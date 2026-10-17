@@ -308,32 +308,44 @@ async fn put_source_settings(
 #[serde(rename_all = "camelCase")]
 pub struct RegisterMangaRequest {
 	pub source_id: i64,
+	#[serde(default)]
 	pub manga_key: String,
+	/// 客户端手里的搜索条目；有它就以它为 get_manga_update 入参，
+	/// 源没改动的字段（典型是 cover）才不会丢
+	pub manga: Option<Manga>,
 }
 
 async fn register_manga(
 	State(state): State<Arc<AppState>>,
 	Json(body): Json<RegisterMangaRequest>,
 ) -> ApiResult<Json<Value>> {
-	if body.manga_key.is_empty() {
+	let initial = match body.manga {
+		Some(manga) => manga,
+		None => {
+			if body.manga_key.is_empty() {
+				return Err(ApiError::bad_request("mangaKey must not be empty"));
+			}
+			Manga {
+				key: body.manga_key.clone(),
+				..Manga::default()
+			}
+		}
+	};
+	if initial.key.is_empty() {
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 			.bind(body.source_id)
-			.bind(&body.manga_key)
+			.bind(&initial.key)
 			.fetch_optional(&state.pool)
 			.await?;
 	if let Some((id,)) = existing {
 		return Ok(Json(json!({ "id": id })));
 	}
 	let handle = state.get_handle(body.source_id).await?;
-	let placeholder = Manga {
-		key: body.manga_key.clone(),
-		..Manga::default()
-	};
-	let updated = handle.get_manga_update(placeholder, true, true).await?;
+	let updated = handle.get_manga_update(initial, true, true).await?;
 	let manga_id = upsert_manga(&state.pool, body.source_id, &updated, true, true, true).await?;
 	reconcile_chapters(
 		&state.pool,
@@ -376,6 +388,12 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 		"inLibrary".into(),
 		json!(in_library.map(|(flag,)| flag).unwrap_or(false)),
 	);
+	let category_ids: Vec<i64> =
+		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
+			.bind(row.id)
+			.fetch_all(&state.pool)
+			.await?;
+	object.insert("categoryIds".into(), json!(category_ids));
 	Ok(value)
 }
 

@@ -38,6 +38,7 @@ export interface MangaDetail extends Manga {
 	initialized: boolean;
 	chapterCount: number;
 	inLibrary: boolean;
+	categoryIds: number[];
 }
 
 export interface LibraryEntry extends Manga {
@@ -116,38 +117,27 @@ export interface Listing {
 	kind: string;
 }
 
-export type FilterKind =
-	| { Text: { placeholder?: string | null } }
-	| { Sort: { can_ascend: boolean; options: string[]; default?: string | null } }
-	| { Check: { name?: string | null; can_exclude: boolean; default?: boolean | null } }
-	| {
-			Select: {
-				is_genre: boolean;
-				uses_tag_style: boolean;
-				options: string[];
-				ids?: string[] | null;
-				default?: string | null;
-			};
-	  }
-	| {
-			MultiSelect: {
-				is_genre: boolean;
-				can_exclude: boolean;
-				uses_tag_style: boolean;
-				options: string[];
-				ids?: string[] | null;
-				default_included?: string[] | null;
-				default_excluded?: string[] | null;
-			};
-	  }
-	| { Note: string }
-	| { Range: { min?: number | null; max?: number | null; decimal: boolean } };
-
+// Filter 的 wire 形态是 aidoku 定制扁平结构：type 标签 + 变体字段平铺
 export interface Filter {
 	id: string;
-	title: string;
-	hide_from_header: boolean;
-	kind: FilterKind;
+	title: string | null;
+	hide_from_header?: boolean | null;
+	type: 'text' | 'sort' | 'check' | 'select' | 'multi-select' | 'note' | 'range';
+	placeholder?: string | null;
+	can_ascend?: boolean;
+	options?: string[];
+	default?: unknown;
+	name?: string | null;
+	can_exclude?: boolean;
+	is_genre?: boolean;
+	uses_tag_style?: boolean;
+	ids?: (string | null)[] | null;
+	default_included?: string[] | null;
+	default_excluded?: string[] | null;
+	text?: string;
+	min?: number | null;
+	max?: number | null;
+	decimal?: boolean;
 }
 
 export type FilterValue =

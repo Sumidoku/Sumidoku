@@ -42,6 +42,7 @@
 	}
 
 	async function openCats() {
+		catSel = new Set(manga?.categoryIds ?? []);
 		catOpen = true;
 		if (allCats.length === 0) {
 			try {
@@ -59,6 +60,7 @@
 				method: 'PUT',
 				body: { categoryIds: [...catSel] }
 			});
+			if (manga) manga = { ...manga, categoryIds: [...catSel] };
 			pushToast('分类已保存', 'info');
 			catOpen = false;
 		} finally {

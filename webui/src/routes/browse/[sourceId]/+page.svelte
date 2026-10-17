@@ -35,23 +35,21 @@
 
 	function initFilterState(fs: Filter[]) {
 		for (const f of fs) {
-			if ('Text' in f.kind) {
+			if (f.type === 'text') {
 				textVals[f.id] = '';
-			} else if ('Sort' in f.kind) {
-				const k = f.kind.Sort;
-				const di = k.default ? k.options.indexOf(k.default) : -1;
-				sortVals[f.id] = { index: di >= 0 ? di : null, ascending: true };
-			} else if ('Check' in f.kind) {
-				checkVals[f.id] = f.kind.Check.default ? 1 : 0;
-			} else if ('Select' in f.kind) {
-				selectVals[f.id] = f.kind.Select.default ?? '';
-			} else if ('MultiSelect' in f.kind) {
-				const k = f.kind.MultiSelect;
+			} else if (f.type === 'sort') {
+				const d = f.default as { index?: number; ascending?: boolean } | null | undefined;
+				sortVals[f.id] = { index: d?.index ?? null, ascending: d?.ascending ?? true };
+			} else if (f.type === 'check') {
+				checkVals[f.id] = f.default ? 1 : 0;
+			} else if (f.type === 'select') {
+				selectVals[f.id] = typeof f.default === 'string' ? f.default : '';
+			} else if (f.type === 'multi-select') {
 				const rec: Record<string, CheckVal> = {};
-				for (const v of k.default_included ?? []) rec[v] = 1;
-				for (const v of k.default_excluded ?? []) rec[v] = -1;
+				for (const v of f.default_included ?? []) rec[v] = 1;
+				for (const v of f.default_excluded ?? []) rec[v] = -1;
 				multiVals[f.id] = rec;
-			} else if ('Range' in f.kind) {
+			} else if (f.type === 'range') {
 				rangeVals[f.id] = { from: '', to: '' };
 			}
 		}
@@ -59,35 +57,31 @@
 
 	// MultiSelect 选中值取 ids（有 ids 时）否则取选项名
 	function multiKey(f: Filter, i: number): string {
-		const k = 'MultiSelect' in f.kind ? f.kind.MultiSelect : null;
-		if (!k) return '';
-		return k.ids?.[i] ?? k.options[i];
+		return f.ids?.[i] ?? f.options?.[i] ?? '';
 	}
 
 	function selectKey(f: Filter, i: number): string {
-		const k = 'Select' in f.kind ? f.kind.Select : null;
-		if (!k) return '';
-		return k.ids?.[i] ?? k.options[i];
+		return f.ids?.[i] ?? f.options?.[i] ?? '';
 	}
 
 	function buildFilterValues(): FilterValue[] {
 		const out: FilterValue[] = [];
 		for (const f of filters ?? []) {
-			if ('Text' in f.kind) {
+			if (f.type === 'text') {
 				const v = (textVals[f.id] ?? '').trim();
 				if (v) out.push({ Text: { id: f.id, value: v } });
-			} else if ('Sort' in f.kind) {
+			} else if (f.type === 'sort') {
 				const s = sortVals[f.id];
 				if (s && s.index !== null) {
 					out.push({ Sort: { id: f.id, index: s.index, ascending: s.ascending } });
 				}
-			} else if ('Check' in f.kind) {
+			} else if (f.type === 'check') {
 				const v = checkVals[f.id] ?? 0;
 				if (v !== 0) out.push({ Check: { id: f.id, value: v } });
-			} else if ('Select' in f.kind) {
+			} else if (f.type === 'select') {
 				const v = selectVals[f.id] ?? '';
 				if (v) out.push({ Select: { id: f.id, value: v } });
-			} else if ('MultiSelect' in f.kind) {
+			} else if (f.type === 'multi-select') {
 				const rec = multiVals[f.id] ?? {};
 				const included = Object.entries(rec)
 					.filter(([, v]) => v === 1)
@@ -98,7 +92,7 @@
 				if (included.length || excluded.length) {
 					out.push({ MultiSelect: { id: f.id, included, excluded } });
 				}
-			} else if ('Range' in f.kind) {
+			} else if (f.type === 'range') {
 				const r = rangeVals[f.id];
 				if (!r) continue;
 				const from = r.from.trim() === '' ? null : Number(r.from);
@@ -148,13 +142,12 @@
 	}
 
 	function cycleMulti(f: Filter, i: number) {
-		const k = 'MultiSelect' in f.kind ? f.kind.MultiSelect : null;
-		if (!k) return;
 		const key = multiKey(f, i);
+		if (!key) return;
 		const rec = { ...(multiVals[f.id] ?? {}) };
 		const cur = rec[key] ?? 0;
 		// 可排除时三态循环：未选 → 包含 → 排除 → 未选
-		const next: CheckVal = cur === 0 ? 1 : cur === 1 ? (k.can_exclude ? -1 : 0) : 0;
+		const next: CheckVal = cur === 0 ? 1 : cur === 1 ? (f.can_exclude ? -1 : 0) : 0;
 		if (next === 0) delete rec[key];
 		else rec[key] = next;
 		multiVals[f.id] = rec;
@@ -167,7 +160,7 @@
 		}
 		const { id } = await api<{ id: number }>('/manga', {
 			method: 'POST',
-			body: { sourceId, mangaKey: m.key }
+			body: { sourceId, manga: m }
 		});
 		goto(`/manga/${id}`);
 	}
@@ -236,22 +229,22 @@
 		{#if filters && showFilters}
 			<div class="card filter-panel">
 				{#each filters as f (f.id)}
-					{#if 'Note' in f.kind}
+					{#if f.type === 'note'}
 						<div class="f-item">
 							<div class="f-title">{f.title}</div>
-							<p class="muted" style="margin: 0; font-size: 13.5px;">{f.kind.Note}</p>
+							<p class="muted" style="margin: 0; font-size: 13.5px;">{f.text}</p>
 						</div>
-					{:else if 'Text' in f.kind}
+					{:else if f.type === 'text'}
 						<div class="f-item">
 							<label class="f-title" for="f-{f.id}">{f.title}</label>
 							<input
 								id="f-{f.id}"
 								type="text"
-								placeholder={f.kind.Text.placeholder ?? ''}
+								placeholder={f.placeholder ?? ''}
 								bind:value={textVals[f.id]}
 							/>
 						</div>
-					{:else if 'Sort' in f.kind}
+					{:else if f.type === 'sort'}
 						<div class="f-item">
 							<label class="f-title" for="f-{f.id}">{f.title}</label>
 							<div style="display: flex; gap: 8px;">
@@ -268,11 +261,11 @@
 									}}
 								>
 									<option value="">默认</option>
-									{#each f.kind.Sort.options as opt, i (i)}
+									{#each f.options ?? [] as opt, i (i)}
 										<option value={i}>{opt}</option>
 									{/each}
 								</select>
-								{#if f.kind.Sort.can_ascend && sortVals[f.id]?.index !== null}
+								{#if f.can_ascend && sortVals[f.id]?.index !== null}
 									<button
 										type="button"
 										onclick={() => {
@@ -285,10 +278,10 @@
 								{/if}
 							</div>
 						</div>
-					{:else if 'Check' in f.kind}
+					{:else if f.type === 'check'}
 						<div class="f-item">
-							<div class="f-title">{f.title}{f.kind.Check.name ? ` · ${f.kind.Check.name}` : ''}</div>
-							{#if f.kind.Check.can_exclude}
+							<div class="f-title">{f.title}{f.name ? ` · ${f.name}` : ''}</div>
+							{#if f.can_exclude}
 								<div class="seg">
 									{#each [['不选', 0], ['包含', 1], ['排除', -1]] as [label, v] (v)}
 										<button
@@ -310,28 +303,28 @@
 								</button>
 							{/if}
 						</div>
-					{:else if 'Select' in f.kind}
+					{:else if f.type === 'select'}
 						<div class="f-item">
 							<label class="f-title" for="f-{f.id}">{f.title}</label>
 							<select id="f-{f.id}" bind:value={selectVals[f.id]}>
 								<option value="">未选</option>
-								{#each f.kind.Select.options as opt, i (i)}
+								{#each f.options ?? [] as opt, i (i)}
 									<option value={selectKey(f, i)}>{opt}</option>
 								{/each}
 							</select>
 						</div>
-					{:else if 'MultiSelect' in f.kind}
+					{:else if f.type === 'multi-select'}
 						<div class="f-item">
 							<div class="f-title">{f.title}</div>
 							<div class="chips">
-								{#each f.kind.MultiSelect.options as opt, i (i)}
+								{#each f.options ?? [] as opt, i (i)}
 									{@const st = multiVals[f.id]?.[multiKey(f, i)] ?? 0}
 									<button
 										type="button"
 										class="chip clickable"
 										class:on={st === 1}
 										class:off={st === -1}
-										title={f.kind.MultiSelect.can_exclude
+										title={f.can_exclude
 											? '点击切换：包含 / 排除 / 不选'
 											: '点击切换选中'}
 										onclick={() => cycleMulti(f, i)}
@@ -341,22 +334,22 @@
 								{/each}
 							</div>
 						</div>
-					{:else if 'Range' in f.kind}
+					{:else if f.type === 'range'}
 						<div class="f-item">
 							<div class="f-title">{f.title}</div>
 							<div style="display: flex; gap: 8px; align-items: center;">
 								<input
 									type="number"
-									placeholder={f.kind.Range.min != null ? String(f.kind.Range.min) : '最小'}
-									step={f.kind.Range.decimal ? 'any' : '1'}
+									placeholder={f.min != null ? String(f.min) : '最小'}
+									step={f.decimal ? 'any' : '1'}
 									bind:value={rangeVals[f.id].from}
 									style="width: 100%;"
 								/>
 								<span class="faint">—</span>
 								<input
 									type="number"
-									placeholder={f.kind.Range.max != null ? String(f.kind.Range.max) : '最大'}
-									step={f.kind.Range.decimal ? 'any' : '1'}
+									placeholder={f.max != null ? String(f.max) : '最大'}
+									step={f.decimal ? 'any' : '1'}
 									bind:value={rangeVals[f.id].to}
 									style="width: 100%;"
 								/>
