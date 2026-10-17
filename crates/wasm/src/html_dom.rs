@@ -161,6 +161,22 @@ impl HtmlElement {
 			.map(|element| self.child(element.id()))
 	}
 
+	/// 仅后代匹配，不含元素自身（:contains 分段求值里剩余选择器的作用域）
+	pub fn select_descendants(&self, selector: &Selector) -> HtmlElementList {
+		let Some(node) = self.0.html.tree.get(self.0.id) else {
+			return HtmlElementList(Vec::new());
+		};
+		let Some(element) = ElementRef::wrap(node) else {
+			return HtmlElementList(Vec::new());
+		};
+		HtmlElementList(
+			element
+				.select(selector)
+				.map(|element| self.child(element.id()))
+				.collect(),
+		)
+	}
+
 	pub fn attr(&self, name: &str) -> Option<String> {
 		let has_abs_prefix = name.starts_with("abs:");
 		let name = if has_abs_prefix { &name[4..] } else { name };
@@ -261,6 +277,17 @@ impl HtmlElement {
 			.map(|text| text.to_string())
 	}
 
+	/// jsoup 仅 script/style 内容算 DataNode；html5ever 统一存文本节点，
+	/// 其他元素按 jsoup 语义给空串
+	pub fn data(&self) -> Option<String> {
+		let node = self.0.html.tree.get(self.0.id)?;
+		let element = ElementRef::wrap(node)?;
+		if !matches!(element.value().name(), "script" | "style") {
+			return Some(String::new());
+		}
+		Some(element.text().collect())
+	}
+
 	pub fn id(&self) -> Option<String> {
 		let node = self.0.html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
@@ -299,6 +326,16 @@ impl HtmlElement {
 			return false;
 		};
 		element.value().attrs().any(|(k, _)| k == name)
+	}
+
+	pub fn has_any_attribute(&self) -> bool {
+		let Some(node) = self.0.html.tree.get(self.0.id) else {
+			return false;
+		};
+		let Some(element) = ElementRef::wrap(node) else {
+			return false;
+		};
+		element.value().attrs().next().is_some()
 	}
 
 	fn child(&self, id: NodeId) -> HtmlElement {
@@ -385,6 +422,256 @@ impl HtmlElementList {
 				.join("\n"),
 		)
 	}
+}
+
+pub enum QueryRoot<'a> {
+	Document(&'a HtmlDocument),
+	Element(&'a HtmlElement),
+	List(&'a HtmlElementList),
+}
+
+/// 字符串形式的选择器入口，额外支持 SwiftSoup 系非标准伪类：
+/// :contains(text)/:containsOwn(text)/:has(selector)/[*]（含 :not 包裹）。
+/// scraper 不支持这些，拆成「基础选择器 + 逐项过滤 + 剩余选择器（候选元素
+/// 作用域、不含自身）」分段递归求值；后缀的 > 按后代处理（真实源写法都是
+/// li:contains(x) > span 这类，极端嵌套下结果是超集，总比整体失败强）
+pub fn select_str(root: QueryRoot, query: &str) -> Result<HtmlElementList, ()> {
+	select_str_impl(root, query, true)
+}
+
+fn select_str_impl(root: QueryRoot, query: &str, include_root: bool) -> Result<HtmlElementList, ()> {
+	if let Some(split) = split_extension(query) {
+		let prefix = split.prefix.trim();
+		let prefix = if prefix.is_empty() { "*" } else { prefix };
+		let base = select_str_impl(root, prefix, include_root)?;
+		let mut filtered = Vec::new();
+		for element in base.0 {
+			if matches_extension(&element, &split.filter)? {
+				filtered.push(element);
+			}
+		}
+		let remainder = split.suffix.trim_start();
+		if remainder.is_empty() {
+			return Ok(HtmlElementList(filtered));
+		}
+		let remainder = remainder
+			.strip_prefix('>')
+			.map(str::trim_start)
+			.unwrap_or(remainder);
+		if remainder.is_empty() || remainder.starts_with('+') || remainder.starts_with('~') {
+			return Err(());
+		}
+		let mut out = Vec::new();
+		for element in &filtered {
+			out.extend(select_str_impl(QueryRoot::Element(element), remainder, false)?.0);
+		}
+		return Ok(HtmlElementList(out));
+	}
+	let selector = Selector::parse(query).map_err(|_| ())?;
+	let list = match root {
+		QueryRoot::Document(doc) => doc.select(&selector),
+		QueryRoot::Element(element) => {
+			if include_root {
+				element
+					.select(&selector)
+					.unwrap_or_else(|| HtmlElementList(Vec::new()))
+			} else {
+				element.select_descendants(&selector)
+			}
+		}
+		QueryRoot::List(list) => {
+			let mut out = Vec::new();
+			for element in &list.0 {
+				if include_root {
+					out.extend(element.select(&selector).map(|l| l.0).unwrap_or_default());
+				} else {
+					out.extend(element.select_descendants(&selector).0);
+				}
+			}
+			HtmlElementList(out)
+		}
+	};
+	Ok(list)
+}
+
+enum ExtensionFilter {
+	Contains { needle: String, own: bool, negate: bool },
+	Has { selectors: Vec<String>, negate: bool },
+	AttrWildcard { negate: bool },
+}
+
+struct ExtensionSplit {
+	prefix: String,
+	filter: ExtensionFilter,
+	suffix: String,
+}
+
+#[derive(Clone, Copy)]
+enum MarkerKind {
+	Contains { own: bool, negate: bool },
+	Has { negate: bool },
+	Attr { negate: bool },
+}
+
+/// 切出第一个 scraper 不支持的伪类（:contains/:containsOwn/:has/[*]，含 :not 包裹）。
+/// 找到标记但括号不闭合时返回 None，让外层走 Selector::parse 报无效查询
+fn split_extension(query: &str) -> Option<ExtensionSplit> {
+	const PAREN_MARKERS: &[(&str, MarkerKind)] = &[
+		(":not(:containsOwn(", MarkerKind::Contains { own: true, negate: true }),
+		(":not(:contains(", MarkerKind::Contains { own: false, negate: true }),
+		(":containsOwn(", MarkerKind::Contains { own: true, negate: false }),
+		(":contains(", MarkerKind::Contains { own: false, negate: false }),
+		(":not(:has(", MarkerKind::Has { negate: true }),
+		(":has(", MarkerKind::Has { negate: false }),
+		(":not([*])", MarkerKind::Attr { negate: true }),
+		("[*]", MarkerKind::Attr { negate: false }),
+	];
+	let mut found: Option<(usize, &'static str, MarkerKind)> = None;
+	for (marker, kind) in PAREN_MARKERS {
+		if let Some(index) = query.find(marker)
+			&& found.is_none_or(|(i, _, _)| index < i)
+		{
+			found = Some((index, marker, *kind));
+		}
+	}
+	let (index, marker, kind) = found?;
+	let prefix = query[..index].to_string();
+	if let MarkerKind::Attr { negate } = kind {
+		return Some(ExtensionSplit {
+			prefix,
+			filter: ExtensionFilter::AttrWildcard { negate },
+			suffix: query[index + marker.len()..].to_string(),
+		});
+	}
+	let extra_depth = match kind {
+		MarkerKind::Contains { negate: true, .. } | MarkerKind::Has { negate: true } => 1,
+		_ => 0,
+	};
+	let (content, suffix) = take_paren_content(query, index + marker.len(), extra_depth)?;
+	match kind {
+		MarkerKind::Contains { own, negate } => Some(ExtensionSplit {
+			prefix,
+			filter: ExtensionFilter::Contains {
+				needle: unquote(content.trim()),
+				own,
+				negate,
+			},
+			suffix,
+		}),
+		MarkerKind::Has { negate } => {
+			let selectors = split_top_level_commas(&content);
+			if selectors.iter().any(|s| s.is_empty()) {
+				return None;
+			}
+			Some(ExtensionSplit {
+				prefix,
+				filter: ExtensionFilter::Has { selectors, negate },
+				suffix,
+			})
+		}
+		MarkerKind::Attr { .. } => unreachable!(),
+	}
+}
+
+/// 从 start 扫描到配平后的右括号（extra_depth 抵消 :not 多包的一层），引号感知。
+/// 返回（内容, 剩余后缀）；extra_depth>0 时内容裁到内层闭合处
+fn take_paren_content(query: &str, start: usize, extra_depth: u8) -> Option<(String, String)> {
+	let rest = &query[start..];
+	let mut quote: Option<char> = None;
+	let mut depth = extra_depth;
+	let mut inner_end = None;
+	for (i, c) in rest.char_indices() {
+		match quote {
+			Some(q) if c == q => quote = None,
+			Some(_) => {}
+			None if c == '\'' || c == '"' => quote = Some(c),
+			None if c == '(' => depth += 1,
+			None if c == ')' => {
+				if depth == 0 {
+					let end = inner_end.unwrap_or(i);
+					return Some((rest[..end].to_string(), rest[i + 1..].to_string()));
+				}
+				depth -= 1;
+				if depth == 0 && extra_depth > 0 {
+					inner_end = Some(i);
+				}
+			}
+			None => {}
+		}
+	}
+	None
+}
+
+fn split_top_level_commas(text: &str) -> Vec<String> {
+	let mut out = Vec::new();
+	let mut quote: Option<char> = None;
+	let mut depth = 0u8;
+	let mut start = 0;
+	for (i, c) in text.char_indices() {
+		match quote {
+			Some(q) if c == q => quote = None,
+			Some(_) => {}
+			None if c == '\'' || c == '"' => quote = Some(c),
+			None if c == '(' => depth += 1,
+			None if c == ')' => depth = depth.saturating_sub(1),
+			None if c == ',' && depth == 0 => {
+				out.push(text[start..i].trim().to_string());
+				start = i + 1;
+			}
+			None => {}
+		}
+	}
+	out.push(text[start..].trim().to_string());
+	out
+}
+
+fn unquote(raw: &str) -> String {
+	if raw.len() >= 2
+		&& ((raw.starts_with('"') && raw.ends_with('"'))
+			|| (raw.starts_with('\'') && raw.ends_with('\'')))
+	{
+		raw[1..raw.len() - 1].to_string()
+	} else {
+		raw.to_string()
+	}
+}
+
+fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<bool, ()> {
+	Ok(match filter {
+		ExtensionFilter::Contains { needle, own, negate } => {
+			contains_text(element, needle, *own) != *negate
+		}
+		ExtensionFilter::AttrWildcard { negate } => element.has_any_attribute() != *negate,
+		ExtensionFilter::Has { selectors, negate } => {
+			// jsoup :has 是后代相对选择器（不含自身），子选择器可再嵌套扩展伪类
+			let mut found = false;
+			for sub in selectors {
+				if !select_str_impl(QueryRoot::Element(element), sub, false)?.0.is_empty() {
+					found = true;
+					break;
+				}
+			}
+			found != *negate
+		}
+	})
+}
+
+/// SwiftSoup :contains 是子树文本、大小写不敏感、空白折叠后匹配
+fn contains_text(element: &HtmlElement, needle: &str, own: bool) -> bool {
+	let text = if own {
+		element.own_text()
+	} else {
+		element.text(false)
+	};
+	let Some(text) = text else { return false };
+	normalize_whitespace(&text).contains(&normalize_whitespace(needle))
+}
+
+fn normalize_whitespace(text: &str) -> String {
+	text.split_whitespace()
+		.collect::<Vec<_>>()
+		.join(" ")
+		.to_lowercase()
 }
 
 pub trait SelectWithRoot<'a, 'b> {
@@ -570,5 +857,117 @@ mod tests {
 
 		let raw = "Tom & Jerry <3 >2";
 		assert_eq!(unescape_str(&escape_str(raw)), raw);
+	}
+
+	#[test]
+	fn contains_basic_and_scoped_suffix() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<ul>
+		<li>狀態： <span class="txt">連載中</span></li>
+		<li>作者： <span class="txt">某人</span></li>
+		</ul>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：)").unwrap();
+		assert_eq!(list.0.len(), 1);
+
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：) > span.txt").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("連載中"));
+
+		// 大小写不敏感；引号包裹的 needle 里可以有右括号
+		let html = r#"<!DOCTYPE html><html><body><p>Hello)a World</p></body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let list = select_str(QueryRoot::Document(&doc), r#"p:contains("hello)a")"#).unwrap();
+		assert_eq!(list.0.len(), 1);
+	}
+
+	#[test]
+	fn contains_excludes_scope_root() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<div class="y">x<div class="y">z</div></div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let list = select_str(QueryRoot::Document(&doc), "div:contains(x) div.y").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("z"));
+	}
+
+	#[test]
+	fn contains_invalid_query() {
+		let doc = HtmlDocument::parse("<p>x</p>", None);
+		assert!(select_str(QueryRoot::Document(&doc), "li:contains(unclosed").is_err());
+		assert!(select_str(QueryRoot::Document(&doc), "p:contains(x) + p").is_err());
+	}
+
+	#[test]
+	fn attr_wildcard() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<script>var x = 1;</script>
+		<script src="https://example.com/a.js"></script>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let list = select_str(QueryRoot::Document(&doc), "script:not([*])").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert!(list.0[0].text(false).unwrap().contains("var x"));
+
+		let list = select_str(QueryRoot::Document(&doc), "script[*]").unwrap();
+		assert_eq!(list.0.len(), 1);
+	}
+
+	#[test]
+	fn script_data() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<script>var contentKey = 'abc';</script>
+		<div>text</div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let script = select_str(QueryRoot::Document(&doc), "script").unwrap();
+		assert_eq!(script.0[0].data().as_deref(), Some("var contentKey = 'abc';"));
+
+		let div = select_str(QueryRoot::Document(&doc), "div").unwrap();
+		assert_eq!(div.0[0].data().as_deref(), Some(""));
+	}
+
+	#[test]
+	fn has_nested_and_negated() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<section><h2>Latest Updates</h2><article>A</article></section>
+		<section><h2>Other</h2><article>B</article></section>
+		<p class="data">plain</p>
+		<p class="data"><b>bold</b></p>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(
+			QueryRoot::Document(&doc),
+			"section:has(h2:contains(Latest Updates)) article",
+		)
+		.unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("A"));
+
+		let list = select_str(QueryRoot::Document(&doc), "p.data:not(:has(*))").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("plain"));
+	}
+
+	#[test]
+	fn has_comma_list() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<ul>
+		<li><strong>Type</strong>: manga <a href="/1">x</a></li>
+		<li><strong>Other</strong> <a href="/2">y</a></li>
+		</ul>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let list = select_str(
+			QueryRoot::Document(&doc),
+			"ul > li:has(strong:contains(Type),strong:contains(Tag)) a",
+		)
+		.unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].attr("href").as_deref(), Some("/1"));
 	}
 }

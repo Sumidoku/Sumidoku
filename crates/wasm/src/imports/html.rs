@@ -1,9 +1,8 @@
 use crate::{
 	WasmEnv,
-	html_dom::{HtmlDocument, HtmlElement, HtmlNode},
+	html_dom::{HtmlDocument, HtmlNode, QueryRoot, select_str},
 	store::{FFIResult, Ptr, Rid, StoreItem},
 };
-use scraper::Selector;
 use wasmer::FunctionEnvMut;
 
 enum Result {
@@ -275,9 +274,18 @@ pub fn own_text(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 		Result::InvalidDescriptor.into()
 	}
 }
-pub fn data(_env: FunctionEnvMut<WasmEnv>, _rid: Rid) -> FFIResult {
-	// i don't think scraper supports this?
-	-1
+pub fn data(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
+	let Some(item) = env.data_mut().store.get_mut(rid) else {
+		return Result::InvalidDescriptor.into();
+	};
+	if let Some(element) = item.as_html_element() {
+		let Some(data) = element.data() else {
+			return Result::NoResult.into();
+		};
+		env.data_mut().store.store(StoreItem::String(data))
+	} else {
+		Result::InvalidDescriptor.into()
+	}
 }
 pub fn id(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 	let Some(item) = env.data_mut().store.get_mut(rid) else {
@@ -538,33 +546,26 @@ pub fn select(
 	let Ok(string) = env.data().read_string(&env, query_ptr, query_len) else {
 		return Result::InvalidString.into();
 	};
-	let Ok(selector) = Selector::parse(&string) else {
-		return Result::InvalidQuery.into();
-	};
 	let Some(item) = env.data_mut().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	if let Some(document) = item.as_html_document() {
-		let elements = document.select(&selector);
-		env.data_mut()
-			.store
-			.store(StoreItem::HtmlElementList(elements))
+	// document 臂存空列表（SwiftSoup select 语义），元素/列表臂空结果报 NoResult
+	let (root, store_empty) = if let Some(document) = item.as_html_document() {
+		(QueryRoot::Document(document), true)
 	} else if let Some(element) = item.as_html_element() {
-		let Some(elements) = element.select(&selector) else {
-			return Result::NoResult.into();
-		};
-		env.data_mut()
-			.store
-			.store(StoreItem::HtmlElementList(elements))
+		(QueryRoot::Element(element), false)
 	} else if let Some(elements) = item.as_html_element_list() {
-		let Some(elements) = elements.select(&selector) else {
-			return Result::NoResult.into();
-		};
-		env.data_mut()
-			.store
-			.store(StoreItem::HtmlElementList(elements))
+		(QueryRoot::List(elements), false)
 	} else {
-		Result::InvalidDescriptor.into()
+		return Result::InvalidDescriptor.into();
+	};
+	match select_str(root, &string) {
+		Ok(elements) if store_empty || !elements.0.is_empty() => env
+			.data_mut()
+			.store
+			.store(StoreItem::HtmlElementList(elements)),
+		Ok(_) => Result::NoResult.into(),
+		Err(()) => Result::InvalidQuery.into(),
 	}
 }
 pub fn select_first(
@@ -576,40 +577,24 @@ pub fn select_first(
 	let Ok(string) = env.data().read_string(&env, query_ptr, query_len) else {
 		return Result::InvalidString.into();
 	};
-	let Ok(selector) = Selector::parse(&string) else {
-		return Result::InvalidQuery.into();
-	};
 	let Some(item) = env.data_mut().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	if let Some(document) = item.as_html_document() {
-		let Some(result) = document
-			.html
-			.select(&selector)
-			.map(|element| {
-				HtmlElement(HtmlNode {
-					html: document.html.clone(),
-					id: element.id(),
-					base_uri: document.base_uri.clone(),
-				})
-			})
-			.next()
-		else {
-			return Result::NoResult.into();
-		};
-		env.data_mut().store.store(StoreItem::HtmlElement(result))
+	let root = if let Some(document) = item.as_html_document() {
+		QueryRoot::Document(document)
 	} else if let Some(element) = item.as_html_element() {
-		let Some(result) = element.select_first(&selector) else {
-			return Result::NoResult.into();
-		};
-		env.data_mut().store.store(StoreItem::HtmlElement(result))
+		QueryRoot::Element(element)
 	} else if let Some(elements) = item.as_html_element_list() {
-		let Some(result) = elements.select_first(&selector) else {
-			return Result::NoResult.into();
-		};
-		env.data_mut().store.store(StoreItem::HtmlElement(result))
+		QueryRoot::List(elements)
 	} else {
-		Result::InvalidDescriptor.into()
+		return Result::InvalidDescriptor.into();
+	};
+	match select_str(root, &string) {
+		Ok(elements) => match elements.0.into_iter().next() {
+			Some(first) => env.data_mut().store.store(StoreItem::HtmlElement(first)),
+			None => Result::NoResult.into(),
+		},
+		Err(()) => Result::InvalidQuery.into(),
 	}
 }
 pub fn text(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {

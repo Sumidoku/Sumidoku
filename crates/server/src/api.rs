@@ -144,13 +144,51 @@ fn dynamic_capability_error(e: SourceError) -> ApiError {
 	}
 }
 
+/// 读源包目录里的静态 json；文件缺失或解析失败都按 None 处理
+async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option<Value>> {
+	let row = source_row(state, id).await?;
+	let Some(dir) = std::path::Path::new(&row.wasm_path).parent() else {
+		return Ok(None);
+	};
+	let Ok(raw) = tokio::fs::read(dir.join(file)).await else {
+		return Ok(None);
+	};
+	Ok(serde_json::from_slice(&raw).ok())
+}
+
 async fn get_filters(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	let filters = handle.get_filters().await.map_err(dynamic_capability_error)?;
-	Ok(Json(serde_json::to_value(filters)?))
+	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后
+	let mut out: Vec<Value> = Vec::new();
+	if let Some(doc) = package_json(&state, id, "source.json").await? {
+		if let Some(filters) = doc.get("filters").and_then(|v| v.as_array()) {
+			out.extend(filters.iter().cloned());
+		}
+	}
+	if out.is_empty() {
+		if let Some(Value::Array(filters)) = package_json(&state, id, "filters.json").await? {
+			out.extend(filters);
+		}
+	}
+	match handle.get_filters().await {
+		Ok(filters) => {
+			if let Value::Array(items) = serde_json::to_value(filters)? {
+				out.extend(items);
+			}
+			Ok(Json(Value::Array(out)))
+		}
+		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+			if out.is_empty() {
+				Err(dynamic_capability_error(e))
+			} else {
+				Ok(Json(Value::Array(out)))
+			}
+		}
+		Err(e) => Err(ApiError::from(e)),
+	}
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,8 +250,29 @@ async fn get_listings(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	let listings = handle.get_listings().await.map_err(dynamic_capability_error)?;
-	Ok(Json(serde_json::to_value(listings)?))
+	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后
+	let mut out: Vec<Value> = Vec::new();
+	if let Some(doc) = package_json(&state, id, "source.json").await? {
+		if let Some(listings) = doc.get("listings").and_then(|v| v.as_array()) {
+			out.extend(listings.iter().cloned());
+		}
+	}
+	match handle.get_listings().await {
+		Ok(listings) => {
+			if let Value::Array(items) = serde_json::to_value(listings)? {
+				out.extend(items);
+			}
+			Ok(Json(Value::Array(out)))
+		}
+		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+			if out.is_empty() {
+				Err(dynamic_capability_error(e))
+			} else {
+				Ok(Json(Value::Array(out)))
+			}
+		}
+		Err(e) => Err(ApiError::from(e)),
+	}
 }
 
 #[derive(Debug, Deserialize)]
@@ -260,7 +319,9 @@ async fn get_source_settings(
 	let handle = state.get_handle(id).await?;
 	let settings = match handle.get_settings().await {
 		Ok(settings) => Some(serde_json::to_value(settings)?),
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => None,
+		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {
+			package_json(&state, id, "settings.json").await?
+		}
 		Err(e) => return Err(ApiError::from(e)),
 	};
 	let values = current_values(&state, id).await?;
@@ -414,11 +475,26 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 	Ok(value)
 }
 
+/// f32 经 serde_json 会先转 f64 再按 f64 最短表示打印（281.1 变 281.1000061035156），
+/// 用 f32 自己的最短表示还原成干净小数
+fn f32_json(value: f64) -> Value {
+	format!("{}", value as f32)
+		.parse::<f64>()
+		.map(Value::from)
+		.unwrap_or(Value::Null)
+}
+
 pub(crate) fn chapter_json(row: &ChapterRow, progress: Option<&ChapterProgress>) -> ApiResult<Value> {
 	let mut value = serde_json::to_value(chapter_from_row(row))?;
 	let object = value
 		.as_object_mut()
 		.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
+	if let Some(number) = row.number {
+		object.insert("chapter_number".into(), f32_json(number));
+	}
+	if let Some(volume) = row.volume {
+		object.insert("volume_number".into(), f32_json(volume));
+	}
 	let progress = progress.copied().unwrap_or_default();
 	object.insert("id".into(), json!(row.id));
 	object.insert("pageCount".into(), json!(row.page_count));

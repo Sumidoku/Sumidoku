@@ -1,7 +1,10 @@
 use crate::error::{ApiError, ApiResult};
-use crate::model::{ChapterRow, MangaRow, chapter_from_row, manga_from_row, unix_now};
+use crate::model::{
+	ChapterRow, MangaRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
+};
 use crate::state::AppState;
 use aidoku::{Chapter, Manga, PageContext};
+use aidoku_wasm::DefaultValue;
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
@@ -133,7 +136,7 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.fetch_optional(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-	if let Some((id,)) = existing {
+	let (id, updated) = if let Some((id,)) = existing {
 		// 老源保留 enabled 与 source_setting，只刷新元数据
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
@@ -151,9 +154,9 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		Ok((key, true))
+		(id, true)
 	} else {
-		sqlx::query(
+		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
 			 wasm_path, icon_path, enabled, installed_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
@@ -171,7 +174,151 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		Ok((key, false))
+		(result.last_insert_rowid(), false)
+	};
+	seed_source_defaults(pool, id, path, &doc).await?;
+	Ok((key, updated))
+}
+
+/// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
+/// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错；
+/// INSERT OR IGNORE 保证不覆盖用户已改的值
+async fn seed_source_defaults(
+	pool: &SqlitePool,
+	source_id: i64,
+	dir: &Path,
+	doc: &serde_json::Value,
+) -> Result<(), String> {
+	let mut seeds: Vec<(String, DefaultValue)> = Vec::new();
+	if let Some((key, langs)) = default_languages(doc) {
+		seeds.push((key, langs));
+	}
+	// allowsBaseUrlSelect 时 App 会合成 base url 设置，默认第一个镜像
+	// （urls = info.url + info.urls）；copymanga 等源 defaults.get("url") 必读
+	let allows_select = doc
+		.get("config")
+		.and_then(|c| c.get("allowsBaseUrlSelect"))
+		.and_then(|v| v.as_bool())
+		.unwrap_or(false);
+	if allows_select {
+		let info = doc.get("info");
+		let mut urls: Vec<&str> = info
+			.and_then(|i| i.get("url"))
+			.and_then(|v| v.as_str())
+			.into_iter()
+			.collect();
+		if let Some(more) = info.and_then(|i| i.get("urls")).and_then(|v| v.as_array()) {
+			urls.extend(more.iter().filter_map(|u| u.as_str()));
+		}
+		if urls.len() > 1 {
+			seeds.push(("url".to_string(), DefaultValue::String(urls[0].to_string())));
+		}
+	}
+	if let Ok(raw) = tokio::fs::read(dir.join("settings.json")).await {
+		match serde_json::from_slice::<serde_json::Value>(&raw) {
+			Ok(settings) => collect_setting_defaults(&settings, &mut seeds),
+			Err(e) => tracing::warn!(source_id, "skip unparsable settings.json: {e}"),
+		}
+	}
+	for (key, value) in seeds {
+		let raw = serde_json::to_string(&value).map_err(|e| format!("encode default: {e}"))?;
+		sqlx::query("INSERT OR IGNORE INTO source_setting (source_id, key, value) VALUES (?, ?, ?)")
+			.bind(source_id)
+			.bind(key)
+			.bind(raw)
+			.execute(pool)
+			.await
+			.map_err(|e| format!("db: {e}"))?;
+	}
+	Ok(())
+}
+
+/// 多语言源的语言设置种子：>1 种语言才存在该设置；键与值类型随 languageSelectType
+/// （multiple → languages: StringArray，single → language: String）。
+/// App 按设备语言取交集定默认，服务端没有设备语言，退化为 isDefault 否则第一个
+fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> {
+	let langs = doc.get("info")?.get("languages")?.as_array()?;
+	let mut codes: Vec<(&str, bool)> = Vec::new();
+	for lang in langs {
+		match lang {
+			serde_json::Value::String(code) => codes.push((code, false)),
+			serde_json::Value::Object(_) => {
+				let code = lang
+					.get("code")
+					.or_else(|| lang.get("value"))
+					.and_then(|v| v.as_str());
+				if let Some(code) = code {
+					let is_default = lang
+						.get("isDefault")
+						.and_then(|v| v.as_bool())
+						.unwrap_or(false);
+					codes.push((code, is_default));
+				}
+			}
+			_ => {}
+		}
+	}
+	if codes.len() < 2 {
+		return None;
+	}
+	let mut picked: Vec<&str> = codes
+		.iter()
+		.filter(|(_, is_default)| *is_default)
+		.map(|(code, _)| *code)
+		.collect();
+	if picked.is_empty() {
+		picked.push(codes[0].0);
+	}
+	let single = doc
+		.get("config")
+		.and_then(|c| c.get("languageSelectType"))
+		.and_then(|v| v.as_str())
+		== Some("single");
+	if single {
+		Some(("language".to_string(), DefaultValue::String(picked[0].to_string())))
+	} else {
+		Some((
+			"languages".to_string(),
+			DefaultValue::StringArray(picked.into_iter().map(str::to_string).collect()),
+		))
+	}
+}
+
+fn collect_setting_defaults(
+	items: &serde_json::Value,
+	out: &mut Vec<(String, DefaultValue)>,
+) {
+	let Some(items) = items.as_array() else { return };
+	for item in items {
+		if item.get("type").and_then(|v| v.as_str()) == Some("group") {
+			if let Some(children) = item.get("items") {
+				collect_setting_defaults(children, out);
+			}
+			continue;
+		}
+		// Aidoku 的 select/segment 无显式默认时落第一个候选值
+		let mut default = item.get("default");
+		if default.is_none()
+			&& matches!(
+				item.get("type").and_then(|v| v.as_str()),
+				Some("select") | Some("segment")
+			)
+		{
+			default = item
+				.get("values")
+				.and_then(|v| v.as_array())
+				.and_then(|v| v.first());
+		}
+		let (Some(key), Some(default)) =
+			(item.get("key").and_then(|v| v.as_str()), default)
+		else {
+			continue;
+		};
+		// Null 种下后 defaults.get 一样是无效值，不浪费一行
+		let value = json_to_default_value(default);
+		if !matches!(value, DefaultValue::Null) {
+			out.push((key.to_string(), value));
+		}
 	}
 }
 
