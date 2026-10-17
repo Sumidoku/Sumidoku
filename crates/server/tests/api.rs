@@ -1,57 +1,12 @@
-use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use serde_json::{Value, json};
-use std::path::PathBuf;
-use suzuri_server::build_app;
-use suzuri_server::config::Config;
-use tower::ServiceExt;
+mod common;
 
-fn fixture_dir() -> PathBuf {
-	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/example")
-}
-
-async fn test_app() -> (Router, tempfile::TempDir) {
-	let tmp = tempfile::tempdir().expect("tempdir");
-	let source_dir = tmp.path().join("sources").join("en.example-source");
-	std::fs::create_dir_all(&source_dir).expect("mkdir source dir");
-	for file in ["source.json", "main.wasm"] {
-		std::fs::copy(fixture_dir().join(file), source_dir.join(file)).expect("copy fixture");
-	}
-	let config = Config {
-		addr: "127.0.0.1:0".into(),
-		database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
-		sources_dir: tmp.path().join("sources"),
-		call_concurrency: 8,
-		log: "warn".into(),
-	};
-	let app = build_app(config).await.expect("build app");
-	(app, tmp)
-}
-
-async fn request(app: &Router, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {
-	let mut builder = Request::builder().method(method).uri(path);
-	if body.is_some() {
-		builder = builder.header("content-type", "application/json");
-	}
-	let request = builder
-		.body(match body {
-			Some(value) => Body::from(serde_json::to_vec(&value).expect("serialize body")),
-			None => Body::empty(),
-		})
-		.expect("build request");
-	let response = app.clone().oneshot(request).await.expect("response");
-	let status = response.status();
-	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-		.await
-		.expect("read body");
-	let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-	(status, value)
-}
+use axum::http::StatusCode;
+use common::{request, test_app, TestApp};
+use serde_json::json;
 
 #[tokio::test]
 async fn full_flow() {
-	let (app, _tmp) = test_app().await;
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
 
 	// health
 	let (status, body) = request(&app, "GET", "/health", None).await;

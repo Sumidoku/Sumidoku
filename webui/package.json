@@ -1,0 +1,27 @@
+{
+	"name": "suzuri-webui",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"imports": {
+		"#lib/*": "./src/lib/*"
+	},
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build && cp build/200.html build/index.html",
+		"preview": "vite preview",
+		"check": "svelte-check --tsconfig ./tsconfig.json"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^4.0.0",
+		"@sveltejs/kit": "^3.1.0",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"svelte": "^5.57.2",
+		"svelte-check": "^4.7.7",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.4"
+	},
+	"dependencies": {
+		"marked": "^18.1.1"
+	}
+}

@@ -1,20 +1,57 @@
 pub mod api;
 pub mod config;
+pub mod cover;
 pub mod db;
 pub mod error;
+pub mod library;
 pub mod model;
+pub mod page;
+pub mod reader;
 pub mod service;
 pub mod state;
 
+/// 单用户阶段所有用户态操作恒为内置 admin
+pub(crate) const USER_ID: i64 = 1;
+pub(crate) const PAGE_SIZE: i64 = 50;
+
 use crate::config::Config;
-use crate::error::Error;
+use crate::error::{ApiError, Error};
 use axum::Router;
+use axum::extract::Request;
+use axum::response::IntoResponse;
+use axum::routing::get;
+use tower::ServiceExt;
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 pub async fn build_app(config: Config) -> Result<Router, Error> {
+	std::fs::create_dir_all(&config.covers_dir)?;
 	let pool = db::create_pool(&config.database_url).await?;
 	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_defaults_writer(pool.clone(), rx));
 	let state = state::AppState::new(pool, config, tx);
-	Ok(api::router(state).layer(TraceLayer::new_for_http()))
+	let app = api::router(state.clone());
+	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
+}
+
+fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
+	if !webui_dir.is_dir() {
+		return app.route("/", get(|| async { "Suzuri API server (webui not built)" }));
+	}
+	// not_found_service 会把响应状态码强制改成 404（给 404 页用的），SPA 要 200，用 fallback
+	let serve = ServeDir::new(webui_dir).fallback(ServeFile::new(webui_dir.join("index.html")));
+	app.fallback(move |req: Request| {
+		let serve = serve.clone();
+		async move {
+			// /api 与 /opds 不许进 SPA fallback，未知 API 路径保持 JSON 404
+			let path = req.uri().path();
+			if path.starts_with("/api") || path.starts_with("/opds") {
+				return ApiError::not_found("route not found").into_response();
+			}
+			match serve.oneshot(req).await {
+				Ok(response) => response.into_response(),
+				Err(e) => match e {},
+			}
+		}
+	})
 }

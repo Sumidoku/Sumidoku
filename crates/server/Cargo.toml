@@ -18,8 +18,10 @@ axum = "0.8"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "json"] }
 chrono = "0.4"
 toml = "0.8"
+tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["trace", "fs"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
 tempfile = "3"

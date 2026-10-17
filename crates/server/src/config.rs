@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::path::PathBuf;
 
+pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
 #[derive(Debug, Clone)]
 pub struct Config {
 	pub addr: String,
@@ -8,6 +10,10 @@ pub struct Config {
 	pub sources_dir: PathBuf,
 	pub call_concurrency: usize,
 	pub log: String,
+	pub covers_dir: PathBuf,
+	pub cover_cache_max: usize,
+	pub webui_dir: PathBuf,
+	pub user_agent: String,
 }
 
 impl Default for Config {
@@ -18,6 +24,10 @@ impl Default for Config {
 			sources_dir: PathBuf::from("./sources"),
 			call_concurrency: 8,
 			log: "info".into(),
+			covers_dir: PathBuf::from("./data/covers"),
+			cover_cache_max: 512,
+			webui_dir: PathBuf::from("./webui/build"),
+			user_agent: DEFAULT_USER_AGENT.into(),
 		}
 	}
 }
@@ -30,6 +40,10 @@ struct ConfigFile {
 	sources_dir: Option<PathBuf>,
 	call_concurrency: Option<usize>,
 	log: Option<String>,
+	covers_dir: Option<PathBuf>,
+	cover_cache_max: Option<usize>,
+	webui_dir: Option<PathBuf>,
+	user_agent: Option<String>,
 }
 
 impl Config {
@@ -54,6 +68,18 @@ impl Config {
 					if let Some(v) = file.log {
 						config.log = v;
 					}
+					if let Some(v) = file.covers_dir {
+						config.covers_dir = v;
+					}
+					if let Some(v) = file.cover_cache_max {
+						config.cover_cache_max = v;
+					}
+					if let Some(v) = file.webui_dir {
+						config.webui_dir = v;
+					}
+					if let Some(v) = file.user_agent {
+						config.user_agent = v;
+					}
 				}
 				Err(e) => eprintln!("invalid ./config.toml, using defaults: {e}"),
 			}
@@ -77,6 +103,20 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUZURI_LOG") {
 			config.log = v;
+		}
+		if let Ok(v) = std::env::var("SUZURI_COVERS_DIR") {
+			config.covers_dir = PathBuf::from(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_COVER_CACHE_MAX") {
+			if let Ok(n) = v.parse() {
+				config.cover_cache_max = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_WEBUI_DIR") {
+			config.webui_dir = PathBuf::from(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_USER_AGENT") {
+			config.user_agent = v;
 		}
 		config
 	}

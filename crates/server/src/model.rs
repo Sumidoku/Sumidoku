@@ -57,6 +57,33 @@ pub struct ChapterRow {
 	pub fetched_at: i64,
 }
 
+/// 章节 LEFT JOIN chapter_user（user 1）的投影；四列用户字段无行时全 NULL
+#[derive(Debug, sqlx::FromRow)]
+pub struct ChapterUserRow {
+	#[sqlx(flatten)]
+	pub chapter: ChapterRow,
+	pub last_page_read: Option<i64>,
+	pub is_read: Option<bool>,
+	pub is_bookmarked: Option<bool>,
+	pub last_read_at: Option<i64>,
+}
+
+/// 库列表：manga JOIN manga_user 的投影
+#[derive(Debug, sqlx::FromRow)]
+pub struct LibraryEntryRow {
+	#[sqlx(flatten)]
+	pub manga: MangaRow,
+	pub in_library_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChapterProgress {
+	pub last_page_read: i64,
+	pub is_read: bool,
+	pub is_bookmarked: bool,
+	pub last_read_at: Option<i64>,
+}
+
 fn none_if_empty(v: &[String]) -> Option<Vec<String>> {
 	if v.is_empty() { None } else { Some(v.to_vec()) }
 }

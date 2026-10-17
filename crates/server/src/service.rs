@@ -1,10 +1,12 @@
 use crate::error::{ApiError, ApiResult};
-use crate::model::unix_now;
-use aidoku::{Chapter, Manga};
+use crate::model::{ChapterRow, MangaRow, chapter_from_row, manga_from_row, unix_now};
+use crate::state::AppState;
+use aidoku::{Chapter, Manga, PageContext};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -302,4 +304,134 @@ pub async fn reconcile_chapters(
 		}
 	}
 	Ok(())
+}
+
+pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
+	let row: Option<MangaRow> = sqlx::query_as(
+		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
+		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
+		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id = ?",
+	)
+	.bind(id)
+	.fetch_optional(pool)
+	.await?;
+	row.ok_or_else(|| ApiError::not_found("manga not found"))
+}
+
+pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
+	let row: Option<ChapterRow> = sqlx::query_as(
+		"SELECT id, manga_id, key, title, number, volume, scanlators, language, url,
+		 date_uploaded, source_order, page_count, locked, fetched_at FROM chapter WHERE id = ?",
+	)
+	.bind(id)
+	.fetch_optional(pool)
+	.await?;
+	row.ok_or_else(|| ApiError::not_found("chapter not found"))
+}
+
+/// 读 page 缓存；miss 或 refresh 时从源拉 get_page_list 并整批落缓存
+pub async fn load_pages(
+	state: &Arc<AppState>,
+	chapter_id: i64,
+	refresh: bool,
+) -> ApiResult<Vec<(i64, String)>> {
+	if !refresh {
+		let cached: Vec<(i64, String)> =
+			sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
+				.bind(chapter_id)
+				.fetch_all(&state.pool)
+				.await?;
+		if !cached.is_empty() {
+			return Ok(cached);
+		}
+	}
+	let chapter = chapter_row(&state.pool, chapter_id).await?;
+	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	let handle = state.get_handle(manga.source_id).await?;
+	let pages = handle
+		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
+		.await?;
+	{
+		let mut tx = state.pool.begin().await?;
+		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+			.bind(chapter_id)
+			.execute(&mut *tx)
+			.await?;
+		for (index, page) in pages.iter().enumerate() {
+			let stored = serde_json::json!({
+				"content": serde_json::to_value(&page.content)?,
+				"thumbnail": page.thumbnail,
+				"hasDescription": page.has_description,
+				"description": page.description,
+			});
+			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
+				.bind(chapter_id)
+				.bind(index as i64)
+				.bind(serde_json::to_string(&stored)?)
+				.execute(&mut *tx)
+				.await?;
+		}
+		sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
+			.bind(pages.len() as i64)
+			.bind(chapter_id)
+			.execute(&mut *tx)
+			.await?;
+		tx.commit().await?;
+	}
+	let stored: Vec<(i64, String)> =
+		sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
+			.bind(chapter_id)
+			.fetch_all(&state.pool)
+			.await?;
+	Ok(stored)
+}
+
+async fn send(request: reqwest::RequestBuilder) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let response = request
+		.send()
+		.await
+		.map_err(|e| ApiError::bad_gateway(format!("upstream request failed: {e}")))?;
+	if !response.status().is_success() {
+		return Err(ApiError::bad_gateway(format!(
+			"upstream returned status {}",
+			response.status()
+		)));
+	}
+	let mime = response
+		.headers()
+		.get(reqwest::header::CONTENT_TYPE)
+		.and_then(|v| v.to_str().ok())
+		.map(str::to_string);
+	let bytes = response
+		.bytes()
+		.await
+		.map_err(|e| ApiError::bad_gateway(format!("read upstream body failed: {e}")))?;
+	Ok((bytes.to_vec(), mime))
+}
+
+/// 裸 GET，不经过源的 image_request 改造
+pub async fn http_get(state: &AppState, url: &str) -> ApiResult<(Vec<u8>, Option<String>)> {
+	send(state.http.get(url)).await
+}
+
+/// 按源特性拉图：有 image_request 用源给的 spec 发请求，否则裸 GET
+pub async fn fetch_remote(
+	state: &Arc<AppState>,
+	source_id: i64,
+	url: &str,
+	context: Option<PageContext>,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let handle = state.get_handle(source_id).await?;
+	if !handle.features().image_request {
+		return http_get(state, url).await;
+	}
+	let spec = handle.get_image_request(url.to_string(), context).await?;
+	let mut builder = state.http.request(spec.method.into(), &spec.url);
+	for (name, value) in &spec.headers {
+		builder = builder.header(name, value);
+	}
+	if let Some(body) = spec.body {
+		builder = builder.body(body);
+	}
+	send(builder).await
 }

@@ -1,0 +1,12 @@
+{
+	"extends": "$app/tsconfig",
+	"compilerOptions": {
+		"strict": true,
+		"sourceMap": true,
+		"paths": {
+			"#lib/*": ["./src/lib/*"]
+		}
+	},
+	"include": ["src", "vite.config.ts"],
+	"exclude": ["src/service-worker"]
+}

@@ -20,6 +20,7 @@ pub struct AppState {
 	pub sources: RwLock<HashMap<i64, SourceEntry>>,
 	pub call_semaphore: Arc<Semaphore>,
 	pub defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
+	pub http: reqwest::Client,
 }
 
 pub struct DefaultsWrite {
@@ -71,12 +72,19 @@ impl AppState {
 		defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
 	) -> Arc<Self> {
 		let call_concurrency = config.call_concurrency;
+		// M2 限制：服务端直拉（封面/页图）不共享引擎内 per-source cookie jar，
+		// M3 经 TRAWL 代理链路统一
+		let http = reqwest::Client::builder()
+			.user_agent(&config.user_agent)
+			.build()
+			.expect("build http client");
 		Arc::new(Self {
 			pool,
 			config,
 			sources: RwLock::new(HashMap::new()),
 			call_semaphore: Arc::new(Semaphore::new(call_concurrency)),
 			defaults_tx,
+			http,
 		})
 	}
 

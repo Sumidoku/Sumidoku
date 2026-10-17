@@ -50,6 +50,22 @@ impl ApiError {
 			format!("source {key} is disabled"),
 		)
 	}
+
+	pub fn duplicate(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, "duplicate", message)
+	}
+
+	pub fn not_in_library(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, "not_in_library", message)
+	}
+
+	pub fn unsupported_501(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::NOT_IMPLEMENTED, "unsupported", message)
+	}
+
+	pub fn bad_gateway(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::BAD_GATEWAY, "bad_gateway", message)
+	}
 }
 
 impl From<aidoku_wasm::Error> for ApiError {

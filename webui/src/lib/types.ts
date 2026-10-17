@@ -1,0 +1,213 @@
+// 与 suzuri-server REST 契约对应的类型。
+// Aidoku 结构体字段为 snake_case，Suzuri 自有字段为 camelCase。
+
+export interface Source {
+	id: number;
+	key: string;
+	name: string;
+	version: string;
+	languages: string[];
+	contentRating: string;
+	baseUrl: string | null;
+	enabled: boolean;
+	installedAt: number;
+	updatedAt: number;
+}
+
+export interface Manga {
+	key: string;
+	title: string;
+	cover: string | null;
+	authors: string[];
+	artists: string[];
+	description: string | null;
+	url: string | null;
+	tags: string[];
+	status: string;
+	content_rating: string;
+	viewer: string;
+	update_strategy: string;
+	next_update_time: number | null;
+	sourceId: number;
+	/** 已入库才有 */
+	id?: number;
+}
+
+export interface MangaDetail extends Manga {
+	id: number;
+	initialized: boolean;
+	chapterCount: number;
+	inLibrary: boolean;
+}
+
+export interface LibraryEntry extends Manga {
+	id: number;
+	inLibrary: boolean;
+	inLibraryAt: number | null;
+}
+
+export interface Chapter {
+	key: string;
+	title: string | null;
+	chapter_number: number | null;
+	volume_number: number | null;
+	date_uploaded: number | string | null;
+	scanlators: string[];
+	url: string | null;
+	language: string | null;
+	thumbnail: string | null;
+	locked: boolean;
+	id: number;
+	pageCount: number | null;
+	lastPageRead: number;
+	isRead: boolean;
+	isBookmarked: boolean;
+	lastReadAt: number | null;
+}
+
+export type PageContent =
+	| { Url: [string, string | null] }
+	| { Text: string }
+	| { Zip: [string, string] }
+	| { Image: unknown };
+
+export interface PageData {
+	index: number;
+	content: PageContent | null;
+	thumbnail: string | null;
+	hasDescription: boolean;
+	description: string | null;
+}
+
+export interface MangaPage {
+	entries: Manga[];
+	hasNextPage: boolean;
+}
+
+export interface LibraryPage {
+	entries: LibraryEntry[];
+	hasNextPage: boolean;
+}
+
+export interface HistoryEntry {
+	chapter: Chapter;
+	manga: MangaDetail;
+	lastReadAt: number;
+	lastPageRead: number;
+	isRead: boolean;
+}
+
+export interface HistoryPage {
+	entries: HistoryEntry[];
+	hasNextPage: boolean;
+}
+
+export interface Category {
+	id: number;
+	name: string;
+	sortOrder: number;
+	isDefault: boolean;
+	mangaCount: number;
+}
+
+export interface Listing {
+	id: string;
+	name: string;
+	kind: string;
+}
+
+export type FilterKind =
+	| { Text: { placeholder?: string | null } }
+	| { Sort: { can_ascend: boolean; options: string[]; default?: string | null } }
+	| { Check: { name?: string | null; can_exclude: boolean; default?: boolean | null } }
+	| {
+			Select: {
+				is_genre: boolean;
+				uses_tag_style: boolean;
+				options: string[];
+				ids?: string[] | null;
+				default?: string | null;
+			};
+	  }
+	| {
+			MultiSelect: {
+				is_genre: boolean;
+				can_exclude: boolean;
+				uses_tag_style: boolean;
+				options: string[];
+				ids?: string[] | null;
+				default_included?: string[] | null;
+				default_excluded?: string[] | null;
+			};
+	  }
+	| { Note: string }
+	| { Range: { min?: number | null; max?: number | null; decimal: boolean } };
+
+export interface Filter {
+	id: string;
+	title: string;
+	hide_from_header: boolean;
+	kind: FilterKind;
+}
+
+export type FilterValue =
+	| { Text: { id: string; value: string } }
+	| { Sort: { id: string; index: number; ascending: boolean } }
+	| { Check: { id: string; value: number } }
+	| { Select: { id: string; value: string } }
+	| { MultiSelect: { id: string; included: string[]; excluded: string[] } }
+	| { Range: { id: string; from: number | null; to: number | null } };
+
+export type SettingValue =
+	| { Group: { footer?: string | null; items: Setting[] } }
+	| { Page: { items: Setting[]; inline_title?: boolean | null } }
+	| {
+			Select: {
+				values: string[];
+				titles?: string[] | null;
+				default?: string | null;
+			};
+	  }
+	| {
+			MultiSelect: {
+				values: string[];
+				titles?: string[] | null;
+				default?: string[] | null;
+			};
+	  }
+	| { Toggle: { subtitle?: string | null; default: boolean } }
+	| {
+			Stepper: {
+				minimum_value: number;
+				maximum_value: number;
+				step_value?: number | null;
+				default?: number | null;
+			};
+	  }
+	| { Segment: { options: string[]; default?: number | null } }
+	| {
+			Text: {
+				placeholder?: string | null;
+				secure?: boolean | null;
+				default?: string | null;
+			};
+	  }
+	// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+	| { Button: Record<string, never> }
+	| { Link: { url: string; external?: boolean | null } }
+	| { Login: Record<string, unknown> };
+
+export interface Setting {
+	key: string;
+	title: string;
+	notification?: string | null;
+	requires?: string | null;
+	requires_false?: string | null;
+	refreshes?: string[] | null;
+	value: SettingValue;
+}
+
+export interface SourceSettings {
+	settings: Setting[] | null;
+	values: Record<string, unknown>;
+}

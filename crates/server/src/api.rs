@@ -1,16 +1,19 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-	ChapterRow, MangaRow, SourceRow, chapter_from_row, default_value_to_json,
-	json_to_default_value, manga_from_row,
+	ChapterProgress, ChapterRow, ChapterUserRow, MangaRow, SourceRow, chapter_from_row,
+	default_value_to_json, json_to_default_value, manga_from_row,
 };
-use crate::service::{reconcile_chapters, scan_sources_dir, upsert_manga};
+use crate::service::{
+	chapter_row, load_pages, manga_row, reconcile_chapters, scan_sources_dir, upsert_manga,
+};
 use crate::state::{AppState, load_defaults};
+use crate::{cover, library, page, reader};
 use aidoku::{FilterValue, Listing, Manga};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -31,7 +34,21 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
+		.route("/api/v1/manga/{id}/cover", get(cover::get_cover))
+		.route("/api/v1/manga/{id}/categories", put(library::set_manga_categories))
+		.route("/api/v1/chapter/{id}", patch(reader::update_chapter))
+		.route("/api/v1/chapter/batch", post(reader::batch_update_chapters))
 		.route("/api/v1/chapter/{id}/pages", get(get_pages))
+		.route("/api/v1/chapter/{id}/page/{index}", get(page::get_page))
+		.route("/api/v1/library", get(library::list_library).post(library::add_to_library))
+		.route("/api/v1/library/{manga_id}", delete(library::remove_from_library))
+		.route("/api/v1/categories", get(library::list_categories).post(library::create_category))
+		.route(
+			"/api/v1/categories/{id}",
+			patch(library::update_category).delete(library::delete_category),
+		)
+		.route("/api/v1/categories/reorder", patch(library::reorder_categories))
+		.route("/api/v1/history", get(reader::get_history))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.with_state(state)
 }
@@ -49,29 +66,6 @@ async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
 	.fetch_optional(&state.pool)
 	.await?;
 	row.ok_or_else(|| ApiError::not_found("source not found"))
-}
-
-async fn manga_row(state: &AppState, id: i64) -> ApiResult<MangaRow> {
-	let row: Option<MangaRow> = sqlx::query_as(
-		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id = ?",
-	)
-	.bind(id)
-	.fetch_optional(&state.pool)
-	.await?;
-	row.ok_or_else(|| ApiError::not_found("manga not found"))
-}
-
-async fn chapter_row(state: &AppState, id: i64) -> ApiResult<ChapterRow> {
-	let row: Option<ChapterRow> = sqlx::query_as(
-		"SELECT id, manga_id, key, title, number, volume, scanlators, language, url,
-		 date_uploaded, source_order, page_count, locked, fetched_at FROM chapter WHERE id = ?",
-	)
-	.bind(id)
-	.fetch_optional(&state.pool)
-	.await?;
-	row.ok_or_else(|| ApiError::not_found("chapter not found"))
 }
 
 async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
@@ -355,15 +349,20 @@ pub struct RefreshQuery {
 	pub refresh: Option<String>,
 }
 
-fn wants_refresh(query: &RefreshQuery) -> bool {
+pub(crate) fn wants_refresh(query: &RefreshQuery) -> bool {
 	matches!(query.refresh.as_deref(), Some("") | Some("1") | Some("true"))
 }
 
-async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
+pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
 	let (chapter_count,): (i64,) =
 		sqlx::query_as("SELECT COUNT(*) FROM chapter WHERE manga_id = ?")
 			.bind(row.id)
 			.fetch_one(&state.pool)
+			.await?;
+	let in_library: Option<(bool,)> =
+		sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ? AND user_id = 1")
+			.bind(row.id)
+			.fetch_optional(&state.pool)
 			.await?;
 	let mut value = serde_json::to_value(manga_from_row(row))?;
 	let object = value
@@ -373,7 +372,36 @@ async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
 	object.insert("sourceId".into(), json!(row.source_id));
 	object.insert("initialized".into(), json!(row.initialized));
 	object.insert("chapterCount".into(), json!(chapter_count));
+	object.insert(
+		"inLibrary".into(),
+		json!(in_library.map(|(flag,)| flag).unwrap_or(false)),
+	);
 	Ok(value)
+}
+
+pub(crate) fn chapter_json(row: &ChapterRow, progress: Option<&ChapterProgress>) -> ApiResult<Value> {
+	let mut value = serde_json::to_value(chapter_from_row(row))?;
+	let object = value
+		.as_object_mut()
+		.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
+	let progress = progress.copied().unwrap_or_default();
+	object.insert("id".into(), json!(row.id));
+	object.insert("pageCount".into(), json!(row.page_count));
+	object.insert("lastPageRead".into(), json!(progress.last_page_read));
+	object.insert("isRead".into(), json!(progress.is_read));
+	object.insert("isBookmarked".into(), json!(progress.is_bookmarked));
+	object.insert("lastReadAt".into(), json!(progress.last_read_at));
+	Ok(value)
+}
+
+pub(crate) fn progress_of(row: &ChapterUserRow) -> Option<ChapterProgress> {
+	// last_page_read 列非空，LEFT JOIN 出 NULL 即用户行不存在
+	row.last_page_read.map(|last_page_read| ChapterProgress {
+		last_page_read,
+		is_read: row.is_read.unwrap_or(false),
+		is_bookmarked: row.is_bookmarked.unwrap_or(false),
+		last_read_at: row.last_read_at,
+	})
 }
 
 async fn get_manga(
@@ -381,14 +409,14 @@ async fn get_manga(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
-	let mut row = manga_row(&state, id).await?;
+	let mut row = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
 		let handle = state.get_handle(row.source_id).await?;
 		let updated = handle
 			.get_manga_update(manga_from_row(&row), true, false)
 			.await?;
 		upsert_manga(&state.pool, row.source_id, &updated, true, true, false).await?;
-		row = manga_row(&state, id).await?;
+		row = manga_row(&state.pool, id).await?;
 	}
 	Ok(Json(manga_json(&state, &row).await?))
 }
@@ -398,7 +426,7 @@ async fn get_chapters(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
-	let manga = manga_row(&state, id).await?;
+	let manga = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
 		let handle = state.get_handle(manga.source_id).await?;
 		let updated = handle
@@ -411,23 +439,18 @@ async fn get_chapters(
 			.execute(&state.pool)
 			.await?;
 	}
-	let rows: Vec<ChapterRow> = sqlx::query_as(
-		"SELECT id, manga_id, key, title, number, volume, scanlators, language, url,
-		 date_uploaded, source_order, page_count, locked, fetched_at
-		 FROM chapter WHERE manga_id = ? ORDER BY source_order ASC",
+	let rows: Vec<ChapterUserRow> = sqlx::query_as(
+		"SELECT c.*, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
+		 FROM chapter c
+		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = ? ORDER BY c.source_order ASC",
 	)
 	.bind(id)
 	.fetch_all(&state.pool)
 	.await?;
 	let mut chapters = Vec::with_capacity(rows.len());
 	for row in &rows {
-		let mut value = serde_json::to_value(chapter_from_row(row))?;
-		let object = value
-			.as_object_mut()
-			.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
-		object.insert("id".into(), json!(row.id));
-		object.insert("pageCount".into(), json!(row.page_count));
-		chapters.push(value);
+		chapters.push(chapter_json(&row.chapter, progress_of(row).as_ref())?);
 	}
 	Ok(Json(json!(chapters)))
 }
@@ -437,62 +460,16 @@ async fn get_pages(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
-	let chapter = chapter_row(&state, id).await?;
-	let cached: Vec<(i64, String)> = sqlx::query_as(
-		"SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC",
-	)
-	.bind(id)
-	.fetch_all(&state.pool)
-	.await?;
-	if !cached.is_empty() && !wants_refresh(&query) {
-		let mut pages = Vec::with_capacity(cached.len());
-		for (index, content) in cached {
-			let mut value = serde_json::from_str::<Value>(&content)?;
-			let object = value
-				.as_object_mut()
-				.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
-			object.insert("index".into(), json!(index));
-			pages.push(value);
-		}
-		return Ok(Json(json!(pages)));
-	}
-	let manga = manga_row(&state, chapter.manga_id).await?;
-	let handle = state.get_handle(manga.source_id).await?;
-	let pages = handle
-		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
-		.await?;
+	chapter_row(&state.pool, id).await?;
+	let pages = load_pages(&state, id, wants_refresh(&query)).await?;
 	let mut out = Vec::with_capacity(pages.len());
-	for (index, page) in pages.into_iter().enumerate() {
-		out.push(json!({
-			"index": index,
-			"content": serde_json::to_value(&page.content)?,
-			"thumbnail": page.thumbnail,
-			"hasDescription": page.has_description,
-			"description": page.description,
-		}));
-	}
-	{
-		let mut tx = state.pool.begin().await?;
-		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
-			.bind(id)
-			.execute(&mut *tx)
-			.await?;
-		for entry in &out {
-			let mut stored = entry.clone();
-			stored.as_object_mut().map(|o| o.remove("index"));
-			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
-				.bind(id)
-				.bind(entry["index"].as_i64().unwrap_or_default())
-				.bind(serde_json::to_string(&stored)?)
-				.execute(&mut *tx)
-				.await?;
-		}
-		sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
-			.bind(out.len() as i64)
-			.bind(id)
-			.execute(&mut *tx)
-			.await?;
-		tx.commit().await?;
+	for (index, content) in pages {
+		let mut value = serde_json::from_str::<Value>(&content)?;
+		let object = value
+			.as_object_mut()
+			.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
+		object.insert("index".into(), json!(index));
+		out.push(value);
 	}
 	Ok(Json(json!(out)))
 }
