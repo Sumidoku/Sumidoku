@@ -212,8 +212,8 @@ pub async fn downloads_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgra
 	let manager = state.downloads();
 	ws.on_upgrade(move |mut socket: WebSocket| async move {
 		let snapshot = match download_entries(&state, &manager).await {
-			Ok(entries) => json!({ "type": "snapshot", "downloads": entries }),
-			Err(_) => json!({ "type": "snapshot", "downloads": [] }),
+			Ok(entries) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": entries }),
+			Err(_) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": [] }),
 		};
 		if socket
 			.send(Message::Text(snapshot.to_string().into()))

@@ -10,6 +10,7 @@ use axum::response::Json;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
@@ -21,6 +22,51 @@ const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
 pub struct LibraryQuery {
 	pub category_id: Option<i64>,
 	pub page: Option<i64>,
+	pub search: Option<String>,
+	pub sort: Option<String>,
+	pub filter: Option<String>,
+}
+
+/// LIKE 的 %/_ 是通配符，用户搜索词里的字面量与转义符本身都要前置转义
+fn escape_like(raw: &str) -> String {
+	let mut out = String::with_capacity(raw.len());
+	for c in raw.chars() {
+		if matches!(c, '\\' | '%' | '_') {
+			out.push('\\');
+		}
+		out.push(c);
+	}
+	out
+}
+
+fn library_order_by(sort: Option<&str>) -> ApiResult<&'static str> {
+	const LAST_READ: &str = " ORDER BY (SELECT MAX(cu.last_read_at) FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = m.id) DESC, m.id ASC";
+	const UNREAD: &str = " ORDER BY (SELECT COUNT(*) FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = m.id AND cu.is_read = 0) DESC, m.id ASC";
+	match sort {
+		None | Some("added") => Ok(" ORDER BY mu.in_library_at DESC, m.id ASC"),
+		Some("title") => Ok(" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC"),
+		// SQLite 里 NULL 比任何值小，DESC 天然落最后
+		Some("lastRead") => Ok(LAST_READ),
+		Some("unread") => Ok(UNREAD),
+		Some(other) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
+	}
+}
+
+fn library_filter_clause(filter: &str) -> ApiResult<String> {
+	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = m.id AND ";
+	let column = match filter {
+		"unread" => "cu.is_read = 0",
+		"downloaded" => "cu.is_downloaded = 1",
+		"bookmarked" => "cu.is_bookmarked = 1",
+		other => return Err(ApiError::bad_request(format!("invalid filter: {other}"))),
+	};
+	Ok(format!("{EXISTS}{column})"))
 }
 
 pub async fn list_library(
@@ -31,33 +77,40 @@ pub async fn list_library(
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
+	let order_by = library_order_by(query.sort.as_deref())?;
+	let search = query.search.filter(|s| !s.is_empty());
+	let mut sql = LIBRARY_SELECT.to_string();
+	if search.is_some() {
+		sql.push_str(" AND m.title LIKE '%'||?||'%' ESCAPE '\\'");
+	}
 	// categoryId=0 指「在库但未分类」，其余 id 指该分类下；缺省不过滤
-	let (sql, category) = match query.category_id {
-		None => (
-			format!("{LIBRARY_SELECT} ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"),
-			None,
-		),
-		Some(0) => (
-			format!(
-				"{LIBRARY_SELECT} AND NOT EXISTS (SELECT 1 FROM category_manga cm
-				 WHERE cm.manga_id = m.id AND cm.user_id = 1)
-				 ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
-			),
-			None,
+	let mut category = None;
+	match query.category_id {
+		None => {}
+		Some(0) => sql.push_str(
+			" AND NOT EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = 1)",
 		),
 		Some(category_id) => {
 			category_row(&state.pool, category_id).await?;
-			(
-				format!(
-					"{LIBRARY_SELECT} AND EXISTS (SELECT 1 FROM category_manga cm
-					 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND cm.category_id = ?)
-					 ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
-				),
-				Some(category_id),
-			)
+			sql.push_str(
+				" AND EXISTS (SELECT 1 FROM category_manga cm
+				 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND cm.category_id = ?)",
+			);
+			category = Some(category_id);
 		}
-	};
+	}
+	if let Some(raw) = &query.filter {
+		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+			sql.push_str(&library_filter_clause(token)?);
+		}
+	}
+	sql.push_str(order_by);
+	sql.push_str(" LIMIT ? OFFSET ?");
 	let mut q = sqlx::query_as::<_, LibraryEntryRow>(&sql);
+	if let Some(search) = &search {
+		q = q.bind(escape_like(search));
+	}
 	if let Some(category_id) = category {
 		q = q.bind(category_id);
 	}
@@ -67,14 +120,33 @@ pub async fn list_library(
 		.fetch_all(&state.pool)
 		.await?;
 	let has_next_page = rows.len() as i64 > PAGE_SIZE;
-	let mut entries = Vec::with_capacity(rows.len().min(PAGE_SIZE as usize));
-	for row in rows.iter().take(PAGE_SIZE as usize) {
+	let page_rows: Vec<&LibraryEntryRow> = rows.iter().take(PAGE_SIZE as usize).collect();
+	let mut unread: HashMap<i64, i64> = HashMap::new();
+	if !page_rows.is_empty() {
+		let placeholders = page_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+		let unread_sql = format!(
+			"SELECT c.manga_id, COUNT(*) FROM chapter c
+			 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1 AND cu.is_read = 0
+			 WHERE c.manga_id IN ({placeholders}) GROUP BY c.manga_id"
+		);
+		let mut q = sqlx::query_as::<_, (i64, i64)>(&unread_sql);
+		for row in &page_rows {
+			q = q.bind(row.manga.id);
+		}
+		unread = q.fetch_all(&state.pool).await?.into_iter().collect();
+	}
+	let mut entries = Vec::with_capacity(page_rows.len());
+	for row in page_rows {
 		let mut value = manga_json(&state, &row.manga).await?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
 		object.insert("inLibrary".into(), json!(true));
 		object.insert("inLibraryAt".into(), json!(row.in_library_at));
+		object.insert(
+			"unreadCount".into(),
+			json!(unread.get(&row.manga.id).copied().unwrap_or(0)),
+		);
 		entries.push(value);
 	}
 	Ok(Json(json!({
@@ -157,10 +229,13 @@ struct CategoryRow {
 	name: String,
 	sort_order: i64,
 	is_default: bool,
+	include_in_update: i64,
+	include_in_download: i64,
 	manga_count: i64,
 }
 
 const CATEGORY_SELECT: &str = "SELECT c.id, c.name, c.sort_order, c.is_default,
+	 c.include_in_update, c.include_in_download,
 	 (SELECT COUNT(*) FROM category_manga cm
 	  WHERE cm.category_id = c.id AND cm.user_id = 1) AS manga_count
 	 FROM category c WHERE c.user_id = 1";
@@ -171,6 +246,8 @@ fn category_json(row: &CategoryRow) -> Value {
 		"name": row.name,
 		"sortOrder": row.sort_order,
 		"isDefault": row.is_default,
+		"includeInUpdate": row.include_in_update,
+		"includeInDownload": row.include_in_download,
 		"mangaCount": row.manga_count,
 	})
 }
@@ -245,22 +322,65 @@ pub async fn create_category(
 	Ok(Json(category_json(&category_row(&state.pool, id).await?)))
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCategoryRequest {
+	pub name: Option<String>,
+	pub include_in_update: Option<i64>,
+	pub include_in_download: Option<i64>,
+}
+
+fn check_include_in(field: &str, value: i64) -> ApiResult<i64> {
+	match value {
+		v @ 0..=2 => Ok(v),
+		v => Err(ApiError::bad_request(format!("{field} must be 0, 1 or 2, got {v}"))),
+	}
+}
+
+/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
 pub async fn update_category(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
-	Json(body): Json<CategoryNameRequest>,
+	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
-	category_row(&state.pool, id).await?;
-	let name = body.name.trim();
-	if name.is_empty() {
-		return Err(ApiError::bad_request("name must not be empty"));
+	let row = category_row(&state.pool, id).await?;
+	let patch = match body {
+		None => UpdateCategoryRequest::default(),
+		Some(Json(value)) => serde_json::from_value(value)
+			.map_err(|e| ApiError::bad_request(format!("invalid category patch: {e}")))?,
+	};
+	let include_in_update = patch
+		.include_in_update
+		.map(|v| check_include_in("includeInUpdate", v))
+		.transpose()?;
+	let include_in_download = patch
+		.include_in_download
+		.map(|v| check_include_in("includeInDownload", v))
+		.transpose()?;
+	let name = match patch.name {
+		Some(name) => {
+			let name = name.trim();
+			if name.is_empty() {
+				return Err(ApiError::bad_request("name must not be empty"));
+			}
+			ensure_unique_name(&state.pool, name, Some(id)).await?;
+			Some(name.to_string())
+		}
+		None => None,
+	};
+	if name.is_none() && include_in_update.is_none() && include_in_download.is_none() {
+		return Ok(Json(category_json(&row)));
 	}
-	ensure_unique_name(&state.pool, name, Some(id)).await?;
-	sqlx::query("UPDATE category SET name = ? WHERE id = ? AND user_id = 1")
-		.bind(name)
-		.bind(id)
-		.execute(&state.pool)
-		.await?;
+	sqlx::query(
+		"UPDATE category SET name = ?, include_in_update = ?, include_in_download = ?
+		 WHERE id = ? AND user_id = 1",
+	)
+	.bind(name.as_deref().unwrap_or(&row.name))
+	.bind(include_in_update.unwrap_or(row.include_in_update))
+	.bind(include_in_download.unwrap_or(row.include_in_download))
+	.bind(id)
+	.execute(&state.pool)
+	.await?;
 	Ok(Json(category_json(&category_row(&state.pool, id).await?)))
 }
 

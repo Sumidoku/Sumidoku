@@ -8,11 +8,11 @@ use crate::service::{
 };
 use crate::state::{AppState, load_defaults};
 use crate::{cover, library, page, reader};
-use aidoku::{FilterValue, Listing, Manga};
+use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::Json;
+use axum::response::{Json, Response};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use serde::Deserialize;
@@ -26,13 +26,14 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/sources/scan", post(scan_sources))
 		.route("/api/v1/sources/{id}", delete(delete_source))
+		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
 		.route("/api/v1/sources/{id}/filters", get(get_filters))
 		.route("/api/v1/sources/{id}/search", post(search_source))
 		.route("/api/v1/sources/{id}/listings", get(get_listings))
 		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
 		.route("/api/v1/manga", post(register_manga))
-		.route("/api/v1/manga/{id}", get(get_manga))
+		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
 		.route("/api/v1/manga/{id}/cover", get(cover::get_cover))
 		.route("/api/v1/manga/{id}/categories", put(library::set_manga_categories))
@@ -133,6 +134,36 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 	Ok(StatusCode::NO_CONTENT)
 }
 
+async fn get_source_icon(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+) -> ApiResult<Response> {
+	let row = source_row(&state, id).await?;
+	let Some(path) = row.icon_path else {
+		return Err(ApiError::not_found("icon not found"));
+	};
+	let bytes = match tokio::fs::read(&path).await {
+		Ok(bytes) => bytes,
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			return Err(ApiError::not_found("icon not found"));
+		}
+		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
+	};
+	let mime = match path
+		.rsplit('.')
+		.next()
+		.map(str::to_ascii_lowercase)
+		.as_deref()
+	{
+		Some("png") => "image/png",
+		Some("jpg" | "jpeg") => "image/jpeg",
+		Some("webp") => "image/webp",
+		Some("gif") => "image/gif",
+		_ => "application/octet-stream",
+	};
+	Ok(cover::bytes_response(bytes, mime, 86400))
+}
+
 /// 动态能力（filters/listings）不支持时按端点约定 404 unsupported
 fn dynamic_capability_error(e: SourceError) -> ApiError {
 	match e {
@@ -163,15 +194,15 @@ async fn get_filters(
 	let handle = state.get_handle(id).await?;
 	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后
 	let mut out: Vec<Value> = Vec::new();
-	if let Some(doc) = package_json(&state, id, "source.json").await? {
-		if let Some(filters) = doc.get("filters").and_then(|v| v.as_array()) {
-			out.extend(filters.iter().cloned());
-		}
+	if let Some(doc) = package_json(&state, id, "source.json").await?
+		&& let Some(filters) = doc.get("filters").and_then(|v| v.as_array())
+	{
+		out.extend(filters.iter().cloned());
 	}
-	if out.is_empty() {
-		if let Some(Value::Array(filters)) = package_json(&state, id, "filters.json").await? {
-			out.extend(filters);
-		}
+	if out.is_empty()
+		&& let Some(Value::Array(filters)) = package_json(&state, id, "filters.json").await?
+	{
+		out.extend(filters);
 	}
 	match handle.get_filters().await {
 		Ok(filters) => {
@@ -252,10 +283,10 @@ async fn get_listings(
 	let handle = state.get_handle(id).await?;
 	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后
 	let mut out: Vec<Value> = Vec::new();
-	if let Some(doc) = package_json(&state, id, "source.json").await? {
-		if let Some(listings) = doc.get("listings").and_then(|v| v.as_array()) {
-			out.extend(listings.iter().cloned());
-		}
+	if let Some(doc) = package_json(&state, id, "source.json").await?
+		&& let Some(listings) = doc.get("listings").and_then(|v| v.as_array())
+	{
+		out.extend(listings.iter().cloned());
 	}
 	match handle.get_listings().await {
 		Ok(listings) => {
@@ -372,10 +403,10 @@ async fn put_source_settings(
 		if let Some(entry) = state.sources.write().await.get_mut(&id) {
 			entry.features = features.clone();
 		}
-		if let Some(notify) = query.notify {
-			if features.notification {
-				handle.handle_notification(notify).await?;
-			}
+		if let Some(notify) = query.notify
+			&& features.notification
+		{
+			handle.handle_notification(notify).await?;
 		}
 	}
 	let values = current_values(&state, id).await?;
@@ -529,6 +560,35 @@ async fn get_manga(
 		upsert_manga(&state.pool, row.source_id, &updated, true, true, false).await?;
 		row = manga_row(&state.pool, id).await?;
 	}
+	Ok(Json(manga_json(&state, &row).await?))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMangaRequest {
+	pub update_strategy: Option<UpdateStrategy>,
+}
+
+/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
+async fn update_manga(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	body: Option<Json<Value>>,
+) -> ApiResult<Json<Value>> {
+	manga_row(&state.pool, id).await?;
+	let patch = match body {
+		None => UpdateMangaRequest::default(),
+		Some(Json(value)) => serde_json::from_value(value)
+			.map_err(|e| ApiError::bad_request(format!("invalid manga patch: {e}")))?,
+	};
+	if let Some(strategy) = patch.update_strategy {
+		sqlx::query("UPDATE manga SET update_strategy = ? WHERE id = ?")
+			.bind(strategy as i64)
+			.bind(id)
+			.execute(&state.pool)
+			.await?;
+	}
+	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(manga_json(&state, &row).await?))
 }
 

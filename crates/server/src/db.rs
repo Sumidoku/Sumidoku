@@ -11,12 +11,11 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 		.split('?')
 		.next()
 		.unwrap_or_default();
-	if !path_part.is_empty() && path_part != ":memory:" {
-		if let Some(parent) = std::path::Path::new(path_part).parent() {
-			if !parent.as_os_str().is_empty() {
-				std::fs::create_dir_all(parent)?;
-			}
-		}
+	if !path_part.is_empty() && path_part != ":memory:"
+		&& let Some(parent) = std::path::Path::new(path_part).parent()
+		&& !parent.as_os_str().is_empty()
+	{
+		std::fs::create_dir_all(parent)?;
 	}
 	let options = SqliteConnectOptions::from_str(database_url)?
 		.create_if_missing(true)

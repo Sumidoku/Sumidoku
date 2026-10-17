@@ -138,10 +138,8 @@ impl CookieJar {
 			let Some((k, v)) = attr.split_once('=') else { continue };
 			match k.trim().to_ascii_lowercase().as_str() {
 				"domain" => domain = v.trim().trim_start_matches('.').to_string(),
-				"max-age" => {
-					if v.trim().parse::<i64>().map(|s| s <= 0).unwrap_or(false) {
-						expired = true;
-					}
+				"max-age" if v.trim().parse::<i64>().map(|s| s <= 0).unwrap_or(false) => {
+					expired = true;
 				}
 				_ => {}
 			}
@@ -212,10 +210,10 @@ fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 					request.headers.insert(USER_AGENT, value);
 				}
 			}
-			if let Some(jar_header) = data.net.jar.header_for(url) {
-				if let Ok(value) = HeaderValue::from_str(&jar_header) {
-					request.headers.entry(COOKIE).or_insert(value);
-				}
+			if let Some(jar_header) = data.net.jar.header_for(url)
+				&& let Ok(value) = HeaderValue::from_str(&jar_header)
+			{
+				request.headers.entry(COOKIE).or_insert(value);
 			}
 			let timeout = request
 				.timeout

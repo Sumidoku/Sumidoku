@@ -1,8 +1,15 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{request, test_app, TestApp};
+use common::{TestApp, register_example_manga, request, request_full, test_app};
 use serde_json::json;
+
+// 1x1 透明 PNG
+const PNG: &[u8] = &[
+	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
+	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
 #[tokio::test]
 async fn full_flow() {
@@ -150,4 +157,78 @@ async fn full_flow() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["settings"].as_array().expect("settings array").len(), 1);
 	assert_eq!(body["values"]["setting"], false);
+}
+
+#[tokio::test]
+async fn source_icon() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = body[0]["id"].as_i64().expect("source id");
+	let icon_path = format!("/api/v1/sources/{source_id}/icon");
+
+	// 源无 icon → 404
+	let (status, body) = request(&app, "GET", &icon_path, None).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(body["error"]["code"], "not_found");
+	// 源不存在 → 404
+	let (status, _) = request(&app, "GET", "/api/v1/sources/999/icon", None).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	// 放入 icon.png 重新 scan → 200
+	std::fs::write(tmp.path().join("sources/en.example-source/icon.png"), PNG).expect("write icon");
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, headers, bytes) = request_full(&app, "GET", &icon_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/png");
+	assert_eq!(headers["cache-control"], "private, max-age=86400");
+	assert_eq!(bytes, PNG);
+
+	// icon_path 还在库里但文件没了 → 404
+	std::fs::remove_file(tmp.path().join("sources/en.example-source/icon.png")).expect("remove icon");
+	let (status, _) = request(&app, "GET", &icon_path, None).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn patch_manga_update_strategy() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let manga_path = format!("/api/v1/manga/{manga_id}");
+	let (_, body) = request(&app, "GET", &manga_path, None).await;
+	assert_eq!(body["update_strategy"], "Always");
+
+	let (status, body) = request(&app, "PATCH", &manga_path, Some(json!({"updateStrategy": "Never"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["id"], manga_id);
+	assert_eq!(body["update_strategy"], "Never");
+	assert!(body["chapterCount"].is_i64());
+	let (_, body) = request(&app, "GET", &manga_path, None).await;
+	assert_eq!(body["update_strategy"], "Never");
+
+	// {} 与空 body 都是无操作
+	let (status, body) = request(&app, "PATCH", &manga_path, Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["update_strategy"], "Never");
+	let (status, body) = request(&app, "PATCH", &manga_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["update_strategy"], "Never");
+
+	// 非法值 400，且不落库
+	for bad in [json!({"updateStrategy": "Sometimes"}), json!({"updateStrategy": 5})] {
+		let (status, body) = request(&app, "PATCH", &manga_path, Some(bad.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+		assert_eq!(body["error"]["code"], "bad_request");
+	}
+	let (_, body) = request(&app, "GET", &manga_path, None).await;
+	assert_eq!(body["update_strategy"], "Never");
+
+	let (status, body) = request(&app, "PATCH", &manga_path, Some(json!({"updateStrategy": "Always"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["update_strategy"], "Always");
+
+	let (status, _) = request(&app, "PATCH", "/api/v1/manga/999", Some(json!({"updateStrategy": "Never"}))).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
 }

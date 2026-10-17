@@ -103,6 +103,8 @@ pub fn webview_get_cookies(_env: FunctionEnvMut<WasmEnv>, _webview: Rid) -> FFIR
 	UNIMPLEMENTED
 }
 
+// 签名由源 ABI 固定，无法归并参数
+#[allow(clippy::too_many_arguments)]
 pub fn webview_delete_cookie(
 	_env: FunctionEnvMut<WasmEnv>,
 	_webview: Rid,

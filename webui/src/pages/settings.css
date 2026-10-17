@@ -1,0 +1,354 @@
+.settings-page {
+	max-width: 860px;
+}
+
+.settings-section {
+	margin-bottom: 14px;
+}
+
+.settings-section__title {
+	font-size: 16px;
+}
+
+.settings-section__desc {
+	margin-top: 2px;
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.settings-section__body {
+	margin-top: 12px;
+}
+
+.settings-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 0;
+}
+
+.settings-row__label {
+	font-size: 14px;
+	color: var(--text-dim);
+}
+
+/* ============ 分类管理 ============ */
+
+.settings-cats {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.settings-cat {
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 10px 14px;
+}
+
+.settings-cat__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+
+.settings-cat__name {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 14.5px;
+	min-width: 0;
+}
+
+.settings-cat__ops {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+}
+
+.settings-cat__fields {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 10px;
+	margin-top: 10px;
+}
+
+.settings-cat__field {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.settings-cat__field .select,
+.settings-cat__field .select__field {
+	width: 100%;
+}
+
+.settings-cat__label {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.settings-cat__hint {
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.settings-cat__create {
+	display: flex;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.settings-cat__create .input {
+	flex: 1;
+	min-width: 0;
+}
+
+/* ============ 源设置 ============ */
+
+.settings-sources {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.settings-source {
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	padding: 4px 14px 12px;
+}
+
+.settings-source__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	width: 100%;
+	padding: 10px 0;
+	font-size: 15px;
+	text-align: left;
+}
+
+.settings-source__name {
+	font-weight: 600;
+}
+
+.settings-source__version {
+	margin-left: 8px;
+	font-size: 12.5px;
+	font-weight: 400;
+	color: var(--text-faint);
+}
+
+.settings-source__chev {
+	color: var(--text-faint);
+	transition: transform 0.15s;
+}
+
+.settings-source__chev--open {
+	transform: rotate(180deg);
+}
+
+.settings-source__body {
+	border-top: 1px solid var(--border);
+	padding-top: 6px;
+}
+
+.settings-source__loading {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 0;
+	color: var(--text-dim);
+}
+
+.settings-source__empty {
+	margin: 8px 0 0;
+}
+
+.settings-source__save {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 8px;
+}
+
+/* ============ 服务器 KV ============ */
+
+.settings-kv {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.settings-kv__row,
+.settings-kv__add {
+	display: grid;
+	grid-template-columns: minmax(120px, 220px) 1fr auto;
+	gap: 8px;
+	align-items: center;
+}
+
+.settings-kv__key .input__field {
+	color: var(--text-dim);
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 13px;
+}
+
+.settings-kv__add {
+	margin-top: 10px;
+}
+
+.settings-kv__empty {
+	margin: 0;
+}
+
+.settings-kv__save {
+	display: flex;
+	justify-content: flex-end;
+	margin-top: 12px;
+}
+
+/* ============ 关于 ============ */
+
+.settings-about {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 14px;
+}
+
+.settings-modal-text {
+	margin: 0 0 4px;
+}
+
+.settings-modal-input {
+	width: 100%;
+}
+
+/* ============ SettingItem ============ */
+
+.setting-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 0;
+}
+
+.setting-row--col {
+	flex-direction: column;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.setting-row--col .select,
+.setting-row--col .select__field,
+.setting-row--col .input,
+.setting-row--col .input__field {
+	width: 100%;
+}
+
+.setting-row--disabled {
+	opacity: 0.7;
+}
+
+.setting-row--disabled .setting-row__title {
+	color: var(--text);
+}
+
+.setting-row--disabled .faint {
+	font-size: 12.5px;
+}
+
+.setting-row__title {
+	font-size: 14px;
+	color: var(--text-dim);
+}
+
+.setting-row__sub {
+	font-size: 12.5px;
+	margin-top: 2px;
+}
+
+.setting-group {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 10px 14px;
+	margin: 8px 0;
+}
+
+.setting-group__title {
+	font-weight: 600;
+	font-size: 13.5px;
+	color: var(--accent);
+	margin-bottom: 4px;
+}
+
+.setting-group__footer {
+	font-size: 12.5px;
+	margin-top: 6px;
+}
+
+.setting-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.setting-ms {
+	display: flex;
+	flex-direction: column;
+}
+
+.setting-ms__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 0;
+}
+
+.setting-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--accent);
+	padding: 8px 0;
+	font-size: 14px;
+}
+
+.setting-link:hover {
+	color: var(--accent-hover);
+}
+
+.setting-notification {
+	font-size: 12.5px;
+	margin-top: -4px;
+}
+
+.setting-textarea {
+	width: 100%;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	padding: 8px 12px;
+	font-size: 14px;
+	color: var(--text);
+	resize: vertical;
+	transition: border-color 0.15s;
+}
+
+.setting-textarea:focus-visible {
+	outline: none;
+	border-color: var(--accent);
+}
+
+.setting-stepper__input {
+	width: 110px;
+	flex: none;
+}

@@ -1,6 +1,6 @@
 [package]
 name = "aidoku-wasm"
-version = "0.1.0"
+version.workspace = true
 description = "Aidoku WASM source runtime for Sumidoku"
 edition = "2024"
 publish = false

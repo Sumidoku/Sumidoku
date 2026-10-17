@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
 use common::{TestApp, base_config, connect_db, register_example_manga, request, request_full, test_app};
-use serde_json::json;
+use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
 // 1x1 透明 PNG
@@ -374,4 +374,321 @@ async fn static_webui() {
 	let (status, body) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["status"], "ok");
+}
+
+#[tokio::test]
+async fn category_include_flags_patch() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let cat = body["id"].as_i64().expect("category id");
+	assert_eq!(body["includeInUpdate"], 0);
+	assert_eq!(body["includeInDownload"], 0);
+	let cat_path = format!("/api/v1/categories/{cat}");
+
+	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({"includeInUpdate": 1}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["includeInUpdate"], 1);
+	assert_eq!(body["includeInDownload"], 0);
+	assert_eq!(body["name"], "Flags");
+
+	let (status, body) = request(
+		&app,
+		"PATCH",
+		&cat_path,
+		Some(json!({"includeInDownload": 2, "name": "Flags2"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["includeInUpdate"], 1);
+	assert_eq!(body["includeInDownload"], 2);
+	assert_eq!(body["name"], "Flags2");
+
+	// 回读确认落库
+	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
+	let cats = body.as_array().expect("categories");
+	let row = cats
+		.iter()
+		.find(|c| c["id"].as_i64() == Some(cat))
+		.expect("category");
+	assert_eq!(row["includeInUpdate"], 1);
+	assert_eq!(row["includeInDownload"], 2);
+
+	// {} 与空 body 都是无操作
+	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["includeInUpdate"], 1);
+	let (status, body) = request(&app, "PATCH", &cat_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["includeInDownload"], 2);
+
+	// 非法值 400，且不落库
+	for bad in [
+		json!({"includeInUpdate": 3}),
+		json!({"includeInDownload": -1}),
+		json!({"includeInUpdate": "x"}),
+	] {
+		let (status, body) = request(&app, "PATCH", &cat_path, Some(bad.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+		assert_eq!(body["error"]["code"], "bad_request");
+	}
+	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
+	let row = body
+		.as_array()
+		.expect("categories")
+		.iter()
+		.find(|c| c["id"].as_i64() == Some(cat))
+		.expect("category")
+		.clone();
+	assert_eq!(row["includeInUpdate"], 1);
+	assert_eq!(row["includeInDownload"], 2);
+
+	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInUpdate": 1}))).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// 注册前三条搜索结果（带完整条目，标题随注册落库），返回 (id, 标题)
+async fn register_three_manga(app: &Router) -> Vec<(i64, String)> {
+	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(app, "GET", "/api/v1/sources", None).await;
+	let source_id = body[0]["id"].as_i64().expect("source id");
+	let (_, body) = request(
+		app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	let entries = body["entries"].as_array().expect("entries");
+	let mut ids = Vec::new();
+	for entry in entries.iter().take(3) {
+		let title = entry["title"].as_str().expect("manga title").to_string();
+		let (status, body) = request(
+			app,
+			"POST",
+			"/api/v1/manga",
+			Some(json!({"sourceId": source_id, "manga": entry})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		ids.push((body["id"].as_i64().expect("manga id"), title));
+	}
+	ids
+}
+
+async fn first_chapters(app: &Router, manga_id: i64, count: usize) -> Vec<i64> {
+	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	body.as_array()
+		.expect("chapters")
+		.iter()
+		.take(count)
+		.map(|c| c["id"].as_i64().expect("chapter id"))
+		.collect()
+}
+
+async fn put_chapter_user(
+	pool: &sqlx::SqlitePool,
+	chapter_id: i64,
+	is_read: bool,
+	is_bookmarked: bool,
+	is_downloaded: bool,
+	last_read_at: Option<i64>,
+) {
+	sqlx::query(
+		"INSERT INTO chapter_user (chapter_id, user_id, is_read, is_bookmarked, is_downloaded, last_read_at)
+		 VALUES (?, 1, ?, ?, ?, ?)",
+	)
+	.bind(chapter_id)
+	.bind(is_read)
+	.bind(is_bookmarked)
+	.bind(is_downloaded)
+	.bind(last_read_at)
+	.execute(pool)
+	.await
+	.expect("insert chapter_user");
+}
+
+fn entry_ids(body: &Value) -> Vec<i64> {
+	body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.map(|e| e["id"].as_i64().expect("id"))
+		.collect()
+}
+
+#[tokio::test]
+async fn library_search_sort_filter() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
+	let (ta, tb, tc) = (&ids[0].1, &ids[1].1, &ids[2].1);
+	// 搜索/排序断言都建立在注册落库的标题上，先回读对账
+	for (id, title) in [(a, ta), (b, tb), (c, tc)] {
+		let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{id}"), None).await;
+		assert_eq!(&body["title"], title);
+	}
+	for id in [a, b, c] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	// added 排序锚点：入库时间显式拉开，避免同秒并列
+	for (id, at) in [(a, 1000), (b, 1001), (c, 1002)] {
+		sqlx::query("UPDATE manga_user SET in_library_at = ? WHERE manga_id = ?")
+			.bind(at)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set in_library_at");
+	}
+	let a_ch = first_chapters(&app, a, 2).await;
+	let b_ch = first_chapters(&app, b, 1).await;
+	let c_ch = first_chapters(&app, c, 1).await;
+	// A：2 未读（其一加书签、读过 @100）；B：1 未读已下载、读过 @300；C：1 已读、无阅读时间
+	put_chapter_user(&pool, a_ch[0], false, true, false, Some(100)).await;
+	put_chapter_user(&pool, a_ch[1], false, false, false, None).await;
+	put_chapter_user(&pool, b_ch[0], false, false, true, Some(300)).await;
+	put_chapter_user(&pool, c_ch[0], true, false, false, None).await;
+
+	// 默认 added 排序 + unreadCount
+	let (status, body) = request(&app, "GET", "/api/v1/library", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![c, b, a]);
+	assert_eq!(body["hasNextPage"], false);
+	let counts: std::collections::HashMap<i64, i64> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.map(|e| {
+			(
+				e["id"].as_i64().expect("id"),
+				e["unreadCount"].as_i64().expect("unreadCount"),
+			)
+		})
+		.collect();
+	assert_eq!(counts, std::collections::HashMap::from([(a, 2), (b, 1), (c, 0)]));
+
+	// 搜索：B 的完整标题只命中 B
+	let (status, body) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/library?search={}", urlencoding(tb)),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![b]);
+	// LIKE 通配符按字面量处理：把标题第 2 个字符换成 _ 或 % 后若被当通配符本应命中
+	let mut wildcard: String = tb.chars().enumerate().map(|(i, ch)| if i == 1 { '_' } else { ch }).collect();
+	let (_, body) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/library?search={}", urlencoding(&wildcard)),
+		None,
+	)
+	.await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	wildcard.insert(1, '%');
+	let (_, body) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/library?search={}", urlencoding(&wildcard)),
+		None,
+	)
+	.await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	// 空 search 视为未传
+	let (_, body) = request(&app, "GET", "/api/v1/library?search=", None).await;
+	assert_eq!(entry_ids(&body).len(), 3);
+
+	// 排序
+	let mut by_title = [(a, ta), (b, tb), (c, tc)];
+	by_title.sort_by_key(|x| x.1.to_lowercase());
+	let title_order: Vec<i64> = by_title.iter().map(|(id, _)| *id).collect();
+	let (_, body) = request(&app, "GET", "/api/v1/library?sort=title", None).await;
+	assert_eq!(entry_ids(&body), title_order);
+	let (_, body) = request(&app, "GET", "/api/v1/library?sort=lastRead", None).await;
+	assert_eq!(entry_ids(&body), vec![b, a, c]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?sort=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![a, b, c]);
+	let (status, _) = request(&app, "GET", "/api/v1/library?sort=bogus", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	// 过滤（多个为 AND）
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![b, a]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=downloaded", None).await;
+	assert_eq!(entry_ids(&body), vec![b]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=bookmarked", None).await;
+	assert_eq!(entry_ids(&body), vec![a]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread,downloaded", None).await;
+	assert_eq!(entry_ids(&body), vec![b]);
+	let (status, _) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	// 组合：搜索 + title 排序
+	let (_, body) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/library?search={}&sort=title", urlencoding(ta)),
+		None,
+	)
+	.await;
+	assert_eq!(entry_ids(&body), vec![a]);
+}
+
+/// query 值里的保留字符 percent-encode（测试标题是 ASCII，按字节处理即可）
+fn urlencoding(raw: &str) -> String {
+	let mut out = String::new();
+	for byte in raw.bytes() {
+		if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+			out.push(byte as char);
+		} else {
+			out.push_str(&format!("%{byte:02X}"));
+		}
+	}
+	out
+}
+
+#[tokio::test]
+async fn embedded_webui() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	// test_app 的 webui_dir 在 tmp 下不存在 → 不走磁盘分支
+	assert!(!tmp.path().join("webui").is_dir());
+	if sumidoku_server::webui_assets::has_index() {
+		let index = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../webui/build/index.html"))
+			.expect("repo webui index");
+		let (status, headers, bytes) = request_full(&app, "GET", "/", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "no-cache");
+		assert_eq!(bytes, index);
+
+		// SPA 路由回退 index.html
+		let (status, headers, bytes) = request_full(&app, "GET", "/some/spa/route", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "no-cache");
+		assert_eq!(bytes, index);
+
+		// 路径穿越被拒，保持 JSON 404
+		let (status, body) = request(&app, "GET", "/../../secret", None).await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+		assert_eq!(body["error"]["code"], "not_found");
+
+		// API 不被 SPA 吞掉
+		let (status, body) = request(&app, "GET", "/api/v1/nope", None).await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+		assert_eq!(body["error"]["code"], "not_found");
+	} else {
+		// 无 webui 产物的环境（CI 干净 checkout）：回「webui not built」文本
+		let (status, _, bytes) = request_full(&app, "GET", "/", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert!(String::from_utf8(bytes).expect("utf8").contains("webui not built"));
+	}
 }

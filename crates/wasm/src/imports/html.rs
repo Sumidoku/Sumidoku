@@ -166,7 +166,7 @@ pub fn kind(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 	}
 	match item {
 		StoreItem::HtmlElement(element) => kind_from_node(&element.0),
-		StoreItem::HtmlNode(node) => kind_from_node(&node),
+		StoreItem::HtmlNode(node) => kind_from_node(node),
 		StoreItem::HtmlDocument(_) => Kind::Document,
 		StoreItem::HtmlElementList(_) => Kind::ElementList,
 		_ => Kind::Unknown,

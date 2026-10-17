@@ -36,6 +36,8 @@ pub fn draw_image(
 	UNIMPLEMENTED
 }
 
+// 签名由源 ABI 固定，无法归并参数
+#[allow(clippy::too_many_arguments)]
 pub fn copy_image(
 	_env: FunctionEnvMut<WasmEnv>,
 	_context: Rid,
@@ -73,6 +75,7 @@ pub fn stroke(
 	UNIMPLEMENTED
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_text(
 	_env: FunctionEnvMut<WasmEnv>,
 	_context: Rid,

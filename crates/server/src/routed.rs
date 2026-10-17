@@ -58,10 +58,10 @@ impl NetPolicy for SumidokuNetPolicy {
 		if Self::domain_match(&self.direct_domains, host) {
 			return NetRoute::Direct;
 		}
-		if Self::domain_match(&self.relay_domains, host) {
-			if let Some(proxy) = &self.trawl_proxy {
-				return NetRoute::Proxy(proxy.clone());
-			}
+		if Self::domain_match(&self.relay_domains, host)
+			&& let Some(proxy) = &self.trawl_proxy
+		{
+			return NetRoute::Proxy(proxy.clone());
 		}
 		if let Some(proxy) = &self.global_proxy {
 			return NetRoute::Proxy(proxy.clone());
@@ -119,7 +119,7 @@ impl RoutedClients {
 		let mut builder = Client::builder().use_rustls_tls();
 		if let NetRoute::Proxy(proxy_url) = &route {
 			let proxy = reqwest::Proxy::all(proxy_url)
-				.map_err(|e| FetchError::Network(reqwest::Error::from(e)))?;
+				.map_err(FetchError::Network)?;
 			builder = builder.proxy(proxy);
 			if let Some(pem) = self.policy.ca_certificate() {
 				let cert = reqwest::Certificate::from_pem(&pem)
