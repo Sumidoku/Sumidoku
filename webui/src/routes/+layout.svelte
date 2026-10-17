@@ -9,6 +9,8 @@
 		{ href: '/library', label: '书库' },
 		{ href: '/browse', label: '浏览' },
 		{ href: '/history', label: '历史' },
+		{ href: '/downloads', label: '下载' },
+		{ href: '/updates', label: '更新' },
 		{ href: '/settings', label: '设置' }
 	];
 

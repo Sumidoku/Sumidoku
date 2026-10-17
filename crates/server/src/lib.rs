@@ -5,6 +5,7 @@ pub mod db;
 pub mod error;
 pub mod library;
 pub mod model;
+pub mod opds;
 pub mod page;
 pub mod reader;
 pub mod routed;
@@ -32,6 +33,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	tokio::spawn(state::run_defaults_writer(pool.clone(), rx));
 	let state = state::AppState::new(pool, config, tx);
 	let app = api::router(state.clone());
+	let app = app.nest("/opds/v1.2", opds::router(state.clone()));
 	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
 }
 

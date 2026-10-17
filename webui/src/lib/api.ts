@@ -56,3 +56,6 @@ export const coverUrl = (mangaId: number) => `${BASE}/manga/${mangaId}/cover`;
 
 export const pageUrl = (chapterId: number, index: number) =>
 	`${BASE}/chapter/${chapterId}/page/${index}`;
+
+/** 已下载章节的 CBZ 文件地址，配 `<a download>` 直接触发浏览器下载 */
+export const chapterFileUrl = (chapterId: number) => `${BASE}/chapter/${chapterId}/file`;

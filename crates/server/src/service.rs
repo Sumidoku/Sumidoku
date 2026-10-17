@@ -446,3 +446,170 @@ pub async fn fetch_remote(
 	}
 	read_body(response).await
 }
+
+const COVER_DEFAULT_MIME: &str = "image/jpeg";
+
+/// OPDS 封面取字节：流程同 cover.rs（新鲜磁盘缓存优先，miss 回源拉取并写缓存）
+pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let manga = manga_row(&state.pool, manga_id).await?;
+	let covers_dir = state.config.covers_dir.clone();
+	let cache_path = covers_dir.join(manga_id.to_string());
+	if let Some((bytes, mime)) = cover_cache_read(&cache_path, manga.last_fetched_at).await {
+		return Ok((bytes, Some(mime)));
+	}
+	let Some(url) = manga.cover_url.clone() else {
+		return Err(ApiError::not_found("cover not available"));
+	};
+	let (bytes, mime) = fetch_remote(state, manga.source_id, &url, None).await?;
+	let mime = mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
+	match cover_cache_write(&covers_dir, manga_id, &bytes, &mime).await {
+		Ok(()) => cover_cache_enforce_limit(&covers_dir, state.config.cover_cache_max),
+		Err(e) => tracing::warn!(manga_id, "cover cache write failed: {e}"),
+	}
+	Ok((bytes, Some(mime)))
+}
+
+fn cover_sidecar_path(cache_path: &Path) -> std::path::PathBuf {
+	cache_path.with_file_name(format!(
+		"{}.content-type",
+		cache_path.file_name().unwrap_or_default().to_string_lossy()
+	))
+}
+
+/// 缓存命中条件：文件存在且 manga 详情没在缓存写入之后重新拉过（last_fetched_at <= mtime）
+async fn cover_cache_read(cache_path: &Path, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
+	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
+	let mtime = metadata
+		.modified()
+		.ok()?
+		.duration_since(std::time::UNIX_EPOCH)
+		.ok()?
+		.as_secs() as i64;
+	if let Some(fetched) = last_fetched_at
+		&& fetched > mtime
+	{
+		return None;
+	}
+	let bytes = tokio::fs::read(cache_path).await.ok()?;
+	let mime = tokio::fs::read_to_string(cover_sidecar_path(cache_path))
+		.await
+		.ok()
+		.map(|s| s.trim().to_string())
+		.filter(|s| !s.is_empty())
+		.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
+	Some((bytes, mime))
+}
+
+/// 先写 tmp 再 rename，避免并发读到写了一半的缓存
+async fn cover_cache_write(covers_dir: &Path, id: i64, bytes: &[u8], mime: &str) -> std::io::Result<()> {
+	let tmp = covers_dir.join(format!(".{id}.tmp"));
+	tokio::fs::write(&tmp, bytes).await?;
+	tokio::fs::rename(&tmp, covers_dir.join(id.to_string())).await?;
+	let tmp = covers_dir.join(format!(".{id}.content-type.tmp"));
+	tokio::fs::write(&tmp, mime).await?;
+	tokio::fs::rename(&tmp, covers_dir.join(format!("{id}.content-type"))).await?;
+	Ok(())
+}
+
+/// LRU：缓存文件数超上限时按 mtime 最旧先删（连同 sidecar）
+fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
+	let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
+	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
+		return;
+	};
+	for entry in read_dir.flatten() {
+		let name = entry.file_name();
+		// 只数封面本体（文件名是纯 manga id），sidecar 与 tmp 随本体连带处理
+		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
+			continue;
+		}
+		let Ok(metadata) = entry.metadata() else {
+			continue;
+		};
+		let Ok(mtime) = metadata.modified() else {
+			continue;
+		};
+		entries.push((entry.path(), mtime));
+	}
+	if entries.len() <= max {
+		return;
+	}
+	entries.sort_by_key(|(_, mtime)| *mtime);
+	let excess = entries.len() - max;
+	for (path, _) in entries.into_iter().take(excess) {
+		let _ = std::fs::remove_file(cover_sidecar_path(&path));
+		let _ = std::fs::remove_file(path);
+	}
+}
+
+/// OPDS-PSE 页图取字节：流程同 page.rs（Url 走 fetch_remote、Zip 解包；Text/Image 报错）
+pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let chapter = chapter_row(&state.pool, chapter_id).await?;
+	let pages = load_pages(state, chapter_id, false).await?;
+	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
+		return Err(ApiError::not_found("page not found"));
+	};
+	let stored: serde_json::Value = serde_json::from_str(content)?;
+	let content = stored.get("content").cloned().unwrap_or(serde_json::Value::Null);
+	if content.get("Text").is_some() {
+		return Err(ApiError::bad_request("text page content cannot be streamed as image"));
+	}
+	// Image 是源内 canvas 句柄，M4 process_*_image 落地前无法在服务端还原成字节
+	if content.get("Image").is_some() {
+		return Err(ApiError::unsupported_501("image page content is not supported yet"));
+	}
+	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
+		let Some(zip_url) = zip.first().and_then(serde_json::Value::as_str) else {
+			return Err(ApiError::bad_request("invalid zip page content"));
+		};
+		let Some(entry_path) = zip.get(1).and_then(serde_json::Value::as_str) else {
+			return Err(ApiError::bad_request("invalid zip page content"));
+		};
+		let (zip_bytes, _) = http_get(state, zip_url).await?;
+		let entry = zip_entry_bytes(&zip_bytes, entry_path)?;
+		return Ok((entry, Some(page_mime_for(entry_path).to_string())));
+	}
+	if let Some(url) = content.get("Url").and_then(serde_json::Value::as_array) {
+		let Some(url_str) = url.first().and_then(serde_json::Value::as_str) else {
+			return Err(ApiError::bad_request("invalid url page content"));
+		};
+		let context: Option<PageContext> = match url.get(1) {
+			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
+			_ => None,
+		};
+		return fetch_remote(state, manga.source_id, url_str, context).await;
+	}
+	Err(ApiError::bad_request("unknown page content"))
+}
+
+fn zip_entry_bytes(zip_bytes: &[u8], entry_path: &str) -> ApiResult<Vec<u8>> {
+	use std::io::Read;
+	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
+		.map_err(|e| ApiError::bad_gateway(format!("invalid zip archive: {e}")))?;
+	let mut entry = archive
+		.by_name(entry_path)
+		.map_err(|_| ApiError::not_found("zip entry not found"))?;
+	let mut out = Vec::with_capacity(entry.size() as usize);
+	entry
+		.read_to_end(&mut out)
+		.map_err(|e| ApiError::bad_gateway(format!("read zip entry failed: {e}")))?;
+	Ok(out)
+}
+
+fn page_mime_for(path: &str) -> &'static str {
+	let ext = path
+		.rsplit('.')
+		.next()
+		.map(str::to_ascii_lowercase)
+		.unwrap_or_default();
+	match ext.as_str() {
+		"jpg" | "jpeg" => "image/jpeg",
+		"png" => "image/png",
+		"webp" => "image/webp",
+		"gif" => "image/gif",
+		"bmp" => "image/bmp",
+		"avif" => "image/avif",
+		_ => "application/octet-stream",
+	}
+}

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { api, coverUrl } from '#lib/api';
+	import { api, chapterFileUrl, coverUrl } from '#lib/api';
 	import Cover from '#lib/components/Cover.svelte';
 	import Modal from '#lib/components/Modal.svelte';
 	import { pushToast } from '#lib/toast.svelte';
@@ -81,6 +81,24 @@
 			body: { isBookmarked: !c.isBookmarked }
 		});
 		chapters = chapters.map((x) => (x.id === c.id ? { ...x, isBookmarked: res.isBookmarked } : x));
+	}
+
+	// 本页入队是本地即时反馈：下载进度在 /downloads 页看，这里只记「已入队」
+	let dlQueued = $state<Set<number>>(new Set());
+	let dlPending = $state<Set<number>>(new Set());
+
+	async function downloadChapter(c: Chapter) {
+		if (dlPending.has(c.id) || dlQueued.has(c.id)) return;
+		dlPending = new Set(dlPending).add(c.id);
+		try {
+			await api('/downloads', { method: 'POST', body: { chapterIds: [c.id] } });
+			dlQueued = new Set(dlQueued).add(c.id);
+			pushToast('已加入下载队列', 'info');
+		} finally {
+			const next = new Set(dlPending);
+			next.delete(c.id);
+			dlPending = next;
+		}
 	}
 
 	function readTarget(c: Chapter): string {
@@ -173,6 +191,22 @@
 								{/if}
 							</div>
 						</a>
+						{#if c.isDownloaded}
+							<a class="dl-done" href={chapterFileUrl(c.id)} download title="下载 CBZ 文件">
+								已下载
+							</a>
+						{:else if dlQueued.has(c.id)}
+							<span class="dl-queue">排队中</span>
+						{:else}
+							<button
+								class="bm dl"
+								title="下载本章"
+								disabled={dlPending.has(c.id)}
+								onclick={() => downloadChapter(c)}
+							>
+								⬇
+							</button>
+						{/if}
 						<button
 							class="bm"
 							class:on={c.isBookmarked}
@@ -321,6 +355,32 @@
 
 	.bm.on {
 		color: var(--accent);
+	}
+
+	.dl {
+		font-size: 15px;
+	}
+
+	.dl:hover:not(:disabled) {
+		color: var(--accent);
+		background: none;
+	}
+
+	.dl-done {
+		flex: none;
+		padding: 3px 9px;
+		border-radius: 999px;
+		font-size: 12px;
+		color: var(--ok);
+		border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+		background: color-mix(in srgb, var(--ok) 12%, var(--bg-raised));
+	}
+
+	.dl-queue {
+		flex: none;
+		padding: 3px 6px;
+		font-size: 12px;
+		color: var(--text-faint);
 	}
 
 	.catlist {

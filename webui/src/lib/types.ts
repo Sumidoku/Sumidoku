@@ -64,6 +64,7 @@ export interface Chapter {
 	isRead: boolean;
 	isBookmarked: boolean;
 	lastReadAt: number | null;
+	isDownloaded: boolean;
 }
 
 export type PageContent =
@@ -109,6 +110,59 @@ export interface Category {
 	sortOrder: number;
 	isDefault: boolean;
 	mangaCount: number;
+}
+
+// ---- M3: 下载与更新 ----
+
+export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'finished' | 'error';
+
+export interface DownloadItem {
+	chapterId: number;
+	mangaId: number;
+	mangaTitle: string;
+	chapterTitle: string;
+	status: DownloadStatus;
+	format: string;
+	path: string | null;
+	error: string | null;
+	retries: number;
+	downloaded: number;
+	total: number;
+	createdAt: number;
+	updatedAt: number;
+}
+
+export interface UpdateSummary {
+	running: boolean;
+	total: number;
+	complete: number;
+	failed: number;
+	skipped: number;
+	pending: number;
+	lastRunAt: number | null;
+}
+
+export type UpdateJobStatus = 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
+
+export interface UpdateJob {
+	status: UpdateJobStatus;
+	mangaId: number;
+	mangaTitle: string;
+	sourceId: number;
+	addedChapters: number;
+}
+
+export interface UpdateRecentEntry {
+	chapter: Chapter;
+	manga: MangaDetail;
+	/** 契约写作 fetched_at，Suzuri 自有字段惯例是 camelCase，两种都容忍 */
+	fetchedAt?: number | null;
+	fetched_at?: number | null;
+}
+
+export interface UpdateRecentPage {
+	entries: UpdateRecentEntry[];
+	hasNextPage: boolean;
 }
 
 export interface Listing {
