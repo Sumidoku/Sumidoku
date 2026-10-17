@@ -17,12 +17,12 @@ tracing-subscriber.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "json"] }
 chrono = "0.4"
-toml = "0.8"
+toml = "1.1"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["trace", "fs"] }
+tower-http = { version = "0.7", features = ["trace", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
