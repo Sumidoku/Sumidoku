@@ -3,6 +3,16 @@ use std::path::PathBuf;
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
+#[derive(Debug, Clone, Default)]
+pub struct NetConfig {
+	pub direct_domains: Vec<String>,
+	pub relay_domains: Vec<String>,
+	pub trawl_proxy: Option<String>,
+	pub trawl_ca: Option<PathBuf>,
+	pub proxy: Option<String>,
+	pub allow_direct_fallback: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
 	pub addr: String,
@@ -14,6 +24,15 @@ pub struct Config {
 	pub cover_cache_max: usize,
 	pub webui_dir: PathBuf,
 	pub user_agent: String,
+	pub downloads_dir: PathBuf,
+	pub download_concurrency: usize,
+	pub download_format: String,
+	pub update_interval_hours: u64,
+	pub auto_download_new_chapters: bool,
+	pub auto_download_limit: usize,
+	pub opds_lazy_download: bool,
+	pub basic_password: Option<String>,
+	pub net: NetConfig,
 }
 
 impl Default for Config {
@@ -28,8 +47,28 @@ impl Default for Config {
 			cover_cache_max: 512,
 			webui_dir: PathBuf::from("./webui/build"),
 			user_agent: DEFAULT_USER_AGENT.into(),
+			downloads_dir: PathBuf::from("./downloads"),
+			download_concurrency: 3,
+			download_format: "cbz".into(),
+			update_interval_hours: 0,
+			auto_download_new_chapters: false,
+			auto_download_limit: 5,
+			opds_lazy_download: false,
+			basic_password: None,
+			net: NetConfig::default(),
 		}
 	}
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct NetConfigFile {
+	direct_domains: Option<Vec<String>>,
+	relay_domains: Option<Vec<String>>,
+	trawl_proxy: Option<String>,
+	trawl_ca: Option<PathBuf>,
+	proxy: Option<String>,
+	allow_direct_fallback: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -44,6 +83,15 @@ struct ConfigFile {
 	cover_cache_max: Option<usize>,
 	webui_dir: Option<PathBuf>,
 	user_agent: Option<String>,
+	downloads_dir: Option<PathBuf>,
+	download_concurrency: Option<usize>,
+	download_format: Option<String>,
+	update_interval_hours: Option<u64>,
+	auto_download_new_chapters: Option<bool>,
+	auto_download_limit: Option<usize>,
+	opds_lazy_download: Option<bool>,
+	basic_password: Option<String>,
+	net: Option<NetConfigFile>,
 }
 
 impl Config {
@@ -52,72 +100,183 @@ impl Config {
 		let mut config = Self::default();
 		if let Ok(raw) = std::fs::read_to_string("./config.toml") {
 			match toml::from_str::<ConfigFile>(&raw) {
-				Ok(file) => {
-					if let Some(v) = file.addr {
-						config.addr = v;
-					}
-					if let Some(v) = file.database_url {
-						config.database_url = v;
-					}
-					if let Some(v) = file.sources_dir {
-						config.sources_dir = v;
-					}
-					if let Some(v) = file.call_concurrency {
-						config.call_concurrency = v;
-					}
-					if let Some(v) = file.log {
-						config.log = v;
-					}
-					if let Some(v) = file.covers_dir {
-						config.covers_dir = v;
-					}
-					if let Some(v) = file.cover_cache_max {
-						config.cover_cache_max = v;
-					}
-					if let Some(v) = file.webui_dir {
-						config.webui_dir = v;
-					}
-					if let Some(v) = file.user_agent {
-						config.user_agent = v;
-					}
-				}
+				Ok(file) => config.apply_file(file),
 				Err(e) => eprintln!("invalid ./config.toml, using defaults: {e}"),
 			}
 		}
+		config.apply_env();
+		config
+	}
+
+	fn apply_file(&mut self, file: ConfigFile) {
+		if let Some(v) = file.addr {
+			self.addr = v;
+		}
+		if let Some(v) = file.database_url {
+			self.database_url = v;
+		}
+		if let Some(v) = file.sources_dir {
+			self.sources_dir = v;
+		}
+		if let Some(v) = file.call_concurrency {
+			self.call_concurrency = v;
+		}
+		if let Some(v) = file.log {
+			self.log = v;
+		}
+		if let Some(v) = file.covers_dir {
+			self.covers_dir = v;
+		}
+		if let Some(v) = file.cover_cache_max {
+			self.cover_cache_max = v;
+		}
+		if let Some(v) = file.webui_dir {
+			self.webui_dir = v;
+		}
+		if let Some(v) = file.user_agent {
+			self.user_agent = v;
+		}
+		if let Some(v) = file.downloads_dir {
+			self.downloads_dir = v;
+		}
+		if let Some(v) = file.download_concurrency {
+			self.download_concurrency = v;
+		}
+		if let Some(v) = file.download_format {
+			self.download_format = v;
+		}
+		if let Some(v) = file.update_interval_hours {
+			self.update_interval_hours = v;
+		}
+		if let Some(v) = file.auto_download_new_chapters {
+			self.auto_download_new_chapters = v;
+		}
+		if let Some(v) = file.auto_download_limit {
+			self.auto_download_limit = v;
+		}
+		if let Some(v) = file.opds_lazy_download {
+			self.opds_lazy_download = v;
+		}
+		if let Some(v) = file.basic_password {
+			self.basic_password = Some(v);
+		}
+		if let Some(net) = file.net {
+			if let Some(v) = net.direct_domains {
+				self.net.direct_domains = v;
+			}
+			if let Some(v) = net.relay_domains {
+				self.net.relay_domains = v;
+			}
+			if net.trawl_proxy.is_some() {
+				self.net.trawl_proxy = net.trawl_proxy;
+			}
+			if net.trawl_ca.is_some() {
+				self.net.trawl_ca = net.trawl_ca;
+			}
+			if net.proxy.is_some() {
+				self.net.proxy = net.proxy;
+			}
+			if let Some(v) = net.allow_direct_fallback {
+				self.net.allow_direct_fallback = v;
+			}
+		}
+	}
+
+	fn apply_env(&mut self) {
 		if let Ok(v) = std::env::var("SUZURI_ADDR") {
-			config.addr = v;
+			self.addr = v;
 		}
 		if let Ok(v) = std::env::var("DATABASE_URL") {
-			config.database_url = v;
+			self.database_url = v;
 		}
 		if let Ok(v) = std::env::var("SUZURI_DATABASE_URL") {
-			config.database_url = v;
+			self.database_url = v;
 		}
 		if let Ok(v) = std::env::var("SUZURI_SOURCES_DIR") {
-			config.sources_dir = PathBuf::from(v);
+			self.sources_dir = PathBuf::from(v);
 		}
 		if let Ok(v) = std::env::var("SUZURI_CALL_CONCURRENCY") {
 			if let Ok(n) = v.parse() {
-				config.call_concurrency = n;
+				self.call_concurrency = n;
 			}
 		}
 		if let Ok(v) = std::env::var("SUZURI_LOG") {
-			config.log = v;
+			self.log = v;
 		}
 		if let Ok(v) = std::env::var("SUZURI_COVERS_DIR") {
-			config.covers_dir = PathBuf::from(v);
+			self.covers_dir = PathBuf::from(v);
 		}
 		if let Ok(v) = std::env::var("SUZURI_COVER_CACHE_MAX") {
 			if let Ok(n) = v.parse() {
-				config.cover_cache_max = n;
+				self.cover_cache_max = n;
 			}
 		}
 		if let Ok(v) = std::env::var("SUZURI_WEBUI_DIR") {
-			config.webui_dir = PathBuf::from(v);
+			self.webui_dir = PathBuf::from(v);
 		}
 		if let Ok(v) = std::env::var("SUZURI_USER_AGENT") {
-			config.user_agent = v;
+			self.user_agent = v;
 		}
-		config
+		if let Ok(v) = std::env::var("SUZURI_DOWNLOADS_DIR") {
+			self.downloads_dir = PathBuf::from(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_DOWNLOAD_CONCURRENCY") {
+			if let Ok(n) = v.parse() {
+				self.download_concurrency = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_DOWNLOAD_FORMAT") {
+			self.download_format = v;
+		}
+		if let Ok(v) = std::env::var("SUZURI_UPDATE_INTERVAL_HOURS") {
+			if let Ok(n) = v.parse() {
+				self.update_interval_hours = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_AUTO_DOWNLOAD_NEW_CHAPTERS") {
+			if let Ok(n) = v.parse() {
+				self.auto_download_new_chapters = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_AUTO_DOWNLOAD_LIMIT") {
+			if let Ok(n) = v.parse() {
+				self.auto_download_limit = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_OPDS_LAZY_DOWNLOAD") {
+			if let Ok(n) = v.parse() {
+				self.opds_lazy_download = n;
+			}
+		}
+		if let Ok(v) = std::env::var("SUZURI_BASIC_PASSWORD") {
+			self.basic_password = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_DIRECT_DOMAINS") {
+			self.net.direct_domains = split_csv(&v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_RELAY_DOMAINS") {
+			self.net.relay_domains = split_csv(&v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_TRAWL_PROXY") {
+			self.net.trawl_proxy = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_TRAWL_CA") {
+			self.net.trawl_ca = Some(PathBuf::from(v));
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_PROXY") {
+			self.net.proxy = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUZURI_NET_ALLOW_DIRECT_FALLBACK") {
+			if let Ok(n) = v.parse() {
+				self.net.allow_direct_fallback = n;
+			}
+		}
 	}
+}
+
+fn split_csv(raw: &str) -> Vec<String> {
+	raw.split(',')
+		.map(|s| s.trim().to_string())
+		.filter(|s| !s.is_empty())
+		.collect()
 }

@@ -386,17 +386,7 @@ pub async fn load_pages(
 	Ok(stored)
 }
 
-async fn send(request: reqwest::RequestBuilder) -> ApiResult<(Vec<u8>, Option<String>)> {
-	let response = request
-		.send()
-		.await
-		.map_err(|e| ApiError::bad_gateway(format!("upstream request failed: {e}")))?;
-	if !response.status().is_success() {
-		return Err(ApiError::bad_gateway(format!(
-			"upstream returned status {}",
-			response.status()
-		)));
-	}
+async fn read_body(response: reqwest::Response) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
 		.get(reqwest::header::CONTENT_TYPE)
@@ -409,9 +399,15 @@ async fn send(request: reqwest::RequestBuilder) -> ApiResult<(Vec<u8>, Option<St
 	Ok((bytes.to_vec(), mime))
 }
 
+fn fetch_err(e: crate::routed::FetchError) -> ApiError {
+	ApiError::bad_gateway(format!("upstream request failed: {e}"))
+}
+
 /// 裸 GET，不经过源的 image_request 改造
 pub async fn http_get(state: &AppState, url: &str) -> ApiResult<(Vec<u8>, Option<String>)> {
-	send(state.http.get(url)).await
+	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
+	let response = state.http.get(&url).await.map_err(fetch_err)?;
+	read_body(response).await
 }
 
 /// 按源特性拉图：有 image_request 用源给的 spec 发请求，否则裸 GET
@@ -426,12 +422,27 @@ pub async fn fetch_remote(
 		return http_get(state, url).await;
 	}
 	let spec = handle.get_image_request(url.to_string(), context).await?;
-	let mut builder = state.http.request(spec.method.into(), &spec.url);
+	let spec_url =
+		reqwest::Url::parse(&spec.url).map_err(|_| ApiError::bad_request("invalid image url"))?;
+	let mut builder = state
+		.http
+		.request(spec.method.into(), &spec_url)
+		.map_err(fetch_err)?;
 	for (name, value) in &spec.headers {
 		builder = builder.header(name, value);
 	}
 	if let Some(body) = spec.body {
 		builder = builder.body(body);
 	}
-	send(builder).await
+	let response = builder
+		.send()
+		.await
+		.map_err(|e| ApiError::bad_gateway(format!("upstream request failed: {e}")))?;
+	if !response.status().is_success() {
+		return Err(ApiError::bad_gateway(format!(
+			"upstream returned status {}",
+			response.status()
+		)));
+	}
+	read_body(response).await
 }

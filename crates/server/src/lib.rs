@@ -7,6 +7,7 @@ pub mod library;
 pub mod model;
 pub mod page;
 pub mod reader;
+pub mod routed;
 pub mod service;
 pub mod state;
 
