@@ -1,0 +1,208 @@
+name: Release
+
+# Publishes a GitHub release whenever the workspace version in Cargo.toml is
+# bumped on main: the version job computes v<version>, skips if that release
+# already exists, otherwise the matrix builds and the release job publishes.
+# `gh release create` creates the tag itself, pointing at the triggering commit.
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml, .github/workflows/release.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      major: ${{ steps.v.outputs.major }}
+      skip: ${{ steps.v.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version=$(awk -F'"' '/^\[workspace\.package\]/{s=1} s && /^version = /{print $2; exit}' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "major=$(echo "$version" | cut -d. -f1)" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "::notice::release v$version already exists, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  webui:
+    needs: version
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: webui-dist
+          path: webui/build
+
+  build:
+    needs: [version, webui]
+    if: needs.version.outputs.skip != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # linux legs build inside cross's pinned containers: the runner image
+          # is irrelevant and the artifact's glibc is deterministic; the C deps
+          # (libsqlite3-sys for sqlx, ring for rustls) cross-compile in the container
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            builder: cross
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            builder: cross
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            builder: cargo
+          # Intel runner: native x86_64 build
+          - os: macos-13
+            target: x86_64-apple-darwin
+            builder: cargo
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      # the web UI bundle is embedded into the binary at compile time
+      - uses: actions/download-artifact@v8
+        with:
+          name: webui-dist
+          path: webui/build
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # registry downloads only; compile caching is sccache's job
+          cache-targets: "false"
+      - uses: taiki-e/install-action@v2
+        if: matrix.builder == 'cross'
+        with:
+          tool: cross
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        if: matrix.builder == 'cargo'
+      - name: Build (cross)
+        if: matrix.builder == 'cross'
+        run: cross build --release --target ${{ matrix.target }} -p sumidoku-server
+      - name: Build (cargo)
+        if: matrix.builder == 'cargo'
+        run: cargo build --release --target ${{ matrix.target }} -p sumidoku-server
+        env:
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+          CARGO_INCREMENTAL: "0"
+      - name: Package
+        shell: bash
+        run: |
+          stage="sumidoku_${{ needs.version.outputs.version }}_${{ matrix.target }}"
+          mkdir -p "$stage" dist
+          cp "target/${{ matrix.target }}/release/sumidoku-server" "$stage/"
+          cp README.md "$stage/"
+          tar -czf "dist/${stage}.tar.gz" "$stage"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sumidoku-${{ matrix.target }}
+          path: dist/*
+
+  docker:
+    needs: [version, build]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "sumidoku-*-linux-gnu"
+          path: artifacts
+      - name: Stage binaries
+        run: |
+          mkdir -p dist/amd64 dist/arm64
+          tar -xzf artifacts/sumidoku-x86_64-unknown-linux-gnu/*.tar.gz -C dist/amd64 --strip-components=1 --wildcards '*/sumidoku-server'
+          tar -xzf artifacts/sumidoku-aarch64-unknown-linux-gnu/*.tar.gz -C dist/arm64 --strip-components=1 --wildcards '*/sumidoku-server'
+          ls -l dist/amd64 dist/arm64
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: sumidoku/sumidoku
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=${{ needs.version.outputs.major }}.x
+      - name: Smoke test (amd64)
+        # the shipped artifact gets no other runtime validation; a glibc or
+        # packaging regression must fail here, before anything is pushed
+        run: |
+          trap 'docker logs sumidoku' ERR
+          docker buildx build --platform linux/amd64 --load -t sumidoku:smoke .
+          docker run -d --name sumidoku -p 3000:3000 sumidoku:smoke
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/health > /dev/null && break || sleep 2
+          done
+          # the bundled web UI is served at /
+          curl -sf http://localhost:3000/ | grep -q "<title>Sumidoku</title>"
+          # the API is up and the database answers
+          curl -sf http://localhost:3000/api/v1/settings
+          echo "server is up: web UI and API verified"
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+        env:
+          # the build record artifact would otherwise be swept into the release assets
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+
+  release:
+    # after docker: if the image smoke test fails, no release is created, so
+    # the skip-guard does not block a fixed re-run
+    needs: [version, build, docker]
+    if: needs.version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          # only the binaries uploaded by the build job; anything else (e.g.
+          # docker build records) never reaches the release assets
+          pattern: "sumidoku-*"
+          merge-multiple: true
+          path: artifacts
+      - run: gh release create "$TAG" --title "$TAG" --generate-notes --target "$GITHUB_SHA" artifacts/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}

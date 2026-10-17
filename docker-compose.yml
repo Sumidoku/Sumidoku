@@ -1,6 +1,8 @@
 services:
   sumidoku:
-    build: .
+    image: sumidoku/sumidoku:latest
+    # 本地改从源码构建:先按 Dockerfile 顶部注释摆好 dist/ 布局,再
+    # docker build -t sumidoku/sumidoku:latest .
     ports:
       - "3000:3000"
     volumes:

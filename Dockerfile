@@ -1,36 +1,30 @@
 # syntax=docker/dockerfile:1
 
-FROM node:22-alpine AS webui
-WORKDIR /webui
-COPY webui/package.json webui/package-lock.json ./
-RUN npm ci
-COPY webui/ ./
-RUN npm run build
+# Packages a prebuilt sumidoku-server binary; nothing is compiled here.
+# Expected layout, as produced by the release workflow (or by hand for a
+# local build):
+#   dist/amd64/sumidoku-server   x86_64-unknown-linux-gnu build
+#   dist/arm64/sumidoku-server   aarch64-unknown-linux-gnu build
+# The web UI is already embedded in the binary (rust-embed over webui/build).
 
-FROM rust:1-bookworm AS server
-WORKDIR /app
-COPY Cargo.toml Cargo.lock ./
-COPY vendor/ vendor/
-COPY crates/ crates/
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/app/target \
-    cargo build --release -p sumidoku-server && \
-    cp target/release/sumidoku-server /usr/local/bin/sumidoku-server
-
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
-    rm -rf /var/lib/apt/lists/* && \
-    useradd -u 1000 -m sumidoku
-COPY --from=server /usr/local/bin/sumidoku-server /usr/local/bin/sumidoku-server
-COPY --from=webui /webui/build /webui
-
+# trixie: runtime glibc (2.41) must cover the CI build image's (ubuntu-24.04, 2.39)
+FROM debian:trixie-slim
+ARG TARGETARCH
+# compose healthchecks shell out to curl; the slim base doesn't ship one
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd -u 1000 -m sumidoku
+LABEL org.opencontainers.image.source="https://github.com/Sumidoku/Sumidoku" \
+      org.opencontainers.image.description="Self-hosted manga server: Aidoku WASM sources, REST + OPDS" \
+      org.opencontainers.image.licenses="MIT"
+COPY --chmod=755 "dist/$TARGETARCH/sumidoku-server" /usr/local/bin/sumidoku-server
+# 777 so an arbitrary --user uid:gid can write when nothing is bind-mounted
+RUN install -d -m 777 /config /sources /downloads
 ENV SUMIDOKU_ADDR=0.0.0.0:3000 \
     DATABASE_URL=sqlite:///config/sumidoku.db?mode=rwc \
     SUMIDOKU_SOURCES_DIR=/sources \
     SUMIDOKU_DOWNLOADS_DIR=/downloads \
-    SUMIDOKU_COVERS_DIR=/config/covers \
-    SUMIDOKU_WEBUI_DIR=/webui
-
+    SUMIDOKU_COVERS_DIR=/config/covers
 USER sumidoku
 EXPOSE 3000
 VOLUME ["/config", "/sources", "/downloads"]

@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  changes:
+    # gate the heavy legs: rust jobs skip web-only PRs, the web job skips rust-only PRs
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+    steps:
+      # push events diff with git commands and need the checkout; PRs go through the API
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          # some-with-excludes: a file must hit an include and no exclude —
+          # under the default 'some' the '**' would swallow the exclusion
+          predicate-quantifier: 'some-with-excludes'
+          filters: |
+            rust:
+              - '**'
+              - '!webui/**'
+            web:
+              - 'webui/**'
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # registry downloads only; compile caching is sccache's job.
+          # target/ is never restored, so stale build-script outputs
+          # (e.g. pkg-config probe results from another runner image)
+          # cannot leak across runs
+          cache-targets: "false"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - run: cargo nextest run --workspace
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    # compile-only gate on the platforms the release workflow ships;
+    # tests stay on ubuntu
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - run: cargo build --workspace --all-targets
+
+  web:
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build
+
+  docker:
+    # not gated on the changes filter: it is the only leg exercising the
+    # embedded web UI end to end
+    runs-on: ubuntu-24.04
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Build web UI
+        working-directory: webui
+        run: npm ci && npm run build
+      # rust-embed only bundles webui/build into a release build
+      - run: cargo build --release -p sumidoku-server
+      - run: mkdir -p dist/amd64 && cp target/release/sumidoku-server dist/amd64/
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: sumidoku:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke test
+        # this run is the only gate that the linked symbols still resolve on
+        # the slim runtime's glibc
+        run: |
+          trap 'docker logs sumidoku' ERR
+          docker run -d --name sumidoku -p 3000:3000 sumidoku:test
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3000/health > /dev/null && break || sleep 2
+          done
+          # the bundled web UI is served at /
+          curl -sf http://localhost:3000/ | grep -q "<title>Sumidoku</title>"
+          # the API is up and the database answers
+          curl -sf http://localhost:3000/api/v1/settings
