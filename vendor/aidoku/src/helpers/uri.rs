@@ -1,0 +1,542 @@
+//! Module for encoding and decoding URIs.
+extern crate alloc;
+
+use crate::AidokuError;
+use alloc::{
+	format,
+	string::{String, ToString},
+	vec::Vec,
+};
+use core::fmt::Display;
+use paste::paste;
+use serde::{
+	Serialize, Serializer,
+	ser::{Error as SerError, Impossible, SerializeMap, SerializeStruct},
+};
+use thiserror::Error;
+
+/// Percent-encode an entire URI string that is valid UTF-8.
+///
+/// `internal_encode_uri` escapes all non-alphanumeric characters not
+/// in the `charset` parameter.
+///
+/// This function is made public for use with a custom unencoded charset.
+pub fn internal_encode_uri<T: AsRef<[u8]>>(url: T, charset: T) -> String {
+	let bytes = url.as_ref();
+	let charset = charset.as_ref();
+	let hex = b"0123456789ABCDEF";
+
+	let mut result: Vec<u8> = Vec::with_capacity(bytes.len() * 3);
+
+	for &byte in bytes {
+		if byte.is_ascii_alphanumeric() || charset.contains(&byte) {
+			result.push(byte);
+		} else {
+			result.push(b'%');
+			result.push(hex[(byte >> 4) as usize]);
+			result.push(hex[(byte & 0x0F) as usize]);
+		}
+	}
+	String::from_utf8(result).unwrap_or_default()
+}
+
+/// Percent-encode an entire URI string that is valid UTF-8.
+///
+/// `encode_uri` escapes all characters except `a-z A-Z 0-9 ; , / ? : @ & = +
+/// $ - _ . ! ~ * ' ( ) #`.
+///
+/// # Examples
+/// ```
+/// use aidoku::helpers::uri::encode_uri;
+/// assert_eq!(
+///     encode_uri("http://www.example.org/a file with spaces.html"),
+///     "http://www.example.org/a%20file%20with%20spaces.html",
+/// )
+/// ```
+pub fn encode_uri<T: AsRef<[u8]>>(url: T) -> String {
+	internal_encode_uri(url.as_ref(), b";,/?:@&=+$-_.!~*'()#")
+}
+
+/// Percent-encode a URI component string that is valid UTF-8.
+///
+/// `encode_uri_component` escapes all characters except `a-z A-Z 0-9 - _ . !
+/// ~ * ' ( )`.
+///
+/// # Examples
+/// ```
+/// use aidoku::helpers::uri::encode_uri_component;
+/// assert_eq!(
+///     encode_uri_component(";,/?:@&=+$"),
+///     "%3B%2C%2F%3F%3A%40%26%3D%2B%24",
+/// )
+/// ```
+pub fn encode_uri_component<T: AsRef<[u8]>>(url: T) -> String {
+	internal_encode_uri(url.as_ref(), b"-_.!~*'()")
+}
+
+/// Decodes a percent-encoded URI string.
+///
+/// Returns the decoded String, or an empty string if invalid UTF-8.
+///
+/// # Examples
+/// ```
+/// use aidoku::helpers::uri::decode_uri;
+/// assert_eq!(
+///     decode_uri("%3B%2C%2F%3F%3A%40%26%3D%2B%24"),
+///     ";,/?:@&=+$",
+/// )
+/// ```
+pub fn decode_uri<T: AsRef<[u8]>>(encoded: T) -> String {
+	let mut iter = encoded.as_ref().iter();
+	let mut result = Vec::with_capacity(encoded.as_ref().len());
+
+	while let Some(&c) = iter.next() {
+		if c == b'%' {
+			// read next two hex digits
+			let hi = iter.next();
+			let lo = iter.next();
+			match (hi, lo) {
+				(Some(&hi), Some(&lo)) => {
+					let hex = (hi as char).to_digit(16).zip((lo as char).to_digit(16));
+					match hex {
+						Some((hi, lo)) => result.push(((hi << 4) | lo) as u8),
+						None => {
+							// invalid hex, push as-is
+							result.push(b'%');
+							result.push(hi);
+							result.push(lo);
+						}
+					}
+				}
+				_ => {
+					// not enough chars, push as-is
+					result.push(b'%');
+					if let Some(&hi) = hi {
+						result.push(hi);
+					}
+					if let Some(&lo) = lo {
+						result.push(lo);
+					}
+				}
+			}
+		} else {
+			result.push(c);
+		}
+	}
+	String::from_utf8(result).unwrap_or_default()
+}
+
+/// Alternating, decoded query names and values.
+#[derive(Clone, Debug, Default)]
+pub struct QueryParameters {
+	params: Vec<(String, Option<String>)>,
+}
+
+impl QueryParameters {
+	#[inline]
+	pub fn new() -> Self {
+		QueryParameters { params: Vec::new() }
+	}
+
+	#[inline]
+	pub fn with_capacity(capacity: usize) -> Self {
+		QueryParameters {
+			params: Vec::with_capacity(capacity),
+		}
+	}
+
+	#[inline]
+	pub fn len(&self) -> usize {
+		self.params.len()
+	}
+
+	#[inline]
+	pub fn is_empty(&self) -> bool {
+		self.params.is_empty()
+	}
+
+	/// Percent-encode the query paramter with [encode_uri_component] and
+	/// add it to the query string along with a value.
+	pub fn push(&mut self, name: &str, value: Option<&str>) {
+		self.params
+			.push((encode_uri_component(name), value.map(encode_uri_component)));
+	}
+
+	/// Percent-encode the query paramter with [encode_uri_component] and
+	/// add it to the query string.
+	pub fn push_key<K: AsRef<str>>(&mut self, name: K) {
+		self.params
+			.push((encode_uri_component(name.as_ref()), None));
+	}
+
+	/// Add a pre-encoded query parameter to the query string.
+	pub fn push_encoded(&mut self, name: &str, value: Option<&str>) {
+		self.params
+			.push((name.to_string(), value.map(|v| v.to_string())));
+	}
+
+	/// Percent-encode the query parameter with [encode_uri_component] and
+	/// replace any existing values.
+	pub fn set(&mut self, name: &str, value: Option<&str>) {
+		self.remove_all(name);
+		self.push(name, value);
+	}
+
+	/// Replace any existing values with the given pair, without encoding.
+	pub fn set_encoded(&mut self, name: &str, value: Option<&str>) {
+		self.remove_all(name);
+		self.push_encoded(name, value);
+	}
+
+	/// Remove all query parameters matching given name.
+	pub fn remove_all<T: AsRef<str>>(&mut self, name: T) {
+		let name = name.as_ref();
+		self.remove_all_encoded(encode_uri_component(name));
+	}
+
+	/// Remove all query parameters matching given pre-encoded name.
+	pub fn remove_all_encoded<T: AsRef<str>>(&mut self, name: T) {
+		let name = name.as_ref();
+		self.params.retain(|(n, _)| n != name);
+	}
+
+	/// Serialize the given data as a [`QueryParameters`] struct.
+	pub fn from_data<T: Serialize>(value: &T) -> Result<Self, SerializeError> {
+		let mut query = Self::new();
+		value.serialize(&mut query)?;
+		Ok(query)
+	}
+}
+
+impl Display for QueryParameters {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		let mut first = true;
+		for (n, v) in &self.params {
+			if !first {
+				write!(f, "&")?;
+			} else {
+				first = false;
+			}
+			write!(f, "{}", n)?;
+			if let Some(v) = v {
+				write!(f, "={}", v)?;
+			}
+		}
+		Ok(())
+	}
+}
+
+macro_rules! serialize_integer {
+	($($type:ty),+) => {$(paste! {
+		fn [<serialize_ $type>](self, v: $type) -> Result<Self::Ok, Self::Error> {
+			self.params
+				.last_mut()
+				.ok_or(SerializeError::TopLevel(stringify!($type)))?
+				.1 = Some(itoa::Buffer::new().format(v).into());
+			Ok(())
+		}
+	})+};
+}
+
+macro_rules! serialize_display {
+	($($type:ty),+) => {$(paste! {
+		fn [<serialize_ $type>](self, v: $type) -> Result<Self::Ok, Self::Error> {
+			self.params
+				.last_mut()
+				.ok_or(SerializeError::TopLevel(stringify!($type)))?
+				.1 = Some(v.to_string());
+			Ok(())
+		}
+	})+};
+}
+
+impl Serializer for &mut QueryParameters {
+	type Ok = ();
+	type Error = SerializeError;
+
+	type SerializeSeq = Impossible<(), SerializeError>;
+	type SerializeTuple = Impossible<(), SerializeError>;
+	type SerializeTupleStruct = Impossible<(), SerializeError>;
+	type SerializeTupleVariant = Impossible<(), SerializeError>;
+	type SerializeMap = Self;
+	type SerializeStruct = Self;
+	type SerializeStructVariant = Impossible<(), SerializeError>;
+
+	/// key1=`true`&key2=`false`&...
+	fn serialize_bool(self, v: bool) -> Result<Self::Ok, Self::Error> {
+		self.params.try_last_mut("bool")?.1 = Some(if v { "true" } else { "false" }.into());
+		Ok(())
+	}
+
+	serialize_integer! { i8, i16, i32, i64, i128, u8, u16, u32, u64, u128 }
+
+	serialize_display! { f32, f64 }
+
+	/// key1=`a`&key2=`%20`&...
+	fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel("char"));
+		}
+
+		let mut b = [0; 4];
+		self.serialize_str(v.encode_utf8(&mut b))
+	}
+
+	/// key1=`abc`&key2=`a%20b%20c`&...
+	fn serialize_str(self, v: &str) -> Result<Self::Ok, Self::Error> {
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel("&str"));
+		}
+
+		self.serialize_bytes(v.as_bytes())
+	}
+
+	fn serialize_bytes(self, v: &[u8]) -> Result<Self::Ok, Self::Error> {
+		self.params.try_last_mut("&[u8]")?.1 = Some(encode_uri_component(v));
+		Ok(())
+	}
+
+	/// key1&key2&...
+	fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
+		let last = self.params.try_last_mut("Option<T>")?;
+		if last.0.is_empty() {
+			return Err(SerializeError::InvalidKey("Option<T>"));
+		}
+
+		last.1 = None;
+		Ok(())
+	}
+
+	fn serialize_some<T>(self, value: &T) -> Result<Self::Ok, Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		if self
+			.params
+			.last()
+			.ok_or(SerializeError::TopLevel("Option<T>"))?
+			.0
+			.is_empty()
+		{
+			return Err(SerializeError::InvalidKey("Option<T>"));
+		}
+
+		value.serialize(self)
+	}
+
+	/// key1=&key2=&...
+	fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
+		self.params.try_last_mut("()")?.1 = Some(String::new());
+		Ok(())
+	}
+
+	/// Serialize as a unit.
+	fn serialize_unit_struct(self, name: &'static str) -> Result<Self::Ok, Self::Error> {
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel(name));
+		}
+
+		self.serialize_unit()
+	}
+
+	/// Serialize as the name of the variant.
+	fn serialize_unit_variant(
+		self,
+		name: &'static str,
+		_variant_index: u32,
+		variant: &'static str,
+	) -> Result<Self::Ok, Self::Error> {
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel(name));
+		}
+
+		self.serialize_str(variant)
+	}
+
+	/// Serialize as the value wrapped in the struct.
+	fn serialize_newtype_struct<T>(
+		self,
+		name: &'static str,
+		value: &T,
+	) -> Result<Self::Ok, Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel(name));
+		}
+
+		value.serialize(self)
+	}
+
+	/// Serialize as the value contained within the variant.
+	fn serialize_newtype_variant<T>(
+		self,
+		name: &'static str,
+		_variant_index: u32,
+		_variant: &'static str,
+		value: &T,
+	) -> Result<Self::Ok, Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		if self.params.last().is_none() {
+			return Err(SerializeError::TopLevel(name));
+		}
+
+		value.serialize(self)
+	}
+
+	fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+		Err(SerializeError::invalid("Vec<T>"))
+	}
+
+	fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+		Err(SerializeError::invalid("(T0, T1,...)` or `[T, T,...]"))
+	}
+
+	fn serialize_tuple_struct(
+		self,
+		name: &'static str,
+		_len: usize,
+	) -> Result<Self::SerializeTupleStruct, Self::Error> {
+		Err(SerializeError::invalid(name))
+	}
+
+	fn serialize_tuple_variant(
+		self,
+		name: &'static str,
+		_variant_index: u32,
+		variant: &'static str,
+		_len: usize,
+	) -> Result<Self::SerializeTupleVariant, Self::Error> {
+		Err(SerializeError::invalid(format!("{name}::{variant}")))
+	}
+
+	fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+		if len.is_some() && !self.params.is_empty() {
+			return Err(SerializeError::NotTopLevel("Map<K, V>"));
+		}
+
+		Ok(self)
+	}
+
+	fn serialize_struct(
+		self,
+		name: &'static str,
+		_len: usize,
+	) -> Result<Self::SerializeStruct, Self::Error> {
+		if !self.params.is_empty() {
+			return Err(SerializeError::NotTopLevel(name));
+		}
+
+		Ok(self)
+	}
+
+	fn serialize_struct_variant(
+		self,
+		name: &'static str,
+		_variant_index: u32,
+		variant: &'static str,
+		_len: usize,
+	) -> Result<Self::SerializeStructVariant, Self::Error> {
+		Err(SerializeError::invalid(format!("{name}::{variant}")))
+	}
+}
+
+impl SerializeMap for &mut QueryParameters {
+	type Ok = ();
+	type Error = SerializeError;
+
+	fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		self.push_encoded("", None);
+		key.serialize(&mut **self)?;
+		let last = self.params.last_mut().ok_or(SerializeError::NoParam)?;
+		last.0 = last
+			.1
+			.as_deref()
+			.ok_or(SerializeError::InvalidKey("Option<T>"))?
+			.into();
+		Ok(())
+	}
+
+	fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		value.serialize(&mut **self)
+	}
+
+	fn end(self) -> Result<Self::Ok, Self::Error> {
+		Ok(())
+	}
+}
+
+impl SerializeStruct for &mut QueryParameters {
+	type Ok = ();
+	type Error = SerializeError;
+
+	fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
+	where
+		T: ?Sized + Serialize,
+	{
+		self.push_key(key);
+		value.serialize(&mut **self)
+	}
+
+	fn end(self) -> Result<Self::Ok, Self::Error> {
+		Ok(())
+	}
+}
+
+#[derive(Error, Debug, PartialEq, Eq)]
+pub enum SerializeError {
+	#[error("{0}")]
+	Custom(String),
+	#[error("`{0}` can only be serialized at the top level")]
+	NotTopLevel(&'static str),
+	#[error("cannot serialize `{0}` at the top level")]
+	TopLevel(&'static str),
+	#[error("expected parameter after serialized key, but none was found")]
+	NoParam,
+	#[error("cannot serialize `{0}` as key")]
+	InvalidKey(&'static str),
+	#[error("cannot serialize `{0}`")]
+	Invalid(String),
+}
+
+impl SerializeError {
+	fn invalid<S: Display>(r#type: S) -> Self {
+		Self::Invalid(r#type.to_string())
+	}
+}
+
+impl From<SerializeError> for AidokuError {
+	fn from(error: SerializeError) -> Self {
+		Self::Message(error.to_string())
+	}
+}
+
+impl SerError for SerializeError {
+	fn custom<T>(msg: T) -> Self
+	where
+		T: Display,
+	{
+		Self::Custom(msg.to_string())
+	}
+}
+
+trait TryParams {
+	type Param;
+	fn try_last_mut(&mut self, r#type: &'static str) -> Result<&mut Self::Param, SerializeError>;
+}
+
+impl<T> TryParams for Vec<T> {
+	type Param = T;
+	fn try_last_mut(&mut self, r#type: &'static str) -> Result<&mut Self::Param, SerializeError> {
+		self.last_mut().ok_or(SerializeError::TopLevel(r#type))
+	}
+}

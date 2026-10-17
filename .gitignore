@@ -1,0 +1,8 @@
+/target
+/sources/*
+!/sources/.gitkeep
+/downloads
+/config
+*.db
+*.db-*
+.DS_Store

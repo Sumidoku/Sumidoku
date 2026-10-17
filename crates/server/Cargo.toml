@@ -1,0 +1,25 @@
+[package]
+name = "suzuri-server"
+version = "0.1.0"
+description = "Suzuri manga server"
+edition = "2024"
+publish = false
+
+[dependencies]
+aidoku-wasm = { path = "../wasm" }
+aidoku.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+axum = "0.8"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "json"] }
+chrono = "0.4"
+toml = "0.8"
+tower-http = { version = "0.6", features = ["trace", "fs"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = "3"

@@ -1,0 +1,28 @@
+[package]
+name = "aidoku-wasm"
+version = "0.1.0"
+description = "Aidoku WASM source runtime for Suzuri"
+edition = "2024"
+publish = false
+
+[dependencies]
+aidoku.workspace = true
+wasmer.workspace = true
+wasmer-middlewares = "6.1"
+wasmer-compiler = "6.1"
+image = "0.25"
+postcard.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono = "0.4"
+chrono-tz = "0.10"
+ego-tree = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip"] }
+scraper = { version = "0.25", features = ["atomic"] }
+url = "2.5"
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
