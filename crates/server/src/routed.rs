@@ -9,7 +9,7 @@ const MAX_ATTEMPTS: u32 = 3;
 
 /// 设计 §6 的 NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct。
 /// 引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
-pub struct SuzuriNetPolicy {
+pub struct SumidokuNetPolicy {
 	user_agent: String,
 	direct_domains: Vec<String>,
 	relay_domains: Vec<String>,
@@ -19,7 +19,7 @@ pub struct SuzuriNetPolicy {
 	ca_pem: Option<Vec<u8>>,
 }
 
-impl SuzuriNetPolicy {
+impl SumidokuNetPolicy {
 	pub fn from_config(config: &Config) -> Arc<Self> {
 		let ca_pem = config
 			.net
@@ -52,7 +52,7 @@ impl SuzuriNetPolicy {
 	}
 }
 
-impl NetPolicy for SuzuriNetPolicy {
+impl NetPolicy for SumidokuNetPolicy {
 	fn route_for(&self, url: &Url) -> NetRoute {
 		let host = url.host_str().unwrap_or_default();
 		if Self::domain_match(&self.direct_domains, host) {
@@ -95,19 +95,19 @@ impl std::fmt::Display for FetchError {
 
 /// 服务端 async HTTP：按 policy 路由缓存 client、统一 UA、429/5xx 退避重试。
 pub struct RoutedClients {
-	policy: Arc<SuzuriNetPolicy>,
+	policy: Arc<SumidokuNetPolicy>,
 	clients: RwLock<HashMap<NetRoute, Client>>,
 }
 
 impl RoutedClients {
-	pub fn new(policy: Arc<SuzuriNetPolicy>) -> Self {
+	pub fn new(policy: Arc<SumidokuNetPolicy>) -> Self {
 		Self {
 			policy,
 			clients: RwLock::new(HashMap::new()),
 		}
 	}
 
-	pub fn policy(&self) -> &Arc<SuzuriNetPolicy> {
+	pub fn policy(&self) -> &Arc<SumidokuNetPolicy> {
 		&self.policy
 	}
 
@@ -211,10 +211,10 @@ impl RoutedClients {
 mod tests {
 	use super::*;
 
-	fn policy(config: impl FnOnce(&mut Config)) -> Arc<SuzuriNetPolicy> {
+	fn policy(config: impl FnOnce(&mut Config)) -> Arc<SumidokuNetPolicy> {
 		let mut c = Config::default();
 		config(&mut c);
-		SuzuriNetPolicy::from_config(&c)
+		SumidokuNetPolicy::from_config(&c)
 	}
 
 	#[test]

@@ -1,5 +1,5 @@
-use suzuri_server::build_app;
-use suzuri_server::config::Config;
+use sumidoku_server::build_app;
+use sumidoku_server::config::Config;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -12,6 +12,6 @@ async fn main() {
 	let listener = tokio::net::TcpListener::bind(&config.addr)
 		.await
 		.expect("failed to bind addr");
-	tracing::info!(addr = %config.addr, "suzuri-server listening");
+	tracing::info!(addr = %config.addr, "sumidoku-server listening");
 	axum::serve(listener, app).await.expect("server error");
 }

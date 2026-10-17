@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, Request, StatusCode, header};
 use axum::routing::get;
 use common::{TestApp, base_config, connect_db, fixture_dir, register_example_manga, request, test_app};
 use serde_json::{Value, json};
-use suzuri_server::build_app;
+use sumidoku_server::build_app;
 use tower::ServiceExt;
 
 // 1x1 透明 PNG
@@ -101,7 +101,7 @@ async fn feeds_files_and_escaping() {
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains(&format!("<title>{title}</title>")));
 	assert!(body.contains(&format!("https://opds.test/opds/v1.2/cover/{manga_id}")));
-	assert!(body.contains(&format!("urn:suzuri:manga:{manga_id}")));
+	assert!(body.contains(&format!("urn:sumidoku:manga:{manga_id}")));
 
 	// series：先落页缓存拿到 page_count=2，再打进度
 	let chapters = first_chapters(&app, manga_id).await;
@@ -207,7 +207,7 @@ async fn basic_auth_guard() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
 		headers[header::WWW_AUTHENTICATE],
-		"Basic realm=\"Suzuri OPDS\""
+		"Basic realm=\"Sumidoku OPDS\""
 	);
 
 	// 错误密码 401（user:wrong）

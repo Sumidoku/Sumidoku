@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use common::{TestApp, base_config, connect_db, register_example_manga, request, request_full, test_app};
 use serde_json::json;
-use suzuri_server::build_app;
+use sumidoku_server::build_app;
 
 // 1x1 透明 PNG
 const PNG: &[u8] = &[
@@ -345,7 +345,7 @@ async fn static_webui() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let webui = tmp.path().join("webui");
 	std::fs::create_dir_all(webui.join("assets")).expect("mkdir assets");
-	std::fs::write(webui.join("index.html"), "<html><body>suzuri-webui</body></html>").expect("index");
+	std::fs::write(webui.join("index.html"), "<html><body>sumidoku-webui</body></html>").expect("index");
 	std::fs::write(webui.join("assets/app.js"), "console.log(1)").expect("asset");
 	let mut config = base_config(&tmp);
 	config.webui_dir = webui;
@@ -353,11 +353,11 @@ async fn static_webui() {
 
 	let (status, _, bytes) = request_full(&app, "GET", "/", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(String::from_utf8(bytes).expect("utf8").contains("suzuri-webui"));
+	assert!(String::from_utf8(bytes).expect("utf8").contains("sumidoku-webui"));
 
 	let (status, _, bytes) = request_full(&app, "GET", "/any/spa/route", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(String::from_utf8(bytes).expect("utf8").contains("suzuri-webui"));
+	assert!(String::from_utf8(bytes).expect("utf8").contains("sumidoku-webui"));
 
 	let (status, _, bytes) = request_full(&app, "GET", "/assets/app.js", None).await;
 	assert_eq!(status, StatusCode::OK);

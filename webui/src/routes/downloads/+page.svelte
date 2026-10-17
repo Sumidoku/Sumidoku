@@ -142,7 +142,7 @@
 </script>
 
 <svelte:head>
-	<title>下载 - Suzuri</title>
+	<title>下载 - Sumidoku</title>
 </svelte:head>
 
 <div class="page">

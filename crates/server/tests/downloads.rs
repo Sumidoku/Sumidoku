@@ -6,8 +6,8 @@ use axum::routing::get;
 use common::{TestApp, base_config, connect_db, fixture_dir, register_example_manga, request, request_full};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
-use suzuri_server::build_app;
-use suzuri_server::config::Config;
+use sumidoku_server::build_app;
+use sumidoku_server::config::Config;
 
 // 1x1 透明 PNG
 const PNG: &[u8] = &[
@@ -99,7 +99,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 		assert_eq!(info.name(), "ComicInfo.xml");
 		let mut text = String::new();
 		info.read_to_string(&mut text).expect("read ComicInfo");
-		assert!(text.contains("!SUZURIDATA"), "{text}");
+		assert!(text.contains("!SUMIDOKUDATA"), "{text}");
 		assert!(text.contains(&format!("\"sourceKey\":\"{source_key}\"")), "{text}");
 		assert!(text.contains(&format!("\"mangaKey\":\"{manga_key}\"")), "{text}");
 		assert!(text.contains(&format!("\"chapterKey\":\"{chapter_key}\"")), "{text}");

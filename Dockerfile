@@ -14,27 +14,27 @@ COPY vendor/ vendor/
 COPY crates/ crates/
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/app/target \
-    cargo build --release -p suzuri-server && \
-    cp target/release/suzuri-server /usr/local/bin/suzuri-server
+    cargo build --release -p sumidoku-server && \
+    cp target/release/sumidoku-server /usr/local/bin/sumidoku-server
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/* && \
-    useradd -u 1000 -m suzuri
-COPY --from=server /usr/local/bin/suzuri-server /usr/local/bin/suzuri-server
+    useradd -u 1000 -m sumidoku
+COPY --from=server /usr/local/bin/sumidoku-server /usr/local/bin/sumidoku-server
 COPY --from=webui /webui/build /webui
 
-ENV SUZURI_ADDR=0.0.0.0:3000 \
-    DATABASE_URL=sqlite:///config/suzuri.db?mode=rwc \
-    SUZURI_SOURCES_DIR=/sources \
-    SUZURI_DOWNLOADS_DIR=/downloads \
-    SUZURI_COVERS_DIR=/config/covers \
-    SUZURI_WEBUI_DIR=/webui
+ENV SUMIDOKU_ADDR=0.0.0.0:3000 \
+    DATABASE_URL=sqlite:///config/sumidoku.db?mode=rwc \
+    SUMIDOKU_SOURCES_DIR=/sources \
+    SUMIDOKU_DOWNLOADS_DIR=/downloads \
+    SUMIDOKU_COVERS_DIR=/config/covers \
+    SUMIDOKU_WEBUI_DIR=/webui
 
-USER suzuri
+USER sumidoku
 EXPOSE 3000
 VOLUME ["/config", "/sources", "/downloads"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD curl -fsS http://localhost:3000/health || exit 1
 
-CMD ["suzuri-server"]
+CMD ["sumidoku-server"]

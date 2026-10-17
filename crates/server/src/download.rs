@@ -778,7 +778,7 @@ fn comic_info_xml(source_key: &str, manga: &MangaRow, chapter: &ChapterRow, page
 		"mangaKey": manga.key,
 		"chapterKey": chapter.key,
 	});
-	xml.push_str(&format!("<Notes>!SUZURIDATA{}</Notes>", xml_escape(&notes.to_string())));
+	xml.push_str(&format!("<Notes>!SUMIDOKUDATA{}</Notes>", xml_escape(&notes.to_string())));
 	xml.push_str(&format!("<PageCount>{page_count}</PageCount></ComicInfo>"));
 	xml
 }

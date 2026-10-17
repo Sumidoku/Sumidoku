@@ -1,5 +1,5 @@
-// 与 suzuri-server REST 契约对应的类型。
-// Aidoku 结构体字段为 snake_case，Suzuri 自有字段为 camelCase。
+// 与 sumidoku-server REST 契约对应的类型。
+// Aidoku 结构体字段为 snake_case，Sumidoku 自有字段为 camelCase。
 
 export interface Source {
 	id: number;
@@ -156,7 +156,7 @@ export interface UpdateJob {
 export interface UpdateRecentEntry {
 	chapter: Chapter;
 	manga: MangaDetail;
-	/** 契约写作 fetched_at，Suzuri 自有字段惯例是 camelCase，两种都容忍 */
+	/** 契约写作 fetched_at，Sumidoku 自有字段惯例是 camelCase，两种都容忍 */
 	fetchedAt?: number | null;
 	fetched_at?: number | null;
 }

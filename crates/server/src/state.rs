@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
-use crate::routed::{RoutedClients, SuzuriNetPolicy};
+use crate::routed::{RoutedClients, SumidokuNetPolicy};
 use aidoku_wasm::{
 	DefaultValue, DefaultsSink, SourceConfig, SourceFeatures, SourceHandle,
 };
@@ -22,7 +22,7 @@ pub struct AppState {
 	pub call_semaphore: Arc<Semaphore>,
 	pub defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
 	pub http: RoutedClients,
-	pub policy: Arc<SuzuriNetPolicy>,
+	pub policy: Arc<SumidokuNetPolicy>,
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
@@ -77,7 +77,7 @@ impl AppState {
 		defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
 	) -> Arc<Self> {
 		let call_concurrency = config.call_concurrency;
-		let policy = SuzuriNetPolicy::from_config(&config);
+		let policy = SumidokuNetPolicy::from_config(&config);
 		let http = RoutedClients::new(policy.clone());
 		Arc::new(Self {
 			pool,

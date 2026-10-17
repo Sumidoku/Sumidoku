@@ -1,4 +1,4 @@
-# Suzuri（硯）— 自建漫画服务器设计文档
+# Sumidoku（硯）— 自建漫画服务器设计文档
 
 > 版本：v0.2 · 2026-10-17
 > 状态：设计稿（v0.1 评审后重构，结论已对账三个参照项目源码）
@@ -10,7 +10,7 @@
 
 | 项    | 值                                          |
 | ---- | ------------------------------------------ |
-| 项目名  | **Suzuri（硯）**                              |
+| 项目名  | **Sumidoku（硯）**                              |
 | 形态   | Docker 自建服务（HTTP + Web UI + OPDS）          |
 | 内核   | Rust（axum + tokio），wasmer 执行 Aidoku WASM 源 |
 | 对标   | Suwayomi（服务端形态）+ Aidoku（源生态与宿主语义）      |
@@ -39,7 +39,7 @@
 | CF 绕过：TRAWL sidecar 代理模式       | TRAWL（AGPL-3.0，challenge-aware forward proxy + `/scrape` + FlareSolverr `/v1`）      |
 | 源列表/.aix 安装、key 迁移协议          | Aidoku app：`SourceManager`（index/.aix/breakingChangeVersion 流程）                   |
 
-与 Suwayomi 的形态差异：Suwayomi 是 REST + GraphQL + OPDS 三协议并存，Suzuri 只做 **REST + OPDS**（设置/用户管理也走 REST），不预留 GraphQL。
+与 Suwayomi 的形态差异：Suwayomi 是 REST + GraphQL + OPDS 三协议并存，Sumidoku 只做 **REST + OPDS**（设置/用户管理也走 REST），不预留 GraphQL。
 
 ---
 
@@ -73,7 +73,7 @@ flowchart TB
         RESTC[REST 客户端/PWA]
     end
 
-    subgraph Suzuri 服务器
+    subgraph Sumidoku 服务器
         API[API 层 axum<br/>/api/v1 · /opds · 认证 · WS]
         SVC[应用服务层<br/>SourceManager · LibraryService · DownloadManager<br/>UpdateScheduler · ReaderService · AuthService]
         CORE[引擎 crate aidoku-wasm<br/>每源 actor 线程 · wasmer<br/>宿主导入 env/std/net/html/defaults/js/canvas]
@@ -113,7 +113,7 @@ flowchart TB
 | 模块                         | 职责                                                                                  |
 | -------------------------- | ----------------------------------------------------------------------------------- |
 | **aidoku-wasm**（引擎 crate）  | 加载 `source.json + main.wasm`；特性探测；每源 actor 线程；7 组宿主导入；GlobalStore；postcard 编解码；资源限制。 |
-| **suzuri-server**（主 crate） | HTTP 服务 + 应用服务（源/库/下载/更新/阅读/认证/设置）+ DB + 文件存储。                                      |
+| **sumidoku-server**（主 crate） | HTTP 服务 + 应用服务（源/库/下载/更新/阅读/认证/设置）+ DB + 文件存储。                                      |
 | **webui/**                 | SvelteKit 前端：浏览、库、阅读器、下载、设置、登录。                                                     |
 
 ---
@@ -189,7 +189,7 @@ ABI 契约以 aidoku-rs 源码为准（已逐条对账 `crates/lib/src/macros/mo
 
 ### 5.6 限流（实装，非 stub）
 
-Aidoku app（`isRateLimited` 硬编码 false）与 test-runner（空函数）都未实现 `net.set_rate_limit(permits, period, unit)`。Suzuri 实装：每源一个令牌桶，源调用 `set_rate_limit` 即调整桶参数；叠加全局每源并发上限（默认同时 5 个在途请求，对齐 Aidoku 下载并行度）。
+Aidoku app（`isRateLimited` 硬编码 false）与 test-runner（空函数）都未实现 `net.set_rate_limit(permits, period, unit)`。Sumidoku 实装：每源一个令牌桶，源调用 `set_rate_limit` 即调整桶参数；叠加全局每源并发上限（默认同时 5 个在途请求，对齐 Aidoku 下载并行度）。
 
 ### 5.7 特性探测与 Page 内容模型
 
@@ -312,7 +312,7 @@ allow_direct_fallback = false
 - **入库流程**：搜索/列表返回的是源侧临时 Manga（含 `sourceKey+mangaKey` 与已入库时的 `mangaId`）；点详情时若未入库先 `POST /manga` 注册，之后一切走内部 id。
 - **认证**：M1–M3 单用户，可选全局 Basic 口令；M4 argon2 + JWT（Bearer / cookie），`session_version` 支持改密吊销。OPDS 始终 Basic（见 §9）。
 - 错误体统一 `{error: {code, message}}`，对外文案英文。
-- **字段命名**：Aidoku 结构体（Manga/Chapter/Page/Filter/Setting…）保持其 serde 原生命名（snake_case，与源生态一致）；Suzuri 自有附加字段（`id`/`sourceId`/`hasNextPage`/`pageCount` 等）用 camelCase。
+- **字段命名**：Aidoku 结构体（Manga/Chapter/Page/Filter/Setting…）保持其 serde 原生命名（snake_case，与源生态一致）；Sumidoku 自有附加字段（`id`/`sourceId`/`hasNextPage`/`pageCount` 等）用 camelCase。
 
 ---
 
@@ -353,7 +353,7 @@ allow_direct_fallback = false
 
 ## 10. Web UI（M2+）
 
-- SvelteKit 静态产物由 suzuri-server 托管（SPA fallback 注意与 `/api`、`/opds` 前缀隔离）。
+- SvelteKit 静态产物由 sumidoku-server 托管（SPA fallback 注意与 `/api`、`/opds` 前缀隔离）。
 - 页面：浏览（源/搜索/首页/listings）、书架（分类）、阅读器（翻页/滚动/webtoon，文本页渲染 markdown）、下载管理、更新、设置、登录（M4）。
 - 阅读器预取：翻页时预取下一章前 N 页（对齐 Aidoku `ReaderPagePrefetcher` 语义，经页图代理）。
 
@@ -366,7 +366,7 @@ allow_direct_fallback = false
 - **重试**：429/5xx 指数退避 + `Retry-After`，每章上限 3 次，失败保留临时目录与失败页码标记。
 - **产物**（对齐 Suwayomi `ArchiveProvider` + Aidoku `DownloadTask`）：
   - 默认 **CBZ**（`downloads.format = cbz | folder`），zip DEFLATED，条目不携带时间戳（产物可复现）；
-  - 一律生成 **`ComicInfo.xml`**（Anansi ComicInfo 2.0），`Notes` 字段嵌 `!SUZURIDATA{"sourceKey","mangaKey","chapterKey"}` JSON 供回读还原（借鉴 Aidoku 的 AIDOKUDATA）；
+  - 一律生成 **`ComicInfo.xml`**（Anansi ComicInfo 2.0），`Notes` 字段嵌 `!SUMIDOKUDATA{"sourceKey","mangaKey","chapterKey"}` JSON 供回读还原（借鉴 Aidoku 的 AIDOKUDATA）；
   - 页图经 `get_image_request` 拉取；`Text` 页存 `NNN.txt`；`Zip` 页解包取条目；目录/文件名经 sanitize（剥离 URL/路径非法字符，对齐 Aidoku `String.directoryName`）；
   - 完成后回写 `download.status` 与 `chapter_user.is_downloaded`。
 - **进度**：WS 推送（queued/progress/finished/error/paused），对齐 Suwayomi `DownloadUpdateType`。
@@ -387,7 +387,7 @@ allow_direct_fallback = false
 ```yaml
 # docker-compose.yml（示意）
 services:
-  suzuri:
+  sumidoku:
     build: .
     ports: ["3000:3000"]
     volumes:
@@ -396,9 +396,9 @@ services:
       - ./downloads:/downloads
       - trawl-ca:/trawl-ca:ro    # TRAWL 共享 CA
     environment:
-      - DATABASE_URL=sqlite:///config/suzuri.db
-      - SUZURI_NET_TRAWL_PROXY=http://trawl:8192
-      - SUZURI_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
+      - DATABASE_URL=sqlite:///config/sumidoku.db
+      - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
+      - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
     depends_on:
       - trawl
     healthcheck:
@@ -421,7 +421,7 @@ volumes:
   trawl-data:
 ```
 
-> 镜像内**不内置源包**：经 `/sources` 挂载或 Web 端安装（M4 在线列表），保持宿主镜像许可干净。TRAWL 不暴露宿主端口，仅 Suzuri 可达。
+> 镜像内**不内置源包**：经 `/sources` 挂载或 Web 端安装（M4 在线列表），保持宿主镜像许可干净。TRAWL 不暴露宿主端口，仅 Sumidoku 可达。
 
 ---
 
@@ -442,7 +442,7 @@ API 面与里程碑的对应关系以此表为准（v0.1 里 `/library/updates` 
 ## 15. 目录结构规划
 
 ```
-suzuri/
+sumidoku/
 ├── Cargo.toml                 # workspace
 ├── crates/
 │   ├── wasm/                  # aidoku-wasm 引擎

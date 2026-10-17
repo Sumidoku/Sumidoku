@@ -27,7 +27,7 @@
 {#if !isReader}
 <header class="nav">
 	<div class="nav-inner">
-		<a class="brand" href="/library">Suzuri</a>
+		<a class="brand" href="/library">Sumidoku</a>
 		<nav class="links desktop">
 			{#each NAV as item (item.href)}
 				<a class:active={isActive(item.href)} href={item.href}>{item.label}</a>

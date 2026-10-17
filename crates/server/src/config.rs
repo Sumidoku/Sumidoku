@@ -39,7 +39,7 @@ impl Default for Config {
 	fn default() -> Self {
 		Self {
 			addr: "0.0.0.0:3000".into(),
-			database_url: "sqlite://data/suzuri.db?mode=rwc".into(),
+			database_url: "sqlite://data/sumidoku.db?mode=rwc".into(),
 			sources_dir: PathBuf::from("./sources"),
 			call_concurrency: 8,
 			log: "info".into(),
@@ -95,7 +95,7 @@ struct ConfigFile {
 }
 
 impl Config {
-	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUZURI_ 前缀优先，DATABASE_URL 兜底）
+	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUMIDOKU_ 前缀优先，DATABASE_URL 兜底）
 	pub fn load() -> Self {
 		let mut config = Self::default();
 		if let Ok(raw) = std::fs::read_to_string("./config.toml") {
@@ -183,90 +183,90 @@ impl Config {
 	}
 
 	fn apply_env(&mut self) {
-		if let Ok(v) = std::env::var("SUZURI_ADDR") {
+		if let Ok(v) = std::env::var("SUMIDOKU_ADDR") {
 			self.addr = v;
 		}
 		if let Ok(v) = std::env::var("DATABASE_URL") {
 			self.database_url = v;
 		}
-		if let Ok(v) = std::env::var("SUZURI_DATABASE_URL") {
+		if let Ok(v) = std::env::var("SUMIDOKU_DATABASE_URL") {
 			self.database_url = v;
 		}
-		if let Ok(v) = std::env::var("SUZURI_SOURCES_DIR") {
+		if let Ok(v) = std::env::var("SUMIDOKU_SOURCES_DIR") {
 			self.sources_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_CALL_CONCURRENCY") {
+		if let Ok(v) = std::env::var("SUMIDOKU_CALL_CONCURRENCY") {
 			if let Ok(n) = v.parse() {
 				self.call_concurrency = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_LOG") {
+		if let Ok(v) = std::env::var("SUMIDOKU_LOG") {
 			self.log = v;
 		}
-		if let Ok(v) = std::env::var("SUZURI_COVERS_DIR") {
+		if let Ok(v) = std::env::var("SUMIDOKU_COVERS_DIR") {
 			self.covers_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_COVER_CACHE_MAX") {
+		if let Ok(v) = std::env::var("SUMIDOKU_COVER_CACHE_MAX") {
 			if let Ok(n) = v.parse() {
 				self.cover_cache_max = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_WEBUI_DIR") {
+		if let Ok(v) = std::env::var("SUMIDOKU_WEBUI_DIR") {
 			self.webui_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_USER_AGENT") {
+		if let Ok(v) = std::env::var("SUMIDOKU_USER_AGENT") {
 			self.user_agent = v;
 		}
-		if let Ok(v) = std::env::var("SUZURI_DOWNLOADS_DIR") {
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOADS_DIR") {
 			self.downloads_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_DOWNLOAD_CONCURRENCY") {
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_CONCURRENCY") {
 			if let Ok(n) = v.parse() {
 				self.download_concurrency = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_DOWNLOAD_FORMAT") {
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_FORMAT") {
 			self.download_format = v;
 		}
-		if let Ok(v) = std::env::var("SUZURI_UPDATE_INTERVAL_HOURS") {
+		if let Ok(v) = std::env::var("SUMIDOKU_UPDATE_INTERVAL_HOURS") {
 			if let Ok(n) = v.parse() {
 				self.update_interval_hours = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_AUTO_DOWNLOAD_NEW_CHAPTERS") {
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS") {
 			if let Ok(n) = v.parse() {
 				self.auto_download_new_chapters = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_AUTO_DOWNLOAD_LIMIT") {
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_LIMIT") {
 			if let Ok(n) = v.parse() {
 				self.auto_download_limit = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_OPDS_LAZY_DOWNLOAD") {
+		if let Ok(v) = std::env::var("SUMIDOKU_OPDS_LAZY_DOWNLOAD") {
 			if let Ok(n) = v.parse() {
 				self.opds_lazy_download = n;
 			}
 		}
-		if let Ok(v) = std::env::var("SUZURI_BASIC_PASSWORD") {
+		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_DIRECT_DOMAINS") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_DIRECT_DOMAINS") {
 			self.net.direct_domains = split_csv(&v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_RELAY_DOMAINS") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_RELAY_DOMAINS") {
 			self.net.relay_domains = split_csv(&v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_TRAWL_PROXY") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_TRAWL_PROXY") {
 			self.net.trawl_proxy = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_TRAWL_CA") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_TRAWL_CA") {
 			self.net.trawl_ca = Some(PathBuf::from(v));
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_PROXY") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_PROXY") {
 			self.net.proxy = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUZURI_NET_ALLOW_DIRECT_FALLBACK") {
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK") {
 			if let Ok(n) = v.parse() {
 				self.net.allow_direct_fallback = n;
 			}

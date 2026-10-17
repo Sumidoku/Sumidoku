@@ -92,7 +92,7 @@
 	async function setMode(m: Mode) {
 		if (m === mode) return;
 		mode = m;
-		localStorage.setItem('suzuri.reader.mode', m);
+		localStorage.setItem('sumidoku.reader.mode', m);
 		if (m !== 'paged') {
 			await tick();
 			scrollToPage(idx);
@@ -101,7 +101,7 @@
 
 	function setDir(d: Dir) {
 		dir = d;
-		localStorage.setItem('suzuri.reader.dir', d);
+		localStorage.setItem('sumidoku.reader.dir', d);
 	}
 
 	function scrollToPage(i: number) {
@@ -162,9 +162,9 @@
 	});
 
 	onMount(() => {
-		const m = localStorage.getItem('suzuri.reader.mode');
+		const m = localStorage.getItem('sumidoku.reader.mode');
 		if (m === 'paged' || m === 'continuous' || m === 'webtoon') mode = m;
-		const d = localStorage.getItem('suzuri.reader.dir');
+		const d = localStorage.getItem('sumidoku.reader.dir');
 		if (d === 'ltr' || d === 'rtl') dir = d;
 
 		window.addEventListener('keydown', onKey);
@@ -210,7 +210,7 @@
 </script>
 
 <svelte:head>
-	<title>{mangaTitle ? `${mangaTitle} · ` : ''}阅读 - Suzuri</title>
+	<title>{mangaTitle ? `${mangaTitle} · ` : ''}阅读 - Sumidoku</title>
 </svelte:head>
 
 <div class="reader" class:webtoon={mode === 'webtoon'}>

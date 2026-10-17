@@ -92,7 +92,7 @@ async fn basic_auth(State(state): State<Arc<AppState>>, req: Request, next: Next
 	}
 	(
 		StatusCode::UNAUTHORIZED,
-		[(header::WWW_AUTHENTICATE, "Basic realm=\"Suzuri OPDS\"")],
+		[(header::WWW_AUTHENTICATE, "Basic realm=\"Sumidoku OPDS\"")],
 		Json(json!({"error": {"code": "unauthorized", "message": "authentication required"}})),
 	)
 		.into_response()
@@ -212,7 +212,7 @@ fn nav_entry(xml: &mut String, base: &str, id: &str, title: &str, path: &str) {
 	let _ = write!(
 		xml,
 		concat!(
-			"<entry><id>urn:suzuri:nav:{}</id><title>{}</title><updated>{}</updated>",
+			"<entry><id>urn:sumidoku:nav:{}</id><title>{}</title><updated>{}</updated>",
 			"<link rel=\"subsection\" type=\"application/atom+xml;profile=opds-catalog;type=feed\" href=\"{}\"/>",
 			"<content type=\"text\">{}</content></entry>\n",
 		),
@@ -227,7 +227,7 @@ fn nav_entry(xml: &mut String, base: &str, id: &str, title: &str, path: &str) {
 fn manga_entry(xml: &mut String, base: &str, row: &MangaRow, updated: i64) {
 	let _ = write!(
 		xml,
-		"<entry><id>urn:suzuri:manga:{}</id><title>{}</title><updated>{}</updated>",
+		"<entry><id>urn:sumidoku:manga:{}</id><title>{}</title><updated>{}</updated>",
 		row.id,
 		esc(&row.title),
 		rfc3339(updated),
@@ -326,7 +326,7 @@ fn chapter_entry(xml: &mut String, base: &str, row: &OpdsChapterRow) {
 	let updated = c.date_uploaded.unwrap_or(c.fetched_at);
 	let _ = write!(
 		xml,
-		"<entry><id>urn:suzuri:chapter:{}</id><title>{}</title><updated>{}</updated>",
+		"<entry><id>urn:sumidoku:chapter:{}</id><title>{}</title><updated>{}</updated>",
 		c.id,
 		esc(&title),
 		rfc3339(updated),
@@ -376,7 +376,7 @@ fn page_of(query: &FeedQuery) -> ApiResult<i64> {
 
 async fn root_feed(headers: HeaderMap) -> Response {
 	let base = base_url(&headers);
-	let mut xml = feed_head("urn:suzuri:root", "Suzuri", &format!("{base}/opds/v1.2/root"), &base);
+	let mut xml = feed_head("urn:sumidoku:root", "Sumidoku", &format!("{base}/opds/v1.2/root"), &base);
 	let _ = write!(
 		xml,
 		"<link rel=\"search\" type=\"application/opensearchdescription+xml\" href=\"{}\"/>\n",
@@ -401,7 +401,7 @@ async fn open_search_description(headers: HeaderMap) -> Response {
 		concat!(
 			"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
 			"<OpenSearchDescription xmlns=\"http://a9.com/-/spec/opensearch/1.1/\">\n",
-			"<ShortName>Suzuri</ShortName>\n<Description>Search Suzuri library</Description>\n",
+			"<ShortName>Sumidoku</ShortName>\n<Description>Search Sumidoku library</Description>\n",
 			"<InputEncoding>UTF-8</InputEncoding>\n<OutputEncoding>UTF-8</OutputEncoding>\n",
 			"<Url type=\"application/atom+xml;profile=opds-catalog;type=feed\" template=\"{}\"/>\n",
 			"</OpenSearchDescription>",
@@ -432,7 +432,7 @@ async fn library_feed(
 	.await?;
 	let self_href = format!("{base}/opds/v1.2/library?page={page}");
 	let next_href = format!("{base}/opds/v1.2/library?page={}", page + 1);
-	Ok(manga_feed(&base, "urn:suzuri:library", "Library", &self_href, &next_href, rows))
+	Ok(manga_feed(&base, "urn:sumidoku:library", "Library", &self_href, &next_href, rows))
 }
 
 async fn categories_feed(
@@ -446,7 +446,7 @@ async fn categories_feed(
 			.fetch_all(&state.pool)
 			.await?;
 	let mut xml = feed_head(
-		"urn:suzuri:categories",
+		"urn:sumidoku:categories",
 		"Categories",
 		&format!("{base}/opds/v1.2/categories"),
 		&base,
@@ -489,7 +489,7 @@ async fn category_feed(
 	let next_href = format!("{base}/opds/v1.2/categories/{id}?page={}", page + 1);
 	Ok(manga_feed(
 		&base,
-		&format!("urn:suzuri:category:{id}"),
+		&format!("urn:sumidoku:category:{id}"),
 		&name,
 		&self_href,
 		&next_href,
@@ -506,7 +506,7 @@ async fn sources_feed(
 		.fetch_all(&state.pool)
 		.await?;
 	let mut xml = feed_head(
-		"urn:suzuri:sources",
+		"urn:sumidoku:sources",
 		"Sources",
 		&format!("{base}/opds/v1.2/sources"),
 		&base,
@@ -545,7 +545,7 @@ async fn source_feed(
 	let next_href = format!("{base}/opds/v1.2/sources/{id}?page={}", page + 1);
 	Ok(manga_feed(
 		&base,
-		&format!("urn:suzuri:source:{id}"),
+		&format!("urn:sumidoku:source:{id}"),
 		&name,
 		&self_href,
 		&next_href,
@@ -577,7 +577,7 @@ async fn history_feed(
 	.await?;
 	let self_href = format!("{base}/opds/v1.2/history?page={page}");
 	let has_next = rows.len() as i64 > PAGE_SIZE;
-	let mut xml = feed_head("urn:suzuri:history", "History", &self_href, &base);
+	let mut xml = feed_head("urn:sumidoku:history", "History", &self_href, &base);
 	if has_next {
 		next_link(&mut xml, &format!("{base}/opds/v1.2/history?page={}", page + 1));
 	}
@@ -606,7 +606,7 @@ async fn updates_feed(
 	.await?;
 	let self_href = format!("{base}/opds/v1.2/updates?page={page}");
 	let next_href = format!("{base}/opds/v1.2/updates?page={}", page + 1);
-	Ok(chapter_feed(&base, "urn:suzuri:updates", "Updates", &self_href, &next_href, rows))
+	Ok(chapter_feed(&base, "urn:sumidoku:updates", "Updates", &self_href, &next_href, rows))
 }
 
 async fn search_feed(
@@ -640,7 +640,7 @@ async fn search_feed(
 	let next_href = format!("{base}/opds/v1.2/search?q={enc_q}&page={}", page + 1);
 	Ok(manga_feed(
 		&base,
-		&format!("urn:suzuri:search:{q}"),
+		&format!("urn:sumidoku:search:{q}"),
 		&format!("Search: {q}"),
 		&self_href,
 		&next_href,
@@ -670,7 +670,7 @@ async fn series_feed(
 	let next_href = format!("{base}/opds/v1.2/series/{manga_id}?page={}", page + 1);
 	Ok(chapter_feed(
 		&base,
-		&format!("urn:suzuri:manga:{manga_id}"),
+		&format!("urn:sumidoku:manga:{manga_id}"),
 		&manga.title,
 		&self_href,
 		&next_href,

@@ -1,5 +1,5 @@
 services:
-  suzuri:
+  sumidoku:
     build: .
     ports:
       - "3000:3000"
@@ -9,10 +9,10 @@ services:
       - ./downloads:/downloads
       - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
     environment:
-      - SUZURI_NET_TRAWL_PROXY=http://trawl:8192
-      - SUZURI_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
-      # - SUZURI_NET_RELAY_DOMAINS=cf.example.com
-      # - SUZURI_BASIC_PASSWORD=
+      - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
+      - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
+      # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
+      # - SUMIDOKU_BASIC_PASSWORD=
     depends_on:
       - trawl
 

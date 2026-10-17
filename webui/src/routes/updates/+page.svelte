@@ -154,7 +154,7 @@
 </script>
 
 <svelte:head>
-	<title>更新 - Suzuri</title>
+	<title>更新 - Sumidoku</title>
 </svelte:head>
 
 <div class="page">

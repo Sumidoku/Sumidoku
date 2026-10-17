@@ -6,8 +6,8 @@ use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use serde_json::{Value, json};
 use std::path::PathBuf;
-use suzuri_server::build_app;
-use suzuri_server::config::Config;
+use sumidoku_server::build_app;
+use sumidoku_server::config::Config;
 use tower::ServiceExt;
 
 pub fn fixture_dir() -> PathBuf {

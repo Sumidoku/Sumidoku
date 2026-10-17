@@ -51,7 +51,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 
 fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 	if !webui_dir.is_dir() {
-		return app.route("/", get(|| async { "Suzuri API server (webui not built)" }));
+		return app.route("/", get(|| async { "Sumidoku API server (webui not built)" }));
 	}
 	// not_found_service 会把响应状态码强制改成 404（给 404 页用的），SPA 要 200，用 fallback
 	let serve = ServeDir::new(webui_dir).fallback(ServeFile::new(webui_dir.join("index.html")));
