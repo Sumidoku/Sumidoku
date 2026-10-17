@@ -1,0 +1,236 @@
+/* ============ 封面网格（书库/源浏览共用） ============ */
+
+.cover-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: 16px;
+}
+
+@media (max-width: 767px) {
+	.cover-grid {
+		grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+		gap: 12px;
+	}
+}
+
+/* ============ 书库 ============ */
+
+.library__search {
+	flex: 1;
+	min-width: 160px;
+	max-width: 320px;
+}
+
+.library__filters {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 14px;
+}
+
+.library__tabs {
+	margin-bottom: 16px;
+}
+
+/* ============ 浏览（源列表） ============ */
+
+.source-list {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.source-card {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 12px 14px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	text-align: left;
+	width: 100%;
+	transition:
+		background 0.15s,
+		border-color 0.15s;
+}
+
+.source-card--link:hover {
+	background: var(--bg-hover);
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.source-card--disabled {
+	opacity: 0.5;
+	pointer-events: none;
+}
+
+.source-card__icon {
+	position: relative;
+	width: 56px;
+	height: 56px;
+	border-radius: var(--r-md);
+	overflow: hidden;
+	flex: none;
+	background: var(--bg-hover);
+}
+
+.source-card__icon img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.source-card__icon-fallback {
+	width: 56px;
+	height: 56px;
+	border-radius: var(--r-md);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+	font-size: 22px;
+	font-weight: 700;
+	flex: none;
+}
+
+.source-card__main {
+	flex: 1;
+	min-width: 0;
+}
+
+.source-card__name {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-weight: 600;
+	font-size: 15px;
+}
+
+.source-card__name-text {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.source-card__meta {
+	margin-top: 2px;
+	font-size: 12.5px;
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.source-card__badges {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	flex-wrap: wrap;
+	margin-top: 7px;
+}
+
+/* 语言 badge 是信息不是装饰，dim 档太浅 */
+.source-card__badges .chip {
+	color: var(--text);
+}
+
+/* ============ 源浏览/搜索 ============ */
+
+.source-page__head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 16px;
+}
+
+.source-page__title {
+	font-size: 20px;
+	font-weight: 600;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.source-page__modes {
+	margin-bottom: 14px;
+}
+
+.source-page__search {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.source-page__search .input {
+	flex: 1;
+	min-width: 0;
+}
+
+.filter-panel {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	margin-bottom: 14px;
+}
+
+.filter-item__title {
+	display: block;
+	font-size: 13px;
+	color: var(--text-dim);
+	margin-bottom: 6px;
+}
+
+.filter-item__row {
+	display: flex;
+	gap: 8px;
+	align-items: center;
+}
+
+.filter-item__row .input,
+.filter-item__row .select {
+	flex: 1;
+	min-width: 0;
+}
+
+/* 面板内非行内布局的控件占满整行 */
+.filter-panel .input,
+.filter-panel .select {
+	display: flex;
+	width: 100%;
+}
+
+.filter-panel .input__field,
+.filter-panel .select__field {
+	flex: 1;
+}
+
+.filter-item__chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+}
+
+.filter-item__note {
+	font-size: 13.5px;
+	color: var(--text-dim);
+}
+
+.filter-panel__footer {
+	display: flex;
+	justify-content: flex-end;
+}
+
+/* ============ 占位页（后续波次替换） ============ */
+
+.stub-reader {
+	min-height: 100dvh;
+	background: #000;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	color: var(--text-dim);
+}
