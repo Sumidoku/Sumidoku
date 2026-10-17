@@ -19,6 +19,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [profile.release]
 opt-level = "s"
 lto = true
-# rustc 1.95–1.97 的 llvm-objcopy strip 在 macOS 27 产出 dyld 拒载的 mis-aligned
-# LINKEDIT dylib（rust-lang/rust#157750，1.98 修复）；none 对所有 toolchain 安全
-strip = "none"
+strip = true
