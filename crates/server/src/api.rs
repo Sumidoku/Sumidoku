@@ -110,7 +110,7 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 	source_row(&state, id).await?;
 	let entry = state.sources.write().await.remove(&id);
 	if let Some(entry) = entry {
-		// 有在途调用持有 Arc 时shutdown 让位给引用计数归零自然退出
+		// 有在途调用持有 Arc 时，让位给引用计数归零后 actor 线程自然退出
 		if let Ok(handle) = Arc::try_unwrap(entry.handle) {
 			handle.shutdown().await;
 		}
@@ -356,7 +356,7 @@ pub struct RefreshQuery {
 }
 
 fn wants_refresh(query: &RefreshQuery) -> bool {
-	matches!(query.refresh.as_deref(), Some("1") | Some("true"))
+	matches!(query.refresh.as_deref(), Some("") | Some("1") | Some("true"))
 }
 
 async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
@@ -447,13 +447,12 @@ async fn get_pages(
 	if !cached.is_empty() && !wants_refresh(&query) {
 		let mut pages = Vec::with_capacity(cached.len());
 		for (index, content) in cached {
-			pages.push(json!({
-				"index": index,
-				"content": serde_json::from_str::<Value>(&content)?,
-				"thumbnail": Value::Null,
-				"hasDescription": false,
-				"description": Value::Null,
-			}));
+			let mut value = serde_json::from_str::<Value>(&content)?;
+			let object = value
+				.as_object_mut()
+				.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
+			object.insert("index".into(), json!(index));
+			pages.push(value);
 		}
 		return Ok(Json(json!(pages)));
 	}
@@ -462,22 +461,6 @@ async fn get_pages(
 	let pages = handle
 		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
 		.await?;
-	{
-		let mut tx = state.pool.begin().await?;
-		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
-			.bind(id)
-			.execute(&mut *tx)
-			.await?;
-		for (index, page) in pages.iter().enumerate() {
-			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
-				.bind(id)
-				.bind(index as i64)
-				.bind(serde_json::to_string(&page.content)?)
-				.execute(&mut *tx)
-				.await?;
-		}
-		tx.commit().await?;
-	}
 	let mut out = Vec::with_capacity(pages.len());
 	for (index, page) in pages.into_iter().enumerate() {
 		out.push(json!({
@@ -487,6 +470,29 @@ async fn get_pages(
 			"hasDescription": page.has_description,
 			"description": page.description,
 		}));
+	}
+	{
+		let mut tx = state.pool.begin().await?;
+		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+			.bind(id)
+			.execute(&mut *tx)
+			.await?;
+		for entry in &out {
+			let mut stored = entry.clone();
+			stored.as_object_mut().map(|o| o.remove("index"));
+			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
+				.bind(id)
+				.bind(entry["index"].as_i64().unwrap_or_default())
+				.bind(serde_json::to_string(&stored)?)
+				.execute(&mut *tx)
+				.await?;
+		}
+		sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
+			.bind(out.len() as i64)
+			.bind(id)
+			.execute(&mut *tx)
+			.await?;
+		tx.commit().await?;
 	}
 	Ok(Json(json!(out)))
 }

@@ -162,10 +162,22 @@ async fn full_flow() {
 			.starts_with("# Title")
 	);
 
-	// 第二次走 page 缓存
+	// 第二次走 page 缓存：字段与源路径一致
 	let (status, body) = request(&app, "GET", &pages_path, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body.as_array().expect("cached pages").len(), 2);
+	let cached = body.as_array().expect("cached pages");
+	assert_eq!(cached.len(), 2);
+	assert_eq!(cached[0]["hasDescription"], true, "缓存路径应与源路径字段一致");
+
+	// page_count 回写
+	let (status, body) = request(&app, "GET", &chapters_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["pageCount"], 2);
+
+	// 裸 ?refresh 标志强制重取
+	let (status, body) = request(&app, "GET", &format!("{pages_path}?refresh"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body.as_array().expect("refreshed pages").len(), 2);
 
 	// 设置热重启：setting=true → settings 多出一个 Toggle
 	let settings_path = format!("/api/v1/sources/{source_id}/settings");

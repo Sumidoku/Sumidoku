@@ -144,8 +144,10 @@ ABI 契约以 aidoku-rs 源码为准（已逐条对账 `crates/lib/src/macros/mo
 模块 `net`：`init` / `send` / `send_all` / `set_url` / `set_header` / `set_body` / `set_timeout` / `data_len` / `read_data` / `get_image` / `get_status_code` / `get_url` / `get_header` / `html` / `set_rate_limit`
 模块 `html`：`parse` / `parse_fragment` / `escape` / `unescape` / 节点遍历与属性系列（`kind`/`children`/`select`/`text`/`attr`/…，全量对齐 test-runner 注册表）
 模块 `defaults`：`get` / `set`
-模块 `js`：`context_*` / `webview_*`（M4；`webview_*` 在服务器上无 WebView，先返回 unimplemented）
+模块 `js`：`context_*` / `webview_*`（M4 实装 context；`webview_*` 在服务器上无 WebView 恒为 unimplemented）
 模块 `canvas`：画布/图像系列（M4）
+
+> M1–M3 期间 `js`/`canvas` 全部函数注册为 unimplemented 桩（返回 -1）：实现了 `CoverImageProcessor` 等能力的源会在模块里引用这些导入，完全不注册会让源连实例化都过不了；桩保证主流程不依赖它们的源可正常加载，调用到即报 unimplemented。
 
 ### 5.3 数据交换与错误语义
 
@@ -310,6 +312,7 @@ allow_direct_fallback = false
 - **入库流程**：搜索/列表返回的是源侧临时 Manga（含 `sourceKey+mangaKey` 与已入库时的 `mangaId`）；点详情时若未入库先 `POST /manga` 注册，之后一切走内部 id。
 - **认证**：M1–M3 单用户，可选全局 Basic 口令；M4 argon2 + JWT（Bearer / cookie），`session_version` 支持改密吊销。OPDS 始终 Basic（见 §9）。
 - 错误体统一 `{error: {code, message}}`，对外文案英文。
+- **字段命名**：Aidoku 结构体（Manga/Chapter/Page/Filter/Setting…）保持其 serde 原生命名（snake_case，与源生态一致）；Suzuri 自有附加字段（`id`/`sourceId`/`hasNextPage`/`pageCount` 等）用 camelCase。
 
 ---
 
@@ -481,6 +484,15 @@ suzuri/
 - **Aidoku app**：`Core/Sources/SourceManager.swift`（源列表/安装/breakingChangeVersion/key 迁移触发）、`Core/Sources/Cloudflare/CloudflareHandler.swift`（cf_clearance 回写语义）、`Core/Downloads/DownloadTask.swift`（退避/并行/目录命名/ComicInfo）、`Core/Backup/BackupManager.swift`（备份范围）
 - **Suwayomi-Server**：`server/JavalinSetup.kt`（路由/认证拦截）、`manga/MangaAPI.kt`（REST 面）、`manga/model/table/ChapterUserTable.kt`（进度语义）、`manga/impl/download/{DownloadManager,Downloader}.kt`（每源串行下载）、`manga/impl/update/Updater.kt`（定时更新）、`opds/{OpdsAPI,controller/OpdsV1Controller,impl/OpdsEntryBuilder}.kt`（OPDS+PSE 形态）、`manga/impl/util/GetComicInfo.kt`（ComicInfo.xml）
 - **TRAWL**：`README.md` 与 `apps/docs/proxy/overview.md`（forward proxy / MITM CA / tier 语义）
+
+## 附录 A.1：vendor/aidoku 补丁清单（MIT，随附 LICENSE）
+
+引擎以 path 依赖 vendor 了 aidoku-rs `crates/lib`（rev ae6485e）。宿主解码需要而上游未提供的补丁（均有 postcard roundtrip 测试锚定，见 `vendor/aidoku/tests/serde_roundtrip.rs`）：
+
+1. `MangaPageResult` 补 `Deserialize` derive（上游只有 `Serialize`）。
+2. `Filter`/`FilterKind`、`DeepLinkResult`、`PageIcon`、`LoginMethod`、`Setting`：上游是手写 `Serialize`（type 标签 + 变体字段扁平布局），逐个配对写 `Deserialize`；`SettingValue` 补 `Deserialize` derive。
+3. 非 wasm 目标补 `destroy` 链接占位（`ImageRef::drop` 在非 wasm 链接宿主二进制时会引用该符号；宿主的 GlobalStore 清扫由宿主驱动）。
+4. 宿主入参编码注意：`read_string` 读的参数给裸 UTF-8（仅搜索 query），`read::<String>` 读的参数必须 postcard 编码（通知/深链/迁移/get_image_request 的字符串参数）。
 
 ## 附录 B：v0.1 → v0.2 主要变更
 
