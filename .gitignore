@@ -6,3 +6,6 @@
 *.db
 *.db-*
 .DS_Store
+
+# 设计文档只留本地
+Sumidoku 设计文档 (DESIGN.md).md
