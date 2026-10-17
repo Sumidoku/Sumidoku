@@ -1,0 +1,33 @@
+services:
+  suzuri:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/config       # 数据库、设置、封面缓存、TRAWL CA
+      - ./sources:/sources     # 源包目录挂载安装，不内置进镜像
+      - ./downloads:/downloads
+      - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
+    environment:
+      - SUZURI_NET_TRAWL_PROXY=http://trawl:8192
+      - SUZURI_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
+      # - SUZURI_NET_RELAY_DOMAINS=cf.example.com
+      # - SUZURI_BASIC_PASSWORD=
+    depends_on:
+      - trawl
+
+  trawl:
+    image: ghcr.io/germondai/trawl:latest
+    environment:
+      - MITM_ENABLED=true
+      - MITM_PORT=8192
+      - MITM_CA_DIR=/data/proxy-ca
+      - MITM_MAX_TIER=3
+    volumes:
+      - trawl-ca:/data/proxy-ca
+      - trawl-data:/data
+    # 不暴露端口，仅 compose 内网可达
+
+volumes:
+  trawl-ca:
+  trawl-data:

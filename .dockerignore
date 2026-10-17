@@ -1,0 +1,12 @@
+.git
+target
+**/node_modules
+webui/.svelte-kit
+webui/build
+data
+downloads
+sources
+config
+*.db
+*.db-*
+.DS_Store
