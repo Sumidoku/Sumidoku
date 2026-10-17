@@ -58,6 +58,8 @@ pub fn utc_offset(_env: FunctionEnvMut<WasmEnv>) -> i64 {
 	chrono::Local::now().offset().utc_minus_local() as i64
 }
 
+// 签名由源 ABI 固定，无法归并参数
+#[allow(clippy::too_many_arguments)]
 pub fn parse_date(
 	env: FunctionEnvMut<WasmEnv>,
 	date_str: Ptr,

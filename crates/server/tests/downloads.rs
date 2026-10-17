@@ -363,7 +363,9 @@ async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) ->
 		n => (2, n as usize),
 	};
 	fill(stream, buf, offset + len).await;
-	buf[offset..offset + len].to_vec()
+	let payload = buf[offset..offset + len].to_vec();
+	buf.drain(..offset + len);
+	payload
 }
 
 #[tokio::test]
@@ -401,4 +403,24 @@ async fn downloads_ws_pushes_snapshot() {
 	assert!(value["type"].is_string(), "{value}");
 	assert_eq!(value["type"], "snapshot");
 	assert!(value["downloads"].is_array(), "{value}");
+	assert_eq!(value["running"], true, "{value}");
+
+	// stop → running 事件帧（chapterId=0 占位，running=false）
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/stop", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let payload = read_ws_frame(&mut stream, &mut rest).await;
+	let event: Value = serde_json::from_slice(&payload).expect("running event json");
+	assert_eq!(event["type"], "running", "{event}");
+	assert_eq!(event["chapterId"], 0);
+	assert_eq!(event["downloaded"], 0);
+	assert_eq!(event["total"], 0);
+	assert_eq!(event["running"], false);
+
+	// start → running=true
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/start", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let payload = read_ws_frame(&mut stream, &mut rest).await;
+	let event: Value = serde_json::from_slice(&payload).expect("running event json");
+	assert_eq!(event["type"], "running", "{event}");
+	assert_eq!(event["running"], true);
 }

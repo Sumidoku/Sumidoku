@@ -70,7 +70,7 @@ async fn feeds_files_and_escaping() {
 	let TestApp { app, tmp, db_path } = &test_app;
 
 	// root：导航 + osd 链接
-	let (status, headers, body) = opds_get(&app, "/opds/v1.2/root").await;
+	let (status, headers, body) = opds_get(app, "/opds/v1.2/root").await;
 	assert_eq!(status, StatusCode::OK);
 	let content_type = headers[header::CONTENT_TYPE].to_str().expect("content-type");
 	assert!(content_type.starts_with("application/atom+xml;profile=opds-catalog"));
@@ -87,16 +87,16 @@ async fn feeds_files_and_escaping() {
 	}
 
 	// osd：OpenSearchDescription 模板
-	let (status, headers, body) = opds_get(&app, "/opds/v1.2/osd").await;
+	let (status, headers, body) = opds_get(app, "/opds/v1.2/osd").await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers[header::CONTENT_TYPE], "application/opensearchdescription+xml");
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("https://opds.test/opds/v1.2/search?q={searchTerms}"));
 
 	// library：标题 + 绝对封面链接
-	let (_, manga) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	let (_, manga) = request(app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	let title = manga["title"].as_str().expect("title").to_string();
-	let (status, _, body) = opds_get(&app, "/opds/v1.2/library").await;
+	let (status, _, body) = opds_get(app, "/opds/v1.2/library").await;
 	assert_eq!(status, StatusCode::OK);
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains(&format!("<title>{title}</title>")));
@@ -104,13 +104,13 @@ async fn feeds_files_and_escaping() {
 	assert!(body.contains(&format!("urn:sumidoku:manga:{manga_id}")));
 
 	// series：先落页缓存拿到 page_count=2，再打进度
-	let chapters = first_chapters(&app, manga_id).await;
+	let chapters = first_chapters(app, manga_id).await;
 	let chapter_id = chapters[0]["id"].as_i64().expect("chapter id");
 	let other_chapter_id = chapters[1]["id"].as_i64().expect("chapter id");
-	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	let (status, _) = request(app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(
-		&app,
+		app,
 		"PATCH",
 		&format!("/api/v1/chapter/{chapter_id}"),
 		Some(json!({"lastPageRead": 1})),
@@ -132,7 +132,7 @@ async fn feeds_files_and_escaping() {
 	.await
 	.expect("insert download");
 
-	let (status, _, body) = opds_get(&app, &format!("/opds/v1.2/series/{manga_id}")).await;
+	let (status, _, body) = opds_get(app, &format!("/opds/v1.2/series/{manga_id}")).await;
 	assert_eq!(status, StatusCode::OK);
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("xmlns:pse=\"http://vaemendis.net/opds-pse\""));
@@ -149,11 +149,11 @@ async fn feeds_files_and_escaping() {
 	assert!(!body.contains(&format!("/opds/v1.2/file/{other_chapter_id}")));
 
 	// file：finished 的 200 zip，未下载的 404
-	let (status, headers, bytes) = opds_get(&app, &format!("/opds/v1.2/file/{chapter_id}")).await;
+	let (status, headers, bytes) = opds_get(app, &format!("/opds/v1.2/file/{chapter_id}")).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
 	assert_eq!(bytes, cbz);
-	let (status, _, _) = opds_get(&app, &format!("/opds/v1.2/file/{other_chapter_id}")).await;
+	let (status, _, _) = opds_get(app, &format!("/opds/v1.2/file/{other_chapter_id}")).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 
 	// 转义：title 里的 &<>" 必须实体化
@@ -163,7 +163,7 @@ async fn feeds_files_and_escaping() {
 		.execute(&pool)
 		.await
 		.expect("update title");
-	let (status, _, body) = opds_get(&app, "/opds/v1.2/library").await;
+	let (status, _, body) = opds_get(app, "/opds/v1.2/library").await;
 	assert_eq!(status, StatusCode::OK);
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("A &amp; B &lt;C&gt; &quot;D&quot;"), "library feed: {body}");

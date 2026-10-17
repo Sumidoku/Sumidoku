@@ -201,9 +201,9 @@ fn feed_head(id: &str, title: &str, self_href: &str, base: &str) -> String {
 }
 
 fn next_link(xml: &mut String, href: &str) {
-	let _ = write!(
+	let _ = writeln!(
 		xml,
-		"<link rel=\"next\" type=\"application/atom+xml;profile=opds-catalog;type=feed\" href=\"{}\"/>\n",
+		"<link rel=\"next\" type=\"application/atom+xml;profile=opds-catalog;type=feed\" href=\"{}\"/>",
 		esc(href),
 	);
 }
@@ -377,9 +377,9 @@ fn page_of(query: &FeedQuery) -> ApiResult<i64> {
 async fn root_feed(headers: HeaderMap) -> Response {
 	let base = base_url(&headers);
 	let mut xml = feed_head("urn:sumidoku:root", "Sumidoku", &format!("{base}/opds/v1.2/root"), &base);
-	let _ = write!(
+	let _ = writeln!(
 		xml,
-		"<link rel=\"search\" type=\"application/opensearchdescription+xml\" href=\"{}\"/>\n",
+		"<link rel=\"search\" type=\"application/opensearchdescription+xml\" href=\"{}\"/>",
 		esc(&format!("{base}/opds/v1.2/osd")),
 	);
 	for (id, title, path) in [

@@ -209,10 +209,9 @@ impl SourceInstance {
 			.instance
 			.exports
 			.get_typed_function::<i32, ()>(&self.store, "free_result")
+			&& let Err(e) = free.call(&mut self.store, ptr)
 		{
-			if let Err(e) = free.call(&mut self.store, ptr) {
-				self.env.as_ref(&self.store).log(&format!("free_result failed: {e}"));
-			}
+			self.env.as_ref(&self.store).log(&format!("free_result failed: {e}"));
 		}
 	}
 

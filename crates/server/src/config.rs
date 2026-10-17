@@ -195,10 +195,10 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_SOURCES_DIR") {
 			self.sources_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_CALL_CONCURRENCY") {
-			if let Ok(n) = v.parse() {
-				self.call_concurrency = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_CALL_CONCURRENCY")
+			&& let Ok(n) = v.parse()
+		{
+			self.call_concurrency = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_LOG") {
 			self.log = v;
@@ -206,10 +206,10 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_COVERS_DIR") {
 			self.covers_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_COVER_CACHE_MAX") {
-			if let Ok(n) = v.parse() {
-				self.cover_cache_max = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_COVER_CACHE_MAX")
+			&& let Ok(n) = v.parse()
+		{
+			self.cover_cache_max = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_WEBUI_DIR") {
 			self.webui_dir = PathBuf::from(v);
@@ -220,33 +220,33 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOADS_DIR") {
 			self.downloads_dir = PathBuf::from(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_CONCURRENCY") {
-			if let Ok(n) = v.parse() {
-				self.download_concurrency = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_CONCURRENCY")
+			&& let Ok(n) = v.parse()
+		{
+			self.download_concurrency = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_FORMAT") {
 			self.download_format = v;
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_UPDATE_INTERVAL_HOURS") {
-			if let Ok(n) = v.parse() {
-				self.update_interval_hours = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_UPDATE_INTERVAL_HOURS")
+			&& let Ok(n) = v.parse()
+		{
+			self.update_interval_hours = n;
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS") {
-			if let Ok(n) = v.parse() {
-				self.auto_download_new_chapters = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS")
+			&& let Ok(n) = v.parse()
+		{
+			self.auto_download_new_chapters = n;
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_LIMIT") {
-			if let Ok(n) = v.parse() {
-				self.auto_download_limit = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_LIMIT")
+			&& let Ok(n) = v.parse()
+		{
+			self.auto_download_limit = n;
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_OPDS_LAZY_DOWNLOAD") {
-			if let Ok(n) = v.parse() {
-				self.opds_lazy_download = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_OPDS_LAZY_DOWNLOAD")
+			&& let Ok(n) = v.parse()
+		{
+			self.opds_lazy_download = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
@@ -266,10 +266,10 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_PROXY") {
 			self.net.proxy = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK") {
-			if let Ok(n) = v.parse() {
-				self.net.allow_direct_fallback = n;
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK")
+			&& let Ok(n) = v.parse()
+		{
+			self.net.allow_direct_fallback = n;
 		}
 	}
 }

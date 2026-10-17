@@ -26,6 +26,9 @@ pub struct DownloadEvent {
 	pub chapter_id: i64,
 	pub downloaded: i64,
 	pub total: i64,
+	/// 仅 running 事件（kind="running"、chapter_id=0）携带；chapter 事件恒 None 不上 wire
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub running: Option<bool>,
 }
 
 /// 设计 §11 下载管理器：源内串行、源间并行，全局并发源数受 semaphore 限制。
@@ -76,6 +79,10 @@ impl DownloadManager {
 		!self.running.load(Ordering::SeqCst)
 	}
 
+	pub fn is_running(&self) -> bool {
+		self.running.load(Ordering::SeqCst)
+	}
+
 	pub async fn progress_of(&self, chapter_id: i64) -> Option<(i64, i64)> {
 		self.progress.lock().await.get(&chapter_id).copied()
 	}
@@ -86,6 +93,17 @@ impl DownloadManager {
 			chapter_id,
 			downloaded,
 			total,
+			running: None,
+		});
+	}
+
+	fn emit_running(&self, running: bool) {
+		let _ = self.events.send(DownloadEvent {
+			kind: "running",
+			chapter_id: 0,
+			downloaded: 0,
+			total: 0,
+			running: Some(running),
 		});
 	}
 
@@ -202,6 +220,7 @@ impl DownloadManager {
 	pub async fn set_running(self: &Arc<Self>, running: bool) {
 		if running {
 			self.running.store(true, Ordering::SeqCst);
+			self.emit_running(true);
 			let result = sqlx::query(
 				"UPDATE download SET status = 'queued', updated_at = ? WHERE status = 'paused'",
 			)
@@ -214,6 +233,7 @@ impl DownloadManager {
 			self.reload_queue().await;
 		} else {
 			self.running.store(false, Ordering::SeqCst);
+			self.emit_running(false);
 			let rows: Vec<i64> =
 				sqlx::query_scalar("SELECT chapter_id FROM download WHERE status = 'queued'")
 					.fetch_all(&self.pool)

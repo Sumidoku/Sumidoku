@@ -122,11 +122,7 @@ impl HtmlNode {
 
 	pub fn text(&self) -> Option<String> {
 		let node = self.html.tree.get(self.id)?;
-		if let Some(text) = node.value().as_text() {
-			Some(text.deref().into())
-		} else {
-			None
-		}
+		node.value().as_text().map(|text| text.deref().into())
 	}
 
 	fn child_node(&self, id: NodeId) -> HtmlNode {
