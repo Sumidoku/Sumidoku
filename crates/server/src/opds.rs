@@ -721,21 +721,8 @@ async fn chapter_file(
 	if !state.config.opds_lazy_download {
 		return Err(ApiError::not_found("chapter not downloaded"));
 	}
-	// 只入库排队：运行期调度（下载 worker 拉起）在集成阶段统一接线
-	let now = unix_now();
-	sqlx::query(
-		"INSERT INTO download (chapter_id, user_id, status, format, created_at, updated_at)
-		 VALUES (?, ?, 'queued', ?, ?, ?)
-		 ON CONFLICT (chapter_id) DO UPDATE SET
-		 status = 'queued', error = NULL, updated_at = excluded.updated_at",
-	)
-	.bind(chapter_id)
-	.bind(USER_ID)
-	.bind(&state.config.download_format)
-	.bind(now)
-	.bind(now)
-	.execute(&state.pool)
-	.await?;
+	let manager = state.downloads();
+	manager.enqueue(&[chapter_id]).await;
 	Ok((
 		StatusCode::ACCEPTED,
 		Json(json!({"queued": true, "chapterId": chapter_id})),

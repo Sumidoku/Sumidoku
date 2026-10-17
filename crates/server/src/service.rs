@@ -242,16 +242,25 @@ pub async fn upsert_manga(
 	Ok(id)
 }
 
-/// 设计 §7.1 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除
+/// 设计 §7.1 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
+/// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
 pub async fn reconcile_chapters(
 	pool: &SqlitePool,
 	manga_id: i64,
 	chapters: &[Chapter],
-) -> ApiResult<()> {
+) -> ApiResult<Vec<i64>> {
 	let now = unix_now();
+	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
+		.bind(manga_id)
+		.fetch_all(pool)
+		.await?;
+	let known: HashSet<&String> = existing.iter().map(|(_, key)| key).collect();
 	let mut seen = HashSet::with_capacity(chapters.len());
+	let mut new_keys = Vec::new();
 	for (index, chapter) in chapters.iter().enumerate() {
-		seen.insert(chapter.key.clone());
+		if seen.insert(chapter.key.clone()) && !known.contains(&chapter.key) {
+			new_keys.push(chapter.key.clone());
+		}
 		let scanlators = serde_json::to_string(&chapter.scanlators.clone().unwrap_or_default())?;
 		sqlx::query(
 			"INSERT INTO chapter (manga_id, key, title, number, volume, scanlators, language, url,
@@ -278,10 +287,6 @@ pub async fn reconcile_chapters(
 		.execute(pool)
 		.await?;
 	}
-	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
-		.bind(manga_id)
-		.fetch_all(pool)
-		.await?;
 	for (chapter_id, key) in existing {
 		if seen.contains(&key) {
 			continue;
@@ -303,7 +308,16 @@ pub async fn reconcile_chapters(
 				.await?;
 		}
 	}
-	Ok(())
+	let mut new_ids = Vec::with_capacity(new_keys.len());
+	for key in new_keys {
+		let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
+			.bind(manga_id)
+			.bind(&key)
+			.fetch_one(pool)
+			.await?;
+		new_ids.push(id);
+	}
+	Ok(new_ids)
 }
 
 pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {

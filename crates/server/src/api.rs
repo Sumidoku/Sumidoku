@@ -17,7 +17,7 @@ use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -49,6 +49,23 @@ pub fn router(state: Arc<AppState>) -> Router {
 		)
 		.route("/api/v1/categories/reorder", patch(library::reorder_categories))
 		.route("/api/v1/history", get(reader::get_history))
+		.route(
+			"/api/v1/downloads",
+			get(crate::download_api::list_downloads).post(crate::download_api::enqueue_downloads),
+		)
+		.route("/api/v1/downloads/start", post(crate::download_api::start_downloads))
+		.route("/api/v1/downloads/stop", post(crate::download_api::stop_downloads))
+		.route("/api/v1/downloads/clear", post(crate::download_api::clear_downloads))
+		.route("/api/v1/downloads/ws", get(crate::download_api::downloads_ws))
+		.route(
+			"/api/v1/downloads/{chapter_id}",
+			delete(crate::download_api::delete_download),
+		)
+		.route("/api/v1/chapter/{id}/file", get(crate::download_api::get_chapter_file))
+		.route("/api/v1/update/fetch", post(crate::update_api::fetch_updates))
+		.route("/api/v1/update/summary", get(crate::update_api::get_summary))
+		.route("/api/v1/update/recent", get(crate::update_api::get_recent))
+		.route("/api/v1/update/ws", get(crate::update_api::updates_ws))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.with_state(state)
 }
@@ -466,9 +483,23 @@ async fn get_chapters(
 	.bind(id)
 	.fetch_all(&state.pool)
 	.await?;
+	let downloaded: HashSet<i64> = sqlx::query_scalar(
+		"SELECT chapter_id FROM chapter_user WHERE user_id = 1 AND is_downloaded = 1
+		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
+	)
+	.bind(id)
+	.fetch_all(&state.pool)
+	.await?
+	.into_iter()
+	.collect();
 	let mut chapters = Vec::with_capacity(rows.len());
 	for row in &rows {
-		chapters.push(chapter_json(&row.chapter, progress_of(row).as_ref())?);
+		let mut value = chapter_json(&row.chapter, progress_of(row).as_ref())?;
+		let object = value
+			.as_object_mut()
+			.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
+		object.insert("isDownloaded".into(), json!(downloaded.contains(&row.chapter.id)));
+		chapters.push(value);
 	}
 	Ok(Json(json!(chapters)))
 }

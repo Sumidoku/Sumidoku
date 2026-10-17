@@ -361,11 +361,6 @@
 		font-size: 15px;
 	}
 
-	.dl:hover:not(:disabled) {
-		color: var(--accent);
-		background: none;
-	}
-
 	.dl-done {
 		flex: none;
 		padding: 3px 9px;

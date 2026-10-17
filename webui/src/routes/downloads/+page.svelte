@@ -21,6 +21,8 @@
 	const EVENT_STATUS: Record<string, DownloadStatus> = {
 		queued: 'queued',
 		started: 'downloading',
+		// progress 帧也可能先于 started 到达，有进度即在下载
+		progress: 'downloading',
 		paused: 'paused',
 		finished: 'finished',
 		error: 'error'
@@ -53,7 +55,7 @@
 	}
 
 	function onMessage(msg: unknown) {
-		// 快照帧兼容两种形态：{type:'snapshot',items:[...]} 或直接数组
+		// 快照帧兼容三种形态：{type:'snapshot',downloads|items:[...]} 或直接数组
 		if (Array.isArray(msg)) {
 			items = msg as DownloadItem[];
 			loading = false;
@@ -62,7 +64,8 @@
 		if (!msg || typeof msg !== 'object') return;
 		const m = msg as Record<string, unknown>;
 		if (m.type === 'snapshot') {
-			items = Array.isArray(m.items) ? (m.items as DownloadItem[]) : [];
+			const list = Array.isArray(m.downloads) ? m.downloads : Array.isArray(m.items) ? m.items : [];
+			items = list as DownloadItem[];
 			loading = false;
 			return;
 		}
@@ -108,7 +111,8 @@
 		busy = true;
 		try {
 			const res = await api<{ cleared: number }>('/downloads/clear', { method: 'POST' });
-			items = items.filter((it) => it.status !== 'finished');
+			// 服务端的 clear 连 error 一起删，本地跟齐
+			items = items.filter((it) => it.status !== 'finished' && it.status !== 'error');
 			pushToast(`已清空 ${res.cleared} 项`, 'info');
 		} finally {
 			busy = false;
@@ -173,17 +177,17 @@
 						{#if it.status === 'downloading'}
 							<div class="progress">
 								<div class="track">
-									{#if it.total > 0}
+									{#if (it.total ?? 0) > 0}
 										<div
 											class="fill"
-											style="width: {Math.min(100, (it.downloaded / it.total) * 100)}%;"
+											style="width: {Math.min(100, ((it.downloaded ?? 0) / (it.total ?? 1)) * 100)}%;"
 										></div>
 									{:else}
 										<div class="fill indet"></div>
 									{/if}
 								</div>
 								<span class="faint pv">
-									{#if it.total > 0}{it.downloaded} / {it.total}{:else}{it.downloaded}{/if}
+									{#if (it.total ?? 0) > 0}{it.downloaded ?? 0} / {it.total}{:else}{it.downloaded ?? 0}{/if}
 								</span>
 							</div>
 						{/if}

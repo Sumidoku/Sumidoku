@@ -23,6 +23,9 @@ pub struct AppState {
 	pub defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
 	pub http: RoutedClients,
 	pub policy: Arc<SuzuriNetPolicy>,
+	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
+	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
+	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
 }
 
 pub struct DefaultsWrite {
@@ -84,7 +87,24 @@ impl AppState {
 			defaults_tx,
 			http,
 			policy,
+			downloads: tokio::sync::OnceCell::new(),
+			updater: tokio::sync::OnceCell::new(),
 		})
+	}
+
+	/// build_app 在路由对外服务前完成装配，此后必然已就位
+	pub fn downloads(&self) -> Arc<crate::download::DownloadManager> {
+		self.downloads
+			.get()
+			.expect("download manager installed")
+			.clone()
+	}
+
+	pub fn updater(&self) -> Arc<crate::update::UpdateScheduler> {
+		self.updater
+			.get()
+			.expect("update scheduler installed")
+			.clone()
 	}
 
 	/// 懒加载：注册表没有就从 source 行 + source_setting 拉起实例

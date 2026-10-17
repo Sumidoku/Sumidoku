@@ -2,6 +2,8 @@ pub mod api;
 pub mod config;
 pub mod cover;
 pub mod db;
+pub mod download;
+pub mod download_api;
 pub mod error;
 pub mod library;
 pub mod model;
@@ -11,6 +13,8 @@ pub mod reader;
 pub mod routed;
 pub mod service;
 pub mod state;
+pub mod update;
+pub mod update_api;
 
 /// 单用户阶段所有用户态操作恒为内置 admin
 pub(crate) const USER_ID: i64 = 1;
@@ -28,10 +32,18 @@ use tower_http::trace::TraceLayer;
 
 pub async fn build_app(config: Config) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.covers_dir)?;
+	std::fs::create_dir_all(&config.downloads_dir)?;
 	let pool = db::create_pool(&config.database_url).await?;
 	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_defaults_writer(pool.clone(), rx));
 	let state = state::AppState::new(pool, config, tx);
+	let downloads = download::DownloadManager::new(&state);
+	assert!(state.downloads.set(downloads.clone()).is_ok());
+	let updater = update::UpdateScheduler::new(&state);
+	assert!(state.updater.set(updater.clone()).is_ok());
+	downloads.recover().await;
+	tokio::spawn(downloads.run());
+	tokio::spawn(updater.run());
 	let app = api::router(state.clone());
 	let app = app.nest("/opds/v1.2", opds::router(state.clone()));
 	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))

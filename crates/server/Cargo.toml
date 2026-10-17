@@ -14,7 +14,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "json"] }
 chrono = "0.4"
 toml = "0.8"

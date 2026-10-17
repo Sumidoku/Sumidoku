@@ -120,14 +120,15 @@ export interface DownloadItem {
 	chapterId: number;
 	mangaId: number;
 	mangaTitle: string;
-	chapterTitle: string;
+	chapterTitle: string | null;
 	status: DownloadStatus;
 	format: string;
 	path: string | null;
 	error: string | null;
 	retries: number;
-	downloaded: number;
-	total: number;
+	/** 只有下载中才有值，其余状态为 null */
+	downloaded: number | null;
+	total: number | null;
 	createdAt: number;
 	updatedAt: number;
 }
