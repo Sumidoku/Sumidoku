@@ -738,6 +738,30 @@ mod tests {
 	}
 
 	#[test]
+	fn jar_insert_fires_sink_for_browser_reflux() {
+		// 浏览器回流（insert）与 store 同一条持久化通道，否则登录态重启即丢
+		struct RecSink(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
+		impl CookieSink for RecSink {
+			fn set(&self, domain: &str, name: &str, value: Option<&str>) {
+				self.0
+					.lock()
+					.expect("writes lock")
+					.push((domain.to_string(), name.to_string(), value.map(str::to_string)));
+			}
+		}
+		let sink = Arc::new(RecSink(std::sync::Mutex::new(Vec::new())));
+		let mut jar = CookieJar::new(HashMap::new(), sink.clone());
+		jar.insert("example.com", "sid", "abc");
+		jar.insert("", "ignored", "x");
+		let writes = sink.0.lock().expect("writes lock").clone();
+		assert_eq!(
+			writes,
+			vec![("example.com".to_string(), "sid".to_string(), Some("abc".to_string()))],
+			"空 domain/name 既不落库也不发 sink"
+		);
+	}
+
+	#[test]
 	fn jar_refill_round_trip() {
 		// 持久化回填的 jar 按域名（含子域后缀）组 Cookie 头
 		let domains = HashMap::from([(
