@@ -3,9 +3,11 @@ import { Settings } from 'lucide-react';
 import {
 	useBasicLogin,
 	useClearSourceCache,
+	useLoginLogout,
 	useResetSourceSettings,
 	useSaveSourceSettings,
-	useSourceSettings
+	useSourceSettings,
+	useWebLogin
 } from '../../api/hooks';
 import type { Setting } from '../../api/types';
 import { Button, IconButton, Modal, Spinner, pushToast } from '../../components';
@@ -30,6 +32,8 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	const reset = useResetSourceSettings(sourceId);
 	const clearCache = useClearSourceCache(sourceId);
 	const login = useBasicLogin(sourceId);
+	const webLogin = useWebLogin(sourceId);
+	const loginLogout = useLoginLogout(sourceId);
 	const [edits, setEdits] = useState<Record<string, unknown>>({});
 	const [pending, setPending] = useState<PendingAction>(null);
 
@@ -79,6 +83,18 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		pushToast('登录成功', 'info');
 	}
 
+	async function onSubmitWebLogin(key: string, cookies: Record<string, string>, localStorage: Record<string, string>) {
+		await webLogin.mutateAsync({ key, cookies, localStorage });
+		setEdits({});
+		pushToast('登录成功', 'info');
+	}
+
+	async function onLogoutLogin(key: string, clearCookies: boolean) {
+		await loginLogout.mutateAsync({ key, clearCookies });
+		setEdits({});
+		pushToast('已登出', 'info');
+	}
+
 	return (
 		<div className="settings-source__body">
 			{data.settings.map((setting) => (
@@ -89,6 +105,8 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 					edits={edits}
 					onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
 					onSubmitLogin={onSubmitLogin}
+					onSubmitWebLogin={onSubmitWebLogin}
+					onLogoutLogin={onLogoutLogin}
 				/>
 			))}
 			<div className="settings-source__save">

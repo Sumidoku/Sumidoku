@@ -412,7 +412,25 @@ more than one language gets a synthesized language setting (key
 `POST .../settings/reset` clears the
 overrides and re-seeds package defaults; `POST .../login/basic` runs the
 source's `handle_basic_login` and, on success, persists the credentials and
-a `logged_in` marker into `source_setting`; `POST .../cache/clear` drops the
+a `logged_in` marker into `source_setting`; `POST .../login/web`
+(`api/login.rs:web_login`) takes the login host's cookies pasted by the user
+(a browser SPA cannot read third-party cookies, so there is no automatic
+path), persists `<key>.keys` / `<key>.values` / `<key>.ls.<lsKey>` first —
+Aidoku's store-first order, and the wasm host pre-seeds the same pair into
+the running instance so the source can read them back via
+`defaults_get_map` during the call — then runs the source's
+`handle_web_login` when exported (a veto answers 502, a source without the
+export simply stores), marks `<key>="logged_in"` (empty cookies clear the
+marker and the host's cookie rows instead), upserts the cookies into
+`source_cookie` under the login page's host (resolved from the setting's
+`url`, the default pointed at by `url_key`, or the source `base_url`) and
+restarts the instance. Persistence is synchronous SQL rather than the sink
+channel: the restart right after would read stale rows from the
+not-yet-flushed batch writer. `POST .../login/logout` prefix-deletes
+`<key>` and all `<key>.*` children and clears the login host's cookie rows
+only when the setting declares `clear_cookies_on_log_out` or the request
+passes `clearCookies` (falling back to the whole jar when the host cannot
+be resolved), then restarts. `POST .../cache/clear` drops the
 source's cookies and restarts the instance. Per-source state spans two
 tables: `source_setting` (defaults and login credentials) and
 `source_cookie` (cookies keyed `(source_id, domain, name)`). A running
@@ -436,14 +454,12 @@ header, media/websocket URLs carry it as an `access_token` query
 
 ## Known gaps
 
-### Source login: OAuth and web login
+### Source login: OAuth
 
 A source's `Login` setting (`api::settings`, from a dynamic `get_settings` or
 the static `settings.json`) can declare `method` `basic` | `oauth` | `web`.
-Only `basic` is implemented: `POST /api/v1/sources/{id}/login/basic` runs the
-source's `handle_basic_login` (wired in `crates/wasm/src/source.rs`) and
-persists `<key>.username` / `<key>.password` / the `logged_in` marker. The
-other two methods are unhandled, and there is no logout endpoint.
+`basic` (`api/mod.rs:basic_login`) and `web` (`api/login.rs`) are implemented
+and share the logout endpoint; `oauth` is not.
 
 The reference semantics are Aidoku's app layer (not the source SDK): for
 `oauth` it builds the authorization URL from `url` or the `url_key` default,
@@ -454,26 +470,15 @@ challenge is unpadded base64url SHA-256), opens a web-auth session with
 `grant_type=authorization_code&code&code_verifier[&redirect_uri][&client_id]`
 (parameters not percent-encoded) to `token_url` and stores the raw response
 string at `<key>`, or stores the callback URL string at `<key>` and fires the
-setting's notification. For `web` it loads `url` in a per-source webview,
-reads the host's `name→value` cookies, stores `<key>.keys` / `<key>.values`,
-calls the source's `handle_web_login(key, cookies)` (the wasm export exists in
-`vendor/aidoku`; no host call is wired), sets `<key>="logged_in"`, keeps
-`localStorageKeys` under `<key>.ls.<lsKey>`, and clears the store on logout
-when `clear_cookies_on_log_out` is set.
+setting's notification.
 
 Blocker: a browser SPA cannot read a third-party login's redirect or cookies,
 and the source's baked `redirect_uri` / custom `callback_scheme` cannot be
 retargeted without provider registration. Implementing `oauth` therefore needs
 a manual callback-URL step (or a hosted callback for the rare rewritable
-redirect) plus a PKCE + token-exchange path; `web` needs a cookie
-paste/import step. Neither has a natural automatic-browser path server-side.
-
-When picked up, the pieces line up as: a new login module under
-`crates/server/src/api/` (start/complete for OAuth, cookie intake for web,
-and logout removing `<key>` and its `.username`/`.password`/`.keys`/`.values`/
-`.codeVerifier`/`.ls.*` children), a `handle_web_login` host call in
-`crates/wasm/src/source.rs` + `runtime/actor.rs`, and the `Login` branches in
-`webui/src/pages/settings/SettingItem.tsx` (currently basic-only).
+redirect) plus a PKCE + token-exchange path, with logout removing `<key>` and
+its `.codeVerifier` child (the shared `/login/logout` prefix delete already
+covers the shape). There is no natural automatic-browser path server-side.
 
 ### HTML DOM fidelity vs SwiftSoup
 
