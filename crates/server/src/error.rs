@@ -63,6 +63,10 @@ impl ApiError {
 		&self.message
 	}
 
+	pub fn code(&self) -> &'static str {
+		self.code
+	}
+
 	pub fn not_in_library(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::CONFLICT, "not_in_library", message)
 	}

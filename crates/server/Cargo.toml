@@ -23,6 +23,8 @@ tower-http = { version = "0.7", features = ["trace", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# axum Body::from_stream 的 Stream trait 出处，无传递依赖
+futures-core = "0.3"
 
 [dev-dependencies]
 tempfile = "3"
