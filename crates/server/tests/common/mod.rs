@@ -287,3 +287,167 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	pool.close().await;
 	out
 }
+
+// ---- sidecar 交互登录的 mock CDP：aidoku_wasm 自带 mock 是 cfg(test) 不外露，
+// 这里按端点测试关注点实现同名 trait ----
+pub mod browser_mock {
+	use aidoku_wasm::browser::{
+		BrowserCookie, BrowserError, CdpClient, CdpConnector, FrameSink, KeyInput, MouseInput,
+	};
+	use std::collections::HashMap;
+	use std::sync::{Arc, Mutex};
+
+	#[derive(Default)]
+	pub struct MockBrowserState {
+		pub connects: usize,
+		pub contexts: Vec<String>,
+		pub disposed: Vec<String>,
+		pub loads: Vec<(String, String)>,
+		pub viewports: Vec<(String, i64, i64)>,
+		pub screencasts: Vec<String>,
+		pub screencast_stopped: Vec<String>,
+		pub cookies: HashMap<String, Vec<BrowserCookie>>,
+		pub local_storage: HashMap<String, String>,
+		pub mouse_inputs: usize,
+		pub key_inputs: usize,
+		pub inserted_text: Vec<String>,
+		pub frames: Vec<String>,
+	}
+
+	pub fn cookie(name: &str, value: &str, domain: &str) -> BrowserCookie {
+		BrowserCookie {
+			name: name.into(),
+			value: value.into(),
+			domain: domain.into(),
+			path: "/".into(),
+			expires: None,
+			secure: false,
+			http_only: false,
+		}
+	}
+
+	pub struct MockBrowserConnector(pub Arc<Mutex<MockBrowserState>>);
+
+	impl CdpConnector for MockBrowserConnector {
+		fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
+			self.0.lock().expect("mock lock").connects += 1;
+			Ok(Box::new(MockBrowserClient(self.0.clone())))
+		}
+	}
+
+	struct MockBrowserClient(Arc<Mutex<MockBrowserState>>);
+
+	impl CdpClient for MockBrowserClient {
+		fn create_context(&mut self) -> Result<String, BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			let id = format!("ctx-{}", state.contexts.len() + 1);
+			state.contexts.push(id.clone());
+			Ok(id)
+		}
+
+		fn dispose_context(&mut self, context: &str) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.disposed.push(context.to_string());
+			state.contexts.retain(|c| c != context);
+			Ok(())
+		}
+
+		fn load(
+			&mut self,
+			context: &str,
+			url: &str,
+			_headers: &[(String, String)],
+			_timeout: std::time::Duration,
+		) -> Result<Vec<BrowserCookie>, BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.loads.push((context.to_string(), url.to_string()));
+			Ok(state.cookies.get(context).cloned().unwrap_or_default())
+		}
+
+		fn cookies(&mut self, context: &str) -> Result<Vec<BrowserCookie>, BrowserError> {
+			let state = self.0.lock().expect("mock lock");
+			Ok(state.cookies.get(context).cloned().unwrap_or_default())
+		}
+
+		fn delete_cookie(
+			&mut self,
+			_context: &str,
+			_name: &str,
+			_domain: Option<&str>,
+			_path: Option<&str>,
+		) -> Result<(), BrowserError> {
+			Ok(())
+		}
+
+		fn clear_cookies(&mut self, _context: &str) -> Result<(), BrowserError> {
+			Ok(())
+		}
+
+		fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.viewports.push((context.to_string(), width, height));
+			Ok(())
+		}
+
+		fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.screencasts.push(context.to_string());
+			for frame in state.frames.drain(..) {
+				let _ = sink.send(frame);
+			}
+			Ok(())
+		}
+
+		fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.screencast_stopped.push(context.to_string());
+			Ok(())
+		}
+
+		fn dispatch_mouse(&mut self, _context: &str, _input: &MouseInput) -> Result<(), BrowserError> {
+			self.0.lock().expect("mock lock").mouse_inputs += 1;
+			Ok(())
+		}
+
+		fn dispatch_key(&mut self, _context: &str, _input: &KeyInput) -> Result<(), BrowserError> {
+			self.0.lock().expect("mock lock").key_inputs += 1;
+			Ok(())
+		}
+
+		fn insert_text(&mut self, _context: &str, text: &str) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.inserted_text.push(text.to_string());
+			Ok(())
+		}
+
+		fn local_storage_values(
+			&mut self,
+			_context: &str,
+			keys: &[String],
+		) -> Result<Vec<(String, String)>, BrowserError> {
+			let state = self.0.lock().expect("mock lock");
+			Ok(keys
+				.iter()
+				.filter_map(|k| state.local_storage.get(k).map(|v| (k.clone(), v.clone())))
+				.collect())
+		}
+	}
+}
+
+/// 装配带 mock CDP 连接器的 app：sidecar 交互登录的端点测试驱动
+pub async fn test_app_with_browser(
+	browser: std::sync::Arc<std::sync::Mutex<browser_mock::MockBrowserState>>,
+) -> TestApp {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let source_dir = tmp.path().join("sources").join("en.example-source");
+	std::fs::create_dir_all(&source_dir).expect("mkdir source dir");
+	for file in ["source.json", "main.wasm"] {
+		std::fs::copy(fixture_dir().join(file), source_dir.join(file)).expect("copy fixture");
+	}
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = sumidoku_server::build_app_with(config, Some(Box::new(browser_mock::MockBrowserConnector(browser))))
+		.await
+		.expect("build app");
+	TestApp { app, tmp, db_path }
+}

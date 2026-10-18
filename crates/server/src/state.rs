@@ -49,6 +49,7 @@ pub struct AppState {
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
+	pub browser_logins: tokio::sync::OnceCell<crate::browser_login::BrowserLoginManager>,
 }
 
 pub struct DefaultsWrite {
@@ -161,6 +162,7 @@ impl AppState {
 			policy,
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
+			browser_logins: tokio::sync::OnceCell::new(),
 		})
 	}
 
