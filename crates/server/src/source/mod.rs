@@ -36,7 +36,7 @@ fn valid_source_key(key: &str) -> bool {
 			.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
-/// 目录挂载扫描：sources_dir 一级子目录里有 source.json + main.wasm 即视为源包
+/// 目录挂载扫描：一级子目录（source.json + main.wasm）与 .aix 包（zip，Payload/ 布局）都视为源包
 pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOutcome> {
 	let mut outcome = ScanOutcome {
 		installed: Vec::new(),
@@ -48,28 +48,33 @@ pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOu
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome),
 		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
 	};
-	let mut dirs = Vec::new();
+	let mut candidates = Vec::new();
 	while let Some(entry) = read_dir
 		.next_entry()
 		.await
 		.map_err(|e| ApiError::from(sqlx::Error::Io(e)))?
 	{
-		let is_dir = entry
-			.file_type()
-			.await
-			.map(|t| t.is_dir())
-			.unwrap_or(false);
-		if is_dir {
-			dirs.push(entry.path());
+		let file_type = entry.file_type().await;
+		let is_aix = entry
+			.path()
+			.extension()
+			.is_some_and(|ext| ext.eq_ignore_ascii_case("aix"));
+		if file_type.map(|t| t.is_dir()).unwrap_or(false) || is_aix {
+			candidates.push(entry.path());
 		}
 	}
-	dirs.sort();
-	for path in dirs {
+	candidates.sort();
+	for path in candidates {
 		let dir_name = path
 			.file_name()
 			.map(|n| n.to_string_lossy().into_owned())
 			.unwrap_or_else(|| path.display().to_string());
-		match scan_one(pool, &path).await {
+		let result = if path.is_dir() {
+			scan_one_dir(pool, &path).await
+		} else {
+			scan_one_aix(pool, &path).await
+		};
+		match result {
 			Ok((key, is_update)) => {
 				if is_update {
 					outcome.updated.push(key);
@@ -86,8 +91,15 @@ pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOu
 	Ok(outcome)
 }
 
-/// 成功返回 (key, 是否更新既有源)
-async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
+/// 清单解析结果与载荷位置；目录源与 .aix 共用同一注册路径
+struct SourcePackage {
+	doc: serde_json::Value,
+	wasm_path: String,
+	icon_path: Option<String>,
+	settings: Option<serde_json::Value>,
+}
+
+async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
 	let json_path = path.join("source.json");
 	let wasm_path = path.join("main.wasm");
 	if !json_path.is_file() || !wasm_path.is_file() {
@@ -98,6 +110,78 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.map_err(|e| format!("read source.json: {e}"))?;
 	let doc: serde_json::Value =
 		serde_json::from_slice(&raw).map_err(|e| format!("parse source.json: {e}"))?;
+	let settings = read_dir_settings(path).await;
+	let icon_path = path
+		.join("icon.png")
+		.is_file()
+		.then(|| path.join("icon.png").display().to_string());
+	register_source(
+		pool,
+		SourcePackage {
+			doc,
+			wasm_path: wasm_path.display().to_string(),
+			icon_path,
+			settings,
+		},
+	)
+	.await
+}
+
+async fn scan_one_aix(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
+	let path_buf = path.to_path_buf();
+	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
+	let (doc, settings) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
+		.await
+		.map_err(|e| format!("join: {e}"))??;
+	register_source(
+		pool,
+		SourcePackage {
+			doc,
+			wasm_path: path.display().to_string(),
+			icon_path: None,
+			settings,
+		},
+	)
+	.await
+}
+
+fn read_aix_package(path: &Path) -> Result<(serde_json::Value, Option<serde_json::Value>), String> {
+	use aidoku_wasm::package::{
+		JSON_ENTRY_MAX, MANIFEST_ENTRY, SETTINGS_ENTRY, WASM_ENTRY, WASM_PAYLOAD_MAX, read_zip_entry,
+	};
+	let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+	let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid archive: {e}"))?;
+	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX)?;
+	let doc: serde_json::Value =
+		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
+	// 载荷必须真实读得出（顺带校验 CRC），扫描不留存字节
+	read_zip_entry(&mut archive, WASM_ENTRY, WASM_PAYLOAD_MAX)?;
+	let settings = read_zip_entry(&mut archive, SETTINGS_ENTRY, JSON_ENTRY_MAX)
+		.ok()
+		.and_then(|raw| match serde_json::from_slice(&raw) {
+			Ok(settings) => Some(settings),
+			Err(e) => {
+				tracing::warn!(path = %path.display(), "skip unparsable settings.json: {e}");
+				None
+			}
+		});
+	Ok((doc, settings))
+}
+
+async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
+	let raw = tokio::fs::read(path.join("settings.json")).await.ok()?;
+	match serde_json::from_slice(&raw) {
+		Ok(settings) => Some(settings),
+		Err(e) => {
+			tracing::warn!(path = %path.display(), "skip unparsable settings.json: {e}");
+			None
+		}
+	}
+}
+
+/// 成功返回 (key, 是否更新既有源)
+async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(String, bool), String> {
+	let doc = &package.doc;
 	let info = doc.get("info").ok_or("missing info")?;
 	let key = info
 		.get("id")
@@ -127,11 +211,8 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.filter(|v| v.is_array())
 		.unwrap_or_else(|| serde_json::json!([]))
 		.to_string();
-	let icon_path = path
-		.join("icon.png")
-		.is_file()
-		.then(|| path.join("icon.png").display().to_string());
-	let wasm = wasm_path.display().to_string();
+	let icon_path = package.icon_path;
+	let wasm = package.wasm_path;
 	let now = unix_now();
 
 	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
@@ -179,7 +260,7 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 		.map_err(|e| format!("db: {e}"))?;
 		(result.last_insert_rowid(), false)
 	};
-	seed_source_defaults(pool, id, path, &doc).await?;
+	seed_source_defaults(pool, id, package.settings.as_ref(), doc).await?;
 	Ok((key, updated))
 }
 
@@ -189,7 +270,7 @@ async fn scan_one(pool: &SqlitePool, path: &Path) -> Result<(String, bool), Stri
 async fn seed_source_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
-	dir: &Path,
+	settings: Option<&serde_json::Value>,
 	doc: &serde_json::Value,
 ) -> Result<(), String> {
 	let mut seeds: Vec<(String, DefaultValue)> = Vec::new();
@@ -217,11 +298,8 @@ async fn seed_source_defaults(
 			seeds.push(("url".to_string(), DefaultValue::String(urls[0].to_string())));
 		}
 	}
-	if let Ok(raw) = tokio::fs::read(dir.join("settings.json")).await {
-		match serde_json::from_slice::<serde_json::Value>(&raw) {
-			Ok(settings) => collect_setting_defaults(&settings, &mut seeds),
-			Err(e) => tracing::warn!(source_id, "skip unparsable settings.json: {e}"),
-		}
+	if let Some(settings) = settings {
+		collect_setting_defaults(settings, &mut seeds);
 	}
 	for (key, value) in seeds {
 		let raw = serde_json::to_string(&value).map_err(|e| format!("encode default: {e}"))?;

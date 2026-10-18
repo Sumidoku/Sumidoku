@@ -4,6 +4,23 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{Value, json};
 
+// 真实 .aix 布局（aidoku-cli 打包约定）：Payload/source.json 清单 + Payload/main.wasm 载荷
+fn write_aix(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+	let file = std::fs::File::create(path).expect("create aix");
+	let mut writer = zip::ZipWriter::new(file);
+	let options =
+		zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+	for (name, data) in entries {
+		writer.start_file(name, options).expect("start entry");
+		std::io::Write::write_all(&mut writer, data).expect("write entry");
+	}
+	writer.finish().expect("finish aix");
+}
+
+fn fixture_wasm() -> Vec<u8> {
+	std::fs::read(fixture_dir().join("main.wasm")).expect("fixture wasm")
+}
+
 fn write_source(dir: &std::path::Path, source_json: &str, settings: Option<&str>, filters: Option<&str>) {
 	std::fs::create_dir_all(dir).expect("mkdir");
 	std::fs::write(dir.join("source.json"), source_json).expect("source.json");
@@ -25,6 +42,127 @@ async fn source_id_by_key(app: &axum::Router, key: &str) -> i64 {
 		.find(|s| s["key"] == key)
 		.and_then(|s| s["id"].as_i64())
 		.expect("source id")
+}
+
+#[tokio::test]
+async fn scan_loads_aix_package() {
+	let app = test_app().await;
+	write_aix(
+		&app.tmp.path().join("sources/en.packed-source-v3.aix"),
+		&[
+			(
+				"Payload/source.json",
+				br#"{
+					"info": {
+						"id": "en.packed-source", "name": "Packed", "version": 3,
+						"url": "https://packed.example", "languages": ["en"], "contentRating": 0
+					}
+				}"#,
+			),
+			("Payload/main.wasm", &fixture_wasm()),
+			(
+				"Payload/settings.json",
+				br#"[{"type": "switch", "key": "dataSaver", "title": "DS", "default": true}]"#,
+			),
+		],
+	);
+	let (status, body) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		body["installed"].as_array().unwrap().contains(&json!("en.packed-source")),
+		"{body}"
+	);
+
+	// 注册路径与目录源一致：wasm_path 指 .aix 本体，settings 默认值照样播种
+	let pool = connect_db(&app.db_path).await;
+	let (wasm_path,): (String,) = sqlx::query_as("SELECT wasm_path FROM source WHERE key = 'en.packed-source'")
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+	assert!(wasm_path.ends_with(".aix"), "{wasm_path}");
+	let seeded: Option<(String,)> = sqlx::query_as(
+		"SELECT ss.value FROM source_setting ss JOIN source s ON s.id = ss.source_id
+		 WHERE s.key = 'en.packed-source' AND ss.key = 'dataSaver'",
+	)
+	.fetch_optional(&pool)
+	.await
+	.expect("setting row");
+	let seeded: Value = serde_json::from_str(&seeded.expect("seeded default").0).expect("value json");
+	assert_eq!(seeded, json!({"Bool": true}));
+
+	// 实例能从 .aix 拉起：搜索走通即证明 wasm 从包内读出
+	let id = source_id_by_key(&app.app, "en.packed-source").await;
+	let (status, body) = request(
+		&app.app,
+		"POST",
+		&format!("/api/v1/sources/{id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(!body["entries"].as_array().unwrap().is_empty(), "{body}");
+}
+
+#[tokio::test]
+async fn scan_skips_corrupt_aix() {
+	let app = test_app().await;
+	std::fs::write(app.tmp.path().join("sources/broken.aix"), b"not a zip at all").expect("write");
+	let (status, body) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let skipped = body["skipped"].as_array().unwrap();
+	let entry = skipped
+		.iter()
+		.find(|s| s["dir"] == "broken.aix")
+		.unwrap_or_else(|| panic!("broken.aix should be skipped: {body}"));
+	assert!(entry["reason"].as_str().unwrap().contains("archive"), "{entry}");
+}
+
+#[tokio::test]
+async fn scan_skips_aix_missing_entries() {
+	let app = test_app().await;
+	write_aix(
+		&app.tmp.path().join("sources/no-manifest.aix"),
+		&[("Payload/main.wasm", &fixture_wasm())],
+	);
+	write_aix(
+		&app.tmp.path().join("sources/bad-manifest.aix"),
+		&[
+			("Payload/source.json", b"{not json"),
+			("Payload/main.wasm", &fixture_wasm()),
+		],
+	);
+	write_aix(
+		&app.tmp.path().join("sources/no-wasm.aix"),
+		&[(
+			"Payload/source.json",
+			br#"{"info": {"id": "en.no-wasm", "version": 1}}"#,
+		)],
+	);
+	let (status, body) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let skipped = body["skipped"].as_array().unwrap();
+	let reason = |name: &str| {
+		skipped
+			.iter()
+			.find(|s| s["dir"] == name)
+			.unwrap_or_else(|| panic!("{name} should be skipped: {body}"))["reason"]
+			.as_str()
+			.unwrap()
+			.to_string()
+	};
+	assert!(reason("no-manifest.aix").contains("Payload/source.json"));
+	assert!(reason("bad-manifest.aix").contains("parse"));
+	assert!(reason("no-wasm.aix").contains("Payload/main.wasm"));
+
+	let (status, body) = request(&app.app, "GET", "/api/v1/sources", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body
+		.as_array()
+		.unwrap()
+		.iter()
+		.filter_map(|s| s["key"].as_str())
+		.collect();
+	assert_eq!(keys, ["en.example-source"]);
 }
 
 #[tokio::test]

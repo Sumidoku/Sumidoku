@@ -2,6 +2,7 @@ mod error;
 mod features;
 mod html_dom;
 mod imports;
+pub mod package;
 mod runtime;
 mod source;
 mod traits;
