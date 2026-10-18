@@ -1,6 +1,7 @@
 use crate::{
 	WasmEnv,
 	runtime::store::{FFIResult, ImageData, Ptr, Rid, StoreItem},
+	traits::NetRoute,
 };
 use image::ImageReader;
 use reqwest::{
@@ -172,12 +173,14 @@ pub fn init(mut env: FunctionEnvMut<WasmEnv>, method: u8) -> FFIResult {
 }
 
 /// perform 的失败面，映射到 send 的 FFI 错误码
+#[derive(Debug)]
 pub(crate) enum SendFailure {
 	InvalidUrl,
 	Request,
 }
 
-/// 按 policy 路由发出一个请求：429/5xx 退避重试、响应 Set-Cookie 入 jar。
+/// 按 policy 路由发出一个请求：429/5xx 退避重试、直连撞 CF 挑战经 trawl
+/// 升级一次、响应 Set-Cookie 入 jar。
 /// 任何 HTTP 响应（含非 2xx）都写回 request.response；只有网络层失败才报错。
 pub(crate) fn perform(
 	net: &mut crate::runtime::env::NetState,
@@ -187,7 +190,7 @@ pub(crate) fn perform(
 	let Some(url) = request.url.clone() else {
 		return Err(SendFailure::InvalidUrl);
 	};
-	let route = net.policy.route_for(&url);
+	let mut route = net.policy.route_for(&url);
 	if net.client_for(&route).is_err() {
 		return Err(SendFailure::Request);
 	}
@@ -195,6 +198,7 @@ pub(crate) fn perform(
 	net.rate.acquire();
 
 	let mut attempt = 0;
+	let mut escalated = false;
 	loop {
 		attempt += 1;
 		if !request.headers.contains_key(USER_AGENT) {
@@ -217,13 +221,28 @@ pub(crate) fn perform(
 			.request(request.method.into(), url.as_str())
 			.headers(request.headers.clone())
 			.timeout(timeout);
-		if let Some(body) = request.body.take() {
+		// 重试也要带 body：take 会让第二次尝试（含 trawl 升级）丢 POST 载荷
+		if let Some(body) = request.body.clone() {
 			builder = builder.body(body);
 		}
 		let Ok(response) = builder.send() else {
 			return Err(SendFailure::Request);
 		};
 		let status = response.status();
+		// CF 升级先于退避：503 挑战页不该白烧直连的退避次数
+		if !escalated
+			&& route == NetRoute::Direct
+			&& crate::traits::is_cf_challenge(status, response.headers())
+			&& let Some(trawl_route) = net.policy.trawl_escalation(&url)
+		{
+			if net.client_for(&trawl_route).is_err() {
+				return Err(SendFailure::Request);
+			}
+			route = trawl_route;
+			escalated = true;
+			attempt = 0;
+			continue;
+		}
 		let retry_after = response
 			.headers()
 			.get(reqwest::header::RETRY_AFTER)
@@ -473,4 +492,186 @@ pub fn html(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 
 pub fn set_rate_limit(mut env: FunctionEnvMut<WasmEnv>, permits: i32, period: i32, unit: i32) {
 	env.data_mut().net.rate.set_rate(permits, period, unit);
+}
+
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::runtime::env::NetState;
+	use crate::traits::{DirectPolicy, NetPolicy, NetRoute};
+	use std::io::{Read, Write};
+	use std::net::TcpListener;
+	use std::sync::atomic::{AtomicUsize, Ordering};
+	use std::sync::{Arc, Mutex};
+
+	struct EscalationPolicy {
+		trawl: Option<String>,
+	}
+
+	impl NetPolicy for EscalationPolicy {
+		fn route_for(&self, _url: &Url) -> NetRoute {
+			NetRoute::Direct
+		}
+
+		fn user_agent(&self) -> Option<String> {
+			None
+		}
+
+		fn trawl_escalation(&self, _url: &Url) -> Option<NetRoute> {
+			self.trawl.as_ref().map(|p| NetRoute::Proxy(p.clone()))
+		}
+	}
+
+	struct MockServer {
+		addr: String,
+		hits: Arc<AtomicUsize>,
+		heads: Arc<Mutex<Vec<String>>>,
+	}
+
+	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
+	/// handler 收到请求头文本、回完整响应。源头与 trawl 代理共用。
+	fn mock_server(handler: impl Fn(&str) -> String + Send + 'static) -> MockServer {
+		let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+		let port = listener.local_addr().expect("local addr").port();
+		let hits = Arc::new(AtomicUsize::new(0));
+		let heads = Arc::new(Mutex::new(Vec::new()));
+		let (hits2, heads2) = (hits.clone(), heads.clone());
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else { break };
+				let mut head = Vec::new();
+				let mut chunk = [0u8; 4096];
+				loop {
+					match stream.read(&mut chunk) {
+						Ok(0) | Err(_) => break,
+						Ok(n) => {
+							head.extend_from_slice(&chunk[..n]);
+							if head.windows(4).any(|w| w == b"\r\n\r\n") {
+								break;
+							}
+						}
+					}
+				}
+				let head = String::from_utf8_lossy(&head).to_string();
+				hits2.fetch_add(1, Ordering::SeqCst);
+				heads2.lock().expect("heads lock").push(head.clone());
+				if stream.write_all(handler(&head).as_bytes()).is_err() {
+					break;
+				}
+			}
+		});
+		MockServer {
+			addr: format!("127.0.0.1:{port}"),
+			hits,
+			heads,
+		}
+	}
+
+	impl MockServer {
+		fn hits(&self) -> usize {
+			self.hits.load(Ordering::SeqCst)
+		}
+
+		fn heads(&self) -> Vec<String> {
+			self.heads.lock().expect("heads lock").clone()
+		}
+	}
+
+	fn respond(status: &str, extra_headers: &[&str], body: &str) -> String {
+		let mut out = format!("HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n", body.len());
+		for header in extra_headers {
+			out.push_str(header);
+			out.push_str("\r\n");
+		}
+		out.push_str("\r\n");
+		out.push_str(body);
+		out
+	}
+
+	fn get(net: &mut NetState, url: &Url) -> NetResponse {
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url.clone());
+		perform(net, &mut request, Duration::from_secs(10)).expect("perform");
+		request.response.expect("response stored")
+	}
+
+	#[test]
+	fn cf_challenge_escalates_via_trawl_and_reuses_clearance() {
+		let origin = mock_server(|head| {
+			if head.contains("cf_clearance=ok") {
+				respond("200 OK", &[], "direct-with-clearance")
+			} else {
+				respond(
+					"403 Forbidden",
+					&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+					"challenged",
+				)
+			}
+		});
+		let trawl = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["set-cookie: cf_clearance=ok; Path=/; HttpOnly", "content-type: text/html"],
+				"solved-via-trawl",
+			)
+		});
+		let policy = Arc::new(EscalationPolicy {
+			trawl: Some(format!("http://{}", trawl.addr)),
+		});
+		let mut net = NetState::new(policy);
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let first = get(&mut net, &url);
+		assert_eq!(first.status, StatusCode::OK);
+		assert_eq!(first.data, b"solved-via-trawl");
+		assert_eq!(origin.hits(), 1, "直连一次撞挑战即升级");
+		assert_eq!(trawl.hits(), 1, "经 trawl 重试一次");
+		assert!(
+			trawl.heads()[0].starts_with(&format!("GET http://{}/manga/1", origin.addr)),
+			"代理收到 absolute-form 请求: {}",
+			trawl.heads()[0].lines().next().unwrap_or_default()
+		);
+
+		// clearance 已入 jar：后续请求直连带出，不再惊动 trawl
+		let second = get(&mut net, &url);
+		assert_eq!(second.status, StatusCode::OK);
+		assert_eq!(second.data, b"direct-with-clearance");
+		assert_eq!(origin.hits(), 2);
+		assert_eq!(trawl.hits(), 1);
+	}
+
+	#[test]
+	fn no_trawl_returns_challenge_as_is() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }));
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::FORBIDDEN);
+		assert_eq!(response.data, b"challenged");
+		assert_eq!(origin.hits(), 1, "403 不是重试面，不应有退避重发");
+	}
+
+	#[test]
+	fn non_cf_403_does_not_escalate() {
+		let origin = mock_server(|_head| respond("403 Forbidden", &["server: nginx"], "forbidden"));
+		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
+		let policy = Arc::new(EscalationPolicy {
+			trawl: Some(format!("http://{}", trawl.addr)),
+		});
+		let mut net = NetState::new(policy);
+		let url = Url::parse(&format!("http://{}/private", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::FORBIDDEN);
+		assert_eq!(response.data, b"forbidden");
+		assert_eq!(trawl.hits(), 0, "源站自己的 403 不该走 trawl");
+	}
 }
