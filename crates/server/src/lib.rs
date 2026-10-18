@@ -1,6 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod backup;
+pub mod browser_login;
 pub mod config;
 pub mod db;
 pub mod download;
@@ -27,6 +28,14 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 pub async fn build_app(config: Config) -> Result<Router, Error> {
+	build_app_with(config, None).await
+}
+
+/// browser_connector 为 Some 时压过 config.net.browser_ws 的组装（测试注入 mock 用）
+pub async fn build_app_with(
+	config: Config,
+	browser_connector: Option<Box<dyn aidoku_wasm::browser::CdpConnector>>,
+) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.covers_dir)?;
 	std::fs::create_dir_all(&config.downloads_dir)?;
 	std::fs::create_dir_all(config.sources_dir())?;
@@ -36,6 +45,19 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let (cookie_tx, cookie_rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
+	let connector = browser_connector.map_or_else(
+		|| {
+			state
+				.config
+				.net
+				.browser_ws
+				.as_deref()
+				.map(|ws| aidoku_wasm::browser::ws_connector_ambient(ws, tokio::runtime::Handle::current()))
+		},
+		Some,
+	);
+	let manager = browser_login::BrowserLoginManager::new(connector, browser_login::SESSION_TTL);
+	assert!(state.browser_logins.set(manager).is_ok());
 	auth::init(&state).await?;
 	let downloads = download::DownloadManager::new(&state);
 	assert!(state.downloads.set(downloads.clone()).is_ok());

@@ -42,6 +42,9 @@ services:
     image: ghcr.io/browserless/chromium:latest
     profiles: ["browser"]
     shm_size: 1gb
+    # 交互登录会话最长 10 分钟（server 侧 TTL），默认 30s 的 CONNECTION_TIMEOUT 会中途杀会话
+    environment:
+      - CONNECTION_TIMEOUT=600000
     # 不暴露端口，仅 compose 内网可达；CDP ws 端点 ws://chromium:3000/chromium
 
 volumes:

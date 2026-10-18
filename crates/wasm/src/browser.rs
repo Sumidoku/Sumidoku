@@ -9,6 +9,54 @@ use crate::runtime::store::Rid;
 use std::collections::HashMap;
 use std::time::Duration;
 
+/// 推流帧的出口：watch 的最新值语义让慢消费方自然丢中间帧，
+/// 实时视图不需要逐帧可靠送达
+pub type FrameSink = tokio::sync::watch::Sender<String>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKind {
+	Down,
+	Up,
+	Move,
+	Wheel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+	None,
+	Left,
+	Middle,
+	Right,
+}
+
+#[derive(Debug, Clone)]
+pub struct MouseInput {
+	pub kind: MouseKind,
+	pub x: f64,
+	pub y: f64,
+	pub button: MouseButton,
+	pub click_count: i64,
+	pub delta_x: f64,
+	pub delta_y: f64,
+	/// CDP 修饰键位掩码：Alt=1 Ctrl=2 Meta=4 Shift=8
+	pub modifiers: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyKind {
+	Down,
+	Up,
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyInput {
+	pub kind: KeyKind,
+	pub key: String,
+	pub code: String,
+	pub windows_virtual_key_code: i64,
+	pub modifiers: i64,
+}
+
 /// 浏览器侧 cookie 的内部形状；编码成 ABI 形状在 imports/js.rs 完成
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrowserCookie {
@@ -65,6 +113,15 @@ pub trait CdpClient: Send + Sync {
 		path: Option<&str>,
 	) -> Result<(), BrowserError>;
 	fn clear_cookies(&mut self, context: &str) -> Result<(), BrowserError>;
+	/// 交互会话（服务端 sidecar 登录）才用的面：视口、推流、输入转发、页面态读取
+	fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError>;
+	fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError>;
+	fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError>;
+	fn dispatch_mouse(&mut self, context: &str, input: &MouseInput) -> Result<(), BrowserError>;
+	fn dispatch_key(&mut self, context: &str, input: &KeyInput) -> Result<(), BrowserError>;
+	fn insert_text(&mut self, context: &str, text: &str) -> Result<(), BrowserError>;
+	/// 读当前页面 localStorage 里指定键的非空值；页面已关/求值失败按单次失败处理
+	fn local_storage_values(&mut self, context: &str, keys: &[String]) -> Result<Vec<(String, String)>, BrowserError>;
 }
 
 pub trait CdpConnector: Send + Sync {
@@ -83,7 +140,7 @@ impl BrowserState {
 	/// ws_url 为 None 即未配置：所有 browser 操作不可达，调用方走显式不支持路径
 	pub fn new(ws_url: Option<String>, timeout: Duration) -> Self {
 		Self {
-			connector: ws_url.map(|ws| Box::new(CdpWsConnector { ws }) as Box<dyn CdpConnector>),
+			connector: ws_url.map(|ws| Box::new(CdpWsConnector { ws, ambient: None }) as Box<dyn CdpConnector>),
 			timeout,
 			client: None,
 			contexts: HashMap::new(),
@@ -207,12 +264,28 @@ impl BrowserState {
 
 struct CdpWsConnector {
 	ws: String,
+	ambient: Option<tokio::runtime::Handle>,
 }
 
 impl CdpConnector for CdpWsConnector {
 	fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
-		Ok(Box::new(cdp::ChromiumoxideClient::connect(&self.ws)?))
+		let client = match &self.ambient {
+			Some(handle) => cdp::ChromiumoxideClient::connect_ambient(&self.ws, handle.clone())?,
+			None => cdp::ChromiumoxideClient::connect(&self.ws)?,
+		};
+		Ok(Box::new(client))
 	}
+}
+
+/// server 层（sidecar 交互登录）直接驱动 CDP 的入口：与 BrowserState 内部同一个连接器
+pub fn ws_connector(ws: &str) -> Box<dyn CdpConnector> {
+	Box::new(CdpWsConnector { ws: ws.to_string(), ambient: None })
+}
+
+/// ambient 变体：Handler 与推流泵改投宿主 runtime——交互会话在两次调用之间是空闲的，
+/// current_thread runtime 无人驱动会让 screencast 泵冻结（server 侧必须用本变体）
+pub fn ws_connector_ambient(ws: &str, ambient: tokio::runtime::Handle) -> Box<dyn CdpConnector> {
+	Box::new(CdpWsConnector { ws: ws.to_string(), ambient: Some(ambient) })
 }
 
 mod cdp;
@@ -238,6 +311,15 @@ pub(crate) mod mock {
 		pub load_error: Option<bool>,
 		pub create_context_error: Option<bool>,
 		pub dispose_error: Option<bool>,
+		pub viewports: Vec<(String, i64, i64)>,
+		pub screencasts: Vec<String>,
+		pub screencast_stopped: Vec<String>,
+		pub mouse_inputs: Vec<(String, MouseInput)>,
+		pub key_inputs: Vec<(String, KeyInput)>,
+		pub inserted_text: Vec<(String, String)>,
+		pub local_storage: HashMap<String, String>,
+		/// screencast_start 时回放的预置帧
+		pub frames: Vec<String>,
 	}
 
 	pub struct MockConnector(pub Arc<Mutex<MockState>>);
@@ -339,6 +421,53 @@ pub(crate) mod mock {
 			state.cleared.push(context.to_string());
 			state.cookies.remove(context);
 			Ok(())
+		}
+
+		fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.viewports.push((context.to_string(), width, height));
+			Ok(())
+		}
+
+		fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.screencasts.push(context.to_string());
+			for frame in state.frames.drain(..) {
+				let _ = sink.send(frame);
+			}
+			Ok(())
+		}
+
+		fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.screencast_stopped.push(context.to_string());
+			Ok(())
+		}
+
+		fn dispatch_mouse(&mut self, context: &str, input: &MouseInput) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.mouse_inputs.push((context.to_string(), input.clone()));
+			Ok(())
+		}
+
+		fn dispatch_key(&mut self, context: &str, input: &KeyInput) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.key_inputs.push((context.to_string(), input.clone()));
+			Ok(())
+		}
+
+		fn insert_text(&mut self, context: &str, text: &str) -> Result<(), BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			state.inserted_text.push((context.to_string(), text.to_string()));
+			Ok(())
+		}
+
+		fn local_storage_values(&mut self, _context: &str, keys: &[String]) -> Result<Vec<(String, String)>, BrowserError> {
+			let state = self.0.lock().expect("mock lock");
+			Ok(keys
+				.iter()
+				.filter_map(|k| state.local_storage.get(k).map(|v| (k.clone(), v.clone())))
+				.collect())
 		}
 	}
 

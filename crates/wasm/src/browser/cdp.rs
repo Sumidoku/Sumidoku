@@ -1,10 +1,22 @@
-//! chromiumoxide 实装的 CDP client。异步 API 收进每源 actor 线程持有的
-//! current_thread runtime：block_on 驱动命令与后台 Handler 同生共死，
-//! 宿主调用保持同步签名，与 reqwest::blocking 的 net 栈同一线程模型。
-use super::{BrowserCookie, BrowserError, CdpClient};
+//! chromiumoxide 实装的 CDP client，两种线程模型：
+//! webview 路径（ambient = None）异步 API 收进每源 actor 线程持有的
+//! current_thread runtime，block_on 驱动命令与后台 Handler 同生共死，
+//! 与 reqwest::blocking 的 net 栈同一线程模型；server 侧交互会话
+//! （ambient = Some）把连接、Handler 与推流泵都放在宿主 runtime——
+//! ws 的 I/O 绑定在首次 poll 它的 reactor 上，会话空闲期（无 block_on
+//! 窗口）只有宿主 runtime 能让这条连接保持可用。
+use super::{BrowserCookie, BrowserError, CdpClient, FrameSink, KeyInput, KeyKind, MouseButton, MouseInput, MouseKind};
 use chromiumoxide::browser::Browser;
 use chromiumoxide::cdp::browser_protocol::browser::BrowserContextId;
+use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+use chromiumoxide::cdp::browser_protocol::input::{
+	DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType, InsertTextParams,
+};
 use chromiumoxide::cdp::browser_protocol::network::DeleteCookiesParams;
+use chromiumoxide::cdp::browser_protocol::page::{
+	CaptureScreenshotFormat, CaptureScreenshotParams, EventScreencastFrame, ScreencastFrameAckParams,
+	StartScreencastFormat, StartScreencastParams, StopScreencastParams,
+};
 use chromiumoxide::cdp::browser_protocol::storage::{ClearCookiesParams, GetCookiesParams};
 use chromiumoxide::cdp::browser_protocol::target::CreateTargetParams;
 use chromiumoxide::error::CdpError;
@@ -17,21 +29,52 @@ pub struct ChromiumoxideClient {
 	runtime: tokio::runtime::Runtime,
 	browser: Browser,
 	pages: HashMap<String, Page>,
+	/// server 侧交互会话：Handler/推流泵改投宿主 runtime（current_thread runtime
+	/// 只在 block_on 窗口被驱动，会话空闲时泵会冻结）；webview 路径为 None，照旧自驱
+	ambient: Option<tokio::runtime::Handle>,
 }
 
 impl ChromiumoxideClient {
 	pub fn connect(ws: &str) -> Result<Self, BrowserError> {
+		Self::connect_inner(ws, None)
+	}
+
+	pub fn connect_ambient(ws: &str, ambient: tokio::runtime::Handle) -> Result<Self, BrowserError> {
+		Self::connect_inner(ws, Some(ambient))
+	}
+
+	fn connect_inner(ws: &str, ambient: Option<tokio::runtime::Handle>) -> Result<Self, BrowserError> {
 		let runtime = tokio::runtime::Builder::new_current_thread()
 			.enable_all()
 			.build()
 			.map_err(|e| BrowserError::fatal(format!("browser runtime: {e}")))?;
-		let (browser, mut handler) = runtime
-			.block_on(Browser::connect(ws))
-			.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?;
-		// Handler 驱动 websocket 收发；只在 block_on 窗口内被轮询，
-		// 对本模块这种纯请求/响应式用法足够
-		runtime.spawn(async move { while handler.next().await.is_some() {} });
-		Ok(Self { runtime, browser, pages: HashMap::new() })
+		// ambient 模式：ws 的 TCP 流绑定在首次 poll 它的 reactor 上，
+		// 必须让连接本身也跑在宿主 runtime，否则 Handler 在宿主 runtime 上
+		// 驱动不了这条 ws（收发都卡死）；join 的等待借自己的 runtime 即可
+		let (browser, mut handler) = match &ambient {
+			Some(handle) => {
+				let join = handle.spawn(Browser::connect(ws.to_string()));
+				runtime
+					.block_on(join)
+					.map_err(|e| BrowserError::fatal(format!("browser connect join: {e}")))?
+					.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?
+			}
+			None => runtime
+				.block_on(Browser::connect(ws))
+				.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?,
+		};
+		let pump = async move { while handler.next().await.is_some() {} };
+		match &ambient {
+			// Handler 驱动 websocket 收发；ambient 模式由宿主 runtime 持续驱动
+			Some(handle) => {
+				handle.spawn(pump);
+			}
+			// 只在 block_on 窗口内被轮询，对本模块这种纯请求/响应式用法足够
+			None => {
+				runtime.spawn(pump);
+			}
+		}
+		Ok(Self { runtime, browser, pages: HashMap::new(), ambient })
 	}
 
 	fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
@@ -161,5 +204,132 @@ impl CdpClient for ChromiumoxideClient {
 		self.block_on(self.browser.execute(params))
 			.map_err(|e| classify("browser cookies clear failed", e))?;
 		Ok(())
+	}
+
+	fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let params = SetDeviceMetricsOverrideParams::new(width, height, 1.0, false);
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser viewport failed", e))?;
+		Ok(())
+	}
+
+	fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		// 先挂监听再开推流，首帧不丢
+		let mut stream = self
+			.block_on(page.event_listener::<EventScreencastFrame>())
+			.map_err(|e| classify("browser screencast listener failed", e))?;
+		let params = StartScreencastParams::builder()
+			.format(StartScreencastFormat::Jpeg)
+			.quality(60)
+			.max_width(1280)
+			.max_height(800)
+			.build();
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser screencast start failed", e))?;
+		// headless 只在页面损伤时产帧，startScreencast 不保证初始帧；
+		// 一次截图制造损伤，首帧（空白页也好）立即可达，用户不用对着黑屏等
+		let nudge = CaptureScreenshotParams::builder().format(CaptureScreenshotFormat::Jpeg).build();
+		let _ = self.block_on(page.execute(nudge));
+		// 泵任务与 client 同生死：逐帧 ack 后投 sink；
+		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停。
+		// ambient 模式投宿主 runtime，保证会话空闲（无 block_on 窗口）时持续被驱动
+		let pump = async move {
+			while let Some(event) = stream.next().await {
+				if page.execute(ScreencastFrameAckParams::new(event.session_id)).await.is_err() {
+					break;
+				}
+				if sink.send(String::from(event.data.clone())).is_err() {
+					break;
+				}
+			}
+		};
+		match &self.ambient {
+			Some(handle) => {
+				handle.spawn(pump);
+			}
+			None => {
+				self.runtime.spawn(pump);
+			}
+		}
+		Ok(())
+	}
+
+	fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		self.block_on(page.execute(StopScreencastParams {}))
+			.map_err(|e| classify("browser screencast stop failed", e))?;
+		Ok(())
+	}
+
+	fn dispatch_mouse(&mut self, context: &str, input: &MouseInput) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let kind = match input.kind {
+			MouseKind::Down => DispatchMouseEventType::MousePressed,
+			MouseKind::Up => DispatchMouseEventType::MouseReleased,
+			MouseKind::Move => DispatchMouseEventType::MouseMoved,
+			MouseKind::Wheel => DispatchMouseEventType::MouseWheel,
+		};
+		let button = match input.button {
+			MouseButton::None => chromiumoxide::cdp::browser_protocol::input::MouseButton::None,
+			MouseButton::Left => chromiumoxide::cdp::browser_protocol::input::MouseButton::Left,
+			MouseButton::Middle => chromiumoxide::cdp::browser_protocol::input::MouseButton::Middle,
+			MouseButton::Right => chromiumoxide::cdp::browser_protocol::input::MouseButton::Right,
+		};
+		let mut params = DispatchMouseEventParams::new(kind, input.x, input.y);
+		params.modifiers = Some(input.modifiers);
+		params.button = Some(button);
+		params.click_count = Some(input.click_count);
+		if input.kind == MouseKind::Wheel {
+			params.delta_x = Some(input.delta_x);
+			params.delta_y = Some(input.delta_y);
+		}
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser mouse dispatch failed", e))?;
+		Ok(())
+	}
+
+	fn dispatch_key(&mut self, context: &str, input: &KeyInput) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let kind = match input.kind {
+			KeyKind::Down => DispatchKeyEventType::KeyDown,
+			KeyKind::Up => DispatchKeyEventType::KeyUp,
+		};
+		let mut params = DispatchKeyEventParams::new(kind);
+		params.modifiers = Some(input.modifiers);
+		params.key = Some(input.key.clone());
+		params.code = Some(input.code.clone());
+		params.windows_virtual_key_code = Some(input.windows_virtual_key_code);
+		params.native_virtual_key_code = Some(input.windows_virtual_key_code);
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser key dispatch failed", e))?;
+		Ok(())
+	}
+
+	fn insert_text(&mut self, context: &str, text: &str) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		self.block_on(page.execute(InsertTextParams::new(text)))
+			.map_err(|e| classify("browser insert text failed", e))?;
+		Ok(())
+	}
+
+	fn local_storage_values(&mut self, context: &str, keys: &[String]) -> Result<Vec<(String, String)>, BrowserError> {
+		let page = self.page(context)?.clone();
+		// 一次求值取回全部声明键；null（键不存在）在宿主侧滤掉
+		let expression = format!(
+			"JSON.stringify(({}).map(k => [k, window.localStorage.getItem(k)]))",
+			serde_json::to_string(keys).unwrap_or_else(|_| "[]".to_string())
+		);
+		let result = self
+			.block_on(page.evaluate(expression))
+			.map_err(|e| classify("browser localStorage read failed", e))?;
+		// 求值结果是 JSON.stringify 的字符串，需二次解析
+		let pairs: Vec<(String, Option<String>)> = result
+			.value()
+			.and_then(|v| v.as_str().map(str::to_string))
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or_default();
+		Ok(pairs.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect())
 	}
 }

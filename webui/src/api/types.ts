@@ -453,6 +453,17 @@ export interface Setting {
 export interface SourceSettings {
 	settings: Setting[] | null;
 	values: Record<string, unknown>;
+	/** 服务端能力面：browserLogin 为真时 web 登录项可走 sidecar 交互登录 */
+	capabilities?: {
+		browserLogin?: boolean;
+	};
+}
+
+/** sidecar 交互登录的会话句柄 */
+export interface BrowserLoginSession {
+	session: string;
+	loginUrl: string;
+	expiresAt: number;
 }
 
 // ---- 本波新端点 ----

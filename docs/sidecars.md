@@ -57,6 +57,33 @@ session. Without the variable, behavior is unchanged: the
 navigation/cookie webview functions report themselves unsupported in the
 source log.
 
-For an interactive login (a captcha or 2FA form a script cannot complete),
-open the sidecar image's own debugger UI in your browser and finish the
-login there; the cookies flow back the same way.
+## Interactive web login (no devtools)
+
+With the same variable set, a `Login` setting of `method: "web"` gains a
+second path next to pasting cookies: "在浏览器中打开登录页". The server
+opens an isolated browser context on the sidecar, loads the login page,
+and streams it into the source settings modal as a live view (CDP
+screencast out, mouse/keyboard back in, over one authenticated WebSocket
+to the Sumidoku server). The user completes sign-in there — captcha, 2FA,
+whatever the site needs — and clicks 完成登录; the server reads the
+context's cookies for the login host and runs the same pipeline as pasted
+cookies. The sidecar needs no UI of its own: the browserless OSS
+`/debugger/` is a code workbench whose session links open plain DevTools,
+and its interactive LiveURL is a premium feature, so Sumidoku relays the
+session itself and any CDP-capable Chromium works.
+
+Deployment notes:
+
+- **Session timeouts.** A login session lives up to 10 minutes server-side;
+  the sidecar must not kill the connection earlier. browserless defaults
+  to `CONNECTION_TIMEOUT=30s`, which destroys the session mid-login — the
+  compose file sets `CONNECTION_TIMEOUT=600000` for this reason.
+- **Exposure.** The interactive view is served by Sumidoku behind its own
+  auth; the sidecar stays on the private network and needs no published
+  port (the compose service exposes none). Whoever can reach the Sumidoku
+  UI can drive a login browser — treat the UI's own access control as the
+  boundary, as with every other settings operation.
+- **Scope.** Cookies are harvested for the login host (including its sub-
+  and parent domains). Flows whose session cookie lands on an unrelated
+  domain (some cross-domain SSO) are out of scope — the paste path remains
+  for those.

@@ -337,6 +337,37 @@
 	border-color: var(--accent);
 }
 
+/* sidecar 交互登录的实时视图：16:10 远端视口等比缩放，点击即抢焦收键盘事件 */
+.browser-view {
+	width: 100%;
+	aspect-ratio: 16 / 10;
+	background: #111;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	overflow: hidden;
+	outline: none;
+}
+
+.browser-view:focus-visible {
+	border-color: var(--accent);
+}
+
+.browser-view__screen {
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+	display: block;
+	user-select: none;
+	cursor: default;
+}
+
+.browser-view__placeholder {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+}
+
 .setting-stepper__input {
 	width: 110px;
 	flex: none;
