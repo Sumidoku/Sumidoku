@@ -144,3 +144,16 @@ before merging — the commit-sha pin proves where the head points, never
 what it contains.
 - Evidence: 2026-10-18, PR #61's rewrite into `24971ab5` dropped the two
   jar sink tests from the review fix; re-added in PR #64.
+
+**A probe on the app's own port answers the dev server, not your
+container.** The main checkout's dev server listens on :3000, so a test
+sidecar published with `docker run -p 127.0.0.1:3000:3000` looks healthy
+(docker prints a container id) while every probe to 127.0.0.1:3000 lands
+on the dev server. Verify a probe against what the sidecar should
+actually say — a CDP websocket upgrade answers 101, not the webui's
+HTML — and pick a host port that is really free before blaming the
+client library.
+- Evidence: 2026-10-18, PR #62's e2e setup: browserless on :3000
+  answered every handshake with the Sumidoku webui ("HTTP error: 200
+  OK" from tungstenite); republishing on 127.0.0.1:3300 made the CDP
+  handshake succeed on the first try.
