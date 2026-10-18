@@ -16,6 +16,10 @@ export interface Source {
 	updatedAt: number;
 	/** 各源仓库缓存里的更新版本，无仓库或无更新为 null */
 	updateVersion: number | null;
+	/** 在置顶列表（browse.pinned_sources）里 */
+	pinned: boolean;
+	/** 置顶列表里的下标，即迁移时的默认优先级；未置顶为 null */
+	pinOrder: number | null;
 }
 
 export interface SourceRepo {

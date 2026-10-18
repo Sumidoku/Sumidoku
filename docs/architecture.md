@@ -40,6 +40,19 @@ Migrations in `crates/server/migrations`.
   the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
   through the same `register_aix` path as the directory scan; versions
   compare as Aidoku's monotonic integers.
+- Pinned sources (`api/pins.rs`): an ordered list of source keys in the
+  global `setting` table under `browse.pinned_sources` — Aidoku's
+  `Browse.pinnedList` analogue, no schema migration. The array order is the
+  pin order and seeds the destination priority of cross-source migration.
+  `GET /api/v1/sources` items carry `pinned` and `pinOrder` (index in that
+  list, null when unpinned) via `repo::source_json`.
+  `PATCH /api/v1/sources/{id}` `{pinned: bool}` pins (appended to the tail)
+  or unpins (removed); `POST /api/v1/sources/reorder-pinned` `{ids: [...]}`
+  replaces the order wholesale and answers 400 unless ids are exactly the
+  current pinned set, so a reorder never silently drops a pin.
+  `delete_source` prunes the key. The Browse page shows the pinned sources
+  in an ordered section above the full list, with drag-to-reorder
+  (`webui/src/pages/BrowsePage.tsx`).
 - Authentication (`auth.rs`): off until a password exists — either seeded
   from the config (`auth.password`, or the legacy `basic_password` alias)
   on every boot, or stored in the `auth_credential` table by a previous

@@ -5,6 +5,7 @@ pub mod import_merge;
 pub mod library;
 pub mod page;
 pub mod partial;
+pub mod pins;
 pub mod reader;
 pub mod repo;
 pub mod settings;
@@ -45,7 +46,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/sources/scan", post(scan_sources))
-		.route("/api/v1/sources/{id}", delete(delete_source))
+		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
+		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
 		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
 		.route("/api/v1/sources/{id}/filters", get(get_filters))
@@ -132,7 +134,7 @@ async fn health() -> Json<Value> {
 	Json(json!({"status": "ok"}))
 }
 
-async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
+pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
 	let row: Option<SourceRow> = sqlx::query_as(
 		"SELECT id, key, name, version, languages, content_rating, base_url, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source WHERE id = ?",
@@ -151,9 +153,10 @@ async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 	.fetch_all(&state.pool)
 	.await?;
 	let latest = crate::source::repo::latest_versions(&state.pool).await?;
+	let pinned = pins::pinned_map(&state.pool).await?;
 	let sources: Vec<Value> = rows
 		.iter()
-		.map(|row| repo::source_json(row, &latest))
+		.map(|row| repo::source_json(row, &latest, &pinned))
 		.collect();
 	Ok(Json(json!(sources)))
 }
@@ -164,12 +167,13 @@ async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 }
 
 async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
-	source_row(&state, id).await?;
+	let row = source_row(&state, id).await?;
 	state.evict_source(id).await;
 	sqlx::query("DELETE FROM source WHERE id = ?")
 		.bind(id)
 		.execute(&state.pool)
 		.await?;
+	pins::prune_pinned(&state.pool, &row.key).await?;
 	Ok(StatusCode::NO_CONTENT)
 }
 
