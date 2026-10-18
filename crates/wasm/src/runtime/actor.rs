@@ -296,6 +296,10 @@ impl SourceHandle {
 			.await
 	}
 
+	pub async fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
+		self.call(move |i| i.handle_web_login(&key, &cookies)).await
+	}
+
 	pub async fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
 		self.call(move |i| i.handle_deep_link(&url)).await
 	}

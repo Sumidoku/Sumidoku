@@ -422,6 +422,33 @@ impl SourceInstance {
 		result
 	}
 
+	pub fn handle_web_login(&mut self, key: &str, cookies: &HashMap<String, String>) -> Result<bool> {
+		self.check(self.features.web_login, "handle_web_login")?;
+		let mut keys: Vec<String> = cookies.keys().cloned().collect();
+		keys.sort();
+		let values: Vec<String> = keys
+			.iter()
+			.map(|k| cookies.get(k).cloned().unwrap_or_default())
+			.collect();
+		// 对齐 Aidoku 的先存后调：源在 handle_web_login 里靠 defaults_get_map
+		// 读回 `<key>.keys/.values` 取 cookie，不走参数
+		self.set_default(format!("{key}.keys"), DefaultValue::StringArray(keys.clone()));
+		self.set_default(format!("{key}.values"), DefaultValue::StringArray(values.clone()));
+		let mut t = Vec::new();
+		let key_rid = self.store_arg(&key, &mut t)?;
+		let keys_rid = self.store_arg(&keys, &mut t)?;
+		let values_rid = self.store_arg(&values, &mut t)?;
+		let ret = self.call_raw(
+			"handle_web_login",
+			&[key_rid.into(), keys_rid.into(), values_rid.into()],
+		);
+		let result = ret.and_then(|r| self.read_result::<bool>(r));
+		self.cleanup(t);
+		// marker 由服务端同步落库：web 登录成功后要重启实例换 cookie jar，
+		// 走 sink 异步写会跟重启读库竞态（basic_login 之后不重启才能那么写）
+		result
+	}
+
 	pub fn handle_deep_link(&mut self, url: &str) -> Result<Option<DeepLinkResult>> {
 		self.check(self.features.deep_link, "handle_deep_link")?;
 		let mut t = Vec::new();

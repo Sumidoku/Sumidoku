@@ -3,6 +3,7 @@ pub mod backup;
 pub mod download;
 pub mod import_merge;
 pub mod library;
+pub mod login;
 pub mod migrate;
 pub mod page;
 pub mod partial;
@@ -61,6 +62,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
 		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
 		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
+		.route("/api/v1/sources/{id}/login/web", post(login::web_login))
+		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
@@ -461,6 +464,34 @@ async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {
 	Ok(Value::Object(values))
 }
 
+/// 设置定义加载：动态 get_settings 优先（顺带补种默认值，对齐 AidokuRunner 的
+/// register(defaults:)），源没导出时退回静态 settings.json 并归一成同款嵌套形状
+pub(crate) async fn load_settings_items(
+	state: &AppState,
+	id: i64,
+	handle: &aidoku_wasm::SourceHandle,
+) -> ApiResult<Vec<Value>> {
+	match handle.get_settings().await {
+		Ok(settings) => {
+			let items = serde_json::to_value(settings)?
+				.as_array()
+				.cloned()
+				.unwrap_or_default();
+			crate::source::seed_dynamic_defaults(&state.pool, id, &items)
+				.await
+				.map_err(ApiError::internal)?;
+			Ok(items)
+		}
+		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => Ok(
+			package_json(state, id, "settings.json")
+				.await?
+				.map(|raw| settings::normalize_static_settings(&raw))
+				.unwrap_or_default(),
+		),
+		Err(e) => Err(ApiError::from(e)),
+	}
+}
+
 async fn get_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -469,26 +500,7 @@ async fn get_source_settings(
 	let doc = package_json(&state, id, "source.json")
 		.await?
 		.unwrap_or_else(|| json!({}));
-	let mut items: Vec<Value> = match handle.get_settings().await {
-		Ok(settings) => {
-			let items = serde_json::to_value(settings)?
-				.as_array()
-				.cloned()
-				.unwrap_or_default();
-			// 首次成功 get_settings：补种代码里声明的默认值（不覆盖用户值），
-			// 对齐 AidokuRunner 在 getSettings() 里 register(defaults:)
-			crate::source::seed_dynamic_defaults(&state.pool, id, &items)
-				.await
-				.map_err(ApiError::internal)?;
-			items
-		}
-		// 静态 settings.json 是 Aidoku 的扁平 schema，归一成动态源同款嵌套形状
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => package_json(&state, id, "settings.json")
-			.await?
-			.map(|raw| settings::normalize_static_settings(&raw))
-			.unwrap_or_default(),
-		Err(e) => return Err(ApiError::from(e)),
-	};
+	let mut items = load_settings_items(&state, id, &handle).await?;
 	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）；
 	// 源已自行声明同名键时跳过合成项，避免列表里出现两个同键设置
 	let declared = settings::declared_keys(&items);
