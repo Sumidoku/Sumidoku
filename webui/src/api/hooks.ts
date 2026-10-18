@@ -8,6 +8,7 @@ import {
 import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
+	AidokuImportResult,
 	BackupListResponse,
 	BackupRestoreResult,
 	Category,
@@ -576,6 +577,18 @@ export function useRestoreNamedBackup() {
 		mutationFn: (name: string) =>
 			api<BackupRestoreResult>('/backups/restore', { method: 'POST', body: { name } }),
 		onSuccess: () => qc.invalidateQueries()
+	});
+}
+
+/** 导入 Aidoku .aib：dryRun 只预览不写库，真导入才全量失效 */
+export function useImportAidoku() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ file, dryRun }: { file: File; dryRun: boolean }) =>
+			api<AidokuImportResult>(`/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
+		onSuccess: (_result, vars) => {
+			if (!vars.dryRun) qc.invalidateQueries();
+		}
 	});
 }
 

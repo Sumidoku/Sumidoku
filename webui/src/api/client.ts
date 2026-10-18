@@ -71,12 +71,17 @@ export interface ApiOptions {
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	const { method = 'GET', body, silent = false } = opts;
+	// 二进制上传（.aib）不走 JSON 编码
+	const raw = body instanceof Blob || body instanceof ArrayBuffer;
 	let res: Response;
 	try {
 		res = await fetch(BASE + path, {
 			method,
-			headers: body !== undefined ? { 'Content-Type': 'application/json', ...authHeaders() } : authHeaders(),
-			body: body !== undefined ? JSON.stringify(body) : undefined
+			headers:
+				body !== undefined
+					? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json', ...authHeaders() }
+					: authHeaders(),
+			body: body !== undefined ? (raw ? (body as BodyInit) : JSON.stringify(body)) : undefined
 		});
 	} catch {
 		const err = new ApiError(0, 'network', '网络请求失败');
