@@ -137,12 +137,15 @@ async fn feeds_files_and_escaping() {
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("xmlns:pse=\"http://vaemendis.net/opds-pse\""));
 	assert!(body.contains("pse:count=\"2\""), "series feed: {body}");
-	assert!(body.contains("pse:lastRead=\"1\""), "series feed: {body}");
+	// lastPageRead 是 0 基索引，PSE lastRead 从 1 计
+	assert!(body.contains("pse:lastRead=\"2\""), "series feed: {body}");
 	assert!(body.contains("pse:lastReadDate="), "series feed: {body}");
+	// href 必须含字面量 {pageNumber} 供客户端替换；无进度的章不出 lastRead
 	assert!(
-		body.contains(&format!("https://opds.test/opds/v1.2/stream/{chapter_id}/0")),
+		body.contains(&format!("https://opds.test/opds/v1.2/stream/{chapter_id}/{{pageNumber}}")),
 		"series feed: {body}"
 	);
+	assert_eq!(body.matches("pse:lastRead=").count(), 1, "series feed: {body}");
 	// 只有已下载的一章带 zip acquisition
 	assert_eq!(body.matches("http://opds-spec.org/acquisition").count(), 1);
 	assert!(body.contains(&format!("https://opds.test/opds/v1.2/file/{chapter_id}")));
