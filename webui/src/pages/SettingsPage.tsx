@@ -90,6 +90,7 @@ function AppearanceSection() {
 				<span className="settings-row__label">主题</span>
 				<SegmentedControl<Theme>
 					options={[
+						{ value: 'system', label: '跟随系统' },
 						{ value: 'dark', label: '暗色' },
 						{ value: 'light', label: '亮色' }
 					]}

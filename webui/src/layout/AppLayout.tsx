@@ -10,7 +10,7 @@ import {
 	Sun
 } from 'lucide-react';
 import { IconButton } from '../components';
-import { useTheme } from '../lib/theme';
+import { useResolvedTheme, useTheme } from '../lib/theme';
 
 const NAV = [
 	{ to: '/library', label: '书库', icon: Library },
@@ -22,14 +22,15 @@ const NAV = [
 ] as const;
 
 function ThemeToggle() {
-	const [theme, setTheme] = useTheme();
-	const next = theme === 'dark' ? 'light' : 'dark';
+	const [, setTheme] = useTheme();
+	const resolved = useResolvedTheme();
+	const next = resolved === 'dark' ? 'light' : 'dark';
 	return (
 		<IconButton
 			label={next === 'light' ? '切到浅色' : '切到深色'}
 			onClick={() => setTheme(next)}
 		>
-			{theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+			{resolved === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
 		</IconButton>
 	);
 }
