@@ -7,7 +7,8 @@ use std::time::Duration;
 
 const MAX_ATTEMPTS: u32 = 3;
 
-/// NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct。
+/// NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct；
+/// 直连撞 CF 挑战（403/503 + CF 头）再经 trawl_escalation 升级一次。
 /// 引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
 pub struct SumidokuNetPolicy {
 	user_agent: String,
@@ -76,6 +77,15 @@ impl NetPolicy for SumidokuNetPolicy {
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
 		self.ca_pem.clone()
 	}
+
+	fn trawl_escalation(&self, url: &Url) -> Option<NetRoute> {
+		let host = url.host_str().unwrap_or_default();
+		// direct_domains 是「永不代理」的显式钉死，CF 升级同样让路
+		if Self::domain_match(&self.direct_domains, host) {
+			return None;
+		}
+		self.trawl_proxy.clone().map(NetRoute::Proxy)
+	}
 }
 
 #[derive(Debug)]
@@ -112,12 +122,15 @@ impl RoutedClients {
 	}
 
 	pub fn client_for(&self, url: &Url) -> Result<Client, FetchError> {
-		let route = self.policy.route_for(url);
-		if let Some(client) = self.clients.read().expect("clients lock").get(&route) {
+		self.client_for_route(&self.policy.route_for(url))
+	}
+
+	fn client_for_route(&self, route: &NetRoute) -> Result<Client, FetchError> {
+		if let Some(client) = self.clients.read().expect("clients lock").get(route) {
 			return Ok(client.clone());
 		}
 		let mut builder = Client::builder().use_rustls_tls();
-		if let NetRoute::Proxy(proxy_url) = &route {
+		if let NetRoute::Proxy(proxy_url) = route {
 			let proxy = reqwest::Proxy::all(proxy_url)
 				.map_err(FetchError::Network)?;
 			builder = builder.proxy(proxy);
@@ -131,7 +144,7 @@ impl RoutedClients {
 		self.clients
 			.write()
 			.expect("clients lock")
-			.entry(route)
+			.entry(route.clone())
 			.or_insert_with(|| client.clone());
 		Ok(client)
 	}
@@ -145,7 +158,7 @@ impl RoutedClients {
 		Ok(builder)
 	}
 
-	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）与可选直连回退的 GET
+	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）、CF 挑战 trawl 升级与可选直连回退的 GET
 	pub async fn get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
 		let via_proxy = matches!(self.policy.route_for(url), NetRoute::Proxy(_));
 		let mut attempt = 0;
@@ -166,6 +179,14 @@ impl RoutedClients {
 				}
 			};
 			let status = response.status();
+			// CF 升级先于退避：503 挑战页不该白烧直连的退避次数
+			if !via_proxy
+				&& aidoku_wasm::is_cf_challenge(status, response.headers())
+				&& let Some(route) = self.policy.trawl_escalation(url)
+			{
+				tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
+				return self.get_via(&route, url).await;
+			}
 			let retry_after = response
 				.headers()
 				.get(reqwest::header::RETRY_AFTER)
@@ -187,6 +208,21 @@ impl RoutedClients {
 			}
 			return Ok(response);
 		}
+	}
+
+	/// 指定路由的单发 GET，供 trawl 升级用：解题本身就是这次请求的重试，循环只会重复解题
+	async fn get_via(&self, route: &NetRoute, url: &Url) -> Result<reqwest::Response, FetchError> {
+		let client = self.client_for_route(route)?;
+		let response = client
+			.get(url.clone())
+			.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default())
+			.send()
+			.await
+			.map_err(FetchError::Network)?;
+		if !response.status().is_success() {
+			return Err(FetchError::Status(response.status()));
+		}
+		Ok(response)
 	}
 
 	async fn direct_get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
@@ -252,5 +288,161 @@ mod tests {
 			p.route_for(&Url::parse("https://cf.example.com/x").unwrap()),
 			NetRoute::Direct
 		);
+	}
+
+	#[test]
+	fn trawl_escalation_respects_config() {
+		let p = policy(|c| {
+			c.net.direct_domains = vec!["pinned.example.com".into()];
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		assert_eq!(
+			p.trawl_escalation(&Url::parse("https://cf.example.com/x").unwrap()),
+			Some(NetRoute::Proxy("http://trawl:8192".into()))
+		);
+		// 钉死直连的 host 连 CF 升级也不走代理
+		assert_eq!(
+			p.trawl_escalation(&Url::parse("https://pinned.example.com/x").unwrap()),
+			None
+		);
+
+		let bare = policy(|_| {});
+		assert_eq!(
+			bare.trawl_escalation(&Url::parse("https://cf.example.com/x").unwrap()),
+			None
+		);
+	}
+
+	struct MockServer {
+		addr: String,
+		hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+		heads: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+	}
+
+	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
+	/// handler 收请求头文本、回完整响应。源站与 trawl 代理共用。
+	fn mock_server(handler: impl Fn(&str) -> String + Send + 'static) -> MockServer {
+		use std::io::{Read, Write};
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
+		let port = listener.local_addr().expect("local addr").port();
+		let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+		let heads = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+		let (hits2, heads2) = (hits.clone(), heads.clone());
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else { break };
+				let mut head = Vec::new();
+				let mut chunk = [0u8; 4096];
+				loop {
+					match stream.read(&mut chunk) {
+						Ok(0) | Err(_) => break,
+						Ok(n) => {
+							head.extend_from_slice(&chunk[..n]);
+							if head.windows(4).any(|w| w == b"\r\n\r\n") {
+								break;
+							}
+						}
+					}
+				}
+				let head = String::from_utf8_lossy(&head).to_string();
+				hits2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+				heads2.lock().expect("heads lock").push(head.clone());
+				if stream.write_all(handler(&head).as_bytes()).is_err() {
+					break;
+				}
+			}
+		});
+		MockServer {
+			addr: format!("127.0.0.1:{port}"),
+			hits,
+			heads,
+		}
+	}
+
+	impl MockServer {
+		fn hits(&self) -> usize {
+			self.hits.load(std::sync::atomic::Ordering::SeqCst)
+		}
+
+		fn heads(&self) -> Vec<String> {
+			self.heads.lock().expect("heads lock").clone()
+		}
+	}
+
+	fn respond(status: &str, extra_headers: &[&str], body: &str) -> String {
+		let mut out = format!("HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n", body.len());
+		for header in extra_headers {
+			out.push_str(header);
+			out.push_str("\r\n");
+		}
+		out.push_str("\r\n");
+		out.push_str(body);
+		out
+	}
+
+	#[tokio::test]
+	async fn get_escalates_cf_challenge_via_trawl() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients.get(&url).await.expect("get");
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.text().await.expect("body"), "solved-via-trawl");
+		assert_eq!(origin.hits(), 1, "直连一次撞挑战即升级");
+		assert_eq!(trawl.hits(), 1);
+		assert!(
+			trawl.heads()[0].starts_with(&format!("GET http://{}/cover.jpg", origin.addr)),
+			"代理收到 absolute-form 请求: {}",
+			trawl.heads()[0].lines().next().unwrap_or_default()
+		);
+	}
+
+	#[tokio::test]
+	async fn get_without_trawl_keeps_403() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let err = clients.get(&url).await.expect_err("no trawl, 403 surfaces");
+		assert!(
+			matches!(err, FetchError::Status(s) if s == StatusCode::FORBIDDEN),
+			"got: {err}"
+		);
+		assert_eq!(origin.hits(), 1, "403 不是重试面，不应有退避重发");
+	}
+
+	#[tokio::test]
+	async fn get_non_cf_403_does_not_escalate() {
+		let origin = mock_server(|_head| respond("403 Forbidden", &["server: nginx"], "forbidden"));
+		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/private", origin.addr)).unwrap();
+
+		let err = clients.get(&url).await.expect_err("origin 403 surfaces");
+		assert!(
+			matches!(err, FetchError::Status(s) if s == StatusCode::FORBIDDEN),
+			"got: {err}"
+		);
+		assert_eq!(trawl.hits(), 0, "源站自己的 403 不该走 trawl");
 	}
 }
