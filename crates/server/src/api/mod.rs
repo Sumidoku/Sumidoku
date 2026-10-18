@@ -1,12 +1,14 @@
 pub mod aidoku_backup;
 pub mod backup;
 pub mod download;
+pub mod import_merge;
 pub mod library;
 pub mod page;
 pub mod partial;
 pub mod reader;
 pub mod repo;
 pub mod settings;
+pub mod suwayomi_backup;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -102,6 +104,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route(
 			"/api/v1/import/aidoku",
 			post(aidoku_backup::import_aidoku_backup)
+				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
+		)
+		.route(
+			"/api/v1/import/suwayomi",
+			post(suwayomi_backup::import_suwayomi_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
 		.route(

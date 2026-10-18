@@ -81,8 +81,7 @@ Migrations in `crates/server/migrations`.
   applied rows per section. Progress entries carry a chapter metadata
   snapshot so a fresh instance can recreate chapter rows ahead of the
   source's first fetch. The document's `version` field (currently `1`) is
-  the format contract — the planned Suwayomi import maps onto the same
-  model — and source setting values round-trip in the same
+  the format contract, and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
   contain source credentials: treat the file as sensitive.
   The construction (`build_backup_doc`) and the restore execution
@@ -113,6 +112,41 @@ Migrations in `crates/server/migrations`.
   run's and the database is untouched; an unparseable or wrongly shaped
   file answers 400 with no writes. The web UI settings page has the
   upload → dry-run preview → confirm flow under the backup section.
+- Suwayomi/Mihon backup import (`api/suwayomi_backup.rs`):
+  `POST /api/v1/import/suwayomi` accepts a Suwayomi-Server or
+  Mihon/Tachiyomi backup as a binary body. Both apps write the same
+  bytes — gzip around one protobuf `Backup` message — whatever the
+  extension (`.tachibk`, `.proto.gz`); the endpoint sniffs magic bytes
+  and also accepts a raw proto (as Mihon's decoder does) and, defensively,
+  a zip holding a `.proto` entry. The prost messages are hand-written
+  against the wire schema (Suwayomi's `backup/proto/models`, Mihon's
+  `data/backup/models`), declaring only consumed fields so tracking,
+  memos, preferences and Suwayomi's `meta` maps are skipped on decode.
+  The merge reuses the same additive primitives as the Aidoku import
+  (`api/import_merge.rs`), with two format-specific twists: a manga is
+  in the library only when `favorite` is set (kotlinx ProtoBuf omits
+  default-valued scalars, so the wire never carries `favorite=true` —
+  absence decodes as true), and category membership references category
+  `order` values, not array positions. Timestamps arrive as epoch
+  milliseconds with 0 meaning absent. The hard part is source mapping:
+  backups name Mihon sources by int64 id plus a display name (no
+  language on the wire), while Sumidoku runs Aidoku sources. Each
+  backup source group auto-matches only when exactly one installed
+  source shares the normalized name (lowercase, alphanumeric only);
+  zero or multiple hits stay unmatched — the importer never guesses —
+  and the response `sources` list reports every group's state
+  (`auto`/`mapped`/`unmatched`, plus the name-match candidates) with
+  manga counts. A real run accepts
+  `?sourceMapping={"<mihonSourceId>": "<aidokuSourceKey>"}` (ids are
+  int64 hashes that can exceed 2^53, hence string keys) to resolve
+  groups explicitly; unmatched-and-unmapped groups skip wholesale into
+  the `skipped` list. `?dryRun=true` rolls back the same transaction.
+  The web UI walks upload → grouped dry-run preview → per-source
+  mapping dropdowns → confirm → result. Tracking, extension settings,
+  saved searches and server preferences are out of scope; the manga
+  `url` is the Mihon source's internal key, which may not line up with
+  the corresponding Aidoku source's manga key — such entries import
+  but a later refresh can miss them.
 - Scheduled backups (`backup/mod.rs`): a `BackupScheduler` task (wired in
   `build_app` like the update scheduler) wakes every 60s, re-reads the
   `backup.*` keys from the `setting` table and, when `backup.enabled` is

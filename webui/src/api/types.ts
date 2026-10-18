@@ -493,6 +493,37 @@ export interface AidokuImportResult {
 	skipped: AidokuImportSkipped[];
 }
 
+export interface SuwayomiImportSkipped {
+	section: 'library' | 'progress' | string;
+	/** Mihon 源 id 是 int64 哈希可超 2^53，服务端按字符串下发 */
+	mihonSourceId: string;
+	mihonSourceName: string;
+	mangaKey: string;
+	reason: string;
+}
+
+export interface SuwayomiSourceGroup {
+	mihonSourceId: string;
+	mihonSourceName: string;
+	mangaCount: number;
+	/** auto=唯一同名自动匹配；mapped=用户显式映射；unmatched=不猜，整组跳过 */
+	match: 'auto' | 'mapped' | 'unmatched';
+	aidokuSourceKey?: string;
+	aidokuSourceName?: string;
+	candidates: { key: string; name: string }[];
+}
+
+export interface SuwayomiImportResult {
+	dryRun: boolean;
+	imported: {
+		library: number;
+		categories: number;
+		progress: number;
+	};
+	skipped: SuwayomiImportSkipped[];
+	sources: SuwayomiSourceGroup[];
+}
+
 export interface BackupListResponse {
 	/** 服务端生效中的备份目录（env > setting > 默认） */
 	dir: string;
