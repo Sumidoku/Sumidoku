@@ -262,7 +262,11 @@ function WebLoginSetting({
 					key={lsKey}
 					placeholder={`localStorage：${lsKey}`}
 					value={lsValues[lsKey] ?? ''}
-					onChange={(e) => setLsValues((cur) => ({ ...cur, [lsKey]: e.currentTarget.value }))}
+					onChange={(e) => {
+						// 更新函数延后执行时 currentTarget 已被置 null，必须先取值
+						const v = e.currentTarget.value;
+						setLsValues((cur) => ({ ...cur, [lsKey]: v }));
+					}}
 				/>
 			))}
 			<Button
