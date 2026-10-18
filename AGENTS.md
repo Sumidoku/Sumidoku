@@ -58,9 +58,9 @@ blocking stays with the maintainer.
 
 ## Session ritual
 
-When a session that merged work ends, review what had to be fixed again,
-what merged that shouldn't have, and what was verified too thinly. Record
-what you learn in [LESSONS.md](LESSONS.md), in a commit of its own. A
-scheduled session runs the same review over each day's merged work; a
-lesson seen again moves into
+Record a lesson the moment work teaches one — don't save it for later.
+Each entry in [LESSONS.md](LESSONS.md) goes in as its own commit: the
+rule, why, and the evidence. A scheduled daily review is the backstop: it
+catches anything the day should have recorded but didn't, counts
+recurrences, and moves a lesson seen three times into
 [docs/code-standards.md](docs/code-standards.md).
