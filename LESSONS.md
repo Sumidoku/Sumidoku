@@ -120,3 +120,15 @@ Rust) so cross uncertainty never materializes at all.
 - Evidence: 2026-10-18, the #21 dispatch's local cross build was killed
   on the maintainer's ask; the instruction was corrected to CI-owned
   verification and pure-Rust-first selection.
+
+**Decide an issue only after reading the whole thread, not just the
+body.** `gh issue view --json body` returns no comments, and a decision
+made from the body alone can contradict what the maintainer already said
+in the thread. Here a references comment (two headless-browser options)
+sat unread for five hours while the issue was decided and merged the
+other way; a collaborator had to reopen the issue to get it re-examined.
+Read `gh issue view --comments` before deciding or closing anything, and
+treat a reopen as new input, not noise.
+- Evidence: 2026-10-18, issue #26 was decided "sandbox + explicitly
+  unsupported" and merged while everpcpc's chromiumoxide/moli references
+  sat unread in the thread; dyphire reopened it the same day.
