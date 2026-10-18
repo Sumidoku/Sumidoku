@@ -86,7 +86,11 @@ function stored(key: string, fallback: string): string {
 
 function AppearanceSection() {
 	const [theme, setTheme] = useTheme();
-	const [mode, setMode] = useState(() => stored(READER_MODE_KEY, 'paged'));
+	// 旧版设置页把「滚动」存成了 vertical，阅读器只认 continuous，读入时归一
+	const [mode, setMode] = useState(() => {
+		const m = stored(READER_MODE_KEY, 'paged');
+		return m === 'vertical' ? 'continuous' : m;
+	});
 	const [dir, setDir] = useState(() => stored(READER_DIR_KEY, 'ltr'));
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
@@ -119,7 +123,7 @@ function AppearanceSection() {
 					onChange={(e) => persist(READER_MODE_KEY, e.currentTarget.value, setMode)}
 				>
 					<option value="paged">翻页</option>
-					<option value="vertical">滚动</option>
+					<option value="continuous">滚动</option>
 					<option value="webtoon">条漫</option>
 				</Select>
 			</div>

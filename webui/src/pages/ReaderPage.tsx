@@ -34,6 +34,8 @@ function readMode(): Mode {
 	try {
 		const m = localStorage.getItem('sumidoku.reader.mode');
 		if (m === 'paged' || m === 'continuous' || m === 'webtoon') return m;
+		// 旧版设置页把「滚动」误存为 vertical，等价成 continuous
+		if (m === 'vertical') return 'continuous';
 	} catch {
 		// 隐私模式读不到存储就用默认
 	}
@@ -114,18 +116,33 @@ function ReaderCore({
 	const idxRef = useRef(0);
 	const [idx, setIdxState] = useState(0);
 	const furthestRef = useRef(0);
-	const [furthest, setFurthestState] = useState(0);
+	// 滚动/条漫模式下视口顶部所在的页，用于页码显示；furthest 只用于进度上报
+	const curRef = useRef(0);
+	const [cur, setCurState] = useState(0);
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
 
+	// 文本页在翻页模式下按视口切成多栏，col 是当前栏；textLayout 是实测的栏宽/间距/栏数
+	const colRef = useRef(0);
+	const [col, setColState] = useState(0);
+	const [textLayout, setTextLayout] = useState({ w: 0, gap: 0, cols: 1 });
+	const textLayoutRef = useRef(textLayout);
+	textLayoutRef.current = textLayout;
+	const textColsRef = useRef<HTMLDivElement>(null);
+
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
+	// 文本章在服务端就是单页，这种章的分页单位是栏而不是页
+	const textOnly = mode === 'paged' && total === 1 && isText(pages?.[0]);
 	// 标题/续读用原列表，避免当前章被筛掉时丢了副标题和进度
 	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
 	const pos = chapters.findIndex((c) => c.id === chapterId);
 	const prevCh = pos > 0 ? chapters[pos - 1] : null;
 	const nextCh = pos >= 0 && pos < chapters.length - 1 ? chapters[pos + 1] : null;
-	const shown = mode === 'paged' ? idx : furthest;
+	const shown = mode === 'paged' ? idx : cur;
+	// 文本单页章的分页单位是栏，其余是页
+	const navTotal = textOnly ? textLayout.cols : total;
+	const navPos = textOnly ? col : shown;
 	const mangaTitle = mangaQuery.data?.title ?? '';
 
 	function setIdx(i: number) {
@@ -135,16 +152,25 @@ function ReaderCore({
 
 	function setFurthest(i: number) {
 		furthestRef.current = i;
-		setFurthestState(i);
+	}
+
+	function setCur(i: number) {
+		curRef.current = i;
+		setCurState(i);
+	}
+
+	function setCol(c: number) {
+		colRef.current = c;
+		setColState(c);
 	}
 
 	const reportRef = useRef<{
 		timer: ReturnType<typeof setTimeout> | undefined;
-		pending: number | null;
+		pending: { page: number; atEnd: boolean } | null;
 		readReported: boolean;
 	}>({ timer: undefined, pending: null, readReported: false });
 
-	// 进度上报防抖 300ms，失败静默不打断阅读；到最后一页顺带标已读，一章只标一次
+	// 进度上报防抖 300ms，失败静默不打断阅读；到章节末尾顺带标已读，一章只标一次
 	function flushProgress() {
 		const r = reportRef.current;
 		if (r.timer !== undefined) {
@@ -152,10 +178,10 @@ function ReaderCore({
 			r.timer = undefined;
 		}
 		if (r.pending === null) return;
-		const i = r.pending;
+		const { page: i, atEnd } = r.pending;
 		r.pending = null;
 		const body: { lastPageRead: number; isRead?: boolean } = { lastPageRead: i };
-		const markRead = total > 0 && i >= total - 1 && !r.readReported;
+		const markRead = total > 0 && atEnd && !r.readReported;
 		if (markRead) body.isRead = true;
 		api(`/chapter/${chapterId}`, { method: 'PATCH', body, silent: true })
 			.then(() => {
@@ -171,9 +197,9 @@ function ReaderCore({
 			.catch(() => {});
 	}
 
-	function scheduleProgress(i: number) {
+	function scheduleProgress(i: number, atEnd: boolean) {
 		const r = reportRef.current;
-		r.pending = i;
+		r.pending = { page: i, atEnd };
 		if (r.timer !== undefined) clearTimeout(r.timer);
 		r.timer = setTimeout(flushProgress, 300);
 	}
@@ -198,8 +224,9 @@ function ReaderCore({
 		const clamped = Math.min(Math.max(i, 0), Math.max(total - 1, 0));
 		if (clamped === idxRef.current && pages) return;
 		setIdx(clamped);
+		setCol(0);
 		if (clamped > furthestRef.current) setFurthest(clamped);
-		scheduleProgress(clamped);
+		scheduleProgress(clamped, clamped >= total - 1);
 		prefetch(clamped);
 	}
 
@@ -209,14 +236,27 @@ function ReaderCore({
 	}
 
 	// 翻到边界直接换章：最后一页再往前 = 下一章，第一页再往回 = 上一章
+	// 文本页先逐栏翻，栏翻完再走页/章的边界
 	function turn(forward: boolean) {
+		const textPage = curPage !== null && isText(curPage);
+		const cols = textLayoutRef.current.cols;
 		if (forward) {
+			if (textPage && colRef.current < cols - 1) {
+				const nextCol = colRef.current + 1;
+				setCol(nextCol);
+				scheduleProgress(idxRef.current, idxRef.current >= total - 1 && nextCol >= cols - 1);
+				return;
+			}
 			if (idxRef.current >= total - 1) navCh(nextCh);
 			else gotoPage(idxRef.current + 1);
-		} else if (idxRef.current <= 0) {
-			navCh(prevCh);
 		} else {
-			gotoPage(idxRef.current - 1);
+			if (textPage && colRef.current > 0) {
+				setCol(colRef.current - 1);
+				scheduleProgress(idxRef.current, false);
+				return;
+			}
+			if (idxRef.current <= 0) navCh(prevCh);
+			else gotoPage(idxRef.current - 1);
 		}
 	}
 
@@ -289,6 +329,8 @@ function ReaderCore({
 		);
 		setIdx(initial);
 		setFurthest(initial);
+		setCol(0);
+		setCur(initial);
 		prefetch(initial);
 		if (mode !== 'paged') scrollToPage(initial);
 	});
@@ -298,8 +340,38 @@ function ReaderCore({
 	useLayoutEffect(() => {
 		if (prevModeRef.current === mode) return;
 		prevModeRef.current = mode;
-		if (mode !== 'paged' && initedRef.current) scrollToPage(idxRef.current);
+		if (mode === 'paged') {
+			// 回到翻页时对齐到滚动模式当前页，而不是离开时停留的 idx
+			setIdx(curRef.current);
+			setCol(0);
+		} else {
+			// 进入滚动/条漫时，页码回到翻页模式当前页，而不是沿用历史最远页
+			setCur(idxRef.current);
+			if (initedRef.current) scrollToPage(idxRef.current);
+		}
 	}, [mode]);
+
+	// 翻页模式下把文本页按视口切成等宽多栏；实测栏数用于分页和小节跳转
+	useLayoutEffect(() => {
+		if (mode !== 'paged') return;
+		const el = textColsRef.current;
+		if (!el) return;
+		const recompute = () => {
+			const w = el.clientWidth;
+			if (w <= 0) return;
+			el.style.columnWidth = `${w}px`;
+			const gap = parseFloat(getComputedStyle(el).columnGap) || 0;
+			const cols = Math.max(1, Math.round((el.scrollWidth + gap) / (w + gap)));
+			setTextLayout((prev) =>
+				prev.w === w && prev.gap === gap && prev.cols === cols ? prev : { w, gap, cols }
+			);
+			if (colRef.current > cols - 1) setCol(cols - 1);
+		};
+		recompute();
+		const ro = new ResizeObserver(recompute);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [mode, idx, pages]);
 
 	// 滚动/条漫模式进度 = 进入过视口的最大页码
 	useEffect(() => {
@@ -313,12 +385,44 @@ function ReaderCore({
 				const i = Number((e.target as HTMLElement).dataset.page);
 				if (i > furthestRef.current) {
 					setFurthest(i);
-					scheduleProgress(i);
+					scheduleProgress(i, i >= pages.length - 1);
 				}
 			}
 		});
 		els.forEach((el) => ob.observe(el));
 		return () => ob.disconnect();
+	}, [mode, pages, navReady]);
+
+	// 滚动/条漫模式页码 = 覆盖视口顶部的那一页，随滚动实时更新
+	useEffect(() => {
+		if (mode === 'paged' || !pages || !navReady) return;
+		const root = contRef.current;
+		if (!root) return;
+		let raf = 0;
+		const update = () => {
+			raf = 0;
+			const els = root.querySelectorAll<HTMLElement>('[data-page]');
+			let best: { i: number; score: number } | null = null;
+			for (const el of els) {
+				const r = el.getBoundingClientRect();
+				const score = r.top <= 0 && r.bottom > 0 ? 0 : Math.abs(r.top);
+				if (best === null || score < best.score) best = { i: Number(el.dataset.page), score };
+			}
+			if (best !== null && best.i !== curRef.current) setCur(best.i);
+		};
+		const onScroll = () => {
+			if (raf === 0) raf = requestAnimationFrame(update);
+		};
+		update();
+		window.addEventListener('scroll', onScroll, { passive: true });
+		// 图片懒加载会改变容器高度，用 ResizeObserver 重算当前页
+		const ro = new ResizeObserver(onScroll);
+		ro.observe(root);
+		return () => {
+			window.removeEventListener('scroll', onScroll);
+			ro.disconnect();
+			if (raf) cancelAnimationFrame(raf);
+		};
 	}, [mode, pages, navReady]);
 
 	// 轻点中部呼出工具栏，滑动不触发
@@ -335,14 +439,22 @@ function ReaderCore({
 	function onSlider(e: ChangeEvent<HTMLInputElement>) {
 		const i = Number(e.currentTarget.value) - 1;
 		if (mode === 'paged') {
-			gotoPage(i);
+			if (textOnly) {
+				const cols = textLayoutRef.current.cols;
+				const c = Math.min(Math.max(i, 0), Math.max(cols - 1, 0));
+				setCol(c);
+				scheduleProgress(idxRef.current, c >= cols - 1);
+			} else {
+				gotoPage(i);
+			}
 			return;
 		}
 		scrollToPage(i);
 		setIdx(i);
+		setCur(i);
 		if (i > furthestRef.current) {
 			setFurthest(i);
-			scheduleProgress(i);
+			scheduleProgress(i, i >= total - 1);
 		}
 	}
 
@@ -389,8 +501,16 @@ function ReaderCore({
 				<div className="reader__paged">
 					{curPage &&
 						(isText(curPage) ? (
-							<div className="reader__text-scroll">
-								<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(curPage.content.Text) }} />
+							<div className="reader__text-paged">
+								<div
+									className="reader-text reader-text--cols"
+									ref={textColsRef}
+									style={{
+										columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
+										transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
+									}}
+									dangerouslySetInnerHTML={{ __html: md(curPage.content.Text) }}
+								/>
 							</div>
 						) : isUnsupported(curPage) ? (
 							<div className="reader__unsupported">该页类型暂不支持</div>
@@ -497,13 +617,13 @@ function ReaderCore({
 					<input
 						type="range"
 						min={1}
-						max={total}
-						value={Math.min(shown + 1, total)}
+						max={navTotal}
+						value={Math.min(navPos + 1, navTotal)}
 						onChange={onSlider}
 						aria-label="跳转到指定页"
 					/>
 					<span className="reader__page-num">
-						{Math.min(shown + 1, total)}/{total}
+						{Math.min(navPos + 1, navTotal)}/{navTotal}
 					</span>
 				</div>
 				<Button size="sm" disabled={!nextCh} onClick={() => navCh(nextCh)}>

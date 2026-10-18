@@ -33,11 +33,14 @@
 	object-fit: contain;
 }
 
-.reader__text-scroll {
+.reader__text-paged {
 	width: 100%;
+	max-width: 60rem;
+	margin: 0 auto;
 	height: 100%;
-	overflow-y: auto;
-	padding: 24px 16px;
+	overflow: hidden;
+	padding: 32px 24px;
+	box-sizing: border-box;
 }
 
 .reader__zone {
@@ -107,6 +110,22 @@
 
 .reader-text img {
 	max-width: 100%;
+}
+
+/* 翻页模式下的文本页：按视口宽度分栏，横向平移翻栏。
+   阅读器固定黑底，这里去掉卡片换成浅色文字，避免浅色主题下暗字不可见 */
+.reader-text--cols {
+	height: 100%;
+	max-width: none;
+	margin: 0;
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 0;
+	column-fill: auto;
+	column-gap: 48px;
+	color: #e6e6e9;
+	will-change: transform;
 }
 
 .reader-text pre {
