@@ -254,3 +254,19 @@ binary only when the change touches the embed/serving layer itself.
   under the server's cwd), on cache busting, and on hand-decoding a
   minified `currentTarget` stack that dev-server source maps would have
   named directly; README.md:101 had the dev loop documented all along.
+
+**chrono's `NaiveDateTime::parse_from_str` silently drops a parsed zone
+offset — route offset-bearing formats through `DateTime`.** A format
+containing `%z` parses fine into a `NaiveDateTime`; the offset is
+discarded and the timestamp comes out wrong by however much the string's
+zone differed from the one you attach afterwards. Any layer translating
+format strings with zone tokens must branch those formats to
+`DateTime::parse_from_str`. Two sibling traps from the same probe: `%f`
+parses a nanosecond *count* while `%.f` parses a fraction of a second,
+and only `%#z` accepts `Z`, `+09`, `+0900` and `+09:00` alike (`%z` and
+`%:z` reject `Z` and the hours-only form).
+- Evidence: 2026-10-19, issue #110's parse_date work; the chrono 0.4.45
+  probe printed `Ok(2024-01-15T12:00:00)` for input `…+0900` under
+  `%…%z` (the correct reading needs the −9h shift), and `500` under `%f`
+  became 500ns rather than half a second; PR #124 routes zone-token
+  formats through `DateTime::parse_from_str` and maps `S` to `%.f`.

@@ -74,6 +74,7 @@ dependencies = [
  "fontdb",
  "futures",
  "html5ever",
+ "iana-time-zone",
  "image",
  "postcard",
  "regex",
