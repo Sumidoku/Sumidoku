@@ -518,6 +518,41 @@ instance's cookie jar reports changes through a `CookieSink` to a batch
 writer, so a login session survives the restart that follows a settings
 change.
 
+With `net.browser_ws` configured, `method: "web"` logins also have an
+interactive path that needs no devtools (`api/login.rs` browser endpoints +
+`browser_login.rs`). `GET .../settings` reports it as
+`capabilities.browserLogin`, and the web UI then shows "open the login page
+in the browser" next to the paste box. `POST .../login/web/browser`
+validates the setting and host exactly like the paste path, then opens an
+isolated browser context on the sidecar (one CDP connection per session),
+sets a fixed 1280×800 viewport and navigates to the resolved login URL; the
+response is a random session handle plus the URL and expiry. The user
+watches and drives the page inside the web UI itself:
+`GET .../login/web/browser/{session}/stream` relays CDP screencast frames
+(jpeg, latest-wins over a watch channel) out and mouse/keyboard/text input
+back in over one authenticated WebSocket — the sidecar therefore needs no
+UI of its own and stays on the private network; any CDP-capable Chromium
+works (the browserless OSS `/debugger/` is a code workbench whose session
+links open plain DevTools, and its LiveURL is a premium feature, so neither
+is used). Sessions live in memory only, pinned to the resolved host and the
+setting key, and are reaped after 10 minutes (the sidecar's own connection
+timeout must be at least that); a server restart orphans the browser-side
+contexts, which the sidecar reclaims. `POST .../login/web/browser/complete`
+harvests the context's cookies for the login host (sub- and parent-domain
+matches included; cross-domain SSO cookies stay out and keep needing the
+paste path) plus the setting's declared `local_storage_keys` from the live
+page (best-effort), then runs the exact paste pipeline
+(`run_web_login_pipeline`: `<key>.keys/.values` → `handle_web_login` →
+marker → `source_cookie` → restart) and disposes the context; completing
+with no cookie for the host answers 400 instead of marking anything.
+`POST .../login/web/browser/cancel` disposes and is idempotent. Without
+`net.browser_ws` all three POST endpoints answer 501 `unsupported` and the
+capability flag is false. The interactive machinery (viewport, screencast,
+input dispatch, page localStorage read) extends the same `CdpClient` trait
+the webview backend uses (`crates/wasm/src/browser.rs`), so tests drive it
+with the same kind of mock connector, injected via
+`build_app_with(config, connector)`.
+
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.
 

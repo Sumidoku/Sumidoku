@@ -86,7 +86,7 @@ Sidecar setup and the routing model are in [docs/sidecars.md](sidecars.md).
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
 | `SUMIDOKU_NET_DIRECT_DOMAINS` | — | comma-separated domains pinned to direct (never escalated to trawl) |
 | `SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK` | `false` | allow falling back to direct when the proxy path fails |
-| `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview for source login flows |
+| `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview and interactive web login for source login flows |
 
 ## config.toml example
 
