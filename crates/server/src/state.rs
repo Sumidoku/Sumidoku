@@ -13,6 +13,27 @@ pub struct SourceEntry {
 	pub handle: Arc<SourceHandle>,
 	pub key: String,
 	pub features: SourceFeatures,
+	/// 最近一次 get_handle 命中的时刻；空闲逐出的判据
+	last_used: std::sync::Mutex<std::time::Instant>,
+}
+
+impl SourceEntry {
+	fn new(handle: Arc<SourceHandle>, key: String, features: SourceFeatures) -> Self {
+		Self {
+			handle,
+			key,
+			features,
+			last_used: std::sync::Mutex::new(std::time::Instant::now()),
+		}
+	}
+
+	fn touch(&self) {
+		*self.last_used.lock().expect("last_used lock") = std::time::Instant::now();
+	}
+
+	fn idle_for(&self, now: std::time::Instant) -> std::time::Duration {
+		now.saturating_duration_since(*self.last_used.lock().expect("last_used lock"))
+	}
 }
 
 pub struct AppState {
@@ -161,6 +182,37 @@ impl AppState {
 		}
 	}
 
+	/// 空闲逐出单趟：last_used 超过 max_idle 的实例移出注册表。写锁内复查空闲才移除
+	/// （get_handle 持读锁 touch，复查必见新值），try_unwrap/shutdown 在锁外
+	pub async fn evict_idle_sources(&self, max_idle: std::time::Duration) -> usize {
+		let now = std::time::Instant::now();
+		let candidates: Vec<i64> = self
+			.sources
+			.read()
+			.await
+			.iter()
+			.filter(|(_, entry)| entry.idle_for(now) >= max_idle)
+			.map(|(source_id, _)| *source_id)
+			.collect();
+		let mut evicted = 0;
+		for source_id in candidates {
+			let entry = {
+				let mut registry = self.sources.write().await;
+				match registry.get(&source_id) {
+					Some(entry) if entry.idle_for(now) >= max_idle => registry.remove(&source_id),
+					_ => None,
+				}
+			};
+			let Some(entry) = entry else { continue };
+			// 与 evict_source 同理：在途调用持 Arc 时等引用计数归零自然退出
+			if let Ok(handle) = Arc::try_unwrap(entry.handle) {
+				handle.shutdown().await;
+			}
+			evicted += 1;
+		}
+		evicted
+	}
+
 	pub fn updater(&self) -> Arc<crate::update::UpdateScheduler> {
 		self.updater
 			.get()
@@ -168,11 +220,8 @@ impl AppState {
 			.clone()
 	}
 
-	/// 懒加载：注册表没有就从 source 行 + source_setting 拉起实例
-	pub async fn get_handle(self: &Arc<Self>, source_id: i64) -> ApiResult<Arc<SourceHandle>> {
-		if let Some(entry) = self.sources.read().await.get(&source_id) {
-			return Ok(entry.handle.clone());
-		}
+	/// 从 source 行 + source_setting + source_cookie 组装实例启动配置
+	async fn source_config(&self, source_id: i64) -> ApiResult<SourceConfig> {
 		let row: Option<(String, String, bool, sqlx::types::Json<Vec<String>>)> =
 			sqlx::query_as("SELECT key, wasm_path, enabled, languages FROM source WHERE id = ?")
 				.bind(source_id)
@@ -189,6 +238,7 @@ impl AppState {
 		let accept_language =
 			aidoku_wasm::default_accept_language(&preferred_languages(&defaults, &languages.0));
 		let mut config = SourceConfig::new(&key, &wasm_path);
+		config.limits = self.config.wasm_limits();
 		config.defaults = defaults;
 		config.cookies = cookies;
 		config.policy = self.policy.clone();
@@ -201,6 +251,18 @@ impl AppState {
 			tx: self.cookie_tx.clone(),
 			source_key: key.clone(),
 		});
+		Ok(config)
+	}
+
+	/// 懒加载：注册表没有就从 source 行 + source_setting 拉起实例
+	pub async fn get_handle(self: &Arc<Self>, source_id: i64) -> ApiResult<Arc<SourceHandle>> {
+		if let Some(entry) = self.sources.read().await.get(&source_id) {
+			// 命中即刷新 last_used；持读锁打点，清扫线程的写锁复查必然看到新值
+			entry.touch();
+			return Ok(entry.handle.clone());
+		}
+		let config = self.source_config(source_id).await?;
+		let key = config.key.clone();
 		let (handle, features) = SourceHandle::spawn(config, self.call_semaphore.clone()).await?;
 		let handle = Arc::new(handle);
 		let mut registry = self.sources.write().await;
@@ -210,13 +272,31 @@ impl AppState {
 				Ok(e.get().handle.clone())
 			}
 			std::collections::hash_map::Entry::Vacant(v) => {
-				v.insert(SourceEntry {
-					handle: handle.clone(),
-					key,
-					features,
-				});
+				v.insert(SourceEntry::new(handle.clone(), key, features));
 				Ok(handle)
 			}
+		}
+	}
+}
+
+/// 空闲清扫的唤醒粒度；阈值默认半小时，分钟级漂移无感
+pub const IDLE_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 周期清扫：把空闲超过 max_idle 的源实例逐出注册表（wasmer 线性内存只涨不消，
+/// 逐出是唯一把实例内存还给 OS 的途径）
+pub async fn run_idle_eviction(
+	state: Arc<AppState>,
+	max_idle: std::time::Duration,
+	sweep_interval: std::time::Duration,
+) {
+	let mut ticker = tokio::time::interval(sweep_interval);
+	// interval 首 tick 立即完成，首扫等满一个周期
+	ticker.tick().await;
+	loop {
+		ticker.tick().await;
+		let evicted = state.evict_idle_sources(max_idle).await;
+		if evicted > 0 {
+			tracing::info!(evicted, "evicted idle source instances");
 		}
 	}
 }
@@ -374,5 +454,147 @@ mod tests {
 			preferred_languages(&HashMap::new(), &strings(&["ko"])),
 			strings(&["ko"])
 		);
+	}
+
+	use std::path::PathBuf;
+	use std::time::{Duration, Instant};
+
+	fn fixture_wasm() -> String {
+		PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("../wasm/tests/fixtures/example/main.wasm")
+			.display()
+			.to_string()
+	}
+
+	async fn test_state(config: Config) -> (Arc<AppState>, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('en.example-source', 'Example', ?) RETURNING id",
+		)
+		.bind(fixture_wasm())
+		.fetch_one(&pool)
+		.await
+		.expect("insert source");
+		let (defaults_tx, _defaults_rx) = mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = mpsc::unbounded_channel();
+		(AppState::new(pool, config, defaults_tx, cookie_tx), source_id, tmp)
+	}
+
+	/// 把注册表项的 last_used 拨回过去，免去真实等待
+	async fn make_idle(state: &AppState, source_id: i64, idle: Duration) {
+		let registry = state.sources.read().await;
+		let entry = registry.get(&source_id).expect("entry");
+		*entry.last_used.lock().expect("last_used lock") = Instant::now()
+			.checked_sub(idle)
+			.expect("host uptime shorter than idle shift");
+	}
+
+	#[tokio::test]
+	async fn idle_sweep_evicts_instances_past_the_threshold() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		assert_eq!(state.sources.read().await.len(), 1);
+		make_idle(&state, source_id, Duration::from_secs(31 * 60)).await;
+		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
+		assert_eq!(evicted, 1);
+		assert!(state.sources.read().await.is_empty());
+	}
+
+	#[tokio::test]
+	async fn idle_sweep_keeps_instances_used_within_the_threshold() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		make_idle(&state, source_id, Duration::from_secs(20 * 60)).await;
+		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
+		assert_eq!(evicted, 0);
+		assert_eq!(state.sources.read().await.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn get_handle_hit_refreshes_last_used() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		make_idle(&state, source_id, Duration::from_secs(40 * 60)).await;
+		// 命中即刷新 last_used，否则这次空闲 40 分钟的实例会被误逐
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
+		assert_eq!(evicted, 0);
+		assert_eq!(state.sources.read().await.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn evicted_source_is_rebuilt_on_next_access() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let first = state.get_handle(source_id).await.expect("handle");
+		drop(first);
+		make_idle(&state, source_id, Duration::from_secs(31 * 60)).await;
+		state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
+		let second = state.get_handle(source_id).await.expect("handle");
+		assert!(second.is_alive());
+		assert_eq!(state.sources.read().await.len(), 1);
+		// 重建的实例真能跑，不是只挂进注册表
+		let listings = second.get_listings().await.expect("listings");
+		assert!(!listings.is_empty());
+	}
+
+	#[tokio::test]
+	async fn idle_sweep_leaves_in_flight_instances_running() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let in_flight = state.get_handle(source_id).await.expect("handle");
+		make_idle(&state, source_id, Duration::from_secs(31 * 60)).await;
+		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
+		assert_eq!(evicted, 1);
+		assert!(state.sources.read().await.is_empty());
+		// 在飞调用持有的实例不被 shutdown，注册表已放手，引用计数归零才退出
+		assert!(in_flight.is_alive());
+		assert_eq!(Arc::strong_count(&in_flight), 1);
+		// 下一次访问另起新实例，不等旧实例退出
+		let second = state.get_handle(source_id).await.expect("handle");
+		assert!(!Arc::ptr_eq(&in_flight, &second));
+	}
+
+	#[tokio::test]
+	async fn sweep_task_evicts_on_its_own_schedule() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		make_idle(&state, source_id, Duration::from_secs(31 * 60)).await;
+		let task = tokio::spawn(run_idle_eviction(
+			state.clone(),
+			Duration::from_secs(30 * 60),
+			Duration::from_millis(20),
+		));
+		let mut swept = false;
+		for _ in 0..250 {
+			if state.sources.read().await.is_empty() {
+				swept = true;
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(20)).await;
+		}
+		task.abort();
+		assert!(swept);
+	}
+
+	#[tokio::test]
+	async fn source_config_applies_configured_limits() {
+		let config = Config {
+			wasm_memory_max_mb: 64,
+			wasm_fuel: 123_456,
+			wasm_call_timeout_secs: 7,
+			..Config::default()
+		};
+		let (state, source_id, _tmp) = test_state(config).await;
+		let source_config = state.source_config(source_id).await.expect("source config");
+		assert_eq!(source_config.limits.memory_max, 64 * 1024 * 1024);
+		assert_eq!(source_config.limits.fuel, 123_456);
+		assert_eq!(source_config.limits.call_timeout, Duration::from_secs(7));
 	}
 }

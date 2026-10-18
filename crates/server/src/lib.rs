@@ -47,6 +47,15 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	tokio::spawn(downloads.run());
 	tokio::spawn(updater.run());
 	tokio::spawn(backups.run());
+	if state.config.source_idle_evict_minutes > 0 {
+		let max_idle =
+			std::time::Duration::from_secs(state.config.source_idle_evict_minutes as u64 * 60);
+		tokio::spawn(state::run_idle_eviction(
+			state.clone(),
+			max_idle,
+			state::IDLE_SWEEP_INTERVAL,
+		));
+	}
 	let app = api::router(state.clone());
 	let app = app
 		.nest("/opds/v1.2", opds::router(state.clone()))

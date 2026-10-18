@@ -41,6 +41,11 @@ pub struct Config {
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
 	pub opds_lazy_download: bool,
+	/// 源实例空闲逐出阈值（分钟）；<= 0 关闭清扫任务
+	pub source_idle_evict_minutes: i64,
+	pub wasm_memory_max_mb: u64,
+	pub wasm_fuel: u64,
+	pub wasm_call_timeout_secs: u64,
 	/// 以下四项是 setting 表 backup.* 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
 	pub backup_enabled: Option<bool>,
 	pub backup_interval_hours: Option<u64>,
@@ -72,6 +77,10 @@ impl Default for Config {
 			auto_download_new_chapters: false,
 			auto_download_limit: 5,
 			opds_lazy_download: false,
+			source_idle_evict_minutes: 30,
+			wasm_memory_max_mb: 128,
+			wasm_fuel: 10_000_000_000,
+			wasm_call_timeout_secs: 60,
 			backup_enabled: None,
 			backup_interval_hours: None,
 			backup_retention_count: None,
@@ -121,6 +130,16 @@ impl Config {
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")
 	}
+
+	/// 组装透传给 wasm 运行时的实例上限；sleep/net/js/browser 各档不开放配置
+	pub fn wasm_limits(&self) -> aidoku_wasm::Limits {
+		aidoku_wasm::Limits {
+			memory_max: self.wasm_memory_max_mb * 1024 * 1024,
+			fuel: self.wasm_fuel,
+			call_timeout: std::time::Duration::from_secs(self.wasm_call_timeout_secs),
+			..aidoku_wasm::Limits::default()
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -147,6 +166,10 @@ struct ConfigFile {
 	auto_download_new_chapters: Option<bool>,
 	auto_download_limit: Option<usize>,
 	opds_lazy_download: Option<bool>,
+	source_idle_evict_minutes: Option<i64>,
+	wasm_memory_max_mb: Option<u64>,
+	wasm_fuel: Option<u64>,
+	wasm_call_timeout_secs: Option<u64>,
 	backup_enabled: Option<bool>,
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
@@ -213,6 +236,18 @@ impl Config {
 		}
 		if let Some(v) = file.opds_lazy_download {
 			self.opds_lazy_download = v;
+		}
+		if let Some(v) = file.source_idle_evict_minutes {
+			self.source_idle_evict_minutes = v;
+		}
+		if let Some(v) = file.wasm_memory_max_mb {
+			self.wasm_memory_max_mb = v;
+		}
+		if let Some(v) = file.wasm_fuel {
+			self.wasm_fuel = v;
+		}
+		if let Some(v) = file.wasm_call_timeout_secs {
+			self.wasm_call_timeout_secs = v;
 		}
 		if file.backup_enabled.is_some() {
 			self.backup_enabled = file.backup_enabled;
@@ -319,6 +354,26 @@ impl Config {
 		{
 			self.opds_lazy_download = n;
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES")
+			&& let Ok(n) = v.parse()
+		{
+			self.source_idle_evict_minutes = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_WASM_MEMORY_MAX_MB")
+			&& let Ok(n) = v.parse()
+		{
+			self.wasm_memory_max_mb = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_WASM_FUEL")
+			&& let Ok(n) = v.parse()
+		{
+			self.wasm_fuel = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_WASM_CALL_TIMEOUT_SECS")
+			&& let Ok(n) = v.parse()
+		{
+			self.wasm_call_timeout_secs = n;
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_ENABLED")
 			&& let Ok(n) = v.parse()
 		{
@@ -400,5 +455,63 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_WS") };
 		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://127.0.0.1:3000"));
+	}
+
+	#[test]
+	fn idle_evict_and_wasm_limits_from_file() {
+		let file: ConfigFile = toml::from_str(
+			"source_idle_evict_minutes = 10\nwasm_memory_max_mb = 64\nwasm_fuel = 500\nwasm_call_timeout_secs = 5\n",
+		)
+		.expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.source_idle_evict_minutes, 10);
+		assert_eq!(config.wasm_memory_max_mb, 64);
+		assert_eq!(config.wasm_fuel, 500);
+		assert_eq!(config.wasm_call_timeout_secs, 5);
+	}
+
+	#[test]
+	fn idle_evict_and_wasm_limits_from_env() {
+		unsafe {
+			std::env::set_var("SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES", "-1");
+			std::env::set_var("SUMIDOKU_WASM_MEMORY_MAX_MB", "96");
+			std::env::set_var("SUMIDOKU_WASM_FUEL", "999");
+			std::env::set_var("SUMIDOKU_WASM_CALL_TIMEOUT_SECS", "15");
+		}
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe {
+			std::env::remove_var("SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES");
+			std::env::remove_var("SUMIDOKU_WASM_MEMORY_MAX_MB");
+			std::env::remove_var("SUMIDOKU_WASM_FUEL");
+			std::env::remove_var("SUMIDOKU_WASM_CALL_TIMEOUT_SECS");
+		}
+		assert_eq!(config.source_idle_evict_minutes, -1);
+		assert_eq!(config.wasm_memory_max_mb, 96);
+		assert_eq!(config.wasm_fuel, 999);
+		assert_eq!(config.wasm_call_timeout_secs, 15);
+	}
+
+	#[test]
+	fn wasm_limits_defaults() {
+		let limits = Config::default().wasm_limits();
+		assert_eq!(limits.memory_max, 128 * 1024 * 1024);
+		assert_eq!(limits.fuel, 10_000_000_000);
+		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(60));
+	}
+
+	#[test]
+	fn wasm_limits_mapping() {
+		let config = Config {
+			wasm_memory_max_mb: 64,
+			wasm_fuel: 123,
+			wasm_call_timeout_secs: 7,
+			..Config::default()
+		};
+		let limits = config.wasm_limits();
+		assert_eq!(limits.memory_max, 64 * 1024 * 1024);
+		assert_eq!(limits.fuel, 123);
+		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(7));
 	}
 }
