@@ -65,7 +65,7 @@ export function BrowserLoginViewer({ sourceId, session, loginUrl, onComplete, on
 		);
 		wsRef.current = ws;
 		ws.onmessage = (e) => {
-			if (typeof e.data !== 'string') return;
+			if (wsRef.current !== ws || typeof e.data !== 'string') return;
 			let msg: { type?: string; data?: string; reason?: string };
 			try {
 				msg = JSON.parse(e.data);
@@ -78,9 +78,12 @@ export function BrowserLoginViewer({ sourceId, session, loginUrl, onComplete, on
 				setEnded(msg.reason ?? 'closed');
 			}
 		};
-		ws.onclose = () => setEnded((cur) => cur ?? 'closed');
+		// StrictMode 双挂载会关掉第一条连接：陈旧连接的 close 不得污染新连接的状态
+		ws.onclose = () => {
+			if (wsRef.current === ws) setEnded((cur) => cur ?? 'closed');
+		};
 		return () => {
-			wsRef.current = null;
+			if (wsRef.current === ws) wsRef.current = null;
 			ws.close();
 		};
 	}, [sourceId, session]);
