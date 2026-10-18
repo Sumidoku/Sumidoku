@@ -25,6 +25,7 @@ async fn js_context_eval_get_and_isolation() {
 		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
+		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 		browser_ws: None,
 	};
 	let (handle, features) = SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))

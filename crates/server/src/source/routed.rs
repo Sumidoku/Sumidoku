@@ -160,20 +160,32 @@ impl RoutedClients {
 
 	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）、CF 挑战 trawl 升级与可选直连回退的 GET
 	pub async fn get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
+		self.get_with(url, None).await
+	}
+
+	/// 同 get，另为请求补 Accept-Language：宿主替 Aidoku 的 URLSession 补的设备 locale，
+	/// 缺失时部分源站 WAF 直接 403
+	pub async fn get_with(
+		&self,
+		url: &Url,
+		accept_language: Option<&str>,
+	) -> Result<reqwest::Response, FetchError> {
 		let via_proxy = matches!(self.policy.route_for(url), NetRoute::Proxy(_));
 		let mut attempt = 0;
 		loop {
 			attempt += 1;
-			let result = self
-				.request(reqwest::Method::GET, url)?
-				.send()
-				.await;
+			let result = with_accept_language(
+				self.request(reqwest::Method::GET, url)?,
+				accept_language,
+			)
+			.send()
+			.await;
 			let response = match result {
 				Ok(response) => response,
 				Err(e) => {
 					if via_proxy && self.policy.allow_direct_fallback() {
 						tracing::warn!(url = %url, "proxy fetch failed, direct fallback: {e}");
-						return self.direct_get(url).await;
+						return self.direct_get(url, accept_language).await;
 					}
 					return Err(FetchError::Network(e));
 				}
@@ -185,7 +197,7 @@ impl RoutedClients {
 				&& let Some(route) = self.policy.trawl_escalation(url)
 			{
 				tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
-				return self.get_via(&route, url).await;
+				return self.get_via(&route, url, accept_language).await;
 			}
 			let retry_after = response
 				.headers()
@@ -201,7 +213,7 @@ impl RoutedClients {
 			}
 			if status.is_client_error() && via_proxy && self.policy.allow_direct_fallback() {
 				tracing::warn!(url = %url, status = %status, "proxy fetch rejected, direct fallback");
-				return self.direct_get(url).await;
+				return self.direct_get(url, accept_language).await;
 			}
 			if !status.is_success() {
 				return Err(FetchError::Status(status));
@@ -211,35 +223,61 @@ impl RoutedClients {
 	}
 
 	/// 指定路由的单发 GET，供 trawl 升级用：解题本身就是这次请求的重试，循环只会重复解题
-	async fn get_via(&self, route: &NetRoute, url: &Url) -> Result<reqwest::Response, FetchError> {
+	async fn get_via(
+		&self,
+		route: &NetRoute,
+		url: &Url,
+		accept_language: Option<&str>,
+	) -> Result<reqwest::Response, FetchError> {
 		let client = self.client_for_route(route)?;
-		let response = client
-			.get(url.clone())
-			.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default())
-			.send()
-			.await
-			.map_err(FetchError::Network)?;
+		let response = with_accept_language(
+			client
+				.get(url.clone())
+				.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default()),
+			accept_language,
+		)
+		.send()
+		.await
+		.map_err(FetchError::Network)?;
 		if !response.status().is_success() {
 			return Err(FetchError::Status(response.status()));
 		}
 		Ok(response)
 	}
 
-	async fn direct_get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
+	async fn direct_get(
+		&self,
+		url: &Url,
+		accept_language: Option<&str>,
+	) -> Result<reqwest::Response, FetchError> {
 		let client = Client::builder()
 			.use_rustls_tls()
 			.build()
 			.map_err(FetchError::Network)?;
-		let response = client
-			.get(url.clone())
-			.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default())
-			.send()
-			.await
-			.map_err(FetchError::Network)?;
+		let response = with_accept_language(
+			client
+				.get(url.clone())
+				.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default()),
+			accept_language,
+		)
+		.send()
+		.await
+		.map_err(FetchError::Network)?;
 		if !response.status().is_success() {
 			return Err(FetchError::Status(response.status()));
 		}
 		Ok(response)
+	}
+}
+
+/// 有默认值时给 builder 补 Accept-Language；空/None 原样返回
+fn with_accept_language(
+	builder: reqwest::RequestBuilder,
+	accept_language: Option<&str>,
+) -> reqwest::RequestBuilder {
+	match accept_language {
+		Some(value) if !value.is_empty() => builder.header(reqwest::header::ACCEPT_LANGUAGE, value),
+		_ => builder,
 	}
 }
 
@@ -378,6 +416,35 @@ mod tests {
 		out.push_str("\r\n");
 		out.push_str(body);
 		out
+	}
+
+	#[tokio::test]
+	async fn get_with_sends_accept_language() {
+		let origin = mock_server(|_head| respond("200 OK", &["content-type: image/jpeg"], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients
+			.get_with(&url, Some("zh-CN,zh;q=0.9"))
+			.await
+			.expect("get");
+		assert_eq!(response.status(), StatusCode::OK);
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		assert!(
+			head.contains("accept-language: zh-cn,zh;q=0.9"),
+			"head: {head}"
+		);
+	}
+
+	#[tokio::test]
+	async fn get_without_accept_language_omits_header() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		assert!(!head.contains("accept-language:"), "head: {head}");
 	}
 
 	#[tokio::test]

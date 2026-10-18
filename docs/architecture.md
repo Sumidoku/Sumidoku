@@ -269,7 +269,11 @@ Migrations in `crates/server/migrations`.
   alike; `net.direct_domains` opts a host out, `net.relay_domains` routes a
   host through trawl on every request. Set-Cookie on the solved response
   lands in the source's cookie jar, so later direct requests reuse the
-  clearance.
+  clearance. These server-side fetches — covers, page images and zip pages
+  (`fetch_remote` / `http_get`) — bypass the wasm net host, so they attach
+  the same per-source `Accept-Language` default themselves (via
+  `RoutedClients::get_with` / the image-request builder); a source that set
+  its own `Accept-Language` on an image request keeps it.
 
 ## WASM sources (`crates/wasm`)
 
@@ -288,7 +292,11 @@ non-UTF-8 page decodes instead of failing the call. gzip, br and deflate
 are negotiated and decoded; a source may still override `Accept-Encoding`
 itself. Stored jar cookies merge in front of a source-set `Cookie` header
 (`jar; source`) instead of being dropped, and a default `Accept-Language`
-goes out when the source set none.
+goes out when the source set none — derived from the source's language by
+`default_accept_language` (e.g. `zh` → `zh-CN,zh;q=0.9`, unknown → `en-US`),
+standing in for the device locale URLSession supplies on Aidoku; a
+multi-language source takes its seeded `languages`/`language` setting first
+(the user's pick), then the manifest's list.
 The `webview` ABI functions split in two (`imports/js.rs`, `webview.rs`).
 The script-running subset is backed by the same Boa engine with one isolated
 engine per webview descriptor, separate from `js` contexts:

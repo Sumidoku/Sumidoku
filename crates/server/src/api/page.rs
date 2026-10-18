@@ -37,7 +37,7 @@ pub async fn get_page(
 		let Some(entry_path) = zip.get(1).and_then(Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));
 		};
-		let (zip_bytes, _) = http_get(&state, zip_url).await?;
+		let (zip_bytes, _) = http_get(&state, manga.source_id, zip_url).await?;
 		let entry = extract_zip_entry(&zip_bytes, entry_path)?;
 		return Ok(bytes_response(entry, mime_for(entry_path), PAGE_MAX_AGE));
 	}

@@ -169,6 +169,8 @@ pub struct NetState {
 	pub clients: HashMap<NetRoute, Client>,
 	pub jar: crate::imports::CookieJar,
 	pub rate: RateLimiter,
+	/// 源没自带时补的 Accept-Language（按源语言推导，见 default_accept_language）
+	pub accept_language: String,
 	ca: Option<Vec<u8>>,
 }
 
@@ -180,6 +182,7 @@ impl NetState {
 			clients: HashMap::new(),
 			jar,
 			rate: RateLimiter::default(),
+			accept_language: crate::traits::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 			ca,
 		}
 	}

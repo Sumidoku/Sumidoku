@@ -73,6 +73,39 @@ pub trait NetPolicy: Send + Sync {
 	}
 }
 
+/// 源语言（ISO 639 主标签）→ 宿主替 URLSession 补的 Accept-Language 默认值。
+/// Aidoku 由 URLSession 按设备 locale 隐式带上该头；缺它时部分源站 WAF 直接 403
+/// （如 zh.bilimanga 的图床）。server 直拉封面/页图与 wasm net 宿主共用这一份映射。
+pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
+
+pub fn default_accept_language(languages: &[String]) -> String {
+	let base = languages
+		.first()
+		.map(|l| l.split(['-', '_']).next().unwrap_or(l).to_ascii_lowercase())
+		.unwrap_or_default();
+	match base.as_str() {
+		"zh" => "zh-CN,zh;q=0.9",
+		"en" => "en-US,en;q=0.9",
+		"ja" => "ja-JP,ja;q=0.9",
+		"ko" => "ko-KR,ko;q=0.9",
+		"es" => "es-ES,es;q=0.9",
+		"fr" => "fr-FR,fr;q=0.9",
+		"de" => "de-DE,de;q=0.9",
+		"it" => "it-IT,it;q=0.9",
+		"pt" => "pt-BR,pt;q=0.9",
+		"ru" => "ru-RU,ru;q=0.9",
+		"ar" => "ar-SA,ar;q=0.9",
+		"id" => "id-ID,id;q=0.9",
+		"th" => "th-TH,th;q=0.9",
+		"vi" => "vi-VN,vi;q=0.9",
+		"tr" => "tr-TR,tr;q=0.9",
+		"pl" => "pl-PL,pl;q=0.9",
+		"nl" => "nl-NL,nl;q=0.9",
+		_ => DEFAULT_ACCEPT_LANGUAGE,
+	}
+	.to_string()
+}
+
 pub struct DirectPolicy {
 	pub user_agent: Option<String>,
 }
@@ -114,6 +147,16 @@ mod tests {
 			StatusCode::FORBIDDEN,
 			&headers(&[("cf-mitigated", "challenge")])
 		));
+	}
+
+	#[test]
+	fn accept_language_from_language() {
+		assert_eq!(default_accept_language(&["zh".into()]), "zh-CN,zh;q=0.9");
+		assert_eq!(default_accept_language(&["zh-Hant".into()]), "zh-CN,zh;q=0.9");
+		assert_eq!(default_accept_language(&["ja".into()]), "ja-JP,ja;q=0.9");
+		// 未知或缺失语言回落到通用默认
+		assert_eq!(default_accept_language(&[]), DEFAULT_ACCEPT_LANGUAGE);
+		assert_eq!(default_accept_language(&["xx".into()]), DEFAULT_ACCEPT_LANGUAGE);
 	}
 
 	#[test]
