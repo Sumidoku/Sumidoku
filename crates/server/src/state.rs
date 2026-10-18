@@ -18,6 +18,7 @@ pub struct SourceEntry {
 pub struct AppState {
 	pub pool: SqlitePool,
 	pub config: Config,
+	pub auth: crate::auth::AuthState,
 	pub sources: RwLock<HashMap<i64, SourceEntry>>,
 	pub call_semaphore: Arc<Semaphore>,
 	pub defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
@@ -126,9 +127,11 @@ impl AppState {
 		let call_concurrency = config.call_concurrency;
 		let policy = SumidokuNetPolicy::from_config(&config);
 		let http = RoutedClients::new(policy.clone());
+		let auth = crate::auth::AuthState::new(&config.auth.api_keys);
 		Arc::new(Self {
 			pool,
 			config,
+			auth,
 			sources: RwLock::new(HashMap::new()),
 			call_semaphore: Arc::new(Semaphore::new(call_concurrency)),
 			defaults_tx,

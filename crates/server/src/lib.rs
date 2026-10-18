@@ -1,4 +1,5 @@
 pub mod api;
+pub mod auth;
 pub mod config;
 pub mod db;
 pub mod download;
@@ -34,6 +35,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let (cookie_tx, cookie_rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
+	auth::init(&state).await?;
 	let downloads = download::DownloadManager::new(&state);
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);
