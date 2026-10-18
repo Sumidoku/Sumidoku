@@ -1,0 +1,97 @@
+# Configuration
+
+Everything is optional — a bare `docker compose up -d` works. Precedence,
+lowest to highest: built-in defaults ← `./config.toml` (relative to the
+working directory, may be absent) ← `SUMIDOKU_*` environment variables.
+`config.toml` keys are the snake_case names of the variables below
+(`net.*` and `auth.*` sections for the grouped ones).
+
+The one data root is `SUMIDOKU_CONFIG_DIR`: the database, cover cache,
+source packages (`sources/`), materialized page images (`page-blobs/`)
+and the default scheduled-backup destination (`backups/`) all live under
+it and are not separately configurable. `sources/` in particular is
+pinned — drop packages there and scan, no path setting exists.
+
+## Volumes (Docker)
+
+| Volume | Purpose |
+| --- | --- |
+| `/config` | the config dir: database, settings, cover cache, source packages |
+| `/downloads` | downloaded chapters |
+
+## Server
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_ADDR` | `0.0.0.0:3000` | listen address |
+| `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `./data` otherwise | data root (see above) |
+| `SUMIDOKU_LOG` | `info` | log level (tracing filter) |
+| `SUMIDOKU_CALL_CONCURRENCY` | `8` | max concurrent calls into a source instance |
+| `SUMIDOKU_USER_AGENT` | a Chrome desktop UA | global User-Agent for source fetches |
+| `SUMIDOKU_COVER_CACHE_MAX` | `512` | max cached cover files on disk |
+| `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |
+
+## Library updates and downloads
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_UPDATE_INTERVAL_HOURS` | `0` (off) | scheduled library update interval |
+| `SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS` | `false` | download chapters found by library updates |
+| `SUMIDOKU_AUTO_DOWNLOAD_LIMIT` | `5` | per-manga cap for auto downloads |
+| `SUMIDOKU_DOWNLOADS_DIR` | `/downloads` in Docker, `./downloads` otherwise | downloads directory |
+| `SUMIDOKU_DOWNLOAD_CONCURRENCY` | `3` | concurrent chapter downloads |
+| `SUMIDOKU_DOWNLOAD_FORMAT` | `cbz` | download container format |
+| `SUMIDOKU_OPDS_LAZY_DOWNLOAD` | `false` | let OPDS readers trigger downloads of missing pages |
+
+## Backup
+
+These four override the `backup.*` settings (headless deployments); see
+[docs/backup.md](backup.md) for the format and scheduling model.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_BACKUP_ENABLED` | — | force scheduled backups on/off, overriding `backup.enabled` |
+| `SUMIDOKU_BACKUP_INTERVAL_HOURS` | — | override `backup.interval_hours` (setting default 24) |
+| `SUMIDOKU_BACKUP_RETENTION_COUNT` | — | override `backup.retention_count` (setting default 10) |
+| `SUMIDOKU_BACKUP_DIR` | `<config>/backups` | scheduled-backup destination; may live outside the config dir |
+
+## Authentication
+
+See [docs/authentication.md](authentication.md) for the model.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_AUTH_PASSWORD` | — | site password; enables authentication for the web UI, REST API and OPDS |
+| `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
+| `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |
+
+## Network
+
+Sidecar setup and the routing model are in [docs/sidecars.md](sidecars.md).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_NET_PROXY` | — | global forward proxy for source fetches |
+| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; challenged hosts are solved once and then kept on trawl |
+| `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
+| `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
+| `SUMIDOKU_NET_DIRECT_DOMAINS` | — | comma-separated domains pinned to direct (never escalated to trawl) |
+| `SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK` | `false` | allow falling back to direct when the proxy path fails |
+| `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview for source login flows |
+
+## config.toml example
+
+```toml
+addr = "0.0.0.0:3000"
+config_dir = "/config"
+log = "info"
+
+[auth]
+password = "change-me"
+api_keys = ["long-lived-key"]
+
+[net]
+proxy = "http://proxy:8080"
+trawl_proxy = "http://trawl:8080"
+browser_ws = "ws://chromium:3000/chromium"
+```
