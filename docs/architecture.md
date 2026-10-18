@@ -280,6 +280,15 @@ limiting (`runtime/rate_limit.rs`), and the host functions sources import
 JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
 isolated context per ABI descriptor, time- and loop-limited, with no host
 access beyond what the ABI exposes.
+The net host (`imports/net.rs`) aligns request behavior with the
+Aidoku/URLSession host. `html()` decodes the body by BOM, then the
+Content-Type charset, then a `<meta charset>` sniff of the first 1024
+bytes, falling back to UTF-8 with replacement (encoding_rs) — a
+non-UTF-8 page decodes instead of failing the call. gzip, br and deflate
+are negotiated and decoded; a source may still override `Accept-Encoding`
+itself. Stored jar cookies merge in front of a source-set `Cookie` header
+(`jar; source`) instead of being dropped, and a default `Accept-Language`
+goes out when the source set none.
 The `webview` ABI functions split in two (`imports/js.rs`, `webview.rs`).
 The script-running subset is backed by the same Boa engine with one isolated
 engine per webview descriptor, separate from `js` contexts:
