@@ -348,14 +348,17 @@ fn chapter_entry(xml: &mut String, base: &str, row: &OpdsChapterRow) {
 		xml,
 		concat!(
 			"<link rel=\"http://vaemendis.net/opds-pse/stream\" type=\"image/jpeg\" href=\"{}\"",
-			" pse:count=\"{}\" pse:lastRead=\"{}\"",
+			" pse:count=\"{}\"",
 		),
-		esc(&format!("{base}/opds/v1.2/stream/{}/0", c.id)),
+		esc(&format!("{base}/opds/v1.2/stream/{}/{{pageNumber}}", c.id)),
 		c.page_count,
-		row.last_page_read.unwrap_or(0),
 	);
-	if let Some(last_read_at) = row.last_read_at {
-		let _ = write!(xml, " pse:lastReadDate=\"{}\"", rfc3339(last_read_at));
+	// PSE lastRead 从 1 计，last_page_read 是 0 基索引；无进度整条不出
+	if let Some(last_page_read) = row.last_page_read {
+		let _ = write!(xml, " pse:lastRead=\"{}\"", last_page_read + 1);
+		if let Some(last_read_at) = row.last_read_at {
+			let _ = write!(xml, " pse:lastReadDate=\"{}\"", rfc3339(last_read_at));
+		}
 	}
 	xml.push_str("/></entry>\n");
 }
