@@ -1,4 +1,4 @@
-//! context_* 由 QuickJS 实装；webview_* 在服务器上无 WebView 语义，保持未实装。
+//! context_* 由 Boa 实装；webview_* 在服务器上无 WebView 语义，保持未实装。
 use crate::{
 	WasmEnv,
 	js_engine::JsEngine,
@@ -28,10 +28,8 @@ impl From<Result> for i32 {
 
 pub fn context_create(mut env: FunctionEnvMut<WasmEnv>) -> Rid {
 	let limits = &env.data().limits;
-	match JsEngine::new(limits.js_memory_max, limits.js_timeout) {
-		Ok(engine) => env.data_mut().store.store(StoreItem::JsContext(Box::new(engine))),
-		Err(_) => Result::MissingResult.into(),
-	}
+	let engine = JsEngine::new(limits.js_timeout, limits.js_loop_max);
+	env.data_mut().store.store(StoreItem::JsContext(Box::new(engine)))
 }
 
 pub fn context_eval(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
@@ -334,17 +332,21 @@ mod tests {
 		let limits = Limits { js_timeout: Duration::from_millis(200), ..Limits::default() };
 		let mut h = Harness::new(limits);
 		let ctx = h.create();
+		h.eval(ctx, "var before = 1");
 		assert_eq!(h.eval(ctx, "while (true) {}"), -1);
-		// 中断后引擎仍可用
+		// 超时后 context 整体重建：引擎可用，但之前的全局状态被丢弃
 		assert_eq!(h.eval_to_string(ctx, "1 + 1"), "2");
+		let rid = h.get(ctx, "before");
+		assert!(rid > 0);
+		assert_eq!(h.stored_string(rid), "undefined");
 	}
 
 	#[test]
-	fn memory_limit_aborts_huge_allocation() {
-		let limits = Limits { js_memory_max: 8 * 1024 * 1024, ..Limits::default() };
+	fn loop_iteration_limit_stops_runaway_loop() {
+		let limits = Limits { js_loop_max: 100_000, ..Limits::default() };
 		let mut h = Harness::new(limits);
 		let ctx = h.create();
-		assert_eq!(h.eval(ctx, "var s = 'x'; for (let i = 0; i < 100; i++) { s += s; } s.length"), -1);
+		assert_eq!(h.eval(ctx, "for (let i = 0; i < 200_000; i++) {}"), -1);
 		assert_eq!(h.eval_to_string(ctx, "1 + 1"), "2");
 	}
 }

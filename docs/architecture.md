@@ -63,9 +63,9 @@ Migrations in `crates/server/migrations`.
 Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
 (`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
 limiting (`runtime/rate_limit.rs`), and the host functions sources import
-(`imports/`), including the HTML DOM helper (`html_dom.rs`) and the
-QuickJS engine (`js_engine.rs`) behind the `js` context functions — one
-memory-capped, interrupt-limited context per ABI descriptor, with no host
+(`imports/`), including the HTML DOM helper (`html_dom.rs`) and the Boa
+JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
+isolated context per ABI descriptor, time- and loop-limited, with no host
 access beyond what the ABI exposes.
 `send_partial_result` payloads are decoded per in-flight call and pushed
 to streaming callers (`SourceHandle::get_home_streaming` /
