@@ -602,16 +602,19 @@ pub fn new_image(mut env: FunctionEnvMut<WasmEnv>, data_ptr: Ptr, data_len: u32)
 }
 
 pub fn get_image_data(mut env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> FFIResult {
-	let Some(png) = env
+	let Some(bytes) = env
 		.data()
 		.store
 		.get(image_rid)
-		.and_then(|item| item.as_image_data())
-		.and_then(|image| image.encode_png())
+		.and_then(|item| match item {
+			StoreItem::ImageData(image) => image.encode_png(),
+			StoreItem::ImageBytes(raw) => Some(raw.clone()),
+			_ => None,
+		})
 	else {
 		return Result::InvalidImagePointer.into();
 	};
-	env.data_mut().store.store(StoreItem::Encoded(png))
+	env.data_mut().store.store(StoreItem::Encoded(bytes))
 }
 
 pub fn get_image_width(env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> f32 {

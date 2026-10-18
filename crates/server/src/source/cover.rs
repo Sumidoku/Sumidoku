@@ -1,6 +1,6 @@
 use crate::api::{RefreshQuery, wants_refresh};
 use crate::error::{ApiError, ApiResult};
-use crate::source::{fetch_cover_image, fetch_remote, manga_row};
+use crate::source::{fetch_cover_image, manga_row};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -19,7 +19,8 @@ pub struct ImageQuery {
 }
 
 /// 源图床的防盗链（Referer 等）只有服务端能按源声明带上，<img> 直连必 403；
-/// 纯透传不落缓存——浏览/home 封面量大且复用率低
+/// 与详情页封面同一条 fetch_cover_image：源声明了 cover 处理器就返回处理后的字节
+/// （加密图床不处理就是浏览器解不出的密文）。不落缓存——浏览/home 封面量大且复用率低
 pub async fn get_source_image(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -29,9 +30,9 @@ pub async fn get_source_image(
 	if !matches!(parsed.scheme(), "http" | "https") {
 		return Err(ApiError::bad_request("unsupported image url scheme"));
 	}
-	let image = fetch_remote(&state, id, &query.url, None).await?;
-	let mime = image.mime.unwrap_or_else(|| DEFAULT_MIME.into());
-	Ok(bytes_response(image.bytes, &mime, COVER_MAX_AGE))
+	let (bytes, mime) = fetch_cover_image(&state, id, &query.url).await?;
+	let mime = mime.unwrap_or_else(|| DEFAULT_MIME.into());
+	Ok(bytes_response(bytes, &mime, COVER_MAX_AGE))
 }
 
 pub async fn get_cover(

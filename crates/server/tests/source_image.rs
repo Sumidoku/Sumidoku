@@ -9,7 +9,7 @@ use axum::Router;
 use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::routing::get;
-use common::{TestApp, base_config, imgreq_wasm_path, install_fixture_source, request, request_full};
+use common::{TestApp, base_config, imgreq_wasm_path, install_fixture_source, mutation_wasm_path, request, request_full};
 use std::sync::{Arc, Mutex};
 use sumidoku_server::build_app;
 
@@ -53,14 +53,11 @@ async fn serve_image() -> (u16, SeenHeaders, tokio::task::JoinHandle<()>) {
 	(port, seen, handle)
 }
 
-/// example（无 image_request 特性）+ imgreq（有特性）双源的 app
+/// mutation（无 image_request 也无图像处理器）+ imgreq（有 image_request）双源的 app：
+/// 纯透传对照要求源无处理器——有处理器时代理返回处理后的字节而非上游原字节
 async fn dual_source_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
-	let source_dir = tmp.path().join("sources").join("en.example-source");
-	std::fs::create_dir_all(&source_dir).expect("mkdir source dir");
-	for file in ["source.json", "main.wasm"] {
-		std::fs::copy(common::fixture_dir().join(file), source_dir.join(file)).expect("copy fixture");
-	}
+	install_fixture_source(&tmp, "en.mutation", "Mutation Source", &mutation_wasm_path());
 	install_fixture_source(&tmp, "en.imgreq", "Imgreq Source", &imgreq_wasm_path());
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
@@ -111,7 +108,7 @@ async fn proxies_with_source_request_headers() {
 async fn proxies_plain_get_without_feature() {
 	let t = dual_source_app().await;
 	let app = t.app.clone();
-	let source_id = source_id_by_key(&app, "en.example-source").await;
+	let source_id = source_id_by_key(&app, "en.mutation").await;
 	let (port, seen, _upstream) = serve_image().await;
 
 	let (status, headers, bytes) = request_full(
