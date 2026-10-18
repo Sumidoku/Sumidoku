@@ -19,8 +19,9 @@ point; the documents it links are binding.
 Before reviewing a community PR, read
 [docs/contributors.md](docs/contributors.md): what stops a review for
 possible harm, what is closed unreviewed, and how a block is proposed.
-Scheduled agent sessions sweep open issues and PRs, triage and review
-them, and run a daily review of the day's merged work into
+Scheduled agent sessions sweep open issues and PRs: they triage, review,
+and start work on the ones that fit the project's direction, and run a
+daily review of the day's merged work into
 [LESSONS.md](LESSONS.md). Merging follows the standing authorization in
 [docs/code-standards.md](docs/code-standards.md#commits-and-merges);
 blocking stays with the maintainer.

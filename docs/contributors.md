@@ -17,8 +17,15 @@ applies any less to them.
 Scheduled agent sessions sweep open issues and PRs (see
 [AGENTS.md](../AGENTS.md)). For each new item the session:
 
-- answers what it can answer, asks for what is missing, or files the fix as
-  a draft PR of its own;
+- answers what it can answer and asks for what is missing;
+- decides each issue against the project's direction (the README,
+  [architecture.md](architecture.md), and the roadmap discussion in the
+  tracker): one that fits is claimed with a comment and worked right away,
+  delivered as the session's own draft PR per
+  [code-standards.md](code-standards.md); one that does not (duplicate,
+  out of scope, unsolvable as stated) is closed with the reason. Only an
+  issue that would reverse a settled product decision or widen the
+  project's scope waits for the maintainer;
 - reviews PRs against [code-standards.md](code-standards.md): run it, break
   the fix by hand, check the diff against the stated goal, and post the
   conclusion on the PR;
