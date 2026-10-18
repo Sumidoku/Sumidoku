@@ -690,4 +690,47 @@ mod tests {
 		assert_eq!(response.data, b"forbidden");
 		assert_eq!(trawl.hits(), 0, "源站自己的 403 不该走 trawl");
 	}
+
+	#[test]
+	fn jar_sink_fires_on_set_and_expiry() {
+		// jar 变更必须同步给 sink（持久化的唯一通道）：写入发 Some，真实删除发 None
+		struct RecSink(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
+		impl CookieSink for RecSink {
+			fn set(&self, domain: &str, name: &str, value: Option<&str>) {
+				self.0
+					.lock()
+					.expect("writes lock")
+					.push((domain.to_string(), name.to_string(), value.map(str::to_string)));
+			}
+		}
+		let sink = Arc::new(RecSink(std::sync::Mutex::new(Vec::new())));
+		let mut jar = CookieJar::new(HashMap::new(), sink.clone());
+		let url = Url::parse("https://example.com/x").unwrap();
+		jar.store(&url, "sid=abc; Path=/");
+		jar.store(&url, "gone=1; Path=/");
+		jar.store(&url, "gone=; Max-Age=0");
+		jar.store(&url, "never=; Max-Age=0");
+		let writes = sink.0.lock().expect("writes lock").clone();
+		assert_eq!(
+			writes,
+			vec![
+				("example.com".to_string(), "sid".to_string(), Some("abc".to_string())),
+				("example.com".to_string(), "gone".to_string(), Some("1".to_string())),
+				("example.com".to_string(), "gone".to_string(), None),
+			],
+			"不存在的 cookie 删除不该发 None"
+		);
+	}
+
+	#[test]
+	fn jar_refill_round_trip() {
+		// 持久化回填的 jar 按域名（含子域后缀）组 Cookie 头
+		let domains = HashMap::from([(
+			"example.com".to_string(),
+			HashMap::from([("sid".to_string(), "abc".to_string())]),
+		)]);
+		let jar = CookieJar::new(domains, Arc::new(crate::traits::NoopCookieSink));
+		let url = Url::parse("https://m.example.com/x").unwrap();
+		assert_eq!(jar.header_for(&url).as_deref(), Some("sid=abc"));
+	}
 }
