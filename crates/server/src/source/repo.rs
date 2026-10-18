@@ -394,11 +394,13 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 		Ok((registered_key, _)) if registered_key == key => {}
 		Ok((registered_key, _)) => {
 			let _ = tokio::fs::remove_file(&path).await;
+			let _ = tokio::fs::remove_file(path.with_extension("png")).await;
 			tracing::warn!(key, registered_key, "package manifest id mismatch");
 			return Err(ApiError::bad_gateway(PACKAGE_FETCH_MSG));
 		}
 		Err(reason) => {
 			let _ = tokio::fs::remove_file(&path).await;
+			let _ = tokio::fs::remove_file(path.with_extension("png")).await;
 			tracing::warn!(key, "install package failed: {reason}");
 			return Err(ApiError::bad_gateway(PACKAGE_FETCH_MSG));
 		}

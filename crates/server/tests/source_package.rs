@@ -60,6 +60,7 @@ async fn scan_loads_aix_package() {
 				}"#,
 			),
 			("Payload/main.wasm", &fixture_wasm()),
+			("Payload/icon.png", b"PNG-packed-icon"),
 			(
 				"Payload/settings.json",
 				br#"[{"type": "switch", "key": "dataSaver", "title": "DS", "default": true}]"#,
@@ -101,6 +102,20 @@ async fn scan_loads_aix_package() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(!body["entries"].as_array().unwrap().is_empty(), "{body}");
+
+	// .aix 内嵌图标落盘到包旁，图标接口可读
+	assert_eq!(
+		std::fs::read(app.tmp.path().join("sources/en.packed-source-v3.png")).expect("icon written"),
+		b"PNG-packed-icon"
+	);
+	let (status, headers, bytes) =
+		request_full(&app.app, "GET", &format!("/api/v1/sources/{id}/icon"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		headers.get("content-type").and_then(|v| v.to_str().ok()),
+		Some("image/png")
+	);
+	assert_eq!(bytes, b"PNG-packed-icon");
 }
 
 #[tokio::test]

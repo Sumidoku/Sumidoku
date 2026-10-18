@@ -102,9 +102,16 @@ fn aix_bytes(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -
 		std::io::Write::write_all(&mut writer, manifest.as_bytes()).unwrap();
 		writer.start_file("Payload/main.wasm", options).unwrap();
 		std::io::Write::write_all(&mut writer, &wasm).unwrap();
+		writer.start_file("Payload/icon.png", options).unwrap();
+		std::io::Write::write_all(&mut writer, icon_bytes(key, version).as_bytes()).unwrap();
 		writer.finish().unwrap();
 	}
 	cursor.into_inner()
+}
+
+/// 图标内容带版本号，便于断言更新后包旁 .png 被覆盖
+fn icon_bytes(key: &str, version: i64) -> String {
+	format!("PNG-{key}-v{version}")
 }
 
 fn repo_entry(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -> Value {
@@ -219,6 +226,25 @@ async fn repo_lifecycle_install_and_update() {
 		app.tmp.path().join("sources/en.repo-source.aix").is_file(),
 		"aix landed in sources dir"
 	);
+	// 包内嵌图标落盘到包旁，图标接口直接可读（此前 .aix 装的源没有图标）
+	let icon_file = app.tmp.path().join("sources/en.repo-source.png");
+	assert_eq!(
+		std::fs::read(&icon_file).expect("icon written next to aix"),
+		icon_bytes("en.repo-source", 1).as_bytes()
+	);
+	let (status, headers, bytes) = request_full(
+		&app.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/icon"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		headers.get("content-type").and_then(|v| v.to_str().ok()),
+		Some("image/png")
+	);
+	assert_eq!(bytes, icon_bytes("en.repo-source", 1).as_bytes());
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -267,6 +293,11 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["version"], 2, "{body}");
 	assert!(body["updateVersion"].is_null(), "{body}");
+	// 更新同时刷新包旁图标
+	assert_eq!(
+		std::fs::read(&icon_file).expect("icon updated"),
+		icon_bytes("en.repo-source", 2).as_bytes()
+	);
 	let (status, body) = request(
 		&app.app,
 		"POST",
