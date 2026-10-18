@@ -3,7 +3,7 @@ use crate::features::SourceFeatures;
 use crate::imports::HttpMethod;
 use crate::runtime::env::WasmEnv;
 use crate::runtime::limits::{Limits, LimitedTunables};
-use crate::runtime::store::{DefaultValue, GlobalStore, ImageData, Rid, StoreItem};
+use crate::runtime::store::{DefaultValue, GlobalStore, Rid, StoreItem};
 use crate::traits::{CookieSink, DefaultsSink, HostLogger, NetPolicy};
 use aidoku::{
 	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
@@ -538,22 +538,6 @@ impl SourceInstance {
 		result
 	}
 
-	fn decode_into_store(&mut self, bytes: &[u8]) -> Result<Rid> {
-		let Some(rgba) = image::ImageReader::new(std::io::Cursor::new(bytes))
-			.with_guessed_format()
-			.ok()
-			.and_then(|reader| reader.decode().ok())
-			.map(|img| img.to_rgba8())
-		else {
-			return Err(Error::Instance("process image: response is not a decodable image".into()));
-		};
-		let (width, height) = rgba.dimensions();
-		let env = self.env.as_mut(&mut self.store);
-		Ok(env
-			.store
-			.store(StoreItem::ImageData(ImageData::from_rgba8(rgba.into_raw(), width, height))))
-	}
-
 	fn process_image(
 		&mut self,
 		export: &'static str,
@@ -562,7 +546,12 @@ impl SourceInstance {
 		input: ProcessImageInput,
 	) -> Result<Vec<u8>> {
 		self.check(supported, export)?;
-		let image_rid = self.decode_into_store(&input.bytes)?;
+		// Aidoku 契约：声明了处理器就把原始响应字节交给源（源包原话 "Aidoku skips its
+		// own decoding step for sources that declare a processor"），解码与否是源的事
+		let image_rid = {
+			let env = self.env.as_mut(&mut self.store);
+			env.store.store(StoreItem::ImageBytes(input.bytes))
+		};
 		let response = aidoku::ImageResponse {
 			code: input.status,
 			headers: input.response_headers.into_iter().collect(),
