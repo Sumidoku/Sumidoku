@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import {
 	ArrowDown,
 	ArrowUp,
-	ChevronDown,
 	ExternalLink,
 	Pencil,
 	Trash2
@@ -17,12 +16,9 @@ import {
 	useRenameCategory,
 	useReorderCategories,
 	useSaveServerSettings,
-	useSaveSourceSettings,
-	useServerSettings,
-	useSourceSettings,
-	useSources
+	useServerSettings
 } from '../api/hooks';
-import type { Category, Setting } from '../api/types';
+import type { Category } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
 import {
@@ -35,10 +31,8 @@ import {
 	SegmentedControl,
 	Select,
 	Skeleton,
-	Spinner,
 	pushToast
 } from '../components';
-import { SettingItem } from './settings/SettingItem';
 import './settings.css';
 
 function Section({
@@ -355,117 +349,6 @@ function CategoriesSection() {
 	);
 }
 
-/** 摊平 group/page 里的嵌套设置，按 key 找配置项用 */
-function flattenSettings(list: Setting[]): Setting[] {
-	return list.flatMap((s) => {
-		const v = s.value;
-		if (typeof v === 'object' && 'Group' in v) return flattenSettings(v.Group.items);
-		if (typeof v === 'object' && 'Page' in v) return flattenSettings(v.Page.items);
-		return [s];
-	});
-}
-
-function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
-	const query = useSourceSettings(sourceId);
-	const save = useSaveSourceSettings(sourceId);
-	const [edits, setEdits] = useState<Record<string, unknown>>({});
-
-	if (query.isPending) {
-		return (
-			<div className="settings-source__loading">
-				<Spinner /> 加载中…
-			</div>
-		);
-	}
-	const data = query.data;
-	if (!data) return <p className="faint settings-source__empty">设置加载失败</p>;
-	if (!data.settings || data.settings.length === 0) {
-		return <p className="faint settings-source__empty">该源没有可配置项</p>;
-	}
-
-	const hasEdits = Object.keys(edits).length > 0;
-
-	async function onSave() {
-		if (!hasEdits || !data?.settings) return;
-		const keys = Object.keys(edits);
-		await save.mutateAsync(edits);
-		setEdits({});
-		pushToast('已保存', 'info');
-		const touched = flattenSettings(data.settings).filter((s) => keys.includes(s.key));
-		if (touched.some((s) => s.refreshes && s.refreshes.length > 0)) {
-			pushToast('该源会在后台刷新设置', 'info');
-		}
-	}
-
-	return (
-		<div className="settings-source__body">
-			{data.settings.map((setting) => (
-				<SettingItem
-					key={setting.key}
-					setting={setting}
-					values={data.values}
-					edits={edits}
-					onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
-				/>
-			))}
-			<div className="settings-source__save">
-				<Button
-					variant="primary"
-					size="sm"
-					loading={save.isPending}
-					disabled={!hasEdits}
-					onClick={() => void onSave()}
-				>
-					保存
-				</Button>
-			</div>
-		</div>
-	);
-}
-
-function SourcesSection() {
-	const sources = useSources();
-	const [openId, setOpenId] = useState<number | null>(null);
-	const list = sources.data ?? [];
-
-	return (
-		<Section title="源设置" desc="配置项由各源包提供">
-			{sources.isPending ? (
-				<Skeleton height={48} />
-			) : list.length === 0 ? (
-				<p className="faint settings-source__empty">还没有安装任何源</p>
-			) : (
-				<div className="settings-sources">
-					{list.map((s) => {
-						const open = openId === s.id;
-						return (
-							<div key={s.id} className="settings-source">
-								<button
-									type="button"
-									className="settings-source__head"
-									onClick={() => setOpenId(open ? null : s.id)}
-								>
-									<span className="settings-source__name">
-										{s.name}
-										<span className="settings-source__version">v{s.version}</span>
-									</span>
-									<ChevronDown
-										size={16}
-										className={
-											open ? 'settings-source__chev settings-source__chev--open' : 'settings-source__chev'
-										}
-									/>
-								</button>
-								{open && <SourceSettingsPanel sourceId={s.id} />}
-							</div>
-						);
-					})}
-				</div>
-			)}
-		</Section>
-	);
-}
-
 interface KvRow {
 	key: string;
 	/** JSON 文本，保存时再解析 */
@@ -613,7 +496,6 @@ export default function SettingsPage() {
 			<PageHeader title="设置" />
 			<AppearanceSection />
 			<CategoriesSection />
-			<SourcesSection />
 			<ServerSettingsSection />
 			<AboutSection />
 		</div>

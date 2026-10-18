@@ -383,7 +383,14 @@ export type SettingValue =
 	| 'Button'
 	| { Button: Record<string, never> }
 	| { Link: { url: string; external?: boolean | null } }
-	| { Login: Record<string, unknown> };
+	| {
+			Login: {
+				method: 'basic' | 'oauth' | 'web';
+				use_email?: boolean | null;
+				url?: string | null;
+				[key: string]: unknown;
+			};
+	  };
 
 export interface Setting {
 	key: string;

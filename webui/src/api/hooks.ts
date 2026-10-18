@@ -570,6 +570,42 @@ export function useSaveSourceSettings(sourceId: number) {
 	});
 }
 
+/** 清空覆盖值并按包内静态 schema 重新播种默认值 */
+export function useResetSourceSettings(sourceId: number) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () =>
+			api<{ values: Record<string, unknown> }>(`/sources/${sourceId}/settings/reset`, {
+				method: 'POST'
+			}),
+		onSuccess: (data) => {
+			qc.setQueryData<SourceSettings>(['source-settings', sourceId], (cur) =>
+				cur ? { ...cur, values: data.values } : cur
+			);
+		}
+	});
+}
+
+/** 清该源登录 cookie 并重启实例（不动封面缓存与下载） */
+export function useClearSourceCache(sourceId: number) {
+	return useMutation({
+		mutationFn: () => api<{ ok: boolean }>(`/sources/${sourceId}/cache/clear`, { method: 'POST' })
+	});
+}
+
+/** 基本登录：成功后会写回 username/password 与 marker，刷新设置值 */
+export function useBasicLogin(sourceId: number) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ key, username, password }: { key: string; username: string; password: string }) =>
+			api<{ ok: boolean }>(`/sources/${sourceId}/login/basic`, {
+				method: 'POST',
+				body: { key, username, password }
+			}),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
+	});
+}
+
 // 重名 409 要转成中文提示，silent 交给调用方统一弹错
 export function useCreateCategory() {
 	const qc = useQueryClient();

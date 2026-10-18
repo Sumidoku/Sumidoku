@@ -10,11 +10,13 @@ export interface ModalProps {
 	onClose: () => void;
 	children: ReactNode;
 	footer?: ReactNode;
+	/** 追加到面板的类名，用来放宽宽度等 */
+	panelClassName?: string;
 }
 
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export function Modal({ open, title, onClose, children, footer }: ModalProps) {
+export function Modal({ open, title, onClose, children, footer, panelClassName }: ModalProps) {
 	const panelRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -49,7 +51,7 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
 	return createPortal(
 		<div className="modal__mask" onClick={onClose}>
 			<div
-				className="modal__panel"
+				className={panelClassName ? `modal__panel ${panelClassName}` : 'modal__panel'}
 				role="dialog"
 				aria-modal="true"
 				aria-label={title}

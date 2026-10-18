@@ -255,7 +255,10 @@ mod tests {
 					memory: Some(memory.clone()),
 					store: GlobalStore::new(),
 					defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
-					net: NetState::new(Arc::new(DirectPolicy { user_agent: None })),
+					net: NetState::new(
+						Arc::new(DirectPolicy { user_agent: None }),
+						crate::imports::CookieJar::default(),
+					),
 					limits,
 					source_key: "test".into(),
 					logger: Arc::new(StdoutLogger),

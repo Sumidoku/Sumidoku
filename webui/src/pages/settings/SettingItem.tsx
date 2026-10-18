@@ -11,6 +11,8 @@ export interface SettingItemProps {
 	/** 本地未保存的改动，优先于 values 显示 */
 	edits: Record<string, unknown>;
 	onEdit: (key: string, value: unknown) => void;
+	/** 基本登录：由外层提供端点调用，缺省时 login 项降级为只读提示 */
+	onSubmitLogin?: (key: string, username: string, password: string) => Promise<void>;
 }
 
 function strArr(v: unknown): string[] {
@@ -61,7 +63,51 @@ function StepperInput({
 	);
 }
 
-export function SettingItem({ setting, values, edits, onEdit }: SettingItemProps) {
+/** 基本登录表单：提交后由源校验，成功即写回凭据 */
+function LoginSetting({
+	title,
+	useEmail,
+	onSubmit
+}: {
+	title: string;
+	useEmail: boolean;
+	onSubmit: (username: string, password: string) => Promise<void>;
+}) {
+	const [username, setUsername] = useState('');
+	const [password, setPassword] = useState('');
+	const [busy, setBusy] = useState(false);
+	return (
+		<div className="setting-row setting-row--col">
+			<span className="setting-row__title">{title}</span>
+			<Input
+				placeholder={useEmail ? '邮箱' : '用户名'}
+				autoComplete={useEmail ? 'email' : 'username'}
+				value={username}
+				onChange={(e) => setUsername(e.currentTarget.value)}
+			/>
+			<Input
+				type="password"
+				placeholder="密码"
+				autoComplete="current-password"
+				value={password}
+				onChange={(e) => setPassword(e.currentTarget.value)}
+			/>
+			<Button
+				size="sm"
+				loading={busy}
+				disabled={!username || !password}
+				onClick={() => {
+					setBusy(true);
+					void onSubmit(username, password).finally(() => setBusy(false));
+				}}
+			>
+				登录
+			</Button>
+		</div>
+	);
+}
+
+export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: SettingItemProps) {
 	const [msOpen, setMsOpen] = useState(false);
 
 	// 当前值优先取未保存的修改，其次取服务器已存值
@@ -112,7 +158,24 @@ export function SettingItem({ setting, values, edits, onEdit }: SettingItemProps
 				</div>
 			</div>
 		);
-	} else if (v === 'Button' || (typeof v === 'object' && 'Button' in v) || (typeof v === 'object' && 'Login' in v)) {
+	} else if (typeof v === 'object' && 'Login' in v) {
+		const method = v.Login.method;
+		body =
+			onSubmitLogin && method === 'basic' ? (
+				<LoginSetting
+					title={setting.title}
+					useEmail={v.Login.use_email === true}
+					onSubmit={(username, password) => onSubmitLogin(setting.key, username, password)}
+				/>
+			) : (
+				<div className="setting-row setting-row--disabled">
+					<span className="setting-row__title">{setting.title}</span>
+					<span className="faint">
+						{method === 'basic' ? '该操作需要在客户端完成' : '暂不支持 OAuth / 网页登录'}
+					</span>
+				</div>
+			);
+	} else if (v === 'Button' || (typeof v === 'object' && 'Button' in v)) {
 		body = (
 			<div className="setting-row setting-row--disabled">
 				<span className="setting-row__title">{setting.title}</span>
@@ -124,7 +187,14 @@ export function SettingItem({ setting, values, edits, onEdit }: SettingItemProps
 			<div className="setting-group">
 				<div className="setting-group__title">{setting.title}</div>
 				{v.Group.items.map((item) => (
-					<SettingItem key={item.key} setting={item} values={values} edits={edits} onEdit={onEdit} />
+					<SettingItem
+						key={item.key}
+						setting={item}
+						values={values}
+						edits={edits}
+						onEdit={onEdit}
+						onSubmitLogin={onSubmitLogin}
+					/>
 				))}
 				{v.Group.footer && <div className="faint setting-group__footer">{v.Group.footer}</div>}
 			</div>
@@ -134,7 +204,14 @@ export function SettingItem({ setting, values, edits, onEdit }: SettingItemProps
 			<div className="setting-group">
 				<div className="setting-group__title">{setting.title}</div>
 				{v.Page.items.map((item) => (
-					<SettingItem key={item.key} setting={item} values={values} edits={edits} onEdit={onEdit} />
+					<SettingItem
+						key={item.key}
+						setting={item}
+						values={values}
+						edits={edits}
+						onEdit={onEdit}
+						onSubmitLogin={onSubmitLogin}
+					/>
 				))}
 			</div>
 		);
@@ -246,7 +323,7 @@ export function SettingItem({ setting, values, edits, onEdit }: SettingItemProps
 			</a>
 		);
 	} else {
-		const kind = typeof v === 'string' ? v : Object.keys(v)[0];
+		const kind = typeof v === 'string' ? v : v && typeof v === 'object' ? Object.keys(v)[0] : String(v);
 		body = <div className="setting-row faint">{setting.title}（暂不支持的类型：{kind}）</div>;
 	}
 

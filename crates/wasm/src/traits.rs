@@ -28,6 +28,18 @@ impl DefaultsSink for NoopDefaultsSink {
 	fn set(&self, _source_key: &str, _key: &str, _value: &DefaultValue) {}
 }
 
+/// cookie jar 变更的持久化回调。在 actor 线程同步调用，实现里不得阻塞。
+/// value 为 None 表示该 cookie 被删除（过期或 max-age<=0）。
+pub trait CookieSink: Send + Sync {
+	fn set(&self, domain: &str, name: &str, value: Option<&str>);
+}
+
+pub struct NoopCookieSink;
+
+impl CookieSink for NoopCookieSink {
+	fn set(&self, _domain: &str, _name: &str, _value: Option<&str>) {}
+}
+
 pub trait HostLogger: Send + Sync {
 	fn log(&self, source_key: &str, message: &str);
 }

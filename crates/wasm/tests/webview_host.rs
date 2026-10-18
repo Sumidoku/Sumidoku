@@ -3,7 +3,9 @@
 //! `cd tests/fixtures/webview-src && cargo build --release --target wasm32-unknown-unknown`
 //! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_webview.wasm
 //! 复制为 tests/fixtures/webview/main.wasm。
-use aidoku_wasm::{DirectPolicy, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger};
+use aidoku_wasm::{
+	DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,6 +21,8 @@ async fn webview_sandbox_semantics() {
 		limits: Default::default(),
 		defaults: HashMap::new(),
 		sink: Arc::new(NoopDefaultsSink),
+		cookies: HashMap::new(),
+		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 	};

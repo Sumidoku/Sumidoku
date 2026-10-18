@@ -8,7 +8,8 @@ use reqwest::{
 	StatusCode,
 	header::{COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
 };
-use std::{collections::HashMap, io::Cursor, str::FromStr, time::Duration};
+use crate::traits::CookieSink;
+use std::{collections::HashMap, io::Cursor, str::FromStr, sync::Arc, time::Duration};
 use url::Url;
 use wasmer::FunctionEnvMut;
 
@@ -105,12 +106,20 @@ impl NetRequest {
 	}
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct CookieJar {
 	domains: HashMap<String, HashMap<String, String>>,
+	sink: Option<Arc<dyn CookieSink>>,
 }
 
 impl CookieJar {
+	pub fn new(domains: HashMap<String, HashMap<String, String>>, sink: Arc<dyn CookieSink>) -> Self {
+		Self {
+			domains,
+			sink: Some(sink),
+		}
+	}
+
 	pub fn header_for(&self, url: &Url) -> Option<String> {
 		let host = url.host_str()?;
 		let mut pairs = Vec::new();
@@ -145,11 +154,18 @@ impl CookieJar {
 				_ => {}
 			}
 		}
-		let entry = self.domains.entry(domain).or_default();
+		let entry = self.domains.entry(domain.clone()).or_default();
 		if expired {
-			entry.remove(name);
+			if entry.remove(name).is_some()
+				&& let Some(sink) = &self.sink
+			{
+				sink.set(&domain, name, None);
+			}
 		} else {
 			entry.insert(name.to_string(), value.to_string());
+			if let Some(sink) = &self.sink {
+				sink.set(&domain, name, Some(value));
+			}
 		}
 	}
 }
@@ -619,7 +635,7 @@ mod tests {
 		let policy = Arc::new(EscalationPolicy {
 			trawl: Some(format!("http://{}", trawl.addr)),
 		});
-		let mut net = NetState::new(policy);
+		let mut net = NetState::new(policy, CookieJar::default());
 		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
 
 		let first = get(&mut net, &url);
@@ -650,7 +666,7 @@ mod tests {
 				"challenged",
 			)
 		});
-		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
 
 		let response = get(&mut net, &url);
@@ -666,7 +682,7 @@ mod tests {
 		let policy = Arc::new(EscalationPolicy {
 			trawl: Some(format!("http://{}", trawl.addr)),
 		});
-		let mut net = NetState::new(policy);
+		let mut net = NetState::new(policy, CookieJar::default());
 		let url = Url::parse(&format!("http://{}/private", origin.addr)).unwrap();
 
 		let response = get(&mut net, &url);

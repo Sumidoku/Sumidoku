@@ -78,6 +78,10 @@ impl ApiError {
 	pub fn bad_gateway(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::BAD_GATEWAY, "bad_gateway", message)
 	}
+
+	pub fn internal(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", message)
+	}
 }
 
 impl From<aidoku_wasm::Error> for ApiError {

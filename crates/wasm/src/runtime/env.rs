@@ -172,12 +172,12 @@ pub struct NetState {
 }
 
 impl NetState {
-	pub fn new(policy: Arc<dyn NetPolicy>) -> Self {
+	pub fn new(policy: Arc<dyn NetPolicy>, jar: crate::imports::CookieJar) -> Self {
 		let ca = policy.ca_certificate();
 		Self {
 			policy,
 			clients: HashMap::new(),
-			jar: crate::imports::CookieJar::default(),
+			jar,
 			rate: RateLimiter::default(),
 			ca,
 		}
