@@ -191,13 +191,17 @@ async fn repo_lifecycle_install_and_update() {
 		"iconUrl resolved against repo url: {main_entry}"
 	);
 
-	// 过滤：语言 / 名字 / NSFW
+	// 过滤：语言（可多选）/ 名字 / 内容分级（Aidoku 三档）
 	assert_eq!(browse(&app.app, "?lang=en").await.len(), 2);
 	assert_eq!(browse(&app.app, "?lang=zh").await.len(), 1);
+	assert_eq!(browse(&app.app, "?lang=en,zh").await.len(), 3);
 	let found = browse(&app.app, "?query=other").await;
 	assert_eq!(found.len(), 1);
 	assert_eq!(found[0]["key"], "en.other");
-	assert_eq!(browse(&app.app, "?nsfw=hide").await.len(), 2);
+	assert_eq!(browse(&app.app, "?contentRating=0,1").await.len(), 2);
+	assert_eq!(browse(&app.app, "?contentRating=2").await.len(), 1);
+	assert_eq!(browse(&app.app, "?contentRating=0,1,2").await.len(), 3);
+	assert_eq!(browse(&app.app, "?contentRating=").await.len(), 0);
 
 	// 一键安装：.aix 落 sources 目录并即时可搜
 	let (status, body) = request(

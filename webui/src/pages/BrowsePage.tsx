@@ -4,6 +4,7 @@ import { CircleArrowUp, House, PackageOpen, ScanSearch, Trash } from 'lucide-rea
 import { sourceIconUrl } from '../api/client';
 import { useDeleteSource, useScanSources, useSources, useUpdateAllSources, useUpdateSource } from '../api/hooks';
 import type { Source } from '../api/types';
+import { contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
 import {
 	Button,
 	Chip,
@@ -179,7 +180,11 @@ export default function BrowsePage() {
 							<div className="source-card__main">
 								<div className="source-card__name">
 									<span className="source-card__name-text">{s.name}</span>
-									{s.contentRating > 1 && <Chip color="danger">NSFW</Chip>}
+									{s.contentRating > 0 && (
+										<Chip color={contentRatingColor(s.contentRating)}>
+											{contentRatingLabel(s.contentRating)}
+										</Chip>
+									)}
 								</div>
 								<div className="source-card__meta">
 									{s.key} · v{s.version}
@@ -188,7 +193,7 @@ export default function BrowsePage() {
 								{s.languages.length > 0 && (
 									<div className="source-card__badges">
 										{s.languages.slice(0, 3).map((lang) => (
-											<Chip key={lang}>{lang}</Chip>
+											<Chip key={lang}>{languageLabel(lang)}</Chip>
 										))}
 										{s.languages.length > 3 && <Chip>+{s.languages.length - 3}</Chip>}
 									</div>
