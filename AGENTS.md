@@ -35,8 +35,8 @@ blocking stays with the maintainer.
 
 ## Layout
 
-- `crates/server` — axum HTTP server: REST `/api/v1`, OPDS `/opds/v1.2`,
-  embedded web UI
+- `crates/server` — axum HTTP server: REST `/api/v1`, OPDS `/opds/v1.2` and
+  `/opds/v2`, embedded web UI
 - `crates/wasm` — Aidoku WASM source runtime (wasmer)
 - `vendor/aidoku` — vendored upstream crate; it tracks upstream, do not
   restyle or "fix" it locally

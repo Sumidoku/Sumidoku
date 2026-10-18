@@ -21,12 +21,12 @@ const COVER_MAX_AGE: u64 = 86400;
 const PAGE_MAX_AGE: u64 = 3600;
 
 /// 在库 manga 投影（同 library.rs 的 LIBRARY_SELECT，私有无法复用故重抄）
-const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
+pub(crate) const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
 	 WHERE mu.in_library = 1";
 
 /// 章节 + 进度 + 下载产物路径 + 漫画名（series/updates 两条 feed 共用）
-const CHAPTER_SELECT: &str = "SELECT c.*, cu.last_page_read, cu.last_read_at,
+pub(crate) const CHAPTER_SELECT: &str = "SELECT c.*, cu.last_page_read, cu.last_read_at,
 	 d.path AS download_path, m.title AS manga_title
 	 FROM chapter c
 	 JOIN manga m ON m.id = c.manga_id
@@ -34,20 +34,20 @@ const CHAPTER_SELECT: &str = "SELECT c.*, cu.last_page_read, cu.last_read_at,
 	 LEFT JOIN download d ON d.chapter_id = c.id AND d.status = 'finished'";
 
 #[derive(Debug, sqlx::FromRow)]
-struct OpdsChapterRow {
+pub(crate) struct OpdsChapterRow {
 	#[sqlx(flatten)]
-	chapter: ChapterRow,
+	pub(crate) chapter: ChapterRow,
 	last_page_read: Option<i64>,
 	last_read_at: Option<i64>,
-	download_path: Option<String>,
-	manga_title: String,
+	pub(crate) download_path: Option<String>,
+	pub(crate) manga_title: String,
 }
 
 #[derive(Debug, sqlx::FromRow)]
-struct HistoryRow {
+pub(crate) struct HistoryRow {
 	#[sqlx(flatten)]
-	manga: MangaRow,
-	last_read_at: Option<i64>,
+	pub(crate) manga: MangaRow,
+	pub(crate) last_read_at: Option<i64>,
 }
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -71,7 +71,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 }
 
 /// OPDS 恒 Basic（§9）：basic_password 非空时全链路校验，用户名任意非空、密码匹配即可
-async fn basic_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
 	let Some(expected) = &state.config.basic_password else {
 		return next.run(req).await;
 	};
@@ -126,7 +126,7 @@ fn base64_decode(input: &str) -> Option<Vec<u8>> {
 }
 
 /// 拼绝对 URL：Host 头 + X-Forwarded-Proto（反代后才是 https），缺省 http://localhost
-fn base_url(headers: &HeaderMap) -> String {
+pub(crate) fn base_url(headers: &HeaderMap) -> String {
 	let host = headers
 		.get(header::HOST)
 		.and_then(|v| v.to_str().ok())
@@ -155,14 +155,14 @@ fn esc(s: &str) -> String {
 	out
 }
 
-fn rfc3339(secs: i64) -> String {
+pub(crate) fn rfc3339(secs: i64) -> String {
 	chrono::DateTime::from_timestamp(secs, 0)
 		.map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 		.unwrap_or_default()
 }
 
-/// rel=next 的 q 参数要进 URL query，先 percent-encode 再交给 esc 转义 &
-fn url_query_escape(s: &str) -> String {
+/// q 要拼进 URL query，保留字符与非 ASCII 一律 percent-encode
+pub(crate) fn url_query_escape(s: &str) -> String {
 	let mut out = String::new();
 	for b in s.bytes() {
 		match b {
@@ -299,7 +299,7 @@ fn chapter_feed(
 	feed_response(xml)
 }
 
-fn chapter_title(number: Option<f64>, title: Option<&str>, key: &str) -> String {
+pub(crate) fn chapter_title(number: Option<f64>, title: Option<&str>, key: &str) -> String {
 	let mut out = String::new();
 	if let Some(n) = number {
 		if n.fract() == 0.0 {
@@ -364,12 +364,12 @@ fn chapter_entry(xml: &mut String, base: &str, row: &OpdsChapterRow) {
 }
 
 #[derive(Debug, Deserialize)]
-struct FeedQuery {
-	page: Option<i64>,
-	q: Option<String>,
+pub(crate) struct FeedQuery {
+	pub(crate) page: Option<i64>,
+	pub(crate) q: Option<String>,
 }
 
-fn page_of(query: &FeedQuery) -> ApiResult<i64> {
+pub(crate) fn page_of(query: &FeedQuery) -> ApiResult<i64> {
 	let page = query.page.unwrap_or(1);
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
@@ -612,6 +612,20 @@ async fn updates_feed(
 	Ok(chapter_feed(&base, "urn:sumidoku:updates", "Updates", &self_href, &next_href, rows))
 }
 
+/// LIKE 通配符按字面匹配
+pub(crate) fn like_pattern(q: &str) -> String {
+	let mut pattern = String::with_capacity(q.len() + 2);
+	pattern.push('%');
+	for c in q.chars() {
+		if matches!(c, '%' | '_' | '\\') {
+			pattern.push('\\');
+		}
+		pattern.push(c);
+	}
+	pattern.push('%');
+	pattern
+}
+
 async fn search_feed(
 	State(state): State<Arc<AppState>>,
 	Query(query): Query<FeedQuery>,
@@ -620,20 +634,10 @@ async fn search_feed(
 	let page = page_of(&query)?;
 	let q = query.q.clone().unwrap_or_default();
 	let base = base_url(&headers);
-	let mut pattern = String::with_capacity(q.len() + 2);
-	pattern.push('%');
-	for c in q.chars() {
-		// LIKE 通配符按字面匹配
-		if matches!(c, '%' | '_' | '\\') {
-			pattern.push('\\');
-		}
-		pattern.push(c);
-	}
-	pattern.push('%');
 	let rows: Vec<LibraryEntryRow> = sqlx::query_as(&format!(
 		"{LIBRARY_SELECT} AND m.title LIKE ? ESCAPE '\\' ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
 	))
-	.bind(pattern)
+	.bind(like_pattern(&q))
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
 	.fetch_all(&state.pool)

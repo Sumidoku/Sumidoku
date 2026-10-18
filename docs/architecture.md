@@ -10,8 +10,11 @@ axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 Migrations in `crates/server/migrations`.
 
 - REST API under `/api/v1` (`api.rs`, `download_api.rs`, `update_api.rs`).
-- OPDS 1.2 catalog at `/opds/v1.2` (`opds.rs`); basic auth applies to the
-  catalog only, and only when `SUMIDOKU_BASIC_PASSWORD` is set.
+- OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds.rs`) and 2.0 (Readium Web
+  Publication JSON) at `/opds/v2` (`opds2.rs`). The 2.0 feed builds its URLs
+  from the 1.2 cover/file/stream endpoints; the two share auth, paging and
+  query helpers from `opds.rs`. Basic auth applies to the catalogs only, and
+  only when `SUMIDOKU_BASIC_PASSWORD` is set.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `library.rs`): manga → chapter → page rows;
