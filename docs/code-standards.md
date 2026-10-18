@@ -34,9 +34,11 @@ run is listed as not run, never left out.
   `gh pr merge --squash --subject --body-file`.
 - Merge with `--match-head-commit <reviewed sha>`: a push during review
   stops the merge instead of shipping code nobody ran.
-- Take a fresh look right before merging: `gh pr view --comments` for
-  comments and commits that arrived after acceptance. Anything new means
-  reviewing that delta first, not merging on a stale read.
+- Take a fresh look right before merging — as its own step, never
+  chained with the merge (`check && merge` makes the check a log line):
+  `gh pr view --comments` for comments and commits that arrived after
+  acceptance. Anything new means reviewing that delta first, not merging
+  on a stale read.
 - The maintainer's standing authorization: an agent merges work it has
   verified against these criteria with CI green on the reviewed head. A
   change to a deliberate product decision, or a PR stopped by the
