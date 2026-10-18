@@ -1,7 +1,7 @@
 use std::ptr::NonNull;
 use std::time::Duration;
 use wasmer::sys::vm::{MemoryError, VMMemory, VMMemoryDefinition, VMTable, VMTableDefinition};
-use wasmer::sys::{BaseTunables, Target, Tunables};
+use wasmer::sys::{BaseTunables, Tunables};
 use wasmer::{MemoryStyle, MemoryType, Pages, TableStyle, TableType};
 
 #[derive(Debug, Clone)]
@@ -40,9 +40,9 @@ pub struct LimitedTunables {
 }
 
 impl LimitedTunables {
-	pub fn new(target: &Target, memory_max_bytes: u64) -> Self {
+	pub fn new(memory_max_bytes: u64) -> Self {
 		Self {
-			base: BaseTunables::for_target(target),
+			base: BaseTunables::new(),
 			limit: Pages(memory_max_bytes.div_ceil(64 * 1024) as u32),
 		}
 	}
