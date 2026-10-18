@@ -1,15 +1,17 @@
 use crate::config::Config;
 use aidoku_wasm::{NetPolicy, NetRoute};
 use reqwest::{Client, StatusCode, Url};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 const MAX_ATTEMPTS: u32 = 3;
 
-/// NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct；
-/// 直连撞 CF 挑战（403/503 + CF 头）再经 trawl_escalation 升级一次。
-/// 引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
+/// NetPolicy 实装：direct > relay(TRAWL) > 已挑战 host(TRAWL) > 全局 proxy > direct。
+/// 直连撞 CF 挑战（403/503 + CF 头）经 trawl_escalation 升级，并把该 host 记为
+/// 「已挑战」——之后一律经 trawl：clearance 与解题浏览器的 UA 绑定，直连回放必被
+/// CF 拒绝，只能让 trawl 自己持有 clearance 与 UA（其 Tier 1 用纯 HTTP 回放，不再起
+/// 浏览器）。引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
 pub struct SumidokuNetPolicy {
 	user_agent: String,
 	direct_domains: Vec<String>,
@@ -18,6 +20,8 @@ pub struct SumidokuNetPolicy {
 	global_proxy: Option<String>,
 	allow_direct_fallback: bool,
 	ca_pem: Option<Vec<u8>>,
+	/// 撞过 CF 挑战、此后常走 trawl 的 host（进程内记忆，重启后首个请求重学一次）
+	challenged: RwLock<HashSet<String>>,
 }
 
 impl SumidokuNetPolicy {
@@ -41,11 +45,33 @@ impl SumidokuNetPolicy {
 			global_proxy: config.net.proxy.clone(),
 			allow_direct_fallback: config.net.allow_direct_fallback,
 			ca_pem,
+			challenged: RwLock::new(HashSet::new()),
 		})
 	}
 
 	fn domain_match(list: &[String], host: &str) -> bool {
 		list.iter().any(|d| host == d || host.ends_with(&format!(".{d}")))
+	}
+
+	/// 该 host 是否撞过 CF 挑战。精确匹配：镜像/子域各自撞一次就各自记一次，
+	/// 不做后缀扩散，免得把没被盾的同域图床也拖进代理。
+	fn is_challenged(&self, host: &str) -> bool {
+		self.challenged.read().expect("challenged lock").contains(host)
+	}
+
+	/// 记住撞过挑战的 host；只在真有 trawl 可升级时调用
+	fn mark_challenged(&self, host: &str) {
+		if host.is_empty() {
+			return;
+		}
+		let inserted = self
+			.challenged
+			.write()
+			.expect("challenged lock")
+			.insert(host.to_string());
+		if inserted {
+			tracing::info!(host, "cloudflare challenge seen, routing host through trawl");
+		}
 	}
 
 	pub fn allow_direct_fallback(&self) -> bool {
@@ -59,8 +85,8 @@ impl NetPolicy for SumidokuNetPolicy {
 		if Self::domain_match(&self.direct_domains, host) {
 			return NetRoute::Direct;
 		}
-		if Self::domain_match(&self.relay_domains, host)
-			&& let Some(proxy) = &self.trawl_proxy
+		if let Some(proxy) = &self.trawl_proxy
+			&& (Self::domain_match(&self.relay_domains, host) || self.is_challenged(host))
 		{
 			return NetRoute::Proxy(proxy.clone());
 		}
@@ -84,7 +110,9 @@ impl NetPolicy for SumidokuNetPolicy {
 		if Self::domain_match(&self.direct_domains, host) {
 			return None;
 		}
-		self.trawl_proxy.clone().map(NetRoute::Proxy)
+		let proxy = self.trawl_proxy.clone()?;
+		self.mark_challenged(host);
+		Some(NetRoute::Proxy(proxy))
 	}
 }
 
@@ -383,6 +411,49 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn escalation_marks_host_sticky() {
+		let p = policy(|c| {
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		assert_eq!(p.route_for(&url), NetRoute::Direct);
+
+		assert_eq!(
+			p.trawl_escalation(&url),
+			Some(NetRoute::Proxy("http://trawl:8192".into()))
+		);
+		// 升级过即记住：此后同一 host 一律走 trawl
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into())
+		);
+		// 精确匹配，不扩散到同域其它子域
+		assert_eq!(
+			p.route_for(&Url::parse("https://www.cf.example.com/x").unwrap()),
+			NetRoute::Direct
+		);
+	}
+
+	#[test]
+	fn pinned_direct_host_is_not_marked() {
+		let p = policy(|c| {
+			c.net.direct_domains = vec!["pinned.example.com".into()];
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://pinned.example.com/x").unwrap();
+		assert_eq!(p.trawl_escalation(&url), None);
+		assert_eq!(p.route_for(&url), NetRoute::Direct);
+	}
+
+	#[test]
+	fn no_trawl_does_not_mark() {
+		let p = policy(|_| {});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		assert_eq!(p.trawl_escalation(&url), None);
+		assert_eq!(p.route_for(&url), NetRoute::Direct);
+	}
+
 	struct MockServer {
 		addr: String,
 		hits: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -623,5 +694,33 @@ mod tests {
 			"got: {err}"
 		);
 		assert_eq!(trawl.hits(), 0, "源站自己的 403 不该走 trawl");
+	}
+
+	#[tokio::test]
+	async fn challenged_host_sticks_to_trawl() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let first = clients.get(&url).await.expect("first get");
+		assert_eq!(first.text().await.expect("body"), "solved-via-trawl");
+		assert_eq!(origin.hits(), 1, "首个请求直连撞挑战后升级");
+		assert_eq!(trawl.hits(), 1);
+
+		// host 已记住：后续请求直接走 trawl，不再直连源站碰挑战
+		let second = clients.get(&url).await.expect("second get");
+		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
+		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
+		assert_eq!(trawl.hits(), 2);
 	}
 }

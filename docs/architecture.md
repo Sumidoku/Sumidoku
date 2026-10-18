@@ -272,10 +272,14 @@ Migrations in `crates/server/migrations`.
   headers retries once through the trawl forward proxy (MITM CA in
   `net.trawl_ca`), ahead of the 429/5xx backoff — in the source net imports
   (`crates/wasm/src/imports/net.rs:perform`) and in the server's own fetches
-  alike; `net.direct_domains` opts a host out, `net.relay_domains` routes a
-  host through trawl on every request. Set-Cookie on the solved response
-  lands in the source's cookie jar, so later direct requests reuse the
-  clearance. These server-side fetches — covers, page images and zip pages
+  alike; the challenged host is then remembered and every later request for it
+  also goes through trawl, because a `cf_clearance` is bound to the user agent
+  that solved it and Sumidoku's own client would replay it with a different one
+  (trawl keeps the clearance and its browser user agent together and replays
+  both over plain HTTP). `net.direct_domains` opts a host out of escalation,
+  `net.relay_domains` routes a host through trawl from the first request.
+  Set-Cookie on the solved response still lands in the source's cookie jar.
+  These server-side fetches — covers, page images and zip pages
   (`fetch_remote` / `http_get`) — bypass the wasm net host, so they attach
   the same per-source `Accept-Language` default themselves (via
   `RoutedClients::get_with` / the image-request builder); a source that set

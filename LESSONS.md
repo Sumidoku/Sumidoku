@@ -213,3 +213,17 @@ look at the output, then decide; never chain the two.
   dyphire's "wait until the work is finished" (15:43:15) sitting in the
   thread; the release run was cancelled 16s in — no tag, no release —
   and 0.5.0 is held for his fixes.
+
+**A Cloudflare clearance is bound to the client that solved it; a bypass
+that replays it from another client silently re-challenges.**
+`cf_clearance` is tied to the solving browser's user agent (and IP), so a
+solver API's response must be replayed with that same user agent — the
+relay and Suwayomi both do. Sumidoku routed a challenged request through
+trawl once and then sent the cookie back over its own reqwest client with a
+different (Chrome) user agent against trawl's Camoufox Firefox, so every
+later request re-challenged. The fix keeps a challenged host on trawl, which
+holds the clearance and user agent together. Check how a solver's output is
+consumed before trusting a "transparent" handoff.
+- Evidence: 2026-10-19, bakamh's managed challenge worked through
+  aidoku-cf-relay and Suwayomi but not Sumidoku; `routed.rs:trawl_escalation`
+  now marks the host and `route_for` keeps it on trawl.
