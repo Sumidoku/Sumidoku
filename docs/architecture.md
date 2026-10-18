@@ -374,16 +374,34 @@ payloads, `set_transform` reassembles the source-side decomposition as
 translate·scale·rotate (the ABI's radians become tiny-skia's degrees),
 and `draw_image` / `copy_image` blit through a bilinear pattern fill
 whose transform maps image space onto the destination rect. Text is laid
-out glyph by glyph from `ttf-parser` outlines filled at the baseline
-point — no shaping or kerning. Fonts come from a process-global `fontdb`
+out glyph by glyph from `ttf-parser` outlines with no shaping or kerning,
+placed as AidokuRunner places it (`CTLineGetImageBounds`): `(x, y)` is the
+top of the text, so the baseline moves down by the rendered line's
+glyph-bounding-box height and a string with descenders sits one descender
+lower. Fonts come from a process-global `fontdb`
 (`fonts.rs`): an embedded DejaVu Sans (`assets/`, Bitstream Vera license)
 is the fallback that keeps Docker/headless hosts working, system font
 directories are scanned once for coverage (notably CJK), and `load_font`
-fetches over the source's own net policy into the same database;
-`new_font` / `system_font` resolve to the embedded face when no match
-exists. Canvas RIDs follow the normal `destroy` lifecycle, and the host
+fetches over the source's own net policy into the same database.
+`new_font` matches AidokuRunner's `UIFont(name:)`: an exact PostScript-name
+or family match wins, and a name matching nothing fails with `invalidFont`
+(-10) instead of silently falling back; `system_font` always resolves,
+falling back to the embedded face when no match exists. Canvas RIDs follow
+the normal `destroy` lifecycle, and the host
 consumes them eagerly wherever a result must outlive the actor call:
 `SourceHandle::take_page_image` encodes an image rid to PNG and drops it.
+The `std` host's `parse_date` (`imports/std.rs`) follows Swift's
+DateFormatter as AidokuRunner drives it: the format string is translated
+token-wise (including `'…'` quoted literals, `S` fractional seconds and
+the `X`/`x` ISO-8601 zone offsets real sources use), a date-only string
+parses as midnight, an offset carried in the string wins over the timezone
+argument, and the timezone defaults to the host's current zone
+(`iana-time-zone` → `chrono-tz`) when absent, `current` or unparseable.
+chrono parses English month names only, so locale support is a
+substitution table covering the locales sources actually pass (es, it, pt,
+tr, fr, id, ar and the CJK numeric 月/월 forms); month names in other
+locales, localized digits such as Eastern Arabic numerals, and localized
+weekday names stay English-only.
 `source.rs`
 loads and validates packages; `package.rs` reads the `.aix` zip layout
 (`Payload/source.json` manifest, `Payload/main.wasm` payload, optional

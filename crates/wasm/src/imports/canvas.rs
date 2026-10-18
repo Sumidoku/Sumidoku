@@ -453,7 +453,8 @@ pub fn draw_text(
 	Result::Success.into()
 }
 
-/// 逐字形取轮廓转 path 填充；(x, y) 是基线起点（与 raqote draw_text 一致）。
+/// 逐字形取轮廓转 path 填充；(x, y) 是文字顶部（AidokuRunner 语义），
+/// 基线按整行字形包围盒的高度下移，带降部的字符把整行再往下推。
 /// 无 shaping/kerning：canvas 文本基本是水印式短句，简单排版够用
 #[allow(clippy::too_many_arguments)]
 fn draw_glyphs(
@@ -467,6 +468,17 @@ fn draw_glyphs(
 	transform: Transform,
 ) {
 	let scale = size / face.units_per_em() as f32;
+	let mut min_y = i32::MAX;
+	let mut max_y = i32::MIN;
+	for ch in text.chars() {
+		let glyph = face.glyph_index(ch).unwrap_or(ttf_parser::GlyphId(0));
+		if let Some(bb) = face.glyph_bounding_box(glyph) {
+			min_y = min_y.min(i32::from(bb.y_min));
+			max_y = max_y.max(i32::from(bb.y_max));
+		}
+	}
+	// 量不到包围盒（空白串等）时基线就落在 y，与 AidokuRunner 空行一致
+	let baseline = if min_y <= max_y { y + (max_y - min_y) as f32 * scale } else { y };
 	let mut pen_x = x;
 	for ch in text.chars() {
 		let glyph = face.glyph_index(ch).unwrap_or(ttf_parser::GlyphId(0));
@@ -474,7 +486,7 @@ fn draw_glyphs(
 			pb: PathBuilder::new(),
 			scale,
 			dx: pen_x,
-			baseline: y,
+			baseline,
 		};
 		if face.outline_glyph(glyph, &mut builder).is_some()
 			&& let Some(path) = builder.pb.finish()
@@ -547,7 +559,9 @@ pub fn new_font(mut env: FunctionEnvMut<WasmEnv>, name_ptr: Ptr, name_len: u32) 
 	let Ok(name) = env.data().read_string(&env, name_ptr, name_len) else {
 		return Result::InvalidString.into();
 	};
-	let id = fonts::resolve_family(&name);
+	let Some(id) = fonts::resolve_family_strict(&name) else {
+		return Result::InvalidFont.into();
+	};
 	env.data_mut().store.store(StoreItem::Font(id))
 }
 

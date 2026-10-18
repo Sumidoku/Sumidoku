@@ -28,15 +28,27 @@ fn library() -> &'static RwLock<FontLibrary> {
 	})
 }
 
-/// 按 family 名解析；服务器没有真实系统字体语义，匹配不到一律回落内嵌字体
-pub fn resolve_family(name: &str) -> fontdb::ID {
+/// new_font 的服务端语义对齐 AidokuRunner 的 UIFont(name:)：PostScript 名或
+/// family 精确匹配，family 命中多个 face 取最接近常规字重的；匹配不到返回
+/// None（调用方报 invalidFont），不回退兜底字体
+pub fn resolve_family_strict(name: &str) -> Option<fontdb::ID> {
+	if name.is_empty() {
+		return None;
+	}
 	let lib = library().read().expect("font library lock");
-	lib.db
-		.query(&fontdb::Query {
-			families: &[fontdb::Family::Name(name)],
-			..fontdb::Query::default()
-		})
-		.unwrap_or(lib.fallback)
+	let mut best: Option<(i32, fontdb::ID)> = None;
+	for face in lib.db.faces() {
+		if face.post_script_name == name {
+			return Some(face.id);
+		}
+		if face.families.iter().any(|(family, _)| family == name) {
+			let distance = (i32::from(face.weight.0) - 400).abs() * 2 + i32::from(face.style != fontdb::Style::Normal);
+			if best.is_none_or(|(d, _)| distance < d) {
+				best = Some((distance, face.id));
+			}
+		}
+	}
+	best.map(|(_, id)| id)
 }
 
 /// system_font 的服务端语义：sans-serif 按字重选优，落空回落内嵌字体

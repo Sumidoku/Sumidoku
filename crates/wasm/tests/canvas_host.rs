@@ -97,9 +97,21 @@ async fn canvas_draw_crop_and_text_pages() {
 	assert_solid(&images[1], [0, 255, 0, 255], "cropped page");
 
 	assert_eq!(images[2].dimensions(), (32, 16));
-	// 白底黑字：只要存在非白像素即 draw_text 真的画出了字形
-	let drawn = images[2].pixels().any(|px| px.0 != [255, 255, 255, 255]);
-	assert!(drawn, "draw_text must paint glyphs");
+	// draw_text 的 y 是文字顶部（AidokuRunner 语义）：「A」无降部，墨迹顶紧挨 y=0；
+	// 「g」的降部把整行墨迹往下推一个降部深度，两个字母的底都不到画布下沿
+	let ink_rows = |x_range: std::ops::Range<u32>| {
+		images[2]
+			.enumerate_pixels()
+			.filter(|(x, _, px)| x_range.contains(x) && px.0 != [255, 255, 255, 255])
+			.map(|(_, y, _)| y)
+			.fold((u32::MAX, 0), |(lo, hi), y| (lo.min(y), hi.max(y)))
+	};
+	let (a_top, a_bottom) = ink_rows(0..12);
+	assert!(a_top <= 2, "'A' ink must start at the top, got top row {a_top}");
+	assert!(a_bottom <= 11, "'A' has no descender, got bottom row {a_bottom}");
+	let (g_top, g_bottom) = ink_rows(14..32);
+	assert!((1..=4).contains(&g_top), "'g' ink sits one descender below the top, got top row {g_top}");
+	assert!(g_bottom <= 13, "'g' must stay on canvas, got bottom row {g_bottom}");
 }
 
 #[tokio::test]
@@ -109,7 +121,7 @@ async fn image_ref_smoke_via_page_description() {
 		.get_page_description(aidoku::Page::default())
 		.await
 		.expect("page description");
-	assert_eq!(out, "8x8:data:true:font:true");
+	assert_eq!(out, "8x8:data:true:bogus_invalid:true:dejavu:true");
 }
 
 #[tokio::test]
