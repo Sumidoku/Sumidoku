@@ -354,7 +354,9 @@ pub async fn browser_login_start(
 }
 
 /// 完成：收割 context 里登录 host（含父子域）的 cookie，localStorage 按设置声明键
-/// 尽力而为读取，然后进 #112 共享管线。会话无论成败都已终结（一次性语义）
+/// 尽力而为读取，然后进 #112 共享管线。会话无论成败都已终结（一次性语义）：
+/// client 的 current_thread runtime 在 async 上下文 drop 会 panic，任何出口都必须
+/// 经 discard 在 blocking 线程池里释放
 pub async fn browser_login_complete(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -371,18 +373,32 @@ pub async fn browser_login_complete(
 		manager.discard(session, crate::browser_login::SessionEnd::Cancelled).await;
 		return Err(ApiError::bad_request("login session does not match the source or key"));
 	}
+	let result = harvest_and_run_pipeline(&state, id, &body.key, &session).await;
+	let end = match &result {
+		Ok(()) => crate::browser_login::SessionEnd::Completed,
+		Err(_) => crate::browser_login::SessionEnd::Cancelled,
+	};
+	manager.discard(session, end).await;
+	result?;
+	Ok(Json(json!({ "ok": true })))
+}
 
+async fn harvest_and_run_pipeline(
+	state: &Arc<AppState>,
+	id: i64,
+	key: &str,
+	session: &crate::browser_login::SessionRef,
+) -> ApiResult<()> {
 	let harvested = session.call(|client, context| client.cookies(context)).await?;
 	let cookies = harvest_host_cookies(harvested, &session.host);
 	if cookies.is_empty() {
-		manager.discard(session, crate::browser_login::SessionEnd::Cancelled).await;
 		return Err(ApiError::bad_request("no cookies found for the login host"));
 	}
 	validate_cookies(&cookies)?;
 
 	let handle = state.get_handle(id).await?;
-	let items = super::load_settings_items(&state, id, &handle).await?;
-	let ls_keys = find_login_setting(&items, &body.key)
+	let items = super::load_settings_items(state, id, &handle).await?;
+	let ls_keys = find_login_setting(&items, key)
 		.map(|setting| setting.local_storage_keys)
 		.unwrap_or_default();
 	let mut local_storage = HashMap::new();
@@ -397,21 +413,17 @@ pub async fn browser_login_complete(
 		}
 	}
 
-	run_web_login_pipeline(&state, id, &body.key, &session.host, &handle, &cookies, &local_storage).await?;
-	manager.discard(session, crate::browser_login::SessionEnd::Completed).await;
-	Ok(Json(json!({ "ok": true })))
+	run_web_login_pipeline(state, id, key, &session.host, &handle, &cookies, &local_storage).await
 }
 
-/// 取消是清理语义：句柄即授权，未知句柄也幂等 200
+/// 取消是清理语义：句柄即授权（不可猜），未知句柄也幂等 200
 pub async fn browser_login_cancel(
 	State(state): State<Arc<AppState>>,
-	Path(id): Path<i64>,
+	Path(_id): Path<i64>,
 	Json(body): Json<BrowserLoginSessionRequest>,
 ) -> ApiResult<Json<Value>> {
 	let manager = browser_manager(&state)?;
-	if let Some(session) = manager.take(&body.session)
-		&& session.source_id == id
-	{
+	if let Some(session) = manager.take(&body.session) {
 		manager.discard(session, crate::browser_login::SessionEnd::Cancelled).await;
 	}
 	Ok(Json(json!({ "ok": true })))
