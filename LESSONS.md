@@ -241,3 +241,16 @@ it, so UI changes get a real-browser smoke, not just `tsc`.
   settings modal on its first keystroke in real-browser smoke (fixed in
   ec3a91b); the same latent pattern in `SettingsPage.tsx` and
   `MangaDetailPage.tsx` filed as #113.
+
+**Local UI smoke runs the dev loop, not the embedded build.** The vite
+dev server proxies `/api` and `/opds` to a debug backend (README
+documents it), giving hot reload and readable stacks; the embedded
+production build costs a rebuild per edit, fights browser caches, and
+hides stack traces behind minification — and its serving path is
+already smoked by CI's docker leg on every PR. Reach for the release
+binary only when the change touches the embed/serving layer itself.
+- Evidence: 2026-10-19, PR #112's acceptance burned cycles on a stale
+  embed (the disk branch wins over embed when `./webui/build` exists
+  under the server's cwd), on cache busting, and on hand-decoding a
+  minified `currentTarget` stack that dev-server source maps would have
+  named directly; README.md:101 had the dev loop documented all along.
