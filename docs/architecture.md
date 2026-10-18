@@ -11,6 +11,11 @@ Migrations in `crates/server/migrations`.
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`).
+  `GET /api/v1/sources/{id}/home` (`api/mod.rs:get_home`) returns the Aidoku
+  `HomeLayout` as-is — an ordered `components` array; the array index is the
+  stable key a `send_partial_result` stream would patch against. A source
+  without `get_home` answers 404 `unsupported`, same as dynamic filters and
+  listings.
 - Source repositories (`source/repo.rs`, `api/repo.rs`): Aidoku-style repo
   indexes are fetched on add/refresh and cached in the `source_repo` table;
   browsing, install and update detection all read the cache, so an

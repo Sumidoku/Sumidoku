@@ -14,6 +14,11 @@ pub fn fixture_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/example")
 }
 
+/// 无 home 导出能力的 fixture 载荷，用于 unsupported 分支
+pub fn mutation_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/mutation/main.wasm")
+}
+
 pub struct TestApp {
 	pub app: Router,
 	pub tmp: tempfile::TempDir,
