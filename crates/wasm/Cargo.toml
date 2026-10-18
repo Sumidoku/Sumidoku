@@ -36,3 +36,6 @@ ttf-parser = "0.25"
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
+# 压缩体测试夹具：与 reqwest 传递引入的同一实现，版本对齐 Cargo.lock
+brotli = "9"
+flate2 = "1"

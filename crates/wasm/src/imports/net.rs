@@ -604,12 +604,15 @@ pub fn set_rate_limit(mut env: FunctionEnvMut<WasmEnv>, permits: i32, period: i3
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::runtime::env::NetState;
-	use crate::traits::{DirectPolicy, NetPolicy, NetRoute};
+	use crate::runtime::env::{Defaults, NetState};
+	use crate::runtime::limits::Limits;
+	use crate::runtime::store::GlobalStore;
+	use crate::traits::{DirectPolicy, NetPolicy, NetRoute, NoopDefaultsSink, StdoutLogger};
 	use std::io::{Read, Write};
 	use std::net::TcpListener;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
+	use wasmer::{Function, FunctionEnv, Memory, MemoryType, Pages, Store, Value};
 
 	struct EscalationPolicy {
 		trawl: Option<String>,
@@ -636,8 +639,8 @@ mod tests {
 	}
 
 	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
-	/// handler 收到请求头文本、回完整响应。源头与 trawl 代理共用。
-	fn mock_server(handler: impl Fn(&str) -> String + Send + 'static) -> MockServer {
+	/// handler 收到请求头文本、回完整响应字节。源头与 trawl 代理共用。
+	fn mock_server(handler: impl Fn(&str) -> Vec<u8> + Send + 'static) -> MockServer {
 		let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
 		let port = listener.local_addr().expect("local addr").port();
 		let hits = Arc::new(AtomicUsize::new(0));
@@ -662,7 +665,7 @@ mod tests {
 				let head = String::from_utf8_lossy(&head).to_string();
 				hits2.fetch_add(1, Ordering::SeqCst);
 				heads2.lock().expect("heads lock").push(head.clone());
-				if stream.write_all(handler(&head).as_bytes()).is_err() {
+				if stream.write_all(&handler(&head)).is_err() {
 					break;
 				}
 			}
@@ -684,14 +687,19 @@ mod tests {
 		}
 	}
 
-	fn respond(status: &str, extra_headers: &[&str], body: &str) -> String {
+	fn respond(status: &str, extra_headers: &[&str], body: &str) -> Vec<u8> {
+		respond_bytes(status, extra_headers, body.as_bytes())
+	}
+
+	fn respond_bytes(status: &str, extra_headers: &[&str], body: &[u8]) -> Vec<u8> {
 		let mut out = format!("HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n", body.len());
 		for header in extra_headers {
 			out.push_str(header);
 			out.push_str("\r\n");
 		}
 		out.push_str("\r\n");
-		out.push_str(body);
+		let mut out = out.into_bytes();
+		out.extend_from_slice(body);
 		out
 	}
 
@@ -898,5 +906,232 @@ mod tests {
 	#[test]
 	fn decode_body_defaults_to_utf8() {
 		assert_eq!(decode_body(&HeaderMap::new(), "中文".as_bytes()), "中文");
+	}
+
+	/// GBK 编码的极简页面：可选 meta 声明 + 一个 p.t 段落
+	fn gbk_page(with_meta: bool, text: &str) -> Vec<u8> {
+		let mut body = b"<html><head>".to_vec();
+		if with_meta {
+			body.extend_from_slice(b"<meta charset=\"gbk\">");
+		}
+		body.extend_from_slice(b"</head><body><p class=\"t\">");
+		body.extend_from_slice(&encoding_rs::GBK.encode(text).0);
+		body.extend_from_slice(b"</p></body></html>");
+		body
+	}
+
+	fn gzip_body(data: &[u8]) -> Vec<u8> {
+		let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+		enc.write_all(data).expect("gzip");
+		enc.finish().expect("gzip finish")
+	}
+
+	/// 线格式是 zlib 包装：tower-http 的 decompression 把 deflate 映射到
+	/// ZlibDecoder，裸 DeflateEncoder 的流解不开
+	fn deflate_body(data: &[u8]) -> Vec<u8> {
+		let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+		enc.write_all(data).expect("deflate");
+		enc.finish().expect("deflate finish")
+	}
+
+	fn brotli_body(data: &[u8]) -> Vec<u8> {
+		let mut enc = brotli::CompressorWriter::new(Vec::new(), 4096, 5, 22);
+		enc.write_all(data).expect("brotli");
+		enc.into_inner()
+	}
+
+	/// 最小 wasmer 宿主：直接驱动 net FFI（init/set_url/send/html），
+	/// 再借 imports::html 的 FFI 验证选择器命中，不需要真 wasm guest
+	struct Ffi {
+		store: Store,
+		env: FunctionEnv<WasmEnv>,
+		memory: Memory,
+		bump: u32,
+	}
+
+	impl Ffi {
+		fn new() -> Self {
+			let mut store = Store::default();
+			let memory = Memory::new(&mut store, MemoryType::new(Pages(4), None, false)).unwrap();
+			let env = FunctionEnv::new(
+				&mut store,
+				WasmEnv {
+					memory: Some(memory.clone()),
+					store: GlobalStore::new(),
+					defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
+					net: NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default()),
+					browser: crate::browser::BrowserState::new(None, Duration::from_secs(1)),
+					limits: Limits::default(),
+					source_key: "test".into(),
+					logger: Arc::new(StdoutLogger),
+					partial_sink: None,
+				},
+			);
+			// 指针 0 起是合法内存，测试数据从 1024 起 bump 写入避免踩到空指针路径
+			Self { store, env, memory, bump: 1024 }
+		}
+
+		fn write_str(&mut self, s: &str) -> (i32, i32) {
+			let ptr = self.bump;
+			self.bump += s.len() as u32 + 64;
+			self.memory.view(&self.store).write(ptr as u64, s.as_bytes()).unwrap();
+			(ptr as i32, s.len() as i32)
+		}
+
+		fn call1(&mut self, f: fn(FunctionEnvMut<WasmEnv>, Rid) -> FFIResult, a: i32) -> i32 {
+			Function::new_typed_with_env(&mut self.store, &self.env, f)
+				.call(&mut self.store, &[Value::I32(a)])
+				.unwrap()
+				.first()
+				.unwrap()
+				.i32()
+				.unwrap()
+		}
+
+		fn call3(&mut self, f: fn(FunctionEnvMut<WasmEnv>, Rid, Ptr, u32) -> FFIResult, a: i32, b: i32, c: i32) -> i32 {
+			Function::new_typed_with_env(&mut self.store, &self.env, f)
+				.call(&mut self.store, &[Value::I32(a), Value::I32(b), Value::I32(c)])
+				.unwrap()
+				.first()
+				.unwrap()
+				.i32()
+				.unwrap()
+		}
+
+		/// init(GET) → set_url → send → html，返回文档 rid；任一步失败即断言
+		fn fetch_html(&mut self, url: &str) -> Rid {
+			let rid = Function::new_typed_with_env(&mut self.store, &self.env, init)
+				.call(&mut self.store, &[Value::I32(0)])
+				.unwrap()
+				.first()
+				.unwrap()
+				.i32()
+				.unwrap();
+			assert!(rid > 0, "init 返回 {rid}");
+			let (p, l) = self.write_str(url);
+			assert_eq!(self.call3(set_url, rid, p, l), 0, "set_url");
+			assert_eq!(self.call1(send, rid), 0, "send");
+			let doc = self.call1(html, rid);
+			assert!(doc > 0, "html 返回 {doc}");
+			doc
+		}
+
+		fn select_text(&mut self, doc: Rid, query: &str) -> String {
+			let (p, l) = self.write_str(query);
+			let el = self.call3(crate::imports::html::select_first, doc, p, l);
+			assert!(el > 0, "select_first({query}) 返回 {el}");
+			let s = self.call1(crate::imports::html::text, el);
+			assert!(s > 0, "text 返回 {s}");
+			let Some(StoreItem::String(text)) = self.env.as_ref(&self.store).store.get(s) else {
+				panic!("rid {s} 不是 StoreItem::String");
+			};
+			text.clone()
+		}
+	}
+
+	#[test]
+	fn html_decodes_gbk_via_content_type() {
+		// content-type 声明 gbk：html() 按 charset 解码成功，选择器命中中文
+		let page = gbk_page(false, "中文标题");
+		let server = mock_server(move |_head| {
+			respond_bytes("200 OK", &["content-type: text/html; charset=gbk"], &page)
+		});
+		let mut ffi = Ffi::new();
+		let doc = ffi.fetch_html(&format!("http://{}/", server.addr));
+		assert_eq!(ffi.select_text(doc, "p.t"), "中文标题");
+	}
+
+	#[test]
+	fn html_decodes_gbk_via_meta_charset() {
+		// 头里没有 charset 时嗅探文档内的 <meta charset>
+		let page = gbk_page(true, "中文标题");
+		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-type: text/html"], &page));
+		let mut ffi = Ffi::new();
+		let doc = ffi.fetch_html(&format!("http://{}/", server.addr));
+		assert_eq!(ffi.select_text(doc, "p.t"), "中文标题");
+	}
+
+	#[test]
+	fn html_replaces_invalid_utf8_without_markers() {
+		// 无 BOM/声明的非法 UTF-8 走 replacement 解码，html() 不返回 InvalidString
+		let body = b"<html><body><p class=\"t\">caf\xE9\x80</p></body></html>".to_vec();
+		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-type: text/html"], &body));
+		let mut ffi = Ffi::new();
+		let doc = ffi.fetch_html(&format!("http://{}/", server.addr));
+		let text = ffi.select_text(doc, "p.t");
+		assert!(text.starts_with("caf"), "text: {text:?}");
+		assert!(text.contains('\u{FFFD}'), "text: {text:?}");
+	}
+
+	/// 源自己覆写 Accept-Encoding 的请求（issue 里 br/deflate 失守的场景）
+	fn get_with_accept_encoding(server: &MockServer, accept_encoding: &str) -> NetResponse {
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		request.headers.insert(
+			reqwest::header::ACCEPT_ENCODING,
+			HeaderValue::from_str(accept_encoding).expect("accept-encoding"),
+		);
+		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		request.response.expect("response stored")
+	}
+
+	#[test]
+	fn gzip_body_is_decoded() {
+		// 默认路径不回归：声明并接受 gzip
+		let server = mock_server(|_head| respond_bytes("200 OK", &["content-encoding: gzip"], &gzip_body(b"gzip-body")));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		assert_eq!(get(&mut net, &url).data, b"gzip-body");
+	}
+
+	#[test]
+	fn brotli_body_is_decoded() {
+		let server = mock_server(|_head| respond_bytes("200 OK", &["content-encoding: br"], &brotli_body(b"br-body")));
+		assert_eq!(get_with_accept_encoding(&server, "gzip, deflate, br").data, b"br-body");
+	}
+
+	#[test]
+	fn deflate_body_is_decoded() {
+		let server =
+			mock_server(|_head| respond_bytes("200 OK", &["content-encoding: deflate"], &deflate_body(b"deflate-body")));
+		assert_eq!(get_with_accept_encoding(&server, "gzip, deflate, br").data, b"deflate-body");
+	}
+
+	#[test]
+	fn accept_encoding_defaults_to_gzip_br_deflate() {
+		// 对齐 URLSession 的协商集：源不设时三种编码都声明（补头只在空位发生）
+		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		get(&mut net, &url);
+		let head = server.heads()[0].to_ascii_lowercase();
+		let line = head
+			.lines()
+			.find(|l| l.starts_with("accept-encoding:"))
+			.expect("accept-encoding header");
+		let tokens: Vec<&str> = line["accept-encoding:".len()..].split(',').map(str::trim).collect();
+		for enc in ["gzip", "br", "deflate"] {
+			assert!(tokens.contains(&enc), "accept-encoding: {line}");
+		}
+	}
+
+	#[test]
+	fn cookie_header_uses_jar_when_source_silent() {
+		// 源没设 Cookie 时行为不变：只带 jar 值
+		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let domains = HashMap::from([(
+			"127.0.0.1".to_string(),
+			HashMap::from([("jar".to_string(), "1".to_string())]),
+		)]);
+		let jar = CookieJar::new(domains, Arc::new(crate::traits::NoopCookieSink));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), jar);
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		let head = server.heads().join("\n").to_ascii_lowercase();
+		assert!(head.contains("cookie: jar=1"), "head: {head}");
 	}
 }

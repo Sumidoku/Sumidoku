@@ -64,11 +64,13 @@ version = "0.3.0"
 dependencies = [
  "aidoku",
  "boa_engine",
+ "brotli",
  "chromiumoxide",
  "chrono",
  "chrono-tz",
  "ego-tree",
  "encoding_rs",
+ "flate2",
  "fontdb",
  "futures",
  "html5ever",
