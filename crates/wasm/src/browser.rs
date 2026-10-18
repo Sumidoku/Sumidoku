@@ -149,9 +149,19 @@ impl BrowserState {
 		if let Some(context) = self.contexts.get(&rid) {
 			return Ok(context.clone());
 		}
-		let context = self.client()?.create_context()?;
-		self.contexts.insert(rid, context.clone());
-		Ok(context)
+		// create_context 不走 run()，fatal 处理（断连）在这里自己兜
+		match self.client()?.create_context() {
+			Ok(context) => {
+				self.contexts.insert(rid, context.clone());
+				Ok(context)
+			}
+			Err(e) => {
+				if e.fatal {
+					self.disconnect();
+				}
+				Err(e)
+			}
+		}
 	}
 
 	/// fatal 错误断连：client 丢弃、context 簿记转入 stale，下次操作重连
@@ -224,6 +234,7 @@ pub(crate) mod mock {
 		pub deleted: Vec<(String, String, Option<String>, Option<String>)>,
 		/// Some(true) = fatal（断连），Some(false) = 单次失败
 		pub load_error: Option<bool>,
+		pub create_context_error: Option<bool>,
 	}
 
 	pub struct MockConnector(pub Arc<Mutex<MockState>>);
@@ -244,6 +255,13 @@ pub(crate) mod mock {
 	impl CdpClient for MockClient {
 		fn create_context(&mut self) -> Result<String, BrowserError> {
 			let mut state = self.0.lock().expect("mock lock");
+			if let Some(fatal) = state.create_context_error {
+				return Err(if fatal {
+					BrowserError::fatal("mock connection died")
+				} else {
+					BrowserError::transient("mock context rejected")
+				});
+			}
 			state.next_context += 1;
 			let id = format!("ctx-{}", state.next_context);
 			state.contexts.push(id.clone());
@@ -396,6 +414,22 @@ mod tests {
 		disposed.sort();
 		assert_eq!(disposed, vec!["ctx-1", "ctx-2"], "旧连接的 context 在重连成功时逐一 dispose");
 		assert_eq!(mock.loads.last().unwrap().0, "ctx-3", "重连后 rid 拿到新 context");
+	}
+
+	#[test]
+	fn fatal_create_context_disconnects() {
+		let mock = Arc::new(Mutex::new(MockState::default()));
+		let mut state = state_with(&mock);
+		state.load(7, "https://a.example/", &[]).expect("load");
+
+		mock.lock().expect("mock lock").create_context_error = Some(true);
+		assert!(state.load(9, "https://b.example/", &[]).is_err(), "新 rid 建 context 撞断线");
+
+		mock.lock().expect("mock lock").create_context_error = None;
+		state.load(9, "https://b.example/", &[]).expect("重连后成功");
+		let mock = mock.lock().expect("mock lock");
+		assert_eq!(mock.connects, 2, "create_context 的 fatal 也要断连重连");
+		assert!(mock.disposed.contains(&"ctx-1".to_string()), "旧 context 重连时回收");
 	}
 
 	#[test]
