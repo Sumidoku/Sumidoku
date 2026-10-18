@@ -19,15 +19,26 @@ import {
 	useCreateCategory,
 	useDeleteCategory,
 	useImportAidoku,
+	useImportSuwayomi,
 	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
 	useRestoreBackup,
 	useRestoreNamedBackup,
 	useSaveServerSettings,
-	useServerSettings
+	useServerSettings,
+	useSources
 } from '../api/hooks';
-import type { AidokuImportResult, AidokuImportSkipped, BackupFileEntry, BackupRestoreResult, Category } from '../api/types';
+import type {
+	AidokuImportResult,
+	AidokuImportSkipped,
+	BackupFileEntry,
+	BackupRestoreResult,
+	Category,
+	SuwayomiImportResult,
+	SuwayomiImportSkipped,
+	SuwayomiSourceGroup
+} from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
 import {
@@ -646,6 +657,77 @@ function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
 	);
 }
 
+function suwayomiSkippedLabel(s: SuwayomiImportSkipped): string {
+	const what = s.section === 'library' ? '书库条目' : '阅读进度';
+	const name = s.mihonSourceName || `源 ${s.mihonSourceId}`;
+	return `${what} ${name}/${s.mangaKey}`;
+}
+
+function suwayomiGroupName(g: SuwayomiSourceGroup): string {
+	return g.mihonSourceName || `未知源 ${g.mihonSourceId}`;
+}
+
+/** unmatched 组的映射下拉：同名候选排前，其余已装源在后；留空即整组跳过 */
+function SuwayomiMappingSelect({
+	group,
+	value,
+	onChange
+}: {
+	group: SuwayomiSourceGroup;
+	value: string;
+	onChange: (key: string) => void;
+}) {
+	const sources = useSources();
+	const candidateKeys = new Set(group.candidates.map((c) => c.key));
+	const rest = (sources.data ?? []).filter((s) => !candidateKeys.has(s.key));
+	return (
+		<Select value={value} onChange={(e) => onChange(e.currentTarget.value)}>
+			<option value="">跳过该源</option>
+			{group.candidates.map((c) => (
+				<option key={c.key} value={c.key}>
+					{c.name}（{c.key}）
+				</option>
+			))}
+			{rest.map((s) => (
+				<option key={s.key} value={s.key}>
+					{s.name}（{s.key}）
+				</option>
+			))}
+		</Select>
+	);
+}
+
+function SuwayomiImportResultView({ result }: { result: SuwayomiImportResult }) {
+	return (
+		<div className="settings-backup__result">
+			<p className="settings-modal-text">
+				已导入：书库 {result.imported.library} · 分类 {result.imported.categories} · 进度{' '}
+				{result.imported.progress}
+			</p>
+			<p className="settings-modal-text">
+				{result.sources
+					.map((g) => {
+						const label = suwayomiGroupName(g);
+						if (g.match === 'unmatched') return `${label}（${g.mangaCount} 部，未映射已跳过）`;
+						const how = g.match === 'auto' ? '自动匹配' : '手动映射';
+						return `${label}（${g.mangaCount} 部，${how}到 ${g.aidokuSourceName ?? g.aidokuSourceKey}）`;
+					})
+					.join('；')}
+			</p>
+			{result.skipped.length > 0 && (
+				<>
+					<p className="settings-modal-text">以下条目被跳过：</p>
+					<ul className="settings-backup__warnings">
+						{result.skipped.map((s, i) => (
+							<li key={i}>{suwayomiSkippedLabel(s)}</li>
+						))}
+					</ul>
+				</>
+			)}
+		</div>
+	);
+}
+
 function BackupSection() {
 	const restore = useRestoreBackup();
 	const fileRef = useRef<HTMLInputElement>(null);
@@ -656,6 +738,50 @@ function BackupSection() {
 	const aibFileRef = useRef<HTMLInputElement>(null);
 	const [aib, setAib] = useState<{ file: File; preview: AidokuImportResult } | null>(null);
 	const [aibResult, setAibResult] = useState<AidokuImportResult | null>(null);
+	const importSuwayomi = useImportSuwayomi();
+	const swFileRef = useRef<HTMLInputElement>(null);
+	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResult } | null>(null);
+	const [swMapping, setSwMapping] = useState<Record<string, string>>({});
+	const [swResult, setSwResult] = useState<SuwayomiImportResult | null>(null);
+
+	async function onSwFile(e: React.ChangeEvent<HTMLInputElement>) {
+		const file = e.currentTarget.files?.[0];
+		e.currentTarget.value = '';
+		if (!file) return;
+		try {
+			const preview = await importSuwayomi.mutateAsync({ file, dryRun: true });
+			setSw({ file, preview });
+			setSwMapping({});
+			setSwResult(null);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	function setSwSource(mihonId: string, key: string) {
+		setSwMapping((cur) => {
+			const next = { ...cur };
+			if (key) next[mihonId] = key;
+			else delete next[mihonId];
+			return next;
+		});
+	}
+
+	async function confirmSwImport() {
+		if (!sw) return;
+		try {
+			const res = await importSuwayomi.mutateAsync({ file: sw.file, dryRun: false, mapping: swMapping });
+			setSwResult(res);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	function closeSwModal() {
+		setSw(null);
+		setSwMapping({});
+		setSwResult(null);
+	}
 
 	async function onAibFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.currentTarget.files?.[0];
@@ -734,7 +860,7 @@ function BackupSection() {
 	return (
 		<Section
 			title="备份"
-			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管；也可导入 Aidoku App 的 .aib 备份（书库、分类、阅读进度，增量合并不覆盖现状）"
+			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管；也可导入 Aidoku App 的 .aib 或 Suwayomi/Mihon 的 .tachibk 备份（书库、分类、阅读进度，增量合并不覆盖现状）"
 		>
 			<div className="settings-backup__ops">
 				<a className="btn settings-backup__download" href={backupUrl()} download>
@@ -763,7 +889,78 @@ function BackupSection() {
 					hidden
 					onChange={(e) => void onAibFile(e)}
 				/>
+				<Button loading={importSuwayomi.isPending && !sw} onClick={() => swFileRef.current?.click()}>
+					<FileUp size={15} />
+					从 Suwayomi 导入
+				</Button>
+				<input
+					ref={swFileRef}
+					type="file"
+					accept=".tachibk,.gz,.proto"
+					hidden
+					onChange={(e) => void onSwFile(e)}
+				/>
 			</div>
+
+			<Modal
+				open={sw !== null}
+				title="从 Suwayomi 导入"
+				onClose={closeSwModal}
+				footer={
+					swResult ? (
+						<Button variant="primary" onClick={closeSwModal}>
+							完成
+						</Button>
+					) : (
+						<>
+							<Button onClick={closeSwModal}>取消</Button>
+							<Button variant="primary" loading={importSuwayomi.isPending} onClick={() => void confirmSwImport()}>
+								确认导入
+							</Button>
+						</>
+					)
+				}
+			>
+				{swResult ? (
+					<SuwayomiImportResultView result={swResult} />
+				) : (
+					sw && (
+						<>
+							<p className="settings-modal-text">
+								将导入：书库 {sw.preview.imported.library} · 分类 {sw.preview.imported.categories} ·
+								进度 {sw.preview.imported.progress}
+							</p>
+							<p className="settings-modal-text">备份里的源与已装源的对应关系：</p>
+							<ul className="settings-backup__mapping">
+								{sw.preview.sources.map((g) => (
+									<li key={g.mihonSourceId} className="settings-backup__mapping-row">
+										<span className="settings-backup__mapping-name">
+											{suwayomiGroupName(g)}（{g.mangaCount} 部）
+										</span>
+										{g.match === 'unmatched' ? (
+											<SuwayomiMappingSelect
+												group={g}
+												value={swMapping[g.mihonSourceId] ?? ''}
+												onChange={(key) => setSwSource(g.mihonSourceId, key)}
+											/>
+										) : (
+											<span className="faint">自动匹配：{g.aidokuSourceName ?? g.aidokuSourceKey}</span>
+										)}
+									</li>
+								))}
+							</ul>
+							{sw.preview.skipped.length > 0 && (
+								<p className="settings-modal-text">
+									未选择映射的源将整组跳过（{sw.preview.skipped.length} 个条目）。
+								</p>
+							)}
+							<p className="settings-backup__warn">
+								导入是增量合并：已存在的书库条目与分类保持现状，阅读进度取较大值；此操作不可撤销。只有唯一同名的源才会自动匹配，其余需手动指定。
+							</p>
+						</>
+					)
+				)}
+			</Modal>
 
 			<Modal
 				open={aib !== null}

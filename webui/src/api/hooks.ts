@@ -34,6 +34,7 @@ import type {
 	SearchStreamEvent,
 	Source,
 	SourceRepo,
+	SuwayomiImportResult,
 	UpdateAllOutcome
 } from './types';
 
@@ -586,6 +587,31 @@ export function useImportAidoku() {
 	return useMutation({
 		mutationFn: ({ file, dryRun }: { file: File; dryRun: boolean }) =>
 			api<AidokuImportResult>(`/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
+		onSuccess: (_result, vars) => {
+			if (!vars.dryRun) qc.invalidateQueries();
+		}
+	});
+}
+
+/** 导入 Suwayomi/Mihon 备份：mapping 只对 unmatched 组起作用，键是字符串形态的 Mihon 源 id */
+export function useImportSuwayomi() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			file,
+			dryRun,
+			mapping
+		}: {
+			file: File;
+			dryRun: boolean;
+			mapping?: Record<string, string>;
+		}) => {
+			let query = `dryRun=${dryRun}`;
+			if (mapping && Object.keys(mapping).length > 0) {
+				query += `&sourceMapping=${encodeURIComponent(JSON.stringify(mapping))}`;
+			}
+			return api<SuwayomiImportResult>(`/import/suwayomi?${query}`, { method: 'POST', body: file });
+		},
 		onSuccess: (_result, vars) => {
 			if (!vars.dryRun) qc.invalidateQueries();
 		}
