@@ -20,6 +20,8 @@ tracing.workspace = true
 chrono = "0.4"
 chrono-tz = "0.10"
 ego-tree = "0.11"
+# scraper 公共签名（Element::new/Attribute/QualName）本身的类型出处，attr 写入要用
+html5ever = "0.39"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip"] }
 scraper = { version = "0.27", features = ["atomic"] }
 url = "2.5"

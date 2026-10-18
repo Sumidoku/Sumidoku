@@ -66,6 +66,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "ego-tree",
+ "html5ever",
  "image",
  "postcard",
  "reqwest",

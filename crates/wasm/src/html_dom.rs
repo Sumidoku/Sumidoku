@@ -1,11 +1,13 @@
 use ego_tree::NodeId;
+use html5ever::{Attribute, LocalName, QualName, ns};
 use scraper::{CaseSensitivity, ElementRef, Html, Selector};
-use std::{ops::Deref, rc::Rc};
+use scraper::node::{Node, Text};
+use std::{cell::RefCell, ops::Deref, rc::Rc};
 use url::Url;
 
 #[derive(Debug, Clone)]
 pub struct HtmlDocument {
-	pub html: Rc<Html>,
+	pub html: Rc<RefCell<Html>>,
 	pub base_uri: Option<Rc<Url>>,
 }
 
@@ -14,7 +16,7 @@ pub struct HtmlElement(pub HtmlNode);
 
 #[derive(Debug, Clone)]
 pub struct HtmlNode {
-	pub html: Rc<Html>,
+	pub html: Rc<RefCell<Html>>,
 	pub base_uri: Option<Rc<Url>>,
 	pub id: NodeId,
 }
@@ -27,7 +29,7 @@ impl HtmlDocument {
 		let html = Html::parse_document(html);
 		let base_uri = base_uri.and_then(|s| Url::parse(s).ok()).map(Rc::new);
 		Self {
-			html: Rc::new(html),
+			html: Rc::new(RefCell::new(html)),
 			base_uri,
 		}
 	}
@@ -36,14 +38,14 @@ impl HtmlDocument {
 		let html = Html::parse_fragment(html);
 		let base_uri = base_uri.and_then(|s| Url::parse(s).ok()).map(Rc::new);
 		Self {
-			html: Rc::new(html),
+			html: Rc::new(RefCell::new(html)),
 			base_uri,
 		}
 	}
 
 	pub fn select(&self, selector: &Selector) -> HtmlElementList {
-		let elements: Vec<HtmlElement> = self
-			.html
+		let html = self.html.borrow();
+		let elements: Vec<HtmlElement> = html
 			.select_with_root(selector)
 			.map(|element| {
 				HtmlElement(HtmlNode {
@@ -60,35 +62,40 @@ impl HtmlDocument {
 
 impl HtmlNode {
 	pub fn is_element(&self) -> bool {
-		let Some(node) = self.html.tree.get(self.id) else {
+		let html = self.html.borrow();
+		let Some(node) = html.tree.get(self.id) else {
 			return false;
 		};
 		node.value().is_element()
 	}
 
 	pub fn is_document(&self) -> bool {
-		let Some(node) = self.html.tree.get(self.id) else {
+		let html = self.html.borrow();
+		let Some(node) = html.tree.get(self.id) else {
 			return false;
 		};
 		node.value().is_document()
 	}
 
 	pub fn is_text(&self) -> bool {
-		let Some(node) = self.html.tree.get(self.id) else {
+		let html = self.html.borrow();
+		let Some(node) = html.tree.get(self.id) else {
 			return false;
 		};
 		node.value().is_text()
 	}
 
 	pub fn is_comment(&self) -> bool {
-		let Some(node) = self.html.tree.get(self.id) else {
+		let html = self.html.borrow();
+		let Some(node) = html.tree.get(self.id) else {
 			return false;
 		};
 		node.value().is_comment()
 	}
 
 	pub fn child_nodes(&self) -> Option<Vec<HtmlNode>> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		Some(
 			node.children()
 				.map(|node| self.child_node(node.id()))
@@ -97,12 +104,14 @@ impl HtmlNode {
 	}
 
 	pub fn parent(&self) -> Option<HtmlNode> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		node.parent().map(|node| self.child_node(node.id()))
 	}
 
 	pub fn siblings(&self) -> Option<Vec<HtmlNode>> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		Some(
 			node.next_siblings()
 				.map(|node| self.child_node(node.id()))
@@ -111,18 +120,141 @@ impl HtmlNode {
 	}
 
 	pub fn next_sibling(&self) -> Option<HtmlNode> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		node.next_sibling().map(|node| self.child_node(node.id()))
 	}
 
 	pub fn prev_sibling(&self) -> Option<HtmlNode> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		node.prev_sibling().map(|node| self.child_node(node.id()))
 	}
 
 	pub fn text(&self) -> Option<String> {
-		let node = self.html.tree.get(self.id)?;
+		let html = self.html.borrow();
+		let node = html.tree.get(self.id)?;
 		node.value().as_text().map(|text| text.deref().into())
+	}
+
+	/// None = 节点已不在树中。非元素节点报 None：ego-tree 只有元素挂属性，
+	/// 与上游 jsoup 的 Node.attr 差异在此（上游 host 未实现该函数，无 ABI 冲突）
+	pub fn set_attr(&self, key: &str, value: &str) -> Option<()> {
+		self.replace_attrs(|attrs| {
+			if let Some(existing) = attrs.iter_mut().find(|(k, _)| k == key) {
+				existing.1 = value.to_string();
+			} else {
+				attrs.push((key.to_string(), value.to_string()));
+			}
+		})
+	}
+
+	/// jsoup removeAttr：属性不存在也是成功
+	pub fn remove_attr(&self, key: &str) -> Option<()> {
+		self.replace_attrs(|attrs| attrs.retain(|(k, _)| k != key))
+	}
+
+	/// jsoup Element.text(String)：清空子节点，换成单个文本节点
+	pub fn set_text(&self, text: &str) -> Option<()> {
+		let mut html = self.html.borrow_mut();
+		let mut node = html.tree.get_mut(self.id)?;
+		if !matches!(node.value(), Node::Element(_)) {
+			return None;
+		}
+		detach_children(&mut node);
+		node.append(Node::Text(Text { text: text.into() }));
+		Some(())
+	}
+
+	/// jsoup Element.html(String)：解析 fragment 替换全部子节点
+	pub fn set_html(&self, fragment: &str) -> Option<()> {
+		self.splice(fragment, Splice::Replace)
+	}
+
+	pub fn prepend_html(&self, fragment: &str) -> Option<()> {
+		self.splice(fragment, Splice::Prepend)
+	}
+
+	pub fn append_html(&self, fragment: &str) -> Option<()> {
+		self.splice(fragment, Splice::Append)
+	}
+
+	/// class 读写都走 class 属性重写：jsoup 语义是「空白切分、去重保序、集合运算后写回」，
+	/// removeClass 清空后保留空 class 属性（jsoup classNames(set) 恒写回）
+	pub fn add_class(&self, class: &str) -> Option<()> {
+		self.replace_attrs(|attrs| {
+			let mut classes = normalized_classes(attrs);
+			if !classes.iter().any(|c| c == class) {
+				classes.push(class.to_string());
+			}
+			set_class_attr(attrs, classes);
+		})
+	}
+
+	pub fn remove_class(&self, class: &str) -> Option<()> {
+		self.replace_attrs(|attrs| {
+			let mut classes = normalized_classes(attrs);
+			classes.retain(|c| c != class);
+			set_class_attr(attrs, classes);
+		})
+	}
+
+	/// ego-tree detach 只摘父子/兄弟链接，子树完整留在 arena：
+	/// 被 remove 的元素之后仍可读写（对齐 jsoup remove 后元素对象仍可用），
+	/// 只是从文档根不可达
+	pub fn detach(&self) -> Option<()> {
+		let mut html = self.html.borrow_mut();
+		html.tree.get_mut(self.id)?.detach();
+		Some(())
+	}
+
+	fn splice(&self, fragment: &str, mode: Splice) -> Option<()> {
+		let frag = Html::parse_fragment(fragment);
+		let mut html = self.html.borrow_mut();
+		// extend_tree 把 fragment 树并入（orphan 子树）；
+		// html5ever fragment 算法会造一个 <html> 包裹元素，内容节点是它的子节点
+		let frag_root_id = html.tree.extend_tree(frag.tree).id();
+		let container_id = fragment_container(&html.tree, frag_root_id);
+		let mut node = html.tree.get_mut(self.id)?;
+		if !matches!(node.value(), Node::Element(_)) {
+			return None;
+		}
+		if mode == Splice::Replace {
+			detach_children(&mut node);
+		}
+		// reparent_from_id_* 整段移动子节点链表，fragment 内相对顺序不变
+		match mode {
+			Splice::Prepend => node.reparent_from_id_prepend(container_id),
+			_ => node.reparent_from_id_append(container_id),
+		}
+		Some(())
+	}
+
+	fn replace_attrs(&self, f: impl FnOnce(&mut Vec<(String, String)>)) -> Option<()> {
+		let mut html = self.html.borrow_mut();
+		let mut node = html.tree.get_mut(self.id)?;
+		let Node::Element(element) = node.value() else {
+			return None;
+		};
+		// Element 的 id/classes 是 OnceCell 缓存，直接改 attrs 会让 .class/#id
+		// 选择器读到旧值——必须 Element::new 整体重建让缓存失效
+		let mut attrs: Vec<(String, String)> = element
+			.attrs()
+			.map(|(k, v)| (k.to_string(), v.to_string()))
+			.collect();
+		let name = element.name.clone();
+		f(&mut attrs);
+		*element = scraper::node::Element::new(
+			name,
+			attrs
+				.into_iter()
+				.map(|(k, v)| Attribute {
+					name: QualName::new(None, ns!(), LocalName::from(k.as_str())),
+					value: v.into(),
+				})
+				.collect(),
+		);
+		Some(())
 	}
 
 	fn child_node(&self, id: NodeId) -> HtmlNode {
@@ -134,9 +266,65 @@ impl HtmlNode {
 	}
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Splice {
+	Prepend,
+	Append,
+	Replace,
+}
+
+fn detach_children(node: &mut ego_tree::NodeMut<'_, Node>) {
+	let children: Vec<NodeId> = node.as_ref().children().map(|child| child.id()).collect();
+	for id in children {
+		if let Some(mut child) = node.tree().get_mut(id) {
+			child.detach();
+		}
+	}
+}
+
+/// fragment 树的内容容器：恰好一个 <html> 子元素时剥开它，否则直接用根
+fn fragment_container(tree: &ego_tree::Tree<Node>, root_id: NodeId) -> NodeId {
+	let Some(root) = tree.get(root_id) else {
+		return root_id;
+	};
+	let mut children = root.children();
+	let (Some(first), None) = (children.next(), children.next()) else {
+		return root_id;
+	};
+	match first.value().as_element() {
+		Some(element) if element.name.local.as_ref() == "html" => first.id(),
+		_ => root_id,
+	}
+}
+
+fn normalized_classes(attrs: &[(String, String)]) -> Vec<String> {
+	let raw = attrs
+		.iter()
+		.find(|(k, _)| k == "class")
+		.map(|(_, v)| v.as_str())
+		.unwrap_or("");
+	let mut classes: Vec<String> = Vec::new();
+	for name in raw.split_whitespace() {
+		if !classes.iter().any(|c| c == name) {
+			classes.push(name.to_string());
+		}
+	}
+	classes
+}
+
+fn set_class_attr(attrs: &mut Vec<(String, String)>, classes: Vec<String>) {
+	let value = classes.join(" ");
+	if let Some(existing) = attrs.iter_mut().find(|(k, _)| k == "class") {
+		existing.1 = value;
+	} else {
+		attrs.push(("class".to_string(), value));
+	}
+}
+
 impl HtmlElement {
 	pub fn select(&self, selector: &Selector) -> Option<HtmlElementList> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 
 		let elements: Vec<HtmlElement> = element
@@ -148,7 +336,8 @@ impl HtmlElement {
 	}
 
 	pub fn select_first(&self, selector: &Selector) -> Option<HtmlElement> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 
 		element
@@ -159,7 +348,8 @@ impl HtmlElement {
 
 	/// 仅后代匹配，不含元素自身（:contains 分段求值里剩余选择器的作用域）
 	pub fn select_descendants(&self, selector: &Selector) -> HtmlElementList {
-		let Some(node) = self.0.html.tree.get(self.0.id) else {
+		let html = self.0.html.borrow();
+		let Some(node) = html.tree.get(self.0.id) else {
 			return HtmlElementList(Vec::new());
 		};
 		let Some(element) = ElementRef::wrap(node) else {
@@ -176,9 +366,12 @@ impl HtmlElement {
 	pub fn attr(&self, name: &str) -> Option<String> {
 		let has_abs_prefix = name.starts_with("abs:");
 		let name = if has_abs_prefix { &name[4..] } else { name };
-		let node = self.0.html.tree.get(self.0.id)?;
-		let element = ElementRef::wrap(node)?;
-		let attr = element.attr(name).map(|value| value.to_string());
+		let attr = {
+			let html = self.0.html.borrow();
+			let node = html.tree.get(self.0.id)?;
+			let element = ElementRef::wrap(node)?;
+			element.attr(name).map(|value| value.to_string())
+		};
 		if has_abs_prefix {
 			if let Some(base_uri) = self.0.base_uri.as_ref() {
 				attr.as_ref()
@@ -200,7 +393,8 @@ impl HtmlElement {
 	}
 
 	pub fn text(&self, trimmed: bool) -> Option<String> {
-		let result = ElementRef::wrap(self.0.html.tree.get(self.0.id)?)?
+		let html = self.0.html.borrow();
+		let result = ElementRef::wrap(html.tree.get(self.0.id)?)?
 			.text()
 			.collect::<String>();
 		if trimmed {
@@ -211,25 +405,29 @@ impl HtmlElement {
 	}
 
 	pub fn html(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(element.inner_html())
 	}
 
 	pub fn outer_html(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(element.html())
 	}
 
 	pub fn parent(&self) -> Option<HtmlElement> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		element.parent().map(|element| self.child(element.id()))
 	}
 
 	pub fn children(&self) -> Option<HtmlElementList> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(HtmlElementList(
 			element
@@ -240,7 +438,8 @@ impl HtmlElement {
 	}
 
 	pub fn siblings(&self) -> Option<HtmlElementList> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(HtmlElementList(
 			element
@@ -251,7 +450,8 @@ impl HtmlElement {
 	}
 
 	pub fn next_sibling(&self) -> Option<HtmlElement> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		element
 			.next_sibling()
@@ -259,7 +459,8 @@ impl HtmlElement {
 	}
 
 	pub fn prev_sibling(&self) -> Option<HtmlElement> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		element
 			.prev_sibling()
@@ -267,7 +468,8 @@ impl HtmlElement {
 	}
 
 	pub fn own_text(&self) -> Option<String> {
-		ElementRef::wrap(self.0.html.tree.get(self.0.id)?)?
+		let html = self.0.html.borrow();
+		ElementRef::wrap(html.tree.get(self.0.id)?)?
 			.text()
 			.next()
 			.map(|text| text.to_string())
@@ -276,7 +478,8 @@ impl HtmlElement {
 	/// jsoup 仅 script/style 内容算 DataNode；html5ever 统一存文本节点，
 	/// 其他元素按 jsoup 语义给空串
 	pub fn data(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		if !matches!(element.value().name(), "script" | "style") {
 			return Some(String::new());
@@ -285,25 +488,29 @@ impl HtmlElement {
 	}
 
 	pub fn id(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		element.value().id().map(|s| s.to_string())
 	}
 
 	pub fn tag_name(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(element.value().name().to_string())
 	}
 
 	pub fn class_name(&self) -> Option<String> {
-		let node = self.0.html.tree.get(self.0.id)?;
+		let html = self.0.html.borrow();
+		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
 		Some(element.value().classes().collect::<Vec<&str>>().join(" "))
 	}
 
 	pub fn has_class(&self, class: &str) -> bool {
-		let Some(node) = self.0.html.tree.get(self.0.id) else {
+		let html = self.0.html.borrow();
+		let Some(node) = html.tree.get(self.0.id) else {
 			return false;
 		};
 		let Some(element) = ElementRef::wrap(node) else {
@@ -315,7 +522,8 @@ impl HtmlElement {
 	}
 
 	pub fn has_attr(&self, name: &str) -> bool {
-		let Some(node) = self.0.html.tree.get(self.0.id) else {
+		let html = self.0.html.borrow();
+		let Some(node) = html.tree.get(self.0.id) else {
 			return false;
 		};
 		let Some(element) = ElementRef::wrap(node) else {
@@ -325,7 +533,8 @@ impl HtmlElement {
 	}
 
 	pub fn has_any_attribute(&self) -> bool {
-		let Some(node) = self.0.html.tree.get(self.0.id) else {
+		let html = self.0.html.borrow();
+		let Some(node) = html.tree.get(self.0.id) else {
 			return false;
 		};
 		let Some(element) = ElementRef::wrap(node) else {
@@ -965,5 +1174,116 @@ mod tests {
 		.unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].attr("href").as_deref(), Some("/1"));
+	}
+
+	#[test]
+	fn set_attr_visibility_and_cache_reset() {
+		let doc = HtmlDocument::parse(HTML, None);
+		let content = content_element(&doc);
+		let first_p = content.select_first(&Selector::parse("p.text").unwrap()).unwrap();
+
+		first_p.0.set_attr("data-k", "v1").unwrap();
+		assert_eq!(first_p.attr("data-k").as_deref(), Some("v1"));
+		first_p.0.set_attr("data-k", "v2").unwrap();
+		assert_eq!(first_p.attr("data-k").as_deref(), Some("v2"));
+
+		// id/classes 有 OnceCell 缓存，attr 写入走 Element::new 重建后 #id 选择器必须看到新值
+		first_p.0.set_attr("id", "target").unwrap();
+		assert_eq!(doc.select(&Selector::parse("#target").unwrap()).0.len(), 1);
+
+		first_p.0.remove_attr("data-k").unwrap();
+		assert_eq!(first_p.attr("data-k"), None);
+		first_p.0.remove_attr("data-k").unwrap();
+
+		// 文本节点挂不了属性
+		let text_node = content
+			.0
+			.child_nodes()
+			.unwrap()
+			.into_iter()
+			.find(|n| n.is_text())
+			.unwrap();
+		assert!(text_node.set_attr("k", "v").is_none());
+	}
+
+	#[test]
+	fn set_text_replaces_children() {
+		let doc = HtmlDocument::parse(HTML, None);
+		let content = content_element(&doc);
+		let first_p = content.select_first(&Selector::parse("p.text").unwrap()).unwrap();
+
+		first_p.0.set_text("only <b> & more").unwrap();
+		assert_eq!(first_p.text(true).as_deref(), Some("only <b> & more"));
+		assert_eq!(
+			first_p.outer_html().as_deref(),
+			Some(r#"<p class="text">only &lt;b&gt; &amp; more</p>"#)
+		);
+		assert_eq!(first_p.0.child_nodes().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn fragment_splice_order() {
+		let doc = HtmlDocument::parse(HTML, None);
+		let content = content_element(&doc);
+
+		content.0.append_html("<em>a</em>x<b>b</b>").unwrap();
+		content.0.prepend_html("<i>h</i>").unwrap();
+		let inner = content.html().unwrap();
+		assert!(inner.starts_with("<i>h</i>"), "got: {inner}");
+		assert!(inner.ends_with("<em>a</em>x<b>b</b>"), "got: {inner}");
+
+		// 拼进来的节点对同一文档的 select 可见
+		assert_eq!(doc.select(&Selector::parse("em").unwrap()).0.len(), 1);
+		assert_eq!(doc.select(&Selector::parse("div i").unwrap()).0.len(), 1);
+
+		// set_html 先清空再拼接
+		content.0.set_html("<span>only</span>").unwrap();
+		assert_eq!(content.html().as_deref(), Some("<span>only</span>"));
+		assert_eq!(doc.select(&Selector::parse("p.text").unwrap()).0.len(), 0);
+		// 空 fragment 是合法 no-op
+		content.0.append_html("").unwrap();
+		assert_eq!(content.html().as_deref(), Some("<span>only</span>"));
+	}
+
+	#[test]
+	fn class_ops_normalize_and_stay_visible() {
+		let doc = HtmlDocument::parse(
+			r#"<!DOCTYPE html><html><body><div id="d" class="x  x y">t</div></body></html>"#,
+			None,
+		);
+		let el = doc.select(&Selector::parse("#d").unwrap()).0.into_iter().next().unwrap();
+
+		el.0.add_class("z").unwrap();
+		// 重复空白与重复 class 被归一化（jsoup classNames 集合语义）
+		assert_eq!(el.class_name().as_deref(), Some("x y z"));
+		el.0.add_class("z").unwrap();
+		assert_eq!(el.class_name().as_deref(), Some("x y z"));
+		assert_eq!(doc.select(&Selector::parse("#d.z").unwrap()).0.len(), 1);
+
+		el.0.remove_class("x").unwrap();
+		assert_eq!(el.class_name().as_deref(), Some("y z"));
+		el.0.remove_class("missing").unwrap();
+		assert_eq!(el.class_name().as_deref(), Some("y z"));
+		// 清空后保留空 class 属性（jsoup 恒写回）
+		el.0.remove_class("y").unwrap();
+		el.0.remove_class("z").unwrap();
+		assert!(el.has_attr("class"));
+		assert_eq!(el.class_name().as_deref(), Some(""));
+	}
+
+	#[test]
+	fn detach_keeps_subtree_usable() {
+		let doc = HtmlDocument::parse(HTML, None);
+		let content = content_element(&doc);
+		let first_p = content.select_first(&Selector::parse("p.text").unwrap()).unwrap();
+
+		first_p.0.detach().unwrap();
+		assert_eq!(doc.select(&Selector::parse("p.text").unwrap()).0.len(), 1);
+		// ego-tree detach 保留子树：被摘下的元素仍可读写，parent 变 None
+		assert_eq!(first_p.text(true).as_deref(), Some("Hello & goodbye"));
+		first_p.0.set_text("changed").unwrap();
+		assert_eq!(first_p.text(true).as_deref(), Some("changed"));
+		assert!(first_p.parent().is_none());
+		assert!(first_p.0.parent().is_none());
 	}
 }
