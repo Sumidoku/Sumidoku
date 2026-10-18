@@ -53,6 +53,37 @@ Migrations in `crates/server/migrations`.
   `delete_source` prunes the key. The Browse page shows the pinned sources
   in an ordered section above the full list, with drag-to-reorder
   (`webui/src/pages/BrowsePage.tsx`).
+- Cross-source migration (`api/migrate.rs`): moves library entries between
+  sources, Aidoku-style. `GET /api/v1/migrate/sources` lists installed
+  sources with their in-library `mangaCount` (plus pin data from
+  `source_json`); `GET /api/v1/migrate/lookup?mangaId=&targetSourceId=[&query=]`
+  runs a title search on one destination source through the source's normal
+  search path (rate limits intact) and returns the candidates with internal
+  ids attached — the batch flow's auto-match calls it per destination in
+  priority order and takes the first source with any hit (its first
+  result), the single flow calls it across all destinations 3 at a time.
+  `POST /api/v1/migrate` `{mode, entries: [{fromMangaId, toSourceId,
+  toMangaKey, toManga?}]}` executes serially: each entry is one SQLite
+  transaction (the `get_manga_update` fetch that initializes a new target's
+  metadata and chapters happens before the transaction), so a failed entry
+  never rolls back the ones already committed and reports
+  `{ok: false, reason}` (`not_found`, `not_in_library`, `source_not_found`,
+  `same_source`, `fetch_failed`) next to the successful
+  `{ok: true, toMangaId, warnings}`. An existing target row is reused and
+  merged into. Carried state: library membership (target keeps its own
+  `in_library_at` when already in library, else inherits the origin's),
+  category membership (union), and reading progress matched by chapter
+  `number` (duplicates resolve to the lowest `source_order`; numberless
+  origin chapters fall back to `volume` but only match numberless target
+  chapters), merged with max(`last_page_read`), OR-ed `is_read`/
+  `is_bookmarked` and the newest `last_read_at`; unmatched chapters land in
+  the entry's `warnings`. Modes: `copy` keeps the origin untouched,
+  `migrate` removes it from the library and resets its progress fields (the
+  row stays for the download flag), `migrateWithHistory` removes it from
+  the library but keeps its progress rows. The web UI has the batch
+  source-first wizard at `/migrate` (`webui/src/pages/migrate/`) and the
+  single-manga flow in the detail page's more-menu
+  (`webui/src/pages/manga/MigrateModal.tsx`).
 - Authentication (`auth.rs`): off until a password exists — either seeded
   from the config (`auth.password`, or the legacy `basic_password` alias)
   on every boot, or stored in the `auth_credential` table by a previous
