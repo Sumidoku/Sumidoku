@@ -10,7 +10,15 @@
 			// 首屏前先落主题，避免暗色用户看到一帧亮色
 			try {
 				var t = localStorage.getItem('sumidoku.theme');
-				if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+				if (t === 'system') {
+					document.documentElement.dataset.theme = window.matchMedia(
+						'(prefers-color-scheme: dark)'
+					).matches
+						? 'dark'
+						: 'light';
+				} else if (t === 'light' || t === 'dark') {
+					document.documentElement.dataset.theme = t;
+				}
 			} catch (e) {}
 		</script>
 	</head>
