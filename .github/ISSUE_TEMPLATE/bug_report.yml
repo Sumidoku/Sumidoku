@@ -1,0 +1,35 @@
+name: Bug report
+description: Something in Sumidoku is broken
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release tag or commit, e.g. v0.1.0. `docker inspect` image tag counts.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How do you run it?
+      options:
+        - Docker image
+        - Binary from the releases page
+        - Built from source
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: What happened, and how to make it happen again
+      description: Steps, what you expected, what you got instead. For a source problem, name the source package and its version.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Server log lines around the failure (`docker logs`, or stderr). Redact tokens and cookies.
+      render: text

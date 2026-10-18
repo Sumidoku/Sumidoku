@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea for Sumidoku
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve for you?
+      description: What are you trying to do that Sumidoku can't do, or does badly?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like to see
+      description: A sketch is fine. If another project does it well, name it — Sumidoku takes cues from Aidoku and Suwayomi.
