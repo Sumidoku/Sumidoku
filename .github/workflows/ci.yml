@@ -67,7 +67,11 @@ jobs:
         with:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: rui314/setup-mold@v2
       - run: cargo nextest run --workspace
+        env:
+          # mold 只产 ELF：Linux 腿用它压链接时间，macOS 腿走系统 ld
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
 
   build:
     needs: changes
@@ -90,7 +94,11 @@ jobs:
         with:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
+      - uses: rui314/setup-mold@v2
+        if: matrix.os == 'ubuntu-latest'
       - run: cargo build --workspace --all-targets
+        env:
+          RUSTFLAGS: ${{ matrix.os == 'ubuntu-latest' && '-C link-arg=-fuse-ld=mold' || '' }}
 
   web:
     needs: changes
@@ -134,7 +142,10 @@ jobs:
         working-directory: webui
         run: npm ci && npm run build
       # rust-embed only bundles webui/build into a release build
+      - uses: rui314/setup-mold@v2
       - run: cargo build --release -p sumidoku-server
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
       - run: mkdir -p dist/amd64 && cp target/release/sumidoku-server dist/amd64/
       - uses: docker/setup-buildx-action@v4
       - uses: docker/build-push-action@v7

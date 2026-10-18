@@ -111,6 +111,8 @@ jobs:
       - name: Build (cross)
         if: matrix.builder == 'cross'
         run: cross build --release --target ${{ matrix.target }} -p sumidoku-server
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
       - name: Build (cargo)
         if: matrix.builder == 'cargo'
         run: cargo build --release --target ${{ matrix.target }} -p sumidoku-server

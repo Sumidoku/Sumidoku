@@ -1,0 +1,10 @@
+# mold 只产 ELF：release 的 Linux cross 腿在 cross 容器里用它压链接时间；
+# 本文件是 cross 的专属配置，cargo 构建忽略它，macOS 与本地开发不受影响
+[build.env]
+passthrough = ["RUSTFLAGS"]
+
+[target.x86_64-unknown-linux-gnu]
+pre-build = ["apt-get update && apt-get install -y mold"]
+
+[target.aarch64-unknown-linux-gnu]
+pre-build = ["apt-get update && apt-get install -y mold"]
