@@ -67,6 +67,26 @@ limiting (`runtime/rate_limit.rs`), and the host functions sources import
 JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
 isolated context per ABI descriptor, time- and loop-limited, with no host
 access beyond what the ABI exposes.
+The `webview` ABI functions split in two (`imports/js.rs`, `webview.rs`).
+The script-running subset is backed by the same Boa engine with one isolated
+engine per webview descriptor, separate from `js` contexts:
+`webview_load_html` resets the engine (a new document replaces the old
+one's state), installs a `window = globalThis` and a `location.href` shim —
+there is no DOM, so `document.*` is deliberately absent — and runs the
+document's inline `<script>`s in order. External `src` scripts are skipped
+(there is no document loader), non-JavaScript `type`s are not executed,
+user scripts wrap the page scripts by injection time, and a failing script
+is logged without failing the load or the scripts after it.
+`webview_wait_for_load` is a synchronous no-op; `webview_eval` /
+`webview_eval_async` behave like their `context_*` counterparts under the
+same time and loop limits. The functions that need a real browser —
+`webview_load` (navigation), `webview_set_rule_list` (content blocking),
+`webview_get_cookies` / `webview_delete_cookie` (cookie store) — return
+`-1` (`JsError::MissingResult`; the ABI has no "unsupported" code) and log
+the function name and reason, so a source relying on them sees the calling
+operation fail with a diagnosable line in the source log. An invalid
+webview rid maps to `-4` (`InvalidHandler`), and webview and js-context
+rids are not interchangeable.
 `send_partial_result` payloads are decoded per in-flight call and pushed
 to streaming callers (`SourceHandle::get_home_streaming` /
 `get_search_manga_list_streaming`); home partials pass through the
