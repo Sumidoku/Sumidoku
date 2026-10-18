@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**`tokio::time::pause` breaks sqlx pool acquisition — age test data
+directly instead of freezing the clock.** With `start_paused`,
+`SqlitePool::connect` fails with `Db(PoolTimedOut)` before the first
+query, so a paused-clock test cannot even build its database. When a
+test needs an aged in-memory timestamp, set it through the struct
+(same-module tests can reach private fields) and keep loop-level tests
+on a short real tick.
+- Evidence: 2026-10-19, PR #128's idle-evict tests: all five
+  `start_paused` state tests died at `db::create_pool` with
+  `Db(PoolTimedOut)`; rewinding `SourceEntry.last_used` via a
+  `make_idle` helper made them deterministic with no clock control.
+
 **Expected values come from running the reference engine, not from
 reasoning about it.** When the contract is "match engine X" (for
 html_dom: jsoup/SwiftSoup), an expected value produced from docs or
