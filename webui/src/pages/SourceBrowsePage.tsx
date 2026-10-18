@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, House, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
+import { sourceImageUrl } from '../api/client';
 import {
 	useListing,
 	useRegisterManga,
@@ -387,7 +388,7 @@ export default function SourceBrowsePage() {
 						{entries.map((m, i) => (
 							<CoverCard
 								key={m.key + i}
-								src={m.cover}
+								src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover}
 								title={m.title}
 								subtitle={m.authors?.[0] ?? statusText(m.status)}
 								busy={pendingKey === m.key}

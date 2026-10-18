@@ -257,6 +257,12 @@ Migrations in `crates/server/migrations`.
   returned PNG — for the reader, OPDS, downloads and the cover endpoint
   alike. Cover caching is unchanged: the processed bytes are what the
   on-disk cache stores.
+- Browse/home covers are proxied through
+  `GET /api/v1/sources/{id}/image?url=…` (`source/cover.rs:get_source_image`):
+  only http/https URLs are accepted and the bytes pass through
+  `fetch_remote` without a disk cache, so a hotlink-protected host sees the
+  source's `get_image_request` headers exactly as on the detail and reader
+  paths.
 - Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.

@@ -1,16 +1,38 @@
 use crate::api::{RefreshQuery, wants_refresh};
 use crate::error::{ApiError, ApiResult};
-use crate::source::{fetch_cover_image, manga_row};
+use crate::source::{fetch_cover_image, fetch_remote, manga_row};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
+use serde::Deserialize;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
 const DEFAULT_MIME: &str = "image/jpeg";
 const COVER_MAX_AGE: u64 = 86400;
+
+#[derive(Debug, Deserialize)]
+pub struct ImageQuery {
+	pub url: String,
+}
+
+/// 源图床的防盗链（Referer 等）只有服务端能按源声明带上，<img> 直连必 403；
+/// 纯透传不落缓存——浏览/home 封面量大且复用率低
+pub async fn get_source_image(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	Query(query): Query<ImageQuery>,
+) -> ApiResult<Response> {
+	let parsed = reqwest::Url::parse(&query.url).map_err(|_| ApiError::bad_request("invalid image url"))?;
+	if !matches!(parsed.scheme(), "http" | "https") {
+		return Err(ApiError::bad_request("unsupported image url scheme"));
+	}
+	let image = fetch_remote(&state, id, &query.url, None).await?;
+	let mime = image.mime.unwrap_or_else(|| DEFAULT_MIME.into());
+	Ok(bytes_response(image.bytes, &mime, COVER_MAX_AGE))
+}
 
 pub async fn get_cover(
 	State(state): State<Arc<AppState>>,

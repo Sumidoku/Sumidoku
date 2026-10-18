@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, House, Search, TriangleAlert } from 'lucide-react';
+import { sourceImageUrl } from '../api/client';
 import { useRegisterManga, useSource, useSourceHome } from '../api/hooks';
 import type { HomeComponent, HomeFilterItem, HomeLink, Listing, Manga } from '../api/types';
 import { chapterLabel, relativeTime } from '../lib/format';
@@ -61,6 +62,11 @@ export default function SourceHomePage() {
 
 	function linkBusy(link: HomeLink): boolean {
 		return link.value !== null && 'Manga' in link.value && pendingKey === link.value.Manga.key;
+	}
+
+	/** 防盗链要的头只有服务端能按源声明带上，封面统一走服务端代理 */
+	function proxyImage(url: string | null): string | null {
+		return url ? sourceImageUrl(sourceId, url) : url;
 	}
 
 	if (source.data && !source.data.enabled) {
@@ -180,7 +186,7 @@ export default function SourceHomePage() {
 							disabled={pendingKey === m.key}
 							onClick={() => void openManga(m)}
 						>
-							<Cover src={m.cover} title={m.title} />
+							<Cover src={proxyImage(m.cover)} title={m.title} />
 							<span className="home-big-card__main">
 								<span className="home-big-card__title">{m.title}</span>
 								{m.authors && m.authors.length > 0 && (
@@ -199,7 +205,7 @@ export default function SourceHomePage() {
 					{v.Scroller.entries.map((link, i) => (
 						<div className="home-scroller__item" key={link.title + i}>
 							<CoverCard
-								src={link.image_url}
+								src={proxyImage(link.image_url)}
 								title={link.title}
 								busy={linkBusy(link)}
 								onClick={link.value ? () => openLink(link) : undefined}
@@ -222,7 +228,7 @@ export default function SourceHomePage() {
 							onClick={() => openLink(link)}
 						>
 							{ranking && <span className="home-row__rank">{i + 1}</span>}
-							<Cover src={link.image_url} title={link.title} />
+							<Cover src={proxyImage(link.image_url)} title={link.title} />
 							<span className="home-row__main">
 								<span className="home-row__title">{link.title}</span>
 								{link.subtitle && <span className="home-row__subtitle">{link.subtitle}</span>}
@@ -244,7 +250,7 @@ export default function SourceHomePage() {
 							disabled={pendingKey === manga.key}
 							onClick={() => void openManga(manga)}
 						>
-							<Cover src={manga.cover} title={manga.title} />
+							<Cover src={proxyImage(manga.cover)} title={manga.title} />
 							<span className="home-row__main">
 								<span className="home-row__title">{manga.title}</span>
 								<span className="home-row__subtitle">
