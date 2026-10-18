@@ -85,6 +85,11 @@ impl Config {
 	pub fn sources_dir(&self) -> PathBuf {
 		self.config_dir.join("sources")
 	}
+
+	/// PageContent::Image 物化出的页图 blob 目录（<chapter_id>/<idx>.png），同样钉死
+	pub fn page_blobs_dir(&self) -> PathBuf {
+		self.config_dir.join("page-blobs")
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]

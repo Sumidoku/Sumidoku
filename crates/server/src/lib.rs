@@ -39,6 +39,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let updater = update::UpdateScheduler::new(&state);
 	assert!(state.updater.set(updater.clone()).is_ok());
 	downloads.recover().await;
+	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;
 	tokio::spawn(downloads.run());
 	tokio::spawn(updater.run());
 	let app = api::router(state.clone());

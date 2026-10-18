@@ -234,11 +234,7 @@ async fn update_page_content(pool: &sqlx::SqlitePool, chapter_id: i64, idx: i64,
 
 #[tokio::test]
 async fn cover_and_page_proxy() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, tmp, db_path } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let pool = connect_db(&db_path).await;
 
@@ -255,13 +251,19 @@ async fn cover_and_page_proxy() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
 	assert_eq!(headers["cache-control"], "private, max-age=86400");
-	assert_eq!(bytes, PNG);
+	// example fixture 带 process_cover_image 导出，封面恒被处理成 200x300 PNG
+	let cover = image::ImageReader::new(std::io::Cursor::new(&bytes))
+		.with_guessed_format()
+		.expect("cover format")
+		.decode()
+		.expect("cover decode");
+	assert_eq!((cover.width(), cover.height()), (200, 300));
 
 	// 上游消失后仍 200：走缓存
 	upstream.abort();
-	let (status, _, bytes) = request_full(&app, "GET", &cover_path, None).await;
+	let (status, _, cached) = request_full(&app, "GET", &cover_path, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, PNG);
+	assert_eq!(cached, bytes);
 
 	// ?refresh 绕过缓存 → 上游已死 502
 	let (status, body) = request(&app, "GET", &format!("{cover_path}?refresh"), None).await;
@@ -314,11 +316,20 @@ async fn cover_and_page_proxy() {
 	assert_eq!(headers["content-type"], "image/jpeg");
 	assert_eq!(bytes, PNG);
 
-	// Image 页：M4 前 501
-	update_page_content(&pool, chapter_id, 0, json!({"Image": {}})).await;
+	// Image 页：物化 blob 存在时正常出图；引用不存在的 blob 报 404
+	update_page_content(&pool, chapter_id, 0, json!({"Image": "0.png"})).await;
+	let blob_dir = tmp.path().join("page-blobs").join(chapter_id.to_string());
+	std::fs::create_dir_all(&blob_dir).expect("mkdir blob dir");
+	std::fs::write(blob_dir.join("0.png"), PNG).expect("write blob");
+	let (status, headers, bytes) = request_full(&app, "GET", &page_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/png");
+	assert_eq!(bytes, PNG);
+
+	update_page_content(&pool, chapter_id, 0, json!({"Image": "9.png"})).await;
 	let (status, body) = request(&app, "GET", &page_path, None).await;
-	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-	assert_eq!(body["error"]["code"], "unsupported");
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(body["error"]["code"], "not_found");
 
 	// 越界 404
 	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/99"), None).await;

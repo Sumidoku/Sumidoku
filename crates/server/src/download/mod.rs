@@ -1,5 +1,5 @@
 use crate::model::{ChapterRow, MangaRow, unix_now};
-use crate::source::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
+use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
 use crate::state::AppState;
 use crate::USER_ID;
 use aidoku::PageContext;
@@ -523,7 +523,7 @@ impl DownloadManager {
 				let state = state.clone();
 				let tmp_dir = tmp_dir.clone();
 				tasks.spawn(async move {
-					let name = fetch_page(&state, source_id, &tmp_dir, idx, &content).await?;
+					let name = fetch_page(&state, source_id, chapter_id, &tmp_dir, idx, &content).await?;
 					Ok((position, name))
 				});
 			}
@@ -567,6 +567,7 @@ impl DownloadManager {
 async fn fetch_page(
 	state: &Arc<AppState>,
 	source_id: i64,
+	chapter_id: i64,
 	tmp_dir: &Path,
 	idx: i64,
 	stored: &str,
@@ -574,7 +575,7 @@ async fn fetch_page(
 	let stored: Value =
 		serde_json::from_str(stored).map_err(|e| format!("parse page {idx}: {e}"))?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
-	let (bytes, ext) = page_bytes(state, source_id, &content)
+	let (bytes, ext) = page_bytes(state, source_id, chapter_id, &content)
 		.await
 		.map_err(|e| format!("page {idx}: {e}"))?;
 	let name = format!("{idx:03}.{ext}");
@@ -587,10 +588,17 @@ async fn fetch_page(
 async fn page_bytes(
 	state: &Arc<AppState>,
 	source_id: i64,
+	chapter_id: i64,
 	content: &Value,
 ) -> Result<(Vec<u8>, String), String> {
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
 		return Ok((text.as_bytes().to_vec(), "txt".into()));
+	}
+	if let Some(name) = content.get("Image").and_then(Value::as_str) {
+		let bytes = crate::source::page_image_blob(state, chapter_id, name)
+			.await
+			.map_err(|e| format!("{e:?}"))?;
+		return Ok((bytes, "png".into()));
 	}
 	if let Some(url) = content.get("Url").and_then(Value::as_array) {
 		let url_str = url
@@ -602,7 +610,7 @@ async fn page_bytes(
 				.map_err(|e| format!("invalid page context: {e}"))?,
 			_ => None,
 		};
-		let (bytes, mime) = fetch_remote(state, source_id, url_str, context)
+		let (bytes, mime) = fetch_page_image(state, source_id, url_str, context)
 			.await
 			.map_err(|e| format!("{e:?}"))?;
 		return Ok((bytes, ext_for_mime(mime.as_deref()).to_string()));
@@ -621,10 +629,6 @@ async fn page_bytes(
 			.map_err(|e| format!("{e:?}"))?;
 		let entry = extract_zip_entry(&zip_bytes, entry_path)?;
 		return Ok((entry, ext_for_path(entry_path)));
-	}
-	// Image 是源内 canvas 句柄，M4 process_*_image 落地前无法还原成字节
-	if content.get("Image").is_some() {
-		return Err("image page content is not supported yet".into());
 	}
 	Err("unknown page content".into())
 }

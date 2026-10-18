@@ -8,7 +8,7 @@ use crate::model::{
 };
 use crate::state::AppState;
 use aidoku::{Chapter, Manga, PageContext};
-use aidoku_wasm::DefaultValue;
+use aidoku_wasm::{DefaultValue, SourceHandle};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -640,15 +640,17 @@ pub async fn load_pages(
 	let pages = handle
 		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
 		.await?;
+	let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
 	{
 		let mut tx = state.pool.begin().await?;
 		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
 			.bind(chapter_id)
 			.execute(&mut *tx)
 			.await?;
-		for (index, page) in pages.iter().enumerate() {
+		for (index, content) in contents.iter().enumerate() {
+			let page = &pages[index];
 			let stored = serde_json::json!({
-				"content": serde_json::to_value(&page.content)?,
+				"content": content,
 				"thumbnail": page.thumbnail,
 				"hasDescription": page.has_description,
 				"description": page.description,
@@ -675,6 +677,77 @@ pub async fn load_pages(
 	Ok(stored)
 }
 
+/// Image 页物化：RID 只在当前 actor 会话里有效，字节落 blob 文件后 JSON 只存
+/// 文件名（{"Image": "<idx>.png"}），这是重启与 actor 重建后仍能取页的唯一形态。
+/// 任一页取字节失败整章失败，blob 目录下轮的整章重写会清掉半成品
+async fn materialize_image_pages(
+	state: &Arc<AppState>,
+	handle: &SourceHandle,
+	chapter_id: i64,
+	pages: &[aidoku::Page],
+) -> ApiResult<Vec<serde_json::Value>> {
+	let dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+	let _ = tokio::fs::remove_dir_all(&dir).await;
+	let mut contents = Vec::with_capacity(pages.len());
+	let mut dir_ready = false;
+	for (index, page) in pages.iter().enumerate() {
+		let mut content = serde_json::to_value(&page.content)?;
+		if let Some(rid) = content.get("Image").and_then(serde_json::Value::as_i64) {
+			let bytes = handle.take_page_image(rid as i32).await?;
+			if !dir_ready {
+				tokio::fs::create_dir_all(&dir)
+					.await
+					.map_err(|e| ApiError::internal(format!("create page blob dir: {e}")))?;
+				dir_ready = true;
+			}
+			let name = format!("{index}.png");
+			tokio::fs::write(dir.join(&name), &bytes)
+				.await
+				.map_err(|e| ApiError::internal(format!("write page blob: {e}")))?;
+			content = serde_json::json!({"Image": name});
+		}
+		contents.push(content);
+	}
+	Ok(contents)
+}
+
+/// 物化过的 Image 页读字节：blob 文件名只由 load_pages 写入（<idx>.png），
+/// 但仍按文件名基元校验一遍防路径逃逸
+pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str) -> ApiResult<Vec<u8>> {
+	if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
+		return Err(ApiError::bad_request("invalid page blob name"));
+	}
+	let path = state
+		.config
+		.page_blobs_dir()
+		.join(chapter_id.to_string())
+		.join(name);
+	tokio::fs::read(&path)
+		.await
+		.map_err(|_| ApiError::not_found("page blob not found"))
+}
+
+/// 启动清扫：chapter 行没了的 blob 目录整棵删掉（章节对账删除后只剩这里能回收）
+pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
+	let mut read_dir = match tokio::fs::read_dir(dir).await {
+		Ok(read_dir) => read_dir,
+		Err(_) => return,
+	};
+	while let Ok(Some(entry)) = read_dir.next_entry().await {
+		let Some(id) = entry.file_name().to_str().and_then(|n| n.parse::<i64>().ok()) else {
+			continue;
+		};
+		let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM chapter WHERE id = ? LIMIT 1")
+			.bind(id)
+			.fetch_optional(pool)
+			.await
+			.unwrap_or(None);
+		if exists.is_none() {
+			let _ = tokio::fs::remove_dir_all(entry.path()).await;
+		}
+	}
+}
+
 async fn read_body(response: reqwest::Response) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
@@ -699,16 +772,46 @@ pub async fn http_get(state: &AppState, url: &str) -> ApiResult<(Vec<u8>, Option
 	read_body(response).await
 }
 
+/// 图像取回的完整结果：字节之外带状态与头，process_*_image 构造 ImageResponse 要用
+pub struct RemoteImage {
+	pub bytes: Vec<u8>,
+	pub mime: Option<String>,
+	pub status: u16,
+	pub response_headers: Vec<(String, String)>,
+	pub request_headers: Vec<(String, String)>,
+}
+
+fn flatten_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+	let mut flat: Vec<(String, String)> = headers
+		.iter()
+		.filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
+		.collect();
+	flat.sort();
+	flat.dedup();
+	flat
+}
+
 /// 按源特性拉图：有 image_request 用源给的 spec 发请求，否则裸 GET
 pub async fn fetch_remote(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 	context: Option<PageContext>,
-) -> ApiResult<(Vec<u8>, Option<String>)> {
+) -> ApiResult<RemoteImage> {
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().image_request {
-		return http_get(state, url).await;
+		let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
+		let response = state.http.get(&parsed).await.map_err(fetch_err)?;
+		let status = response.status().as_u16();
+		let response_headers = flatten_headers(response.headers());
+		let (bytes, mime) = read_body(response).await?;
+		return Ok(RemoteImage {
+			bytes,
+			mime,
+			status,
+			response_headers,
+			request_headers: Vec::new(),
+		});
 	}
 	let spec = handle.get_image_request(url.to_string(), context).await?;
 	let spec_url =
@@ -720,8 +823,8 @@ pub async fn fetch_remote(
 	for (name, value) in &spec.headers {
 		builder = builder.header(name, value);
 	}
-	if let Some(body) = spec.body {
-		builder = builder.body(body);
+	if let Some(body) = &spec.body {
+		builder = builder.body(body.clone());
 	}
 	let response = builder
 		.send()
@@ -733,7 +836,64 @@ pub async fn fetch_remote(
 			response.status()
 		)));
 	}
-	read_body(response).await
+	let status = response.status().as_u16();
+	let response_headers = flatten_headers(response.headers());
+	let (bytes, mime) = read_body(response).await?;
+	Ok(RemoteImage {
+		bytes,
+		mime,
+		status,
+		response_headers,
+		request_headers: spec.headers,
+	})
+}
+
+/// 处理器输出统一编码成 PNG（无损且源侧解码链路已有）
+const PROCESSED_MIME: &str = "image/png";
+
+/// 页图拉取：fetch_remote 之后源有 page_image_processor 就过一道处理
+pub async fn fetch_page_image(
+	state: &Arc<AppState>,
+	source_id: i64,
+	url: &str,
+	context: Option<PageContext>,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let handle = state.get_handle(source_id).await?;
+	if !handle.features().page_image_processor {
+		let image = fetch_remote(state, source_id, url, context).await?;
+		return Ok((image.bytes, image.mime));
+	}
+	let image = fetch_remote(state, source_id, url, context.clone()).await?;
+	let bytes = handle
+		.process_page_image(process_input(image, url), context)
+		.await?;
+	Ok((bytes, Some(PROCESSED_MIME.into())))
+}
+
+/// 封面拉取：同上，走 cover_image_processor
+pub async fn fetch_cover_image(
+	state: &Arc<AppState>,
+	source_id: i64,
+	url: &str,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let handle = state.get_handle(source_id).await?;
+	if !handle.features().cover_image_processor {
+		let image = fetch_remote(state, source_id, url, None).await?;
+		return Ok((image.bytes, image.mime));
+	}
+	let image = fetch_remote(state, source_id, url, None).await?;
+	let bytes = handle.process_cover_image(process_input(image, url)).await?;
+	Ok((bytes, Some(PROCESSED_MIME.into())))
+}
+
+fn process_input(image: RemoteImage, url: &str) -> aidoku_wasm::ProcessImageInput {
+	aidoku_wasm::ProcessImageInput {
+		bytes: image.bytes,
+		url: url.to_string(),
+		status: image.status,
+		response_headers: image.response_headers,
+		request_headers: image.request_headers,
+	}
 }
 
 const COVER_DEFAULT_MIME: &str = "image/jpeg";
@@ -749,7 +909,7 @@ pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec
 	let Some(url) = manga.cover_url.clone() else {
 		return Err(ApiError::not_found("cover not available"));
 	};
-	let (bytes, mime) = fetch_remote(state, manga.source_id, &url, None).await?;
+	let (bytes, mime) = fetch_cover_image(state, manga.source_id, &url).await?;
 	let mime = mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
 	match cover_cache_write(&covers_dir, manga_id, &bytes, &mime).await {
 		Ok(()) => cover_cache_enforce_limit(&covers_dir, state.config.cover_cache_max),
@@ -831,7 +991,7 @@ fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
 	}
 }
 
-/// OPDS-PSE 页图取字节：流程同 page.rs（Url 走 fetch_remote、Zip 解包；Text/Image 报错）
+/// OPDS-PSE 页图取字节：流程同 page.rs（Url 走 fetch_page_image、Zip 解包、Image 读物化 blob）
 pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let pages = load_pages(state, chapter_id, false).await?;
@@ -843,9 +1003,9 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 	if content.get("Text").is_some() {
 		return Err(ApiError::bad_request("text page content cannot be streamed as image"));
 	}
-	// Image 是源内 canvas 句柄，M4 process_*_image 落地前无法在服务端还原成字节
-	if content.get("Image").is_some() {
-		return Err(ApiError::unsupported_501("image page content is not supported yet"));
+	if let Some(name) = content.get("Image").and_then(serde_json::Value::as_str) {
+		let bytes = page_image_blob(state, chapter_id, name).await?;
+		return Ok((bytes, Some(PROCESSED_MIME.into())));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
@@ -867,7 +1027,7 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
 			_ => None,
 		};
-		return fetch_remote(state, manga.source_id, url_str, context).await;
+		return fetch_page_image(state, manga.source_id, url_str, context).await;
 	}
 	Err(ApiError::bad_request("unknown page content"))
 }
