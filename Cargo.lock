@@ -80,6 +80,7 @@ dependencies = [
  "wasmer",
  "wasmer-compiler",
  "wasmer-middlewares",
+ "zip",
 ]
 
 [[package]]

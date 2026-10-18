@@ -36,8 +36,12 @@ Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
 (`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
 limiting (`runtime/rate_limit.rs`), and the host functions sources import
 (`imports/`), including the HTML DOM helper (`html_dom.rs`). `source.rs`
-loads and validates packages; the server scans the `sources/` directory
-under `config_dir` for them.
+loads and validates packages; `package.rs` reads the `.aix` zip layout
+(`Payload/source.json` manifest, `Payload/main.wasm` payload) into memory
+without extracting. The server scans the `sources/` directory under
+`config_dir` for `.aix` files and extracted source directories alike;
+both register the same way, with `wasm_path` pointing at the `.aix` or
+the directory's `main.wasm`.
 
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.

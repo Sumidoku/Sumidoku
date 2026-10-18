@@ -71,8 +71,7 @@ pub(crate) struct SourceInstance {
 
 impl SourceInstance {
 	pub fn build(config: &SourceConfig) -> Result<Self> {
-		let wasm_bytes = std::fs::read(&config.wasm_path)
-			.map_err(|e| Error::Instance(format!("read wasm {}: {e}", config.wasm_path.display())))?;
+		let wasm_bytes = crate::package::read_wasm_payload(&config.wasm_path)?;
 
 		let metering: Arc<Metering<CostFn>> = Arc::new(Metering::new(config.limits.fuel, operator_cost as CostFn));
 		let mut compiler = Cranelift::default();
