@@ -54,7 +54,10 @@ and the server embeds it (see above).
   compile on ubuntu + macOS) skip web-only changes; the web leg (tsc +
   build) skips rust-only ones. The docker leg always runs: it is the only
   check that exercises the embedded web UI, and it smoke-tests `/health`,
-  the served `<title>`, and `/api/v1/settings`.
+  the served `<title>`, and `/api/v1/settings`. The terminal `ci` job
+  aggregates every leg (skipped counts as filtered-out, failure fails it);
+  branch protection pins `changes` and `ci` because a skipped matrix leg
+  never reports its expanded `build (os)` name.
 - `release.yml`: a push to `main` touching `Cargo.toml` reads the
   workspace version and skips when that release already exists
   (`workflow_dispatch` is the manual fallback). Builds cross-compile the
