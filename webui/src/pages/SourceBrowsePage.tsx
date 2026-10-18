@@ -354,7 +354,8 @@ export default function SourceBrowsePage() {
 				</>
 			)}
 
-			{activeQuery.isPending ? (
+			{/* 流式搜索中 partial 已进列表：骨架只留给一条都没有时，之后边到边追加 */}
+			{activeQuery.isPending && entries.length === 0 ? (
 				<div className="cover-grid">
 					{Array.from({ length: 12 }, (_, i) => (
 						<div key={i}>

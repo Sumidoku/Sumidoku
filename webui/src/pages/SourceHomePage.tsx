@@ -78,6 +78,8 @@ export default function SourceHomePage() {
 	}
 
 	const home = homeQuery.data;
+	// 流式加载中 partial 已写进缓存：有数据就边到边渲染，骨架只留给全无数据时
+	const showSkeleton = (!home && homeQuery.isPending) || (home !== null && home !== undefined && home.components.length === 0 && homeQuery.isFetching);
 
 	return (
 		<div className="page container">
@@ -92,7 +94,7 @@ export default function SourceHomePage() {
 				</Button>
 			</div>
 
-			{homeQuery.isPending ? (
+			{showSkeleton ? (
 				<>
 					{[0, 1].map((i) => (
 						<div className="home-section" key={i}>
