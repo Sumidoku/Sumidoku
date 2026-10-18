@@ -17,6 +17,7 @@ pub struct WasmEnv {
 	pub store: GlobalStore,
 	pub defaults: Defaults,
 	pub net: NetState,
+	pub browser: crate::browser::BrowserState,
 	pub limits: Limits,
 	pub source_key: String,
 	pub logger: Arc<dyn HostLogger>,

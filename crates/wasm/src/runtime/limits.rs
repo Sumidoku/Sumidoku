@@ -20,6 +20,8 @@ pub struct Limits {
 	pub js_timeout: Duration,
 	/// js 单循环迭代上限：promise reaction job 内死循环的最后兜底（VM 回边检查）
 	pub js_loop_max: u64,
+	/// webview 浏览器导航超时；必须低于 call_timeout，否则熔断先于超时生效
+	pub browser_timeout: Duration,
 }
 
 impl Default for Limits {
@@ -33,6 +35,7 @@ impl Default for Limits {
 			memory_max: 256 * 1024 * 1024,
 			js_timeout: Duration::from_secs(10),
 			js_loop_max: 1_000_000_000,
+			browser_timeout: Duration::from_secs(30),
 		}
 	}
 }

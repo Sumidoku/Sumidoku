@@ -27,6 +27,8 @@ scraper = { version = "0.27", features = ["atomic"] }
 url = "2.5"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 boa_engine = "0.21"
+chromiumoxide = { version = "0.9", default-features = false }
+futures = "0.3"
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

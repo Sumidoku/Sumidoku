@@ -31,6 +31,7 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; enables Cloudflare-bypass retries |
 | `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
+| `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview for source login flows |
 
 ## Cloudflare bypass (trawl)
 
@@ -39,6 +40,18 @@ Sources behind Cloudflare anti-bot protection are fetched through a [trawl](http
 With `SUMIDOKU_NET_TRAWL_PROXY` set, a direct request answered `403`/`503` with Cloudflare headers is retried once through trawl. Cookies on the solved response (`cf_clearance`) land in the source's session jar, so later direct requests reuse the clearance; when it expires the cycle repeats. Sources that challenge every request can skip the failed direct attempt by listing their domains in `SUMIDOKU_NET_RELAY_DOMAINS`. Without the variable, behavior is unchanged: requests go direct and the challenge page reaches the source.
 
 HTTPS sources also need `SUMIDOKU_NET_TRAWL_CA`: trawl terminates TLS locally to inspect responses and re-signs with its own root CA, which the client must trust. The compose file already runs the sidecar and shares the CA through the `trawl-ca` volume — trawl writes `ca.crt` into it on first boot, Sumidoku reads it from `/trawl-ca/ca.crt`.
+
+## Browser-backed webview (source login)
+
+Sources that log in through a web view (load the login page in a real browser, then call their API with the session cookie) need a Chromium sidecar: Sumidoku ships no browser, it drives one over CDP. Point `SUMIDOKU_NET_BROWSER_WS` at the sidecar's CDP websocket — for the [browserless](https://ghcr.io/browserless/chromium) image that is `ws://<host>:3000/chromium`; other CDP-capable images (e.g. headless-shell on :9222) work the same way, with whatever path that image serves.
+
+The compose file carries an optional `chromium` service, off by default:
+
+```sh
+docker compose --profile browser up -d
+```
+
+and `SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium` (a commented line is already in the compose environment). Each webview a source opens gets an isolated browser context — cookies never bleed across webviews — and after every page load the context's cookies flow into the source's session jar, so once the login page completes, the source's own API requests carry the session. Without the variable, behavior is unchanged: the navigation/cookie webview functions report themselves unsupported in the source log.
 
 ## Installing sources
 

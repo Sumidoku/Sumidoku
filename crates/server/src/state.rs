@@ -187,6 +187,7 @@ impl AppState {
 		config.defaults = defaults;
 		config.cookies = cookies;
 		config.policy = self.policy.clone();
+		config.browser_ws = self.config.net.browser_ws.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
 		});

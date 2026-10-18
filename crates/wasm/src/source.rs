@@ -31,6 +31,8 @@ pub struct SourceConfig {
 	pub cookie_sink: Arc<dyn CookieSink>,
 	pub policy: Arc<dyn NetPolicy>,
 	pub logger: Arc<dyn HostLogger>,
+	/// CDP websocket 地址（ws://…）；None 时 webview 浏览器函数显式不支持
+	pub browser_ws: Option<String>,
 }
 
 impl SourceConfig {
@@ -45,6 +47,7 @@ impl SourceConfig {
 			cookie_sink: Arc::new(crate::traits::NoopCookieSink),
 			policy: Arc::new(crate::traits::DirectPolicy { user_agent: None }),
 			logger: Arc::new(crate::traits::StdoutLogger),
+			browser_ws: None,
 		}
 	}
 }
@@ -102,6 +105,10 @@ impl SourceInstance {
 				net: crate::runtime::env::NetState::new(
 					config.policy.clone(),
 					crate::imports::CookieJar::new(config.cookies.clone(), config.cookie_sink.clone()),
+				),
+				browser: crate::browser::BrowserState::new(
+					config.browser_ws.clone(),
+					config.limits.browser_timeout,
 				),
 				limits: config.limits.clone(),
 				source_key: config.key.clone(),

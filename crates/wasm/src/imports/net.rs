@@ -133,6 +133,21 @@ impl CookieJar {
 		if pairs.is_empty() { None } else { Some(pairs.join("; ")) }
 	}
 
+	/// 浏览器回流的 cookie 按 Domain 属性直接落库（无 Set-Cookie 原文可解析）；
+	/// 与 store 一样经 sink 持久化，否则登录态只活内存、重启即丢
+	pub fn insert(&mut self, domain: &str, name: &str, value: &str) {
+		if domain.is_empty() || name.is_empty() {
+			return;
+		}
+		self.domains
+			.entry(domain.to_string())
+			.or_default()
+			.insert(name.to_string(), value.to_string());
+		if let Some(sink) = &self.sink {
+			sink.set(domain, name, Some(value));
+		}
+	}
+
 	pub fn store(&mut self, url: &Url, set_cookie: &str) {
 		let mut parts = set_cookie.split(';');
 		let Some(pair) = parts.next() else { return };
@@ -719,6 +734,30 @@ mod tests {
 				("example.com".to_string(), "gone".to_string(), None),
 			],
 			"不存在的 cookie 删除不该发 None"
+		);
+	}
+
+	#[test]
+	fn jar_insert_fires_sink_for_browser_reflux() {
+		// 浏览器回流（insert）与 store 同一条持久化通道，否则登录态重启即丢
+		struct RecSink(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
+		impl CookieSink for RecSink {
+			fn set(&self, domain: &str, name: &str, value: Option<&str>) {
+				self.0
+					.lock()
+					.expect("writes lock")
+					.push((domain.to_string(), name.to_string(), value.map(str::to_string)));
+			}
+		}
+		let sink = Arc::new(RecSink(std::sync::Mutex::new(Vec::new())));
+		let mut jar = CookieJar::new(HashMap::new(), sink.clone());
+		jar.insert("example.com", "sid", "abc");
+		jar.insert("", "ignored", "x");
+		let writes = sink.0.lock().expect("writes lock").clone();
+		assert_eq!(
+			writes,
+			vec![("example.com".to_string(), "sid".to_string(), Some("abc".to_string()))],
+			"空 domain/name 既不落库也不发 sink"
 		);
 	}
 

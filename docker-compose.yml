@@ -13,6 +13,8 @@ services:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
+      # 源登录用的真浏览器背衬；配合下方 chromium 服务（--profile browser）
+      # - SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium
       # - SUMIDOKU_BASIC_PASSWORD=
     depends_on:
       - trawl
@@ -31,6 +33,14 @@ services:
       - trawl-ca:/data/proxy-ca
       - trawl-data:/data
     # 不暴露端口，仅 compose 内网可达
+
+  # 可选：webview 真浏览器背衬（源登录流程）。默认不拉起，
+  # docker compose --profile browser up -d 才启动
+  chromium:
+    image: ghcr.io/browserless/chromium:latest
+    profiles: ["browser"]
+    shm_size: 1gb
+    # 不暴露端口，仅 compose 内网可达；CDP ws 端点 ws://chromium:3000/chromium
 
 volumes:
   trawl-ca:
