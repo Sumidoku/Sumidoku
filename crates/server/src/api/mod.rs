@@ -489,12 +489,18 @@ async fn get_source_settings(
 			.unwrap_or_default(),
 		Err(e) => return Err(ApiError::from(e)),
 	};
-	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）
+	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）；
+	// 源已自行声明同名键时跳过合成项，避免列表里出现两个同键设置
+	let declared = settings::declared_keys(&items);
 	let mut extras: Vec<Value> = Vec::new();
-	if let Some(language) = settings::language_setting(&doc) {
+	if let Some(language) = settings::language_setting(&doc)
+		&& !settings::clashes(&language, &declared)
+	{
 		extras.push(language);
 	}
-	if let Some(base_url) = settings::base_url_setting(&doc) {
+	if let Some(base_url) = settings::base_url_setting(&doc)
+		&& !settings::clashes(&base_url, &declared)
+	{
 		extras.push(base_url);
 	}
 	for (offset, extra) in extras.into_iter().enumerate() {

@@ -279,7 +279,11 @@ Migrations in `crates/server/migrations`.
   (`fetch_remote` / `http_get`) — bypass the wasm net host, so they attach
   the same per-source `Accept-Language` default themselves (via
   `RoutedClients::get_with` / the image-request builder); a source that set
-  its own `Accept-Language` on an image request keeps it.
+  its own `Accept-Language` on an image request keeps it, and a source-set
+  `User-Agent` likewise wins over the global one
+  (`RoutedClients::request_with`, insert-only-if-absent) rather than being
+  appended as a second value — Cloudflare reads only the first and 403s a
+  duplicated header.
 
 ## WASM sources (`crates/wasm`)
 
@@ -396,9 +400,11 @@ synthesized base-URL `select` (key `url`, default the first URL) prepended
 to the list, mirroring AidokuRunner's extra settings; a source declaring
 more than one language gets a synthesized language setting (key
 `languages`, or `language` when `config.languageSelectType` is `single`)
-prepended ahead of it, with the default from each language's `isDefault`
-(AidokuRunner picks the device-language intersection; the server has no
-device locale, so it falls back to the first).
+  prepended ahead of it, with the default from each language's `isDefault`
+  (AidokuRunner picks the device-language intersection; the server has no
+  device locale, so it falls back to the first). A synthesized setting is
+  skipped when the source already declares the same key, so the list never
+  shows two entries keyed alike.
 `POST .../settings/reset` clears the
 overrides and re-seeds package defaults; `POST .../login/basic` runs the
 source's `handle_basic_login` and, on success, persists the credentials and

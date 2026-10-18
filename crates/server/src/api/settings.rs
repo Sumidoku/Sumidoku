@@ -5,6 +5,8 @@
 //! `Setting` 序列化成嵌套的 `{type,key,title,...,value:{Kind:{...}}}`（snake_case）。
 //! `/sources/{id}/settings` 对两种来源都返回后者，前端才只需处理一种形状。
 
+use std::collections::HashSet;
+
 use serde_json::{Map, Value, json};
 
 use crate::source::{
@@ -116,6 +118,37 @@ pub fn language_setting(doc: &Value) -> Option<Value> {
 		"refreshes": null,
 		"value": { "Group": { "footer": null, "items": [select] } },
 	}))
+}
+
+/// 源自己声明的叶子设置键（递归 group/page，跳过容器）
+pub fn declared_keys(items: &[Value]) -> HashSet<String> {
+	let mut keys = HashSet::new();
+	collect_leaf_keys(items, &mut keys);
+	keys
+}
+
+/// 合成的语言/线路设置是否与源已声明的键撞车：撞了就不合成，避免出现同键两项
+pub fn clashes(extra: &Value, declared: &HashSet<String>) -> bool {
+	let mut keys = HashSet::new();
+	collect_leaf_keys(std::slice::from_ref(extra), &mut keys);
+	keys.iter().any(|key| declared.contains(key))
+}
+
+fn collect_leaf_keys(items: &[Value], out: &mut HashSet<String>) {
+	for item in items {
+		let container = item
+			.get("value")
+			.and_then(|value| value.get("Group").or_else(|| value.get("Page")));
+		if let Some(container) = container {
+			if let Some(children) = container.get("items").and_then(Value::as_array) {
+				collect_leaf_keys(children, out);
+			}
+			continue;
+		}
+		if let Some(key) = item.get("key").and_then(Value::as_str) {
+			out.insert(key.to_string());
+		}
+	}
 }
 
 /// 扁平 settings.json -> 动态源同款嵌套数组；输入非数组时返回空
@@ -367,5 +400,35 @@ mod tests {
 	fn language_setting_needs_two_languages() {
 		assert!(language_setting(&json!({"info": {"languages": ["en"]}})).is_none());
 		assert!(language_setting(&json!({"info": {}})).is_none());
+	}
+
+	#[test]
+	fn declared_keys_clashes_guard_synthesized_settings() {
+		let items = json!([
+			{"type": "select", "key": "url", "title": "U", "value": {"Select": {"values": ["a"], "default": null}}},
+			{"type": "switch", "key": "dataSaver", "title": "D", "value": {"Toggle": {"default": false}}},
+			{"type": "group", "key": "__group_0", "title": "G", "value": {"Group": {"footer": null, "items": [
+				{"type": "select", "key": "language", "title": "L", "value": {"Select": {"values": ["en"], "default": null}}}
+			]}}}
+		]);
+		let keys = declared_keys(items.as_array().unwrap());
+		assert!(keys.contains("url"));
+		assert!(keys.contains("dataSaver"));
+		assert!(keys.contains("language"));
+		assert!(!keys.contains("__group_0"), "容器合成键不算设置键");
+
+		let doc = json!({
+			"info": {"url": "https://a.example", "urls": ["https://b.example"]},
+			"config": {"allowsBaseUrlSelect": true}
+		});
+		let base = base_url_setting(&doc).expect("base url setting");
+		assert!(clashes(&base, &keys), "源已声明 url，合成项应判冲突");
+
+		let single = json!({
+			"info": {"languages": ["en", "ja"]},
+			"config": {"languageSelectType": "single"}
+		});
+		let language = language_setting(&single).expect("language setting");
+		assert!(clashes(&language, &keys), "源已声明 language，合成项应判冲突");
 	}
 }
