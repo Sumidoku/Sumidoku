@@ -7,11 +7,13 @@ import {
 	Download,
 	ExternalLink,
 	Pencil,
+	RotateCw,
 	Trash2,
 	Upload
 } from 'lucide-react';
 import { ApiError, api, backupUrl, clearToken } from '../api/client';
 import {
+	useBackupFiles,
 	useCategories,
 	useCreateCategory,
 	useDeleteCategory,
@@ -19,10 +21,11 @@ import {
 	useRenameCategory,
 	useReorderCategories,
 	useRestoreBackup,
+	useRestoreNamedBackup,
 	useSaveServerSettings,
 	useServerSettings
 } from '../api/hooks';
-import type { BackupRestoreResult, Category } from '../api/types';
+import type { BackupFileEntry, BackupRestoreResult, Category } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
 import {
@@ -486,7 +489,7 @@ function ServerSettingsSection() {
 	}
 
 	return (
-		<Section title="服务器设置" desc="服务端暂不消费这些键，仅作通用存储">
+		<Section title="服务器设置" desc="通用键值存储；backup.* 键由「自动备份」区读写，请在那里修改">
 			{rows === null ? (
 				<Skeleton height={48} />
 			) : (
@@ -586,6 +589,30 @@ function previewCounts(doc: Record<string, unknown>): Record<string, number> {
 		settings: count('settings'),
 		sourceSettings: credentialCount
 	};
+}
+
+function BackupResultView({ result }: { result: BackupRestoreResult }) {
+	return (
+		<div className="settings-backup__result">
+			<p className="settings-modal-text">
+				已恢复：书库 {result.restored.library} · 分类 {result.restored.categories} · 进度{' '}
+				{result.restored.progress} · 设置 {result.restored.settings} · 源设置{' '}
+				{result.restored.sourceSettings}
+			</p>
+			{result.warnings.length === 0 ? (
+				<p className="faint">全部条目均已恢复，无跳过项</p>
+			) : (
+				<>
+					<p className="settings-modal-text">以下条目被跳过：</p>
+					<ul className="settings-backup__warnings">
+						{result.warnings.map((w, i) => (
+							<li key={i}>{w}</li>
+						))}
+					</ul>
+				</>
+			)}
+		</div>
+	);
 }
 
 function BackupSection() {
@@ -689,25 +716,7 @@ function BackupSection() {
 				}
 			>
 				{result ? (
-					<div className="settings-backup__result">
-						<p className="settings-modal-text">
-							已恢复：书库 {result.restored.library} · 分类 {result.restored.categories} · 进度{' '}
-							{result.restored.progress} · 设置 {result.restored.settings} · 源设置{' '}
-							{result.restored.sourceSettings}
-						</p>
-						{result.warnings.length === 0 ? (
-							<p className="faint">全部条目均已恢复，无跳过项</p>
-						) : (
-							<>
-								<p className="settings-modal-text">以下条目被跳过：</p>
-								<ul className="settings-backup__warnings">
-									{result.warnings.map((w, i) => (
-										<li key={i}>{w}</li>
-									))}
-								</ul>
-							</>
-						)}
-					</div>
+					<BackupResultView result={result} />
 				) : (
 					preview && (
 						<>
@@ -730,6 +739,206 @@ function BackupSection() {
 							</div>
 							<p className="settings-backup__warn">
 								导入会按所选内容覆盖当前实例的对应状态，此操作不可撤销；备份可能包含源站账号密码，请确认文件来源可信。
+							</p>
+						</>
+					)
+				)}
+			</Modal>
+		</Section>
+	);
+}
+
+function formatSize(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function ScheduledBackupSection() {
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const backups = useBackupFiles();
+	const restore = useRestoreNamedBackup();
+	const [confirming, setConfirming] = useState<BackupFileEntry | null>(null);
+	const [result, setResult] = useState<BackupRestoreResult | null>(null);
+	const [intervalText, setIntervalText] = useState<string | null>(null);
+	const [retentionText, setRetentionText] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (!settings.data) return;
+		if (intervalText === null)
+			setIntervalText(String(Number(settings.data['backup.interval_hours'] ?? 24)));
+		if (retentionText === null)
+			setRetentionText(String(Number(settings.data['backup.retention_count'] ?? 10)));
+	}, [settings.data, intervalText, retentionText]);
+
+	const data = settings.data;
+	if (!data || intervalText === null || retentionText === null) {
+		return (
+			<Section
+				title="自动备份"
+				desc="按周期把全量备份写入服务器目录；超出保留份数的最老备份自动清理，最新一份始终保留"
+			>
+				<Skeleton height={48} />
+			</Section>
+		);
+	}
+
+	const enabled = data['backup.enabled'] === true;
+	const lastRun = data['backup.last_run'];
+	const files = backups.data?.files ?? [];
+
+	function commitNumber(
+		key: 'backup.interval_hours' | 'backup.retention_count',
+		text: string,
+		fallback: number,
+		min: number,
+		reset: (v: string) => void
+	) {
+		const n = Number(text);
+		if (!Number.isInteger(n) || n < min) {
+			pushToast(`请输入不小于 ${min} 的整数`);
+			reset(String(fallback));
+			return;
+		}
+		if (n !== fallback) save.mutate({ [key]: n });
+	}
+
+	const intervalHours = Number(data['backup.interval_hours'] ?? 24);
+	const retentionCount = Number(data['backup.retention_count'] ?? 10);
+
+	async function confirmRestore() {
+		if (!confirming) return;
+		try {
+			const res = await restore.mutateAsync(confirming.name);
+			setResult(res);
+			setConfirming(null);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	function closeModal() {
+		setConfirming(null);
+		setResult(null);
+	}
+
+	return (
+		<Section
+			title="自动备份"
+			desc="按周期把全量备份写入服务器目录；超出保留份数的最老备份自动清理，最新一份始终保留"
+		>
+			<label className="settings-backup__section">
+				<input
+					type="checkbox"
+					checked={enabled}
+					onChange={(e) => save.mutate({ 'backup.enabled': e.currentTarget.checked })}
+				/>
+				启用自动备份
+			</label>
+			<div className="settings-row">
+				<span className="settings-row__label">备份间隔（小时）</span>
+				<Input
+					className="settings-backup__num"
+					type="number"
+					min={1}
+					value={intervalText}
+					onChange={(e) => setIntervalText(e.currentTarget.value)}
+					onBlur={() =>
+						commitNumber('backup.interval_hours', intervalText, intervalHours, 1, setIntervalText)
+					}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter')
+							commitNumber('backup.interval_hours', intervalText, intervalHours, 1, setIntervalText);
+					}}
+				/>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">保留份数</span>
+				<Input
+					className="settings-backup__num"
+					type="number"
+					min={0}
+					value={retentionText}
+					onChange={(e) => setRetentionText(e.currentTarget.value)}
+					onBlur={() =>
+						commitNumber('backup.retention_count', retentionText, retentionCount, 0, setRetentionText)
+					}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter')
+							commitNumber(
+								'backup.retention_count',
+								retentionText,
+								retentionCount,
+								0,
+								setRetentionText
+							);
+					}}
+				/>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">备份目录</span>
+				<span className="settings-backup__dir">{backups.data?.dir ?? '…'}</span>
+			</div>
+			<p className="faint settings-backup__hint">
+				目录可用 SUMIDOKU_BACKUP_DIR 或设置项 backup.dir 修改；上次备份：
+				{typeof lastRun === 'number' ? new Date(lastRun * 1000).toLocaleString() : '从未'}
+			</p>
+
+			<div className="settings-backup__files-head">
+				<span className="settings-row__label">已有备份</span>
+				<IconButton label="刷新" size="sm" onClick={() => void backups.refetch()}>
+					<RotateCw size={14} />
+				</IconButton>
+			</div>
+			{files.length === 0 ? (
+				<p className="faint">暂无备份</p>
+			) : (
+				<div className="settings-backup__files">
+					{files.map((f) => (
+						<div key={f.name} className="settings-backup__file">
+							<div className="settings-backup__file-meta">
+								<span>{new Date(f.createdAt * 1000).toLocaleString()}</span>
+								<span className="faint">{formatSize(f.size)}</span>
+							</div>
+							<Button size="sm" onClick={() => setConfirming(f)}>
+								恢复
+							</Button>
+						</div>
+					))}
+				</div>
+			)}
+
+			<Modal
+				open={confirming !== null || result !== null}
+				title="恢复备份"
+				onClose={closeModal}
+				footer={
+					result ? (
+						<Button variant="primary" onClick={closeModal}>
+							完成
+						</Button>
+					) : (
+						<>
+							<Button onClick={closeModal}>取消</Button>
+							<Button variant="danger" loading={restore.isPending} onClick={() => void confirmRestore()}>
+								恢复
+							</Button>
+						</>
+					)
+				}
+			>
+				{result ? (
+					<BackupResultView result={result} />
+				) : (
+					confirming && (
+						<>
+							<p className="settings-modal-text">
+								将从 {new Date(confirming.createdAt * 1000).toLocaleString()}{' '}
+								创建的备份恢复，覆盖当前实例的书库、分类、进度与全部设置，此操作不可撤销。
+							</p>
+							<p className="settings-backup__warn">
+								备份可能包含源站账号密码，请确认文件来源可信。
 							</p>
 						</>
 					)
@@ -773,6 +982,7 @@ export default function SettingsPage() {
 			<CategoriesSection />
 			<ServerSettingsSection />
 			<BackupSection />
+			<ScheduledBackupSection />
 			<AboutSection />
 		</div>
 	);

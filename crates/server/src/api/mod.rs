@@ -96,6 +96,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 				.post(backup::import_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
+		.route("/api/v1/backups", get(backup::list_backups))
+		.route("/api/v1/backups/restore", post(backup::restore_backup))
 		.route(
 			"/api/v1/source-repos",
 			get(repo::list_repos).post(repo::add_repo),

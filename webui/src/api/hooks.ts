@@ -8,6 +8,7 @@ import {
 import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
+	BackupListResponse,
 	BackupRestoreResult,
 	Category,
 	Chapter,
@@ -52,7 +53,8 @@ export const qk = {
 	chapters: (mangaId: number) => ['manga', mangaId, 'chapters'] as const,
 	sourceFilters: (sourceId: number) => ['sources', sourceId, 'filters'] as const,
 	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
-	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const
+	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
+	backups: ['backups'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -556,6 +558,23 @@ export function useRestoreBackup() {
 				method: 'POST',
 				body: doc
 			}),
+		onSuccess: () => qc.invalidateQueries()
+	});
+}
+
+export function useBackupFiles() {
+	return useQuery({
+		queryKey: qk.backups,
+		queryFn: () => api<BackupListResponse>('/backups')
+	});
+}
+
+/** 从服务器备份目录里的既有文件恢复：与上传恢复同一条导入路径，同样全量失效 */
+export function useRestoreNamedBackup() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (name: string) =>
+			api<BackupRestoreResult>('/backups/restore', { method: 'POST', body: { name } }),
 		onSuccess: () => qc.invalidateQueries()
 	});
 }

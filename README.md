@@ -35,6 +35,10 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_AUTH_PASSWORD` | — | site password; enables authentication for the web UI, REST API and OPDS |
 | `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
 | `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |
+| `SUMIDOKU_BACKUP_ENABLED` | — | force scheduled backups on/off, overriding the `backup.enabled` setting |
+| `SUMIDOKU_BACKUP_INTERVAL_HOURS` | — | override the `backup.interval_hours` setting (default 24) |
+| `SUMIDOKU_BACKUP_RETENTION_COUNT` | — | override the `backup.retention_count` setting (default 10) |
+| `SUMIDOKU_BACKUP_DIR` | `<config>/backups` | scheduled-backup destination, overriding the `backup.dir` setting; may live outside the config dir |
 
 ## Authentication
 
@@ -83,6 +87,19 @@ The OPDS 1.2 catalog is served at `/opds/v1.2`. When authentication is enabled, 
 ## Backup
 
 `GET /api/v1/backup` downloads the full library state — library membership and manga metadata, categories, reading progress, app settings and source settings — as one JSON document with a `version` field (currently `1`; unknown versions are rejected with `400`). `POST /api/v1/backup` imports it back, optionally limited with `?sections=library,categories,progress,settings,sourceSettings`. Import upserts by natural key (source key + manga key, chapter key, category name) inside a single transaction, so a failed or invalid backup leaves the database untouched; entries whose source is not installed are skipped and reported in the response `warnings`. The settings page of the web UI has download and restore buttons. The file contains source settings, which may include site passwords — store it accordingly.
+
+## Scheduled backups
+
+The server can also write backups on its own schedule, so a corrupted database or a bad change between manual exports stays recoverable. It is configured through the `setting` table (the web UI's settings page exposes all of it under "自动备份"), and each value can be pinned by the env override above for headless deployments:
+
+| Setting key | Default | Purpose |
+| --- | --- | --- |
+| `backup.enabled` | `false` | master switch |
+| `backup.interval_hours` | `24` | hours between runs (minimum 1) |
+| `backup.retention_count` | `10` | how many newest files to keep |
+| `backup.dir` | `<config>/backups` | destination directory |
+
+When enabled, a background task writes `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) every interval — the same document `GET /api/v1/backup` serves — stamps `backup.last_run`, and deletes files beyond the retention count, oldest first; the newest file is never deleted, even with `backup.retention_count = 0`. At startup, if more than one interval elapsed since `backup.last_run` (or no backup was ever taken), one backup runs immediately, so downtime does not leave a gap. `GET /api/v1/backups` lists the files (name, size, creation time, newest first); `POST /api/v1/backups/restore` with `{"name": "<file>"}` restores one through the same validated import path as the upload endpoint, and the settings page lists them with a restore action.
 
 ## Local build
 

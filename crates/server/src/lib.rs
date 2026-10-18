@@ -1,5 +1,6 @@
 pub mod api;
 pub mod auth;
+pub mod backup;
 pub mod config;
 pub mod db;
 pub mod download;
@@ -40,10 +41,12 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);
 	assert!(state.updater.set(updater.clone()).is_ok());
+	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;
 	tokio::spawn(downloads.run());
 	tokio::spawn(updater.run());
+	tokio::spawn(backups.run());
 	let app = api::router(state.clone());
 	let app = app
 		.nest("/opds/v1.2", opds::router(state.clone()))

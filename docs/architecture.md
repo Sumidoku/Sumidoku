@@ -85,6 +85,29 @@ Migrations in `crates/server/migrations`.
   onto the same model — and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
   contain source credentials: treat the file as sensitive.
+  The construction (`build_backup_doc`) and the restore execution
+  (`import_backup_doc`) are shared with the scheduler and the
+  restore-from-list endpoint below, so a scheduled file is the same
+  document the GET handler serves.
+- Scheduled backups (`backup/mod.rs`): a `BackupScheduler` task (wired in
+  `build_app` like the update scheduler) wakes every 60s, re-reads the
+  `backup.*` keys from the `setting` table and, when `backup.enabled` is
+  set and the run is overdue — no `backup.last_run` yet, or more than
+  `backup.interval_hours` since it — writes
+  `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) to the backup dir through
+  a tmp+rename swap, stamps `backup.last_run`, and prunes. The first tick
+  doubles as the startup overdue check. Pruning keeps the newest
+  `max(backup.retention_count, 1)` files by name order — the newest file
+  is never deleted, even at retention 0 — and ignores files not matching
+  the name pattern. Each setting resolves env (`SUMIDOKU_BACKUP_ENABLED` /
+  `_INTERVAL_HOURS` / `_RETENTION_COUNT` / `_DIR`) over the `setting`
+  table over the built-in defaults (disabled, 24h, keep 10,
+  `<config_dir>/backups`). `GET /api/v1/backups` lists the dir
+  (name/size/createdAt, newest first, plus the effective `dir`);
+  `POST /api/v1/backups/restore` reads a listed file server-side and runs
+  it through `import_backup_doc`, accepting only names that match the
+  backup pattern (everything else, `..` included, is a 400; a
+  well-shaped but missing file is a 404).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter.
 - Page blobs (`source/mod.rs:materialize_image_pages`): a

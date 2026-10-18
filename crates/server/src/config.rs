@@ -41,6 +41,12 @@ pub struct Config {
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
 	pub opds_lazy_download: bool,
+	/// 以下四项是 setting 表 backup.* 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
+	pub backup_enabled: Option<bool>,
+	pub backup_interval_hours: Option<u64>,
+	pub backup_retention_count: Option<u32>,
+	/// 备份落点，允许在 config_dir 外
+	pub backup_dir: Option<PathBuf>,
 	/// legacy：auth.password 的兼容别名，只在 auth.password 缺席时生效
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
@@ -66,6 +72,10 @@ impl Default for Config {
 			auto_download_new_chapters: false,
 			auto_download_limit: 5,
 			opds_lazy_download: false,
+			backup_enabled: None,
+			backup_interval_hours: None,
+			backup_retention_count: None,
+			backup_dir: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -106,6 +116,11 @@ impl Config {
 	pub fn page_blobs_dir(&self) -> PathBuf {
 		self.config_dir.join("page-blobs")
 	}
+
+	/// 定时备份的默认落点；backup_dir（env）或 setting 表 backup.dir 都可改
+	pub fn default_backups_dir(&self) -> PathBuf {
+		self.config_dir.join("backups")
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -132,6 +147,10 @@ struct ConfigFile {
 	auto_download_new_chapters: Option<bool>,
 	auto_download_limit: Option<usize>,
 	opds_lazy_download: Option<bool>,
+	backup_enabled: Option<bool>,
+	backup_interval_hours: Option<u64>,
+	backup_retention_count: Option<u32>,
+	backup_dir: Option<PathBuf>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
@@ -194,6 +213,18 @@ impl Config {
 		}
 		if let Some(v) = file.opds_lazy_download {
 			self.opds_lazy_download = v;
+		}
+		if file.backup_enabled.is_some() {
+			self.backup_enabled = file.backup_enabled;
+		}
+		if file.backup_interval_hours.is_some() {
+			self.backup_interval_hours = file.backup_interval_hours;
+		}
+		if file.backup_retention_count.is_some() {
+			self.backup_retention_count = file.backup_retention_count;
+		}
+		if file.backup_dir.is_some() {
+			self.backup_dir = file.backup_dir;
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
@@ -287,6 +318,24 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.opds_lazy_download = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_ENABLED")
+			&& let Ok(n) = v.parse()
+		{
+			self.backup_enabled = Some(n);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_INTERVAL_HOURS")
+			&& let Ok(n) = v.parse()
+		{
+			self.backup_interval_hours = Some(n);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_RETENTION_COUNT")
+			&& let Ok(n) = v.parse()
+		{
+			self.backup_retention_count = Some(n);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_DIR") {
+			self.backup_dir = Some(PathBuf::from(v));
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);

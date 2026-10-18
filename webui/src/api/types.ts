@@ -466,3 +466,17 @@ export interface BackupRestoreResult {
 	};
 	warnings: string[];
 }
+
+export interface BackupFileEntry {
+	name: string;
+	/** 字节数 */
+	size: number;
+	/** 文件名里的 UTC 时间戳（秒） */
+	createdAt: number;
+}
+
+export interface BackupListResponse {
+	/** 服务端生效中的备份目录（env > setting > 默认） */
+	dir: string;
+	files: BackupFileEntry[];
+}
