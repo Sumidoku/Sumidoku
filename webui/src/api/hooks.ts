@@ -759,6 +759,30 @@ export function useStartBrowserLogin(sourceId: number) {
 	});
 }
 
+/** OAuth 登录：构建授权 URL（pkce 时服务端生成 verifier 落库并追加 challenge），新标签打开 */
+export function useOAuthLoginStart(sourceId: number) {
+	return useMutation({
+		mutationFn: (key: string) =>
+			api<{ url: string }>(`/sources/${sourceId}/login/oauth/start`, {
+				method: 'POST',
+				body: { key }
+			})
+	});
+}
+
+/** OAuth 登录：解析粘贴的回调 URL，换令牌或存回调串，服务端重启实例后刷新设置值 */
+export function useOAuthLoginComplete(sourceId: number) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ key, url }: { key: string; url: string }) =>
+			api<{ values: Record<string, unknown> }>(`/sources/${sourceId}/login/oauth/complete`, {
+				method: 'POST',
+				body: { key, url }
+			}),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
+	});
+}
+
 /** 完成交互登录：服务端收割 context 的 cookie 走 #112 管线，成功后刷新设置值 */
 export function useCompleteBrowserLogin(sourceId: number) {
 	const qc = useQueryClient();

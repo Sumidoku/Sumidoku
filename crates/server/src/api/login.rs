@@ -41,13 +41,19 @@ pub struct LoginSettingInfo {
 	pub method: String,
 	pub url: Option<String>,
 	pub url_key: Option<String>,
+	pub pkce: bool,
+	pub token_url: Option<String>,
+	/// Aidoku app 层用它拦截 web-auth 回调；服务端是手动粘贴流，仅留作设置画像
+	pub callback_scheme: Option<String>,
+	/// 设置级 notification：OAuth 回调串分支存完值后送达（Aidoku 同款）
+	pub notification: Option<String>,
 	pub clear_cookies_on_log_out: bool,
 	/// 设置声明的 localStorage 键；sidecar 收割时按它从页面读取
 	pub local_storage_keys: Vec<String>,
 }
 
 /// 递归 group/page 容器找 key 对应的 login 设置；key 撞在非 login 设置上视同不存在
-fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
+pub(crate) fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
 	for item in items {
 		let Some(value) = item.get("value") else {
 			continue;
@@ -75,6 +81,19 @@ fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
 				.get("url_key")
 				.and_then(Value::as_str)
 				.map(str::to_string),
+			pkce: login.get("pkce").and_then(Value::as_bool).unwrap_or(false),
+			token_url: login
+				.get("token_url")
+				.and_then(Value::as_str)
+				.map(str::to_string),
+			callback_scheme: login
+				.get("callback_scheme")
+				.and_then(Value::as_str)
+				.map(str::to_string),
+			notification: item
+				.get("notification")
+				.and_then(Value::as_str)
+				.map(str::to_string),
 			clear_cookies_on_log_out: login
 				.get("clear_cookies_on_log_out")
 				.and_then(Value::as_bool)
@@ -90,7 +109,7 @@ fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
 }
 
 /// 登录 URL 的三级解析：login 设置的 url → url_key 指向的 defaults 值 → 源 base_url
-async fn resolve_login_url(
+pub(crate) async fn resolve_login_url(
 	state: &AppState,
 	id: i64,
 	setting: &LoginSettingInfo,
@@ -144,7 +163,7 @@ fn validate_cookies(cookies: &HashMap<String, String>) -> ApiResult<()> {
 	Ok(())
 }
 
-async fn upsert_setting(pool: &SqlitePool, source_id: i64, key: &str, value: DefaultValue) -> ApiResult<()> {
+pub(crate) async fn upsert_setting(pool: &SqlitePool, source_id: i64, key: &str, value: DefaultValue) -> ApiResult<()> {
 	let encoded = serde_json::to_string(&value)?;
 	sqlx::query(
 		"INSERT INTO source_setting (source_id, key, value) VALUES (?, ?, ?)

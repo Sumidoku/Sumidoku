@@ -566,6 +566,27 @@ the webview backend uses (`crates/wasm/src/browser.rs`), so tests drive it
 with the same kind of mock connector, injected via
 `build_app_with(config, connector)`.
 
+`method: "oauth"` logins (`api/oauth.rs`) reproduce Aidoku's app-layer flow
+with a manual callback step — a browser SPA cannot intercept the
+custom-scheme redirect sources bake into `redirect_uri` /
+`callback_scheme`. `POST .../login/oauth/start` resolves the authorization
+URL from the setting's `url` (or the default pointed at by `url_key`) and,
+when `pkce`, persists a 128-char unreserved-set verifier at
+`<key>.codeVerifier` and appends `code_challenge` (unpadded base64url
+SHA-256 of the verifier) / `code_challenge_method=S256` /
+`response_type=code` to the query; the web UI opens it in a new tab.
+`POST .../login/oauth/complete` parses the pasted callback URL: with `pkce`
+and `token_url` it POSTs
+`grant_type=authorization_code&code&code_verifier[&redirect_uri][&client_id]`
+— parameters not percent-encoded, `redirect_uri` / `client_id` captured
+from the authorization URL's query — to `token_url` and stores the raw
+response body at `<key>` regardless of status (Aidoku stores whatever the
+endpoint answers); otherwise it stores the callback URL string at `<key>`
+and fires the setting's notification (best-effort, matching Aidoku's
+log-and-continue). Either way the instance restarts so the source reads the
+new value, and the shared logout's prefix delete already covers
+`<key>.codeVerifier`.
+
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.
 
@@ -582,31 +603,15 @@ header, media/websocket URLs carry it as an `access_token` query
 
 ## Known gaps
 
-### Source login: OAuth
+### Source login: OAuth callback capture
 
-A source's `Login` setting (`api::settings`, from a dynamic `get_settings` or
-the static `settings.json`) can declare `method` `basic` | `oauth` | `web`.
-`basic` (`api/mod.rs:basic_login`) and `web` (`api/login.rs`) are implemented
-and share the logout endpoint; `oauth` is not.
-
-The reference semantics are Aidoku's app layer (not the source SDK): for
-`oauth` it builds the authorization URL from `url` or the `url_key` default,
-optionally appends PKCE (`code_challenge` / `code_challenge_method=S256` /
-`response_type=code`; verifier is 128 chars from the unreserved set and the
-challenge is unpadded base64url SHA-256), opens a web-auth session with
-`callback_scheme ?? "aidoku"`, then either POSTs
-`grant_type=authorization_code&code&code_verifier[&redirect_uri][&client_id]`
-(parameters not percent-encoded) to `token_url` and stores the raw response
-string at `<key>`, or stores the callback URL string at `<key>` and fires the
-setting's notification.
-
-Blocker: a browser SPA cannot read a third-party login's redirect or cookies,
-and the source's baked `redirect_uri` / custom `callback_scheme` cannot be
-retargeted without provider registration. Implementing `oauth` therefore needs
-a manual callback-URL step (or a hosted callback for the rare rewritable
-redirect) plus a PKCE + token-exchange path, with logout removing `<key>` and
-its `.codeVerifier` child (the shared `/login/logout` prefix delete already
-covers the shape). There is no natural automatic-browser path server-side.
+All three `Login` methods (`basic` / `web` / `oauth`) are implemented
+(`api/mod.rs:basic_login`, `api/login.rs`, `api/oauth.rs`) and share the
+logout endpoint. The remaining constraint is inherent to a browser SPA: the
+OAuth callback lands on a custom scheme (or a cross-origin redirect the page
+cannot read), so completing a login means the user pastes the redirected URL
+by hand; there is no automatic capture path short of a hosted callback for
+the rare rewritable `redirect_uri`.
 
 ### Source settings: biometric gates and iOS-only page metadata
 
