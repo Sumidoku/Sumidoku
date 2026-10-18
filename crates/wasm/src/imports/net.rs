@@ -452,19 +452,16 @@ pub fn get_image(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 		Err(e) => return e,
 	};
 	let cursor = Cursor::new(data);
-	let Some(rgb) = ImageReader::new(cursor)
+	let Some(rgba) = ImageReader::new(cursor)
 		.with_guessed_format()
 		.ok()
 		.and_then(|r| r.decode().ok())
-		.map(|img| img.to_rgb8())
+		.map(|img| img.to_rgba8())
 	else {
 		return Result::NotAnImage.into();
 	};
-	let image = ImageData {
-		width: rgb.width() as i32,
-		height: rgb.height() as i32,
-		data: rgb.into_raw(),
-	};
+	let (width, height) = rgba.dimensions();
+	let image = ImageData::from_rgba8(rgba.into_raw(), width, height);
 	env.data_mut().store.store(StoreItem::ImageData(image))
 }
 
