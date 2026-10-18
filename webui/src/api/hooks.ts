@@ -325,6 +325,25 @@ export function useDeleteSource() {
 	});
 }
 
+export function usePinSource() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, pinned }: { id: number; pinned: boolean }) =>
+			api<Source>(`/sources/${id}`, { method: 'PATCH', body: { pinned } }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
+/** ids 是 source key 的有序数组，服务端要求与当前置顶集合一一对应，顺序没变别调 */
+export function useReorderPinned() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (ids: string[]) =>
+			api<string[]>('/sources/reorder-pinned', { method: 'POST', body: { ids } }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
 // ---- 源仓库 ----
 
 export interface RepoBrowseFilter {

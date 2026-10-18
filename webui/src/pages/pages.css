@@ -136,6 +136,32 @@
 	color: var(--text);
 }
 
+/* 置顶段：标题 / 拖柄 / 拖拽反馈 */
+
+.browse__section {
+	margin: 18px 0 10px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text-faint);
+	letter-spacing: 0.04em;
+}
+
+.source-card__grip {
+	display: flex;
+	align-items: center;
+	flex: none;
+	color: var(--text-faint);
+	cursor: grab;
+}
+
+.source-card--dragging {
+	opacity: 0.4;
+}
+
+.source-card--drag-over {
+	border-color: var(--accent);
+}
+
 /* ============ 浏览页分段 / 源仓库 ============ */
 
 .browse__tabs {
