@@ -19,8 +19,10 @@ Scheduled agent sessions sweep open issues and PRs (see
   reason;
 - proposes blocks to the maintainer with evidence.
 
-**An agent never merges a PR and never blocks an author on its own. Both
-need the maintainer's explicit word.**
+**An agent merges per the maintainer's standing authorization (see
+[code-standards.md](code-standards.md#commits-and-merges)); a PR stopped
+by "Look for harm first" always waits. Blocking an author always needs the
+maintainer's explicit word.**
 
 ## Look for harm first
 

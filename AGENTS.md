@@ -21,7 +21,9 @@ Before reviewing a community PR, read
 possible harm, what is closed unreviewed, and how a block is proposed.
 Scheduled agent sessions sweep open issues and PRs, triage and review
 them, and run a daily review of the day's merged work into
-[LESSONS.md](LESSONS.md). Merging and blocking stay with the maintainer.
+[LESSONS.md](LESSONS.md). Merging follows the standing authorization in
+[docs/code-standards.md](docs/code-standards.md#commits-and-merges);
+blocking stays with the maintainer.
 
 ## Commands
 

@@ -33,8 +33,10 @@ run is listed as not run, never left out.
   `gh pr merge --squash --subject --body-file`.
 - Merge with `--match-head-commit <reviewed sha>`: a push during review
   stops the merge instead of shipping code nobody ran.
-- Merge only when the maintainer says so. Green CI and an approved review
-  are not a merge signal.
+- The maintainer's standing authorization: an agent merges work it has
+  verified against these criteria with CI green on the reviewed head. A
+  change to a deliberate product decision, or a PR stopped by the
+  harm-first check, still waits for the maintainer's explicit word.
 
 ## Releases
 
