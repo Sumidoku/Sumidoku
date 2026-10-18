@@ -244,6 +244,12 @@
 	margin-top: 2px;
 }
 
+.setting-login__head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
 .setting-group {
 	border: 1px solid var(--border);
 	border-radius: 10px;
