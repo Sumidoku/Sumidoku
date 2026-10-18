@@ -32,7 +32,8 @@ impl Default for Limits {
 			sleep_max: Duration::from_secs(10),
 			net_timeout_default: Duration::from_secs(30),
 			net_timeout_max: Duration::from_secs(120),
-			memory_max: 256 * 1024 * 1024,
+			// Aidoku 源实测很少超 64 MiB；压太低会让 memory.grow 失败直接打死源
+			memory_max: 128 * 1024 * 1024,
 			js_timeout: Duration::from_secs(10),
 			js_loop_max: 1_000_000_000,
 			browser_timeout: Duration::from_secs(30),
