@@ -32,8 +32,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub fn router(state: Arc<AppState>) -> Router {
-	Router::new()
+	// 公开面：健康检查 + 认证自身（登录都进不来就死锁了）
+	let public = Router::new()
 		.route("/health", get(health))
+		.route("/api/v1/auth/status", get(crate::auth::status))
+		.route("/api/v1/auth/login", post(crate::auth::login))
+		.route("/api/v1/auth/logout", post(crate::auth::logout));
+	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/sources/scan", post(scan_sources))
 		.route("/api/v1/sources/{id}", delete(delete_source))
@@ -93,7 +98,12 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
 		.route("/api/v1/source-repos/install", post(repo::install_source))
 		.route("/api/v1/source-repos/update-all", post(repo::update_all))
-		.with_state(state)
+		.route("/api/v1/auth/password", put(crate::auth::change_password))
+		.layer(axum::middleware::from_fn_with_state(
+			state.clone(),
+			crate::auth::require_auth,
+		));
+	public.merge(protected).with_state(state)
 }
 
 async fn health() -> Json<Value> {

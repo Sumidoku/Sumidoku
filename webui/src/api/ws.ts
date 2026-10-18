@@ -1,4 +1,5 @@
 // WebSocket 订阅封装：自动重连、JSON 解析、退订清理。
+import { withToken } from './client';
 
 export interface WSHandlers {
 	/** 每帧 JSON 已解析后的回调，帧结构由调用方自行收窄 */
@@ -15,7 +16,7 @@ export function subscribeWS(path: string, handlers: WSHandlers): () => void {
 
 	function connect() {
 		const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-		ws = new WebSocket(`${proto}://${location.host}${path}`);
+		ws = new WebSocket(`${proto}://${location.host}${withToken(path)}`);
 		ws.onopen = () => handlers.onStatus?.(true);
 		ws.onmessage = (e) => {
 			if (typeof e.data !== 'string') return;

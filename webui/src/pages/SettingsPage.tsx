@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
 	ArrowDown,
 	ArrowUp,
@@ -7,7 +8,7 @@ import {
 	Pencil,
 	Trash2
 } from 'lucide-react';
-import { ApiError } from '../api/client';
+import { ApiError, api, clearToken } from '../api/client';
 import {
 	useCategories,
 	useCreateCategory,
@@ -114,8 +115,89 @@ function AppearanceSection() {
 	);
 }
 
-const TRI_STATE = [
-	{ value: 0, label: '跟随默认' },
+function SecuritySection() {
+	const navigate = useNavigate();
+	const [enabled, setEnabled] = useState<boolean | null>(null);
+	const [current, setCurrent] = useState('');
+	const [next, setNext] = useState('');
+	const [pending, setPending] = useState(false);
+
+	useEffect(() => {
+		api<{ enabled: boolean }>('/auth/status', { silent: true })
+			.then((s) => setEnabled(s.enabled))
+			.catch(() => setEnabled(null));
+	}, []);
+
+	async function submit() {
+		if (!current || !next || pending) return;
+		setPending(true);
+		try {
+			// 改密码会吊销全部会话 token，成功后必须重新登录
+			await api('/auth/password', {
+				method: 'PUT',
+				body: { currentPassword: current, newPassword: next },
+				silent: true
+			});
+			pushToast('密码已修改，请重新登录', 'info');
+			clearToken();
+			navigate('/login');
+		} catch (e) {
+			pushToast(e instanceof ApiError && e.status === 401 ? '当前密码错误' : '修改失败');
+		} finally {
+			setPending(false);
+		}
+	}
+
+	async function logout() {
+		await api('/auth/logout', { method: 'POST', silent: true }).catch(() => {});
+		clearToken();
+		navigate('/login');
+	}
+
+	return (
+		<Section title="安全" desc="web 界面、REST API 与 OPDS 共用同一密码；API key 走服务端配置">
+			{enabled === null ? (
+				<Skeleton height={48} />
+			) : !enabled ? (
+				<p className="faint settings-security__off">
+					未启用认证，配置 SUMIDOKU_AUTH_PASSWORD 后重启生效
+				</p>
+			) : (
+				<>
+					<div className="settings-row">
+						<span className="settings-row__label">当前密码</span>
+						<Input
+							type="password"
+							value={current}
+							onChange={(e) => setCurrent(e.currentTarget.value)}
+						/>
+					</div>
+					<div className="settings-row">
+						<span className="settings-row__label">新密码</span>
+						<Input
+							type="password"
+							value={next}
+							onChange={(e) => setNext(e.currentTarget.value)}
+						/>
+					</div>
+					<div className="settings-security__ops">
+						<Button
+							variant="primary"
+							loading={pending}
+							disabled={!current || !next}
+							onClick={() => void submit()}
+						>
+							修改密码
+						</Button>
+						<Button onClick={() => void logout()}>退出登录</Button>
+					</div>
+				</>
+			)}
+		</Section>
+	);
+}
+
+const TRI_STATE = [	{ value: 0, label: '跟随默认' },
 	{ value: 1, label: '仅此类' },
 	{ value: 2, label: '排除' }
 ];
@@ -474,7 +556,7 @@ function AboutSection() {
 				</p>
 				<p className="muted">REST API：/api/v1 · OPDS：/opds/v1.2</p>
 				<p className="faint">
-					OPDS 客户端用 Basic 认证，需在服务端配置 SUMIDOKU_BASIC_PASSWORD
+					OPDS 客户端用 Basic 认证，密码与 web 界面相同（配置 SUMIDOKU_AUTH_PASSWORD 启用）
 				</p>
 				<a
 					className="setting-link"
@@ -495,6 +577,7 @@ export default function SettingsPage() {
 		<div className="page container settings-page">
 			<PageHeader title="设置" />
 			<AppearanceSection />
+			<SecuritySection />
 			<CategoriesSection />
 			<ServerSettingsSection />
 			<AboutSection />

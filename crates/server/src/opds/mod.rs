@@ -72,24 +72,12 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.with_state(state)
 }
 
-/// OPDS 恒 Basic（§9）：basic_password 非空时全链路校验，用户名任意非空、密码匹配即可
+/// OPDS 恒 Basic（§9）：认证开启时全链路校验，用户名任意非空、密码匹配统一密码即可
 pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
-	let Some(expected) = &state.config.basic_password else {
+	if !state.auth.enabled().await {
 		return next.run(req).await;
-	};
-	let granted = req
-		.headers()
-		.get(header::AUTHORIZATION)
-		.and_then(|v| v.to_str().ok())
-		.and_then(|v| v.strip_prefix("Basic "))
-		.and_then(base64_decode)
-		.and_then(|raw| String::from_utf8(raw).ok())
-		.map(|cred| match cred.split_once(':') {
-			Some((user, pass)) => !user.is_empty() && pass == *expected,
-			None => false,
-		})
-		.unwrap_or(false);
-	if granted {
+	}
+	if crate::auth::basic_granted(&state, req.headers()).await {
 		return next.run(req).await;
 	}
 	(
@@ -101,7 +89,7 @@ pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, req: Request,
 }
 
 /// 仓库没引 base64 crate，Basic 凭证只用标准字母表，手写解码
-fn base64_decode(input: &str) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(input: &str) -> Option<Vec<u8>> {
 	fn val(c: u8) -> Option<u32> {
 		match c {
 			b'A'..=b'Z' => Some((c - b'A') as u32),

@@ -162,3 +162,18 @@ client library.
   answered every handshake with the Sumidoku webui ("HTTP error: 200
   OK" from tungstenite); republishing on 127.0.0.1:3300 made the CDP
   handshake succeed on the first try.
+
+**`&Request` held across `.await` fails the `FromFn: Service` bound without
+naming `Send`.** axum's `Body` wraps `UnsyncBoxBody` — it is `Send` but
+not `Sync` — so a `&Request` captured by an `async` middleware's future
+makes that future non-`Send`, and rustc reports the whole
+`FromFn<…>: Service<_>` bound as unsatisfied with no pointer to the real
+cause. Extract owned data from the request (headers, tokens, query)
+*before* the first `.await`; borrows of `HeaderMap` are fine because it is
+`Sync`. When a middleware that "looks just like the working one" fails
+this bound, strip the body to `next.run(req).await` and re-add pieces —
+that bisect lands on the non-`Send` capture in minutes.
+- Evidence: 2026-10-18, the auth middleware kept `&req` alive across
+  `bearer_granted(...).await`; two identical-looking signatures (working
+  `basic_auth` vs failing `require_auth`) differed only in that borrow,
+  and the fix was passing an owned `Option<String>` token instead.

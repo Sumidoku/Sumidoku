@@ -1,6 +1,54 @@
 import { pushToast } from '../components/Toast';
 
 const BASE = '/api/v1';
+const TOKEN_KEY = 'sumidoku.auth.token';
+let memoryToken: string | null = null;
+
+export function getToken(): string | null {
+	try {
+		return localStorage.getItem(TOKEN_KEY) ?? memoryToken;
+	} catch {
+		return memoryToken;
+	}
+}
+
+export function setToken(token: string) {
+	memoryToken = token;
+	try {
+		localStorage.setItem(TOKEN_KEY, token);
+	} catch {
+		// 隐私模式写不进去，靠内存态撑本次会话（刷新后需重新登录）
+	}
+}
+
+export function clearToken() {
+	memoryToken = null;
+	try {
+		localStorage.removeItem(TOKEN_KEY);
+	} catch {
+		// 同上
+	}
+}
+
+/** 401 归一处理：清 token 跳登录页；登录/改密码请求由页面本地处理（防循环、防误踢） */
+function handleUnauthorized(path: string) {
+	if (location.pathname === '/login' || path === '/auth/login' || path === '/auth/password') return;
+	clearToken();
+	location.assign('/login');
+}
+
+function authHeaders(): Record<string, string> {
+	const token = getToken();
+	return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/** <img>/<a>/WebSocket 发不了 Authorization 头，媒体与流地址带 query token */
+export function withToken(url: string): string {
+	const token = getToken();
+	if (!token) return url;
+	const sep = url.includes('?') ? '&' : '?';
+	return `${url}${sep}access_token=${encodeURIComponent(token)}`;
+}
 
 export class ApiError extends Error {
 	status: number;
@@ -27,7 +75,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	try {
 		res = await fetch(BASE + path, {
 			method,
-			headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+			headers: body !== undefined ? { 'Content-Type': 'application/json', ...authHeaders() } : authHeaders(),
 			body: body !== undefined ? JSON.stringify(body) : undefined
 		});
 	} catch {
@@ -46,6 +94,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 			// 错误体不是 JSON 时保留默认文案
 		}
 		const err = new ApiError(res.status, code, message);
+		if (res.status === 401) handleUnauthorized(path);
 		if (!silent) pushToast(message);
 		throw err;
 	}
@@ -53,7 +102,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	return (await res.json()) as T;
 }
 
-export const coverUrl = (mangaId: number) => `${BASE}/manga/${mangaId}/cover`;
+export const coverUrl = (mangaId: number) => withToken(`${BASE}/manga/${mangaId}/cover`);
 
 /** NDJSON 流式响应里 partial 之外的两个终态事件形状 */
 type StreamTerminal<TFinal> =
@@ -85,6 +134,7 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 			method,
 			headers: {
 				Accept: 'application/x-ndjson',
+				...authHeaders(),
 				...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
 			},
 			body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -107,6 +157,7 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 			// 错误体不是 JSON 时保留默认文案
 		}
 		const err = new ApiError(res.status, code, message);
+		if (res.status === 401) handleUnauthorized(path);
 		if (!silent) pushToast(message);
 		throw err;
 	}
@@ -159,9 +210,11 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 }
 
 export const pageUrl = (chapterId: number, index: number) =>
-	`${BASE}/chapter/${chapterId}/page/${index}`;
+	withToken(`${BASE}/chapter/${chapterId}/page/${index}`);
 
 /** 已下载章节的 CBZ 文件地址，配 `<a download>` 直接触发浏览器下载 */
-export const chapterFileUrl = (chapterId: number) => `${BASE}/chapter/${chapterId}/file`;
+export const chapterFileUrl = (chapterId: number) =>
+	withToken(`${BASE}/chapter/${chapterId}/file`);
 
-export const sourceIconUrl = (sourceId: number) => `${BASE}/sources/${sourceId}/icon`;
+export const sourceIconUrl = (sourceId: number) =>
+	withToken(`${BASE}/sources/${sourceId}/icon`);

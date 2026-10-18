@@ -39,11 +39,27 @@ Migrations in `crates/server/migrations`.
   the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
   through the same `register_aix` path as the directory scan; versions
   compare as Aidoku's monotonic integers.
+- Authentication (`auth.rs`): off until a password exists — either seeded
+  from the config (`auth.password`, or the legacy `basic_password` alias)
+  on every boot, or stored in the `auth_credential` table by a previous
+  boot/password change. With a password, `require_auth` guards all of
+  `/api/v1` except `/health`, `auth/status` and `auth/login`: the bearer
+  credential (header, or `access_token` query for `<img>`/WebSocket
+  clients) is checked against the configured `auth.api_keys` (SHA-256
+  fingerprints in memory) and session tokens in `auth_token` (SHA-256 at
+  rest, 30-day rolling expiry). Login/logout/password-change live under
+  `/api/v1/auth/`; changing the password revokes every session token.
+  Failures share one `401 {"error":{"code":"unauthorized"}}` shape. The
+  password is argon2-hashed; the config-set password always re-seeds the
+  stored hash at boot, so it wins over UI-changed passwords after a
+  restart.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
   and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
-  only, and only when `SUMIDOKU_BASIC_PASSWORD` is set.
+  when authentication is enabled, checking the same site password (any
+  non-empty username) — repeated verifications hit a one-entry cache so
+  per-page image requests don't pay argon2 each time.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
@@ -190,7 +206,10 @@ Vite 7 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `src/components` shared pieces, `src/api` the REST client,
 `@tanstack/react-query` for server state. `npm run check` is
 `tsc --noEmit`; there is no test suite. The build lands in `webui/build`
-and the server embeds it (see above).
+and the server embeds it (see above). When authentication is on, the
+client (`api/client.ts`) sends the stored session token as a bearer
+header, media/websocket URLs carry it as an `access_token` query
+(`withToken`), and any `401` clears the token and lands on `/login`.
 
 ## Known gaps
 

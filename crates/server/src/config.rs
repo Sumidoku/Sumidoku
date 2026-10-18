@@ -15,6 +15,14 @@ pub struct NetConfig {
 	pub browser_ws: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct AuthConfig {
+	/// 全站密码（web UI 登录、/api/v1、OPDS 共用）；None = 认证关闭
+	pub password: Option<String>,
+	/// 长期 API key，Bearer 直用；配置面明文、不落库
+	pub api_keys: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
 	pub addr: String,
@@ -33,7 +41,9 @@ pub struct Config {
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
 	pub opds_lazy_download: bool,
+	/// legacy：auth.password 的兼容别名，只在 auth.password 缺席时生效
 	pub basic_password: Option<String>,
+	pub auth: AuthConfig,
 	pub net: NetConfig,
 }
 
@@ -57,6 +67,7 @@ impl Default for Config {
 			auto_download_limit: 5,
 			opds_lazy_download: false,
 			basic_password: None,
+			auth: AuthConfig::default(),
 			net: NetConfig::default(),
 		}
 	}
@@ -81,6 +92,11 @@ impl Config {
 		self.covers_dir = self.config_dir.join("covers");
 	}
 
+	/// auth.password 优先；缺席时 legacy basic_password 顶上（OPDS 时代的旧配置继续生效）
+	pub fn effective_password(&self) -> Option<&str> {
+		self.auth.password.as_deref().or(self.basic_password.as_deref())
+	}
+
 	/// 源包目录钉死在 config_dir 下，不开放配置
 	pub fn sources_dir(&self) -> PathBuf {
 		self.config_dir.join("sources")
@@ -90,6 +106,13 @@ impl Config {
 	pub fn page_blobs_dir(&self) -> PathBuf {
 		self.config_dir.join("page-blobs")
 	}
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct AuthConfigFile {
+	password: Option<String>,
+	api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -110,6 +133,7 @@ struct ConfigFile {
 	auto_download_limit: Option<usize>,
 	opds_lazy_download: Option<bool>,
 	basic_password: Option<String>,
+	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
 }
 
@@ -173,6 +197,14 @@ impl Config {
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
+		}
+		if let Some(auth) = file.auth {
+			if auth.password.is_some() {
+				self.auth.password = auth.password;
+			}
+			if let Some(v) = auth.api_keys {
+				self.auth.api_keys = v;
+			}
 		}
 		if let Some(net) = file.net {
 			if let Some(v) = net.direct_domains {
@@ -258,6 +290,12 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_PASSWORD") {
+			self.auth.password = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_API_KEYS") {
+			self.auth.api_keys = split_csv(&v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_DIRECT_DOMAINS") {
 			self.net.direct_domains = split_csv(&v);

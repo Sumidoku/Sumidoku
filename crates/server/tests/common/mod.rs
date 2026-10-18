@@ -137,6 +137,36 @@ async fn request_full_accept(
 	(status, headers, bytes.to_vec())
 }
 
+/// 自带请求头的通用请求（认证测试要挂 Authorization）
+pub async fn request_with_headers(
+	app: &Router,
+	method: &str,
+	path: &str,
+	body: Option<Value>,
+	headers: &[(&str, &str)],
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+	let mut builder = Request::builder().method(method).uri(path);
+	if body.is_some() {
+		builder = builder.header("content-type", "application/json");
+	}
+	for (key, value) in headers {
+		builder = builder.header(*key, *value);
+	}
+	let request = builder
+		.body(match body {
+			Some(value) => Body::from(serde_json::to_vec(&value).expect("serialize body")),
+			None => Body::empty(),
+		})
+		.expect("build request");
+	let response = app.clone().oneshot(request).await.expect("response");
+	let status = response.status();
+	let resp_headers = response.headers().clone();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("read body");
+	(status, resp_headers, bytes.to_vec())
+}
+
 /// scan 安装 example-source 并注册第一本搜索结果的漫画，返回内部 manga id
 pub async fn register_example_manga(app: &Router) -> i64 {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;

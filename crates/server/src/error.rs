@@ -12,6 +12,8 @@ pub enum Error {
 	Io(#[from] std::io::Error),
 	#[error(transparent)]
 	Source(#[from] aidoku_wasm::Error),
+	#[error("auth: {0}")]
+	Auth(String),
 }
 
 #[derive(Debug)]
@@ -32,6 +34,15 @@ impl ApiError {
 
 	pub fn not_found(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::NOT_FOUND, "not_found", message)
+	}
+
+	/// 无凭证、坏 token、错密码对外同一形状，不区分原因
+	pub fn unauthorized() -> Self {
+		Self::new(
+			StatusCode::UNAUTHORIZED,
+			"unauthorized",
+			"authentication required",
+		)
 	}
 
 	/// 源不支持某动态能力时按端点约定返回 404，但 code 仍是 unsupported

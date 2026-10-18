@@ -169,6 +169,19 @@
 	margin-top: 12px;
 }
 
+/* ============ 安全 ============ */
+
+.settings-security__off {
+	font-size: 14px;
+}
+
+.settings-security__ops {
+	display: flex;
+	gap: 10px;
+	justify-content: flex-end;
+	margin-top: 12px;
+}
+
 /* ============ 关于 ============ */
 
 .settings-about {
