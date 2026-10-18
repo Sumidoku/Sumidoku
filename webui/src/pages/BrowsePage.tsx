@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PackageOpen, ScanSearch, Trash } from 'lucide-react';
+import { CircleArrowUp, PackageOpen, ScanSearch, Trash } from 'lucide-react';
 import { sourceIconUrl } from '../api/client';
-import { useDeleteSource, useScanSources, useSources } from '../api/hooks';
+import { useDeleteSource, useScanSources, useSources, useUpdateAllSources, useUpdateSource } from '../api/hooks';
 import type { Source } from '../api/types';
 import {
 	Button,
@@ -11,27 +11,12 @@ import {
 	IconButton,
 	Modal,
 	PageHeader,
+	SegmentedControl,
 	Skeleton,
 	pushToast
 } from '../components';
-
-// 图标加载失败的色块底色：按 key hash 从 8 色板取，同源每次渲染颜色一致
-const ICON_COLORS = [
-	'#7c6cf0',
-	'#4f8ef7',
-	'#3fb68b',
-	'#d9a03f',
-	'#e5534b',
-	'#c86dd7',
-	'#5fb8a6',
-	'#8b9cf9'
-];
-
-function iconColor(key: string): string {
-	let h = 0;
-	for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
-	return ICON_COLORS[Math.abs(h) % ICON_COLORS.length];
-}
+import ReposPanel from './browse/ReposPanel';
+import { iconColor } from './browse/iconColor';
 
 function SourceIcon({ source }: { source: Source }) {
 	const [failed, setFailed] = useState(false);
@@ -55,12 +40,37 @@ function SourceIcon({ source }: { source: Source }) {
 	);
 }
 
+function UpdateButton({ source }: { source: Source }) {
+	const update = useUpdateSource();
+
+	async function onClick(e: React.MouseEvent) {
+		e.stopPropagation();
+		try {
+			await update.mutateAsync(source.id);
+			pushToast(`已更新 ${source.name} 到 v${source.updateVersion}`, 'info');
+		} catch {
+			// client 已弹错误 toast
+		}
+	}
+
+	return (
+		<Button size="sm" variant="primary" loading={update.isPending} onClick={(e) => void onClick(e)}>
+			<CircleArrowUp size={14} />
+			v{source.updateVersion}
+		</Button>
+	);
+}
+
 export default function BrowsePage() {
 	const navigate = useNavigate();
 	const sources = useSources();
 	const scan = useScanSources();
 	const del = useDeleteSource();
+	const updateAll = useUpdateAllSources();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
+	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
+
+	const updateCount = (sources.data ?? []).filter((s) => s.updateVersion !== null).length;
 
 	async function onScan() {
 		try {
@@ -71,6 +81,18 @@ export default function BrowsePage() {
 			);
 			for (const s of r.skipped.slice(0, 3)) {
 				pushToast(`跳过 ${s.dir}：${s.reason}`, 'info');
+			}
+		} catch {
+			// client 已弹错误 toast
+		}
+	}
+
+	async function onUpdateAll() {
+		try {
+			const r = await updateAll.mutateAsync();
+			pushToast(`更新完成：${r.updated.length} 个已更新、${r.failed.length} 个失败`, 'info');
+			for (const f of r.failed.slice(0, 3)) {
+				pushToast(`更新 ${f.key} 失败：${f.reason}`, 'info');
 			}
 		} catch {
 			// client 已弹错误 toast
@@ -93,14 +115,37 @@ export default function BrowsePage() {
 			<PageHeader
 				title="浏览"
 				actions={
-					<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
-						<ScanSearch size={15} />
-						扫描源目录
-					</Button>
+					tab === 'installed' ? (
+						<>
+							{updateCount > 0 && (
+								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
+									<CircleArrowUp size={15} />
+									全部更新（{updateCount}）
+								</Button>
+							)}
+							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
+								<ScanSearch size={15} />
+								扫描源目录
+							</Button>
+						</>
+					) : undefined
 				}
 			/>
 
-			{sources.isPending ? (
+			<div className="browse__tabs">
+				<SegmentedControl
+					options={[
+						{ value: 'installed', label: '已安装' },
+						{ value: 'repos', label: '源仓库' }
+					]}
+					value={tab}
+					onChange={setTab}
+				/>
+			</div>
+
+			{tab === 'repos' ? (
+				<ReposPanel />
+			) : sources.isPending ? (
 				<div className="source-list">
 					{Array.from({ length: 4 }, (_, i) => (
 						<Skeleton key={i} height={82} style={{ borderRadius: 'var(--r-md)' }} />
@@ -110,7 +155,7 @@ export default function BrowsePage() {
 				<EmptyState
 					icon={PackageOpen}
 					title="还没有安装源"
-					hint="把源包放进服务器的 sources 目录，然后点右上角「扫描源目录」"
+					hint="把源包放进服务器的 sources 目录然后点「扫描源目录」，或到「源仓库」一键安装"
 				/>
 			) : (
 				<div className="source-list">
@@ -149,6 +194,7 @@ export default function BrowsePage() {
 									</div>
 								)}
 							</div>
+							{s.updateVersion !== null && <UpdateButton source={s} />}
 							<IconButton
 								label={`卸载 ${s.name}`}
 								variant="danger"
