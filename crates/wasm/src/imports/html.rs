@@ -673,22 +673,22 @@ pub fn select(
 	let Some(item) = env.data_mut().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	// document 臂存空列表（SwiftSoup select 语义），元素/列表臂空结果报 NoResult
-	let (root, store_empty) = if let Some(document) = item.as_html_document() {
-		(QueryRoot::Document(document), true)
+	// Aidoku 宿主的 select 不分 Document/Element，SwiftSoup 对无命中返回空
+	// Elements——空结果一律存空列表，None 只留给无效查询
+	let root = if let Some(document) = item.as_html_document() {
+		QueryRoot::Document(document)
 	} else if let Some(element) = item.as_html_element() {
-		(QueryRoot::Element(element), false)
+		QueryRoot::Element(element)
 	} else if let Some(elements) = item.as_html_element_list() {
-		(QueryRoot::List(elements), false)
+		QueryRoot::List(elements)
 	} else {
 		return Result::InvalidDescriptor.into();
 	};
 	match select_str(root, &string) {
-		Ok(elements) if store_empty || !elements.0.is_empty() => env
+		Ok(elements) => env
 			.data_mut()
 			.store
 			.store(StoreItem::HtmlElementList(elements)),
-		Ok(_) => Result::NoResult.into(),
 		Err(()) => Result::InvalidQuery.into(),
 	}
 }
@@ -1194,5 +1194,47 @@ mod tests {
 		assert_eq!(h.call1(remove, 9999), -1);
 		// document 不是 Element/ElementList
 		assert_eq!(h.call1(remove, doc), -1);
+	}
+
+	#[test]
+	fn select_empty_result_stores_empty_list_on_all_roots() {
+		// F（issue #83）：Aidoku 宿主的 select 不分 Document/Element，SwiftSoup
+		// 对无命中返回空 Elements——三种根的空结果都存空列表，只有无效查询报错
+		let mut h = Harness::new();
+		let doc = h.parse_doc(DOC);
+		let el = h.select_first(doc, "#a");
+		assert!(el > 0);
+		let list = h.select(doc, "p");
+		assert!(list > 0);
+
+		let empty = h.select(el, "span.missing");
+		assert!(empty > 0, "element 根空结果应存空列表，得到 {empty}");
+		assert_eq!(h.call1(size, empty), 0);
+
+		let empty = h.select(list, "span.missing");
+		assert!(empty > 0, "list 根空结果应存空列表，得到 {empty}");
+		assert_eq!(h.call1(size, empty), 0);
+	}
+
+	#[test]
+	fn select_empty_result_document_arm_and_error_codes() {
+		// pin：document 根空结果本就存空列表；无效查询三种根统一报 InvalidQuery；
+		// select_first 无命中仍报 NoResult（jsoup selectFirst → null 语义，不在 F 范围）
+		let mut h = Harness::new();
+		let doc = h.parse_doc(DOC);
+		let el = h.select_first(doc, "#a");
+		let list = h.select(doc, "p");
+
+		let empty = h.select(doc, "span.missing");
+		assert!(empty > 0);
+		assert_eq!(h.call1(size, empty), 0);
+
+		for (root, name) in [(doc, "document"), (el, "element"), (list, "list")] {
+			let (p, l) = h.write_str("p:contains(unclosed");
+			assert_eq!(h.call3(select, root, p, l), -4, "{name} 根无效查询");
+		}
+
+		assert_eq!(h.select_first(doc, "span.missing"), -5);
+		assert_eq!(h.select_first(el, "span.missing"), -5);
 	}
 }

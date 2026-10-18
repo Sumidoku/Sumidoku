@@ -443,6 +443,45 @@ and logout removing `<key>` and its `.username`/`.password`/`.keys`/`.values`/
 `crates/wasm/src/source.rs` + `runtime/actor.rs`, and the `Login` branches in
 `webui/src/pages/settings/SettingItem.tsx` (currently basic-only).
 
+### HTML DOM fidelity vs SwiftSoup
+
+The wasm host builds its DOM with html5ever — a spec-conformant HTML5 tree
+builder — and serializes through scraper (`crates/wasm/src/html_dom.rs`),
+while Aidoku's host parses and serializes with SwiftSoup (jsoup lineage).
+Well-formed documents behave the same under both, but three divergence
+classes are known and accepted rather than chased case by case:
+
+- Serialization: `html()` / `outer_html()` output can differ at the byte
+  level — void-element form, attribute quoting and ordering, and which
+  non-ASCII characters serialize as named entity references versus literal
+  UTF-8.
+- Tree construction on malformed markup: foster parenting of text inside
+  tables, `<template>` contents, foreign content (SVG/MathML), and
+  misnested or unclosed tags — html5ever follows the WHATWG tree-builder
+  algorithm exactly, while SwiftSoup follows jsoup's, which resolves some
+  of these corners differently.
+- Entity tables: the set of named character references each engine decodes
+  does not line up one to one, and the host `escape` / `unescape`
+  functions cover only `&amp;` / `&lt;` / `&gt;` where SwiftSoup's
+  `Entities` covers the full table.
+
+These are class-level differences between two engine families, not bugs
+with a bounded fix list: byte parity would mean reimplementing jsoup's
+serializer and tree-builder quirks wholesale. What sources actually
+consume is selector matching plus the `text()` / `attr()` / `data()`
+accessors, and those paths are aligned with jsoup semantics — for
+`data()` that means script/style elements return their contents and
+other elements return `""`, matching jsoup's `DataNode` model for the
+direct call (jsoup additionally recurses into descendants' data nodes,
+which the html5ever text-node model does not reproduce).
+
+Source authors should therefore never post-process `html()` /
+`outer_html()` output with string operations (regex, splitting,
+index-of): extract data with selectors and the text/attr accessors
+instead. When a concrete source does break on one of these differences,
+open an issue naming the source and the page; that case gets fixed on
+its own.
+
 ## CI/CD (`.github/workflows`)
 
 - `ci.yml`: a paths-filter gates the legs — rust legs (clippy, nextest,
