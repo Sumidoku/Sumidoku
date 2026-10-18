@@ -11,6 +11,7 @@ import {
 } from '../../api/hooks';
 import type { RepoSourceEntry, SourceRepo } from '../../api/types';
 import { relativeTime } from '../../lib/format';
+import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';
 import {
 	CONTENT_RATING_LEVELS,
 	MULTI_LANGUAGE,
@@ -111,7 +112,7 @@ export default function ReposPanel() {
 	const [pendingDelete, setPendingDelete] = useState<SourceRepo | null>(null);
 
 	const [query, setQuery] = useState('');
-	const [langs, setLangs] = useState<string[]>([]);
+	const [langs, setLangs] = useState<string[]>(loadRepoLangs);
 	const [ratings, setRatings] = useState<number[]>(() =>
 		CONTENT_RATING_LEVELS.map((level) => level.value)
 	);
@@ -123,6 +124,10 @@ export default function ReposPanel() {
 		const t = setTimeout(() => setSubmitted(query.trim()), 500);
 		return () => clearTimeout(t);
 	}, [query]);
+
+	useEffect(() => {
+		saveRepoLangs(langs);
+	}, [langs]);
 
 	const hasRepos = (repos.data ?? []).length > 0;
 	const entries = useRepoSources(
