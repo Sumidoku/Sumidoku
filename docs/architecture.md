@@ -68,6 +68,8 @@ and the server embeds it (see above).
   workspace version and skips when that release already exists
   (`workflow_dispatch` is the manual fallback). Builds cross-compile the
   two linux targets and build both darwin targets on `macos-latest`, then
-  push a multi-arch image to Docker Hub (`sumidoku/sumidoku` tags
-  `latest`/`X.Y.Z`/`X.Y`) and create the GitHub release with the four
-  archives.
+  push the same multi-arch image to Docker Hub (`sumidoku/sumidoku`) and
+  GitHub Container Registry (`ghcr.io/sumidoku/sumidoku`), each tagged
+  `latest`/`X.Y.Z`/`X.Y`, and create the GitHub release with the four
+  archives. The ghcr login uses the run's `GITHUB_TOKEN`, so the job asks
+  for `packages: write`.
