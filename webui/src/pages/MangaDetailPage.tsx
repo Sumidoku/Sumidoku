@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, ArrowDownUp, ExternalLink, RefreshCw, Search, TriangleAlert } from 'lucide-react';
@@ -21,6 +21,13 @@ import {
 import type { Chapter } from '../api/types';
 import { statusText } from '../lib/format';
 import {
+	applyPrefs,
+	loadPrefs,
+	nextTri,
+	savePrefs
+} from '../lib/chapterPrefs';
+import type { ChapterPrefs, SortKey, Tri } from '../lib/chapterPrefs';
+import {
 	Button,
 	Chip,
 	Cover,
@@ -29,6 +36,7 @@ import {
 	Input,
 	Modal,
 	pushToast,
+	Select,
 	Skeleton,
 	Spinner,
 	Switch
@@ -47,14 +55,31 @@ const STATUS_COLOR: Record<string, ChipColor> = {
 	unknown: 'default'
 };
 
-type ChapFilter = 'unread' | 'read' | 'downloaded' | 'bookmarked';
+type ChapFilterKey = 'unread' | 'downloaded' | 'bookmarked' | 'locked';
 
-const CHAP_FILTERS: { value: ChapFilter; label: string }[] = [
+const CHAP_FILTERS: { value: ChapFilterKey; label: string }[] = [
 	{ value: 'unread', label: '未读' },
-	{ value: 'read', label: '已读' },
 	{ value: 'downloaded', label: '已下载' },
-	{ value: 'bookmarked', label: '书签' }
+	{ value: 'bookmarked', label: '书签' },
+	{ value: 'locked', label: '锁定' }
 ];
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+	{ value: 'source', label: '源序' },
+	{ value: 'chapter', label: '章节号' },
+	{ value: 'date', label: '上传日期' }
+];
+
+/** 三态 chip 颜色：含=accent、排除=danger、关=default */
+function triColor(t: Tri): ChipColor {
+	return t === 1 ? 'accent' : t === -1 ? 'danger' : 'default';
+}
+
+function triTitle(label: string, t: Tri): string {
+	if (t === 1) return `当前只显示${label}章节，点击改为排除`;
+	if (t === -1) return `当前排除${label}章节，点击关闭筛选`;
+	return `当前不筛选${label}，点击改为只显示${label}`;
+}
 
 export default function MangaDetailPage() {
 	const { id: rawId } = useParams();
@@ -73,14 +98,26 @@ export default function MangaDetailPage() {
 	const [catSel, setCatSel] = useState<Set<number>>(new Set());
 
 	const [search, setSearch] = useState('');
-	const [order, setOrder] = useState<'desc' | 'asc'>('desc');
-	const [filter, setFilter] = useState<ChapFilter | null>(null);
+	// 排序/筛选设置按漫画持久化；loadedId 防止切漫画瞬间把上一部的设置写到新 key 下
+	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
+	const [loadedId, setLoadedId] = useState(mangaId);
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
 
 	// 入队只记本地即时反馈，下载进度在下载页看
 	const [dlQueued, setDlQueued] = useState<Set<number>>(new Set());
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
+
+	// 同路由换 mangaId 时组件不重挂，切漫画要重载该部的设置
+	useEffect(() => {
+		setPrefs(loadPrefs(mangaId));
+		setLoadedId(mangaId);
+	}, [mangaId]);
+
+	// 只在 prefs 确实属于当前漫画时回写，避免瞬态串写
+	useEffect(() => {
+		if (loadedId === mangaId && Number.isFinite(mangaId)) savePrefs(mangaId, prefs);
+	}, [mangaId, loadedId, prefs]);
 
 	const addToLibrary = useAddToLibrary();
 	const removeFromLibrary = useRemoveFromLibrary();
@@ -97,10 +134,22 @@ export default function MangaDetailPage() {
 	const continueCh =
 		chapters.length === 0 ? null : (chapters.find((c) => !c.isRead) ?? chapters[chapters.length - 1]);
 
+	// 语言/扫图组只用于渲染筛选项，从全部章节里去重取值
+	const languages = useMemo(() => {
+		const set = new Set<string>();
+		for (const c of chapters) if (c.language) set.add(c.language);
+		return [...set];
+	}, [chapters]);
+
+	const scanlators = useMemo(() => {
+		const set = new Set<string>();
+		for (const c of chapters) for (const s of c.scanlators ?? []) set.add(s);
+		return [...set];
+	}, [chapters]);
+
 	const visible = useMemo(() => {
-		let list = [...chapters];
-		// 接口按源序升序返回，默认倒转让最新章在最上
-		if (order === 'desc') list.reverse();
+		// 先应用持久化的排序/筛选，再做标题/序号文本搜索
+		let list = applyPrefs(chapters, prefs);
 		const q = search.trim().toLowerCase();
 		if (q) {
 			list = list.filter(
@@ -109,12 +158,8 @@ export default function MangaDetailPage() {
 					(c.chapter_number !== null && String(c.chapter_number).includes(q))
 			);
 		}
-		if (filter === 'unread') list = list.filter((c) => !c.isRead);
-		else if (filter === 'read') list = list.filter((c) => c.isRead);
-		else if (filter === 'downloaded') list = list.filter((c) => c.isDownloaded);
-		else if (filter === 'bookmarked') list = list.filter((c) => c.isBookmarked);
 		return list;
-	}, [chapters, order, search, filter]);
+	}, [chapters, prefs, search]);
 
 	const allSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
 	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
@@ -436,25 +481,84 @@ export default function MangaDetailPage() {
 							value={search}
 							onChange={(e) => setSearch(e.currentTarget.value)}
 						/>
+						<Select
+							value={prefs.sort}
+							title="排序方式"
+							aria-label="排序方式"
+							onChange={(e) => setPrefs((p) => ({ ...p, sort: e.currentTarget.value as SortKey }))}
+						>
+							{SORT_OPTIONS.map((o) => (
+								<option key={o.value} value={o.value}>
+									{o.label}
+								</option>
+							))}
+						</Select>
 						<Button
 							size="sm"
-							title={order === 'desc' ? '当前降序（最新章在前），点击切换' : '当前升序，点击切换'}
-							onClick={() => setOrder((o) => (o === 'desc' ? 'asc' : 'desc'))}
+							title={prefs.asc ? '当前升序（旧章在前），点击切换' : '当前降序（最新章在前），点击切换'}
+							onClick={() => setPrefs((p) => ({ ...p, asc: !p.asc }))}
 						>
 							<ArrowDownUp size={14} />
-							源序
+							{prefs.asc ? '升序' : '降序'}
 						</Button>
 						<div className="manga-chaps__filters">
 							{CHAP_FILTERS.map((f) => (
 								<Chip
 									key={f.value}
-									color={filter === f.value ? 'accent' : 'default'}
-									onClick={() => setFilter((cur) => (cur === f.value ? null : f.value))}
+									color={triColor(prefs.filters[f.value])}
+									className={prefs.filters[f.value] === -1 ? 'chip--exclude' : undefined}
+									title={triTitle(f.label, prefs.filters[f.value])}
+									onClick={() =>
+										setPrefs((p) => ({
+											...p,
+											filters: { ...p.filters, [f.value]: nextTri(p.filters[f.value]) }
+										}))
+									}
 								>
 									{f.label}
 								</Chip>
 							))}
 						</div>
+						{languages.length > 1 && (
+							<Select
+								value={prefs.language ?? ''}
+								title="语言"
+								aria-label="语言"
+								onChange={(e) => setPrefs((p) => ({ ...p, language: e.currentTarget.value || null }))}
+							>
+								<option value="">全部语言</option>
+								{languages.map((l) => (
+									<option key={l} value={l}>
+										{l}
+									</option>
+								))}
+							</Select>
+						)}
+						{scanlators.length > 1 && (
+							<div className="manga-chaps__filters">
+								{scanlators.map((s) => (
+									<Chip
+										key={s}
+										color={prefs.scanlators.includes(s) ? 'accent' : 'default'}
+										title={
+											prefs.scanlators.includes(s)
+											? `点击取消筛选「${s}」`
+											: `点击只显示「${s}」的章节`
+										}
+										onClick={() =>
+											setPrefs((p) => ({
+												...p,
+												scanlators: p.scanlators.includes(s)
+												? p.scanlators.filter((x) => x !== s)
+												: [...p.scanlators, s]
+											}))
+										}
+									>
+										{s}
+									</Chip>
+								))}
+							</div>
+						)}
 						{chapters.length > 0 && (
 							<Button size="sm" onClick={() => setSelecting(true)}>
 								选择

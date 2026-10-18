@@ -302,10 +302,26 @@ button.manga-menu__row:hover:not(:disabled) {
 	max-width: 260px;
 }
 
+/* 排序/语言下拉在工具行里保持紧凑，不撑满整行 */
+.manga-chaps__tools .select {
+	font-size: 13px;
+}
+
+.manga-chaps__tools .select__field {
+	padding: 7px 28px 7px 10px;
+	font-size: 13px;
+}
+
 .manga-chaps__filters {
 	display: flex;
 	gap: 6px;
 	flex-wrap: wrap;
+}
+
+/* 三态 chip 的排除态：划线 + 降透明度，与「含」的 accent 色区分 */
+.chip--exclude {
+	text-decoration: line-through;
+	opacity: 0.75;
 }
 
 .manga-chaps__select-tools {

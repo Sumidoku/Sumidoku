@@ -16,6 +16,7 @@ import { api, pageUrl } from '../api/client';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { Chapter, PageData } from '../api/types';
 import { chapterLabel } from '../lib/format';
+import { applyPrefs, DEFAULT_PREFS, loadPrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import './reader.css';
 
@@ -100,7 +101,10 @@ function ReaderCore({
 	const navEnabled = mangaId !== null;
 	const mangaQuery = useManga(mangaId ?? 0, { enabled: navEnabled, silent: true });
 	const chaptersQuery = useMangaChapters(mangaId ?? 0, { enabled: navEnabled, silent: true });
-	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
+	// 原列表保留给章节标题/续读进度；排序/筛选后的列表只用于上一章/下一章导航
+	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
+	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
+	const chapters = useMemo(() => applyPrefs(rawChapters, prefs), [rawChapters, prefs]);
 
 	const [mode, setModeState] = useState<Mode>(readMode);
 	const [dir, setDirState] = useState<Dir>(readDir);
@@ -116,7 +120,8 @@ function ReaderCore({
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
-	const curChapter = chapters.find((c) => c.id === chapterId) ?? null;
+	// 标题/续读用原列表，避免当前章被筛掉时丢了副标题和进度
+	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
 	const pos = chapters.findIndex((c) => c.id === chapterId);
 	const prevCh = pos > 0 ? chapters[pos - 1] : null;
 	const nextCh = pos >= 0 && pos < chapters.length - 1 ? chapters[pos + 1] : null;
@@ -277,7 +282,7 @@ function ReaderCore({
 	useLayoutEffect(() => {
 		if (!pages || !navReady || initedRef.current) return;
 		initedRef.current = true;
-		const resume = chapters.find((c) => c.id === chapterId)?.lastPageRead ?? 0;
+		const resume = rawChapters.find((c) => c.id === chapterId)?.lastPageRead ?? 0;
 		const initial = Math.min(
 			Math.max(startPage ?? (resume > 0 ? resume : 0), 0),
 			Math.max(pages.length - 1, 0)
