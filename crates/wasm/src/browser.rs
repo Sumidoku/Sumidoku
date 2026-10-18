@@ -115,6 +115,8 @@ impl BrowserState {
 				if let Err(e) = client.dispose_context(&context) {
 					if e.fatal {
 						self.disconnect();
+						// dispose 可能没到达浏览器，重连时补刀
+						self.stale.push(context);
 					}
 					return Some(format!("webview browser context dispose failed: {e}"));
 				}
@@ -235,6 +237,7 @@ pub(crate) mod mock {
 		/// Some(true) = fatal（断连），Some(false) = 单次失败
 		pub load_error: Option<bool>,
 		pub create_context_error: Option<bool>,
+		pub dispose_error: Option<bool>,
 	}
 
 	pub struct MockConnector(pub Arc<Mutex<MockState>>);
@@ -270,6 +273,13 @@ pub(crate) mod mock {
 
 		fn dispose_context(&mut self, context: &str) -> Result<(), BrowserError> {
 			let mut state = self.0.lock().expect("mock lock");
+			if let Some(fatal) = state.dispose_error {
+				return Err(if fatal {
+					BrowserError::fatal("mock connection died")
+				} else {
+					BrowserError::transient("mock dispose rejected")
+				});
+			}
 			state.disposed.push(context.to_string());
 			state.contexts.retain(|c| c != context);
 			Ok(())
@@ -414,6 +424,23 @@ mod tests {
 		disposed.sort();
 		assert_eq!(disposed, vec!["ctx-1", "ctx-2"], "旧连接的 context 在重连成功时逐一 dispose");
 		assert_eq!(mock.loads.last().unwrap().0, "ctx-3", "重连后 rid 拿到新 context");
+	}
+
+	#[test]
+	fn fatal_dispose_failure_marks_context_stale() {
+		let mock = Arc::new(Mutex::new(MockState::default()));
+		let mut state = state_with(&mock);
+		state.load(7, "https://a.example/", &[]).expect("load");
+
+		mock.lock().expect("mock lock").dispose_error = Some(true);
+		assert!(state.destroy(7).is_some(), "dispose 失败有日志行");
+
+		mock.lock().expect("mock lock").dispose_error = None;
+		state.load(8, "https://c.example/", &[]).expect("重连");
+		assert!(
+			mock.lock().expect("mock lock").disposed.contains(&"ctx-1".to_string()),
+			"没到达浏览器的 dispose 重连时补上"
+		);
 	}
 
 	#[test]
