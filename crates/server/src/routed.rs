@@ -7,7 +7,7 @@ use std::time::Duration;
 
 const MAX_ATTEMPTS: u32 = 3;
 
-/// 设计 §6 的 NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct。
+/// NetPolicy 实装：direct > relay(TRAWL) > 全局 proxy > direct。
 /// 引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
 pub struct SumidokuNetPolicy {
 	user_agent: String,

@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, Semaphore, broadcast};
 use tokio::task::JoinSet;
 
-/// 全局同时更新的源数上限（设计 §12：源内串行、源间并行）
+/// 全局同时更新的源数上限：源内串行、源间并行
 const UPDATE_SOURCE_CONCURRENCY: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,7 +40,7 @@ pub struct UpdateSummary {
 	pub last_run_at: Option<i64>,
 }
 
-/// 设计 §12 库更新检测：定时或手动触发全量 fetch，分类 include_in_update 三态过滤。
+/// 库更新检测：定时或手动触发全量 fetch，分类 include_in_update 三态过滤。
 pub struct UpdateScheduler {
 	// Weak 防循环引用：AppState 经 OnceCell 持有本调度器
 	state: Weak<AppState>,
