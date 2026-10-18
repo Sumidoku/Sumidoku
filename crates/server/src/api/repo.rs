@@ -41,6 +41,7 @@ pub(crate) fn source_json(
 		"languages": row.languages.0,
 		"contentRating": row.content_rating,
 		"baseUrl": row.base_url,
+		"breakingChangeVersion": row.breaking_change_version,
 		"enabled": row.enabled,
 		"installedAt": row.installed_at,
 		"updatedAt": row.updated_at,
@@ -160,10 +161,15 @@ pub async fn update_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	let row = repo::update_source(&state, id).await?;
+	let update = repo::update_source(&state, id).await?;
 	let latest = repo::latest_versions(&state.pool).await?;
 	let pinned = super::pins::pinned_map(&state.pool).await?;
-	Ok(Json(source_json(&row, &latest, &pinned)))
+	let mut value = source_json(&update.source, &latest, &pinned);
+	if let Some(object) = value.as_object_mut() {
+		object.insert("migrationRequired".into(), json!(update.migration.required));
+		object.insert("migrationWarnings".into(), json!(update.migration.warnings));
+	}
+	Ok(Json(value))
 }
 
 pub async fn update_all(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
@@ -173,8 +179,15 @@ pub async fn update_all(State(state): State<Arc<AppState>>) -> ApiResult<Json<Va
 		.iter()
 		.map(|(key, reason)| json!({ "key": key, "reason": reason }))
 		.collect();
+	let migration_warnings: Vec<Value> = outcome
+		.migration_warnings
+		.iter()
+		.map(|(key, message)| json!({ "key": key, "message": message }))
+		.collect();
 	Ok(Json(json!({
 		"updated": outcome.updated,
 		"failed": failed,
+		"migrationRequired": outcome.migration_required,
+		"migrationWarnings": migration_warnings,
 	})))
 }

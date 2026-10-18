@@ -40,6 +40,36 @@ Migrations in `crates/server/migrations`.
   the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
   through the same `register_aix` path as the directory scan; versions
   compare as Aidoku's monotonic integers.
+- Breaking-change key migration (`source/rekey.rs`): registration stores the
+  manifest's `config.breakingChangeVersion` (Aidoku's
+  `SourceInfo.Configuration`) in `source.breaking_change_version`, and
+  `source_json` exposes it. When an update crosses it
+  (`old version < breakingChangeVersion <= new version`, Aidoku checks only
+  the lower bound) and the source has manga rows, the update path runs key
+  migration after the new package registers. With `features.migration` the
+  flow mirrors Aidoku's `AppDelegate.handleSourceMigration`: every manga and
+  chapter key is remapped through `handle_key_migration`
+  (`system.startMigration`/`endMigration` notifications when the source has
+  the notification feature, chapter calls pass the old manga key), mappings
+  are collected outside the transaction and then applied in one transaction
+  that re-keys rows in place — ids stay, so progress, categories and
+  download flags ride along. Keys the source maps to an empty string, fails
+  on, or leaves unchanged are skipped (empty/failed ones land in
+  `warnings`); a new key that collides with `UNIQUE(source_id, key)` /
+  `UNIQUE(manga_id, key)` is retried to a fixpoint (the occupying row may
+  itself move) and otherwise keeps its old key with a warning — Aidoku does
+  no collision handling at all (a failed Core Data save is only logged), so
+  this is deliberately stricter. Without `features.migration` nothing is
+  re-keyed; the update responses flag `migrationRequired` (only when the
+  source has in-library rows, Aidoku's `forceMigrate` condition) and the web
+  UI routes to `/migrate?source=<id>&sameSource=1`, the cross-source wizard
+  prefilled with the same source as destination. `POST /sources/{id}/update`
+  returns `migrationRequired`/`migrationWarnings` next to the source DTO;
+  `POST /source-repos/update-all` groups them per source key. To serve that
+  fallback, `POST /api/v1/migrate` accepts same-source entries when the
+  target key differs from the origin's (identical `(source, key)` still
+  reports `same_source`); the new-key row is fetched or reused and progress
+  carries by chapter number as usual.
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the
