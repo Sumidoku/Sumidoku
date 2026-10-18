@@ -655,9 +655,10 @@ async fn register_manga(
 	}
 	let handle = state.get_handle(body.source_id).await?;
 	let updated = handle.get_manga_update(initial, true, true).await?;
-	let manga_id = upsert_manga(&state.pool, body.source_id, &updated, true, true, true).await?;
+	let mut conn = state.pool.acquire().await?;
+	let manga_id = upsert_manga(&mut conn, body.source_id, &updated, true, true, true).await?;
 	reconcile_chapters(
-		&state.pool,
+		&mut conn,
 		manga_id,
 		&updated.chapters.clone().unwrap_or_default(),
 	)
@@ -828,7 +829,8 @@ async fn get_manga(
 		let updated = handle
 			.get_manga_update(manga_from_row(&row), true, false)
 			.await?;
-		upsert_manga(&state.pool, row.source_id, &updated, true, true, false).await?;
+		let mut conn = state.pool.acquire().await?;
+		upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
 		row = manga_row(&state.pool, id).await?;
 	}
 	Ok(Json(manga_json(&state, &row).await?))
@@ -874,11 +876,12 @@ async fn get_chapters(
 		let updated = handle
 			.get_manga_update(manga_from_row(&manga), false, true)
 			.await?;
-		reconcile_chapters(&state.pool, id, &updated.chapters.clone().unwrap_or_default()).await?;
+		let mut conn = state.pool.acquire().await?;
+		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
 		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 			.bind(crate::model::unix_now())
 			.bind(id)
-			.execute(&state.pool)
+			.execute(&mut *conn)
 			.await?;
 	}
 	let rows: Vec<ChapterUserRow> = sqlx::query_as(

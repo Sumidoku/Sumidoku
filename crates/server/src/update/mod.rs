@@ -183,13 +183,14 @@ impl UpdateScheduler {
 			let updated = handle
 				.get_manga_update(manga_from_row(&manga), false, true)
 				.await?;
+			let mut conn = self.pool.acquire().await?;
 			let new_ids =
-				reconcile_chapters(&self.pool, manga.id, &updated.chapters.clone().unwrap_or_default())
+				reconcile_chapters(&mut conn, manga.id, &updated.chapters.clone().unwrap_or_default())
 					.await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(unix_now())
 				.bind(manga.id)
-				.execute(&self.pool)
+				.execute(&mut *conn)
 				.await?;
 			Ok(new_ids)
 		}
