@@ -377,7 +377,16 @@ sources from `Payload/` inside the zip without extracting. Source settings
 `get_settings` export when present, otherwise from the static
 `settings.json`; the static Aidoku schema (flat, camelCase) is normalized
 to the nested shape the dynamic export produces (`api::settings`), so the
-API and web UI see a single contract. `POST .../settings/reset` clears the
+API and web UI see a single contract. A source whose `source.json` sets
+`config.allowsBaseUrlSelect` and declares more than one base URL gets a
+synthesized base-URL `select` (key `url`, default the first URL) prepended
+to the list, mirroring AidokuRunner's extra settings; a source declaring
+more than one language gets a synthesized language setting (key
+`languages`, or `language` when `config.languageSelectType` is `single`)
+prepended ahead of it, with the default from each language's `isDefault`
+(AidokuRunner picks the device-language intersection; the server has no
+device locale, so it falls back to the first).
+`POST .../settings/reset` clears the
 overrides and re-seeds package defaults; `POST .../login/basic` runs the
 source's `handle_basic_login` and, on success, persists the credentials and
 a `logged_in` marker into `source_setting`; `POST .../cache/clear` drops the

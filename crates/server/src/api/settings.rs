@@ -7,6 +7,117 @@
 
 use serde_json::{Map, Value, json};
 
+use crate::source::{
+	default_language_pick, language_select_single, source_languages, source_urls,
+};
+
+/// 合成设置：对齐 AidokuRunner `Source.getExtraSettings` 的 base url 分支。
+///
+/// `config.allowsBaseUrlSelect` 为真且 `info.url` + `info.urls` 至少两个时，
+/// App 会在源设置里生成一个选线路的 select（键 `url`，默认第一个镜像），
+/// 源运行时再通过 `defaults.get("url")` 读取。这里补出同款嵌套形状，
+/// 插在静态/动态设置之前（AidokuRunner 把 extraSettings 排在 staticSettings 前）。
+pub fn base_url_setting(doc: &Value) -> Option<Value> {
+	if doc
+		.get("config")
+		.and_then(|c| c.get("allowsBaseUrlSelect"))
+		.and_then(Value::as_bool)
+		!= Some(true)
+	{
+		return None;
+	}
+	let urls = source_urls(doc);
+	let (first, rest) = urls.split_first()?;
+	if rest.is_empty() {
+		return None;
+	}
+	let default = first.clone();
+	let select = json!({
+		"type": "select",
+		"key": "url",
+		"title": "基础地址",
+		"notification": null,
+		"requires": null,
+		"requires_false": null,
+		"refreshes": ["content"],
+		"value": { "Select": {
+			"values": urls,
+			"titles": null,
+			"auth_to_open": null,
+			"default": default,
+		} },
+	});
+	Some(json!({
+		"type": "group",
+		"key": "__base_url",
+		"title": "基础地址",
+		"notification": null,
+		"requires": null,
+		"requires_false": null,
+		"refreshes": null,
+		"value": { "Group": { "footer": null, "items": [select] } },
+	}))
+}
+
+/// 合成设置：对齐 AidokuRunner `Source.getExtraSettings` 的语言分支。
+///
+/// `info.languages` 超过一种即生成语言设置：languageSelectType == "single"
+/// 时是单选 select（键 language），否则多选 multi-select（键 languages），
+/// 默认值取 isDefault、都没有取第一个（AidokuRunner 按设备语言取交集，
+/// 服务端无设备语言）。插在 base url 之前（Runner 的 extraSettings 顺序）。
+pub fn language_setting(doc: &Value) -> Option<Value> {
+	let langs = source_languages(doc);
+	if langs.len() < 2 {
+		return None;
+	}
+	let values: Vec<String> = langs.iter().map(|(code, _)| code.clone()).collect();
+	let picked = default_language_pick(&langs);
+	let single = language_select_single(doc);
+	let (ty, key, value) = if single {
+		(
+			"select",
+			"language",
+			json!({ "Select": {
+				"values": values,
+				"titles": null,
+				"auth_to_open": null,
+				"default": picked.first(),
+			} }),
+		)
+	} else {
+		(
+			"multi-select",
+			"languages",
+			json!({ "MultiSelect": {
+				"values": values,
+				"titles": null,
+				"auth_to_open": null,
+				"default": picked,
+			} }),
+		)
+	};
+	let select = json!({
+		"type": ty,
+		"key": key,
+		"title": "语言",
+		"notification": key,
+		"requires": null,
+		"requires_false": null,
+		"refreshes": ["content"],
+		"value": value,
+	});
+	Some(json!({
+		"type": "group",
+		"key": "__language",
+		"title": "语言",
+		"notification": null,
+		"requires": null,
+		"requires_false": null,
+		"refreshes": null,
+		"value": { "Group": { "footer": null, "items": [select] } },
+	}))
+}
+
 /// 扁平 settings.json -> 动态源同款嵌套数组；输入非数组时返回空
 pub fn normalize_static_settings(raw: &Value) -> Vec<Value> {
 	raw.as_array()
@@ -178,5 +289,83 @@ mod tests {
 	fn non_array_input_is_empty() {
 		assert!(normalize_static_settings(&json!({"type": "switch"})).is_empty());
 		assert!(normalize_static_settings(&Value::Null).is_empty());
+	}
+
+	#[test]
+	fn base_url_setting_matches_runner_extra_settings() {
+		let doc = json!({
+			"info": {
+				"url": "https://main.example",
+				"urls": ["https://m1.example", "https://m2.example"]
+			},
+			"config": {"allowsBaseUrlSelect": true}
+		});
+		let out = base_url_setting(&doc).expect("base url setting");
+		assert_eq!(out["type"], "group");
+		let item = &out["value"]["Group"]["items"][0];
+		assert_eq!(item["type"], "select");
+		assert_eq!(item["key"], "url");
+		assert_eq!(
+			item["value"]["Select"]["values"],
+			json!(["https://main.example", "https://m1.example", "https://m2.example"])
+		);
+		assert_eq!(item["value"]["Select"]["default"], "https://main.example");
+		assert_eq!(item["refreshes"], json!(["content"]));
+	}
+
+	#[test]
+	fn base_url_setting_needs_config_and_two_urls() {
+		let two_urls = json!({
+			"info": {"url": "https://a.example", "urls": ["https://b.example"]}
+		});
+		assert!(base_url_setting(&two_urls).is_none());
+
+		let disabled = json!({
+			"info": {"url": "https://a.example", "urls": ["https://b.example"]},
+			"config": {"allowsBaseUrlSelect": false}
+		});
+		assert!(base_url_setting(&disabled).is_none());
+
+		let single = json!({
+			"info": {"url": "https://a.example"},
+			"config": {"allowsBaseUrlSelect": true}
+		});
+		assert!(base_url_setting(&single).is_none());
+	}
+
+	#[test]
+	fn language_setting_matches_runner_extra_settings() {
+		let doc = json!({"info": {"languages": ["en", "ja", "zh"]}});
+		let out = language_setting(&doc).expect("language setting");
+		assert_eq!(out["type"], "group");
+		assert_eq!(out["title"], "语言");
+		let item = &out["value"]["Group"]["items"][0];
+		assert_eq!(item["type"], "multi-select");
+		assert_eq!(item["key"], "languages");
+		assert_eq!(item["notification"], "languages");
+		assert_eq!(item["value"]["MultiSelect"]["values"], json!(["en", "ja", "zh"]));
+		assert_eq!(item["value"]["MultiSelect"]["default"], json!(["en"]));
+		assert_eq!(item["refreshes"], json!(["content"]));
+	}
+
+	#[test]
+	fn language_setting_single_uses_is_default() {
+		let doc = json!({
+			"info": {"languages": [
+				{"code": "en"}, {"code": "ja", "isDefault": true}
+			]},
+			"config": {"languageSelectType": "single"}
+		});
+		let out = language_setting(&doc).expect("language setting");
+		let item = &out["value"]["Group"]["items"][0];
+		assert_eq!(item["type"], "select");
+		assert_eq!(item["key"], "language");
+		assert_eq!(item["value"]["Select"]["default"], "ja");
+	}
+
+	#[test]
+	fn language_setting_needs_two_languages() {
+		assert!(language_setting(&json!({"info": {"languages": ["en"]}})).is_none());
+		assert!(language_setting(&json!({"info": {}})).is_none());
 	}
 }

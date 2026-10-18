@@ -465,17 +465,35 @@ async fn get_source_settings(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	let settings = match handle.get_settings().await {
-		Ok(settings) => Some(serde_json::to_value(settings)?),
+	let doc = package_json(&state, id, "source.json")
+		.await?
+		.unwrap_or_else(|| json!({}));
+	let mut items: Vec<Value> = match handle.get_settings().await {
+		Ok(settings) => serde_json::to_value(settings)?
+			.as_array()
+			.cloned()
+			.unwrap_or_default(),
 		// 静态 settings.json 是 Aidoku 的扁平 schema，归一成动态源同款嵌套形状
 		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => package_json(&state, id, "settings.json")
 			.await?
-			.map(|raw| Value::Array(settings::normalize_static_settings(&raw))),
+			.map(|raw| settings::normalize_static_settings(&raw))
+			.unwrap_or_default(),
 		Err(e) => return Err(ApiError::from(e)),
 	};
+	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）
+	let mut extras: Vec<Value> = Vec::new();
+	if let Some(language) = settings::language_setting(&doc) {
+		extras.push(language);
+	}
+	if let Some(base_url) = settings::base_url_setting(&doc) {
+		extras.push(base_url);
+	}
+	for (offset, extra) in extras.into_iter().enumerate() {
+		items.insert(offset, extra);
+	}
 	let values = current_values(&state, id).await?;
 	Ok(Json(json!({
-		"settings": settings,
+		"settings": items,
 		"values": values,
 	})))
 }

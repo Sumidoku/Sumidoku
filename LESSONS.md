@@ -192,3 +192,14 @@ and update every one.
   missing field accept_language` in rekey_host, js_host, webview_host,
   canvas_host, html_mutation, partial_result and smoke; the follow-up
   commit adds the field to each.
+
+**Never run `cargo fmt` in this repo; the tree is hand-formatted with tabs.**
+There is no `rustfmt.toml`, so default rustfmt expands every tab to spaces
+and rewrites the whole workspace — 108 files, `vendor/aidoku` included,
+which `AGENTS.md` says must not be restyled. A single `cargo fmt --all`
+produced a 31k-insertion/28k-deletion diff over tracked files; only
+`git reset --hard` undid it. Match the surrounding indentation by hand;
+CI checks clippy and tests, not formatting.
+- Evidence: 2026-10-18 session, `cargo fmt --all` reformatted 108 files
+  (including `vendor/aidoku`) before the fix was re-applied on the reset
+  tree.

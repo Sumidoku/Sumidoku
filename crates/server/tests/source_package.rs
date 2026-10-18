@@ -284,6 +284,30 @@ async fn scan_seeds_settings_languages_and_base_url() {
 	// select 无显式默认落第一个候选值
 	assert_eq!(seeded["mode"], json!({"String": "a"}));
 	assert_eq!(seeded["ratings"], json!({"StringArray": ["safe"]}));
+
+	// 源设置端点补出合成的语言/基础地址设置，webui 才能显示切换项
+	// 顺序对齐 AidokuRunner：extraSettings 在前，语言在 base url 之前
+	let id = source_id_by_key(&app.app, "multi.custom").await;
+	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/settings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let list = body["settings"].as_array().expect("settings array");
+
+	let language = &list[0]["value"]["Group"]["items"][0];
+	assert_eq!(language["type"], "multi-select", "{body}");
+	assert_eq!(language["key"], "languages", "{body}");
+	assert_eq!(language["value"]["MultiSelect"]["values"], json!(["en", "ja"]), "{body}");
+	assert_eq!(language["value"]["MultiSelect"]["default"], json!(["en"]), "{body}");
+	assert_eq!(body["values"]["languages"], json!(["en"]), "{body}");
+
+	let base_url = &list[1]["value"]["Group"]["items"][0];
+	assert_eq!(base_url["type"], "select", "{body}");
+	assert_eq!(base_url["key"], "url", "{body}");
+	assert_eq!(
+		base_url["value"]["Select"]["values"],
+		json!(["https://main.example", "https://m1.example", "https://m2.example"]),
+		"{body}"
+	);
+	assert_eq!(body["values"]["url"], "https://main.example", "{body}");
 }
 
 #[tokio::test]
