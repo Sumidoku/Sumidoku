@@ -1,4 +1,5 @@
 use crate::html_dom::{HtmlDocument, HtmlElement, HtmlElementList, HtmlNode};
+use crate::js_engine::JsEngine;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -22,6 +23,7 @@ pub enum StoreItem {
 	HtmlElementList(HtmlElementList),
 	Encoded(Vec<u8>),
 	ImageData(ImageData),
+	JsContext(Box<JsEngine>),
 }
 
 // HtmlDocument/JsContext 等内部类型非 Send，但实例与 store 只活在单个 actor
@@ -62,6 +64,10 @@ impl StoreItem {
 
 	pub fn as_image_data(&self) -> Option<&ImageData> {
 		if let StoreItem::ImageData(s) = self { Some(s) } else { None }
+	}
+
+	pub fn as_js_context(&mut self) -> Option<&mut JsEngine> {
+		if let StoreItem::JsContext(engine) = self { Some(engine) } else { None }
 	}
 
 	pub fn as_encoded(&self) -> Option<&[u8]> {
