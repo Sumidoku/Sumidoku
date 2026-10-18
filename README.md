@@ -32,6 +32,21 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
 | `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview for source login flows |
+| `SUMIDOKU_AUTH_PASSWORD` | — | site password; enables authentication for the web UI, REST API and OPDS |
+| `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
+| `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |
+
+## Authentication
+
+Authentication is off until `SUMIDOKU_AUTH_PASSWORD` (or the legacy
+`SUMIDOKU_BASIC_PASSWORD`) is set. With a password configured, the web UI
+shows a login page, `/api/v1` requires `Authorization: Bearer <token>` (a
+login-issued session token or a configured API key), and the OPDS catalogs
+require Basic auth with the same password. Unauthenticated requests get a
+uniform `401` (`{"error":{"code":"unauthorized"}}`). The config-set password
+is hashed (argon2) into the database on every boot, so it overrides a
+password previously changed through the UI; API keys stay in the config
+only.
 
 ## Cloudflare bypass (trawl)
 
@@ -63,7 +78,7 @@ curl -X POST http://localhost:3000/api/v1/sources/scan
 
 ## OPDS
 
-The OPDS 1.2 catalog is served at `/opds/v1.2`. Basic auth applies to the catalog only, and only when `SUMIDOKU_BASIC_PASSWORD` is set (any non-empty username).
+The OPDS 1.2 catalog is served at `/opds/v1.2`. When authentication is enabled, the catalogs require Basic auth with the site password (any non-empty username); see [Authentication](#authentication).
 
 ## Local build
 

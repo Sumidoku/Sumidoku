@@ -4,6 +4,7 @@ import BrowsePage from './pages/BrowsePage';
 import DownloadsPage from './pages/DownloadsPage';
 import HistoryPage from './pages/HistoryPage';
 import LibraryPage from './pages/LibraryPage';
+import LoginPage from './pages/LoginPage';
 import MangaDetailPage from './pages/MangaDetailPage';
 import NotFound from './pages/NotFound';
 import ReaderPage from './pages/ReaderPage';
@@ -30,7 +31,9 @@ const router = createBrowserRouter([
 		]
 	},
 	// 阅读器全屏，不带 AppLayout 导航
-	{ path: '/reader/:chapterId', element: <ReaderPage /> }
+	{ path: '/reader/:chapterId', element: <ReaderPage /> },
+	// 登录页同样独立布局（未认证时不渲染任何受保护页面）
+	{ path: '/login', element: <LoginPage /> }
 ]);
 
 export default function App() {
