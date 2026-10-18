@@ -28,6 +28,17 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_CONFIG_DIR` | `/config` | data root: database, covers and sources live under it |
 | `SUMIDOKU_DOWNLOADS_DIR` | `/downloads` | downloads directory |
 | `SUMIDOKU_COVERS_DIR` | `/config/covers` | cover cache directory |
+| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; enables Cloudflare-bypass retries |
+| `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
+| `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
+
+## Cloudflare bypass (trawl)
+
+Sources behind Cloudflare anti-bot protection are fetched through a [trawl](https://github.com/germondai/trawl) sidecar: a challenge-aware forward proxy that passes ordinary traffic through and solves detected challenges with a real browser.
+
+With `SUMIDOKU_NET_TRAWL_PROXY` set, a direct request answered `403`/`503` with Cloudflare headers is retried once through trawl. Cookies on the solved response (`cf_clearance`) land in the source's session jar, so later direct requests reuse the clearance; when it expires the cycle repeats. Sources that challenge every request can skip the failed direct attempt by listing their domains in `SUMIDOKU_NET_RELAY_DOMAINS`. Without the variable, behavior is unchanged: requests go direct and the challenge page reaches the source.
+
+HTTPS sources also need `SUMIDOKU_NET_TRAWL_CA`: trawl terminates TLS locally to inspect responses and re-signs with its own root CA, which the client must trust. The compose file already runs the sidecar and shares the CA through the `trawl-ca` volume — trawl writes `ca.crt` into it on first boot, Sumidoku reads it from `/trawl-ca/ca.crt`.
 
 ## Installing sources
 
