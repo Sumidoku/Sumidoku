@@ -8,6 +8,7 @@ one; a PR that misses one gets a comment saying which.
 | Rule | What a reviewer looks at |
 | --- | --- |
 | A fix comes with a test that fails without it. | Revert the fix by hand, run the test, watch it fail with a real `FAIL` on the target behavior. A compile error or a skipped test doesn't count. The PR names the test and what it printed. |
+| The break-and-restore starts from a committed green state. | The green state is committed before the fix is broken; the restore is `git restore -- <file>` or an equivalent one-file revert — never a bare `git stash` among uncommitted work, and `git stash drop` is not a restore. |
 | Run the full suite, not the packages you think you touched. | `cargo nextest run --workspace`, clippy with `-D warnings`, and `npm run check && npm run build` for web UI changes. |
 | A test never reaches the network or the real `data/` directory. | Sources and HTTP are served from local fixtures; the database is a temp file. |
 | A test that fails on `main` is a bug to fix now. | "Fails the same on main" is not a baseline. Fix it at its cause in a commit of its own, or file an issue, before shipping on top of it. |
