@@ -6,8 +6,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config       # 数据库、设置、封面缓存、TRAWL CA
-      - ./sources:/sources     # 源包目录挂载安装，不内置进镜像
+      - ./config:/config       # 数据库、设置、封面缓存、源包、TRAWL CA
       - ./downloads:/downloads
       - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
     environment:

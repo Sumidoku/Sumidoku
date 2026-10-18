@@ -41,7 +41,7 @@ blocking stays with the maintainer.
 - `vendor/aidoku` — vendored upstream crate; it tracks upstream, do not
   restyle or "fix" it locally
 - `webui` — Vite + React SPA, built to `webui/build`
-- `data/` — local dev database and cover cache; untracked, never commit it
+- `data/` — local dev database, cover cache and sources; untracked, never commit it
 
 ## Release
 

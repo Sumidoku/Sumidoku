@@ -19,15 +19,13 @@ LABEL org.opencontainers.image.source="https://github.com/Sumidoku/Sumidoku" \
       org.opencontainers.image.licenses="MIT"
 COPY --chmod=755 "dist/$TARGETARCH/sumidoku-server" /usr/local/bin/sumidoku-server
 # 777 so an arbitrary --user uid:gid can write when nothing is bind-mounted
-RUN install -d -m 777 /config /sources /downloads
+RUN install -d -m 777 /config /downloads
 ENV SUMIDOKU_ADDR=0.0.0.0:3000 \
-    DATABASE_URL=sqlite:///config/sumidoku.db?mode=rwc \
-    SUMIDOKU_SOURCES_DIR=/sources \
-    SUMIDOKU_DOWNLOADS_DIR=/downloads \
-    SUMIDOKU_COVERS_DIR=/config/covers
+    SUMIDOKU_CONFIG_DIR=/config \
+    SUMIDOKU_DOWNLOADS_DIR=/downloads
 USER sumidoku
 EXPOSE 3000
-VOLUME ["/config", "/sources", "/downloads"]
+VOLUME ["/config", "/downloads"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
     CMD curl -fsS http://localhost:3000/health || exit 1
 
