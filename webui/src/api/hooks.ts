@@ -27,7 +27,6 @@ import type {
 	MangaDetail,
 	MangaPage,
 	MigrateLookupResult,
-	MigrateMode,
 	MigrateRequest,
 	MigrateResponse,
 	MigrateSource,

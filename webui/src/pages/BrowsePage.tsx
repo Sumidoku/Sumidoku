@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+	ArrowLeftRight,
 	CircleArrowUp,
 	GripVertical,
 	House,
@@ -198,6 +199,7 @@ export default function BrowsePage() {
 	const updateAll = useUpdateAllSources();
 	const pin = usePinSource();
 	const reorderPinned = useReorderPinned();
+	const navigate = useNavigate();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -274,6 +276,10 @@ export default function BrowsePage() {
 				actions={
 					tab === 'installed' ? (
 						<>
+							<Button onClick={() => navigate('/migrate')}>
+								<ArrowLeftRight size={15} />
+								迁移
+							</Button>
 							{updateCount > 0 && (
 								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
 									<CircleArrowUp size={15} />
