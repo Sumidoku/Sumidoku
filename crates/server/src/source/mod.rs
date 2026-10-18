@@ -427,9 +427,10 @@ fn collect_setting_defaults(
 	}
 }
 
-/// 按 (source_id, key) upsert 详情字段；时间戳由调用方按需打点
+/// 按 (source_id, key) upsert 详情字段；时间戳由调用方按需打点。
+/// 收连接而不是连接池：迁移等场景要把 upsert 包进调用方自己的事务
 pub async fn upsert_manga(
-	pool: &SqlitePool,
+	conn: &mut sqlx::SqliteConnection,
 	source_id: i64,
 	manga: &Manga,
 	initialized: bool,
@@ -469,26 +470,26 @@ pub async fn upsert_manga(
 	.bind(manga.next_update_time)
 	.bind(if fetched_details { Some(now) } else { None })
 	.bind(if fetched_chapters { Some(now) } else { None })
-	.execute(pool)
+	.execute(&mut *conn)
 	.await?;
 
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(source_id)
 		.bind(&manga.key)
-		.fetch_one(pool)
+		.fetch_one(&mut *conn)
 		.await?;
 	if fetched_details {
 		sqlx::query("UPDATE manga SET last_fetched_at = ? WHERE id = ?")
 			.bind(now)
 			.bind(id)
-			.execute(pool)
+			.execute(&mut *conn)
 			.await?;
 	}
 	if fetched_chapters {
 		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 			.bind(now)
 			.bind(id)
-			.execute(pool)
+			.execute(&mut *conn)
 			.await?;
 	}
 	Ok(id)
@@ -497,14 +498,14 @@ pub async fn upsert_manga(
 /// 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
 /// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
 pub async fn reconcile_chapters(
-	pool: &SqlitePool,
+	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
 	chapters: &[Chapter],
 ) -> ApiResult<Vec<i64>> {
 	let now = unix_now();
 	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
 		.bind(manga_id)
-		.fetch_all(pool)
+		.fetch_all(&mut *conn)
 		.await?;
 	let known: HashSet<&String> = existing.iter().map(|(_, key)| key).collect();
 	let mut seen = HashSet::with_capacity(chapters.len());
@@ -536,7 +537,7 @@ pub async fn reconcile_chapters(
 		.bind(index as i64)
 		.bind(chapter.locked)
 		.bind(now)
-		.execute(pool)
+		.execute(&mut *conn)
 		.await?;
 	}
 	for (chapter_id, key) in existing {
@@ -546,17 +547,17 @@ pub async fn reconcile_chapters(
 		let has_download: Option<(i64,)> =
 			sqlx::query_as("SELECT 1 FROM download WHERE chapter_id = ? LIMIT 1")
 				.bind(chapter_id)
-				.fetch_optional(pool)
+				.fetch_optional(&mut *conn)
 				.await?;
 		if has_download.is_some() {
 			sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
 				.bind(chapter_id)
-				.execute(pool)
+				.execute(&mut *conn)
 				.await?;
 		} else {
 			sqlx::query("DELETE FROM chapter WHERE id = ?")
 				.bind(chapter_id)
-				.execute(pool)
+				.execute(&mut *conn)
 				.await?;
 		}
 	}
@@ -565,7 +566,7 @@ pub async fn reconcile_chapters(
 		let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
 			.bind(manga_id)
 			.bind(&key)
-			.fetch_one(pool)
+			.fetch_one(&mut *conn)
 			.await?;
 		new_ids.push(id);
 	}

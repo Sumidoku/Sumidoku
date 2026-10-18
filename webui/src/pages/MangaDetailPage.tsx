@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ExternalLink, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import {
 	qk,
@@ -44,6 +44,7 @@ import {
 import type { ChipColor } from '../components';
 import { ChapterRow } from './manga/ChapterRow';
 import type { ChapterDlState } from './manga/ChapterRow';
+import { MigrateModal } from './manga/MigrateModal';
 import { MoreMenu } from './manga/MoreMenu';
 import './manga.css';
 
@@ -98,6 +99,7 @@ export default function MangaDetailPage() {
 	const [catSel, setCatSel] = useState<Set<number>>(new Set());
 
 	const [search, setSearch] = useState('');
+	const [migrateOpen, setMigrateOpen] = useState(false);
 	// 排序/筛选设置按漫画持久化；loadedId 防止切漫画瞬间把上一部的设置写到新 key 下
 	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
 	const [loadedId, setLoadedId] = useState(mangaId);
@@ -446,6 +448,19 @@ export default function MangaDetailPage() {
 											<span>刷新章节列表</span>
 											{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
 										</button>
+										{manga.inLibrary && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setMigrateOpen(true);
+												}}
+											>
+												<span>切换图源</span>
+												<ArrowLeftRight size={14} />
+											</button>
+										)}
 									</>
 								)}
 							</MoreMenu>
@@ -653,10 +668,11 @@ export default function MangaDetailPage() {
 				</div>
 			)}
 
+			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
+
 			<Modal
 				open={removeOpen}
-				title="移出书库"
-				onClose={() => setRemoveOpen(false)}
+				title="移出书库"				onClose={() => setRemoveOpen(false)}
 				footer={
 					<>
 						<Button onClick={() => setRemoveOpen(false)}>取消</Button>

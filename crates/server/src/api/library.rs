@@ -21,6 +21,8 @@ const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
 #[serde(rename_all = "camelCase")]
 pub struct LibraryQuery {
 	pub category_id: Option<i64>,
+	/// 迁移批量流程按源筛条目
+	pub source_id: Option<i64>,
 	pub page: Option<i64>,
 	pub search: Option<String>,
 	pub sort: Option<String>,
@@ -100,6 +102,9 @@ pub async fn list_library(
 			category = Some(category_id);
 		}
 	}
+	if query.source_id.is_some() {
+		sql.push_str(" AND m.source_id = ?");
+	}
 	if let Some(raw) = &query.filter {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
 			sql.push_str(&library_filter_clause(token)?);
@@ -113,6 +118,9 @@ pub async fn list_library(
 	}
 	if let Some(category_id) = category {
 		q = q.bind(category_id);
+	}
+	if let Some(source_id) = query.source_id {
+		q = q.bind(source_id);
 	}
 	let rows = q
 		.bind(PAGE_SIZE + 1)

@@ -26,6 +26,10 @@ import type {
 	Manga,
 	MangaDetail,
 	MangaPage,
+	MigrateLookupResult,
+	MigrateRequest,
+	MigrateResponse,
+	MigrateSource,
 	PageData,
 	PatchCategoryBody,
 	PatchMangaBody,
@@ -101,15 +105,18 @@ export interface LibraryBrowse {
 	search?: string;
 	sort?: LibrarySort;
 	filter?: LibraryFilter[];
+	/** 迁移批量流程按源筛条目 */
+	sourceId?: number;
 }
 
 export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse = {}) {
-	const { search, sort, filter } = browse;
+	const { search, sort, filter, sourceId } = browse;
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filter }],
+		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filter, sourceId }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
 			if (categoryId !== undefined) qs.set('categoryId', String(categoryId));
+			if (sourceId !== undefined) qs.set('sourceId', String(sourceId));
 			if (search) qs.set('search', search);
 			if (sort) qs.set('sort', sort);
 			if (filter && filter.length > 0) qs.set('filter', filter.join(','));
@@ -730,5 +737,30 @@ export function useReorderCategories() {
 		mutationFn: (ids: number[]) =>
 			api<Category[]>('/categories/reorder', { method: 'PATCH', body: { ids } }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.categories })
+	});
+}
+
+// ---- 跨源迁移 ----
+
+export function useMigrateSources() {
+	return useQuery({
+		queryKey: ['migrate', 'sources'],
+		queryFn: () => api<MigrateSource[]>('/migrate/sources')
+	});
+}
+
+/** 单条目对一个目标源的标题搜索：命令式调用，批量匹配的并发由页面自持 */
+export function migrateLookup(mangaId: number, targetSourceId: number, query?: string) {
+	const qs = new URLSearchParams({ mangaId: String(mangaId), targetSourceId: String(targetSourceId) });
+	if (query) qs.set('query', query);
+	return api<MigrateLookupResult>(`/migrate/lookup?${qs}`, { silent: true });
+}
+
+export function useMigrate() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (body: MigrateRequest) => api<MigrateResponse>('/migrate', { method: 'POST', body }),
+		// 库/进度/历史/分类都可能变，与备份恢复同级全量失效
+		onSuccess: () => qc.invalidateQueries()
 	});
 }

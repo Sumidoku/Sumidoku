@@ -533,3 +533,44 @@ export interface BackupListResponse {
 	dir: string;
 	files: BackupFileEntry[];
 }
+
+// ---- 跨源迁移 ----
+
+export interface MigrateSource extends Source {
+	/** 该源在库的漫画数 */
+	mangaCount: number;
+}
+
+export interface MigrateLookupResult {
+	/** 实际生效的搜索词（显式 query 或源条目标题） */
+	query: string;
+	candidates: Manga[];
+}
+
+export type MigrateMode = 'copy' | 'migrate' | 'migrateWithHistory';
+
+export interface MigrateEntryBody {
+	fromMangaId: number;
+	toSourceId: number;
+	toMangaKey: string;
+	/** 客户端手里的候选条目，服务端以它为 get_manga_update 入参 */
+	toManga?: Manga;
+}
+
+export interface MigrateResultItem {
+	fromMangaId: number;
+	ok: boolean;
+	toMangaId?: number;
+	warnings?: string[];
+	reason?: string;
+	message?: string | null;
+}
+
+export interface MigrateResponse {
+	results: MigrateResultItem[];
+}
+
+export interface MigrateRequest {
+	mode: MigrateMode;
+	entries: MigrateEntryBody[];
+}
