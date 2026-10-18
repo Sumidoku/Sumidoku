@@ -254,7 +254,15 @@ async fn scan_seeds_settings_languages_and_base_url() {
 				{"type": "switch", "key": "dataSaver", "title": "Data Saver", "default": false},
 				{"type": "select", "key": "quality", "title": "Quality", "values": ["low", "high"], "default": "high"},
 				{"type": "select", "key": "mode", "title": "Mode", "values": ["a", "b"]},
-				{"type": "multi-select", "key": "ratings", "title": "Ratings", "values": ["safe", "nsfw"], "default": ["safe"]}
+				{"type": "multi-select", "key": "ratings", "title": "Ratings", "values": ["safe", "nsfw"], "default": ["safe"]},
+				{"type": "switch", "key": "noDefault", "title": "No Default"},
+				{"type": "picker", "key": "theme", "title": "Theme", "values": ["dark", "light"]},
+				{"type": "segment", "key": "seg", "title": "Seg", "options": ["a", "b"]},
+				{"type": "page", "title": "Advanced", "items": [
+					{"type": "group", "items": [
+						{"type": "switch", "key": "nested", "title": "Nested", "default": true}
+					]}
+				]}
 			]}
 		]"#),
 		None,
@@ -284,6 +292,12 @@ async fn scan_seeds_settings_languages_and_base_url() {
 	// select 无显式默认落第一个候选值
 	assert_eq!(seeded["mode"], json!({"String": "a"}));
 	assert_eq!(seeded["ratings"], json!({"StringArray": ["safe"]}));
+	// page 里的 group 也要递归；picker 同 select 落第一个；switch 无默认落 false
+	assert_eq!(seeded["noDefault"], json!({"Bool": false}));
+	assert_eq!(seeded["theme"], json!({"String": "dark"}));
+	assert_eq!(seeded["nested"], json!({"Bool": true}));
+	// segment 没有 values，不应凭空播种
+	assert!(!seeded.contains_key("seg"));
 
 	// 源设置端点补出合成的语言/基础地址设置，webui 才能显示切换项
 	// 顺序对齐 AidokuRunner：extraSettings 在前，语言在 base url 之前
@@ -308,6 +322,32 @@ async fn scan_seeds_settings_languages_and_base_url() {
 		"{body}"
 	);
 	assert_eq!(body["values"]["url"], "https://main.example", "{body}");
+}
+
+#[tokio::test]
+async fn get_settings_seeds_dynamic_defaults() {
+	let app = test_app().await;
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let id = source_id_by_key(&app.app, "en.example-source").await;
+
+	// 该 fixture 没有 settings.json：首次 get_settings 前 source_setting 是空的，
+	// 取完设置后源在代码里声明的默认值（此处是 toggle "setting"）应被补种
+	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/settings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert!(body["values"]["setting"].is_boolean(), "{body}");
+
+	let pool = connect_db(&app.db_path).await;
+	let (value,): (String,) = sqlx::query_as(
+		"SELECT ss.value FROM source_setting ss
+		 JOIN source s ON s.id = ss.source_id
+		 WHERE s.key = 'en.example-source' AND ss.key = 'setting'",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("dynamic default should be seeded");
+	let seeded: Value = serde_json::from_str(&value).expect("value json");
+	assert!(seeded.get("Bool").and_then(Value::as_bool).is_some(), "{seeded}");
 }
 
 #[tokio::test]
