@@ -6,6 +6,23 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**`window.open` must fire synchronously inside the click handler; after an
+`await` it is popup-blocked.** Browsers grant `window.open` only during
+transient user activation — Safari denies it outright once the gesture's
+synchronous run ends, so `onClick={() => void fetch().then(d =>
+window.open(d.url))}` silently loses the tab in exactly the flow that
+fetches a URL before opening it. Open the tab in the handler
+(`const tab = window.open('', '_blank')`) and navigate it when the fetch
+resolves (`tab.location.href = url`), with a plain `window.open(url)`
+fallback when the synchronous open itself was blocked. Only an exercised
+browser catches this: type checking passes, and the failure mode is
+environment-dependent (one embedded browser mapped the blocked open to a
+same-tab navigation, which looked almost correct).
+- Evidence: 2026-10-19, PR #132's OAuth login smoke: the 登录 button's
+  async `window.open` navigated the SPA tab itself to the authorization
+  URL instead of opening a new tab; the sync-open-then-navigate pattern
+  is the fix, and the same smoke verified it end-to-end.
+
 **A CDP connection is bound to the runtime that first polled it; drive the
 connect on the host runtime.** tokio I/O handles register with the reactor
 active at creation/poll time, so a `Browser::connect` driven inside a
