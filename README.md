@@ -22,7 +22,8 @@ Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a sin
   chapter downloads, scheduled library updates, and OPDS 1.2 + 2.0
   catalogs for KOReader and other readers.
 - **Cloudflare bypass** — an optional [trawl](https://github.com/germondai/trawl)
-  sidecar retries challenged requests and reuses the clearance.
+  sidecar solves a challenged host once, then keeps routing it through trawl
+  (the clearance is bound to the solving browser's user agent).
 - **Real-browser login** — an optional Chromium sidecar (driven over CDP)
   backs webview login flows, cookies landing in the source's session.
 - **Authentication** — one site password guards the web UI, REST API and
@@ -52,7 +53,7 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_CONFIG_DIR` | `/config` | data root: database, covers and sources live under it |
 | `SUMIDOKU_DOWNLOADS_DIR` | `/downloads` | downloads directory |
 | `SUMIDOKU_COVERS_DIR` | `/config/covers` | cover cache directory |
-| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; enables Cloudflare-bypass retries |
+| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; challenged hosts are solved once and then kept on trawl |
 | `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
 | `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview for source login flows |

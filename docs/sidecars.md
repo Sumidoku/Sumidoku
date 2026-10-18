@@ -14,13 +14,17 @@ forward proxy that passes ordinary traffic through and solves detected
 challenges with a real browser.
 
 With `SUMIDOKU_NET_TRAWL_PROXY` set, a direct request answered `403`/`503`
-with Cloudflare headers is retried once through trawl. Cookies on the
-solved response (`cf_clearance`) land in the source's session jar, so later
-direct requests reuse the clearance; when it expires the cycle repeats.
-Sources that challenge every request can skip the failed direct attempt by
-listing their domains in `SUMIDOKU_NET_RELAY_DOMAINS`. Without the
-variable, behavior is unchanged: requests go direct and the challenge page
-reaches the source.
+with Cloudflare headers is retried once through trawl, and that host is
+remembered: every later request for it also goes through trawl. A
+`cf_clearance` cookie is bound to the user agent (and IP) that solved the
+challenge, so replaying it from Sumidoku's own client with a different user
+agent is refused; routing the host through trawl instead lets trawl keep the
+clearance and the solving browser's user agent together (its plain-HTTP tier
+replays both, so no browser runs per request). Publishing a host in
+`SUMIDOKU_NET_RELAY_DOMAINS` skips the first failed direct attempt; a host in
+`SUMIDOKU_NET_DIRECT_DOMAINS` is pinned to direct and opted out of the
+escalation entirely. Without `SUMIDOKU_NET_TRAWL_PROXY`, behavior is
+unchanged: requests go direct and the challenge page reaches the source.
 
 HTTPS sources also need `SUMIDOKU_NET_TRAWL_CA`: trawl terminates TLS
 locally to inspect responses and re-signs with its own root CA, which the
