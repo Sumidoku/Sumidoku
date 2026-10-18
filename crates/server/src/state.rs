@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
 use crate::source::routed::{RoutedClients, SumidokuNetPolicy};
 use aidoku_wasm::{
-	DefaultValue, DefaultsSink, SourceConfig, SourceFeatures, SourceHandle,
+	CookieSink, DefaultValue, DefaultsSink, SourceConfig, SourceFeatures, SourceHandle,
 };
 use sqlx::SqlitePool;
 use std::collections::HashMap;
@@ -21,6 +21,7 @@ pub struct AppState {
 	pub sources: RwLock<HashMap<i64, SourceEntry>>,
 	pub call_semaphore: Arc<Semaphore>,
 	pub defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
+	pub cookie_tx: mpsc::UnboundedSender<CookieWrite>,
 	pub http: RoutedClients,
 	pub policy: Arc<SumidokuNetPolicy>,
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
@@ -52,6 +53,34 @@ impl DefaultsSink for ChanDefaultsSink {
 	}
 }
 
+pub struct CookieWrite {
+	pub source_key: String,
+	pub domain: String,
+	pub name: String,
+	/// None 表示删除该 cookie
+	pub value: Option<String>,
+}
+
+/// CookieJar 在 actor 线程同步触发，这里只投 channel，持久化由 writer task 批量落库
+pub struct ChanCookieSink {
+	tx: mpsc::UnboundedSender<CookieWrite>,
+	source_key: String,
+}
+
+impl CookieSink for ChanCookieSink {
+	fn set(&self, domain: &str, name: &str, value: Option<&str>) {
+		let write = CookieWrite {
+			source_key: self.source_key.clone(),
+			domain: domain.to_string(),
+			name: name.to_string(),
+			value: value.map(str::to_string),
+		};
+		if self.tx.send(write).is_err() {
+			tracing::warn!(source = %self.source_key, domain, name, "cookie writer channel closed, value dropped");
+		}
+	}
+}
+
 pub async fn load_defaults(pool: &SqlitePool, source_id: i64) -> ApiResult<HashMap<String, DefaultValue>> {
 	let rows: Vec<(String, String)> =
 		sqlx::query_as("SELECT key, value FROM source_setting WHERE source_id = ?")
@@ -70,11 +99,29 @@ pub async fn load_defaults(pool: &SqlitePool, source_id: i64) -> ApiResult<HashM
 	Ok(defaults)
 }
 
+/// 回填实例 cookie jar：domain → (name → value)
+pub async fn load_cookies(
+	pool: &SqlitePool,
+	source_id: i64,
+) -> ApiResult<HashMap<String, HashMap<String, String>>> {
+	let rows: Vec<(String, String, String)> =
+		sqlx::query_as("SELECT domain, name, value FROM source_cookie WHERE source_id = ?")
+			.bind(source_id)
+			.fetch_all(pool)
+			.await?;
+	let mut cookies: HashMap<String, HashMap<String, String>> = HashMap::new();
+	for (domain, name, value) in rows {
+		cookies.entry(domain).or_default().insert(name, value);
+	}
+	Ok(cookies)
+}
+
 impl AppState {
 	pub fn new(
 		pool: SqlitePool,
 		config: Config,
 		defaults_tx: mpsc::UnboundedSender<DefaultsWrite>,
+		cookie_tx: mpsc::UnboundedSender<CookieWrite>,
 	) -> Arc<Self> {
 		let call_concurrency = config.call_concurrency;
 		let policy = SumidokuNetPolicy::from_config(&config);
@@ -85,6 +132,7 @@ impl AppState {
 			sources: RwLock::new(HashMap::new()),
 			call_semaphore: Arc::new(Semaphore::new(call_concurrency)),
 			defaults_tx,
+			cookie_tx,
 			http,
 			policy,
 			downloads: tokio::sync::OnceCell::new(),
@@ -134,11 +182,17 @@ impl AppState {
 			return Err(ApiError::source_disabled(&key));
 		}
 		let defaults = load_defaults(&self.pool, source_id).await?;
+		let cookies = load_cookies(&self.pool, source_id).await?;
 		let mut config = SourceConfig::new(&key, &wasm_path);
 		config.defaults = defaults;
+		config.cookies = cookies;
 		config.policy = self.policy.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
+		});
+		config.cookie_sink = Arc::new(ChanCookieSink {
+			tx: self.cookie_tx.clone(),
+			source_key: key.clone(),
 		});
 		let (handle, features) = SourceHandle::spawn(config, self.call_semaphore.clone()).await?;
 		let handle = Arc::new(handle);
@@ -198,6 +252,61 @@ pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiv
 		.await;
 		if let Err(e) = result {
 			tracing::warn!("defaults writer batch failed: {e}");
+		}
+	}
+}
+
+/// 后台 writer：把 sink 投递的 cookie 变更批量 upsert/delete 进 source_cookie
+pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver<CookieWrite>) {
+	while let Some(first) = rx.recv().await {
+		let mut batch = vec![first];
+		while batch.len() < 64 {
+			match rx.try_recv() {
+				Ok(write) => batch.push(write),
+				Err(_) => break,
+			}
+		}
+		let result: Result<(), sqlx::Error> = async {
+			let mut tx = pool.begin().await?;
+			for write in batch {
+				let source_id: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
+					.bind(&write.source_key)
+					.fetch_optional(&mut *tx)
+					.await?;
+				let Some((source_id,)) = source_id else {
+					tracing::warn!(source = write.source_key, "cookie write for unknown source, dropped");
+					continue;
+				};
+				match write.value {
+					Some(value) => {
+						sqlx::query(
+							"INSERT INTO source_cookie (source_id, domain, name, value) VALUES (?, ?, ?, ?)
+							 ON CONFLICT (source_id, domain, name) DO UPDATE SET value = excluded.value",
+						)
+						.bind(source_id)
+						.bind(&write.domain)
+						.bind(&write.name)
+						.bind(value)
+						.execute(&mut *tx)
+						.await?;
+					}
+					None => {
+						sqlx::query(
+							"DELETE FROM source_cookie WHERE source_id = ? AND domain = ? AND name = ?",
+						)
+						.bind(source_id)
+						.bind(&write.domain)
+						.bind(&write.name)
+						.execute(&mut *tx)
+						.await?;
+					}
+				}
+			}
+			tx.commit().await
+		}
+		.await;
+		if let Err(e) = result {
+			tracing::warn!("cookie writer batch failed: {e}");
 		}
 	}
 }

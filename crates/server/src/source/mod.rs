@@ -291,7 +291,7 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 /// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
 /// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错；
 /// INSERT OR IGNORE 保证不覆盖用户已改的值
-async fn seed_source_defaults(
+pub(crate) async fn seed_source_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
 	settings: Option<&serde_json::Value>,

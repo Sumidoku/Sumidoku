@@ -363,6 +363,10 @@
 	animation: modal-in 0.2s ease-out;
 }
 
+.modal__panel.modal__panel--wide {
+	width: min(640px, 100%);
+}
+
 .modal__panel:focus {
 	outline: none;
 }

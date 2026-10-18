@@ -160,6 +160,48 @@ async fn full_flow() {
 }
 
 #[tokio::test]
+async fn reset_and_clear_source_state() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, sources) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = sources[0]["id"].as_i64().expect("source id");
+	let settings_path = format!("/api/v1/sources/{source_id}/settings");
+
+	// 覆盖一个设置项
+	let (status, _) = request(&app, "PUT", &settings_path, Some(json!({"setting": true}))).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// 重置：覆盖值清空，回到包内默认（动态源没有静态 settings.json，只剩默认项）
+	let reset_path = format!("/api/v1/sources/{source_id}/settings/reset");
+	let (status, body) = request(&app, "POST", &reset_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body["values"].is_object());
+	let (status, body) = request(&app, "GET", &settings_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["settings"].as_array().expect("settings array").len(), 1);
+	assert!(body["values"].get("setting").is_none(), "覆盖值应已清除");
+
+	// 清缓存：幂等成功
+	let clear_path = format!("/api/v1/sources/{source_id}/cache/clear");
+	let (status, body) = request(&app, "POST", &clear_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["ok"], true);
+
+	// 源不支持基本登录 → 501 unsupported
+	let login_path = format!("/api/v1/sources/{source_id}/login/basic");
+	let (status, body) = request(
+		&app,
+		"POST",
+		&login_path,
+		Some(json!({"key": "login", "username": "u", "password": "p"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+	assert_eq!(body["error"]["code"], "unsupported");
+}
+
+#[tokio::test]
 async fn source_icon() {
 	let TestApp { app, tmp, .. } = test_app().await;
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;

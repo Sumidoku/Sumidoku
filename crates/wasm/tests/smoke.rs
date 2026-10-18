@@ -1,6 +1,6 @@
 use aidoku_wasm::{
-	DefaultValue, DirectPolicy, Error, Limits, NoopDefaultsSink, SourceConfig, SourceHandle,
-	StdoutLogger,
+	DefaultValue, DirectPolicy, Error, Limits, NoopCookieSink, NoopDefaultsSink, SourceConfig,
+	SourceHandle, StdoutLogger,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,6 +18,8 @@ fn config(key: &str, defaults: HashMap<String, DefaultValue>) -> SourceConfig {
 		limits: Limits::default(),
 		defaults,
 		sink: Arc::new(NoopDefaultsSink),
+		cookies: HashMap::new(),
+		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 	}

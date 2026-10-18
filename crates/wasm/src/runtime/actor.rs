@@ -141,9 +141,20 @@ impl SourceHandle {
 	}
 
 	pub async fn restart(&self, defaults: HashMap<String, DefaultValue>) -> Result<SourceFeatures> {
+		let cookies = self.config.read().expect("config lock").cookies.clone();
+		self.restart_with(defaults, cookies).await
+	}
+
+	/// 换 defaults 与 cookie jar 重建实例；clear-cache / 设置变更走这里
+	pub async fn restart_with(
+		&self,
+		defaults: HashMap<String, DefaultValue>,
+		cookies: HashMap<String, HashMap<String, String>>,
+	) -> Result<SourceFeatures> {
 		let config = {
 			let mut guard = self.config.write().expect("config lock");
 			guard.defaults = defaults;
+			guard.cookies = cookies;
 			guard.clone()
 		};
 		let (inner, init) = Self::spawn_actor(&config).await?;
@@ -268,6 +279,16 @@ impl SourceHandle {
 
 	pub async fn handle_notification(&self, key: String) -> Result<()> {
 		self.call(move |i| i.handle_notification(&key)).await
+	}
+
+	pub async fn handle_basic_login(
+		&self,
+		key: String,
+		username: String,
+		password: String,
+	) -> Result<bool> {
+		self.call(move |i| i.handle_basic_login(&key, &username, &password))
+			.await
 	}
 
 	pub async fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {

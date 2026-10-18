@@ -110,6 +110,23 @@ source directories alike; both register the same way, with `wasm_path`
 pointing at the `.aix` or the directory's `main.wasm`. An `.aix` icon is
 written next to the package as `<name>.png` so installed sources serve
 `/sources/{id}/icon` the same way the directory scan's `icon.png` does.
+Static package files (`source.json`, `settings.json`, `filters.json`) are
+read by the same helper: directory sources from next to `main.wasm`, `.aix`
+sources from `Payload/` inside the zip without extracting. Source settings
+(`GET/PUT /api/v1/sources/{id}/settings`) come from the source's dynamic
+`get_settings` export when present, otherwise from the static
+`settings.json`; the static Aidoku schema (flat, camelCase) is normalized
+to the nested shape the dynamic export produces (`api::settings`), so the
+API and web UI see a single contract. `POST .../settings/reset` clears the
+overrides and re-seeds package defaults; `POST .../login/basic` runs the
+source's `handle_basic_login` and, on success, persists the credentials and
+a `logged_in` marker into `source_setting`; `POST .../cache/clear` drops the
+source's cookies and restarts the instance. Per-source state spans two
+tables: `source_setting` (defaults and login credentials) and
+`source_cookie` (cookies keyed `(source_id, domain, name)`). A running
+instance's cookie jar reports changes through a `CookieSink` to a batch
+writer, so a login session survives the restart that follows a settings
+change.
 
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.
@@ -121,6 +138,47 @@ Vite 7 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `@tanstack/react-query` for server state. `npm run check` is
 `tsc --noEmit`; there is no test suite. The build lands in `webui/build`
 and the server embeds it (see above).
+
+## Known gaps
+
+### Source login: OAuth and web login
+
+A source's `Login` setting (`api::settings`, from a dynamic `get_settings` or
+the static `settings.json`) can declare `method` `basic` | `oauth` | `web`.
+Only `basic` is implemented: `POST /api/v1/sources/{id}/login/basic` runs the
+source's `handle_basic_login` (wired in `crates/wasm/src/source.rs`) and
+persists `<key>.username` / `<key>.password` / the `logged_in` marker. The
+other two methods are unhandled, and there is no logout endpoint.
+
+The reference semantics are Aidoku's app layer (not the source SDK): for
+`oauth` it builds the authorization URL from `url` or the `url_key` default,
+optionally appends PKCE (`code_challenge` / `code_challenge_method=S256` /
+`response_type=code`; verifier is 128 chars from the unreserved set and the
+challenge is unpadded base64url SHA-256), opens a web-auth session with
+`callback_scheme ?? "aidoku"`, then either POSTs
+`grant_type=authorization_code&code&code_verifier[&redirect_uri][&client_id]`
+(parameters not percent-encoded) to `token_url` and stores the raw response
+string at `<key>`, or stores the callback URL string at `<key>` and fires the
+setting's notification. For `web` it loads `url` in a per-source webview,
+reads the host's `name→value` cookies, stores `<key>.keys` / `<key>.values`,
+calls the source's `handle_web_login(key, cookies)` (the wasm export exists in
+`vendor/aidoku`; no host call is wired), sets `<key>="logged_in"`, keeps
+`localStorageKeys` under `<key>.ls.<lsKey>`, and clears the store on logout
+when `clear_cookies_on_log_out` is set.
+
+Blocker: a browser SPA cannot read a third-party login's redirect or cookies,
+and the source's baked `redirect_uri` / custom `callback_scheme` cannot be
+retargeted without provider registration. Implementing `oauth` therefore needs
+a manual callback-URL step (or a hosted callback for the rare rewritable
+redirect) plus a PKCE + token-exchange path; `web` needs a cookie
+paste/import step. Neither has a natural automatic-browser path server-side.
+
+When picked up, the pieces line up as: a new login module under
+`crates/server/src/api/` (start/complete for OAuth, cookie intake for web,
+and logout removing `<key>` and its `.username`/`.password`/`.keys`/`.values`/
+`.codeVerifier`/`.ls.*` children), a `handle_web_login` host call in
+`crates/wasm/src/source.rs` + `runtime/actor.rs`, and the `Login` branches in
+`webui/src/pages/settings/SettingItem.tsx` (currently basic-only).
 
 ## CI/CD (`.github/workflows`)
 

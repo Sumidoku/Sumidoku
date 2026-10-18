@@ -29,9 +29,11 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.downloads_dir)?;
 	std::fs::create_dir_all(config.sources_dir())?;
 	let pool = db::create_pool(&config.database_url).await?;
-	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-	tokio::spawn(state::run_defaults_writer(pool.clone(), rx));
-	let state = state::AppState::new(pool, config, tx);
+	let (defaults_tx, defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+	tokio::spawn(state::run_defaults_writer(pool.clone(), defaults_rx));
+	let (cookie_tx, cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
+	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
 	let downloads = download::DownloadManager::new(&state);
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);

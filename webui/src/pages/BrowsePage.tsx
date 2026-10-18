@@ -17,6 +17,7 @@ import {
 	pushToast
 } from '../components';
 import ReposPanel from './browse/ReposPanel';
+import { SourceSettingsButton } from './browse/SourceSettingsModal';
 import { iconColor } from './browse/iconColor';
 
 function SourceIcon({ source }: { source: Source }) {
@@ -170,6 +171,7 @@ export default function BrowsePage() {
 							tabIndex={s.enabled ? 0 : undefined}
 							onClick={() => s.enabled && navigate(`/browse/${s.id}`)}
 							onKeyDown={(e) => {
+								if (e.target !== e.currentTarget) return;
 								if (s.enabled && (e.key === 'Enter' || e.key === ' ')) {
 									e.preventDefault();
 									navigate(`/browse/${s.id}`);
@@ -209,6 +211,7 @@ export default function BrowsePage() {
 							>
 								<House size={17} />
 							</IconButton>
+							<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
 							<IconButton
 								label={`卸载 ${s.name}`}
 								variant="danger"

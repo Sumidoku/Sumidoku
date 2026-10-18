@@ -4,7 +4,7 @@
 //! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_partial.wasm
 //! 复制为 tests/fixtures/partial/main.wasm。
 use aidoku_wasm::{
-	DirectPolicy, HomePartial, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
+	DirectPolicy, HomePartial, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,6 +18,8 @@ fn config() -> SourceConfig {
 		limits: Default::default(),
 		defaults: HashMap::new(),
 		sink: Arc::new(NoopDefaultsSink),
+		cookies: HashMap::new(),
+		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 	}

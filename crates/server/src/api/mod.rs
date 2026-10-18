@@ -4,6 +4,7 @@ pub mod page;
 pub mod partial;
 pub mod reader;
 pub mod repo;
+pub mod settings;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -16,7 +17,7 @@ use crate::source::{
 	chapter_row, load_pages, manga_row, manga_rows_by_ids, reconcile_chapters, scan_sources_dir,
 	upsert_manga,
 };
-use crate::state::{AppState, load_defaults};
+use crate::state::{AppState, load_cookies, load_defaults};
 use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, State};
@@ -44,6 +45,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
 		.route("/api/v1/sources/{id}/home", get(get_home))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
+		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
+		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
+		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
@@ -178,16 +182,37 @@ fn dynamic_capability_error(e: SourceError) -> ApiError {
 	}
 }
 
-/// 读源包目录里的静态 json；文件缺失或解析失败都按 None 处理
+/// 读源包里的静态 json（source.json/settings.json/filters.json）；
+/// 目录源读 wasm_path 同级文件，.aix 源从 zip 内 `Payload/` 取；缺失或解析失败都按 None 处理
 async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option<Value>> {
 	let row = source_row(state, id).await?;
-	let Some(dir) = std::path::Path::new(&row.wasm_path).parent() else {
-		return Ok(None);
-	};
-	let Ok(raw) = tokio::fs::read(dir.join(file)).await else {
+	let Some(raw) = read_package_file(&row.wasm_path, file).await else {
 		return Ok(None);
 	};
 	Ok(serde_json::from_slice(&raw).ok())
+}
+
+/// 目录源与 .aix 源共用的静态文件读取：先找 wasm_path 同级文件，再退回 zip 内 `Payload/<file>`
+async fn read_package_file(wasm_path: &str, file: &str) -> Option<Vec<u8>> {
+	let path = std::path::PathBuf::from(wasm_path);
+	if let Some(dir) = path.parent()
+		&& let Ok(raw) = tokio::fs::read(dir.join(file)).await
+	{
+		return Some(raw);
+	}
+	let entry = format!("Payload/{file}");
+	tokio::task::spawn_blocking(move || read_aix_entry(&path, &entry))
+		.await
+		.ok()
+		.flatten()
+}
+
+/// 从 `.aix`（zip）读取 `Payload/` 下的条目；非 zip 或条目缺失都按 None 处理
+fn read_aix_entry(path: &std::path::Path, entry: &str) -> Option<Vec<u8>> {
+	use aidoku_wasm::package::{JSON_ENTRY_MAX, read_zip_entry};
+	let file = std::fs::File::open(path).ok()?;
+	let mut archive = zip::ZipArchive::new(file).ok()?;
+	read_zip_entry(&mut archive, entry, JSON_ENTRY_MAX).ok()
 }
 
 async fn get_filters(
@@ -402,9 +427,10 @@ async fn get_source_settings(
 	let handle = state.get_handle(id).await?;
 	let settings = match handle.get_settings().await {
 		Ok(settings) => Some(serde_json::to_value(settings)?),
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {
-			package_json(&state, id, "settings.json").await?
-		}
+		// 静态 settings.json 是 Aidoku 的扁平 schema，归一成动态源同款嵌套形状
+		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => package_json(&state, id, "settings.json")
+			.await?
+			.map(|raw| Value::Array(settings::normalize_static_settings(&raw))),
 		Err(e) => return Err(ApiError::from(e)),
 	};
 	let values = current_values(&state, id).await?;
@@ -451,7 +477,8 @@ async fn put_source_settings(
 		.map(|entry| entry.handle.clone());
 	if let Some(handle) = handle {
 		let defaults = load_defaults(&state.pool, id).await?;
-		let features = handle.restart(defaults).await?;
+		let cookies = load_cookies(&state.pool, id).await?;
+		let features = handle.restart_with(defaults, cookies).await?;
 		if let Some(entry) = state.sources.write().await.get_mut(&id) {
 			entry.features = features.clone();
 		}
@@ -463,6 +490,91 @@ async fn put_source_settings(
 	}
 	let values = current_values(&state, id).await?;
 	Ok(Json(json!({ "values": values })))
+}
+
+/// 实例在跑才热重启（换 defaults/cookies）；没跑的下一次懒加载自然吃到新值
+async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()> {
+	let handle = state
+		.sources
+		.read()
+		.await
+		.get(&id)
+		.map(|entry| entry.handle.clone());
+	if let Some(handle) = handle {
+		let defaults = load_defaults(&state.pool, id).await?;
+		let cookies = load_cookies(&state.pool, id).await?;
+		let features = handle.restart_with(defaults, cookies).await?;
+		if let Some(entry) = state.sources.write().await.get_mut(&id) {
+			entry.features = features;
+		}
+	}
+	Ok(())
+}
+
+/// 清空该源的 settings 覆盖值后按包内静态 schema 重新播种默认值（对齐重装语义）
+async fn reset_source_settings(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+	source_row(&state, id).await?;
+	let settings = package_json(&state, id, "settings.json").await?;
+	let doc = package_json(&state, id, "source.json")
+		.await?
+		.unwrap_or_else(|| json!({}));
+	sqlx::query("DELETE FROM source_setting WHERE source_id = ?")
+		.bind(id)
+		.execute(&state.pool)
+		.await?;
+	crate::source::seed_source_defaults(&state.pool, id, settings.as_ref(), &doc)
+		.await
+		.map_err(ApiError::internal)?;
+	restart_if_loaded(&state, id).await?;
+	let values = current_values(&state, id).await?;
+	Ok(Json(json!({ "values": values })))
+}
+
+/// 清该源的登录 cookie 并重启实例；不动封面缓存与下载
+async fn clear_source_cache(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+	source_row(&state, id).await?;
+	sqlx::query("DELETE FROM source_cookie WHERE source_id = ?")
+		.bind(id)
+		.execute(&state.pool)
+		.await?;
+	restart_if_loaded(&state, id).await?;
+	Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BasicLoginRequest {
+	pub key: String,
+	pub username: String,
+	pub password: String,
+}
+
+/// 基本登录：凭据交给源校验，成功后由源内 sink 落库（username/password/marker）
+async fn basic_login(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	Json(body): Json<BasicLoginRequest>,
+) -> ApiResult<Json<Value>> {
+	if body.key.is_empty() {
+		return Err(ApiError::bad_request("key must not be empty"));
+	}
+	let handle = state.get_handle(id).await?;
+	if !handle.features().basic_login {
+		return Err(ApiError::unsupported_501("source does not support basic login"));
+	}
+	let ok = handle
+		.handle_basic_login(body.key, body.username, body.password)
+		.await?;
+	if !ok {
+		return Err(ApiError::bad_gateway("basic login failed"));
+	}
+	Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Debug, Deserialize)]

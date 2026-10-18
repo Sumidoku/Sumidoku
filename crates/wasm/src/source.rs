@@ -4,7 +4,7 @@ use crate::imports::HttpMethod;
 use crate::runtime::env::WasmEnv;
 use crate::runtime::limits::{Limits, LimitedTunables};
 use crate::runtime::store::{DefaultValue, GlobalStore, Rid, StoreItem};
-use crate::traits::{DefaultsSink, HostLogger, NetPolicy};
+use crate::traits::{CookieSink, DefaultsSink, HostLogger, NetPolicy};
 use aidoku::{
 	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
 	PageContext, Setting,
@@ -26,6 +26,9 @@ pub struct SourceConfig {
 	pub limits: Limits,
 	pub defaults: HashMap<String, DefaultValue>,
 	pub sink: Arc<dyn DefaultsSink>,
+	/// 持久化的 cookie：domain → (name → value)，实例启动时回填 jar
+	pub cookies: HashMap<String, HashMap<String, String>>,
+	pub cookie_sink: Arc<dyn CookieSink>,
 	pub policy: Arc<dyn NetPolicy>,
 	pub logger: Arc<dyn HostLogger>,
 }
@@ -38,6 +41,8 @@ impl SourceConfig {
 			limits: Limits::default(),
 			defaults: HashMap::new(),
 			sink: Arc::new(crate::traits::NoopDefaultsSink),
+			cookies: HashMap::new(),
+			cookie_sink: Arc::new(crate::traits::NoopCookieSink),
 			policy: Arc::new(crate::traits::DirectPolicy { user_agent: None }),
 			logger: Arc::new(crate::traits::StdoutLogger),
 		}
@@ -94,7 +99,10 @@ impl SourceInstance {
 					config.sink.clone(),
 					config.key.clone(),
 				),
-				net: crate::runtime::env::NetState::new(config.policy.clone()),
+				net: crate::runtime::env::NetState::new(
+					config.policy.clone(),
+					crate::imports::CookieJar::new(config.cookies.clone(), config.cookie_sink.clone()),
+				),
 				limits: config.limits.clone(),
 				source_key: config.key.clone(),
 				logger: config.logger.clone(),
@@ -217,6 +225,11 @@ impl SourceInstance {
 
 	fn check(&self, supported: bool, name: &'static str) -> Result<()> {
 		if supported { Ok(()) } else { Err(Error::Unsupported(name)) }
+	}
+
+	/// 把值写进运行中实例的 defaults，经 sink 持久化（供登录成功后提交凭据）
+	fn set_default(&mut self, key: String, value: DefaultValue) {
+		self.env.as_mut(&mut self.store).defaults.set(key, value);
 	}
 
 	// 部分结果 sink 只在单个导出调用期间挂上，调用结束（含 trap）即摘，
@@ -362,6 +375,27 @@ impl SourceInstance {
 		let ret = self.call_raw("handle_notification", &[key_rid.into()]);
 		let result = ret.map(|_| ());
 		self.cleanup(t);
+		result
+	}
+
+	pub fn handle_basic_login(&mut self, key: &str, username: &str, password: &str) -> Result<bool> {
+		self.check(self.features.basic_login, "handle_basic_login")?;
+		let mut t = Vec::new();
+		let key_rid = self.store_arg(&key, &mut t)?;
+		let username_rid = self.store_arg(&username, &mut t)?;
+		let password_rid = self.store_arg(&password, &mut t)?;
+		let ret = self.call_raw(
+			"handle_basic_login",
+			&[key_rid.into(), username_rid.into(), password_rid.into()],
+		);
+		let result = ret.and_then(|r| self.read_result::<bool>(r));
+		self.cleanup(t);
+		// 对齐 Aidoku：登录成功后把凭据与该键的 marker 写进 defaults（经 sink 落库）
+		if result.as_ref().is_ok_and(|ok| *ok) {
+			self.set_default(format!("{key}.username"), DefaultValue::String(username.to_string()));
+			self.set_default(format!("{key}.password"), DefaultValue::String(password.to_string()));
+			self.set_default(key.to_string(), DefaultValue::String("logged_in".to_string()));
+		}
 		result
 	}
 

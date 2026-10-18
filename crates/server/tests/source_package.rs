@@ -132,6 +132,61 @@ async fn scan_skips_corrupt_aix() {
 	assert!(entry["reason"].as_str().unwrap().contains("archive"), "{entry}");
 }
 
+// 无 get_settings 导出的载荷：静态 settings.json 必须经回退归一成嵌套形状，
+// .aix 包（zip 内 Payload/）与解包目录（同级文件）两条读取路径都要覆盖
+#[tokio::test]
+async fn static_settings_fall_back_to_nested_shape() {
+	let app = test_app().await;
+	let wasm = std::fs::read(mutation_wasm_path()).expect("mutation wasm");
+	let settings = br#"[
+		{"type": "group", "title": "G", "footer": "F", "items": [
+			{"type": "switch", "key": "dataSaver", "title": "DS", "default": true},
+			{"type": "select", "key": "quality", "title": "Q", "values": ["low", "high"], "default": "high"}
+		]},
+		{"type": "select", "key": "mode", "title": "M", "values": ["a", "b"], "requiresFalse": "dataSaver"}
+	]"#;
+
+	write_aix(
+		&app.tmp.path().join("sources/en.packed-static.aix"),
+		&[
+			(
+				"Payload/source.json",
+				br#"{"info":{"id":"en.packed-static","name":"PackedStatic","version":1,"languages":["en"]}}"#,
+			),
+			("Payload/main.wasm", wasm.as_slice()),
+			("Payload/settings.json", &settings[..]),
+		],
+	);
+	let dir = app.tmp.path().join("sources/en.dir-static");
+	std::fs::create_dir_all(&dir).expect("mkdir");
+	std::fs::write(
+		dir.join("source.json"),
+		br#"{"info":{"id":"en.dir-static","name":"DirStatic","version":1,"languages":["en"]}}"#,
+	)
+	.expect("source.json");
+	std::fs::write(dir.join("main.wasm"), &wasm).expect("main.wasm");
+	std::fs::write(dir.join("settings.json"), settings).expect("settings.json");
+
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	for key in ["en.packed-static", "en.dir-static"] {
+		let id = source_id_by_key(&app.app, key).await;
+		let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/settings"), None).await;
+		assert_eq!(status, StatusCode::OK, "{key}: {body}");
+		let list = body["settings"]
+			.as_array()
+			.unwrap_or_else(|| panic!("{key}: settings array: {body}"));
+		assert_eq!(list[0]["type"], "group", "{key}");
+		let items = list[0]["value"]["Group"]["items"].as_array().expect("group items");
+		assert_eq!(items[0]["value"]["Toggle"]["default"], true, "{key}");
+		assert_eq!(items[1]["value"]["Select"]["values"], json!(["low", "high"]), "{key}");
+		assert_eq!(list[1]["requires_false"], "dataSaver", "{key}");
+		assert_eq!(body["values"]["dataSaver"], true, "{key}");
+		assert_eq!(body["values"]["quality"], "high", "{key}");
+	}
+}
+
 #[tokio::test]
 async fn scan_skips_aix_missing_entries() {
 	let app = test_app().await;
