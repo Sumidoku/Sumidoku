@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
-use crate::routed::{RoutedClients, SumidokuNetPolicy};
+use crate::source::routed::{RoutedClients, SumidokuNetPolicy};
 use aidoku_wasm::{
 	DefaultValue, DefaultsSink, SourceConfig, SourceFeatures, SourceHandle,
 };

@@ -1,21 +1,13 @@
 pub mod api;
 pub mod config;
-pub mod cover;
 pub mod db;
 pub mod download;
-pub mod download_api;
 pub mod error;
-pub mod library;
 pub mod model;
 pub mod opds;
-pub mod opds2;
-pub mod page;
-pub mod reader;
-pub mod routed;
-pub mod service;
+pub mod source;
 pub mod state;
 pub mod update;
-pub mod update_api;
 pub mod webui_assets;
 
 /// 单用户阶段所有用户态操作恒为内置 admin
@@ -49,7 +41,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let app = api::router(state.clone());
 	let app = app
 		.nest("/opds/v1.2", opds::router(state.clone()))
-		.nest("/opds/v2", opds2::router(state.clone()));
+		.nest("/opds/v2", opds::v2::router(state.clone()));
 	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
 }
 

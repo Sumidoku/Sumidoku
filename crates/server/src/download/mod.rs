@@ -1,5 +1,5 @@
 use crate::model::{ChapterRow, MangaRow, unix_now};
-use crate::service::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
+use crate::source::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
 use crate::state::AppState;
 use crate::USER_ID;
 use aidoku::PageContext;

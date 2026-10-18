@@ -1,6 +1,6 @@
 use crate::api::{RefreshQuery, wants_refresh};
 use crate::error::{ApiError, ApiResult};
-use crate::service::{fetch_remote, manga_row};
+use crate::source::{fetch_remote, manga_row};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};

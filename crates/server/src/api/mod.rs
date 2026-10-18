@@ -1,13 +1,19 @@
+pub mod download;
+pub mod library;
+pub mod page;
+pub mod reader;
+pub mod update;
+
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
 	ChapterProgress, ChapterRow, ChapterUserRow, MangaRow, SourceRow, chapter_from_row,
 	default_value_to_json, json_to_default_value, manga_from_row,
 };
-use crate::service::{
+use crate::source::cover;
+use crate::source::{
 	chapter_row, load_pages, manga_row, reconcile_chapters, scan_sources_dir, upsert_manga,
 };
 use crate::state::{AppState, load_defaults};
-use crate::{cover, library, page, reader};
 use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, State};
@@ -52,21 +58,21 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/history", get(reader::get_history))
 		.route(
 			"/api/v1/downloads",
-			get(crate::download_api::list_downloads).post(crate::download_api::enqueue_downloads),
+			get(crate::api::download::list_downloads).post(crate::api::download::enqueue_downloads),
 		)
-		.route("/api/v1/downloads/start", post(crate::download_api::start_downloads))
-		.route("/api/v1/downloads/stop", post(crate::download_api::stop_downloads))
-		.route("/api/v1/downloads/clear", post(crate::download_api::clear_downloads))
-		.route("/api/v1/downloads/ws", get(crate::download_api::downloads_ws))
+		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
+		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
+		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
+		.route("/api/v1/downloads/ws", get(crate::api::download::downloads_ws))
 		.route(
 			"/api/v1/downloads/{chapter_id}",
-			delete(crate::download_api::delete_download),
+			delete(crate::api::download::delete_download),
 		)
-		.route("/api/v1/chapter/{id}/file", get(crate::download_api::get_chapter_file))
-		.route("/api/v1/update/fetch", post(crate::update_api::fetch_updates))
-		.route("/api/v1/update/summary", get(crate::update_api::get_summary))
-		.route("/api/v1/update/recent", get(crate::update_api::get_recent))
-		.route("/api/v1/update/ws", get(crate::update_api::updates_ws))
+		.route("/api/v1/chapter/{id}/file", get(crate::api::download::get_chapter_file))
+		.route("/api/v1/update/fetch", post(crate::api::update::fetch_updates))
+		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
+		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
+		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.with_state(state)
 }

@@ -1,6 +1,6 @@
-use crate::limits::Limits;
-use crate::rate_limit::RateLimiter;
-use crate::store::{DefaultValue, GlobalStore};
+use crate::runtime::limits::Limits;
+use crate::runtime::rate_limit::RateLimiter;
+use crate::runtime::store::{DefaultValue, GlobalStore};
 use crate::traits::{DefaultsSink, HostLogger, NetPolicy, NetRoute};
 use crate::{Error, Result};
 use reqwest::blocking::Client;

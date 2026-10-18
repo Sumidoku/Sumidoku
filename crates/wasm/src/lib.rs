@@ -1,21 +1,17 @@
-mod actor;
-mod env;
 mod error;
 mod features;
 mod html_dom;
 mod imports;
-mod limits;
-mod rate_limit;
+mod runtime;
 mod source;
-mod store;
 mod traits;
 
-pub use actor::SourceHandle;
-pub use env::WasmEnv;
 pub use error::{Error, Result};
 pub use features::SourceFeatures;
 pub use imports::HttpMethod;
-pub use limits::Limits;
+pub use runtime::actor::SourceHandle;
+pub use runtime::env::WasmEnv;
+pub use runtime::limits::Limits;
+pub use runtime::store::{DefaultKind, DefaultValue};
 pub use source::{ImageRequestSpec, SourceConfig};
-pub use store::{DefaultKind, DefaultValue};
 pub use traits::{DefaultsSink, DirectPolicy, HostLogger, NetPolicy, NetRoute, NoopDefaultsSink, StdoutLogger};

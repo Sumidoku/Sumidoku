@@ -1,6 +1,6 @@
 use crate::{
 	WasmEnv,
-	store::{FFIResult, Ptr, Rid},
+	runtime::store::{FFIResult, Ptr, Rid},
 };
 use wasmer::FunctionEnvMut;
 

@@ -1,6 +1,6 @@
-use crate::cover::bytes_response;
+use crate::source::cover::bytes_response;
 use crate::error::{ApiError, ApiResult};
-use crate::service::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
+use crate::source::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
 use crate::state::AppState;
 use aidoku::PageContext;
 use axum::extract::{Path, State};

@@ -1,9 +1,11 @@
-use crate::cover::bytes_response;
+pub mod v2;
+
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, LibraryEntryRow, MangaRow, unix_now};
-use crate::service::{chapter_row, manga_row};
+use crate::source::cover::bytes_response;
+use crate::source::{chapter_row, manga_row};
 use crate::state::AppState;
-use crate::{PAGE_SIZE, USER_ID, service};
+use crate::{PAGE_SIZE, USER_ID, source};
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -689,7 +691,7 @@ async fn cover_image(
 	State(state): State<Arc<AppState>>,
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<Response> {
-	let (bytes, mime) = service::cover_bytes(&state, manga_id).await?;
+	let (bytes, mime) = source::cover_bytes(&state, manga_id).await?;
 	Ok(bytes_response(
 		bytes,
 		mime.as_deref().unwrap_or("image/jpeg"),
@@ -741,7 +743,7 @@ async fn stream_page(
 	State(state): State<Arc<AppState>>,
 	Path((chapter_id, index)): Path<(i64, i64)>,
 ) -> ApiResult<Response> {
-	let pages = service::load_pages(&state, chapter_id, false).await?;
+	let pages = source::load_pages(&state, chapter_id, false).await?;
 	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
@@ -755,7 +757,7 @@ async fn stream_page(
 		)
 			.into_response());
 	}
-	let (bytes, mime) = service::page_content(&state, chapter_id, index).await?;
+	let (bytes, mime) = source::page_content(&state, chapter_id, index).await?;
 	Ok(bytes_response(
 		bytes,
 		mime.as_deref().unwrap_or("application/octet-stream"),

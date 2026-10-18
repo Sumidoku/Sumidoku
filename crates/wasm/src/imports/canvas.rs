@@ -2,7 +2,7 @@
 //! PageContent::Image 在 M4 前按 unimplemented 处理的语义一致。
 use crate::{
 	WasmEnv,
-	store::{FFIResult, Ptr, Rid},
+	runtime::store::{FFIResult, Ptr, Rid},
 };
 use wasmer::FunctionEnvMut;
 

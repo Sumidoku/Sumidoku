@@ -1,7 +1,7 @@
 use crate::api::{PageQuery, chapter_json, manga_json, progress_of};
 use crate::error::{ApiError, ApiResult};
 use crate::model::ChapterUserRow;
-use crate::service::manga_row;
+use crate::source::manga_row;
 use crate::state::AppState;
 use crate::PAGE_SIZE;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
