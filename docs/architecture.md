@@ -87,12 +87,31 @@ user scripts wrap the page scripts by injection time, and a failing script
 is logged without failing the load or the scripts after it.
 `webview_wait_for_load` is a synchronous no-op; `webview_eval` /
 `webview_eval_async` behave like their `context_*` counterparts under the
-same time and loop limits. The functions that need a real browser —
-`webview_load` (navigation), `webview_set_rule_list` (content blocking),
-`webview_get_cookies` / `webview_delete_cookie` (cookie store) — return
+same time and loop limits.
+The navigation and cookie functions — `webview_load`,
+`webview_get_cookies`, `webview_delete_cookie` — have two backends
+(`browser.rs`, `browser/cdp.rs`). With `net.browser_ws` unset they return
 `-1` (`JsError::MissingResult`; the ABI has no "unsupported" code) and log
 the function name and reason, so a source relying on them sees the calling
-operation fail with a diagnosable line in the source log. An invalid
+operation fail with a diagnosable line in the source log. With
+`net.browser_ws` pointing at a user-supplied Chromium CDP endpoint (e.g. a
+browserless container; Sumidoku ships no browser) they drive that browser:
+`webview_load` navigates a page and waits for the page load event — the
+same completion signal as WKWebView's `didFinish` on iOS — and the cookie
+functions read and edit the cookie store. Every webview rid maps to one
+isolated browser context, created on first use and disposed when the rid
+is destroyed, so sessions never bleed across webviews; a dead connection
+is retried on the next call and the browser-side contexts it orphaned are
+disposed after the reconnect. Cookies from the browser context flow into
+the source's session jar after every load and on every `get_cookies`,
+keyed by each cookie's own `Domain` attribute — that is what makes
+webview login work: the source loads the login page, the login completes
+in the browser, and the source's plain API requests then carry the
+session cookie. `webview_load` only navigates GET requests (CDP has no
+POST navigation; iOS would load the full URLRequest) and a non-GET
+request fails with `-1` and a log line rather than silently degrading.
+`webview_set_rule_list` (content blocking) stays explicitly unsupported
+in both backends. An invalid
 webview rid maps to `-4` (`InvalidHandler`), and webview and js-context
 rids are not interchangeable.
 `send_partial_result` payloads are decoded per in-flight call and pushed

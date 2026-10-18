@@ -993,11 +993,13 @@ mod tests {
 
 	// ---------- e2e：真 CDP，SUMIDOKU_TEST_BROWSER_WS 指向才跑 ----------
 
+	type SeenRequests = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
 	/// 裸 HTTP/1.1 站点：/login?who=X 种会话 cookie，/api 记录 Cookie 头，
 	/// 其余路径 404（浏览器会来抓 favicon）。每连接一个请求。
 	struct MockSite {
 		port: u16,
-		seen: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+		seen: SeenRequests,
 	}
 
 	fn mock_site() -> MockSite {
