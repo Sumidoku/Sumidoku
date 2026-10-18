@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 /// 章级重跑次数上限（不含首次尝试），退避 2/4/8s
 const MAX_CHAPTER_RETRIES: u32 = 3;
-/// 章内页图并行上限（设计 §11）
+/// 章内页图并行上限
 const PAGE_CONCURRENCY: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
@@ -31,7 +31,7 @@ pub struct DownloadEvent {
 	pub running: Option<bool>,
 }
 
-/// 设计 §11 下载管理器：源内串行、源间并行，全局并发源数受 semaphore 限制。
+/// 下载管理器：源内串行、源间并行，全局并发源数受 semaphore 限制。
 /// 状态机落 download 表（queued → downloading → (paused) → finished / error），重启可恢复。
 pub struct DownloadManager {
 	// Weak 防循环引用：AppState 经 OnceCell 持有本管理器

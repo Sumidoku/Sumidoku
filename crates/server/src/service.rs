@@ -25,7 +25,7 @@ pub struct SkippedSource {
 	pub reason: String,
 }
 
-/// 设计 §7.1：source.key 只允许这组字符（保留前缀 local/komga/kavita/suwayomi）
+/// source.key 只允许这组字符（保留前缀 local/komga/kavita/suwayomi）
 fn valid_source_key(key: &str) -> bool {
 	!key.is_empty()
 		&& key
@@ -389,7 +389,7 @@ pub async fn upsert_manga(
 	Ok(id)
 }
 
-/// 设计 §7.1 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
+/// 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
 /// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
 pub async fn reconcile_chapters(
 	pool: &SqlitePool,
