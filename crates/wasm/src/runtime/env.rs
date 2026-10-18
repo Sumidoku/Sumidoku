@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use wasmer::{Memory, MemoryView, WasmPtr};
 
+/// 在途请求的部分结果消费者：入参是源 encode 的 postcard 载荷。
+/// 挂在 WasmEnv 上随调用设置/清除，actor 串行保证同时只有一个调用持有
+pub type PartialSink = Box<dyn Fn(&[u8]) + Send + Sync>;
+
 pub struct WasmEnv {
 	pub memory: Option<Memory>,
 	pub store: GlobalStore,
@@ -16,6 +20,7 @@ pub struct WasmEnv {
 	pub limits: Limits,
 	pub source_key: String,
 	pub logger: Arc<dyn HostLogger>,
+	pub partial_sink: Option<PartialSink>,
 }
 
 impl WasmEnv {
