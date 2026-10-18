@@ -321,3 +321,45 @@
 	width: 110px;
 	flex: none;
 }
+
+.settings-backup__ops {
+	display: flex;
+	gap: 12px;
+	flex-wrap: wrap;
+}
+
+.settings-backup__download {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	text-decoration: none;
+}
+
+.settings-backup__sections {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.settings-backup__section {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+}
+
+.settings-backup__warn {
+	font-size: 13px;
+	color: var(--danger);
+	line-height: 1.5;
+}
+
+.settings-backup__warnings {
+	margin: 8px 0 0;
+	padding-left: 18px;
+	font-size: 13px;
+	line-height: 1.6;
+	max-height: 200px;
+	overflow-y: auto;
+}

@@ -80,6 +80,10 @@ curl -X POST http://localhost:3000/api/v1/sources/scan
 
 The OPDS 1.2 catalog is served at `/opds/v1.2`. When authentication is enabled, the catalogs require Basic auth with the site password (any non-empty username); see [Authentication](#authentication).
 
+## Backup
+
+`GET /api/v1/backup` downloads the full library state — library membership and manga metadata, categories, reading progress, app settings and source settings — as one JSON document with a `version` field (currently `1`; unknown versions are rejected with `400`). `POST /api/v1/backup` imports it back, optionally limited with `?sections=library,categories,progress,settings,sourceSettings`. Import upserts by natural key (source key + manga key, chapter key, category name) inside a single transaction, so a failed or invalid backup leaves the database untouched; entries whose source is not installed are skipped and reported in the response `warnings`. The settings page of the web UI has download and restore buttons. The file contains source settings, which may include site passwords — store it accordingly.
+
 ## Local build
 
 The web UI is embedded into the binary at compile time, so it must be built first:

@@ -10,7 +10,8 @@ axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 Migrations in `crates/server/migrations`.
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
-  `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`).
+  `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`,
+  `api/backup.rs`).
   `GET /api/v1/sources/{id}/home` (`api/mod.rs:get_home`) returns the Aidoku
   `HomeLayout` as-is — an ordered `components` array; the array index is the
   stable key a `send_partial_result` stream patches against. A source
@@ -66,6 +67,24 @@ Migrations in `crates/server/migrations`.
   `source_order` is the source's own chapter index. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise.
+- Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
+  JSON document (a `Content-Disposition` attachment) with the single user's
+  library rows and metadata, categories with membership, reading progress,
+  app settings and source settings, plus source identity (key, name, version
+  and a best-effort repo URL). `POST /api/v1/backup` restores it, optionally
+  limited by `?sections=` to some of `library`, `categories`, `progress`,
+  `settings`, `sourceSettings`. Restore upserts by natural key — source
+  key + manga key, chapter key, category name — inside one SQLite
+  transaction; an unknown `version` or an invalid row answers 400 with the
+  database untouched. Entries naming a source that is not installed are
+  skipped and listed in the response `warnings`; the `restored` map counts
+  applied rows per section. Progress entries carry a chapter metadata
+  snapshot so a fresh instance can recreate chapter rows ahead of the
+  source's first fetch. The document's `version` field (currently `1`) is
+  the format contract — the planned Aidoku `.aib` and Suwayomi imports map
+  onto the same model — and source setting values round-trip in the same
+  bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
+  contain source credentials: treat the file as sensitive.
 - Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter.
 - Page blobs (`source/mod.rs:materialize_image_pages`): a

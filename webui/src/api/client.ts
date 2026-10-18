@@ -216,5 +216,8 @@ export const pageUrl = (chapterId: number, index: number) =>
 export const chapterFileUrl = (chapterId: number) =>
 	withToken(`${BASE}/chapter/${chapterId}/file`);
 
+/** 全量备份下载地址，配 `<a download>` 触发浏览器保存 */
+export const backupUrl = () => withToken(`${BASE}/backup`);
+
 export const sourceIconUrl = (sourceId: number) =>
 	withToken(`${BASE}/sources/${sourceId}/icon`);

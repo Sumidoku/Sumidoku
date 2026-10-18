@@ -8,6 +8,7 @@ import {
 import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
+	BackupRestoreResult,
 	Category,
 	Chapter,
 	ChapterPatchBody,
@@ -543,6 +544,19 @@ export function useSaveServerSettings() {
 		mutationFn: (body: Record<string, unknown>) =>
 			api<Record<string, unknown>>('/settings', { method: 'PUT', body }),
 		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved)
+	});
+}
+
+/** 恢复备份：任意 section 都可能变，全量失效 */
+export function useRestoreBackup() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ doc, sections }: { doc: unknown; sections: string[] }) =>
+			api<BackupRestoreResult>(`/backup?sections=${sections.join(',')}`, {
+				method: 'POST',
+				body: doc
+			}),
+		onSuccess: () => qc.invalidateQueries()
 	});
 }
 
