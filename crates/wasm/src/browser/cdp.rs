@@ -235,9 +235,6 @@ impl CdpClient for ChromiumoxideClient {
 		// 泵任务与 client 同生死：逐帧 ack 后投 sink；
 		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停。
 		// ambient 模式投宿主 runtime，保证会话空闲（无 block_on 窗口）时持续被驱动
-		// 泵任务与 client 同生死：逐帧 ack 后投 sink；
-		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停。
-		// ambient 模式投宿主 runtime，保证会话空闲（无 block_on 窗口）时持续被驱动
 		let pump = async move {
 			while let Some(event) = stream.next().await {
 				if page.execute(ScreencastFrameAckParams::new(event.session_id)).await.is_err() {
