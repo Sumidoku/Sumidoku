@@ -51,6 +51,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
 		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
+		.route("/api/v1/sources/{id}/image", get(cover::get_source_image))
 		.route("/api/v1/sources/{id}/filters", get(get_filters))
 		.route("/api/v1/sources/{id}/search", post(search_source))
 		.route("/api/v1/sources/{id}/listings", get(get_listings))

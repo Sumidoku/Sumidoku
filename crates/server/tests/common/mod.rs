@@ -34,6 +34,11 @@ pub fn rekey_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/rekey/main.wasm")
 }
 
+/// 实现 ImageRequestProvider 的 fixture 载荷，用于 /sources/{id}/image 代理链路
+pub fn imgreq_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/imgreq/main.wasm")
+}
+
 /// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let dir = tmp.path().join("sources").join(key);

@@ -226,3 +226,7 @@ export const backupUrl = () => withToken(`${BASE}/backup`);
 
 export const sourceIconUrl = (sourceId: number) =>
 	withToken(`${BASE}/sources/${sourceId}/icon`);
+
+/** 源图床防盗链要的头只有服务端能按源声明带上，browse/home 封面经服务端代理取回 */
+export const sourceImageUrl = (sourceId: number, url: string) =>
+	withToken(`${BASE}/sources/${sourceId}/image?url=${encodeURIComponent(url)}`);
