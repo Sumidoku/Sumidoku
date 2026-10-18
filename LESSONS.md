@@ -227,3 +227,17 @@ consumed before trusting a "transparent" handoff.
 - Evidence: 2026-10-19, bakamh's managed challenge worked through
   aidoku-cf-relay and Suwayomi but not Sumidoku; `routed.rs:trawl_escalation`
   now marks the host and `route_for` keeps it on trawl.
+
+**A change event's `currentTarget` is dead by the time a deferred state
+updater runs — read the value eagerly.** React nulls `currentTarget` when
+the dispatch ends, so `setState((cur) => … e.currentTarget.value …)`
+crashes with "Cannot read properties of null (reading 'value')" whenever
+the updater is not eagerly evaluated during dispatch (batching defers
+it). Grab `const v = e.currentTarget.value` first and close over `v`;
+sites that survive on React's eager-state optimization are still
+landmines. Type checking cannot see this — only an exercised UI catches
+it, so UI changes get a real-browser smoke, not just `tsc`.
+- Evidence: 2026-10-19, PR #112's localStorage input crashed the source
+  settings modal on its first keystroke in real-browser smoke (fixed in
+  ec3a91b); the same latent pattern in `SettingsPage.tsx` and
+  `MangaDetailPage.tsx` filed as #113.
