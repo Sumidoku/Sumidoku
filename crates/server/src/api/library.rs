@@ -1,6 +1,6 @@
-use crate::api::manga_json;
+use crate::api::{manga_json, manga_json_batch};
 use crate::error::{ApiError, ApiResult};
-use crate::model::{LibraryEntryRow, unix_now};
+use crate::model::{LibraryEntryRow, MangaRow, unix_now};
 use crate::source::manga_row;
 use crate::state::AppState;
 use crate::{PAGE_SIZE, USER_ID};
@@ -135,9 +135,10 @@ pub async fn list_library(
 		}
 		unread = q.fetch_all(&state.pool).await?.into_iter().collect();
 	}
+	let manga_refs: Vec<&MangaRow> = page_rows.iter().map(|row| &row.manga).collect();
+	let values = manga_json_batch(&state, &manga_refs).await?;
 	let mut entries = Vec::with_capacity(page_rows.len());
-	for row in page_rows {
-		let mut value = manga_json(&state, &row.manga).await?;
+	for (row, mut value) in page_rows.into_iter().zip(values) {
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
