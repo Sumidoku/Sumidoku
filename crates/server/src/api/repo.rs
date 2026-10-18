@@ -118,6 +118,7 @@ pub async fn browse_sources(
 				"baseUrl": item.entry.base_url,
 				"repoId": item.repo_id,
 				"repoName": item.repo_name,
+				"installedId": item.installed_id,
 				"installedVersion": item.installed_version,
 				"updateVersion": update,
 			})

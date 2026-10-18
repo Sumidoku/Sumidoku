@@ -310,15 +310,17 @@ pub struct BrowseItem {
 	pub repo_id: i64,
 	pub repo_name: Option<String>,
 	pub entry: RepoEntry,
+	pub installed_id: Option<i64>,
 	pub installed_version: Option<i64>,
 }
 
 /// 跨 repo 浏览：只读缓存，repo 不可达不影响结果；过滤口径与已装源列表一致
 pub async fn browse_sources(pool: &SqlitePool, filter: &BrowseFilter) -> ApiResult<Vec<BrowseItem>> {
-	let installed: Vec<(String, i64)> = sqlx::query_as("SELECT key, version FROM source")
+	let installed: Vec<(i64, String, i64)> = sqlx::query_as("SELECT id, key, version FROM source")
 		.fetch_all(pool)
 		.await?;
-	let installed: HashMap<String, i64> = installed.into_iter().collect();
+	let installed: HashMap<String, (i64, i64)> =
+		installed.into_iter().map(|(id, key, v)| (key, (id, v))).collect();
 	let mut out = Vec::new();
 	for repo in list_repos(pool).await? {
 		for entry in cached_entries(&repo) {
@@ -328,10 +330,15 @@ pub async fn browse_sources(pool: &SqlitePool, filter: &BrowseFilter) -> ApiResu
 			{
 				continue;
 			}
+			let (installed_id, installed_version) = installed
+				.get(&entry.key)
+				.map(|&(id, v)| (Some(id), Some(v)))
+				.unwrap_or((None, None));
 			out.push(BrowseItem {
 				repo_id: repo.id,
 				repo_name: repo.name.clone(),
-				installed_version: installed.get(&entry.key).copied(),
+				installed_id,
+				installed_version,
 				entry,
 			});
 		}

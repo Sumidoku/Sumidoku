@@ -228,6 +228,7 @@ async fn repo_lifecycle_install_and_update() {
 	// 浏览反映已装：installedVersion=1，暂无更新
 	let entries = browse(&app.app, "").await;
 	let main_entry = entries.iter().find(|e| e["key"] == "en.repo-source").expect("entry");
+	assert_eq!(main_entry["installedId"], source_id);
 	assert_eq!(main_entry["installedVersion"], 1);
 	assert!(main_entry["updateVersion"].is_null(), "{main_entry}");
 
