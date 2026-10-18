@@ -330,6 +330,15 @@ fn set_class_attr(attrs: &mut Vec<(String, String)>, classes: Vec<String>) {
 	}
 }
 
+/// jsoup/SwiftSoup 的属性查找大小写不敏感；html5ever 只保证解析出的属性名
+/// 小写，set_attr 可写入大写名，故统一在查找侧匹配
+fn find_attr<'a>(element: &'a scraper::node::Element, name: &str) -> Option<&'a str> {
+	element
+		.attrs()
+		.find(|(key, _)| key.eq_ignore_ascii_case(name))
+		.map(|(_, value)| value)
+}
+
 impl HtmlElement {
 	pub fn select(&self, selector: &Selector) -> Option<HtmlElementList> {
 		let html = self.0.html.borrow();
@@ -379,7 +388,7 @@ impl HtmlElement {
 			let html = self.0.html.borrow();
 			let node = html.tree.get(self.0.id)?;
 			let element = ElementRef::wrap(node)?;
-			element.attr(name).map(|value| value.to_string())
+			find_attr(element.value(), name).map(|value| value.to_string())
 		};
 		if has_abs_prefix {
 			if let Some(base_uri) = self.0.base_uri.as_ref() {
@@ -519,11 +528,12 @@ impl HtmlElement {
 		Some(element.text().collect())
 	}
 
+	/// SwiftSoup id() 缺席返回 ""（WasmHtml host 原样存空串，客户端见 Some("")）
 	pub fn id(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
-		element.value().id().map(|s| s.to_string())
+		Some(find_attr(element.value(), "id").unwrap_or("").to_string())
 	}
 
 	pub fn tag_name(&self) -> Option<String> {
@@ -533,11 +543,12 @@ impl HtmlElement {
 		Some(element.value().name().to_string())
 	}
 
+	/// jsoup/SwiftSoup className() 是 class 属性字面值（trim 首尾），缺席返回 ""
 	pub fn class_name(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
-		Some(element.value().classes().collect::<Vec<&str>>().join(" "))
+		Some(find_attr(element.value(), "class").unwrap_or("").trim().to_string())
 	}
 
 	pub fn has_class(&self, class: &str) -> bool {
@@ -561,7 +572,7 @@ impl HtmlElement {
 		let Some(element) = ElementRef::wrap(node) else {
 			return false;
 		};
-		element.value().attrs().any(|(k, _)| k == name)
+		find_attr(element.value(), name).is_some()
 	}
 
 	pub fn has_any_attribute(&self) -> bool {
@@ -1564,6 +1575,60 @@ mod tests {
 			img.attr("abs:src").as_deref(),
 			Some("https://example.com/img.png")
 		);
+	}
+
+	#[test]
+	fn attr_lookup_is_case_insensitive() {
+		// E1（issue #83）：jsoup/SwiftSoup 的 attr/has_attr 查找大小写不敏感
+		let doc = HtmlDocument::parse(
+			r#"<!DOCTYPE html><html><body><img src="s" DATA-K="v"></body></html>"#,
+			Some("https://example.com/dir/"),
+		);
+		let img = first_element(&doc, "img");
+
+		// html5ever 解析时把属性名小写化（DATA-K 存为 data-k）
+		assert_eq!(img.attr("data-k").as_deref(), Some("v"));
+		assert_eq!(img.attr("SRC").as_deref(), Some("s"));
+		assert_eq!(img.attr("Src").as_deref(), Some("s"));
+		assert!(img.has_attr("SRC"));
+		assert!(img.has_attr("src"));
+		assert!(!img.has_attr("missing"));
+		// abs: 前缀剥离后按同样规则查找
+		assert_eq!(img.attr("abs:SRC").as_deref(), Some("https://example.com/dir/s"));
+
+		// set_attr 原样写入的大写名也要能被小写查询命中
+		img.0.set_attr("HREF", "/x").unwrap();
+		assert_eq!(img.attr("href").as_deref(), Some("/x"));
+		assert!(img.has_attr("href"));
+	}
+
+	#[test]
+	fn class_name_returns_literal_value() {
+		// E2（issue #83）：className() 返回 class 属性字面值，不排序/去重/折叠内部空白
+		let doc = HtmlDocument::parse(
+			r#"<!DOCTYPE html><html><body><div id="a" class="b  a a">t</div><div id="b">u</div></body></html>"#,
+			None,
+		);
+		assert_eq!(first_element(&doc, "#a").class_name().as_deref(), Some("b  a a"));
+		// 缺席返回 ""：SwiftSoup className() 非可选，WasmHtml host 原样存空串
+		assert_eq!(first_element(&doc, "#b").class_name().as_deref(), Some(""));
+
+		// SwiftSoup 只 trim 首尾空白
+		let doc = HtmlDocument::parse(r#"<div id="c" class="  b  a  ">t</div>"#, None);
+		assert_eq!(first_element(&doc, "#c").class_name().as_deref(), Some("b  a"));
+	}
+
+	#[test]
+	fn id_absent_returns_empty_string() {
+		// E3（issue #83）：jsoup/SwiftSoup id() 缺席返回 ""，aidoku 客户端见 Some("")
+		let doc = HtmlDocument::parse(
+			r#"<!DOCTYPE html><html><body><div id="a">x</div><p>y</p><span ID="C">z</span></body></html>"#,
+			None,
+		);
+		assert_eq!(first_element(&doc, "#a").id().as_deref(), Some("a"));
+		assert_eq!(first_element(&doc, "p").id().as_deref(), Some(""));
+		// ID 解析为小写 id 后照常命中
+		assert_eq!(first_element(&doc, "span").id().as_deref(), Some("C"));
 	}
 
 	#[test]
