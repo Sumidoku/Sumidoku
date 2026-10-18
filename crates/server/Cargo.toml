@@ -8,6 +8,7 @@ publish = false
 [dependencies]
 aidoku-wasm = { path = "../wasm" }
 aidoku.workspace = true
+plist.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -2,7 +2,7 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{TestApp, connect_db, register_example_manga, request, request_full, test_app};
+use common::{TestApp, db_dump, register_example_manga, request, request_full, test_app};
 use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
@@ -113,41 +113,6 @@ async fn fresh_target() -> TestApp {
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	app
-}
-
-/// 全表逻辑 dump：WAL 模式下文件字节不代表逻辑状态，逐表按 rowid 取 quote 文本对账
-async fn db_dump(db_path: &std::path::Path) -> String {
-	const TABLES: &[&str] = &[
-		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
-		"category", "category_manga", "download", "setting", "source_repo", "source_cookie",
-		"auth_credential", "auth_token",
-	];
-	let pool = connect_db(db_path).await;
-	let mut out = String::new();
-	for table in TABLES {
-		let cols: Vec<(String,)> =
-			sqlx::query_as(&format!("SELECT name FROM pragma_table_info('{table}')"))
-				.fetch_all(&pool)
-				.await
-				.expect("table info");
-		let quoted = cols
-			.iter()
-			.map(|(c,)| format!("quote(\"{c}\")"))
-			.collect::<Vec<_>>()
-			.join("||','||");
-		let rows: Vec<(String,)> =
-			sqlx::query_as(&format!("SELECT {quoted} FROM \"{table}\" ORDER BY rowid"))
-				.fetch_all(&pool)
-				.await
-				.expect("table rows");
-		out.push_str(&format!("== {table}\n"));
-		for (row,) in rows {
-			out.push_str(&row);
-			out.push('\n');
-		}
-	}
-	pool.close().await;
-	out
 }
 
 #[tokio::test]
