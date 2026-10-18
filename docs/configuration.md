@@ -30,6 +30,15 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_USER_AGENT` | a Chrome desktop UA | global User-Agent for source fetches |
 | `SUMIDOKU_COVER_CACHE_MAX` | `512` | max cached cover files on disk |
 | `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |
+| `SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES` | `30` | evict source instances idle longer than this; `0` or negative disables the sweep |
+
+## WASM runtime
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `SUMIDOKU_WASM_MEMORY_MAX_MB` | `128` | per-source wasm linear-memory cap; `memory.grow` beyond it fails |
+| `SUMIDOKU_WASM_FUEL` | `10000000000` | instruction budget per source export call |
+| `SUMIDOKU_WASM_CALL_TIMEOUT_SECS` | `60` | per-call wall-clock timeout; a timed-out call restarts the instance |
 
 ## Library updates and downloads
 

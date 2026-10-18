@@ -275,6 +275,27 @@ Migrations in `crates/server/migrations`.
 - Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.
+- Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
+  first use (`get_handle`) and lives in a registry keyed by source id;
+  concurrent spawns for the same source collapse to the first arrival.
+  Instances leave the registry on package update/uninstall
+  (`evict_source`) and through an idle sweep (`run_idle_eviction`, wired
+  in `build_app` like the update scheduler): every 60s it removes entries
+  whose `last_used` — stamped at spawn and refreshed on every `get_handle`
+  hit — is older than `source_idle_evict_minutes` (default 30; `0` or
+  negative disables the sweep). Idle candidates are filtered under the
+  read lock, re-checked and removed under a short write lock, and shut
+  down outside the lock via the same `Arc::try_unwrap` courtesy as
+  `evict_source`: an in-flight call keeps its instance until the last
+  reference drops, while a new lookup respawns immediately. The sweep
+  exists because wasmer linear memory only grows — eviction is the one
+  path that returns an idle instance's memory to the OS, at the price of
+  a seconds-long recompile on the next access. Per-instance `Limits`
+  (`crates/wasm/src/runtime/limits.rs`) are server-configured at spawn:
+  `wasm_memory_max_mb` (default 128 — Aidoku sources rarely exceed 64
+  MiB, but a tighter cap makes `memory.grow` fail and kills the source),
+  `wasm_fuel` and `wasm_call_timeout_secs`; the sleep/net/js/browser
+  knobs stay hardcoded.
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
   direct, per-domain relay, or a global proxy, decided per host. When
   `net.trawl_proxy` is set, a direct request answered 403/503 with Cloudflare
@@ -306,7 +327,12 @@ limiting (`runtime/rate_limit.rs`), and the host functions sources import
 (`imports/`), including the HTML DOM helper (`html_dom.rs`) and the Boa
 JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
 isolated context per ABI descriptor, time- and loop-limited, with no host
-access beyond what the ABI exposes.
+access beyond what the ABI exposes. Each instance runs under the `Limits`
+from its `SourceConfig` (`runtime/limits.rs`): a metering fuel budget per
+export call, a per-call timeout that fuses and restarts the instance, and
+a linear-memory cap enforced through custom wasmer tunables
+(`LimitedTunables`) — the server sets these from its own config when it
+spawns an instance, defaulting the memory cap to 128 MiB.
 The net host (`imports/net.rs`) aligns request behavior with the
 Aidoku/URLSession host. `html()` decodes the body by BOM, then the
 Content-Type charset, then a `<meta charset>` sniff of the first 1024
