@@ -1,4 +1,4 @@
-/* 「暗夜书房」设计基调：暗色优先、低饱和底 + 单点紫 accent，封面是唯一主角 */
+/* 「暗夜书房」设计基调：暗色优先、低饱和底 + 品牌红 accent（取自 logo #cf161b，暗色下提亮保对比），封面是唯一主角 */
 
 :root,
 [data-theme='dark'] {
@@ -9,10 +9,10 @@
 	--text: #e8eaf0;
 	--text-dim: #9aa1b2;
 	--text-faint: #6b7280;
-	--accent: #7c6cf0;
-	--accent-hover: #8f80f5;
-	--accent-soft: rgba(124, 108, 240, 0.14);
-	--danger: #e5534b;
+	--accent: #e5484d;
+	--accent-hover: #f25a5f;
+	--accent-soft: rgba(229, 72, 77, 0.16);
+	--danger: #f4673b;
 	--success: #3fb68b;
 	--warning: #d9a03f;
 	--border: #262b38;
@@ -30,10 +30,10 @@
 	--text: #1a1d26;
 	--text-dim: #5b6172;
 	--text-faint: #9aa1b2;
-	--accent: #6a5ae0;
-	--accent-hover: #7a6ae8;
-	--accent-soft: rgba(106, 90, 224, 0.12);
-	--danger: #e5534b;
+	--accent: #cf161b;
+	--accent-hover: #b01216;
+	--accent-soft: rgba(207, 22, 27, 0.1);
+	--danger: #d9482e;
 	--success: #2f9e77;
 	--warning: #c08a2e;
 	--border: #e3e6ec;
