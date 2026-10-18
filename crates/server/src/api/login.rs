@@ -45,7 +45,9 @@ pub struct LoginSettingInfo {
 /// 递归 group/page 容器找 key 对应的 login 设置；key 撞在非 login 设置上视同不存在
 fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
 	for item in items {
-		let value = item.get("value")?;
+		let Some(value) = item.get("value") else {
+			continue;
+		};
 		if let Some(container) = value.get("Group").or_else(|| value.get("Page")) {
 			if let Some(children) = container.get("items").and_then(Value::as_array)
 				&& let Some(found) = find_login_setting(children, key)
