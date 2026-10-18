@@ -3,19 +3,21 @@
 :root,
 [data-theme='dark'] {
 	color-scheme: dark;
-	--bg: #0f1115;
-	--bg-elev: #171a21;
-	--bg-hover: #1f2330;
+	--bg: #100f12;
+	--bg-elev: #18161a;
+	--bg-hover: #211e24;
 	--text: #e8eaf0;
 	--text-dim: #9aa1b2;
 	--text-faint: #6b7280;
-	--accent: #e5484d;
-	--accent-hover: #f25a5f;
-	--accent-soft: rgba(229, 72, 77, 0.16);
+	--accent: #ed4248;
+	--accent-hover: #f25459;
+	--accent-soft: rgba(237, 66, 72, 0.1);
+	--accent-solid: #cf161b;
+	--accent-solid-hover: #b01216;
 	--danger: #f4673b;
 	--success: #3fb68b;
 	--warning: #d9a03f;
-	--border: #262b38;
+	--border: #29262c;
 	--shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
 	--r-sm: 8px;
 	--r-md: 12px;
@@ -33,6 +35,8 @@
 	--accent: #cf161b;
 	--accent-hover: #b01216;
 	--accent-soft: rgba(207, 22, 27, 0.1);
+	--accent-solid: #cf161b;
+	--accent-solid-hover: #b01216;
 	--danger: #d9482e;
 	--success: #2f9e77;
 	--warning: #c08a2e;

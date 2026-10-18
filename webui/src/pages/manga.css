@@ -161,8 +161,8 @@
 }
 
 .manga-hero__actions .btn--primary {
-	background: var(--accent);
-	border-color: var(--accent);
+	background: var(--accent-solid);
+	border-color: var(--accent-solid);
 	color: #fff;
 }
 
@@ -215,8 +215,8 @@
 }
 
 [data-theme='light'] .manga-hero__actions .btn--primary {
-	background: var(--accent);
-	border-color: var(--accent);
+	background: var(--accent-solid);
+	border-color: var(--accent-solid);
 	color: #fff;
 }
 
