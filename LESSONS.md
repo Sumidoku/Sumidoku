@@ -56,10 +56,15 @@ everything uncommitted — two sessions lost their whole implementation that
 way, the second one after the dispatch prompt already warned about the
 first. Commit the green state before breaking it; restore with
 `git stash push -- <file>` or a manual edit, never a bare stash among
-uncommitted work.
+uncommitted work. And `git stash drop` is not a restore: it deletes the
+stash — after `stash push` reverted the tree, the stashed diff is the
+*only* copy of the fix when the fix itself was still uncommitted.
+*(recurrence, third sighting — noted so the daily review can count it.)*
 - Evidence: PR #39's session recovered its implementation from a dangling
   stash commit; PR #46's replayed six destroyed webui files from memory —
-  one day after the first incident and despite the warning (2026-10-18).
+  one day after the first incident and despite the warning (2026-10-18);
+  PR #62's session dropped the stash holding its own uncommitted fix and
+  recovered it from the dangling commit `9c109c5` (2026-10-18).
 
 **Write every GitHub body to a file; never inline it.**
 Backticks inside a double-quoted `--body`/`--comment` string are command
