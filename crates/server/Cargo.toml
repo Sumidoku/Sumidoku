@@ -30,6 +30,8 @@ prost = "0.14"
 flate2 = "1"
 # axum Body::from_stream 的 Stream trait 出处，无传递依赖
 futures-core = "0.3"
+# 登录 host 解析（wasm crate 已依赖，不向依赖树新增 crate）
+url = "2.5"
 # 密码哈希（纯 Rust，无 C 依赖交叉风险）；token/API key 指纹用 sha2
 argon2 = "0.5"
 sha2 = "0.11"

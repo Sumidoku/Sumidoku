@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import type { Setting } from '../../api/types';
-import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch } from '../../components';
+import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch, pushToast } from '../../components';
 
 export interface SettingItemProps {
 	setting: Setting;
@@ -13,6 +13,10 @@ export interface SettingItemProps {
 	onEdit: (key: string, value: unknown) => void;
 	/** 基本登录：由外层提供端点调用，缺省时 login 项降级为只读提示 */
 	onSubmitLogin?: (key: string, username: string, password: string) => Promise<void>;
+	/** 网页登录：粘贴 cookie 换取登录态 */
+	onSubmitWebLogin?: (key: string, cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
+	/** 源级登出：clearCookies 为真时连登录 cookie 一起清 */
+	onLogoutLogin?: (key: string, clearCookies: boolean) => Promise<void>;
 }
 
 function strArr(v: unknown): string[] {
@@ -116,7 +120,176 @@ function LoginSetting({
 	);
 }
 
-export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: SettingItemProps) {
+/**
+ * 解析粘贴的 cookie：接受 `Cookie:` 请求头（name=value; …）、
+ * `{name: value}` JSON 对象，或浏览器导出的 [{name, value, …}] 数组
+ */
+function parseCookies(text: string): Record<string, string> | null {
+	const trimmed = text.trim().replace(/^cookie:\s*/i, '');
+	if (!trimmed) return null;
+	if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+		try {
+			const parsed: unknown = JSON.parse(trimmed);
+			const entries = Array.isArray(parsed) ? parsed : [parsed];
+			const out: Record<string, string> = {};
+			for (const entry of entries) {
+				if (!entry || typeof entry !== 'object') return null;
+				if (Array.isArray(parsed)) {
+					const { name, value } = entry as { name?: unknown; value?: unknown };
+					if (typeof name !== 'string' || !name || value === undefined) return null;
+					out[name] = String(value);
+				} else {
+					for (const [k, v] of Object.entries(entry)) out[k] = String(v);
+				}
+			}
+			return Object.keys(out).length > 0 ? out : null;
+		} catch {
+			return null;
+		}
+	}
+	const out: Record<string, string> = {};
+	for (const part of trimmed.split(';')) {
+		const eq = part.indexOf('=');
+		const name = eq > 0 ? part.slice(0, eq).trim() : '';
+		if (!name) return null;
+		out[name] = part.slice(eq + 1).trim();
+	}
+	return out;
+}
+
+/** 网页登录：服务端没有 webview，用户登录后粘贴该 host 的 cookie 换取登录态 */
+function WebLoginSetting({
+	title,
+	url,
+	logoutTitle,
+	localStorageKeys,
+	clearCookiesOnLogOut,
+	loggedIn,
+	onSubmit,
+	onLogout
+}: {
+	title: string;
+	/** 登录页地址（设置声明的 url），提示用户去哪里登录 */
+	url: string | null;
+	logoutTitle: string | null;
+	localStorageKeys: string[];
+	clearCookiesOnLogOut: boolean;
+	loggedIn: boolean;
+	onSubmit: (cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
+	onLogout: (clearCookies: boolean) => Promise<void>;
+}) {
+	const [text, setText] = useState('');
+	const [lsValues, setLsValues] = useState<Record<string, string>>({});
+	const [busy, setBusy] = useState(false);
+	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [clearCookies, setClearCookies] = useState(clearCookiesOnLogOut);
+
+	if (loggedIn) {
+		return (
+			<div className="setting-row setting-row--col">
+				<div className="setting-login__head">
+					<span className="setting-row__title">{title}</span>
+					<Chip color="success">已登录</Chip>
+				</div>
+				<Button
+					size="sm"
+					onClick={() => {
+						setClearCookies(clearCookiesOnLogOut);
+						setConfirmOpen(true);
+					}}
+				>
+					{logoutTitle ?? '登出'}
+				</Button>
+				<Modal
+					open={confirmOpen}
+					title={logoutTitle ?? '登出'}
+					onClose={() => setConfirmOpen(false)}
+					footer={
+						<>
+							<Button onClick={() => setConfirmOpen(false)}>取消</Button>
+							<Button
+								variant="primary"
+								loading={busy}
+								onClick={() => {
+									setBusy(true);
+									void onLogout(clearCookies)
+										.then(() => setConfirmOpen(false))
+										.finally(() => setBusy(false));
+								}}
+							>
+								{logoutTitle ?? '登出'}
+							</Button>
+						</>
+					}
+				>
+					<p>退出该源的登录？登录态与已保存的 cookie 键值会被清除。</p>
+					<label className="setting-row">
+						<span className="setting-row__title">同时清除登录 cookie</span>
+						<Switch checked={clearCookies} onChange={setClearCookies} label="同时清除登录 cookie" />
+					</label>
+				</Modal>
+			</div>
+		);
+	}
+
+	return (
+		<div className="setting-row setting-row--col">
+			<div className="setting-login__head">
+				<span className="setting-row__title">{title}</span>
+			</div>
+			<span className="faint">
+				{url ? (
+					<>
+						先在浏览器登录{' '}
+						<a href={url} target="_blank" rel="noreferrer">
+							{url}
+						</a>
+						，再粘贴该站的 Cookie 请求头或 JSON 导出
+					</>
+				) : (
+					'先在浏览器登录该源，再粘贴登录站的 Cookie 请求头或 JSON 导出'
+				)}
+			</span>
+			<textarea
+				className="setting-textarea"
+				rows={3}
+				placeholder={'name=value; name2=value2\n或 {"name": "value"}'}
+				value={text}
+				onChange={(e) => setText(e.currentTarget.value)}
+			/>
+			{localStorageKeys.map((lsKey) => (
+				<Input
+					key={lsKey}
+					placeholder={`localStorage：${lsKey}`}
+					value={lsValues[lsKey] ?? ''}
+					onChange={(e) => {
+						// 更新函数延后执行时 currentTarget 已被置 null，必须先取值
+						const v = e.currentTarget.value;
+						setLsValues((cur) => ({ ...cur, [lsKey]: v }));
+					}}
+				/>
+			))}
+			<Button
+				size="sm"
+				loading={busy}
+				disabled={!text.trim()}
+				onClick={() => {
+					const cookies = parseCookies(text);
+					if (!cookies) {
+						pushToast('无法解析 Cookie，支持请求头或 JSON 格式', 'error');
+						return;
+					}
+					setBusy(true);
+					void onSubmit(cookies, lsValues).finally(() => setBusy(false));
+				}}
+			>
+				登录
+			</Button>
+		</div>
+	);
+}
+
+export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onSubmitWebLogin, onLogoutLogin }: SettingItemProps) {
 	const [msOpen, setMsOpen] = useState(false);
 
 	// 当前值优先取未保存的修改，其次取服务器已存值
@@ -170,23 +343,39 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: S
 	} else if (typeof v === 'object' && 'Login' in v) {
 		const method = v.Login.method;
 		const savedUser = cur(`${setting.key}.username`);
-		body =
-			onSubmitLogin && method === 'basic' ? (
+		const marker = cur(setting.key);
+		if (onSubmitLogin && method === 'basic') {
+			body = (
 				<LoginSetting
 					title={setting.title}
 					useEmail={v.Login.use_email === true}
 					savedUsername={typeof savedUser === 'string' ? savedUser : ''}
-					loggedIn={cur(setting.key) === 'logged_in'}
+					loggedIn={marker === 'logged_in'}
 					onSubmit={(username, password) => onSubmitLogin(setting.key, username, password)}
 				/>
-			) : (
+			);
+		} else if (onSubmitWebLogin && onLogoutLogin && method === 'web') {
+			// Aidoku 以 marker 非空判登录态（不限于 "logged_in" 字面值）
+			body = (
+				<WebLoginSetting
+					title={setting.title}
+					url={v.Login.url ?? null}
+					logoutTitle={v.Login.logout_title ?? null}
+					localStorageKeys={v.Login.local_storage_keys ?? []}
+					clearCookiesOnLogOut={v.Login.clear_cookies_on_log_out === true}
+					loggedIn={typeof marker === 'string' && marker !== ''}
+					onSubmit={(cookies, ls) => onSubmitWebLogin(setting.key, cookies, ls)}
+					onLogout={(clearCookies) => onLogoutLogin(setting.key, clearCookies)}
+				/>
+			);
+		} else {
+			body = (
 				<div className="setting-row setting-row--disabled">
 					<span className="setting-row__title">{setting.title}</span>
-					<span className="faint">
-						{method === 'basic' ? '该操作需要在客户端完成' : '暂不支持 OAuth / 网页登录'}
-					</span>
+					<span className="faint">{method === 'basic' ? '该操作需要在客户端完成' : '暂不支持 OAuth 登录'}</span>
 				</div>
 			);
+		}
 	} else if (v === 'Button' || (typeof v === 'object' && 'Button' in v)) {
 		body = (
 			<div className="setting-row setting-row--disabled">
@@ -206,6 +395,8 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: S
 						edits={edits}
 						onEdit={onEdit}
 						onSubmitLogin={onSubmitLogin}
+						onSubmitWebLogin={onSubmitWebLogin}
+						onLogoutLogin={onLogoutLogin}
 					/>
 				))}
 				{v.Group.footer && <div className="faint setting-group__footer">{v.Group.footer}</div>}
@@ -223,6 +414,8 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: S
 						edits={edits}
 						onEdit={onEdit}
 						onSubmitLogin={onSubmitLogin}
+						onSubmitWebLogin={onSubmitWebLogin}
+						onLogoutLogin={onLogoutLogin}
 					/>
 				))}
 			</div>

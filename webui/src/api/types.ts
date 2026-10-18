@@ -404,6 +404,10 @@ export type SettingValue =
 				method: 'basic' | 'oauth' | 'web';
 				use_email?: boolean | null;
 				url?: string | null;
+				url_key?: string | null;
+				logout_title?: string | null;
+				local_storage_keys?: string[] | null;
+				clear_cookies_on_log_out?: boolean | null;
 				[key: string]: unknown;
 			};
 	  };

@@ -705,6 +705,40 @@ export function useBasicLogin(sourceId: number) {
 	});
 }
 
+/** 网页登录：粘贴登录 host 的 cookie 换取登录态，服务端重启实例后刷新设置值 */
+export function useWebLogin(sourceId: number) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			key,
+			cookies,
+			localStorage
+		}: {
+			key: string;
+			cookies: Record<string, string>;
+			localStorage?: Record<string, string>;
+		}) =>
+			api<{ ok: boolean }>(`/sources/${sourceId}/login/web`, {
+				method: 'POST',
+				body: { key, cookies, localStorage }
+			}),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
+	});
+}
+
+/** 源级登出：清 <key> 及其子键；clearCookies 为真时连登录 cookie 一起清 */
+export function useLoginLogout(sourceId: number) {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ key, clearCookies }: { key: string; clearCookies: boolean }) =>
+			api<{ ok: boolean }>(`/sources/${sourceId}/login/logout`, {
+				method: 'POST',
+				body: { key, clearCookies }
+			}),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
+	});
+}
+
 // 重名 409 要转成中文提示，silent 交给调用方统一弹错
 export function useCreateCategory() {
 	const qc = useQueryClient();
