@@ -34,12 +34,13 @@ async fn library_manga(app: &Router, example_id: i64) -> (i64, String) {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let key = body["entries"][0]["key"].as_str().expect("manga key").to_string();
+	let entry = body["entries"][0].clone();
+	let key = entry["key"].as_str().expect("manga key").to_string();
 	let (status, body) = request(
 		app,
 		"POST",
 		"/api/v1/manga",
-		Some(json!({"sourceId": example_id, "mangaKey": key})),
+		Some(json!({"sourceId": example_id, "manga": entry})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -383,7 +384,7 @@ async fn carry_by_number_and_volume_fallback_with_warnings() {
 	assert_eq!(result["toMangaId"].as_i64(), Some(target), "{result}");
 	let warnings = result["warnings"].as_array().expect("warnings");
 	assert_eq!(warnings.len(), 1, "{result}");
-	assert!(warnings[0].as_str().unwrap().contains("99.5"), "{warnings}");
+	assert!(warnings[0].as_str().unwrap().contains("99.5"), "{:?}", warnings);
 
 	// 章节号精确匹配照常；卷号兜底落在目标无章节号的章节上
 	let ch8 = chapter_by_number(&app, target, 8.0).await;
@@ -444,15 +445,15 @@ async fn entry_failures_are_reported_per_row() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let results = body["results"].as_array().expect("results");
 	assert_eq!(results.len(), 5, "{body}");
-	assert_eq!(results[0]["ok"], true, "{results[0]}");
-	assert_eq!(results[1]["ok"], false, "{results[1]}");
-	assert_eq!(results[1]["reason"], "not_found", "{results[1]}");
-	assert_eq!(results[2]["ok"], false, "{results[2]}");
-	assert_eq!(results[2]["reason"], "not_in_library", "{results[2]}");
-	assert_eq!(results[3]["ok"], false, "{results[3]}");
-	assert_eq!(results[3]["reason"], "source_not_found", "{results[3]}");
-	assert_eq!(results[4]["ok"], false, "{results[4]}");
-	assert_eq!(results[4]["reason"], "same_source", "{results[4]}");
+	assert_eq!(results[0]["ok"], true, "{:?}", results[0]);
+	assert_eq!(results[1]["ok"], false, "{:?}", results[1]);
+	assert_eq!(results[1]["reason"], "not_found", "{:?}", results[1]);
+	assert_eq!(results[2]["ok"], false, "{:?}", results[2]);
+	assert_eq!(results[2]["reason"], "not_in_library", "{:?}", results[2]);
+	assert_eq!(results[3]["ok"], false, "{:?}", results[3]);
+	assert_eq!(results[3]["reason"], "source_not_found", "{:?}", results[3]);
+	assert_eq!(results[4]["ok"], false, "{:?}", results[4]);
+	assert_eq!(results[4]["reason"], "same_source", "{:?}", results[4]);
 
 	// 批次级部分失败不回滚：第一条的迁移已生效
 	let detail = manga_detail(&app, origin).await;

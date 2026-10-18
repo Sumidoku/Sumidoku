@@ -3,6 +3,7 @@ pub mod backup;
 pub mod download;
 pub mod import_merge;
 pub mod library;
+pub mod migrate;
 pub mod page;
 pub mod partial;
 pub mod pins;
@@ -70,6 +71,9 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/chapter/{id}/page/{index}", get(page::get_page))
 		.route("/api/v1/library", get(library::list_library).post(library::add_to_library))
 		.route("/api/v1/library/{manga_id}", delete(library::remove_from_library))
+		.route("/api/v1/migrate/sources", get(migrate::migrate_sources))
+		.route("/api/v1/migrate/lookup", get(migrate::migrate_lookup))
+		.route("/api/v1/migrate", post(migrate::migrate_execute))
 		.route("/api/v1/categories", get(library::list_categories).post(library::create_category))
 		.route(
 			"/api/v1/categories/{id}",
@@ -295,7 +299,7 @@ pub struct SearchRequest {
 }
 
 /// 已入库漫画的 key → 内部 id，流式与非流式搜索共用同一份 attach 语义
-async fn known_manga_ids(state: &AppState, source_id: i64) -> ApiResult<HashMap<String, i64>> {
+pub(crate) async fn known_manga_ids(state: &AppState, source_id: i64) -> ApiResult<HashMap<String, i64>> {
 	let known: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ?")
 		.bind(source_id)
 		.fetch_all(&state.pool)
@@ -320,7 +324,7 @@ pub(crate) fn manga_json_with_ids(
 }
 
 /// 搜索/列表返回的源侧 Manga 附加 sourceId；已入库的再附内部 id
-async fn attach_internal_ids(
+pub(crate) async fn attach_internal_ids(
 	state: &AppState,
 	source_id: i64,
 	entries: Vec<Manga>,
