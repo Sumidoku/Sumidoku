@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod download;
 pub mod library;
 pub mod page;
@@ -89,6 +90,12 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
 		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
+		.route(
+			"/api/v1/backup",
+			get(backup::export_backup)
+				.post(backup::import_backup)
+				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
+		)
 		.route(
 			"/api/v1/source-repos",
 			get(repo::list_repos).post(repo::add_repo),
@@ -503,7 +510,7 @@ async fn put_source_settings(
 }
 
 /// 实例在跑才热重启（换 defaults/cookies）；没跑的下一次懒加载自然吃到新值
-async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()> {
+pub(crate) async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()> {
 	let handle = state
 		.sources
 		.read()
