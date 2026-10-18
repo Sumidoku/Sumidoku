@@ -151,6 +151,22 @@ fn collect_leaf_keys(items: &[Value], out: &mut HashSet<String>) {
 	}
 }
 
+/// 静态 + 动态设置合并：静态在前、动态追加，对齐 AidokuRunner 的
+/// `staticSettings + getSettings()`。Runner 本身不去重（同键显示两项），这里按
+/// 叶子键去重、同键保留先出现项——与合成设置撞键跳过同规则，列表里同键只出现一次
+pub fn merge_settings(static_items: Vec<Value>, dynamic_items: Vec<Value>) -> Vec<Value> {
+	let mut declared = declared_keys(&static_items);
+	let mut out = static_items;
+	for item in dynamic_items {
+		if clashes(&item, &declared) {
+			continue;
+		}
+		collect_leaf_keys(std::slice::from_ref(&item), &mut declared);
+		out.push(item);
+	}
+	out
+}
+
 /// 扁平 settings.json -> 动态源同款嵌套数组；输入非数组时返回空
 pub fn normalize_static_settings(raw: &Value) -> Vec<Value> {
 	raw.as_array()

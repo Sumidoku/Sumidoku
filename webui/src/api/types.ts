@@ -361,13 +361,26 @@ export type SearchStreamEvent = { type: 'manga'; manga: Manga };
 
 // ---- 源设置 ----
 
+export type PageIcon =
+	| { type: 'system'; name: string; color: string; inset?: number | null }
+	| { type: 'url'; url: string };
+
 export type SettingValue =
 	| { Group: { footer?: string | null; items: Setting[] } }
-	| { Page: { items: Setting[]; inline_title?: boolean | null } }
+	| {
+			Page: {
+				items: Setting[];
+				inline_title?: boolean | null;
+				auth_to_open?: boolean | null;
+				icon?: PageIcon | null;
+				info?: string | null;
+			};
+	  }
 	| {
 			Select: {
 				values: string[];
 				titles?: string[] | null;
+				auth_to_open?: boolean | null;
 				default?: string | null;
 			};
 	  }
@@ -375,10 +388,11 @@ export type SettingValue =
 			MultiSelect: {
 				values: string[];
 				titles?: string[] | null;
+				auth_to_open?: boolean | null;
 				default?: string[] | null;
 			};
 	  }
-	| { Toggle: { subtitle?: string | null; default: boolean } }
+	| { Toggle: { subtitle?: string | null; auth_to_disable?: boolean | null; default: boolean } }
 	| {
 			Stepper: {
 				minimum_value: number;

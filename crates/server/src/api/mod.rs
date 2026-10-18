@@ -27,7 +27,7 @@ use crate::source::{
 use crate::state::{AppState, load_cookies, load_defaults};
 use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, patch, post, put};
@@ -60,6 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/home", get(get_home))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
 		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
+		.route("/api/v1/sources/{id}/notify", post(notify_source))
 		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
 		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
 		.route("/api/v1/sources/{id}/login/web", post(login::web_login))
@@ -464,30 +465,30 @@ async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {
 	Ok(Value::Object(values))
 }
 
-/// 设置定义加载：动态 get_settings 优先（顺带补种默认值，对齐 AidokuRunner 的
-/// register(defaults:)），源没导出时退回静态 settings.json 并归一成同款嵌套形状
+/// 设置定义加载：静态 settings.json 与动态 get_settings 合并（静态在前、动态追加、
+/// 同键去重，对齐 AidokuRunner 的 staticSettings + getSettings()）；动态项顺带播种
+/// 默认值，对齐 Runner 的 register(defaults:)
 pub(crate) async fn load_settings_items(
 	state: &AppState,
 	id: i64,
 	handle: &aidoku_wasm::SourceHandle,
 ) -> ApiResult<Vec<Value>> {
+	let static_items = package_json(state, id, "settings.json")
+		.await?
+		.map(|raw| settings::normalize_static_settings(&raw))
+		.unwrap_or_default();
 	match handle.get_settings().await {
 		Ok(settings) => {
-			let items = serde_json::to_value(settings)?
+			let dynamic_items = serde_json::to_value(settings)?
 				.as_array()
 				.cloned()
 				.unwrap_or_default();
-			crate::source::seed_dynamic_defaults(&state.pool, id, &items)
+			crate::source::seed_dynamic_defaults(&state.pool, id, &dynamic_items)
 				.await
 				.map_err(ApiError::internal)?;
-			Ok(items)
+			Ok(settings::merge_settings(static_items, dynamic_items))
 		}
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => Ok(
-			package_json(state, id, "settings.json")
-				.await?
-				.map(|raw| settings::normalize_static_settings(&raw))
-				.unwrap_or_default(),
-		),
+		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => Ok(static_items),
 		Err(e) => Err(ApiError::from(e)),
 	}
 }
@@ -525,15 +526,21 @@ async fn get_source_settings(
 	})))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct NotifyQuery {
-	pub notify: Option<String>,
+/// serde_urlencoded 不收重复键；notify 可重复（一次保存可能改多个带
+/// notification 的设置，逐个送达），改用手工解析
+fn notify_params(raw: Option<&str>) -> Vec<String> {
+	raw.map(|q| {
+		url::form_urlencoded::parse(q.as_bytes())
+			.filter_map(|(k, v)| (k == "notify").then(|| v.into_owned()))
+			.collect()
+	})
+	.unwrap_or_default()
 }
 
 async fn put_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
-	Query(query): Query<NotifyQuery>,
+	RawQuery(raw): RawQuery,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
 	source_row(&state, id).await?;
@@ -567,14 +574,34 @@ async fn put_source_settings(
 		if let Some(entry) = state.sources.write().await.get_mut(&id) {
 			entry.features = features.clone();
 		}
-		if let Some(notify) = query.notify
-			&& features.notification
-		{
-			handle.handle_notification(notify).await?;
+		if features.notification {
+			for notify in notify_params(raw.as_deref()) {
+				handle.handle_notification(notify).await?;
+			}
 		}
 	}
 	let values = current_values(&state, id).await?;
 	Ok(Json(json!({ "values": values })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NotifyRequest {
+	pub notification: String,
+}
+
+/// 直接给在跑（或懒加载拉起）的实例送 notification，不重启——Button 设置的
+/// 按下语义（Aidoku app：按下即 handleNotification，实例状态保留）
+async fn notify_source(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	Json(body): Json<NotifyRequest>,
+) -> ApiResult<Json<Value>> {
+	let handle = state.get_handle(id).await?;
+	if !handle.features().notification {
+		return Err(ApiError::unsupported_501("source does not support notifications"));
+	}
+	handle.handle_notification(body.notification).await?;
+	Ok(Json(json!({ "ok": true })))
 }
 
 /// 实例在跑才热重启（换 defaults/cookies）；没跑的下一次懒加载自然吃到新值

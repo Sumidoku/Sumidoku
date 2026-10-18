@@ -49,6 +49,11 @@ pub fn weblogin_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin/main.wasm")
 }
 
+/// 导出 handle_notification 与动态设置的 fixture 载荷，用于设置合并与通知送达链路
+pub fn notify_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/notify/main.wasm")
+}
+
 /// 同款登录设置但不导出 handle_web_login 的对照载荷
 pub fn weblogin_plain_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin-plain/main.wasm")

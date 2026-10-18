@@ -298,8 +298,7 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 }
 
 /// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
-/// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错；
-/// INSERT OR IGNORE 保证不覆盖用户已改的值
+/// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错
 pub(crate) async fn seed_source_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -326,12 +325,11 @@ pub(crate) async fn seed_source_defaults(
 	if let Some(settings) = settings {
 		collect_setting_defaults(settings, &mut seeds);
 	}
-	insert_missing_defaults(pool, source_id, seeds).await
+	seed_defaults(pool, source_id, seeds).await
 }
 
-/// 首次成功 `get_settings` 后调：把源在代码里声明、库里还没有的默认值补种进去
-/// （INSERT OR IGNORE，不覆盖用户已改的值），对齐 AidokuRunner 在 getSettings()
-/// 里 `register(defaults:)` 的行为
+/// 成功 `get_settings` 后调：把源在代码里声明的默认值播种进库，对齐 AidokuRunner
+/// 在 getSettings() 里 `register(defaults:)` 的行为
 pub(crate) async fn seed_dynamic_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -339,23 +337,33 @@ pub(crate) async fn seed_dynamic_defaults(
 ) -> Result<(), String> {
 	let mut seeds = Vec::new();
 	collect_dynamic_defaults(settings, &mut seeds);
-	insert_missing_defaults(pool, source_id, seeds).await
+	seed_defaults(pool, source_id, seeds).await
 }
 
-async fn insert_missing_defaults(
+/// 播种默认值：行不存在直接种；已存在时仅当现存值仍等于上次播种的默认才写新默认
+/// （UserDefaults register(defaults:) 的物化版——没设过的键永远解析到当前默认），
+/// 用户改过的值保留。迁移前入库的行 seeded_value 为 NULL，一律按用户值保守处理
+async fn seed_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
 	seeds: Vec<(String, DefaultValue)>,
 ) -> Result<(), String> {
 	for (key, value) in seeds {
 		let raw = serde_json::to_string(&value).map_err(|e| format!("encode default: {e}"))?;
-		sqlx::query("INSERT OR IGNORE INTO source_setting (source_id, key, value) VALUES (?, ?, ?)")
-			.bind(source_id)
-			.bind(key)
-			.bind(raw)
-			.execute(pool)
-			.await
-			.map_err(|e| format!("db: {e}"))?;
+		sqlx::query(
+			"INSERT INTO source_setting (source_id, key, value, seeded_value) VALUES (?, ?, ?, ?)
+			 ON CONFLICT (source_id, key) DO UPDATE SET
+			 value = CASE WHEN source_setting.value IS source_setting.seeded_value THEN excluded.value
+			              ELSE source_setting.value END,
+			 seeded_value = excluded.seeded_value",
+		)
+		.bind(source_id)
+		.bind(&key)
+		.bind(&raw)
+		.bind(&raw)
+		.execute(pool)
+		.await
+		.map_err(|e| format!("db: {e}"))?;
 	}
 	Ok(())
 }

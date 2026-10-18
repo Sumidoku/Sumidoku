@@ -262,6 +262,20 @@
 	font-size: 13.5px;
 	color: var(--accent);
 	margin-bottom: 4px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.setting-group__icon {
+	width: 20px;
+	height: 20px;
+	border-radius: 4px;
+}
+
+.setting-group__info {
+	font-size: 12.5px;
+	margin-bottom: 4px;
 }
 
 .setting-group__footer {
