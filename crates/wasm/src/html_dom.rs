@@ -110,16 +110,24 @@ impl HtmlNode {
 		node.parent().map(|node| self.child_node(node.id()))
 	}
 
+	/// jsoup siblingNodes()：父节点全部子节点排除自身、按文档序；
+	/// node 层不按元素过滤，文本/注释都在
 	pub fn siblings(&self) -> Option<Vec<HtmlNode>> {
 		let html = self.html.borrow();
 		let node = html.tree.get(self.id)?;
+		let Some(parent) = node.parent() else {
+			return Some(Vec::new());
+		};
 		Some(
-			node.next_siblings()
-				.map(|node| self.child_node(node.id()))
+			parent
+				.children()
+				.filter(|sibling| sibling.id() != self.id)
+				.map(|sibling| self.child_node(sibling.id()))
 				.collect::<Vec<HtmlNode>>(),
 		)
 	}
 
+	/// 紧邻兄弟节点（文本/注释也算）：node 层不做元素过滤，元素级导航在 HtmlElement
 	pub fn next_sibling(&self) -> Option<HtmlNode> {
 		let html = self.html.borrow();
 		let node = html.tree.get(self.id)?;
@@ -440,34 +448,40 @@ impl HtmlElement {
 		))
 	}
 
+	/// jsoup siblingElements()：父元素的全部元素子节点排除自身、按文档序
 	pub fn siblings(&self) -> Option<HtmlElementList> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
-		let element = ElementRef::wrap(node)?;
+		ElementRef::wrap(node)?;
+		let Some(parent) = node.parent() else {
+			return Some(HtmlElementList(Vec::new()));
+		};
 		Some(HtmlElementList(
-			element
-				.next_siblings()
-				.map(|element| self.child(element.id()))
+			parent
+				.children()
+				.filter(|sibling| sibling.id() != self.0.id)
+				.filter_map(ElementRef::wrap)
+				.map(|sibling| self.child(sibling.id()))
 				.collect::<Vec<HtmlElement>>(),
 		))
 	}
 
+	/// jsoup nextElementSibling()：沿兄弟链找第一个元素节点，跳过文本/注释
 	pub fn next_sibling(&self) -> Option<HtmlElement> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
-		element
-			.next_sibling()
-			.map(|element| self.child(element.id()))
+		let sibling = element.next_siblings().find_map(ElementRef::wrap)?;
+		Some(self.child(sibling.id()))
 	}
 
+	/// jsoup previousElementSibling()：反向沿兄弟链找第一个元素节点
 	pub fn prev_sibling(&self) -> Option<HtmlElement> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
 		let element = ElementRef::wrap(node)?;
-		element
-			.prev_sibling()
-			.map(|element| self.child(element.id()))
+		let sibling = element.prev_siblings().find_map(ElementRef::wrap)?;
+		Some(self.child(sibling.id()))
 	}
 
 	/// jsoup ownText()：只拼直系文本节点子节点，与 text() 同一套归一化；
@@ -2227,5 +2241,92 @@ mod tests {
 		// 文本时 text() 不补空格（SwiftSoup 2.13.7 实测 "ab"，jsoup 1.15.3 是 "a b"）
 		let doc = HtmlDocument::parse(r#"<div id="t">a</div>b"#, None);
 		assert_eq!(first_element(&doc, "body").text(true).as_deref(), Some("ab"));
+	}
+
+	// body 子节点固定为 [div#a, Text(" text "), div#b, Comment, div#c]
+	const SIBLINGS_HTML: &str = r#"<!DOCTYPE html><html><body><div id="a">a</div> text <div id="b">b</div><!--x--><div id="c">c</div></body></html>"#;
+
+	#[test]
+	fn element_next_prev_sibling_skips_non_elements() {
+		// D1（issue #83）：jsoup nextElementSibling/previousElementSibling
+		// 沿兄弟链找第一个元素节点，文本/注释不算
+		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
+		let a = first_element(&doc, "#a");
+		let b = first_element(&doc, "#b");
+		let c = first_element(&doc, "#c");
+
+		// a 的紧邻兄弟是文本节点，next 必须跳到 #b
+		assert_eq!(a.next_sibling().unwrap().id().as_deref(), Some("b"));
+		// b 的紧邻后方是注释，next 必须跳到 #c
+		assert_eq!(b.next_sibling().unwrap().id().as_deref(), Some("c"));
+		assert!(c.next_sibling().is_none());
+
+		assert_eq!(c.prev_sibling().unwrap().id().as_deref(), Some("b"));
+		assert_eq!(b.prev_sibling().unwrap().id().as_deref(), Some("a"));
+		assert!(a.prev_sibling().is_none());
+	}
+
+	#[test]
+	fn element_siblings_both_directions_elements_only() {
+		// D2（issue #83）：jsoup siblingElements() 是父元素的全部元素子节点，
+		// 排除自身、按文档序（双向，文本/注释不计）
+		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
+		let sibling_ids = |selector: &str| -> Vec<String> {
+			first_element(&doc, selector)
+				.siblings()
+				.unwrap()
+				.0
+				.iter()
+				.map(|element| element.id().unwrap())
+				.collect()
+		};
+		assert_eq!(sibling_ids("#a"), ["b", "c"]);
+		assert_eq!(sibling_ids("#b"), ["a", "c"]);
+		assert_eq!(sibling_ids("#c"), ["a", "b"]);
+
+		// 摘下的元素没有父节点，兄弟列表为空（jsoup 对无父元素给空列表）
+		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
+		let b = first_element(&doc, "#b");
+		b.0.detach().unwrap();
+		assert!(b.siblings().unwrap().0.is_empty());
+		assert!(b.0.siblings().unwrap().is_empty());
+	}
+
+	#[test]
+	fn node_siblings_both_directions_all_node_kinds() {
+		// D3（issue #83）：jsoup siblingNodes() 双向全部兄弟节点、排除自身、
+		// 按文档序；node 层不按元素过滤，文本/注释在内
+		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
+		let b = first_element(&doc, "#b");
+		let siblings = b.0.siblings().unwrap();
+		assert_eq!(siblings.len(), 4);
+		let first = HtmlElement::try_from(siblings[0].clone()).ok().unwrap();
+		assert_eq!(first.id().as_deref(), Some("a"));
+		assert!(siblings[1].is_text());
+		assert!(siblings[2].is_comment());
+		let last = HtmlElement::try_from(siblings[3].clone()).ok().unwrap();
+		assert_eq!(last.id().as_deref(), Some("c"));
+
+		// 非元素节点自身的兄弟列表同样双向、含全部节点
+		let text_node = first_element(&doc, "#a").0.next_sibling().unwrap();
+		assert!(text_node.is_text());
+		assert_eq!(text_node.siblings().unwrap().len(), 4);
+	}
+
+	#[test]
+	fn node_next_prev_stay_adjacent_nodes() {
+		// node 层 next/prev 保持紧邻节点导航、不按元素过滤（vendor 文档
+		// "Get the next sibling of the node"，SwiftSoup Node.nextSibling）
+		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
+
+		let text = first_element(&doc, "#a").0.next_sibling().unwrap();
+		assert!(text.is_text());
+		assert_eq!(text.text().as_deref(), Some(" text "));
+		assert!(text.prev_sibling().unwrap().is_element());
+
+		let comment = first_element(&doc, "#b").0.next_sibling().unwrap();
+		assert!(comment.is_comment());
+		let c = comment.next_sibling().unwrap();
+		assert_eq!(HtmlElement::try_from(c).ok().unwrap().id().as_deref(), Some("c"));
 	}
 }
