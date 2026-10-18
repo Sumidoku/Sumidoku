@@ -75,11 +75,13 @@ index-addressed events, and an empty final layout falls back to the
 accumulated partials. Calls without a streaming caller discard partials,
 as before. `source.rs`
 loads and validates packages; `package.rs` reads the `.aix` zip layout
-(`Payload/source.json` manifest, `Payload/main.wasm` payload) into memory
-without extracting. The server scans the `sources/` directory under
-`config_dir` for `.aix` files and extracted source directories alike;
-both register the same way, with `wasm_path` pointing at the `.aix` or
-the directory's `main.wasm`.
+(`Payload/source.json` manifest, `Payload/main.wasm` payload, optional
+`Payload/icon.png`) into memory without extracting. The server scans the
+`sources/` directory under `config_dir` for `.aix` files and extracted
+source directories alike; both register the same way, with `wasm_path`
+pointing at the `.aix` or the directory's `main.wasm`. An `.aix` icon is
+written next to the package as `<name>.png` so installed sources serve
+`/sources/{id}/icon` the same way the directory scan's `icon.png` does.
 
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.

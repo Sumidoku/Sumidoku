@@ -7,11 +7,15 @@ use std::path::Path;
 pub const MANIFEST_ENTRY: &str = "Payload/source.json";
 pub const WASM_ENTRY: &str = "Payload/main.wasm";
 pub const SETTINGS_ENTRY: &str = "Payload/settings.json";
+/// Aidoku 包内嵌图标：解析后供已装源列表用（Aidoku 从解包目录读 icon.png）
+pub const ICON_ENTRY: &str = "Payload/icon.png";
 
 /// 单个 entry 解压上限：真实包 wasm 不足 1 MiB，64 MiB 已留足余量；防 zip bomb
 pub const WASM_PAYLOAD_MAX: u64 = 64 * 1024 * 1024;
 /// 清单 / settings 这类 json 元数据的上限
 pub const JSON_ENTRY_MAX: u64 = 1024 * 1024;
+/// 图标上限：真实图标几十 KiB，1 MiB 已留足余量
+pub const ICON_ENTRY_MAX: u64 = 1024 * 1024;
 
 /// 错误用裸 String：调用方（wasm 端 build、服务端扫描）各自包成自己的错误类型
 pub fn read_zip_entry<R: Read + Seek>(
@@ -35,6 +39,18 @@ pub fn read_zip_entry<R: Read + Seek>(
         return Err(format!("{name} exceeds {max} bytes"));
     }
     Ok(out)
+}
+
+/// 可选 entry：不存在返回 `Ok(None)`，存在则按上限读取
+pub fn read_optional_zip_entry<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    name: &str,
+    max: u64,
+) -> std::result::Result<Option<Vec<u8>>, String> {
+    if archive.by_name(name).is_err() {
+        return Ok(None);
+    }
+    read_zip_entry(archive, name, max).map(Some)
 }
 
 /// wasm_path 可能是裸 .wasm 或 .aix（zip）：按 PK 魔数区分，zip 从 Payload/main.wasm 取载荷
@@ -91,6 +107,28 @@ mod tests {
         let bytes = make_zip(&[("Payload/main.wasm", b"0123456789")]);
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let err = read_zip_entry(&mut archive, WASM_ENTRY, 4).unwrap_err();
+        assert!(err.contains("exceeds"), "{err}");
+    }
+
+    #[test]
+    fn read_optional_zip_entry_absent_is_none() {
+        let bytes = make_zip(&[("Payload/main.wasm", b"x")]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            read_optional_zip_entry(&mut archive, ICON_ENTRY, ICON_ENTRY_MAX).unwrap(),
+            None
+        );
+
+        let bytes = make_zip(&[(ICON_ENTRY, b"icon")]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            read_optional_zip_entry(&mut archive, ICON_ENTRY, ICON_ENTRY_MAX).unwrap(),
+            Some(b"icon".to_vec())
+        );
+
+        let bytes = make_zip(&[(ICON_ENTRY, b"0123456789")]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let err = read_optional_zip_entry(&mut archive, ICON_ENTRY, 4).unwrap_err();
         assert!(err.contains("exceeds"), "{err}");
     }
 

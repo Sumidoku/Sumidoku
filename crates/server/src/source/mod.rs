@@ -132,24 +132,44 @@ async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), 
 pub(crate) async fn register_aix(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
 	let path_buf = path.to_path_buf();
 	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
-	let (doc, settings) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
+	let (doc, settings, icon) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
 		.await
 		.map_err(|e| format!("join: {e}"))??;
+	// 包内嵌图标落盘到包旁，供 /sources/{id}/icon 读取（Aidoku 从解包目录读 icon.png）
+	let icon_path = write_aix_icon(path, icon).await;
 	register_source(
 		pool,
 		SourcePackage {
 			doc,
 			wasm_path: path.display().to_string(),
-			icon_path: None,
+			icon_path,
 			settings,
 		},
 	)
 	.await
 }
 
-fn read_aix_package(path: &Path) -> Result<(serde_json::Value, Option<serde_json::Value>), String> {
+/// 把 .aix 的 `Payload/icon.png` 写到包旁的 `<name>.png`；无图标时清掉遗留文件。
+/// 写失败只告警，不阻断注册
+async fn write_aix_icon(aix_path: &Path, icon: Option<Vec<u8>>) -> Option<String> {
+	let icon_path = aix_path.with_extension("png");
+	let Some(bytes) = icon else {
+		let _ = tokio::fs::remove_file(&icon_path).await;
+		return None;
+	};
+	if let Err(e) = tokio::fs::write(&icon_path, &bytes).await {
+		tracing::warn!(path = %aix_path.display(), "write source icon failed: {e}");
+		return None;
+	}
+	Some(icon_path.display().to_string())
+}
+
+type AixPackage = (serde_json::Value, Option<serde_json::Value>, Option<Vec<u8>>);
+
+fn read_aix_package(path: &Path) -> Result<AixPackage, String> {
 	use aidoku_wasm::package::{
-		JSON_ENTRY_MAX, MANIFEST_ENTRY, SETTINGS_ENTRY, WASM_ENTRY, WASM_PAYLOAD_MAX, read_zip_entry,
+		ICON_ENTRY, ICON_ENTRY_MAX, JSON_ENTRY_MAX, MANIFEST_ENTRY, SETTINGS_ENTRY, WASM_ENTRY,
+		WASM_PAYLOAD_MAX, read_optional_zip_entry, read_zip_entry,
 	};
 	let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
 	let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid archive: {e}"))?;
@@ -158,6 +178,8 @@ fn read_aix_package(path: &Path) -> Result<(serde_json::Value, Option<serde_json
 		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
 	// 载荷必须真实读得出（顺带校验 CRC），扫描不留存字节
 	read_zip_entry(&mut archive, WASM_ENTRY, WASM_PAYLOAD_MAX)?;
+	// 图标可选：老包或纯 wasm 包可能没有
+	let icon = read_optional_zip_entry(&mut archive, ICON_ENTRY, ICON_ENTRY_MAX)?;
 	let settings = read_zip_entry(&mut archive, SETTINGS_ENTRY, JSON_ENTRY_MAX)
 		.ok()
 		.and_then(|raw| match serde_json::from_slice(&raw) {
@@ -167,7 +189,7 @@ fn read_aix_package(path: &Path) -> Result<(serde_json::Value, Option<serde_json
 				None
 			}
 		});
-	Ok((doc, settings))
+	Ok((doc, settings, icon))
 }
 
 async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
