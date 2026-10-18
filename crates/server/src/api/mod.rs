@@ -12,7 +12,8 @@ use crate::model::{
 };
 use crate::source::cover;
 use crate::source::{
-	chapter_row, load_pages, manga_row, reconcile_chapters, scan_sources_dir, upsert_manga,
+	chapter_row, load_pages, manga_row, manga_rows_by_ids, reconcile_chapters, scan_sources_dir,
+	upsert_manga,
 };
 use crate::state::{AppState, load_defaults};
 use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
@@ -503,6 +504,77 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 			.await?;
 	object.insert("categoryIds".into(), json!(category_ids));
 	Ok(value)
+}
+
+/// 列表端点的批量版 manga_json：三条 IN 查询替代逐行三查询，输出与入参同序；
+/// 缺行按单查缺省（0 / false / 空数组）补齐
+pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
+	if rows.is_empty() {
+		return Ok(Vec::new());
+	}
+	let placeholders = rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+	let count_sql = format!(
+		"SELECT manga_id, COUNT(*) FROM chapter WHERE manga_id IN ({placeholders}) GROUP BY manga_id"
+	);
+	let mut q = sqlx::query_as::<_, (i64, i64)>(&count_sql);
+	for row in rows {
+		q = q.bind(row.id);
+	}
+	let chapter_counts: HashMap<i64, i64> = q.fetch_all(&state.pool).await?.into_iter().collect();
+	let library_sql = format!(
+		"SELECT manga_id, in_library FROM manga_user WHERE user_id = 1 AND manga_id IN ({placeholders})"
+	);
+	let mut q = sqlx::query_as::<_, (i64, bool)>(&library_sql);
+	for row in rows {
+		q = q.bind(row.id);
+	}
+	let in_library: HashMap<i64, bool> = q.fetch_all(&state.pool).await?.into_iter().collect();
+	let category_sql = format!(
+		"SELECT manga_id, category_id FROM category_manga WHERE user_id = 1 AND manga_id IN ({placeholders})"
+	);
+	let mut q = sqlx::query_as::<_, (i64, i64)>(&category_sql);
+	for row in rows {
+		q = q.bind(row.id);
+	}
+	let mut category_ids: HashMap<i64, Vec<i64>> = HashMap::new();
+	for (manga_id, category_id) in q.fetch_all(&state.pool).await? {
+		category_ids.entry(manga_id).or_default().push(category_id);
+	}
+	let mut out = Vec::with_capacity(rows.len());
+	for row in rows {
+		let mut value = serde_json::to_value(manga_from_row(row))?;
+		let object = value
+			.as_object_mut()
+			.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
+		object.insert("id".into(), json!(row.id));
+		object.insert("sourceId".into(), json!(row.source_id));
+		object.insert("initialized".into(), json!(row.initialized));
+		object.insert(
+			"chapterCount".into(),
+			json!(chapter_counts.get(&row.id).copied().unwrap_or(0)),
+		);
+		object.insert(
+			"inLibrary".into(),
+			json!(in_library.get(&row.id).copied().unwrap_or(false)),
+		);
+		object.insert(
+			"categoryIds".into(),
+			json!(category_ids.get(&row.id).cloned().unwrap_or_default()),
+		);
+		out.push(value);
+	}
+	Ok(out)
+}
+
+/// history/update 的漫画列：批量取行再批量序列化，输出与 ids 同序；缺行同 manga_row 的 404
+pub(crate) async fn manga_json_by_ids(state: &AppState, ids: &[i64]) -> ApiResult<Vec<Value>> {
+	let rows = manga_rows_by_ids(&state.pool, ids).await?;
+	let refs: Vec<&MangaRow> = ids
+		.iter()
+		.map(|id| rows.get(id))
+		.collect::<Option<Vec<_>>>()
+		.ok_or_else(|| ApiError::not_found("manga not found"))?;
+	manga_json_batch(state, &refs).await
 }
 
 /// f32 经 serde_json 会先转 f64 再按 f64 最短表示打印（281.1 变 281.1000061035156），

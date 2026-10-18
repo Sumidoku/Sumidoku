@@ -1,7 +1,7 @@
-use crate::api::{PageQuery, chapter_json, manga_json, progress_of};
+use crate::api::{PageQuery, chapter_json, manga_json_by_ids, progress_of};
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterProgress, ChapterUserRow, unix_now};
-use crate::source::{chapter_row, manga_row};
+use crate::source::chapter_row;
 use crate::state::AppState;
 use crate::{PAGE_SIZE, USER_ID};
 use axum::extract::{Path, Query, State};
@@ -161,13 +161,15 @@ pub async fn get_history(
 	.fetch_all(&state.pool)
 	.await?;
 	let has_next_page = rows.len() as i64 > PAGE_SIZE;
-	let mut entries = Vec::with_capacity(rows.len().min(PAGE_SIZE as usize));
-	for row in rows.iter().take(PAGE_SIZE as usize) {
-		let manga = manga_row(&state.pool, row.chapter.manga_id).await?;
+	let page_rows: Vec<&ChapterUserRow> = rows.iter().take(PAGE_SIZE as usize).collect();
+	let manga_ids: Vec<i64> = page_rows.iter().map(|row| row.chapter.manga_id).collect();
+	let manga_values = manga_json_by_ids(&state, &manga_ids).await?;
+	let mut entries = Vec::with_capacity(page_rows.len());
+	for (row, manga_value) in page_rows.into_iter().zip(manga_values) {
 		let progress = progress_of(row).unwrap_or_default();
 		entries.push(json!({
 			"chapter": chapter_json(&row.chapter, Some(&progress))?,
-			"manga": manga_json(&state, &manga).await?,
+			"manga": manga_value,
 			"lastReadAt": row.last_read_at,
 			"lastPageRead": progress.last_page_read,
 			"isRead": progress.is_read,

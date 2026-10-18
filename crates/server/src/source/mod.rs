@@ -11,7 +11,7 @@ use aidoku::{Chapter, Manga, PageContext};
 use aidoku_wasm::DefaultValue;
 use serde::Serialize;
 use sqlx::SqlitePool;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -560,6 +560,29 @@ pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	.fetch_optional(pool)
 	.await?;
 	row.ok_or_else(|| ApiError::not_found("manga not found"))
+}
+
+/// 列表端点批量取行：一条 IN 查询替代逐行 manga_row
+pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<HashMap<i64, MangaRow>> {
+	if ids.is_empty() {
+		return Ok(HashMap::new());
+	}
+	let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+	let sql = format!(
+		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
+		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
+		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id IN ({placeholders})"
+	);
+	let mut q = sqlx::query_as::<_, MangaRow>(&sql);
+	for id in ids {
+		q = q.bind(id);
+	}
+	Ok(q
+		.fetch_all(pool)
+		.await?
+		.into_iter()
+		.map(|row| (row.id, row))
+		.collect())
 }
 
 pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
