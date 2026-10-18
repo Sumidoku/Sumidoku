@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CircleArrowUp, PackageOpen, ScanSearch, Trash } from 'lucide-react';
+import { CircleArrowUp, House, PackageOpen, ScanSearch, Trash } from 'lucide-react';
 import { sourceIconUrl } from '../api/client';
 import { useDeleteSource, useScanSources, useSources, useUpdateAllSources, useUpdateSource } from '../api/hooks';
 import type { Source } from '../api/types';
@@ -195,6 +195,15 @@ export default function BrowsePage() {
 								)}
 							</div>
 							{s.updateVersion !== null && <UpdateButton source={s} />}
+							<IconButton
+								label={`${s.name} 主页`}
+								onClick={(e) => {
+									e.stopPropagation();
+									navigate(`/browse/${s.id}/home`);
+								}}
+							>
+								<House size={17} />
+							</IconButton>
 							<IconButton
 								label={`卸载 ${s.name}`}
 								variant="danger"

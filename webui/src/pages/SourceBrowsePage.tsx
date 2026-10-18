@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, House, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
 import {
 	useListing,
 	useRegisterManga,
@@ -74,6 +74,51 @@ function optionKey(f: Filter, i: number): string {
 	return f.ids?.[i] ?? f.options?.[i] ?? '';
 }
 
+// 源主页深链（?filters=...）带来的筛选值，解析失败视为没有
+function parseFiltersParam(raw: string | null): FilterValue[] {
+	if (!raw) return [];
+	try {
+		const v: unknown = JSON.parse(raw);
+		return Array.isArray(v) ? (v as FilterValue[]) : [];
+	} catch {
+		return [];
+	}
+}
+
+// 深链筛选值回填面板草稿；filter id 对不上（源改版）的值静默丢弃
+function applyFilterValues(s: FilterStates, values: FilterValue[]): FilterStates {
+	const next: FilterStates = {
+		textVals: { ...s.textVals },
+		sortVals: { ...s.sortVals },
+		checkVals: { ...s.checkVals },
+		selectVals: { ...s.selectVals },
+		multiVals: { ...s.multiVals },
+		rangeVals: { ...s.rangeVals }
+	};
+	for (const v of values) {
+		if ('Text' in v) {
+			next.textVals[v.Text.id] = v.Text.value;
+		} else if ('Sort' in v) {
+			next.sortVals[v.Sort.id] = { index: v.Sort.index, ascending: v.Sort.ascending };
+		} else if ('Check' in v) {
+			next.checkVals[v.Check.id] = v.Check.value as CheckVal;
+		} else if ('Select' in v) {
+			next.selectVals[v.Select.id] = v.Select.value;
+		} else if ('MultiSelect' in v) {
+			const rec: Record<string, CheckVal> = {};
+			for (const k of v.MultiSelect.included) rec[k] = 1;
+			for (const k of v.MultiSelect.excluded) rec[k] = -1;
+			next.multiVals[v.MultiSelect.id] = rec;
+		} else if ('Range' in v) {
+			next.rangeVals[v.Range.id] = {
+				from: v.Range.from === null ? '' : String(v.Range.from),
+				to: v.Range.to === null ? '' : String(v.Range.to)
+			};
+		}
+	}
+	return next;
+}
+
 export default function SourceBrowsePage() {
 	const { sourceId: rawId } = useParams();
 	const sourceId = Number(rawId);
@@ -93,13 +138,16 @@ export default function SourceBrowsePage() {
 		return d && d.length > 0 ? d : null;
 	}, [listingsQuery.data]);
 
-	const [mode, setMode] = useState<string>('search');
+	// 深链参数（源主页的 listing/filters 组件）只在进页时消费一次，之后 URL 跟随 mode 切换
+	const [searchParams, setSearchParams] = useSearchParams();
+	const [initialFilters] = useState(() => parseFiltersParam(searchParams.get('filters')));
+	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
 	const [input, setInput] = useState('');
 	const [showFilters, setShowFilters] = useState(false);
 	const [states, setStates] = useState<FilterStates | null>(null);
 	const [submitted, setSubmitted] = useState<{ query: string; filters: FilterValue[] }>({
 		query: '',
-		filters: []
+		filters: initialFilters
 	});
 
 	// 筛选默认值只在 filters 首次到达时铺一次，之后的修改都留在面板草稿里
@@ -107,8 +155,8 @@ export default function SourceBrowsePage() {
 	useEffect(() => {
 		if (!filters || initedFor.current === sourceId) return;
 		initedFor.current = sourceId;
-		setStates(initFilterStates(filters));
-	}, [filters, sourceId]);
+		setStates(applyFilterValues(initFilterStates(filters), initialFilters));
+	}, [filters, sourceId, initialFilters]);
 
 	function buildFilterValues(): FilterValue[] {
 		const out: FilterValue[] = [];
@@ -182,6 +230,7 @@ export default function SourceBrowsePage() {
 	function switchMode(m: string) {
 		if (m === mode) return;
 		setMode(m);
+		setSearchParams(m === 'search' ? {} : { mode: m }, { replace: true });
 	}
 
 	function cycleMulti(f: Filter, i: number) {
@@ -241,6 +290,10 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
+				<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
+					<House size={15} />
+					主页
+				</Button>
 			</div>
 
 			{listings && (

@@ -13,6 +13,7 @@ import type {
 	ChapterProgress,
 	Filter,
 	FilterValue,
+	HomeLayout,
 	LibraryFilter,
 	LibraryPage,
 	LibrarySort,
@@ -46,7 +47,8 @@ export const qk = {
 	manga: (id: number) => ['manga', id] as const,
 	chapters: (mangaId: number) => ['manga', mangaId, 'chapters'] as const,
 	sourceFilters: (sourceId: number) => ['sources', sourceId, 'filters'] as const,
-	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const
+	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
+	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -58,6 +60,16 @@ async function emptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
 		return await p;
 	} catch (e) {
 		if (e instanceof ApiError && e.status === 404) return [];
+		throw e;
+	}
+}
+
+/** 主页能力不支持时按 null 处理，页面据此显示「该源没有主页」而不是报错 */
+async function nullOn404<T>(p: Promise<T>): Promise<T | null> {
+	try {
+		return await p;
+	} catch (e) {
+		if (e instanceof ApiError && e.status === 404) return null;
 		throw e;
 	}
 }
@@ -116,6 +128,14 @@ export function useSourceListings(sourceId: number, enabled = true) {
 	return useQuery({
 		queryKey: qk.sourceListings(sourceId),
 		queryFn: () => emptyOn404(api<Listing[]>(`/sources/${sourceId}/listings`, { silent: true })),
+		enabled
+	});
+}
+
+export function useSourceHome(sourceId: number, enabled = true) {
+	return useQuery({
+		queryKey: qk.sourceHome(sourceId),
+		queryFn: () => nullOn404(api<HomeLayout>(`/sources/${sourceId}/home`, { silent: true })),
 		enabled
 	});
 }

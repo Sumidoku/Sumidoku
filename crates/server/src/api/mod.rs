@@ -40,6 +40,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/search", post(search_source))
 		.route("/api/v1/sources/{id}/listings", get(get_listings))
 		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
+		.route("/api/v1/sources/{id}/home", get(get_home))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
@@ -332,6 +333,13 @@ async fn get_manga_list(
 		"entries": entries,
 		"hasNextPage": result.has_next_page,
 	})))
+}
+
+/// 组件数组定序即稳定标识：send_partial_result 的部分结果按数组下标增量替换，不破坏现有字段
+async fn get_home(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+	let handle = state.get_handle(id).await?;
+	let home = handle.get_home().await.map_err(dynamic_capability_error)?;
+	Ok(Json(serde_json::to_value(home)?))
 }
 
 async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {
