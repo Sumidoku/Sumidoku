@@ -7,11 +7,18 @@ export interface ChipProps {
 	/** 传了 onClick 就渲染成按钮（可点多选），否则是纯标签 */
 	onClick?: () => void;
 	title?: string;
+	/** 追加到 chip 上的额外类名（如三态排除态 .chip--exclude） */
+	className?: string;
 	children: ReactNode;
 }
 
-export function Chip({ color = 'default', onClick, title, children }: ChipProps) {
-	const cls = ['chip', color !== 'default' ? `chip--${color}` : '', onClick ? 'chip--clickable' : '']
+export function Chip({ color = 'default', onClick, title, className, children }: ChipProps) {
+	const cls = [
+		'chip',
+		color !== 'default' ? `chip--${color}` : '',
+		onClick ? 'chip--clickable' : '',
+		className ?? ''
+	]
 		.filter(Boolean)
 		.join(' ');
 	if (onClick) {
