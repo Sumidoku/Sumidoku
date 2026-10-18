@@ -383,7 +383,14 @@ sources from `Payload/` inside the zip without extracting. Source settings
 `get_settings` export when present, otherwise from the static
 `settings.json`; the static Aidoku schema (flat, camelCase) is normalized
 to the nested shape the dynamic export produces (`api::settings`), so the
-API and web UI see a single contract. A source whose `source.json` sets
+API and web UI see a single contract. Defaults are seeded into
+`source_setting` with `INSERT OR IGNORE` (never overwriting a user value):
+the language, base-URL and `settings.json` defaults at install/reset, and a
+dynamic source's `get_settings` defaults on the first successful fetch,
+mirroring AidokuRunner's `register(defaults:)`. The rules match
+`loadSettingsDefaults`: recurse `group` and `page`, fall back to the first
+value for `select` and `picker`, and treat a `switch` without a default as
+`false`. A source whose `source.json` sets
 `config.allowsBaseUrlSelect` and declares more than one base URL gets a
 synthesized base-URL `select` (key `url`, default the first URL) prepended
 to the list, mirroring AidokuRunner's extra settings; a source declaring

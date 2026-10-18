@@ -326,6 +326,27 @@ pub(crate) async fn seed_source_defaults(
 	if let Some(settings) = settings {
 		collect_setting_defaults(settings, &mut seeds);
 	}
+	insert_missing_defaults(pool, source_id, seeds).await
+}
+
+/// 首次成功 `get_settings` 后调：把源在代码里声明、库里还没有的默认值补种进去
+/// （INSERT OR IGNORE，不覆盖用户已改的值），对齐 AidokuRunner 在 getSettings()
+/// 里 `register(defaults:)` 的行为
+pub(crate) async fn seed_dynamic_defaults(
+	pool: &SqlitePool,
+	source_id: i64,
+	settings: &[serde_json::Value],
+) -> Result<(), String> {
+	let mut seeds = Vec::new();
+	collect_dynamic_defaults(settings, &mut seeds);
+	insert_missing_defaults(pool, source_id, seeds).await
+}
+
+async fn insert_missing_defaults(
+	pool: &SqlitePool,
+	source_id: i64,
+	seeds: Vec<(String, DefaultValue)>,
+) -> Result<(), String> {
 	for (key, value) in seeds {
 		let raw = serde_json::to_string(&value).map_err(|e| format!("encode default: {e}"))?;
 		sqlx::query("INSERT OR IGNORE INTO source_setting (source_id, key, value) VALUES (?, ?, ?)")
@@ -433,35 +454,82 @@ fn collect_setting_defaults(
 ) {
 	let Some(items) = items.as_array() else { return };
 	for item in items {
-		if item.get("type").and_then(|v| v.as_str()) == Some("group") {
+		let ty = item.get("type").and_then(|v| v.as_str());
+		// group 与 page 都是容器：AidokuRunner 的 loadSettingsDefaults 两者都递归
+		if matches!(ty, Some("group") | Some("page")) {
 			if let Some(children) = item.get("items") {
 				collect_setting_defaults(children, out);
 			}
 			continue;
 		}
-		// Aidoku 的 select/segment 无显式默认时落第一个候选值
-		let mut default = item.get("default");
-		if default.is_none()
-			&& matches!(
-				item.get("type").and_then(|v| v.as_str()),
-				Some("select") | Some("segment")
-			)
-		{
-			default = item
-				.get("values")
-				.and_then(|v| v.as_array())
-				.and_then(|v| v.first());
-		}
+		// 对齐 AidokuRunner loadSettingsDefaults：显式 default 优先（null 视同缺失）；
+		// 缺失时 select/picker 落第一个候选值，switch 落 false，其余不播种
+		let default = item
+			.get("default")
+			.filter(|v| !v.is_null())
+			.cloned()
+			.or_else(|| match ty {
+				Some("select") | Some("picker") => item
+					.get("values")
+					.and_then(|v| v.as_array())
+					.and_then(|v| v.first())
+					.cloned(),
+				Some("switch") => Some(serde_json::Value::Bool(false)),
+				_ => None,
+			});
 		let (Some(key), Some(default)) =
 			(item.get("key").and_then(|v| v.as_str()), default)
 		else {
 			continue;
 		};
 		// Null 种下后 defaults.get 一样是无效值，不浪费一行
-		let value = json_to_default_value(default);
+		let value = json_to_default_value(&default);
 		if !matches!(value, DefaultValue::Null) {
 			out.push((key.to_string(), value));
 		}
+	}
+}
+
+/// 动态设置（`get_settings` 导出的嵌套 shape）的默认值，规则同 `collect_setting_defaults`：
+/// group/page 递归，select/picker 无显式默认落第一个候选值，其余只在有 default 时取
+fn collect_dynamic_defaults(
+	items: &[serde_json::Value],
+	out: &mut Vec<(String, DefaultValue)>,
+) {
+	for item in items {
+		let Some(value) = item.get("value") else { continue };
+		if let Some(container) = value.get("Group").or_else(|| value.get("Page")) {
+			if let Some(children) = container.get("items").and_then(|v| v.as_array()) {
+				collect_dynamic_defaults(children, out);
+			}
+			continue;
+		}
+		let Some(key) = item.get("key").and_then(|v| v.as_str()) else {
+			continue;
+		};
+		let Some(default) = dynamic_default(value) else {
+			continue;
+		};
+		let value = json_to_default_value(&default);
+		if !matches!(value, DefaultValue::Null) {
+			out.push((key.to_string(), value));
+		}
+	}
+}
+
+/// 一个动态设置项的默认值；无显式默认时 select/picker 退化为第一个候选值
+fn dynamic_default(value: &serde_json::Value) -> Option<serde_json::Value> {
+	let (kind, body) = value.as_object()?.iter().next()?;
+	if let Some(default) = body.get("default").filter(|v| !v.is_null()) {
+		return Some(default.clone());
+	}
+	match kind.as_str() {
+		"Select" | "Picker" => body
+			.get("values")
+			.and_then(|v| v.as_array())
+			.and_then(|v| v.first())
+			.cloned(),
+		_ => None,
 	}
 }
 
@@ -1122,5 +1190,81 @@ fn page_mime_for(path: &str) -> &'static str {
 		"bmp" => "image/bmp",
 		"avif" => "image/avif",
 		_ => "application/octet-stream",
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::{Value, json};
+
+	fn as_json(value: &DefaultValue) -> Value {
+		crate::model::default_value_to_json(value)
+	}
+
+	fn flat_defaults(raw: &Value) -> std::collections::HashMap<String, Value> {
+		let mut seeds = Vec::new();
+		collect_setting_defaults(raw, &mut seeds);
+		seeds
+			.into_iter()
+			.map(|(key, value)| (key, as_json(&value)))
+			.collect()
+	}
+
+	fn dynamic_defaults(raw: &Value) -> std::collections::HashMap<String, Value> {
+		let mut seeds = Vec::new();
+		collect_dynamic_defaults(raw.as_array().expect("array"), &mut seeds);
+		seeds
+			.into_iter()
+			.map(|(key, value)| (key, as_json(&value)))
+			.collect()
+	}
+
+	#[test]
+	fn flat_defaults_recurse_page_and_match_runner_rules() {
+		let raw = json!([{"type": "group", "title": "G", "items": [
+			{"type": "switch", "key": "plain", "title": "S"},
+			{"type": "select", "key": "sel", "title": "Sel", "values": ["a", "b"]},
+			{"type": "multi-select", "key": "multi", "title": "M", "values": ["x", "y"]},
+			{"type": "page", "title": "P", "items": [
+				{"type": "group", "items": [
+					{"type": "switch", "key": "nested", "title": "N", "default": true}
+				]}
+			]},
+			{"type": "picker", "key": "pick", "title": "Pk", "values": ["dark", "light"]},
+			{"type": "segment", "key": "seg", "title": "Sg", "options": ["a", "b"]}
+		]}]);
+		let m = flat_defaults(&raw);
+		assert_eq!(m.get("plain").cloned(), Some(json!(false)));
+		assert_eq!(m.get("sel").cloned(), Some(json!("a")));
+		assert!(!m.contains_key("multi"));
+		assert_eq!(m.get("nested").cloned(), Some(json!(true)));
+		assert_eq!(m.get("pick").cloned(), Some(json!("dark")));
+		assert!(!m.contains_key("seg"));
+	}
+
+	#[test]
+	fn dynamic_defaults_recurse_page_and_match_runner_rules() {
+		let raw = json!([{"type": "group", "key": "g", "title": "G", "value": {"Group": {"footer": null, "items": [
+			{"type": "select", "key": "sel", "title": "Sel", "value": {"Select": {"values": ["a", "b"], "titles": null, "auth_to_open": null, "default": null}}},
+			{"type": "select", "key": "sel2", "title": "Sel2", "value": {"Select": {"values": ["a", "b"], "titles": null, "auth_to_open": null, "default": "b"}}},
+			{"type": "multi-select", "key": "multi", "title": "M", "value": {"MultiSelect": {"values": ["x", "y"], "titles": null, "auth_to_open": null, "default": null}}},
+			{"type": "toggle", "key": "tog", "title": "T", "value": {"Toggle": {"subtitle": null, "auth_to_disable": null, "default": false}}},
+			{"type": "picker", "key": "pick", "title": "Pk", "value": {"Picker": {"values": ["dark", "light"], "titles": null, "default": null}}},
+			{"type": "page", "key": "p", "title": "P", "value": {"Page": {"items": [
+				{"type": "group", "key": "ig", "title": "I", "value": {"Group": {"footer": null, "items": [
+					{"type": "switch", "key": "nested", "title": "N", "value": {"Toggle": {"subtitle": null, "auth_to_disable": null, "default": true}}}
+				]}}}
+			], "inline_title": null, "auth_to_open": null, "icon": null, "info": null}}},
+			{"type": "segment", "key": "seg", "title": "Sg", "value": {"Segment": {"options": ["a", "b"], "default": null}}}
+		]}}}]);
+		let m = dynamic_defaults(&raw);
+		assert_eq!(m.get("sel").cloned(), Some(json!("a")));
+		assert_eq!(m.get("sel2").cloned(), Some(json!("b")));
+		assert!(!m.contains_key("multi"));
+		assert_eq!(m.get("tog").cloned(), Some(json!(false)));
+		assert_eq!(m.get("pick").cloned(), Some(json!("dark")));
+		assert_eq!(m.get("nested").cloned(), Some(json!(true)));
+		assert!(!m.contains_key("seg"));
 	}
 }

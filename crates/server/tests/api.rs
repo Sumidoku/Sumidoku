@@ -172,7 +172,7 @@ async fn reset_and_clear_source_state() {
 	let (status, _) = request(&app, "PUT", &settings_path, Some(json!({"setting": true}))).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 重置：覆盖值清空，回到包内默认（动态源没有静态 settings.json，只剩默认项）
+	// 重置：覆盖值清空；下一次 get_settings 会把源声明的默认值重新补种
 	let reset_path = format!("/api/v1/sources/{source_id}/settings/reset");
 	let (status, body) = request(&app, "POST", &reset_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -180,7 +180,10 @@ async fn reset_and_clear_source_state() {
 	let (status, body) = request(&app, "GET", &settings_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["settings"].as_array().expect("settings array").len(), 1);
-	assert!(body["values"].get("setting").is_none(), "覆盖值应已清除");
+	assert!(
+		body["values"]["setting"].is_boolean(),
+		"重置后应回到源声明的默认值: {body}"
+	);
 
 	// 清缓存：幂等成功
 	let clear_path = format!("/api/v1/sources/{source_id}/cache/clear");

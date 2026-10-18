@@ -470,10 +470,18 @@ async fn get_source_settings(
 		.await?
 		.unwrap_or_else(|| json!({}));
 	let mut items: Vec<Value> = match handle.get_settings().await {
-		Ok(settings) => serde_json::to_value(settings)?
-			.as_array()
-			.cloned()
-			.unwrap_or_default(),
+		Ok(settings) => {
+			let items = serde_json::to_value(settings)?
+				.as_array()
+				.cloned()
+				.unwrap_or_default();
+			// 首次成功 get_settings：补种代码里声明的默认值（不覆盖用户值），
+			// 对齐 AidokuRunner 在 getSettings() 里 register(defaults:)
+			crate::source::seed_dynamic_defaults(&state.pool, id, &items)
+				.await
+				.map_err(ApiError::internal)?;
+			items
+		}
 		// 静态 settings.json 是 Aidoku 的扁平 schema，归一成动态源同款嵌套形状
 		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => package_json(&state, id, "settings.json")
 			.await?
