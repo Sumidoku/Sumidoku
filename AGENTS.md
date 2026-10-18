@@ -14,6 +14,15 @@ point; the documents it links are binding.
   linked source. Update that doc in the same PR when the change alters a
   contract it describes.
 
+## Community issues and PRs
+
+Before reviewing a community PR, read
+[docs/contributors.md](docs/contributors.md): what stops a review for
+possible harm, what is closed unreviewed, and how a block is proposed.
+Scheduled agent sessions sweep open issues and PRs, triage and review
+them, and run a daily review of the day's merged work into
+[LESSONS.md](LESSONS.md). Merging and blocking stay with the maintainer.
+
 ## Commands
 
 - Server: `cargo nextest run --workspace` and
@@ -46,4 +55,7 @@ point; the documents it links are binding.
 
 When a session that merged work ends, review what had to be fixed again,
 what merged that shouldn't have, and what was verified too thinly. Record
-what you learn in [LESSONS.md](LESSONS.md), in a commit of its own.
+what you learn in [LESSONS.md](LESSONS.md), in a commit of its own. A
+scheduled session runs the same review over each day's merged work; a
+lesson seen again moves into
+[docs/code-standards.md](docs/code-standards.md).
