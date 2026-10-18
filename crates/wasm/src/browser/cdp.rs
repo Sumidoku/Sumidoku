@@ -1,6 +1,10 @@
-//! chromiumoxide 实装的 CDP client。异步 API 收进每源 actor 线程持有的
-//! current_thread runtime：block_on 驱动命令与后台 Handler 同生共死，
-//! 宿主调用保持同步签名，与 reqwest::blocking 的 net 栈同一线程模型。
+//! chromiumoxide 实装的 CDP client，两种线程模型：
+//! webview 路径（ambient = None）异步 API 收进每源 actor 线程持有的
+//! current_thread runtime，block_on 驱动命令与后台 Handler 同生共死，
+//! 与 reqwest::blocking 的 net 栈同一线程模型；server 侧交互会话
+//! （ambient = Some）把连接、Handler 与推流泵都放在宿主 runtime——
+//! ws 的 I/O 绑定在首次 poll 它的 reactor 上，会话空闲期（无 block_on
+//! 窗口）只有宿主 runtime 能让这条连接保持可用。
 use super::{BrowserCookie, BrowserError, CdpClient, FrameSink, KeyInput, KeyKind, MouseButton, MouseInput, MouseKind};
 use chromiumoxide::browser::Browser;
 use chromiumoxide::cdp::browser_protocol::browser::BrowserContextId;
