@@ -107,3 +107,16 @@ counter reading `message` and keeping PRAGMA was green locally and flaky
 red in CI.
 - Evidence: PR #39's first CI run red while local was green; the fixed
   counter ran 60/60 locally and green in CI (2026-10-18).
+
+**The build matrix is CI's job; never rehearse it locally.**
+A dispatch prompt asked the subagent to prove the four release targets
+locally, so it burned ~50 minutes on a `cross` + docker compile that the
+CI legs already cover — on a machine with a history of memory-pressure
+OOM kills. Before writing a verification requirement into a prompt, ask
+whose job it is: anything the build/docker/release legs already answer
+belongs to CI; local work is tests plus the host build. And when a
+dependency choice carries build risk, prefer the zero-risk option (pure
+Rust) so cross uncertainty never materializes at all.
+- Evidence: 2026-10-18, the #21 dispatch's local cross build was killed
+  on the maintainer's ask; the instruction was corrected to CI-owned
+  verification and pure-Rust-first selection.
