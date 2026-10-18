@@ -10,7 +10,8 @@ use chromiumoxide::cdp::browser_protocol::input::{
 };
 use chromiumoxide::cdp::browser_protocol::network::DeleteCookiesParams;
 use chromiumoxide::cdp::browser_protocol::page::{
-	EventScreencastFrame, ScreencastFrameAckParams, StartScreencastFormat, StartScreencastParams, StopScreencastParams,
+	CaptureScreenshotFormat, CaptureScreenshotParams, EventScreencastFrame, ScreencastFrameAckParams,
+	StartScreencastFormat, StartScreencastParams, StopScreencastParams,
 };
 use chromiumoxide::cdp::browser_protocol::storage::{ClearCookiesParams, GetCookiesParams};
 use chromiumoxide::cdp::browser_protocol::target::CreateTargetParams;
@@ -24,21 +25,52 @@ pub struct ChromiumoxideClient {
 	runtime: tokio::runtime::Runtime,
 	browser: Browser,
 	pages: HashMap<String, Page>,
+	/// server 侧交互会话：Handler/推流泵改投宿主 runtime（current_thread runtime
+	/// 只在 block_on 窗口被驱动，会话空闲时泵会冻结）；webview 路径为 None，照旧自驱
+	ambient: Option<tokio::runtime::Handle>,
 }
 
 impl ChromiumoxideClient {
 	pub fn connect(ws: &str) -> Result<Self, BrowserError> {
+		Self::connect_inner(ws, None)
+	}
+
+	pub fn connect_ambient(ws: &str, ambient: tokio::runtime::Handle) -> Result<Self, BrowserError> {
+		Self::connect_inner(ws, Some(ambient))
+	}
+
+	fn connect_inner(ws: &str, ambient: Option<tokio::runtime::Handle>) -> Result<Self, BrowserError> {
 		let runtime = tokio::runtime::Builder::new_current_thread()
 			.enable_all()
 			.build()
 			.map_err(|e| BrowserError::fatal(format!("browser runtime: {e}")))?;
-		let (browser, mut handler) = runtime
-			.block_on(Browser::connect(ws))
-			.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?;
-		// Handler 驱动 websocket 收发；只在 block_on 窗口内被轮询，
-		// 对本模块这种纯请求/响应式用法足够
-		runtime.spawn(async move { while handler.next().await.is_some() {} });
-		Ok(Self { runtime, browser, pages: HashMap::new() })
+		// ambient 模式：ws 的 TCP 流绑定在首次 poll 它的 reactor 上，
+		// 必须让连接本身也跑在宿主 runtime，否则 Handler 在宿主 runtime 上
+		// 驱动不了这条 ws（收发都卡死）；join 的等待借自己的 runtime 即可
+		let (browser, mut handler) = match &ambient {
+			Some(handle) => {
+				let join = handle.spawn(Browser::connect(ws.to_string()));
+				runtime
+					.block_on(join)
+					.map_err(|e| BrowserError::fatal(format!("browser connect join: {e}")))?
+					.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?
+			}
+			None => runtime
+				.block_on(Browser::connect(ws))
+				.map_err(|e| BrowserError::fatal(format!("browser connect failed: {e}")))?,
+		};
+		let pump = async move { while handler.next().await.is_some() {} };
+		match &ambient {
+			// Handler 驱动 websocket 收发；ambient 模式由宿主 runtime 持续驱动
+			Some(handle) => {
+				handle.spawn(pump);
+			}
+			// 只在 block_on 窗口内被轮询，对本模块这种纯请求/响应式用法足够
+			None => {
+				runtime.spawn(pump);
+			}
+		}
+		Ok(Self { runtime, browser, pages: HashMap::new(), ambient })
 	}
 
 	fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
@@ -192,9 +224,17 @@ impl CdpClient for ChromiumoxideClient {
 			.build();
 		self.block_on(page.execute(params))
 			.map_err(|e| classify("browser screencast start failed", e))?;
-		// 泵任务与 client 同 runtime 同生死：逐帧 ack 后投 sink；
-		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停
-		self.runtime.spawn(async move {
+		// headless 只在页面损伤时产帧，startScreencast 不保证初始帧；
+		// 一次截图制造损伤，首帧（空白页也好）立即可达，用户不用对着黑屏等
+		let nudge = CaptureScreenshotParams::builder().format(CaptureScreenshotFormat::Jpeg).build();
+		let _ = self.block_on(page.execute(nudge));
+		// 泵任务与 client 同生死：逐帧 ack 后投 sink；
+		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停。
+		// ambient 模式投宿主 runtime，保证会话空闲（无 block_on 窗口）时持续被驱动
+		// 泵任务与 client 同生死：逐帧 ack 后投 sink；
+		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停。
+		// ambient 模式投宿主 runtime，保证会话空闲（无 block_on 窗口）时持续被驱动
+		let pump = async move {
 			while let Some(event) = stream.next().await {
 				if page.execute(ScreencastFrameAckParams::new(event.session_id)).await.is_err() {
 					break;
@@ -203,7 +243,15 @@ impl CdpClient for ChromiumoxideClient {
 					break;
 				}
 			}
-		});
+		};
+		match &self.ambient {
+			Some(handle) => {
+				handle.spawn(pump);
+			}
+			None => {
+				self.runtime.spawn(pump);
+			}
+		}
 		Ok(())
 	}
 

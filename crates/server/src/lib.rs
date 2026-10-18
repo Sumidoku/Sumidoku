@@ -46,7 +46,14 @@ pub async fn build_app_with(
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
 	let connector = browser_connector.map_or_else(
-		|| state.config.net.browser_ws.as_deref().map(aidoku_wasm::browser::ws_connector),
+		|| {
+			state
+				.config
+				.net
+				.browser_ws
+				.as_deref()
+				.map(|ws| aidoku_wasm::browser::ws_connector_ambient(ws, tokio::runtime::Handle::current()))
+		},
 		Some,
 	);
 	let manager = browser_login::BrowserLoginManager::new(connector, browser_login::SESSION_TTL);

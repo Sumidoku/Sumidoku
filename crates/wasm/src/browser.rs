@@ -140,7 +140,7 @@ impl BrowserState {
 	/// ws_url 为 None 即未配置：所有 browser 操作不可达，调用方走显式不支持路径
 	pub fn new(ws_url: Option<String>, timeout: Duration) -> Self {
 		Self {
-			connector: ws_url.map(|ws| Box::new(CdpWsConnector { ws }) as Box<dyn CdpConnector>),
+			connector: ws_url.map(|ws| Box::new(CdpWsConnector { ws, ambient: None }) as Box<dyn CdpConnector>),
 			timeout,
 			client: None,
 			contexts: HashMap::new(),
@@ -264,17 +264,28 @@ impl BrowserState {
 
 struct CdpWsConnector {
 	ws: String,
+	ambient: Option<tokio::runtime::Handle>,
 }
 
 impl CdpConnector for CdpWsConnector {
 	fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
-		Ok(Box::new(cdp::ChromiumoxideClient::connect(&self.ws)?))
+		let client = match &self.ambient {
+			Some(handle) => cdp::ChromiumoxideClient::connect_ambient(&self.ws, handle.clone())?,
+			None => cdp::ChromiumoxideClient::connect(&self.ws)?,
+		};
+		Ok(Box::new(client))
 	}
 }
 
 /// server 层（sidecar 交互登录）直接驱动 CDP 的入口：与 BrowserState 内部同一个连接器
 pub fn ws_connector(ws: &str) -> Box<dyn CdpConnector> {
-	Box::new(CdpWsConnector { ws: ws.to_string() })
+	Box::new(CdpWsConnector { ws: ws.to_string(), ambient: None })
+}
+
+/// ambient 变体：Handler 与推流泵改投宿主 runtime——交互会话在两次调用之间是空闲的，
+/// current_thread runtime 无人驱动会让 screencast 泵冻结（server 侧必须用本变体）
+pub fn ws_connector_ambient(ws: &str, ambient: tokio::runtime::Handle) -> Box<dyn CdpConnector> {
+	Box::new(CdpWsConnector { ws: ws.to_string(), ambient: Some(ambient) })
 }
 
 mod cdp;
