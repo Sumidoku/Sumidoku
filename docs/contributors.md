@@ -5,6 +5,13 @@ sessions. Two things keep that from wearing the project down: a PR that
 could harm users is caught before any review of what it does, and an author
 who keeps sending work that costs more to review than it gives is stopped.
 
+## Collaborators
+
+everpcpc (the maintainer) and dyphire are the project's main
+collaborators. This only tells the reviewer who is who: their PRs get the
+same run-it-and-break-it review as anyone else's, and nothing on this page
+applies any less to them.
+
 ## Agent triage duty
 
 Scheduled agent sessions sweep open issues and PRs (see
