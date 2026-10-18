@@ -70,8 +70,8 @@ pub fn parse_date(
 	date_len: u32,
 	format_str: Ptr,
 	format_len: u32,
-	_locale_str: Ptr,
-	_locale_len: u32,
+	locale_str: Ptr,
+	locale_len: u32,
 	timezone_str: Ptr,
 	timezone_len: u32,
 ) -> f64 {
@@ -87,20 +87,25 @@ pub fn parse_date(
 	} else {
 		None
 	};
-	let timezone: chrono_tz::Tz = timezone_string
-		.as_deref()
-		.and_then(|tz| tz.parse().ok())
-		.unwrap_or(chrono_tz::UTC);
-
-	use chrono::NaiveDateTime;
-	let Some(timestamp) = NaiveDateTime::parse_from_str(&string, &swift_date_format_to_chrono(&format))
-		.ok()
-		.and_then(|dt| dt.and_local_timezone(timezone).single())
-		.map(|dt| dt.timestamp() as f64)
-	else {
+	let locale_string = if locale_len > 0 {
+		env.data().read_string(&env, locale_str, locale_len).ok()
+	} else {
+		None
+	};
+	let Some(timestamp) = parse_date_impl(&string, &format, locale_string.as_deref(), timezone_string.as_deref()) else {
 		return invalid();
 	};
 	timestamp
+}
+
+fn parse_date_impl(string: &str, format: &str, _locale: Option<&str>, timezone: Option<&str>) -> Option<f64> {
+	let timezone: chrono_tz::Tz = timezone.and_then(|tz| tz.parse().ok()).unwrap_or(chrono_tz::UTC);
+
+	use chrono::NaiveDateTime;
+	NaiveDateTime::parse_from_str(string, &swift_date_format_to_chrono(format))
+		.ok()
+		.and_then(|dt| dt.and_local_timezone(timezone).single())
+		.map(|dt| dt.timestamp() as f64)
 }
 
 fn swift_date_format_to_chrono(format: &str) -> String {
