@@ -67,7 +67,7 @@ jobs:
         with:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
-      - uses: rui314/setup-mold@v2
+      - uses: rui314/setup-mold@v1
       - run: cargo nextest run --workspace
         env:
           # mold 只产 ELF：Linux 腿用它压链接时间，macOS 腿走系统 ld
@@ -94,7 +94,7 @@ jobs:
         with:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
-      - uses: rui314/setup-mold@v2
+      - uses: rui314/setup-mold@v1
         if: matrix.os == 'ubuntu-latest'
       - run: cargo build --workspace --all-targets
         env:
@@ -142,7 +142,7 @@ jobs:
         working-directory: webui
         run: npm ci && npm run build
       # rust-embed only bundles webui/build into a release build
-      - uses: rui314/setup-mold@v2
+      - uses: rui314/setup-mold@v1
       - run: cargo build --release -p sumidoku-server
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
