@@ -277,3 +277,60 @@ async fn patch_manga_update_strategy() {
 	let (status, _) = request(&app, "PATCH", "/api/v1/manga/999", Some(json!({"updateStrategy": "Never"}))).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn manga_api_exposes_stored_viewer_thumbnail_and_override() {
+	let app = test_app().await;
+	let manga_id = register_example_manga(&app.app).await;
+	let manga_path = format!("/api/v1/manga/{manga_id}");
+	let chapters_path = format!("{manga_path}/chapters");
+	let pool = common::connect_db(&app.db_path).await;
+
+	// 源没给 viewer/thumbnail 时响应保持 Unknown/null
+	let (_, body) = request(&app.app, "GET", &manga_path, None).await;
+	assert_eq!(body["viewer"], "Unknown");
+	let (_, body) = request(&app.app, "GET", &chapters_path, None).await;
+	assert!(body[0]["thumbnail"].is_null());
+
+	// 落库的 viewer/thumbnail 要出现在响应里（2 = RightToLeft）
+	sqlx::query("UPDATE manga SET viewer = 2 WHERE id = ?")
+		.bind(manga_id)
+		.execute(&pool)
+		.await
+		.expect("seed manga viewer");
+	sqlx::query("UPDATE chapter SET thumbnail = 'https://img.example/c1.png' WHERE manga_id = ?")
+		.bind(manga_id)
+		.execute(&pool)
+		.await
+		.expect("seed chapter thumbnail");
+	let (_, body) = request(&app.app, "GET", &manga_path, None).await;
+	assert_eq!(body["viewer"], "RightToLeft");
+	let (_, body) = request(&app.app, "GET", &chapters_path, None).await;
+	for chapter in body.as_array().expect("chapters") {
+		assert_eq!(chapter["thumbnail"], "https://img.example/c1.png");
+	}
+
+	// manga_user.viewer_flags 非零即用户覆盖：响应 viewer 用覆盖值（4 = Webtoon），源值保留在库里
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/library",
+		Some(json!({"mangaId": manga_id})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	sqlx::query("UPDATE manga_user SET viewer_flags = 4 WHERE manga_id = ?")
+		.bind(manga_id)
+		.execute(&pool)
+		.await
+		.expect("seed viewer override");
+	let (_, body) = request(&app.app, "GET", &manga_path, None).await;
+	assert_eq!(body["viewer"], "Webtoon");
+	// 覆盖只作用于响应，库里的源 viewer 不动
+	let (stored,): (i64,) = sqlx::query_as("SELECT viewer FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("stored viewer");
+	assert_eq!(stored, 2);
+}

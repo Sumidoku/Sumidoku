@@ -2,7 +2,7 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{TestApp, db_dump, register_example_manga, request, request_full, test_app};
+use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, test_app};
 use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
@@ -122,6 +122,18 @@ async fn export_import_round_trip() {
 	let (_, a_library) = request(&a.app, "GET", "/api/v1/library", None).await;
 	let a_manga = a_library["entries"][0].clone();
 	let a_manga_id = a_manga["id"].as_i64().expect("manga id");
+	// 源侧 viewer 与章节 thumbnail 也要进备份往返
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query("UPDATE manga SET viewer = 2 WHERE id = ?")
+		.bind(a_manga_id)
+		.execute(&pool)
+		.await
+		.expect("seed viewer");
+	sqlx::query("UPDATE chapter SET thumbnail = 'https://img.example/thumb.png' WHERE manga_id = ?")
+		.bind(a_manga_id)
+		.execute(&pool)
+		.await
+		.expect("seed thumbnail");
 	let doc = export_doc(&a.app).await;
 
 	assert_eq!(doc["version"], 1);
@@ -132,8 +144,14 @@ async fn export_import_round_trip() {
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["library"][0]["sourceKey"], SOURCE_KEY);
 	assert!(doc["library"][0]["inLibraryAt"].is_i64());
+	assert_eq!(doc["library"][0]["viewer"], 2);
 	assert_eq!(doc["categories"].as_array().expect("categories").len(), 2);
 	assert_eq!(doc["progress"].as_array().expect("progress").len(), 2);
+	assert_eq!(doc["progress"][0]["chapter"]["language"], "en");
+	assert_eq!(
+		doc["progress"][0]["chapter"]["thumbnail"],
+		"https://img.example/thumb.png"
+	);
 
 	let b = fresh_target().await;
 	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
@@ -154,6 +172,7 @@ async fn export_import_round_trip() {
 	assert_eq!(entries[0]["title"], a_manga["title"]);
 	assert_eq!(entries[0]["authors"], a_manga["authors"]);
 	assert_eq!(entries[0]["tags"], a_manga["tags"]);
+	assert_eq!(entries[0]["viewer"], "RightToLeft");
 	assert_eq!(entries[0]["inLibraryAt"], doc["library"][0]["inLibraryAt"]);
 
 	// 分类：顺序、三态、成员
@@ -197,6 +216,8 @@ async fn export_import_round_trip() {
 			.find(|c| c["key"] == a_ch["key"])
 			.expect("chapter by key");
 		assert_eq!(b_ch["title"], a_ch["title"]);
+		assert_eq!(b_ch["thumbnail"], a_ch["thumbnail"]);
+		assert_eq!(b_ch["language"], a_ch["language"]);
 		assert_eq!(b_ch["lastPageRead"], a_ch["lastPageRead"]);
 		assert_eq!(b_ch["isRead"], a_ch["isRead"]);
 		assert_eq!(b_ch["isBookmarked"], a_ch["isBookmarked"]);

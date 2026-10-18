@@ -31,6 +31,7 @@ pub struct MangaRow {
 	pub tags: sqlx::types::Json<Vec<String>>,
 	pub status: i64,
 	pub content_rating: i64,
+	pub viewer: i64,
 	pub cover_url: Option<String>,
 	pub url: Option<String>,
 	pub initialized: bool,
@@ -50,6 +51,7 @@ pub struct ChapterRow {
 	pub volume: Option<f64>,
 	pub scanlators: sqlx::types::Json<Vec<String>>,
 	pub language: Option<String>,
+	pub thumbnail: Option<String>,
 	pub url: Option<String>,
 	pub date_uploaded: Option<i64>,
 	pub source_order: i64,
@@ -108,6 +110,16 @@ pub fn content_rating_from_int(v: i64) -> ContentRating {
 	}
 }
 
+pub fn viewer_from_int(v: i64) -> Viewer {
+	match v {
+		1 => Viewer::LeftToRight,
+		2 => Viewer::RightToLeft,
+		3 => Viewer::Vertical,
+		4 => Viewer::Webtoon,
+		_ => Viewer::Unknown,
+	}
+}
+
 fn update_strategy_from_int(v: i64) -> UpdateStrategy {
 	match v {
 		1 => UpdateStrategy::Never,
@@ -128,7 +140,7 @@ pub fn manga_from_row(row: &MangaRow) -> Manga {
 		tags: none_if_empty(&row.tags),
 		status: status_from_int(row.status),
 		content_rating: content_rating_from_int(row.content_rating),
-		viewer: Viewer::Unknown,
+		viewer: viewer_from_int(row.viewer),
 		update_strategy: update_strategy_from_int(row.update_strategy),
 		next_update_time: row.next_update_time,
 		chapters: None,
@@ -145,7 +157,7 @@ pub fn chapter_from_row(row: &ChapterRow) -> Chapter {
 		scanlators: none_if_empty(&row.scanlators),
 		url: row.url.clone(),
 		language: row.language.clone(),
-		thumbnail: None,
+		thumbnail: row.thumbnail.clone(),
 		locked: row.locked,
 	}
 }
