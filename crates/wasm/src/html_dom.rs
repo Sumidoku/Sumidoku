@@ -393,15 +393,17 @@ impl HtmlElement {
 		}
 	}
 
+	/// trimmed=true 对齐 jsoup text()：归一化 + trim；trimmed=false 是 aidoku
+	/// untrimmed_text：文本节点逐字拼接、不 trim，但块级分隔与 script/style
+	/// 排除照旧（vendor 文档「Notices from Element::text apply」）
 	pub fn text(&self, trimmed: bool) -> Option<String> {
 		let html = self.0.html.borrow();
-		let result = ElementRef::wrap(html.tree.get(self.0.id)?)?
-			.text()
-			.collect::<String>();
+		let element = ElementRef::wrap(html.tree.get(self.0.id)?)?;
+		let text = collect_text(element, trimmed);
 		if trimmed {
-			Some(result.trim().to_string())
+			Some(jsoup_trim(&text).to_string())
 		} else {
-			Some(result)
+			Some(text)
 		}
 	}
 
@@ -468,12 +470,27 @@ impl HtmlElement {
 			.map(|element| self.child(element.id()))
 	}
 
+	/// jsoup ownText()：只拼直系文本节点子节点，与 text() 同一套归一化；
+	/// 直系 <br> 补一个空格；script/style 的内容是 data 不算 own text
 	pub fn own_text(&self) -> Option<String> {
 		let html = self.0.html.borrow();
-		ElementRef::wrap(html.tree.get(self.0.id)?)?
-			.text()
-			.next()
-			.map(|text| text.to_string())
+		let element = ElementRef::wrap(html.tree.get(self.0.id)?)?;
+		let is_data_element = matches!(element.value().name(), "script" | "style");
+		let mut accum = String::new();
+		for child in element.children() {
+			match child.value() {
+				Node::Text(text) if !is_data_element => {
+					append_normalised_text(&mut accum, child, text.deref())
+				}
+				Node::Element(child_element)
+					if child_element.name() == "br" && !accum.ends_with(' ') =>
+				{
+					accum.push(' ');
+				}
+				_ => {}
+			}
+		}
+		Some(jsoup_trim(&accum).to_string())
 	}
 
 	/// jsoup 仅 script/style 内容算 DataNode；html5ever 统一存文本节点，
@@ -1154,8 +1171,8 @@ fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<
 			contains_text(element, needle, *own) != *negate
 		}
 		ExtensionFilter::Matches { pattern, own, negate } => {
-			// jsoup :matches 针对未归一化文本、find 语义、默认大小写敏感
-			let text = if *own { element.own_text() } else { element.text(false) };
+			// jsoup :matches 针对归一化后的 text()/ownText()、find 语义、默认大小写敏感
+			let text = if *own { element.own_text() } else { element.text(true) };
 			text.is_some_and(|text| pattern.is_match(&text)) != *negate
 		}
 		ExtensionFilter::AttrWildcard { negate } => element.has_any_attribute() != *negate,
@@ -1185,12 +1202,12 @@ fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<
 	})
 }
 
-/// SwiftSoup :contains 是子树文本、大小写不敏感、空白折叠后匹配
+/// SwiftSoup :contains 是子树归一化文本、大小写不敏感、空白折叠后匹配
 fn contains_text(element: &HtmlElement, needle: &str, own: bool) -> bool {
 	let text = if own {
 		element.own_text()
 	} else {
-		element.text(false)
+		element.text(true)
 	};
 	let Some(text) = text else { return false };
 	normalize_whitespace(&text).contains(&normalize_whitespace(needle))
@@ -1201,6 +1218,106 @@ fn normalize_whitespace(text: &str) -> String {
 		.collect::<Vec<_>>()
 		.join(" ")
 		.to_lowercase()
+}
+
+/// SwiftSoup blockTags：text() 的分隔只对块级元素与 <br> 生效，未列出的
+/// 标签（含自定义标签）按行内处理
+const BLOCK_TAGS: &[&str] = &[
+	"html", "head", "body", "frameset", "script", "noscript", "style", "meta", "link", "title",
+	"frame", "noframes", "noembed", "section", "nav", "aside", "hgroup", "header", "footer", "p",
+	"h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "pre", "listing", "div", "blockquote", "hr",
+	"address", "figure", "figcaption", "form", "fieldset", "center", "dir", "applet", "marquee",
+	"ins", "del", "s", "dl", "dt", "dd", "li", "table", "caption", "thead", "tfoot", "tbody",
+	"colgroup", "col", "tr", "th", "td", "video", "audio", "canvas", "details", "menu", "plaintext",
+	"template", "article", "main", "svg", "math",
+];
+
+/// SwiftSoup preserveWhitespaceTags：子树内文本逐字保留不折叠
+const PRESERVE_WHITESPACE_TAGS: &[&str] = &["pre", "plaintext", "title", "textarea"];
+
+/// jsoup StringUtil.isActuallyWhitespace：\xA0 算空白、U+3000 不算，
+/// 比 char::is_whitespace 窄，CJK 文本里的表意空格必须保住
+fn is_text_whitespace(c: char) -> bool {
+	matches!(c, ' ' | '\t' | '\n' | '\x0C' | '\r' | '\u{A0}')
+}
+
+/// jsoup StringUtil.isInvisibleChar：零宽空格与软连字符不进 text()
+fn is_invisible_char(c: char) -> bool {
+	matches!(c, '\u{200B}' | '\u{AD}')
+}
+
+/// java String.trim() 语义：只去 <= U+0020 的字符，不是 Unicode 空白
+fn jsoup_trim(text: &str) -> &str {
+	text.trim_matches(|c: char| c <= '\u{20}')
+}
+
+/// jsoup Element.preserveWhitespace：父元素起向上最多 6 层查 pre 系标签
+/// （ego-tree 的 ancestors 从父节点开始，不含自身）
+fn preserve_whitespace(node: ego_tree::NodeRef<'_, Node>) -> bool {
+	node.ancestors()
+		.take(6)
+		.filter_map(|ancestor| ancestor.value().as_element())
+		.any(|element| PRESERVE_WHITESPACE_TAGS.contains(&element.name()))
+}
+
+/// jsoup Element.appendNormalisedText：preserveWhitespace 子树逐字追加，
+/// 否则折叠连续空白为单空格；accum 为空或末尾已是空格时剥掉前导空白
+fn append_normalised_text(accum: &mut String, node: ego_tree::NodeRef<'_, Node>, text: &str) {
+	if preserve_whitespace(node) {
+		accum.push_str(text);
+		return;
+	}
+	let strip_leading = accum.is_empty() || accum.ends_with(' ');
+	let mut last_was_white = false;
+	let mut reached_non_white = false;
+	for c in text.chars() {
+		if is_text_whitespace(c) {
+			if (strip_leading && !reached_non_white) || last_was_white {
+				continue;
+			}
+			accum.push(' ');
+			last_was_white = true;
+		} else if !is_invisible_char(c) {
+			accum.push(c);
+			last_was_white = false;
+			reached_non_white = true;
+		}
+	}
+}
+
+/// SwiftSoup text() 遍历：前序走子树，块级/br 元素头部在末尾非空格时补一个
+/// 空格（SwiftSoup 无 jsoup 的 tail 分隔，<div>a</div>b 得 "ab"）；script/style
+/// 的内容在 jsoup 是 DataNode 不进 text，html5ever 存成文本节点，靠跳过整个
+/// 子树排除；normalize=false 时文本节点逐字追加（aidoku untrimmed_text）
+fn collect_text(element: ElementRef<'_>, normalize: bool) -> String {
+	let mut accum = String::new();
+	let mut stack = vec![*element];
+	while let Some(node) = stack.pop() {
+		match node.value() {
+			Node::Text(text) => {
+				if normalize {
+					append_normalised_text(&mut accum, node, text.deref());
+				} else {
+					accum.push_str(text.deref());
+				}
+				continue;
+			}
+			Node::Element(element) => {
+				if !accum.is_empty()
+					&& (BLOCK_TAGS.contains(&element.name()) || element.name() == "br")
+					&& !accum.ends_with(' ')
+				{
+					accum.push(' ');
+				}
+				if matches!(element.name(), "script" | "style") {
+					continue;
+				}
+			}
+			_ => {}
+		}
+		stack.extend(node.children().rev());
+	}
+	accum
 }
 
 fn element_matches(element: &HtmlElement, selector: &Selector) -> bool {
@@ -1779,7 +1896,7 @@ mod tests {
 		let doc = HtmlDocument::parse(html, None);
 		let list = select_str(QueryRoot::Document(&doc), "script:not([*])").unwrap();
 		assert_eq!(list.0.len(), 1);
-		assert!(list.0[0].text(false).unwrap().contains("var x"));
+		assert!(list.0[0].data().unwrap().contains("var x"));
 
 		let list = select_str(QueryRoot::Document(&doc), "script[*]").unwrap();
 		assert_eq!(list.0.len(), 1);
@@ -1949,5 +2066,166 @@ mod tests {
 		assert_eq!(first_p.text(true).as_deref(), Some("changed"));
 		assert!(first_p.parent().is_none());
 		assert!(first_p.0.parent().is_none());
+	}
+
+	fn first_element(doc: &HtmlDocument, selector: &str) -> HtmlElement {
+		doc.select(&Selector::parse(selector).unwrap())
+			.0
+			.into_iter()
+			.next()
+			.unwrap()
+	}
+
+	#[test]
+	fn text_block_br_and_whitespace() {
+		// B1（issue #83）：块级边界补一个空格，内部空白折叠
+		let doc = HtmlDocument::parse(r#"<div id="d"><p>a</p><p>b</p></div>"#, None);
+		assert_eq!(first_element(&doc, "#d").text(true).as_deref(), Some("a b"));
+
+		let doc = HtmlDocument::parse("<p>a<br>b</p>", None);
+		assert_eq!(first_element(&doc, "p").text(true).as_deref(), Some("a b"));
+
+		let doc = HtmlDocument::parse("<p>  Hello   there\n now  </p>", None);
+		let p = first_element(&doc, "p");
+		assert_eq!(p.text(true).as_deref(), Some("Hello there now"));
+		// trimmed=false 逐字保留（aidoku untrimmed_text：不归一化不 trim）
+		assert_eq!(p.text(false).as_deref(), Some("  Hello   there\n now  "));
+
+		// aidoku-rs 文档里的 untrimmed_text 示例
+		let doc = HtmlDocument::parse("<p>Hello <b>there</b> now! </p>", None);
+		let p = first_element(&doc, "p");
+		assert_eq!(p.text(false).as_deref(), Some("Hello there now! "));
+		assert_eq!(p.text(true).as_deref(), Some("Hello there now!"));
+
+		// untrimmed 同样补块级分隔、不含尾部 trim
+		let doc = HtmlDocument::parse(r#"<div id="u">a<p>b</p></div>"#, None);
+		assert_eq!(first_element(&doc, "#u").text(false).as_deref(), Some("a b"));
+	}
+
+	#[test]
+	fn text_excludes_script_style_content() {
+		// B2（issue #83）：script/style 内容（jsoup DataNode）不进 text；
+		// 元素自身是块级分隔，jsoup 1.15.3 / SwiftSoup 2.13.7 实测均为 "x y"
+		let doc = HtmlDocument::parse(
+			r#"<div id="e">x<script>var s=1;</script>y</div><div id="s">x<style>.a{color:red}</style>y</div>"#,
+			None,
+		);
+		let e = first_element(&doc, "#e");
+		assert_eq!(e.text(true).as_deref(), Some("x y"));
+		assert_eq!(e.text(false).as_deref(), Some("x y"));
+		assert_eq!(first_element(&doc, "#s").text(true).as_deref(), Some("x y"));
+
+		// script 元素自身 text 为空，内容只能走 data()
+		let doc = HtmlDocument::parse("<script>var x = 1;</script>", None);
+		let script = first_element(&doc, "script");
+		assert_eq!(script.text(true).as_deref(), Some(""));
+		assert_eq!(script.own_text().as_deref(), Some(""));
+		assert_eq!(script.data().as_deref(), Some("var x = 1;"));
+
+		// 脚本内容不参与 :contains/:matches 的匹配文本
+		let doc = HtmlDocument::parse("<div>x<script>needle</script>y</div>", None);
+		assert!(
+			select_str(QueryRoot::Document(&doc), "div:contains(needle)")
+				.unwrap()
+				.0
+				.is_empty()
+		);
+		assert!(
+			select_str(QueryRoot::Document(&doc), "div:matchesOwn(needle)")
+				.unwrap()
+				.0
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn own_text_direct_text_children() {
+		// C（issue #83）：own_text 拼接直系文本节点并归一化
+		let doc = HtmlDocument::parse(r#"<div id="d">A<b>B</b>C</div>"#, None);
+		let d = first_element(&doc, "#d");
+		assert_eq!(d.own_text().as_deref(), Some("AC"));
+		assert_eq!(d.text(true).as_deref(), Some("ABC"));
+
+		let doc = HtmlDocument::parse("<div>A  <b>B</b>  C</div>", None);
+		assert_eq!(first_element(&doc, "div").own_text().as_deref(), Some("A C"));
+
+		// 直系 <br> 也补空格
+		let doc = HtmlDocument::parse("<p>a<br>b</p>", None);
+		assert_eq!(first_element(&doc, "p").own_text().as_deref(), Some("a b"));
+
+		let doc = HtmlDocument::parse(r#"<div id="c">A<b>B</b>C</div>"#, None);
+		assert_eq!(
+			select_str(QueryRoot::Document(&doc), "#c:containsOwn(AC)")
+				.unwrap()
+				.0
+				.len(),
+			1
+		);
+		assert!(
+			select_str(QueryRoot::Document(&doc), "#c:containsOwn(ABC)")
+				.unwrap()
+				.0
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn contains_and_matches_use_normalized_text() {
+		// jsoup :contains/:matches 针对归一化后的 text()：块级边界带空格
+		let doc = HtmlDocument::parse(r#"<div id="m"><p>hello</p><p>world</p></div>"#, None);
+		assert_eq!(
+			select_str(QueryRoot::Document(&doc), "div:contains(hello world)")
+				.unwrap()
+				.0
+				.len(),
+			1
+		);
+		assert!(
+			select_str(QueryRoot::Document(&doc), "div:contains(helloworld)")
+				.unwrap()
+				.0
+				.is_empty()
+		);
+		assert_eq!(
+			select_str(QueryRoot::Document(&doc), "#m:matches(hello world)")
+				.unwrap()
+				.0
+				.len(),
+			1
+		);
+		assert!(
+			select_str(QueryRoot::Document(&doc), "#m:matches(helloworld)")
+				.unwrap()
+				.0
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn text_preserve_whitespace_and_special_chars() {
+		// jsoup preserveWhitespace 标签内文本逐字保留
+		let doc = HtmlDocument::parse("<pre id=\"p\">a\n  b</pre>", None);
+		assert_eq!(first_element(&doc, "#p").text(true).as_deref(), Some("a\n  b"));
+		let doc = HtmlDocument::parse(r#"<textarea id="t">a
+  b</textarea>"#, None);
+		assert_eq!(first_element(&doc, "#t").text(true).as_deref(), Some("a\n  b"));
+
+		// jsoup 的空白集不含 U+3000（表意空格不折叠），零宽字符直接丢弃
+		let doc = HtmlDocument::parse("<div>a\u{3000}b</div>", None);
+		assert_eq!(first_element(&doc, "div").text(true).as_deref(), Some("a\u{3000}b"));
+		let doc = HtmlDocument::parse("<p>a\u{200B}b</p>", None);
+		assert_eq!(first_element(&doc, "p").text(true).as_deref(), Some("ab"));
+
+		// nbsp 归入普通空格参与折叠
+		let doc = HtmlDocument::parse("<p>a&nbsp;&nbsp;b</p>", None);
+		assert_eq!(first_element(&doc, "p").text(true).as_deref(), Some("a b"));
+	}
+
+	#[test]
+	fn text_no_tail_separator() {
+		// SwiftSoup（Aidoku 实际依赖）没有 jsoup 的 tail 分隔：块级元素后紧跟
+		// 文本时 text() 不补空格（SwiftSoup 2.13.7 实测 "ab"，jsoup 1.15.3 是 "a b"）
+		let doc = HtmlDocument::parse(r#"<div id="t">a</div>b"#, None);
+		assert_eq!(first_element(&doc, "body").text(true).as_deref(), Some("ab"));
 	}
 }
