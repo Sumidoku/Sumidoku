@@ -51,6 +51,7 @@ import {
 	SegmentedControl,
 	Select,
 	Skeleton,
+	Switch,
 	pushToast
 } from '../components';
 import './settings.css';
@@ -134,6 +135,33 @@ function AppearanceSection() {
 					<option value="rtl">从右到左</option>
 				</Select>
 			</div>
+		</Section>
+	);
+}
+
+function IncognitoSection() {
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const enabled = settings.data?.['incognito.enabled'] === true;
+
+	return (
+		<Section
+			title="隐身阅读"
+			desc="开启后阅读进度照常保存，但不写入阅读历史（历史页与 OPDS 目录）；漫画详情页可对单部开启"
+		>
+			{settings.isPending ? (
+				<Skeleton height={48} />
+			) : (
+				<label className="settings-backup__section">
+					<Switch
+						checked={enabled}
+						disabled={save.isPending}
+						onChange={(on) => save.mutate({ 'incognito.enabled': on })}
+						label="全局隐身阅读"
+					/>
+					全局隐身阅读
+				</label>
+			)}
 		</Section>
 	);
 }
@@ -1298,6 +1326,7 @@ export default function SettingsPage() {
 		<div className="page container settings-page">
 			<PageHeader title="设置" />
 			<AppearanceSection />
+			<IncognitoSection />
 			<SecuritySection />
 			<CategoriesSection />
 			<ServerSettingsSection />

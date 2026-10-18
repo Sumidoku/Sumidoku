@@ -23,22 +23,20 @@ impl ProgressPatch {
 		self.last_page_read.is_none() && self.is_read.is_none() && self.is_bookmarked.is_none()
 	}
 
-	/// lastPageRead 落笔即视为读过：只有它出现时才刷新 last_read_at
+	/// lastPageRead 落笔即视为读过：只有它出现时才刷新 last_read_at；
+	/// 隐身（全局或单本任一开启）时不打新戳，旧戳保持不动
 	async fn apply(
 		&self,
 		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 		chapter_id: i64,
 	) -> ApiResult<ChapterProgress> {
 		let current = read_progress(&mut **tx, chapter_id).await?;
+		let stamp = self.last_page_read.is_some() && !incognito_on(tx, chapter_id).await?;
 		let merged = ChapterProgress {
 			last_page_read: self.last_page_read.unwrap_or(current.last_page_read),
 			is_read: self.is_read.unwrap_or(current.is_read),
 			is_bookmarked: self.is_bookmarked.unwrap_or(current.is_bookmarked),
-			last_read_at: if self.last_page_read.is_some() {
-				Some(unix_now())
-			} else {
-				current.last_read_at
-			},
+			last_read_at: if stamp { Some(unix_now()) } else { current.last_read_at },
 		};
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
@@ -57,6 +55,29 @@ impl ProgressPatch {
 		.await?;
 		Ok(merged)
 	}
+}
+
+/// 隐身判定：全局 setting 的 incognito.enabled 或该章节所属漫画的 manga_user.incognito，
+/// 任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
+async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, chapter_id: i64) -> ApiResult<bool> {
+	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'incognito.enabled'")
+		.fetch_optional(&mut **tx)
+		.await?;
+	if global
+		.and_then(|(raw,)| serde_json::from_str::<bool>(&raw).ok())
+		.unwrap_or(false)
+	{
+		return Ok(true);
+	}
+	let per_manga: Option<(bool,)> = sqlx::query_as(
+		"SELECT mu.incognito FROM chapter c
+		 JOIN manga_user mu ON mu.manga_id = c.manga_id AND mu.user_id = 1
+		 WHERE c.id = ?",
+	)
+	.bind(chapter_id)
+	.fetch_optional(&mut **tx)
+	.await?;
+	Ok(per_manga.map(|(on,)| on).unwrap_or(false))
 }
 
 async fn read_progress<'e, E>(executor: E, chapter_id: i64) -> ApiResult<ChapterProgress>

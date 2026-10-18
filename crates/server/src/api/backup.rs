@@ -85,6 +85,8 @@ pub struct BackupManga {
 	#[serde(default)]
 	pub viewer_flags: i64,
 	#[serde(default)]
+	pub incognito: bool,
+	#[serde(default)]
 	pub sort_key: String,
 }
 
@@ -173,6 +175,7 @@ struct ExportMangaRow {
 	in_library: bool,
 	in_library_at: Option<i64>,
 	viewer_flags: i64,
+	incognito: bool,
 	sort_key: String,
 }
 
@@ -224,7 +227,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	let manga_rows: Vec<ExportMangaRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key, m.title, m.authors, m.artists, m.description, m.tags,
 		 m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized, m.update_strategy,
-		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.sort_key
+		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.incognito, mu.sort_key
 		 FROM manga m
 		 JOIN source s ON s.id = m.source_id
 		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
@@ -252,6 +255,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			in_library: row.in_library,
 			in_library_at: row.in_library_at,
 			viewer_flags: row.viewer_flags,
+			incognito: row.incognito,
 			sort_key: row.sort_key,
 		})
 		.collect();
@@ -605,16 +609,18 @@ async fn restore_library(
 				.fetch_one(&mut **tx)
 				.await?;
 		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, sort_key)
-			 VALUES (?, 1, ?, ?, ?, ?)
+			"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, incognito, sort_key)
+			 VALUES (?, 1, ?, ?, ?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET
 			 in_library = excluded.in_library, in_library_at = excluded.in_library_at,
-			 viewer_flags = excluded.viewer_flags, sort_key = excluded.sort_key",
+			 viewer_flags = excluded.viewer_flags, incognito = excluded.incognito,
+			 sort_key = excluded.sort_key",
 		)
 		.bind(manga_id)
 		.bind(entry.in_library)
 		.bind(entry.in_library_at)
 		.bind(entry.viewer_flags)
+		.bind(entry.incognito)
 		.bind(&entry.sort_key)
 		.execute(&mut **tx)
 		.await?;

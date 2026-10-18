@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, EyeOff, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import {
 	qk,
@@ -416,6 +416,18 @@ export default function MangaDetailPage() {
 								onClick={() => refreshManga.mutate(mangaId)}
 							>
 								{refreshManga.isPending ? <Spinner size={16} /> : <RefreshCw size={17} />}
+							</IconButton>
+							<IconButton
+								label={
+									manga.incognito
+										? '隐身阅读中：这部漫画的阅读不写入历史，点击关闭'
+										: '隐身阅读：开启后这部漫画的阅读不写入历史'
+								}
+								className={manga.incognito ? 'icon-btn--active' : undefined}
+								disabled={patchManga.isPending}
+								onClick={() => patchManga.mutate({ id: mangaId, incognito: !manga.incognito })}
+							>
+								<EyeOff size={17} />
 							</IconButton>
 							<MoreMenu>
 								{(closeMenu) => (

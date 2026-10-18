@@ -91,6 +91,7 @@ export interface MangaDetail extends Manga {
 	initialized: boolean;
 	chapterCount: number;
 	inLibrary: boolean;
+	incognito: boolean;
 	categoryIds: number[];
 }
 
@@ -478,6 +479,7 @@ export type UpdateStrategy = 'Always' | 'Never';
 
 export interface PatchMangaBody {
 	updateStrategy?: UpdateStrategy;
+	incognito?: boolean;
 }
 
 export interface PatchCategoryBody {

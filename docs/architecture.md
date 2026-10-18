@@ -146,6 +146,19 @@ Migrations in `crates/server/migrations`.
   chapter languages with it on reconcile. A non-zero
   `manga_user.viewer_flags` is the user's viewer override: API responses
   report it as the manga `viewer` while the source value stays stored.
+- Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
+  stamped whenever `lastPageRead` is written; the history page and both OPDS
+  history feeds select rows where it is non-null. The global
+  `incognito.enabled` setting or a per-manga `manga_user.incognito` flag
+  (Aidoku's pause-history analogue) pauses the stamp: a progress write still
+  saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
+  reads never enter history and existing stamps are kept. `GET`/`PATCH
+  /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
+  row, so the flag also works for manga not in the library), and the backup
+  document round-trips it, defaulting to off for backups predating the field.
+  The web UI exposes the global toggle in Settings (`SettingsPage.tsx`) and
+  the per-manga toggle as an icon button in the detail header
+  (`MangaDetailPage.tsx`).
 - Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
   JSON document (a `Content-Disposition` attachment) with the single user's
   library rows and metadata, categories with membership, reading progress,
