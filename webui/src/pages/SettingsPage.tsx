@@ -1,14 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
 	ArrowDown,
 	ArrowUp,
+	Download,
 	ExternalLink,
 	Pencil,
-	Trash2
+	Trash2,
+	Upload
 } from 'lucide-react';
-import { ApiError, api, clearToken } from '../api/client';
+import { ApiError, api, backupUrl, clearToken } from '../api/client';
 import {
 	useCategories,
 	useCreateCategory,
@@ -16,10 +18,11 @@ import {
 	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
+	useRestoreBackup,
 	useSaveServerSettings,
 	useServerSettings
 } from '../api/hooks';
-import type { Category } from '../api/types';
+import type { BackupRestoreResult, Category } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
 import {
@@ -547,6 +550,195 @@ function ServerSettingsSection() {
 	);
 }
 
+const BACKUP_SECTIONS = [
+	{ key: 'library', label: '书库' },
+	{ key: 'categories', label: '分类' },
+	{ key: 'progress', label: '阅读进度' },
+	{ key: 'settings', label: '服务器设置' },
+	{ key: 'sourceSettings', label: '源设置' }
+] as const;
+
+interface BackupPreview {
+	doc: unknown;
+	createdAt: number | null;
+	counts: Record<string, number>;
+}
+
+function previewCounts(doc: Record<string, unknown>): Record<string, number> {
+	const count = (key: string): number => {
+		const v = doc[key];
+		if (Array.isArray(v)) return v.length;
+		if (v && typeof v === 'object') return Object.keys(v).length;
+		return 0;
+	};
+	const sourceSettings = doc['sourceSettings'];
+	const credentialCount =
+		sourceSettings && typeof sourceSettings === 'object'
+			? Object.values(sourceSettings).reduce(
+					(n, v) => n + (v && typeof v === 'object' ? Object.keys(v).length : 0),
+					0
+				)
+			: 0;
+	return {
+		library: count('library'),
+		categories: count('categories'),
+		progress: count('progress'),
+		settings: count('settings'),
+		sourceSettings: credentialCount
+	};
+}
+
+function BackupSection() {
+	const restore = useRestoreBackup();
+	const fileRef = useRef<HTMLInputElement>(null);
+	const [preview, setPreview] = useState<BackupPreview | null>(null);
+	const [picked, setPicked] = useState<string[]>([]);
+	const [result, setResult] = useState<BackupRestoreResult | null>(null);
+
+	async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+		const file = e.currentTarget.files?.[0];
+		// 清空 value 让同一文件能再次触发 change
+		e.currentTarget.value = '';
+		if (!file) return;
+		let doc: unknown;
+		try {
+			doc = JSON.parse(await file.text());
+		} catch {
+			pushToast('备份文件不是合法 JSON');
+			return;
+		}
+		const version = (doc as { version?: unknown } | null)?.version;
+		if (version !== 1) {
+			pushToast(`备份版本不受支持：${typeof version === 'number' ? version : '缺失'}`);
+			return;
+		}
+		const createdAt = (doc as { createdAt?: unknown }).createdAt;
+		setPreview({
+			doc,
+			createdAt: typeof createdAt === 'number' ? createdAt : null,
+			counts: previewCounts(doc as Record<string, unknown>)
+		});
+		setPicked(BACKUP_SECTIONS.map((s) => s.key));
+		setResult(null);
+	}
+
+	function toggle(key: string, on: boolean) {
+		setPicked((cur) => (on ? [...cur, key] : cur.filter((k) => k !== key)));
+	}
+
+	async function confirmRestore() {
+		if (!preview || picked.length === 0) return;
+		try {
+			const res = await restore.mutateAsync({ doc: preview.doc, sections: picked });
+			setResult(res);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	function closeModal() {
+		setPreview(null);
+		setResult(null);
+	}
+
+	return (
+		<Section
+			title="备份"
+			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管"
+		>
+			<div className="settings-backup__ops">
+				<a className="btn settings-backup__download" href={backupUrl()} download>
+					<Download size={15} />
+					下载备份
+				</a>
+				<Button onClick={() => fileRef.current?.click()}>
+					<Upload size={15} />
+					上传备份恢复
+				</Button>
+				<input
+					ref={fileRef}
+					type="file"
+					accept="application/json,.json"
+					hidden
+					onChange={(e) => void onFile(e)}
+				/>
+			</div>
+
+			<Modal
+				open={preview !== null}
+				title="恢复备份"
+				onClose={closeModal}
+				footer={
+					result ? (
+						<Button variant="primary" onClick={closeModal}>
+							完成
+						</Button>
+					) : (
+						<>
+							<Button onClick={closeModal}>取消</Button>
+							<Button
+								variant="danger"
+								loading={restore.isPending}
+								disabled={picked.length === 0}
+								onClick={() => void confirmRestore()}
+							>
+								导入
+							</Button>
+						</>
+					)
+				}
+			>
+				{result ? (
+					<div className="settings-backup__result">
+						<p className="settings-modal-text">
+							已恢复：书库 {result.restored.library} · 分类 {result.restored.categories} · 进度{' '}
+							{result.restored.progress} · 设置 {result.restored.settings} · 源设置{' '}
+							{result.restored.sourceSettings}
+						</p>
+						{result.warnings.length === 0 ? (
+							<p className="faint">全部条目均已恢复，无跳过项</p>
+						) : (
+							<>
+								<p className="settings-modal-text">以下条目被跳过：</p>
+								<ul className="settings-backup__warnings">
+									{result.warnings.map((w, i) => (
+										<li key={i}>{w}</li>
+									))}
+								</ul>
+							</>
+						)}
+					</div>
+				) : (
+					preview && (
+						<>
+							<p className="settings-modal-text">
+								{preview.createdAt
+									? `备份创建于 ${new Date(preview.createdAt * 1000).toLocaleString()}，选择要恢复的内容：`
+									: '选择要恢复的内容：'}
+							</p>
+							<div className="settings-backup__sections">
+								{BACKUP_SECTIONS.map((s) => (
+									<label key={s.key} className="settings-backup__section">
+										<input
+											type="checkbox"
+											checked={picked.includes(s.key)}
+											onChange={(e) => toggle(s.key, e.currentTarget.checked)}
+										/>
+										{s.label}（{preview.counts[s.key] ?? 0}）
+									</label>
+								))}
+							</div>
+							<p className="settings-backup__warn">
+								导入会按所选内容覆盖当前实例的对应状态，此操作不可撤销；备份可能包含源站账号密码，请确认文件来源可信。
+							</p>
+						</>
+					)
+				)}
+			</Modal>
+		</Section>
+	);
+}
+
 function AboutSection() {
 	return (
 		<Section title="关于" desc="接口入口与项目地址">
@@ -580,6 +772,7 @@ export default function SettingsPage() {
 			<SecuritySection />
 			<CategoriesSection />
 			<ServerSettingsSection />
+			<BackupSection />
 			<AboutSection />
 		</div>
 	);

@@ -455,3 +455,14 @@ export interface ChapterProgress {
 	isBookmarked: boolean;
 	lastReadAt: number | null;
 }
+
+export interface BackupRestoreResult {
+	restored: {
+		library: number;
+		categories: number;
+		progress: number;
+		settings: number;
+		sourceSettings: number;
+	};
+	warnings: string[];
+}
