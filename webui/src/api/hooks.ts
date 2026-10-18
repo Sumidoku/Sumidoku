@@ -656,17 +656,38 @@ export function useSourceSettings(sourceId: number, enabled = true) {
 export function useSaveSourceSettings(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (edits: Record<string, unknown>) =>
-			api<{ values: Record<string, unknown> }>(`/sources/${sourceId}/settings`, {
-				method: 'PUT',
-				body: edits
-			}),
+		mutationFn: ({ edits, notify }: { edits: Record<string, unknown>; notify?: string[] }) => {
+			// 被改设置声明的 notification 逐个发给源（重复参数，服务端按序送达）
+			const qs = (notify ?? []).map((n) => `notify=${encodeURIComponent(n)}`).join('&');
+			return api<{ values: Record<string, unknown> }>(
+				`/sources/${sourceId}/settings${qs ? `?${qs}` : ''}`,
+				{ method: 'PUT', body: edits }
+			);
+		},
 		onSuccess: (data) => {
 			qc.setQueryData<SourceSettings>(['source-settings', sourceId], (cur) =>
 				cur ? { ...cur, values: data.values } : cur
 			);
 		}
 	});
+}
+
+/** Button 设置的按下：把它的 notification 串发给源（不重启实例），无动作串时源侧不响应 */
+export function useNotifySource(sourceId: number) {
+	return useMutation({
+		mutationFn: (notification: string) =>
+			api<{ ok: boolean }>(`/sources/${sourceId}/notify`, { method: 'POST', body: { notification } })
+	});
+}
+
+/** 设置变更声明的 refreshes 映射成查询失效，对齐 Aidoku app 的 refresh-* 通知 */
+export function invalidateForRefreshes(qc: QueryClient, sourceId: number, refreshes: string[]) {
+	for (const target of new Set(refreshes)) {
+		if (target === 'settings') void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] });
+		if (target === 'filters') void qc.invalidateQueries({ queryKey: qk.sourceFilters(sourceId) });
+		if (target === 'listings') void qc.invalidateQueries({ queryKey: qk.sourceListings(sourceId) });
+		if (target === 'content') void qc.invalidateQueries({ queryKey: qk.sourceHome(sourceId) });
+	}
 }
 
 /** 清空覆盖值并按包内静态 schema 重新播种默认值 */

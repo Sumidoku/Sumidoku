@@ -1,9 +1,12 @@
 import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
 import {
+	invalidateForRefreshes,
 	useBasicLogin,
 	useClearSourceCache,
 	useLoginLogout,
+	useNotifySource,
 	useResetSourceSettings,
 	useSaveSourceSettings,
 	useSourceSettings,
@@ -27,6 +30,7 @@ function flattenSettings(list: Setting[]): Setting[] {
 type PendingAction = 'reset' | 'clear' | null;
 
 function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
+	const qc = useQueryClient();
 	const query = useSourceSettings(sourceId);
 	const save = useSaveSourceSettings(sourceId);
 	const reset = useResetSourceSettings(sourceId);
@@ -34,6 +38,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	const login = useBasicLogin(sourceId);
 	const webLogin = useWebLogin(sourceId);
 	const loginLogout = useLoginLogout(sourceId);
+	const notifySource = useNotifySource(sourceId);
 	const [edits, setEdits] = useState<Record<string, unknown>>({});
 	const [pending, setPending] = useState<PendingAction>(null);
 
@@ -55,13 +60,22 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	async function onSave() {
 		if (!hasEdits || !data?.settings) return;
 		const keys = Object.keys(edits);
-		await save.mutateAsync(edits);
+		const touched = flattenSettings(data.settings).filter((s) => keys.includes(s.key));
+		// 每个被改设置声明的 notification 都发给源（Aidoku：值一变即发）
+		const notify = touched
+			.map((s) => s.notification)
+			.filter((n): n is string => typeof n === 'string' && n !== '');
+		await save.mutateAsync({ edits, notify });
 		setEdits({});
 		pushToast('已保存', 'info');
-		const touched = flattenSettings(data.settings).filter((s) => keys.includes(s.key));
-		if (touched.some((s) => s.refreshes && s.refreshes.length > 0)) {
-			pushToast('该源会在后台刷新设置', 'info');
-		}
+		invalidateForRefreshes(qc, sourceId, touched.flatMap((s) => s.refreshes ?? []));
+	}
+
+	/** Button 设置按下即把它的 notification 发给源，再按声明刷新相关数据 */
+	async function onPressButton(setting: Setting) {
+		if (!setting.notification) return;
+		await notifySource.mutateAsync(setting.notification);
+		invalidateForRefreshes(qc, sourceId, setting.refreshes ?? []);
 	}
 
 	async function onReset() {
@@ -104,6 +118,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 					values={data.values}
 					edits={edits}
 					onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
+					onPressButton={onPressButton}
 					onSubmitLogin={onSubmitLogin}
 					onSubmitWebLogin={onSubmitWebLogin}
 					onLogoutLogin={onLogoutLogin}

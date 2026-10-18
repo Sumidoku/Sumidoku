@@ -396,14 +396,26 @@ written next to the package as `<name>.png` so installed sources serve
 Static package files (`source.json`, `settings.json`, `filters.json`) are
 read by the same helper: directory sources from next to `main.wasm`, `.aix`
 sources from `Payload/` inside the zip without extracting. Source settings
-(`GET/PUT /api/v1/sources/{id}/settings`) come from the source's dynamic
-`get_settings` export when present, otherwise from the static
-`settings.json`; the static Aidoku schema (flat, camelCase) is normalized
+(`GET/PUT /api/v1/sources/{id}/settings`) merge the static `settings.json`
+with the dynamic `get_settings` export — static first, dynamic appended,
+matching AidokuRunner's `staticSettings + getSettings()` — deduplicated by
+leaf key with the first occurrence kept (AidokuRunner shows duplicates;
+Sumidoku's rule is the same one the synthesized settings use). The static
+Aidoku schema (flat, camelCase) is normalized
 to the nested shape the dynamic export produces (`api::settings`), so the
 API and web UI see a single contract. Defaults are seeded into
-`source_setting` with `INSERT OR IGNORE` (never overwriting a user value):
-the language, base-URL and `settings.json` defaults at install/reset, and a
-dynamic source's `get_settings` defaults on the first successful fetch,
+`source_setting` with UserDefaults `register(defaults:)` semantics: every
+seed also records the default in the row's `seeded_value`, and a later seed
+(a source update, or the next `get_settings` fetch) rewrites the live value
+only while it still equals the previously seeded default — user-set values
+are never overwritten, while untouched defaults (including the base URL)
+track the new package. Rows written before the column existed carry a NULL
+`seeded_value` and are treated as user values; a live value that merely
+equals the seeded default counts as untouched (a materialized row cannot
+tell an explicit set-to-default apart from never-touched; AidokuRunner's
+registered-defaults model can). Seeding happens
+for the language, base-URL and `settings.json` defaults at install/reset, and a
+dynamic source's `get_settings` defaults on every successful fetch,
 mirroring AidokuRunner's `register(defaults:)`. The rules match
 `loadSettingsDefaults`: recurse `group` and `page`, fall back to the first
 value for `select` and `picker`, and treat a `switch` without a default as
@@ -418,6 +430,21 @@ more than one language gets a synthesized language setting (key
   device locale, so it falls back to the first). A synthesized setting is
   skipped when the source already declares the same key, so the list never
   shows two entries keyed alike.
+Saving settings restarts a running instance with the
+new defaults and then delivers every repeated `?notify=` query parameter to
+`handle_notification` in order; the web UI collects the `notification`
+string of each changed setting that declares one, mirroring Aidoku firing
+it on every change. `POST .../notify` delivers a notification without a
+restart — the `Button` setting's press semantics — and the web UI renders
+Button settings as working buttons wired to it (a Button without a
+`notification` string has no action and renders disabled, same as Aidoku's
+no-op). A changed setting's `refreshes` entries map to client-side query
+invalidations, Aidoku's `refresh-*` notifications: `settings` refetches the
+source settings, `filters` and `listings` the respective queries, and
+`content` the source home. In the web UI a `Link` opens in a new tab when
+`external` is set and in the current tab otherwise (Aidoku's system browser
+vs in-app Safari view), and a `Page` renders its `info` line and URL `icon`
+alongside the title.
 `POST .../settings/reset` clears the
 overrides and re-seeds package defaults; `POST .../login/basic` runs the
 source's `handle_basic_login` and, on success, persists the credentials and
@@ -488,6 +515,17 @@ a manual callback-URL step (or a hosted callback for the rare rewritable
 redirect) plus a PKCE + token-exchange path, with logout removing `<key>` and
 its `.codeVerifier` child (the shared `/login/logout` prefix delete already
 covers the shape). There is no natural automatic-browser path server-side.
+
+### Source settings: biometric gates and iOS-only page metadata
+
+`authToOpen` (select / multi-select / page) and `authToDisable` (toggle)
+gate the action behind iOS LocalAuthentication (device biometrics) in the
+Aidoku app. A browser has no equivalent primitive, so the web UI renders
+these settings ungated; the flags pass through the API unchanged. Two
+`Page` fields are likewise iOS-only: `inlineTitle` only selects the pushed
+page's navigation-bar title mode, which has no analog in the web UI's
+inline rendering, and a `system` icon names an SF Symbol — URL icons
+render, system icons are ignored.
 
 ### HTML DOM fidelity vs SwiftSoup
 

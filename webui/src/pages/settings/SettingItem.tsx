@@ -11,6 +11,8 @@ export interface SettingItemProps {
 	/** 本地未保存的改动，优先于 values 显示 */
 	edits: Record<string, unknown>;
 	onEdit: (key: string, value: unknown) => void;
+	/** Button 设置按下：把它的 notification 发给源 */
+	onPressButton?: (setting: Setting) => Promise<void>;
 	/** 基本登录：由外层提供端点调用，缺省时 login 项降级为只读提示 */
 	onSubmitLogin?: (key: string, username: string, password: string) => Promise<void>;
 	/** 网页登录：粘贴 cookie 换取登录态 */
@@ -289,7 +291,36 @@ function WebLoginSetting({
 	);
 }
 
-export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onSubmitWebLogin, onLogoutLogin }: SettingItemProps) {
+/** Button 设置：按下把 notification 发给源（Aidoku 语义）；没声明动作串时按下也是空操作，直接禁用 */
+function ButtonRow({
+	title,
+	hasAction,
+	onPress
+}: {
+	title: string;
+	hasAction: boolean;
+	onPress: () => Promise<void>;
+}) {
+	const [busy, setBusy] = useState(false);
+	return (
+		<div className="setting-row">
+			<Button
+				size="sm"
+				loading={busy}
+				disabled={!hasAction}
+				onClick={() => {
+					setBusy(true);
+					void onPress().finally(() => setBusy(false));
+				}}
+			>
+				{title}
+			</Button>
+			{!hasAction && <span className="faint">该按钮未声明动作</span>}
+		</div>
+	);
+}
+
+export function SettingItem({ setting, values, edits, onEdit, onPressButton, onSubmitLogin, onSubmitWebLogin, onLogoutLogin }: SettingItemProps) {
 	const [msOpen, setMsOpen] = useState(false);
 
 	// 当前值优先取未保存的修改，其次取服务器已存值
@@ -378,10 +409,11 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onS
 		}
 	} else if (v === 'Button' || (typeof v === 'object' && 'Button' in v)) {
 		body = (
-			<div className="setting-row setting-row--disabled">
-				<span className="setting-row__title">{setting.title}</span>
-				<span className="faint">该操作需要在客户端完成</span>
-			</div>
+			<ButtonRow
+				title={setting.title}
+				hasAction={!!setting.notification && !!onPressButton}
+				onPress={() => onPressButton?.(setting) ?? Promise.resolve()}
+			/>
 		);
 	} else if (typeof v === 'object' && 'Group' in v) {
 		body = (
@@ -394,6 +426,7 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onS
 						values={values}
 						edits={edits}
 						onEdit={onEdit}
+						onPressButton={onPressButton}
 						onSubmitLogin={onSubmitLogin}
 						onSubmitWebLogin={onSubmitWebLogin}
 						onLogoutLogin={onLogoutLogin}
@@ -405,7 +438,11 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onS
 	} else if (typeof v === 'object' && 'Page' in v) {
 		body = (
 			<div className="setting-group">
-				<div className="setting-group__title">{setting.title}</div>
+				<div className="setting-group__title">
+					{v.Page.icon?.type === 'url' && <img className="setting-group__icon" src={v.Page.icon.url} alt="" />}
+					{setting.title}
+				</div>
+				{v.Page.info && <div className="faint setting-group__info">{v.Page.info}</div>}
 				{v.Page.items.map((item) => (
 					<SettingItem
 						key={item.key}
@@ -413,6 +450,7 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onS
 						values={values}
 						edits={edits}
 						onEdit={onEdit}
+						onPressButton={onPressButton}
 						onSubmitLogin={onSubmitLogin}
 						onSubmitWebLogin={onSubmitWebLogin}
 						onLogoutLogin={onLogoutLogin}
@@ -521,10 +559,16 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin, onS
 			</div>
 		);
 	} else if (typeof v === 'object' && 'Link' in v) {
+		// Aidoku：external 走系统浏览器，否则内嵌 SafariView；web 上映射为新标签页 vs 当前标签
+		const external = v.Link.external === true;
 		body = (
-			<a className="setting-link" href={v.Link.url} target="_blank" rel="noreferrer">
+			<a
+				className="setting-link"
+				href={v.Link.url}
+				{...(external ? { target: '_blank', rel: 'noreferrer' } : {})}
+			>
 				{setting.title}
-				<ExternalLink size={13} />
+				{external && <ExternalLink size={13} />}
 			</a>
 		);
 	} else {
