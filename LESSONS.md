@@ -1,10 +1,25 @@
-<!-- reviewed-through: 351893f (2026-10-18) -->
+<!-- reviewed-through: 7264734 (2026-10-18) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**Expected values come from running the reference engine, not from
+reasoning about it.** When the contract is "match engine X" (for
+html_dom: jsoup/SwiftSoup), an expected value produced from docs or
+memory can be wrong in either direction — here an issue's carefully
+researched expectation still didn't survive contact with the real
+engines. Before asserting against the Aidoku contract, run the actual
+jsoup/SwiftSoup on the fragment and pin what they print; when the two
+engines disagree, Aidoku's engine (SwiftSoup) wins and the divergence
+gets a pin test naming the choice.
+- Evidence: 2026-10-18, issue #83's B2 quoted `"xy"` for
+  `x<script>…</script>y`; jsoup 1.15.3 and SwiftSoup 2.13.7 both produce
+  `"x y"` (the script element is a block separator; its content is what
+  is dropped), and `"xy"` is that fragment's `ownText()`. PR #95 asserts
+  the measured value.
 
 **A workaround names its cause and gets retested when the toolchain moves.**
 `strip` was disabled for every release build with no reason on record. The
@@ -49,22 +64,6 @@ tag nor release.
 cancelled run. Read the per-job conclusion before deciding what happened.
 - Evidence: the run-1 watcher exited 1 while four of five build legs were
   green; the queued macos-13 leg's cancellation was the only red.
-
-**Break the fix with the work committed and restore one file at a time.**
-The red-green ritual ends by reverting the break. A bare `git stash` takes
-everything uncommitted — two sessions lost their whole implementation that
-way, the second one after the dispatch prompt already warned about the
-first. Commit the green state before breaking it; restore with
-`git stash push -- <file>` or a manual edit, never a bare stash among
-uncommitted work. And `git stash drop` is not a restore: it deletes the
-stash — after `stash push` reverted the tree, the stashed diff is the
-*only* copy of the fix when the fix itself was still uncommitted.
-*(recurrence, third sighting — noted so the daily review can count it.)*
-- Evidence: PR #39's session recovered its implementation from a dangling
-  stash commit; PR #46's replayed six destroyed webui files from memory —
-  one day after the first incident and despite the warning (2026-10-18);
-  PR #62's session dropped the stash holding its own uncommitted fix and
-  recovered it from the dangling commit `9c109c5` (2026-10-18).
 
 **Write every GitHub body to a file; never inline it.**
 Backticks inside a double-quoted `--body`/`--comment` string are command
