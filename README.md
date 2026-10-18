@@ -7,6 +7,30 @@
 
 Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a single binary or a Docker image.
 
+![Library](docs/images/library.png)
+![Source repositories](docs/images/source-repos.png)
+
+## Features
+
+- **Aidoku WASM sources** — run source packages from any Aidoku-compatible
+  repository: listings, search, filters, source home pages, settings,
+  JavaScript execution, canvas drawing, and partial-result streaming all
+  work server-side.
+- **Source repositories** — add Aidoku-style source repos, browse with
+  language/NSFW filters, one-click install and update (per-source or all).
+- **Library and reading** — categories, reading progress, history,
+  chapter downloads, scheduled library updates, and OPDS 1.2 + 2.0
+  catalogs for KOReader and other readers.
+- **Cloudflare bypass** — an optional [trawl](https://github.com/germondai/trawl)
+  sidecar retries challenged requests and reuses the clearance.
+- **Real-browser login** — an optional Chromium sidecar (driven over CDP)
+  backs webview login flows, cookies landing in the source's session.
+- **Authentication** — one site password guards the web UI, REST API and
+  OPDS (off by default); session tokens and long-lived API keys.
+- **Backup and migration** — versioned JSON backup, scheduled backups with
+  retention, and imports from Aidoku (`.aib`) and Suwayomi/Mihon
+  (`.tachibk`, `.proto.gz`).
+
 ## Quick start
 
 ```sh
@@ -40,38 +64,6 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 | `SUMIDOKU_BACKUP_RETENTION_COUNT` | — | override the `backup.retention_count` setting (default 10) |
 | `SUMIDOKU_BACKUP_DIR` | `<config>/backups` | scheduled-backup destination, overriding the `backup.dir` setting; may live outside the config dir |
 
-## Authentication
-
-Authentication is off until `SUMIDOKU_AUTH_PASSWORD` (or the legacy
-`SUMIDOKU_BASIC_PASSWORD`) is set. With a password configured, the web UI
-shows a login page, `/api/v1` requires `Authorization: Bearer <token>` (a
-login-issued session token or a configured API key), and the OPDS catalogs
-require Basic auth with the same password. Unauthenticated requests get a
-uniform `401` (`{"error":{"code":"unauthorized"}}`). The config-set password
-is hashed (argon2) into the database on every boot, so it overrides a
-password previously changed through the UI; API keys stay in the config
-only.
-
-## Cloudflare bypass (trawl)
-
-Sources behind Cloudflare anti-bot protection are fetched through a [trawl](https://github.com/germondai/trawl) sidecar: a challenge-aware forward proxy that passes ordinary traffic through and solves detected challenges with a real browser.
-
-With `SUMIDOKU_NET_TRAWL_PROXY` set, a direct request answered `403`/`503` with Cloudflare headers is retried once through trawl. Cookies on the solved response (`cf_clearance`) land in the source's session jar, so later direct requests reuse the clearance; when it expires the cycle repeats. Sources that challenge every request can skip the failed direct attempt by listing their domains in `SUMIDOKU_NET_RELAY_DOMAINS`. Without the variable, behavior is unchanged: requests go direct and the challenge page reaches the source.
-
-HTTPS sources also need `SUMIDOKU_NET_TRAWL_CA`: trawl terminates TLS locally to inspect responses and re-signs with its own root CA, which the client must trust. The compose file already runs the sidecar and shares the CA through the `trawl-ca` volume — trawl writes `ca.crt` into it on first boot, Sumidoku reads it from `/trawl-ca/ca.crt`.
-
-## Browser-backed webview (source login)
-
-Sources that log in through a web view (load the login page in a real browser, then call their API with the session cookie) need a Chromium sidecar: Sumidoku ships no browser, it drives one over CDP. Point `SUMIDOKU_NET_BROWSER_WS` at the sidecar's CDP websocket — for the [browserless](https://ghcr.io/browserless/chromium) image that is `ws://<host>:3000/chromium`; other CDP-capable images (e.g. headless-shell on :9222) work the same way, with whatever path that image serves.
-
-The compose file carries an optional `chromium` service, off by default:
-
-```sh
-docker compose --profile browser up -d
-```
-
-and `SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium` (a commented line is already in the compose environment). Each webview a source opens gets an isolated browser context — cookies never bleed across webviews — and after every page load the context's cookies flow into the source's session jar, so once the login page completes, the source's own API requests carry the session. Without the variable, behavior is unchanged: the navigation/cookie webview functions report themselves unsupported in the source log.
-
 ## Installing sources
 
 Drop `.aix` source packages (or extracted source directories) into `./config/sources`, then press the scan button on the web UI's browse page, or call:
@@ -80,34 +72,18 @@ Drop `.aix` source packages (or extracted source directories) into `./config/sou
 curl -X POST http://localhost:3000/api/v1/sources/scan
 ```
 
+You can also add an Aidoku-compatible source repository from the browse page and install sources from it directly.
+
 ## OPDS
 
-The OPDS 1.2 catalog is served at `/opds/v1.2`. When authentication is enabled, the catalogs require Basic auth with the site password (any non-empty username); see [Authentication](#authentication).
+The OPDS 1.2 catalog is served at `/opds/v1.2` (OPDS 2.0 at `/opds/v2`). When authentication is enabled, the catalogs require Basic auth with the site password (any non-empty username); see [docs/authentication.md](docs/authentication.md).
 
-## Backup
+## Documentation
 
-`GET /api/v1/backup` downloads the full library state — library membership and manga metadata, categories, reading progress, app settings and source settings — as one JSON document with a `version` field (currently `1`; unknown versions are rejected with `400`). `POST /api/v1/backup` imports it back, optionally limited with `?sections=library,categories,progress,settings,sourceSettings`. Import upserts by natural key (source key + manga key, chapter key, category name) inside a single transaction, so a failed or invalid backup leaves the database untouched; entries whose source is not installed are skipped and reported in the response `warnings`. The settings page of the web UI has download and restore buttons. The file contains source settings, which may include site passwords — store it accordingly.
-
-## Importing from Aidoku
-
-`POST /api/v1/import/aidoku` imports an Aidoku app backup (`.aib`, a binary plist) into the library: library manga, reading progress (chapter read state and last page read) and categories with membership. Aidoku and Sumidoku share the same source ecosystem, so entries match on source key and manga/chapter key; entries whose source is not installed are skipped and reported with a reason in the response `skipped` list, never half-imported silently. The import is additive — existing library entries and categories keep their current state, and progress merges by taking the larger last-page-read, OR-ing the read flag and keeping the newer read timestamp. `POST /api/v1/import/aidoku?dryRun=true` runs the same transaction and rolls it back, returning the would-import report (per-section counts plus the skipped list) without writing anything. The web UI's settings page has an "从 Aidoku 导入" button under the backup section that walks upload → dry-run preview → confirm. Aidoku settings, source configs and trackers are out of scope.
-
-## Importing from Suwayomi/Mihon
-
-`POST /api/v1/import/suwayomi` imports a Suwayomi-Server or Mihon/Tachiyomi backup (`.tachibk`, `.proto.gz` — both are gzip around one protobuf `Backup` message; raw proto and zip containers are sniffed too) into the library: library manga (`favorite` entries), chapter read history (read state, last page read and the history timeline; chapters present only in history are kept), and categories with membership. The merge is additive, same as the Aidoku import. Backups reference Mihon extension sources by id and name, not Aidoku source keys, so every backup source group is resolved first: it auto-matches only when exactly one installed source has the same normalized name — multiple hits are never guessed — and the response `sources` list reports each group's state and manga count. Unmatched groups need an explicit `?sourceMapping={"<mihonSourceId>": "<aidokuSourceKey>"}` or they skip wholesale into the `skipped` list. `?dryRun=true` previews the same transaction without writing. The web UI's settings page has a "从 Suwayomi 导入" button under the backup section that walks upload → grouped preview → per-source mapping → confirm. One caveat: a backup's manga `url` is the Mihon source's internal key, which does not always match the corresponding Aidoku source's manga key; such entries import with their progress but a later source refresh may not resolve them. Tracking, extension settings, saved searches and server preferences are out of scope.
-
-## Scheduled backups
-
-The server can also write backups on its own schedule, so a corrupted database or a bad change between manual exports stays recoverable. It is configured through the `setting` table (the web UI's settings page exposes all of it under "自动备份"), and each value can be pinned by the env override above for headless deployments:
-
-| Setting key | Default | Purpose |
-| --- | --- | --- |
-| `backup.enabled` | `false` | master switch |
-| `backup.interval_hours` | `24` | hours between runs (minimum 1) |
-| `backup.retention_count` | `10` | how many newest files to keep |
-| `backup.dir` | `<config>/backups` | destination directory |
-
-When enabled, a background task writes `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) every interval — the same document `GET /api/v1/backup` serves — stamps `backup.last_run`, and deletes files beyond the retention count, oldest first; the newest file is never deleted, even with `backup.retention_count = 0`. At startup, if more than one interval elapsed since `backup.last_run` (or no backup was ever taken), one backup runs immediately, so downtime does not leave a gap. `GET /api/v1/backups` lists the files (name, size, creation time, newest first); `POST /api/v1/backups/restore` with `{"name": "<file>"}` restores one through the same validated import path as the upload endpoint, and the settings page lists them with a restore action.
+- [docs/authentication.md](docs/authentication.md) — the auth model, credentials, OPDS and token details
+- [docs/sidecars.md](docs/sidecars.md) — trawl (Cloudflare bypass) and Chromium (webview login) setup
+- [docs/backup.md](docs/backup.md) — backup format, scheduled backups, and the Aidoku/Suwayomi import paths
+- [docs/architecture.md](docs/architecture.md) — the technical contract: API surface, WASM runtime, data flow
 
 ## Local build
 
@@ -122,6 +98,10 @@ cargo build --release -p sumidoku-server
 
 - `cargo test` — server test suite
 - `cd webui && npm run dev` — Vite dev server, proxying API calls to the server on :3000
+
+## Contributing
+
+Issues and pull requests are welcome. The project is built and maintained by agent sessions — [AGENTS.md](AGENTS.md) is the entry point for how that works, and [docs/contributors.md](docs/contributors.md) describes how community PRs are triaged and reviewed.
 
 ## License
 
