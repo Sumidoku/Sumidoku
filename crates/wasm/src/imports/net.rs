@@ -6,7 +6,7 @@ use crate::{
 use image::ImageReader;
 use reqwest::{
 	StatusCode,
-	header::{COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
+	header::{ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
 };
 use crate::traits::CookieSink;
 use std::{collections::HashMap, io::Cursor, str::FromStr, sync::Arc, time::Duration};
@@ -14,6 +14,9 @@ use url::Url;
 use wasmer::FunctionEnvMut;
 
 const FALLBACK_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+/// Aidoku 宿主由 URLSession 按系统语言隐式提供 Accept-Language；reqwest 不会，
+/// 源没设时补一个默认值（部分 WAF 对缺失该头的请求直接 403）
+const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 const MAX_ATTEMPTS: u32 = 3;
 
 enum Result {
@@ -228,25 +231,37 @@ pub(crate) fn perform(
 
 	net.rate.acquire();
 
+	// 请求头只组装一次：重试与 CF 升级重发同一份头，放循环里会把 jar
+	// cookie 反复拼进 Cookie
+	if !request.headers.contains_key(USER_AGENT) {
+		let ua = net
+			.policy
+			.user_agent()
+			.unwrap_or_else(|| FALLBACK_USER_AGENT.to_string());
+		if let Ok(value) = HeaderValue::from_str(&ua) {
+			request.headers.insert(USER_AGENT, value);
+		}
+	}
+	if !request.headers.contains_key(ACCEPT_LANGUAGE) {
+		request
+			.headers
+			.insert(ACCEPT_LANGUAGE, HeaderValue::from_static(DEFAULT_ACCEPT_LANGUAGE));
+	}
+	// 对齐 Aidoku：jar cookie 拼在源自带 Cookie 前面，而不是源设了就丢掉 jar
+	if let Some(jar_header) = net.jar.header_for(&url) {
+		let merged = match request.headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
+			Some(existing) if !existing.is_empty() => format!("{jar_header}; {existing}"),
+			_ => jar_header,
+		};
+		if let Ok(value) = HeaderValue::from_str(&merged) {
+			request.headers.insert(COOKIE, value);
+		}
+	}
+
 	let mut attempt = 0;
 	let mut escalated = false;
 	loop {
 		attempt += 1;
-		if !request.headers.contains_key(USER_AGENT) {
-			let ua = net
-				.policy
-				.user_agent()
-				.unwrap_or_else(|| FALLBACK_USER_AGENT.to_string());
-			if let Ok(value) = HeaderValue::from_str(&ua) {
-				request.headers.insert(USER_AGENT, value);
-			}
-		}
-		if let Some(jar_header) = net.jar.header_for(&url)
-			&& let Ok(value) = HeaderValue::from_str(&jar_header)
-		{
-			request.headers.entry(COOKIE).or_insert(value);
-		}
-
 		let client = net.clients.get(&route).expect("client built above");
 		let mut builder = client
 			.request(request.method.into(), url.as_str())
@@ -505,17 +520,80 @@ pub fn get_header(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_
 }
 
 pub fn html(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let parsed = match with_response(&mut env, rid, Result::MissingResponse, |r| {
-		std::str::from_utf8(&r.data)
-			.ok()
-			.map(|text| (text.to_string(), r.url.as_str().to_string()))
+	let (text, url) = match with_response(&mut env, rid, Result::MissingResponse, |r| {
+		(decode_body(&r.headers, &r.data), r.url.as_str().to_string())
 	}) {
-		Ok(Some(p)) => p,
-		Ok(None) => return Result::InvalidString.into(),
+		Ok(p) => p,
 		Err(e) => return e,
 	};
-	let document = crate::html_dom::HtmlDocument::parse(&parsed.0, Some(&parsed.1));
+	let document = crate::html_dom::HtmlDocument::parse(&text, Some(&url));
 	env.data_mut().store.store(StoreItem::HtmlDocument(document))
+}
+
+/// 按响应体的 charset 解码：BOM → Content-Type → `<meta charset>` → UTF-8 兜底。
+/// Aidoku 宿主由 URLSession/SwiftSoup 处理这一步，reqwest 不管，
+/// 旧实现直接在字节上跑 from_utf8，非 UTF-8 页面被整页判失败
+fn decode_body(headers: &HeaderMap, data: &[u8]) -> String {
+	let (text, _, _) = detect_encoding(headers, data).decode(data);
+	text.into_owned()
+}
+
+fn detect_encoding(headers: &HeaderMap, data: &[u8]) -> &'static encoding_rs::Encoding {
+	if data.starts_with(&[0xEF, 0xBB, 0xBF]) {
+		return encoding_rs::UTF_8;
+	}
+	if data.starts_with(&[0xFF, 0xFE]) {
+		return encoding_rs::UTF_16LE;
+	}
+	if data.starts_with(&[0xFE, 0xFF]) {
+		return encoding_rs::UTF_16BE;
+	}
+	if let Some(enc) = headers
+		.get(CONTENT_TYPE)
+		.and_then(|v| v.to_str().ok())
+		.and_then(charset_from_content_type)
+		.and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+	{
+		return enc;
+	}
+	meta_charset(data).unwrap_or(encoding_rs::UTF_8)
+}
+
+fn charset_from_content_type(value: &str) -> Option<&str> {
+	for part in value.split(';') {
+		let part = part.trim();
+		if let Some((key, val)) = part.split_once('=')
+			&& key.trim().eq_ignore_ascii_case("charset")
+		{
+			let val = val.trim().trim_matches(['"', '\'']);
+			if !val.is_empty() {
+				return Some(val);
+			}
+		}
+	}
+	None
+}
+
+/// 从文档前 1024 字节里嗅探 `<meta charset>` / `<meta http-equiv=content-type>`
+fn meta_charset(data: &[u8]) -> Option<&'static encoding_rs::Encoding> {
+	let head: String = data[..data.len().min(1024)].iter().map(|&b| char::from(b)).collect();
+	let idx = head.to_ascii_lowercase().find("charset")?;
+	let after = head[idx + "charset".len()..].trim_start();
+	let after = after.strip_prefix('=')?.trim_start();
+	let label = if let Some(rest) = after.strip_prefix('"') {
+		rest.split('"').next()?
+	} else if let Some(rest) = after.strip_prefix('\'') {
+		rest.split('\'').next()?
+	} else {
+		let end = after
+			.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.'))
+			.unwrap_or(after.len());
+		&after[..end]
+	};
+	if label.is_empty() {
+		return None;
+	}
+	encoding_rs::Encoding::for_label(label.as_bytes())
 }
 
 pub fn set_rate_limit(mut env: FunctionEnvMut<WasmEnv>, permits: i32, period: i32, unit: i32) {
@@ -768,5 +846,57 @@ mod tests {
 		let jar = CookieJar::new(domains, Arc::new(crate::traits::NoopCookieSink));
 		let url = Url::parse("https://m.example.com/x").unwrap();
 		assert_eq!(jar.header_for(&url).as_deref(), Some("sid=abc"));
+	}
+
+	#[test]
+	fn cookie_header_merges_jar_with_source() {
+		// jar cookie 与源自带 Cookie 合并，而不是源设了就丢掉 jar（对齐 Aidoku）
+		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let domains = HashMap::from([(
+			"127.0.0.1".to_string(),
+			HashMap::from([("jar".to_string(), "1".to_string())]),
+		)]);
+		let jar = CookieJar::new(domains, Arc::new(crate::traits::NoopCookieSink));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), jar);
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		request.headers.insert(COOKIE, HeaderValue::from_static("src=1"));
+		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		let head = server.heads().join("\n").to_ascii_lowercase();
+		assert!(head.contains("cookie: jar=1; src=1"), "head: {head}");
+	}
+
+	#[test]
+	fn accept_language_default_is_sent() {
+		// 源没设时补默认 Accept-Language（部分 WAF 缺它就 403）
+		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		let head = server.heads().join("\n").to_ascii_lowercase();
+		assert!(head.contains("accept-language:"), "head: {head}");
+	}
+
+	#[test]
+	fn decode_body_honors_content_type_charset() {
+		let mut headers = HeaderMap::new();
+		headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=gbk"));
+		let gbk = encoding_rs::GBK.encode("中文").0;
+		assert_eq!(decode_body(&headers, &gbk), "中文");
+	}
+
+	#[test]
+	fn decode_body_honors_meta_charset() {
+		let mut body = b"<html><head><meta charset=\"big5\"></head><body>".to_vec();
+		body.extend_from_slice(&encoding_rs::BIG5.encode("中").0);
+		assert!(decode_body(&HeaderMap::new(), &body).ends_with('中'));
+	}
+
+	#[test]
+	fn decode_body_defaults_to_utf8() {
+		assert_eq!(decode_body(&HeaderMap::new(), "中文".as_bytes()), "中文");
 	}
 }
