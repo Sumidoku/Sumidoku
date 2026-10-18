@@ -14,6 +14,40 @@ export interface Source {
 	enabled: boolean;
 	installedAt: number;
 	updatedAt: number;
+	/** 各源仓库缓存里的更新版本，无仓库或无更新为 null */
+	updateVersion: number | null;
+}
+
+export interface SourceRepo {
+	id: number;
+	url: string;
+	name: string | null;
+	sourceCount: number;
+	addedAt: number;
+	fetchedAt: number | null;
+	/** 上次 refresh 失败的归一文案；界面据此标 stale */
+	fetchError: string | null;
+}
+
+export interface RepoSourceEntry {
+	key: string;
+	name: string;
+	version: number;
+	languages: string[];
+	contentRating: number;
+	iconUrl: string | null;
+	baseUrl: string | null;
+	repoId: number;
+	repoName: string | null;
+	/** 已装则有内部 id，供单源更新用 */
+	installedId: number | null;
+	installedVersion: number | null;
+	updateVersion: number | null;
+}
+
+export interface UpdateAllOutcome {
+	updated: string[];
+	failed: { key: string; reason: string }[];
 }
 
 export interface Manga {

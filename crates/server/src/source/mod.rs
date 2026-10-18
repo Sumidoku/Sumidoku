@@ -1,4 +1,5 @@
 pub mod cover;
+pub mod repo;
 pub mod routed;
 
 use crate::error::{ApiError, ApiResult};
@@ -29,7 +30,7 @@ pub struct SkippedSource {
 }
 
 /// source.key 只允许这组字符（保留前缀 local/komga/kavita/suwayomi）
-fn valid_source_key(key: &str) -> bool {
+pub(crate) fn valid_source_key(key: &str) -> bool {
 	!key.is_empty()
 		&& key
 			.chars()
@@ -72,7 +73,7 @@ pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOu
 		let result = if path.is_dir() {
 			scan_one_dir(pool, &path).await
 		} else {
-			scan_one_aix(pool, &path).await
+			register_aix(pool, &path).await
 		};
 		match result {
 			Ok((key, is_update)) => {
@@ -127,7 +128,8 @@ async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), 
 	.await
 }
 
-async fn scan_one_aix(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
+/// .aix 注册的统一入口：目录扫描与仓库安装共用；成功返回 (key, 是否更新既有源)
+pub(crate) async fn register_aix(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
 	let path_buf = path.to_path_buf();
 	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
 	let (doc, settings) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))

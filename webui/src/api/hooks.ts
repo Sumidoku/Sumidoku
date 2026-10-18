@@ -23,8 +23,11 @@ import type {
 	PageData,
 	PatchCategoryBody,
 	PatchMangaBody,
+	RepoSourceEntry,
 	ScanOutcome,
-	Source
+	Source,
+	SourceRepo,
+	UpdateAllOutcome
 } from './types';
 
 export const queryClient = new QueryClient({
@@ -36,6 +39,8 @@ export const queryClient = new QueryClient({
 // query key 统一出口，跨页失效（如入库后刷新书库）按前缀对账
 export const qk = {
 	sources: ['sources'] as const,
+	sourceRepos: ['source-repos'] as const,
+	repoSources: ['source-repos', 'sources'] as const,
 	categories: ['categories'] as const,
 	library: ['library'] as const,
 	manga: (id: number) => ['manga', id] as const,
@@ -251,6 +256,103 @@ export function useDeleteSource() {
 	return useMutation({
 		mutationFn: (sourceId: number) => api(`/sources/${sourceId}`, { method: 'DELETE' }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
+// ---- 源仓库 ----
+
+export interface RepoBrowseFilter {
+	lang?: string;
+	query?: string;
+	hideNsfw?: boolean;
+}
+
+export function useSourceRepos() {
+	return useQuery({
+		queryKey: qk.sourceRepos,
+		queryFn: () => api<SourceRepo[]>('/source-repos')
+	});
+}
+
+export function useRepoSources(filter: RepoBrowseFilter, enabled = true) {
+	return useQuery({
+		queryKey: [...qk.repoSources, filter],
+		queryFn: () => {
+			const qs = new URLSearchParams();
+			if (filter.lang) qs.set('lang', filter.lang);
+			if (filter.query) qs.set('query', filter.query);
+			if (filter.hideNsfw) qs.set('nsfw', 'hide');
+			const suffix = qs.size > 0 ? `?${qs}` : '';
+			return api<RepoSourceEntry[]>(`/source-repos/sources${suffix}`);
+		},
+		enabled
+	});
+}
+
+/** 安装/更新后已装列表与各过滤结果里的 installedVersion/updateVersion 都要重算 */
+function invalidateSourceViews(qc: QueryClient) {
+	void qc.invalidateQueries({ queryKey: qk.sources });
+	void qc.invalidateQueries({ queryKey: qk.repoSources });
+}
+
+export function useAddSourceRepo() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (url: string) =>
+			api<SourceRepo>('/source-repos', { method: 'POST', body: { url } }),
+		onSuccess: () => {
+			void qc.invalidateQueries({ queryKey: qk.sourceRepos });
+			void qc.invalidateQueries({ queryKey: qk.repoSources });
+		}
+	});
+}
+
+export function useDeleteSourceRepo() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (repoId: number) => api(`/source-repos/${repoId}`, { method: 'DELETE' }),
+		onSuccess: () => {
+			void qc.invalidateQueries({ queryKey: qk.sourceRepos });
+			void qc.invalidateQueries({ queryKey: qk.repoSources });
+		}
+	});
+}
+
+export function useRefreshSourceRepo() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (repoId: number) =>
+			api<SourceRepo>(`/source-repos/${repoId}/refresh`, { method: 'POST' }),
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: qk.sourceRepos });
+			void qc.invalidateQueries({ queryKey: qk.repoSources });
+		}
+	});
+}
+
+export function useInstallRepoSource() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (body: { repoId: number; sourceKey: string }) =>
+			api<Source>('/source-repos/install', { method: 'POST', body }),
+		onSuccess: () => invalidateSourceViews(qc)
+	});
+}
+
+export function useUpdateSource() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (sourceId: number) =>
+			api<Source>(`/sources/${sourceId}/update`, { method: 'POST' }),
+		onSuccess: () => invalidateSourceViews(qc)
+	});
+}
+
+export function useUpdateAllSources() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () => api<UpdateAllOutcome>('/source-repos/update-all', { method: 'POST' }),
+		onSuccess: () => invalidateSourceViews(qc)
 	});
 }
 

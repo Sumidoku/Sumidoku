@@ -2,6 +2,7 @@ pub mod download;
 pub mod library;
 pub mod page;
 pub mod reader;
+pub mod repo;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -32,6 +33,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/sources/scan", post(scan_sources))
 		.route("/api/v1/sources/{id}", delete(delete_source))
+		.route("/api/v1/sources/{id}/update", post(repo::update_source))
 		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
 		.route("/api/v1/sources/{id}/filters", get(get_filters))
 		.route("/api/v1/sources/{id}/search", post(search_source))
@@ -74,6 +76,15 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
 		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
+		.route(
+			"/api/v1/source-repos",
+			get(repo::list_repos).post(repo::add_repo),
+		)
+		.route("/api/v1/source-repos/{id}", delete(repo::delete_repo))
+		.route("/api/v1/source-repos/{id}/refresh", post(repo::refresh_repo))
+		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
+		.route("/api/v1/source-repos/install", post(repo::install_source))
+		.route("/api/v1/source-repos/update-all", post(repo::update_all))
 		.with_state(state)
 }
 
@@ -99,22 +110,10 @@ async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 	)
 	.fetch_all(&state.pool)
 	.await?;
+	let latest = crate::source::repo::latest_versions(&state.pool).await?;
 	let sources: Vec<Value> = rows
 		.iter()
-		.map(|row| {
-			json!({
-				"id": row.id,
-				"key": row.key,
-				"name": row.name,
-				"version": row.version,
-				"languages": row.languages.0,
-				"contentRating": row.content_rating,
-				"baseUrl": row.base_url,
-				"enabled": row.enabled,
-				"installedAt": row.installed_at,
-				"updatedAt": row.updated_at,
-			})
-		})
+		.map(|row| repo::source_json(row, &latest))
 		.collect();
 	Ok(Json(json!(sources)))
 }
@@ -126,13 +125,7 @@ async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 
 async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
 	source_row(&state, id).await?;
-	let entry = state.sources.write().await.remove(&id);
-	if let Some(entry) = entry {
-		// 有在途调用持有 Arc 时，让位给引用计数归零后 actor 线程自然退出
-		if let Ok(handle) = Arc::try_unwrap(entry.handle) {
-			handle.shutdown().await;
-		}
-	}
+	state.evict_source(id).await;
 	sqlx::query("DELETE FROM source WHERE id = ?")
 		.bind(id)
 		.execute(&state.pool)
