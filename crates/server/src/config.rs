@@ -16,8 +16,8 @@ pub struct NetConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
 	pub addr: String,
+	pub config_dir: PathBuf,
 	pub database_url: String,
-	pub sources_dir: PathBuf,
 	pub call_concurrency: usize,
 	pub log: String,
 	pub covers_dir: PathBuf,
@@ -39,8 +39,8 @@ impl Default for Config {
 	fn default() -> Self {
 		Self {
 			addr: "0.0.0.0:3000".into(),
+			config_dir: PathBuf::from("./data"),
 			database_url: "sqlite://data/sumidoku.db?mode=rwc".into(),
-			sources_dir: PathBuf::from("./sources"),
 			call_concurrency: 8,
 			log: "info".into(),
 			covers_dir: PathBuf::from("./data/covers"),
@@ -71,15 +71,26 @@ struct NetConfigFile {
 	allow_direct_fallback: Option<bool>,
 }
 
+impl Config {
+	/// db、covers、sources 全部钉在 config_dir 下派生，数据根只有这一个配置项
+	fn derive_paths(&mut self) {
+		self.database_url = format!("sqlite://{}/sumidoku.db?mode=rwc", self.config_dir.display());
+		self.covers_dir = self.config_dir.join("covers");
+	}
+
+	/// 源包目录钉死在 config_dir 下，不开放配置
+	pub fn sources_dir(&self) -> PathBuf {
+		self.config_dir.join("sources")
+	}
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ConfigFile {
 	addr: Option<String>,
-	database_url: Option<String>,
-	sources_dir: Option<PathBuf>,
+	config_dir: Option<PathBuf>,
 	call_concurrency: Option<usize>,
 	log: Option<String>,
-	covers_dir: Option<PathBuf>,
 	cover_cache_max: Option<usize>,
 	webui_dir: Option<PathBuf>,
 	user_agent: Option<String>,
@@ -95,7 +106,7 @@ struct ConfigFile {
 }
 
 impl Config {
-	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUMIDOKU_ 前缀优先，DATABASE_URL 兜底）
+	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUMIDOKU_ 前缀）
 	pub fn load() -> Self {
 		let mut config = Self::default();
 		if let Ok(raw) = std::fs::read_to_string("./config.toml") {
@@ -105,6 +116,7 @@ impl Config {
 			}
 		}
 		config.apply_env();
+		config.derive_paths();
 		config
 	}
 
@@ -112,20 +124,14 @@ impl Config {
 		if let Some(v) = file.addr {
 			self.addr = v;
 		}
-		if let Some(v) = file.database_url {
-			self.database_url = v;
-		}
-		if let Some(v) = file.sources_dir {
-			self.sources_dir = v;
+		if let Some(v) = file.config_dir {
+			self.config_dir = v;
 		}
 		if let Some(v) = file.call_concurrency {
 			self.call_concurrency = v;
 		}
 		if let Some(v) = file.log {
 			self.log = v;
-		}
-		if let Some(v) = file.covers_dir {
-			self.covers_dir = v;
 		}
 		if let Some(v) = file.cover_cache_max {
 			self.cover_cache_max = v;
@@ -186,14 +192,8 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_ADDR") {
 			self.addr = v;
 		}
-		if let Ok(v) = std::env::var("DATABASE_URL") {
-			self.database_url = v;
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_DATABASE_URL") {
-			self.database_url = v;
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_SOURCES_DIR") {
-			self.sources_dir = PathBuf::from(v);
+		if let Ok(v) = std::env::var("SUMIDOKU_CONFIG_DIR") {
+			self.config_dir = PathBuf::from(v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_CALL_CONCURRENCY")
 			&& let Ok(n) = v.parse()
@@ -202,9 +202,6 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_LOG") {
 			self.log = v;
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_COVERS_DIR") {
-			self.covers_dir = PathBuf::from(v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_COVER_CACHE_MAX")
 			&& let Ok(n) = v.parse()

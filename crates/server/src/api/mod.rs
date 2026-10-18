@@ -120,7 +120,7 @@ async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 }
 
 async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let outcome = scan_sources_dir(&state.pool, &state.config.sources_dir).await?;
+	let outcome = scan_sources_dir(&state.pool, &state.config.sources_dir()).await?;
 	Ok(Json(serde_json::to_value(outcome)?))
 }
 

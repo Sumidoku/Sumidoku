@@ -27,6 +27,7 @@ use tower_http::trace::TraceLayer;
 pub async fn build_app(config: Config) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.covers_dir)?;
 	std::fs::create_dir_all(&config.downloads_dir)?;
+	std::fs::create_dir_all(config.sources_dir())?;
 	let pool = db::create_pool(&config.database_url).await?;
 	let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_defaults_writer(pool.clone(), rx));

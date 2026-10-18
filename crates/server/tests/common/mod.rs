@@ -23,8 +23,8 @@ pub struct TestApp {
 pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 	Config {
 		addr: "127.0.0.1:0".into(),
+		config_dir: tmp.path().to_path_buf(),
 		database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
-		sources_dir: tmp.path().join("sources"),
 		covers_dir: tmp.path().join("covers"),
 		webui_dir: tmp.path().join("webui"),
 		call_concurrency: 8,
