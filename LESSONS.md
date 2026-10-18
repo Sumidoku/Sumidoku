@@ -227,3 +227,30 @@ consumed before trusting a "transparent" handoff.
 - Evidence: 2026-10-19, bakamh's managed challenge worked through
   aidoku-cf-relay and Suwayomi but not Sumidoku; `routed.rs:trawl_escalation`
   now marks the host and `route_for` keeps it on trawl.
+
+**A change event's `currentTarget` is dead by the time a deferred state
+updater runs — read the value eagerly.** React nulls `currentTarget` when
+the dispatch ends, so `setState((cur) => … e.currentTarget.value …)`
+crashes with "Cannot read properties of null (reading 'value')" whenever
+the updater is not eagerly evaluated during dispatch (batching defers
+it). Grab `const v = e.currentTarget.value` first and close over `v`;
+sites that survive on React's eager-state optimization are still
+landmines. Type checking cannot see this — only an exercised UI catches
+it, so UI changes get a real-browser smoke, not just `tsc`.
+- Evidence: 2026-10-19, PR #112's localStorage input crashed the source
+  settings modal on its first keystroke in real-browser smoke (fixed in
+  ec3a91b); the same latent pattern in `SettingsPage.tsx` and
+  `MangaDetailPage.tsx` filed as #113.
+
+**Local UI smoke runs the dev loop, not the embedded build.** The vite
+dev server proxies `/api` and `/opds` to a debug backend (README
+documents it), giving hot reload and readable stacks; the embedded
+production build costs a rebuild per edit, fights browser caches, and
+hides stack traces behind minification — and its serving path is
+already smoked by CI's docker leg on every PR. Reach for the release
+binary only when the change touches the embed/serving layer itself.
+- Evidence: 2026-10-19, PR #112's acceptance burned cycles on a stale
+  embed (the disk branch wins over embed when `./webui/build` exists
+  under the server's cwd), on cache busting, and on hand-decoding a
+  minified `currentTarget` stack that dev-server source maps would have
+  named directly; README.md:101 had the dev loop documented all along.
