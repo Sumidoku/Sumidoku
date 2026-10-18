@@ -63,22 +63,31 @@ function StepperInput({
 	);
 }
 
-/** 基本登录表单：提交后由源校验，成功即写回凭据 */
+/** 基本登录表单：已登录时回填用户名并标记登录态，提交后由源校验，成功即写回凭据 */
 function LoginSetting({
 	title,
 	useEmail,
+	savedUsername,
+	loggedIn,
 	onSubmit
 }: {
 	title: string;
 	useEmail: boolean;
+	/** 服务端已存的用户名，回填输入框 */
+	savedUsername: string;
+	/** 服务端已标记登录 */
+	loggedIn: boolean;
 	onSubmit: (username: string, password: string) => Promise<void>;
 }) {
-	const [username, setUsername] = useState('');
+	const [username, setUsername] = useState(savedUsername);
 	const [password, setPassword] = useState('');
 	const [busy, setBusy] = useState(false);
 	return (
 		<div className="setting-row setting-row--col">
-			<span className="setting-row__title">{title}</span>
+			<div className="setting-login__head">
+				<span className="setting-row__title">{title}</span>
+				{loggedIn && <Chip color="success">已登录</Chip>}
+			</div>
 			<Input
 				placeholder={useEmail ? '邮箱' : '用户名'}
 				autoComplete={useEmail ? 'email' : 'username'}
@@ -101,7 +110,7 @@ function LoginSetting({
 					void onSubmit(username, password).finally(() => setBusy(false));
 				}}
 			>
-				登录
+				{loggedIn ? '重新登录' : '登录'}
 			</Button>
 		</div>
 	);
@@ -160,11 +169,14 @@ export function SettingItem({ setting, values, edits, onEdit, onSubmitLogin }: S
 		);
 	} else if (typeof v === 'object' && 'Login' in v) {
 		const method = v.Login.method;
+		const savedUser = cur(`${setting.key}.username`);
 		body =
 			onSubmitLogin && method === 'basic' ? (
 				<LoginSetting
 					title={setting.title}
 					useEmail={v.Login.use_email === true}
+					savedUsername={typeof savedUser === 'string' ? savedUser : ''}
+					loggedIn={cur(setting.key) === 'logged_in'}
 					onSubmit={(username, password) => onSubmitLogin(setting.key, username, password)}
 				/>
 			) : (
