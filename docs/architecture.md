@@ -81,14 +81,38 @@ Migrations in `crates/server/migrations`.
   applied rows per section. Progress entries carry a chapter metadata
   snapshot so a fresh instance can recreate chapter rows ahead of the
   source's first fetch. The document's `version` field (currently `1`) is
-  the format contract — the planned Aidoku `.aib` and Suwayomi imports map
-  onto the same model — and source setting values round-trip in the same
+  the format contract — the planned Suwayomi import maps onto the same
+  model — and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
   contain source credentials: treat the file as sensitive.
   The construction (`build_backup_doc`) and the restore execution
   (`import_backup_doc`) are shared with the scheduler and the
   restore-from-list endpoint below, so a scheduled file is the same
   document the GET handler serves.
+- Aidoku backup import (`api/aidoku_backup.rs`):
+  `POST /api/v1/import/aidoku` accepts a `.aib` upload — a binary plist of
+  Aidoku's Codable `Backup` struct, decoded with the `plist` crate into
+  tolerant structs that only name the consumed fields. It imports library
+  membership (`library` + `manga` metadata), reading progress (`history` +
+  `chapters` metadata, creating manga/chapter rows as needed, not in
+  library for manga the backup does not list), and categories with
+  membership (top-level `categories`, accepting both the bare-string and
+  object plist shapes). Aidoku's `mangaId`/`chapterId` are the same
+  source-ecosystem keys as Sumidoku's `manga.key`/`chapter.key`, so rows
+  reconcile by (source key, manga key[, chapter key]) with no URL
+  translation; Aidoku's `nsfw` stores ContentRating raw value minus one,
+  so it maps 1→2 (suggestive) and 2→3 (NSFW) with 0 read as unknown.
+  Unlike the BackupDoc restore's upsert, the merge is additive: existing
+  library entries and categories keep their state (only `in_library` is
+  raised and membership added), and progress merges
+  `max(last_page_read)`, OR-ed `is_read` and the newer `last_read_at`.
+  Entries whose source is not installed are skipped and reported in the
+  response `skipped` list with a reason; the `imported` map counts
+  processed entries per section. `?dryRun=true` runs the same single
+  transaction and rolls it back, so the report is identical to a real
+  run's and the database is untouched; an unparseable or wrongly shaped
+  file answers 400 with no writes. The web UI settings page has the
+  upload → dry-run preview → confirm flow under the backup section.
 - Scheduled backups (`backup/mod.rs`): a `BackupScheduler` task (wired in
   `build_app` like the update scheduler) wakes every 60s, re-reads the
   `backup.*` keys from the `setting` table and, when `backup.enabled` is

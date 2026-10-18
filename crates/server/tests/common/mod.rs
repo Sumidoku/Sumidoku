@@ -137,6 +137,29 @@ async fn request_full_accept(
 	(status, headers, bytes.to_vec())
 }
 
+/// 二进制 body 请求（.aib 这类上传）：content-type 由调用方指定
+pub async fn request_bytes(
+	app: &Router,
+	method: &str,
+	path: &str,
+	body: Vec<u8>,
+	content_type: &str,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
+	let request = Request::builder()
+		.method(method)
+		.uri(path)
+		.header("content-type", content_type)
+		.body(Body::from(body))
+		.expect("build request");
+	let response = app.clone().oneshot(request).await.expect("response");
+	let status = response.status();
+	let headers = response.headers().clone();
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+		.await
+		.expect("read body");
+	(status, headers, bytes.to_vec())
+}
+
 /// 自带请求头的通用请求（认证测试要挂 Authorization）
 pub async fn request_with_headers(
 	app: &Router,
@@ -198,4 +221,39 @@ pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {
 	sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", db_path.display()))
 		.await
 		.expect("connect db")
+}
+
+/// 全表逻辑 dump：WAL 模式下文件字节不代表逻辑状态，逐表按 rowid 取 quote 文本对账
+pub async fn db_dump(db_path: &std::path::Path) -> String {
+	const TABLES: &[&str] = &[
+		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
+		"category", "category_manga", "download", "setting", "source_repo", "source_cookie",
+		"auth_credential", "auth_token",
+	];
+	let pool = connect_db(db_path).await;
+	let mut out = String::new();
+	for table in TABLES {
+		let cols: Vec<(String,)> =
+			sqlx::query_as(&format!("SELECT name FROM pragma_table_info('{table}')"))
+				.fetch_all(&pool)
+				.await
+				.expect("table info");
+		let quoted = cols
+			.iter()
+			.map(|(c,)| format!("quote(\"{c}\")"))
+			.collect::<Vec<_>>()
+			.join("||','||");
+		let rows: Vec<(String,)> =
+			sqlx::query_as(&format!("SELECT {quoted} FROM \"{table}\" ORDER BY rowid"))
+				.fetch_all(&pool)
+				.await
+				.expect("table rows");
+		out.push_str(&format!("== {table}\n"));
+		for (row,) in rows {
+			out.push_str(&row);
+			out.push('\n');
+		}
+	}
+	pool.close().await;
+	out
 }

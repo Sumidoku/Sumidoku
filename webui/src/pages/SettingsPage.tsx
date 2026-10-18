@@ -6,6 +6,7 @@ import {
 	ArrowUp,
 	Download,
 	ExternalLink,
+	FileUp,
 	Pencil,
 	RotateCw,
 	Trash2,
@@ -17,6 +18,7 @@ import {
 	useCategories,
 	useCreateCategory,
 	useDeleteCategory,
+	useImportAidoku,
 	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
@@ -25,7 +27,7 @@ import {
 	useSaveServerSettings,
 	useServerSettings
 } from '../api/hooks';
-import type { BackupFileEntry, BackupRestoreResult, Category } from '../api/types';
+import type { AidokuImportResult, AidokuImportSkipped, BackupFileEntry, BackupRestoreResult, Category } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
 import {
@@ -615,12 +617,73 @@ function BackupResultView({ result }: { result: BackupRestoreResult }) {
 	);
 }
 
+function aidokuSkippedLabel(s: AidokuImportSkipped): string {
+	const what = s.section === 'library' ? '书库条目' : '阅读进度';
+	const chapter = s.chapterKey ? ` / 章节 ${s.chapterKey}` : '';
+	return `${what} ${s.sourceKey}/${s.mangaKey}${chapter}`;
+}
+
+function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
+	return (
+		<div className="settings-backup__result">
+			<p className="settings-modal-text">
+				已导入：书库 {result.imported.library} · 分类 {result.imported.categories} · 进度{' '}
+				{result.imported.progress}
+			</p>
+			{result.skipped.length === 0 ? (
+				<p className="faint">全部条目均已导入，无跳过项</p>
+			) : (
+				<>
+					<p className="settings-modal-text">以下条目被跳过（未安装对应源）：</p>
+					<ul className="settings-backup__warnings">
+						{result.skipped.map((s, i) => (
+							<li key={i}>{aidokuSkippedLabel(s)}</li>
+						))}
+					</ul>
+				</>
+			)}
+		</div>
+	);
+}
+
 function BackupSection() {
 	const restore = useRestoreBackup();
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [preview, setPreview] = useState<BackupPreview | null>(null);
 	const [picked, setPicked] = useState<string[]>([]);
 	const [result, setResult] = useState<BackupRestoreResult | null>(null);
+	const importAidoku = useImportAidoku();
+	const aibFileRef = useRef<HTMLInputElement>(null);
+	const [aib, setAib] = useState<{ file: File; preview: AidokuImportResult } | null>(null);
+	const [aibResult, setAibResult] = useState<AidokuImportResult | null>(null);
+
+	async function onAibFile(e: React.ChangeEvent<HTMLInputElement>) {
+		const file = e.currentTarget.files?.[0];
+		e.currentTarget.value = '';
+		if (!file) return;
+		try {
+			const dryPreview = await importAidoku.mutateAsync({ file, dryRun: true });
+			setAib({ file, preview: dryPreview });
+			setAibResult(null);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	async function confirmAibImport() {
+		if (!aib) return;
+		try {
+			const res = await importAidoku.mutateAsync({ file: aib.file, dryRun: false });
+			setAibResult(res);
+		} catch {
+			// api() 已弹错误提示
+		}
+	}
+
+	function closeAibModal() {
+		setAib(null);
+		setAibResult(null);
+	}
 
 	async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.currentTarget.files?.[0];
@@ -671,7 +734,7 @@ function BackupSection() {
 	return (
 		<Section
 			title="备份"
-			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管"
+			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管；也可导入 Aidoku App 的 .aib 备份（书库、分类、阅读进度，增量合并不覆盖现状）"
 		>
 			<div className="settings-backup__ops">
 				<a className="btn settings-backup__download" href={backupUrl()} download>
@@ -689,7 +752,64 @@ function BackupSection() {
 					hidden
 					onChange={(e) => void onFile(e)}
 				/>
+				<Button loading={importAidoku.isPending && !aib} onClick={() => aibFileRef.current?.click()}>
+					<FileUp size={15} />
+					从 Aidoku 导入
+				</Button>
+				<input
+					ref={aibFileRef}
+					type="file"
+					accept=".aib"
+					hidden
+					onChange={(e) => void onAibFile(e)}
+				/>
 			</div>
+
+			<Modal
+				open={aib !== null}
+				title="从 Aidoku 导入"
+				onClose={closeAibModal}
+				footer={
+					aibResult ? (
+						<Button variant="primary" onClick={closeAibModal}>
+							完成
+						</Button>
+					) : (
+						<>
+							<Button onClick={closeAibModal}>取消</Button>
+							<Button variant="primary" loading={importAidoku.isPending} onClick={() => void confirmAibImport()}>
+								确认导入
+							</Button>
+						</>
+					)
+				}
+			>
+				{aibResult ? (
+					<AidokuImportResultView result={aibResult} />
+				) : (
+					aib && (
+						<>
+							<p className="settings-modal-text">
+								将导入：书库 {aib.preview.imported.library} · 分类 {aib.preview.imported.categories} ·
+								进度 {aib.preview.imported.progress}
+							</p>
+							{aib.preview.skipped.length > 0 && (
+								<>
+									<p className="settings-modal-text">以下条目因未安装对应源将被跳过：</p>
+									<ul className="settings-backup__warnings">
+										{aib.preview.skipped.map((s, i) => (
+											<li key={i}>{aidokuSkippedLabel(s)}</li>
+										))}
+									</ul>
+								</>
+							)}
+							<p className="settings-backup__warn">
+								导入是增量合并：已存在的书库条目与分类保持现状，阅读进度取较大值；此操作不可撤销。
+							</p>
+						</>
+					)
+				)}
+			</Modal>
 
 			<Modal
 				open={preview !== null}

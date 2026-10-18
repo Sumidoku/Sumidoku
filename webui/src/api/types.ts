@@ -475,6 +475,24 @@ export interface BackupFileEntry {
 	createdAt: number;
 }
 
+export interface AidokuImportSkipped {
+	section: 'library' | 'categories' | 'progress' | string;
+	sourceKey: string;
+	mangaKey: string;
+	chapterKey?: string;
+	reason: string;
+}
+
+export interface AidokuImportResult {
+	dryRun: boolean;
+	imported: {
+		library: number;
+		categories: number;
+		progress: number;
+	};
+	skipped: AidokuImportSkipped[];
+}
+
 export interface BackupListResponse {
 	/** 服务端生效中的备份目录（env > setting > 默认） */
 	dir: string;
