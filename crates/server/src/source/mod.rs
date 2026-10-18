@@ -318,17 +318,9 @@ pub(crate) async fn seed_source_defaults(
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
 	if allows_select {
-		let info = doc.get("info");
-		let mut urls: Vec<&str> = info
-			.and_then(|i| i.get("url"))
-			.and_then(|v| v.as_str())
-			.into_iter()
-			.collect();
-		if let Some(more) = info.and_then(|i| i.get("urls")).and_then(|v| v.as_array()) {
-			urls.extend(more.iter().filter_map(|u| u.as_str()));
-		}
+		let urls = source_urls(doc);
 		if urls.len() > 1 {
-			seeds.push(("url".to_string(), DefaultValue::String(urls[0].to_string())));
+			seeds.push(("url".to_string(), DefaultValue::String(urls[0].clone())));
 		}
 	}
 	if let Some(settings) = settings {
@@ -347,15 +339,34 @@ pub(crate) async fn seed_source_defaults(
 	Ok(())
 }
 
-/// 多语言源的语言设置种子：>1 种语言才存在该设置；键与值类型随 languageSelectType
-/// （multiple → languages: StringArray，single → language: String）。
-/// App 按设备语言取交集定默认，服务端没有设备语言，退化为 isDefault 否则第一个
-fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> {
-	let langs = doc.get("info")?.get("languages")?.as_array()?;
-	let mut codes: Vec<(&str, bool)> = Vec::new();
+/// 源声明的 base url 列表：info.url 在前，info.urls 按顺序追加（对齐 AidokuRunner 的 urls 组装）
+pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
+	let info = doc.get("info");
+	let mut urls: Vec<String> = info
+		.and_then(|i| i.get("url"))
+		.and_then(|v| v.as_str())
+		.map(str::to_string)
+		.into_iter()
+		.collect();
+	if let Some(more) = info.and_then(|i| i.get("urls")).and_then(|v| v.as_array()) {
+		urls.extend(more.iter().filter_map(|u| u.as_str()).map(str::to_string));
+	}
+	urls
+}
+
+/// 源声明的语言列表：(code, isDefault)，按声明顺序；字符串项无 isDefault 标记
+pub(crate) fn source_languages(doc: &serde_json::Value) -> Vec<(String, bool)> {
+	let Some(langs) = doc
+		.get("info")
+		.and_then(|i| i.get("languages"))
+		.and_then(|v| v.as_array())
+	else {
+		return Vec::new();
+	};
+	let mut codes: Vec<(String, bool)> = Vec::new();
 	for lang in langs {
 		match lang {
-			serde_json::Value::String(code) => codes.push((code, false)),
+			serde_json::Value::String(code) => codes.push((code.clone(), false)),
 			serde_json::Value::Object(_) => {
 				let code = lang
 					.get("code")
@@ -366,35 +377,53 @@ fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> 
 						.get("isDefault")
 						.and_then(|v| v.as_bool())
 						.unwrap_or(false);
-					codes.push((code, is_default));
+					codes.push((code.to_string(), is_default));
 				}
 			}
 			_ => {}
 		}
 	}
-	if codes.len() < 2 {
-		return None;
-	}
-	let mut picked: Vec<&str> = codes
-		.iter()
-		.filter(|(_, is_default)| *is_default)
-		.map(|(code, _)| *code)
-		.collect();
-	if picked.is_empty() {
-		picked.push(codes[0].0);
-	}
-	let single = doc
-		.get("config")
+	codes
+}
+
+/// languageSelectType == "single" 时语言设置是单选（键 language），否则多选（键 languages）
+pub(crate) fn language_select_single(doc: &serde_json::Value) -> bool {
+	doc.get("config")
 		.and_then(|c| c.get("languageSelectType"))
 		.and_then(|v| v.as_str())
-		== Some("single");
-	if single {
-		Some(("language".to_string(), DefaultValue::String(picked[0].to_string())))
+		== Some("single")
+}
+
+/// 服务端没有设备语言，默认退化为 isDefault 优先，都没有取第一个
+/// （AidokuRunner 按设备语言取交集，差异记录在 docs/architecture.md）
+pub(crate) fn default_language_pick(langs: &[(String, bool)]) -> Vec<String> {
+	let picked: Vec<String> = langs
+		.iter()
+		.filter(|(_, is_default)| *is_default)
+		.map(|(code, _)| code.clone())
+		.collect();
+	if picked.is_empty() {
+		langs
+			.first()
+			.map(|(code, _)| vec![code.clone()])
+			.unwrap_or_default()
 	} else {
-		Some((
-			"languages".to_string(),
-			DefaultValue::StringArray(picked.into_iter().map(str::to_string).collect()),
-		))
+		picked
+	}
+}
+
+/// 多语言源的语言设置种子：>1 种语言才存在该设置；键与值类型随 languageSelectType
+/// （multiple → languages: StringArray，single → language: String）。
+fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> {
+	let langs = source_languages(doc);
+	if langs.len() < 2 {
+		return None;
+	}
+	let picked = default_language_pick(&langs);
+	if language_select_single(doc) {
+		Some(("language".to_string(), DefaultValue::String(picked[0].clone())))
+	} else {
+		Some(("languages".to_string(), DefaultValue::StringArray(picked)))
 	}
 }
 
