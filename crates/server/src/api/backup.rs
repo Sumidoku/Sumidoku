@@ -11,7 +11,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Json, Response};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{Sqlite, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -191,8 +191,8 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-pub async fn export_backup(State(state): State<Arc<AppState>>) -> ApiResult<Response> {
-	let pool = &state.pool;
+/// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构
+pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
@@ -363,6 +363,11 @@ pub async fn export_backup(State(state): State<Arc<AppState>>) -> ApiResult<Resp
 		settings,
 		source_settings,
 	};
+	Ok(doc)
+}
+
+pub async fn export_backup(State(state): State<Arc<AppState>>) -> ApiResult<Response> {
+	let doc = build_backup_doc(&state.pool).await?;
 	let body = serde_json::to_vec(&doc)?;
 	let date = chrono::Utc::now().format("%Y%m%d");
 	let disposition = format!("attachment; filename=\"sumidoku-backup-{date}.json\"");
@@ -429,8 +434,18 @@ pub async fn import_backup(
 	Query(query): Query<ImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let sections = parse_sections(query.sections.as_deref())?;
-	let raw: Value = serde_json::from_slice(&body)
+	let result = import_backup_doc(&state, query.sections.as_deref(), &body).await?;
+	Ok(Json(result))
+}
+
+/// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用
+pub async fn import_backup_doc(
+	state: &AppState,
+	sections_query: Option<&str>,
+	body: &[u8],
+) -> ApiResult<Value> {
+	let sections = parse_sections(sections_query)?;
+	let raw: Value = serde_json::from_slice(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid backup document: {e}")))?;
 	let version = raw.get("version").and_then(Value::as_i64);
 	if version != Some(BACKUP_VERSION) {
@@ -468,11 +483,11 @@ pub async fn import_backup(
 	}
 	// 源设置可能换了凭据，热重启在跑的实例；失败不回滚（导入已提交，重启等下次懒加载）
 	for id in touched_sources {
-		if let Err(e) = crate::api::restart_if_loaded(&state, id).await {
+		if let Err(e) = crate::api::restart_if_loaded(state, id).await {
 			tracing::warn!(source_id = id, "restart after backup import failed: {}", e.message());
 		}
 	}
-	Ok(Json(json!({
+	Ok(json!({
 		"restored": {
 			"library": restored.library,
 			"categories": restored.categories,
@@ -481,7 +496,7 @@ pub async fn import_backup(
 			"sourceSettings": restored.source_settings,
 		},
 		"warnings": warnings,
-	})))
+	}))
 }
 
 async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> ApiResult<Option<i64>> {
