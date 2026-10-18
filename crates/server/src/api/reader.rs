@@ -1,7 +1,7 @@
 use crate::api::{PageQuery, chapter_json, manga_json, progress_of};
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterProgress, ChapterUserRow, unix_now};
-use crate::service::{chapter_row, manga_row};
+use crate::source::{chapter_row, manga_row};
 use crate::state::AppState;
 use crate::{PAGE_SIZE, USER_ID};
 use axum::extract::{Path, Query, State};

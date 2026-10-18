@@ -1,7 +1,7 @@
 use crate::api::manga_json;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{LibraryEntryRow, unix_now};
-use crate::service::manga_row;
+use crate::source::manga_row;
 use crate::state::AppState;
 use crate::{PAGE_SIZE, USER_ID};
 use axum::extract::{Path, Query, State};

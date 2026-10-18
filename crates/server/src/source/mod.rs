@@ -1,3 +1,6 @@
+pub mod cover;
+pub mod routed;
+
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
 	ChapterRow, MangaRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
@@ -560,7 +563,7 @@ async fn read_body(response: reqwest::Response) -> ApiResult<(Vec<u8>, Option<St
 	Ok((bytes.to_vec(), mime))
 }
 
-fn fetch_err(e: crate::routed::FetchError) -> ApiError {
+fn fetch_err(e: crate::source::routed::FetchError) -> ApiError {
 	ApiError::bad_gateway(format!("upstream request failed: {e}"))
 }
 

@@ -9,33 +9,35 @@ here. Link to symbols rather than copying details that drift.
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 Migrations in `crates/server/migrations`.
 
-- REST API under `/api/v1` (`api.rs`, `download_api.rs`, `update_api.rs`).
-- OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds.rs`) and 2.0 (Readium Web
-  Publication JSON) at `/opds/v2` (`opds2.rs`). The 2.0 feed builds its URLs
-  from the 1.2 cover/file/stream endpoints; the two share auth, paging and
-  query helpers from `opds.rs`. Basic auth applies to the catalogs only, and
-  only when `SUMIDOKU_BASIC_PASSWORD` is set.
+- REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
+  `api/page.rs`, `api/download.rs`, `api/update.rs`).
+- OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
+  Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
+  URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
+  and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
+  only, and only when `SUMIDOKU_BASIC_PASSWORD` is set.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
-- Library model (`model.rs`, `library.rs`): manga → chapter → page rows;
+- Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
   `source_order` is the source's own chapter index. Chapter reconcile
-  (`service.rs:reconcile_chapters`) keeps a chapter the source stopped
+  (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise.
-- Downloads (`download.rs`): serial within a source, parallel across
+- Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter.
-- Library updates (`update.rs`): same scheduling shape as downloads —
+- Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.
-- Outbound requests pass a `NetPolicy` (`routed.rs:SumidokuNetPolicy`):
+- Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
   direct, per-domain relay, or a global proxy, decided per host.
 
 ## WASM sources (`crates/wasm`)
 
 Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
-(`actor.rs`) owns the store (`store.rs`), per-source rate limiting
-(`rate_limit.rs`), and the host functions sources import (`imports/`),
-including the HTML DOM helper (`html_dom.rs`). `source.rs` loads and
-validates packages; the server scans `SUMIDOKU_SOURCES_DIR` for them.
+(`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
+limiting (`runtime/rate_limit.rs`), and the host functions sources import
+(`imports/`), including the HTML DOM helper (`html_dom.rs`). `source.rs`
+loads and validates packages; the server scans `SUMIDOKU_SOURCES_DIR` for
+them.
 
 `vendor/aidoku` is the vendored upstream `aidoku` crate with the `imports`
 feature. It tracks upstream; local fixes don't belong there.

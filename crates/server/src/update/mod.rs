@@ -1,6 +1,6 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::{MangaRow, manga_from_row, unix_now};
-use crate::service::reconcile_chapters;
+use crate::source::reconcile_chapters;
 use crate::state::AppState;
 use serde::Serialize;
 use sqlx::SqlitePool;

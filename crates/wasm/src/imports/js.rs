@@ -1,7 +1,7 @@
 //! M4 前的桩：webview_* 在服务器上本无 WebView 语义，js context 到 M4 实装。
 use crate::{
 	WasmEnv,
-	store::{FFIResult, Ptr, Rid},
+	runtime::store::{FFIResult, Ptr, Rid},
 };
 use wasmer::FunctionEnvMut;
 

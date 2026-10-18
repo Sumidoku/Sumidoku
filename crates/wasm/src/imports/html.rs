@@ -1,7 +1,7 @@
 use crate::{
 	WasmEnv,
 	html_dom::{HtmlDocument, HtmlNode, QueryRoot, select_str},
-	store::{FFIResult, Ptr, Rid, StoreItem},
+	runtime::store::{FFIResult, Ptr, Rid, StoreItem},
 };
 use wasmer::FunctionEnvMut;
 

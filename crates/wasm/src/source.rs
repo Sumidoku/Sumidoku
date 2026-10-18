@@ -1,9 +1,9 @@
-use crate::env::WasmEnv;
 use crate::error::{Error, Result};
 use crate::features::SourceFeatures;
 use crate::imports::HttpMethod;
-use crate::limits::{Limits, LimitedTunables};
-use crate::store::{DefaultValue, GlobalStore, Rid, StoreItem};
+use crate::runtime::env::WasmEnv;
+use crate::runtime::limits::{Limits, LimitedTunables};
+use crate::runtime::store::{DefaultValue, GlobalStore, Rid, StoreItem};
 use crate::traits::{DefaultsSink, HostLogger, NetPolicy};
 use aidoku::{
 	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
@@ -90,12 +90,12 @@ impl SourceInstance {
 			WasmEnv {
 				memory: None,
 				store: GlobalStore::new(),
-				defaults: crate::env::Defaults::new(
+				defaults: crate::runtime::env::Defaults::new(
 					config.defaults.clone(),
 					config.sink.clone(),
 					config.key.clone(),
 				),
-				net: crate::env::NetState::new(config.policy.clone()),
+				net: crate::runtime::env::NetState::new(config.policy.clone()),
 				limits: config.limits.clone(),
 				source_key: config.key.clone(),
 				logger: config.logger.clone(),

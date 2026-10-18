@@ -1,6 +1,6 @@
 use crate::{
 	WasmEnv,
-	store::{FFIResult, ImageData, Ptr, Rid, StoreItem},
+	runtime::store::{FFIResult, ImageData, Ptr, Rid, StoreItem},
 };
 use image::ImageReader;
 use reqwest::{

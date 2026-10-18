@@ -4,7 +4,7 @@ use crate::opds::{
 	CHAPTER_SELECT, FeedQuery, HistoryRow, LIBRARY_SELECT, OpdsChapterRow, base_url, chapter_title,
 	like_pattern, page_of, rfc3339, url_query_escape,
 };
-use crate::service::manga_row;
+use crate::source::manga_row;
 use crate::state::AppState;
 use crate::{PAGE_SIZE, USER_ID};
 use axum::body::Body;

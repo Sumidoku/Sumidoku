@@ -1,7 +1,7 @@
 use crate::error::{Error, Result};
 use crate::features::SourceFeatures;
 use crate::source::{ImageRequestSpec, SourceConfig, SourceInstance};
-use crate::store::DefaultValue;
+use crate::runtime::store::DefaultValue;
 use aidoku::{
 	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
 	PageContext, Setting,

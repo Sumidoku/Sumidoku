@@ -1,4 +1,4 @@
-use crate::{WasmEnv, store::Ptr};
+use crate::{WasmEnv, runtime::store::Ptr};
 use wasmer::FunctionEnvMut;
 
 pub fn abort(env: FunctionEnvMut<WasmEnv>) {
