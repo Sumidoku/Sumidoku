@@ -19,6 +19,26 @@ pub fn mutation_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/mutation/main.wasm")
 }
 
+/// 发 partial 结果的 fixture 载荷，用于流式 NDJSON 分支
+pub fn partial_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/partial/main.wasm")
+}
+
+/// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
+pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
+	let dir = tmp.path().join("sources").join(key);
+	std::fs::create_dir_all(&dir).expect("mkdir fixture source");
+	std::fs::copy(wasm, dir.join("main.wasm")).expect("copy fixture wasm");
+	std::fs::write(
+		dir.join("source.json"),
+		serde_json::json!({
+			"info": {"id": key, "name": name, "version": 1, "languages": ["en"]}
+		})
+		.to_string(),
+	)
+	.expect("write source.json");
+}
+
 pub struct TestApp {
 	pub app: Router,
 	pub tmp: tempfile::TempDir,
@@ -63,9 +83,39 @@ pub async fn request_full(
 	path: &str,
 	body: Option<Value>,
 ) -> (StatusCode, HeaderMap, Vec<u8>) {
+	request_full_accept(app, method, path, body, None).await
+}
+
+/// NDJSON 流式请求：响应体按行解析成事件数组
+pub async fn request_ndjson(
+	app: &Router,
+	method: &str,
+	path: &str,
+	body: Option<Value>,
+) -> (StatusCode, HeaderMap, Vec<Value>) {
+	let (status, headers, bytes) =
+		request_full_accept(app, method, path, body, Some("application/x-ndjson")).await;
+	let lines = bytes
+		.split(|b| *b == b'\n')
+		.filter(|line| !line.is_empty())
+		.map(|line| serde_json::from_slice(line).expect("ndjson line"))
+		.collect();
+	(status, headers, lines)
+}
+
+async fn request_full_accept(
+	app: &Router,
+	method: &str,
+	path: &str,
+	body: Option<Value>,
+	accept: Option<&str>,
+) -> (StatusCode, HeaderMap, Vec<u8>) {
 	let mut builder = Request::builder().method(method).uri(path);
 	if body.is_some() {
 		builder = builder.header("content-type", "application/json");
+	}
+	if let Some(accept) = accept {
+		builder = builder.header("accept", accept);
 	}
 	let request = builder
 		.body(match body {

@@ -98,6 +98,7 @@ impl SourceInstance {
 				limits: config.limits.clone(),
 				source_key: config.key.clone(),
 				logger: config.logger.clone(),
+				partial_sink: None,
 			},
 		);
 		let imports = crate::imports::generate_imports(&mut store, &env);
@@ -216,6 +217,33 @@ impl SourceInstance {
 
 	fn check(&self, supported: bool, name: &'static str) -> Result<()> {
 		if supported { Ok(()) } else { Err(Error::Unsupported(name)) }
+	}
+
+	// 部分结果 sink 只在单个导出调用期间挂上，调用结束（含 trap）即摘，
+	// 不泄漏到下一个调用
+	fn with_partials<T>(
+		&mut self,
+		sink: crate::runtime::env::PartialSink,
+		f: impl FnOnce(&mut Self) -> Result<T>,
+	) -> Result<T> {
+		self.env.as_mut(&mut self.store).partial_sink = Some(sink);
+		let result = f(self);
+		self.env.as_mut(&mut self.store).partial_sink = None;
+		result
+	}
+
+	pub fn get_home_with_partials(&mut self, sink: crate::runtime::env::PartialSink) -> Result<HomeLayout> {
+		self.with_partials(sink, |i| i.get_home())
+	}
+
+	pub fn get_search_manga_list_with_partials(
+		&mut self,
+		query: Option<String>,
+		page: i32,
+		filters: Vec<FilterValue>,
+		sink: crate::runtime::env::PartialSink,
+	) -> Result<MangaPageResult> {
+		self.with_partials(sink, |i| i.get_search_manga_list(query, page, filters))
 	}
 
 	pub fn get_search_manga_list(

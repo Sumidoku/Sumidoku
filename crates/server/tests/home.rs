@@ -101,17 +101,7 @@ async fn home_layout_serialized() {
 async fn home_unsupported_source_404() {
 	let TestApp { app, tmp, .. } = test_app().await;
 	// mutation fixture 只导出 Source + get_page_description，没有 get_home
-	let dir = tmp.path().join("sources").join("en.mutation");
-	std::fs::create_dir_all(&dir).expect("mkdir mutation source");
-	std::fs::copy(common::mutation_wasm_path(), dir.join("main.wasm")).expect("copy mutation wasm");
-	std::fs::write(
-		dir.join("source.json"),
-		serde_json::json!({
-			"info": {"id": "en.mutation", "name": "Mutation Source", "version": 1, "languages": ["en"]}
-		})
-		.to_string(),
-	)
-	.expect("write source.json");
+	common::install_fixture_source(&tmp, "en.mutation", "Mutation Source", &common::mutation_wasm_path());
 	let ids = scan_and_source_ids(&app).await;
 	let source_id = ids
 		.iter()

@@ -1,6 +1,7 @@
 pub mod download;
 pub mod library;
 pub mod page;
+pub mod partial;
 pub mod reader;
 pub mod repo;
 pub mod update;
@@ -19,14 +20,15 @@ use crate::state::{AppState, load_defaults};
 use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::{Json, Response};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 pub fn router(state: Arc<AppState>) -> Router {
 	Router::new()
@@ -231,50 +233,76 @@ pub struct SearchRequest {
 	pub filters: Option<Vec<FilterValue>>,
 }
 
+/// 已入库漫画的 key → 内部 id，流式与非流式搜索共用同一份 attach 语义
+async fn known_manga_ids(state: &AppState, source_id: i64) -> ApiResult<HashMap<String, i64>> {
+	let known: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ?")
+		.bind(source_id)
+		.fetch_all(&state.pool)
+	.await?;
+	Ok(known.into_iter().map(|(id, key)| (key, id)).collect())
+}
+
+pub(crate) fn manga_json_with_ids(
+	manga: Manga,
+	source_id: i64,
+	known: &HashMap<String, i64>,
+) -> ApiResult<Value> {
+	let mut value = serde_json::to_value(&manga)?;
+	let object = value
+		.as_object_mut()
+		.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
+	object.insert("sourceId".into(), json!(source_id));
+	if let Some(id) = known.get(&manga.key) {
+		object.insert("id".into(), json!(id));
+	}
+	Ok(value)
+}
+
 /// 搜索/列表返回的源侧 Manga 附加 sourceId；已入库的再附内部 id
 async fn attach_internal_ids(
 	state: &AppState,
 	source_id: i64,
 	entries: Vec<Manga>,
 ) -> ApiResult<Vec<Value>> {
-	let known: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ?")
-		.bind(source_id)
-		.fetch_all(&state.pool)
-		.await?;
-	let known: HashMap<String, i64> = known.into_iter().map(|(id, key)| (key, id)).collect();
-	let mut out = Vec::with_capacity(entries.len());
-	for manga in entries {
-		let mut value = serde_json::to_value(&manga)?;
-		let object = value
-			.as_object_mut()
-			.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
-		object.insert("sourceId".into(), json!(source_id));
-		if let Some(id) = known.get(&manga.key) {
-			object.insert("id".into(), json!(id));
-		}
-		out.push(value);
-	}
-	Ok(out)
+	let known = known_manga_ids(state, source_id).await?;
+	entries
+		.into_iter()
+		.map(|manga| manga_json_with_ids(manga, source_id, &known))
+		.collect()
 }
 
 async fn search_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
+	headers: HeaderMap,
 	Json(body): Json<SearchRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
 	let page = body.page.unwrap_or(1);
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
 	let handle = state.get_handle(id).await?;
-	let result = handle
-		.get_search_manga_list(body.query, page, body.filters.unwrap_or_default())
-		.await?;
-	let entries = attach_internal_ids(&state, id, result.entries).await?;
-	Ok(Json(json!({
-		"entries": entries,
-		"hasNextPage": result.has_next_page,
-	})))
+	if !partial::wants_ndjson(&headers) {
+		let result = handle
+			.get_search_manga_list(body.query, page, body.filters.unwrap_or_default())
+			.await?;
+		let entries = attach_internal_ids(&state, id, result.entries).await?;
+		return Ok(Json(json!({
+			"entries": entries,
+			"hasNextPage": result.has_next_page,
+		}))
+		.into_response());
+	}
+	let known = known_manga_ids(&state, id).await?;
+	let (line_tx, line_rx) = mpsc::unbounded_channel();
+	let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+	let call = tokio::spawn(async move {
+		handle
+			.get_search_manga_list_streaming(body.query, page, body.filters.unwrap_or_default(), partial_tx)
+			.await
+	});
+	tokio::spawn(partial::forward_search(partial_rx, call, line_tx, id, known));
+	Ok(partial::ndjson_response(line_rx))
 }
 
 async fn get_listings(
@@ -335,11 +363,27 @@ async fn get_manga_list(
 	})))
 }
 
-/// 组件数组定序即稳定标识：send_partial_result 的部分结果按数组下标增量替换，不破坏现有字段
-async fn get_home(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<Json<Value>> {
+/// 组件数组定序即稳定标识：流式请求里 send_partial_result 的部分结果按下标增量替换，
+/// 不破坏现有字段；下标由 wasm 层按上游 title 匹配语义解析（见 partial.rs）
+async fn get_home(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	headers: HeaderMap,
+) -> ApiResult<Response> {
 	let handle = state.get_handle(id).await?;
-	let home = handle.get_home().await.map_err(dynamic_capability_error)?;
-	Ok(Json(serde_json::to_value(home)?))
+	if !partial::wants_ndjson(&headers) {
+		let home = handle.get_home().await.map_err(dynamic_capability_error)?;
+		return Ok(Json(serde_json::to_value(home)?).into_response());
+	}
+	// 能力缺失要在流开始前返回 404，保持与非流式相同的状态码契约
+	if !handle.features().home {
+		return Err(dynamic_capability_error(SourceError::Unsupported("get_home")));
+	}
+	let (line_tx, line_rx) = mpsc::unbounded_channel();
+	let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+	let call = tokio::spawn(async move { handle.get_home_streaming(partial_tx).await });
+	tokio::spawn(partial::forward_home(partial_rx, call, line_tx));
+	Ok(partial::ndjson_response(line_rx))
 }
 
 async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {

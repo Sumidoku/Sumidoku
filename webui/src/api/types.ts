@@ -335,6 +335,14 @@ export interface HomeFilterItem {
 	values: FilterValue[] | null;
 }
 
+/** 流式主页的部分事件：layout 全量替换；component 按下标替换（index == 当前长度即追加） */
+export type HomeStreamEvent =
+	| { type: 'layout'; layout: HomeLayout }
+	| { type: 'component'; index: number; component: HomeComponent };
+
+/** 流式搜索的部分事件：到达一条追加一条 */
+export type SearchStreamEvent = { type: 'manga'; manga: Manga };
+
 // ---- 源设置 ----
 
 export type SettingValue =

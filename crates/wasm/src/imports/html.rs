@@ -810,6 +810,7 @@ mod tests {
 					limits: Limits::default(),
 					source_key: "test".into(),
 					logger: Arc::new(StdoutLogger),
+					partial_sink: None,
 				},
 			);
 			// 指针 0 起是合法内存，测试数据从 1024 起 bump 写入避免踩到空指针路径

@@ -1,15 +1,16 @@
 use crate::error::{Error, Result};
 use crate::features::SourceFeatures;
+use crate::partial::{HomeAccumulator, HomePartial};
 use crate::source::{ImageRequestSpec, SourceConfig, SourceInstance};
 use crate::runtime::store::DefaultValue;
 use aidoku::{
-	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
-	PageContext, Setting,
+	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, HomePartialResult, Listing, Manga,
+	MangaPageResult, Page, PageContext, Setting,
 };
 use std::collections::HashMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 
@@ -188,6 +189,57 @@ impl SourceHandle {
 
 	pub async fn get_home(&self) -> Result<HomeLayout> {
 		self.call(|i| i.get_home()).await
+	}
+
+	/// 流式版 get_home：源在调用中途 send_partial_result 的部分结果按到达顺序
+	/// 推进 partials。接收端掉线（客户端断开）时发送失败静默丢弃，源继续跑完
+	pub async fn get_home_streaming(
+		&self,
+		partials: mpsc::UnboundedSender<HomePartial>,
+	) -> Result<HomeLayout> {
+		self.call(move |i| {
+			let acc = Arc::new(Mutex::new(HomeAccumulator::default()));
+			let sink_acc = acc.clone();
+			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
+				match postcard::from_bytes::<HomePartialResult>(bytes) {
+					Ok(partial) => {
+						let event = sink_acc.lock().expect("accumulator lock").apply(partial);
+						let _ = partials.send(event);
+					}
+					// 部分结果只是渐进预览，解码失败不值得让整个请求失败
+					Err(_) => tracing::warn!("failed to decode home partial result"),
+				}
+			});
+			let layout = i.get_home_with_partials(sink)?;
+			let acc = match Arc::try_unwrap(acc) {
+				Ok(mutex) => mutex.into_inner().expect("accumulator lock"),
+				Err(arc) => arc.lock().expect("accumulator lock").clone(),
+			};
+			Ok(acc.finish(layout))
+		})
+		.await
+	}
+
+	/// 流式版 get_search_manga_list：每个 partial 载荷是一条完整 Manga，按到达顺序追加
+	pub async fn get_search_manga_list_streaming(
+		&self,
+		query: Option<String>,
+		page: i32,
+		filters: Vec<FilterValue>,
+		partials: mpsc::UnboundedSender<Manga>,
+	) -> Result<MangaPageResult> {
+		self.call(move |i| {
+			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
+				match postcard::from_bytes::<Manga>(bytes) {
+					Ok(manga) => {
+						let _ = partials.send(manga);
+					}
+					Err(_) => tracing::warn!("failed to decode search partial result"),
+				}
+			});
+			i.get_search_manga_list_with_partials(query, page, filters, sink)
+		})
+		.await
 	}
 
 	pub async fn get_filters(&self) -> Result<Vec<Filter>> {

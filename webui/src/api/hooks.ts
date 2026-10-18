@@ -5,7 +5,8 @@ import {
 	useQuery,
 	useQueryClient
 } from '@tanstack/react-query';
-import { ApiError, api } from './client';
+import type { InfiniteData } from '@tanstack/react-query';
+import { ApiError, api, apiStream } from './client';
 import type {
 	Category,
 	Chapter,
@@ -14,6 +15,7 @@ import type {
 	Filter,
 	FilterValue,
 	HomeLayout,
+	HomeStreamEvent,
 	LibraryFilter,
 	LibraryPage,
 	LibrarySort,
@@ -26,6 +28,7 @@ import type {
 	PatchMangaBody,
 	RepoSourceEntry,
 	ScanOutcome,
+	SearchStreamEvent,
 	Source,
 	SourceRepo,
 	UpdateAllOutcome
@@ -133,9 +136,28 @@ export function useSourceListings(sourceId: number, enabled = true) {
 }
 
 export function useSourceHome(sourceId: number, enabled = true) {
+	const qc = useQueryClient();
 	return useQuery({
 		queryKey: qk.sourceHome(sourceId),
-		queryFn: () => nullOn404(api<HomeLayout>(`/sources/${sourceId}/home`, { silent: true })),
+		queryFn: ({ signal }) =>
+			nullOn404(
+				apiStream<HomeLayout, HomeStreamEvent>(`/sources/${sourceId}/home`, {
+					silent: true,
+					signal,
+					onEvent: (ev) => {
+						// partial 到达即写缓存，页面边到边渲染；终态由 queryFn 返回后覆盖
+						qc.setQueryData<HomeLayout | null>(qk.sourceHome(sourceId), (cur) => {
+							if (ev.type === 'layout') return ev.layout;
+							if (ev.type === 'component') {
+								const components = (cur?.components ?? []).slice();
+								components[ev.index] = ev.component;
+								return { components };
+							}
+							return cur ?? null;
+						});
+					}
+				})
+			),
 		enabled
 	});
 }
@@ -146,12 +168,31 @@ export interface SourceSearchRequest {
 }
 
 export function useSourceSearch(sourceId: number, req: SourceSearchRequest, enabled = true) {
+	const qc = useQueryClient();
+	const queryKey = ['sources', sourceId, 'search', req] as const;
 	return useInfiniteQuery({
-		queryKey: ['sources', sourceId, 'search', req],
-		queryFn: ({ pageParam }) =>
-			api<MangaPage>(`/sources/${sourceId}/search`, {
+		queryKey,
+		queryFn: ({ pageParam, signal }) =>
+			apiStream<MangaPage, SearchStreamEvent>(`/sources/${sourceId}/search`, {
 				method: 'POST',
-				body: { query: req.query || undefined, page: pageParam, filters: req.filters }
+				body: { query: req.query || undefined, page: pageParam, filters: req.filters },
+				signal,
+				onEvent: (ev) => {
+					if (ev.type !== 'manga') return;
+					// partial 逐条追加到对应页；终态由 queryFn 返回后覆盖整页
+					qc.setQueryData<InfiniteData<MangaPage, number>>(queryKey, (cur) => {
+						const idx = pageParam - 1;
+						if (!cur) {
+							if (idx !== 0) return cur;
+							return { pages: [{ entries: [ev.manga], hasNextPage: true }], pageParams: [1] };
+						}
+						const page = cur.pages[idx];
+						if (!page) return cur;
+						const pages = cur.pages.slice();
+						pages[idx] = { ...page, entries: [...page.entries, ev.manga] };
+						return { ...cur, pages };
+					});
+				}
 			}),
 		initialPageParam: 1,
 		getNextPageParam: nextPage,

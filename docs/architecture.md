@@ -13,9 +13,25 @@ Migrations in `crates/server/migrations`.
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`).
   `GET /api/v1/sources/{id}/home` (`api/mod.rs:get_home`) returns the Aidoku
   `HomeLayout` as-is — an ordered `components` array; the array index is the
-  stable key a `send_partial_result` stream would patch against. A source
+  stable key a `send_partial_result` stream patches against. A source
   without `get_home` answers 404 `unsupported`, same as dynamic filters and
   listings.
+- Partial-result streaming (`api/partial.rs`): the home and search endpoints
+  honor `Accept: application/x-ndjson` as an explicit opt-in. The source's
+  mid-request `send_partial_result` payloads arrive as one JSON event per
+  line in send order, then a terminal event closes the stream: home emits
+  `{"type":"layout","layout":…}` (replace whole layout) and
+  `{"type":"component","index":N,"component":…}` (replace at index, or
+  append when `index` equals the current length — the index is resolved
+  from the upstream title-upsert semantics by the wasm layer, see
+  `crates/wasm/src/partial.rs`), search emits per-Manga deltas
+  `{"type":"manga","manga":…}`. Both end with
+  `{"type":"final","payload":…}` where the payload is the same JSON value
+  as the buffered response, or `{"type":"error","error":{code,message}}`
+  when the source call fails after streaming started. Requests without
+  the header take the original buffered path unchanged. The connection is
+  the key: a client disconnect drops the body stream, later sends fail and
+  the forward task stops while the source call runs to completion.
 - Source repositories (`source/repo.rs`, `api/repo.rs`): Aidoku-style repo
   indexes are fetched on add/refresh and cached in the `source_repo` table;
   browsing, install and update detection all read the cache, so an
@@ -47,7 +63,14 @@ Migrations in `crates/server/migrations`.
 Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
 (`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
 limiting (`runtime/rate_limit.rs`), and the host functions sources import
-(`imports/`), including the HTML DOM helper (`html_dom.rs`). `source.rs`
+(`imports/`), including the HTML DOM helper (`html_dom.rs`).
+`send_partial_result` payloads are decoded per in-flight call and pushed
+to streaming callers (`SourceHandle::get_home_streaming` /
+`get_search_manga_list_streaming`); home partials pass through the
+upstream title-upsert accumulator (`partial.rs`) so consumers receive
+index-addressed events, and an empty final layout falls back to the
+accumulated partials. Calls without a streaming caller discard partials,
+as before. `source.rs`
 loads and validates packages; `package.rs` reads the `.aix` zip layout
 (`Payload/source.json` manifest, `Payload/main.wasm` payload) into memory
 without extracting. The server scans the `sources/` directory under

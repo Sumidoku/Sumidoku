@@ -4337,6 +4337,7 @@ dependencies = [
  "aidoku-wasm",
  "axum",
  "chrono",
+ "futures-core",
  "reqwest",
  "rust-embed",
  "serde",
