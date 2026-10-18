@@ -6,12 +6,12 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config       # 数据库、设置、封面缓存、源包、TRAWL CA
+      - ./config:/config       # 数据库、设置、封面缓存、源包
       - ./downloads:/downloads
       - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
-      - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/proxy-ca.crt
+      - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
       # - SUMIDOKU_BASIC_PASSWORD=
     depends_on:
@@ -19,11 +19,14 @@ services:
 
   trawl:
     image: ghcr.io/germondai/trawl:latest
+    shm_size: 1gb
     environment:
       - MITM_ENABLED=true
       - MITM_PORT=8192
       - MITM_CA_DIR=/data/proxy-ca
       - MITM_MAX_TIER=3
+      # 这套 compose 不带 redis，会话缓存落进程内存
+      - SESSION_CACHE_DRIVER=memory
     volumes:
       - trawl-ca:/data/proxy-ca
       - trawl-data:/data

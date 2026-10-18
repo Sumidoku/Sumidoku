@@ -56,7 +56,15 @@ Migrations in `crates/server/migrations`.
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
-  direct, per-domain relay, or a global proxy, decided per host.
+  direct, per-domain relay, or a global proxy, decided per host. When
+  `net.trawl_proxy` is set, a direct request answered 403/503 with Cloudflare
+  headers retries once through the trawl forward proxy (MITM CA in
+  `net.trawl_ca`), ahead of the 429/5xx backoff — in the source net imports
+  (`crates/wasm/src/imports/net.rs:perform`) and in the server's own fetches
+  alike; `net.direct_domains` opts a host out, `net.relay_domains` routes a
+  host through trawl on every request. Set-Cookie on the solved response
+  lands in the source's cookie jar, so later direct requests reuse the
+  clearance.
 
 ## WASM sources (`crates/wasm`)
 
