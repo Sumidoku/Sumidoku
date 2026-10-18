@@ -522,20 +522,19 @@ function ServerSettingsSection() {
 										placeholder="键"
 										value={row.key}
 										readOnly={!row.isNew}
-										onChange={(e) =>
-											setRows((cur) =>
-												(cur ?? []).map((r, j) => (j === i ? { ...r, key: e.currentTarget.value } : r))
-											)
-										}
+										onChange={(e) => {
+											// 更新函数延后执行时 currentTarget 已被置 null，必须先取值
+											const v = e.currentTarget.value;
+											setRows((cur) => (cur ?? []).map((r, j) => (j === i ? { ...r, key: v } : r)));
+										}}
 									/>
 									<Input
 										placeholder="值（JSON，字符串可裸写）"
 										value={row.text}
-										onChange={(e) =>
-											setRows((cur) =>
-												(cur ?? []).map((r, j) => (j === i ? { ...r, text: e.currentTarget.value } : r))
-											)
-										}
+										onChange={(e) => {
+											const v = e.currentTarget.value;
+											setRows((cur) => (cur ?? []).map((r, j) => (j === i ? { ...r, text: v } : r)));
+										}}
 									/>
 									<IconButton
 										label="删除"

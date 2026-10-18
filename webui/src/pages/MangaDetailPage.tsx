@@ -500,7 +500,10 @@ export default function MangaDetailPage() {
 							value={prefs.sort}
 							title="排序方式"
 							aria-label="排序方式"
-							onChange={(e) => setPrefs((p) => ({ ...p, sort: e.currentTarget.value as SortKey }))}
+							onChange={(e) => {
+								const v = e.currentTarget.value as SortKey;
+								setPrefs((p) => ({ ...p, sort: v }));
+							}}
 						>
 							{SORT_OPTIONS.map((o) => (
 								<option key={o.value} value={o.value}>
@@ -539,7 +542,10 @@ export default function MangaDetailPage() {
 								value={prefs.language ?? ''}
 								title="语言"
 								aria-label="语言"
-								onChange={(e) => setPrefs((p) => ({ ...p, language: e.currentTarget.value || null }))}
+								onChange={(e) => {
+									const v = e.currentTarget.value;
+									setPrefs((p) => ({ ...p, language: v || null }));
+								}}
 							>
 								<option value="">全部语言</option>
 								{languages.map((l) => (
