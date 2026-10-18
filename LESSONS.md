@@ -203,3 +203,13 @@ CI checks clippy and tests, not formatting.
 - Evidence: 2026-10-18 session, `cargo fmt --all` reformatted 108 files
   (including `vendor/aidoku`) before the fix was re-applied on the reset
   tree.
+
+**The pre-merge re-check is its own step; the merge runs only after the
+result is read.** A fresh-look that shares a shell command with the merge
+(`check && merge`) is a log line, not a gate — the merge fired seven
+minutes after a collaborator's explicit hold, un-read. Run the check,
+look at the output, then decide; never chain the two.
+- Evidence: 2026-10-18, PR #103 (release 0.5.0) merged at 15:50:13 with
+  dyphire's "wait until the work is finished" (15:43:15) sitting in the
+  thread; the release run was cancelled 16s in — no tag, no release —
+  and 0.5.0 is held for his fixes.
