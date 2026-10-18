@@ -64,7 +64,8 @@ export interface Manga {
 	viewer: string;
 	update_strategy: string;
 	next_update_time: number | null;
-	sourceId: number;
+	/** 搜索/列表端点附加；主页组件内嵌的源侧 Manga 没有这个字段 */
+	sourceId?: number;
 	/** 已入库才有 */
 	id?: number;
 }
@@ -265,6 +266,74 @@ export type FilterValue =
 	| { Select: { id: string; value: string } }
 	| { MultiSelect: { id: string; included: string[]; excluded: string[] } }
 	| { Range: { id: string; from: number | null; to: number | null } };
+
+// ---- 源主页（GET /sources/{id}/home，aidoku HomeLayout 原样透传）----
+
+export interface HomeLayout {
+	components: HomeComponent[];
+}
+
+export interface HomeComponent {
+	title: string | null;
+	subtitle: string | null;
+	value: HomeComponentValue;
+}
+
+export type HomeComponentValue =
+	| {
+			ImageScroller: {
+				links: HomeLink[];
+				auto_scroll_interval: number | null;
+				width: number | null;
+				height: number | null;
+			};
+	  }
+	| { BigScroller: { entries: Manga[]; auto_scroll_interval: number | null } }
+	| { Scroller: { entries: HomeLink[]; listing: Listing | null } }
+	| {
+			MangaList: {
+				ranking: boolean;
+				page_size: number | null;
+				entries: HomeLink[];
+				listing: Listing | null;
+			};
+	  }
+	| {
+			MangaChapterList: {
+				page_size: number | null;
+				entries: MangaWithChapter[];
+				listing: Listing | null;
+			};
+	  }
+	| { Filters: HomeFilterItem[] }
+	| { Links: HomeLink[] };
+
+export interface HomeLink {
+	title: string;
+	subtitle: string | null;
+	image_url: string | null;
+	value: HomeLinkValue | null;
+}
+
+export type HomeLinkValue = { Url: string } | { Listing: Listing } | { Manga: Manga };
+
+export interface MangaWithChapter {
+	manga: Manga;
+	chapter: SourceChapter;
+}
+
+/** 主页组件内嵌的源侧章节，不带服务端附加字段 */
+export interface SourceChapter {
+	key: string;
+	title: string | null;
+	chapter_number: number | null;
+	date_uploaded: number | string | null;
+}
+
+export interface HomeFilterItem {
+	title: string;
+	values: FilterValue[] | null;
+}
 
 // ---- 源设置 ----
 

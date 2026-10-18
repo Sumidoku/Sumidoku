@@ -9,6 +9,7 @@ import NotFound from './pages/NotFound';
 import ReaderPage from './pages/ReaderPage';
 import SettingsPage from './pages/SettingsPage';
 import SourceBrowsePage from './pages/SourceBrowsePage';
+import SourceHomePage from './pages/SourceHomePage';
 import UpdatesPage from './pages/UpdatesPage';
 
 const router = createBrowserRouter([
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
 			{ path: '/library', element: <LibraryPage /> },
 			{ path: '/browse', element: <BrowsePage /> },
 			{ path: '/browse/:sourceId', element: <SourceBrowsePage /> },
+			{ path: '/browse/:sourceId/home', element: <SourceHomePage /> },
 			{ path: '/manga/:id', element: <MangaDetailPage /> },
 			{ path: '/history', element: <HistoryPage /> },
 			{ path: '/downloads', element: <DownloadsPage /> },
