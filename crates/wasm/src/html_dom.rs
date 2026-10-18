@@ -1,5 +1,6 @@
 use ego_tree::NodeId;
 use html5ever::{Attribute, LocalName, QualName, ns};
+use regex::Regex;
 use scraper::{CaseSensitivity, ElementRef, Html, Selector};
 use scraper::node::{Node, Text};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
@@ -633,55 +634,155 @@ pub enum QueryRoot<'a> {
 	Document(&'a HtmlDocument),
 	Element(&'a HtmlElement),
 	List(&'a HtmlElementList),
+	/// 组合器（>/+/~）锁定的候选集：元素自身必须命中下一段复合选择器
+	Scope(Vec<HtmlElement>),
 }
 
 /// 字符串形式的选择器入口，额外支持 SwiftSoup 系非标准伪类：
-/// :contains(text)/:containsOwn(text)/:has(selector)/[*]（含 :not 包裹）。
-/// scraper 不支持这些，拆成「基础选择器 + 逐项过滤 + 剩余选择器（候选元素
-/// 作用域、不含自身）」分段递归求值；后缀的 > 按后代处理（真实源写法都是
-/// li:contains(x) > span 这类，极端嵌套下结果是超集，总比整体失败强）
+/// :contains/:containsOwn/:matches/:matchesOwn/:lt/:gt/:eq/[*]/[^前缀]，
+/// 以及它们的 :not 包裹和含扩展内容的 :has。
+/// 求值按「复合段 + 组合器」推进：组合器开新作用域（> 只取直接子元素，
+/// +/~ 只取兄弟元素），同复合剩余作用于候选元素自身；顶层逗号分支按
+/// jsoup 语义求并集（文档序、去重）。:has/:not 内容不含扩展伪类时整个
+/// 查询交给 Selector::parse（selectors crate 原生支持 CSS4 相对选择器）
 pub fn select_str(root: QueryRoot, query: &str) -> Result<HtmlElementList, ()> {
 	select_str_impl(root, query, true)
 }
 
 fn select_str_impl(root: QueryRoot, query: &str, include_root: bool) -> Result<HtmlElementList, ()> {
-	if let Some(split) = split_extension(query) {
-		let prefix = split.prefix.trim();
-		let prefix = if prefix.is_empty() { "*" } else { prefix };
-		let base = select_str_impl(root, prefix, include_root)?;
-		let mut filtered = Vec::new();
-		for element in base.0 {
-			if matches_extension(&element, &split.filter)? {
-				filtered.push(element);
+	if split_extension(query).is_none() {
+		return Ok(HtmlElementList(select_css(&root, query, include_root)?));
+	}
+	let branches = split_top_level_commas(query);
+	if branches.iter().any(|branch| branch.is_empty()) {
+		return Err(());
+	}
+	let mut out = Vec::new();
+	for branch in &branches {
+		out.extend(eval(&root, branch, include_root)?);
+	}
+	if branches.len() > 1 {
+		sort_dedup_document_order(&mut out);
+	}
+	Ok(HtmlElementList(out))
+}
+
+/// 单分支求值：切出首段复合选择器匹配候选，再按组合器递归推进作用域
+fn eval(root: &QueryRoot, query: &str, include_root: bool) -> Result<Vec<HtmlElement>, ()> {
+	let (head, continuation) = split_head(query);
+	let candidates = match_compound(root, head, include_root)?;
+	apply_continuation(candidates, continuation)
+}
+
+/// 复合选择器（无顶层组合器）匹配：Scope 下元素自身必须命中；
+/// 其余根按 include_root 决定元素自身是否参与
+fn match_compound(root: &QueryRoot, compound: &str, include_root: bool) -> Result<Vec<HtmlElement>, ()> {
+	let compound = compound.trim();
+	if let QueryRoot::Scope(scope) = root {
+		let mut out = Vec::new();
+		for element in scope {
+			if matches_self(element, compound)? {
+				out.push(element.clone());
 			}
 		}
-		let remainder = split.suffix.trim_start();
-		if remainder.is_empty() {
-			return Ok(HtmlElementList(filtered));
-		}
-		let remainder = remainder
-			.strip_prefix('>')
-			.map(str::trim_start)
-			.unwrap_or(remainder);
-		if remainder.is_empty() || remainder.starts_with('+') || remainder.starts_with('~') {
-			return Err(());
-		}
-		let mut out = Vec::new();
-		for element in &filtered {
-			out.extend(select_str_impl(QueryRoot::Element(element), remainder, false)?.0);
-		}
-		return Ok(HtmlElementList(out));
+		return Ok(out);
 	}
+	if let Some(split) = split_extension(compound) {
+		let prefix = split.prefix.trim();
+		let prefix = if prefix.is_empty() { "*" } else { prefix };
+		let base = match_compound(root, prefix, include_root)?;
+		let rest = split.suffix.trim();
+		let mut out = Vec::new();
+		for element in base {
+			if matches_extension(&element, &split.filter)?
+				&& (rest.is_empty() || matches_self(&element, rest)?)
+			{
+				out.push(element);
+			}
+		}
+		return Ok(out);
+	}
+	select_css(root, compound, include_root)
+}
+
+/// 同复合剩余匹配候选元素自身（扩展伪类逐段消化，纯 CSS 段交给 selectors crate）
+fn matches_self(element: &HtmlElement, compound: &str) -> Result<bool, ()> {
+	if let Some(split) = split_extension(compound) {
+		let prefix = split.prefix.trim();
+		if !prefix.is_empty() {
+			let selector = Selector::parse(prefix).map_err(|_| ())?;
+			if !element_matches(element, &selector) {
+				return Ok(false);
+			}
+		}
+		if !matches_extension(element, &split.filter)? {
+			return Ok(false);
+		}
+		let rest = split.suffix.trim();
+		return if rest.is_empty() { Ok(true) } else { matches_self(element, rest) };
+	}
+	let selector = Selector::parse(compound).map_err(|_| ())?;
+	Ok(element_matches(element, &selector))
+}
+
+fn apply_continuation(candidates: Vec<HtmlElement>, continuation: &str) -> Result<Vec<HtmlElement>, ()> {
+	let trimmed = continuation.trim_start();
+	if trimmed.is_empty() {
+		return Ok(candidates);
+	}
+	let rest = match trimmed.as_bytes()[0] {
+		b'>' => return apply_scope(candidates, Scope::Children, trimmed[1..].trim()),
+		b'+' => return apply_scope(candidates, Scope::NextSibling, trimmed[1..].trim()),
+		b'~' => return apply_scope(candidates, Scope::LaterSiblings, trimmed[1..].trim()),
+		_ => trimmed,
+	};
+	if rest.is_empty() {
+		return Err(());
+	}
+	let mut out = Vec::new();
+	for element in &candidates {
+		out.extend(eval(&QueryRoot::Element(element), rest, false)?);
+	}
+	Ok(out)
+}
+
+enum Scope {
+	Children,
+	NextSibling,
+	LaterSiblings,
+}
+
+fn apply_scope(candidates: Vec<HtmlElement>, scope: Scope, rest: &str) -> Result<Vec<HtmlElement>, ()> {
+	if rest.is_empty() {
+		// 悬空组合器（如 `p:contains(x) +`）按无效查询处理
+		return Err(());
+	}
+	let elements: Vec<HtmlElement> = match scope {
+		Scope::Children => candidates.iter().flat_map(element_children).collect(),
+		Scope::NextSibling => candidates.iter().filter_map(next_element_sibling).collect(),
+		Scope::LaterSiblings => {
+			let mut siblings: Vec<HtmlElement> =
+				candidates.iter().flat_map(following_element_siblings).collect();
+			// 多个候选的后续兄弟集合互相重叠
+			dedup_elements(&mut siblings);
+			siblings
+		}
+	};
+	eval(&QueryRoot::Scope(elements), rest, true)
+}
+
+fn select_css(root: &QueryRoot, query: &str, include_root: bool) -> Result<Vec<HtmlElement>, ()> {
 	let selector = Selector::parse(query).map_err(|_| ())?;
-	let list = match root {
-		QueryRoot::Document(doc) => doc.select(&selector),
+	let elements = match root {
+		QueryRoot::Document(doc) => doc.select(&selector).0,
 		QueryRoot::Element(element) => {
 			if include_root {
 				element
 					.select(&selector)
 					.unwrap_or_else(|| HtmlElementList(Vec::new()))
+					.0
 			} else {
-				element.select_descendants(&selector)
+				element.select_descendants(&selector).0
 			}
 		}
 		QueryRoot::List(list) => {
@@ -693,16 +794,31 @@ fn select_str_impl(root: QueryRoot, query: &str, include_root: bool) -> Result<H
 					out.extend(element.select_descendants(&selector).0);
 				}
 			}
-			HtmlElementList(out)
+			out
 		}
+		QueryRoot::Scope(scope) => scope
+			.iter()
+			.filter(|element| element_matches(element, &selector))
+			.cloned()
+			.collect(),
 	};
-	Ok(list)
+	Ok(elements)
 }
 
 enum ExtensionFilter {
 	Contains { needle: String, own: bool, negate: bool },
+	Matches { pattern: Regex, own: bool, negate: bool },
 	Has { selectors: Vec<String>, negate: bool },
 	AttrWildcard { negate: bool },
+	AttrPrefix { prefix: String, negate: bool },
+	Index { kind: IndexKind, n: usize, negate: bool },
+}
+
+#[derive(Clone, Copy)]
+enum IndexKind {
+	Lt,
+	Gt,
+	Eq,
 }
 
 struct ExtensionSplit {
@@ -714,81 +830,222 @@ struct ExtensionSplit {
 #[derive(Clone, Copy)]
 enum MarkerKind {
 	Contains { own: bool, negate: bool },
+	Matches { own: bool, negate: bool },
 	Has { negate: bool },
-	Attr { negate: bool },
+	Index { kind: IndexKind, negate: bool },
+	AttrWildcard { negate: bool },
+	AttrPrefix { negate: bool },
 }
 
-/// 切出第一个 scraper 不支持的伪类（:contains/:containsOwn/:has/[*]，含 :not 包裹）。
+enum MarkerOutcome {
+	Split(ExtensionSplit),
+	/// 不是标记（或 :has 内容无需拦截），从给定位置继续扫描
+	Skip(usize),
+	Invalid,
+}
+
+/// 切出第一个 scraper 不支持的伪类标记，引号/括号/属性/转义感知（引号内的
+/// `:has(` 之类不算标记）。:has/:not(:has) 内容不含扩展伪类时跳过整组不拦截；
 /// 找到标记但括号不闭合时返回 None，让外层走 Selector::parse 报无效查询
 fn split_extension(query: &str) -> Option<ExtensionSplit> {
-	const PAREN_MARKERS: &[(&str, MarkerKind)] = &[
+	const MARKERS: &[(&str, MarkerKind)] = &[
 		(":not(:containsOwn(", MarkerKind::Contains { own: true, negate: true }),
 		(":not(:contains(", MarkerKind::Contains { own: false, negate: true }),
+		(":not(:matchesOwn(", MarkerKind::Matches { own: true, negate: true }),
+		(":not(:matches(", MarkerKind::Matches { own: false, negate: true }),
+		(":not(:has(", MarkerKind::Has { negate: true }),
+		(":not(:lt(", MarkerKind::Index { kind: IndexKind::Lt, negate: true }),
+		(":not(:gt(", MarkerKind::Index { kind: IndexKind::Gt, negate: true }),
+		(":not(:eq(", MarkerKind::Index { kind: IndexKind::Eq, negate: true }),
+		(":not([^", MarkerKind::AttrPrefix { negate: true }),
+		(":not([*])", MarkerKind::AttrWildcard { negate: true }),
 		(":containsOwn(", MarkerKind::Contains { own: true, negate: false }),
 		(":contains(", MarkerKind::Contains { own: false, negate: false }),
-		(":not(:has(", MarkerKind::Has { negate: true }),
+		(":matchesOwn(", MarkerKind::Matches { own: true, negate: false }),
+		(":matches(", MarkerKind::Matches { own: false, negate: false }),
 		(":has(", MarkerKind::Has { negate: false }),
-		(":not([*])", MarkerKind::Attr { negate: true }),
-		("[*]", MarkerKind::Attr { negate: false }),
+		(":lt(", MarkerKind::Index { kind: IndexKind::Lt, negate: false }),
+		(":gt(", MarkerKind::Index { kind: IndexKind::Gt, negate: false }),
+		(":eq(", MarkerKind::Index { kind: IndexKind::Eq, negate: false }),
+		("[^", MarkerKind::AttrPrefix { negate: false }),
+		("[*]", MarkerKind::AttrWildcard { negate: false }),
 	];
-	let mut found: Option<(usize, &'static str, MarkerKind)> = None;
-	for (marker, kind) in PAREN_MARKERS {
-		if let Some(index) = query.find(marker)
-			&& found.is_none_or(|(i, _, _)| index < i)
+	let mut quote: Option<char> = None;
+	let mut paren = 0u8;
+	let mut bracket = 0u8;
+	let mut i = 0;
+	while i < query.len() {
+		let c = query[i..].chars().next()?;
+		if quote.is_none() && paren == 0 && bracket == 0
+			&& let Some((marker, kind)) = MARKERS.iter().find(|(m, _)| query[i..].starts_with(m))
 		{
-			found = Some((index, marker, *kind));
+			match parse_extension_at(query, i, marker, kind) {
+				MarkerOutcome::Split(split) => return Some(split),
+				MarkerOutcome::Skip(end) => {
+					i = end;
+					continue;
+				}
+				MarkerOutcome::Invalid => return None,
+			}
+		}
+		match quote {
+			Some(q) if c == q => quote = None,
+			Some(_) => {}
+			None if c == '\'' || c == '"' => quote = Some(c),
+			None if c == '(' => paren += 1,
+			None if c == '[' => bracket += 1,
+			None if c == ')' => paren = paren.saturating_sub(1),
+			None if c == ']' => bracket = bracket.saturating_sub(1),
+			None => {}
+		}
+		i += c.len_utf8();
+		if c == '\\' && i < query.len() {
+			// 转义的下一个字符不参与引号/括号/标记判定
+			i += query[i..].chars().next().map_or(0, char::len_utf8);
 		}
 	}
-	let (index, marker, kind) = found?;
+	None
+}
+
+fn parse_extension_at(query: &str, index: usize, marker: &str, kind: &MarkerKind) -> MarkerOutcome {
 	let prefix = query[..index].to_string();
-	if let MarkerKind::Attr { negate } = kind {
-		return Some(ExtensionSplit {
+	if let MarkerKind::AttrPrefix { negate } = kind {
+		let content_start = index + marker.len();
+		let Some(close) = find_bracket_close(query, content_start) else {
+			return MarkerOutcome::Invalid;
+		};
+		let content = query[content_start..close].trim();
+		let after = close + 1;
+		let suffix = if *negate {
+			// :not([^前缀]) 要求右括号收尾，否则 [:not( 里包的是别的东西
+			if query[after..].starts_with(')') {
+				&query[after + 1..]
+			} else {
+				return MarkerOutcome::Skip(index + 1);
+			}
+		} else {
+			&query[after..]
+		};
+		if content.is_empty() {
+			return MarkerOutcome::Invalid;
+		}
+		return MarkerOutcome::Split(ExtensionSplit {
 			prefix,
-			filter: ExtensionFilter::AttrWildcard { negate },
+			filter: ExtensionFilter::AttrPrefix { prefix: content.to_string(), negate: *negate },
+			suffix: suffix.to_string(),
+		});
+	}
+	if let MarkerKind::AttrWildcard { negate } = kind {
+		return MarkerOutcome::Split(ExtensionSplit {
+			prefix,
+			filter: ExtensionFilter::AttrWildcard { negate: *negate },
 			suffix: query[index + marker.len()..].to_string(),
 		});
 	}
-	let extra_depth = match kind {
-		MarkerKind::Contains { negate: true, .. } | MarkerKind::Has { negate: true } => 1,
-		_ => 0,
+	let extra_depth = u8::from(matches!(
+		kind,
+		MarkerKind::Contains { negate: true, .. }
+			| MarkerKind::Matches { negate: true, .. }
+			| MarkerKind::Has { negate: true }
+			| MarkerKind::Index { negate: true, .. }
+	));
+	let Some((content, suffix)) = take_paren_content(query, index + marker.len(), extra_depth) else {
+		return MarkerOutcome::Invalid;
 	};
-	let (content, suffix) = take_paren_content(query, index + marker.len(), extra_depth)?;
 	match kind {
-		MarkerKind::Contains { own, negate } => Some(ExtensionSplit {
+		MarkerKind::Contains { own, negate } => MarkerOutcome::Split(ExtensionSplit {
 			prefix,
 			filter: ExtensionFilter::Contains {
-				needle: unquote(content.trim()),
-				own,
-				negate,
+				needle: unescape_needle(&unquote(content.trim())),
+				own: *own,
+				negate: *negate,
 			},
 			suffix,
 		}),
+		MarkerKind::Matches { own, negate } => match Regex::new(content.trim()) {
+			Ok(pattern) => MarkerOutcome::Split(ExtensionSplit {
+				prefix,
+				filter: ExtensionFilter::Matches { pattern, own: *own, negate: *negate },
+				suffix,
+			}),
+			Err(_) => MarkerOutcome::Invalid,
+		},
 		MarkerKind::Has { negate } => {
+			if split_extension(&content).is_none() {
+				return MarkerOutcome::Skip(query.len() - suffix.len());
+			}
 			let selectors = split_top_level_commas(&content);
 			if selectors.iter().any(|s| s.is_empty()) {
-				return None;
+				return MarkerOutcome::Invalid;
 			}
-			Some(ExtensionSplit {
+			MarkerOutcome::Split(ExtensionSplit {
 				prefix,
-				filter: ExtensionFilter::Has { selectors, negate },
+				filter: ExtensionFilter::Has { selectors, negate: *negate },
 				suffix,
 			})
 		}
-		MarkerKind::Attr { .. } => unreachable!(),
+		MarkerKind::Index { kind, negate } => match content.trim().parse::<usize>() {
+			Ok(n) => MarkerOutcome::Split(ExtensionSplit {
+				prefix,
+				filter: ExtensionFilter::Index { kind: *kind, n, negate: *negate },
+				suffix,
+			}),
+			Err(_) => MarkerOutcome::Invalid,
+		},
+		MarkerKind::AttrWildcard { .. } | MarkerKind::AttrPrefix { .. } => unreachable!(),
 	}
 }
 
-/// 从 start 扫描到配平后的右括号（extra_depth 抵消 :not 多包的一层），引号感知。
+/// 在首个顶层组合器（空白/>/+/~）处切开，引号/括号/属性/转义感知。
+/// 返回（首段复合, 组合器起的剩余）
+fn split_head(query: &str) -> (&str, &str) {
+	let mut quote: Option<char> = None;
+	let mut paren = 0u8;
+	let mut bracket = 0u8;
+	let mut chars = query.char_indices().peekable();
+	while let Some((i, c)) = chars.next() {
+		match quote {
+			Some(_) if c == '\\' => {
+				chars.next();
+			}
+			Some(q) if c == q => quote = None,
+			Some(_) => {}
+			None if c == '\\' => {
+				chars.next();
+			}
+			None if c == '\'' || c == '"' => quote = Some(c),
+			None if c == '(' => paren += 1,
+			None if c == '[' => bracket += 1,
+			None if c == ')' => paren = paren.saturating_sub(1),
+			None if c == ']' => bracket = bracket.saturating_sub(1),
+			None if paren == 0 && bracket == 0 && (matches!(c, '>' | '+' | '~') || c.is_whitespace()) => {
+				return (&query[..i], &query[i..]);
+			}
+			None => {}
+		}
+	}
+	(query, "")
+}
+
+/// 从 start 扫描到配平后的右括号（extra_depth 抵消 :not 多包的一层），引号感知；
+/// 反斜杠转义的字符不参与配平（`:contains(a\))` 的 \) 不算闭合）。
 /// 返回（内容, 剩余后缀）；extra_depth>0 时内容裁到内层闭合处
 fn take_paren_content(query: &str, start: usize, extra_depth: u8) -> Option<(String, String)> {
 	let rest = &query[start..];
 	let mut quote: Option<char> = None;
 	let mut depth = extra_depth;
 	let mut inner_end = None;
-	for (i, c) in rest.char_indices() {
+	let mut chars = rest.char_indices().peekable();
+	while let Some((i, c)) = chars.next() {
 		match quote {
+			Some(_) if c == '\\' => {
+				chars.next();
+			}
 			Some(q) if c == q => quote = None,
 			Some(_) => {}
+			None if c == '\\' => {
+				chars.next();
+			}
 			None if c == '\'' || c == '"' => quote = Some(c),
 			None if c == '(' => depth += 1,
 			None if c == ')' => {
@@ -807,19 +1064,52 @@ fn take_paren_content(query: &str, start: usize, extra_depth: u8) -> Option<(Str
 	None
 }
 
+/// 属性选择器 `[^前缀]` 的右括号位置，引号/转义感知
+fn find_bracket_close(query: &str, start: usize) -> Option<usize> {
+	let rest = &query[start..];
+	let mut quote: Option<char> = None;
+	let mut chars = rest.char_indices().peekable();
+	while let Some((i, c)) = chars.next() {
+		match quote {
+			Some(_) if c == '\\' => {
+				chars.next();
+			}
+			Some(q) if c == q => quote = None,
+			Some(_) => {}
+			None if c == '\\' => {
+				chars.next();
+			}
+			None if c == '\'' || c == '"' => quote = Some(c),
+			None if c == ']' => return Some(start + i),
+			None => {}
+		}
+	}
+	None
+}
+
 fn split_top_level_commas(text: &str) -> Vec<String> {
 	let mut out = Vec::new();
 	let mut quote: Option<char> = None;
-	let mut depth = 0u8;
+	let mut paren = 0u8;
+	let mut bracket = 0u8;
 	let mut start = 0;
-	for (i, c) in text.char_indices() {
+	let mut chars = text.char_indices().peekable();
+	while let Some((i, c)) = chars.next() {
 		match quote {
+			Some(_) if c == '\\' => {
+				chars.next();
+			}
 			Some(q) if c == q => quote = None,
 			Some(_) => {}
+			None if c == '\\' => {
+				chars.next();
+			}
 			None if c == '\'' || c == '"' => quote = Some(c),
-			None if c == '(' => depth += 1,
-			None if c == ')' => depth = depth.saturating_sub(1),
-			None if c == ',' && depth == 0 => {
+			None if c == '(' => paren += 1,
+			None if c == '[' => bracket += 1,
+			None if c == ')' => paren = paren.saturating_sub(1),
+			None if c == ']' => bracket = bracket.saturating_sub(1),
+			None if c == ',' && paren == 0 && bracket == 0 => {
 				out.push(text[start..i].trim().to_string());
 				start = i + 1;
 			}
@@ -841,12 +1131,46 @@ fn unquote(raw: &str) -> String {
 	}
 }
 
+/// jsoup TokenQueue.unescape：反斜杠只转义紧跟的一个字符
+fn unescape_needle(raw: &str) -> String {
+	let mut out = String::with_capacity(raw.len());
+	let mut chars = raw.chars();
+	while let Some(c) = chars.next() {
+		if c == '\\' {
+			match chars.next() {
+				Some(escaped) => out.push(escaped),
+				None => out.push('\\'),
+			}
+		} else {
+			out.push(c);
+		}
+	}
+	out
+}
+
 fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<bool, ()> {
 	Ok(match filter {
 		ExtensionFilter::Contains { needle, own, negate } => {
 			contains_text(element, needle, *own) != *negate
 		}
+		ExtensionFilter::Matches { pattern, own, negate } => {
+			// jsoup :matches 针对未归一化文本、find 语义、默认大小写敏感
+			let text = if *own { element.own_text() } else { element.text(false) };
+			text.is_some_and(|text| pattern.is_match(&text)) != *negate
+		}
 		ExtensionFilter::AttrWildcard { negate } => element.has_any_attribute() != *negate,
+		ExtensionFilter::AttrPrefix { prefix, negate } => {
+			has_attr_prefix(element, prefix) != *negate
+		}
+		ExtensionFilter::Index { kind, n, negate } => {
+			let index = element_sibling_index(element);
+			let hit = match kind {
+				IndexKind::Lt => index < *n,
+				IndexKind::Gt => index > *n,
+				IndexKind::Eq => index == *n,
+			};
+			hit != *negate
+		}
 		ExtensionFilter::Has { selectors, negate } => {
 			// jsoup :has 是后代相对选择器（不含自身），子选择器可再嵌套扩展伪类
 			let mut found = false;
@@ -877,6 +1201,81 @@ fn normalize_whitespace(text: &str) -> String {
 		.collect::<Vec<_>>()
 		.join(" ")
 		.to_lowercase()
+}
+
+fn element_matches(element: &HtmlElement, selector: &Selector) -> bool {
+	let html = element.0.html.borrow();
+	let Some(node) = html.tree.get(element.0.id) else {
+		return false;
+	};
+	let Some(element_ref) = ElementRef::wrap(node) else {
+		return false;
+	};
+	selector.matches(&element_ref)
+}
+
+fn element_children(element: &HtmlElement) -> Vec<HtmlElement> {
+	element.children().map(|list| list.0).unwrap_or_default()
+}
+
+/// CSS 兄弟组合器只在元素之间成立，文本/注释节点要跳过
+fn next_element_sibling(element: &HtmlElement) -> Option<HtmlElement> {
+	let html = element.0.html.borrow();
+	let node = html.tree.get(element.0.id)?;
+	let sibling = node.next_siblings().find_map(ElementRef::wrap)?;
+	Some(element.child(sibling.id()))
+}
+
+fn following_element_siblings(element: &HtmlElement) -> Vec<HtmlElement> {
+	let html = element.0.html.borrow();
+	let Some(node) = html.tree.get(element.0.id) else {
+		return Vec::new();
+	};
+	node.next_siblings()
+		.filter_map(ElementRef::wrap)
+		.map(|sibling| element.child(sibling.id()))
+		.collect()
+}
+
+fn has_attr_prefix(element: &HtmlElement, prefix: &str) -> bool {
+	let html = element.0.html.borrow();
+	let Some(node) = html.tree.get(element.0.id) else {
+		return false;
+	};
+	let Some(element_ref) = ElementRef::wrap(node) else {
+		return false;
+	};
+	element_ref.value().attrs().any(|(k, _)| k.starts_with(prefix))
+}
+
+/// jsoup elementSiblingIndex：同级元素中的 0 起下标，非元素节点不计
+fn element_sibling_index(element: &HtmlElement) -> usize {
+	let html = element.0.html.borrow();
+	let Some(node) = html.tree.get(element.0.id) else {
+		return usize::MAX;
+	};
+	node.prev_siblings()
+		.filter(|sibling| sibling.value().is_element())
+		.count()
+}
+
+fn dedup_elements(elements: &mut Vec<HtmlElement>) {
+	let mut seen = std::collections::HashSet::new();
+	elements.retain(|element| seen.insert(element.0.id));
+}
+
+/// jsoup 逗号列表语义：并集按文档序、去重
+fn sort_dedup_document_order(elements: &mut Vec<HtmlElement>) {
+	let Some(html) = elements.first().map(|element| element.0.html.clone()) else {
+		return;
+	};
+	let html = html.borrow();
+	let mut order = std::collections::HashMap::new();
+	for (index, node) in html.tree.root().descendants().enumerate() {
+		order.insert(node.id(), index);
+	}
+	elements.sort_by_key(|element| order.get(&element.0.id).copied().unwrap_or(usize::MAX));
+	elements.dedup_by_key(|element| element.0.id);
 }
 
 pub trait SelectWithRoot<'a, 'b> {
@@ -1103,7 +1502,272 @@ mod tests {
 	fn contains_invalid_query() {
 		let doc = HtmlDocument::parse("<p>x</p>", None);
 		assert!(select_str(QueryRoot::Document(&doc), "li:contains(unclosed").is_err());
-		assert!(select_str(QueryRoot::Document(&doc), "p:contains(x) + p").is_err());
+		assert!(select_str(QueryRoot::Document(&doc), "p:contains(x) +").is_err());
+	}
+
+	#[test]
+	fn contains_sibling_continuations() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<ul>
+		<li>狀態： <span class="txt">連載中</span></li>
+		<li>作者： <span class="txt">某人</span></li>
+		<li>其他</li>
+		</ul>
+		<p>x</p>
+		<p>first</p>
+		<span>gap</span>
+		<p>second</p>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		// + 紧邻兄弟（跳过文本节点）
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：) + li").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("作者： 某人"));
+
+		// ~ 后续全部兄弟
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：) ~ li").unwrap();
+		assert_eq!(list.0.len(), 2);
+
+		let list = select_str(QueryRoot::Document(&doc), "p:contains(x) + p").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("first"));
+
+		// + 只取紧邻的一个，中间隔了 span 的不再命中
+		let list = select_str(QueryRoot::Document(&doc), "p:contains(x) ~ p").unwrap();
+		assert_eq!(list.0.len(), 2);
+	}
+
+	#[test]
+	fn contains_adjacent_sibling_source_shape() {
+		// zh.relamanhua 的真实写法（issue #83 的原始报告）
+		let html = r#"<!DOCTYPE html><html><body>
+		<div class="comicParticulars-synopsis">
+		<span class="comicParticulars-left-txt">作者：</span>
+		<span class="comicParticulars-right-txt"><a href="/author/1">某人</a></span>
+		<span class="comicParticulars-left-txt">題材：</span>
+		<span class="comicParticulars-right-txt"><a href="/genre/1">熱血</a></span>
+		<span class="comicParticulars-left-txt">狀態：</span>
+		<span class="comicParticulars-right-txt"><a href="/status/1">連載中</a></span>
+		</div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		for (label, href) in [
+			("作者：", "/author/1"),
+			("題材：", "/genre/1"),
+			("狀態：", "/status/1"),
+		] {
+			let query = format!("span:contains({label}) + span.comicParticulars-right-txt a");
+			let list = select_str(QueryRoot::Document(&doc), &query).unwrap();
+			assert_eq!(list.0.len(), 1, "{query}");
+			assert_eq!(list.0[0].attr("href").as_deref(), Some(href), "{query}");
+		}
+	}
+
+	#[test]
+	fn has_sibling_continuation() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<div><a href="/1">x</a></div>
+		<p>p1</p>
+		<p>p2</p>
+		<div>plain</div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let list = select_str(QueryRoot::Document(&doc), "div:has(a) ~ p").unwrap();
+		assert_eq!(list.0.len(), 2);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("p1"));
+	}
+
+	#[test]
+	fn has_relative_selector_passthrough() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<div id="a"><a href="/1">x</a></div>
+		<div id="b"><p><a href="/2">y</a></p></div>
+		<div id="c"><p>z</p></div>
+		<div id="d"></div><p>after</p>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		// :has/:not 内容不含扩展伪类时整个交给 Selector::parse（CSS4 相对选择器）
+		let list = select_str(QueryRoot::Document(&doc), "div:has(> a)").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("a"));
+
+		let list = select_str(QueryRoot::Document(&doc), "div:not(:has(> a))").unwrap();
+		assert_eq!(list.0.len(), 3);
+
+		let list = select_str(QueryRoot::Document(&doc), "div:has(+ p)").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("d"));
+
+		// 内容含扩展伪类时仍走拦截路径
+		let list = select_str(QueryRoot::Document(&doc), "div:has(p:contains(z))").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("c"));
+	}
+
+	#[test]
+	fn same_compound_continuation_on_candidate() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<ul>
+		<li class="cls keep" data-k="v">x one</li>
+		<li class="keep">x two</li>
+		<li class="cls">y three <span class="cls">nested</span></li>
+		</ul>
+		<div id="ab"><a href="/1">x</a><b>y</b></div>
+		<div id="a"><a href="/2">x</a></div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		// 同复合剩余必须作用于候选元素自身，不是后代
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(x).cls").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("x one"));
+
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(x)[data-k]").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("x one"));
+
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(x):not(.cls)").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("x two"));
+
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(x):contains(two)").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("x two"));
+
+		let list = select_str(QueryRoot::Document(&doc), "div:has(a):has(b)").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("ab"));
+	}
+
+	#[test]
+	fn child_combinator_after_extension() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<ul><li>x<span class="inner">a<span class="inner">b</span></span></li></ul>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		// > 是直接子元素，不是后代：嵌套的第二个 span.inner 不能命中
+		let list = select_str(QueryRoot::Document(&doc), "li:contains(x) > span.inner").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].children().unwrap().0.len(), 1);
+	}
+
+	#[test]
+	fn index_selectors() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<table><tr><td>c0</td><td>c1</td><td>c2</td><td>c3</td></tr></table>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let texts = |query: &str| -> Vec<String> {
+			select_str(QueryRoot::Document(&doc), query)
+				.unwrap()
+				.0
+				.iter()
+				.map(|e| e.text(true).unwrap())
+				.collect()
+		};
+
+		// jsoup :lt/:gt/:eq 是同级元素下标（0 起）
+		assert_eq!(texts("td:lt(2)"), ["c0", "c1"]);
+		assert_eq!(texts("td:gt(1)"), ["c2", "c3"]);
+		assert_eq!(texts("td:eq(2)"), ["c2"]);
+		assert_eq!(texts("td:eq(0)"), ["c0"]);
+		assert_eq!(texts("td:not(:eq(0))"), ["c1", "c2", "c3"]);
+	}
+
+	#[test]
+	fn matches_regex_selectors() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<p id="p1">Chapter 12</p>
+		<p id="p2">no digits</p>
+		<p id="p3">sub <b>3</b> own</p>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+		let ids = |query: &str| -> Vec<String> {
+			select_str(QueryRoot::Document(&doc), query)
+				.unwrap()
+				.0
+				.iter()
+				.map(|e| e.id().unwrap())
+				.collect()
+		};
+
+		assert_eq!(ids(r"p:matches(\d+)"), ["p1", "p3"]);
+		// own 文本：p3 的数字在子元素里
+		assert_eq!(ids(r"p:matchesOwn(\d+)"), ["p1"]);
+		// 默认大小写敏感，(?i) 显式放开（jsoup 同款）
+		assert_eq!(ids(r"p:matches(chapter)"), Vec::<String>::new());
+		assert_eq!(ids(r"p:matches((?i)chapter)"), ["p1"]);
+		assert!(select_str(QueryRoot::Document(&doc), r"p:matches([)").is_err());
+	}
+
+	#[test]
+	fn attr_prefix_selector() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<div id="d1" data-id="1" data-x="2">a</div>
+		<div id="d2" title="t">b</div>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(QueryRoot::Document(&doc), "div[^data-]").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("d1"));
+
+		let list = select_str(QueryRoot::Document(&doc), "div:not([^data-])").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].id().as_deref(), Some("d2"));
+	}
+
+	#[test]
+	fn marker_inside_quoted_attr_value_not_split() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<a href="/1" title=":has(">x</a>
+		<a href="/2">y</a>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(QueryRoot::Document(&doc), r#"a[title=":has("]"#).unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].attr("href").as_deref(), Some("/1"));
+
+		let list = select_str(QueryRoot::Document(&doc), r#"a[title=":has("]:contains(x)"#).unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].attr("href").as_deref(), Some("/1"));
+	}
+
+	#[test]
+	fn contains_backslash_escape() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<p>a) b</p>
+		<p>other</p>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(QueryRoot::Document(&doc), r"p:contains(a\))").unwrap();
+		assert_eq!(list.0.len(), 1);
+		assert_eq!(list.0[0].text(true).as_deref(), Some("a) b"));
+	}
+
+	#[test]
+	fn top_level_comma_union() {
+		let html = r#"<!DOCTYPE html><html><body>
+		<h2>has y</h2>
+		<h1>has x</h1>
+		<h3>plain</h3>
+		</body></html>"#;
+		let doc = HtmlDocument::parse(html, None);
+
+		let list = select_str(QueryRoot::Document(&doc), "h1:contains(x), h2:contains(y)").unwrap();
+		assert_eq!(list.0.len(), 2);
+		// 并集按文档序（jsoup 逗号列表语义），不是分支顺序
+		assert_eq!(list.0[0].tag_name().as_deref(), Some("h2"));
+		assert_eq!(list.0[1].tag_name().as_deref(), Some("h1"));
+
+		// 重复命中要去重
+		let list = select_str(QueryRoot::Document(&doc), "h1:contains(x), h1").unwrap();
+		assert_eq!(list.0.len(), 1);
 	}
 
 	#[test]
