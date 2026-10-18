@@ -940,19 +940,13 @@ pub async fn fetch_remote(
 		reqwest::Url::parse(&spec.url).map_err(|_| ApiError::bad_request("invalid image url"))?;
 	let mut builder = state
 		.http
-		.request(spec.method.into(), &spec_url)
+		.request_with(
+			spec.method.into(),
+			&spec_url,
+			&spec.headers,
+			Some(accept_language.as_str()),
+		)
 		.map_err(fetch_err)?;
-	for (name, value) in &spec.headers {
-		builder = builder.header(name, value);
-	}
-	// 源已自带 Accept-Language 就不覆盖；否则补上宿主按源语言推导的默认值
-	if !spec
-		.headers
-		.iter()
-		.any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
-	{
-		builder = builder.header(reqwest::header::ACCEPT_LANGUAGE, accept_language.as_str());
-	}
 	if let Some(body) = &spec.body {
 		builder = builder.body(body.clone());
 	}

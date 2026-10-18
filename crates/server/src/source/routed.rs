@@ -149,13 +149,28 @@ impl RoutedClients {
 		Ok(client)
 	}
 
-	/// 直接构造请求（调用方自定 method/body/headers）；UA 缺省补全局值
+	/// 直接构造请求（不含源声明头）：UA/Accept-Language 用全局缺省
 	pub fn request(&self, method: reqwest::Method, url: &Url) -> Result<reqwest::RequestBuilder, FetchError> {
+		self.request_with(method, url, &[], None)
+	}
+
+	/// 带源声明 headers 的请求：源的同名头优先，缺省才补全局 UA 与 Accept-Language。
+	/// reqwest 的 header() 是 append，缺省值先塞会与源值并成两个同名头；CF 只认第一个
+	/// （默认值）→ 403，故一律「先判后补」（同 wasm net host）。
+	pub fn request_with(
+		&self,
+		method: reqwest::Method,
+		url: &Url,
+		headers: &[(String, String)],
+		accept_language: Option<&str>,
+	) -> Result<reqwest::RequestBuilder, FetchError> {
 		let client = self.client_for(url)?;
-		let builder = client
-			.request(method, url.clone())
-			.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default());
-		Ok(builder)
+		Ok(apply_default_headers(
+			client.request(method, url.clone()),
+			headers,
+			self.policy.user_agent().unwrap_or_default(),
+			accept_language,
+		))
 	}
 
 	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）、CF 挑战 trawl 升级与可选直连回退的 GET
@@ -174,12 +189,10 @@ impl RoutedClients {
 		let mut attempt = 0;
 		loop {
 			attempt += 1;
-			let result = with_accept_language(
-				self.request(reqwest::Method::GET, url)?,
-				accept_language,
-			)
-			.send()
-			.await;
+			let result = self
+				.request_with(reqwest::Method::GET, url, &[], accept_language)?
+				.send()
+				.await;
 			let response = match result {
 				Ok(response) => response,
 				Err(e) => {
@@ -230,10 +243,10 @@ impl RoutedClients {
 		accept_language: Option<&str>,
 	) -> Result<reqwest::Response, FetchError> {
 		let client = self.client_for_route(route)?;
-		let response = with_accept_language(
-			client
-				.get(url.clone())
-				.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default()),
+		let response = apply_default_headers(
+			client.get(url.clone()),
+			&[],
+			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
 		)
 		.send()
@@ -254,10 +267,10 @@ impl RoutedClients {
 			.use_rustls_tls()
 			.build()
 			.map_err(FetchError::Network)?;
-		let response = with_accept_language(
-			client
-				.get(url.clone())
-				.header(reqwest::header::USER_AGENT, self.policy.user_agent().unwrap_or_default()),
+		let response = apply_default_headers(
+			client.get(url.clone()),
+			&[],
+			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
 		)
 		.send()
@@ -270,15 +283,34 @@ impl RoutedClients {
 	}
 }
 
-/// 有默认值时给 builder 补 Accept-Language；空/None 原样返回
-fn with_accept_language(
+/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent 与宿主 Accept-Language。
+/// 关键在「先判后补」——reqwest 的 header() 是 append，缺省值若先塞会与源值并成两个同名头。
+fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
+	source_headers: &[(String, String)],
+	global_user_agent: String,
 	accept_language: Option<&str>,
 ) -> reqwest::RequestBuilder {
-	match accept_language {
-		Some(value) if !value.is_empty() => builder.header(reqwest::header::ACCEPT_LANGUAGE, value),
-		_ => builder,
+	let has = |name: &str| {
+		source_headers
+			.iter()
+			.any(|(key, _)| key.eq_ignore_ascii_case(name))
+	};
+	let has_user_agent = has("user-agent");
+	let has_accept_language = has("accept-language");
+	let mut builder = builder;
+	if !has_user_agent {
+		builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
 	}
+	for (name, value) in source_headers {
+		builder = builder.header(name, value);
+	}
+	if !has_accept_language
+		&& let Some(value) = accept_language.filter(|value| !value.is_empty())
+	{
+		builder = builder.header(reqwest::header::ACCEPT_LANGUAGE, value);
+	}
+	builder
 }
 
 #[cfg(test)]
@@ -445,6 +477,86 @@ mod tests {
 		clients.get(&url).await.expect("get");
 		let head = origin.heads().join("\n").to_ascii_lowercase();
 		assert!(!head.contains("accept-language:"), "head: {head}");
+	}
+
+	#[tokio::test]
+	async fn request_with_keeps_source_user_agent_as_the_only_value() {
+		let origin = mock_server(|_head| respond("200 OK", &["content-type: image/webp"], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/m1.webp", origin.addr)).unwrap();
+
+		// 源在 get_image_request 里自带的 UA 必须赢过全局值，且只能有一个：
+		// reqwest 的 header() 是 append，CF 只读第一个，重复即 403。
+		let headers = vec![
+			("User-Agent".to_string(), "NoyAcg/3.0".to_string()),
+			("Referer".to_string(), "https://noymanga.com/".to_string()),
+		];
+		let response = clients
+			.request_with(reqwest::Method::GET, &url, &headers, None)
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+		assert_eq!(response.status(), StatusCode::OK);
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let ua: Vec<&str> = head
+			.lines()
+			.filter(|l| l.starts_with("user-agent:"))
+			.collect();
+		assert_eq!(ua.len(), 1, "源 UA 不得被追加成两个: {head}");
+		assert_eq!(ua[0].trim(), "user-agent: noyacg/3.0", "{head}");
+		assert!(head.contains("referer: https://noymanga.com/"), "{head}");
+		assert!(!head.contains("mozilla/5.0"), "全局 UA 不该出现: {head}");
+	}
+
+	#[tokio::test]
+	async fn request_with_falls_back_to_global_user_agent() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let headers = vec![("Referer".to_string(), "https://noymanga.com/".to_string())];
+		clients
+			.request_with(reqwest::Method::GET, &url, &headers, Some("zh-CN,zh;q=0.9"))
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let expected = format!(
+			"user-agent: {}",
+			Config::default().user_agent.to_ascii_lowercase()
+		);
+		assert!(head.contains(&expected), "缺省应补全局 UA: {head}");
+		assert!(
+			head.contains("accept-language: zh-cn,zh;q=0.9"),
+			"缺省应补 Accept-Language: {head}"
+		);
+	}
+
+	#[tokio::test]
+	async fn request_with_does_not_duplicate_accept_language() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let headers = vec![("Accept-Language".to_string(), "ja-JP".to_string())];
+		clients
+			.request_with(reqwest::Method::GET, &url, &headers, Some("zh-CN,zh;q=0.9"))
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let al: Vec<&str> = head
+			.lines()
+			.filter(|line| line.starts_with("accept-language:"))
+			.collect();
+		assert_eq!(al.len(), 1, "源 Accept-Language 不得被追加成两个: {head}");
+		assert_eq!(al[0].trim(), "accept-language: ja-jp", "{head}");
 	}
 
 	#[tokio::test]
