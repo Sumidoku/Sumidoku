@@ -24,6 +24,10 @@ tower-http = { version = "0.7", features = ["trace", "fs"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
 rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
+# suwayomi/mihon 备份解码：prost 由 wasmer 系带入、flate2 由 zip/reqwest 带入，
+# 两个直接依赖不向依赖树新增任何 crate（miniz_oxide 纯 Rust 后端，无交叉风险）
+prost = "0.14"
+flate2 = "1"
 # axum Body::from_stream 的 Stream trait 出处，无传递依赖
 futures-core = "0.3"
 # 密码哈希（纯 Rust，无 C 依赖交叉风险）；token/API key 指纹用 sha2
