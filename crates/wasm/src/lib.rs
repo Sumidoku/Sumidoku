@@ -2,6 +2,7 @@ mod error;
 mod features;
 mod html_dom;
 mod imports;
+mod js_engine;
 pub mod package;
 mod partial;
 mod runtime;

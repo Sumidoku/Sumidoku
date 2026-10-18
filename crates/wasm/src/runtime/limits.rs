@@ -16,6 +16,10 @@ pub struct Limits {
 	pub net_timeout_max: Duration,
 	/// 实例线性内存上限，memory.grow 超过即失败
 	pub memory_max: u64,
+	/// 单次 js eval 的执行上限，interrupt handler 到点中断
+	pub js_timeout: Duration,
+	/// 单个 js context 的引擎堆上限（QuickJS 分配计数）
+	pub js_memory_max: usize,
 }
 
 impl Default for Limits {
@@ -27,6 +31,8 @@ impl Default for Limits {
 			net_timeout_default: Duration::from_secs(30),
 			net_timeout_max: Duration::from_secs(120),
 			memory_max: 256 * 1024 * 1024,
+			js_timeout: Duration::from_secs(10),
+			js_memory_max: 64 * 1024 * 1024,
 		}
 	}
 }
