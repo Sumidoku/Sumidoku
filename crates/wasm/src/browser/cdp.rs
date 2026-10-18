@@ -1,10 +1,17 @@
 //! chromiumoxide 实装的 CDP client。异步 API 收进每源 actor 线程持有的
 //! current_thread runtime：block_on 驱动命令与后台 Handler 同生共死，
 //! 宿主调用保持同步签名，与 reqwest::blocking 的 net 栈同一线程模型。
-use super::{BrowserCookie, BrowserError, CdpClient};
+use super::{BrowserCookie, BrowserError, CdpClient, FrameSink, KeyInput, KeyKind, MouseButton, MouseInput, MouseKind};
 use chromiumoxide::browser::Browser;
 use chromiumoxide::cdp::browser_protocol::browser::BrowserContextId;
+use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+use chromiumoxide::cdp::browser_protocol::input::{
+	DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType, InsertTextParams,
+};
 use chromiumoxide::cdp::browser_protocol::network::DeleteCookiesParams;
+use chromiumoxide::cdp::browser_protocol::page::{
+	EventScreencastFrame, ScreencastFrameAckParams, StartScreencastFormat, StartScreencastParams, StopScreencastParams,
+};
 use chromiumoxide::cdp::browser_protocol::storage::{ClearCookiesParams, GetCookiesParams};
 use chromiumoxide::cdp::browser_protocol::target::CreateTargetParams;
 use chromiumoxide::error::CdpError;
@@ -161,5 +168,119 @@ impl CdpClient for ChromiumoxideClient {
 		self.block_on(self.browser.execute(params))
 			.map_err(|e| classify("browser cookies clear failed", e))?;
 		Ok(())
+	}
+
+	fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let params = SetDeviceMetricsOverrideParams::new(width, height, 1.0, false);
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser viewport failed", e))?;
+		Ok(())
+	}
+
+	fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		// 先挂监听再开推流，首帧不丢
+		let mut stream = self
+			.block_on(page.event_listener::<EventScreencastFrame>())
+			.map_err(|e| classify("browser screencast listener failed", e))?;
+		let params = StartScreencastParams::builder()
+			.format(StartScreencastFormat::Jpeg)
+			.quality(60)
+			.max_width(1280)
+			.max_height(800)
+			.build();
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser screencast start failed", e))?;
+		// 泵任务与 client 同 runtime 同生死：逐帧 ack 后投 sink；
+		// ack 失败（页面/连接已死）或 sink 无人收（会话结束）即自停
+		self.runtime.spawn(async move {
+			while let Some(event) = stream.next().await {
+				if page.execute(ScreencastFrameAckParams::new(event.session_id)).await.is_err() {
+					break;
+				}
+				if sink.send(String::from(event.data.clone())).is_err() {
+					break;
+				}
+			}
+		});
+		Ok(())
+	}
+
+	fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		self.block_on(page.execute(StopScreencastParams {}))
+			.map_err(|e| classify("browser screencast stop failed", e))?;
+		Ok(())
+	}
+
+	fn dispatch_mouse(&mut self, context: &str, input: &MouseInput) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let kind = match input.kind {
+			MouseKind::Down => DispatchMouseEventType::MousePressed,
+			MouseKind::Up => DispatchMouseEventType::MouseReleased,
+			MouseKind::Move => DispatchMouseEventType::MouseMoved,
+			MouseKind::Wheel => DispatchMouseEventType::MouseWheel,
+		};
+		let button = match input.button {
+			MouseButton::None => chromiumoxide::cdp::browser_protocol::input::MouseButton::None,
+			MouseButton::Left => chromiumoxide::cdp::browser_protocol::input::MouseButton::Left,
+			MouseButton::Middle => chromiumoxide::cdp::browser_protocol::input::MouseButton::Middle,
+			MouseButton::Right => chromiumoxide::cdp::browser_protocol::input::MouseButton::Right,
+		};
+		let mut params = DispatchMouseEventParams::new(kind, input.x, input.y);
+		params.modifiers = Some(input.modifiers);
+		params.button = Some(button);
+		params.click_count = Some(input.click_count);
+		if input.kind == MouseKind::Wheel {
+			params.delta_x = Some(input.delta_x);
+			params.delta_y = Some(input.delta_y);
+		}
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser mouse dispatch failed", e))?;
+		Ok(())
+	}
+
+	fn dispatch_key(&mut self, context: &str, input: &KeyInput) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		let kind = match input.kind {
+			KeyKind::Down => DispatchKeyEventType::KeyDown,
+			KeyKind::Up => DispatchKeyEventType::KeyUp,
+		};
+		let mut params = DispatchKeyEventParams::new(kind);
+		params.modifiers = Some(input.modifiers);
+		params.key = Some(input.key.clone());
+		params.code = Some(input.code.clone());
+		params.windows_virtual_key_code = Some(input.windows_virtual_key_code);
+		params.native_virtual_key_code = Some(input.windows_virtual_key_code);
+		self.block_on(page.execute(params))
+			.map_err(|e| classify("browser key dispatch failed", e))?;
+		Ok(())
+	}
+
+	fn insert_text(&mut self, context: &str, text: &str) -> Result<(), BrowserError> {
+		let page = self.page(context)?.clone();
+		self.block_on(page.execute(InsertTextParams::new(text)))
+			.map_err(|e| classify("browser insert text failed", e))?;
+		Ok(())
+	}
+
+	fn local_storage_values(&mut self, context: &str, keys: &[String]) -> Result<Vec<(String, String)>, BrowserError> {
+		let page = self.page(context)?.clone();
+		// 一次求值取回全部声明键；null（键不存在）在宿主侧滤掉
+		let expression = format!(
+			"JSON.stringify(({}).map(k => [k, window.localStorage.getItem(k)]))",
+			serde_json::to_string(keys).unwrap_or_else(|_| "[]".to_string())
+		);
+		let result = self
+			.block_on(page.evaluate(expression))
+			.map_err(|e| classify("browser localStorage read failed", e))?;
+		// 求值结果是 JSON.stringify 的字符串，需二次解析
+		let pairs: Vec<(String, Option<String>)> = result
+			.value()
+			.and_then(|v| v.as_str().map(str::to_string))
+			.and_then(|text| serde_json::from_str(&text).ok())
+			.unwrap_or_default();
+		Ok(pairs.into_iter().filter_map(|(k, v)| v.map(|v| (k, v))).collect())
 	}
 }
