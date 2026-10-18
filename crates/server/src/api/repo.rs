@@ -22,9 +22,14 @@ fn repo_json(row: &SourceRepoRow) -> Value {
 	})
 }
 
-/// 已装源 DTO 统一出口：list/install/update 同形；updateVersion 取各 repo
-/// 缓存里的最新版（严格大于已装才给值），无 repo 或无更新时为 null
-pub(crate) fn source_json(row: &SourceRow, latest: &HashMap<String, (i64, i64)>) -> Value {
+/// 已装源 DTO 统一出口：list/install/update/patch 同形；updateVersion 取各 repo
+/// 缓存里的最新版（严格大于已装才给值），无 repo 或无更新时为 null；
+/// pinOrder 是 browse.pinned_sources 里的下标，未置顶为 null
+pub(crate) fn source_json(
+	row: &SourceRow,
+	latest: &HashMap<String, (i64, i64)>,
+	pinned: &HashMap<String, i64>,
+) -> Value {
 	let update = latest
 		.get(&row.key)
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
@@ -40,6 +45,8 @@ pub(crate) fn source_json(row: &SourceRow, latest: &HashMap<String, (i64, i64)>)
 		"installedAt": row.installed_at,
 		"updatedAt": row.updated_at,
 		"updateVersion": update,
+		"pinned": pinned.contains_key(&row.key),
+		"pinOrder": pinned.get(&row.key),
 	})
 }
 
@@ -145,7 +152,8 @@ pub async fn install_source(
 ) -> ApiResult<Json<Value>> {
 	let row = repo::install_from_repo(&state, body.repo_id, &body.source_key).await?;
 	let latest = repo::latest_versions(&state.pool).await?;
-	Ok(Json(source_json(&row, &latest)))
+	let pinned = super::pins::pinned_map(&state.pool).await?;
+	Ok(Json(source_json(&row, &latest, &pinned)))
 }
 
 pub async fn update_source(
@@ -154,7 +162,8 @@ pub async fn update_source(
 ) -> ApiResult<Json<Value>> {
 	let row = repo::update_source(&state, id).await?;
 	let latest = repo::latest_versions(&state.pool).await?;
-	Ok(Json(source_json(&row, &latest)))
+	let pinned = super::pins::pinned_map(&state.pool).await?;
+	Ok(Json(source_json(&row, &latest, &pinned)))
 }
 
 pub async fn update_all(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
