@@ -82,6 +82,8 @@ and the server embeds it (see above).
   two linux targets and build both darwin targets on `macos-latest`, then
   push the same multi-arch image to Docker Hub (`sumidoku/sumidoku`) and
   GitHub Container Registry (`ghcr.io/sumidoku/sumidoku`), each tagged
-  `latest`/`X.Y.Z`/`X.Y`, and create the GitHub release with the four
-  archives. The ghcr login uses the run's `GITHUB_TOKEN`, so the job asks
-  for `packages: write`.
+  `latest`/`X.Y.Z`/`<major>.x` (e.g. `0.x`), and create the GitHub release
+  with the four archives. The ghcr login uses the run's `GITHUB_TOKEN`, so
+  the job asks for `packages: write`. The ghcr package starts private on
+  first push and must be flipped to public in the org's package settings
+  once — anonymous pulls fail until then.
