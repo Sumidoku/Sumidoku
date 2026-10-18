@@ -24,6 +24,7 @@ pub enum StoreItem {
 	Encoded(Vec<u8>),
 	ImageData(ImageData),
 	JsContext(Box<JsEngine>),
+	WebView(Box<crate::webview::WebView>),
 }
 
 // HtmlDocument/JsContext 等内部类型非 Send，但实例与 store 只活在单个 actor
@@ -68,6 +69,10 @@ impl StoreItem {
 
 	pub fn as_js_context(&mut self) -> Option<&mut JsEngine> {
 		if let StoreItem::JsContext(engine) = self { Some(engine) } else { None }
+	}
+
+	pub fn as_webview(&mut self) -> Option<&mut crate::webview::WebView> {
+		if let StoreItem::WebView(view) = self { Some(view) } else { None }
 	}
 
 	pub fn as_encoded(&self) -> Option<&[u8]> {

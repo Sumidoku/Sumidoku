@@ -39,6 +39,11 @@ impl JsEngine {
 		context
 	}
 
+	// webview 的 document 替换语义要求丢弃全部全局状态重来，与超时重建同一条路径
+	pub fn reset(&mut self) {
+		self.context = Self::new_context(self.loop_max);
+	}
+
 	pub fn eval(&mut self, source: &str) -> Result<String, String> {
 		let value = self.run_script(source)?;
 		to_js_string(&mut self.context, &value)
