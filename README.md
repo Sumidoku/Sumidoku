@@ -13,7 +13,7 @@ Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a sin
 docker compose up -d
 ```
 
-The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts `./config` and `./downloads`. Open http://localhost:3000.
+The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts `./config` and `./downloads`. Open http://localhost:3000. The same image is published to GitHub Container Registry as `ghcr.io/sumidoku/sumidoku`; point the compose `image:` at either.
 
 ## Volumes and environment
 
