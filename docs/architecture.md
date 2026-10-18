@@ -52,6 +52,21 @@ Migrations in `crates/server/migrations`.
   listing when it has download rows, and deletes it otherwise.
 - Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter.
+- Page blobs (`source/mod.rs:materialize_image_pages`): a
+  `PageContent::Image` page holds an actor-local rid, so `load_pages`
+  exchanges it for PNG bytes in the same call that fetched the page list
+  and stores them under `config_dir/page-blobs/<chapter_id>/<idx>.png`; the
+  page row keeps just the file name. The reader (`api/page.rs`), OPDS-PSE
+  (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
+  page_bytes`) all read the blob; chapter dirs whose chapter row is gone
+  are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Image processors: when a source exports `process_page_image` /
+  `process_cover_image`, `fetch_page_image` / `fetch_cover_image`
+  (`source/mod.rs`) pass the fetched response through the actor
+  (`SourceHandle::process_page_image`) and replace the bytes with the
+  returned PNG — for the reader, OPDS, downloads and the cover endpoint
+  alike. Cover caching is unchanged: the processed bytes are what the
+  on-disk cache stores.
 - Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.
@@ -120,7 +135,26 @@ to streaming callers (`SourceHandle::get_home_streaming` /
 upstream title-upsert accumulator (`partial.rs`) so consumers receive
 index-addressed events, and an empty final layout falls back to the
 accumulated partials. Calls without a streaming caller discard partials,
-as before. `source.rs`
+as before. The `canvas` ABI (`imports/canvas.rs`) is rendered by
+tiny-skia: a context is a premultiplied-RGBA pixmap plus a current
+transform, and images live in the same store as straight RGBA8 buffers
+(`runtime/store.rs:ImageData`), converted at the boundary. `fill` /
+`stroke` take postcard-encoded `aidoku::canvas::Path` / `StrokeStyle`
+payloads, `set_transform` reassembles the source-side decomposition as
+translate·scale·rotate (the ABI's radians become tiny-skia's degrees),
+and `draw_image` / `copy_image` blit through a bilinear pattern fill
+whose transform maps image space onto the destination rect. Text is laid
+out glyph by glyph from `ttf-parser` outlines filled at the baseline
+point — no shaping or kerning. Fonts come from a process-global `fontdb`
+(`fonts.rs`): an embedded DejaVu Sans (`assets/`, Bitstream Vera license)
+is the fallback that keeps Docker/headless hosts working, system font
+directories are scanned once for coverage (notably CJK), and `load_font`
+fetches over the source's own net policy into the same database;
+`new_font` / `system_font` resolve to the embedded face when no match
+exists. Canvas RIDs follow the normal `destroy` lifecycle, and the host
+consumes them eagerly wherever a result must outlive the actor call:
+`SourceHandle::take_page_image` encodes an image rid to PNG and drops it.
+`source.rs`
 loads and validates packages; `package.rs` reads the `.aix` zip layout
 (`Payload/source.json` manifest, `Payload/main.wasm` payload, optional
 `Payload/icon.png`) into memory without extracting. The server scans the

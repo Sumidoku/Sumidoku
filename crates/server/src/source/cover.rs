@@ -1,6 +1,6 @@
 use crate::api::{RefreshQuery, wants_refresh};
 use crate::error::{ApiError, ApiResult};
-use crate::source::{fetch_remote, manga_row};
+use crate::source::{fetch_cover_image, manga_row};
 use crate::state::AppState;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
@@ -28,7 +28,7 @@ pub async fn get_cover(
 	let Some(url) = manga.cover_url.clone() else {
 		return Err(ApiError::not_found("cover not available"));
 	};
-	let (bytes, mime) = fetch_remote(&state, manga.source_id, &url, None).await?;
+	let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
 	let mime = mime.unwrap_or_else(|| DEFAULT_MIME.into());
 	match write_cache(&covers_dir, id, &bytes, &mime).await {
 		Ok(()) => enforce_cache_limit(&covers_dir, state.config.cover_cache_max),

@@ -1,6 +1,6 @@
 use crate::source::cover::bytes_response;
 use crate::error::{ApiError, ApiResult};
-use crate::source::{chapter_row, fetch_remote, http_get, load_pages, manga_row};
+use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row, page_image_blob};
 use crate::state::AppState;
 use aidoku::PageContext;
 use axum::extract::{Path, State};
@@ -25,11 +25,9 @@ pub async fn get_page(
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());
 	}
-	// Image 是源内 canvas 句柄，M4 process_*_image 落地前无法在服务端还原成字节
-	if content.get("Image").is_some() {
-		return Err(ApiError::unsupported_501(
-			"image page content is not supported yet",
-		));
+	if let Some(name) = content.get("Image").and_then(Value::as_str) {
+		let bytes = page_image_blob(&state, id, name).await?;
+		return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
@@ -51,7 +49,7 @@ pub async fn get_page(
 			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
 			_ => None,
 		};
-		let (bytes, mime) = fetch_remote(&state, manga.source_id, url_str, context).await?;
+		let (bytes, mime) = fetch_page_image(&state, manga.source_id, url_str, context).await?;
 		return Ok(bytes_response(
 			bytes,
 			mime.as_deref().unwrap_or("application/octet-stream"),

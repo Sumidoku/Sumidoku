@@ -312,4 +312,21 @@ impl SourceHandle {
 	) -> Result<ImageRequestSpec> {
 		self.call(move |i| i.get_image_request(&url, context.as_ref())).await
 	}
+
+	/// 把 PageContent::Image 的源内句柄还原成 PNG 字节并回收 rid
+	pub async fn take_page_image(&self, rid: i32) -> Result<Vec<u8>> {
+		self.call(move |i| i.take_image_png(rid)).await
+	}
+
+	pub async fn process_page_image(
+		&self,
+		input: crate::source::ProcessImageInput,
+		context: Option<PageContext>,
+	) -> Result<Vec<u8>> {
+		self.call(move |i| i.process_page_image(input, context.as_ref())).await
+	}
+
+	pub async fn process_cover_image(&self, input: crate::source::ProcessImageInput) -> Result<Vec<u8>> {
+		self.call(move |i| i.process_cover_image(input)).await
+	}
 }

@@ -1,5 +1,6 @@
 mod error;
 mod features;
+mod fonts;
 mod html_dom;
 mod imports;
 mod js_engine;
@@ -19,7 +20,7 @@ pub use runtime::actor::SourceHandle;
 pub use runtime::env::WasmEnv;
 pub use runtime::limits::Limits;
 pub use runtime::store::{DefaultKind, DefaultValue};
-pub use source::{ImageRequestSpec, SourceConfig};
+pub use source::{ImageRequestSpec, ProcessImageInput, SourceConfig};
 pub use traits::{
 	CookieSink, DefaultsSink, DirectPolicy, HostLogger, NetPolicy, NetRoute, NoopCookieSink, NoopDefaultsSink,
 	StdoutLogger, is_cf_challenge,

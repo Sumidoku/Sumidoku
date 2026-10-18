@@ -3,7 +3,7 @@ use crate::features::SourceFeatures;
 use crate::imports::HttpMethod;
 use crate::runtime::env::WasmEnv;
 use crate::runtime::limits::{Limits, LimitedTunables};
-use crate::runtime::store::{DefaultValue, GlobalStore, Rid, StoreItem};
+use crate::runtime::store::{DefaultValue, GlobalStore, ImageData, Rid, StoreItem};
 use crate::traits::{CookieSink, DefaultsSink, HostLogger, NetPolicy};
 use aidoku::{
 	Chapter, DeepLinkResult, Filter, FilterValue, HomeLayout, Listing, Manga, MangaPageResult, Page,
@@ -59,6 +59,16 @@ pub struct ImageRequestSpec {
 	pub url: String,
 	pub headers: Vec<(String, String)>,
 	pub body: Option<Vec<u8>>,
+}
+
+/// process_*_image 的入参：已取回的图像字节与构造 ImageResponse 所需的请求上下文
+#[derive(Debug, Clone)]
+pub struct ProcessImageInput {
+	pub bytes: Vec<u8>,
+	pub url: String,
+	pub status: u16,
+	pub response_headers: Vec<(String, String)>,
+	pub request_headers: Vec<(String, String)>,
 }
 
 type CostFn = fn(&wasmer::wasmparser::Operator) -> u64;
@@ -474,6 +484,99 @@ impl SourceInstance {
 		});
 		self.cleanup(t);
 		result
+	}
+
+	fn image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
+		let env = self.env.as_mut(&mut self.store);
+		let image = env
+			.store
+			.get(rid)
+			.and_then(|item| item.as_image_data())
+			.ok_or_else(|| Error::Instance(format!("invalid image rid {rid}")))?;
+		image
+			.encode_png()
+			.ok_or_else(|| Error::Instance("encode image png failed".into()))
+	}
+
+	/// 取走图像字节：无论成败都回收 rid，否则每拉一次 page list store 只涨不消
+	pub fn take_image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
+		let result = self.image_png(rid);
+		self.env.as_mut(&mut self.store).store.remove(rid);
+		result
+	}
+
+	fn decode_into_store(&mut self, bytes: &[u8]) -> Result<Rid> {
+		let Some(rgba) = image::ImageReader::new(std::io::Cursor::new(bytes))
+			.with_guessed_format()
+			.ok()
+			.and_then(|reader| reader.decode().ok())
+			.map(|img| img.to_rgba8())
+		else {
+			return Err(Error::Instance("process image: response is not a decodable image".into()));
+		};
+		let (width, height) = rgba.dimensions();
+		let env = self.env.as_mut(&mut self.store);
+		Ok(env
+			.store
+			.store(StoreItem::ImageData(ImageData::from_rgba8(rgba.into_raw(), width, height))))
+	}
+
+	fn process_image(
+		&mut self,
+		export: &'static str,
+		supported: bool,
+		context: Option<Option<&PageContext>>,
+		input: ProcessImageInput,
+	) -> Result<Vec<u8>> {
+		self.check(supported, export)?;
+		let image_rid = self.decode_into_store(&input.bytes)?;
+		let response = aidoku::ImageResponse {
+			code: input.status,
+			headers: input.response_headers.into_iter().collect(),
+			request: aidoku::ImageRequest {
+				url: Some(input.url),
+				headers: input.request_headers.into_iter().collect(),
+			},
+			// 宿主侧构造的引用必须 externally_managed，否则源 drop 时会 destroy
+			image: aidoku::imports::canvas::ImageRef {
+				rid: image_rid,
+				externally_managed: true,
+			},
+		};
+		let mut t = Vec::new();
+		let response_rid = self.store_arg(&response, &mut t)?;
+		let mut args = vec![response_rid.into()];
+		// 外层 Option 区分导出签名：page 处理器带 context 参（None 传 -1），cover 处理器没有
+		if let Some(context) = context {
+			let context_rid = match context {
+				Some(context) => self.store_arg(context, &mut t)?,
+				None => -1,
+			};
+			args.push(context_rid.into());
+		}
+		let ret = self.call_raw(export, &args);
+		let result = ret.and_then(|r| self.read_result::<i32>(r));
+		self.env.as_mut(&mut self.store).store.remove(image_rid);
+		self.cleanup(t);
+		let result_rid = result?;
+		self.take_image_png(result_rid)
+	}
+
+	pub fn process_page_image(
+		&mut self,
+		input: ProcessImageInput,
+		context: Option<&PageContext>,
+	) -> Result<Vec<u8>> {
+		self.process_image(
+			"process_page_image",
+			self.features.page_image_processor,
+			Some(context),
+			input,
+		)
+	}
+
+	pub fn process_cover_image(&mut self, input: ProcessImageInput) -> Result<Vec<u8>> {
+		self.process_image("process_cover_image", self.features.cover_image_processor, None, input)
 	}
 }
 
