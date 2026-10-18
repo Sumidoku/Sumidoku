@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CircleArrowUp, Download, Globe, Plus, RefreshCw, Search, Trash } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import {
 	useAddSourceRepo,
 	useDeleteSourceRepo,
@@ -68,13 +69,19 @@ function EntryIcon({ entry }: { entry: RepoSourceEntry }) {
 function EntryAction({ entry }: { entry: RepoSourceEntry }) {
 	const install = useInstallRepoSource();
 	const update = useUpdateSource();
+	const navigate = useNavigate();
 	const busy = install.isPending || update.isPending;
 
 	async function onClick() {
 		try {
 			if (entry.installedId !== null && entry.updateVersion !== null) {
-				await update.mutateAsync(entry.installedId);
-				pushToast(`已更新 ${entry.name} 到 v${entry.updateVersion}`, 'info');
+				const r = await update.mutateAsync(entry.installedId);
+				pushToast(`已更新 ${entry.name} 到 v${r.version}`, 'info');
+				for (const w of r.migrationWarnings.slice(0, 3)) pushToast(w, 'info');
+				if (r.migrationRequired) {
+					pushToast(`${entry.name} 换了条目地址，库内条目需要迁移`, 'info');
+					navigate(`/migrate?source=${entry.installedId}&sameSource=1`);
+				}
 			} else if (entry.installedId === null) {
 				await install.mutateAsync({ repoId: entry.repoId, sourceKey: entry.key });
 				pushToast(`已安装 ${entry.name}`, 'info');

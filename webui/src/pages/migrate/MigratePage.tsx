@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Ellipsis, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useLibrary, useMigrate, useMigrateSources } from '../../api/hooks';
@@ -68,17 +68,23 @@ function Reason({ item }: { item: MigrateResultItem }) {
 		not_found: '源条目不存在',
 		not_in_library: '源条目不在书库',
 		source_not_found: '目标源不存在',
-		same_source: '目标与来源同源',
+		same_source: '目标与来源是同一条目',
 		fetch_failed: item.message ? `目标详情拉取失败：${item.message}` : '目标详情拉取失败'
 	};
 	return <span className="migrate-row__reason">{text[item.reason ?? ''] ?? item.reason}</span>;
 }
 
 export default function MigratePage() {
-	const [step, setStep] = useState<Step>('source');
-	const [sourceId, setSourceId] = useState<number | null>(null);
+	const [params] = useSearchParams();
+	// breaking-change 引导入口：?source=<id> 预填来源，sameSource=1 允许并预选同源目标
+	const prefill = Number(params.get('source')) || null;
+	const sameSource = params.get('sameSource') === '1';
+	const [step, setStep] = useState<Step>(prefill ? 'series' : 'source');
+	const [sourceId, setSourceId] = useState<number | null>(prefill);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
-	const [destinations, setDestinations] = useState<number[]>([]);
+	const [destinations, setDestinations] = useState<number[]>(
+		sameSource && prefill ? [prefill] : []
+	);
 	const [rows, setRows] = useState<Row[]>([]);
 	const [matching, setMatching] = useState(false);
 	const [confirmMode, setConfirmMode] = useState<MigrateMode | null>(null);
@@ -253,7 +259,11 @@ export default function MigratePage() {
 
 			{step === 'destinations' && (
 				<>
-					<DestinationPicker selected={destinations} onChange={setDestinations} excludeId={sourceId ?? undefined} />
+					<DestinationPicker
+						selected={destinations}
+						onChange={setDestinations}
+						excludeId={sameSource ? undefined : (sourceId ?? undefined)}
+					/>
 					<div className="migrate-toolbar">
 						<Button variant="primary" disabled={destinations.length === 0} onClick={startMatch}>
 							开始匹配（{selected.size} 部）

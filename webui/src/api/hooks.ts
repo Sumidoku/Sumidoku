@@ -38,6 +38,7 @@ import type {
 	SearchStreamEvent,
 	Source,
 	SourceRepo,
+	SourceUpdate,
 	SuwayomiImportResult,
 	UpdateAllOutcome
 } from './types';
@@ -438,7 +439,7 @@ export function useUpdateSource() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (sourceId: number) =>
-			api<Source>(`/sources/${sourceId}/update`, { method: 'POST' }),
+			api<SourceUpdate>(`/sources/${sourceId}/update`, { method: 'POST' }),
 		onSuccess: () => invalidateSourceViews(qc)
 	});
 }

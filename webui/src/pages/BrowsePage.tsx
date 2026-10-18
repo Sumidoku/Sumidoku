@@ -62,12 +62,18 @@ function SourceIcon({ source }: { source: Source }) {
 
 function UpdateButton({ source }: { source: Source }) {
 	const update = useUpdateSource();
+	const navigate = useNavigate();
 
 	async function onClick(e: React.MouseEvent) {
 		e.stopPropagation();
 		try {
-			await update.mutateAsync(source.id);
-			pushToast(`已更新 ${source.name} 到 v${source.updateVersion}`, 'info');
+			const r = await update.mutateAsync(source.id);
+			pushToast(`已更新 ${source.name} 到 v${r.version}`, 'info');
+			for (const w of r.migrationWarnings.slice(0, 3)) pushToast(w, 'info');
+			if (r.migrationRequired) {
+				pushToast(`${source.name} 换了条目地址，库内条目需要迁移`, 'info');
+				navigate(`/migrate?source=${source.id}&sameSource=1`);
+			}
 		} catch {
 			// client 已弹错误 toast
 		}
@@ -232,6 +238,13 @@ export default function BrowsePage() {
 			pushToast(`更新完成：${r.updated.length} 个已更新、${r.failed.length} 个失败`, 'info');
 			for (const f of r.failed.slice(0, 3)) {
 				pushToast(`更新 ${f.key} 失败：${f.reason}`, 'info');
+			}
+			for (const w of r.migrationWarnings.slice(0, 3)) {
+				pushToast(`${w.key}：${w.message}`, 'info');
+			}
+			if (r.migrationRequired.length > 0) {
+				pushToast(`${r.migrationRequired.join('、')} 换了条目地址，库内条目需要迁移`, 'info');
+				navigate('/migrate');
 			}
 		} catch {
 			// client 已弹错误 toast
