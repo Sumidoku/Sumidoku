@@ -26,6 +26,10 @@ impl From<Result> for i32 {
 
 pub fn destroy(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) {
 	env.data_mut().store.remove(rid);
+	// webview rid 可能挂着浏览器 context，随 destroy 一并回收
+	if let Some(line) = env.data_mut().browser.destroy(rid) {
+		env.data().log(&line);
+	}
 }
 
 pub fn buffer_len(env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {

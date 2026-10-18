@@ -807,6 +807,7 @@ mod tests {
 					store: GlobalStore::new(),
 					defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
 					net: NetState::new(Arc::new(DirectPolicy { user_agent: None }), crate::imports::CookieJar::default()),
+					browser: crate::browser::BrowserState::new(None, std::time::Duration::from_secs(1)),
 					limits: Limits::default(),
 					source_key: "test".into(),
 					logger: Arc::new(StdoutLogger),

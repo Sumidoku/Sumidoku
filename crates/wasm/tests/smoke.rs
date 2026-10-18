@@ -22,6 +22,7 @@ fn config(key: &str, defaults: HashMap<String, DefaultValue>) -> SourceConfig {
 		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
+		browser_ws: None,
 	}
 }
 

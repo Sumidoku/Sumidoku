@@ -133,6 +133,21 @@ impl CookieJar {
 		if pairs.is_empty() { None } else { Some(pairs.join("; ")) }
 	}
 
+	/// 浏览器回流的 cookie 按 Domain 属性直接落库（无 Set-Cookie 原文可解析）；
+	/// 与 store 一样经 sink 持久化，否则登录态只活内存、重启即丢
+	pub fn insert(&mut self, domain: &str, name: &str, value: &str) {
+		if domain.is_empty() || name.is_empty() {
+			return;
+		}
+		self.domains
+			.entry(domain.to_string())
+			.or_default()
+			.insert(name.to_string(), value.to_string());
+		if let Some(sink) = &self.sink {
+			sink.set(domain, name, Some(value));
+		}
+	}
+
 	pub fn store(&mut self, url: &Url, set_cookie: &str) {
 		let mut parts = set_cookie.split(';');
 		let Some(pair) = parts.next() else { return };

@@ -11,6 +11,8 @@ pub struct NetConfig {
 	pub trawl_ca: Option<PathBuf>,
 	pub proxy: Option<String>,
 	pub allow_direct_fallback: bool,
+	/// CDP websocket 地址（ws://…），未配置时 webview 浏览器函数显式不支持
+	pub browser_ws: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,7 @@ struct NetConfigFile {
 	trawl_ca: Option<PathBuf>,
 	proxy: Option<String>,
 	allow_direct_fallback: Option<bool>,
+	browser_ws: Option<String>,
 }
 
 impl Config {
@@ -182,6 +185,9 @@ impl Config {
 			if net.proxy.is_some() {
 				self.net.proxy = net.proxy;
 			}
+			if net.browser_ws.is_some() {
+				self.net.browser_ws = net.browser_ws;
+			}
 			if let Some(v) = net.allow_direct_fallback {
 				self.net.allow_direct_fallback = v;
 			}
@@ -263,6 +269,9 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_PROXY") {
 			self.net.proxy = Some(v);
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_WS") {
+			self.net.browser_ws = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK")
 			&& let Ok(n) = v.parse()
 		{
@@ -276,4 +285,28 @@ fn split_csv(raw: &str) -> Vec<String> {
 		.map(|s| s.trim().to_string())
 		.filter(|s| !s.is_empty())
 		.collect()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn browser_ws_from_file() {
+		let mut config = Config::default();
+		assert_eq!(config.net.browser_ws, None);
+		let file: ConfigFile = toml::from_str("[net]\nbrowser_ws = \"ws://browserless:3000\"\n").expect("toml");
+		config.apply_file(file);
+		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://browserless:3000"));
+	}
+
+	#[test]
+	fn browser_ws_from_env() {
+		// nextest 每测试一个进程，改环境变量不串扰
+		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_WS", "ws://127.0.0.1:3000") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_WS") };
+		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://127.0.0.1:3000"));
+	}
 }
