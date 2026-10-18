@@ -6,13 +6,22 @@
 //! 事件顺序与载荷由 crates/wasm/tests/partial_result.rs 断言。
 use aidoku::{
 	alloc::{String, Vec, vec},
-	imports::std::send_partial_result,
+	imports::{defaults::defaults_get, std::send_partial_result, std::sleep},
 	prelude::*,
 	Chapter, FilterValue, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
 	Link, LinkValue, Manga, MangaPageResult, Page, Result, Source,
 };
 
 struct PartialSource;
+
+// 端到端演示用：设置 partial_delay（秒）后每个事件之间停一下，渐进渲染才看得见；
+// 测试不设这个键，零延迟
+fn delay() {
+	let secs = defaults_get::<i32>("partial_delay").unwrap_or(0);
+	if secs > 0 {
+		sleep(secs);
+	}
+}
 
 fn manga(key: &str, title: &str) -> Manga {
 	Manga {
@@ -56,6 +65,7 @@ impl Source for PartialSource {
 		for n in 1..=3 {
 			let key = format!("partial-{n}");
 			send_partial_result(&manga(&key, &key));
+			delay();
 		}
 		Ok(MangaPageResult {
 			entries: vec![manga("final-1", "Final One"), manga("final-2", "Final Two")],
@@ -77,9 +87,13 @@ impl Home for PartialSource {
 		send_partial_result(&HomePartialResult::Layout(HomeLayout {
 			components: vec![scroller("Partial A", &[]), scroller("Partial B", &[])],
 		}));
+		delay();
 		send_partial_result(&HomePartialResult::Component(scroller("Partial A", &["a-1"])));
+		delay();
 		send_partial_result(&HomePartialResult::Component(scroller("Partial B", &["b-1"])));
+		delay();
 		send_partial_result(&HomePartialResult::Component(scroller("Partial C", &["c-1"])));
+		delay();
 		Ok(HomeLayout {
 			components: vec![
 				scroller("Partial A", &["a-1", "a-2"]),
