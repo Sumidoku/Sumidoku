@@ -40,7 +40,7 @@ export function AppLayout() {
 		<div className="app">
 			<aside className="app__sidebar">
 				<NavLink to="/library" className="app__logo">
-					<span className="app__logo-mark">硯</span>
+					<img className="app__logo-mark" src="/icon.svg" alt="" />
 					<span className="app__logo-text">Sumidoku</span>
 				</NavLink>
 				<nav className="side-nav">
@@ -64,7 +64,7 @@ export function AppLayout() {
 
 			<header className="app__topbar">
 				<NavLink to="/library" className="app__logo app__logo--sm">
-					<span className="app__logo-mark">硯</span>
+					<img className="app__logo-mark" src="/icon.svg" alt="" />
 					<span className="app__logo-text">Sumidoku</span>
 				</NavLink>
 				<ThemeToggle />

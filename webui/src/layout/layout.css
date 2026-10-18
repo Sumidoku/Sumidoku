@@ -65,23 +65,16 @@
 }
 
 .app__logo-mark {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
+	display: block;
 	width: 34px;
 	height: 34px;
-	border-radius: 10px;
-	background: var(--accent);
-	color: #fff;
-	font-size: 18px;
-	font-weight: 600;
+	border-radius: 8px;
 	flex: none;
 }
 
 .app__logo--sm .app__logo-mark {
 	width: 30px;
 	height: 30px;
-	font-size: 16px;
 }
 
 .app__logo-text {
