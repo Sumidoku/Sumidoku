@@ -586,7 +586,7 @@ function AboutSection() {
 		<Section title="关于" desc="接口入口与项目地址">
 			<div className="settings-about">
 				<p>
-					<strong>Sumidoku（硯）</strong> · 自建漫画服务器
+					<strong>Sumidoku</strong> · 自建漫画服务器
 				</p>
 				<p className="muted">REST API：/api/v1 · OPDS：/opds/v1.2</p>
 				<p className="faint">
