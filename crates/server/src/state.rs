@@ -100,6 +100,16 @@ impl AppState {
 			.clone()
 	}
 
+	/// 卸载/换包后踢掉注册表里的实例；有在途调用持有 Arc 时让位给引用计数归零后自然退出
+	pub async fn evict_source(&self, source_id: i64) {
+		let entry = self.sources.write().await.remove(&source_id);
+		if let Some(entry) = entry
+			&& let Ok(handle) = Arc::try_unwrap(entry.handle)
+		{
+			handle.shutdown().await;
+		}
+	}
+
 	pub fn updater(&self) -> Arc<crate::update::UpdateScheduler> {
 		self.updater
 			.get()

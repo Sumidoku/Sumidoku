@@ -10,7 +10,14 @@ axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 Migrations in `crates/server/migrations`.
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
-  `api/page.rs`, `api/download.rs`, `api/update.rs`).
+  `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`).
+- Source repositories (`source/repo.rs`, `api/repo.rs`): Aidoku-style repo
+  indexes are fetched on add/refresh and cached in the `source_repo` table;
+  browsing, install and update detection all read the cache, so an
+  unreachable repo never breaks the installed-source list. Install downloads
+  the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
+  through the same `register_aix` path as the directory scan; versions
+  compare as Aidoku's monotonic integers.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging

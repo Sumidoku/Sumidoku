@@ -55,6 +55,14 @@ impl ApiError {
 		Self::new(StatusCode::CONFLICT, "duplicate", message)
 	}
 
+	pub fn no_update(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, "no_update", message)
+	}
+
+	pub fn message(&self) -> &str {
+		&self.message
+	}
+
 	pub fn not_in_library(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::CONFLICT, "not_in_library", message)
 	}
