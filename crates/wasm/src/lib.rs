@@ -22,6 +22,6 @@ pub use runtime::limits::Limits;
 pub use runtime::store::{DefaultKind, DefaultValue};
 pub use source::{ImageRequestSpec, ProcessImageInput, SourceConfig};
 pub use traits::{
-	CookieSink, DefaultsSink, DirectPolicy, HostLogger, NetPolicy, NetRoute, NoopCookieSink, NoopDefaultsSink,
-	StdoutLogger, is_cf_challenge,
+	CookieSink, DefaultsSink, DEFAULT_ACCEPT_LANGUAGE, DirectPolicy, HostLogger, NetPolicy, NetRoute,
+	NoopCookieSink, NoopDefaultsSink, StdoutLogger, default_accept_language, is_cf_challenge,
 };

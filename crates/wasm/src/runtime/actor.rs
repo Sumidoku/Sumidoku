@@ -99,6 +99,11 @@ impl SourceHandle {
 		&self.key
 	}
 
+	/// 该源的 Accept-Language 默认值（按源语言推导）；服务端直拉封面/页图复用同一值
+	pub fn accept_language(&self) -> String {
+		self.config.read().expect("config lock").accept_language.clone()
+	}
+
 	pub fn features(&self) -> SourceFeatures {
 		self.features.read().expect("features lock").clone()
 	}

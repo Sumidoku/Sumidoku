@@ -22,6 +22,7 @@ fn config() -> SourceConfig {
 		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
+		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 		browser_ws: None,
 	}
 }

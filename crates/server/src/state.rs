@@ -173,12 +173,12 @@ impl AppState {
 		if let Some(entry) = self.sources.read().await.get(&source_id) {
 			return Ok(entry.handle.clone());
 		}
-		let row: Option<(String, String, bool)> =
-			sqlx::query_as("SELECT key, wasm_path, enabled FROM source WHERE id = ?")
+		let row: Option<(String, String, bool, sqlx::types::Json<Vec<String>>)> =
+			sqlx::query_as("SELECT key, wasm_path, enabled, languages FROM source WHERE id = ?")
 				.bind(source_id)
 				.fetch_optional(&self.pool)
 				.await?;
-		let Some((key, wasm_path, enabled)) = row else {
+		let Some((key, wasm_path, enabled, languages)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
 		if !enabled {
@@ -186,10 +186,13 @@ impl AppState {
 		}
 		let defaults = load_defaults(&self.pool, source_id).await?;
 		let cookies = load_cookies(&self.pool, source_id).await?;
+		let accept_language =
+			aidoku_wasm::default_accept_language(&preferred_languages(&defaults, &languages.0));
 		let mut config = SourceConfig::new(&key, &wasm_path);
 		config.defaults = defaults;
 		config.cookies = cookies;
 		config.policy = self.policy.clone();
+		config.accept_language = accept_language;
 		config.browser_ws = self.config.net.browser_ws.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
@@ -260,6 +263,27 @@ pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiv
 	}
 }
 
+/// Accept-Language 的语言来源：多语言源优先取播种的 `languages`/`language`
+/// 源设置（`source/mod.rs:seed_source_defaults` 建的用户可改项），没有才退回
+/// manifest 的语言列表。Aidoku 用设备 locale，服务端没有设备态，源语言设置
+/// 是最接近的替代。
+fn preferred_languages(
+	defaults: &HashMap<String, DefaultValue>,
+	manifest: &[String],
+) -> Vec<String> {
+	if let Some(DefaultValue::StringArray(langs)) = defaults.get("languages")
+		&& !langs.is_empty()
+	{
+		return langs.to_vec();
+	}
+	if let Some(DefaultValue::String(lang)) = defaults.get("language")
+		&& !lang.is_empty()
+	{
+		return vec![lang.to_string()];
+	}
+	manifest.to_vec()
+}
+
 /// 后台 writer：把 sink 投递的 cookie 变更批量 upsert/delete 进 source_cookie
 pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver<CookieWrite>) {
 	while let Some(first) = rx.recv().await {
@@ -312,5 +336,43 @@ pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver
 		if let Err(e) = result {
 			tracing::warn!("cookie writer batch failed: {e}");
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn strings(values: &[&str]) -> Vec<String> {
+		values.iter().map(|v| v.to_string()).collect()
+	}
+
+	#[test]
+	fn preferred_languages_prefers_the_source_setting() {
+		let mut defaults = HashMap::new();
+		defaults.insert("languages".into(), DefaultValue::StringArray(strings(&["zh"])));
+		assert_eq!(preferred_languages(&defaults, &strings(&["en"])), strings(&["zh"]));
+	}
+
+	#[test]
+	fn preferred_languages_reads_a_single_language_setting() {
+		let mut defaults = HashMap::new();
+		defaults.insert("language".into(), DefaultValue::String("ja".into()));
+		assert_eq!(preferred_languages(&defaults, &strings(&["en"])), strings(&["ja"]));
+	}
+
+	#[test]
+	fn preferred_languages_ignores_an_empty_setting() {
+		let mut defaults = HashMap::new();
+		defaults.insert("languages".into(), DefaultValue::StringArray(Vec::new()));
+		assert_eq!(preferred_languages(&defaults, &strings(&["vi"])), strings(&["vi"]));
+	}
+
+	#[test]
+	fn preferred_languages_falls_back_to_the_manifest() {
+		assert_eq!(
+			preferred_languages(&HashMap::new(), &strings(&["ko"])),
+			strings(&["ko"])
+		);
 	}
 }

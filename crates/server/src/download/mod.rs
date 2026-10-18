@@ -624,7 +624,7 @@ async fn page_bytes(
 			.get(1)
 			.and_then(Value::as_str)
 			.ok_or("invalid zip page content")?;
-		let (zip_bytes, _) = http_get(state, zip_url)
+		let (zip_bytes, _) = http_get(state, source_id, zip_url)
 			.await
 			.map_err(|e| format!("{e:?}"))?;
 		let entry = extract_zip_entry(&zip_bytes, entry_path)?;

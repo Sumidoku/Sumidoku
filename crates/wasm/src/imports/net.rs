@@ -14,9 +14,6 @@ use url::Url;
 use wasmer::FunctionEnvMut;
 
 const FALLBACK_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
-/// Aidoku 宿主由 URLSession 按系统语言隐式提供 Accept-Language；reqwest 不会，
-/// 源没设时补一个默认值（部分 WAF 对缺失该头的请求直接 403）
-const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 const MAX_ATTEMPTS: u32 = 3;
 
 enum Result {
@@ -242,10 +239,11 @@ pub(crate) fn perform(
 			request.headers.insert(USER_AGENT, value);
 		}
 	}
-	if !request.headers.contains_key(ACCEPT_LANGUAGE) {
-		request
-			.headers
-			.insert(ACCEPT_LANGUAGE, HeaderValue::from_static(DEFAULT_ACCEPT_LANGUAGE));
+	if !request.headers.contains_key(ACCEPT_LANGUAGE)
+		&& !net.accept_language.is_empty()
+		&& let Ok(value) = HeaderValue::from_str(&net.accept_language)
+	{
+		request.headers.insert(ACCEPT_LANGUAGE, value);
 	}
 	// 对齐 Aidoku：jar cookie 拼在源自带 Cookie 前面，而不是源设了就丢掉 jar
 	if let Some(jar_header) = net.jar.header_for(&url) {
@@ -886,6 +884,20 @@ mod tests {
 		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
 		let head = server.heads().join("\n").to_ascii_lowercase();
 		assert!(head.contains("accept-language:"), "head: {head}");
+	}
+
+	#[test]
+	fn accept_language_uses_source_value() {
+		// 宿主按源语言推导的值，替代内置默认
+		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		net.accept_language = "zh-CN,zh;q=0.9".into();
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		let head = server.heads().join("\n").to_ascii_lowercase();
+		assert!(head.contains("accept-language: zh-cn,zh;q=0.9"), "head: {head}");
 	}
 
 	#[test]

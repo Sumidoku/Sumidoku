@@ -177,3 +177,19 @@ that bisect lands on the non-`Send` capture in minutes.
   `bearer_granted(...).await`; two identical-looking signatures (working
   `basic_auth` vs failing `require_auth`) differed only in that borrow,
   and the fix was passing an owned `Option<String>` token instead.
+
+**A new field on a public struct breaks every out-of-crate struct literal;
+list them before pushing.**
+`SourceConfig.accept_language` compiled inside the crate and broke all
+seven `crates/wasm/tests/*.rs` integration tests that build
+`SourceConfig { … }` by hand. A parse-only check scoped to the files you
+edited cannot see that, and no local compile was possible
+(wasmer-compiler-cranelift is a `compile_error!` on Windows), so the red
+landed in CI instead of the session. Before pushing a struct change, grep
+the whole workspace — `crates/*/tests/` included — for `Name {` literals
+and update every one.
+- Evidence: 2026-10-18, branch `net`, the "send the source language's
+  Accept-Language" commit: CI's `cargo test --workspace` reported `E0063:
+  missing field accept_language` in rekey_host, js_host, webview_host,
+  canvas_host, html_mutation, partial_result and smoke; the follow-up
+  commit adds the field to each.

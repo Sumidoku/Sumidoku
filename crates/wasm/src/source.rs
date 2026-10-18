@@ -31,6 +31,8 @@ pub struct SourceConfig {
 	pub cookie_sink: Arc<dyn CookieSink>,
 	pub policy: Arc<dyn NetPolicy>,
 	pub logger: Arc<dyn HostLogger>,
+	/// 源语言推导出的 Accept-Language 默认值；源没自带时由 net 宿主补上
+	pub accept_language: String,
 	/// CDP websocket 地址（ws://…）；None 时 webview 浏览器函数显式不支持
 	pub browser_ws: Option<String>,
 }
@@ -47,6 +49,7 @@ impl SourceConfig {
 			cookie_sink: Arc::new(crate::traits::NoopCookieSink),
 			policy: Arc::new(crate::traits::DirectPolicy { user_agent: None }),
 			logger: Arc::new(crate::traits::StdoutLogger),
+			accept_language: crate::traits::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 			browser_ws: None,
 		}
 	}
@@ -102,6 +105,12 @@ impl SourceInstance {
 			.map_err(|e| Error::Instance(format!("compile module: {e}")))?;
 		let features = SourceFeatures::from_module(&module);
 
+		let mut net = crate::runtime::env::NetState::new(
+			config.policy.clone(),
+			crate::imports::CookieJar::new(config.cookies.clone(), config.cookie_sink.clone()),
+		);
+		net.accept_language = config.accept_language.clone();
+
 		let env = FunctionEnv::new(
 			&mut store,
 			WasmEnv {
@@ -112,10 +121,7 @@ impl SourceInstance {
 					config.sink.clone(),
 					config.key.clone(),
 				),
-				net: crate::runtime::env::NetState::new(
-					config.policy.clone(),
-					crate::imports::CookieJar::new(config.cookies.clone(), config.cookie_sink.clone()),
-				),
+				net,
 				browser: crate::browser::BrowserState::new(
 					config.browser_ws.clone(),
 					config.limits.browser_timeout,

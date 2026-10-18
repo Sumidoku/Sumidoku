@@ -25,6 +25,7 @@ async fn webview_sandbox_semantics() {
 		cookie_sink: Arc::new(NoopCookieSink),
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
+		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 		browser_ws: None,
 	};
 	let (handle, features) = SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))

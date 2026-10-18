@@ -776,9 +776,19 @@ fn fetch_err(e: crate::source::routed::FetchError) -> ApiError {
 }
 
 /// 裸 GET，不经过源的 image_request 改造
-pub async fn http_get(state: &AppState, url: &str) -> ApiResult<(Vec<u8>, Option<String>)> {
+pub async fn http_get(
+	state: &Arc<AppState>,
+	source_id: i64,
+	url: &str,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
-	let response = state.http.get(&url).await.map_err(fetch_err)?;
+	let handle = state.get_handle(source_id).await?;
+	let accept_language = handle.accept_language();
+	let response = state
+		.http
+		.get_with(&url, Some(accept_language.as_str()))
+		.await
+		.map_err(fetch_err)?;
 	read_body(response).await
 }
 
@@ -809,9 +819,14 @@ pub async fn fetch_remote(
 	context: Option<PageContext>,
 ) -> ApiResult<RemoteImage> {
 	let handle = state.get_handle(source_id).await?;
+	let accept_language = handle.accept_language();
 	if !handle.features().image_request {
 		let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
-		let response = state.http.get(&parsed).await.map_err(fetch_err)?;
+		let response = state
+			.http
+			.get_with(&parsed, Some(accept_language.as_str()))
+			.await
+			.map_err(fetch_err)?;
 		let status = response.status().as_u16();
 		let response_headers = flatten_headers(response.headers());
 		let (bytes, mime) = read_body(response).await?;
@@ -832,6 +847,14 @@ pub async fn fetch_remote(
 		.map_err(fetch_err)?;
 	for (name, value) in &spec.headers {
 		builder = builder.header(name, value);
+	}
+	// 源已自带 Accept-Language 就不覆盖；否则补上宿主按源语言推导的默认值
+	if !spec
+		.headers
+		.iter()
+		.any(|(name, _)| name.eq_ignore_ascii_case("accept-language"))
+	{
+		builder = builder.header(reqwest::header::ACCEPT_LANGUAGE, accept_language.as_str());
 	}
 	if let Some(body) = &spec.body {
 		builder = builder.body(body.clone());
@@ -1025,7 +1048,7 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 		let Some(entry_path) = zip.get(1).and_then(serde_json::Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));
 		};
-		let (zip_bytes, _) = http_get(state, zip_url).await?;
+		let (zip_bytes, _) = http_get(state, manga.source_id, zip_url).await?;
 		let entry = zip_entry_bytes(&zip_bytes, entry_path)?;
 		return Ok((entry, Some(page_mime_for(entry_path).to_string())));
 	}
