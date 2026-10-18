@@ -43,6 +43,10 @@ run is listed as not run, never left out.
 - The workspace `Cargo.toml` version is the trigger: a push to `main` that
   changes it runs the release pipeline. Don't push tags or create releases
   by hand.
+- The agent decides when a release is due (maintainer's authorization):
+  weigh what has landed on `main` since the last tag. Cut it as its own PR
+  that only bumps `workspace.package.version` — breaking → major,
+  features → minor, fixes → patch — and let CI publish on merge.
 - A release counts only when the run is green, `gh release view` shows all
   4 platform archives, and Docker Hub's `latest`, `X.Y.Z` and `X.Y` tags
   point at the new multi-arch manifest. Verify before naming the version to
