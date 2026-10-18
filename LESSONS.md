@@ -49,3 +49,61 @@ tag nor release.
 cancelled run. Read the per-job conclusion before deciding what happened.
 - Evidence: the run-1 watcher exited 1 while four of five build legs were
   green; the queued macos-13 leg's cancellation was the only red.
+
+**Break the fix with the work committed and restore one file at a time.**
+The red-green ritual ends by reverting the break. A bare `git stash` takes
+everything uncommitted — two sessions lost their whole implementation that
+way, the second one after the dispatch prompt already warned about the
+first. Commit the green state before breaking it; restore with
+`git stash push -- <file>` or a manual edit, never a bare stash among
+uncommitted work.
+- Evidence: PR #39's session recovered its implementation from a dangling
+  stash commit; PR #46's replayed six destroyed webui files from memory —
+  one day after the first incident and despite the warning (2026-10-18).
+
+**Write every GitHub body to a file; never inline it.**
+Backticks inside a double-quoted `--body`/`--comment` string are command
+substitution to the shell: the text between them ran as a command and the
+posted comment had holes where `` `IN (...)` `` used to be. Same class as
+the long-standing body-file rule for merge requests, and it bites on plain
+issue comments too.
+- Evidence: 2026-10-18, the claim comment on issue #33 went out mangled;
+  fixed via comment PATCH with `--body-file`.
+
+**A 200 on a config write proves nothing; read the parsed value back.**
+A settings PUT stored the whole `{"values": …}` envelope as the values
+map, so the consumer's top-level key never existed and the knob silently
+stayed at its default — every "progressive" screenshot then showed the
+final state. The read-back (`values.values.partial_delay`) was the only
+place the bug was visible. Write, then parse what the consumer will parse.
+- Evidence: 2026-10-18, the #50 stream measured 0ms until the flat re-PUT;
+  after it the same request took the expected 16s.
+
+**Write contract docs from the pipeline file, not from memory of the last
+run.** *(recurrence of the standing "copy facts from the authoritative
+source" rule — noted here so the daily review can count it.)*
+The release docs said the floating image tag was `X.Y` because that is how
+the previous verification was summarized; the workflow has always
+published `<major>.x`. Three documents and the patrol cron's check
+inherited the wrong tag, and it survived a whole release cycle.
+- Evidence: PR #51 (2026-10-18) corrected all three after the v0.2.0
+  manifest query showed `0.x`, not `0.2`.
+
+**A smoke server started from the wrong directory serves stale assets.**
+`webui_dir` resolves `./webui/build` against the process's cwd; starting a
+PR worktree's binary from the main checkout's directory serves the main
+checkout's old UI, and the page looks plausibly "done". Before trusting a
+smoke page, curl the served asset hash and compare it with the build you
+mean to test.
+- Evidence: 2026-10-18, the #38 smoke served `index-BWzzabJ3.js` while the
+  worktree build was `index-BnNwpN81.js`; restarting with the worktree cwd
+  served the right one.
+
+**Count sqlx statements from the event's `summary` field, and filter
+PRAGMA.** sqlx emits one `sqlx::query` event per statement with the
+summary in the `summary` field (not `message`), and connection setup emits
+PRAGMA events that fall into the measurement window on slow machines. A
+counter reading `message` and keeping PRAGMA was green locally and flaky
+red in CI.
+- Evidence: PR #39's first CI run red while local was green; the fixed
+  counter ran 60/60 locally and green in CI (2026-10-18).
