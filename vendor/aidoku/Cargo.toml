@@ -16,7 +16,7 @@ helpers = []
 
 [dependencies]
 euclid = { version = "0.22", default-features = false, features = ["libm"] }
-hashbrown = { version = "0.16", features = ["serde"] }
+hashbrown = { version = "0.17", features = ["serde"] }
 itoa = "1.0"
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 paste = "1.0"

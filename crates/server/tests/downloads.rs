@@ -96,7 +96,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 	assert_eq!(archive.len(), pages + 1);
 	{
 		let mut info = archive.by_index(0).expect("first entry");
-		assert_eq!(info.name(), "ComicInfo.xml");
+		assert_eq!(info.name().expect("entry name"), "ComicInfo.xml");
 		let mut text = String::new();
 		info.read_to_string(&mut text).expect("read ComicInfo");
 		assert!(text.contains("!SUMIDOKUDATA"), "{text}");
@@ -106,7 +106,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 		assert!(text.contains(&format!("<PageCount>{pages}</PageCount>")), "{text}");
 	}
 	let names: Vec<String> = (1..archive.len())
-		.map(|i| archive.by_index(i).expect("entry").name().to_string())
+		.map(|i| archive.by_index(i).expect("entry").name().expect("entry name").into_owned())
 		.collect();
 	assert!(names.contains(&"000.png".to_string()), "{names:?}");
 	assert!(names.contains(&"001.txt".to_string()), "{names:?}");
@@ -130,7 +130,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 			),
 			(1980, 1, 1, 0, 0, 0),
 			"entry {} timestamp",
-			entry.name()
+			entry.name().expect("entry name")
 		);
 	}
 }

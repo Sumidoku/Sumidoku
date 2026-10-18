@@ -78,7 +78,7 @@ impl SourceInstance {
 		let mut compiler = Cranelift::default();
 		compiler.push_middleware(metering.clone());
 		let mut engine = EngineBuilder::new(compiler).engine();
-		engine.set_tunables(LimitedTunables::new(engine.target(), config.limits.memory_max));
+		engine.set_tunables(LimitedTunables::new(config.limits.memory_max));
 		let mut store = Store::new(engine);
 
 		let module = Module::new(&store, &wasm_bytes)
