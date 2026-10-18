@@ -323,9 +323,11 @@ export function useDeleteSource() {
 // ---- 源仓库 ----
 
 export interface RepoBrowseFilter {
-	lang?: string;
+	/** 语言码多选，逗号拼接；空数组不过滤 */
+	langs?: string[];
 	query?: string;
-	hideNsfw?: boolean;
+	/** 内容分级多选，逗号拼接；undefined 不过滤，空串表示全不选 */
+	contentRating?: string;
 }
 
 export function useSourceRepos() {
@@ -340,9 +342,10 @@ export function useRepoSources(filter: RepoBrowseFilter, enabled = true) {
 		queryKey: [...qk.repoSources, filter],
 		queryFn: () => {
 			const qs = new URLSearchParams();
-			if (filter.lang) qs.set('lang', filter.lang);
+			if (filter.langs?.length) qs.set('lang', filter.langs.join(','));
 			if (filter.query) qs.set('query', filter.query);
-			if (filter.hideNsfw) qs.set('nsfw', 'hide');
+			// 显式区分：undefined 不过滤；空串表示一个分级都不选（服务端匹配空集）
+			if (filter.contentRating !== undefined) qs.set('contentRating', filter.contentRating);
 			const suffix = qs.size > 0 ? `?${qs}` : '';
 			return api<RepoSourceEntry[]>(`/source-repos/sources${suffix}`);
 		},

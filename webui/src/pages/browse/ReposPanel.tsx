@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CircleArrowUp, Download, Plus, RefreshCw, Search, Trash } from 'lucide-react';
+import { CircleArrowUp, Download, Globe, Plus, RefreshCw, Search, Trash } from 'lucide-react';
 import {
 	useAddSourceRepo,
 	useDeleteSourceRepo,
@@ -12,13 +12,21 @@ import {
 import type { RepoSourceEntry, SourceRepo } from '../../api/types';
 import { relativeTime } from '../../lib/format';
 import {
+	CONTENT_RATING_LEVELS,
+	MULTI_LANGUAGE,
+	compareLanguageLabel,
+	contentRatingColor,
+	contentRatingLabel,
+	isMultiLanguage,
+	languageLabel
+} from '../../lib/source';
+import {
 	Button,
 	Chip,
 	EmptyState,
 	IconButton,
 	Input,
 	Modal,
-	Select,
 	Skeleton,
 	Switch,
 	pushToast
@@ -103,8 +111,11 @@ export default function ReposPanel() {
 	const [pendingDelete, setPendingDelete] = useState<SourceRepo | null>(null);
 
 	const [query, setQuery] = useState('');
-	const [lang, setLang] = useState('');
-	const [hideNsfw, setHideNsfw] = useState(false);
+	const [langs, setLangs] = useState<string[]>([]);
+	const [ratings, setRatings] = useState<number[]>(() =>
+		CONTENT_RATING_LEVELS.map((level) => level.value)
+	);
+	const [langOpen, setLangOpen] = useState(false);
 
 	// 搜索防抖 500ms，与源内搜索一致
 	const [submitted, setSubmitted] = useState('');
@@ -115,7 +126,13 @@ export default function ReposPanel() {
 
 	const hasRepos = (repos.data ?? []).length > 0;
 	const entries = useRepoSources(
-		{ lang: lang || undefined, query: submitted || undefined, hideNsfw },
+		{
+			langs,
+			query: submitted || undefined,
+			// 三档全选等价于不过滤；不选任何档时传空串，服务端匹配空集
+			contentRating:
+				ratings.length === CONTENT_RATING_LEVELS.length ? undefined : ratings.join(',')
+		},
 		hasRepos
 	);
 	// 语言候选从未过滤的全量派生，随过滤结果收缩会把选项自己筛没
@@ -124,12 +141,25 @@ export default function ReposPanel() {
 		const set = new Set<string>();
 		for (const e of allEntries.data ?? []) {
 			for (const l of e.languages) {
-				const code = l.toLowerCase();
-				if (code !== 'multi' && code !== 'all') set.add(code);
+				const code = l.trim().toLowerCase();
+				if (code && !isMultiLanguage(code)) set.add(code);
 			}
 		}
-		return [...set].sort();
+		// 与 Aidoku 一致：多语言哨兵恒在列表首位
+		return [MULTI_LANGUAGE, ...[...set].sort(compareLanguageLabel)];
 	}, [allEntries.data]);
+
+	function toggleLang(code: string) {
+		setLangs((prev) => (prev.includes(code) ? prev.filter((c) => c !== code) : [...prev, code]));
+	}
+
+	function toggleRating(value: number) {
+		setRatings((prev) =>
+			prev.includes(value)
+				? prev.filter((v) => v !== value)
+				: [...prev, value].sort((a, b) => a - b)
+		);
+	}
 
 	async function onAdd(e: React.FormEvent) {
 		e.preventDefault();
@@ -232,18 +262,25 @@ export default function ReposPanel() {
 							value={query}
 							onChange={(e) => setQuery(e.currentTarget.value)}
 						/>
-						<Select value={lang} onChange={(e) => setLang(e.currentTarget.value)}>
-							<option value="">全部语言</option>
-							{langOptions.map((l) => (
-								<option key={l} value={l}>
-									{l}
-								</option>
-							))}
-						</Select>
-						<label className="repos__nsfw">
-							<Switch checked={!hideNsfw} onChange={(on) => setHideNsfw(!on)} label="显示 NSFW" />
-							显示 NSFW
-						</label>
+						<Button onClick={() => setLangOpen(true)}>
+							<Globe size={15} />
+							语言{langs.length > 0 ? `（${langs.length}）` : ''}
+						</Button>
+						<div className="repos__ratings" role="group" aria-label="内容分级">
+							{CONTENT_RATING_LEVELS.map((level) => {
+								const on = ratings.includes(level.value);
+								return (
+									<Chip
+										key={level.value}
+										color={on ? level.color : 'default'}
+										onClick={() => toggleRating(level.value)}
+										title={on ? `隐藏${level.label}` : `显示${level.label}`}
+									>
+										{level.label}
+									</Chip>
+								);
+							})}
+						</div>
 					</div>
 
 					{entries.isPending ? (
@@ -262,7 +299,11 @@ export default function ReposPanel() {
 									<div className="source-card__main">
 										<div className="source-card__name">
 											<span className="source-card__name-text">{entry.name}</span>
-											{entry.contentRating > 1 && <Chip color="danger">NSFW</Chip>}
+											{entry.contentRating > 0 && (
+												<Chip color={contentRatingColor(entry.contentRating)}>
+													{contentRatingLabel(entry.contentRating)}
+												</Chip>
+											)}
 										</div>
 										<div className="source-card__meta">
 											{entry.key} · v{entry.version}
@@ -271,7 +312,7 @@ export default function ReposPanel() {
 										{entry.languages.length > 0 && (
 											<div className="source-card__badges">
 												{entry.languages.slice(0, 3).map((l) => (
-													<Chip key={l}>{l}</Chip>
+													<Chip key={l}>{languageLabel(l)}</Chip>
 												))}
 												{entry.languages.length > 3 && <Chip>+{entry.languages.length - 3}</Chip>}
 											</div>
@@ -284,6 +325,30 @@ export default function ReposPanel() {
 					)}
 				</>
 			)}
+
+			<Modal
+				open={langOpen}
+				title="选择语言"
+				onClose={() => setLangOpen(false)}
+				footer={
+					<Button variant="primary" onClick={() => setLangOpen(false)}>
+						完成
+					</Button>
+				}
+			>
+				<div className="repos__lang-list">
+					{langOptions.map((code) => (
+						<label key={code} className="repos__lang-row">
+							<span>{languageLabel(code)}</span>
+							<Switch
+								checked={langs.includes(code)}
+								onChange={() => toggleLang(code)}
+								label={languageLabel(code)}
+							/>
+						</label>
+					))}
+				</div>
+			</Modal>
 
 			<Modal
 				open={pendingDelete !== null}

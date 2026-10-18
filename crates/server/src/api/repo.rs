@@ -83,7 +83,9 @@ pub async fn refresh_repo(
 pub struct BrowseQuery {
 	pub lang: Option<String>,
 	pub query: Option<String>,
-	pub nsfw: Option<String>,
+	/// 逗号分隔的内容分级白名单（Aidoku SourceContentRating 数值）；缺省不过滤
+	#[serde(rename = "contentRating")]
+	pub content_rating: Option<String>,
 }
 
 pub async fn browse_sources(
@@ -99,7 +101,10 @@ pub async fn browse_sources(
 			.filter(|l| !l.is_empty())
 			.collect(),
 		query: query.query.unwrap_or_default().trim().to_string(),
-		hide_nsfw: query.nsfw.as_deref() == Some("hide"),
+		// Some(空串) 表示一个分级都不选：解析成空集，匹配不到任何源
+		content_ratings: query
+			.content_rating
+			.map(|s| s.split(',').filter_map(|v| v.trim().parse::<i64>().ok()).collect()),
 	};
 	let items = repo::browse_sources(&state.pool, &filter).await?;
 	let out: Vec<Value> = items

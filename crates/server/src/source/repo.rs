@@ -282,7 +282,13 @@ pub fn cached_entries(repo: &SourceRepoRow) -> Vec<RepoEntry> {
 pub struct BrowseFilter {
 	pub lang: Vec<String>,
 	pub query: String,
-	pub hide_nsfw: bool,
+	/// 内容分级白名单；None 不过滤，Some(空集) 表示一个分级都不显示
+	pub content_ratings: Option<Vec<i64>>,
+}
+
+/// Aidoku SourceContentRating 三档白名单匹配；None 不过滤，Some(空集) 全过滤
+fn content_rating_matches(rating: i64, want: Option<&[i64]>) -> bool {
+	want.is_none_or(|set| set.contains(&rating))
 }
 
 fn lang_matches(entry_langs: &[String], want: &[String]) -> bool {
@@ -326,7 +332,7 @@ pub async fn browse_sources(pool: &SqlitePool, filter: &BrowseFilter) -> ApiResu
 		for entry in cached_entries(&repo) {
 			if !lang_matches(&entry.languages, &filter.lang)
 				|| !query_matches(&entry, &filter.query)
-				|| (filter.hide_nsfw && entry.content_rating >= 2)
+				|| !content_rating_matches(entry.content_rating, filter.content_ratings.as_deref())
 			{
 				continue;
 			}
