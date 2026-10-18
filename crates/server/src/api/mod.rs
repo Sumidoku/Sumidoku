@@ -17,7 +17,7 @@ pub mod update;
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
 	ChapterProgress, ChapterRow, ChapterUserRow, MangaRow, SourceRow, chapter_from_row,
-	default_value_to_json, json_to_default_value, manga_from_row,
+	default_value_to_json, json_to_default_value, manga_from_row, viewer_from_int,
 };
 use crate::source::cover;
 use crate::source::{
@@ -730,8 +730,8 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 			.bind(row.id)
 			.fetch_one(&state.pool)
 			.await?;
-	let in_library: Option<(bool,)> =
-		sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ? AND user_id = 1")
+	let manga_user: Option<(bool, i64)> =
+		sqlx::query_as("SELECT in_library, viewer_flags FROM manga_user WHERE manga_id = ? AND user_id = 1")
 			.bind(row.id)
 			.fetch_optional(&state.pool)
 			.await?;
@@ -739,13 +739,16 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 	let object = value
 		.as_object_mut()
 		.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
+	if let Some((_, flags)) = manga_user {
+		apply_viewer_override(object, flags)?;
+	}
 	object.insert("id".into(), json!(row.id));
 	object.insert("sourceId".into(), json!(row.source_id));
 	object.insert("initialized".into(), json!(row.initialized));
 	object.insert("chapterCount".into(), json!(chapter_count));
 	object.insert(
 		"inLibrary".into(),
-		json!(in_library.map(|(flag,)| flag).unwrap_or(false)),
+		json!(manga_user.map(|(flag, _)| flag).unwrap_or(false)),
 	);
 	let category_ids: Vec<i64> =
 		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
@@ -754,6 +757,14 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 			.await?;
 	object.insert("categoryIds".into(), json!(category_ids));
 	Ok(value)
+}
+
+/// viewer_flags 非零即用户阅读方向覆盖：响应 viewer 用覆盖值，库里的源值不动
+fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_flags: i64) -> ApiResult<()> {
+	if viewer_flags != 0 {
+		object.insert("viewer".into(), serde_json::to_value(viewer_from_int(viewer_flags))?);
+	}
+	Ok(())
 }
 
 /// 列表端点的批量版 manga_json：三条 IN 查询替代逐行三查询，输出与入参同序；
@@ -772,13 +783,18 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 	}
 	let chapter_counts: HashMap<i64, i64> = q.fetch_all(&state.pool).await?.into_iter().collect();
 	let library_sql = format!(
-		"SELECT manga_id, in_library FROM manga_user WHERE user_id = 1 AND manga_id IN ({placeholders})"
+		"SELECT manga_id, in_library, viewer_flags FROM manga_user WHERE user_id = 1 AND manga_id IN ({placeholders})"
 	);
-	let mut q = sqlx::query_as::<_, (i64, bool)>(&library_sql);
+	let mut q = sqlx::query_as::<_, (i64, bool, i64)>(&library_sql);
 	for row in rows {
 		q = q.bind(row.id);
 	}
-	let in_library: HashMap<i64, bool> = q.fetch_all(&state.pool).await?.into_iter().collect();
+	let manga_users: HashMap<i64, (bool, i64)> = q
+		.fetch_all(&state.pool)
+		.await?
+		.into_iter()
+		.map(|(id, in_library, flags)| (id, (in_library, flags)))
+		.collect();
 	let category_sql = format!(
 		"SELECT manga_id, category_id FROM category_manga WHERE user_id = 1 AND manga_id IN ({placeholders})"
 	);
@@ -805,8 +821,11 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 		);
 		object.insert(
 			"inLibrary".into(),
-			json!(in_library.get(&row.id).copied().unwrap_or(false)),
+			json!(manga_users.get(&row.id).map(|(flag, _)| *flag).unwrap_or(false)),
 		);
+		if let Some((_, flags)) = manga_users.get(&row.id) {
+			apply_viewer_override(object, *flags)?;
+		}
 		object.insert(
 			"categoryIds".into(),
 			json!(category_ids.get(&row.id).cloned().unwrap_or_default()),

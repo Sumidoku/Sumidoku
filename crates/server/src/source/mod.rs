@@ -549,13 +549,14 @@ pub async fn upsert_manga(
 	let tags = serde_json::to_string(&manga.tags.clone().unwrap_or_default())?;
 	sqlx::query(
 		"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
+		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
 		 last_fetched_at, chapters_last_fetched_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (source_id, key) DO UPDATE SET
 		 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
 		 description = excluded.description, tags = excluded.tags, status = excluded.status,
-		 content_rating = excluded.content_rating, cover_url = excluded.cover_url,
+		 content_rating = excluded.content_rating, viewer = excluded.viewer,
+		 cover_url = excluded.cover_url,
 		 url = excluded.url, initialized = excluded.initialized,
 		 update_strategy = excluded.update_strategy,
 		 next_update_time = excluded.next_update_time",
@@ -569,6 +570,7 @@ pub async fn upsert_manga(
 	.bind(tags)
 	.bind(manga.status as i64)
 	.bind(manga.content_rating as i64)
+	.bind(manga.viewer as i64)
 	.bind(&manga.cover)
 	.bind(&manga.url)
 	.bind(initialized)
@@ -609,6 +611,18 @@ pub async fn reconcile_chapters(
 	chapters: &[Chapter],
 ) -> ApiResult<Vec<i64>> {
 	let now = unix_now();
+	// 源恰好一种语言时给缺语言的章节补上（对齐 AidokuRunner）
+	let fill_language: Option<String> =
+		sqlx::query_as::<_, (sqlx::types::Json<Vec<String>>,)>(
+			"SELECT s.languages FROM manga m JOIN source s ON s.id = m.source_id WHERE m.id = ?",
+		)
+		.bind(manga_id)
+		.fetch_optional(&mut *conn)
+		.await?
+		.and_then(|(languages,)| match languages.0.as_slice() {
+			[only] => Some(only.clone()),
+			_ => None,
+		});
 	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
 		.bind(manga_id)
 		.fetch_all(&mut *conn)
@@ -621,13 +635,20 @@ pub async fn reconcile_chapters(
 			new_keys.push(chapter.key.clone());
 		}
 		let scanlators = serde_json::to_string(&chapter.scanlators.clone().unwrap_or_default())?;
+		let language = chapter
+			.language
+			.as_ref()
+			.filter(|l| !l.is_empty())
+			.cloned()
+			.or_else(|| fill_language.clone());
 		sqlx::query(
-			"INSERT INTO chapter (manga_id, key, title, number, volume, scanlators, language, url,
+			"INSERT INTO chapter (manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
 			 date_uploaded, source_order, locked, fetched_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (manga_id, key) DO UPDATE SET
 			 title = excluded.title, number = excluded.number, volume = excluded.volume,
-			 scanlators = excluded.scanlators, language = excluded.language, url = excluded.url,
+			 scanlators = excluded.scanlators, language = excluded.language,
+			 thumbnail = excluded.thumbnail, url = excluded.url,
 			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
 			 locked = excluded.locked, fetched_at = excluded.fetched_at",
 		)
@@ -637,7 +658,8 @@ pub async fn reconcile_chapters(
 		.bind(chapter.chapter_number.map(|n| n as f64))
 		.bind(chapter.volume_number.map(|n| n as f64))
 		.bind(scanlators)
-		.bind(&chapter.language)
+		.bind(language)
+		.bind(&chapter.thumbnail)
 		.bind(&chapter.url)
 		.bind(chapter.date_uploaded)
 		.bind(index as i64)
@@ -682,7 +704,7 @@ pub async fn reconcile_chapters(
 pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	let row: Option<MangaRow> = sqlx::query_as(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
+		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
 		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id = ?",
 	)
 	.bind(id)
@@ -699,7 +721,7 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 	let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 	let sql = format!(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, cover_url, url, initialized, update_strategy, next_update_time,
+		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
 		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id IN ({placeholders})"
 	);
 	let mut q = sqlx::query_as::<_, MangaRow>(&sql);
@@ -716,7 +738,7 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 
 pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	let row: Option<ChapterRow> = sqlx::query_as(
-		"SELECT id, manga_id, key, title, number, volume, scanlators, language, url,
+		"SELECT id, manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
 		 date_uploaded, source_order, page_count, locked, fetched_at FROM chapter WHERE id = ?",
 	)
 	.bind(id)

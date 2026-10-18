@@ -69,6 +69,8 @@ pub struct BackupManga {
 	#[serde(default)]
 	pub content_rating: i64,
 	#[serde(default)]
+	pub viewer: i64,
+	#[serde(default)]
 	pub cover_url: Option<String>,
 	#[serde(default)]
 	pub url: Option<String>,
@@ -125,6 +127,8 @@ pub struct BackupChapter {
 	#[serde(default)]
 	pub language: Option<String>,
 	#[serde(default)]
+	pub thumbnail: Option<String>,
+	#[serde(default)]
 	pub url: Option<String>,
 	#[serde(default)]
 	pub date_uploaded: Option<i64>,
@@ -161,6 +165,7 @@ struct ExportMangaRow {
 	tags: sqlx::types::Json<Vec<String>>,
 	status: i64,
 	content_rating: i64,
+	viewer: i64,
 	cover_url: Option<String>,
 	url: Option<String>,
 	initialized: bool,
@@ -181,6 +186,7 @@ struct ExportProgressRow {
 	volume: Option<f64>,
 	scanlators: sqlx::types::Json<Vec<String>>,
 	language: Option<String>,
+	thumbnail: Option<String>,
 	url: Option<String>,
 	date_uploaded: Option<i64>,
 	source_order: i64,
@@ -217,7 +223,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 
 	let manga_rows: Vec<ExportMangaRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key, m.title, m.authors, m.artists, m.description, m.tags,
-		 m.status, m.content_rating, m.cover_url, m.url, m.initialized, m.update_strategy,
+		 m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized, m.update_strategy,
 		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.sort_key
 		 FROM manga m
 		 JOIN source s ON s.id = m.source_id
@@ -238,6 +244,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			tags: row.tags.0,
 			status: row.status,
 			content_rating: row.content_rating,
+			viewer: row.viewer,
 			cover_url: row.cover_url,
 			url: row.url,
 			initialized: row.initialized,
@@ -287,7 +294,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	// 全默认的行不携带任何用户状态，导出去重（is_downloaded 不在备份范围）
 	let progress_rows: Vec<ExportProgressRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key AS manga_key, c.key, c.title, c.number, c.volume,
-		 c.scanlators, c.language, c.url, c.date_uploaded, c.source_order, c.page_count,
+		 c.scanlators, c.language, c.thumbnail, c.url, c.date_uploaded, c.source_order, c.page_count,
 		 cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter_user cu
 		 JOIN chapter c ON c.id = cu.chapter_id
@@ -311,6 +318,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 				volume: row.volume,
 				scanlators: row.scanlators.0,
 				language: row.language,
+				thumbnail: row.thumbnail,
 				url: row.url,
 				date_uploaded: row.date_uploaded,
 				source_order: row.source_order,
@@ -564,12 +572,13 @@ async fn restore_library(
 		};
 		sqlx::query(
 			"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
-			 content_rating, cover_url, url, initialized, update_strategy)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 content_rating, viewer, cover_url, url, initialized, update_strategy)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (source_id, key) DO UPDATE SET
 			 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
 			 description = excluded.description, tags = excluded.tags, status = excluded.status,
-			 content_rating = excluded.content_rating, cover_url = excluded.cover_url,
+			 content_rating = excluded.content_rating, viewer = excluded.viewer,
+			 cover_url = excluded.cover_url,
 			 url = excluded.url, initialized = excluded.initialized,
 			 update_strategy = excluded.update_strategy",
 		)
@@ -582,6 +591,7 @@ async fn restore_library(
 		.bind(serde_json::to_string(&entry.tags)?)
 		.bind(entry.status)
 		.bind(entry.content_rating)
+		.bind(entry.viewer)
 		.bind(&entry.cover_url)
 		.bind(&entry.url)
 		.bind(entry.initialized)
@@ -739,8 +749,8 @@ async fn restore_progress(
 		// fetched_at = 0 标记是备份补的行，等源刷新覆盖；已存在的章节保留更新的元数据
 		sqlx::query(
 			"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators,
-			 language, url, date_uploaded, source_order, page_count, fetched_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+			 language, thumbnail, url, date_uploaded, source_order, page_count, fetched_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
 		)
 		.bind(manga_id)
 		.bind(&entry.chapter.key)
@@ -749,6 +759,7 @@ async fn restore_progress(
 		.bind(entry.chapter.volume)
 		.bind(serde_json::to_string(&entry.chapter.scanlators)?)
 		.bind(&entry.chapter.language)
+		.bind(&entry.chapter.thumbnail)
 		.bind(&entry.chapter.url)
 		.bind(entry.chapter.date_uploaded)
 		.bind(entry.chapter.source_order)

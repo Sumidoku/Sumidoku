@@ -140,7 +140,12 @@ Migrations in `crates/server/migrations`.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
   `source_order` is the source's own chapter index. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
-  listing when it has download rows, and deletes it otherwise.
+  listing when it has download rows, and deletes it otherwise. Manga rows
+  persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
+  source `thumbnail`; a source declaring exactly one language fills missing
+  chapter languages with it on reconcile. A non-zero
+  `manga_user.viewer_flags` is the user's viewer override: API responses
+  report it as the manga `viewer` while the source value stays stored.
 - Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
   JSON document (a `Content-Disposition` attachment) with the single user's
   library rows and metadata, categories with membership, reading progress,
