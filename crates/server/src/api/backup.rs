@@ -386,6 +386,42 @@ pub struct ImportQuery {
 	pub sections: Option<String>,
 }
 
+/// 服务器备份目录里的既有备份，新到旧
+pub async fn list_backups(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+	let dir = crate::backup::backups_dir(&state.pool, &state.config).await?;
+	let files: Vec<Value> = crate::backup::list_backup_files(&dir)
+		.await?
+		.into_iter()
+		.map(|f| json!({"name": f.name, "size": f.size, "createdAt": f.created_at}))
+		.collect();
+	Ok(Json(json!({ "dir": dir.display().to_string(), "files": files })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RestoreRequest {
+	pub name: String,
+}
+
+/// 从备份目录里已有的文件恢复：服务端读文件，走与上传导入同一条校验+事务路径
+pub async fn restore_backup(
+	State(state): State<Arc<AppState>>,
+	Json(body): Json<RestoreRequest>,
+) -> ApiResult<Json<Value>> {
+	if crate::backup::parse_backup_name(&body.name).is_none() {
+		return Err(ApiError::bad_request("invalid backup file name"));
+	}
+	let dir = crate::backup::backups_dir(&state.pool, &state.config).await?;
+	let bytes = match tokio::fs::read(dir.join(&body.name)).await {
+		Ok(bytes) => bytes,
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			return Err(ApiError::not_found("backup not found"));
+		}
+		Err(e) => return Err(ApiError::internal(format!("read backup: {e}"))),
+	};
+	let result = import_backup_doc(&state, None, &bytes).await?;
+	Ok(Json(result))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Section {
 	Library,
