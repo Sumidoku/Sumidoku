@@ -239,3 +239,55 @@ async fn processors_transform_fetched_images() {
 	assert_eq!(green.dimensions(), (3, 3));
 	assert_solid(&green, [0, 255, 0, 255], "processed cover");
 }
+
+#[tokio::test]
+async fn processors_handle_undecodable_upstream_bytes() {
+	// 加密图床（favcomic 等）返回的字节宿主侧不可解码：不得在 decode_into_store 直接
+	// 502，而要把原始字节透传给源的 export（Aidoku 契约）。fixture 处理器忽略入参、
+	// 恒返回固定画布，因此 reader 页与封面都应拿到 2x2 蓝 / 3x3 绿，而不是报错。
+	let t = canvas_app().await;
+	let app = t.app.clone();
+	let manga_id = register_canvas_manga(&app).await;
+	let chapter_id = canvas_chapter(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// IV||AES-128-CBC 密文样式的载荷：无任何图片魔数、16 字节块对齐
+	let cipher: Vec<u8> = [0x0e, 0xfa, 0x55, 0x5a, 0x67, 0xbe, 0x93, 0xd3]
+		.iter()
+		.cycle()
+		.take(160)
+		.copied()
+		.collect();
+	let (port, _upstream) = serve_bytes(vec![("/img.enc", "application/octet-stream", cipher)]).await;
+	let pool = connect_db(&t.db_path).await;
+	let stored = json!({
+		"content": {"Url": [format!("http://127.0.0.1:{port}/img.enc"), null]},
+		"thumbnail": null,
+		"hasDescription": false,
+		"description": null,
+	});
+	sqlx::query("UPDATE page SET content = ? WHERE chapter_id = ? AND idx = 0")
+		.bind(stored.to_string())
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("rewrite page 0");
+	let blue = decode_png(&fetch_page_png(&app, chapter_id, 0).await);
+	assert_eq!(blue.dimensions(), (2, 2));
+	assert_solid(&blue, [0, 0, 255, 255], "processed page from opaque bytes");
+
+	sqlx::query("UPDATE manga SET cover_url = ? WHERE id = ?")
+		.bind(format!("http://127.0.0.1:{port}/img.enc"))
+		.bind(manga_id)
+		.execute(&pool)
+		.await
+		.expect("update cover url");
+	let (status, headers, bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/png");
+	let green = decode_png(&bytes);
+	assert_eq!(green.dimensions(), (3, 3));
+	assert_solid(&green, [0, 255, 0, 255], "processed cover from opaque bytes");
+}

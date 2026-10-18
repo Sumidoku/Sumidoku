@@ -494,14 +494,19 @@ impl SourceInstance {
 
 	fn image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
 		let env = self.env.as_mut(&mut self.store);
-		let image = env
+		let item = env
 			.store
 			.get(rid)
-			.and_then(|item| item.as_image_data())
 			.ok_or_else(|| Error::Instance(format!("invalid image rid {rid}")))?;
-		image
-			.encode_png()
-			.ok_or_else(|| Error::Instance("encode image png failed".into()))
+		match item {
+			// 源 export 返回的 ImageRef（new_image 解码过）→ 编码 PNG
+			StoreItem::ImageData(image) => image
+				.encode_png()
+				.ok_or_else(|| Error::Instance("encode image png failed".into())),
+			// 源把宿主透传的原始字节直接回传（pass-through 处理器）→ 原样返回
+			StoreItem::Encoded(bytes) => Ok(bytes.clone()),
+			_ => Err(Error::Instance(format!("invalid image rid {rid}"))),
+		}
 	}
 
 	/// 取走图像字节：无论成败都回收 rid，否则每拉一次 page list store 只涨不消
@@ -518,7 +523,12 @@ impl SourceInstance {
 			.and_then(|reader| reader.decode().ok())
 			.map(|img| img.to_rgba8())
 		else {
-			return Err(Error::Instance("process image: response is not a decodable image".into()));
+			// 源声明了图片处理器却喂来宿主侧不可解码的字节（favcomic 这类加密图床
+			// 返回 IV||AES-128-CBC 密文）时，不在这里失败：把原始字节以 Encoded 入
+			// store，data() 原样取回，让源的 export 自行解密/处理。与 Aidoku 契约
+			// 一致——声明处理器的源收到的是原始响应体（见 canvas 的 get_image_data）。
+			let env = self.env.as_mut(&mut self.store);
+			return Ok(env.store.store(StoreItem::Encoded(bytes.to_vec())));
 		};
 		let (width, height) = rgba.dimensions();
 		let env = self.env.as_mut(&mut self.store);

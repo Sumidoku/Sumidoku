@@ -1,6 +1,8 @@
 //! GET /api/v1/sources/{id}/image 图片代理：browse/home 封面的源图床防盗链只能靠服务端
-//! 带上源声明的请求头去取。fixture 源在 crates/wasm/tests/fixtures/imgreq-src（no_std cdylib），
-//! 重建方式：`cd crates/wasm/tests/fixtures/imgreq-src && cargo build --release --target wasm32-unknown-unknown`，
+//! 带上源声明的请求头去取；源声明了 cover_image_processor 时还会经过封面处理器（favcomic
+//! 这类加密图床由此得以解密出图）。fixture 源在 crates/wasm/tests/fixtures/imgreq-src
+//! （no_std cdylib），重建方式：
+//! `cd crates/wasm/tests/fixtures/imgreq-src && cargo build --release --target wasm32-unknown-unknown`，
 //! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_imgreq.wasm
 //! 复制为 crates/wasm/tests/fixtures/imgreq/main.wasm。
 mod common;
@@ -10,6 +12,8 @@ use axum::extract::Request;
 use axum::http::StatusCode;
 use axum::routing::get;
 use common::{TestApp, base_config, imgreq_wasm_path, install_fixture_source, request, request_full};
+use image::ImageReader;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 use sumidoku_server::build_app;
 
@@ -122,8 +126,16 @@ async fn proxies_plain_get_without_feature() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
+	// example-source 导出 cover_image_processor：get_source_image 走 fetch_cover_image，
+	// 1x1 上游载荷被换成 fixture 的固定 200x300 画布（PNG），不再原样透传
 	assert_eq!(headers["content-type"], "image/png");
-	assert_eq!(bytes, PNG);
+	let image = ImageReader::new(Cursor::new(&bytes))
+		.with_guessed_format()
+		.expect("png format")
+		.decode()
+		.expect("png decode")
+		.to_rgba8();
+	assert_eq!(image.dimensions(), (200, 300), "cover processor output");
 
 	let seen = seen.lock().expect("seen lock");
 	assert!(

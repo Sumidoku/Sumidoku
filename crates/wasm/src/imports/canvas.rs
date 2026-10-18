@@ -602,16 +602,22 @@ pub fn new_image(mut env: FunctionEnvMut<WasmEnv>, data_ptr: Ptr, data_len: u32)
 }
 
 pub fn get_image_data(mut env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> FFIResult {
-	let Some(png) = env
+	let Some(encoded) = env
 		.data()
 		.store
 		.get(image_rid)
-		.and_then(|item| item.as_image_data())
-		.and_then(|image| image.encode_png())
+		.and_then(|item| match item {
+			// 常规 ImageData：编码为 PNG 再存 Encoded（原行为）
+			StoreItem::ImageData(image) => image.encode_png(),
+			// 处理器入参的原始字节透传：decode_into_store 解码失败时以 Encoded 入 store，
+			// data() 必须原样返回（源的解密逻辑在 export 里），而不是 InvalidImagePointer
+			StoreItem::Encoded(bytes) => Some(bytes.clone()),
+			_ => None,
+		})
 	else {
 		return Result::InvalidImagePointer.into();
 	};
-	env.data_mut().store.store(StoreItem::Encoded(png))
+	env.data_mut().store.store(StoreItem::Encoded(encoded))
 }
 
 pub fn get_image_width(env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> f32 {

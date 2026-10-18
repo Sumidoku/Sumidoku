@@ -132,3 +132,23 @@ async fn processors_return_fixed_canvas_images() {
 	assert_eq!(cover.dimensions(), (3, 3));
 	assert_solid(&cover, [0, 255, 0, 255], "processed cover");
 }
+
+#[tokio::test]
+async fn processor_runs_on_undecodable_bytes() {
+	// 加密图床（favcomic 等）返回的原始字节宿主侧解码必然失败：契约要求把字节
+	// 透传给源的 export（data() 原样返回）而不是在 decode_into_store 直接报错。
+	// fixture 处理器忽略入参、恒返回固定画布，因此输出仍是 2x2 蓝块。
+	let (handle, _) = spawn_fixture().await;
+	let mut input = process_input();
+	input.bytes = vec![
+		0x0e, 0xfa, 0x55, 0x5a, 0x67, 0xbe, 0x93, 0xd3, 0xd7, 0x31, 0x05, 0x36, 0xb8, 0x52, 0x7f,
+		0xa4,
+	];
+	let png = handle
+		.process_page_image(input, None)
+		.await
+		.expect("undecodable bytes must still reach the processor");
+	let img = decode_png(&png);
+	assert_eq!(img.dimensions(), (2, 2));
+	assert_solid(&img, [0, 0, 255, 255], "processed page");
+}
