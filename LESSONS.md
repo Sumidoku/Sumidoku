@@ -132,3 +132,15 @@ treat a reopen as new input, not noise.
 - Evidence: 2026-10-18, issue #26 was decided "sandbox + explicitly
   unsupported" and merged while everpcpc's chromiumoxide/moli references
   sat unread in the thread; dyphire reopened it the same day.
+
+**A rewritten branch gets its test count re-checked, not just its CI.**
+A collaborator consolidated their branch into one commit before merge;
+the rewrite kept the code fixes but silently dropped two tests added
+during review. CI went green because the suite got smaller, and
+`--match-head-commit` matched the new head while the content had
+changed. After any force-push that rewrites history, diff the test list
+(`cargo nextest list` or the suite count) against the reviewed state
+before merging — the commit-sha pin proves where the head points, never
+what it contains.
+- Evidence: 2026-10-18, PR #61's rewrite into `24971ab5` dropped the two
+  jar sink tests from the review fix; re-added in PR #64.
