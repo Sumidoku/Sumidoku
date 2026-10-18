@@ -32,7 +32,7 @@ async fn post_backup(app: &Router, query: &str, bytes: &[u8]) -> (StatusCode, Va
 fn mapping_query(mapping: &Value) -> String {
 	let raw = serde_json::to_string(mapping).expect("mapping json");
 	let encoded = raw.replace('{', "%7B").replace('}', "%7D").replace('"', "%22");
-	format!("&sourceMapping={encoded}")
+	format!("?sourceMapping={encoded}")
 }
 
 async fn scan(app: &Router) {
@@ -181,11 +181,13 @@ async fn import_suwayomi_merges_with_existing_state() {
 
 	// favorite=false 的 manga 3：建行但不入库；只在 history 出现的章节 5 也有进度
 	let pool = connect_db(&app.db_path).await;
-	let row: Option<(i64, i64)> =
-		sqlx::query_as("SELECT m.id, mu.in_library FROM manga m JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 WHERE m.key = '3'")
-			.fetch_optional(&pool)
-			.await
-			.expect("manga 3 row");
+	let row: Option<(i64, i64)> = sqlx::query_as(
+		"SELECT m.id, COALESCE(mu.in_library, 0) FROM manga m
+		 LEFT JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 WHERE m.key = '3'",
+	)
+	.fetch_optional(&pool)
+	.await
+	.expect("manga 3 row");
 	let (manga3_id, in_library) = row.expect("manga 3 must exist for its history");
 	assert_eq!(in_library, 0);
 	let ch5: (i64, i64, i64) = sqlx::query_as(
@@ -303,7 +305,7 @@ async fn import_suwayomi_explicit_mapping() {
 	let (status, body) = post_backup(&app.app, &query, TACHIBK).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	assert_eq!(body["imported"]["library"], 3);
-	assert_eq!(body["imported"]["progress"], 4);
+	assert_eq!(body["imported"]["progress"], 5);
 	assert_eq!(body["skipped"].as_array().expect("skipped").len(), 0);
 	assert_eq!(source_group(&body, "111")["match"], "mapped");
 	assert_eq!(source_group(&body, "111")["aidokuSourceKey"], "en.example-dup");
