@@ -1,6 +1,7 @@
 pub mod aidoku_backup;
 pub mod backup;
 pub mod download;
+pub mod import_merge;
 pub mod library;
 pub mod page;
 pub mod partial;
