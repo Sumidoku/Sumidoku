@@ -171,69 +171,57 @@ pub fn init(mut env: FunctionEnvMut<WasmEnv>, method: u8) -> FFIResult {
 		.store(StoreItem::Request(Box::new(NetRequest::new(method))))
 }
 
-fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let url = {
-		let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
-			return Result::InvalidDescriptor.into();
-		};
-		let Some(url) = request.url.clone() else {
-			return Result::InvalidUrl.into();
-		};
-		url
+/// perform 的失败面，映射到 send 的 FFI 错误码
+pub(crate) enum SendFailure {
+	InvalidUrl,
+	Request,
+}
+
+/// 按 policy 路由发出一个请求：429/5xx 退避重试、响应 Set-Cookie 入 jar。
+/// 任何 HTTP 响应（含非 2xx）都写回 request.response；只有网络层失败才报错。
+pub(crate) fn perform(
+	net: &mut crate::runtime::env::NetState,
+	request: &mut NetRequest,
+	timeout: Duration,
+) -> std::result::Result<(), SendFailure> {
+	let Some(url) = request.url.clone() else {
+		return Err(SendFailure::InvalidUrl);
 	};
-	let route = env.data().net.policy.route_for(&url);
-	if env.data_mut().net.client_for(&route).is_err() {
-		return Result::RequestError.into();
+	let route = net.policy.route_for(&url);
+	if net.client_for(&route).is_err() {
+		return Err(SendFailure::Request);
 	}
 
-	env.data_mut().net.rate.acquire();
+	net.rate.acquire();
 
-	let max_attempts = MAX_ATTEMPTS;
 	let mut attempt = 0;
 	loop {
 		attempt += 1;
-		let outcome = {
-			let data = env.data_mut();
-			let Some(request) = data.store.get_mut(rid).and_then(|item| item.as_request()) else {
-				return Result::InvalidDescriptor.into();
-			};
-			let Some(url) = request.url.as_ref() else {
-				return Result::InvalidUrl.into();
-			};
-			if !request.headers.contains_key(USER_AGENT) {
-				let ua = data
-					.net
-					.policy
-					.user_agent()
-					.unwrap_or_else(|| FALLBACK_USER_AGENT.to_string());
-				if let Ok(value) = HeaderValue::from_str(&ua) {
-					request.headers.insert(USER_AGENT, value);
-				}
+		if !request.headers.contains_key(USER_AGENT) {
+			let ua = net
+				.policy
+				.user_agent()
+				.unwrap_or_else(|| FALLBACK_USER_AGENT.to_string());
+			if let Ok(value) = HeaderValue::from_str(&ua) {
+				request.headers.insert(USER_AGENT, value);
 			}
-			if let Some(jar_header) = data.net.jar.header_for(url)
-				&& let Ok(value) = HeaderValue::from_str(&jar_header)
-			{
-				request.headers.entry(COOKIE).or_insert(value);
-			}
-			let timeout = request
-				.timeout
-				.map(|t| Duration::from_secs_f64(t.max(0.0)))
-				.map(|t| t.min(data.limits.net_timeout_max))
-				.unwrap_or(data.limits.net_timeout_default);
+		}
+		if let Some(jar_header) = net.jar.header_for(&url)
+			&& let Ok(value) = HeaderValue::from_str(&jar_header)
+		{
+			request.headers.entry(COOKIE).or_insert(value);
+		}
 
-			let client = data.net.clients.get(&route).expect("client built above");
-			let mut builder = client
-				.request(request.method.into(), url.to_string())
-				.headers(request.headers.clone())
-				.timeout(timeout);
-			if let Some(body) = request.body.take() {
-				builder = builder.body(body);
-			}
-			builder.send()
-		};
-
-		let Ok(response) = outcome else {
-			return Result::RequestError.into();
+		let client = net.clients.get(&route).expect("client built above");
+		let mut builder = client
+			.request(request.method.into(), url.as_str())
+			.headers(request.headers.clone())
+			.timeout(timeout);
+		if let Some(body) = request.body.take() {
+			builder = builder.body(body);
+		}
+		let Ok(response) = builder.send() else {
+			return Err(SendFailure::Request);
 		};
 		let status = response.status();
 		let retry_after = response
@@ -241,7 +229,7 @@ fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 			.get(reqwest::header::RETRY_AFTER)
 			.and_then(|v| v.to_str().ok())
 			.and_then(|s| s.parse::<u64>().ok());
-		if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) && attempt < max_attempts {
+		if (status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) && attempt < MAX_ATTEMPTS {
 			let wait = retry_after
 				.map(Duration::from_secs)
 				.unwrap_or_else(|| Duration::from_secs(1 << (attempt - 1)));
@@ -251,25 +239,37 @@ fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 
 		let url = response.url().clone();
 		let headers = response.headers().clone();
-		let data = response.bytes();
-		let Ok(bytes) = data else {
-			return Result::RequestError.into();
+		let Ok(bytes) = response.bytes() else {
+			return Err(SendFailure::Request);
 		};
 
-		let env_data = env.data_mut();
 		for value in headers.get_all(SET_COOKIE).iter().filter_map(|v| v.to_str().ok()) {
-			env_data.net.jar.store(&url, value);
+			net.jar.store(&url, value);
 		}
-		let Some(request) = env_data.store.get_mut(rid).and_then(|item| item.as_request()) else {
-			return Result::InvalidDescriptor.into();
-		};
 		request.response = Some(NetResponse {
 			url,
 			status,
 			headers,
 			data: bytes.into(),
 		});
-		return Result::Success.into();
+		return Ok(());
+	}
+}
+
+fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
+	let data = env.data_mut();
+	let Some(request) = data.store.get_mut(rid).and_then(|item| item.as_request()) else {
+		return Result::InvalidDescriptor.into();
+	};
+	let timeout = request
+		.timeout
+		.map(|t| Duration::from_secs_f64(t.max(0.0)))
+		.map(|t| t.min(data.limits.net_timeout_max))
+		.unwrap_or(data.limits.net_timeout_default);
+	match perform(&mut data.net, request, timeout) {
+		Ok(()) => Result::Success.into(),
+		Err(SendFailure::InvalidUrl) => Result::InvalidUrl.into(),
+		Err(SendFailure::Request) => Result::RequestError.into(),
 	}
 }
 
