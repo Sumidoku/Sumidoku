@@ -6,6 +6,27 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A CDP connection is bound to the runtime that first polled it; drive the
+connect on the host runtime.** tokio I/O handles register with the reactor
+active at creation/poll time, so a `Browser::connect` driven inside a
+client-owned `current_thread` runtime cannot be driven from anywhere
+else — when the handler and screencast pump were moved to the server
+runtime (needed because a login session is idle between calls, and a
+current_thread runtime is only polled during `block_on`), frames arrived
+exactly once inside a `block_on` window and every later command hung with
+no error. When a connection must outlive `block_on` windows, spawn the
+connect itself on the host runtime. Two neighbours of the same bug: a
+client that owns a `Runtime` panics in tokio's shutdown assertion if
+dropped in async context, so every exit path must release it inside
+`spawn_blocking`; and headless Chromium only emits screencast frames on
+damage, so starting a screencast does not guarantee an initial frame —
+nudge one screenshot.
+- Evidence: 2026-10-19, issue #115's real-browser smoke: the pump logged
+  one frame (produced by a command inside a `block_on` window), then
+  `screencastFrameAck` and every later command hung; moving the connect
+  onto the app runtime delivered frames end-to-end. The runtime-drop panic
+  surfaced in the same probe (tokio shutdown.rs:51).
+
 **`tokio::time::pause` breaks sqlx pool acquisition — age test data
 directly instead of freezing the clock.** With `start_paused`,
 `SqlitePool::connect` fails with `Db(PoolTimedOut)` before the first
