@@ -1,0 +1,21 @@
+[package]
+name = "sumidoku-fixture-rekey"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aidoku = { path = "../../../../../vendor/aidoku" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true
+lto = true
+
+# 独立于主 workspace：只面向 wasm32-unknown-unknown 构建，
+# 产物手工复制为 ../rekey/main.wasm（见 crates/wasm/tests/rekey_host.rs 顶部说明）
+[workspace]

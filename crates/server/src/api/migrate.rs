@@ -15,7 +15,7 @@ use std::sync::Arc;
 /// 迁移源清单：已装源全量下发（目标组合选择器也要用），mangaCount 是在库条数
 pub async fn migrate_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, icon_path,
+		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
@@ -186,7 +186,9 @@ async fn run_entry(
 	if source_row(state, entry.to_source_id).await.is_err() {
 		return Ok(failed("source_not_found"));
 	}
-	if origin.source_id == entry.to_source_id {
+	// 同源不同 key 是 breaking-change 的 forceMigrate 回退路径（新 key 另起一行，
+	// 进度按章节号搬）；只有原地搬自己（同 key）会清掉自身进度，必须拒
+	if origin.source_id == entry.to_source_id && origin.key == entry.to_manga_key {
 		return Ok(failed("same_source"));
 	}
 	let origin_user: Option<(bool, Option<i64>)> =

@@ -16,6 +16,8 @@ export interface Source {
 	updatedAt: number;
 	/** 各源仓库缓存里的更新版本，无仓库或无更新为 null */
 	updateVersion: number | null;
+	/** manifest config.breakingChangeVersion，未声明为 0；跨版本更新会触发 key 迁移 */
+	breakingChangeVersion: number;
 	/** 在置顶列表（browse.pinned_sources）里 */
 	pinned: boolean;
 	/** 置顶列表里的下标，即迁移时的默认优先级；未置顶为 null */
@@ -52,6 +54,16 @@ export interface RepoSourceEntry {
 export interface UpdateAllOutcome {
 	updated: string[];
 	failed: { key: string; reason: string }[];
+	/** 跨 breaking 但源无自迁移能力：需要走迁移页（同源）的源 key */
+	migrationRequired: string[];
+	/** 原地重键时被跳过的行（映射失败/撞键），按源归组 */
+	migrationWarnings: { key: string; message: string }[];
+}
+
+/** 单源更新响应：源 DTO 之外带本次跨 breaking 的 key 迁移结果 */
+export interface SourceUpdate extends Source {
+	migrationRequired: boolean;
+	migrationWarnings: string[];
 }
 
 export interface Manga {

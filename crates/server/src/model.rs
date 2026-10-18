@@ -11,6 +11,7 @@ pub struct SourceRow {
 	pub languages: sqlx::types::Json<Vec<String>>,
 	pub content_rating: i64,
 	pub base_url: Option<String>,
+	pub breaking_change_version: i64,
 	pub icon_path: Option<String>,
 	pub wasm_path: String,
 	pub enabled: bool,

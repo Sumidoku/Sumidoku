@@ -407,7 +407,7 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 	}
 
 	let source: SourceRow = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, icon_path,
+		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source WHERE key = ?",
 	)
 	.bind(key)
@@ -418,8 +418,15 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 	Ok(source)
 }
 
-/// 单源更新：取所有 repo 缓存里该 key 的最新版，严格大于已装才动手
-pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<SourceRow> {
+/// 单源更新的完整结果：新行 + 跨 breaking 的 key 迁移报告
+pub struct SourceUpdate {
+	pub source: SourceRow,
+	pub migration: crate::source::rekey::RekeyReport,
+}
+
+/// 单源更新：取所有 repo 缓存里该 key 的最新版，严格大于已装才动手；
+/// 跨过新包 manifest 的 breakingChangeVersion 时做 key 迁移（见 rekey 模块）
+pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<SourceUpdate> {
 	let row: Option<(String, i64)> = sqlx::query_as("SELECT key, version FROM source WHERE id = ?")
 		.bind(source_id)
 		.fetch_optional(&state.pool)
@@ -430,7 +437,9 @@ pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 	let latest = latest_versions(&state.pool).await?;
 	match latest.get(&key) {
 		Some(&(new_version, repo_id)) if new_version > version => {
-			install_from_repo(state, repo_id, &key).await
+			let source = install_from_repo(state, repo_id, &key).await?;
+			let migration = crate::source::rekey::migrate_after_update(state, source.id, version).await?;
+			Ok(SourceUpdate { source, migration })
 		}
 		_ => Err(ApiError::no_update(format!("source {key} is up to date"))),
 	}
@@ -439,6 +448,10 @@ pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 pub struct UpdateAllOutcome {
 	pub updated: Vec<String>,
 	pub failed: Vec<(String, String)>,
+	/// 跨 breaking 但源无自迁移能力的 key：界面引导走 flow A 同源迁移
+	pub migration_required: Vec<String>,
+	/// 原地重键里被跳过的行（映射失败/撞键），按源归组
+	pub migration_warnings: Vec<(String, String)>,
 }
 
 pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
@@ -449,6 +462,8 @@ pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
 	let mut outcome = UpdateAllOutcome {
 		updated: Vec::new(),
 		failed: Vec::new(),
+		migration_required: Vec::new(),
+		migration_warnings: Vec::new(),
 	};
 	for (key, version) in sources {
 		let Some(&(new_version, repo_id)) = latest.get(&key) else {
@@ -457,11 +472,28 @@ pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
 		if new_version <= version {
 			continue;
 		}
-		match install_from_repo(state, repo_id, &key).await {
-			Ok(_) => outcome.updated.push(key),
+		let source = match install_from_repo(state, repo_id, &key).await {
+			Ok(source) => source,
 			Err(e) => {
 				tracing::warn!(key, "update-all install failed: {e:?}");
 				outcome.failed.push((key, e.message().to_string()));
+				continue;
+			}
+		};
+		outcome.updated.push(key.clone());
+		match crate::source::rekey::migrate_after_update(state, source.id, version).await {
+			Ok(report) => {
+				if report.required {
+					outcome.migration_required.push(key.clone());
+				}
+				for warning in report.warnings {
+					outcome.migration_warnings.push((key.clone(), warning));
+				}
+			}
+			// 重键失败不回滚已完成的更新，降级为该源的警告
+			Err(e) => {
+				tracing::warn!(key, "post-update key migration failed: {e:?}");
+				outcome.migration_warnings.push((key.clone(), e.message().to_string()));
 			}
 		}
 	}

@@ -301,6 +301,49 @@ async fn migrate_with_history_keeps_origin_progress() {
 	assert_eq!(ch8["isRead"], true, "{ch8}");
 }
 
+/// 同源不同 key 是 breaking-change 无自迁移能力时的 forceMigrate 回退：
+/// 新 key 另起一行，进度按章节号搬；同 key 才是 same_source（见 entry_failures）
+#[tokio::test]
+async fn same_source_different_key_migrates() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let (example, _second) = two_sources(&app, &tmp).await;
+	let (origin, _key, cat) = stocked_origin(&app, example).await;
+
+	// 同源的另一部条目作为「重 key 后的新家」
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{example}/search"),
+		Some(json!({"query": "Manga 2", "page": 1})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let new_key = body["entries"][0]["key"].as_str().expect("new key").to_string();
+
+	let (status, body) = migrate(
+		&app,
+		"migrate",
+		json!([{"fromMangaId": origin, "toSourceId": example, "toMangaKey": new_key}]),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let result = &body["results"][0];
+	assert_eq!(result["ok"], true, "{result}");
+	let target = result["toMangaId"].as_i64().expect("toMangaId");
+	assert_ne!(target, origin, "{result}");
+
+	let detail = manga_detail(&app, target).await;
+	assert_eq!(detail["inLibrary"], true, "{detail}");
+	assert_eq!(detail["sourceId"], example, "{detail}");
+	assert_eq!(detail["categoryIds"], json!([cat]), "{detail}");
+	let ch8 = chapter_by_number(&app, target, 8.0).await;
+	assert_eq!(ch8["lastPageRead"], 7, "{ch8}");
+	assert_eq!(ch8["isRead"], true, "{ch8}");
+
+	let detail = manga_detail(&app, origin).await;
+	assert_eq!(detail["inLibrary"], false, "{detail}");
+}
+
 #[tokio::test]
 async fn carry_merges_with_existing_target() {
 	let TestApp { app, tmp, .. } = test_app().await;

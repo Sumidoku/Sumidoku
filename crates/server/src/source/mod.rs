@@ -1,4 +1,5 @@
 pub mod cover;
+pub mod rekey;
 pub mod repo;
 pub mod routed;
 
@@ -221,6 +222,12 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 		.unwrap_or(&key)
 		.to_string();
 	let version = info.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
+	// Aidoku 的 breakingChangeVersion 在 manifest 的 config 节（SourceInfo.Configuration）
+	let breaking_change_version = doc
+		.get("config")
+		.and_then(|c| c.get("breakingChangeVersion"))
+		.and_then(|v| v.as_i64())
+		.unwrap_or(0);
 	let base_url = info
 		.get("url")
 		.and_then(|v| v.as_str())
@@ -248,13 +255,14 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 		// 老源保留 enabled 与 source_setting，只刷新元数据
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
-			 base_url = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
+			 base_url = ?, breaking_change_version = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
 		)
 		.bind(name)
 		.bind(version)
 		.bind(languages)
 		.bind(content_rating)
 		.bind(base_url)
+		.bind(breaking_change_version)
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)
@@ -266,8 +274,8 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 	} else {
 		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
-			 wasm_path, icon_path, enabled, installed_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+			 breaking_change_version, wasm_path, icon_path, enabled, installed_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
 		)
 		.bind(&key)
 		.bind(name)
@@ -275,6 +283,7 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 		.bind(languages)
 		.bind(content_rating)
 		.bind(base_url)
+		.bind(breaking_change_version)
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)
