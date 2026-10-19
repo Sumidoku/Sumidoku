@@ -385,6 +385,73 @@ async fn filters_and_listings_merge_static_and_dynamic() {
 	assert_eq!(ids, ["test", "listing"]);
 }
 
+// 静态筛选（filters.json 与 source.json `filters` 数组）归一成动态导出的扁平
+// snake_case 形状：无 id 派生稳定 id（id ?? title ?? type），camelCase 能力键映射，
+// 变体缺失字段补 null；动态导出原样透传
+#[tokio::test]
+async fn static_filters_normalize_to_runtime_shape() {
+	let app = test_app().await;
+	std::fs::write(
+		app.tmp.path().join("sources/en.example-source/filters.json"),
+		r#"[
+			{"type": "select", "title": "Genre", "options": ["A", "B"], "isGenre": true, "usesTagStyle": true},
+			{"type": "check", "id": "official", "title": "Official", "canExclude": true, "default": true},
+			{"type": "sort", "id": "order", "canAscend": false, "options": ["New", "Hot"], "default": {"index": 0, "ascending": false}},
+			{"type": "multi-select", "title": "Tags", "options": ["x"], "canExclude": true,
+			 "defaultIncluded": ["x"], "hideFromHeader": true}
+		]"#,
+	)
+	.expect("filters.json");
+	write_source(
+		&app.tmp.path().join("sources/en.manifest-filters"),
+		r#"{
+			"info": {"id": "en.manifest-filters", "name": "ManifestFilters", "version": 1, "languages": ["en"]},
+			"filters": [{"type": "check", "title": "Hide", "canExclude": true}]
+		}"#,
+		None,
+		None,
+	);
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	let id = source_id_by_key(&app.app, "en.example-source").await;
+	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/filters"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let list = body.as_array().expect("filters array");
+
+	// 无 id 的静态 select：id 落 title，能力键映射，缺失变体字段补 null
+	assert_eq!(list[0]["id"], "Genre", "{body}");
+	assert_eq!(list[0]["is_genre"], true, "{body}");
+	assert_eq!(list[0]["uses_tag_style"], true, "{body}");
+	assert_eq!(list[0]["options"], json!(["A", "B"]), "{body}");
+	assert_eq!(list[0]["ids"], Value::Null, "{body}");
+	assert_eq!(list[0]["default"], Value::Null, "{body}");
+	assert_eq!(list[0]["hide_from_header"], Value::Null, "{body}");
+
+	// canExclude / canAscend 不再被丢弃
+	assert_eq!(list[1]["can_exclude"], true, "{body}");
+	assert_eq!(list[1]["name"], Value::Null, "{body}");
+	assert_eq!(list[2]["can_ascend"], false, "{body}");
+	assert_eq!(list[2]["default"], json!({"index": 0, "ascending": false}), "{body}");
+	assert_eq!(list[3]["id"], "Tags", "{body}");
+	assert_eq!(list[3]["default_included"], json!(["x"]), "{body}");
+	assert_eq!(list[3]["default_excluded"], Value::Null, "{body}");
+	assert_eq!(list[3]["hide_from_header"], true, "{body}");
+
+	// 动态导出（example 载荷第一个导出筛选是 text）原样排在静态项之后
+	assert_eq!(list[4]["id"], "text", "{body}");
+	assert_eq!(list[4]["type"], "text", "{body}");
+
+	// source.json `filters` 数组走同一个归一化器
+	let id = source_id_by_key(&app.app, "en.manifest-filters").await;
+	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/filters"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let list = body.as_array().expect("filters array");
+	assert_eq!(list[0]["id"], "Hide", "{body}");
+	assert_eq!(list[0]["can_exclude"], true, "{body}");
+	assert_eq!(list[0]["default"], Value::Null, "{body}");
+}
+
 #[tokio::test]
 async fn chapter_number_serializes_cleanly() {
 	let app = test_app().await;

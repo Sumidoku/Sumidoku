@@ -243,12 +243,14 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.get("contentRating")
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
-	let languages = info
-		.get("languages")
-		.cloned()
-		.filter(|v| v.is_array())
-		.unwrap_or_else(|| serde_json::json!([]))
-		.to_string();
+	// languages 允许 {"code","isDefault"} 对象形式，列里只落语言码：消费端全按
+	// [String] 解码，原样落库会让源列表等查询 500；isDefault 由读清单原文的
+	// 合成/播种路径消费
+	let languages = serde_json::json!(source_languages(doc)
+		.into_iter()
+		.map(|(code, _)| code)
+		.collect::<Vec<_>>())
+	.to_string();
 	let icon_path = package.icon_path;
 	let wasm = package.wasm_path;
 	let now = unix_now();

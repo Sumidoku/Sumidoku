@@ -233,3 +233,60 @@ async fn source_update_refreshes_untouched_defaults() {
 	assert_eq!(body["values"]["url"], "https://v2.example", "未动过的 base url 应刷新: {body}");
 	assert_eq!(body["values"]["mode"], "b", "用户改过的值必须保留: {body}");
 }
+
+/// 单语言、单地址的源不合成语言/线路设置（example fixture：languages ["en"]，无 urls）
+#[tokio::test]
+async fn single_language_source_has_no_synthesized_settings() {
+	let app = test_app().await;
+	scan(&app.app).await;
+	let id = source_id_by_key(&app.app, "en.example-source").await;
+	let body = settings_body(&app.app, id).await;
+	let leaves = flatten(body["settings"].as_array().expect("settings array"));
+	let keys: Vec<&str> = leaves.iter().filter_map(|s| s["key"].as_str()).collect();
+	assert!(!keys.contains(&"languages") && !keys.contains(&"language"), "{keys:?}");
+	assert!(!keys.contains(&"url"), "{keys:?}");
+}
+
+/// languageSelectType == "single" 时多语言源出单选 language 设置，带 content 刷新语义
+#[tokio::test]
+async fn multi_language_single_select_setting() {
+	let app = test_app().await;
+	let dir = app.tmp.path().join("sources/en.single-lang");
+	std::fs::create_dir_all(&dir).expect("mkdir");
+	std::fs::copy(common::mutation_wasm_path(), dir.join("main.wasm")).expect("main.wasm");
+	std::fs::write(
+		dir.join("source.json"),
+		serde_json::json!({
+			"info": {"id": "en.single-lang", "name": "SingleLang", "version": 1,
+				"languages": [{"code": "en"}, {"code": "ja", "isDefault": true}]},
+			"config": {"languageSelectType": "single"}
+		})
+		.to_string(),
+	)
+	.expect("source.json");
+	scan(&app.app).await;
+	let id = source_id_by_key(&app.app, "en.single-lang").await;
+
+	// 清单的对象形式在 DTO 里归一成语言码，源列表不会解码失败
+	let (status, body) = request(&app.app, "GET", "/api/v1/sources", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let source = body
+		.as_array()
+		.unwrap()
+		.iter()
+		.find(|s| s["key"] == "en.single-lang")
+		.expect("source listed");
+	assert_eq!(source["languages"], json!(["en", "ja"]), "{source}");
+
+	let body = settings_body(&app.app, id).await;
+	let list = body["settings"].as_array().expect("settings array");
+	assert_eq!(list[0]["key"], "__language", "{body}");
+	let item = &list[0]["value"]["Group"]["items"][0];
+	assert_eq!(item["type"], "select", "{body}");
+	assert_eq!(item["key"], "language", "{body}");
+	assert_eq!(item["notification"], "language", "{body}");
+	assert_eq!(item["refreshes"], json!(["content"]), "{body}");
+	assert_eq!(item["value"]["Select"]["values"], json!(["en", "ja"]), "{body}");
+	assert_eq!(item["value"]["Select"]["default"], "ja", "{body}");
+	assert_eq!(body["values"]["language"], "ja", "{body}");
+}

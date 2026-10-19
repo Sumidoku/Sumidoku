@@ -1,6 +1,7 @@
 pub mod aidoku_backup;
 pub mod backup;
 pub mod download;
+pub mod filters;
 pub mod import_merge;
 pub mod library;
 pub mod login;
@@ -289,17 +290,18 @@ async fn get_filters(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后
+	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后；
+	// 静态项归一成动态导出的形状（动态项已是该形状，原样透传）
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
-		&& let Some(filters) = doc.get("filters").and_then(|v| v.as_array())
+		&& let Some(filters) = doc.get("filters")
 	{
-		out.extend(filters.iter().cloned());
+		out.extend(filters::normalize_static_filters(filters));
 	}
 	if out.is_empty()
-		&& let Some(Value::Array(filters)) = package_json(&state, id, "filters.json").await?
+		&& let Some(filters) = package_json(&state, id, "filters.json").await?
 	{
-		out.extend(filters);
+		out.extend(filters::normalize_static_filters(&filters));
 	}
 	match handle.get_filters().await {
 		Ok(filters) => {
