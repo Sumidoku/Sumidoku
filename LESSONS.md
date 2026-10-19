@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Before writing a file, confirm it does not exist — truncated listings
+lie.** A `find | head -20` that cuts off before the target makes an
+existing file look absent; writing then silently replaces work that was
+never read. Check the exact path (`test -e` / `ls <path>`) before Write,
+and when a write does replace something, the diff self-review is the
+backstop that catches it.
+- Evidence: 2026-10-19, trawl upstream PR germondai/trawl#236 (Sumidoku
+  #144): a truncated `find | head` hid an existing 411-line integration
+  test file; the agent overwrote it, caught the loss only in the diff
+  self-review, restored from git and appended the new tests instead.
+
 **On a machine with an active user, drive smoke UIs by AX action, not
 coordinates — and bring your own browser profile.** A synthetic coordinate
 click is aborted ("user intervened") whenever the physical cursor moves
