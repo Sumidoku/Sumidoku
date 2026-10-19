@@ -16,7 +16,7 @@ use std::sync::Arc;
 pub async fn migrate_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
 		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source ORDER BY id",
+		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
 	.await?;

@@ -35,6 +35,12 @@ pub(crate) fn source_json(
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
 	// Aidoku 语义的弃用标识：外部安装（repo_id 非空）且 key 已不在任何仓库 index 里
 	let missing_from_repos = row.repo_id.is_some() && !latest.contains_key(&row.key);
+	// 主页能力位：注册时 stamping；旧行未 stamping 为 null，消费端按未知处理（不藏入口）
+	let has_home = row
+		.features
+		.as_deref()
+		.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+		.and_then(|v| v.get("home").and_then(|b| b.as_bool()));
 	let config = row
 		.config
 		.as_deref()
@@ -55,6 +61,7 @@ pub(crate) fn source_json(
 		"updatedAt": row.updated_at,
 		"updateVersion": update,
 		"missingFromRepos": missing_from_repos,
+		"hasHome": has_home,
 		"pinned": pinned.contains_key(&row.key),
 		"pinOrder": pinned.get(&row.key),
 	})

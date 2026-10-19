@@ -1,6 +1,6 @@
 use wasmer::Module;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SourceFeatures {
 	pub manga_list: bool,
 	pub home: bool,
@@ -21,6 +21,17 @@ pub struct SourceFeatures {
 }
 
 impl SourceFeatures {
+	/// 只编译模块、按导出名算能力位，不建实例：注册之外的回填路径用
+	/// （启动时给 features 列为 NULL 的旧行补 stamping）
+	pub fn from_wasm_bytes(bytes: &[u8]) -> Result<Self, String> {
+		use wasmer::sys::EngineBuilder;
+		let compiler = wasmer::sys::Cranelift::default();
+		let engine = EngineBuilder::new(compiler).engine();
+		let store = wasmer::Store::new(engine);
+		let module = wasmer::Module::new(&store, bytes).map_err(|e| format!("compile module: {e}"))?;
+		Ok(Self::from_module(&module))
+	}
+
 	pub fn from_module(module: &Module) -> Self {
 		let has = |name: &str| module.exports().any(|e| e.name() == name);
 		Self {
