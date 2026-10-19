@@ -226,6 +226,45 @@ impl AppState {
 		evicted
 	}
 
+	/// 内存压力逐出：按 last_used 从闲到忙逐个逐出，每逐一个复查 RSS，回到阈值内
+	/// 或无可逐实例为止。压力下 idle 阈值视为 0——响应流式/落盘、缓存都在磁盘，
+	/// 常驻 wasmer 实例是唯一可还的内存。在途实例（注册表外还有 Arc 引用）跳过不摘：
+	/// 摘了还不了内存，下次访问还会另起实例，短时反而双份
+	pub async fn evict_for_rss_pressure(
+		&self,
+		threshold_bytes: u64,
+		rss: &mut (dyn FnMut() -> Option<u64> + Send),
+	) -> usize {
+		let mut evicted = 0;
+		while rss().is_some_and(|bytes| bytes > threshold_bytes) {
+			let now = std::time::Instant::now();
+			let candidate = {
+				let registry = self.sources.read().await;
+				registry
+					.iter()
+					.filter(|(_, entry)| Arc::strong_count(&entry.handle) == 1)
+					.max_by_key(|(_, entry)| entry.idle_for(now))
+					.map(|(source_id, _)| *source_id)
+			};
+			let Some(source_id) = candidate else { break };
+			let entry = {
+				let mut registry = self.sources.write().await;
+				// 写锁内复查引用数：读锁检查到摘表之间被 get_handle 命中的实例不摘
+				match registry.get(&source_id) {
+					Some(entry) if Arc::strong_count(&entry.handle) == 1 => registry.remove(&source_id),
+					_ => None,
+				}
+			};
+			let Some(entry) = entry else { continue };
+			// 引用数复查过关后注册表引用已移至此处，try_unwrap 必然成功
+			if let Ok(handle) = Arc::try_unwrap(entry.handle) {
+				handle.shutdown().await;
+			}
+			evicted += 1;
+		}
+		evicted
+	}
+
 	pub fn updater(&self) -> Arc<crate::update::UpdateScheduler> {
 		self.updater
 			.get()
@@ -314,6 +353,45 @@ pub async fn run_idle_eviction(
 		let evicted = state.evict_idle_sources(max_idle).await;
 		if evicted > 0 {
 			tracing::info!(evicted, "evicted idle source instances");
+		}
+	}
+}
+
+/// RSS 监控：与空闲清扫同频的独立任务。超阈值按最闲优先逐出，逐完仍超只大声记日志
+/// ——重启进程是运维决定，监控不自动做
+pub async fn run_rss_monitor(
+	state: Arc<AppState>,
+	threshold_bytes: u64,
+	sweep_interval: std::time::Duration,
+	mut rss: impl FnMut() -> Option<u64> + Send,
+) {
+	const MIB: u64 = 1024 * 1024;
+	let mut ticker = tokio::time::interval(sweep_interval);
+	// interval 首 tick 立即完成，首扫等满一个周期
+	ticker.tick().await;
+	loop {
+		ticker.tick().await;
+		let Some(before) = rss() else { continue };
+		if before <= threshold_bytes {
+			continue;
+		}
+		let evicted = state.evict_for_rss_pressure(threshold_bytes, &mut rss).await;
+		let after = rss();
+		let still_over = after.is_some_and(|bytes| bytes > threshold_bytes);
+		tracing::warn!(
+			rss_before_mb = before / MIB,
+			rss_after_mb = after.map(|bytes| bytes / MIB),
+			threshold_mb = threshold_bytes / MIB,
+			evicted,
+			"RSS over threshold, evicted idle source instances by memory pressure"
+		);
+		if still_over {
+			let resident = state.sources.read().await.len();
+			tracing::warn!(
+				threshold_mb = threshold_bytes / MIB,
+				resident,
+				"RSS still over threshold with nothing idle to evict; restart left to operator"
+			);
 		}
 	}
 }
@@ -508,6 +586,23 @@ mod tests {
 		(AppState::new(pool, config, defaults_tx, cookie_tx), source_id, tmp)
 	}
 
+	async fn test_state_multi(config: Config, count: usize) -> (Arc<AppState>, Vec<i64>, tempfile::TempDir) {
+		let (state, first, tmp) = test_state(config).await;
+		let mut ids = vec![first];
+		for i in 1..count {
+			let source_id: i64 = sqlx::query_scalar(
+				"INSERT INTO source (key, name, wasm_path) VALUES (?, 'Example', ?) RETURNING id",
+			)
+			.bind(format!("en.example-source-{i}"))
+			.bind(fixture_wasm())
+			.fetch_one(&state.pool)
+			.await
+			.expect("insert source");
+			ids.push(source_id);
+		}
+		(state, ids, tmp)
+	}
+
 	/// 把注册表项的 last_used 拨回过去，免去真实等待
 	async fn make_idle(state: &AppState, source_id: i64, idle: Duration) {
 		let registry = state.sources.read().await;
@@ -596,6 +691,121 @@ mod tests {
 			Duration::from_secs(30 * 60),
 			Duration::from_millis(20),
 		));
+		let mut swept = false;
+		for _ in 0..250 {
+			if state.sources.read().await.is_empty() {
+				swept = true;
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(20)).await;
+		}
+		task.abort();
+		assert!(swept);
+	}
+
+	#[tokio::test]
+	async fn rss_pressure_evicts_only_until_rss_recovers() {
+		let (state, ids, _tmp) = test_state_multi(Config::default(), 3).await;
+		for id in &ids {
+			let handle = state.get_handle(*id).await.expect("handle");
+			drop(handle);
+		}
+		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
+		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
+		make_idle(&state, ids[2], Duration::from_secs(10 * 60)).await;
+		// 读数序列：超 → 逐一个 → 回落。只逐一个且必须是最闲的 ids[0]
+		let mut readings = vec![150_u64, 50].into_iter();
+		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
+		assert_eq!(evicted, 1);
+		{
+			let registry = state.sources.read().await;
+			assert!(!registry.contains_key(&ids[0]));
+			assert!(registry.contains_key(&ids[1]));
+			assert!(registry.contains_key(&ids[2]));
+		}
+		// 被逐源再访问另起新实例
+		let rebuilt = state.get_handle(ids[0]).await.expect("handle");
+		assert!(rebuilt.is_alive());
+	}
+
+	#[tokio::test]
+	async fn rss_pressure_keeps_evicting_while_over_threshold() {
+		let (state, ids, _tmp) = test_state_multi(Config::default(), 3).await;
+		for id in &ids {
+			let handle = state.get_handle(*id).await.expect("handle");
+			drop(handle);
+		}
+		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
+		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
+		make_idle(&state, ids[2], Duration::from_secs(10 * 60)).await;
+		// 超 → 超 → 回落：两个最闲的都被逐，最新使用的保留
+		let mut readings = vec![150_u64, 150, 50].into_iter();
+		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
+		assert_eq!(evicted, 2);
+		let registry = state.sources.read().await;
+		assert!(!registry.contains_key(&ids[0]));
+		assert!(!registry.contains_key(&ids[1]));
+		assert!(registry.contains_key(&ids[2]));
+	}
+
+	#[tokio::test]
+	async fn rss_pressure_leaves_in_flight_instances_untouched() {
+		let (state, ids, _tmp) = test_state_multi(Config::default(), 2).await;
+		let in_flight = state.get_handle(ids[0]).await.expect("handle");
+		let other = state.get_handle(ids[1]).await.expect("handle");
+		drop(other);
+		// 在途的恰好最闲：压力逐出应跳过它去逐次闲的，而不是把它摘出注册表
+		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
+		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
+		let mut readings = vec![150_u64, 50].into_iter();
+		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
+		assert_eq!(evicted, 1);
+		let registry = state.sources.read().await;
+		assert!(registry.contains_key(&ids[0]));
+		assert!(!registry.contains_key(&ids[1]));
+		drop(registry);
+		assert!(in_flight.is_alive());
+	}
+
+	#[tokio::test]
+	async fn rss_pressure_noop_under_threshold() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		make_idle(&state, source_id, Duration::from_secs(40 * 60)).await;
+		let mut readings = vec![50_u64].into_iter();
+		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
+		assert_eq!(evicted, 0);
+		assert_eq!(state.sources.read().await.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn rss_pressure_stops_when_nothing_is_evictable() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let in_flight = state.get_handle(source_id).await.expect("handle");
+		// RSS 一直超、唯一实例又在途：必须退出循环而不是空转
+		let evicted = state.evict_for_rss_pressure(100, &mut || Some(150_u64)).await;
+		assert_eq!(evicted, 0);
+		assert!(in_flight.is_alive());
+		assert_eq!(state.sources.read().await.len(), 1);
+	}
+
+	#[tokio::test]
+	async fn rss_monitor_task_evicts_when_threshold_crossed() {
+		use std::sync::atomic::{AtomicU64, Ordering};
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		let reading = Arc::new(AtomicU64::new(50));
+		let rss = {
+			let reading = reading.clone();
+			move || Some(reading.load(Ordering::Relaxed))
+		};
+		let task = tokio::spawn(run_rss_monitor(state.clone(), 100, Duration::from_millis(20), rss));
+		// 阈值内几个周期不动注册表
+		tokio::time::sleep(Duration::from_millis(110)).await;
+		assert_eq!(state.sources.read().await.len(), 1);
+		reading.store(150, Ordering::Relaxed);
 		let mut swept = false;
 		for _ in 0..250 {
 			if state.sources.read().await.is_empty() {

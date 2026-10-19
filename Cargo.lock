@@ -4994,6 +4994,7 @@ dependencies = [
  "flate2",
  "futures-core",
  "image",
+ "libc",
  "plist",
  "prost",
  "rand_core 0.6.4",

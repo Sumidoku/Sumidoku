@@ -42,5 +42,9 @@ base64 = "0.22"
 # 页图降采样（wasm crate 同为 0.25，版本自然对齐）
 image = "0.25"
 
+# RSS 读取（macOS task_info / Linux _SC_PAGESIZE）；libc 由大量依赖传递带入，不新增 crate
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

@@ -31,6 +31,7 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_COVER_CACHE_MAX` | `512` | max cached cover files on disk |
 | `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |
 | `SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES` | `30` | evict source instances idle longer than this; `0` or negative disables the sweep |
+| `SUMIDOKU_RSS_THRESHOLD_MB` | `1024` | process RSS threshold; above it the monitor evicts source instances most-idle first (in-flight calls are never touched). `0` disables the monitor |
 
 ## WASM runtime
 

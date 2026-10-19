@@ -8,6 +8,7 @@ pub mod download;
 pub mod error;
 pub mod model;
 pub mod opds;
+pub mod rss;
 pub mod source;
 pub mod state;
 pub mod update;
@@ -83,6 +84,19 @@ pub async fn build_app_with(
 			max_idle,
 			state::IDLE_SWEEP_INTERVAL,
 		));
+	}
+	if state.config.rss_threshold_mb > 0 {
+		// 读不出 RSS 的平台（Windows）监控无从谈起，只记一次日志
+		if rss::current_rss().is_some() {
+			tokio::spawn(state::run_rss_monitor(
+				state.clone(),
+				state.config.rss_threshold_mb * 1024 * 1024,
+				state::IDLE_SWEEP_INTERVAL,
+				rss::current_rss,
+			));
+		} else {
+			tracing::info!("current RSS unreadable on this platform; RSS monitor disabled");
+		}
 	}
 	let app = api::router(state.clone());
 	let app = app
