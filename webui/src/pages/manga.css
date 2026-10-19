@@ -81,6 +81,20 @@
 	white-space: nowrap;
 }
 
+.manga-hero__creator {
+	padding: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+.manga-hero__creator:hover {
+	color: var(--accent-hover);
+	text-decoration: underline;
+}
+
 .manga-hero__chips {
 	display: flex;
 	align-items: center;

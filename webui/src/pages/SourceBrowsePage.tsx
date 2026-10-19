@@ -133,6 +133,10 @@ export default function SourceBrowsePage() {
 	const filtersQuery = useSourceFilters(sourceId, sourceEnabled);
 	const listingsQuery = useSourceListings(sourceId, sourceEnabled);
 
+	// hidesFiltersWhileSearching：搜索态藏起过滤器，且搜索请求不带过滤器值
+	// （AidokuRunner 在 query 非空时直接清空 filters 再调源）
+	const sourceConfig = source.data?.config;
+
 	const filters = useMemo(() => {
 		const d = filtersQuery.data;
 		return d && d.length > 0 ? d : null;
@@ -205,7 +209,9 @@ export default function SourceBrowsePage() {
 	}
 
 	function runSearch() {
-		setSubmitted({ query: input.trim(), filters: buildFilterValues() });
+		const query = input.trim();
+		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
+		setSubmitted({ query, filters: dropFilters ? [] : buildFilterValues() });
 	}
 
 	// 输入防抖 500ms 自动触发；筛选草稿不参与防抖，只在回车/应用筛选时一并提交
@@ -219,6 +225,7 @@ export default function SourceBrowsePage() {
 	}, [input]);
 
 	const isSearch = mode === 'search';
+	const filtersHidden = !!sourceConfig?.hidesFiltersWhileSearching && input.trim() !== '';
 	const searchQuery = useSourceSearch(
 		sourceId,
 		{ query: submitted.query || undefined, filters: submitted.filters },
@@ -360,7 +367,7 @@ export default function SourceBrowsePage() {
 							value={input}
 							onChange={(e) => setInput(e.currentTarget.value)}
 						/>
-						{filters && (
+						{filters && !filtersHidden && (
 							<Button onClick={() => setShowFilters((v) => !v)}>
 								<ListFilter size={15} />
 								筛选{showFilters ? ' ▴' : ' ▾'}
@@ -368,7 +375,7 @@ export default function SourceBrowsePage() {
 						)}
 					</form>
 
-					{filters && showFilters && states && (
+					{filters && !filtersHidden && showFilters && states && (
 						<div className="card filter-panel">
 							{filters.map((f) => (
 								<FilterItem

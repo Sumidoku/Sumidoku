@@ -33,6 +33,11 @@ pub(crate) fn source_json(
 	let update = latest
 		.get(&row.key)
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
+	let config = row
+		.config
+		.as_deref()
+		.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+		.unwrap_or(Value::Null);
 	json!({
 		"id": row.id,
 		"key": row.key,
@@ -42,6 +47,7 @@ pub(crate) fn source_json(
 		"contentRating": row.content_rating,
 		"baseUrl": row.base_url,
 		"breakingChangeVersion": row.breaking_change_version,
+		"config": config,
 		"enabled": row.enabled,
 		"installedAt": row.installed_at,
 		"updatedAt": row.updated_at,

@@ -12,6 +12,8 @@ pub struct SourceRow {
 	pub content_rating: i64,
 	pub base_url: Option<String>,
 	pub breaking_change_version: i64,
+	/// manifest config 节原文（JSON），未声明为 NULL
+	pub config: Option<String>,
 	pub icon_path: Option<String>,
 	pub wasm_path: String,
 	pub enabled: bool,

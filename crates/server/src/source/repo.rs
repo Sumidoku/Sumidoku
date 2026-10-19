@@ -407,7 +407,7 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 	}
 
 	let source: SourceRow = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, icon_path,
+		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source WHERE key = ?",
 	)
 	.bind(key)
