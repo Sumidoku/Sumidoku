@@ -222,7 +222,9 @@ export default function BrowsePage() {
 
 	// 已装源按名字字母序；置顶段另按 pinOrder 排
 	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
-	const updateCount = all.filter((s) => s.updateVersion !== null).length;
+	// Aidoku 同款独立分段：可更新的源聚在一起，置顶段之下、全部列表之上
+	const updateSources = all.filter((s) => s.updateVersion !== null);
+	const updateCount = updateSources.length;
 	const pinnedSources = all
 		.filter((s) => s.pinned)
 		.sort((a, b) => (a.pinOrder ?? 0) - (b.pinOrder ?? 0));
@@ -377,6 +379,21 @@ export default function BrowsePage() {
 								))}
 							</div>
 							<h2 className="browse__section">全部</h2>
+						</>
+					)}
+					{updateSources.length > 0 && (
+						<>
+							<h2 className="browse__section">更新（{updateSources.length}）</h2>
+							<div className="source-list">
+								{updateSources.map((s) => (
+									<SourceCard
+										key={s.id}
+										source={s}
+										onTogglePin={(s) => void togglePin(s)}
+										onDelete={setPendingDelete}
+									/>
+								))}
+							</div>
 						</>
 					)}
 					<div className="source-list">
