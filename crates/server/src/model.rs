@@ -19,6 +19,8 @@ pub struct SourceRow {
 	pub enabled: bool,
 	pub installed_at: i64,
 	pub updated_at: i64,
+	/// 安装来源仓库 id，目录扫描侧载为 NULL；不在任何仓库 index 里时据此报 missingFromRepos
+	pub repo_id: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]

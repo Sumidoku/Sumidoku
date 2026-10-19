@@ -33,6 +33,8 @@ pub(crate) fn source_json(
 	let update = latest
 		.get(&row.key)
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
+	// Aidoku 语义的弃用标识：外部安装（repo_id 非空）且 key 已不在任何仓库 index 里
+	let missing_from_repos = row.repo_id.is_some() && !latest.contains_key(&row.key);
 	let config = row
 		.config
 		.as_deref()
@@ -52,6 +54,7 @@ pub(crate) fn source_json(
 		"installedAt": row.installed_at,
 		"updatedAt": row.updated_at,
 		"updateVersion": update,
+		"missingFromRepos": missing_from_repos,
 		"pinned": pinned.contains_key(&row.key),
 		"pinOrder": pinned.get(&row.key),
 	})

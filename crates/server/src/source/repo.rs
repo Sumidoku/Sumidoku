@@ -426,9 +426,15 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 		}
 	}
 
+	// 标记安装来源仓库（目录扫描侧载保持 NULL），供 missingFromRepos 判定
+	sqlx::query("UPDATE source SET repo_id = ? WHERE key = ?")
+		.bind(repo_id)
+		.bind(key)
+		.execute(&state.pool)
+		.await?;
 	let source: SourceRow = sqlx::query_as(
 		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at FROM source WHERE key = ?",
+		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source WHERE key = ?",
 	)
 	.bind(key)
 	.fetch_one(&state.pool)

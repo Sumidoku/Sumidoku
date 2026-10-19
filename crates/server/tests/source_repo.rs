@@ -347,6 +347,57 @@ async fn repo_lifecycle_install_and_update() {
 }
 
 #[tokio::test]
+async fn missing_from_repos_flags_sources_dropped_from_index() {
+	let app = test_app().await;
+	let repo = serve_repo().await;
+	stage_repo(&repo, 1, 3);
+
+	let (status, body) = add_repo(&app.app, &repo.url).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let repo_id = body["id"].as_i64().expect("repo id");
+
+	// 仓库安装且在仓：不标
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/source-repos/install",
+		Some(json!({"repoId": repo_id, "sourceKey": "en.repo-source"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let installed = source_by_key(&app.app, "en.repo-source").await;
+	assert_eq!(installed["missingFromRepos"], false, "{installed}");
+
+	// 源从 index 移除并刷新缓存：标 missingFromRepos
+	repo.mock.set_index(json!([repo_entry("en.other", "Other Source", 3, &["en"], 1)]));
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		&format!("/api/v1/source-repos/{repo_id}/refresh"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let installed = source_by_key(&app.app, "en.repo-source").await;
+	assert_eq!(installed["missingFromRepos"], true, "{installed}");
+
+	// 源回到 index 并刷新缓存：恢复不标
+	stage_repo(&repo, 1, 3);
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		&format!("/api/v1/source-repos/{repo_id}/refresh"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let installed = source_by_key(&app.app, "en.repo-source").await;
+	assert_eq!(installed["missingFromRepos"], false, "{installed}");
+
+	repo.serve.abort();
+}
+
+#[tokio::test]
 async fn unreachable_repo_keeps_cache_and_installed_list() {
 	let app = test_app().await;
 	// 目录扫描装 example-source，与 repo 装的源并列验证互不影响

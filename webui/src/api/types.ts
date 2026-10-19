@@ -16,6 +16,8 @@ export interface Source {
 	updatedAt: number;
 	/** 各源仓库缓存里的更新版本，无仓库或无更新为 null */
 	updateVersion: number | null;
+	/** Aidoku 语义的弃用标识：仓库安装的源已不在任何仓库 index 里，不会再收到更新 */
+	missingFromRepos: boolean;
 	/** manifest config.breakingChangeVersion，未声明为 0；跨版本更新会触发 key 迁移 */
 	breakingChangeVersion: number;
 	/** manifest config 节原文（Aidoku SourceInfo.Configuration），未声明为 null */
