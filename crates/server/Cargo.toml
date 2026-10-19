@@ -39,7 +39,8 @@ sha2 = "0.11"
 rand_core = { version = "0.6", features = ["getrandom"] }
 # PKCE code_challenge 的 base64url 编码（reqwest 系已带入 0.22，不新增版本）
 base64 = "0.22"
+# 页图降采样（wasm crate 同为 0.25，版本自然对齐）
+image = "0.25"
 
 [dev-dependencies]
 tempfile = "3"
-image = "0.25"

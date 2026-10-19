@@ -220,8 +220,8 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 	return finalPayload;
 }
 
-export const pageUrl = (chapterId: number, index: number) =>
-	withToken(`${BASE}/chapter/${chapterId}/page/${index}`);
+export const pageUrl = (chapterId: number, index: number, width?: number) =>
+	withToken(`${BASE}/chapter/${chapterId}/page/${index}${width ? `?width=${width}` : ''}`);
 
 /** 已下载章节的 CBZ 文件地址，配 `<a download>` 直接触发浏览器下载 */
 export const chapterFileUrl = (chapterId: number) =>

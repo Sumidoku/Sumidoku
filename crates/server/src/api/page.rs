@@ -1,19 +1,29 @@
 use crate::source::cover::bytes_response;
 use crate::error::{ApiError, ApiResult};
+use crate::model::ChapterRow;
+use crate::source::downsample::{VariantHit, bucket_width, downsample_png, read_variant, write_variant};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row, page_image_blob};
 use crate::state::AppState;
 use aidoku::PageContext;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 const PAGE_MAX_AGE: u64 = 3600;
 
+#[derive(Deserialize)]
+pub struct PageQuery {
+	/// 请求降采样变体的目标宽度；缺省/0 = 原图字节直通
+	width: Option<u32>,
+}
+
 pub async fn get_page(
 	State(state): State<Arc<AppState>>,
 	Path((id, index)): Path<(i64, i64)>,
+	Query(query): Query<PageQuery>,
 ) -> ApiResult<Response> {
 	let chapter = chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, false).await?;
@@ -25,9 +35,50 @@ pub async fn get_page(
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());
 	}
+
+	let mut bucket = query.width.filter(|w| *w > 0).map(bucket_width);
+	if let Some(b) = bucket {
+		match read_variant(&state.config.page_blobs_dir(), id, index, b).await {
+			Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
+			// pass 命中 = 该桶不缩（窄图/解不了码），跳变体逻辑走原路径
+			Some(VariantHit::PassThrough) => bucket = None,
+			None => {}
+		}
+	}
+
+	let (bytes, mime) = page_image_bytes(&state, &chapter, &content).await?;
+	if let Some(b) = bucket {
+		// 解码+缩放是 CPU 重活，挪阻塞线程；原字节随闭包带回供直通分支用
+		let (resized, original) = tokio::task::spawn_blocking(move || {
+			let resized = downsample_png(&bytes, b);
+			(resized, bytes)
+		})
+		.await
+		.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
+		let blobs_dir = state.config.page_blobs_dir();
+		return match resized {
+			Some(png) => {
+				if let Err(e) = write_variant(&blobs_dir, id, index, b, Some(&png)).await {
+					tracing::warn!(chapter_id = id, index, "page variant write failed: {e}");
+				}
+				Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
+			}
+			None => {
+				if let Err(e) = write_variant(&blobs_dir, id, index, b, None).await {
+					tracing::warn!(chapter_id = id, index, "page variant marker write failed: {e}");
+				}
+				Ok(bytes_response(original, &mime, PAGE_MAX_AGE))
+			}
+		};
+	}
+	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
+}
+
+/// 三种图像页内容取原图字节（Image 物化 blob / Zip 解包 / Url 回源），与下载路径同源
+async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
 	if let Some(name) = content.get("Image").and_then(Value::as_str) {
-		let bytes = page_image_blob(&state, id, name).await?;
-		return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE));
+		let bytes = page_image_blob(state, chapter.id, name).await?;
+		return Ok((bytes, "image/png".to_string()));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
@@ -37,9 +88,9 @@ pub async fn get_page(
 		let Some(entry_path) = zip.get(1).and_then(Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));
 		};
-		let (zip_bytes, _) = http_get(&state, manga.source_id, zip_url).await?;
+		let (zip_bytes, _) = http_get(state, manga.source_id, zip_url).await?;
 		let entry = extract_zip_entry(&zip_bytes, entry_path)?;
-		return Ok(bytes_response(entry, mime_for(entry_path), PAGE_MAX_AGE));
+		return Ok((entry, mime_for(entry_path).to_string()));
 	}
 	if let Some(url) = content.get("Url").and_then(Value::as_array) {
 		let Some(url_str) = url.first().and_then(Value::as_str) else {
@@ -49,12 +100,8 @@ pub async fn get_page(
 			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
 			_ => None,
 		};
-		let (bytes, mime) = fetch_page_image(&state, manga.source_id, url_str, context).await?;
-		return Ok(bytes_response(
-			bytes,
-			mime.as_deref().unwrap_or("application/octet-stream"),
-			PAGE_MAX_AGE,
-		));
+		let (bytes, mime) = fetch_page_image(state, manga.source_id, url_str, context).await?;
+		return Ok((bytes, mime.unwrap_or_else(|| "application/octet-stream".into())));
 	}
 	Err(ApiError::bad_request("unknown page content"))
 }
