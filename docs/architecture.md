@@ -27,19 +27,29 @@ Migrations in `crates/server/migrations`.
   with no second lookup; `Listing` passes through and the source browse page
   switches to that listing, and an unmatched URL answers `{"result": null}`.
   A source without the export answers 404 `unsupported`, same as `get_home`.
+  `GET /api/v1/sources/{id}/listings` merges the source's declared listings —
+  static `source.json` entries first, then the dynamic `get_listings` export —
+  into one shape (`api::listings`). Static entries parse with AidokuRunner's
+  `SourceInfo` decoding semantics: a bare string means `id = name = string`, a
+  missing `name` falls back to the id, and `kind` is `List` only for the
+  numeric value 1 (AidokuRunner decodes `ListingKind` as UInt8, anything else
+  lands on `Default`). Every listing answers `{id, name, kind}` with `kind`
+  normalized to the lowercase string `default` | `list` (static kinds are
+  numeric, dynamic exports serialize the enum name — the server is the single
+  shape authority, so both land on one string). The web UI renders a listing
+  whose kind is `list` as a row layout (small cover, title, subtitle, tags)
+  and keeps the cover grid otherwise (`webui/src/pages/SourceBrowsePage.tsx`).
+  Listings embedded in deep-link results and home components pass through as
+  the source returned them; the web UI consumes those for navigation only.
   `GET /api/v1/sources/{id}/listings/{listing_id}` (`api/mod.rs:get_manga_list`)
   resolves the real `Listing` before calling `get_manga_list`: the id is looked
-  up in the source's declared listings (static `source.json` entries first,
-  then the dynamic `get_listings` export — the same order the listings
-  endpoint serves). Static entries parse with AidokuRunner's `SourceInfo`
-  decoding semantics: a bare string means `id = name = string`, a missing
-  `name` falls back to the id, and `kind` is `List` only for the numeric
-  value 1 (AidokuRunner decodes `ListingKind` as UInt8, anything else lands
-  on `Default`). An unknown id passes through with an empty name and
-  `Default` kind — Aidoku only ever sends a listing the source itself
-  returned, so there is no upstream lookup-failure behavior to mirror, and
-  the source decides how to answer. A failed dynamic-listings fetch degrades
-  to the static list rather than failing the request.
+  up in the source's declared listings, merged in the same order and with the
+  same static decode semantics as the listings endpoint above. An unknown id
+  passes through with an empty name and `Default` kind — Aidoku only ever
+  sends a listing the source itself returned, so there is no upstream
+  lookup-failure behavior to mirror, and the source decides how to answer. A
+  failed dynamic-listings fetch degrades to the static list rather than
+  failing the request.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
