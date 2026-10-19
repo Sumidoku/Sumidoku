@@ -16,6 +16,7 @@ import {
 	useRefreshManga,
 	useRemoveFromLibrary,
 	useSetMangaCategories,
+	useSource,
 	useSourceFilters,
 	useUpdateChapter
 } from '../api/hooks';
@@ -84,23 +85,27 @@ function triTitle(label: string, t: Tri): string {
 	return `当前不筛选${label}，点击改为只显示${label}`;
 }
 
-// 作者/画师搜索能力对齐 Aidoku supportsAuthorSearch：过滤器列表里有同 id 的 text 过滤器即可
+// 作者/画师搜索能力对齐 Aidoku supportsAuthorSearch：manifest 声明优先，
+// 未声明（undefined）才回落到过滤器列表推导（有同 id 的 text 过滤器即可）
+function creatorSearchable(
+	filters: Filter[],
+	flag: boolean | undefined,
+	id: string
+): boolean {
+	return flag ?? hasTextFilter(filters, id);
+}
+
 function hasTextFilter(filters: Filter[], id: string): boolean {
 	return filters.some((f) => f.type === 'text' && f.id === id);
 }
 
-// tag 点按对齐 Aidoku matchingGenreFilter：命中 genre 风格过滤器的 option 才可点。
-// 上游对 select 判 is_genre，这里把 uses_tag_style 的 select 一并算作 genre 风格
+// tag 点按对齐 Aidoku matchingGenreFilter：只对 isGenre 的多选/单选做 option 名
+// 精确匹配（大小写敏感），提交值取 ids[i] ?? options[i]；不匹配则不可点
 function genreFilterValue(filters: Filter[], tag: string): FilterValue | null {
-	const t = tag.toLowerCase();
 	for (const f of filters) {
-		const genreStyle =
-			(f.type === 'multi-select' && f.is_genre) ||
-			(f.type === 'select' && !!(f.is_genre || f.uses_tag_style));
-		if (!genreStyle) continue;
+		if ((f.type !== 'multi-select' && f.type !== 'select') || !f.is_genre) continue;
 		const options = f.options ?? [];
-		let i = options.findIndex((o) => o.toLowerCase() === t);
-		if (i < 0) i = (f.ids ?? []).findIndex((id) => id?.toLowerCase() === t);
+		const i = options.indexOf(tag);
 		if (i < 0) continue;
 		// 提交键与浏览页 optionKey 一致：有 ids 用 ids，否则用 option 名
 		const value = f.ids?.[i] ?? options[i];
@@ -122,7 +127,9 @@ export default function MangaDetailPage() {
 	const chaptersQuery = useMangaChapters(mangaId);
 	const manga = mangaQuery.data ?? null;
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
-	// tag/作者/画师可点与否从源的过滤器列表推导；manga 未到时以 0 占位 404 成空列表，自然不可点
+	// manifest 声明优先（Aidoku config?.supportsX ?? 推导）；过滤器列表是未声明时的兜底。
+	// manga 未到时以 0 占位：source 查不到、filters 404 成空列表，自然都不可点
+	const sourceQuery = useSource(manga?.sourceId ?? 0);
 	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0);
 
 	const [descOpen, setDescOpen] = useState(false);
@@ -361,6 +368,7 @@ export default function MangaDetailPage() {
 	const artists = manga.artists ?? [];
 	const tags = manga.tags ?? [];
 	const filters = filtersQuery.data ?? [];
+	const sourceConfig = sourceQuery.data?.config;
 	// 去重保序；同时在 authors/artists 出现的名字按 author 搜索（Aidoku 搜作者同款）
 	const creators = [...new Set([...authors, ...artists])].map((name) => ({
 		name,
@@ -402,7 +410,11 @@ export default function MangaDetailPage() {
 						{creators.length > 0 && (
 							<div className="manga-hero__creators">
 								{creators.map((c, i) => {
-									const searchable = hasTextFilter(filters, c.filterId);
+									const flag =
+										c.filterId === 'author'
+											? sourceConfig?.supportsAuthorSearch
+											: sourceConfig?.supportsArtistSearch;
+									const searchable = creatorSearchable(filters, flag, c.filterId);
 									return (
 										<span key={c.name}>
 											{i > 0 && ' / '}
@@ -442,9 +454,13 @@ export default function MangaDetailPage() {
 						</div>
 						{tags.length > 0 && (
 							<div className="manga-hero__tags">
-								{tags.map((t) => {
-									const v = genreFilterValue(filters, t);
-									return (
+							{tags.map((t) => {
+								// Aidoku：config.supportsTagSearch 声明优先（发 Select "genre"，值为原始 tag）；
+								// 未声明才按 isGenre 过滤器 option 精确匹配
+								const v = sourceConfig?.supportsTagSearch
+									? { Select: { id: 'genre', value: t } }
+									: genreFilterValue(filters, t);
+								return (
 										<Chip
 											key={t}
 											title={v ? `搜索标签：${t}` : undefined}

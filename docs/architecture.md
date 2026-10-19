@@ -122,15 +122,16 @@ Migrations in `crates/server/migrations`.
   The web UI honors `hidesFiltersWhileSearching` on the source browse page
   (a non-empty search box hides the filter UI and the search request drops
   filter values, mirroring AidokuRunner clearing filters on a non-empty
-  query). The manga detail page derives its tap-to-search capabilities
-  from the served filter list (`GET /sources/{id}/filters`), the way
-  Aidoku does: a tag is clickable when a genre-style filter (`is_genre`
-  multi-select, or a select marked `is_genre`/`uses_tag_style`) has an
-  option matching it case-insensitively (by option label, falling back to
-  `ids`) and submits that filter with the matched option included; a
-  creator name is clickable when a text filter with id `author`/`artist`
-  exists and submits a `Text` filter value — Aidoku's query-less filter
-  search in both cases.
+  query). The manga detail page follows Aidoku's declared-first,
+  derived-fallback tap-to-search (`config?.supportsX ?? …` in
+  AidokuRunner): manifest `supportsTagSearch` submits a `Select` with id
+  `genre` and the raw tag; when undeclared, a tag is clickable only on an
+  exact, case-sensitive option-label match against an `is_genre`
+  multi-select or select (submitted value `ids[i] ?? options[i]`), and a
+  creator name is clickable when the served filter list (`GET
+  /sources/{id}/filters`) has a text filter with id `author`/`artist`,
+  submitted as a `Text` filter value — Aidoku's query-less filter search
+  in both cases.
   `maximumParallelRequests` becomes a per-source call semaphore (see
   `state.rs` below). When an update crosses it
   (`old version < breakingChangeVersion <= new version`, Aidoku checks only
