@@ -16,6 +16,7 @@ import type {
 	Chapter,
 	ChapterPatchBody,
 	ChapterProgress,
+	DeepLinkResponse,
 	Filter,
 	FilterValue,
 	HomeLayout,
@@ -233,6 +234,13 @@ export function useRegisterManga() {
 	return useMutation({
 		mutationFn: (body: { sourceId: number; manga: Manga }) =>
 			api<{ id: number }>('/manga', { method: 'POST', body })
+	});
+}
+
+export function useDeepLink() {
+	return useMutation({
+		mutationFn: ({ sourceId, url }: { sourceId: number; url: string }) =>
+			api<DeepLinkResponse>(`/sources/${sourceId}/deep-link`, { method: 'POST', body: { url } })
 	});
 }
 

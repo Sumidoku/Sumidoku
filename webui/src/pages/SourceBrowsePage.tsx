@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, House, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, House, Link2, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import {
+	useDeepLink,
 	useListing,
 	useRegisterManga,
 	useSource,
@@ -20,10 +21,12 @@ import {
 	IconButton,
 	InfiniteList,
 	Input,
+	Modal,
 	SegmentedControl,
 	Select,
 	Skeleton,
-	Switch
+	Switch,
+	pushToast
 } from '../components';
 
 type CheckVal = 0 | 1 | -1;
@@ -266,6 +269,33 @@ export default function SourceBrowsePage() {
 		}
 	}
 
+	const deepLink = useDeepLink();
+	const [showLink, setShowLink] = useState(false);
+	const [linkInput, setLinkInput] = useState('');
+
+	async function openLink() {
+		const url = linkInput.trim();
+		if (!url || deepLink.isPending) return;
+		try {
+			const { result } = await deepLink.mutateAsync({ sourceId, url });
+			if (!result) {
+				pushToast('源未识别该链接', 'info');
+				return;
+			}
+			setShowLink(false);
+			setLinkInput('');
+			if (result.chapterId != null) {
+				navigate(`/reader/${result.chapterId}`);
+			} else if (result.mangaId != null) {
+				navigate(`/manga/${result.mangaId}`);
+			} else if (result.listing) {
+				switchMode(result.listing.id);
+			}
+		} catch {
+			// client 已弹错误 toast
+		}
+	}
+
 	if (source.data && !source.data.enabled) {
 		return (
 			<div className="page container">
@@ -294,6 +324,10 @@ export default function SourceBrowsePage() {
 				<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 					<House size={15} />
 					主页
+				</Button>
+				<Button onClick={() => setShowLink(true)}>
+					<Link2 size={15} />
+					打开链接
 				</Button>
 			</div>
 
@@ -398,6 +432,32 @@ export default function SourceBrowsePage() {
 					</div>
 				</InfiniteList>
 			)}
+
+			<Modal
+				open={showLink}
+				title="打开源链接"
+				onClose={() => setShowLink(false)}
+				footer={
+					<Button variant="primary" loading={deepLink.isPending} onClick={() => void openLink()}>
+						打开
+					</Button>
+				}
+			>
+				<form
+					onSubmit={(e) => {
+						e.preventDefault();
+						void openLink();
+					}}
+				>
+					<Input
+						type="url"
+						icon={<Link2 size={15} />}
+						placeholder={`粘贴 ${source.data?.name ?? '源'} 的漫画或章节链接…`}
+						value={linkInput}
+						onChange={(e) => setLinkInput(e.currentTarget.value)}
+					/>
+				</form>
+			</Modal>
 		</div>
 	);
 }

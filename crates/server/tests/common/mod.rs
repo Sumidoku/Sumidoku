@@ -79,6 +79,10 @@ pub fn baseurl_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/baseurl/main.wasm")
 }
 
+pub fn deeplink_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/deeplink/main.wasm")
+}
+
 /// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let dir = tmp.path().join("sources").join(key);

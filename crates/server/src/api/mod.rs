@@ -26,7 +26,7 @@ use crate::source::{
 	upsert_manga,
 };
 use crate::state::{AppState, load_cookies, load_defaults};
-use aidoku::{FilterValue, Listing, Manga, UpdateStrategy};
+use aidoku::{DeepLinkResult, FilterValue, Listing, Manga, UpdateStrategy};
 use aidoku_wasm::Error as SourceError;
 use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -59,6 +59,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/listings", get(get_listings))
 		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
 		.route("/api/v1/sources/{id}/home", get(get_home))
+		.route("/api/v1/sources/{id}/deep-link", post(deep_link))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
 		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
 		.route("/api/v1/sources/{id}/notify", post(notify_source))
@@ -748,26 +749,99 @@ async fn register_manga(
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
+	let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+	Ok(Json(json!({ "id": manga_id })))
+}
+
+/// (source, key) 已有 manga 行就直接命中；没有则回源拉详情 + 章节登记（不入库），
+/// 浏览页点开条目与深链落地共用这条路径
+pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64, initial: Manga) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
-			.bind(body.source_id)
+			.bind(source_id)
 			.bind(&initial.key)
 			.fetch_optional(&state.pool)
 			.await?;
 	if let Some((id,)) = existing {
-		return Ok(Json(json!({ "id": id })));
+		return Ok(id);
 	}
-	let handle = state.get_handle(body.source_id).await?;
+	let handle = state.get_handle(source_id).await?;
 	let updated = handle.get_manga_update(initial, true, true).await?;
 	let mut conn = state.pool.acquire().await?;
-	let manga_id = upsert_manga(&mut conn, body.source_id, &updated, true, true, true).await?;
+	let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
 	reconcile_chapters(
 		&mut conn,
 		manga_id,
 		&updated.chapters.clone().unwrap_or_default(),
 	)
 	.await?;
-	Ok(Json(json!({ "id": manga_id })))
+	Ok(manga_id)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeepLinkRequest {
+	pub url: String,
+}
+
+/// 把 URL 交给源的 handle_deep_link 并解析成前端可直接导航的目标：Manga/Chapter
+/// 变体按 (source, key) 登记/命中 manga 行后回内部 id——chapter key 不在章节列表里
+/// 时 chapterId 为 null，前端落到 manga 页；Listing 原样回传，由前端切到该列表；
+/// 源不认这个 URL 时 result 为 null
+async fn deep_link(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	Json(body): Json<DeepLinkRequest>,
+) -> ApiResult<Json<Value>> {
+	if body.url.trim().is_empty() {
+		return Err(ApiError::bad_request("url must not be empty"));
+	}
+	let handle = state.get_handle(id).await?;
+	let linked = handle
+		.handle_deep_link(body.url)
+		.await
+		.map_err(dynamic_capability_error)?;
+	let Some(linked) = linked else {
+		return Ok(Json(json!({ "result": null })));
+	};
+	let mut result = json!({
+		"mangaKey": null,
+		"chapterKey": null,
+		"listing": null,
+		"mangaId": null,
+		"chapterId": null,
+	});
+	match linked {
+		DeepLinkResult::Manga { key } => {
+			let manga_id = find_or_register_manga(&state, id, Manga {
+				key: key.clone(),
+				..Manga::default()
+			})
+			.await?;
+			result["mangaKey"] = json!(key);
+			result["mangaId"] = json!(manga_id);
+		}
+		DeepLinkResult::Chapter { manga_key, key } => {
+			let manga_id = find_or_register_manga(&state, id, Manga {
+				key: manga_key.clone(),
+				..Manga::default()
+			})
+			.await?;
+			let chapter_id: Option<i64> =
+				sqlx::query_scalar("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
+					.bind(manga_id)
+					.bind(&key)
+					.fetch_optional(&state.pool)
+					.await?;
+			result["mangaKey"] = json!(manga_key);
+			result["chapterKey"] = json!(key);
+			result["mangaId"] = json!(manga_id);
+			result["chapterId"] = json!(chapter_id);
+		}
+		DeepLinkResult::Listing(listing) => {
+			result["listing"] = serde_json::to_value(listing)?;
+		}
+	}
+	Ok(Json(json!({ "result": result })))
 }
 
 #[derive(Debug, Deserialize)]
