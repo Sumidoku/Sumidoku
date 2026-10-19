@@ -247,6 +247,15 @@ pub(crate) fn perform(
 	{
 		request.headers.insert(ACCEPT_LANGUAGE, value);
 	}
+	if net.policy.browser_headers(&url) {
+		for &(name, value) in crate::traits::BROWSER_HEADERS {
+			if !request.headers.contains_key(name) {
+				request
+					.headers
+					.insert(HeaderName::from_static(name), HeaderValue::from_static(value));
+			}
+		}
+	}
 	// 对齐 Aidoku：jar cookie 拼在源自带 Cookie 前面，而不是源设了就丢掉 jar
 	if let Some(jar_header) = net.jar.header_for(&url) {
 		let merged = match request.headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
@@ -831,6 +840,65 @@ mod tests {
 		assert_eq!(response.status, StatusCode::FORBIDDEN);
 		assert_eq!(response.data, b"forbidden");
 		assert_eq!(trawl.hits(), 0, "源站自己的 403 不该走 trawl");
+	}
+
+	#[test]
+	fn browser_header_suite_fills_missing_and_keeps_source_values() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url.clone());
+		// 源自带的套件成员必须赢过套件缺省值，且只能有一个：缺省值先塞会并成两个同名头
+		request
+			.headers
+			.insert(reqwest::header::ACCEPT, HeaderValue::from_static("application/json"));
+		perform(&mut net, &mut request, Duration::from_secs(10), TEST_BODY_MAX).expect("perform");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let accepts: Vec<&str> = head.lines().filter(|l| l.starts_with("accept:")).collect();
+		assert_eq!(accepts.len(), 1, "Accept 不得被追加成两个: {head}");
+		assert_eq!(accepts[0].trim(), "accept: application/json", "{head}");
+		for &(name, value) in crate::traits::BROWSER_HEADERS {
+			if name == "accept" {
+				continue;
+			}
+			let expected = format!("{}: {}", name, value.to_ascii_lowercase());
+			assert!(head.contains(&expected), "缺浏览器头 {name}: {head}");
+		}
+	}
+
+	#[test]
+	fn browser_headers_disabled_omits_suite() {
+		struct NoSuitePolicy;
+		impl NetPolicy for NoSuitePolicy {
+			fn route_for(&self, _url: &Url) -> NetRoute {
+				NetRoute::Direct
+			}
+			fn user_agent(&self) -> Option<String> {
+				None
+			}
+			fn browser_headers(&self, _url: &Url) -> bool {
+				false
+			}
+		}
+		let origin = mock_server(|_head| respond("200 OK", &[], "ok"));
+		let mut net = NetState::new(Arc::new(NoSuitePolicy), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		get(&mut net, &url);
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, _) in crate::traits::BROWSER_HEADERS {
+			if name == "accept" {
+				// reqwest 自己兜底 accept: */*，只能钉套件值不在
+				assert!(!head.contains("accept: text/html"), "{head}");
+				continue;
+			}
+			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
+		}
+		// 旋钮只管套件：UA 兜底照补
+		assert!(head.contains("user-agent:"), "{head}");
 	}
 
 	#[test]

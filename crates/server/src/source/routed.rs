@@ -19,6 +19,7 @@ pub struct SumidokuNetPolicy {
 	trawl_proxy: Option<String>,
 	global_proxy: Option<String>,
 	allow_direct_fallback: bool,
+	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
 	/// 撞过 CF 挑战、此后常走 trawl 的 host（进程内记忆，重启后首个请求重学一次）
 	challenged: RwLock<HashSet<String>>,
@@ -44,6 +45,7 @@ impl SumidokuNetPolicy {
 			trawl_proxy: config.net.trawl_proxy.clone(),
 			global_proxy: config.net.proxy.clone(),
 			allow_direct_fallback: config.net.allow_direct_fallback,
+			browser_headers: config.net.browser_headers,
 			ca_pem,
 			challenged: RwLock::new(HashSet::new()),
 		})
@@ -98,6 +100,10 @@ impl NetPolicy for SumidokuNetPolicy {
 
 	fn user_agent(&self) -> Option<String> {
 		Some(self.user_agent.clone())
+	}
+
+	fn browser_headers(&self, _url: &Url) -> bool {
+		self.browser_headers
 	}
 
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
@@ -198,6 +204,7 @@ impl RoutedClients {
 			headers,
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		))
 	}
 
@@ -276,6 +283,7 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		)
 		.send()
 		.await
@@ -299,6 +307,7 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		)
 		.send()
 		.await
@@ -315,13 +324,15 @@ fn base_builder() -> reqwest::ClientBuilder {
 	Client::builder().use_rustls_tls()
 }
 
-/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent 与宿主 Accept-Language。
+/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent、浏览器头套件与宿主
+/// Accept-Language。
 /// 关键在「先判后补」——reqwest 的 header() 是 append，缺省值若先塞会与源值并成两个同名头。
 fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
 	source_headers: &[(String, String)],
 	global_user_agent: String,
 	accept_language: Option<&str>,
+	browser_headers: bool,
 ) -> reqwest::RequestBuilder {
 	let has = |name: &str| {
 		source_headers
@@ -333,6 +344,13 @@ fn apply_default_headers(
 	let mut builder = builder;
 	if !has_user_agent {
 		builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+	}
+	if browser_headers {
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			if !has(name) {
+				builder = builder.header(name, value);
+			}
+		}
 	}
 	for (name, value) in source_headers {
 		builder = builder.header(name, value);
@@ -632,6 +650,74 @@ mod tests {
 			.collect();
 		assert_eq!(al.len(), 1, "源 Accept-Language 不得被追加成两个: {head}");
 		assert_eq!(al[0].trim(), "accept-language: ja-jp", "{head}");
+	}
+
+	#[tokio::test]
+	async fn get_with_sends_browser_header_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			let expected = format!("{}: {}", name, value.to_ascii_lowercase());
+			assert!(head.contains(&expected), "缺浏览器头 {name}: {head}");
+		}
+	}
+
+	#[tokio::test]
+	async fn request_with_keeps_source_suite_headers() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		// 源自带的套件成员（API 请求常见的 Accept / Sec-Fetch-Site）必须赢过套件缺省值，
+		// 且只能有一个：缺省值先塞会并成两个同名头
+		let headers = vec![
+			("Accept".to_string(), "application/json".to_string()),
+			("Sec-Fetch-Site".to_string(), "same-origin".to_string()),
+		];
+		clients
+			.request_with(reqwest::Method::GET, &url, &headers, None)
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let accepts: Vec<&str> = head.lines().filter(|l| l.starts_with("accept:")).collect();
+		assert_eq!(accepts.len(), 1, "Accept 不得被追加成两个: {head}");
+		assert_eq!(accepts[0].trim(), "accept: application/json", "{head}");
+		let sites: Vec<&str> = head
+			.lines()
+			.filter(|l| l.starts_with("sec-fetch-site:"))
+			.collect();
+		assert_eq!(sites.len(), 1, "Sec-Fetch-Site 不得被追加成两个: {head}");
+		assert_eq!(sites[0].trim(), "sec-fetch-site: same-origin", "{head}");
+		// 源没设的套件成员仍要补
+		assert!(head.contains("sec-ch-ua:"), "{head}");
+		assert!(head.contains("upgrade-insecure-requests: 1"), "{head}");
+	}
+
+	#[tokio::test]
+	async fn browser_headers_disabled_omits_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|c| c.net.browser_headers = false));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, _) in aidoku_wasm::BROWSER_HEADERS {
+			if name == "accept" {
+				// reqwest 自己兜底 accept: */*，只能钉套件值不在
+				assert!(!head.contains("accept: text/html"), "{head}");
+				continue;
+			}
+			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
+		}
+		// 旋钮只管套件：全局 UA 照补
+		assert!(head.contains("user-agent:"), "{head}");
 	}
 
 	#[tokio::test]

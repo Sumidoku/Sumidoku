@@ -61,6 +61,12 @@ pub enum NetRoute {
 pub trait NetPolicy: Send + Sync {
 	fn route_for(&self, url: &Url) -> NetRoute;
 	fn user_agent(&self) -> Option<String>;
+	/// 该 url 的请求是否补 BROWSER_HEADERS。默认开：被动盾只核对套件在不在；
+	/// 关掉则对 API/XHR 语义诚实——sec-fetch-* 的 navigate 语义是套件的失真部分
+	fn browser_headers(&self, url: &Url) -> bool {
+		let _ = url;
+		true
+	}
 	/// TRAWL 代理的 MITM CA（PEM），不走代理则返回 None
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
 		None
@@ -72,6 +78,22 @@ pub trait NetPolicy: Send + Sync {
 		None
 	}
 }
+
+/// 直连请求补的浏览器头套件：被动 Cloudflare 校验的是「协议(h2) + 头套件」与 UA
+/// 的一致性，而非 TLS 指纹——光有 Chrome UA 没有这套头，照样被部分站点 403。
+/// 取值与默认 User-Agent（Chrome 126 / macOS）配套；UA 换掉时这里要跟着换。
+/// 源在请求上自设同名头时一律让位（先判后补，见 net 宿主与 server 的默认头路径）。
+pub const BROWSER_HEADERS: &[(&str, &str)] = &[
+	("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\""),
+	("sec-ch-ua-mobile", "?0"),
+	("sec-ch-ua-platform", "\"macOS\""),
+	("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7"),
+	("sec-fetch-dest", "document"),
+	("sec-fetch-mode", "navigate"),
+	("sec-fetch-site", "none"),
+	("sec-fetch-user", "?1"),
+	("upgrade-insecure-requests", "1"),
+];
 
 /// 源语言（ISO 639 主标签）→ 宿主替 URLSession 补的 Accept-Language 默认值。
 /// Aidoku 由 URLSession 按设备 locale 隐式带上该头；缺它时部分源站 WAF 直接 403
