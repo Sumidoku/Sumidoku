@@ -88,6 +88,11 @@ pub fn listing_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/listing/main.wasm")
 }
 
+/// 主页组件字段全设的 fixture 载荷，用于 home 端点透传契约
+pub fn home_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/home/main.wasm")
+}
+
 /// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let doc = serde_json::json!({
