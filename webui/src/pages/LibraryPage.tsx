@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, ListFilter, Search, SearchX } from 'lucide-react';
+import { BookOpen, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
-import { useCategories, useLibrary, useSources } from '../api/hooks';
+import { useCategories, useLibrary, useLibrarySourceCounts, useSources } from '../api/hooks';
 import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
 import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
 import {
@@ -12,12 +12,11 @@ import {
 	EmptyState,
 	InfiniteList,
 	Input,
-	Modal,
 	PageHeader,
-	SegmentedControl,
 	Select,
 	Skeleton,
-	Tabs
+	Tabs,
+	TriStateDropdown
 } from '../components';
 
 const SORT_OPTIONS: { value: LibrarySort; label: string }[] = [
@@ -57,7 +56,6 @@ export default function LibraryPage() {
 	const [filters, setFilters] = useState<LibraryFilter[]>([]);
 	const [ratings, setRatings] = useState<TriStateSelection>({});
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>({});
-	const [sourceOpen, setSourceOpen] = useState(false);
 
 	useEffect(() => {
 		const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -74,11 +72,26 @@ export default function LibraryPage() {
 	});
 	const categories = useCategories();
 	const sourcesQuery = useSources();
+	const countsQuery = useLibrarySourceCounts();
+	const counts = useMemo(() => {
+		const map = new Map<number, number>();
+		for (const c of countsQuery.data ?? []) map.set(c.sourceId, c.count);
+		return map;
+	}, [countsQuery.data]);
 	// 停用源仍可能拥有库内条目，候选不去除
 	const sourceOptions = useMemo(
 		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
 		[sourcesQuery.data]
 	);
+	// 图源下拉的候选：计数到达后自动隐藏库内为 0 的源（正被三态选中的不藏，避免悬空筛选）；
+	// 计数未到时先按全量名单渲染，避免闪烁
+	const counted = countsQuery.data !== undefined;
+	const triOptions = sourceOptions
+		.filter((s) => !counted || (counts.get(s.id) ?? 0) > 0 || sourceTri[String(s.id)])
+		.map((s) => ({
+			key: String(s.id),
+			label: counted ? `${s.name}（${counts.get(s.id) ?? 0}）` : s.name
+		}));
 
 	const entries = useMemo(
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
@@ -167,10 +180,13 @@ export default function LibraryPage() {
 						</Chip>
 					);
 				})}
-				<Button onClick={() => setSourceOpen(true)}>
-					<ListFilter size={15} />
-					图源{sourceCount > 0 ? `（${sourceCount}）` : ''}
-				</Button>
+				{/* 与跨源搜索页同款的图源三态下拉（含停用源：库内条目可能属于它们） */}
+				<TriStateDropdown
+					label="图源"
+					options={triOptions}
+					states={sourceTri}
+					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
+				/>
 			</div>
 
 			<div className="library__tabs">
@@ -226,49 +242,6 @@ export default function LibraryPage() {
 				</InfiniteList>
 			)}
 
-			<Modal
-				open={sourceOpen}
-				title="筛选图源"
-				onClose={() => setSourceOpen(false)}
-				footer={
-					<Button variant="primary" onClick={() => setSourceOpen(false)}>
-						完成
-					</Button>
-				}
-			>
-				{sourceOptions.length === 0 ? (
-					<p className="muted">还没有已安装的源</p>
-				) : (
-					<div className="library__source-list">
-						{sourceOptions.map((s) => {
-							const st = sourceTri[String(s.id)] ?? 0;
-							return (
-								<div key={s.id} className="library__source-row">
-									<span className="library__source-name">{s.name}</span>
-									<SegmentedControl
-										options={TRI_OPTIONS}
-										value={st}
-										onChange={(v) =>
-											setSourceTri((cur) => {
-												const next = { ...cur };
-												if (v === 0) delete next[String(s.id)];
-												else next[String(s.id)] = v;
-												return next;
-											})
-										}
-									/>
-								</div>
-							);
-						})}
-					</div>
-				)}
-			</Modal>
 		</div>
 	);
 }
-
-const TRI_OPTIONS: { value: 1 | -1 | 0; label: string }[] = [
-	{ value: 0, label: '不选' },
-	{ value: 1, label: '包含' },
-	{ value: -1, label: '排除' }
-];

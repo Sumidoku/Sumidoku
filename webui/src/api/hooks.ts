@@ -26,6 +26,7 @@ import type {
 	LibraryFilter,
 	LibraryPage,
 	LibrarySort,
+	LibrarySourceCount,
 	Listing,
 	Manga,
 	MangaDetail,
@@ -159,6 +160,15 @@ export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse
 
 export function useCategories() {
 	return useQuery({ queryKey: qk.categories, queryFn: () => api<Category[]>('/categories') });
+}
+
+/** 书库各源条目数；queryKey 挂在 qk.library 下，入库/移出自动失效重取 */
+export function useLibrarySourceCounts(enabled = true) {
+	return useQuery({
+		queryKey: [...qk.library, 'source-counts'],
+		queryFn: () => api<LibrarySourceCount[]>('/library/source-counts'),
+		enabled
+	});
 }
 
 export function useSourceFilters(sourceId: number, enabled = true) {

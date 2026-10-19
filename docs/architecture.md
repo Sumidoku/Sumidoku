@@ -245,7 +245,10 @@ Migrations in `crates/server/migrations`.
   `manga.source_id`): within one dimension the include set is an OR and the
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
-  treated as absent; invalid tokens answer 400. Chapter reconcile
+  treated as absent; invalid tokens answer 400.
+  `GET /api/v1/library/source-counts` returns per-source in-library totals
+  (`{sourceId, count}`) for the web UI's source filter dropdown — counts
+  include disabled sources' rows and only in-library manga. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the

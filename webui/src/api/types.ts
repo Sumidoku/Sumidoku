@@ -167,6 +167,12 @@ export interface LibraryPage {
 	hasNextPage: boolean;
 }
 
+/** GET /library/source-counts：书库内每个源的条目数（含已停用源的条目） */
+export interface LibrarySourceCount {
+	sourceId: number;
+	count: number;
+}
+
 export interface HistoryEntry {
 	chapter: Chapter;
 	manga: MangaDetail;
