@@ -21,7 +21,7 @@ chrono = "0.4"
 toml = "1.1"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["trace", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "http2"] }
 rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 # suwayomi/mihon 备份解码：prost 由 wasmer 系带入、flate2 由 zip/reqwest 带入，
@@ -48,3 +48,8 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# 本地 TLS+ALPN-h2 echo（routed.rs 的 h2 协商测试）：rustls 走 ring 与 reqwest 已引入的
+# 后端一致，rcgen 只留 ring；全部纯 Rust，不进 release 二进制
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }

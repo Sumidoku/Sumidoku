@@ -157,7 +157,7 @@ impl RoutedClients {
 		if let Some(client) = self.clients.read().expect("clients lock").get(route) {
 			return Ok(client.clone());
 		}
-		let mut builder = Client::builder().use_rustls_tls();
+		let mut builder = base_builder();
 		if let NetRoute::Proxy(proxy_url) = route {
 			let proxy = reqwest::Proxy::all(proxy_url)
 				.map_err(FetchError::Network)?;
@@ -291,8 +291,7 @@ impl RoutedClients {
 		url: &Url,
 		accept_language: Option<&str>,
 	) -> Result<reqwest::Response, FetchError> {
-		let client = Client::builder()
-			.use_rustls_tls()
+		let client = base_builder()
 			.build()
 			.map_err(FetchError::Network)?;
 		let response = apply_default_headers(
@@ -309,6 +308,11 @@ impl RoutedClients {
 		}
 		Ok(response)
 	}
+}
+
+/// 直连/代理共用的客户端底座：rustls 一处钉死，各路由只叠加自己的 proxy/CA
+fn base_builder() -> reqwest::ClientBuilder {
+	Client::builder().use_rustls_tls()
 }
 
 /// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent 与宿主 Accept-Language。
@@ -722,5 +726,63 @@ mod tests {
 		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
 		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
 		assert_eq!(trawl.hits(), 2);
+	}
+
+	/// 直连底座（base_builder + 测试 CA）必须能对只讲 h2 的源站协商出 HTTP/2：
+	/// 本地 rustls echo 只放 h2 一个 ALPN——客户端不开 http2 时连 TLS 握手都过不了。
+	#[tokio::test]
+	async fn direct_client_negotiates_http2() {
+		use tokio::io::AsyncReadExt;
+
+		let rcgen::CertifiedKey { cert, key_pair } =
+			rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("self-signed");
+		let cert_der = cert.der().clone();
+		let mut server_config = rustls::ServerConfig::builder()
+			.with_no_client_auth()
+			.with_single_cert(
+				vec![cert_der.clone()],
+				rustls::pki_types::PrivateKeyDer::Pkcs8(
+					rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+				),
+			)
+			.expect("server config");
+		server_config.alpn_protocols = vec![b"h2".to_vec()];
+		let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+		let port = listener.local_addr().expect("local addr").port();
+		let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+		tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.expect("accept");
+			let negotiated = match acceptor.accept(stream).await {
+				Ok(mut tls) => {
+					let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+					let mut preface = vec![0u8; 24];
+					let _ = tls.read_exact(&mut preface).await;
+					Some((alpn, preface))
+				}
+				Err(_) => None,
+			};
+			let _ = seen_tx.send(negotiated);
+		});
+
+		let client = base_builder()
+			.add_root_certificate(reqwest::Certificate::from_der(cert_der.as_ref()).expect("cert"))
+			.build()
+			.expect("client");
+		let url = Url::parse(&format!("https://localhost:{port}/")).unwrap();
+		// echo 不答任何请求：h2 preface 一到即关，send 的结果无关紧要
+		let _ = client.get(url).send().await;
+
+		let negotiated = tokio::time::timeout(Duration::from_secs(10), seen_rx)
+			.await
+			.expect("echo 应收到一次连接")
+			.expect("seen channel");
+		let (alpn, preface) = negotiated.expect("客户端不开 http2 时 ALPN 无交集，TLS 握手会失败");
+		assert_eq!(alpn.as_deref(), Some(b"h2".as_slice()), "ALPN 应选中 h2");
+		assert_eq!(
+			preface,
+			b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec(),
+			"客户端应发出 h2 client preface"
+		);
 	}
 }
