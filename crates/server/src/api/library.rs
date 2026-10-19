@@ -356,7 +356,8 @@ pub async fn source_counts(State(state): State<Arc<AppState>>) -> ApiResult<Json
 	Ok(Json(json!(out)))
 }
 
-pub async fn list_categories(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {	let rows: Vec<CategoryRow> =
+pub async fn list_categories(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+	let rows: Vec<CategoryRow> =
 		sqlx::query_as(&format!("{CATEGORY_SELECT} ORDER BY c.sort_order ASC, c.id ASC"))
 			.fetch_all(&state.pool)
 			.await?;

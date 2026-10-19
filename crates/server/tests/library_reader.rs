@@ -682,7 +682,7 @@ async fn library_source_counts() {
 
 	// 移出一本后计数跟随
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{}", ids[0].0), None).await;
-	assert_eq!(status, StatusCode::OK);
+	assert_eq!(status, StatusCode::NO_CONTENT);
 	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
 	assert_eq!(body, json!([{ "sourceId": source_id, "count": 1 }]), "{body}");
 }
