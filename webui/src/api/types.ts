@@ -34,6 +34,12 @@ export interface Source {
 export interface SourceConfig {
 	/** 搜索态下隐藏过滤器，且搜索请求不再携带过滤器值（Aidoku Runner 同款语义） */
 	hidesFiltersWhileSearching?: boolean;
+	/** tag 可点：声明优先，点击发 Select 过滤器 id "genre"、值为原始 tag（Aidoku matchingGenreFilter） */
+	supportsTagSearch?: boolean;
+	/** artist 可点：声明优先，未声明时回落到过滤器列表推导（存在 text 过滤器 id "artist"） */
+	supportsArtistSearch?: boolean;
+	/** author 可点：声明优先，未声明时回落到过滤器列表推导（存在 text 过滤器 id "author"） */
+	supportsAuthorSearch?: boolean;
 	/** 该源并发请求上限，服务端换成 per-source 调用准入帽 */
 	maximumParallelRequests?: number;
 }
