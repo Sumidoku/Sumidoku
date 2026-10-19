@@ -13,6 +13,7 @@ import {
 } from '../api/hooks';
 import type { Filter, FilterValue, Manga } from '../api/types';
 import { statusText } from '../lib/format';
+import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
 	Chip,
@@ -146,9 +147,12 @@ export default function SourceBrowsePage() {
 		return d && d.length > 0 ? d : null;
 	}, [listingsQuery.data]);
 
-	// 深链参数（源主页的 listing/filters 组件）只在进页时消费一次，之后 URL 跟随 mode 切换
+	// 深链参数（源主页的 listing/filters 组件）只在进页时消费一次，之后 URL 跟随 mode 切换；有深链时优先于本机存的筛选值
 	const [searchParams, setSearchParams] = useSearchParams();
-	const [initialFilters] = useState(() => parseFiltersParam(searchParams.get('filters')));
+	const [initialFilters] = useState<FilterValue[]>(() => {
+		const deep = parseFiltersParam(searchParams.get('filters'));
+		return deep.length > 0 ? deep : loadFilterPrefs(sourceId);
+	});
 	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
 	const [input, setInput] = useState('');
 	const [showFilters, setShowFilters] = useState(false);
@@ -210,8 +214,11 @@ export default function SourceBrowsePage() {
 
 	function runSearch() {
 		const query = input.trim();
+		// 草稿值始终持久化；隐藏筛选的源在带关键词搜索时不提交、也不覆盖存储
+		const values = buildFilterValues();
 		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
-		setSubmitted({ query, filters: dropFilters ? [] : buildFilterValues() });
+		if (!dropFilters) saveFilterPrefs(sourceId, values);
+		setSubmitted({ query, filters: dropFilters ? [] : values });
 	}
 
 	// 输入防抖 500ms 自动触发；筛选草稿不参与防抖，只在回车/应用筛选时一并提交

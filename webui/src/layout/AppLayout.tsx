@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, ScrollRestoration } from 'react-router-dom';
 import {
 	Clock,
 	Compass,
@@ -71,9 +71,11 @@ export function AppLayout() {
 				<ThemeToggle />
 			</header>
 
-			<main className="app__content">
-				<Outlet />
-			</main>
+		<main className="app__content">
+			<Outlet />
+		</main>
+		{/* 新导航滚到顶、前进后退恢复各自位置；阅读器在布局外，自带滚动管理不受影响 */}
+		<ScrollRestoration />
 
 			<nav className="app__tabbar">
 				{NAV.map((item) => (
