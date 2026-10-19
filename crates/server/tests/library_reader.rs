@@ -658,6 +658,35 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), vec![a]);
 }
 
+#[tokio::test]
+async fn library_source_counts() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path: _,
+	} = test_app().await;
+	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(body.as_array().expect("array").len(), 0, "{body}");
+
+	let ids = register_three_manga(&app).await;
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = body[0]["id"].as_i64().expect("source id");
+	for (id, _) in ids.iter().take(2) {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+
+	let (status, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, json!([{ "sourceId": source_id, "count": 2 }]), "{body}");
+
+	// 移出一本后计数跟随
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{}", ids[0].0), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(body, json!([{ "sourceId": source_id, "count": 1 }]), "{body}");
+}
+
 /// 库列表 id 集（排序无关断言，先排序再比）
 async fn library_ids(app: &Router, qs: &str) -> Vec<i64> {
 	let (status, body) = request(app, "GET", &format!("/api/v1/library?{qs}"), None).await;

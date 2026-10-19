@@ -339,8 +339,24 @@ async fn category_row(pool: &SqlitePool, id: i64) -> ApiResult<CategoryRow> {
 	row.ok_or_else(|| ApiError::not_found("category not found"))
 }
 
-pub async fn list_categories(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let rows: Vec<CategoryRow> =
+/// 书库内每个源的条目数（书库图源筛选下拉的计数与自动隐藏用）。
+/// 含已停用源的条目——库内漫画不随源停用消失
+pub async fn source_counts(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+	let rows: Vec<(i64, i64)> = sqlx::query_as(
+		"SELECT m.source_id, COUNT(*) FROM manga m
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+		 WHERE mu.in_library = 1 GROUP BY m.source_id",
+	)
+	.fetch_all(&state.pool)
+	.await?;
+	let out: Vec<Value> = rows
+		.into_iter()
+		.map(|(source_id, count)| json!({ "sourceId": source_id, "count": count }))
+		.collect();
+	Ok(Json(json!(out)))
+}
+
+pub async fn list_categories(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {	let rows: Vec<CategoryRow> =
 		sqlx::query_as(&format!("{CATEGORY_SELECT} ORDER BY c.sort_order ASC, c.id ASC"))
 			.fetch_all(&state.pool)
 			.await?;

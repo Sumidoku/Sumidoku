@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
-import { useCategories, useLibrary, useSources } from '../api/hooks';
+import { useCategories, useLibrary, useLibrarySourceCounts, useSources } from '../api/hooks';
 import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
 import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
 import {
@@ -72,11 +72,26 @@ export default function LibraryPage() {
 	});
 	const categories = useCategories();
 	const sourcesQuery = useSources();
+	const countsQuery = useLibrarySourceCounts();
+	const counts = useMemo(() => {
+		const map = new Map<number, number>();
+		for (const c of countsQuery.data ?? []) map.set(c.sourceId, c.count);
+		return map;
+	}, [countsQuery.data]);
 	// 停用源仍可能拥有库内条目，候选不去除
 	const sourceOptions = useMemo(
 		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
 		[sourcesQuery.data]
 	);
+	// 图源下拉的候选：计数到达后自动隐藏库内为 0 的源（正被三态选中的不藏，避免悬空筛选）；
+	// 计数未到时先按全量名单渲染，避免闪烁
+	const counted = countsQuery.data !== undefined;
+	const triOptions = sourceOptions
+		.filter((s) => !counted || (counts.get(s.id) ?? 0) > 0 || sourceTri[String(s.id)])
+		.map((s) => ({
+			key: String(s.id),
+			label: counted ? `${s.name}（${counts.get(s.id) ?? 0}）` : s.name
+		}));
 
 	const entries = useMemo(
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
@@ -168,7 +183,7 @@ export default function LibraryPage() {
 				{/* 与跨源搜索页同款的图源三态下拉（含停用源：库内条目可能属于它们） */}
 				<TriStateDropdown
 					label="图源"
-					options={sourceOptions.map((s) => ({ key: String(s.id), label: s.name }))}
+					options={triOptions}
 					states={sourceTri}
 					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
 				/>
