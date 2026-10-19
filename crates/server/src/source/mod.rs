@@ -7,9 +7,9 @@ use crate::error::{ApiError, ApiResult};
 use crate::model::{
 	ChapterRow, MangaRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
 };
-use crate::state::AppState;
+use crate::state::{AppState, load_cookies, load_defaults};
 use aidoku::{Chapter, Manga, PageContext};
-use aidoku_wasm::{DefaultValue, SourceHandle};
+use aidoku_wasm::{DefaultValue, SourceConfig, SourceHandle};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -39,7 +39,7 @@ pub(crate) fn valid_source_key(key: &str) -> bool {
 }
 
 /// 目录挂载扫描：一级子目录（source.json + main.wasm）与 .aix 包（zip，Payload/ 布局）都视为源包
-pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOutcome> {
+pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOutcome> {
 	let mut outcome = ScanOutcome {
 		installed: Vec::new(),
 		updated: Vec::new(),
@@ -72,9 +72,9 @@ pub async fn scan_sources_dir(pool: &SqlitePool, dir: &Path) -> ApiResult<ScanOu
 			.map(|n| n.to_string_lossy().into_owned())
 			.unwrap_or_else(|| path.display().to_string());
 		let result = if path.is_dir() {
-			scan_one_dir(pool, &path).await
+			scan_one_dir(state, &path).await
 		} else {
-			register_aix(pool, &path).await
+			register_aix(state, &path).await
 		};
 		match result {
 			Ok((key, is_update)) => {
@@ -101,7 +101,7 @@ struct SourcePackage {
 	settings: Option<serde_json::Value>,
 }
 
-async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
+async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), String> {
 	let json_path = path.join("source.json");
 	let wasm_path = path.join("main.wasm");
 	if !json_path.is_file() || !wasm_path.is_file() {
@@ -118,7 +118,7 @@ async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), 
 		.is_file()
 		.then(|| path.join("icon.png").display().to_string());
 	register_source(
-		pool,
+		state,
 		SourcePackage {
 			doc,
 			wasm_path: wasm_path.display().to_string(),
@@ -130,7 +130,7 @@ async fn scan_one_dir(pool: &SqlitePool, path: &Path) -> Result<(String, bool), 
 }
 
 /// .aix 注册的统一入口：目录扫描与仓库安装共用；成功返回 (key, 是否更新既有源)
-pub(crate) async fn register_aix(pool: &SqlitePool, path: &Path) -> Result<(String, bool), String> {
+pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, bool), String> {
 	let path_buf = path.to_path_buf();
 	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
 	let (doc, settings, icon) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
@@ -139,7 +139,7 @@ pub(crate) async fn register_aix(pool: &SqlitePool, path: &Path) -> Result<(Stri
 	// 包内嵌图标落盘到包旁，供 /sources/{id}/icon 读取（Aidoku 从解包目录读 icon.png）
 	let icon_path = write_aix_icon(path, icon).await;
 	register_source(
-		pool,
+		state,
 		SourcePackage {
 			doc,
 			wasm_path: path.display().to_string(),
@@ -205,7 +205,8 @@ async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
 }
 
 /// 成功返回 (key, 是否更新既有源)
-async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(String, bool), String> {
+async fn register_source(state: &AppState, package: SourcePackage) -> Result<(String, bool), String> {
+	let pool = &state.pool;
 	let doc = &package.doc;
 	let info = doc.get("info").ok_or("missing info")?;
 	let key = info
@@ -251,6 +252,9 @@ async fn register_source(pool: &SqlitePool, package: SourcePackage) -> Result<(S
 		.fetch_optional(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
+	// 动态值是 base_url 的真相源：落列后合成设置的候选与种子、登录 host 兜底都从行里出
+	let dynamic = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc).await;
+	let base_url = dynamic.or(base_url);
 	let (id, updated) = if let Some((id,)) = existing {
 		// 老源保留 enabled 与 source_setting，只刷新元数据
 		sqlx::query(
@@ -309,15 +313,20 @@ pub(crate) async fn seed_source_defaults(
 	if let Some((key, langs)) = default_languages(doc) {
 		seeds.push((key, langs));
 	}
-	// allowsBaseUrlSelect 时 App 会合成 base url 设置，默认第一个镜像
-	// （urls = info.url + info.urls）；copymanga 等源 defaults.get("url") 必读
+	// allowsBaseUrlSelect 时 App 会合成 base url 设置，默认候选列表第一个
+	// （动态解析值前置进 info.url + info.urls）；copymanga 等源 defaults.get("url") 必读
 	let allows_select = doc
 		.get("config")
 		.and_then(|c| c.get("allowsBaseUrlSelect"))
 		.and_then(|v| v.as_bool())
 		.unwrap_or(false);
 	if allows_select {
-		let urls = source_urls(doc);
+		let persisted: Option<(Option<String>,)> = sqlx::query_as("SELECT base_url FROM source WHERE id = ?")
+			.bind(source_id)
+			.fetch_optional(pool)
+			.await
+			.map_err(|e| format!("db: {e}"))?;
+		let urls = candidate_urls(doc, persisted.and_then(|row| row.0).as_deref());
 		if urls.len() > 1 {
 			seeds.push(("url".to_string(), DefaultValue::String(urls[0].clone())));
 		}
@@ -381,6 +390,67 @@ pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
 		urls.extend(more.iter().filter_map(|u| u.as_str()).map(str::to_string));
 	}
 	urls
+}
+
+/// 合成 base-url 设置的候选列表：持久化的 base_url（动态解析值或包内静态值）按
+/// AidokuRunner 语义前置，已存在于包内列表则不重复。注册时行内 base_url 总是
+/// 当前包的解析结果，设置端点与播种共用同一组装，候选与默认不会分叉
+pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -> Vec<String> {
+	let mut urls = source_urls(doc);
+	if let Some(persisted) = persisted
+		&& !urls.iter().any(|u| u == persisted)
+	{
+		urls.insert(0, persisted.to_string());
+	}
+	urls
+}
+
+/// 安装/更新时解析动态 base URL（features.base_url 门控，对齐 AidokuRunner init 的
+/// `try? getBaseUrl()`：导出缺失、调用失败、返回值非法都只告警并回退包内静态值）。
+/// 一次性实例带库内现有 defaults/cookies——Runner 解析时 UserDefaults 已有上次注册值；
+/// 新装源为空
+async fn resolve_dynamic_base_url(
+	state: &AppState,
+	key: &str,
+	wasm_path: &str,
+	existing_id: Option<i64>,
+	doc: &serde_json::Value,
+) -> Option<String> {
+	let mut config = SourceConfig::new(key, wasm_path);
+	config.limits = state.config.wasm_limits();
+	config.policy = state.policy.clone();
+	let langs: Vec<String> = source_languages(doc).into_iter().map(|(code, _)| code).collect();
+	config.accept_language = aidoku_wasm::default_accept_language(&langs);
+	if let Some(id) = existing_id {
+		config.defaults = load_defaults(&state.pool, id).await.ok()?;
+		config.cookies = load_cookies(&state.pool, id).await.ok()?;
+	}
+	let (handle, features) = match SourceHandle::spawn(config, state.call_semaphore.clone()).await {
+		Ok(spawned) => spawned,
+		Err(e) => {
+			tracing::warn!(key, "spawn for base url resolution failed: {e}");
+			return None;
+		}
+	};
+	let resolved = if features.base_url {
+		match handle.get_base_url().await {
+			Ok(url) => Some(url),
+			Err(e) => {
+				tracing::warn!(key, "get_base_url failed: {e}");
+				None
+			}
+		}
+	} else {
+		None
+	};
+	handle.shutdown().await;
+	resolved.filter(|url| {
+		let valid = url::Url::parse(url).is_ok();
+		if !valid {
+			tracing::warn!(key, url, "ignore invalid dynamic base url");
+		}
+		valid
+	})
 }
 
 /// 源声明的语言列表：(code, isDefault)，按声明顺序；字符串项无 isDefault 标记
@@ -1240,6 +1310,27 @@ fn page_mime_for(path: &str) -> &'static str {
 mod tests {
 	use super::*;
 	use serde_json::{Value, json};
+
+	#[test]
+	fn candidate_urls_prepend_and_dedup() {
+		let doc = json!({"info": {"url": "https://a.example", "urls": ["https://b.example"]}});
+		assert_eq!(
+			candidate_urls(&doc, Some("https://dyn.example")),
+			vec!["https://dyn.example", "https://a.example", "https://b.example"]
+		);
+		// 持久值已在包内列表不重复（未解析时持久值即 info.url）
+		assert_eq!(
+			candidate_urls(&doc, Some("https://a.example")),
+			vec!["https://a.example", "https://b.example"]
+		);
+		assert_eq!(
+			candidate_urls(&doc, None),
+			vec!["https://a.example", "https://b.example"]
+		);
+		// 包内无 url 时持久值单独成候选
+		let bare = json!({"info": {}});
+		assert_eq!(candidate_urls(&bare, Some("https://dyn.example")), vec!["https://dyn.example"]);
+	}
 
 	#[test]
 	fn clone_page_round_trips_all_content_variants() {

@@ -389,7 +389,7 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 	tokio::fs::rename(&tmp, &path)
 		.await
 		.map_err(|e| ApiError::from(sqlx::Error::Io(e)))?;
-	let registered = crate::source::register_aix(&state.pool, &path).await;
+	let registered = crate::source::register_aix(state, &path).await;
 	match registered {
 		Ok((registered_key, _)) if registered_key == key => {}
 		Ok((registered_key, _)) => {
