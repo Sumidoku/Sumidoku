@@ -94,6 +94,9 @@ export default function SourceHomePage() {
 	const home = homeQuery.data;
 	// 流式加载中 partial 已写进缓存：有数据就边到边渲染，骨架只留给全无数据时
 	const showSkeleton = (!home && homeQuery.isPending) || (home !== null && home !== undefined && home.components.length === 0 && homeQuery.isFetching);
+	// layout 事件先到（组件槽位带真实标题、payload 为空），component 事件按 title 替换填实；
+	// 流式期间未填实的槽位Aidoku redacted+shimmering 同款渲染骨架，到位即换真身
+	const streaming = homeQuery.isFetching;
 
 	return (
 		<div className="page container">
@@ -151,7 +154,7 @@ export default function SourceHomePage() {
 						key={i}
 						component={c}
 						onOpenListing={openListing}
-						renderBody={() => renderBody(c)}
+						renderBody={() => (streaming && isPendingComponent(c) ? <PendingBody c={c} /> : renderBody(c))}
 					/>
 				))
 			)}
@@ -320,6 +323,63 @@ export default function SourceHomePage() {
 		// 未知组件种类：保留区块标题，正文跳过
 		return null;
 	}
+}
+
+/** 流式期间组件还没填实的判定：layout 槽位的 payload 各变体条目数组为空 */
+function isPendingComponent(c: HomeComponent): boolean {
+	const v = c.value;
+	if ('ImageScroller' in v) return v.ImageScroller.links.length === 0;
+	if ('BigScroller' in v) return v.BigScroller.entries.length === 0;
+	if ('Scroller' in v) return v.Scroller.entries.length === 0;
+	if ('MangaList' in v) return v.MangaList.entries.length === 0;
+	if ('MangaChapterList' in v) return v.MangaChapterList.entries.length === 0;
+	if ('Filters' in v) return v.Filters.length === 0;
+	return v.Links.length === 0;
+}
+
+/** 未到组件的类型化骨架（Aidoku redacted+shimmering 同款占位）；标题由 HomeSection 用槽位真实标题渲染 */
+function PendingBody({ c }: { c: HomeComponent }) {
+	const v = c.value;
+	// 列表形：行骨架
+	if ('MangaList' in v || 'MangaChapterList' in v || 'Links' in v) {
+		return (
+			<div className="home-rows">
+				{[0, 1, 2].map((i) => (
+					<Skeleton key={i} height={64} style={{ borderRadius: 'var(--r-md)' }} />
+				))}
+			</div>
+		);
+	}
+	// 筛选 chips：chip 骨架
+	if ('Filters' in v) {
+		return (
+			<div className="home-chips">
+				{[0, 1, 2, 3].map((i) => (
+					<Skeleton key={i} width={72} height={26} style={{ borderRadius: 999 }} />
+				))}
+			</div>
+		);
+	}
+	// 横幅轮播：按声明的宽高比铺横幅骨架
+	if ('ImageScroller' in v) {
+		const { width, height } = v.ImageScroller;
+		const ratio = width && height && width > 0 && height > 0 ? `${width} / ${height}` : '16 / 9';
+		return (
+			<div className="home-hrow">
+				{[0, 1].map((i) => (
+					<Skeleton key={i} width={280} aspect={ratio} style={{ borderRadius: 'var(--r-md)' }} />
+				))}
+			</div>
+		);
+	}
+	// Scroller / BigScroller：封面横排骨架
+	return (
+		<div className="home-hrow">
+			{Array.from({ length: 5 }, (_, i) => (
+				<Skeleton key={i} width={120} aspect="2 / 3" style={{ borderRadius: 'var(--r-md)' }} />
+			))}
+		</div>
+	);
 }
 
 function HomeSection({
