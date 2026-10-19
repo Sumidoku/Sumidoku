@@ -49,7 +49,7 @@ pub fn ndjson_response(rx: mpsc::UnboundedReceiver<Bytes>) -> Response {
 }
 
 // Value 序列化不会失败；发送失败即客户端断开，返回 false 让转发任务收尾
-fn send_line(tx: &mpsc::UnboundedSender<Bytes>, event: &Value) -> bool {
+pub(crate) fn send_line(tx: &mpsc::UnboundedSender<Bytes>, event: &Value) -> bool {
 	let mut buf = serde_json::to_vec(event).unwrap_or_default();
 	buf.push(b'\n');
 	tx.send(Bytes::from(buf)).is_ok()

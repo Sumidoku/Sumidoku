@@ -13,6 +13,7 @@ pub mod partial;
 pub mod pins;
 pub mod reader;
 pub mod repo;
+pub mod search;
 pub mod settings;
 pub mod suwayomi_backup;
 pub mod update;
@@ -51,6 +52,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/sources/scan", post(scan_sources))
+		.route("/api/v1/search", post(search::search_all))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
