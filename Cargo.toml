@@ -3,7 +3,7 @@ members = ["crates/*", "vendor/aidoku"]
 resolver = "3"
 
 [workspace.package]
-version = "0.8.0"
+version = "0.9.0"
 
 [workspace.dependencies]
 aidoku = { path = "vendor/aidoku", default-features = false, features = ["imports"] }
