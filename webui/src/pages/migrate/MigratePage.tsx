@@ -5,6 +5,7 @@ import { coverUrl } from '../../api/client';
 import { migrateLookup, useLibrary, useMigrate, useMigrateSources } from '../../api/hooks';
 import type { LibraryEntry, Manga, MigrateMode, MigrateResultItem } from '../../api/types';
 import { mapPool } from '../../lib/pool';
+import { compareSourceName } from '../../lib/source';
 import {
 	Button,
 	Cover,
@@ -94,6 +95,12 @@ export default function MigratePage() {
 	const sourcesQuery = useMigrateSources();
 	const libraryQuery = useLibrary(undefined, { sourceId: sourceId ?? 0 });
 	const migrate = useMigrate();
+
+	// 迁移源清单按名字字母序，与已装源列表一致
+	const migrateSources = useMemo(
+		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
+		[sourcesQuery.data]
+	);
 
 	const series = useMemo(
 		() => (sourceId === null ? [] : (libraryQuery.data?.pages.flatMap((p) => p.entries) ?? [])),
@@ -187,7 +194,7 @@ export default function MigratePage() {
 					<>
 						<p className="muted">先选要迁出的源（只列在库有条目的源）：</p>
 						<div className="migrate-source-list">
-							{(sourcesQuery.data ?? [])
+							{migrateSources
 								.filter((s) => s.mangaCount > 0)
 								.map((s) => (
 									<button
@@ -202,7 +209,7 @@ export default function MigratePage() {
 									</button>
 								))}
 						</div>
-						{(sourcesQuery.data ?? []).every((s) => s.mangaCount === 0) && (
+						{migrateSources.every((s) => s.mangaCount === 0) && (
 							<EmptyState icon={TriangleAlert} title="书库还是空的" hint="先把漫画加入书库再来迁移" />
 						)}
 					</>

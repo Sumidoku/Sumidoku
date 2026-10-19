@@ -3,6 +3,7 @@ import { GripVertical, ListPlus, Plus, X } from 'lucide-react';
 import { sourceIconUrl } from '../../api/client';
 import { useSources } from '../../api/hooks';
 import type { Source } from '../../api/types';
+import { compareSourceName } from '../../lib/source';
 import { Button } from '../../components';
 
 function RowIcon({ source }: { source: Source }) {
@@ -38,7 +39,10 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 	const byId = new Map(all.map((s) => [s.id, s]));
 	const chosen = selected.map((id) => byId.get(id)).filter((s): s is Source => s !== undefined);
 	const chosenIds = new Set(chosen.map((s) => s.id));
-	const available = all.filter((s) => !chosenIds.has(s.id));
+	// 可选源按名字字母序；置顶仍按 pinOrder 段在前
+	const available = all
+		.filter((s) => !chosenIds.has(s.id))
+		.sort(compareSourceName);
 	const pinnedRest = all
 		.filter((s) => s.pinned && !chosenIds.has(s.id))
 		.sort((a, b) => (a.pinOrder ?? 0) - (b.pinOrder ?? 0));
