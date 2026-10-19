@@ -45,8 +45,11 @@ export function ChipDropdown({ label, active, children }: ChipDropdownProps) {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') setOpen(false);
 		};
-		// 任意滚动收起（fixed 定位不跟随锚点），免滚动跟随的复杂度
-		const onScroll = () => setOpen(false);
+		// 任意滚动收起（fixed 定位不跟随锚点）；菜单自身的滚动除外，否则滚菜单等于关菜单
+		const onScroll = (e: Event) => {
+			if (menuRef.current?.contains(e.target as Node)) return;
+			setOpen(false);
+		};
 		document.addEventListener('mousedown', onDown);
 		document.addEventListener('keydown', onKey);
 		document.addEventListener('scroll', onScroll, true);
