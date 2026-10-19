@@ -352,10 +352,13 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
-				<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
-					<House size={15} />
-					主页
-				</Button>
+				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示 */}
+				{source.data?.hasHome !== false && (
+					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
+						<House size={15} />
+						主页
+					</Button>
+				)}
 				<Button onClick={() => setShowLink(true)}>
 					<Link2 size={15} />
 					打开链接

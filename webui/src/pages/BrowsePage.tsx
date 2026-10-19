@@ -183,15 +183,17 @@ function SourceCard({
 			>
 				{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 			</IconButton>
-			<IconButton
-				label={`${s.name} 主页`}
-				onClick={(e) => {
-					e.stopPropagation();
-					navigate(`/browse/${s.id}/home`);
-				}}
-			>
-				<House size={17} />
-			</IconButton>
+			{s.hasHome !== false && (
+				<IconButton
+					label={`${s.name} 主页`}
+					onClick={(e) => {
+						e.stopPropagation();
+						navigate(`/browse/${s.id}/home`);
+					}}
+				>
+					<House size={17} />
+				</IconButton>
+			)}
 			<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
 			<IconButton
 				label={`卸载 ${s.name}`}

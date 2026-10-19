@@ -398,6 +398,40 @@ async fn missing_from_repos_flags_sources_dropped_from_index() {
 }
 
 #[tokio::test]
+async fn backfill_stamps_features_for_legacy_rows() {
+	let app = test_app().await;
+	let repo = serve_repo().await;
+	stage_repo(&repo, 1, 3);
+
+	let (status, body) = add_repo(&app.app, &repo.url).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let repo_id = body["id"].as_i64().unwrap();
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/source-repos/install",
+		Some(json!({"repoId": repo_id, "sourceKey": "en.repo-source"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// 模拟 0010 列加入前的旧行：features 清 NULL，启动回填任务补 stamping
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", app.db_path.display()))
+		.await
+		.expect("connect test db");
+	sqlx::query("UPDATE source SET features = NULL")
+		.execute(&pool)
+		.await
+		.expect("null out features");
+	sumidoku_server::source::backfill_source_features(&pool).await;
+
+	let installed = source_by_key(&app.app, "en.repo-source").await;
+	assert!(installed["hasHome"].is_boolean(), "{installed}");
+
+	repo.serve.abort();
+}
+
+#[tokio::test]
 async fn unreachable_repo_keeps_cache_and_installed_list() {
 	let app = test_app().await;
 	// 目录扫描装 example-source，与 repo 装的源并列验证互不影响

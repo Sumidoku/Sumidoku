@@ -82,6 +82,11 @@ pub async fn build_app_with(
 			state.config.repo_refresh_interval_hours,
 		));
 	}
+	// 旧行 features 回填：后台串行编译补 stamping，不挡启动
+	{
+		let pool = state.pool.clone();
+		tokio::spawn(async move { source::backfill_source_features(&pool).await });
+	}
 	if state.config.source_idle_evict_minutes > 0 {
 		let max_idle =
 			std::time::Duration::from_secs(state.config.source_idle_evict_minutes as u64 * 60);

@@ -261,13 +261,15 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.await
 		.map_err(|e| format!("db: {e}"))?;
 	// 动态值是 base_url 的真相源：落列后合成设置的候选与种子、登录 host 兜底都从行里出
-	let dynamic = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc).await;
-	let base_url = dynamic.or(base_url);
+	let (dynamic, features) = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc)
+		.await
+		.unwrap_or_else(|| (String::new(), "{}".to_string()));
+	let base_url = if dynamic.is_empty() { base_url } else { Some(dynamic) };
 	let (id, updated) = if let Some((id,)) = existing {
 		// 老源保留 enabled 与 source_setting，只刷新元数据
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
-			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
+			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ?, features = ? WHERE id = ?",
 		)
 		.bind(name)
 		.bind(version)
@@ -279,6 +281,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)
+		.bind(&features)
 		.bind(id)
 		.execute(pool)
 		.await
@@ -287,8 +290,8 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	} else {
 		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
-			 breaking_change_version, config, wasm_path, icon_path, enabled, installed_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+			 breaking_change_version, config, wasm_path, icon_path, enabled, installed_at, updated_at, features)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
 		)
 		.bind(&key)
 		.bind(name)
@@ -302,6 +305,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(icon_path)
 		.bind(now)
 		.bind(now)
+		.bind(&features)
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
@@ -309,6 +313,47 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	};
 	seed_source_defaults(pool, id, package.settings.as_ref(), doc).await?;
 	Ok((key, updated))
+}
+
+/// 0010 列加入前装的旧行 features 为 NULL：逐源只编译模块算出能力位回填。
+/// 启动后后台串行跑，不挡服务起；单个源失败（包损坏/编译失败）留 NULL，
+/// DTO 按未知处理（不藏主页入口）。新装的源注册时已 stamping，不在这趟里
+pub async fn backfill_source_features(pool: &sqlx::SqlitePool) {
+	let rows: Vec<(i64, String)> = match sqlx::query_as(
+		"SELECT id, wasm_path FROM source WHERE features IS NULL",
+	)
+	.fetch_all(pool)
+	.await
+	{
+		Ok(rows) => rows,
+		Err(e) => {
+			tracing::warn!("backfill source features select failed: {e}");
+			return;
+		}
+	};
+	for (id, wasm_path) in rows {
+		let stamped = tokio::task::spawn_blocking(move || -> Result<String, String> {
+			let bytes = aidoku_wasm::package::read_wasm_payload(std::path::Path::new(&wasm_path))
+				.map_err(|e| e.to_string())?;
+			let features = aidoku_wasm::SourceFeatures::from_wasm_bytes(&bytes)?;
+			serde_json::to_string(&features).map_err(|e| e.to_string())
+		})
+		.await;
+		match stamped {
+			Ok(Ok(json)) => {
+				if let Err(e) = sqlx::query("UPDATE source SET features = ? WHERE id = ?")
+					.bind(&json)
+					.bind(id)
+					.execute(pool)
+					.await
+				{
+					tracing::warn!(source_id = id, "backfill source features update failed: {e}");
+				}
+			}
+			Ok(Err(e)) => tracing::warn!(source_id = id, "backfill source features failed: {e}"),
+			Err(e) => tracing::warn!(source_id = id, "backfill source features join failed: {e}"),
+		}
+	}
 }
 
 /// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
@@ -418,14 +463,14 @@ pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -
 /// 安装/更新时解析动态 base URL（features.base_url 门控，对齐 AidokuRunner init 的
 /// `try? getBaseUrl()`：导出缺失、调用失败、返回值非法都只告警并回退包内静态值）。
 /// 一次性实例带库内现有 defaults/cookies——Runner 解析时 UserDefaults 已有上次注册值；
-/// 新装源为空
+/// 新装源为空。features 一并返回，注册落库供 DTO 暴露能力位（如 hasHome）
 async fn resolve_dynamic_base_url(
 	state: &AppState,
 	key: &str,
 	wasm_path: &str,
 	existing_id: Option<i64>,
 	doc: &serde_json::Value,
-) -> Option<String> {
+) -> Option<(String, String)> {
 	let mut config = SourceConfig::new(key, wasm_path);
 	config.limits = state.config.wasm_limits();
 	config.policy = state.policy.clone();
@@ -454,13 +499,18 @@ async fn resolve_dynamic_base_url(
 		None
 	};
 	handle.shutdown().await;
-	resolved.filter(|url| {
+	let resolved = resolved.filter(|url| {
 		let valid = url::Url::parse(url).is_ok();
 		if !valid {
 			tracing::warn!(key, url, "ignore invalid dynamic base url");
 		}
 		valid
-	})
+	});
+	let features = serde_json::to_string(&features).unwrap_or_else(|e| {
+		tracing::warn!(key, "serialize source features failed: {e}");
+		"{}".into()
+	});
+	Some((resolved.unwrap_or_default(), features))
 }
 
 /// 源声明的语言列表：(code, isDefault)，按声明顺序；字符串项无 isDefault 标记
