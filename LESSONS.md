@@ -6,6 +6,27 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Lazy `<img>` loads never fire in the embedded smoke browser until a
+scroll nudge — bisect the environment before suspecting the component.**
+The Kimi Code desktop browser's lazy-load intersection observer does not
+trigger on its own: `loading="lazy"` images sit silent (no
+`onLoad`/`onError`) while eager ones load fine, so a page full of lazy
+covers looks broken even when the app is right. Bisect with a static
+probe page (plain / lazy / referrerPolicy / container-type), nudge a
+scroll to flush lazy loads, and when a failure does survive that,
+instrument the component (`document.title` from `onError`) instead of
+theorizing. A sibling rule from the same smoke: appending query params
+must pick `?`/`&` from whether the base already has a query —
+`withToken`'s conditional means the base is bare exactly when auth is
+off, so a `&v=` append 404s only in no-auth setups and passes every type
+check.
+- Evidence: 2026-10-19, issue #135's picker smoke: bisect probes showed
+  only the lazy imgs silent; after a scroll the title probe printed
+  `COVER ERR /api/v1/manga/1/cover&v=…` — `coverUrl` built an invalid
+  URL whenever no token made `withToken` return the bare path, while
+  logged-in setups were accidentally correct. The same smoke caught the
+  Cover component's `failed` latch (fixed in a0c9722).
+
 **A "black page" in a reader smoke can be occlusion by fixed chrome, not
 a missing render — rule that out before suspecting the pipeline.** In
 paged mode the first text line starts 32px from the top, directly under

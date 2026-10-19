@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 export interface CoverProps {
 	src?: string | null;
@@ -10,6 +10,11 @@ export interface CoverProps {
 export function Cover({ src, title, alt }: CoverProps) {
 	const [failed, setFailed] = useState(false);
 	const [loaded, setLoaded] = useState(false);
+	// 失败是按 src 记的：换封面这类原地换 src 的场景，旧图的失败不能锁死新图
+	useEffect(() => {
+		setFailed(false);
+		setLoaded(false);
+	}, [src]);
 	const showImg = !!src && !failed;
 	return (
 		<div className={showImg && !loaded ? 'cover cover--shimmer' : 'cover'}>

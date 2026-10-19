@@ -243,7 +243,7 @@ export default function MigratePage() {
 									}
 								/>
 								<span className="migrate-series__cover">
-									<Cover src={coverUrl(m.id)} title={m.title} />
+									<Cover src={coverUrl(m.id, m.cover)} title={m.title} />
 								</span>
 								<span className="migrate-series__title">{m.title}</span>
 							</label>
@@ -305,7 +305,7 @@ export default function MigratePage() {
 						{rows.map((row) => (
 							<div key={row.manga.id} className="migrate-row">
 								<span className="migrate-row__cover">
-									<Cover src={coverUrl(row.manga.id)} title={row.manga.title} />
+									<Cover src={coverUrl(row.manga.id, row.manga.cover)} title={row.manga.title} />
 								</span>
 								<div className="migrate-row__side">
 									<div className="migrate-row__title">{row.manga.title}</div>

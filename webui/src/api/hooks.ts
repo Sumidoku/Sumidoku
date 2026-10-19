@@ -495,6 +495,29 @@ export function useRefreshManga() {
 	});
 }
 
+/** 备选封面：501 是源没导出的正常分支，silent 交给页面按「没有备选」显示 */
+export function useAlternateCovers(mangaId: number) {
+	return useQuery({
+		queryKey: ['manga', mangaId, 'alternate-covers'],
+		queryFn: () => api<string[]>(`/manga/${mangaId}/covers/alternates`, { silent: true })
+	});
+}
+
+// 响应直接写回详情缓存：cover 字段一变，coverUrl 的版本参数跟着变，浏览器才会重取图
+export function useSelectCover() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, url }: { id: number; url: string }) =>
+			api<MangaDetail>(`/manga/${id}/cover`, { method: 'PUT', body: { url } }),
+		onSuccess: (data, { id }) => {
+			qc.setQueryData(qk.manga(id), data);
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['history'] });
+			void qc.invalidateQueries({ queryKey: ['update-recent'] });
+		}
+	});
+}
+
 export function useRefreshChapters() {
 	const qc = useQueryClient();
 	return useMutation({

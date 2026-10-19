@@ -49,7 +49,7 @@ export default function HistoryPage() {
 								to={`/reader/${h.chapter.id}?manga=${h.manga.id}&page=${h.lastPageRead}`}
 							>
 								<div className="history-item__thumb">
-									<Cover src={coverUrl(h.manga.id)} title={h.manga.title} />
+									<Cover src={coverUrl(h.manga.id, h.manga.cover)} title={h.manga.title} />
 								</div>
 								<div className="history-item__meta">
 									<div className="history-item__title">{h.manga.title}</div>

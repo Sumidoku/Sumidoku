@@ -107,7 +107,7 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 				<div className="migrate-single__confirm">
 					<div className="migrate-single__pair">
 						<span className="migrate-row__cover">
-							<Cover src={coverUrl(manga.id)} title={manga.title} />
+							<Cover src={coverUrl(manga.id, manga.cover)} title={manga.title} />
 						</span>
 						<ArrowRight size={16} />
 						<div>

@@ -107,7 +107,13 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	return (await res.json()) as T;
 }
 
-export const coverUrl = (mangaId: number) => withToken(`${BASE}/manga/${mangaId}/cover`);
+/** v 是版本标记（传 manga.cover）：换封面后端点 URL 不变而响应 max-age=86400 可缓存，没它浏览器一直用旧图 */
+export const coverUrl = (mangaId: number, v?: string | null) => {
+	const base = withToken(`${BASE}/manga/${mangaId}/cover`);
+	// base 不一定带 query（没 token 时 withToken 原样返回），分隔符要自己判
+	const sep = base.includes('?') ? '&' : '?';
+	return v ? `${base}${sep}v=${encodeURIComponent(v)}` : base;
+};
 
 /** NDJSON 流式响应里 partial 之外的两个终态事件形状 */
 type StreamTerminal<TFinal> =

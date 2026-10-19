@@ -1,12 +1,15 @@
 use crate::api::{RefreshQuery, wants_refresh};
 use crate::error::{ApiError, ApiResult};
+use crate::model::manga_from_row;
 use crate::source::{fetch_cover_image, manga_row};
 use crate::state::AppState;
+use axum::Json;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::Response;
 use serde::Deserialize;
+use serde_json::{Value, json};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 
@@ -67,6 +70,54 @@ pub(crate) fn bytes_response(bytes: Vec<u8>, mime: &str, max_age: u64) -> Respon
 		.header(header::CACHE_CONTROL, format!("private, max-age={max_age}"))
 		.body(Body::from(bytes))
 		.expect("bytes response")
+}
+
+/// 备选封面列表：以库里的 manga 为入参调源导出；源没导出按惯例 501
+pub async fn get_alternate_covers(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+	let manga = manga_row(&state.pool, id).await?;
+	let handle = state.get_handle(manga.source_id).await?;
+	if !handle.features().alternate_covers {
+		return Err(ApiError::unsupported_501("source does not support alternate covers"));
+	}
+	let covers = handle.get_alternate_covers(manga_from_row(&manga)).await?;
+	Ok(Json(json!(covers)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SelectCoverRequest {
+	pub url: String,
+}
+
+/// 选定封面：只写 cover_url 并让磁盘缓存失效。不碰 last_fetched_at（那是源刷新语义）——
+/// 缓存按它判新，不清旧字节的话换完后旧封面继续被 serve，选择永远不生效
+pub async fn select_cover(
+	State(state): State<Arc<AppState>>,
+	Path(id): Path<i64>,
+	Json(body): Json<SelectCoverRequest>,
+) -> ApiResult<Json<Value>> {
+	manga_row(&state.pool, id).await?;
+	let parsed = reqwest::Url::parse(&body.url).map_err(|_| ApiError::bad_request("invalid cover url"))?;
+	if !matches!(parsed.scheme(), "http" | "https") {
+		return Err(ApiError::bad_request("unsupported cover url scheme"));
+	}
+	sqlx::query("UPDATE manga SET cover_url = ? WHERE id = ?")
+		.bind(&body.url)
+		.bind(id)
+		.execute(&state.pool)
+		.await?;
+	invalidate_cache(&state.config.covers_dir, id).await;
+	let row = manga_row(&state.pool, id).await?;
+	Ok(Json(crate::api::manga_json(&state, &row).await?))
+}
+
+/// 本体与 sidecar 一起删；还没缓存过时缺文件不算错误
+async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
+	let cache_path = covers_dir.join(id.to_string());
+	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
+	let _ = tokio::fs::remove_file(cache_path).await;
 }
 
 fn sidecar_path(cache_path: &FsPath) -> PathBuf {

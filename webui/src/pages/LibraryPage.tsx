@@ -163,7 +163,7 @@ export default function LibraryPage() {
 						{entries.map((m) => (
 							<CoverCard
 								key={m.id}
-								src={coverUrl(m.id)}
+								src={coverUrl(m.id, m.cover)}
 								title={m.title}
 								unreadCount={m.unreadCount}
 								to={`/manga/${m.id}`}
