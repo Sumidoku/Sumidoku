@@ -476,6 +476,17 @@ source directories alike; both register the same way, with `wasm_path`
 pointing at the `.aix` or the directory's `main.wasm`. An `.aix` icon is
 written next to the package as `<name>.png` so installed sources serve
 `/sources/{id}/icon` the same way the directory scan's `icon.png` does.
+Registration also resolves the source's dynamic base URL, mirroring the
+`try? await runner.getBaseUrl()` in AidokuRunner's `Source.init`: when the
+payload exports `get_base_url` a throwaway instance answers it (carrying
+the stored defaults and cookies, empty on a fresh install — the Runner
+resolves before `register(defaults:)`, so the source sees the previously
+registered values) and the result lands in `source.base_url`; a missing
+export, a failed call or an unparsable URL only logs a warning and the
+manifest's static `info.url` stands instead. That column is the truth
+source every consumer reads — the synthesized base-URL setting's
+candidates and seeded default, the login-host fallback, the `baseUrl`
+DTO — so the settings list and the fallback never disagree.
 Static package files (`source.json`, `settings.json`, `filters.json`) are
 read by the same helper: directory sources from next to `main.wasm`, `.aix`
 sources from `Payload/` inside the zip without extracting. Source settings
@@ -503,9 +514,14 @@ mirroring AidokuRunner's `register(defaults:)`. The rules match
 `loadSettingsDefaults`: recurse `group` and `page`, fall back to the first
 value for `select` and `picker`, and treat a `switch` without a default as
 `false`. A source whose `source.json` sets
-`config.allowsBaseUrlSelect` and declares more than one base URL gets a
-synthesized base-URL `select` (key `url`, default the first URL) prepended
-to the list, mirroring AidokuRunner's extra settings; a source declaring
+`config.allowsBaseUrlSelect` and ends up with more than one base-URL
+candidate gets a synthesized base-URL `select` (key `url`) prepended to the
+list, mirroring AidokuRunner's extra settings: the candidates are the
+persisted `source.base_url` prepended to the manifest's `info.url` +
+`info.urls` (skipped when already present, the Runner's dedup), so a
+resolved dynamic value leads the list and is the default, and an untouched
+`url` value tracks each re-resolution while a user-picked mirror survives
+updates; a source declaring
 more than one language gets a synthesized language setting (key
 `languages`, or `language` when `config.languageSelectType` is `single`)
   prepended ahead of it, with the default from each language's `isDefault`

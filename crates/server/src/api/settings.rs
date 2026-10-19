@@ -10,16 +10,16 @@ use std::collections::HashSet;
 use serde_json::{Map, Value, json};
 
 use crate::source::{
-	default_language_pick, language_select_single, source_languages, source_urls,
+	candidate_urls, default_language_pick, language_select_single, source_languages,
 };
 
 /// 合成设置：对齐 AidokuRunner `Source.getExtraSettings` 的 base url 分支。
 ///
-/// `config.allowsBaseUrlSelect` 为真且 `info.url` + `info.urls` 至少两个时，
-/// App 会在源设置里生成一个选线路的 select（键 `url`，默认第一个镜像），
+/// `config.allowsBaseUrlSelect` 为真且候选（动态解析值前置进 `info.url` + `info.urls`）
+/// 至少两个时，App 会在源设置里生成一个选线路的 select（键 `url`，默认第一个），
 /// 源运行时再通过 `defaults.get("url")` 读取。这里补出同款嵌套形状，
 /// 插在静态/动态设置之前（AidokuRunner 把 extraSettings 排在 staticSettings 前）。
-pub fn base_url_setting(doc: &Value) -> Option<Value> {
+pub fn base_url_setting(doc: &Value, persisted: Option<&str>) -> Option<Value> {
 	if doc
 		.get("config")
 		.and_then(|c| c.get("allowsBaseUrlSelect"))
@@ -28,7 +28,7 @@ pub fn base_url_setting(doc: &Value) -> Option<Value> {
 	{
 		return None;
 	}
-	let urls = source_urls(doc);
+	let urls = candidate_urls(doc, persisted);
 	let (first, rest) = urls.split_first()?;
 	if rest.is_empty() {
 		return None;
@@ -349,7 +349,7 @@ mod tests {
 			},
 			"config": {"allowsBaseUrlSelect": true}
 		});
-		let out = base_url_setting(&doc).expect("base url setting");
+		let out = base_url_setting(&doc, None).expect("base url setting");
 		assert_eq!(out["type"], "group");
 		let item = &out["value"]["Group"]["items"][0];
 		assert_eq!(item["type"], "select");
@@ -363,23 +363,50 @@ mod tests {
 	}
 
 	#[test]
+	fn base_url_setting_prepends_persisted_dynamic() {
+		let doc = json!({
+			"info": {
+				"url": "https://main.example",
+				"urls": ["https://m1.example"]
+			},
+			"config": {"allowsBaseUrlSelect": true}
+		});
+		let out = base_url_setting(&doc, Some("https://dyn.example")).expect("base url setting");
+		let item = &out["value"]["Group"]["items"][0];
+		assert_eq!(
+			item["value"]["Select"]["values"],
+			json!(["https://dyn.example", "https://main.example", "https://m1.example"])
+		);
+		assert_eq!(item["value"]["Select"]["default"], "https://dyn.example");
+
+		// 持久值已在包内列表（动态值等于静态值，或未解析时的 info.url）不重复前置
+		let out = base_url_setting(&doc, Some("https://main.example")).expect("base url setting");
+		let item = &out["value"]["Group"]["items"][0];
+		assert_eq!(
+			item["value"]["Select"]["values"],
+			json!(["https://main.example", "https://m1.example"])
+		);
+		assert_eq!(item["value"]["Select"]["default"], "https://main.example");
+	}
+
+	#[test]
 	fn base_url_setting_needs_config_and_two_urls() {
 		let two_urls = json!({
 			"info": {"url": "https://a.example", "urls": ["https://b.example"]}
 		});
-		assert!(base_url_setting(&two_urls).is_none());
+		assert!(base_url_setting(&two_urls, None).is_none());
 
 		let disabled = json!({
 			"info": {"url": "https://a.example", "urls": ["https://b.example"]},
 			"config": {"allowsBaseUrlSelect": false}
 		});
-		assert!(base_url_setting(&disabled).is_none());
+		assert!(base_url_setting(&disabled, None).is_none());
 
 		let single = json!({
 			"info": {"url": "https://a.example"},
 			"config": {"allowsBaseUrlSelect": true}
 		});
-		assert!(base_url_setting(&single).is_none());
+		assert!(base_url_setting(&single, None).is_none());
 	}
 
 	#[test]
@@ -437,7 +464,7 @@ mod tests {
 			"info": {"url": "https://a.example", "urls": ["https://b.example"]},
 			"config": {"allowsBaseUrlSelect": true}
 		});
-		let base = base_url_setting(&doc).expect("base url setting");
+		let base = base_url_setting(&doc, None).expect("base url setting");
 		assert!(clashes(&base, &keys), "源已声明 url，合成项应判冲突");
 
 		let single = json!({

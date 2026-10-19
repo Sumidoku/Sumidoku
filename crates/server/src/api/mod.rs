@@ -194,7 +194,7 @@ async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 }
 
 async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let outcome = scan_sources_dir(&state.pool, &state.config.sources_dir()).await?;
+	let outcome = scan_sources_dir(&state, &state.config.sources_dir()).await?;
 	Ok(Json(serde_json::to_value(outcome)?))
 }
 
@@ -524,6 +524,7 @@ async fn get_source_settings(
 	let doc = package_json(&state, id, "source.json")
 		.await?
 		.unwrap_or_else(|| json!({}));
+	let row = source_row(&state, id).await?;
 	let mut items = load_settings_items(&state, id, &handle).await?;
 	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）；
 	// 源已自行声明同名键时跳过合成项，避免列表里出现两个同键设置
@@ -534,7 +535,7 @@ async fn get_source_settings(
 	{
 		extras.push(language);
 	}
-	if let Some(base_url) = settings::base_url_setting(&doc)
+	if let Some(base_url) = settings::base_url_setting(&doc, row.base_url.as_deref())
 		&& !settings::clashes(&base_url, &declared)
 	{
 		extras.push(base_url);
