@@ -315,45 +315,84 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	Ok((key, updated))
 }
 
-/// 0010 列加入前装的旧行 features 为 NULL：逐源只编译模块算出能力位回填。
-/// 启动后后台串行跑，不挡服务起；单个源失败（包损坏/编译失败）留 NULL，
-/// DTO 按未知处理（不藏主页入口）。新装的源注册时已 stamping，不在这趟里
-pub async fn backfill_source_features(pool: &sqlx::SqlitePool) {
+/// #147/0010 之前装的旧行 manifest 派生元数据可能缺失：config（config 列加入前装的）、
+/// features（0010 列加入前装的）与 breaking_change_version（旧注册没解析 manifest 的恒为 0，
+/// 跨 breaking 更新的 rekey 判定会失效）。逐源读包补 stamping，COALESCE/MAX 只填缺口：
+/// config/features 只补 NULL 列，breaking 单调取 MAX（不回退已有值）。启动后后台串行跑，
+/// 不挡服务起；单个源失败（包损坏/编译失败）留 NULL，DTO 按未知处理（不藏主页入口）。
+/// 新装的源注册时已 stamping，不在这趟里
+pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
 	let rows: Vec<(i64, String)> = match sqlx::query_as(
-		"SELECT id, wasm_path FROM source WHERE features IS NULL",
+		"SELECT id, wasm_path FROM source WHERE config IS NULL OR features IS NULL",
 	)
 	.fetch_all(pool)
 	.await
 	{
 		Ok(rows) => rows,
 		Err(e) => {
-			tracing::warn!("backfill source features select failed: {e}");
+			tracing::warn!("backfill source metadata select failed: {e}");
 			return;
 		}
 	};
 	for (id, wasm_path) in rows {
-		let stamped = tokio::task::spawn_blocking(move || -> Result<String, String> {
-			let bytes = aidoku_wasm::package::read_wasm_payload(std::path::Path::new(&wasm_path))
-				.map_err(|e| e.to_string())?;
-			let features = aidoku_wasm::SourceFeatures::from_wasm_bytes(&bytes)?;
-			serde_json::to_string(&features).map_err(|e| e.to_string())
-		})
+		let stamped = tokio::task::spawn_blocking(
+			move || -> Result<(Option<String>, String, i64), String> {
+				let path = std::path::Path::new(&wasm_path);
+				let (config, breaking) = read_manifest_config(path)?;
+				let bytes = aidoku_wasm::package::read_wasm_payload(path).map_err(|e| e.to_string())?;
+				let features = aidoku_wasm::SourceFeatures::from_wasm_bytes(&bytes)?;
+				let features = serde_json::to_string(&features).map_err(|e| e.to_string())?;
+				Ok((config, features, breaking))
+			},
+		)
 		.await;
 		match stamped {
-			Ok(Ok(json)) => {
-				if let Err(e) = sqlx::query("UPDATE source SET features = ? WHERE id = ?")
-					.bind(&json)
-					.bind(id)
-					.execute(pool)
-					.await
+			Ok(Ok((config, features, breaking))) => {
+				if let Err(e) = sqlx::query(
+					"UPDATE source SET config = COALESCE(config, ?), features = COALESCE(features, ?),
+					 breaking_change_version = MAX(breaking_change_version, ?) WHERE id = ?",
+				)
+				.bind(config)
+				.bind(features)
+				.bind(breaking)
+				.bind(id)
+				.execute(pool)
+				.await
 				{
-					tracing::warn!(source_id = id, "backfill source features update failed: {e}");
+					tracing::warn!(source_id = id, "backfill source metadata update failed: {e}");
 				}
 			}
-			Ok(Err(e)) => tracing::warn!(source_id = id, "backfill source features failed: {e}"),
-			Err(e) => tracing::warn!(source_id = id, "backfill source features join failed: {e}"),
+			Ok(Err(e)) => tracing::warn!(source_id = id, "backfill source metadata failed: {e}"),
+			Err(e) => tracing::warn!(source_id = id, "backfill source metadata join failed: {e}"),
 		}
 	}
+}
+
+/// 回填用：从源包读 manifest 的 config 节原文（透传口径与注册一致，未知键不丢）
+/// 和 config.breakingChangeVersion（rekey 判定依赖，旧注册可能没解析过）。
+/// 裸 wasm 包没有 manifest，返回 (None, 0)——该行 config 保持 NULL
+fn read_manifest_config(path: &Path) -> Result<(Option<String>, i64), String> {
+	use aidoku_wasm::package::{JSON_ENTRY_MAX, MANIFEST_ENTRY, read_zip_entry};
+	let is_zip = std::fs::File::open(path)
+		.and_then(|mut f| {
+			let mut magic = [0u8; 2];
+			std::io::Read::read_exact(&mut f, &mut magic).map(|_| magic == *b"PK")
+		})
+		.unwrap_or(false);
+	if !is_zip {
+		return Ok((None, 0));
+	}
+	let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+	let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid archive: {e}"))?;
+	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX).map_err(|e| e.to_string())?;
+	let doc: serde_json::Value =
+		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
+	let config = doc.get("config").filter(|c| c.is_object());
+	let breaking = config
+		.and_then(|c| c.get("breakingChangeVersion"))
+		.and_then(|v| v.as_i64())
+		.unwrap_or(0);
+	Ok((config.map(|c| c.to_string()), breaking))
 }
 
 /// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。

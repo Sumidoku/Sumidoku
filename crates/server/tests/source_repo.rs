@@ -92,6 +92,28 @@ fn aix_bytes(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -
 		r#"{{"info": {{"id": "{key}", "name": "{name}", "version": {version}, "languages": [{}], "contentRating": {rating}}}}}"#,
 		langs.join(", ")
 	);
+	aix_package(&manifest, &icon_bytes(key, version))
+}
+
+/// 带 config 节声明的源包（回填 config 的测试用）
+fn aix_bytes_with_config(
+	key: &str,
+	name: &str,
+	version: i64,
+	langs: &[&str],
+	rating: i64,
+	config: &str,
+) -> Vec<u8> {
+	let langs: Vec<String> = langs.iter().map(|l| format!("\"{l}\"")).collect();
+	let manifest = format!(
+		r#"{{"info": {{"id": "{key}", "name": "{name}", "version": {version}, "languages": [{}], "contentRating": {rating}}}, "config": {config}}}"#,
+		langs.join(", ")
+	);
+	aix_package(&manifest, &icon_bytes(key, version))
+}
+
+/// 按 manifest 原文打 .aix 测试包
+fn aix_package(manifest: &str, icon: &str) -> Vec<u8> {
 	let wasm = std::fs::read(fixture_dir().join("main.wasm")).expect("fixture wasm");
 	let mut cursor = std::io::Cursor::new(Vec::new());
 	{
@@ -103,7 +125,7 @@ fn aix_bytes(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -
 		writer.start_file("Payload/main.wasm", options).unwrap();
 		std::io::Write::write_all(&mut writer, &wasm).unwrap();
 		writer.start_file("Payload/icon.png", options).unwrap();
-		std::io::Write::write_all(&mut writer, icon_bytes(key, version).as_bytes()).unwrap();
+		std::io::Write::write_all(&mut writer, icon.as_bytes()).unwrap();
 		writer.finish().unwrap();
 	}
 	cursor.into_inner()
@@ -423,10 +445,58 @@ async fn backfill_stamps_features_for_legacy_rows() {
 		.execute(&pool)
 		.await
 		.expect("null out features");
-	sumidoku_server::source::backfill_source_features(&pool).await;
+	sumidoku_server::source::backfill_source_metadata(&pool).await;
 
 	let installed = source_by_key(&app.app, "en.repo-source").await;
 	assert!(installed["hasHome"].is_boolean(), "{installed}");
+
+	repo.serve.abort();
+}
+
+#[tokio::test]
+async fn backfill_stamps_config_for_legacy_rows() {
+	let app = test_app().await;
+	let repo = serve_repo().await;
+	// manifest 声明 config 的源包：模拟 #147（config 落库）之前装、行里 config 为 NULL 的存量源
+	repo.mock.set_index(json!([repo_entry("en.cfg-source", "Config Source", 1, &["en"], 0)]));
+	repo.mock.set_file(
+		"files/en.cfg-source-v1.aix",
+		aix_bytes_with_config(
+			"en.cfg-source",
+			"Config Source",
+			1,
+			&["en"],
+			0,
+			r#"{"supportsTagSearch": true, "hidesFiltersWhileSearching": true, "breakingChangeVersion": 2}"#,
+		),
+	);
+
+	let (status, body) = add_repo(&app.app, &repo.url).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let repo_id = body["id"].as_i64().unwrap();
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/source-repos/install",
+		Some(json!({"repoId": repo_id, "sourceKey": "en.cfg-source"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// 模拟 #147 之前的旧行：config/breaking 清掉，启动回填任务从 manifest 补 stamping
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", app.db_path.display()))
+		.await
+		.expect("connect test db");
+	sqlx::query("UPDATE source SET config = NULL, breaking_change_version = 0")
+		.execute(&pool)
+		.await
+		.expect("null out config");
+	sumidoku_server::source::backfill_source_metadata(&pool).await;
+
+	let installed = source_by_key(&app.app, "en.cfg-source").await;
+	assert_eq!(installed["config"]["supportsTagSearch"], true, "{installed}");
+	assert_eq!(installed["config"]["hidesFiltersWhileSearching"], true, "{installed}");
+	assert_eq!(installed["breakingChangeVersion"], 2, "{installed}");
 
 	repo.serve.abort();
 }

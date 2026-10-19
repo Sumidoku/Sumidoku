@@ -122,10 +122,12 @@ Migrations in `crates/server/migrations`.
   Registration also serializes the spawned instance's `SourceFeatures`
   into `source.features`; the DTO exposes `hasHome` from it. Rows installed
   before the column existed start NULL and are backfilled once at startup
-  (`source::backfill_source_features` compiles each package's module
-  without instantiating — rows whose package fails to compile stay NULL,
-  and the web UI keeps the home entry visible on unknown rather than
-  hiding it).
+  (`source::backfill_source_metadata`): each package's manifest re-stamps
+  a NULL `config` and a stale `breaking_change_version` (MAX, never
+  regressing), and its module is compiled without instantiating to
+  re-stamp a NULL `features` (COALESCE keeps any live value). Rows whose
+  package fails to read or compile stay NULL, and the web UI keeps the
+  home entry visible on unknown rather than hiding it.
   The web UI honors `hidesFiltersWhileSearching` on the source browse page
   (a non-empty search box hides the filter UI and the search request drops
   filter values, mirroring AidokuRunner clearing filters on a non-empty
