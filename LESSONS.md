@@ -506,3 +506,7 @@ same-day slip.
 - Evidence: 2026-10-19, the first merge attempt on PR #171 was rejected
   for a from-memory sha; the real head (`288121b4dcb…`) fetched via
   `gh pr view` differed and merged.
+- Seen again: 2026-10-19, PR #188 — passed the short sha from the local
+  `git commit` output instead of the full sha in the `gh pr view` result
+  fetched seconds earlier; same GraphQL rejection, retried with the
+  fetched full sha.
