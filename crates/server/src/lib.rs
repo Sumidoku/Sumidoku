@@ -69,6 +69,12 @@ pub async fn build_app_with(
 	tokio::spawn(downloads.run());
 	tokio::spawn(updater.run());
 	tokio::spawn(backups.run());
+	if state.config.repo_refresh_interval_hours > 0 {
+		tokio::spawn(source::repo::run_periodic_refresh(
+			state.clone(),
+			state.config.repo_refresh_interval_hours,
+		));
+	}
 	if state.config.source_idle_evict_minutes > 0 {
 		let max_idle =
 			std::time::Duration::from_secs(state.config.source_idle_evict_minutes as u64 * 60);
