@@ -42,6 +42,20 @@ component.
   global-search `TriDropdown` (same copied code) still had the bug and
   was repaired by extracting `ChipDropdown` into `components/`.
 
+**A leftover smoke Chrome owns the debug port, and a string-prefix URL
+match hands you its tabs.** When a second headless Chrome launches with
+the same `--remote-debugging-port`, the port stays with the first
+instance, so `/json/list` answers with the old instance's targets; and
+matching them with `url.startsWith('http://127.0.0.1:4567')` also
+matches `127.0.0.1:45672` — the driver then "passes" against a previous
+session's page. Before launching, kill any Chrome bound to the port
+(`lsof -nP -iTCP:<port> -sTCP:LISTEN`), and match targets by parsed
+`new URL(t.url).host`.
+- Evidence: 2026-10-20, PR #181's library-filter smoke: the previous
+  session's Chrome (pid from an older run) still held 127.0.0.1:9222, and
+  the prefix match picked its `127.0.0.1:45672/browse/3` tab; the driver
+  failed on a missing chip until both were fixed, then ran 30/30 green.
+
 **Destructuring `TestApp` without keeping `tmp` deletes the fixture
 directory mid-test.** `tempfile::TempDir` removes its tree on drop, so
 `let TestApp { app, .. } = test_app().await` wipes the sources directory

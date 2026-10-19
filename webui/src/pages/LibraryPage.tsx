@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BookOpen, Search, SearchX } from 'lucide-react';
+import { BookOpen, ListFilter, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
-import { useCategories, useLibrary } from '../api/hooks';
-import type { LibraryFilter, LibrarySort } from '../api/types';
+import { useCategories, useLibrary, useSources } from '../api/hooks';
+import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
+import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
 import {
 	Button,
 	Chip,
@@ -11,7 +12,9 @@ import {
 	EmptyState,
 	InfiniteList,
 	Input,
+	Modal,
 	PageHeader,
+	SegmentedControl,
 	Select,
 	Skeleton,
 	Tabs
@@ -33,12 +36,28 @@ const FILTER_OPTIONS: { value: LibraryFilter; label: string }[] = [
 const ALL = 'all';
 const UNCATEGORIZED = '0';
 
+/** 三态循环的下一态：未选 → 包含 → 排除 → 未选 */
+function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
+	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
+}
+
+function cycled(sel: TriStateSelection, key: string): TriStateSelection {
+	const next = { ...sel };
+	const v = nextTri(next[key] ?? 0);
+	if (v === 0) delete next[key];
+	else next[key] = v;
+	return next;
+}
+
 export default function LibraryPage() {
 	const [tab, setTab] = useState(ALL);
 	const [searchInput, setSearchInput] = useState('');
 	const [search, setSearch] = useState('');
 	const [sort, setSort] = useState<LibrarySort>('added');
 	const [filters, setFilters] = useState<LibraryFilter[]>([]);
+	const [ratings, setRatings] = useState<TriStateSelection>({});
+	const [sourceTri, setSourceTri] = useState<TriStateSelection>({});
+	const [sourceOpen, setSourceOpen] = useState(false);
 
 	useEffect(() => {
 		const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -49,15 +68,26 @@ export default function LibraryPage() {
 	const query = useLibrary(categoryId, {
 		search: search || undefined,
 		sort,
-		filter: filters
+		filter: filters,
+		ratings,
+		sources: sourceTri
 	});
 	const categories = useCategories();
+	const sourcesQuery = useSources();
+	// 停用源仍可能拥有库内条目，候选不去除
+	const sourceOptions = useMemo(
+		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
+		[sourcesQuery.data]
+	);
 
 	const entries = useMemo(
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
 		[query.data]
 	);
-	const filtering = search !== '' || filters.length > 0;
+	const ratingCount = Object.keys(ratings).length;
+	const sourceCount = Object.keys(sourceTri).length;
+	const filtering =
+		search !== '' || filters.length > 0 || ratingCount > 0 || sourceCount > 0;
 
 	function toggleFilter(f: LibraryFilter) {
 		setFilters((cur) => (cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f]));
@@ -67,6 +97,8 @@ export default function LibraryPage() {
 		setSearchInput('');
 		setSearch('');
 		setFilters([]);
+		setRatings({});
+		setSourceTri({});
 	}
 
 	const tabs = [
@@ -118,6 +150,27 @@ export default function LibraryPage() {
 						{o.label}
 					</Chip>
 				))}
+			</div>
+
+			<div className="library__filters" role="group" aria-label="内容分级与图源">
+				{MANGA_CONTENT_RATING_LEVELS.map((level) => {
+					const st = ratings[String(level.value)] ?? 0;
+					return (
+						<Chip
+							key={level.value}
+							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
+							title="点击切换：包含 / 排除 / 不选"
+							onClick={() => setRatings((cur) => cycled(cur, String(level.value)))}
+						>
+							{st === -1 ? '− ' : ''}
+							{level.label}
+						</Chip>
+					);
+				})}
+				<Button onClick={() => setSourceOpen(true)}>
+					<ListFilter size={15} />
+					图源{sourceCount > 0 ? `（${sourceCount}）` : ''}
+				</Button>
 			</div>
 
 			<div className="library__tabs">
@@ -172,6 +225,50 @@ export default function LibraryPage() {
 					</div>
 				</InfiniteList>
 			)}
+
+			<Modal
+				open={sourceOpen}
+				title="筛选图源"
+				onClose={() => setSourceOpen(false)}
+				footer={
+					<Button variant="primary" onClick={() => setSourceOpen(false)}>
+						完成
+					</Button>
+				}
+			>
+				{sourceOptions.length === 0 ? (
+					<p className="muted">还没有已安装的源</p>
+				) : (
+					<div className="library__source-list">
+						{sourceOptions.map((s) => {
+							const st = sourceTri[String(s.id)] ?? 0;
+							return (
+								<div key={s.id} className="library__source-row">
+									<span className="library__source-name">{s.name}</span>
+									<SegmentedControl
+										options={TRI_OPTIONS}
+										value={st}
+										onChange={(v) =>
+											setSourceTri((cur) => {
+												const next = { ...cur };
+												if (v === 0) delete next[String(s.id)];
+												else next[String(s.id)] = v;
+												return next;
+											})
+										}
+									/>
+								</div>
+							);
+						})}
+					</div>
+				)}
+			</Modal>
 		</div>
 	);
 }
+
+const TRI_OPTIONS: { value: 1 | -1 | 0; label: string }[] = [
+	{ value: 0, label: '不选' },
+	{ value: 1, label: '包含' },
+	{ value: -1, label: '排除' }
+];
