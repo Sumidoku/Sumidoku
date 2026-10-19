@@ -628,31 +628,24 @@ export default function MangaDetailPage() {
 								))}
 							</Select>
 						)}
-						{scanlators.length > 1 && (
-							<div className="manga-chaps__filters">
-								{scanlators.map((s) => (
-									<Chip
-										key={s}
-										color={prefs.scanlators.includes(s) ? 'accent' : 'default'}
-										title={
-											prefs.scanlators.includes(s)
-											? `点击取消筛选「${s}」`
-											: `点击只显示「${s}」的章节`
-										}
-										onClick={() =>
-											setPrefs((p) => ({
-												...p,
-												scanlators: p.scanlators.includes(s)
-												? p.scanlators.filter((x) => x !== s)
-												: [...p.scanlators, s]
-											}))
-										}
-									>
-										{s}
-									</Chip>
-								))}
-							</div>
-						)}
+					{scanlators.length > 1 && (
+						<Select
+							value={prefs.scanlators[0] ?? ''}
+							title="汉化组"
+							aria-label="汉化组"
+							onChange={(e) => {
+								const v = e.currentTarget.value;
+								setPrefs((p) => ({ ...p, scanlators: v ? [v] : [] }));
+							}}
+						>
+							<option value="">全部汉化组</option>
+							{scanlators.map((s) => (
+								<option key={s} value={s}>
+									{s}
+								</option>
+							))}
+						</Select>
+					)}
 						{chapters.length > 0 && (
 							<Button size="sm" onClick={() => setSelecting(true)}>
 								选择
