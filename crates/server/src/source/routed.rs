@@ -19,6 +19,7 @@ pub struct SumidokuNetPolicy {
 	trawl_proxy: Option<String>,
 	global_proxy: Option<String>,
 	allow_direct_fallback: bool,
+	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
 	/// 撞过 CF 挑战、此后常走 trawl 的 host（进程内记忆，重启后首个请求重学一次）
 	challenged: RwLock<HashSet<String>>,
@@ -44,6 +45,7 @@ impl SumidokuNetPolicy {
 			trawl_proxy: config.net.trawl_proxy.clone(),
 			global_proxy: config.net.proxy.clone(),
 			allow_direct_fallback: config.net.allow_direct_fallback,
+			browser_headers: config.net.browser_headers,
 			ca_pem,
 			challenged: RwLock::new(HashSet::new()),
 		})
@@ -98,6 +100,10 @@ impl NetPolicy for SumidokuNetPolicy {
 
 	fn user_agent(&self) -> Option<String> {
 		Some(self.user_agent.clone())
+	}
+
+	fn browser_headers(&self, _url: &Url) -> bool {
+		self.browser_headers
 	}
 
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
@@ -157,7 +163,7 @@ impl RoutedClients {
 		if let Some(client) = self.clients.read().expect("clients lock").get(route) {
 			return Ok(client.clone());
 		}
-		let mut builder = Client::builder().use_rustls_tls();
+		let mut builder = base_builder();
 		if let NetRoute::Proxy(proxy_url) = route {
 			let proxy = reqwest::Proxy::all(proxy_url)
 				.map_err(FetchError::Network)?;
@@ -198,6 +204,7 @@ impl RoutedClients {
 			headers,
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		))
 	}
 
@@ -276,6 +283,7 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		)
 		.send()
 		.await
@@ -291,8 +299,7 @@ impl RoutedClients {
 		url: &Url,
 		accept_language: Option<&str>,
 	) -> Result<reqwest::Response, FetchError> {
-		let client = Client::builder()
-			.use_rustls_tls()
+		let client = base_builder()
 			.build()
 			.map_err(FetchError::Network)?;
 		let response = apply_default_headers(
@@ -300,6 +307,7 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
 		)
 		.send()
 		.await
@@ -311,13 +319,20 @@ impl RoutedClients {
 	}
 }
 
-/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent 与宿主 Accept-Language。
+/// 直连/代理共用的客户端底座：rustls 一处钉死，各路由只叠加自己的 proxy/CA
+fn base_builder() -> reqwest::ClientBuilder {
+	Client::builder().use_rustls_tls()
+}
+
+/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent、浏览器头套件与宿主
+/// Accept-Language。
 /// 关键在「先判后补」——reqwest 的 header() 是 append，缺省值若先塞会与源值并成两个同名头。
 fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
 	source_headers: &[(String, String)],
 	global_user_agent: String,
 	accept_language: Option<&str>,
+	browser_headers: bool,
 ) -> reqwest::RequestBuilder {
 	let has = |name: &str| {
 		source_headers
@@ -329,6 +344,13 @@ fn apply_default_headers(
 	let mut builder = builder;
 	if !has_user_agent {
 		builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+	}
+	if browser_headers {
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			if !has(name) {
+				builder = builder.header(name, value);
+			}
+		}
 	}
 	for (name, value) in source_headers {
 		builder = builder.header(name, value);
@@ -631,6 +653,74 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn get_with_sends_browser_header_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			let expected = format!("{}: {}", name, value.to_ascii_lowercase());
+			assert!(head.contains(&expected), "缺浏览器头 {name}: {head}");
+		}
+	}
+
+	#[tokio::test]
+	async fn request_with_keeps_source_suite_headers() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		// 源自带的套件成员（API 请求常见的 Accept / Sec-Fetch-Site）必须赢过套件缺省值，
+		// 且只能有一个：缺省值先塞会并成两个同名头
+		let headers = vec![
+			("Accept".to_string(), "application/json".to_string()),
+			("Sec-Fetch-Site".to_string(), "same-origin".to_string()),
+		];
+		clients
+			.request_with(reqwest::Method::GET, &url, &headers, None)
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let accepts: Vec<&str> = head.lines().filter(|l| l.starts_with("accept:")).collect();
+		assert_eq!(accepts.len(), 1, "Accept 不得被追加成两个: {head}");
+		assert_eq!(accepts[0].trim(), "accept: application/json", "{head}");
+		let sites: Vec<&str> = head
+			.lines()
+			.filter(|l| l.starts_with("sec-fetch-site:"))
+			.collect();
+		assert_eq!(sites.len(), 1, "Sec-Fetch-Site 不得被追加成两个: {head}");
+		assert_eq!(sites[0].trim(), "sec-fetch-site: same-origin", "{head}");
+		// 源没设的套件成员仍要补
+		assert!(head.contains("sec-ch-ua:"), "{head}");
+		assert!(head.contains("upgrade-insecure-requests: 1"), "{head}");
+	}
+
+	#[tokio::test]
+	async fn browser_headers_disabled_omits_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|c| c.net.browser_headers = false));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, _) in aidoku_wasm::BROWSER_HEADERS {
+			if name == "accept" {
+				// reqwest 自己兜底 accept: */*，只能钉套件值不在
+				assert!(!head.contains("accept: text/html"), "{head}");
+				continue;
+			}
+			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
+		}
+		// 旋钮只管套件：全局 UA 照补
+		assert!(head.contains("user-agent:"), "{head}");
+	}
+
+	#[tokio::test]
 	async fn get_escalates_cf_challenge_via_trawl() {
 		let origin = mock_server(|_head| {
 			respond(
@@ -722,5 +812,97 @@ mod tests {
 		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
 		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
 		assert_eq!(trawl.hits(), 2);
+	}
+
+	/// 实测冒烟：打真实站点，不进固定套件（nextest --run-ignored all 手动跑）。
+	/// 钉三件事：协议回声协商 h2、被动 CF 样本站直连 200 且非挑战页、正常站无回归。
+	#[tokio::test]
+	#[ignore = "打真实站点，只手动跑"]
+	async fn smoke_direct_path_fingerprint() {
+		let clients = RoutedClients::new(policy(|_| {}));
+
+		let peet = Url::parse("https://tls.peet.ws/api/all").unwrap();
+		let response = clients.get(&peet).await.expect("tls.peet.ws");
+		assert_eq!(format!("{:?}", response.version()), "HTTP/2.0", "协议回声应协商 h2");
+		let body = response.text().await.expect("peet body");
+		assert!(body.contains("\"http_version\": \"h2\""), "{body}");
+		println!("tls.peet.ws: negotiated HTTP/2.0");
+
+		for site in ["https://toonily.com/", "https://bakamh.com/"] {
+			let url = Url::parse(site).unwrap();
+			let response = clients.get(&url).await.unwrap_or_else(|e| panic!("{site}: {e}"));
+			assert_eq!(response.status(), StatusCode::OK, "{site}");
+			let body = response.text().await.unwrap_or_else(|e| panic!("{site} body: {e}"));
+			assert!(!body.contains("Just a moment"), "{site} 不应是挑战页");
+			assert!(
+				body.len() > 20_000,
+				"{site} 正文过短（{} 字节），疑似挑战页",
+				body.len()
+			);
+			println!("{site} 200, {} bytes", body.len());
+		}
+
+		let mangadex = Url::parse("https://mangadex.org/").unwrap();
+		let response = clients.get(&mangadex).await.expect("mangadex");
+		assert_eq!(response.status(), StatusCode::OK, "mangadex 无回归");
+		println!("https://mangadex.org/ 200");
+	}
+
+	/// 直连底座（base_builder + 测试 CA）必须能对只讲 h2 的源站协商出 HTTP/2：
+	/// 本地 rustls echo 只放 h2 一个 ALPN——客户端不开 http2 时连 TLS 握手都过不了。
+	#[tokio::test]
+	async fn direct_client_negotiates_http2() {
+		use tokio::io::AsyncReadExt;
+
+		let rcgen::CertifiedKey { cert, key_pair } =
+			rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("self-signed");
+		let cert_der = cert.der().clone();
+		let mut server_config = rustls::ServerConfig::builder()
+			.with_no_client_auth()
+			.with_single_cert(
+				vec![cert_der.clone()],
+				rustls::pki_types::PrivateKeyDer::Pkcs8(
+					rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+				),
+			)
+			.expect("server config");
+		server_config.alpn_protocols = vec![b"h2".to_vec()];
+		let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+		let port = listener.local_addr().expect("local addr").port();
+		let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+		tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.expect("accept");
+			let negotiated = match acceptor.accept(stream).await {
+				Ok(mut tls) => {
+					let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+					let mut preface = vec![0u8; 24];
+					let _ = tls.read_exact(&mut preface).await;
+					Some((alpn, preface))
+				}
+				Err(_) => None,
+			};
+			let _ = seen_tx.send(negotiated);
+		});
+
+		let client = base_builder()
+			.add_root_certificate(reqwest::Certificate::from_der(cert_der.as_ref()).expect("cert"))
+			.build()
+			.expect("client");
+		let url = Url::parse(&format!("https://localhost:{port}/")).unwrap();
+		// echo 不答任何请求：h2 preface 一到即关，send 的结果无关紧要
+		let _ = client.get(url).send().await;
+
+		let negotiated = tokio::time::timeout(Duration::from_secs(10), seen_rx)
+			.await
+			.expect("echo 应收到一次连接")
+			.expect("seen channel");
+		let (alpn, preface) = negotiated.expect("客户端不开 http2 时 ALPN 无交集，TLS 握手会失败");
+		assert_eq!(alpn.as_deref(), Some(b"h2".as_slice()), "ALPN 应选中 h2");
+		assert_eq!(
+			preface,
+			b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec(),
+			"客户端应发出 h2 client preface"
+		);
 	}
 }

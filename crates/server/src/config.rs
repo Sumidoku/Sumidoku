@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NetConfig {
 	pub direct_domains: Vec<String>,
 	pub relay_domains: Vec<String>,
@@ -11,10 +11,29 @@ pub struct NetConfig {
 	pub trawl_ca: Option<PathBuf>,
 	pub proxy: Option<String>,
 	pub allow_direct_fallback: bool,
+	/// 直连请求补浏览器头套件（BROWSER_HEADERS）：sec-fetch-* 的导航语义对
+	/// API/XHR 是轻度失真，关掉换语义诚实；被动盾核对套件存在性，关了更容易 403
+	pub browser_headers: bool,
 	/// CDP websocket 地址（ws://…），未配置时 webview 浏览器函数显式不支持
 	pub browser_ws: Option<String>,
 	/// trawl session API 地址（http://…）；与 browser_ws 互斥（build_app 校验）
 	pub browser_trawl: Option<String>,
+}
+
+impl Default for NetConfig {
+	fn default() -> Self {
+		Self {
+			direct_domains: Vec::new(),
+			relay_domains: Vec::new(),
+			trawl_proxy: None,
+			trawl_ca: None,
+			proxy: None,
+			allow_direct_fallback: false,
+			browser_headers: true,
+			browser_ws: None,
+			browser_trawl: None,
+		}
+	}
 }
 
 #[derive(Debug, Clone, Default)]
@@ -115,6 +134,7 @@ struct NetConfigFile {
 	trawl_ca: Option<PathBuf>,
 	proxy: Option<String>,
 	allow_direct_fallback: Option<bool>,
+	browser_headers: Option<bool>,
 	browser_ws: Option<String>,
 	browser_trawl: Option<String>,
 }
@@ -329,6 +349,9 @@ impl Config {
 			if let Some(v) = net.allow_direct_fallback {
 				self.net.allow_direct_fallback = v;
 			}
+			if let Some(v) = net.browser_headers {
+				self.net.browser_headers = v;
+			}
 		}
 	}
 
@@ -482,6 +505,11 @@ impl Config {
 		{
 			self.net.allow_direct_fallback = n;
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_HEADERS")
+			&& let Ok(n) = v.parse()
+		{
+			self.net.browser_headers = n;
+		}
 	}
 }
 
@@ -621,6 +649,21 @@ mod tests {
 		assert_eq!(limits.fuel, 123);
 		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(7));
 		assert_eq!(limits.net_body_max, 48 * 1024 * 1024);
+	}
+
+	#[test]
+	fn browser_headers_from_file_and_env() {
+		assert!(Config::default().net.browser_headers, "默认开");
+		let file: ConfigFile = toml::from_str("[net]\nbrowser_headers = false\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert!(!config.net.browser_headers);
+
+		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_HEADERS", "false") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_HEADERS") };
+		assert!(!config.net.browser_headers);
 	}
 
 	#[test]
