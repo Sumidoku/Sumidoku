@@ -1114,7 +1114,8 @@ mod tests {
 					(
 						"200 OK",
 						format!("set-cookie: sess={who}-secret; Path=/\r\ncontent-type: text/html\r\n"),
-						format!("<html><body><form>login {who}</form></body></html>"),
+						// trawl 把 <100 字符的页面判为空壳加载失败，夹具页要垫过这条线
+						format!("<html><head><title>sign in</title></head><body><h1>member login</h1><form method=\"post\" action=\"/login\">login {who}</form><p>fixture page padded past the scraper's empty-shell threshold</p></body></html>"),
 					)
 				} else if path == "/api" {
 					("200 OK", "content-type: application/json\r\n".to_string(), "{}".to_string())

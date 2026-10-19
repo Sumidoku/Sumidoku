@@ -59,12 +59,17 @@ source log.
 
 A trawl deployment can double as the webview browser instead of a Chromium
 sidecar: point `SUMIDOKU_NET_BROWSER_TRAWL` at the trawl API (e.g.
-`http://trawl:8191`) and each webview becomes a named keepPage session with
-the same cookie reflux. The two variables are mutually exclusive —
-configuring both fails startup. Trawl-backed webviews additionally run
-`webview_eval` in the real page, but `webview_delete_cookie` is unsupported
-there (no endpoint), and trawl cannot power the interactive login below
-(the session API has no screencast or input surface).
+`http://trawl:8191`, requires trawl ≥ v1.9.1) and each webview becomes a
+named keepPage session with the same cookie reflux. The two variables are
+mutually exclusive — configuring both fails startup. Trawl-backed webviews
+additionally run `webview_eval` in the real page, but
+`webview_delete_cookie` is unsupported there (no endpoint), and trawl
+cannot power the interactive login below (the session API has no
+screencast or input surface). Two upstream behaviors to know: trawl
+sessions live in the process and die with the container (Sumidoku
+recreates them on demand), and trawl rejects pages under 100 characters
+as empty shells — real source pages never come close, but a hand-built
+fixture will trip it.
 
 ## Interactive web login (no devtools)
 
