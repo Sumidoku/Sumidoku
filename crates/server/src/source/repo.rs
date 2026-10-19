@@ -239,6 +239,26 @@ pub async fn refresh_repo(state: &Arc<AppState>, id: i64) -> ApiResult<SourceRep
 	}
 }
 
+/// 定时入口：逐仓刷新 index。失败的仓保留旧缓存、fetch_error 落库（见 refresh_repo），
+/// 这里只记日志继续刷下一个，互不阻塞
+pub async fn refresh_all(state: &Arc<AppState>) {
+	for repo in list_repos(&state.pool).await.unwrap_or_default() {
+		if let Err(e) = refresh_repo(state, repo.id).await {
+			tracing::warn!(repo = repo.id, url = %repo.url, "scheduled repository refresh failed: {e:?}");
+		}
+	}
+}
+
+/// 周期刷新任务：interval 首 tick 立即完成，首跑等满一个周期
+pub async fn run_periodic_refresh(state: Arc<AppState>, interval_hours: u64) {
+	let mut interval = tokio::time::interval(Duration::from_secs(interval_hours * 3600));
+	interval.tick().await;
+	loop {
+		interval.tick().await;
+		refresh_all(&state).await;
+	}
+}
+
 /// 各 key 在所有 repo 缓存里的最新版本与所在 repo；update 检测的唯一口径
 /// （Aidoku 语义：整数 version 严格大于已装即算有更新）
 pub async fn latest_versions(pool: &SqlitePool) -> ApiResult<HashMap<String, (i64, i64)>> {

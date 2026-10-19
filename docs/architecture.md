@@ -59,7 +59,12 @@ Migrations in `crates/server/migrations`.
 - Source repositories (`source/repo.rs`, `api/repo.rs`): Aidoku-style repo
   indexes are fetched on add/refresh and cached in the `source_repo` table;
   browsing, install and update detection all read the cache, so an
-  unreachable repo never breaks the installed-source list. Install downloads
+  unreachable repo never breaks the installed-source list. Refreshing is the
+  only way the cache moves: the API's manual per-repo refresh, plus an
+  optional periodic sweep of every repo when `repo_refresh_interval_hours`
+  (config file/env `SUMIDOKU_REPO_REFRESH_INTERVAL_HOURS`, default 0 = off)
+  is non-zero; a failed refresh keeps the old cache and records
+  `fetch_error`. Install downloads
   the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
   through the same `register_aix` path as the directory scan; versions
   compare as Aidoku's monotonic integers.

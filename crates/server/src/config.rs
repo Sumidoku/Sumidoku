@@ -38,6 +38,8 @@ pub struct Config {
 	pub download_concurrency: usize,
 	pub download_format: String,
 	pub update_interval_hours: u64,
+	/// 源仓库 index 定时刷新周期（小时）；0 = 关闭，只靠手动刷新
+	pub repo_refresh_interval_hours: u64,
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
 	pub opds_lazy_download: bool,
@@ -74,6 +76,7 @@ impl Default for Config {
 			download_concurrency: 3,
 			download_format: "cbz".into(),
 			update_interval_hours: 0,
+			repo_refresh_interval_hours: 1,
 			auto_download_new_chapters: false,
 			auto_download_limit: 5,
 			opds_lazy_download: false,
@@ -163,6 +166,7 @@ struct ConfigFile {
 	download_concurrency: Option<usize>,
 	download_format: Option<String>,
 	update_interval_hours: Option<u64>,
+	repo_refresh_interval_hours: Option<u64>,
 	auto_download_new_chapters: Option<bool>,
 	auto_download_limit: Option<usize>,
 	opds_lazy_download: Option<bool>,
@@ -227,6 +231,9 @@ impl Config {
 		}
 		if let Some(v) = file.update_interval_hours {
 			self.update_interval_hours = v;
+		}
+		if let Some(v) = file.repo_refresh_interval_hours {
+			self.repo_refresh_interval_hours = v;
 		}
 		if let Some(v) = file.auto_download_new_chapters {
 			self.auto_download_new_chapters = v;
@@ -338,6 +345,11 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.update_interval_hours = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_REPO_REFRESH_INTERVAL_HOURS")
+			&& let Ok(n) = v.parse()
+		{
+			self.repo_refresh_interval_hours = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS")
 			&& let Ok(n) = v.parse()
@@ -491,6 +503,20 @@ mod tests {
 		assert_eq!(config.wasm_memory_max_mb, 96);
 		assert_eq!(config.wasm_fuel, 999);
 		assert_eq!(config.wasm_call_timeout_secs, 15);
+	}
+
+	#[test]
+	fn repo_refresh_interval_from_file_and_env() {
+		let file: ConfigFile = toml::from_str("repo_refresh_interval_hours = 12\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.repo_refresh_interval_hours, 12);
+
+		unsafe { std::env::set_var("SUMIDOKU_REPO_REFRESH_INTERVAL_HOURS", "6") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_REPO_REFRESH_INTERVAL_HOURS") };
+		assert_eq!(config.repo_refresh_interval_hours, 6);
 	}
 
 	#[test]
