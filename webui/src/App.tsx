@@ -1,4 +1,4 @@
-import { createBrowserRouter, Navigate, RouterProvider } from 'react-router-dom';
+import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom';
 import { AppLayout } from './layout/AppLayout';
 import BrowsePage from './pages/BrowsePage';
 import DownloadsPage from './pages/DownloadsPage';
@@ -21,7 +21,7 @@ const router = createBrowserRouter([
 			{ path: '/', element: <Navigate to="/library" replace /> },
 			{ path: '/library', element: <LibraryPage /> },
 			{ path: '/browse', element: <BrowsePage /> },
-			{ path: '/browse/:sourceId', element: <SourceBrowsePage /> },
+			{ path: '/browse/:sourceId', element: <SourceBrowseRoute /> },
 			{ path: '/browse/:sourceId/home', element: <SourceHomePage /> },
 			{ path: '/manga/:id', element: <MangaDetailPage /> },
 			{ path: '/migrate', element: <MigratePage /> },
@@ -37,6 +37,13 @@ const router = createBrowserRouter([
 	// 登录页同样独立布局（未认证时不渲染任何受保护页面）
 	{ path: '/login', element: <LoginPage /> }
 ]);
+
+// 浏览页有按进页参数一次性初始化的状态（存储的筛选值、深链参数），
+// 同路由换 sourceId 不会自动重挂载，用 key 强制重置，避免源间串筛选
+function SourceBrowseRoute() {
+	const { sourceId } = useParams();
+	return <SourceBrowsePage key={sourceId} />;
+}
 
 export default function App() {
 	return <RouterProvider router={router} />;
