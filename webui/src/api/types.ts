@@ -32,12 +32,6 @@ export interface Source {
 export interface SourceConfig {
 	/** 搜索态下隐藏过滤器，且搜索请求不再携带过滤器值（Aidoku Runner 同款语义） */
 	hidesFiltersWhileSearching?: boolean;
-	/** tag 可点，以 Text 过滤器 id "tag" 发起搜索 */
-	supportsTagSearch?: boolean;
-	/** artist 可点，以 Text 过滤器 id "artist" 发起搜索 */
-	supportsArtistSearch?: boolean;
-	/** author 可点，以 Text 过滤器 id "author" 发起搜索 */
-	supportsAuthorSearch?: boolean;
 	/** 该源并发请求上限，服务端换成 per-source 调用准入帽 */
 	maximumParallelRequests?: number;
 }

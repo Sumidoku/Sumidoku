@@ -16,10 +16,10 @@ import {
 	useRefreshManga,
 	useRemoveFromLibrary,
 	useSetMangaCategories,
-	useSource,
+	useSourceFilters,
 	useUpdateChapter
 } from '../api/hooks';
-import type { Chapter } from '../api/types';
+import type { Chapter, Filter, FilterValue } from '../api/types';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -84,6 +84,34 @@ function triTitle(label: string, t: Tri): string {
 	return `当前不筛选${label}，点击改为只显示${label}`;
 }
 
+// 作者/画师搜索能力对齐 Aidoku supportsAuthorSearch：过滤器列表里有同 id 的 text 过滤器即可
+function hasTextFilter(filters: Filter[], id: string): boolean {
+	return filters.some((f) => f.type === 'text' && f.id === id);
+}
+
+// tag 点按对齐 Aidoku matchingGenreFilter：命中 genre 风格过滤器的 option 才可点。
+// 上游对 select 判 is_genre，这里把 uses_tag_style 的 select 一并算作 genre 风格
+function genreFilterValue(filters: Filter[], tag: string): FilterValue | null {
+	const t = tag.toLowerCase();
+	for (const f of filters) {
+		const genreStyle =
+			(f.type === 'multi-select' && f.is_genre) ||
+			(f.type === 'select' && !!(f.is_genre || f.uses_tag_style));
+		if (!genreStyle) continue;
+		const options = f.options ?? [];
+		let i = options.findIndex((o) => o.toLowerCase() === t);
+		if (i < 0) i = (f.ids ?? []).findIndex((id) => id?.toLowerCase() === t);
+		if (i < 0) continue;
+		// 提交键与浏览页 optionKey 一致：有 ids 用 ids，否则用 option 名
+		const value = f.ids?.[i] ?? options[i];
+		if (!value) continue;
+		return f.type === 'multi-select'
+			? { MultiSelect: { id: f.id, included: [value], excluded: [] } }
+			: { Select: { id: f.id, value } };
+	}
+	return null;
+}
+
 export default function MangaDetailPage() {
 	const { id: rawId } = useParams();
 	const mangaId = Number(rawId);
@@ -94,8 +122,8 @@ export default function MangaDetailPage() {
 	const chaptersQuery = useMangaChapters(mangaId);
 	const manga = mangaQuery.data ?? null;
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
-	// 源 config 的 tag/artist/author 搜索能力位；manga 未到时以 0 占位查不到，自然不渲染链接
-	const sourceQuery = useSource(manga?.sourceId ?? 0);
+	// tag/作者/画师可点与否从源的过滤器列表推导；manga 未到时以 0 占位 404 成空列表，自然不可点
+	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0);
 
 	const [descOpen, setDescOpen] = useState(false);
 	const [removeOpen, setRemoveOpen] = useState(false);
@@ -332,7 +360,7 @@ export default function MangaDetailPage() {
 	const authors = manga.authors ?? [];
 	const artists = manga.artists ?? [];
 	const tags = manga.tags ?? [];
-	const sourceConfig = sourceQuery.data?.config;
+	const filters = filtersQuery.data ?? [];
 	// 去重保序；同时在 authors/artists 出现的名字按 author 搜索（Aidoku 搜作者同款）
 	const creators = [...new Set([...authors, ...artists])].map((name) => ({
 		name,
@@ -341,11 +369,11 @@ export default function MangaDetailPage() {
 	const statusColor = STATUS_COLOR[manga.status.toLowerCase()] ?? 'default';
 	const allCats = categoriesQuery.data ?? [];
 
-	// tag/artist/author 搜索：Aidoku 以 query 空 + Text 过滤器发起，这里复用浏览页的 filters 深链
-	function searchByTextFilter(filterId: string, value: string) {
+	// tag/作者/画师搜索对齐 Aidoku：query 为空、只带过滤器值，复用浏览页的 filters 深链
+	function searchByFilters(values: FilterValue[]) {
 		if (!manga?.sourceId) return;
-		const filters = encodeURIComponent(JSON.stringify([{ Text: { id: filterId, value } }]));
-		navigate(`/browse/${manga.sourceId}?filters=${filters}`);
+		const q = encodeURIComponent(JSON.stringify(values));
+		navigate(`/browse/${manga.sourceId}?filters=${q}`);
 	}
 
 	return (
@@ -374,10 +402,7 @@ export default function MangaDetailPage() {
 						{creators.length > 0 && (
 							<div className="manga-hero__creators">
 								{creators.map((c, i) => {
-									const searchable =
-										c.filterId === 'author'
-											? sourceConfig?.supportsAuthorSearch
-											: sourceConfig?.supportsArtistSearch;
+									const searchable = hasTextFilter(filters, c.filterId);
 									return (
 										<span key={c.name}>
 											{i > 0 && ' / '}
@@ -386,7 +411,9 @@ export default function MangaDetailPage() {
 													type="button"
 													className="manga-hero__creator"
 													title={`搜索${c.filterId === 'author' ? '作者' : '画师'}：${c.name}`}
-													onClick={() => searchByTextFilter(c.filterId, c.name)}
+													onClick={() =>
+														searchByFilters([{ Text: { id: c.filterId, value: c.name } }])
+													}
 												>
 													{c.name}
 												</button>
@@ -415,19 +442,18 @@ export default function MangaDetailPage() {
 						</div>
 						{tags.length > 0 && (
 							<div className="manga-hero__tags">
-								{tags.map((t) => (
-									<Chip
-										key={t}
-										title={sourceConfig?.supportsTagSearch ? `搜索标签：${t}` : undefined}
-										onClick={
-											sourceConfig?.supportsTagSearch
-												? () => searchByTextFilter('tag', t)
-												: undefined
-										}
-									>
-										{t}
-									</Chip>
-								))}
+								{tags.map((t) => {
+									const v = genreFilterValue(filters, t);
+									return (
+										<Chip
+											key={t}
+											title={v ? `搜索标签：${t}` : undefined}
+											onClick={v ? () => searchByFilters([v]) : undefined}
+										>
+											{t}
+										</Chip>
+									);
+								})}
 							</div>
 						)}
 						{manga.description && (
