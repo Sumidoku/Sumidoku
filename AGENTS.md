@@ -26,6 +26,12 @@ daily review of the day's merged work into
 [docs/code-standards.md](docs/code-standards.md#commits-and-merges);
 blocking stays with the maintainer.
 
+## Public writing
+
+Docs, lessons, and issue/PR text record mechanisms and numbers, never
+local machine details: no hostnames, absolute paths, internal domains
+or IPs, and no how-or-where a tool was installed on a private machine.
+
 ## Commands
 
 - Server: `cargo nextest run --workspace` and

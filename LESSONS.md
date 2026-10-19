@@ -1,4 +1,4 @@
-<!-- reviewed-through: 7264734 (2026-10-18) -->
+<!-- reviewed-through: fa2a384 (2026-10-19) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
@@ -394,6 +394,9 @@ before pushing costs a call and saves the detour.
   head branch `webui` was deleted before the fix push, which recreated
   it as "[new branch]"; the fix was cherry-picked onto
   `fix/browse-updates-header` (PR #166) and the stray branch deleted.
+- Seen again: 2026-10-19, PR #170 — the rule was applied before the
+  fix push (state read OPEN), yet the author merged one minute before
+  the merge command; no harm because the fix was already on the branch.
 
 **Piping cargo output hides its exit code — check `${PIPESTATUS[0]}`
 after the pipe.** `cargo clippy ... | tail -5` prints the errors and
@@ -403,3 +406,41 @@ status of the left side, or drop the pipe.
 - Evidence: 2026-10-19, #164's implementation session: a clippy gate
   piped to `tail` showed error output with `EXIT:0`; caught when the
   same gate was re-run unpiped before pushing.
+
+**A compiler-cache wrapper does its own work in the project's name —
+suspect the wrapper when build memory or disk goes wrong.** The ~2 GB
+dsymutil processes behind a build's memory peak had the cache wrapper
+(kache) as their parent, not cargo, and the wrapper ran them even when
+the wrapped rustc carried `-C split-debuginfo=off` (kache never parses
+that flag — kunobi-ninja/kache#1625). The same hiding covers the store
+on disk: 177 GB of cached dSYM bundles filled the disk twice while
+build targets got the blame. Put `RUSTC_WRAPPER` (kache/sccache) on the
+suspect list for build-resource anomalies, put the cache store in every
+disk sweep, and use the one-command bisect (`KACHE_DISABLED=1` or
+unsetting the wrapper) before theorizing about the project.
+- Evidence: 2026-10-19, pid pairings tied every dsymutil to the kache
+  wrapper with `split-debuginfo=off` in the rustc line; 44 `.dSYM`
+  dirs appeared under `off` vs 0 with `KACHE_DISABLED=1`; the store
+  measured 177 GB; the affected builds moved to sccache (same full
+  build: 636 s → 100 s, zero dsymutil).
+
+**Install software through the machine's native package manager first;
+the skill's generic static-binary fallback is a fallback, not the
+default.** Check the distro and its repos (pacman/brew/apt) before
+reaching for a release tarball — a repo-managed install gets updates
+and clean removal for free.
+- Evidence: 2026-10-19, a sccache install went in as a manually
+  copied static binary pulled from upstream releases until the
+  maintainer asked whether the native package manager carried it — it
+  did; reinstalled through the package manager and removed the manual
+  copy.
+
+**`--match-head-commit` takes the sha from a live `gh pr view`, never
+from memory.** A remembered sha fails loudly when it is not a real
+object (GraphQL "Could not coerce … to GitObjectID"), and one that
+happened to collide with a real object would pin the wrong head. The
+standing rule lives in the patrol prompt; anchored here after a
+same-day slip.
+- Evidence: 2026-10-19, the first merge attempt on PR #171 was rejected
+  for a from-memory sha; the real head (`288121b4dcb…`) fetched via
+  `gh pr view` differed and merged.
