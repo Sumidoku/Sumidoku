@@ -34,6 +34,8 @@ pub struct SourceHandle {
 	inner: Arc<RwLock<Inner>>,
 	features: Arc<RwLock<SourceFeatures>>,
 	semaphore: Arc<Semaphore>,
+	/// manifest config.maximumParallelRequests 换算的每源调用准入帽；None 只受全局帽
+	source_semaphore: Option<Arc<Semaphore>>,
 	call_timeout: Duration,
 }
 
@@ -41,6 +43,14 @@ impl SourceHandle {
 	pub async fn spawn(
 		config: SourceConfig,
 		semaphore: Arc<Semaphore>,
+	) -> Result<(Self, SourceFeatures)> {
+		Self::spawn_with_source_limit(config, semaphore, None).await
+	}
+
+	pub async fn spawn_with_source_limit(
+		config: SourceConfig,
+		semaphore: Arc<Semaphore>,
+		source_semaphore: Option<Arc<Semaphore>>,
 	) -> Result<(Self, SourceFeatures)> {
 		let inner = Self::spawn_actor(&config).await?;
 		let features = inner.1?;
@@ -51,6 +61,7 @@ impl SourceHandle {
 			inner: Arc::new(RwLock::new(inner.0)),
 			features: Arc::new(RwLock::new(features.clone())),
 			semaphore,
+			source_semaphore,
 			call_timeout,
 		};
 		Ok((handle, features))
@@ -120,6 +131,17 @@ impl SourceHandle {
 		&self,
 		job: impl FnOnce(&mut SourceInstance) -> Result<T> + Send + 'static,
 	) -> Result<T> {
+		// 先取每源帽再占全局帽：声明了 maximumParallelRequests 的源在入口就被压回，
+		// 不消耗全局许可排队
+		let _source_permit = match &self.source_semaphore {
+			Some(sem) => Some(
+				sem.clone()
+					.acquire_owned()
+					.await
+					.map_err(|_| Error::Instance("source call semaphore closed".into()))?,
+			),
+			None => None,
+		};
 		let _permit = self
 			.semaphore
 			.clone()

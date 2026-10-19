@@ -83,19 +83,26 @@ pub fn deeplink_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/deeplink/main.wasm")
 }
 
+/// 回显收到 listing 的 fixture 载荷，用于 listing 透传与 source config DTO 链路
+pub fn listing_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/listing/main.wasm")
+}
+
 /// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
+	let doc = serde_json::json!({
+		"info": {"id": key, "name": name, "version": 1, "languages": ["en"]}
+	});
+	install_fixture_source_with_doc(tmp, &doc, wasm);
+}
+
+/// 带自定义 source.json（listings/config 等节）的 fixture 源登记；info.id 取 doc 里的 id
+pub fn install_fixture_source_with_doc(tmp: &tempfile::TempDir, doc: &Value, wasm: &std::path::Path) {
+	let key = doc["info"]["id"].as_str().expect("fixture info.id");
 	let dir = tmp.path().join("sources").join(key);
 	std::fs::create_dir_all(&dir).expect("mkdir fixture source");
 	std::fs::copy(wasm, dir.join("main.wasm")).expect("copy fixture wasm");
-	std::fs::write(
-		dir.join("source.json"),
-		serde_json::json!({
-			"info": {"id": key, "name": name, "version": 1, "languages": ["en"]}
-		})
-		.to_string(),
-	)
-	.expect("write source.json");
+	std::fs::write(dir.join("source.json"), doc.to_string()).expect("write source.json");
 }
 
 pub struct TestApp {

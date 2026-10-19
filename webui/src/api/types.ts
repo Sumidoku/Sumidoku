@@ -18,10 +18,26 @@ export interface Source {
 	updateVersion: number | null;
 	/** manifest config.breakingChangeVersion，未声明为 0；跨版本更新会触发 key 迁移 */
 	breakingChangeVersion: number;
+	/** manifest config 节原文（Aidoku SourceInfo.Configuration），未声明为 null */
+	config: SourceConfig | null;
 	/** 在置顶列表（browse.pinned_sources）里 */
 	pinned: boolean;
 	/** 置顶列表里的下标，即迁移时的默认优先级；未置顶为 null */
 	pinOrder: number | null;
+}
+
+/** Aidoku SourceInfo.Configuration；DTO 原样透传，这里只列消费到的键 */
+export interface SourceConfig {
+	/** 搜索态下隐藏过滤器，且搜索请求不再携带过滤器值（Aidoku Runner 同款语义） */
+	hidesFiltersWhileSearching?: boolean;
+	/** tag 可点，以 Text 过滤器 id "tag" 发起搜索 */
+	supportsTagSearch?: boolean;
+	/** artist 可点，以 Text 过滤器 id "artist" 发起搜索 */
+	supportsArtistSearch?: boolean;
+	/** author 可点，以 Text 过滤器 id "author" 发起搜索 */
+	supportsAuthorSearch?: boolean;
+	/** 该源并发请求上限，服务端换成 per-source 调用准入帽 */
+	maximumParallelRequests?: number;
 }
 
 export interface SourceRepo {

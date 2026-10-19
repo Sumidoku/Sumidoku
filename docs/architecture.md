@@ -27,6 +27,19 @@ Migrations in `crates/server/migrations`.
   with no second lookup; `Listing` passes through and the source browse page
   switches to that listing, and an unmatched URL answers `{"result": null}`.
   A source without the export answers 404 `unsupported`, same as `get_home`.
+  `GET /api/v1/sources/{id}/listings/{listing_id}` (`api/mod.rs:get_manga_list`)
+  resolves the real `Listing` before calling `get_manga_list`: the id is looked
+  up in the source's declared listings (static `source.json` entries first,
+  then the dynamic `get_listings` export — the same order the listings
+  endpoint serves). Static entries parse with AidokuRunner's `SourceInfo`
+  decoding semantics: a bare string means `id = name = string`, a missing
+  `name` falls back to the id, and `kind` is `List` only for the numeric
+  value 1 (AidokuRunner decodes `ListingKind` as UInt8, anything else lands
+  on `Default`). An unknown id passes through with an empty name and
+  `Default` kind — Aidoku only ever sends a listing the source itself
+  returned, so there is no upstream lookup-failure behavior to mirror, and
+  the source decides how to answer. A failed dynamic-listings fetch degrades
+  to the static list rather than failing the request.
 - Partial-result streaming (`api/partial.rs`): the home and search endpoints
   honor `Accept: application/x-ndjson` as an explicit opt-in. The source's
   mid-request `send_partial_result` payloads arrive as one JSON event per
@@ -53,7 +66,18 @@ Migrations in `crates/server/migrations`.
 - Breaking-change key migration (`source/rekey.rs`): registration stores the
   manifest's `config.breakingChangeVersion` (Aidoku's
   `SourceInfo.Configuration`) in `source.breaking_change_version`, and
-  `source_json` exposes it. When an update crosses it
+  `source_json` exposes it. Registration also persists the whole manifest
+  `config` section verbatim in `source.config` (null when absent), and
+  `repo::source_json` exposes it as `config` in the installed-source DTO.
+  The web UI honors `hidesFiltersWhileSearching` on the source browse page
+  (a non-empty search box hides the filter UI and the search request drops
+  filter values, mirroring AidokuRunner clearing filters on a non-empty
+  query) and the tag/artist/author search capabilities on the manga detail
+  page (`supportsTagSearch`/`supportsArtistSearch`/`supportsAuthorSearch`
+  make tags and creator names clickable, navigating to the browse page with
+  a `Text` filter value, Aidoku's query-less filter search).
+  `maximumParallelRequests` becomes a per-source call semaphore (see
+  `state.rs` below). When an update crosses it
   (`old version < breakingChangeVersion <= new version`, Aidoku checks only
   the lower bound) and the source has manga rows, the update path runs key
   migration after the new package registers. With `features.migration` the
@@ -344,7 +368,15 @@ Migrations in `crates/server/migrations`.
   `wasm_memory_max_mb` (default 128 — Aidoku sources rarely exceed 64
   MiB, but a tighter cap makes `memory.grow` fail and kills the source),
   `wasm_fuel` and `wasm_call_timeout_secs`; the sleep/net/js/browser
-  knobs stay hardcoded.
+  knobs stay hardcoded. Every export call also passes two admission
+  semaphores (`crates/wasm/src/runtime/actor.rs:call`): the global
+  `call_concurrency` cap, and — only when the source manifest declares
+  `config.maximumParallelRequests` — a per-source cap of
+  `max(1, declared)` permits built at spawn and held on the
+  `SourceEntry`. Aidoku applies the same declaration as
+  `max(1, min(config, default))` to page-download groups; stacking the
+  two semaphores reproduces the `min(declared, global)` bound while
+  undeclared sources keep the global cap alone.
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
   direct, per-domain relay, or a global proxy, decided per host. When
   `net.trawl_proxy` is set, a direct request answered 403/503 with Cloudflare

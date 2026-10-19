@@ -13,16 +13,24 @@ pub struct SourceEntry {
 	pub handle: Arc<SourceHandle>,
 	pub key: String,
 	pub features: SourceFeatures,
+	/// manifest config.maximumParallelRequests 换算的每源调用准入帽；None 只受全局帽
+	pub call_limit: Option<Arc<Semaphore>>,
 	/// 最近一次 get_handle 命中的时刻；空闲逐出的判据
 	last_used: std::sync::Mutex<std::time::Instant>,
 }
 
 impl SourceEntry {
-	fn new(handle: Arc<SourceHandle>, key: String, features: SourceFeatures) -> Self {
+	fn new(
+		handle: Arc<SourceHandle>,
+		key: String,
+		features: SourceFeatures,
+		call_limit: Option<Arc<Semaphore>>,
+	) -> Self {
 		Self {
 			handle,
 			key,
 			features,
+			call_limit,
 			last_used: std::sync::Mutex::new(std::time::Instant::now()),
 		}
 	}
@@ -139,6 +147,9 @@ pub async fn load_cookies(
 	Ok(cookies)
 }
 
+/// source 行里组装实例启动配置所需的列（key, wasm_path, enabled, languages, config）
+type SourceConfigRow = (String, String, bool, sqlx::types::Json<Vec<String>>, Option<String>);
+
 impl AppState {
 	pub fn new(
 		pool: SqlitePool,
@@ -222,19 +233,21 @@ impl AppState {
 			.clone()
 	}
 
-	/// 从 source 行 + source_setting + source_cookie 组装实例启动配置
-	async fn source_config(&self, source_id: i64) -> ApiResult<SourceConfig> {
-		let row: Option<(String, String, bool, sqlx::types::Json<Vec<String>>)> =
-			sqlx::query_as("SELECT key, wasm_path, enabled, languages FROM source WHERE id = ?")
+	/// 从 source 行 + source_setting + source_cookie 组装实例启动配置；
+	/// 顺带把 manifest config.maximumParallelRequests 换算成每源调用准入帽
+	async fn source_config(&self, source_id: i64) -> ApiResult<(SourceConfig, Option<Arc<Semaphore>>)> {
+		let row: Option<SourceConfigRow> =
+			sqlx::query_as("SELECT key, wasm_path, enabled, languages, config FROM source WHERE id = ?")
 				.bind(source_id)
 				.fetch_optional(&self.pool)
 				.await?;
-		let Some((key, wasm_path, enabled, languages)) = row else {
+		let Some((key, wasm_path, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
 		if !enabled {
 			return Err(ApiError::source_disabled(&key));
 		}
+		let call_limit = source_call_limit(source_manifest_config.as_deref()).map(Semaphore::new);
 		let defaults = load_defaults(&self.pool, source_id).await?;
 		let cookies = load_cookies(&self.pool, source_id).await?;
 		let accept_language =
@@ -253,7 +266,7 @@ impl AppState {
 			tx: self.cookie_tx.clone(),
 			source_key: key.clone(),
 		});
-		Ok(config)
+		Ok((config, call_limit.map(Arc::new)))
 	}
 
 	/// 懒加载：注册表没有就从 source 行 + source_setting 拉起实例
@@ -263,9 +276,11 @@ impl AppState {
 			entry.touch();
 			return Ok(entry.handle.clone());
 		}
-		let config = self.source_config(source_id).await?;
+		let (config, call_limit) = self.source_config(source_id).await?;
 		let key = config.key.clone();
-		let (handle, features) = SourceHandle::spawn(config, self.call_semaphore.clone()).await?;
+		let (handle, features) =
+			SourceHandle::spawn_with_source_limit(config, self.call_semaphore.clone(), call_limit.clone())
+				.await?;
 		let handle = Arc::new(handle);
 		let mut registry = self.sources.write().await;
 		match registry.entry(source_id) {
@@ -274,7 +289,7 @@ impl AppState {
 				Ok(e.get().handle.clone())
 			}
 			std::collections::hash_map::Entry::Vacant(v) => {
-				v.insert(SourceEntry::new(handle.clone(), key, features));
+				v.insert(SourceEntry::new(handle.clone(), key, features, call_limit));
 				Ok(handle)
 			}
 		}
@@ -364,6 +379,14 @@ fn preferred_languages(
 		return vec![lang.to_string()];
 	}
 	manifest.to_vec()
+}
+
+/// maximumParallelRequests 换算每源并发帽：声明即生效、至少 1（Aidoku 取
+/// max(1, min(config, 默认))，与全局帽叠加后下限语义一致）；未声明/非法为 None，只受全局帽
+fn source_call_limit(manifest_config: Option<&str>) -> Option<usize> {
+	let value: serde_json::Value = serde_json::from_str(manifest_config?).ok()?;
+	let n = value.get("maximumParallelRequests")?.as_i64()?;
+	Some(n.max(1) as usize)
 }
 
 /// 后台 writer：把 sink 投递的 cookie 变更批量 upsert/delete 进 source_cookie
@@ -594,9 +617,47 @@ mod tests {
 			..Config::default()
 		};
 		let (state, source_id, _tmp) = test_state(config).await;
-		let source_config = state.source_config(source_id).await.expect("source config");
+		let (source_config, call_limit) = state.source_config(source_id).await.expect("source config");
 		assert_eq!(source_config.limits.memory_max, 64 * 1024 * 1024);
 		assert_eq!(source_config.limits.fuel, 123_456);
 		assert_eq!(source_config.limits.call_timeout, Duration::from_secs(7));
+		assert!(call_limit.is_none());
+	}
+
+	#[test]
+	fn source_call_limit_reads_the_manifest_config() {
+		assert_eq!(
+			source_call_limit(Some(r#"{"maximumParallelRequests": 3}"#)),
+			Some(3)
+		);
+		// 声明 0/负数按 Aidoku 的 max(1, …) 钳到 1
+		assert_eq!(
+			source_call_limit(Some(r#"{"maximumParallelRequests": 0}"#)),
+			Some(1)
+		);
+		assert_eq!(source_call_limit(Some(r#"{"other": 1}"#)), None);
+		assert_eq!(source_call_limit(Some("not json")), None);
+		assert_eq!(source_call_limit(None), None);
+	}
+
+	#[tokio::test]
+	async fn get_handle_wires_the_declared_call_limit() {
+		let (state, source_id, _tmp) = test_state(Config::default()).await;
+		sqlx::query("UPDATE source SET config = ? WHERE id = ?")
+			.bind(r#"{"maximumParallelRequests": 2}"#)
+			.bind(source_id)
+			.execute(&state.pool)
+			.await
+			.expect("set config");
+		let handle = state.get_handle(source_id).await.expect("handle");
+		drop(handle);
+		let registry = state.sources.read().await;
+		let limit = registry
+			.get(&source_id)
+			.expect("entry")
+			.call_limit
+			.as_ref()
+			.expect("per-source call limit");
+		assert_eq!(limit.available_permits(), 2);
 	}
 }

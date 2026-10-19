@@ -229,6 +229,11 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.and_then(|c| c.get("breakingChangeVersion"))
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
+	// config 节原文落库：DTO 暴露与 per-source 并发帽都从这里读
+	let config = doc
+		.get("config")
+		.filter(|c| c.is_object())
+		.map(|c| c.to_string());
 	let base_url = info
 		.get("url")
 		.and_then(|v| v.as_str())
@@ -259,7 +264,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		// 老源保留 enabled 与 source_setting，只刷新元数据
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
-			 base_url = ?, breaking_change_version = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
+			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
 		)
 		.bind(name)
 		.bind(version)
@@ -267,6 +272,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(content_rating)
 		.bind(base_url)
 		.bind(breaking_change_version)
+		.bind(config)
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)
@@ -278,8 +284,8 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	} else {
 		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
-			 breaking_change_version, wasm_path, icon_path, enabled, installed_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+			 breaking_change_version, config, wasm_path, icon_path, enabled, installed_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
 		)
 		.bind(&key)
 		.bind(name)
@@ -288,6 +294,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(content_rating)
 		.bind(base_url)
 		.bind(breaking_change_version)
+		.bind(config)
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)

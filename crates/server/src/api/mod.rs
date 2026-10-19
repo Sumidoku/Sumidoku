@@ -169,7 +169,7 @@ async fn health() -> Json<Value> {
 
 pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
 	let row: Option<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, icon_path,
+		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source WHERE id = ?",
 	)
 	.bind(id)
@@ -180,7 +180,7 @@ pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow
 
 async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, icon_path,
+		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
@@ -434,6 +434,50 @@ pub struct PageQuery {
 	pub page: Option<i32>,
 }
 
+/// 静态 listings 按 AidokuRunner 的 SourceInfo 解码语义解析：裸字符串 → id=name=字符串；
+/// 对象缺 name 回填 id，kind 只有数值 1 是 List（Runner 按 UInt8 解码，解析失败落 default）
+fn parse_static_listing(value: &Value) -> Option<Listing> {
+	if let Some(s) = value.as_str() {
+		return Some(Listing {
+			id: s.to_string(),
+			name: s.to_string(),
+			kind: aidoku::ListingKind::Default,
+		});
+	}
+	let id = value.get("id").and_then(|v| v.as_str())?.to_string();
+	let name = value
+		.get("name")
+		.and_then(|v| v.as_str())
+		.unwrap_or(&id)
+		.to_string();
+	let kind = match value.get("kind").and_then(|v| v.as_i64()) {
+		Some(1) => aidoku::ListingKind::List,
+		_ => aidoku::ListingKind::Default,
+	};
+	Some(Listing { id, name, kind })
+}
+
+/// 静态（source.json listings）在前、动态导出结果追加在后，与 get_listings 端点同序；
+/// 动态拉取失败只记日志按纯静态继续，不拖累 manga 列表
+async fn combined_listings(
+	state: &AppState,
+	id: i64,
+	handle: &aidoku_wasm::SourceHandle,
+) -> ApiResult<Vec<Listing>> {
+	let mut out: Vec<Listing> = Vec::new();
+	if let Some(doc) = package_json(state, id, "source.json").await?
+		&& let Some(listings) = doc.get("listings").and_then(|v| v.as_array())
+	{
+		out.extend(listings.iter().filter_map(parse_static_listing));
+	}
+	match handle.get_listings().await {
+		Ok(listings) => out.extend(listings),
+		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {}
+		Err(e) => tracing::warn!(source_id = id, "dynamic listings fetch failed, static only: {e}"),
+	}
+	Ok(out)
+}
+
 async fn get_manga_list(
 	State(state): State<Arc<AppState>>,
 	Path((id, listing_id)): Path<(i64, String)>,
@@ -444,11 +488,17 @@ async fn get_manga_list(
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
 	let handle = state.get_handle(id).await?;
-	let listing = Listing {
-		id: listing_id,
-		name: String::new(),
-		kind: aidoku::ListingKind::Default,
-	};
+	// 按 id 在源声明的 listings 里找真实 listing（Aidoku 只会传源自己给的对象）；
+	// 找不到时透传 id 本身，源自行决定怎么响应，与既有行为一致
+	let listing = combined_listings(&state, id, &handle)
+		.await?
+		.into_iter()
+		.find(|l| l.id == listing_id)
+		.unwrap_or(Listing {
+			id: listing_id,
+			name: String::new(),
+			kind: aidoku::ListingKind::Default,
+		});
 	let result = handle.get_manga_list(listing, page).await?;
 	let entries = attach_internal_ids(&state, id, result.entries).await?;
 	Ok(Json(json!({

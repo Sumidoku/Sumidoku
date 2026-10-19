@@ -16,6 +16,7 @@ import {
 	useRefreshManga,
 	useRemoveFromLibrary,
 	useSetMangaCategories,
+	useSource,
 	useUpdateChapter
 } from '../api/hooks';
 import type { Chapter } from '../api/types';
@@ -93,6 +94,8 @@ export default function MangaDetailPage() {
 	const chaptersQuery = useMangaChapters(mangaId);
 	const manga = mangaQuery.data ?? null;
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
+	// 源 config 的 tag/artist/author 搜索能力位；manga 未到时以 0 占位查不到，自然不渲染链接
+	const sourceQuery = useSource(manga?.sourceId ?? 0);
 
 	const [descOpen, setDescOpen] = useState(false);
 	const [removeOpen, setRemoveOpen] = useState(false);
@@ -327,9 +330,21 @@ export default function MangaDetailPage() {
 	const authors = manga.authors ?? [];
 	const artists = manga.artists ?? [];
 	const tags = manga.tags ?? [];
-	const creators = [...new Set([...authors, ...artists])].join(' / ');
+	const sourceConfig = sourceQuery.data?.config;
+	// 去重保序；同时在 authors/artists 出现的名字按 author 搜索（Aidoku 搜作者同款）
+	const creators = [...new Set([...authors, ...artists])].map((name) => ({
+		name,
+		filterId: authors.includes(name) ? 'author' : 'artist'
+	}));
 	const statusColor = STATUS_COLOR[manga.status.toLowerCase()] ?? 'default';
 	const allCats = categoriesQuery.data ?? [];
+
+	// tag/artist/author 搜索：Aidoku 以 query 空 + Text 过滤器发起，这里复用浏览页的 filters 深链
+	function searchByTextFilter(filterId: string, value: string) {
+		if (!manga?.sourceId) return;
+		const filters = encodeURIComponent(JSON.stringify([{ Text: { id: filterId, value } }]));
+		navigate(`/browse/${manga.sourceId}?filters=${filters}`);
+	}
 
 	return (
 		<div className="page container">
@@ -354,7 +369,33 @@ export default function MangaDetailPage() {
 					</div>
 					<div className="manga-hero__info">
 						<h1 className="manga-hero__title">{manga.title}</h1>
-						{creators && <div className="manga-hero__creators">{creators}</div>}
+						{creators.length > 0 && (
+							<div className="manga-hero__creators">
+								{creators.map((c, i) => {
+									const searchable =
+										c.filterId === 'author'
+											? sourceConfig?.supportsAuthorSearch
+											: sourceConfig?.supportsArtistSearch;
+									return (
+										<span key={c.name}>
+											{i > 0 && ' / '}
+											{searchable ? (
+												<button
+													type="button"
+													className="manga-hero__creator"
+													title={`搜索${c.filterId === 'author' ? '作者' : '画师'}：${c.name}`}
+													onClick={() => searchByTextFilter(c.filterId, c.name)}
+												>
+													{c.name}
+												</button>
+											) : (
+												c.name
+											)}
+										</span>
+									);
+								})}
+							</div>
+						)}
 						<div className="manga-hero__chips">
 							<Chip color={statusColor}>{statusText(manga.status)}</Chip>
 							{manga.url && (
@@ -373,7 +414,17 @@ export default function MangaDetailPage() {
 						{tags.length > 0 && (
 							<div className="manga-hero__tags">
 								{tags.map((t) => (
-									<Chip key={t}>{t}</Chip>
+									<Chip
+										key={t}
+										title={sourceConfig?.supportsTagSearch ? `搜索标签：${t}` : undefined}
+										onClick={
+											sourceConfig?.supportsTagSearch
+												? () => searchByTextFilter('tag', t)
+												: undefined
+										}
+									>
+										{t}
+									</Chip>
 								))}
 							</div>
 						)}
