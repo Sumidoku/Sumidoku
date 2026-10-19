@@ -30,6 +30,7 @@ import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
 	Chip,
+	Cover,
 	CoverCard,
 	EmptyState,
 	IconButton,
@@ -257,6 +258,8 @@ export default function SourceBrowsePage() {
 		() => activeQuery.data?.pages.flatMap((p) => p.entries) ?? [],
 		[activeQuery.data]
 	);
+	// 服务端把 kind 归一成 default/list；搜索态与 kind 未知（深链进来的未声明 listing）维持网格
+	const listMode = !isSearch && listings?.find((l) => l.id === mode)?.kind === 'list';
 
 	function switchMode(m: string) {
 		if (m === mode) return;
@@ -428,14 +431,28 @@ export default function SourceBrowsePage() {
 
 			{/* 流式搜索中 partial 已进列表：骨架只留给一条都没有时，之后边到边追加 */}
 			{activeQuery.isPending && entries.length === 0 ? (
-				<div className="cover-grid">
-					{Array.from({ length: 12 }, (_, i) => (
-						<div key={i}>
-							<Skeleton aspect="2 / 3" style={{ borderRadius: 'var(--r-md)' }} />
-							<Skeleton height={14} style={{ marginTop: 8 }} />
-						</div>
-					))}
-				</div>
+				listMode ? (
+					<div className="home-rows">
+						{Array.from({ length: 8 }, (_, i) => (
+							<div key={i} className="home-row">
+								<Skeleton width={40} aspect="2 / 3" style={{ borderRadius: 'var(--r-sm)', flex: 'none' }} />
+								<span className="home-row__main">
+									<Skeleton height={14} width="55%" />
+									<Skeleton height={12} width="35%" />
+								</span>
+							</div>
+						))}
+					</div>
+				) : (
+					<div className="cover-grid">
+						{Array.from({ length: 12 }, (_, i) => (
+							<div key={i}>
+								<Skeleton aspect="2 / 3" style={{ borderRadius: 'var(--r-md)' }} />
+								<Skeleton height={14} style={{ marginTop: 8 }} />
+							</div>
+						))}
+					</div>
+				)
 			) : activeQuery.isError ? (
 				<EmptyState
 					icon={TriangleAlert}
@@ -455,18 +472,41 @@ export default function SourceBrowsePage() {
 					isFetching={activeQuery.isFetching}
 					onLoadMore={() => void activeQuery.fetchNextPage()}
 				>
-					<div className="cover-grid">
-						{entries.map((m, i) => (
-							<CoverCard
-								key={m.key + i}
-								src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover}
-								title={m.title}
-								subtitle={m.authors?.[0] ?? statusText(m.status)}
-								busy={pendingKey === m.key}
-								onClick={() => void openEntry(m)}
-							/>
-						))}
-					</div>
+					{listMode ? (
+						<div className="home-rows">
+							{entries.map((m, i) => (
+								<button
+									key={m.key + i}
+									type="button"
+									className="home-row"
+									disabled={pendingKey === m.key}
+									onClick={() => void openEntry(m)}
+								>
+									<Cover src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover} title={m.title} />
+									<span className="home-row__main">
+										<span className="home-row__title">{m.title}</span>
+										<span className="home-row__subtitle">{m.authors?.[0] ?? statusText(m.status)}</span>
+										{m.tags && m.tags.length > 0 && (
+											<span className="home-row__tags">{m.tags.join(' · ')}</span>
+										)}
+									</span>
+								</button>
+							))}
+						</div>
+					) : (
+						<div className="cover-grid">
+							{entries.map((m, i) => (
+								<CoverCard
+									key={m.key + i}
+									src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover}
+									title={m.title}
+									subtitle={m.authors?.[0] ?? statusText(m.status)}
+									busy={pendingKey === m.key}
+									onClick={() => void openEntry(m)}
+								/>
+							))}
+						</div>
+					)}
 				</InfiniteList>
 			)}
 
