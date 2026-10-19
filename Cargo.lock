@@ -4989,6 +4989,7 @@ dependencies = [
  "aidoku-wasm",
  "argon2",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "flate2",
  "futures-core",

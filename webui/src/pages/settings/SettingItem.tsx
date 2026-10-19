@@ -29,6 +29,9 @@ export interface SettingItemProps {
 	/** sidecar 交互登录：完成（收割 cookie）与取消（清理 context） */
 	onCompleteBrowserLogin?: (key: string, session: string) => Promise<void>;
 	onCancelBrowserLogin?: (key: string, session: string) => Promise<void>;
+	/** OAuth 登录：拿授权 URL（新标签打开）与粘贴回调串完成 */
+	onStartOAuth?: (key: string) => Promise<{ url: string }>;
+	onCompleteOAuth?: (key: string, url: string) => Promise<void>;
 }
 
 function strArr(v: unknown): string[] {
@@ -169,6 +172,68 @@ function parseCookies(text: string): Record<string, string> | null {
 	return out;
 }
 
+/** 已登录态的行：标题 + 已登录 chip + 登出按钮与确认框（web/oauth 登录共用） */
+function LoginLogoutRow({
+	title,
+	logoutTitle,
+	clearCookiesOnLogOut,
+	onLogout
+}: {
+	title: string;
+	logoutTitle: string | null;
+	clearCookiesOnLogOut: boolean;
+	onLogout: (clearCookies: boolean) => Promise<void>;
+}) {
+	const [busy, setBusy] = useState(false);
+	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [clearCookies, setClearCookies] = useState(clearCookiesOnLogOut);
+	return (
+		<div className="setting-row setting-row--col">
+			<div className="setting-login__head">
+				<span className="setting-row__title">{title}</span>
+				<Chip color="success">已登录</Chip>
+			</div>
+			<Button
+				size="sm"
+				onClick={() => {
+					setClearCookies(clearCookiesOnLogOut);
+					setConfirmOpen(true);
+				}}
+			>
+				{logoutTitle ?? '登出'}
+			</Button>
+			<Modal
+				open={confirmOpen}
+				title={logoutTitle ?? '登出'}
+				onClose={() => setConfirmOpen(false)}
+				footer={
+					<>
+						<Button onClick={() => setConfirmOpen(false)}>取消</Button>
+						<Button
+							variant="primary"
+							loading={busy}
+							onClick={() => {
+								setBusy(true);
+								void onLogout(clearCookies)
+									.then(() => setConfirmOpen(false))
+									.finally(() => setBusy(false));
+							}}
+						>
+							{logoutTitle ?? '登出'}
+						</Button>
+					</>
+				}
+			>
+				<p>退出该源的登录？登录态与已保存的 cookie 键值会被清除。</p>
+				<label className="setting-row">
+					<span className="setting-row__title">同时清除登录 cookie</span>
+					<Switch checked={clearCookies} onChange={setClearCookies} label="同时清除登录 cookie" />
+				</label>
+			</Modal>
+		</div>
+	);
+}
+
 /** 网页登录：服务端没有 webview，用户登录后粘贴该 host 的 cookie 换取登录态；
  *  服务端配了 sidecar 时也可以开交互会话，在实时视图里完成登录 */
 function WebLoginSetting({
@@ -204,8 +269,6 @@ function WebLoginSetting({
 	const [text, setText] = useState('');
 	const [lsValues, setLsValues] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState(false);
-	const [confirmOpen, setConfirmOpen] = useState(false);
-	const [clearCookies, setClearCookies] = useState(clearCookiesOnLogOut);
 	const [browserSession, setBrowserSession] = useState<BrowserLoginSession | null>(null);
 	const [browserBusy, setBrowserBusy] = useState(false);
 
@@ -221,49 +284,12 @@ function WebLoginSetting({
 
 	if (loggedIn) {
 		return (
-			<div className="setting-row setting-row--col">
-				<div className="setting-login__head">
-					<span className="setting-row__title">{title}</span>
-					<Chip color="success">已登录</Chip>
-				</div>
-				<Button
-					size="sm"
-					onClick={() => {
-						setClearCookies(clearCookiesOnLogOut);
-						setConfirmOpen(true);
-					}}
-				>
-					{logoutTitle ?? '登出'}
-				</Button>
-				<Modal
-					open={confirmOpen}
-					title={logoutTitle ?? '登出'}
-					onClose={() => setConfirmOpen(false)}
-					footer={
-						<>
-							<Button onClick={() => setConfirmOpen(false)}>取消</Button>
-							<Button
-								variant="primary"
-								loading={busy}
-								onClick={() => {
-									setBusy(true);
-									void onLogout(clearCookies)
-										.then(() => setConfirmOpen(false))
-										.finally(() => setBusy(false));
-								}}
-							>
-								{logoutTitle ?? '登出'}
-							</Button>
-						</>
-					}
-				>
-					<p>退出该源的登录？登录态与已保存的 cookie 键值会被清除。</p>
-					<label className="setting-row">
-						<span className="setting-row__title">同时清除登录 cookie</span>
-						<Switch checked={clearCookies} onChange={setClearCookies} label="同时清除登录 cookie" />
-					</label>
-				</Modal>
-			</div>
+			<LoginLogoutRow
+				title={title}
+				logoutTitle={logoutTitle}
+				clearCookiesOnLogOut={clearCookiesOnLogOut}
+				onLogout={onLogout}
+			/>
 		);
 	}
 
@@ -353,6 +379,93 @@ function WebLoginSetting({
 	);
 }
 
+/**
+ * OAuth 登录：授权页在新标签打开（URL 由服务端构建，pkce 时带 challenge）；
+ * 浏览器拦不到自定义 scheme 的重定向，用户授权后手动粘贴地址栏的回调串完成登录
+ */
+function OAuthSetting({
+	title,
+	logoutTitle,
+	clearCookiesOnLogOut,
+	loggedIn,
+	onStart,
+	onComplete,
+	onLogout
+}: {
+	title: string;
+	logoutTitle: string | null;
+	clearCookiesOnLogOut: boolean;
+	loggedIn: boolean;
+	/** 拿授权 URL（服务端构建）并新标签打开 */
+	onStart: () => Promise<{ url: string }>;
+	onComplete: (url: string) => Promise<void>;
+	onLogout: (clearCookies: boolean) => Promise<void>;
+}) {
+	const [text, setText] = useState('');
+	const [busy, setBusy] = useState(false);
+	const [startBusy, setStartBusy] = useState(false);
+
+	if (loggedIn) {
+		return (
+			<LoginLogoutRow
+				title={title}
+				logoutTitle={logoutTitle}
+				clearCookiesOnLogOut={clearCookiesOnLogOut}
+				onLogout={onLogout}
+			/>
+		);
+	}
+
+	return (
+		<div className="setting-row setting-row--col">
+			<div className="setting-login__head">
+				<span className="setting-row__title">{title}</span>
+			</div>
+			<span className="faint">点「登录」在新标签页打开授权页；授权完成后，把地址栏里的重定向 URL 粘贴到下面</span>
+			<Button
+				size="sm"
+				loading={startBusy}
+				onClick={() => {
+					// window.open 在 await 之后会被弹窗拦截（Safari 必拦）：同步先开空白
+					// 标签，授权 URL 回来再导航它；同步阶段就被拦则退化为直接打开
+					const tab = window.open('', '_blank');
+					setStartBusy(true);
+					void onStart()
+						.then((data) => {
+							if (tab && !tab.closed) {
+								tab.location.href = data.url;
+							} else {
+								window.open(data.url, '_blank', 'noreferrer');
+							}
+						})
+						.catch(() => tab?.close())
+						.finally(() => setStartBusy(false));
+				}}
+			>
+				登录
+			</Button>
+			<textarea
+				className="setting-textarea"
+				rows={2}
+				placeholder={'粘贴重定向 URL，例如 myscheme://callback?code=…'}
+				value={text}
+				onChange={(e) => setText(e.currentTarget.value)}
+			/>
+			<Button
+				size="sm"
+				loading={busy}
+				disabled={!text.trim()}
+				onClick={() => {
+					setBusy(true);
+					void onComplete(text.trim()).finally(() => setBusy(false));
+				}}
+			>
+				完成
+			</Button>
+		</div>
+	);
+}
+
 /** Button 设置：按下把 notification 发给源（Aidoku 语义）；没声明动作串时按下也是空操作，直接禁用 */
 function ButtonRow({
 	title,
@@ -395,7 +508,9 @@ export function SettingItem({
 	browserLogin,
 	onStartBrowserLogin,
 	onCompleteBrowserLogin,
-	onCancelBrowserLogin
+	onCancelBrowserLogin,
+	onStartOAuth,
+	onCompleteOAuth
 }: SettingItemProps) {
 	const [msOpen, setMsOpen] = useState(false);
 
@@ -484,6 +599,19 @@ export function SettingItem({
 					}
 				/>
 			);
+		} else if (onStartOAuth && onCompleteOAuth && onLogoutLogin && method === 'oauth') {
+			// 登录态判定同 web：marker（<key> 存的是令牌串或回调串）非空即已登录
+			body = (
+				<OAuthSetting
+					title={setting.title}
+					logoutTitle={v.Login.logout_title ?? null}
+					clearCookiesOnLogOut={v.Login.clear_cookies_on_log_out === true}
+					loggedIn={typeof marker === 'string' && marker !== ''}
+					onStart={() => onStartOAuth(setting.key)}
+					onComplete={(url) => onCompleteOAuth(setting.key, url)}
+					onLogout={(clearCookies) => onLogoutLogin(setting.key, clearCookies)}
+				/>
+			);
 		} else {
 			body = (
 				<div className="setting-row setting-row--disabled">
@@ -520,6 +648,8 @@ export function SettingItem({
 						onStartBrowserLogin={onStartBrowserLogin}
 						onCompleteBrowserLogin={onCompleteBrowserLogin}
 						onCancelBrowserLogin={onCancelBrowserLogin}
+						onStartOAuth={onStartOAuth}
+						onCompleteOAuth={onCompleteOAuth}
 					/>
 				))}
 				{v.Group.footer && <div className="faint setting-group__footer">{v.Group.footer}</div>}
@@ -549,6 +679,8 @@ export function SettingItem({
 						onStartBrowserLogin={onStartBrowserLogin}
 						onCompleteBrowserLogin={onCompleteBrowserLogin}
 						onCancelBrowserLogin={onCancelBrowserLogin}
+						onStartOAuth={onStartOAuth}
+						onCompleteOAuth={onCompleteOAuth}
 					/>
 				))}
 			</div>

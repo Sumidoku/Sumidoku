@@ -5,6 +5,7 @@ pub mod import_merge;
 pub mod library;
 pub mod login;
 pub mod migrate;
+pub mod oauth;
 pub mod page;
 pub mod partial;
 pub mod pins;
@@ -77,6 +78,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 			"/api/v1/sources/{id}/login/web/browser/{session}/stream",
 			get(login::browser_login_stream),
 		)
+		.route("/api/v1/sources/{id}/login/oauth/start", post(oauth::oauth_start))
+		.route("/api/v1/sources/{id}/login/oauth/complete", post(oauth::oauth_complete))
 		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
@@ -469,7 +472,7 @@ async fn get_home(
 	Ok(partial::ndjson_response(line_rx))
 }
 
-async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {
+pub(crate) async fn current_values(state: &AppState, source_id: i64) -> ApiResult<Value> {
 	let defaults = load_defaults(&state.pool, source_id).await?;
 	let values: serde_json::Map<String, Value> = defaults
 		.iter()

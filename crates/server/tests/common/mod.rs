@@ -59,6 +59,11 @@ pub fn weblogin_plain_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin-plain/main.wasm")
 }
 
+/// OAuth 登录（method: "oauth"）三分支的 fixture 载荷
+pub fn oauth_wasm_path() -> PathBuf {
+	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/oauth/main.wasm")
+}
+
 /// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let dir = tmp.path().join("sources").join(key);

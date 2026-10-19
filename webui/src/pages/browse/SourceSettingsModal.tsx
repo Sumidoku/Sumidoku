@@ -9,6 +9,8 @@ import {
 	useCompleteBrowserLogin,
 	useLoginLogout,
 	useNotifySource,
+	useOAuthLoginComplete,
+	useOAuthLoginStart,
 	useResetSourceSettings,
 	useSaveSourceSettings,
 	useSourceSettings,
@@ -44,6 +46,8 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	const completeBrowserLogin = useCompleteBrowserLogin(sourceId);
 	const cancelBrowserLogin = useCancelBrowserLogin(sourceId);
 	const loginLogout = useLoginLogout(sourceId);
+	const oauthStart = useOAuthLoginStart(sourceId);
+	const oauthComplete = useOAuthLoginComplete(sourceId);
 	const notifySource = useNotifySource(sourceId);
 	const [edits, setEdits] = useState<Record<string, unknown>>({});
 	const [pending, setPending] = useState<PendingAction>(null);
@@ -125,6 +129,12 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		pushToast('已登出', 'info');
 	}
 
+	async function onCompleteOAuth(key: string, url: string) {
+		await oauthComplete.mutateAsync({ key, url });
+		setEdits({});
+		pushToast('登录成功', 'info');
+	}
+
 	return (
 		<div className="settings-source__body">
 			{data.settings.map((setting) => (
@@ -143,6 +153,8 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 					onStartBrowserLogin={(key) => startBrowserLogin.mutateAsync(key)}
 					onCompleteBrowserLogin={onCompleteBrowserLogin}
 					onCancelBrowserLogin={onCancelBrowserLogin}
+					onStartOAuth={(key) => oauthStart.mutateAsync(key)}
+					onCompleteOAuth={onCompleteOAuth}
 				/>
 			))}
 			<div className="settings-source__save">
