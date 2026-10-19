@@ -4,8 +4,6 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
 	ArrowLeft,
 	Check,
-	ChevronDown,
-	ChevronUp,
 	House,
 	Link2,
 	ListFilter,
@@ -30,6 +28,7 @@ import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
 	Chip,
+	ChipDropdown,
 	Cover,
 	CoverCard,
 	EmptyState,
@@ -777,36 +776,6 @@ interface FilterChipProps {
 }
 
 /** chip 下拉菜单；children 拿到 close 以便点选后收起 */
-function ChipDropdown({
-	label,
-	active,
-	children
-}: {
-	label: ReactNode;
-	active?: boolean;
-	children: (close: () => void) => ReactNode;
-}) {
-	const [open, setOpen] = useState(false);
-	const wrapRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		if (!open) return;
-		const onDown = (e: MouseEvent) => {
-			if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-		};
-		document.addEventListener('mousedown', onDown);
-		return () => document.removeEventListener('mousedown', onDown);
-	}, [open]);
-	return (
-		<div className="chip-dropdown" ref={wrapRef}>
-			<Chip color={active ? 'accent' : 'default'} onClick={() => setOpen((v) => !v)}>
-				{label}
-				{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-			</Chip>
-			{open && <div className="chip-dropdown__menu">{children(() => setOpen(false))}</div>}
-		</div>
-	);
-}
-
 function ChipMenuItem({
 	checked,
 	excluded,

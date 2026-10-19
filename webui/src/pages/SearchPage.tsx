@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, ChevronDown, ChevronUp, Search, SearchX, TriangleAlert, X } from 'lucide-react';
+import { Check, Search, SearchX, TriangleAlert, X } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
 import type { Manga, Source, SourceSearchResult } from '../api/types';
@@ -19,7 +19,7 @@ import {
 	isMultiLanguage,
 	languageLabel
 } from '../lib/source';
-import { Button, Chip, CoverCard, EmptyState, Input, Skeleton } from '../components';
+import { Button, ChipDropdown, CoverCard, EmptyState, Input, Skeleton } from '../components';
 
 type FilterGroup = 'ratings' | 'langs' | 'sources';
 
@@ -277,46 +277,29 @@ function TriDropdown({
 	states: Record<string, TriState>;
 	onCycle: (key: string) => void;
 }) {
-	const [open, setOpen] = useState(false);
-	const wrapRef = useRef<HTMLDivElement>(null);
-	useEffect(() => {
-		if (!open) return;
-		const onDown = (e: MouseEvent) => {
-			if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-		};
-		document.addEventListener('mousedown', onDown);
-		return () => document.removeEventListener('mousedown', onDown);
-	}, [open]);
 	const count = Object.keys(states).length;
 	return (
-		<div className="chip-dropdown" ref={wrapRef}>
-			<Chip color={count > 0 ? 'accent' : 'default'} onClick={() => setOpen((v) => !v)}>
-				{label}
-				{count > 0 ? `（${count}）` : ''}
-				{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-			</Chip>
-			{open && (
-				<div className="chip-dropdown__menu">
-					{options.map((opt) => {
-						const st = states[opt.key] ?? 0;
-						return (
-							<button
-								key={opt.key}
-								type="button"
-								className="chip-dropdown__item"
-								onClick={() => onCycle(opt.key)}
-							>
-								<span>
-									{st === -1 ? '− ' : ''}
-									{opt.label}
-								</span>
-								{st === 1 && <Check size={14} />}
-								{st === -1 && <X size={14} />}
-							</button>
-						);
-					})}
-				</div>
-			)}
-		</div>
+		<ChipDropdown active={count > 0} label={`${label}${count > 0 ? `（${count}）` : ''}`}>
+			{() =>
+				options.map((opt) => {
+					const st = states[opt.key] ?? 0;
+					return (
+						<button
+							key={opt.key}
+							type="button"
+							className="chip-dropdown__item"
+							onClick={() => onCycle(opt.key)}
+						>
+							<span>
+								{st === -1 ? '− ' : ''}
+								{opt.label}
+							</span>
+							{st === 1 && <Check size={14} />}
+							{st === -1 && <X size={14} />}
+						</button>
+					);
+				})
+			}
+		</ChipDropdown>
 	);
 }
