@@ -1,6 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, House, Link2, ListFilter, Search, SearchX, TriangleAlert } from 'lucide-react';
+import {
+	ArrowLeft,
+	Check,
+	ChevronDown,
+	ChevronUp,
+	House,
+	Link2,
+	ListFilter,
+	Search,
+	SearchX,
+	TriangleAlert,
+	X
+} from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import {
 	useDeepLink,
@@ -257,7 +270,7 @@ export default function SourceBrowsePage() {
 		const rec = { ...(states.multiVals[f.id] ?? {}) };
 		const cur = rec[key] ?? 0;
 		// 可排除时三态循环：未选 → 包含 → 排除 → 未选
-		const next: CheckVal = cur === 0 ? 1 : cur === 1 ? (f.can_exclude ? -1 : 0) : 0;
+		const next = nextMultiVal(cur, !!f.can_exclude);
 		if (next === 0) delete rec[key];
 		else rec[key] = next;
 		setStates({ ...states, multiVals: { ...states.multiVals, [f.id]: rec } });
@@ -381,6 +394,16 @@ export default function SourceBrowsePage() {
 							</Button>
 						)}
 					</form>
+
+					{/* Aidoku FilterHeaderView 同款：输入框下方的横向筛选 chip 条；chip 改动即提交 */}
+					{filters && !filtersHidden && states && (
+						<FilterHeader
+							filters={filters}
+							states={states}
+							setStates={setStates}
+							onApply={runSearch}
+						/>
+					)}
 
 					{filters && !filtersHidden && showFilters && states && (
 						<div className="card filter-panel">
@@ -678,4 +701,236 @@ function FilterItem({
 	}
 
 	return null;
+}
+
+// ---- Aidoku FilterHeaderView 同款：搜索框下方的横向筛选条 ----
+
+/** 三态循环的下一态（多选 chip 与面板共用） */
+function nextMultiVal(cur: CheckVal, canExclude: boolean): CheckVal {
+	return cur === 0 ? 1 : cur === 1 ? (canExclude ? -1 : 0) : 0;
+}
+
+/** 草稿里该筛选是否会产生提交值（Aidoku enabledFilters 口径，用于启用排序） */
+function isFilterEnabled(f: Filter, states: FilterStates): boolean {
+	switch (f.type) {
+		case 'sort':
+			return (states.sortVals[f.id]?.index ?? null) !== null;
+		case 'check':
+			return (states.checkVals[f.id] ?? 0) !== 0;
+		case 'select':
+			return (states.selectVals[f.id] ?? '') !== '';
+		case 'multi-select':
+			return Object.keys(states.multiVals[f.id] ?? {}).length > 0;
+		default:
+			return false;
+	}
+}
+
+interface FilterChipProps {
+	filter: Filter;
+	states: FilterStates;
+	setStates: (s: FilterStates) => void;
+	/** chip 改动即提交（Aidoku 改筛选立即生效） */
+	onApply: () => void;
+}
+
+/** chip 下拉菜单；children 拿到 close 以便点选后收起 */
+function ChipDropdown({
+	label,
+	active,
+	children
+}: {
+	label: ReactNode;
+	active?: boolean;
+	children: (close: () => void) => ReactNode;
+}) {
+	const [open, setOpen] = useState(false);
+	const wrapRef = useRef<HTMLDivElement>(null);
+	useEffect(() => {
+		if (!open) return;
+		const onDown = (e: MouseEvent) => {
+			if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+		};
+		document.addEventListener('mousedown', onDown);
+		return () => document.removeEventListener('mousedown', onDown);
+	}, [open]);
+	return (
+		<div className="chip-dropdown" ref={wrapRef}>
+			<Chip color={active ? 'accent' : 'default'} onClick={() => setOpen((v) => !v)}>
+				{label}
+				{open ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+			</Chip>
+			{open && <div className="chip-dropdown__menu">{children(() => setOpen(false))}</div>}
+		</div>
+	);
+}
+
+function ChipMenuItem({
+	checked,
+	excluded,
+	onClick,
+	children
+}: {
+	checked?: boolean;
+	excluded?: boolean;
+	onClick: () => void;
+	children: ReactNode;
+}) {
+	return (
+		<button type="button" className="chip-dropdown__item" onClick={onClick}>
+			<span>{children}</span>
+			{checked && <Check size={14} />}
+			{excluded && <X size={14} />}
+		</button>
+	);
+}
+
+function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const options = f.options ?? [];
+	const cur = states.sortVals[f.id] ?? { index: null, ascending: true };
+	const def = f.default as { index?: number; ascending?: boolean } | null | undefined;
+	// 与默认（未选视为 null/true）不同即启用
+	const active =
+		cur.index !== null && (cur.index !== (def?.index ?? null) || cur.ascending !== (def?.ascending ?? true));
+	const label =
+		cur.index !== null && cur.index < options.length
+			? `${f.title ? `${f.title}: ` : ''}${options[cur.index]}${f.can_ascend ? (cur.ascending ? ' ↑' : ' ↓') : ''}`
+			: (f.title ?? '排序');
+	function pick(index: number, close: () => void) {
+		// Aidoku：点当前项且可升降序时切方向，否则选中并归默认方向
+		const next: SortVal =
+			cur.index === index && f.can_ascend ? { index, ascending: !cur.ascending } : { index, ascending: false };
+		setStates({ ...states, sortVals: { ...states.sortVals, [f.id]: next } });
+		onApply();
+		close();
+	}
+	return (
+		<ChipDropdown active={active} label={label}>
+			{(close) =>
+				options.map((opt, i) => (
+					<ChipMenuItem key={i} checked={cur.index === i} onClick={() => pick(i, close)}>
+						{opt}
+						{cur.index === i && f.can_ascend ? (cur.ascending ? ' ↑' : ' ↓') : ''}
+					</ChipMenuItem>
+				))
+			}
+		</ChipDropdown>
+	);
+}
+
+function CheckFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const cur = states.checkVals[f.id] ?? 0;
+	return (
+		<Chip
+			color={cur !== 0 ? 'accent' : 'default'}
+			onClick={() => {
+				setStates({
+					...states,
+					checkVals: { ...states.checkVals, [f.id]: nextMultiVal(cur, !!f.can_exclude) }
+				});
+				onApply();
+			}}
+		>
+			{f.can_exclude && cur === 1 && <Check size={13} />}
+			{f.can_exclude && cur === -1 && <X size={13} />}
+			{f.name ?? f.title ?? ''}
+		</Chip>
+	);
+}
+
+function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const cur = states.selectVals[f.id] ?? '';
+	const defVal = typeof f.default === 'string' ? f.default : '';
+	const active = cur !== '' && cur !== defVal;
+	function pick(value: string, close: () => void) {
+		setStates({ ...states, selectVals: { ...states.selectVals, [f.id]: value } });
+		onApply();
+		close();
+	}
+	return (
+		<ChipDropdown active={active} label={f.title ?? ''}>
+			{(close) => (
+				<>
+					{cur !== '' && (
+						<ChipMenuItem checked onClick={() => pick('', close)}>
+							未选
+						</ChipMenuItem>
+					)}
+					{(f.options ?? []).map((opt, i) => {
+						const key = optionKey(f, i);
+						return (
+							<ChipMenuItem key={i} checked={cur === key} onClick={() => pick(key, close)}>
+								{opt}
+							</ChipMenuItem>
+						);
+					})}
+				</>
+			)}
+		</ChipDropdown>
+	);
+}
+
+function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const rec = { ...(states.multiVals[f.id] ?? {}) };
+	const count = Object.keys(rec).length;
+	function toggle(i: number) {
+		const key = optionKey(f, i);
+		if (!key) return;
+		const next = nextMultiVal(rec[key] ?? 0, !!f.can_exclude);
+		if (next === 0) delete rec[key];
+		else rec[key] = next;
+		setStates({ ...states, multiVals: { ...states.multiVals, [f.id]: rec } });
+		onApply();
+		// Aidoku menuActionDismissDisabled：菜单不收起，连续多选
+	}
+	return (
+		<ChipDropdown active={count > 0} label={`${f.title ?? ''}${count > 0 ? `（${count}）` : ''}`}>
+			{() =>
+				(f.options ?? []).map((opt, i) => {
+					const key = optionKey(f, i);
+					const st = rec[key] ?? 0;
+					return (
+						<ChipMenuItem key={i} checked={st === 1} excluded={st === -1} onClick={() => toggle(i)}>
+							{st === -1 ? '− ' : ''}
+							{opt}
+						</ChipMenuItem>
+					);
+				})
+			}
+		</ChipDropdown>
+	);
+}
+
+/** 搜索框下方的横向筛选 chip 条：各筛选 chip，启用在先 */
+function FilterHeader({
+	filters,
+	states,
+	setStates,
+	onApply
+}: {
+	filters: Filter[];
+	states: FilterStates;
+	setStates: (s: FilterStates) => void;
+	onApply: () => void;
+}) {
+	const sorted = [...filters].sort(
+		(a, b) => Number(isFilterEnabled(b, states)) - Number(isFilterEnabled(a, states))
+	);
+	return (
+		<div className="filter-header">
+			{sorted.map((f) => {
+				if (f.hide_from_header || f.type === 'note' || f.type === 'text' || f.type === 'range') return null;
+				const props = { filter: f, states, setStates, onApply };
+				if (f.type === 'sort') return <SortFilterChip key={f.id} {...props} />;
+				// Aidoku：有默认值的 check 不进头部（重置后不会误显示为启用）
+				if (f.type === 'check') {
+					if (f.default != null) return null;
+					return <CheckFilterChip key={f.id} {...props} />;
+				}
+				if (f.type === 'select') return <SelectFilterChip key={f.id} {...props} />;
+				if (f.type === 'multi-select') return <MultiSelectFilterChip key={f.id} {...props} />;
+				return null;
+			})}
+		</div>
+	);
 }
