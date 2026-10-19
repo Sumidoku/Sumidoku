@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
 	ArrowLeftRight,
@@ -22,7 +22,7 @@ import {
 	useUpdateSource
 } from '../api/hooks';
 import type { Source } from '../api/types';
-import { contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
+import { compareSourceName, contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
 import {
 	Button,
 	Chip,
@@ -211,7 +211,8 @@ export default function BrowsePage() {
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
 
-	const all = sources.data ?? [];
+	// 已装源按名字字母序；置顶段另按 pinOrder 排
+	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
 	const updateCount = all.filter((s) => s.updateVersion !== null).length;
 	const pinnedSources = all
 		.filter((s) => s.pinned)

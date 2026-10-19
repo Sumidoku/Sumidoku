@@ -30,9 +30,19 @@ export function languageLabel(code: string): string {
 	return getDisplayNames()?.of(normalized) ?? code;
 }
 
-/** 按显示名排序，中文界面下与 Aidoku 的 compare 一致 */
+/** 按显示名排序 */
 export function compareLanguageLabel(a: string, b: string): number {
-	return languageLabel(a).localeCompare(languageLabel(b), 'zh-Hans');
+	return languageLabel(a).localeCompare(languageLabel(b), 'und');
+}
+
+/** 已装源列表排序：按名字字母序，名字相同退回 key 保证稳定 */
+export function compareSourceName(
+	a: { name: string; key: string },
+	b: { name: string; key: string }
+): number {
+	const byName = a.name.localeCompare(b.name, 'und');
+	if (byName !== 0) return byName;
+	return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
 // Aidoku 的 SourceContentRating：0 安全 / 1 含 NSFW / 2 主要 NSFW
