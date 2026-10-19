@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, EyeOff, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import {
 	qk,
@@ -44,6 +44,7 @@ import {
 import type { ChipColor } from '../components';
 import { ChapterRow } from './manga/ChapterRow';
 import type { ChapterDlState } from './manga/ChapterRow';
+import { CoverPickerModal } from './manga/CoverPickerModal';
 import { MigrateModal } from './manga/MigrateModal';
 import { MoreMenu } from './manga/MoreMenu';
 import './manga.css';
@@ -100,6 +101,7 @@ export default function MangaDetailPage() {
 
 	const [search, setSearch] = useState('');
 	const [migrateOpen, setMigrateOpen] = useState(false);
+	const [coverPickerOpen, setCoverPickerOpen] = useState(false);
 	// 排序/筛选设置按漫画持久化；loadedId 防止切漫画瞬间把上一部的设置写到新 key 下
 	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
 	const [loadedId, setLoadedId] = useState(mangaId);
@@ -334,13 +336,21 @@ export default function MangaDetailPage() {
 			<div className="manga-hero">
 				<div
 					className="manga-hero__bg"
-					style={{ backgroundImage: `url("${coverUrl(mangaId)}")` }}
+					style={{ backgroundImage: `url("${coverUrl(mangaId, manga.cover)}")` }}
 				/>
 				<div className="manga-hero__scrim" />
 				<div className="manga-hero__body">
 					<div className="manga-hero__cover">
 						{manga.content_rating === 'NSFW' && <span className="manga-hero__nsfw">NSFW</span>}
-						<Cover src={coverUrl(mangaId)} title={manga.title} />
+						<Cover src={coverUrl(mangaId, manga.cover)} title={manga.title} />
+						<button
+							type="button"
+							className="manga-hero__cover-edit"
+							onClick={() => setCoverPickerOpen(true)}
+						>
+							<Images size={13} />
+							更换封面
+						</button>
 					</div>
 					<div className="manga-hero__info">
 						<h1 className="manga-hero__title">{manga.title}</h1>
@@ -687,6 +697,8 @@ export default function MangaDetailPage() {
 			)}
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
+
+			{coverPickerOpen && <CoverPickerModal manga={manga} onClose={() => setCoverPickerOpen(false)} />}
 
 			<Modal
 				open={removeOpen}

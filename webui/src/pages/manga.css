@@ -536,6 +536,106 @@ button.manga-menu__row:hover:not(:disabled) {
 	background: var(--bg-hover);
 }
 
+/* ============ 更换封面 ============ */
+
+.manga-hero__cover-edit {
+	position: absolute;
+	left: 50%;
+	bottom: 8px;
+	transform: translateX(-50%);
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 10px;
+	border: none;
+	border-radius: 999px;
+	background: rgba(14, 16, 22, 0.78);
+	color: #eef0f5;
+	font-size: 12px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.manga-hero__cover-edit:hover {
+	background: rgba(14, 16, 22, 0.94);
+}
+
+.cover-picker {
+	max-width: 640px;
+}
+
+.cover-picker__loading {
+	display: flex;
+	justify-content: center;
+	padding: 40px 0;
+}
+
+.cover-picker__grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 12px;
+}
+
+.cover-picker__cell {
+	position: relative;
+	display: block;
+	width: 100%;
+	aspect-ratio: 2 / 3;
+	padding: 0;
+	border: 2px solid transparent;
+	border-radius: var(--r-md);
+	overflow: hidden;
+	background: var(--bg-elev);
+	cursor: pointer;
+}
+
+.cover-picker__cell img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.cover-picker__cell--current {
+	border-color: var(--accent-solid);
+}
+
+.cover-picker__cell:disabled {
+	cursor: default;
+}
+
+.cover-picker__badge {
+	position: absolute;
+	left: 6px;
+	bottom: 6px;
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--accent-solid);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.cover-picker__busy {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.45);
+	color: #fff;
+}
+
+@media (max-width: 640px) {
+	.cover-picker__grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
 /* ============ 骨架与响应式 ============ */
 
 .manga-skeleton {

@@ -294,6 +294,23 @@ Migrations in `crates/server/migrations`.
   `fetch_cover_image` (so a declared cover processor runs) without a disk
   cache, so a hotlink-protected host sees the source's `get_image_request`
   headers exactly as on the detail and reader paths.
+- Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
+  disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
+  refetches `manga.cover_url` through `fetch_cover_image` only when the
+  file is missing or `last_fetched_at` is newer than its mtime; OPDS reads
+  the same cache via `source/mod.rs:cover_bytes`.
+  `GET /api/v1/manga/{id}/covers/alternates` calls the source's
+  `get_alternate_covers` with the stored manga row and returns the URL
+  list, 501 when the source does not export it.
+  `PUT /api/v1/manga/{id}/cover` `{url}` persists a pick to
+  `manga.cover_url` and deletes both cache files: the freshness key is
+  `last_fetched_at`, which a user pick must not move, so without the
+  delete the stale bytes keep serving and the pick never takes effect.
+  Because the cover response is `max-age=86400` cacheable, the web UI
+  versions cover `<img>` URLs with the manga's `cover` string
+  (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
+  (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
+  through the source-image proxy above.
 - Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.

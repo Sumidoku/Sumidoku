@@ -232,7 +232,7 @@ export default function UpdatesPage() {
 						{recentEntries.map((e) => (
 							<Link key={e.chapter.id} className="updates-item card" to={`/manga/${e.manga.id}`}>
 								<div className="updates-item__thumb">
-									<Cover src={coverUrl(e.manga.id)} title={e.manga.title} />
+									<Cover src={coverUrl(e.manga.id, e.manga.cover)} title={e.manga.title} />
 								</div>
 								<div className="updates-item__meta">
 									<div className="updates-item__title">{e.manga.title}</div>
