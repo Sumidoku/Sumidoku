@@ -183,26 +183,26 @@ export default function SourceBrowsePage() {
 		setStates(applyFilterValues(initFilterStates(filters), initialFilters));
 	}, [filters, sourceId, initialFilters]);
 
-	function buildFilterValues(): FilterValue[] {
+	function buildFilterValues(draft: FilterStates | null): FilterValue[] {
 		const out: FilterValue[] = [];
-		if (!states) return out;
+		if (!draft) return out;
 		for (const f of filters ?? []) {
 			if (f.type === 'text') {
-				const v = (states.textVals[f.id] ?? '').trim();
+				const v = (draft.textVals[f.id] ?? '').trim();
 				if (v) out.push({ Text: { id: f.id, value: v } });
 			} else if (f.type === 'sort') {
-				const s = states.sortVals[f.id];
+				const s = draft.sortVals[f.id];
 				if (s && s.index !== null) {
 					out.push({ Sort: { id: f.id, index: s.index, ascending: s.ascending } });
 				}
 			} else if (f.type === 'check') {
-				const v = states.checkVals[f.id] ?? 0;
+				const v = draft.checkVals[f.id] ?? 0;
 				if (v !== 0) out.push({ Check: { id: f.id, value: v } });
 			} else if (f.type === 'select') {
-				const v = states.selectVals[f.id] ?? '';
+				const v = draft.selectVals[f.id] ?? '';
 				if (v) out.push({ Select: { id: f.id, value: v } });
 			} else if (f.type === 'multi-select') {
-				const rec = states.multiVals[f.id] ?? {};
+				const rec = draft.multiVals[f.id] ?? {};
 				const included = Object.entries(rec)
 					.filter(([, v]) => v === 1)
 					.map(([k]) => k);
@@ -213,7 +213,7 @@ export default function SourceBrowsePage() {
 					out.push({ MultiSelect: { id: f.id, included, excluded } });
 				}
 			} else if (f.type === 'range') {
-				const r = states.rangeVals[f.id];
+				const r = draft.rangeVals[f.id];
 				if (!r) continue;
 				const from = r.from.trim() === '' ? null : Number(r.from);
 				const to = r.to.trim() === '' ? null : Number(r.to);
@@ -225,10 +225,10 @@ export default function SourceBrowsePage() {
 		return out;
 	}
 
-	function runSearch() {
+	function runSearch(nextStates?: FilterStates) {
 		const query = input.trim();
 		// 草稿值始终持久化；隐藏筛选的源在带关键词搜索时不提交、也不覆盖存储
-		const values = buildFilterValues();
+		const values = buildFilterValues(nextStates ?? states);
 		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
 		if (!dropFilters) saveFilterPrefs(sourceId, values);
 		setSubmitted({ query, filters: dropFilters ? [] : values });
@@ -417,7 +417,7 @@ export default function SourceBrowsePage() {
 								/>
 							))}
 							<div className="filter-panel__footer">
-								<Button variant="primary" onClick={runSearch}>
+								<Button variant="primary" onClick={() => runSearch()}>
 									应用筛选
 								</Button>
 							</div>
@@ -730,8 +730,8 @@ interface FilterChipProps {
 	filter: Filter;
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
-	/** chip 改动即提交（Aidoku 改筛选立即生效） */
-	onApply: () => void;
+	/** chip 改动即提交（Aidoku 改筛选立即生效）；setStates 异步，新草稿随调用传入 */
+	onApply: (s: FilterStates) => void;
 }
 
 /** chip 下拉菜单；children 拿到 close 以便点选后收起 */
@@ -800,8 +800,9 @@ function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipPro
 		// Aidoku：点当前项且可升降序时切方向，否则选中并归默认方向
 		const next: SortVal =
 			cur.index === index && f.can_ascend ? { index, ascending: !cur.ascending } : { index, ascending: false };
-		setStates({ ...states, sortVals: { ...states.sortVals, [f.id]: next } });
-		onApply();
+		const nextStates = { ...states, sortVals: { ...states.sortVals, [f.id]: next } };
+		setStates(nextStates);
+		onApply(nextStates);
 		close();
 	}
 	return (
@@ -824,11 +825,12 @@ function CheckFilterChip({ filter: f, states, setStates, onApply }: FilterChipPr
 		<Chip
 			color={cur !== 0 ? 'accent' : 'default'}
 			onClick={() => {
-				setStates({
+				const nextStates = {
 					...states,
 					checkVals: { ...states.checkVals, [f.id]: nextMultiVal(cur, !!f.can_exclude) }
-				});
-				onApply();
+				};
+				setStates(nextStates);
+				onApply(nextStates);
 			}}
 		>
 			{f.can_exclude && cur === 1 && <Check size={13} />}
@@ -843,8 +845,9 @@ function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipP
 	const defVal = typeof f.default === 'string' ? f.default : '';
 	const active = cur !== '' && cur !== defVal;
 	function pick(value: string, close: () => void) {
-		setStates({ ...states, selectVals: { ...states.selectVals, [f.id]: value } });
-		onApply();
+		const nextStates = { ...states, selectVals: { ...states.selectVals, [f.id]: value } };
+		setStates(nextStates);
+		onApply(nextStates);
 		close();
 	}
 	return (
@@ -879,8 +882,9 @@ function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: Filter
 		const next = nextMultiVal(rec[key] ?? 0, !!f.can_exclude);
 		if (next === 0) delete rec[key];
 		else rec[key] = next;
-		setStates({ ...states, multiVals: { ...states.multiVals, [f.id]: rec } });
-		onApply();
+		const nextStates = { ...states, multiVals: { ...states.multiVals, [f.id]: rec } };
+		setStates(nextStates);
+		onApply(nextStates);
 		// Aidoku menuActionDismissDisabled：菜单不收起，连续多选
 	}
 	return (
@@ -911,7 +915,7 @@ function FilterHeader({
 	filters: Filter[];
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
-	onApply: () => void;
+	onApply: (s: FilterStates) => void;
 }) {
 	const sorted = [...filters].sort(
 		(a, b) => Number(isFilterEnabled(b, states)) - Number(isFilterEnabled(a, states))
