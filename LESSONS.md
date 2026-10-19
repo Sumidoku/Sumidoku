@@ -394,3 +394,12 @@ before pushing costs a call and saves the detour.
   head branch `webui` was deleted before the fix push, which recreated
   it as "[new branch]"; the fix was cherry-picked onto
   `fix/browse-updates-header` (PR #166) and the stray branch deleted.
+
+**Piping cargo output hides its exit code — check `${PIPESTATUS[0]}`
+after the pipe.** `cargo clippy ... | tail -5` prints the errors and
+still exits 0, because the pipeline's status is `tail`'s. A gate run
+this way can report green while clippy is failing on screen. Read the
+status of the left side, or drop the pipe.
+- Evidence: 2026-10-19, #164's implementation session: a clippy gate
+  piped to `tail` showed error output with `EXIT:0`; caught when the
+  same gate was re-run unpiped before pushing.
