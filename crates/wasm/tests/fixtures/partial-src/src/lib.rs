@@ -2,7 +2,9 @@
 //! send_partial_result 流式加载的端到端验证源：
 //! get_home 先推 Layout 占位（A/B 空组件），再推 3 个 Component partial
 //!（A 填充、B 填充、C 新增），终态布局与 partial 不同以证明终态权威；
-//! get_search_manga_list 中途推 3 条 Manga partial 再回 2 条终态。
+//! get_search_manga_list 中途推 3 条 Manga partial 再回 2 条终态；
+//! get_manga_update 按请求的 needs_details/needs_chapters 推对应快照
+//!（详情快照 → 详情+两章快照），终态三章，同样与 partial 不同。
 //! 事件顺序与载荷由 crates/wasm/tests/partial_result.rs 断言。
 use aidoku::{
 	alloc::{String, Vec, vec},
@@ -29,6 +31,14 @@ fn manga(key: &str, title: &str) -> Manga {
 		title: String::from(title),
 		cover: Some(String::from("https://example.com/cover.jpg")),
 		..Manga::default()
+	}
+}
+
+fn chapter(key: &str, number: f32) -> Chapter {
+	Chapter {
+		key: String::from(key),
+		chapter_number: Some(number),
+		..Chapter::default()
 	}
 }
 
@@ -73,8 +83,21 @@ impl Source for PartialSource {
 		})
 	}
 
-	fn get_manga_update(&self, manga: Manga, _needs_details: bool, _needs_chapters: bool) -> Result<Manga> {
-		Ok(manga)
+	fn get_manga_update(&self, manga: Manga, needs_details: bool, needs_chapters: bool) -> Result<Manga> {
+		let mut updated = manga;
+		if needs_details {
+			updated.title = String::from("Partial Title");
+			updated.description = Some(String::from("fetched in pieces"));
+			send_partial_result(&updated);
+			delay();
+		}
+		if needs_chapters {
+			updated.chapters = Some(vec![chapter("c1", 1.0), chapter("c2", 2.0)]);
+			send_partial_result(&updated);
+			delay();
+			updated.chapters = Some(vec![chapter("c1", 1.0), chapter("c2", 2.0), chapter("c3", 3.0)]);
+		}
+		Ok(updated)
 	}
 
 	fn get_page_list(&self, _manga: Manga, _chapter: Chapter) -> Result<Vec<Page>> {
