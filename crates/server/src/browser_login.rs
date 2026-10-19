@@ -124,7 +124,7 @@ impl BrowserLoginManager {
 				.connect()
 				.map_err(|e| ApiError::bad_gateway(format!("browser connect failed: {e}")))?;
 			let context = client
-				.create_context()
+				.create_context("login")
 				.map_err(|e| ApiError::bad_gateway(format!("browser context create failed: {e}")))?;
 			if let Err(e) = client.set_viewport(&context, VIEWPORT_WIDTH, VIEWPORT_HEIGHT) {
 				let _ = client.dispose_context(&context);
@@ -263,7 +263,7 @@ mod tests {
 	struct FakeClient(Arc<StdMutex<FakeState>>);
 
 	impl CdpClient for FakeClient {
-		fn create_context(&mut self) -> Result<String, BrowserError> {
+		fn create_context(&mut self, _label: &str) -> Result<String, BrowserError> {
 			let mut state = self.0.lock().expect("lock");
 			let id = format!("ctx-{}", state.contexts.len() + 1);
 			state.contexts.push(id.clone());

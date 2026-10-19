@@ -1,9 +1,10 @@
-//! webview 的真浏览器背衬：CDP 驱动用户自供的 Chromium sidecar。
-//! 每个 webview rid 映射一个隔离 BrowserContext，cookie/会话不跨 rid 串味；
-//! rid destroy 时 dispose 对应 context，连接断开（fatal 错误）后下一次操作
-//! 重连，浏览器侧可能残留的 context 记进 stale 在重连成功时逐一 dispose。
-//! 单次操作失败（导航超时、CDP 报错）不断连：context 里的登录会话不能因
-//! 一次超时丢掉。
+//! webview 的真浏览器背衬，两种后端：CDP 驱动用户自供的 Chromium sidecar，
+//! 或 trawl session API（browser/trawl.rs）。
+//! 每个 webview rid 映射一个隔离浏览器会话（CDP BrowserContext / trawl session），
+//! cookie/会话不跨 rid 串味；rid destroy 时 dispose 对应会话。CDP 连接断开
+//! （fatal 错误）后下一次操作重连，浏览器侧可能残留的 context 记进 stale 在
+//! 重连成功时逐一 dispose。单次操作失败（导航超时、CDP 报错）不断连：会话里
+//! 的登录态不能因一次超时丢掉。
 
 use crate::runtime::store::Rid;
 use std::collections::HashMap;
@@ -93,7 +94,8 @@ impl std::fmt::Display for BrowserError {
 }
 
 pub trait CdpClient: Send + Sync {
-	fn create_context(&mut self) -> Result<String, BrowserError>;
+	/// label 是给后端的会话命名提示（trawl 拿它拼 session id）；CDP 忽略
+	fn create_context(&mut self, label: &str) -> Result<String, BrowserError>;
 	fn dispose_context(&mut self, context: &str) -> Result<(), BrowserError>;
 	/// 在 context 里 GET 导航（带附加请求头），等 load 事件后回该 context
 	/// 的 cookie 快照——导航期间的 Set-Cookie 与脚本写入一并回流，省一次往返
@@ -113,19 +115,47 @@ pub trait CdpClient: Send + Sync {
 		path: Option<&str>,
 	) -> Result<(), BrowserError>;
 	fn clear_cookies(&mut self, context: &str) -> Result<(), BrowserError>;
-	/// 交互会话（服务端 sidecar 登录）才用的面：视口、推流、输入转发、页面态读取
-	fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError>;
-	fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError>;
-	fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError>;
-	fn dispatch_mouse(&mut self, context: &str, input: &MouseInput) -> Result<(), BrowserError>;
-	fn dispatch_key(&mut self, context: &str, input: &KeyInput) -> Result<(), BrowserError>;
-	fn insert_text(&mut self, context: &str, text: &str) -> Result<(), BrowserError>;
+	/// 在页面主 JS 环境求值并回字符串结果（后端会 await 返回的 promise）；
+	/// 是否走本方法由 connector 的 supports_eval 决定，CDP 后端用不到
+	fn eval(&mut self, _context: &str, _source: &str, _timeout: Duration) -> Result<String, BrowserError> {
+		Err(BrowserError::transient("eval not supported by this browser backend"))
+	}
+	/// 交互会话（服务端 sidecar 登录）才用的面：视口、推流、输入转发、页面态读取；
+	/// 只有 CDP 后端实装，其余后端默认不支持
+	fn set_viewport(&mut self, _context: &str, _width: i64, _height: i64) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
+	fn screencast_start(&mut self, _context: &str, _sink: FrameSink) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
+	fn screencast_stop(&mut self, _context: &str) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
+	fn dispatch_mouse(&mut self, _context: &str, _input: &MouseInput) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
+	fn dispatch_key(&mut self, _context: &str, _input: &KeyInput) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
+	fn insert_text(&mut self, _context: &str, _text: &str) -> Result<(), BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
 	/// 读当前页面 localStorage 里指定键的非空值；页面已关/求值失败按单次失败处理
-	fn local_storage_values(&mut self, context: &str, keys: &[String]) -> Result<Vec<(String, String)>, BrowserError>;
+	fn local_storage_values(&mut self, _context: &str, _keys: &[String]) -> Result<Vec<(String, String)>, BrowserError> {
+		Err(BrowserError::transient("interactive sessions not supported by this browser backend"))
+	}
 }
 
 pub trait CdpConnector: Send + Sync {
 	fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError>;
+	/// webview_eval 是否路由到浏览器（trawl 的页面 eval）；CDP 维持 Boa 页面模型
+	fn supports_eval(&self) -> bool {
+		false
+	}
+	/// cookie 编辑（delete/clear）是否可用；trawl session API 没有对应端点
+	fn supports_cookie_edit(&self) -> bool {
+		true
+	}
 }
 
 pub struct BrowserState {
@@ -159,8 +189,30 @@ impl BrowserState {
 		}
 	}
 
+	/// trawl session 后端：HTTP 无持久连接，连接态字段对它形同虚设，
+	/// 断连重连语义天然由「每次操作独立请求」提供
+	pub fn new_trawl(source_key: &str, api_url: &str, timeout: Duration) -> Self {
+		Self {
+			connector: Some(Box::new(trawl::TrawlConnector::new(api_url, source_key))),
+			timeout,
+			client: None,
+			contexts: HashMap::new(),
+			stale: Vec::new(),
+		}
+	}
+
 	pub fn configured(&self) -> bool {
 		self.connector.is_some()
+	}
+
+	/// webview_eval 是否路由到浏览器后端（trawl）；false 时 FFI 维持 Boa 页面模型
+	pub fn supports_eval(&self) -> bool {
+		self.connector.as_ref().is_some_and(|c| c.supports_eval())
+	}
+
+	/// cookie 编辑（webview_delete_cookie）是否可用；trawl session API 没有对应端点
+	pub fn supports_cookie_edit(&self) -> bool {
+		self.connector.as_ref().is_some_and(|c| c.supports_cookie_edit())
 	}
 
 	/// rid destroy 时回收对应 context；返回要进源日志的行（dispose 失败不致命：
@@ -209,7 +261,7 @@ impl BrowserState {
 			return Ok(context.clone());
 		}
 		// create_context 不走 run()，fatal 处理（断连）在这里自己兜
-		match self.client()?.create_context() {
+		match self.client()?.create_context(&rid.to_string()) {
 			Ok(context) => {
 				self.contexts.insert(rid, context.clone());
 				Ok(context)
@@ -260,6 +312,12 @@ impl BrowserState {
 		let context = self.context(rid)?;
 		self.run(|client| client.clear_cookies(&context))
 	}
+
+	pub fn eval(&mut self, rid: Rid, source: &str) -> Result<String, BrowserError> {
+		let timeout = self.timeout;
+		let context = self.context(rid)?;
+		self.run(|client| client.eval(&context, source, timeout))
+	}
 }
 
 struct CdpWsConnector {
@@ -289,6 +347,7 @@ pub fn ws_connector_ambient(ws: &str, ambient: tokio::runtime::Handle) -> Box<dy
 }
 
 mod cdp;
+mod trawl;
 
 #[cfg(test)]
 pub(crate) mod mock {
@@ -311,6 +370,12 @@ pub(crate) mod mock {
 		pub load_error: Option<bool>,
 		pub create_context_error: Option<bool>,
 		pub dispose_error: Option<bool>,
+		/// 模拟 trawl 类后端的能力位：eval 路由开关与 cookie 编辑缺席
+		pub supports_eval: bool,
+		pub cookie_edit_unsupported: bool,
+		pub evals: Vec<(String, String)>,
+		pub eval_value: Option<String>,
+		pub eval_error: Option<bool>,
 		pub viewports: Vec<(String, i64, i64)>,
 		pub screencasts: Vec<String>,
 		pub screencast_stopped: Vec<String>,
@@ -333,12 +398,20 @@ pub(crate) mod mock {
 			}
 			Ok(Box::new(MockClient(self.0.clone())))
 		}
+
+		fn supports_eval(&self) -> bool {
+			self.0.lock().expect("mock lock").supports_eval
+		}
+
+		fn supports_cookie_edit(&self) -> bool {
+			!self.0.lock().expect("mock lock").cookie_edit_unsupported
+		}
 	}
 
 	struct MockClient(Arc<Mutex<MockState>>);
 
 	impl CdpClient for MockClient {
-		fn create_context(&mut self) -> Result<String, BrowserError> {
+		fn create_context(&mut self, _label: &str) -> Result<String, BrowserError> {
 			let mut state = self.0.lock().expect("mock lock");
 			if let Some(fatal) = state.create_context_error {
 				return Err(if fatal {
@@ -421,6 +494,19 @@ pub(crate) mod mock {
 			state.cleared.push(context.to_string());
 			state.cookies.remove(context);
 			Ok(())
+		}
+
+		fn eval(&mut self, context: &str, source: &str, _timeout: Duration) -> Result<String, BrowserError> {
+			let mut state = self.0.lock().expect("mock lock");
+			if let Some(fatal) = state.eval_error {
+				return Err(if fatal {
+					BrowserError::fatal("mock connection died")
+				} else {
+					BrowserError::transient("mock eval failed")
+				});
+			}
+			state.evals.push((context.to_string(), source.to_string()));
+			Ok(state.eval_value.clone().unwrap_or_default())
 		}
 
 		fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
@@ -626,5 +712,17 @@ mod tests {
 		let state = BrowserState::new(None, Duration::from_secs(1));
 		assert!(!state.configured());
 		assert!(BrowserState::new(Some("ws://x".into()), Duration::from_secs(1)).configured());
+	}
+
+	#[test]
+	fn backend_capabilities_reported_per_backend() {
+		let cdp = BrowserState::new(Some("ws://x".into()), Duration::from_secs(1));
+		assert!(!cdp.supports_eval(), "CDP 的 eval 维持 Boa 页面模型");
+		assert!(cdp.supports_cookie_edit());
+		let trawl = BrowserState::new_trawl("test", "http://trawl:8191", Duration::from_secs(1));
+		assert!(trawl.supports_eval());
+		assert!(!trawl.supports_cookie_edit(), "trawl 没有 cookie 编辑端点");
+		let none = BrowserState::new(None, Duration::from_secs(1));
+		assert!(!none.supports_eval() && !none.supports_cookie_edit());
 	}
 }

@@ -499,11 +499,12 @@ is logged without failing the load or the scripts after it.
 `webview_eval_async` behave like their `context_*` counterparts under the
 same time and loop limits.
 The navigation and cookie functions — `webview_load`,
-`webview_get_cookies`, `webview_delete_cookie` — have two backends
-(`browser.rs`, `browser/cdp.rs`). With `net.browser_ws` unset they return
-`-1` (`JsError::MissingResult`; the ABI has no "unsupported" code) and log
-the function name and reason, so a source relying on them sees the calling
-operation fail with a diagnosable line in the source log. With
+`webview_get_cookies`, `webview_delete_cookie` — have two real-browser
+backends (`browser.rs`, `browser/cdp.rs`, `browser/trawl.rs`), mutually
+exclusive (configuring both fails startup). With neither configured they
+return `-1` (`JsError::MissingResult`; the ABI has no "unsupported" code)
+and log the function name and reason, so a source relying on them sees the
+calling operation fail with a diagnosable line in the source log. With
 `net.browser_ws` pointing at a user-supplied Chromium CDP endpoint (e.g. a
 browserless container; Sumidoku ships no browser) they drive that browser:
 `webview_load` navigates a page and waits for the page load event — the
@@ -512,7 +513,27 @@ functions read and edit the cookie store. Every webview rid maps to one
 isolated browser context, created on first use and disposed when the rid
 is destroyed, so sessions never bleed across webviews; a dead connection
 is retried on the next call and the browser-side contexts it orphaned are
-disposed after the reconnect. Cookies from the browser context flow into
+disposed after the reconnect. `webview_eval` keeps the Boa page model on
+this backend.
+With `net.browser_trawl` pointing at a trawl API URL instead, every webview
+rid maps to one keepPage session named `sumidoku-<source>-<rid>`, created
+lazily on first use and deleted (`DELETE /sessions/:id`) eagerly on destroy
+— trawl caps concurrent sessions per instance (`BROWSER_SESSION_MAX_ENTRIES`,
+default 4), so sessions are never pooled. `webview_load` navigates via
+`POST /scrape` (GET only, same as the CDP backend), `webview_get_cookies`
+reads `GET /sessions/:id/cookies` (HttpOnly included), and `webview_eval` /
+`webview_eval_async` both run through `POST /sessions/:id/eval`, which
+evaluates in the kept page's main JS context and awaits returned promises —
+scalar results come back in their JS string form, objects/arrays as compact
+JSON. A 404/410 (session expired, its browser replaced, or retired by an
+eval timeout — trawl sessions are in-memory and lost on restart) recreates
+the session under the same id and retries the operation once; a duplicate
+id on create is adopted (a restarted Sumidoku reuses rid numbers while
+trawl may still hold the old session); 409 busy, 429 (registry full) and
+503 are single-operation failures like a navigation timeout.
+`webview_delete_cookie` has no trawl endpoint and is explicitly unsupported
+on this backend.
+Cookies from the browser session flow into
 the source's session jar after every load and on every `get_cookies`,
 keyed by each cookie's own `Domain` attribute — that is what makes
 webview login work: the source loads the login page, the login completes
@@ -705,7 +726,9 @@ marker → `source_cookie` → restart) and disposes the context; completing
 with no cookie for the host answers 400 instead of marking anything.
 `POST .../login/web/browser/cancel` disposes and is idempotent. Without
 `net.browser_ws` all three POST endpoints answer 501 `unsupported` and the
-capability flag is false. The interactive machinery (viewport, screencast,
+capability flag is false — `net.browser_trawl` does not count as a browser
+here: the session API has no screencast or input surface, so interactive
+login stays CDP-only. The interactive machinery (viewport, screencast,
 input dispatch, page localStorage read) extends the same `CdpClient` trait
 the webview backend uses (`crates/wasm/src/browser.rs`), so tests drive it
 with the same kind of mock connector, injected via

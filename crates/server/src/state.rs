@@ -298,6 +298,7 @@ impl AppState {
 		config.policy = self.policy.clone();
 		config.accept_language = accept_language;
 		config.browser_ws = self.config.net.browser_ws.clone();
+	config.browser_trawl = self.config.net.browser_trawl.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
 		});

@@ -120,7 +120,8 @@ impl From<chromiumoxide::cdp::browser_protocol::network::Cookie> for BrowserCook
 }
 
 impl CdpClient for ChromiumoxideClient {
-	fn create_context(&mut self) -> Result<String, BrowserError> {
+	// CDP 的 context id 由浏览器分配，label 无用武之地
+	fn create_context(&mut self, _label: &str) -> Result<String, BrowserError> {
 		let params = chromiumoxide::cdp::browser_protocol::target::CreateBrowserContextParams::default();
 		let id = self
 			.block_on(self.browser.create_browser_context(params))

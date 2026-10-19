@@ -15,6 +15,8 @@ services:
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
       # 源登录用的真浏览器背衬；配合下方 chromium 服务（--profile browser）
       # - SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium
+      # 或复用本 compose 的 trawl（≥ v1.9.1）作 webview 后端；与 BROWSER_WS 互斥
+      # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
       # 全站认证（web 界面/REST/OPDS 同一密码）
       # - SUMIDOKU_AUTH_PASSWORD=
       # - SUMIDOKU_AUTH_API_KEYS=key1,key2

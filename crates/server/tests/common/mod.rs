@@ -369,7 +369,7 @@ pub mod browser_mock {
 	struct MockBrowserClient(Arc<Mutex<MockBrowserState>>);
 
 	impl CdpClient for MockBrowserClient {
-		fn create_context(&mut self) -> Result<String, BrowserError> {
+		fn create_context(&mut self, _label: &str) -> Result<String, BrowserError> {
 			let mut state = self.0.lock().expect("mock lock");
 			let id = format!("ctx-{}", state.contexts.len() + 1);
 			state.contexts.push(id.clone());

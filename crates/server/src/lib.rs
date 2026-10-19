@@ -37,6 +37,12 @@ pub async fn build_app_with(
 	config: Config,
 	browser_connector: Option<Box<dyn aidoku_wasm::browser::CdpConnector>>,
 ) -> Result<Router, Error> {
+	// 两个浏览器后端并存没有合并语义，配置错误要在启动时暴露而不是运行时行为漂移
+	if config.net.browser_ws.is_some() && config.net.browser_trawl.is_some() {
+		return Err(Error::Config(
+			"net.browser_ws and net.browser_trawl are mutually exclusive: configure one browser backend".into(),
+		));
+	}
 	std::fs::create_dir_all(&config.covers_dir)?;
 	std::fs::create_dir_all(&config.downloads_dir)?;
 	std::fs::create_dir_all(config.sources_dir())?;

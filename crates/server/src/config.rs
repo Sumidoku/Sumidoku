@@ -13,6 +13,8 @@ pub struct NetConfig {
 	pub allow_direct_fallback: bool,
 	/// CDP websocket 地址（ws://…），未配置时 webview 浏览器函数显式不支持
 	pub browser_ws: Option<String>,
+	/// trawl session API 地址（http://…）；与 browser_ws 互斥（build_app 校验）
+	pub browser_trawl: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -114,6 +116,7 @@ struct NetConfigFile {
 	proxy: Option<String>,
 	allow_direct_fallback: Option<bool>,
 	browser_ws: Option<String>,
+	browser_trawl: Option<String>,
 }
 
 impl Config {
@@ -320,6 +323,9 @@ impl Config {
 			if net.browser_ws.is_some() {
 				self.net.browser_ws = net.browser_ws;
 			}
+			if net.browser_trawl.is_some() {
+				self.net.browser_trawl = net.browser_trawl;
+			}
 			if let Some(v) = net.allow_direct_fallback {
 				self.net.allow_direct_fallback = v;
 			}
@@ -468,6 +474,9 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_WS") {
 			self.net.browser_ws = Some(v);
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_TRAWL") {
+			self.net.browser_trawl = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK")
 			&& let Ok(n) = v.parse()
 		{
@@ -504,6 +513,24 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_WS") };
 		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://127.0.0.1:3000"));
+	}
+
+	#[test]
+	fn browser_trawl_from_file() {
+		let mut config = Config::default();
+		assert_eq!(config.net.browser_trawl, None);
+		let file: ConfigFile = toml::from_str("[net]\nbrowser_trawl = \"http://trawl:8191\"\n").expect("toml");
+		config.apply_file(file);
+		assert_eq!(config.net.browser_trawl.as_deref(), Some("http://trawl:8191"));
+	}
+
+	#[test]
+	fn browser_trawl_from_env() {
+		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_TRAWL", "http://127.0.0.1:8191") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_TRAWL") };
+		assert_eq!(config.net.browser_trawl.as_deref(), Some("http://127.0.0.1:8191"));
 	}
 
 	#[test]
