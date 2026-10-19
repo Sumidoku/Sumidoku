@@ -1,7 +1,8 @@
 #![no_std]
 //! listing 透传（issue #138）的端到端验证源：get_manga_list 把收到的
 //! listing 回显成标题 "{id}|{name}|{kind}"（kind 为 default/list），
-//! 断言方据此确认端点传来的 id、name、kind 全部真实到达。
+//! 断言方据此确认端点传来的 id、name、kind 全部真实到达；回显 manga 带
+//! authors/tags，供浏览页行式布局（list kind）冒烟断言 subtitle 与 tags 行。
 //! get_search_manga_list 回显 "{query}|{id=value,…}"，配合浏览 UI 冒烟
 //! 验证 hidesFiltersWhileSearching 时搜索不再携带过滤器值。
 //! get_manga_update 填 authors/artists/tags，供详情页 tag/作者搜索冒烟。
@@ -68,6 +69,8 @@ impl ListingProvider for ListingSource {
 		let mut manga = Manga::default();
 		manga.key = String::from("echo");
 		manga.title = format!("{}|{}|{}", listing.id, listing.name, kind_name(listing.kind));
+		manga.authors = Some(Vec::from([String::from("Author One")]));
+		manga.tags = Some(Vec::from([String::from("Action"), String::from("Fantasy")]));
 		Ok(MangaPageResult {
 			entries: Vec::from([manga]),
 			has_next_page: false,
