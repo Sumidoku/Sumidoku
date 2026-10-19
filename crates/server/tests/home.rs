@@ -1,3 +1,8 @@
+//! 主页端点契约。字段透传用例的 fixture 源在 crates/wasm/tests/fixtures/home-src
+//! （no_std cdylib），重建方式：
+//! `cd crates/wasm/tests/fixtures/home-src && cargo build --release --target wasm32-unknown-unknown`，
+//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_home.wasm
+//! 复制为 crates/wasm/tests/fixtures/home/main.wasm。
 mod common;
 
 use axum::http::StatusCode;
@@ -97,9 +102,62 @@ async fn home_layout_serialized() {
 	assert_eq!(body["error"]["code"], "not_found");
 }
 
+/// home fixture 把组件里易丢的字段全部设上，断言端点原样透传：
+/// ImageScroller 的 subtitle/width/height/auto_scroll_interval、BigScroller 的
+/// tags/content_rating、Scroller 的 subtitle、MangaList/MangaChapterList 的
+/// page_size 与 MangaList 链接内嵌 Manga 的 tags
 #[tokio::test]
-async fn home_unsupported_source_404() {
+async fn home_component_fields_pass_through() {
 	let TestApp { app, tmp, .. } = test_app().await;
+	common::install_fixture_source(&tmp, "en.home", "Home Source", &common::home_wasm_path());
+	let ids = scan_and_source_ids(&app).await;
+	let source_id = ids
+		.iter()
+		.find(|(key, _)| key == "en.home")
+		.map(|(_, id)| *id)
+		.expect("home source id");
+
+	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let components = body["components"].as_array().expect("components array");
+	assert_eq!(components.len(), 6);
+
+	let banners = &components[0]["value"]["ImageScroller"];
+	assert_eq!(banners["auto_scroll_interval"], 2.0);
+	assert_eq!(banners["width"], 600);
+	assert_eq!(banners["height"], 280);
+	let links = banners["links"].as_array().expect("banner links");
+	assert_eq!(links.len(), 6);
+	assert_eq!(links[0]["subtitle"], "Banner sub 1");
+
+	let big = &components[1]["value"]["BigScroller"];
+	let entries = big["entries"].as_array().expect("big entries");
+	assert_eq!(entries.len(), 3);
+	assert_eq!(entries[0]["tags"], serde_json::json!(["Action", "Drama"]));
+	assert_eq!(entries[0]["content_rating"], "NSFW");
+	assert_eq!(entries[1]["content_rating"], "Suggestive");
+	assert_eq!(entries[2]["content_rating"], "Safe");
+
+	let scroller = &components[2]["value"]["Scroller"];
+	let entries = scroller["entries"].as_array().expect("scroller entries");
+	assert_eq!(entries[0]["subtitle"], "Scroll sub 1");
+
+	let paged = &components[3]["value"]["MangaList"];
+	assert_eq!(paged["page_size"], 2);
+	let entries = paged["entries"].as_array().expect("paged entries");
+	assert_eq!(entries.len(), 5);
+	assert_eq!(entries[0]["value"]["Manga"]["tags"], serde_json::json!(["Action", "Fantasy"]));
+
+	let plain = &components[4]["value"]["MangaList"];
+	assert!(plain["page_size"].is_null());
+
+	let chapters = &components[5]["value"]["MangaChapterList"];
+	assert_eq!(chapters["page_size"], 2);
+	assert_eq!(chapters["entries"].as_array().expect("chapter entries").len(), 3);
+}
+
+#[tokio::test]
+async fn home_unsupported_source_404() {	let TestApp { app, tmp, .. } = test_app().await;
 	// mutation fixture 只导出 Source + get_page_description，没有 get_home
 	common::install_fixture_source(&tmp, "en.mutation", "Mutation Source", &common::mutation_wasm_path());
 	let ids = scan_and_source_ids(&app).await;
