@@ -6,6 +6,23 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A "black page" in a reader smoke can be occlusion by fixed chrome, not
+a missing render — rule that out before suspecting the pipeline.** In
+paged mode the first text line starts 32px from the top, directly under
+the ~45px translucent (92% + backdrop-blur) fixed toolbar, so a one-line
+text or description page looks entirely black while its DOM, layout and
+computed styles are all correct. Before treating "nothing visible" as a
+render bug, hide the overlay (mid-zone tap) or swap in long content, and
+compare against `main` the same way; a DOM text snapshot plus a static
+same-CSS probe page bisects CSS-vs-app-state faster than reading styles.
+- Evidence: 2026-10-19, issue #134's reader smoke: one-line fixture pages
+  looked black in paged mode on the branch AND with main's ReaderPage
+  (swapped in via vite HMR); hiding the toolbar revealed the text and a
+  200-line probe rendered fully — occlusion, not a regression. Headless
+  Chrome showed computed styles all-visible while painting black, which
+  only the long-text swap explained.
+
+
 **`window.open` must fire synchronously inside the click handler; after an
 `await` it is popup-blocked.** Browsers grant `window.open` only during
 transient user activation — Safari denies it outright once the gesture's
