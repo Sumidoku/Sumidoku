@@ -146,6 +146,48 @@
 	border-color: var(--accent);
 }
 
+/* ============ ChipDropdown ============ */
+/* 菜单 portal 挂到 body、fixed 定位由行内样式给：不挂在触发元素所在容器里，
+ * 避免被父级 overflow 裁剪、被页面内容遮挡 */
+.chip-dropdown {
+	flex: none;
+}
+
+.chip-dropdown__menu {
+	position: fixed;
+	z-index: 1000;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	max-height: 260px;
+	overflow-y: auto;
+	padding: 4px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow);
+}
+
+.chip-dropdown__item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 10px;
+	font-size: 13px;
+	white-space: nowrap;
+	text-align: left;
+	color: var(--text);
+	background: none;
+	border: none;
+	border-radius: var(--r-sm);
+	cursor: pointer;
+}
+
+.chip-dropdown__item:hover {
+	background: var(--bg-hover);
+}
+
 .chip--accent {
 	background: var(--accent-soft);
 	border-color: color-mix(in srgb, var(--accent) 45%, transparent);

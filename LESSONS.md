@@ -6,6 +6,42 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Never edit UTF-8 source files through a legacy Windows shell — it
+re-encodes them as ANSI and silently corrupts every non-ASCII byte, and
+shell mojibake is not proof of damage.** PowerShell 5.1's
+`Set-Content`/redirection writes with the system ANSI codepage, so a bulk
+regex edit across a few Rust sources turned Chinese comments into garbage
+and even joined lines (18 lines changed in a file that needed 1); the
+recovery was `git checkout` of the touched files and redoing the edits
+with a UTF-8-safe editor. Conversely, a non-UTF-8 console displaying a
+healthy UTF-8 file prints the same kind of mojibake, so before reverting
+anything on "corruption" evidence, verify bytewise (dump `git show
+HEAD:file` through a byte-preserving redirect and read the dump with a
+UTF-8-aware reader). Prefer the dedicated edit tool for file edits; if a
+shell loop is unavoidable, inspect `git diff` immediately for
+unrelated-line churn.
+- Evidence: 2026-10-19, source-filter persistence work: one
+  `Get-Content -Raw | Set-Content` batch edit corrupted three Rust files;
+  a later mojibake scare on committed files was cleared by dumping the
+  committed bytes and finding valid UTF-8 — display-only artifact.
+
+**Dropdown menus inside a horizontally scrolling chip bar get clipped and
+over-painted — portal them to body, and never leave a second copy of the
+pattern unfixed.** An `overflow-x: auto` container computes `overflow-y`
+to `auto` too, so an absolutely positioned menu inside it is clipped at
+the bar's bounds and painted under later grid items with their own
+stacking contexts. Rendering the menu through a portal with `fixed`
+positioning computed from the anchor's bounding rect (clamped to the
+viewport, closing on Escape and on any scroll) fixes it for good. The
+corollary that cost a second bug: fixing the original instance does not
+fix the copy — the global-search page had duplicated the pre-fix dropdown
+and shipped the same occlusion until both pages pointed at one shared
+component.
+- Evidence: 2026-10-19/20, Aidoku-style filter chips: the source-browse
+  chip dropdown rendered under the cover grid; after the portal fix the
+  global-search `TriDropdown` (same copied code) still had the bug and
+  was repaired by extracting `ChipDropdown` into `components/`.
+
 **A leftover smoke Chrome owns the debug port, and a string-prefix URL
 match hands you its tabs.** When a second headless Chrome launches with
 the same `--remote-debugging-port`, the port stays with the first

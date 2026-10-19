@@ -4,6 +4,8 @@ export { Button } from './Button';
 export type { ButtonProps } from './Button';
 export { Chip } from './Chip';
 export type { ChipColor, ChipProps } from './Chip';
+export { ChipDropdown } from './ChipDropdown';
+export type { ChipDropdownProps } from './ChipDropdown';
 export { Cover } from './Cover';
 export type { CoverProps } from './Cover';
 export { CoverCard } from './CoverCard';

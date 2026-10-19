@@ -418,7 +418,7 @@
 	justify-content: flex-end;
 }
 
-/* Aidoku FilterHeaderView 同款横向筛选条：搜索框下方，funnel + 各筛选 chip */
+/* Aidoku FilterHeaderView 同款横向筛选条：搜索框下方的筛选 chip 行 */
 .filter-header {
 	display: flex;
 	align-items: center;
@@ -428,58 +428,12 @@
 	scrollbar-width: thin;
 }
 
-.filter-header .chip,
-.chip-dropdown {
-	flex: none;
-}
-
 .filter-header .chip {
+	flex: none;
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
 	white-space: nowrap;
-}
-
-.chip-dropdown {
-	position: relative;
-}
-
-.chip-dropdown__menu {
-	position: absolute;
-	top: calc(100% + 4px);
-	left: 0;
-	z-index: 30;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	min-width: 160px;
-	max-height: 260px;
-	overflow-y: auto;
-	padding: 4px;
-	background: var(--bg-elev);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	box-shadow: var(--shadow);
-}
-
-.chip-dropdown__item {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	padding: 6px 10px;
-	font-size: 13px;
-	white-space: nowrap;
-	text-align: left;
-	color: var(--text);
-	background: none;
-	border: none;
-	border-radius: var(--r-sm);
-	cursor: pointer;
-}
-
-.chip-dropdown__item:hover {
-	background: var(--bg-hover);
 }
 
 /* ============ 源主页 ============ */
