@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**On a machine with an active user, drive smoke UIs by AX action, not
+coordinates — and bring your own browser profile.** A synthetic coordinate
+click is aborted ("user intervened") whenever the physical cursor moves
+mid-action; `AXPress` on the snapshot index lands regardless. The desktop
+browser tool is also unavailable from subagent runs ("requires a running
+turn"), so a subagent smoke launches a throwaway Chrome with
+`--user-data-dir=/tmp/...` against the local server — fully drivable,
+nothing in the user's real tabs, killed whole afterwards.
+- Evidence: 2026-10-19, PR #150's partial-stream smoke: two coordinate
+  clicks on the ⋯ menu were swallowed by real-cursor movement while the
+  AX index press opened it first try; the smoke ran in an isolated-profile
+  Chrome on 127.0.0.1:3100 and caught the 2-chapter placeholder state
+  mid-stream.
+
 **Lazy `<img>` loads never fire in the embedded smoke browser until a
 scroll nudge — bisect the environment before suspecting the component.**
 The Kimi Code desktop browser's lazy-load intersection observer does not
