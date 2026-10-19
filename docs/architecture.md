@@ -500,7 +500,16 @@ Migrations in `crates/server/migrations`.
   `User-Agent` likewise wins over the global one
   (`RoutedClients::request_with`, insert-only-if-absent) rather than being
   appended as a second value — Cloudflare reads only the first and 403s a
-  duplicated header. Their response bodies are capped as well: covers and
+  duplicated header. The same insert-only-if-absent paths fill the browser
+  header suite (`aidoku_wasm::BROWSER_HEADERS`: the `sec-ch-ua` trio,
+  `accept`, the `sec-fetch-*` quartet and `upgrade-insecure-requests`), and
+  both reqwest builders negotiate HTTP/2 — the user agent claims Chrome,
+  and passive Cloudflare checks exactly that coherence of protocol and
+  header suite rather than the TLS fingerprint. The suite sits behind a
+  per-policy knob (`NetPolicy::browser_headers`, config
+  `net.browser_headers`, default on): `sec-fetch-*`'s navigate semantics
+  are a mild lie for API/XHR requests, so the knob keeps the honest
+  option. Their response bodies are capped as well: covers and
   page images share the net host's `net_body_max_mb`, while zip pages —
   a whole chapter packed into one archive — fall under the higher
   `net_zip_body_max_mb` (default 128 MiB).

@@ -87,6 +87,7 @@ Sidecar setup and the routing model are in [docs/sidecars.md](sidecars.md).
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
 | `SUMIDOKU_NET_DIRECT_DOMAINS` | — | comma-separated domains pinned to direct (never escalated to trawl) |
 | `SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK` | `false` | allow falling back to direct when the proxy path fails |
+| `SUMIDOKU_NET_BROWSER_HEADERS` | `true` | fill the browser header suite (`sec-ch-ua`, `accept`, `sec-fetch-*`, `upgrade-insecure-requests`) matching the Chrome user agent on source fetches; set `false` for honest semantics on API/XHR-heavy sources |
 | `SUMIDOKU_NET_BROWSER_WS` | — | Chromium CDP websocket URL; enables real-browser webview and interactive web login for source login flows |
 | `SUMIDOKU_NET_BROWSER_TRAWL` | — | trawl API URL (e.g. `http://trawl:8191`, requires trawl ≥ v1.9.1); alternative browser backend for webview using trawl sessions, mutually exclusive with `browser_ws` (configuring both fails startup) |
 | `SUMIDOKU_NET_BODY_MAX_MB` | `32` | response body cap for source fetches; shared by the wasm net host and the server-side cover/page fetches because both buffer a source-controlled endpoint's body in the same process — the cap counts decoded bytes; `0` disables |
