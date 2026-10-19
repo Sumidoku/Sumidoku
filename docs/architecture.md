@@ -320,6 +320,23 @@ Migrations in `crates/server/migrations`.
   (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
   page_bytes`) all read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
+  `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
+  variant of any image page kind (blob, zip entry or fetched URL), the
+  server-side counterpart of Aidoku's `Reader.downsampleImages`. The width
+  is quantized up to a multiple of 256 and variants are stored as PNG under
+  `page-blobs/<chapter_id>/variants/<bucket>/<idx>.png`, so buckets never
+  share bytes and a chapter reload (`materialize_image_pages`' wipe) or the
+  startup blob sweep invalidates them for free; a `<idx>.pass` marker
+  records "not resized at this bucket" (narrow image or undecodable bytes)
+  so repeat hits skip re-decoding. Pages never upscale and any failure
+  falls back to the original bytes, so a request without `width` — and the
+  downloads and OPDS-PSE paths, which never pass one — stays byte-identical
+  to the unmodified pipeline. Decode+resize runs on a blocking thread with
+  a Lanczos3 filter (line art survives shrinking better; the cost lands
+  only on a variant's first request). The web reader asks for its
+  container width times the device pixel ratio
+  (`webui/src/pages/ReaderPage.tsx:readImgWidth`).
 - Page descriptions (`source/mod.rs:fetch_page_descriptions`): per the
   Aidoku contract a page with `has_description` and no inline
   `description` gets its text from the source's `get_page_description`, so

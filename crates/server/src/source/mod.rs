@@ -1,4 +1,5 @@
 pub mod cover;
+pub mod downsample;
 pub mod rekey;
 pub mod repo;
 pub mod routed;

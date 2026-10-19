@@ -73,6 +73,12 @@ function md(text: string): string {
 	return marked.parse(text, { async: false }) as string;
 }
 
+// 页图降采样的目标宽 = 显示容器 CSS 宽 × DPR，服务端再按 256 向上取桶；条漫/翻页铺满屏宽，滚动栏上限 780
+function readImgWidth(mode: Mode): number {
+	const css = mode === 'continuous' ? Math.min(window.innerWidth, 780) : window.innerWidth;
+	return Math.max(1, Math.round(css * (window.devicePixelRatio || 1)));
+}
+
 export default function ReaderPage() {
 	const { chapterId: raw } = useParams();
 	const [sp] = useSearchParams();
@@ -120,6 +126,7 @@ function ReaderCore({
 	const [dir, setDirState] = useState<Dir>(readDir);
 	const [overlay, setOverlay] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
 
 	const idxRef = useRef(0);
 	const [idx, setIdxState] = useState(0);
@@ -173,6 +180,21 @@ function ReaderCore({
 		setColState(c);
 	}
 
+	// 窗口尺寸变化后按新宽度重新取变体，防抖避免拖拽缩放期间反复拉图
+	useEffect(() => {
+		setImgWidth(readImgWidth(mode));
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const onResize = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			timer = setTimeout(() => setImgWidth(readImgWidth(mode)), 200);
+		};
+		window.addEventListener('resize', onResize);
+		return () => {
+			if (timer !== undefined) clearTimeout(timer);
+			window.removeEventListener('resize', onResize);
+		};
+	}, [mode]);
+
 	const reportRef = useRef<{
 		timer: ReturnType<typeof setTimeout> | undefined;
 		pending: { page: number; atEnd: boolean } | null;
@@ -225,7 +247,7 @@ function ReaderCore({
 			const p = pages[center + d];
 			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
-			im.src = pageUrl(chapterId, p.index);
+			im.src = pageUrl(chapterId, p.index, imgWidth);
 		}
 	}
 
@@ -526,7 +548,7 @@ function ReaderCore({
 						) : (
 							<img
 								className="reader__img"
-								src={pageUrl(chapterId, curPage.index)}
+								src={pageUrl(chapterId, curPage.index, imgWidth)}
 								alt={`第 ${idx + 1} 页`}
 							/>
 						))}
@@ -565,7 +587,7 @@ function ReaderCore({
 								) : isUnsupported(p) ? (
 									<div className="reader__unsupported">该页类型暂不支持</div>
 								) : (
-									<img src={pageUrl(chapterId, p.index)} alt={`第 ${p.index + 1} 页`} loading="lazy" />
+									<img src={pageUrl(chapterId, p.index, imgWidth)} alt={`第 ${p.index + 1} 页`} loading="lazy" />
 								)}
 							</div>
 						);
