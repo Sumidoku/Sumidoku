@@ -378,7 +378,6 @@ export default function BrowsePage() {
 									/>
 								))}
 							</div>
-							<h2 className="browse__section">全部</h2>
 						</>
 					)}
 					{updateSources.length > 0 && (
@@ -395,6 +394,10 @@ export default function BrowsePage() {
 								))}
 							</div>
 						</>
+					)}
+					{(pinnedSources.length > 0 || updateSources.length > 0) && (
+						// 上方出现任何分段时，全列表需要「全部」标题区隔
+						<h2 className="browse__section">全部</h2>
 					)}
 					<div className="source-list">
 						{all.map((s) => (
