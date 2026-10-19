@@ -9,7 +9,7 @@ use reqwest::{
 	header::{ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
 };
 use crate::traits::CookieSink;
-use std::{collections::HashMap, io::Cursor, str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::{Cursor, Read}, str::FromStr, sync::Arc, time::Duration};
 use url::Url;
 use wasmer::FunctionEnvMut;
 
@@ -208,6 +208,7 @@ pub fn init(mut env: FunctionEnvMut<WasmEnv>, method: u8) -> FFIResult {
 pub(crate) enum SendFailure {
 	InvalidUrl,
 	Request,
+	BodyTooLarge,
 }
 
 /// 按 policy 路由发出一个请求：429/5xx 退避重试、直连撞 CF 挑战经 trawl
@@ -217,6 +218,7 @@ pub(crate) fn perform(
 	net: &mut crate::runtime::env::NetState,
 	request: &mut NetRequest,
 	timeout: Duration,
+	body_max: u64,
 ) -> std::result::Result<(), SendFailure> {
 	let Some(url) = request.url.clone() else {
 		return Err(SendFailure::InvalidUrl);
@@ -302,8 +304,10 @@ pub(crate) fn perform(
 
 		let url = response.url().clone();
 		let headers = response.headers().clone();
-		let Ok(bytes) = response.bytes() else {
-			return Err(SendFailure::Request);
+		let bytes = match read_body_capped(response, body_max) {
+			Ok(bytes) => bytes,
+			Err(BodyRead::TooLarge) => return Err(SendFailure::BodyTooLarge),
+			Err(BodyRead::Request) => return Err(SendFailure::Request),
 		};
 
 		for value in headers.get_all(SET_COOKIE).iter().filter_map(|v| v.to_str().ok()) {
@@ -313,10 +317,41 @@ pub(crate) fn perform(
 			url,
 			status,
 			headers,
-			data: bytes.into(),
+			data: bytes,
 		});
 		return Ok(());
 	}
+}
+
+enum BodyRead {
+	TooLarge,
+	Request,
+}
+
+/// 有界读响应体：头声明长度超线直接快败；压缩响应的头长度是压缩后尺寸（甚至缺席），
+/// 进内存的是 decoded 字节，流式累计截停才是真防线。max 为 0 不设限
+fn read_body_capped(mut response: reqwest::blocking::Response, max: u64) -> std::result::Result<Vec<u8>, BodyRead> {
+	if max > 0
+		&& let Some(len) = response.content_length()
+		&& len > max
+	{
+		return Err(BodyRead::TooLarge);
+	}
+	let mut out = Vec::new();
+	let mut buf = [0u8; 64 * 1024];
+	loop {
+		match response.read(&mut buf) {
+			Ok(0) => break,
+			Ok(n) => {
+				if max > 0 && out.len() as u64 + n as u64 > max {
+					return Err(BodyRead::TooLarge);
+				}
+				out.extend_from_slice(&buf[..n]);
+			}
+			Err(_) => return Err(BodyRead::Request),
+		}
+	}
+	Ok(out)
 }
 
 fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
@@ -329,10 +364,18 @@ fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 		.map(|t| Duration::from_secs_f64(t.max(0.0)))
 		.map(|t| t.min(data.limits.net_timeout_max))
 		.unwrap_or(data.limits.net_timeout_default);
-	match perform(&mut data.net, request, timeout) {
+	let result = perform(&mut data.net, request, timeout, data.limits.net_body_max);
+	if let Err(SendFailure::BodyTooLarge) = &result {
+		data.log(&format!(
+			"response body exceeds the {} byte net_body_max limit",
+			data.limits.net_body_max
+		));
+	}
+	match result {
 		Ok(()) => Result::Success.into(),
 		Err(SendFailure::InvalidUrl) => Result::InvalidUrl.into(),
-		Err(SendFailure::Request) => Result::RequestError.into(),
+		// ABI 没有「body 超限」专用码，源只能拿 RequestError，帽值与原因进上面的源日志
+		Err(SendFailure::Request | SendFailure::BodyTooLarge) => Result::RequestError.into(),
 	}
 }
 
@@ -616,6 +659,9 @@ mod tests {
 		trawl: Option<String>,
 	}
 
+	/// 与帽无关的既有测试一律给宽松上限，帽的行为由专门测试钉
+	const TEST_BODY_MAX: u64 = 64 * 1024 * 1024;
+
 	impl NetPolicy for EscalationPolicy {
 		fn route_for(&self, _url: &Url) -> NetRoute {
 			NetRoute::Direct
@@ -704,7 +750,7 @@ mod tests {
 	fn get(net: &mut NetState, url: &Url) -> NetResponse {
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url.clone());
-		perform(net, &mut request, Duration::from_secs(10)).expect("perform");
+		perform(net, &mut request, Duration::from_secs(10), TEST_BODY_MAX).expect("perform");
 		request.response.expect("response stored")
 	}
 
@@ -868,7 +914,7 @@ mod tests {
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url);
 		request.headers.insert(COOKIE, HeaderValue::from_static("src=1"));
-		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		perform(&mut net, &mut request, Duration::from_secs(5), TEST_BODY_MAX).expect("perform");
 		let head = server.heads().join("\n").to_ascii_lowercase();
 		assert!(head.contains("cookie: jar=1; src=1"), "head: {head}");
 	}
@@ -881,7 +927,7 @@ mod tests {
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url);
-		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		perform(&mut net, &mut request, Duration::from_secs(5), TEST_BODY_MAX).expect("perform");
 		let head = server.heads().join("\n").to_ascii_lowercase();
 		assert!(head.contains("accept-language:"), "head: {head}");
 	}
@@ -895,7 +941,7 @@ mod tests {
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url);
-		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		perform(&mut net, &mut request, Duration::from_secs(5), TEST_BODY_MAX).expect("perform");
 		let head = server.heads().join("\n").to_ascii_lowercase();
 		assert!(head.contains("accept-language: zh-cn,zh;q=0.9"), "head: {head}");
 	}
@@ -1085,7 +1131,7 @@ mod tests {
 			reqwest::header::ACCEPT_ENCODING,
 			HeaderValue::from_str(accept_encoding).expect("accept-encoding"),
 		);
-		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		perform(&mut net, &mut request, Duration::from_secs(5), TEST_BODY_MAX).expect("perform");
 		request.response.expect("response stored")
 	}
 
@@ -1142,8 +1188,100 @@ mod tests {
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url);
-		perform(&mut net, &mut request, Duration::from_secs(5)).expect("perform");
+		perform(&mut net, &mut request, Duration::from_secs(5), TEST_BODY_MAX).expect("perform");
 		let head = server.heads().join("\n").to_ascii_lowercase();
 		assert!(head.contains("cookie: jar=1"), "head: {head}");
+	}
+
+	fn perform_get(net: &mut NetState, url: &Url, body_max: u64) -> std::result::Result<NetResponse, SendFailure> {
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url.clone());
+		perform(net, &mut request, Duration::from_secs(5), body_max)?;
+		Ok(request.response.take().expect("response stored"))
+	}
+
+	#[test]
+	fn body_at_cap_is_stored() {
+		// 边界钉死：恰好等于帽值通过，超一字节即败
+		let body = vec![b'x'; 1024];
+		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let response = perform_get(&mut net, &url, 1024).expect("恰好在帽内");
+		assert_eq!(response.data.len(), 1024);
+
+		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &vec![b'x'; 1025]));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		let result = perform(&mut net, &mut request, Duration::from_secs(5), 1024);
+		assert!(matches!(result, Err(SendFailure::BodyTooLarge)), "got: {result:?}");
+		assert!(request.response.is_none(), "超限响应不得落 store");
+	}
+
+	#[test]
+	fn declared_length_over_cap_fails_fast() {
+		let body = vec![b'x'; 2048];
+		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		let result = perform(&mut net, &mut request, Duration::from_secs(5), 1024);
+		assert!(matches!(result, Err(SendFailure::BodyTooLarge)), "got: {result:?}");
+		assert_eq!(server.hits(), 1, "超限不是重试面");
+	}
+
+	#[test]
+	fn unannounced_over_cap_fails_while_streaming() {
+		// 无 content-length 的响应靠流式累计截停，而不是读满才发现
+		let body = vec![b'x'; 2048];
+		let server = mock_server(move |_head| {
+			let mut out = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n".to_vec();
+			out.extend_from_slice(&body);
+			out
+		});
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		let result = perform(&mut net, &mut request, Duration::from_secs(5), 1024);
+		assert!(matches!(result, Err(SendFailure::BodyTooLarge)), "got: {result:?}");
+	}
+
+	#[test]
+	fn gzip_decoded_bytes_count_against_cap() {
+		// 头里 content-length 是压缩后的尺寸，进内存的是 decoded 量：帽按 decoded 计
+		let body = gzip_body(&vec![b'x'; 2048]);
+		assert!((body.len() as u64) < 1024, "夹具前提：压缩后小于帽");
+		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-encoding: gzip"], &body));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		let result = perform(&mut net, &mut request, Duration::from_secs(5), 1024);
+		assert!(matches!(result, Err(SendFailure::BodyTooLarge)), "got: {result:?}");
+	}
+
+	#[test]
+	fn send_reports_request_error_and_stores_nothing_over_cap() {
+		// 源侧的表面：send 拿 -10（ABI 无超限专用码），响应不落 store
+		let body = vec![b'x'; 2048];
+		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
+		let mut ffi = Ffi::new();
+		ffi.env.as_mut(&mut ffi.store).limits.net_body_max = 1024;
+		let rid = Function::new_typed_with_env(&mut ffi.store, &ffi.env, init)
+			.call(&mut ffi.store, &[Value::I32(0)])
+			.unwrap()
+			.first()
+			.unwrap()
+			.i32()
+			.unwrap();
+		assert!(rid > 0, "init 返回 {rid}");
+		let (p, l) = ffi.write_str(&format!("http://{}/x", server.addr));
+		assert_eq!(ffi.call3(set_url, rid, p, l), 0, "set_url");
+		assert_eq!(ffi.call1(send, rid), -10, "超限必须失败而不是无界缓冲");
+		assert_eq!(ffi.call1(data_len, rid), -8, "超限响应不得可读");
 	}
 }

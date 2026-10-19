@@ -48,6 +48,10 @@ pub struct Config {
 	pub wasm_memory_max_mb: u64,
 	pub wasm_fuel: u64,
 	pub wasm_call_timeout_secs: u64,
+	/// 源端点响应体上限（MiB）：wasm net host 与服务端代取（封面/页图）共用；0 = 不设限
+	pub net_body_max_mb: u64,
+	/// zip 页整章压缩包的响应体上限（MiB）：一章 N 页打成一个 body，得给页图帽的数倍
+	pub net_zip_body_max_mb: u64,
 	/// 以下四项是 setting 表 backup.* 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
 	pub backup_enabled: Option<bool>,
 	pub backup_interval_hours: Option<u64>,
@@ -84,6 +88,8 @@ impl Default for Config {
 			wasm_memory_max_mb: 128,
 			wasm_fuel: 10_000_000_000,
 			wasm_call_timeout_secs: 60,
+			net_body_max_mb: 32,
+			net_zip_body_max_mb: 128,
 			backup_enabled: None,
 			backup_interval_hours: None,
 			backup_retention_count: None,
@@ -140,6 +146,7 @@ impl Config {
 			memory_max: self.wasm_memory_max_mb * 1024 * 1024,
 			fuel: self.wasm_fuel,
 			call_timeout: std::time::Duration::from_secs(self.wasm_call_timeout_secs),
+			net_body_max: self.net_body_max_mb * 1024 * 1024,
 			..aidoku_wasm::Limits::default()
 		}
 	}
@@ -174,6 +181,8 @@ struct ConfigFile {
 	wasm_memory_max_mb: Option<u64>,
 	wasm_fuel: Option<u64>,
 	wasm_call_timeout_secs: Option<u64>,
+	net_body_max_mb: Option<u64>,
+	net_zip_body_max_mb: Option<u64>,
 	backup_enabled: Option<bool>,
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
@@ -255,6 +264,12 @@ impl Config {
 		}
 		if let Some(v) = file.wasm_call_timeout_secs {
 			self.wasm_call_timeout_secs = v;
+		}
+		if let Some(v) = file.net_body_max_mb {
+			self.net_body_max_mb = v;
+		}
+		if let Some(v) = file.net_zip_body_max_mb {
+			self.net_zip_body_max_mb = v;
 		}
 		if file.backup_enabled.is_some() {
 			self.backup_enabled = file.backup_enabled;
@@ -385,6 +400,16 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.wasm_call_timeout_secs = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_BODY_MAX_MB")
+			&& let Ok(n) = v.parse()
+		{
+			self.net_body_max_mb = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_ZIP_BODY_MAX_MB")
+			&& let Ok(n) = v.parse()
+		{
+			self.net_zip_body_max_mb = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_ENABLED")
 			&& let Ok(n) = v.parse()
@@ -525,6 +550,7 @@ mod tests {
 		assert_eq!(limits.memory_max, 128 * 1024 * 1024);
 		assert_eq!(limits.fuel, 10_000_000_000);
 		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(60));
+		assert_eq!(limits.net_body_max, 32 * 1024 * 1024);
 	}
 
 	#[test]
@@ -533,11 +559,36 @@ mod tests {
 			wasm_memory_max_mb: 64,
 			wasm_fuel: 123,
 			wasm_call_timeout_secs: 7,
+			net_body_max_mb: 48,
 			..Config::default()
 		};
 		let limits = config.wasm_limits();
 		assert_eq!(limits.memory_max, 64 * 1024 * 1024);
 		assert_eq!(limits.fuel, 123);
 		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(7));
+		assert_eq!(limits.net_body_max, 48 * 1024 * 1024);
+	}
+
+	#[test]
+	fn net_body_max_from_file_and_env() {
+		let file: ConfigFile =
+			toml::from_str("net_body_max_mb = 16\nnet_zip_body_max_mb = 96\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.net_body_max_mb, 16);
+		assert_eq!(config.net_zip_body_max_mb, 96);
+
+		unsafe {
+			std::env::set_var("SUMIDOKU_NET_BODY_MAX_MB", "24");
+			std::env::set_var("SUMIDOKU_NET_ZIP_BODY_MAX_MB", "160");
+		}
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe {
+			std::env::remove_var("SUMIDOKU_NET_BODY_MAX_MB");
+			std::env::remove_var("SUMIDOKU_NET_ZIP_BODY_MAX_MB");
+		}
+		assert_eq!(config.net_body_max_mb, 24);
+		assert_eq!(config.net_zip_body_max_mb, 160);
 	}
 }
