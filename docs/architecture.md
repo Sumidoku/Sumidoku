@@ -17,6 +17,16 @@ Migrations in `crates/server/migrations`.
   stable key a `send_partial_result` stream patches against. A source
   without `get_home` answers 404 `unsupported`, same as dynamic filters and
   listings.
+  `POST /api/v1/sources/{id}/deep-link` (`api/mod.rs:deep_link`) hands a URL
+  to the source's `handle_deep_link`. `Manga`/`Chapter` results are resolved
+  to internal ids before answering — the manga is found or registered through
+  the same find-or-register path a browse-page click takes
+  (`find_or_register_manga`), and the chapter id is looked up by key (null
+  when the source's chapter list lacks it, the web UI then lands on the manga
+  page) — so the web UI navigates to `/manga/:id` or `/reader/:chapterId`
+  with no second lookup; `Listing` passes through and the source browse page
+  switches to that listing, and an unmatched URL answers `{"result": null}`.
+  A source without the export answers 404 `unsupported`, same as `get_home`.
 - Partial-result streaming (`api/partial.rs`): the home and search endpoints
   honor `Accept: application/x-ndjson` as an explicit opt-in. The source's
   mid-request `send_partial_result` payloads arrive as one JSON event per

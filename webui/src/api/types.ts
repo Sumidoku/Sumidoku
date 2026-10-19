@@ -253,6 +253,20 @@ export interface Listing {
 	kind: string;
 }
 
+/** POST /sources/{id}/deep-link 的解析结果：源侧 key 原样回传，
+ * mangaId/chapterId 是服务端按 (source, key) 登记/命中后的内部 id */
+export interface DeepLinkResult {
+	mangaKey: string | null;
+	chapterKey: string | null;
+	listing: Listing | null;
+	mangaId: number | null;
+	chapterId: number | null;
+}
+
+export interface DeepLinkResponse {
+	result: DeepLinkResult | null;
+}
+
 // Filter 的 wire 形态是 aidoku 定制扁平结构：type 标签 + 变体字段平铺
 export interface Filter {
 	id: string;
