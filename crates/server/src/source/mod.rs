@@ -981,24 +981,42 @@ pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 	}
 }
 
-async fn read_body(response: reqwest::Response) -> ApiResult<(Vec<u8>, Option<String>)> {
+/// 有界读响应体：头声明长度超线快败；压缩/无头长度靠流式累计截停（同 repo::fetch_capped
+/// 模式）。max 为 0 不设限
+async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
 		.get(reqwest::header::CONTENT_TYPE)
 		.and_then(|v| v.to_str().ok())
 		.map(str::to_string);
-	let bytes = response
-		.bytes()
+	let too_large = || ApiError::bad_gateway(format!("upstream body exceeds the {max} byte limit"));
+	if max > 0
+		&& let Some(len) = response.content_length()
+		&& len > max
+	{
+		return Err(too_large());
+	}
+	let mut response = response;
+	let mut bytes = Vec::new();
+	while let Some(chunk) = response
+		.chunk()
 		.await
-		.map_err(|e| ApiError::bad_gateway(format!("read upstream body failed: {e}")))?;
-	Ok((bytes.to_vec(), mime))
+		.map_err(|e| ApiError::bad_gateway(format!("read upstream body failed: {e}")))?
+	{
+		if max > 0 && bytes.len() as u64 + chunk.len() as u64 > max {
+			return Err(too_large());
+		}
+		bytes.extend_from_slice(&chunk);
+	}
+	Ok((bytes, mime))
 }
 
 fn fetch_err(e: crate::source::routed::FetchError) -> ApiError {
 	ApiError::bad_gateway(format!("upstream request failed: {e}"))
 }
 
-/// 裸 GET，不经过源的 image_request 改造
+/// 裸 GET，不经过源的 image_request 改造。调用方全是 zip 页：整章压缩包是单个
+/// 大 body，走 net_zip_body_max_mb 专用高帽而不是页图帽
 pub async fn http_get(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1012,7 +1030,7 @@ pub async fn http_get(
 		.get_with(&url, Some(accept_language.as_str()))
 		.await
 		.map_err(fetch_err)?;
-	read_body(response).await
+	read_body(response, state.config.net_zip_body_max_mb * 1024 * 1024).await
 }
 
 /// 图像取回的完整结果：字节之外带状态与头，process_*_image 构造 ImageResponse 要用
@@ -1052,7 +1070,7 @@ pub async fn fetch_remote(
 			.map_err(fetch_err)?;
 		let status = response.status().as_u16();
 		let response_headers = flatten_headers(response.headers());
-		let (bytes, mime) = read_body(response).await?;
+		let (bytes, mime) = read_body(response, state.config.net_body_max_mb * 1024 * 1024).await?;
 		return Ok(RemoteImage {
 			bytes,
 			mime,
@@ -1088,7 +1106,7 @@ pub async fn fetch_remote(
 	}
 	let status = response.status().as_u16();
 	let response_headers = flatten_headers(response.headers());
-	let (bytes, mime) = read_body(response).await?;
+	let (bytes, mime) = read_body(response, state.config.net_body_max_mb * 1024 * 1024).await?;
 	Ok(RemoteImage {
 		bytes,
 		mime,
@@ -1425,5 +1443,81 @@ mod tests {
 		assert_eq!(m.get("pick").cloned(), Some(json!("dark")));
 		assert_eq!(m.get("nested").cloned(), Some(json!(true)));
 		assert!(!m.contains_key("seg"));
+	}
+
+	/// 裸 HTTP/1.1 mock：announce_length=false 时不写 content-length，
+	/// 靠 connection: close 收尾，验流式累计路径
+	fn body_server(body: Vec<u8>, announce_length: bool) -> String {
+		use std::io::{Read, Write};
+		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
+		let port = listener.local_addr().expect("local addr").port();
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else { break };
+				let mut head = Vec::new();
+				let mut chunk = [0u8; 4096];
+				loop {
+					match stream.read(&mut chunk) {
+						Ok(0) | Err(_) => break,
+						Ok(n) => {
+							head.extend_from_slice(&chunk[..n]);
+							if head.windows(4).any(|w| w == b"\r\n\r\n") {
+								break;
+							}
+						}
+					}
+				}
+				let mut out = b"HTTP/1.1 200 OK\r\nconnection: close\r\n".to_vec();
+				if announce_length {
+					out.extend_from_slice(format!("content-length: {}\r\n", body.len()).as_bytes());
+				}
+				out.extend_from_slice(b"\r\n");
+				out.extend_from_slice(&body);
+				if stream.write_all(&out).is_err() {
+					break;
+				}
+			}
+		});
+		format!("127.0.0.1:{port}")
+	}
+
+	async fn get_response(addr: &str) -> reqwest::Response {
+		reqwest::Client::new()
+			.get(format!("http://{addr}/x"))
+			.send()
+			.await
+			.expect("send")
+	}
+
+	#[tokio::test]
+	async fn read_body_at_cap_passes_over_cap_fails() {
+		// 边界钉死：恰好等于帽值通过，超一字节即败
+		let addr = body_server(vec![b'x'; 1024], true);
+		let (bytes, _) = read_body(get_response(&addr).await, 1024).await.expect("恰好在帽内");
+		assert_eq!(bytes.len(), 1024);
+
+		let addr = body_server(vec![b'x'; 1025], true);
+		let err = read_body(get_response(&addr).await, 1024)
+			.await
+			.expect_err("超一字节必须失败而不是无界缓冲");
+		assert!(err.message().contains("exceeds the 1024 byte limit"), "got: {}", err.message());
+	}
+
+	#[tokio::test]
+	async fn read_body_unannounced_over_cap_fails() {
+		// 无 content-length：流式累计截停
+		let addr = body_server(vec![b'x'; 2048], false);
+		let err = read_body(get_response(&addr).await, 1024)
+			.await
+			.expect_err("无头长度也必须被帽截停");
+		assert!(err.message().contains("exceeds the 1024 byte limit"), "got: {}", err.message());
+	}
+
+	#[tokio::test]
+	async fn read_body_zero_cap_is_unlimited() {
+		// 0 是显式逃生门：配置面文档化的契约，钉住
+		let addr = body_server(vec![b'x'; 2048], true);
+		let (bytes, _) = read_body(get_response(&addr).await, 0).await.expect("0 不设限");
+		assert_eq!(bytes.len(), 2048);
 	}
 }

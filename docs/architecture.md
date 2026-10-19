@@ -385,8 +385,8 @@ Migrations in `crates/server/migrations`.
   (`crates/wasm/src/runtime/limits.rs`) are server-configured at spawn:
   `wasm_memory_max_mb` (default 128 — Aidoku sources rarely exceed 64
   MiB, but a tighter cap makes `memory.grow` fail and kills the source),
-  `wasm_fuel` and `wasm_call_timeout_secs`; the sleep/net/js/browser
-  knobs stay hardcoded. Every export call also passes two admission
+  `wasm_fuel`, `wasm_call_timeout_secs` and `net_body_max_mb`; the
+  sleep/net-timeout/js/browser knobs stay hardcoded. Every export call also passes two admission
   semaphores (`crates/wasm/src/runtime/actor.rs:call`): the global
   `call_concurrency` cap, and — only when the source manifest declares
   `config.maximumParallelRequests` — a per-source cap of
@@ -416,7 +416,10 @@ Migrations in `crates/server/migrations`.
   `User-Agent` likewise wins over the global one
   (`RoutedClients::request_with`, insert-only-if-absent) rather than being
   appended as a second value — Cloudflare reads only the first and 403s a
-  duplicated header.
+  duplicated header. Their response bodies are capped as well: covers and
+  page images share the net host's `net_body_max_mb`, while zip pages —
+  a whole chapter packed into one archive — fall under the higher
+  `net_zip_body_max_mb` (default 128 MiB).
 
 ## WASM sources (`crates/wasm`)
 
@@ -433,7 +436,12 @@ a linear-memory cap enforced through custom wasmer tunables
 (`LimitedTunables`) — the server sets these from its own config when it
 spawns an instance, defaulting the memory cap to 128 MiB.
 The net host (`imports/net.rs`) aligns request behavior with the
-Aidoku/URLSession host. `html()` decodes the body by BOM, then the
+Aidoku/URLSession host. Response bodies are buffered under a
+configurable cap (`net_body_max_mb`, default 32 MiB, decoded bytes —
+gzip is counted after decompression): a declared content-length over
+the cap fails fast, otherwise streaming reads stop at the cap, and an
+oversized body fails the request with the ABI's generic request error
+while naming the limit in the source log. `html()` decodes the body by BOM, then the
 Content-Type charset, then a `<meta charset>` sniff of the first 1024
 bytes, falling back to UTF-8 with replacement (encoding_rs) — a
 non-UTF-8 page decodes instead of failing the call. gzip, br and deflate

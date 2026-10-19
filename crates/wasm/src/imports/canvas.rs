@@ -582,7 +582,8 @@ pub fn load_font(mut env: FunctionEnvMut<WasmEnv>, url_ptr: Ptr, url_len: u32) -
 	let mut request = crate::imports::NetRequest::new(crate::imports::HttpMethod::Get);
 	request.url = Some(url);
 	let timeout = data.limits.net_timeout_default;
-	if crate::imports::net::perform(&mut data.net, &mut request, timeout).is_err() {
+	let body_max = data.limits.net_body_max;
+	if crate::imports::net::perform(&mut data.net, &mut request, timeout, body_max).is_err() {
 		return Result::FontLoadFailed.into();
 	}
 	let Some(response) = request.response else {

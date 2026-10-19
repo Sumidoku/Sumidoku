@@ -14,6 +14,8 @@ pub struct Limits {
 	pub sleep_max: Duration,
 	pub net_timeout_default: Duration,
 	pub net_timeout_max: Duration,
+	/// net host 单次响应体上限（解码后字节）；0 = 不设限
+	pub net_body_max: u64,
 	/// 实例线性内存上限，memory.grow 超过即失败
 	pub memory_max: u64,
 	/// 单次 js eval 的执行上限（脚本入口 wall-clock，budget 让出点检查）
@@ -32,6 +34,8 @@ impl Default for Limits {
 			sleep_max: Duration::from_secs(10),
 			net_timeout_default: Duration::from_secs(30),
 			net_timeout_max: Duration::from_secs(120),
+			// 生态里最大的合法单体是长条漫整页图（常见几 MiB，极端约 20 MiB），32 MiB 留余量
+			net_body_max: 32 * 1024 * 1024,
 			// Aidoku 源实测很少超 64 MiB；压太低会让 memory.grow 失败直接打死源
 			memory_max: 128 * 1024 * 1024,
 			js_timeout: Duration::from_secs(10),
