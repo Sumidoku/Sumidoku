@@ -626,7 +626,21 @@ leaf key with the first occurrence kept (AidokuRunner shows duplicates;
 Sumidoku's rule is the same one the synthesized settings use). The static
 Aidoku schema (flat, camelCase) is normalized
 to the nested shape the dynamic export produces (`api::settings`), so the
-API and web UI see a single contract. Defaults are seeded into
+API and web UI see a single contract.
+`GET /api/v1/sources/{id}/filters` (`api/mod.rs:get_filters`) merges the same
+way — static entries from the manifest's `filters` array (or `filters.json`
+when the manifest declares none) first, the dynamic `get_filters` export
+appended — and the static filter schema (flat, camelCase, `id` optional) is
+normalized to the flat snake_case shape the dynamic export produces
+(`api::filters`): `id` derives as `id ?? title ?? type`, Aidoku's static-filter
+decode (without it every id-less filter shares an empty id, and the web UI's
+id-keyed state and React keys overwrite each other); the capability keys map
+camelCase to snake_case (`canAscend`→`can_ascend`, `canExclude`→`can_exclude`,
+`isGenre`→`is_genre`, `usesTagStyle`→`uses_tag_style`,
+`hideFromHeader`→`hide_from_header`, `defaultIncluded`→`default_included`,
+`defaultExcluded`→`default_excluded`); and each variant's absent fields come
+back null. Dynamic exports pass through untouched — the server is the single
+authority for the shape. Defaults are seeded into
 `source_setting` with UserDefaults `register(defaults:)` semantics: every
 seed also records the default in the row's `seeded_value`, and a later seed
 (a source update, or the next `get_settings` fetch) rewrites the live value
