@@ -58,6 +58,14 @@ export const CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
 	{ value: 2, label: 'NSFW', color: 'danger' }
 ];
 
+// 漫画级内容分级（manga.content_rating，Aidoku ContentRating）：1 安全 / 2 建议 / 3 NSFW；
+// 与上方源级 0/1/2 是两套刻度，别混用
+export const MANGA_CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
+	{ value: 1, label: '安全', color: 'accent' },
+	{ value: 2, label: '建议', color: 'warning' },
+	{ value: 3, label: 'NSFW', color: 'danger' }
+];
+
 function levelOf(value: number): ContentRatingLevel {
 	if (value >= 0 && value < CONTENT_RATING_LEVELS.length) return CONTENT_RATING_LEVELS[value];
 	// 越界（>2）按最高档显示；Aidoku 的 unknown(0) 也落在安全档

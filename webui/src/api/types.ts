@@ -195,6 +195,9 @@ export type LibrarySort = 'added' | 'title' | 'lastRead' | 'unread';
 
 export type LibraryFilter = 'unread' | 'downloaded' | 'bookmarked';
 
+/** 三态多选：键为选项 id（字符串形式），1 包含 / -1 排除，未选不入列 */
+export type TriStateSelection = Record<string, 1 | -1>;
+
 // ---- 下载与更新 ----
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'finished' | 'error';
