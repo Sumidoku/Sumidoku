@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Check, Search, SearchX, TriangleAlert, X } from 'lucide-react';
+import { Search, SearchX, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
 import type { Manga, Source, SourceSearchResult } from '../api/types';
@@ -19,7 +19,7 @@ import {
 	isMultiLanguage,
 	languageLabel
 } from '../lib/source';
-import { Button, ChipDropdown, CoverCard, EmptyState, Input, Skeleton } from '../components';
+import { Button, CoverCard, EmptyState, Input, Skeleton, TriStateDropdown } from '../components';
 
 type FilterGroup = 'ratings' | 'langs' | 'sources';
 
@@ -158,19 +158,19 @@ export default function SearchPage() {
 			</form>
 
 			<div className="filter-header">
-				<TriDropdown
+				<TriStateDropdown
 					label="分级"
 					options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
 					states={filters.ratings}
 					onCycle={(k) => cycle('ratings', k)}
 				/>
-				<TriDropdown
+				<TriStateDropdown
 					label="语言"
 					options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
 					states={filters.langs}
 					onCycle={(k) => cycle('langs', k)}
 				/>
-				<TriDropdown
+				<TriStateDropdown
 					label="图源"
 					options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
 					states={filters.sources}
@@ -261,45 +261,5 @@ function SourceSection({
 				</div>
 			)}
 		</section>
-	);
-}
-
-/** 三态多选下拉：chip 展示选中计数，菜单项点击循环 未选 → 包含 → 排除；
- * 菜单不收起（Aidoku menuActionDismissDisabled），连续多选 */
-function TriDropdown({
-	label,
-	options,
-	states,
-	onCycle
-}: {
-	label: string;
-	options: { key: string; label: string }[];
-	states: Record<string, TriState>;
-	onCycle: (key: string) => void;
-}) {
-	const count = Object.keys(states).length;
-	return (
-		<ChipDropdown active={count > 0} label={`${label}${count > 0 ? `（${count}）` : ''}`}>
-			{() =>
-				options.map((opt) => {
-					const st = states[opt.key] ?? 0;
-					return (
-						<button
-							key={opt.key}
-							type="button"
-							className="chip-dropdown__item"
-							onClick={() => onCycle(opt.key)}
-						>
-							<span>
-								{st === -1 ? '− ' : ''}
-								{opt.label}
-							</span>
-							{st === 1 && <Check size={14} />}
-							{st === -1 && <X size={14} />}
-						</button>
-					);
-				})
-			}
-		</ChipDropdown>
 	);
 }

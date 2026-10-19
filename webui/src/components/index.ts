@@ -32,6 +32,8 @@ export type { SkeletonProps } from './Skeleton';
 export { Spinner } from './Spinner';
 export { Switch } from './Switch';
 export type { SwitchProps } from './Switch';
+export { TriStateDropdown } from './TriStateDropdown';
+export type { TriStateDropdownProps } from './TriStateDropdown';
 export { Tabs } from './Tabs';
 export type { TabItem, TabsProps } from './Tabs';
 export { pushToast, Toaster } from './Toast';
