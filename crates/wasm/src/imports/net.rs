@@ -901,6 +901,39 @@ mod tests {
 		assert!(head.contains("user-agent:"), "{head}");
 	}
 
+	/// 实测冒烟（wasm 阻塞 net 宿主）：打真实站点，只手动跑。
+	/// 断言面与 server 侧冒烟一致：协议回声 h2、被动 CF 样本站 200 非挑战页、正常站无回归。
+	#[test]
+	#[ignore = "打真实站点，只手动跑"]
+	fn smoke_wasm_net_host_fingerprint() {
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+
+		let peet = Url::parse("https://tls.peet.ws/api/all").unwrap();
+		let response = get(&mut net, &peet);
+		assert_eq!(response.status, StatusCode::OK);
+		let body = String::from_utf8_lossy(&response.data);
+		assert!(body.contains("\"http_version\": \"h2\""), "{body}");
+
+		for site in ["https://toonily.com/", "https://bakamh.com/"] {
+			let url = Url::parse(site).unwrap();
+			let response = get(&mut net, &url);
+			assert_eq!(response.status, StatusCode::OK, "{site}");
+			let body = String::from_utf8_lossy(&response.data);
+			assert!(!body.contains("Just a moment"), "{site} 不应是挑战页");
+			assert!(
+				body.len() > 20_000,
+				"{site} 正文过短（{} 字节），疑似挑战页",
+				body.len()
+			);
+			println!("{site} 200, {} bytes", body.len());
+		}
+
+		let mangadex = Url::parse("https://mangadex.org/").unwrap();
+		let response = get(&mut net, &mangadex);
+		assert_eq!(response.status, StatusCode::OK, "mangadex 无回归");
+		println!("https://mangadex.org/ 200");
+	}
+
 	#[test]
 	fn jar_sink_fires_on_set_and_expiry() {
 		// jar 变更必须同步给 sink（持久化的唯一通道）：写入发 Some，真实删除发 None

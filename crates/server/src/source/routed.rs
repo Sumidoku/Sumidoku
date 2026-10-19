@@ -814,6 +814,40 @@ mod tests {
 		assert_eq!(trawl.hits(), 2);
 	}
 
+	/// 实测冒烟：打真实站点，不进固定套件（nextest --run-ignored all 手动跑）。
+	/// 钉三件事：协议回声协商 h2、被动 CF 样本站直连 200 且非挑战页、正常站无回归。
+	#[tokio::test]
+	#[ignore = "打真实站点，只手动跑"]
+	async fn smoke_direct_path_fingerprint() {
+		let clients = RoutedClients::new(policy(|_| {}));
+
+		let peet = Url::parse("https://tls.peet.ws/api/all").unwrap();
+		let response = clients.get(&peet).await.expect("tls.peet.ws");
+		assert_eq!(format!("{:?}", response.version()), "HTTP/2.0", "协议回声应协商 h2");
+		let body = response.text().await.expect("peet body");
+		assert!(body.contains("\"http_version\": \"h2\""), "{body}");
+		println!("tls.peet.ws: negotiated HTTP/2.0");
+
+		for site in ["https://toonily.com/", "https://bakamh.com/"] {
+			let url = Url::parse(site).unwrap();
+			let response = clients.get(&url).await.unwrap_or_else(|e| panic!("{site}: {e}"));
+			assert_eq!(response.status(), StatusCode::OK, "{site}");
+			let body = response.text().await.unwrap_or_else(|e| panic!("{site} body: {e}"));
+			assert!(!body.contains("Just a moment"), "{site} 不应是挑战页");
+			assert!(
+				body.len() > 20_000,
+				"{site} 正文过短（{} 字节），疑似挑战页",
+				body.len()
+			);
+			println!("{site} 200, {} bytes", body.len());
+		}
+
+		let mangadex = Url::parse("https://mangadex.org/").unwrap();
+		let response = clients.get(&mangadex).await.expect("mangadex");
+		assert_eq!(response.status(), StatusCode::OK, "mangadex 无回归");
+		println!("https://mangadex.org/ 200");
+	}
+
 	/// 直连底座（base_builder + 测试 CA）必须能对只讲 h2 的源站协商出 HTTP/2：
 	/// 本地 rustls echo 只放 h2 一个 ALPN——客户端不开 http2 时连 TLS 握手都过不了。
 	#[tokio::test]
