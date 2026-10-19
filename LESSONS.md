@@ -383,3 +383,14 @@ and only `%#z` accepts `Z`, `+09`, `+0900` and `+09:00` alike (`%z` and
   `%…%z` (the correct reading needs the −9h shift), and `500` under `%f`
   became 500ns rather than half a second; PR #124 routes zone-token
   formats through `DateTime::parse_from_str` and maps `S` to `%.f`.
+
+**Re-check a same-repo PR is still open before pushing a fix to its head
+branch.** A collaborator can merge the PR — and GitHub delete the head
+branch — while the review is still running; `git push` then recreates
+the deleted branch disconnected from the PR, and the fix has to be
+rescued onto a fresh branch anyway. One `gh pr view <N> --json state`
+before pushing costs a call and saves the detour.
+- Evidence: 2026-10-19, PR #165: dyphire merged it mid-review and the
+  head branch `webui` was deleted before the fix push, which recreated
+  it as "[new branch]"; the fix was cherry-picked onto
+  `fix/browse-updates-header` (PR #166) and the stray branch deleted.
