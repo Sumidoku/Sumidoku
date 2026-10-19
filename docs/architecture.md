@@ -76,7 +76,11 @@ Migrations in `crates/server/migrations`.
   `fetch_error`. Install downloads
   the `.aix` (http/https only, 64 MiB cap) into `sources/` and registers it
   through the same `register_aix` path as the directory scan; versions
-  compare as Aidoku's monotonic integers.
+  compare as Aidoku's monotonic integers. Install also stamps
+  `source.repo_id` with the installing repo (directory-scan sideloads stay
+  NULL), and `repo::source_json` reports `missingFromRepos` when a
+  repo-installed source's key is absent from every cached index — Aidoku's
+  "missing source list" warning, the deprecation signal for external sources.
 - Breaking-change key migration (`source/rekey.rs`): registration stores the
   manifest's `config.breakingChangeVersion` (Aidoku's
   `SourceInfo.Configuration`) in `source.breaking_change_version`, and

@@ -123,6 +123,13 @@
 	white-space: nowrap;
 }
 
+.source-card__missing {
+	display: inline-flex;
+	vertical-align: -2px;
+	margin-left: 4px;
+	color: var(--warning, #d97706);
+}
+
 .source-card__badges {
 	display: flex;
 	align-items: center;

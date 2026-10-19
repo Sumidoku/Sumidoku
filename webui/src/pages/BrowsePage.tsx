@@ -9,7 +9,8 @@ import {
 	Pin,
 	PinOff,
 	ScanSearch,
-	Trash
+	Trash,
+	TriangleAlert
 } from 'lucide-react';
 import { sourceIconUrl } from '../api/client';
 import {
@@ -154,6 +155,14 @@ function SourceCard({
 				<div className="source-card__meta">
 					{s.key} · v{s.version}
 					{!s.enabled ? ' · 已停用' : ''}
+					{s.missingFromRepos && (
+						<span
+							className="source-card__missing"
+							title="该源已不在任何已配置的源仓库中，不会再收到更新，未来可能无法使用"
+						>
+							<TriangleAlert size={13} />
+						</span>
+					)}
 				</div>
 				{s.languages.length > 0 && (
 					<div className="source-card__badges">
