@@ -27,6 +27,12 @@ pub struct LibraryQuery {
 	pub search: Option<String>,
 	pub sort: Option<String>,
 	pub filter: Option<String>,
+	/// 逗号分隔的 manga 级分级值（1..=3），包含集
+	pub content_rating: Option<String>,
+	pub content_rating_exclude: Option<String>,
+	/// 逗号分隔的源 id，包含集
+	pub source: Option<String>,
+	pub source_exclude: Option<String>,
 }
 
 /// LIKE 的 %/_ 是通配符，用户搜索词里的字面量与转义符本身都要前置转义
@@ -71,6 +77,22 @@ fn library_filter_clause(filter: &str) -> ApiResult<String> {
 	Ok(format!("{EXISTS}{column})"))
 }
 
+/// 逗号分隔的整数列表：整段空白或空段视为缺席，非空段非法即 400（同 sort/filter 风格）
+fn parse_int_list(raw: &str, param: &str, valid: impl Fn(i64) -> bool) -> ApiResult<Vec<i64>> {
+	let mut out = Vec::new();
+	for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+		match token.parse::<i64>() {
+			Ok(v) if valid(v) => out.push(v),
+			_ => return Err(ApiError::bad_request(format!("invalid {param}: {token}"))),
+		}
+	}
+	Ok(out)
+}
+
+fn in_placeholders(len: usize) -> String {
+	vec!["?"; len].join(",")
+}
+
 pub async fn list_library(
 	State(state): State<Arc<AppState>>,
 	Query(query): Query<LibraryQuery>,
@@ -81,6 +103,23 @@ pub async fn list_library(
 	}
 	let order_by = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
+	// bind 顺序与 SQL 子句一致：search → categoryId → 分级包含 → 分级排除 → 源包含 → 源排除
+	let rating_in = match &query.content_rating {
+		Some(raw) => parse_int_list(raw, "contentRating", |v| (1..=3).contains(&v))?,
+		None => Vec::new(),
+	};
+	let rating_ex = match &query.content_rating_exclude {
+		Some(raw) => parse_int_list(raw, "contentRatingExclude", |v| (1..=3).contains(&v))?,
+		None => Vec::new(),
+	};
+	let source_in = match &query.source {
+		Some(raw) => parse_int_list(raw, "source", |_| true)?,
+		None => Vec::new(),
+	};
+	let source_ex = match &query.source_exclude {
+		Some(raw) => parse_int_list(raw, "sourceExclude", |_| true)?,
+		None => Vec::new(),
+	};
 	let mut sql = LIBRARY_SELECT.to_string();
 	if search.is_some() {
 		sql.push_str(" AND m.title LIKE '%'||?||'%' ESCAPE '\\'");
@@ -102,6 +141,24 @@ pub async fn list_library(
 			category = Some(category_id);
 		}
 	}
+	if !rating_in.is_empty() {
+		sql.push_str(&format!(" AND m.content_rating IN ({})", in_placeholders(rating_in.len())));
+	}
+	if !rating_ex.is_empty() {
+		sql.push_str(&format!(
+			" AND m.content_rating NOT IN ({})",
+			in_placeholders(rating_ex.len())
+		));
+	}
+	if !source_in.is_empty() {
+		sql.push_str(&format!(" AND m.source_id IN ({})", in_placeholders(source_in.len())));
+	}
+	if !source_ex.is_empty() {
+		sql.push_str(&format!(
+			" AND m.source_id NOT IN ({})",
+			in_placeholders(source_ex.len())
+		));
+	}
 	if query.source_id.is_some() {
 		sql.push_str(" AND m.source_id = ?");
 	}
@@ -118,6 +175,18 @@ pub async fn list_library(
 	}
 	if let Some(category_id) = category {
 		q = q.bind(category_id);
+	}
+	for v in rating_in {
+		q = q.bind(v);
+	}
+	for v in rating_ex {
+		q = q.bind(v);
+	}
+	for v in source_in {
+		q = q.bind(v);
+	}
+	for v in source_ex {
+		q = q.bind(v);
 	}
 	if let Some(source_id) = query.source_id {
 		q = q.bind(source_id);

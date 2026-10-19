@@ -46,6 +46,7 @@ import type {
 	SourceSearchResult,
 	SourceUpdate,
 	SuwayomiImportResult,
+	TriStateSelection,
 	UpdateAllOutcome
 } from './types';
 
@@ -114,12 +115,30 @@ export interface LibraryBrowse {
 	filter?: LibraryFilter[];
 	/** 迁移批量流程按源筛条目 */
 	sourceId?: number;
+	/** 内容分级三态（manga 级 1..=3 → 1 包含 / -1 排除） */
+	ratings?: TriStateSelection;
+	/** 源三态（源 id → 1 包含 / -1 排除） */
+	sources?: TriStateSelection;
+}
+
+/** 三态拆成 API 的包含/排除两个逗号串；空集缺席 */
+function triParams(sel: TriStateSelection | undefined): [string?, string?] {
+	if (!sel) return [undefined, undefined];
+	const inc = Object.entries(sel)
+		.filter(([, v]) => v === 1)
+		.map(([k]) => k);
+	const exc = Object.entries(sel)
+		.filter(([, v]) => v === -1)
+		.map(([k]) => k);
+	return [inc.length > 0 ? inc.join(',') : undefined, exc.length > 0 ? exc.join(',') : undefined];
 }
 
 export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse = {}) {
-	const { search, sort, filter, sourceId } = browse;
+	const { search, sort, filter, sourceId, ratings, sources } = browse;
+	const [ratingInc, ratingExc] = triParams(ratings);
+	const [sourceInc, sourceExc] = triParams(sources);
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filter, sourceId }],
+		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filter, sourceId, ratings, sources }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
 			if (categoryId !== undefined) qs.set('categoryId', String(categoryId));
@@ -127,6 +146,10 @@ export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse
 			if (search) qs.set('search', search);
 			if (sort) qs.set('sort', sort);
 			if (filter && filter.length > 0) qs.set('filter', filter.join(','));
+			if (ratingInc) qs.set('contentRating', ratingInc);
+			if (ratingExc) qs.set('contentRatingExclude', ratingExc);
+			if (sourceInc) qs.set('source', sourceInc);
+			if (sourceExc) qs.set('sourceExclude', sourceExc);
 			return api<LibraryPage>(`/library?${qs}`);
 		},
 		initialPageParam: 1,

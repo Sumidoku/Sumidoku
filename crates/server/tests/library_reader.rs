@@ -3,7 +3,10 @@ mod common;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
-use common::{TestApp, base_config, connect_db, register_example_manga, request, request_full, test_app};
+use common::{
+	TestApp, base_config, connect_db, fixture_dir, install_fixture_source, register_example_manga,
+	request, request_full, test_app,
+};
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
@@ -653,6 +656,142 @@ async fn library_search_sort_filter() {
 	)
 	.await;
 	assert_eq!(entry_ids(&body), vec![a]);
+}
+
+/// 库列表 id 集（排序无关断言，先排序再比）
+async fn library_ids(app: &Router, qs: &str) -> Vec<i64> {
+	let (status, body) = request(app, "GET", &format!("/api/v1/library?{qs}"), None).await;
+	assert_eq!(status, StatusCode::OK, "{qs}");
+	let mut ids = entry_ids(&body);
+	ids.sort_unstable();
+	ids
+}
+
+#[tokio::test]
+async fn library_rating_source_filter() {
+	let TestApp { app, tmp, db_path } = test_app().await;
+	// 第二个源用同一 fixture 载荷，key 不同即是另一个源
+	install_fixture_source(&tmp, "en.example-two", "Example Two", &fixture_dir().join("main.wasm"));
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let sources = body.as_array().expect("sources").clone();
+	let source_id_of = |key: &str| {
+		sources
+			.iter()
+			.find(|s| s["key"].as_str() == Some(key))
+			.unwrap_or_else(|| panic!("source id for {key}"))["id"]
+			.as_i64()
+			.expect("source id")
+	};
+	let one = source_id_of("en.example-source");
+	let two = source_id_of("en.example-two");
+
+	// 源一注册 3 本、源二注册 1 本，全部入库；分级直接落库控制（fixture 不产出）
+	let mut registered: Vec<(i64, String)> = Vec::new();
+	for (source, take) in [(one, 3), (two, 1)] {
+		let (_, body) = request(
+			&app,
+			"POST",
+			&format!("/api/v1/sources/{source}/search"),
+			Some(json!({"page": 1})),
+		)
+		.await;
+		for entry in body["entries"].as_array().expect("entries").iter().take(take) {
+			let title = entry["title"].as_str().expect("manga title").to_string();
+			let (status, body) = request(
+				&app,
+				"POST",
+				"/api/v1/manga",
+				Some(json!({"sourceId": source, "manga": entry})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+			let id = body["id"].as_i64().expect("manga id");
+			let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+			assert_eq!(status, StatusCode::OK);
+			registered.push((id, title));
+		}
+	}
+	let (a, b, c, d) = (
+		registered[0].0,
+		registered[1].0,
+		registered[2].0,
+		registered[3].0,
+	);
+	let tb = registered[1].1.clone();
+	let pool = connect_db(&db_path).await;
+	for (id, rating) in [(a, 1), (b, 2), (c, 3), (d, 3)] {
+		sqlx::query("UPDATE manga SET content_rating = ? WHERE id = ?")
+			.bind(rating)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set content_rating");
+	}
+
+	// 分级：包含集内 OR、排除集 NOT-OR
+	assert_eq!(library_ids(&app, "contentRating=1,2").await, vec![a, b]);
+	assert_eq!(library_ids(&app, "contentRating=3").await, vec![c, d]);
+	assert_eq!(library_ids(&app, "contentRatingExclude=3").await, vec![a, b]);
+	assert_eq!(
+		library_ids(&app, "contentRating=1,2,3&contentRatingExclude=2").await,
+		vec![a, c, d]
+	);
+	// 源：包含集内 OR、排除集 NOT-OR
+	assert_eq!(library_ids(&app, &format!("source={one}")).await, vec![a, b, c]);
+	assert_eq!(library_ids(&app, &format!("sourceExclude={one}")).await, vec![d]);
+	assert_eq!(
+		library_ids(&app, &format!("source={one},{two}&sourceExclude={two}")).await,
+		vec![a, b, c]
+	);
+	// 维度间 AND
+	assert_eq!(
+		library_ids(&app, &format!("contentRating=3&source={one}")).await,
+		vec![c]
+	);
+	assert_eq!(
+		library_ids(&app, &format!("contentRatingExclude=3&sourceExclude={two}")).await,
+		vec![a, b]
+	);
+	// 空 / 纯空白视为缺席
+	let mut all = vec![a, b, c, d];
+	all.sort_unstable();
+	assert_eq!(library_ids(&app, "contentRating=").await, all);
+	assert_eq!(library_ids(&app, "contentRating=%20").await, all);
+	assert_eq!(library_ids(&app, "source=%20%20").await, all.clone());
+	assert_eq!(library_ids(&app, "sourceExclude=").await, all);
+	// 非法 token 400：越界分级、非整数
+	for qs in [
+		"contentRating=0",
+		"contentRating=4",
+		"contentRating=x",
+		"contentRatingExclude=9",
+		"source=abc",
+		"sourceExclude=1.5",
+	] {
+		let (status, body) = request(&app, "GET", &format!("/api/v1/library?{qs}"), None).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{qs}");
+		assert_eq!(body["error"]["code"], "bad_request", "{qs}");
+	}
+
+	// bind 位序对账：search + categoryId + 四个新参数同发，换位即错
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Fav"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let cat = body["id"].as_i64().expect("category id");
+	let (status, _) = request(
+		&app,
+		"PUT",
+		&format!("/api/v1/manga/{b}/categories"),
+		Some(json!({"categoryIds": [cat]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let qs = format!(
+		"search={}&categoryId={cat}&contentRating=2&contentRatingExclude=3&source={one},{two}&sourceExclude={two}",
+		urlencoding(&tb)
+	);
+	assert_eq!(library_ids(&app, &qs).await, vec![b]);
 }
 
 /// query 值里的保留字符 percent-encode（测试标题是 ASCII，按字节处理即可）
