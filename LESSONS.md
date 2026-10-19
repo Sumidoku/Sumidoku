@@ -25,6 +25,23 @@ unrelated-line churn.
   a later mojibake scare on committed files was cleared by dumping the
   committed bytes and finding valid UTF-8 — display-only artifact.
 
+**Dropdown menus inside a horizontally scrolling chip bar get clipped and
+over-painted — portal them to body, and never leave a second copy of the
+pattern unfixed.** An `overflow-x: auto` container computes `overflow-y`
+to `auto` too, so an absolutely positioned menu inside it is clipped at
+the bar's bounds and painted under later grid items with their own
+stacking contexts. Rendering the menu through a portal with `fixed`
+positioning computed from the anchor's bounding rect (clamped to the
+viewport, closing on Escape and on any scroll) fixes it for good. The
+corollary that cost a second bug: fixing the original instance does not
+fix the copy — the global-search page had duplicated the pre-fix dropdown
+and shipped the same occlusion until both pages pointed at one shared
+component.
+- Evidence: 2026-10-19/20, Aidoku-style filter chips: the source-browse
+  chip dropdown rendered under the cover grid; after the portal fix the
+  global-search `TriDropdown` (same copied code) still had the bug and
+  was repaired by extracting `ChipDropdown` into `components/`.
+
 **Destructuring `TestApp` without keeping `tmp` deletes the fixture
 directory mid-test.** `tempfile::TempDir` removes its tree on drop, so
 `let TestApp { app, .. } = test_app().await` wipes the sources directory
