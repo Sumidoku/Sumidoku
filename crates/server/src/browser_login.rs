@@ -326,16 +326,19 @@ mod tests {
 		let manager = manager_with(&state, Duration::from_millis(50));
 		manager.start(1, "login", "h", "https://h/").await.expect("start");
 		assert_eq!(manager.session_count(), 1);
-		// CI 满载时 tokio 任务唤醒可能远迟于 TTL 的几倍：轮询等结果，不做固定时长睡眠
+		// CI 满载时 tokio 任务唤醒可能远迟于 TTL 的几倍：轮询等结果，不做固定时长睡眠。
+		// reaper 先把会话移出 map 再 spawn_blocking dispose，两步之间有空窗，
+		// 轮询的终点必须是 dispose 落地，count 归零不算
 		let mut reaped = false;
 		for _ in 0..50 {
-			if manager.session_count() == 0 {
+			if !state.lock().expect("lock").disposed.is_empty() {
 				reaped = true;
 				break;
 			}
 			tokio::time::sleep(Duration::from_millis(100)).await;
 		}
 		assert!(reaped, "reaper did not reap within 5s");
+		assert_eq!(manager.session_count(), 0);
 		assert_eq!(state.lock().expect("lock").disposed, vec!["ctx-1"]);
 	}
 
