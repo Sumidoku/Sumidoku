@@ -21,3 +21,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 opt-level = "s"
 lto = true
 strip = true
+
+# macOS 的 unpacked 默认值让每个测试二进制链接后都跑一遍 dsymutil，其内存随二进制
+# 大小走（本仓测试二进制多且静态链 wasmer/boa，单个 dsymutil ~2GB，并行数个即十几 GB）；
+# 关掉后调试符号留在二进制内，lldb 照常，release（debug=0）不受影响
+[profile.dev]
+split-debuginfo = "off"
