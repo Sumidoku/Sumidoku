@@ -421,18 +421,19 @@ unsetting the wrapper) before theorizing about the project.
 - Evidence: 2026-10-19, pid pairings tied every dsymutil to the kache
   wrapper with `split-debuginfo=off` in the rustc line; 44 `.dSYM`
   dirs appeared under `off` vs 0 with `KACHE_DISABLED=1`; the store
-  measured 177 GB; both machines moved to sccache (same full build:
-  636 s → 100 s, zero dsymutil).
+  measured 177 GB; the affected builds moved to sccache (same full
+  build: 636 s → 100 s, zero dsymutil).
 
 **Install software through the machine's native package manager first;
 the skill's generic static-binary fallback is a fallback, not the
 default.** Check the distro and its repos (pacman/brew/apt) before
 reaching for a release tarball — a repo-managed install gets updates
 and clean removal for free.
-- Evidence: 2026-10-19, sccache on the dev box went in as a hand-scp'd
-  musl binary until the maintainer asked "pacman 没有吗" —
-  `extra/sccache 0.18.0-1` was right there; reinstalled via pacman and
-  removed the manual copy.
+- Evidence: 2026-10-19, a sccache install went in as a manually
+  copied static binary pulled from upstream releases until the
+  maintainer asked whether the native package manager carried it — it
+  did; reinstalled through the package manager and removed the manual
+  copy.
 
 **`--match-head-commit` takes the sha from a live `gh pr view`, never
 from memory.** A remembered sha fails loudly when it is not a real
