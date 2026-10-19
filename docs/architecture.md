@@ -222,7 +222,15 @@ Migrations in `crates/server/migrations`.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
-  `source_order` is the source's own chapter index. Chapter reconcile
+  `source_order` is the source's own chapter index. `GET /api/v1/library`
+  filters by `search`, `categoryId`, `filter` and the tri-state pairs
+  `contentRating`/`contentRatingExclude` (comma-separated manga-level
+  ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`) and
+  `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on
+  `manga.source_id`): within one dimension the include set is an OR and the
+  exclude set a NOT-OR, dimensions combine with the other filters via AND
+  (Aidoku's library filter semantics). Empty or whitespace-only values are
+  treated as absent; invalid tokens answer 400. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
