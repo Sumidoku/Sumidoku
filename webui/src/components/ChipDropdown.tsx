@@ -18,6 +18,7 @@ export function ChipDropdown({ label, active, children }: ChipDropdownProps) {
 	const [open, setOpen] = useState(false);
 	const [pos, setPos] = useState<{ top: number; left: number; minWidth: number } | null>(null);
 	const anchorRef = useRef<HTMLDivElement>(null);
+	const menuRef = useRef<HTMLDivElement>(null);
 
 	function toggle() {
 		if (open) {
@@ -36,7 +37,10 @@ export function ChipDropdown({ label, active, children }: ChipDropdownProps) {
 	useEffect(() => {
 		if (!open) return;
 		const onDown = (e: MouseEvent) => {
-			if (!anchorRef.current?.contains(e.target as Node)) setOpen(false);
+			// 菜单 portal 在 body 下、不在 anchor 里，必须把菜单也算 inside——
+			// 否则菜单项的 mousedown 先收起菜单，onClick 永远发不出来
+			const t = e.target as Node;
+			if (!anchorRef.current?.contains(t) && !menuRef.current?.contains(t)) setOpen(false);
 		};
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') setOpen(false);
@@ -63,6 +67,7 @@ export function ChipDropdown({ label, active, children }: ChipDropdownProps) {
 				pos &&
 				createPortal(
 					<div
+						ref={menuRef}
 						className="chip-dropdown__menu"
 						style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth }}
 					>
