@@ -13,6 +13,88 @@
 	}
 }
 
+/* ============ 行式列表（源主页/list kind 列表共用） ============ */
+
+.home-rows {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.home-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 6px 8px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	text-align: left;
+	cursor: pointer;
+	transition: border-color 0.15s;
+}
+
+.home-row:hover {
+	border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.home-row .cover {
+	width: 40px;
+	flex: none;
+	border-radius: var(--r-sm);
+}
+
+.home-row--link {
+	padding: 10px 12px;
+}
+
+.home-row__rank {
+	flex: none;
+	width: 26px;
+	text-align: center;
+	font-size: 16px;
+	font-weight: 700;
+	color: var(--accent);
+	font-variant-numeric: tabular-nums;
+}
+
+.home-row__main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 1px;
+}
+
+.home-row__title {
+	font-size: 14px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.home-row__subtitle {
+	font-size: 12.5px;
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.home-row__tags {
+	font-size: 12px;
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.home-row__chevron {
+	flex: none;
+	color: var(--text-faint);
+}
+
 /* ============ 书库 ============ */
 
 .library__search {
@@ -508,78 +590,6 @@
 	display: -webkit-box;
 	-webkit-box-orient: vertical;
 	overflow: hidden;
-}
-
-.home-rows {
-	display: flex;
-	flex-direction: column;
-	gap: 6px;
-}
-
-.home-row {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	width: 100%;
-	padding: 6px 8px;
-	background: var(--bg-elev);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
-	text-align: left;
-	cursor: pointer;
-	transition: border-color 0.15s;
-}
-
-.home-row:hover {
-	border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-
-.home-row .cover {
-	width: 40px;
-	flex: none;
-	border-radius: var(--r-sm);
-}
-
-.home-row--link {
-	padding: 10px 12px;
-}
-
-.home-row__rank {
-	flex: none;
-	width: 26px;
-	text-align: center;
-	font-size: 16px;
-	font-weight: 700;
-	color: var(--accent);
-	font-variant-numeric: tabular-nums;
-}
-
-.home-row__main {
-	flex: 1;
-	min-width: 0;
-	display: flex;
-	flex-direction: column;
-	gap: 1px;
-}
-
-.home-row__title {
-	font-size: 14px;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.home-row__subtitle {
-	font-size: 12.5px;
-	color: var(--text-faint);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.home-row__chevron {
-	flex: none;
-	color: var(--text-faint);
 }
 
 .home-chips {

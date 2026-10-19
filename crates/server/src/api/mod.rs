@@ -4,6 +4,7 @@ pub mod download;
 pub mod filters;
 pub mod import_merge;
 pub mod library;
+pub mod listings;
 pub mod login;
 pub mod migrate;
 pub mod oauth;
@@ -406,18 +407,22 @@ async fn get_listings(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后
+	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后；
+	// 两种来源统一归一成 listing_json 的形状，kind 静态是数值、动态是枚举名
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
-		&& let Some(listings) = doc.get("listings").and_then(|v| v.as_array())
+		&& let Some(items) = doc.get("listings").and_then(|v| v.as_array())
 	{
-		out.extend(listings.iter().cloned());
+		out.extend(
+			items
+				.iter()
+				.filter_map(listings::parse_static_listing)
+				.map(|l| listings::listing_json(&l)),
+		);
 	}
 	match handle.get_listings().await {
 		Ok(listings) => {
-			if let Value::Array(items) = serde_json::to_value(listings)? {
-				out.extend(items);
-			}
+			out.extend(listings.iter().map(listings::listing_json));
 			Ok(Json(Value::Array(out)))
 		}
 		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
@@ -436,29 +441,6 @@ pub struct PageQuery {
 	pub page: Option<i32>,
 }
 
-/// 静态 listings 按 AidokuRunner 的 SourceInfo 解码语义解析：裸字符串 → id=name=字符串；
-/// 对象缺 name 回填 id，kind 只有数值 1 是 List（Runner 按 UInt8 解码，解析失败落 default）
-fn parse_static_listing(value: &Value) -> Option<Listing> {
-	if let Some(s) = value.as_str() {
-		return Some(Listing {
-			id: s.to_string(),
-			name: s.to_string(),
-			kind: aidoku::ListingKind::Default,
-		});
-	}
-	let id = value.get("id").and_then(|v| v.as_str())?.to_string();
-	let name = value
-		.get("name")
-		.and_then(|v| v.as_str())
-		.unwrap_or(&id)
-		.to_string();
-	let kind = match value.get("kind").and_then(|v| v.as_i64()) {
-		Some(1) => aidoku::ListingKind::List,
-		_ => aidoku::ListingKind::Default,
-	};
-	Some(Listing { id, name, kind })
-}
-
 /// 静态（source.json listings）在前、动态导出结果追加在后，与 get_listings 端点同序；
 /// 动态拉取失败只记日志按纯静态继续，不拖累 manga 列表
 async fn combined_listings(
@@ -468,9 +450,9 @@ async fn combined_listings(
 ) -> ApiResult<Vec<Listing>> {
 	let mut out: Vec<Listing> = Vec::new();
 	if let Some(doc) = package_json(state, id, "source.json").await?
-		&& let Some(listings) = doc.get("listings").and_then(|v| v.as_array())
+		&& let Some(items) = doc.get("listings").and_then(|v| v.as_array())
 	{
-		out.extend(listings.iter().filter_map(parse_static_listing));
+		out.extend(items.iter().filter_map(listings::parse_static_listing));
 	}
 	match handle.get_listings().await {
 		Ok(listings) => out.extend(listings),

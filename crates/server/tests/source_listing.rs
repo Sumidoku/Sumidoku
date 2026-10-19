@@ -88,6 +88,33 @@ async fn manga_list_receives_the_real_listing() {
 }
 
 #[tokio::test]
+async fn listings_endpoint_normalizes_shape_and_kind() {
+	let app = listing_app().await;
+	let (source_id, _) = install_and_ids(&app).await;
+
+	let (status, body) = request(
+		&app.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let listings = body.as_array().expect("listings array");
+	// 静态 kind 是数值、裸字符串条目没有对象形状，动态导出 kind 是枚举名；
+	// 端点统一归一成 {id, name, kind} 且 kind 为小写 default/list，前端按 "list" 判行式布局
+	assert_eq!(
+		json!(listings),
+		json!([
+			{"id": "hot", "name": "Hot Updates", "kind": "list"},
+			{"id": "fresh", "name": "fresh", "kind": "default"},
+			{"id": "bare", "name": "bare", "kind": "default"},
+			{"id": "dyn", "name": "Dynamic Picks", "kind": "list"},
+		])
+	);
+}
+
+#[tokio::test]
 async fn installed_source_dto_exposes_the_manifest_config() {
 	let app = listing_app().await;
 	let (source_id, plain_id) = install_and_ids(&app).await;
