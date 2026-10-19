@@ -630,24 +630,24 @@ export default function MangaDetailPage() {
 								))}
 							</Select>
 						)}
-					{scanlators.length > 1 && (
-						<Select
-							value={prefs.scanlators[0] ?? ''}
-							title="汉化组"
-							aria-label="汉化组"
-							onChange={(e) => {
-								const v = e.currentTarget.value;
-								setPrefs((p) => ({ ...p, scanlators: v ? [v] : [] }));
-							}}
-						>
-							<option value="">全部汉化组</option>
-							{scanlators.map((s) => (
-								<option key={s} value={s}>
-									{s}
-								</option>
-							))}
-						</Select>
-					)}
+						{scanlators.length > 1 && (
+							<Select
+								value={prefs.scanlators[0] ?? ''}
+								title="汉化组"
+								aria-label="汉化组"
+								onChange={(e) => {
+									const v = e.currentTarget.value;
+									setPrefs((p) => ({ ...p, scanlators: v ? [v] : [] }));
+								}}
+							>
+								<option value="">全部汉化组</option>
+								{scanlators.map((s) => (
+									<option key={s} value={s}>
+										{s}
+									</option>
+								))}
+							</Select>
+						)}
 						{chapters.length > 0 && (
 							<Button size="sm" onClick={() => setSelecting(true)}>
 								选择
