@@ -133,7 +133,7 @@ export interface PageData {
 	index: number;
 	content: PageContent | null;
 	thumbnail: string | null;
-	has_description: boolean;
+	hasDescription: boolean;
 	description: string | null;
 }
 

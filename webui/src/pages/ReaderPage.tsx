@@ -60,6 +60,14 @@ function isUnsupported(p: PageData): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
 }
 
+// hasDescription 页的展示文本是 description（服务端已回源取好），其余文本页走 content.Text
+function pageText(p: PageData | undefined | null): string | null {
+	if (!p) return null;
+	if (p.hasDescription && typeof p.description === 'string') return p.description;
+	if (isText(p)) return p.content.Text;
+	return null;
+}
+
 // 沿用旧版信任模型，markdown 结果不做 sanitize
 function md(text: string): string {
 	return marked.parse(text, { async: false }) as string;
@@ -132,8 +140,9 @@ function ReaderCore({
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
+	const curText = pageText(curPage);
 	// 文本章在服务端就是单页，这种章的分页单位是栏而不是页
-	const textOnly = mode === 'paged' && total === 1 && isText(pages?.[0]);
+	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// 标题/续读用原列表，避免当前章被筛掉时丢了副标题和进度
 	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
 	const pos = chapters.findIndex((c) => c.id === chapterId);
@@ -214,7 +223,7 @@ function ReaderCore({
 		for (let d = -3; d <= 3; d++) {
 			if (d === 0) continue;
 			const p = pages[center + d];
-			if (!p || isText(p)) continue;
+			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
 			im.src = pageUrl(chapterId, p.index);
 		}
@@ -238,7 +247,7 @@ function ReaderCore({
 	// 翻到边界直接换章：最后一页再往前 = 下一章，第一页再往回 = 上一章
 	// 文本页先逐栏翻，栏翻完再走页/章的边界
 	function turn(forward: boolean) {
-		const textPage = curPage !== null && isText(curPage);
+		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
 		if (forward) {
 			if (textPage && colRef.current < cols - 1) {
@@ -500,7 +509,7 @@ function ReaderCore({
 			{mode === 'paged' ? (
 				<div className="reader__paged">
 					{curPage &&
-						(isText(curPage) ? (
+						(curText !== null ? (
 							<div className="reader__text-paged">
 								<div
 									className="reader-text reader-text--cols"
@@ -509,7 +518,7 @@ function ReaderCore({
 										columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
 										transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
 									}}
-									dangerouslySetInnerHTML={{ __html: md(curPage.content.Text) }}
+									dangerouslySetInnerHTML={{ __html: md(curText) }}
 								/>
 							</div>
 						) : isUnsupported(curPage) ? (
@@ -547,17 +556,20 @@ function ReaderCore({
 					onPointerDown={onPointerDown}
 					onPointerUp={onPointerUp}
 				>
-					{pages.map((p) => (
-						<div className="reader__pg" data-page={p.index} key={p.index}>
-							{isText(p) ? (
-								<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(p.content.Text) }} />
-							) : isUnsupported(p) ? (
-								<div className="reader__unsupported">该页类型暂不支持</div>
-							) : (
-								<img src={pageUrl(chapterId, p.index)} alt={`第 ${p.index + 1} 页`} loading="lazy" />
-							)}
-						</div>
-					))}
+					{pages.map((p) => {
+						const text = pageText(p);
+						return (
+							<div className="reader__pg" data-page={p.index} key={p.index}>
+								{text !== null ? (
+									<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
+								) : isUnsupported(p) ? (
+									<div className="reader__unsupported">该页类型暂不支持</div>
+								) : (
+									<img src={pageUrl(chapterId, p.index)} alt={`第 ${p.index + 1} 页`} loading="lazy" />
+								)}
+							</div>
+						);
+					})}
 				</div>
 			)}
 
