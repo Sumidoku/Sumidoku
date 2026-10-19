@@ -40,16 +40,25 @@ Migrations in `crates/server/migrations`.
   returned, so there is no upstream lookup-failure behavior to mirror, and
   the source decides how to answer. A failed dynamic-listings fetch degrades
   to the static list rather than failing the request.
-- Partial-result streaming (`api/partial.rs`): the home and search endpoints
-  honor `Accept: application/x-ndjson` as an explicit opt-in. The source's
-  mid-request `send_partial_result` payloads arrive as one JSON event per
-  line in send order, then a terminal event closes the stream: home emits
-  `{"type":"layout","layout":…}` (replace whole layout) and
-  `{"type":"component","index":N,"component":…}` (replace at index, or
+- Partial-result streaming (`api/partial.rs`): the home, search and
+  manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
+  opt-in. The source's mid-request `send_partial_result` payloads arrive as
+  one JSON event per line in send order, then a terminal event closes the
+  stream: home emits `{"type":"layout","layout":…}` (replace whole layout)
+  and `{"type":"component","index":N,"component":…}` (replace at index, or
   append when `index` equals the current length — the index is resolved
   from the upstream title-upsert semantics by the wasm layer, see
   `crates/wasm/src/partial.rs`), search emits per-Manga deltas
-  `{"type":"manga","manga":…}`. Both end with
+  `{"type":"manga","manga":…}`. The manga-update paths — `POST /api/v1/manga`
+  (register), `GET /api/v1/manga/{id}?refresh` and
+  `GET /api/v1/manga/{id}/chapters?refresh` (`api/mod.rs`) — emit the same
+  `{"type":"manga","manga":…}` event per partial: mirroring AidokuRunner's
+  `partialMangaPublisher`, each one is the complete source-side `Manga` as it
+  stood mid-fetch, and unlike home there is no accumulation — the returned
+  manga stays authoritative. Register answers a buffered `{"id":…}` when the
+  manga is already registered (there is no source call to stream); the
+  background library update (`update/mod.rs`) and migration keep the
+  buffered call, since no client waits on them. All streams end with
   `{"type":"final","payload":…}` where the payload is the same JSON value
   as the buffered response, or `{"type":"error","error":{code,message}}`
   when the source call fails after streaming started. Requests without
@@ -468,11 +477,14 @@ webview rid maps to `-4` (`InvalidHandler`), and webview and js-context
 rids are not interchangeable.
 `send_partial_result` payloads are decoded per in-flight call and pushed
 to streaming callers (`SourceHandle::get_home_streaming` /
-`get_search_manga_list_streaming`); home partials pass through the
-upstream title-upsert accumulator (`partial.rs`) so consumers receive
-index-addressed events, and an empty final layout falls back to the
-accumulated partials. Calls without a streaming caller discard partials,
-as before. The `canvas` ABI (`imports/canvas.rs`) is rendered by
+`get_search_manga_list_streaming` / `get_manga_update_streaming`); home
+partials pass through the upstream title-upsert accumulator (`partial.rs`)
+so consumers receive index-addressed events, and an empty final layout
+falls back to the accumulated partials, while search and manga-update
+partials forward each decoded `Manga` as-is (a full snapshot per event,
+matching upstream's `partialMangaPublisher`). Calls without a streaming
+caller discard partials, as before. The `canvas` ABI (`imports/canvas.rs`)
+is rendered by
 tiny-skia: a context is a premultiplied-RGBA pixmap plus a current
 transform, and images live in the same store as straight RGBA8 buffers
 (`runtime/store.rs:ImageData`), converted at the boundary. `fill` /
