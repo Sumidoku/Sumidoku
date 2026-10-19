@@ -774,9 +774,10 @@ pub async fn load_pages(
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	let handle = state.get_handle(manga.source_id).await?;
-	let pages = handle
+	let mut pages = handle
 		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
 		.await?;
+	fetch_page_descriptions(&handle, &mut pages).await?;
 	let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
 	{
 		let mut tx = state.pool.begin().await?;
@@ -812,6 +813,24 @@ pub async fn load_pages(
 			.fetch_all(&state.pool)
 			.await?;
 	Ok(stored)
+}
+
+/// has_description 且未内联 description 的页按 Aidoku 语义回源调 get_page_description
+/// 取文本；与 image 物化同一纪律：任一页失败整章失败，下轮整章重写清掉半成品
+async fn fetch_page_descriptions(handle: &SourceHandle, pages: &mut [aidoku::Page]) -> ApiResult<()> {
+	for page in pages.iter_mut() {
+		if !page.has_description || page.description.is_some() {
+			continue;
+		}
+		page.description = Some(handle.get_page_description(clone_page(page)?).await?);
+	}
+	Ok(())
+}
+
+/// Page 不实现 Clone 而宿主调用按值消费：深拷走 JSON 往返（四种 content 变体的
+/// serde 表示对称，Image 的 rid 反序列化回来是 externally_managed 不触发回收）
+fn clone_page(page: &aidoku::Page) -> ApiResult<aidoku::Page> {
+	Ok(serde_json::from_value(serde_json::to_value(page)?)?)
 }
 
 /// Image 页物化：RID 只在当前 actor 会话里有效，字节落 blob 文件后 JSON 只存
@@ -1221,6 +1240,24 @@ fn page_mime_for(path: &str) -> &'static str {
 mod tests {
 	use super::*;
 	use serde_json::{Value, json};
+
+	#[test]
+	fn clone_page_round_trips_all_content_variants() {
+		// Image 变体只能从 serde 反序列化构造（ImageRef::from 是 vendor 私有的）
+		let raws = [
+			json!({"content": {"Text": "body"}, "thumbnail": null, "has_description": true, "description": null}),
+			json!({"content": {"Url": ["https://x.test/p.png", null]}, "thumbnail": "https://x.test/t.png",
+				"has_description": true, "description": null}),
+			json!({"content": {"Zip": ["https://x.test/a.zip", "p.png"]}, "thumbnail": null,
+				"has_description": false, "description": "inline"}),
+			json!({"content": {"Image": 7}, "thumbnail": null, "has_description": true, "description": null}),
+		];
+		for raw in raws {
+			let page: aidoku::Page = serde_json::from_value(raw.clone()).expect("page");
+			let cloned = clone_page(&page).expect("clone");
+			assert_eq!(serde_json::to_value(&cloned).expect("json"), raw);
+		}
+	}
 
 	fn as_json(value: &DefaultValue) -> Value {
 		crate::model::default_value_to_json(value)

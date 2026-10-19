@@ -268,6 +268,15 @@ Migrations in `crates/server/migrations`.
   (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
   page_bytes`) all read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Page descriptions (`source/mod.rs:fetch_page_descriptions`): per the
+  Aidoku contract a page with `has_description` and no inline
+  `description` gets its text from the source's `get_page_description`, so
+  `load_pages` fetches it in the same pass that materializes image pages
+  and stores it in the page row's `description` field. A failed
+  description export fails the whole chapter load, same as image
+  materialization. The reader renders a flagged page with a description
+  as a text page (`webui/src/pages/ReaderPage.tsx:pageText`); OPDS and
+  downloads keep reading only the page `content`.
 - Image processors: when a source exports `process_page_image` /
   `process_cover_image`, `fetch_page_image` / `fetch_cover_image`
   (`source/mod.rs`) pass the fetched response through the actor
