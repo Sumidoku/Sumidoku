@@ -6,6 +6,25 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Never edit UTF-8 source files through a legacy Windows shell — it
+re-encodes them as ANSI and silently corrupts every non-ASCII byte, and
+shell mojibake is not proof of damage.** PowerShell 5.1's
+`Set-Content`/redirection writes with the system ANSI codepage, so a bulk
+regex edit across a few Rust sources turned Chinese comments into garbage
+and even joined lines (18 lines changed in a file that needed 1); the
+recovery was `git checkout` of the touched files and redoing the edits
+with a UTF-8-safe editor. Conversely, a non-UTF-8 console displaying a
+healthy UTF-8 file prints the same kind of mojibake, so before reverting
+anything on "corruption" evidence, verify bytewise (dump `git show
+HEAD:file` through a byte-preserving redirect and read the dump with a
+UTF-8-aware reader). Prefer the dedicated edit tool for file edits; if a
+shell loop is unavoidable, inspect `git diff` immediately for
+unrelated-line churn.
+- Evidence: 2026-10-19, source-filter persistence work: one
+  `Get-Content -Raw | Set-Content` batch edit corrupted three Rust files;
+  a later mojibake scare on committed files was cleared by dumping the
+  committed bytes and finding valid UTF-8 — display-only artifact.
+
 **Destructuring `TestApp` without keeping `tmp` deletes the fixture
 directory mid-test.** `tempfile::TempDir` removes its tree on drop, so
 `let TestApp { app, .. } = test_app().await` wipes the sources directory
