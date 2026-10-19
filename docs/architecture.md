@@ -75,6 +75,28 @@ Migrations in `crates/server/migrations`.
   the header take the original buffered path unchanged. The connection is
   the key: a client disconnect drops the body stream, later sends fail and
   the forward task stops while the source call runs to completion.
+- Cross-source aggregate search (`api/search.rs`): `POST /api/v1/search`
+  takes `{query?, page?, sourceIds: number[]}` and runs one search per
+  source concurrently — per-request fan-out capped at 4, with the shared
+  call semaphore (`state.rs`) still gating source calls globally. Results
+  come back in request order as `{"sources": [{sourceId, entries,
+  hasNextPage, error?}]}`, entries tagged exactly like the single-source
+  search (owning `sourceId`, plus the internal `id` when registered). A
+  failing source — unknown id, disabled, or a failed source call — only
+  marks its own entry (`entries: []`, `hasNextPage: false`,
+  `error: {code, message}`) and never fails the request. With
+  `Accept: application/x-ndjson` the endpoint reuses the same stream
+  plumbing: one `{"type":"source","source":…}` event per finished source
+  and one `{"type":"sourceError","sourceId":…,"error":…}` per failed one,
+  in completion order, then a final event whose payload is the same JSON
+  value as the buffered response. The per-source failure type is
+  `sourceError`, not `error`, because the streaming client treats
+  `{"type":"error"}` as the terminal failure of the whole request. The
+  web UI's `/search` page (`webui/src/pages/SearchPage.tsx`) renders each
+  arriving section as a horizontal cover scroller and offers tri-state
+  (include/exclude) content-rating / language / source filters persisted
+  to localStorage — filtering is client-side and only decides which
+  source ids are sent.
 - Source repositories (`source/repo.rs`, `api/repo.rs`): Aidoku-style repo
   indexes are fetched on add/refresh and cached in the `source_repo` table;
   browsing, install and update detection all read the cache, so an
