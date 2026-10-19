@@ -398,7 +398,22 @@ Migrations in `crates/server/migrations`.
   reference drops, while a new lookup respawns immediately. The sweep
   exists because wasmer linear memory only grows — eviction is the one
   path that returns an idle instance's memory to the OS, at the price of
-  a seconds-long recompile on the next access. Per-instance `Limits`
+  a seconds-long recompile on the next access. Aggregate pressure has
+  its own watcher (`run_rss_monitor`, same 60s cadence, spawned only
+  when the platform reports RSS — macOS via mach `task_info`, Linux via
+  `/proc/self/statm`): above `rss_threshold_mb` (default 1024 MiB; `0`
+  disables) it evicts most-idle-first, re-reading RSS after each
+  eviction until the reading drops under the threshold or nothing
+  evictable remains. The pressure pass ignores the idle threshold —
+  responses stream or land on disk and there is no in-memory page cache
+  to drop, so resident instances are the only memory that can be
+  returned — and skips instances with outside `Arc` references entirely:
+  detaching an in-flight instance frees nothing, and the next lookup
+  would respawn a second one while the first still runs. When RSS stays
+  over the threshold with nothing left to evict, the monitor only logs
+  loudly (`tracing::warn!` with before/after/threshold and the resident
+  count); restarting the process stays an operator decision.
+  Per-instance `Limits`
   (`crates/wasm/src/runtime/limits.rs`) are server-configured at spawn:
   `wasm_memory_max_mb` (default 128 — Aidoku sources rarely exceed 64
   MiB, but a tighter cap makes `memory.grow` fail and kills the source),

@@ -45,6 +45,8 @@ pub struct Config {
 	pub opds_lazy_download: bool,
 	/// 源实例空闲逐出阈值（分钟）；<= 0 关闭清扫任务
 	pub source_idle_evict_minutes: i64,
+	/// 进程 RSS 阈值（MiB）：超过即按最闲优先逐出源实例；0 = 关闭监控
+	pub rss_threshold_mb: u64,
 	pub wasm_memory_max_mb: u64,
 	pub wasm_fuel: u64,
 	pub wasm_call_timeout_secs: u64,
@@ -85,6 +87,7 @@ impl Default for Config {
 			auto_download_limit: 5,
 			opds_lazy_download: false,
 			source_idle_evict_minutes: 30,
+			rss_threshold_mb: 1024,
 			wasm_memory_max_mb: 128,
 			wasm_fuel: 10_000_000_000,
 			wasm_call_timeout_secs: 60,
@@ -178,6 +181,7 @@ struct ConfigFile {
 	auto_download_limit: Option<usize>,
 	opds_lazy_download: Option<bool>,
 	source_idle_evict_minutes: Option<i64>,
+	rss_threshold_mb: Option<u64>,
 	wasm_memory_max_mb: Option<u64>,
 	wasm_fuel: Option<u64>,
 	wasm_call_timeout_secs: Option<u64>,
@@ -255,6 +259,9 @@ impl Config {
 		}
 		if let Some(v) = file.source_idle_evict_minutes {
 			self.source_idle_evict_minutes = v;
+		}
+		if let Some(v) = file.rss_threshold_mb {
+			self.rss_threshold_mb = v;
 		}
 		if let Some(v) = file.wasm_memory_max_mb {
 			self.wasm_memory_max_mb = v;
@@ -385,6 +392,11 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.source_idle_evict_minutes = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_RSS_THRESHOLD_MB")
+			&& let Ok(n) = v.parse()
+		{
+			self.rss_threshold_mb = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_WASM_MEMORY_MAX_MB")
 			&& let Ok(n) = v.parse()
@@ -528,6 +540,21 @@ mod tests {
 		assert_eq!(config.wasm_memory_max_mb, 96);
 		assert_eq!(config.wasm_fuel, 999);
 		assert_eq!(config.wasm_call_timeout_secs, 15);
+	}
+
+	#[test]
+	fn rss_threshold_from_file_and_env() {
+		assert_eq!(Config::default().rss_threshold_mb, 1024);
+		let file: ConfigFile = toml::from_str("rss_threshold_mb = 256\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.rss_threshold_mb, 256);
+
+		unsafe { std::env::set_var("SUMIDOKU_RSS_THRESHOLD_MB", "512") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_RSS_THRESHOLD_MB") };
+		assert_eq!(config.rss_threshold_mb, 512);
 	}
 
 	#[test]
