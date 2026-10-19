@@ -57,6 +57,15 @@ session. Without the variable, behavior is unchanged: the
 navigation/cookie webview functions report themselves unsupported in the
 source log.
 
+A trawl deployment can double as the webview browser instead of a Chromium
+sidecar: point `SUMIDOKU_NET_BROWSER_TRAWL` at the trawl API (e.g.
+`http://trawl:8191`) and each webview becomes a named keepPage session with
+the same cookie reflux. The two variables are mutually exclusive —
+configuring both fails startup. Trawl-backed webviews additionally run
+`webview_eval` in the real page, but `webview_delete_cookie` is unsupported
+there (no endpoint), and trawl cannot power the interactive login below
+(the session API has no screencast or input surface).
+
 ## Interactive web login (no devtools)
 
 With the same variable set, a `Login` setting of `method: "web"` gains a

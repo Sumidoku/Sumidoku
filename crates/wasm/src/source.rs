@@ -35,6 +35,9 @@ pub struct SourceConfig {
 	pub accept_language: String,
 	/// CDP websocket 地址（ws://…）；None 时 webview 浏览器函数显式不支持
 	pub browser_ws: Option<String>,
+	/// trawl session API 地址（http://…）；与 browser_ws 互斥（server 配置层校验），
+	/// 都设置时 trawl 优先——它是显式配置的新后端
+	pub browser_trawl: Option<String>,
 }
 
 impl SourceConfig {
@@ -51,6 +54,7 @@ impl SourceConfig {
 			logger: Arc::new(crate::traits::StdoutLogger),
 			accept_language: crate::traits::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 			browser_ws: None,
+			browser_trawl: None,
 		}
 	}
 }
@@ -122,10 +126,17 @@ impl SourceInstance {
 					config.key.clone(),
 				),
 				net,
-				browser: crate::browser::BrowserState::new(
-					config.browser_ws.clone(),
-					config.limits.browser_timeout,
-				),
+				browser: match &config.browser_trawl {
+					Some(api) => crate::browser::BrowserState::new_trawl(
+						&config.key,
+						api,
+						config.limits.browser_timeout,
+					),
+					None => crate::browser::BrowserState::new(
+						config.browser_ws.clone(),
+						config.limits.browser_timeout,
+					),
+				},
 				limits: config.limits.clone(),
 				source_key: config.key.clone(),
 				logger: config.logger.clone(),

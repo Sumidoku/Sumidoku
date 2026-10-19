@@ -24,6 +24,7 @@ fn config() -> SourceConfig {
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 		browser_ws: None,
+		browser_trawl: None,
 	}
 }
 

@@ -1,6 +1,9 @@
 //! context_* 与 webview_* 的纯脚本子集由 Boa 实装（页面建模见 crate::webview）。
-//! 配置了 net.browser_ws 时，webview_load/webview_get_cookies/webview_delete_cookie
-//! 走真浏览器背衬（crate::browser）；未配置时这三个函数与 webview_set_rule_list
+//! 配置了真浏览器后端（net.browser_ws 的 CDP sidecar 或 net.browser_trawl 的
+//! trawl session API）时，webview_load/webview_get_cookies 走浏览器背衬
+//! （crate::browser）；webview_eval/webview_eval_async 在后端支持时（trawl）
+//! 同样走浏览器，CDP 后端与未配置时维持 Boa 页面模型。webview_delete_cookie
+//! 仅 CDP 支持，trawl 无对应端点。未配置时这几个函数与 webview_set_rule_list
 //! 一样显式不支持：返回 ABI 的 -1 家族错误码（JsError 没有 unsupported 专用码，
 //! 上游 aidoku-rs 对这些函数也一律 -1），并在源日志点名函数与原因。
 use crate::{
@@ -188,9 +191,13 @@ pub fn webview_eval(mut env: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: 
 	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(view) = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview) else {
+	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	};
+	if env.data().browser.supports_eval() {
+		return browser_eval(&mut env, webview, &source, "webview_eval");
+	}
+	let view = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
 	match view.eval(&source) {
 		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
 		Err(msg) => fail(&mut env, msg),
@@ -206,12 +213,25 @@ pub fn webview_eval_async(
 	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(view) = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview) else {
+	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	};
+	// 浏览器后端的 eval 由服务端 await promise，eval 与 eval_async 天然同一路径
+	if env.data().browser.supports_eval() {
+		return browser_eval(&mut env, webview, &source, "webview_eval_async");
+	}
+	let view = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
 	match view.eval_async(&source) {
 		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
 		Err(msg) => fail(&mut env, msg),
+	}
+}
+
+// 浏览器后端的 eval 路径（trawl）：值回传契约见 browser/trawl.rs
+fn browser_eval(env: &mut FunctionEnvMut<WasmEnv>, webview: Rid, source: &str, name: &str) -> FFIResult {
+	match env.data_mut().browser.eval(webview, source) {
+		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
+		Err(e) => browser_fail(env, name, &e),
 	}
 }
 
@@ -270,6 +290,11 @@ pub fn webview_delete_cookie(
 	}
 	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
+	}
+	// trawl 后端没有 cookie 编辑端点：与 webview_set_rule_list 同款的显式不支持
+	if !env.data().browser.supports_cookie_edit() {
+		env.data().log("webview_delete_cookie is not supported by the browser backend: trawl has no cookie-edit endpoint");
+		return Result::MissingResult.into();
 	}
 	// ABI 约定 name_len == -1 为清空全 store（上游 delete_all_cookies 的入参）
 	if name_len == u32::MAX {
@@ -991,6 +1016,59 @@ mod tests {
 		assert_eq!(decoded_cookies(&h, rid_b)[0].value, "b");
 	}
 
+	#[test]
+	fn webview_eval_routes_to_browser_when_backend_supports_it() {
+		let mock = std::sync::Arc::new(std::sync::Mutex::new(crate::browser::mock::MockState::default()));
+		{
+			let mut state = mock.lock().expect("mock lock");
+			state.supports_eval = true;
+			state.eval_value = Some("tok42".into());
+		}
+		let mut h = browser_harness(mock.clone());
+		let wv = h.wv_create();
+		let rid = h.wv_eval(wv, "window.token");
+		assert!(rid > 0, "eval 返回 {rid}");
+		assert_eq!(h.stored_string(rid), "tok42", "值来自浏览器后端而不是 Boa");
+		let rid = h.wv_eval_async(wv, "fetch('/token').then(r => r.text())");
+		assert!(rid > 0, "eval_async 返回 {rid}");
+		assert_eq!(h.stored_string(rid), "tok42", "两个 FFI 天然映射到同一操作");
+		let mock = mock.lock().expect("mock lock");
+		assert_eq!(
+			mock.evals,
+			vec![
+				("ctx-1".to_string(), "window.token".to_string()),
+				("ctx-1".to_string(), "fetch('/token').then(r => r.text())".to_string()),
+			],
+			"eval 落在浏览器会话上"
+		);
+	}
+
+	#[test]
+	fn webview_eval_browser_failure_maps_to_missing_result() {
+		let mock = std::sync::Arc::new(std::sync::Mutex::new(crate::browser::mock::MockState::default()));
+		{
+			let mut state = mock.lock().expect("mock lock");
+			state.supports_eval = true;
+			state.eval_error = Some(false);
+		}
+		let mut h = browser_harness(mock.clone());
+		let wv = h.wv_create();
+		assert_eq!(h.wv_eval(wv, "nope()"), -1);
+		assert_eq!(h.wv_eval_async(wv, "Promise.reject(1)"), -1);
+	}
+
+	#[test]
+	fn webview_delete_cookie_unsupported_on_backend_without_cookie_edit() {
+		let mock = std::sync::Arc::new(std::sync::Mutex::new(crate::browser::mock::MockState::default()));
+		mock.lock().expect("mock lock").cookie_edit_unsupported = true;
+		let mut h = browser_harness(mock.clone());
+		let wv = h.wv_create();
+		assert_eq!(h.wv_delete_cookie(wv, Some("sid"), None, None, None), -1, "单个删除显式不支持");
+		assert_eq!(h.wv_delete_cookie(wv, None, Some(u32::MAX), None, None), -1, "清空同样不支持");
+		let mock = mock.lock().expect("mock lock");
+		assert!(mock.deleted.is_empty() && mock.cleared.is_empty(), "不触达浏览器");
+	}
+
 	// ---------- e2e：真 CDP，SUMIDOKU_TEST_BROWSER_WS 指向才跑 ----------
 
 	type SeenRequests = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
@@ -1191,6 +1269,59 @@ mod tests {
 		let rid = h.wv_get_cookies(wv);
 		assert!(rid > 0);
 		assert!(decoded_cookies(&h, rid).is_empty(), "清空后为空: {:?}", decoded_cookies(&h, rid));
+	}
+
+	// ---------- e2e：trawl session 后端，SUMIDOKU_TEST_TRAWL_URL 指向才跑 ----------
+
+	fn e2e_trawl_harness() -> Option<Harness> {
+		let url = std::env::var("SUMIDOKU_TEST_TRAWL_URL").ok().filter(|v| !v.is_empty())?;
+		Some(Harness::with_browser(
+			Limits::default(),
+			crate::browser::BrowserState::new_trawl("e2e", &url, Duration::from_secs(30)),
+		))
+	}
+
+	#[test]
+	fn e2e_trawl_webview_login_flow_cookies_reach_jar_and_requests() {
+		let Some(mut h) = e2e_trawl_harness() else {
+			eprintln!("SUMIDOKU_TEST_TRAWL_URL 未设置，跳过");
+			return;
+		};
+		let site = mock_site();
+		let base = site.base();
+		let wv = h.wv_create();
+		let req = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login")));
+		assert_eq!(h.wv_load(wv, req), 0, "webview_load 经 trawl 真导航");
+		assert_eq!(
+			h.jar_header(&format!("{base}/api")),
+			Some("sess=alpha-secret".to_string()),
+			"登录 cookie 回流进 jar"
+		);
+		let rid = h.wv_get_cookies(wv);
+		assert!(rid > 0, "get_cookies: {rid}");
+		assert!(
+			decoded_cookies(&h, rid).iter().any(|c| c.name == "sess" && c.value == "alpha-secret"),
+			"cookie 形状: {:?}",
+			decoded_cookies(&h, rid)
+		);
+		// eval 打在驻留页的主 JS 环境：href 是刚导航的登录页
+		let rid = h.wv_eval(wv, "location.href");
+		assert!(rid > 0, "eval: {rid}");
+		assert_eq!(h.stored_string(rid), format!("{base}/login"));
+		// 源 API 请求自动带会话 cookie（net 栈从 jar 取）
+		let api = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/api")));
+		assert_eq!(crate::imports::net::send(h.env.clone().into_mut(&mut h.store), api), 0);
+		assert_eq!(
+			site.cookie_for("/api"),
+			Some("sess=alpha-secret".to_string()),
+			"API 请求带会话 cookie"
+		);
+		// destroy 立即 DELETE：新建的 webview 是干净 session
+		h.destroy(wv);
+		let wv2 = h.wv_create();
+		let rid = h.wv_get_cookies(wv2);
+		assert!(rid > 0);
+		assert!(decoded_cookies(&h, rid).is_empty(), "新 session 无旧 cookie");
 	}
 }
 

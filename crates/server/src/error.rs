@@ -14,6 +14,8 @@ pub enum Error {
 	Source(#[from] aidoku_wasm::Error),
 	#[error("auth: {0}")]
 	Auth(String),
+	#[error("config: {0}")]
+	Config(String),
 }
 
 #[derive(Debug)]
