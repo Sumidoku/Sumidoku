@@ -60,7 +60,7 @@ dependencies = [
 
 [[package]]
 name = "aidoku-wasm"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aidoku",
  "boa_engine",
@@ -4983,7 +4983,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "sumidoku-server"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "aidoku",
  "aidoku-wasm",
