@@ -28,6 +28,7 @@ import type {
 	Manga,
 	MangaDetail,
 	MangaPage,
+	MangaUpdateStreamEvent,
 	MigrateLookupResult,
 	MigrateRequest,
 	MigrateResponse,
@@ -233,7 +234,12 @@ export function useListing(sourceId: number, listingId: string, enabled = true) 
 export function useRegisterManga() {
 	return useMutation({
 		mutationFn: (body: { sourceId: number; manga: Manga }) =>
-			api<{ id: number }>('/manga', { method: 'POST', body })
+			apiStream<{ id: number }, MangaUpdateStreamEvent>('/manga', {
+				method: 'POST',
+				body,
+				// 登记完成才拿得到内部 id，partial 没有可挂载的页面状态，忽略
+				onEvent: () => {}
+			})
 	});
 }
 
@@ -498,7 +504,15 @@ export function useChapterPages(chapterId: number) {
 export function useRefreshManga() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (id: number) => api<MangaDetail>(`/manga/${id}?refresh`),
+		mutationFn: (id: number) =>
+			apiStream<MangaDetail, MangaUpdateStreamEvent>(`/manga/${id}?refresh`, {
+				onEvent: (ev) => {
+					if (ev.type !== 'manga') return;
+					// 详情快照渐进上屏；chapters 不进详情缓存，终态返回后整体覆盖
+					const { chapters, ...detail } = ev.manga;
+					qc.setQueryData<MangaDetail>(qk.manga(id), (cur) => (cur ? { ...cur, ...detail } : cur));
+				}
+			}),
 		onSuccess: (data, id) => qc.setQueryData(qk.manga(id), data)
 	});
 }
@@ -529,7 +543,25 @@ export function useSelectCover() {
 export function useRefreshChapters() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (mangaId: number) => api<Chapter[]>(`/manga/${mangaId}/chapters?refresh`),
+		mutationFn: (mangaId: number) =>
+			apiStream<Chapter[], MangaUpdateStreamEvent>(`/manga/${mangaId}/chapters?refresh`, {
+				onEvent: (ev) => {
+					if (ev.type !== 'manga' || !ev.manga.chapters) return;
+					// 章节快照渐进上屏：源侧章节还没有库内 id/进度，负 id 占位，
+					// 页面据此挡掉点读/选择/下载，终态返回后整体覆盖
+					const partial: Chapter[] = ev.manga.chapters.map((c, i) => ({
+						...c,
+						id: -(i + 1),
+						pageCount: null,
+						lastPageRead: 0,
+						isRead: false,
+						isBookmarked: false,
+						lastReadAt: null,
+						isDownloaded: false
+					}));
+					qc.setQueryData(qk.chapters(mangaId), partial);
+				}
+			}),
 		onSuccess: (data, mangaId) => qc.setQueryData(qk.chapters(mangaId), data)
 	});
 }

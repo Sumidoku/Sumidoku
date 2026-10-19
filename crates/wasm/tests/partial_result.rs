@@ -99,6 +99,88 @@ async fn search_partials_are_ordered_manga_deltas() {
 }
 
 #[tokio::test]
+async fn manga_update_partials_are_full_snapshots_before_final() {
+	let (handle, _) = SourceHandle::spawn(config(), Arc::new(Semaphore::new(8)))
+		.await
+		.expect("spawn source");
+
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let input = aidoku::Manga {
+		key: "manga-1".into(),
+		..Default::default()
+	};
+	let updated = handle
+		.get_manga_update_streaming(input, true, true, tx)
+		.await
+		.expect("manga update");
+
+	let mut events = Vec::new();
+	while let Ok(manga) = rx.try_recv() {
+		events.push(manga);
+	}
+	assert!(rx.recv().await.is_none(), "调用结束后 channel 应关闭");
+
+	// fixture 序列：详情快照（尚无章节）→ 详情+两章快照；输入 key 原样保留
+	assert_eq!(events.len(), 2, "partial 事件应按到达顺序全量送达");
+	assert_eq!(events[0].key, "manga-1");
+	assert_eq!(events[0].title, "Partial Title");
+	assert!(events[0].chapters.is_none(), "详情快照尚未带章节");
+	let chapters = events[1].chapters.as_ref().expect("第二章快照");
+	assert_eq!(chapters.len(), 2);
+	assert_eq!(chapters[0].key, "c1");
+
+	// 终态以导出返回为准，与 partial 不同：多一章 c3
+	assert_eq!(updated.key, "manga-1");
+	assert_eq!(updated.title, "Partial Title");
+	let chapters = updated.chapters.as_ref().expect("终态章节");
+	assert_eq!(chapters.len(), 3);
+	assert_eq!(chapters[2].key, "c3");
+}
+
+#[tokio::test]
+async fn manga_update_partials_respect_requested_parts() {
+	let (handle, _) = SourceHandle::spawn(config(), Arc::new(Semaphore::new(8)))
+		.await
+		.expect("spawn source");
+
+	// 只要详情：只有详情快照一个 partial
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let input = aidoku::Manga {
+		key: "manga-1".into(),
+		..Default::default()
+	};
+	let updated = handle
+		.get_manga_update_streaming(input, true, false, tx)
+		.await
+		.expect("details update");
+	let mut events = Vec::new();
+	while let Ok(manga) = rx.try_recv() {
+		events.push(manga);
+	}
+	assert_eq!(events.len(), 1);
+	assert!(events[0].chapters.is_none());
+	assert!(updated.chapters.is_none());
+
+	// 只要章节：只有章节快照一个 partial
+	let (tx, mut rx) = mpsc::unbounded_channel();
+	let input = aidoku::Manga {
+		key: "manga-1".into(),
+		..Default::default()
+	};
+	let updated = handle
+		.get_manga_update_streaming(input, false, true, tx)
+		.await
+		.expect("chapters update");
+	let mut events = Vec::new();
+	while let Ok(manga) = rx.try_recv() {
+		events.push(manga);
+	}
+	assert_eq!(events.len(), 1);
+	assert_eq!(events[0].chapters.as_ref().map(|c| c.len()), Some(2));
+	assert_eq!(updated.chapters.as_ref().map(|c| c.len()), Some(3));
+}
+
+#[tokio::test]
 async fn non_streaming_calls_discard_partials() {
 	let (handle, _) = SourceHandle::spawn(config(), Arc::new(Semaphore::new(8)))
 		.await

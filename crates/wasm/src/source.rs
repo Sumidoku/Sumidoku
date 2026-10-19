@@ -282,6 +282,16 @@ impl SourceInstance {
 		self.with_partials(sink, |i| i.get_search_manga_list(query, page, filters))
 	}
 
+	pub fn get_manga_update_with_partials(
+		&mut self,
+		manga: &Manga,
+		needs_details: bool,
+		needs_chapters: bool,
+		sink: crate::runtime::env::PartialSink,
+	) -> Result<Manga> {
+		self.with_partials(sink, |i| i.get_manga_update(manga, needs_details, needs_chapters))
+	}
+
 	pub fn get_search_manga_list(
 		&mut self,
 		query: Option<String>,

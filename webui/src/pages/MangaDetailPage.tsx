@@ -178,6 +178,8 @@ export default function MangaDetailPage() {
 	}
 
 	function activate(c: Chapter) {
+		// 章节刷新流中的占位行（负 id）没有库内 id，点读/选择都等终态落地
+		if (c.id < 0) return;
 		if (selecting) {
 			setSelected((prev) => {
 				const next = new Set(prev);
@@ -196,7 +198,7 @@ export default function MangaDetailPage() {
 	}
 
 	function toggleAll() {
-		setSelected(allSelected ? new Set() : new Set(visible.map((c) => c.id)));
+		setSelected(allSelected ? new Set() : new Set(visible.filter((c) => c.id > 0).map((c) => c.id)));
 	}
 
 	function openCats() {
@@ -241,7 +243,7 @@ export default function MangaDetailPage() {
 	}
 
 	function downloadChapter(c: Chapter) {
-		if (dlPending.has(c.id) || dlQueued.has(c.id) || c.isDownloaded) return;
+		if (c.id < 0 || dlPending.has(c.id) || dlQueued.has(c.id) || c.isDownloaded) return;
 		setDlPending((prev) => new Set(prev).add(c.id));
 		enqueueDownloads.mutate([c.id], {
 			onSuccess: () => {
@@ -693,9 +695,10 @@ export default function MangaDetailPage() {
 								onActivate={() => activate(c)}
 								dlState={dlStateOf(c)}
 								onDownload={() => downloadChapter(c)}
-								onToggleBookmark={() =>
-									updateChapter.mutate({ id: c.id, mangaId, isBookmarked: !c.isBookmarked })
-								}
+								onToggleBookmark={() => {
+									if (c.id < 0) return;
+									updateChapter.mutate({ id: c.id, mangaId, isBookmarked: !c.isBookmarked });
+								}}
 								bookmarkPending={
 									updateChapter.isPending && updateChapter.variables?.id === c.id
 								}

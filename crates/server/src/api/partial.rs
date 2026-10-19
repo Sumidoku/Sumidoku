@@ -126,3 +126,24 @@ pub async fn forward_search(
 	};
 	let _ = send_line(&tx, &event);
 }
+
+/// manga 更新（register/refresh）的转发：partial 与搜索同形（完整 Manga 快照，
+/// 对齐上游 partialMangaPublisher）；终态 payload 是各端点自己的响应体，
+/// 源调用与落库都在 call 里，失败以终态 error 事件表达
+pub async fn forward_manga_update(
+	mut partials: mpsc::UnboundedReceiver<Manga>,
+	call: JoinHandle<ApiResult<Value>>,
+	tx: mpsc::UnboundedSender<Bytes>,
+) {
+	while let Some(manga) = partials.recv().await {
+		if !send_line(&tx, &json!({"type": "manga", "manga": manga})) {
+			return;
+		}
+	}
+	let event = match call.await {
+		Ok(Ok(payload)) => json!({"type": "final", "payload": payload}),
+		Ok(Err(e)) => json!({"type": "error", "error": {"code": e.code(), "message": e.message()}}),
+		Err(_) => panic_event(),
+	};
+	let _ = send_line(&tx, &event);
+}

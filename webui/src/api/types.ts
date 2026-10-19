@@ -369,12 +369,18 @@ export interface MangaWithChapter {
 	chapter: SourceChapter;
 }
 
-/** 主页组件内嵌的源侧章节，不带服务端附加字段 */
+/** 主页组件/更新流内嵌的源侧章节（aidoku Chapter 原样序列化），不带服务端附加字段 */
 export interface SourceChapter {
 	key: string;
 	title: string | null;
 	chapter_number: number | null;
+	volume_number: number | null;
 	date_uploaded: number | string | null;
+	scanlators: string[] | null;
+	url: string | null;
+	language: string | null;
+	thumbnail: string | null;
+	locked: boolean;
 }
 
 export interface HomeFilterItem {
@@ -389,6 +395,13 @@ export type HomeStreamEvent =
 
 /** 流式搜索的部分事件：到达一条追加一条 */
 export type SearchStreamEvent = { type: 'manga'; manga: Manga };
+
+/** 流式 manga 更新的部分事件：当时的完整源侧 Manga 快照（对齐上游
+ * partialMangaPublisher），详情/章节随拉取进度逐渐填充，终态事件整体覆盖 */
+export type MangaUpdateStreamEvent = {
+	type: 'manga';
+	manga: Manga & { chapters?: SourceChapter[] };
+};
 
 // ---- 源设置 ----
 

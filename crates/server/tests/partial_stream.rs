@@ -181,3 +181,158 @@ async fn home_stream_unsupported_source_404() {
 		request_ndjson(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+async fn partial_source_id(app: &axum::Router, tmp: &tempfile::TempDir) -> i64 {
+	install_fixture_source(tmp, "en.partial", "Partial Source", &partial_wasm_path());
+	let ids = scan_sources(app).await;
+	ids.iter()
+		.find(|(key, _)| key == "en.partial")
+		.map(|(_, id)| *id)
+		.expect("partial source id")
+}
+
+async fn register_buffered(app: &axum::Router, source_id: i64, manga_key: &str) -> i64 {
+	let (status, body) = request(
+		app,
+		"POST",
+		"/api/v1/manga",
+		Some(serde_json::json!({"sourceId": source_id, "mangaKey": manga_key})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	body["id"].as_i64().expect("manga id")
+}
+
+#[tokio::test]
+async fn register_ndjson_streams_manga_partials() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let source_id = partial_source_id(&app, &tmp).await;
+
+	let (status, headers, events) = request_ndjson(
+		&app,
+		"POST",
+		"/api/v1/manga",
+		Some(serde_json::json!({"sourceId": source_id, "mangaKey": "streamed-manga"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		headers.get("content-type").expect("content-type"),
+		"application/x-ndjson"
+	);
+
+	// fixture 序列：详情快照（无章节）→ 详情+两章快照 → 终态
+	assert_eq!(event_types(&events), ["manga", "manga", "final"]);
+	assert_eq!(events[0]["manga"]["key"], "streamed-manga");
+	assert_eq!(events[0]["manga"]["title"], "Partial Title");
+	assert!(events[0]["manga"]["chapters"].is_null());
+	assert_eq!(
+		events[1]["manga"]["chapters"].as_array().expect("partial chapters").len(),
+		2
+	);
+
+	// 终态权威：入库的是三章
+	let manga_id = events[2]["payload"]["id"].as_i64().expect("manga id");
+	let (status, chapters) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let chapters = chapters.as_array().expect("chapters array");
+	assert_eq!(chapters.len(), 3);
+	assert_eq!(chapters[2]["key"], "c3");
+}
+
+#[tokio::test]
+async fn register_without_accept_keeps_buffered_contract() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let source_id = partial_source_id(&app, &tmp).await;
+
+	let (status, headers, bytes) = common::request_full(
+		&app,
+		"POST",
+		"/api/v1/manga",
+		Some(serde_json::json!({"sourceId": source_id, "mangaKey": "buffered-manga"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		headers.get("content-type").expect("content-type"),
+		"application/json"
+	);
+	// 非流式响应不含事件包装，直接是 {"id": …}
+	let body: Value = serde_json::from_slice(&bytes).expect("json body");
+	assert!(body["id"].is_i64());
+	assert!(body.get("type").is_none());
+}
+
+#[tokio::test]
+async fn register_existing_with_ndjson_falls_back_to_buffered() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let source_id = partial_source_id(&app, &tmp).await;
+	let manga_id = register_buffered(&app, source_id, "already-there").await;
+
+	// 已登记命中没有源调用可流：回普通 JSON，客户端按非流式终态处理
+	let (status, headers, bytes) = common::request_full(
+		&app,
+		"POST",
+		"/api/v1/manga",
+		Some(serde_json::json!({"sourceId": source_id, "mangaKey": "already-there"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let body: Value = serde_json::from_slice(&bytes).expect("json body");
+	assert_eq!(body["id"], manga_id);
+	assert_eq!(
+		headers.get("content-type").expect("content-type"),
+		"application/json"
+	);
+}
+
+#[tokio::test]
+async fn manga_refresh_ndjson_streams_partials() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let source_id = partial_source_id(&app, &tmp).await;
+	let manga_id = register_buffered(&app, source_id, "refresh-me").await;
+
+	let (status, _, events) =
+		request_ndjson(&app, "GET", &format!("/api/v1/manga/{manga_id}?refresh"), None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// 详情刷新只要 details：一个详情快照 partial，不带章节
+	assert_eq!(event_types(&events), ["manga", "final"]);
+	assert_eq!(events[0]["manga"]["title"], "Partial Title");
+	assert!(events[0]["manga"]["chapters"].is_null());
+
+	// 终态 payload 与非流式响应体是同一个 JSON 值
+	let (status, buffered) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(events[1]["payload"], buffered);
+}
+
+#[tokio::test]
+async fn chapters_refresh_ndjson_streams_partials() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let source_id = partial_source_id(&app, &tmp).await;
+	let manga_id = register_buffered(&app, source_id, "refresh-chapters").await;
+
+	let (status, _, events) = request_ndjson(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/chapters?refresh"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// 章节刷新只要 chapters：一个两章快照 partial
+	assert_eq!(event_types(&events), ["manga", "final"]);
+	assert_eq!(
+		events[0]["manga"]["chapters"].as_array().expect("partial chapters").len(),
+		2
+	);
+	let payload = events[1]["payload"].as_array().expect("chapters payload");
+	assert_eq!(payload.len(), 3);
+
+	// 终态 payload 与非流式响应体是同一个 JSON 值
+	let (status, buffered) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(events[1]["payload"], buffered);
+}

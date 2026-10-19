@@ -280,6 +280,30 @@ impl SourceHandle {
 		.await
 	}
 
+	/// 流式版 get_manga_update：对齐上游 partialMangaPublisher——每个 partial 是
+	/// 当时的完整 Manga 快照（详情/章节随拉取进度逐渐填充），终态以导出返回为准，
+	/// 不做 home 那样的累积合并
+	pub async fn get_manga_update_streaming(
+		&self,
+		manga: Manga,
+		needs_details: bool,
+		needs_chapters: bool,
+		partials: mpsc::UnboundedSender<Manga>,
+	) -> Result<Manga> {
+		self.call(move |i| {
+			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
+				match postcard::from_bytes::<Manga>(bytes) {
+					Ok(manga) => {
+						let _ = partials.send(manga);
+					}
+					Err(_) => tracing::warn!("failed to decode manga update partial result"),
+				}
+			});
+			i.get_manga_update_with_partials(&manga, needs_details, needs_chapters, sink)
+		})
+		.await
+	}
+
 	pub async fn get_filters(&self) -> Result<Vec<Filter>> {
 		self.call(|i| i.get_filters()).await
 	}

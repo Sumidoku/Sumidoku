@@ -781,8 +781,9 @@ pub struct RegisterMangaRequest {
 
 async fn register_manga(
 	State(state): State<Arc<AppState>>,
+	headers: HeaderMap,
 	Json(body): Json<RegisterMangaRequest>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
 	let initial = match body.manga {
 		Some(manga) => manga,
 		None => {
@@ -799,8 +800,39 @@ async fn register_manga(
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
-	let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
-	Ok(Json(json!({ "id": manga_id })))
+	if !partial::wants_ndjson(&headers) {
+		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+		return Ok(Json(json!({ "id": manga_id })).into_response());
+	}
+	// 已登记命中没有源调用可流：直接缓冲响应，客户端按非流式终态处理
+	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
+		.bind(body.source_id)
+		.bind(&initial.key)
+		.fetch_optional(&state.pool)
+		.await?;
+	if let Some((id,)) = existing {
+		return Ok(Json(json!({ "id": id })).into_response());
+	}
+	let handle = state.get_handle(body.source_id).await?;
+	let (line_tx, line_rx) = mpsc::unbounded_channel();
+	let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+	let source_id = body.source_id;
+	let call = tokio::spawn(async move {
+		let updated = handle
+			.get_manga_update_streaming(initial, true, true, partial_tx)
+			.await?;
+		let mut conn = state.pool.acquire().await?;
+		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
+		reconcile_chapters(
+			&mut conn,
+			manga_id,
+			&updated.chapters.clone().unwrap_or_default(),
+		)
+		.await?;
+		Ok::<_, ApiError>(json!({ "id": manga_id }))
+	});
+	tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
+	Ok(partial::ndjson_response(line_rx))
 }
 
 /// (source, key) 已有 manga 行就直接命中；没有则回源拉详情 + 章节登记（不入库），
@@ -1077,10 +1109,26 @@ async fn get_manga(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
-) -> ApiResult<Json<Value>> {
+	headers: HeaderMap,
+) -> ApiResult<Response> {
 	let mut row = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
 		let handle = state.get_handle(row.source_id).await?;
+		if partial::wants_ndjson(&headers) {
+			let (line_tx, line_rx) = mpsc::unbounded_channel();
+			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+			let input = manga_from_row(&row);
+			let source_id = row.source_id;
+			let call = tokio::spawn(async move {
+				let updated = handle.get_manga_update_streaming(input, true, false, partial_tx).await?;
+				let mut conn = state.pool.acquire().await?;
+				upsert_manga(&mut conn, source_id, &updated, true, true, false).await?;
+				let row = manga_row(&state.pool, id).await?;
+				manga_json(&state, &row).await
+			});
+			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
+			return Ok(partial::ndjson_response(line_rx));
+		}
 		let updated = handle
 			.get_manga_update(manga_from_row(&row), true, false)
 			.await?;
@@ -1088,7 +1136,7 @@ async fn get_manga(
 		upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
 		row = manga_row(&state.pool, id).await?;
 	}
-	Ok(Json(manga_json(&state, &row).await?))
+	Ok(Json(manga_json(&state, &row).await?).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1136,10 +1184,30 @@ async fn get_chapters(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
-) -> ApiResult<Json<Value>> {
+	headers: HeaderMap,
+) -> ApiResult<Response> {
 	let manga = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
 		let handle = state.get_handle(manga.source_id).await?;
+		if partial::wants_ndjson(&headers) {
+			let (line_tx, line_rx) = mpsc::unbounded_channel();
+			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+			let call = tokio::spawn(async move {
+				let updated = handle
+					.get_manga_update_streaming(manga_from_row(&manga), false, true, partial_tx)
+					.await?;
+				let mut conn = state.pool.acquire().await?;
+				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
+				sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+					.bind(crate::model::unix_now())
+					.bind(id)
+					.execute(&mut *conn)
+					.await?;
+				chapters_json(&state, id).await
+			});
+			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
+			return Ok(partial::ndjson_response(line_rx));
+		}
 		let updated = handle
 			.get_manga_update(manga_from_row(&manga), false, true)
 			.await?;
@@ -1151,20 +1219,24 @@ async fn get_chapters(
 			.execute(&mut *conn)
 			.await?;
 	}
+	Ok(Json(chapters_json(&state, id).await?).into_response())
+}
+
+async fn chapters_json(state: &AppState, manga_id: i64) -> ApiResult<Value> {
 	let rows: Vec<ChapterUserRow> = sqlx::query_as(
 		"SELECT c.*, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter c
 		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
 		 WHERE c.manga_id = ? ORDER BY c.source_order ASC",
 	)
-	.bind(id)
+	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?;
 	let downloaded: HashSet<i64> = sqlx::query_scalar(
 		"SELECT chapter_id FROM chapter_user WHERE user_id = 1 AND is_downloaded = 1
 		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 	)
-	.bind(id)
+	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?
 	.into_iter()
@@ -1178,7 +1250,7 @@ async fn get_chapters(
 		object.insert("isDownloaded".into(), json!(downloaded.contains(&row.chapter.id)));
 		chapters.push(value);
 	}
-	Ok(Json(json!(chapters)))
+	Ok(json!(chapters))
 }
 
 async fn get_pages(
