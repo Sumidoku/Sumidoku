@@ -19,6 +19,8 @@ import type {
 	DeepLinkResponse,
 	Filter,
 	FilterValue,
+	GlobalSearchResponse,
+	GlobalSearchStreamEvent,
 	HomeLayout,
 	HomeStreamEvent,
 	LibraryFilter,
@@ -41,6 +43,7 @@ import type {
 	SearchStreamEvent,
 	Source,
 	SourceRepo,
+	SourceSearchResult,
 	SourceUpdate,
 	SuwayomiImportResult,
 	UpdateAllOutcome
@@ -212,6 +215,33 @@ export function useSourceSearch(sourceId: number, req: SourceSearchRequest, enab
 			}),
 		initialPageParam: 1,
 		getNextPageParam: nextPage,
+		enabled
+	});
+}
+
+/** 跨源聚合搜索：流式到达的每源结果按 sourceId 写进聚合缓存（完成一个上一个），
+ * 终态返回后整体覆盖；页面按自己的源顺序取各源结果渲染 */
+export function useGlobalSearch(sourceIds: number[], query: string, enabled = true) {
+	const qc = useQueryClient();
+	const queryKey = ['global-search', query, sourceIds] as const;
+	return useQuery({
+		queryKey,
+		queryFn: ({ signal }) =>
+			apiStream<GlobalSearchResponse, GlobalSearchStreamEvent>('/search', {
+				method: 'POST',
+				body: { query: query || undefined, page: 1, sourceIds },
+				signal,
+				onEvent: (ev) => {
+					const result: SourceSearchResult =
+						ev.type === 'source'
+							? ev.source
+							: { sourceId: ev.sourceId, entries: [], hasNextPage: false, error: ev.error };
+					qc.setQueryData<GlobalSearchResponse>(queryKey, (cur) => {
+						const rest = (cur?.sources ?? []).filter((s) => s.sourceId !== result.sourceId);
+						return { sources: [...rest, result] };
+					});
+				}
+			}),
 		enabled
 	});
 }
