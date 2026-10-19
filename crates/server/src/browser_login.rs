@@ -326,8 +326,16 @@ mod tests {
 		let manager = manager_with(&state, Duration::from_millis(50));
 		manager.start(1, "login", "h", "https://h/").await.expect("start");
 		assert_eq!(manager.session_count(), 1);
-		tokio::time::sleep(Duration::from_millis(200)).await;
-		assert_eq!(manager.session_count(), 0);
+		// CI 满载时 tokio 任务唤醒可能远迟于 TTL 的几倍：轮询等结果，不做固定时长睡眠
+		let mut reaped = false;
+		for _ in 0..50 {
+			if manager.session_count() == 0 {
+				reaped = true;
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
+		assert!(reaped, "reaper did not reap within 5s");
 		assert_eq!(state.lock().expect("lock").disposed, vec!["ctx-1"]);
 	}
 
