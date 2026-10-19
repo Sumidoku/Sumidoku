@@ -611,6 +611,11 @@ manifest's static `info.url` stands instead. That column is the truth
 source every consumer reads — the synthesized base-URL setting's
 candidates and seeded default, the login-host fallback, the `baseUrl`
 DTO — so the settings list and the fallback never disagree.
+The `languages` column stores language codes only: object-form manifest
+entries (`{"code", "isDefault"}`, accepted by `source_languages`) are
+normalized at registration — every consumer (the source DTO,
+`Accept-Language` derivation) decodes `[String]`, while `isDefault` is read
+from the manifest text by the synthesis/seeding path.
 Static package files (`source.json`, `settings.json`, `filters.json`) are
 read by the same helper: directory sources from next to `main.wasm`, `.aix`
 sources from `Payload/` inside the zip without extracting. Source settings
