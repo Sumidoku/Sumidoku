@@ -398,6 +398,24 @@ export type HomeStreamEvent =
 /** 流式搜索的部分事件：到达一条追加一条 */
 export type SearchStreamEvent = { type: 'manga'; manga: Manga };
 
+/** 聚合搜索里单个源的结果：error 非空即该源失败，entries 为空 */
+export interface SourceSearchResult {
+	sourceId: number;
+	entries: Manga[];
+	hasNextPage: boolean;
+	error?: { code: string; message: string };
+}
+
+export interface GlobalSearchResponse {
+	sources: SourceSearchResult[];
+}
+
+/** 聚合搜索的流式事件：每源完成/失败各一个。失败不叫 error 是有意的——
+ * apiStream 把 type:'error' 当终态流错误整请求 reject，会毁掉单源失败隔离 */
+export type GlobalSearchStreamEvent =
+	| { type: 'source'; source: SourceSearchResult }
+	| { type: 'sourceError'; sourceId: number; error: { code: string; message: string } };
+
 /** 流式 manga 更新的部分事件：当时的完整源侧 Manga 快照（对齐上游
  * partialMangaPublisher），详情/章节随拉取进度逐渐填充，终态事件整体覆盖 */
 export type MangaUpdateStreamEvent = {

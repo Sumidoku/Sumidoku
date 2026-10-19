@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Destructuring `TestApp` without keeping `tmp` deletes the fixture
+directory mid-test.** `tempfile::TempDir` removes its tree on drop, so
+`let TestApp { app, .. } = test_app().await` wipes the sources directory
+the scan endpoint is about to read; the failure surfaces far from the
+cause (an empty source list, then a confusing "source id for X" panic in
+the lookup helper). Bind the field — `tmp: _tmp` when unused — in every
+test that builds a `TestApp`.
+- Evidence: 2026-10-20, PR #179's aggregate-search tests: the two cases
+  written with `let TestApp { app, .. }` failed at `source_id_of` with an
+  empty scan while the three that kept `tmp` passed; binding `tmp: _tmp`
+  (what every existing test already does) turned them green.
+
 **Before writing a file, confirm it does not exist — truncated listings
 lie.** A `find | head -20` that cuts off before the target makes an
 existing file look absent; writing then silently replaces work that was

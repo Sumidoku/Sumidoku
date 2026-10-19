@@ -6,6 +6,7 @@ import {
 	Library,
 	Moon,
 	RefreshCw,
+	Search,
 	Settings,
 	Sun
 } from 'lucide-react';
@@ -15,6 +16,7 @@ import { useResolvedTheme, useTheme } from '../lib/theme';
 const NAV = [
 	{ to: '/library', label: '书库', icon: Library },
 	{ to: '/browse', label: '浏览', icon: Compass },
+	{ to: '/search', label: '搜索', icon: Search },
 	{ to: '/history', label: '历史', icon: Clock },
 	{ to: '/downloads', label: '下载', icon: Download },
 	{ to: '/updates', label: '更新', icon: RefreshCw },

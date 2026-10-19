@@ -678,6 +678,14 @@
 	flex: none;
 }
 
+/* ============ 跨源搜索 ============ */
+
+/* 单源失败只占自己 section 的一行，不弹 toast 也不挡他源结果 */
+.search-page__error {
+	font-size: 13px;
+	color: var(--danger);
+}
+
 /* ============ 占位页（后续波次替换） ============ */
 
 .stub-reader {

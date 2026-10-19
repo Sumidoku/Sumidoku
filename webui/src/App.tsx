@@ -9,6 +9,7 @@ import MangaDetailPage from './pages/MangaDetailPage';
 import MigratePage from './pages/migrate/MigratePage';
 import NotFound from './pages/NotFound';
 import ReaderPage from './pages/ReaderPage';
+import SearchPage from './pages/SearchPage';
 import SettingsPage from './pages/SettingsPage';
 import SourceBrowsePage from './pages/SourceBrowsePage';
 import SourceHomePage from './pages/SourceHomePage';
@@ -23,6 +24,7 @@ const router = createBrowserRouter([
 			{ path: '/browse', element: <BrowsePage /> },
 			{ path: '/browse/:sourceId', element: <SourceBrowseRoute /> },
 			{ path: '/browse/:sourceId/home', element: <SourceHomePage /> },
+			{ path: '/search', element: <SearchPage /> },
 			{ path: '/manga/:id', element: <MangaDetailPage /> },
 			{ path: '/migrate', element: <MigratePage /> },
 			{ path: '/history', element: <HistoryPage /> },

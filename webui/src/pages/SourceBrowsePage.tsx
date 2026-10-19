@@ -167,12 +167,14 @@ export default function SourceBrowsePage() {
 		const deep = parseFiltersParam(searchParams.get('filters'));
 		return deep.length > 0 ? deep : loadFilterPrefs(sourceId);
 	});
+	// ?q= 深链（跨源搜索页的「查看全部」）：预填输入框并直接以该词进搜索态
+	const [initialQuery] = useState(() => (searchParams.get('q') ?? '').trim());
 	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
-	const [input, setInput] = useState('');
+	const [input, setInput] = useState(initialQuery);
 	const [showFilters, setShowFilters] = useState(false);
 	const [states, setStates] = useState<FilterStates | null>(null);
 	const [submitted, setSubmitted] = useState<{ query: string; filters: FilterValue[] }>({
-		query: '',
+		query: initialQuery,
 		filters: initialFilters
 	});
 
@@ -290,7 +292,7 @@ export default function SourceBrowsePage() {
 		if (pendingKey) return;
 		setPendingKey(m.key);
 		try {
-			const { id } = await register.mutateAsync({ sourceId, manga: m });
+			const { id } = await register.mutateAsync({ sourceId: m.sourceId ?? sourceId, manga: m });
 			navigate(`/manga/${id}`);
 		} catch {
 			// client 已弹错误 toast
