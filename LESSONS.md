@@ -444,15 +444,3 @@ same-day slip.
 - Evidence: 2026-10-19, the first merge attempt on PR #171 was rejected
   for a from-memory sha; the real head (`288121b4dcb…`) fetched via
   `gh pr view` differed and merged.
-
-**Public docs never carry local machine details — write evidence so it
-survives publication.** Hostnames, absolute paths, internal domains,
-IPs and my-setup specifics (distro, access method, machine count)
-identify infrastructure a community repo has no business publishing,
-and they rot fast. Record the mechanism and the numbers; drop the
-machine identity — "a manually copied static binary", not how or where
-it was installed.
-- Evidence: 2026-10-19, the maintainer called out machine-identifying
-  wording in this PR's first draft; the two offending evidence entries
-  were reworded before merge, and a repo-wide sweep (docs, workflows)
-  confirmed no other leaks.
