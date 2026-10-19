@@ -6,6 +6,23 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**When research shows an issue diverges from upstream, take the
+divergence back to the issue before implementing — the issue text can
+be wrong.** An implementation merged exactly per the issue text, with
+the deviations from upstream flagged in the PR as deliberate
+(case-insensitive vs exact, union vs single marker, gates dropped
+entirely); the issue author then corrected the issue text itself and
+re-fixed the code. The divergence was known before implementation —
+one comment on the issue would have let the author correct the spec
+before code existed. When the issue author is an active collaborator,
+"the issue says X but upstream does Y" goes on the issue and waits,
+not in a PR footnote after the fact.
+- Evidence: 2026-10-19/20, #183's tap-to-search: research flagged three
+  divergences from AidokuRunner (exact case-sensitive match, `is_genre`
+  only, declared-flag-wins); #187 merged per the issue text, the author
+  corrected the issue description, and #193 reverted all three to the
+  upstream semantics.
+
 **Never edit UTF-8 source files through a legacy Windows shell — it
 re-encodes them as ANSI and silently corrupts every non-ASCII byte, and
 shell mojibake is not proof of damage.** PowerShell 5.1's
