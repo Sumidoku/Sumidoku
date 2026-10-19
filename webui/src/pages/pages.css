@@ -638,7 +638,6 @@
 	white-space: nowrap;
 }
 
-/* page_size 分页列表：每页是占满整行宽的一列行式条目，列间横滑翻页 */
 /* page_size 横向分页的卡片列：Aidoku mangaListLayout 同款——列宽约 340px
    （窄屏占 90%），条目固定 100px 高，列间横滑带下一列窥边，不再全宽 */
 .home-page {
