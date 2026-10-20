@@ -259,22 +259,22 @@ function SourceCard({
 					</div>
 				)}
 			</div>
-		{s.updateVersion !== null && isAdmin && <UpdateButton source={s} />}
-		{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
-		{isAdmin && s.kind !== 'local' && (
-			<IconButton
-				label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
-				onClick={(e) => {
-					e.stopPropagation();
-					onTogglePin(s);
-				}}
-			>
-				{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
-			</IconButton>
-		)}
-		{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
-			so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
-		{s.kind !== 'local' && (
+			{s.updateVersion !== null && isAdmin && <UpdateButton source={s} />}
+			{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
+			{isAdmin && s.kind !== 'local' && (
+				<IconButton
+					label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
+					onClick={(e) => {
+						e.stopPropagation();
+						onTogglePin(s);
+					}}
+				>
+					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+				</IconButton>
+			)}
+			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
+				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
+			{s.kind !== 'local' && (
 				<>
 					{s.kind !== 'opds' && s.hasHome !== false && (
 						<IconButton
@@ -474,15 +474,15 @@ export default function BrowsePage() {
 						<>
 							<h2 className="browse__section">置顶</h2>
 							<div className="source-list">
-							{pinnedSources.map((s, i) => (
-								<SourceCard
-									key={s.id}
-									source={s}
-									isAdmin={isAdmin}
-									// The local source is a fixed header of the section: no grip, no drag reordering
-									dnd={
-										isAdmin && s.kind !== 'local'
-											? {
+								{pinnedSources.map((s, i) => (
+									<SourceCard
+										key={s.id}
+										source={s}
+										isAdmin={isAdmin}
+										// The local source is a fixed header of the section: no grip, no drag reordering
+										dnd={
+											isAdmin && s.kind !== 'local'
+												? {
 														dragging: dragIndex === i,
 														dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
 														onDragStart: (e) => {
