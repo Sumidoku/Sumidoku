@@ -981,6 +981,12 @@ pub async fn load_pages(
 			.map(|entry| crate::local::page_content_json(entry))
 			.collect();
 		store_page_rows(&state.pool, chapter_id, &rows).await?;
+	} else if source_is_opds(&state.pool, manga.source_id).await? {
+		// CBZ 兜底的落盘缓存随页行重写失效，与 blob 目录同一纪律；先删再拉保证 refresh 拿新包
+		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
+		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
 		let mut pages = handle
@@ -1165,6 +1171,11 @@ pub async fn http_get(
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let max = state.config.net_zip_body_max_mb * 1024 * 1024;
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, max).await;
+	}
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
 	let handle = state.get_handle(source_id).await?;
 	let accept_language = handle.accept_language();
@@ -1173,7 +1184,7 @@ pub async fn http_get(
 		.get_with(&url, Some(accept_language.as_str()))
 		.await
 		.map_err(fetch_err)?;
-	read_body(response, state.config.net_zip_body_max_mb * 1024 * 1024).await
+	read_body(response, max).await
 }
 
 /// 图像取回的完整结果：字节之外带状态与头，process_*_image 构造 ImageResponse 要用
@@ -1262,13 +1273,18 @@ pub async fn fetch_remote(
 /// 处理器输出统一编码成 PNG（无损且源侧解码链路已有）
 const PROCESSED_MIME: &str = "image/png";
 
-/// 页图拉取：fetch_remote 之后源有 page_image_processor 就过一道处理
+/// 页图拉取：fetch_remote 之后源有 page_image_processor 就过一道处理；
+/// opds 源没有处理器与实例，页图走 basic 凭据的裸 GET
 pub async fn fetch_page_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 	context: Option<PageContext>,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().page_image_processor {
 		let image = fetch_remote(state, source_id, url, context).await?;
@@ -1281,12 +1297,16 @@ pub async fn fetch_page_image(
 	Ok((bytes, Some(PROCESSED_MIME.into())))
 }
 
-/// 封面拉取：同上，走 cover_image_processor
+/// 封面拉取：同上，走 cover_image_processor；opds 源同页图臂
 pub async fn fetch_cover_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().cover_image_processor {
 		let image = fetch_remote(state, source_id, url, None).await?;
@@ -1435,6 +1455,10 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 		)
 		.await?;
 		return Ok((bytes, Some(crate::local::image_mime(entry).to_string())));
+	}
+	if let Some(entry) = content.get("OpdsZip").and_then(serde_json::Value::as_str) {
+		let (bytes, mime) = crate::opds_source::read_cbz_page(state, &manga, &chapter, entry).await?;
+		return Ok((bytes, Some(mime)));
 	}
 	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
 		let Some(zip_url) = zip.first().and_then(serde_json::Value::as_str) else {

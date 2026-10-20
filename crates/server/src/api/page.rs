@@ -92,6 +92,9 @@ async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: 
 		.await?;
 		return Ok((bytes, crate::local::image_mime(entry).to_string()));
 	}
+	if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
+		return crate::opds_source::read_cbz_page(state, &manga, chapter, entry).await;
+	}
 	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
 		let Some(zip_url) = zip.first().and_then(Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));
