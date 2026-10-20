@@ -784,11 +784,13 @@ pub async fn upsert_manga(
 }
 
 /// 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
+/// protected 里的章节 key 永不当消失处理（本地源扫描读失败的条目，kmrs 失败目录保护）。
 /// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
 pub async fn reconcile_chapters(
 	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
 	chapters: &[Chapter],
+	protected: &[String],
 ) -> ApiResult<Vec<i64>> {
 	let now = unix_now();
 	// 源恰好一种语言时给缺语言的章节补上（对齐 AidokuRunner）
@@ -849,7 +851,7 @@ pub async fn reconcile_chapters(
 		.await?;
 	}
 	for (chapter_id, key) in existing {
-		if seen.contains(&key) {
+		if seen.contains(&key) || protected.contains(&key) {
 			continue;
 		}
 		let has_download: Option<(i64,)> =
@@ -927,6 +929,15 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	row.ok_or_else(|| ApiError::not_found("chapter not found"))
 }
 
+/// 内置本地源（kind = local）没有 wasm 实例，章节/页面/封面全走文件系统分支
+pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
+	let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM source WHERE id = ?")
+		.bind(source_id)
+		.fetch_optional(pool)
+		.await?;
+	Ok(kind.is_some_and(|(k,)| k == crate::model::SOURCE_KIND_LOCAL))
+}
+
 /// 读 page 缓存；miss 或 refresh 时从源拉 get_page_list 并整批落缓存
 pub async fn load_pages(
 	state: &Arc<AppState>,
@@ -945,39 +956,43 @@ pub async fn load_pages(
 	}
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
-	let handle = state.get_handle(manga.source_id).await?;
-	let mut pages = handle
-		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
+	if source_is_local(&state.pool, manga.source_id).await? {
+		let entries = crate::local::chapter_pages(
+			&state.config.local_dir(),
+			&state.local_zip,
+			&manga.key,
+			&chapter.key,
+		)
 		.await?;
-	fetch_page_descriptions(&handle, &mut pages).await?;
-	let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
-	{
-		let mut tx = state.pool.begin().await?;
-		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
-			.bind(chapter_id)
-			.execute(&mut *tx)
+		// 本地章没有物化 blob，但可能有降采样变体：页行重写时一并失效（在线路径由
+		// materialize_image_pages 的整目录清掉承担同一职责）
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		let rows: Vec<serde_json::Value> = entries
+			.iter()
+			.map(|entry| crate::local::page_content_json(entry))
+			.collect();
+		store_page_rows(&state.pool, chapter_id, &rows).await?;
+	} else {
+		let handle = state.get_handle(manga.source_id).await?;
+		let mut pages = handle
+			.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
 			.await?;
-		for (index, content) in contents.iter().enumerate() {
-			let page = &pages[index];
-			let stored = serde_json::json!({
-				"content": content,
-				"thumbnail": page.thumbnail,
-				"hasDescription": page.has_description,
-				"description": page.description,
-			});
-			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
-				.bind(chapter_id)
-				.bind(index as i64)
-				.bind(serde_json::to_string(&stored)?)
-				.execute(&mut *tx)
-				.await?;
-		}
-		sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
-			.bind(pages.len() as i64)
-			.bind(chapter_id)
-			.execute(&mut *tx)
-			.await?;
-		tx.commit().await?;
+		fetch_page_descriptions(&handle, &mut pages).await?;
+		let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
+		let rows: Vec<serde_json::Value> = contents
+			.iter()
+			.enumerate()
+			.map(|(index, content)| {
+				let page = &pages[index];
+				serde_json::json!({
+					"content": content,
+					"thumbnail": page.thumbnail,
+					"hasDescription": page.has_description,
+					"description": page.description,
+				})
+			})
+			.collect();
+		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	}
 	let stored: Vec<(i64, String)> =
 		sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
@@ -985,6 +1000,30 @@ pub async fn load_pages(
 			.fetch_all(&state.pool)
 			.await?;
 	Ok(stored)
+}
+
+/// 整章页行重写：删除重插并回写 page_count；变体缓存按目录生命周期随之失效
+async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value]) -> ApiResult<()> {
+	let mut tx = pool.begin().await?;
+	sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+		.bind(chapter_id)
+		.execute(&mut *tx)
+		.await?;
+	for (index, stored) in rows.iter().enumerate() {
+		sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
+			.bind(chapter_id)
+			.bind(index as i64)
+			.bind(serde_json::to_string(stored)?)
+			.execute(&mut *tx)
+			.await?;
+	}
+	sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
+		.bind(rows.len() as i64)
+		.bind(chapter_id)
+		.execute(&mut *tx)
+		.await?;
+	tx.commit().await?;
+	Ok(())
 }
 
 /// has_description 且未内联 description 的页按 Aidoku 语义回源调 get_page_description
@@ -1269,11 +1308,17 @@ pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec
 	if let Some((bytes, mime)) = cover_cache_read(&cache_path, manga.last_fetched_at).await {
 		return Ok((bytes, Some(mime)));
 	}
-	let Some(url) = manga.cover_url.clone() else {
-		return Err(ApiError::not_found("cover not available"));
+	let (bytes, mime) = if source_is_local(&state.pool, manga.source_id).await? {
+		crate::local::resolve_cover(&state.config.local_dir(), &state.local_zip, &manga.key)
+			.await?
+			.ok_or_else(|| ApiError::not_found("cover not available"))?
+	} else {
+		let Some(url) = manga.cover_url.clone() else {
+			return Err(ApiError::not_found("cover not available"));
+		};
+		let (bytes, mime) = fetch_cover_image(state, manga.source_id, &url).await?;
+		(bytes, mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into()))
 	};
-	let (bytes, mime) = fetch_cover_image(state, manga.source_id, &url).await?;
-	let mime = mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
 	match cover_cache_write(&covers_dir, manga_id, &bytes, &mime).await {
 		Ok(()) => cover_cache_enforce_limit(&covers_dir, state.config.cover_cache_max),
 		Err(e) => tracing::warn!(manga_id, "cover cache write failed: {e}"),
@@ -1371,6 +1416,17 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 		return Ok((bytes, Some(PROCESSED_MIME.into())));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	if let Some(entry) = content.get("Local").and_then(serde_json::Value::as_str) {
+		let bytes = crate::local::read_page(
+			&state.config.local_dir(),
+			&state.local_zip,
+			&manga.key,
+			&chapter.key,
+			entry,
+		)
+		.await?;
+		return Ok((bytes, Some(crate::local::image_mime(entry).to_string())));
+	}
 	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
 		let Some(zip_url) = zip.first().and_then(serde_json::Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));

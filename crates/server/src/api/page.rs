@@ -74,13 +74,24 @@ pub async fn get_page(
 	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
 }
 
-/// 三种图像页内容取原图字节（Image 物化 blob / Zip 解包 / Url 回源），与下载路径同源
+/// 图像页内容取原图字节（Image 物化 blob / Local 本地文件 / Zip 解包 / Url 回源），与下载路径同源
 async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
 	if let Some(name) = content.get("Image").and_then(Value::as_str) {
 		let bytes = page_image_blob(state, chapter.id, name).await?;
 		return Ok((bytes, "image/png".to_string()));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	if let Some(entry) = content.get("Local").and_then(Value::as_str) {
+		let bytes = crate::local::read_page(
+			&state.config.local_dir(),
+			&state.local_zip,
+			&manga.key,
+			&chapter.key,
+			entry,
+		)
+		.await?;
+		return Ok((bytes, crate::local::image_mime(entry).to_string()));
+	}
 	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
 		let Some(zip_url) = zip.first().and_then(Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));

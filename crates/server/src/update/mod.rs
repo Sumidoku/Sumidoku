@@ -155,8 +155,8 @@ impl UpdateScheduler {
 
 	async fn update_one(self: &Arc<Self>, manga: MangaRow) {
 		self.emit("running", &manga, 0);
-		let enabled: Option<(bool,)> =
-			match sqlx::query_as("SELECT enabled FROM source WHERE id = ?")
+		let source: Option<(bool, String)> =
+			match sqlx::query_as("SELECT enabled, kind FROM source WHERE id = ?")
 				.bind(manga.source_id)
 				.fetch_optional(&self.pool)
 				.await
@@ -169,23 +169,35 @@ impl UpdateScheduler {
 					return;
 				}
 			};
-		if !enabled.map(|(flag,)| flag).unwrap_or(false) {
+		let Some((enabled, kind)) = source else {
+			self.account("skipped").await;
+			self.emit("skipped", &manga, 0);
+			return;
+		};
+		if !enabled {
 			self.account("skipped").await;
 			self.emit("skipped", &manga, 0);
 			return;
 		}
+		let is_local = kind == crate::model::SOURCE_KIND_LOCAL;
 		let outcome: ApiResult<Vec<i64>> = async {
 			let state = self
 				.state
 				.upgrade()
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
-			let handle = state.get_handle(manga.source_id).await?;
-			let updated = handle
-				.get_manga_update(manga_from_row(&manga), false, true)
-				.await?;
+			let (updated, protected) = if is_local {
+				let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
+				(update.manga, update.protected)
+			} else {
+				let handle = state.get_handle(manga.source_id).await?;
+				let updated = handle
+					.get_manga_update(manga_from_row(&manga), false, true)
+					.await?;
+				(updated, Vec::new())
+			};
 			let mut conn = self.pool.acquire().await?;
 			let new_ids =
-				reconcile_chapters(&mut conn, manga.id, &updated.chapters.clone().unwrap_or_default())
+				reconcile_chapters(&mut conn, manga.id, &updated.chapters.clone().unwrap_or_default(), &protected)
 					.await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(unix_now())
@@ -200,7 +212,8 @@ impl UpdateScheduler {
 				let added = new_ids.len() as i64;
 				self.account("complete").await;
 				self.emit("complete", &manga, added);
-				if added > 0 && self.auto_download {
+				// 本地漫画不进下载管理（文件本来就在本地），跳过新章自动下载
+				if added > 0 && self.auto_download && !is_local {
 					self.enqueue_new_chapters(manga.id, new_ids).await;
 				}
 			}

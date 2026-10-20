@@ -51,11 +51,17 @@ pub async fn get_cover(
 	{
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
-	let Some(url) = manga.cover_url.clone() else {
-		return Err(ApiError::not_found("cover not available"));
+	let (bytes, mime) = if crate::source::source_is_local(&state.pool, manga.source_id).await? {
+		crate::local::resolve_cover(&state.config.local_dir(), &state.local_zip, &manga.key)
+			.await?
+			.ok_or_else(|| ApiError::not_found("cover not available"))?
+	} else {
+		let Some(url) = manga.cover_url.clone() else {
+			return Err(ApiError::not_found("cover not available"));
+		};
+		let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
+		(bytes, mime.unwrap_or_else(|| DEFAULT_MIME.into()))
 	};
-	let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
-	let mime = mime.unwrap_or_else(|| DEFAULT_MIME.into());
 	match write_cache(&covers_dir, id, &bytes, &mime).await {
 		Ok(()) => enforce_cache_limit(&covers_dir, state.config.cover_cache_max),
 		Err(e) => tracing::warn!(manga_id = id, "cover cache write failed: {e}"),

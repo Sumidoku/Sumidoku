@@ -215,7 +215,8 @@ pub async fn manga_update(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str
 	})
 }
 
-/// ComicInfo 读取顺序同 Suwayomi：漫画目录顶层优先；顶层存在但解析失败不再下探；
+/// ComicInfo 读取顺序同 Suwayomi：漫画目录顶层优先；顶层文件存在即以其为准
+/// （解析失败也算），不下探压缩包；
 /// 否则按章节序从首个带 ComicInfo.xml 的压缩包抽取（只在内存解析，不回写用户目录）
 async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter]) -> Option<comic_info::ComicInfo> {
 	let top_level = local_dir.join(manga_key).join(comic_info::COMIC_INFO_FILE);

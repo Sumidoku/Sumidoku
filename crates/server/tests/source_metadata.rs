@@ -45,7 +45,7 @@ async fn upsert_persists_viewer_and_chapter_thumbnail() {
 			..Chapter::default()
 		},
 	];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 
@@ -110,7 +110,7 @@ async fn single_language_source_fills_missing_chapter_language() {
 			..Chapter::default()
 		},
 	];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 
@@ -158,7 +158,7 @@ async fn multi_language_source_keeps_chapter_language_missing() {
 		key: "c1".into(),
 		..Chapter::default()
 	}];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 

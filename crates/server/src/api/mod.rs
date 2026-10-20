@@ -790,6 +790,11 @@ async fn register_manga(
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
+	// 本地源没有源调用可流：一律走缓冲路径（ndjson 客户端按非流式终态处理）
+	if crate::source::source_is_local(&state.pool, body.source_id).await? {
+		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+		return Ok(Json(json!({ "id": manga_id })).into_response());
+	}
 	if !partial::wants_ndjson(&headers) {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
@@ -817,6 +822,7 @@ async fn register_manga(
 			&mut conn,
 			manga_id,
 			&updated.chapters.clone().unwrap_or_default(),
+			&[],
 		)
 		.await?;
 		Ok::<_, ApiError>(json!({ "id": manga_id }))
@@ -837,6 +843,19 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 	if let Some((id,)) = existing {
 		return Ok(id);
 	}
+	if crate::source::source_is_local(&state.pool, source_id).await? {
+		let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &initial.key).await?;
+		let mut conn = state.pool.acquire().await?;
+		let manga_id = upsert_manga(&mut conn, source_id, &update.manga, true, true, true).await?;
+		reconcile_chapters(
+			&mut conn,
+			manga_id,
+			&update.manga.chapters.clone().unwrap_or_default(),
+			&update.protected,
+		)
+		.await?;
+		return Ok(manga_id);
+	}
 	let handle = state.get_handle(source_id).await?;
 	let updated = handle.get_manga_update(initial, true, true).await?;
 	let mut conn = state.pool.acquire().await?;
@@ -845,6 +864,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		&mut conn,
 		manga_id,
 		&updated.chapters.clone().unwrap_or_default(),
+		&[],
 	)
 	.await?;
 	Ok(manga_id)
@@ -1103,6 +1123,15 @@ async fn get_manga(
 ) -> ApiResult<Response> {
 	let mut row = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
+		// 本地源刷新 = 重扫目录；没有源调用可流，ndjson 一样回缓冲响应
+		if crate::source::source_is_local(&state.pool, row.source_id).await? {
+			let mut update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &row.key).await?;
+			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
+			let mut conn = state.pool.acquire().await?;
+			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
+			row = manga_row(&state.pool, id).await?;
+			return Ok(Json(manga_json(&state, &row).await?).into_response());
+		}
 		let handle = state.get_handle(row.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
@@ -1178,6 +1207,24 @@ async fn get_chapters(
 ) -> ApiResult<Response> {
 	let manga = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
+		// 本地源刷新 = 重扫目录；读失败的章节条目进对账保护集，不当消失删除
+		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
+			let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
+			let mut conn = state.pool.acquire().await?;
+			reconcile_chapters(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.protected,
+			)
+			.await?;
+			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+				.bind(crate::model::unix_now())
+				.bind(id)
+				.execute(&mut *conn)
+				.await?;
+			return Ok(Json(chapters_json(&state, id).await?).into_response());
+		}
 		let handle = state.get_handle(manga.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
@@ -1187,7 +1234,7 @@ async fn get_chapters(
 					.get_manga_update_streaming(manga_from_row(&manga), false, true, partial_tx)
 					.await?;
 				let mut conn = state.pool.acquire().await?;
-				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
+				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 				sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 					.bind(crate::model::unix_now())
 					.bind(id)
@@ -1202,7 +1249,7 @@ async fn get_chapters(
 			.get_manga_update(manga_from_row(&manga), false, true)
 			.await?;
 		let mut conn = state.pool.acquire().await?;
-		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
+		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 			.bind(crate::model::unix_now())
 			.bind(id)

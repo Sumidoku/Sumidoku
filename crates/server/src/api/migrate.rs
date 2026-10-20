@@ -233,7 +233,7 @@ async fn run_entry(
 		(Some(id), _) => id,
 		(None, Some(updated)) => {
 			let id = upsert_manga(&mut tx, entry.to_source_id, updated, true, true, true).await?;
-			reconcile_chapters(&mut tx, id, &updated.chapters.clone().unwrap_or_default()).await?;
+			reconcile_chapters(&mut tx, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 			id
 		}
 		(None, None) => unreachable!("fetched is Some when to_manga_id is None"),
