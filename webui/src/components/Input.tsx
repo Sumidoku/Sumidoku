@@ -1,7 +1,7 @@
 import type { InputHTMLAttributes, ReactNode } from 'react';
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
-	/** 左侧图标槽（搜索框放 Search 图标） */
+	/** Left icon slot (search boxes take the Search icon) */
 	icon?: ReactNode;
 }
 

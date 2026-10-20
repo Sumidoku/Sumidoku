@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-/// 每源令牌桶。默认不限流；源调 set_rate_limit 后按 permits/period 限速。
+/// Per-source token bucket. No limit by default; once the source calls set_rate_limit, throttle to permits/period.
 #[derive(Default)]
 pub struct RateLimiter {
 	bucket: Option<Bucket>,

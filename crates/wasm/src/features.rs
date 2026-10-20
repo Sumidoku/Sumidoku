@@ -21,8 +21,9 @@ pub struct SourceFeatures {
 }
 
 impl SourceFeatures {
-	/// 只翻译模块、按导出名算能力位，不建实例：注册之外的回填路径用
-	/// （启动时给 features 列为 NULL 的旧行补 stamping）
+	/// Only translate the module and compute capability bits from export names, without
+	/// building an instance: used by backfill paths outside registration (at startup,
+	/// stamping old rows whose features column is NULL)
 	pub fn from_wasm_bytes(bytes: &[u8]) -> Result<Self, String> {
 		let engine = wasmi::Engine::default();
 		let module = Module::new(&engine, bytes).map_err(|e| format!("translate module: {e}"))?;

@@ -4,7 +4,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use std::str::FromStr;
 
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
-	// sqlite:// 后的文件路径父目录要先存在，否则 rwc 建库失败
+	// The parent directory of the file path after sqlite:// must exist first, otherwise rwc cannot create the DB
 	let path_part = database_url
 		.strip_prefix("sqlite://")
 		.unwrap_or(database_url)
@@ -26,9 +26,9 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 	Ok(pool)
 }
 
-/// 写事务入口：deferred 事务先读后写时，升级写锁撞上并发提交会吃
-/// SQLITE_BUSY_SNAPSHOT（快照已旧，busy_timeout 不覆盖）；IMMEDIATE 在
-/// BEGIN 即排队写锁，事务内的读快照必然可写
+/// Write-transaction entry point: when a deferred transaction reads before writing, upgrading to a write lock
+/// against a concurrent commit hits SQLITE_BUSY_SNAPSHOT (the snapshot is stale and busy_timeout does not cover it);
+/// IMMEDIATE queues for the write lock at BEGIN, so the transaction's read snapshot is necessarily writable
 pub async fn begin_write(
 	pool: &SqlitePool,
 ) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {

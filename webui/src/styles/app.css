@@ -93,7 +93,7 @@ p {
 	margin: 0 auto;
 }
 
-/* 页面进场合一：fade + 轻微上浮 */
+/* One shared page entrance: fade + slight rise */
 .page {
 	animation: page-in 0.2s ease-out;
 }

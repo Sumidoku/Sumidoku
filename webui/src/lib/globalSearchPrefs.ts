@@ -1,15 +1,15 @@
-// 跨源搜索页的三态筛选（包含/排除），存 localStorage 跨会话保留。
-// 筛选只决定哪些源参与搜索（客户端过滤，服务端不过滤）；
-// 存的是原始映射，已卸载源的残留 id 在匹配时自然落空，无需清理
+// Tri-state filters (include/exclude) of the cross-source search page, kept in localStorage across sessions.
+// The filters only decide which sources participate (client-side filtering; the server does not filter);
+// the raw mapping is stored as-is — leftover ids of uninstalled sources simply never match, no cleanup needed
 
 export type TriState = 1 | -1;
 
 export interface GlobalSearchFilterPrefs {
-	/** 内容分级值（0/1/2）→ 态 */
+	/** Content rating value (0/1/2) → state */
 	ratings: Record<string, TriState>;
-	/** 语言码（小写）→ 态 */
+	/** Language code (lowercase) → state */
 	langs: Record<string, TriState>;
-	/** 源 id（字符串）→ 态 */
+	/** Source id (string) → state */
 	sources: Record<string, TriState>;
 }
 
@@ -26,12 +26,12 @@ export function loadGlobalSearchFilters(): GlobalSearchFilterPrefs {
 		const p = v as Partial<GlobalSearchFilterPrefs>;
 		return { ratings: clean(p.ratings), langs: clean(p.langs), sources: clean(p.sources) };
 	} catch {
-		// 隐私模式读不到或坏 JSON 都视为没有，静默
+		// Private mode or broken JSON both count as absent, silently
 		return EMPTY;
 	}
 }
 
-/** 只收 1/-1 两个合法态，坏值（手改存储）丢弃 */
+/** Only 1/-1 are valid states; bad values (hand-edited storage) are dropped */
 function clean(rec: unknown): Record<string, TriState> {
 	const out: Record<string, TriState> = {};
 	if (rec && typeof rec === 'object') {
@@ -46,6 +46,6 @@ export function saveGlobalSearchFilters(prefs: GlobalSearchFilterPrefs): void {
 	try {
 		localStorage.setItem(KEY, JSON.stringify(prefs));
 	} catch {
-		// 隐私模式写不进存储，静默降级（筛选仅本轮生效）
+		// Private mode blocks the write; degrade silently (filters apply for this session only)
 	}
 }

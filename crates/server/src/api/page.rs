@@ -16,7 +16,7 @@ const PAGE_MAX_AGE: u64 = 3600;
 
 #[derive(Deserialize)]
 pub struct PageQuery {
-	/// 请求降采样变体的目标宽度；缺省/0 = 原图字节直通
+	/// Target width for a requested downsampled variant; absent/0 = pass the original bytes through
 	width: Option<u32>,
 }
 
@@ -40,7 +40,7 @@ pub async fn get_page(
 	if let Some(b) = bucket {
 		match read_variant(&state.config.page_blobs_dir(), id, index, b).await {
 			Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
-			// pass 命中 = 该桶不缩（窄图/解不了码），跳变体逻辑走原路径
+			// A pass hit = this bucket does not resize (narrow image/undecodable); skip the variant logic and take the original path
 			Some(VariantHit::PassThrough) => bucket = None,
 			None => {}
 		}
@@ -48,7 +48,7 @@ pub async fn get_page(
 
 	let (bytes, mime) = page_image_bytes(&state, &chapter, &content).await?;
 	if let Some(b) = bucket {
-		// 解码+缩放是 CPU 重活，挪阻塞线程；原字节随闭包带回供直通分支用
+		// Decode+resize is CPU-heavy work, moved to a blocking thread; the original bytes ride the closure back for the pass-through branch
 		let (resized, original) = tokio::task::spawn_blocking(move || {
 			let resized = downsample_png(&bytes, b);
 			(resized, bytes)
@@ -74,7 +74,7 @@ pub async fn get_page(
 	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
 }
 
-/// 图像页内容取原图字节（Image 物化 blob / Local 本地文件 / Zip 解包 / Url 回源），与下载路径同源
+/// Fetches the original bytes of an image page's content (Image materialized blob / Local local file / Zip unpack / Url source fetch), sharing the download path's sources
 async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
 	if let Some(name) = content.get("Image").and_then(Value::as_str) {
 		let bytes = page_image_blob(state, chapter.id, name).await?;

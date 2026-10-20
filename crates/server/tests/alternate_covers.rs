@@ -1,10 +1,11 @@
-//! 备选封面端点：GET /api/v1/manga/{id}/covers/alternates 从源取回备选列表，
-//! PUT /api/v1/manga/{id}/cover 把选择落库为 manga.cover_url 并让封面磁盘缓存
-//! （本体 + sidecar）失效，下一次 GET cover 按新 URL 回源取图。fixture 源在
-//! crates/wasm/tests/fixtures/altcovers-src（no_std cdylib），重建方式：
-//! `cd crates/wasm/tests/fixtures/altcovers-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_altcovers.wasm
-//! 复制为 crates/wasm/tests/fixtures/altcovers/main.wasm。
+//! Alternate cover endpoints: GET /api/v1/manga/{id}/covers/alternates fetches the alternates list
+//! from the source; PUT /api/v1/manga/{id}/cover persists the choice as manga.cover_url and
+//! invalidates the on-disk cover cache (body + sidecar), so the next GET cover fetches the new URL
+//! from the source. The fixture source lives in crates/wasm/tests/fixtures/altcovers-src (no_std
+//! cdylib); rebuild with
+//! `cd crates/wasm/tests/fixtures/altcovers-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_altcovers.wasm
+//! to crates/wasm/tests/fixtures/altcovers/main.wasm.
 mod common;
 
 use axum::Router;
@@ -18,14 +19,14 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 use sumidoku_server::build_app;
 
-// 三张备选各回不同字节，断言取回的是哪一张；服务端不校验图片字节
+// each of the three alternates returns different bytes so assertions can tell which was fetched; the server does not validate image bytes
 const PNG_ONE: &[u8] = b"fake-png-one";
 const PNG_TWO: &[u8] = b"fake-png-two";
 const PNG_THREE: &[u8] = b"fake-png-three";
 
 type SeenPaths = Arc<Mutex<Vec<String>>>;
 
-/// 记录请求路径的微型图床：/cover-N.png 按 N 回不同字节
+/// Minimal image host that records request paths: /cover-N.png returns different bytes per N
 async fn serve_images() -> (u16, SeenPaths, tokio::task::JoinHandle<()>) {
 	let seen: SeenPaths = Arc::new(Mutex::new(Vec::new()));
 	let seen_handler = seen.clone();
@@ -51,7 +52,7 @@ async fn serve_images() -> (u16, SeenPaths, tokio::task::JoinHandle<()>) {
 	(port, seen, handle)
 }
 
-/// altcovers（有 AlternateCoverProvider）+ pagedesc（无导出，501 对照）双源的 app
+/// App with two sources: altcovers (has AlternateCoverProvider) + pagedesc (no export, the 501 control)
 async fn dual_source_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	install_fixture_source(&tmp, "en.altcovers", "AltCovers Source", &altcovers_wasm_path());
@@ -127,8 +128,8 @@ async fn selection_persists_and_is_served() {
 	let t = dual_source_app().await;
 	let app = t.app.clone();
 	let source_id = source_id_by_key(&app, "en.altcovers").await;
-	// coverBase 指到 mock 图床，备选列表变成能真实取图的本地 URL（注册前写入，
-	// 实例懒加载时即从库读到）
+	// point coverBase at the mock image host so the alternates list becomes local URLs that actually
+	// serve images (written before registration, so the lazily loaded instance reads it from the DB)
 	let base = format!("http://127.0.0.1:{port}");
 	let (status, _) = request(
 		&app,
@@ -158,7 +159,7 @@ async fn selection_persists_and_is_served() {
 		]
 	);
 
-	// 选第一张：取图后落磁盘缓存（本体 + sidecar）
+	// selecting the first one: the fetched image lands in the on-disk cache (body + sidecar)
 	let (status, body) = request(
 		&app,
 		"PUT",
@@ -182,7 +183,7 @@ async fn selection_persists_and_is_served() {
 	assert!(cache.is_file(), "cover cache body should exist");
 	assert!(sidecar.is_file(), "cover cache sidecar should exist");
 
-	// 换第二张：落库的同时缓存连 sidecar 一起清，再 GET 按新 URL 回源取图
+	// switching to the second one: while persisting, the cache is cleared together with the sidecar, and the next GET fetches the new URL from the source
 	let (status, body) = request(
 		&app,
 		"PUT",
@@ -212,7 +213,7 @@ async fn selection_persists_and_is_served() {
 		.expect("cover_url row");
 	assert_eq!(cover_url.as_deref(), Some(covers[1].as_str()));
 
-	// 两张各回源一次：第二张不是旧缓存顶替的
+	// each of the two was fetched from the source exactly once: the second is not served from the stale cache
 	assert_eq!(
 		*seen.lock().expect("seen lock"),
 		vec!["/cover-1.png".to_string(), "/cover-2.png".to_string()]

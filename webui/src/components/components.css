@@ -98,7 +98,7 @@
 	color: var(--danger);
 }
 
-/* 开关型图标按钮的开启态（如详情页隐身阅读） */
+/* On state of toggle-style icon buttons (e.g. incognito reading on the detail page) */
 .icon-btn--active,
 .icon-btn--active:hover:not(:disabled) {
 	background: var(--accent-soft);
@@ -141,14 +141,14 @@
 	color: var(--text);
 }
 
-/* 可点 chips 的选中态要一眼可辨，45% 的浅环不够 */
+/* The selected state of clickable chips must be obvious at a glance; the 45% faint ring is not enough */
 .chip--clickable.chip--accent {
 	border-color: var(--accent);
 }
 
 /* ============ ChipDropdown ============ */
-/* 菜单 portal 挂到 body、fixed 定位由行内样式给：不挂在触发元素所在容器里，
- * 避免被父级 overflow 裁剪、被页面内容遮挡 */
+/* The menu is portaled to body with fixed positioning from inline styles: it must not live in the
+ * trigger's container, so it is neither clipped by a parent's overflow nor covered by page content */
 .chip-dropdown {
 	flex: none;
 }
@@ -274,7 +274,7 @@
 	text-align: center;
 }
 
-/* 亮主题下 bg-elev 与页面底同为白色，回退块要降一档才看得出边界 */
+/* In the light theme bg-elev matches the white page background, so the fallback block must drop a shade to stay visible */
 [data-theme='light'] .cover__placeholder {
 	background: var(--bg-hover);
 }
@@ -294,7 +294,7 @@
 	font-weight: 600;
 }
 
-/* 56px 历史/更新缩略一档：标题放不下两行，只留首字 */
+/* 56px history/update thumbnails shrink a notch: two title lines don't fit, keep only the first character */
 @container (max-width: 80px) {
 	.cover__ph-text {
 		display: none;
@@ -870,7 +870,7 @@
 	}
 }
 
-/* ============ 通用卡片 ============ */
+/* ============ Generic card ============ */
 
 .card {
 	background: var(--bg-elev);

@@ -31,7 +31,7 @@ function notify() {
 	listeners.forEach((l) => l());
 }
 
-// index.html 的内联脚本已按 localStorage 落过一次，这里兜底纠偏（如存储被清后默认值不一致）
+// index.html's inline script has already applied the theme from localStorage once; this is a fallback correction (e.g. defaults disagree after storage was cleared)
 apply();
 
 media.addEventListener('change', () => {
@@ -46,7 +46,7 @@ export function setTheme(t: Theme) {
 	try {
 		localStorage.setItem(STORAGE_KEY, t);
 	} catch {
-		// 隐私模式写不进去也照常切换，只是不持久化
+		// In private mode the write fails but the theme still switches, just without persisting
 	}
 	apply();
 	notify();
@@ -64,7 +64,7 @@ export function useTheme(): [Theme, (t: Theme) => void] {
 	return [theme, setTheme];
 }
 
-/** 已解析的实际主题（system 落到 dark/light），用于图标等依赖具体明暗的展示 */
+/** The resolved effective theme (system falls to dark/light), for UI that depends on actual brightness such as icons */
 export function useResolvedTheme(): ResolvedTheme {
 	return useSyncExternalStore(subscribe, () => resolve(current));
 }

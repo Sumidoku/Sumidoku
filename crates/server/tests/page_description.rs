@@ -1,9 +1,10 @@
-//! 页描述（PageDescriptionProvider）管线端到端：fixture 源（tests/fixtures/pagedesc-src）
-//! 的 hasDescription 页在页列表载荷里带回源取到的描述文本；无标志页、页内容端点与
-//! 下载物化路径保持原样；导出失败按整章失败露出 source_error。
-//! fixture 重建：`cd tests/fixtures/pagedesc-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_pagedesc.wasm
-//! 复制为 tests/fixtures/pagedesc/main.wasm。
+//! End-to-end page description (PageDescriptionProvider) pipeline: hasDescription pages from the
+//! fixture source (tests/fixtures/pagedesc-src) carry the description text fetched from the source
+//! back in the page-list payload; unflagged pages, the page content endpoint, and the download
+//! materialization path stay unchanged; an export failure surfaces source_error as a whole-chapter failure.
+//! Fixture rebuild: `cd tests/fixtures/pagedesc-src && cargo build --release --target wasm32-unknown-unknown`
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_pagedesc.wasm
+//! to tests/fixtures/pagedesc/main.wasm.
 mod common;
 
 use axum::Router;
@@ -79,21 +80,21 @@ async fn flagged_pages_carry_fetched_description() {
 	let pages = body.as_array().expect("pages");
 	assert_eq!(pages.len(), 3);
 
-	// 无 description 的标志页：回源取文本
+	// flagged page without a description: fetch the text from the source
 	assert_eq!(pages[0]["hasDescription"], json!(true));
 	assert_eq!(pages[0]["description"], json!("fetched: page zero body"));
 	assert_eq!(pages[0]["content"], json!({"Text": "page zero body"}));
 
-	// 无标志页：不碰，description 保持 null
+	// unflagged page: untouched, description stays null
 	assert_eq!(pages[1]["hasDescription"], json!(false));
 	assert_eq!(pages[1]["description"], json!(null));
 
-	// 内联 description 的标志页：不得再调 get_page_description
-	// （fixture 对该 content 恒 bail，误调会让整章 502）
+	// flagged page with an inline description: get_page_description must not be called again
+	// (the fixture always bails for that content; a stray call would 502 the whole chapter)
 	assert_eq!(pages[2]["hasDescription"], json!(true));
 	assert_eq!(pages[2]["description"], json!("inline description"));
 
-	// Url 内容页：取描述与内容类型无关，content 原样保留
+	// Url content page: description fetching is independent of content type; content is kept verbatim
 	let chapter_id = chapter_id_by_key(&app, manga_id, "ch-url").await;
 	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -139,7 +140,7 @@ async fn description_export_failure_surfaces_source_error() {
 	assert_eq!(status, StatusCode::BAD_GATEWAY);
 	assert_eq!(body["error"]["code"], json!("source_error"));
 
-	// 失败的整章不落半成品页：page 表保持空，重试仍走回源（同样报错）
+	// a failed chapter persists no half-baked pages: the page table stays empty, and a retry goes back to the source (failing the same way)
 	let pool = connect_db(&t.db_path).await;
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM page WHERE chapter_id = ?")
 		.bind(chapter_id)
@@ -183,7 +184,7 @@ async fn downloads_materialize_pages_unchanged() {
 		tokio::time::sleep(Duration::from_millis(100)).await;
 	};
 
-	// cbz 里装的是页 content（Text 页成 txt），不是描述文本
+	// the cbz holds the page content (a Text page becomes txt), not the description text
 	let rel_path = entry["path"].as_str().expect("download path");
 	let cbz = std::fs::read(t.tmp.path().join("downloads").join(rel_path)).expect("read cbz");
 	let mut archive = zip::ZipArchive::new(Cursor::new(cbz)).expect("open cbz");

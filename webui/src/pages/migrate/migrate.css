@@ -1,6 +1,6 @@
-/* ============ 跨源迁移 ============ */
+/* ============ Cross-source migration ============ */
 
-/* 目标组合选择器（批量页与单条弹窗共用） */
+/* Destination-set picker (shared by the batch page and the single-entry modal) */
 
 .dest-picker h4 {
 	margin: 12px 0 8px;
@@ -117,7 +117,7 @@
 	color: var(--danger);
 }
 
-/* 批量流程 */
+/* Batch flow */
 
 .migrate-toolbar {
 	display: flex;
@@ -300,7 +300,7 @@
 	background: var(--bg-hover);
 }
 
-/* 手动重搜 / 单条候选 */
+/* Manual rematch / single-entry candidates */
 
 .migrate-rematch__bar {
 	display: flex;
@@ -387,7 +387,7 @@
 	font-size: 13px;
 }
 
-/* 弹窗加宽：候选列表与选择器都偏挤 */
+/* Widened modal: the candidate list and the picker are both cramped */
 .migrate-rematch {
 	width: min(560px, 92vw);
 }

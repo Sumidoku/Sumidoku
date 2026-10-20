@@ -51,7 +51,7 @@ pub fn set(
 	let Ok(key) = ctx.read_string(key_ptr, len) else {
 		return Result::InvalidKey.into();
 	};
-	// wasmi host 参数没有 u8，kind 的 0..=6 校验在函数体内
+	// wasmi host params have no u8, so the 0..=6 check on kind lives in the function body
 	if !(0..=6).contains(&kind) {
 		return Result::InvalidValue.into();
 	}

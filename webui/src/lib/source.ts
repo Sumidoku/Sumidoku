@@ -1,6 +1,6 @@
-// 源元数据展示：语言码 → 人类可读名称，内容分级 → Aidoku 三档文案。
-// 语言名沿用浏览器 Locale（与 Aidoku 的 SourceLanguage.displayName 同口径），
-// multi/all 是 Aidoku 的多语言哨兵，不在 Intl 里，单独给名。
+// Source metadata display: language code → human-readable name, content rating → Aidoku's three-level labels.
+// Language names come from the browser Locale (same convention as Aidoku's SourceLanguage.displayName);
+// multi/all is Aidoku's multi-language sentinel, absent from Intl, so it gets a name of its own.
 
 let displayNames: Intl.DisplayNames | null | undefined;
 
@@ -15,7 +15,7 @@ function getDisplayNames(): Intl.DisplayNames | null {
 	return displayNames;
 }
 
-/** 多语言源的哨兵码：Aidoku 用 multi，个别 index 用 all */
+/** Sentinel code for multi-language sources: Aidoku uses multi, some indexes use all */
 export const MULTI_LANGUAGE = 'multi';
 
 const MULTI_CODES = new Set([MULTI_LANGUAGE, 'all']);
@@ -30,12 +30,12 @@ export function languageLabel(code: string): string {
 	return getDisplayNames()?.of(normalized) ?? code;
 }
 
-/** 按显示名排序 */
+/** Sort by display name */
 export function compareLanguageLabel(a: string, b: string): number {
 	return languageLabel(a).localeCompare(languageLabel(b), 'und');
 }
 
-/** 已装源列表排序：按名字字母序，名字相同退回 key 保证稳定 */
+/** Installed-source list ordering: alphabetical by name, falling back to key for stability on ties */
 export function compareSourceName(
 	a: { name: string; key: string },
 	b: { name: string; key: string }
@@ -45,7 +45,7 @@ export function compareSourceName(
 	return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
-// Aidoku 的 SourceContentRating：0 安全 / 1 含 NSFW / 2 主要 NSFW
+// Aidoku's SourceContentRating: 0 safe / 1 contains NSFW / 2 primarily NSFW
 export interface ContentRatingLevel {
 	value: number;
 	label: string;
@@ -58,8 +58,8 @@ export const CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
 	{ value: 2, label: 'NSFW', color: 'danger' }
 ];
 
-// 漫画级内容分级（manga.content_rating，Aidoku ContentRating）：1 安全 / 2 建议 / 3 NSFW；
-// 与上方源级 0/1/2 是两套刻度，别混用
+// Manga-level content rating (manga.content_rating, Aidoku ContentRating): 1 safe / 2 suggestive / 3 NSFW;
+// a different scale from the source-level 0/1/2 above — don't mix them up
 export const MANGA_CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
 	{ value: 1, label: '安全', color: 'accent' },
 	{ value: 2, label: '建议', color: 'warning' },
@@ -68,7 +68,7 @@ export const MANGA_CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
 
 function levelOf(value: number): ContentRatingLevel {
 	if (value >= 0 && value < CONTENT_RATING_LEVELS.length) return CONTENT_RATING_LEVELS[value];
-	// 越界（>2）按最高档显示；Aidoku 的 unknown(0) 也落在安全档
+	// Out-of-range (>2) shows as the highest level; Aidoku's unknown(0) also lands on the safe level
 	return CONTENT_RATING_LEVELS[CONTENT_RATING_LEVELS.length - 1];
 }
 

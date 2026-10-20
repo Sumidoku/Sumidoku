@@ -6,20 +6,20 @@ import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch, pushToast
 
 export interface SettingItemProps {
 	setting: Setting;
-	/** 服务端已保存的值 */
+	/** Values already saved on the server */
 	values: Record<string, unknown>;
-	/** 本地未保存的改动，优先于 values 显示 */
+	/** Local unsaved edits, shown in preference to values */
 	edits: Record<string, unknown>;
 	onEdit: (key: string, value: unknown) => void;
-	/** Button 设置按下：把它的 notification 发给源 */
+	/** Button setting pressed: send its notification to the source */
 	onPressButton?: (setting: Setting) => Promise<void>;
-	/** 基本登录：由外层提供端点调用，缺省时 login 项降级为只读提示 */
+	/** Basic login: the outer layer provides the endpoint call; when absent the login item degrades to a read-only hint */
 	onSubmitLogin?: (key: string, username: string, password: string) => Promise<void>;
-	/** 网页登录：粘贴 cookie 换取登录态 */
+	/** Web login: paste cookies in exchange for a logged-in state */
 	onSubmitWebLogin?: (key: string, cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
-	/** 源级登出：clearCookies 为真时连登录 cookie 一起清 */
+	/** Source-level logout: when clearCookies is true the login cookies are cleared too */
 	onLogoutLogin?: (key: string, clearCookies: boolean) => Promise<void>;
-	/** OAuth 登录：拿授权 URL（新标签打开）与粘贴回调串完成 */
+	/** OAuth login: get the authorization URL (opened in a new tab), completed by pasting the callback string */
 	onStartOAuth?: (key: string) => Promise<{ url: string }>;
 	onCompleteOAuth?: (key: string, url: string) => Promise<void>;
 }
@@ -32,7 +32,7 @@ function num(v: unknown, fallback: number): number {
 	return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
 }
 
-/** number 输入允许中间态（清空、负号），失焦才夹回 min/max */
+/** The number input allows intermediate states (cleared, a lone minus sign); the value clamps back into min/max only on blur */
 function StepperInput({
 	value,
 	min,
@@ -72,7 +72,7 @@ function StepperInput({
 	);
 }
 
-/** 基本登录表单：已登录时回填用户名并标记登录态，提交后由源校验，成功即写回凭据 */
+/** Basic login form: when logged in, prefills the username and marks the state; the source validates on submit, and success writes back the credentials */
 function LoginSetting({
 	title,
 	useEmail,
@@ -82,9 +82,9 @@ function LoginSetting({
 }: {
 	title: string;
 	useEmail: boolean;
-	/** 服务端已存的用户名，回填输入框 */
+	/** Username already stored on the server, prefilled into the input */
 	savedUsername: string;
-	/** 服务端已标记登录 */
+	/** Already marked logged-in on the server */
 	loggedIn: boolean;
 	onSubmit: (username: string, password: string) => Promise<void>;
 }) {
@@ -126,8 +126,8 @@ function LoginSetting({
 }
 
 /**
- * 解析粘贴的 cookie：接受 `Cookie:` 请求头（name=value; …）、
- * `{name: value}` JSON 对象，或浏览器导出的 [{name, value, …}] 数组
+ * Parse pasted cookies: accepts a `Cookie:` request header (name=value; …),
+ * a `{name: value}` JSON object, or a browser-exported [{name, value, …}] array
  */
 function parseCookies(text: string): Record<string, string> | null {
 	const trimmed = text.trim().replace(/^cookie:\s*/i, '');
@@ -162,7 +162,7 @@ function parseCookies(text: string): Record<string, string> | null {
 	return out;
 }
 
-/** 已登录态的行：标题 + 已登录 chip + 登出按钮与确认框（web/oauth 登录共用） */
+/** The logged-in row: title + logged-in chip + logout button with confirmation (shared by web/oauth login) */
 function LoginLogoutRow({
 	title,
 	logoutTitle,
@@ -224,7 +224,7 @@ function LoginLogoutRow({
 	);
 }
 
-/** 网页登录：服务端没有 webview，用户登录后粘贴该 host 的 cookie 换取登录态 */
+/** Web login: the server has no webview, so the user logs in elsewhere and pastes that host's cookies in exchange for a logged-in state */
 function WebLoginSetting({
 	title,
 	url,
@@ -236,7 +236,7 @@ function WebLoginSetting({
 	onLogout
 }: {
 	title: string;
-	/** 登录页地址（设置声明的 url），提示用户去哪里登录 */
+	/** Login page address (the setting's declared url), telling the user where to log in */
 	url: string | null;
 	logoutTitle: string | null;
 	localStorageKeys: string[];
@@ -291,7 +291,7 @@ function WebLoginSetting({
 					placeholder={`localStorage：${lsKey}`}
 					value={lsValues[lsKey] ?? ''}
 					onChange={(e) => {
-						// 更新函数延后执行时 currentTarget 已被置 null，必须先取值
+						// currentTarget is already null by the time the deferred updater runs, so take the value first
 						const v = e.currentTarget.value;
 						setLsValues((cur) => ({ ...cur, [lsKey]: v }));
 					}}
@@ -318,8 +318,9 @@ function WebLoginSetting({
 }
 
 /**
- * OAuth 登录：授权页在新标签打开（URL 由服务端构建，pkce 时带 challenge）；
- * 浏览器拦不到自定义 scheme 的重定向，用户授权后手动粘贴地址栏的回调串完成登录
+ * OAuth login: the authorization page opens in a new tab (URL built by the server, with a challenge when
+ * using pkce); the browser cannot intercept the custom-scheme redirect, so after authorizing the user
+ * manually pastes the callback URL from the address bar to complete login
  */
 function OAuthSetting({
 	title,
@@ -334,7 +335,7 @@ function OAuthSetting({
 	logoutTitle: string | null;
 	clearCookiesOnLogOut: boolean;
 	loggedIn: boolean;
-	/** 拿授权 URL（服务端构建）并新标签打开 */
+	/** Get the authorization URL (built by the server) and open it in a new tab */
 	onStart: () => Promise<{ url: string }>;
 	onComplete: (url: string) => Promise<void>;
 	onLogout: (clearCookies: boolean) => Promise<void>;
@@ -364,8 +365,8 @@ function OAuthSetting({
 				size="sm"
 				loading={startBusy}
 				onClick={() => {
-					// window.open 在 await 之后会被弹窗拦截（Safari 必拦）：同步先开空白
-					// 标签，授权 URL 回来再导航它；同步阶段就被拦则退化为直接打开
+					// window.open after an await is popup-blocked (Safari always blocks): open a blank tab synchronously
+					// and navigate it once the authorization URL arrives; if even the synchronous open is blocked, fall back to opening directly
 					const tab = window.open('', '_blank');
 					setStartBusy(true);
 					void onStart()
@@ -404,7 +405,7 @@ function OAuthSetting({
 	);
 }
 
-/** Button 设置：按下把 notification 发给源（Aidoku 语义）；没声明动作串时按下也是空操作，直接禁用 */
+/** Button setting: pressing sends its notification to the source (Aidoku semantics); with no action string declared, pressing is a no-op, so disable it outright */
 function ButtonRow({
 	title,
 	hasAction,
@@ -447,10 +448,10 @@ export function SettingItem({
 }: SettingItemProps) {
 	const [msOpen, setMsOpen] = useState(false);
 
-	// 当前值优先取未保存的修改，其次取服务器已存值
+	// The current value prefers unsaved edits, then the server-stored value
 	const cur = (key: string): unknown => (key in edits ? edits[key] : values[key]);
 
-	// requires / requires_false 控制显隐，按当前值实时判断
+	// requires / requires_false control visibility, evaluated live against the current values
 	if (setting.requires && cur(setting.requires) !== true) return null;
 	if (setting.requires_false && cur(setting.requires_false) === true) return null;
 
@@ -470,7 +471,7 @@ export function SettingItem({
 			</label>
 		);
 	} else if (setting.type === 'picker') {
-		// types.ts 的 SettingValue 没有 Picker 变体，wire 上与 Select 同构，宽松取值
+		// types.ts's SettingValue has no Picker variant; on the wire it is structurally identical to Select, so read it loosely
 		const p = (
 			v as unknown as Record<
 				string,
@@ -510,7 +511,7 @@ export function SettingItem({
 				/>
 			);
 		} else if (onSubmitWebLogin && onLogoutLogin && method === 'web') {
-			// Aidoku 以 marker 非空判登录态（不限于 "logged_in" 字面值）
+			// Aidoku judges the logged-in state by a non-empty marker (not limited to the literal "logged_in")
 			body = (
 				<WebLoginSetting
 					title={setting.title}
@@ -524,7 +525,7 @@ export function SettingItem({
 				/>
 			);
 		} else if (onStartOAuth && onCompleteOAuth && onLogoutLogin && method === 'oauth') {
-			// 登录态判定同 web：marker（<key> 存的是令牌串或回调串）非空即已登录
+			// Logged-in check same as web: a non-empty marker (the <key> stores a token or callback string) means logged in
 			body = (
 				<OAuthSetting
 					title={setting.title}
@@ -700,7 +701,7 @@ export function SettingItem({
 			</div>
 		);
 	} else if (typeof v === 'object' && 'Link' in v) {
-		// Aidoku：external 走系统浏览器，否则内嵌 SafariView；web 上映射为新标签页 vs 当前标签
+		// Aidoku: external goes to the system browser, otherwise an embedded SafariView; on the web this maps to new tab vs current tab
 		const external = v.Link.external === true;
 		body = (
 			<a

@@ -3,7 +3,7 @@ interface ParsedVersion {
 	prerelease: string | null;
 }
 
-/** 剥 v 前缀后拆 `-` 预发布标签；数字段含非数字时算不可解析（调用方按不提示更新处理） */
+/** Strip the v prefix, then split off the `-` prerelease tag; non-numeric segments count as unparseable (callers then skip the update prompt) */
 function parseVersion(v: string): ParsedVersion | null {
 	const core = v.trim().replace(/^v/i, '');
 	const dash = core.indexOf('-');
@@ -15,7 +15,7 @@ function parseVersion(v: string): ParsedVersion | null {
 	};
 }
 
-/** 预发布互比：数字标识按数值、其余按字典序；前缀相同短者在前（semver 第 11 条） */
+/** Prerelease comparison: numeric identifiers numerically, the rest lexicographically; with a common prefix the shorter one comes first (semver rule 11) */
 function comparePrerelease(a: string, b: string): number {
 	const pa = a.split('.');
 	const pb = b.split('.');
@@ -34,8 +34,8 @@ function comparePrerelease(a: string, b: string): number {
 }
 
 /**
- * a 相对 b 的次序：负 = a 旧，0 = 同号，正 = a 新。预发布版排在同号正式版之前；
- * 数字段不等长按 0 补齐（1.2 与 1.2.0 同号）。任一侧不可解析返回 null
+ * Order of a relative to b: negative = a is older, 0 = same version, positive = a is newer. Prereleases
+ * sort before the same-numbered release; unequal segment counts pad with 0 (1.2 equals 1.2.0). Either side unparseable returns null
  */
 export function compareVersions(a: string, b: string): number | null {
 	const pa = parseVersion(a);

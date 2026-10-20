@@ -1,5 +1,7 @@
-//! 双用户隔离：A（admin）与 B（reader）共享内容缓存，用户态数据互不可见、互不污染。
-//! 第二个用户直接 SQL 落库：隔离语义与用户管理端点解耦，各自演化互不影响
+//! Two-user isolation: A (admin) and B (reader) share the content cache, while user-state data is
+//! mutually invisible and non-polluting.
+//! The second user is inserted via direct SQL: isolation semantics stay decoupled from the user
+//! management endpoints, so each evolves independently
 
 mod common;
 
@@ -68,7 +70,7 @@ async fn as_user(app: &Router, token: &str, method: &str, path: &str, body: Opti
 	(status, value)
 }
 
-/// scan 装源 + 搜索注册第一条结果，返回内部 manga id（全程带请求用户）
+/// Installs the source via scan + registers the first search result, returning the internal manga id (with the requesting user throughout)
 async fn register_manga_as(app: &Router, token: &str) -> i64 {
 	let (status, _) = as_user(app, token, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -111,7 +113,7 @@ async fn user_state_isolated_between_users() {
 	let app = &users.app;
 	let (admin, bob) = (&users.admin, &users.bob);
 
-	// A 攒下用户态：库 + 分类 + 进度 + 隐身 + 下载行
+	// A accumulates user state: library + category + progress + incognito + download row
 	let manga_id = register_manga_as(app, admin).await;
 	let chapter_id = first_chapter_as(app, admin, manga_id).await;
 	let (status, body) = as_user(app, admin, "POST", "/api/v1/categories", Some(json!({"name": "Action"}))).await;
@@ -148,7 +150,7 @@ async fn user_state_isolated_between_users() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"].as_array().expect("queued").len(), 1);
 
-	// B 看 A 的用户态：空集或 404
+	// B looking at A's user state: empty sets or 404
 	let (_, body) = as_user(app, bob, "GET", "/api/v1/library", None).await;
 	assert_eq!(body["entries"].as_array().expect("entries").len(), 0);
 	let (status, _) = as_user(app, bob, "GET", &format!("/api/v1/library?categoryId={admin_cat}"), None).await;
@@ -181,7 +183,7 @@ async fn user_state_isolated_between_users() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	let (status, _) = as_user(app, bob, "DELETE", &format!("/api/v1/categories/{admin_cat}"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
-	// 漫画对 B 只是「未入库」：与单用户语义同形 409，不暴露 A 的在库状态
+	// to B the manga is merely "not shelved": same 409 shape as single-user semantics, without exposing A's shelved state
 	let (status, _) = as_user(
 		app,
 		bob,
@@ -191,7 +193,7 @@ async fn user_state_isolated_between_users() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::CONFLICT);
-	// A 的库内条目对 B 的更新触发不可见：B 按 A 的分类触发更新同样 404
+	// A's library entries are invisible to B's update trigger: B triggering an update by A's category likewise 404s
 	let (status, _) = as_user(
 		app,
 		bob,
@@ -202,7 +204,7 @@ async fn user_state_isolated_between_users() {
 	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 
-	// B 的同名分类与自留用户态：不污染 A
+	// B's same-named category and own user state: doesn't pollute A
 	let (status, body) = as_user(app, bob, "POST", "/api/v1/categories", Some(json!({"name": "Action"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let bob_cat = body["id"].as_i64().expect("bob category id");
@@ -216,7 +218,7 @@ async fn user_state_isolated_between_users() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	// 入库后的 B 引用 A 的分类 id：与分类不存在同按 404
+	// once shelved, B referencing A's category id: treated the same as a nonexistent category, 404
 	let (status, _) = as_user(
 		app,
 		bob,
@@ -237,7 +239,7 @@ async fn user_state_isolated_between_users() {
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(app, bob, "PUT", "/api/v1/settings", Some(json!({"incognito.enabled": false}))).await;
 	assert_eq!(status, StatusCode::OK);
-	// 同一章节两人各持下载行（复合主键）
+	// both users hold a download row for the same chapter (composite primary key)
 	let (status, body) = as_user(
 		app,
 		bob,
@@ -249,7 +251,7 @@ async fn user_state_isolated_between_users() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"].as_array().expect("queued").len(), 1);
 
-	// 回头核对 A 的视图：一切如旧
+	// re-checking A's view: everything as before
 	let (_, body) = as_user(app, admin, "GET", "/api/v1/library", None).await;
 	let entries = body["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 1);
@@ -269,7 +271,7 @@ async fn user_state_isolated_between_users() {
 	let (_, body) = as_user(app, bob, "GET", "/api/v1/settings", None).await;
 	assert_eq!(body["incognito.enabled"], false);
 
-	// B 自己的视图里只有自己的一行
+	// B's own view has only his own row
 	let (_, body) = as_user(app, bob, "GET", "/api/v1/library", None).await;
 	let entries = body["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 1);
@@ -278,7 +280,7 @@ async fn user_state_isolated_between_users() {
 	assert_eq!(body.as_array().expect("downloads").len(), 1);
 }
 
-/// B 导出备份只含自己的用户态；A 的分类与进度不进 B 的文档
+/// B's backup export contains only his own user state; A's categories and progress don't enter B's document
 #[tokio::test]
 async fn backup_export_scoped_to_requesting_user() {
 	let users = two_user_app().await;
@@ -317,12 +319,12 @@ async fn backup_export_scoped_to_requesting_user() {
 	assert_eq!(body["settings"]["incognito.enabled"], true);
 }
 
-// ---------- 2b：后台 worker 按用户 ----------
+// ---------- 2b: background workers per user ----------
 
 use common::{PNG, connect_ws, point_page_at_local, read_ws_frame, read_ws_kind, serve_app, serve_bytes};
 use std::time::{Duration, Instant};
 
-/// 注册漫画、预热页缓存并把第 0 页指向本地图床，返回 (manga_id, chapter_id)
+/// Registers the manga, warms the page cache and points page 0 at the local image host, returning (manga_id, chapter_id)
 async fn prepared_chapter(users: &TwoUsers, port: u16) -> (i64, i64) {
 	let app = &users.app;
 	let manga_id = register_manga_as(app, &users.admin).await;
@@ -352,7 +354,7 @@ async fn wait_download_status_as(app: &Router, token: &str, chapter_id: i64, wan
 	}
 }
 
-/// 延时图床：worker 在页抓取期间停在在途态，给在途取消留确定性窗口
+/// Delayed image host: keeps the worker in the in-flight state during the page fetch, leaving a deterministic window for in-flight cancel
 async fn serve_slow_png(delay: Duration) -> (u16, tokio::task::JoinHandle<()>) {
 	let handler = move || async move {
 		tokio::time::sleep(delay).await;
@@ -375,7 +377,7 @@ async fn download_shared_artifact_between_users() {
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	let (manga_id, chapter_id) = prepared_chapter(&users, port).await;
 
-	// A 走 worker 下完，产物落盘
+	// A finishes via the worker, artifact on disk
 	let (status, body) = as_user(app, admin, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([chapter_id]));
@@ -384,7 +386,7 @@ async fn download_shared_artifact_between_users() {
 	let artifact = users.tmp.path().join("downloads").join(&path);
 	let bytes_a = std::fs::read(&artifact).expect("artifact bytes");
 
-	// B 入队同一章：产物已在，直接落 finished，不重复打包
+	// B enqueues the same chapter: the artifact already exists, lands finished directly, no repacking
 	let (status, body) = as_user(app, bob, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([]));
@@ -392,7 +394,7 @@ async fn download_shared_artifact_between_users() {
 	assert_eq!(entry["path"].as_str().expect("download path"), path);
 	assert_eq!(std::fs::read(&artifact).expect("artifact bytes"), bytes_a);
 
-	// 下载标记归 B（worker 的完成标记按条目用户），B 能取到同一份产物
+	// the download mark belongs to B (the worker's completion mark is per entry user), and B can fetch the same artifact
 	let (_, body) = as_user(app, bob, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(body[0]["isDownloaded"], true);
 	let (status, _, file_bytes) =
@@ -400,14 +402,14 @@ async fn download_shared_artifact_between_users() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(file_bytes, bytes_a);
 
-	// A 删自己的行：B 还引用同一产物，文件留着
+	// A deletes his own row: B still references the same artifact, the file stays
 	let (status, _) = as_user(app, admin, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(artifact.exists());
 	let (status, _) = as_user(app, bob, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// B 也删：没人引用了，产物清掉
+	// B deletes too: no references left, the artifact is removed
 	let (status, _) = as_user(app, bob, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!artifact.exists());
@@ -415,7 +417,7 @@ async fn download_shared_artifact_between_users() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// move_path 目标是共享内容区：两行渲染同一绝对目标，删除只清无人引用的一刻
+/// The move_path target is the shared content area: both rows render the same absolute target, and deletion only clears it once nothing references it
 #[tokio::test]
 async fn download_moved_artifact_shared_between_users() {
 	let users = two_user_app().await;
@@ -435,7 +437,7 @@ async fn download_moved_artifact_shared_between_users() {
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	let (_manga_id, chapter_id) = prepared_chapter(&users, port).await;
 
-	// A 下完并移动到共享内容区，行存绝对路径
+	// A finishes and moves to the shared content area, the row stores the absolute path
 	let (status, _) = as_user(app, admin, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let entry = wait_download_status_as(app, admin, chapter_id, "finished").await;
@@ -444,21 +446,21 @@ async fn download_moved_artifact_shared_between_users() {
 	let artifact = std::path::PathBuf::from(&path);
 	assert!(artifact.is_file());
 
-	// B 入队同一章：移动后的产物经绝对路径命中共享，两行指向同一文件
+	// B enqueues the same chapter: the moved artifact hits the share via the absolute path, both rows point at the same file
 	let (status, body) = as_user(app, bob, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([]));
 	let entry = wait_download_status_as(app, bob, chapter_id, "finished").await;
 	assert_eq!(entry["path"].as_str().expect("download path"), path);
 
-	// A 删自己的行：B 还引用同一绝对路径，文件留着，B 照常能取
+	// A deletes his own row: B still references the same absolute path, the file stays, B fetches as usual
 	let (status, _) = as_user(app, admin, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(artifact.exists());
 	let (status, _) = as_user(app, bob, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// B 也删：没人引用了，共享文件清掉
+	// B deletes too: no references left, the shared file is removed
 	let (status, _) = as_user(app, bob, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!artifact.exists());
@@ -472,7 +474,7 @@ async fn download_cancel_only_removes_own_row() {
 	let (port, _upstream) = serve_slow_png(Duration::from_secs(2)).await;
 	let (manga_id, chapter_id) = prepared_chapter(&users, port).await;
 
-	// A 的任务先跑起来；产物未出，B 正常排队
+	// A's task starts first; with no artifact yet, B queues normally
 	let (status, _) = as_user(app, admin, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	wait_download_status_as(app, admin, chapter_id, "downloading").await;
@@ -480,7 +482,7 @@ async fn download_cancel_only_removes_own_row() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([chapter_id]));
 
-	// A 在途取消：只退 A 的行，B 的行原样在队
+	// A cancels in flight: only A's row is withdrawn, B's row stays queued
 	let (status, _) = as_user(app, admin, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	let (_, body) = as_user(app, admin, "GET", "/api/v1/downloads", None).await;
@@ -488,7 +490,7 @@ async fn download_cancel_only_removes_own_row() {
 	let (_, body) = as_user(app, bob, "GET", "/api/v1/downloads", None).await;
 	assert_eq!(body.as_array().expect("downloads").len(), 1);
 
-	// B 的条目走完整任务落 finished，下载标记归 B 不殃及 A 的视图
+	// B's entry runs the full task to finished; the download mark belongs to B without affecting A's view
 	let entry = wait_download_status_as(app, bob, chapter_id, "finished").await;
 	assert!(entry["path"].is_string());
 	let (_, body) = as_user(app, bob, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
@@ -512,7 +514,7 @@ async fn downloads_ws_events_filtered_per_user() {
 	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut bob_ws, &mut bob_buf).await).expect("snapshot");
 	assert_eq!(snapshot["type"], "snapshot");
 
-	// A 入队：行事件只进 A 的连接
+	// A enqueues: row events go only into A's connection
 	let (status, _) = as_user(
 		&users.app,
 		&users.admin,
@@ -527,7 +529,7 @@ async fn downloads_ws_events_filtered_per_user() {
 	let leaked = tokio::time::timeout(Duration::from_millis(300), read_ws_frame(&mut bob_ws, &mut bob_buf)).await;
 	assert!(leaked.is_err(), "bob must not see admin's download events");
 
-	// 全局 start/stop 是管理器状态：两条连接都收 running 事件
+	// global start/stop is manager state: both connections receive running events
 	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let event = read_ws_kind(&mut admin_ws, &mut admin_buf, "running").await;
@@ -557,7 +559,7 @@ async fn updates_ws_events_filtered_per_user() {
 	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut bob_ws, &mut bob_buf).await).expect("snapshot");
 	assert_eq!(snapshot["type"], "summary");
 
-	// admin 手动触发 fetch：job 事件只进 admin 的连接
+	// admin triggers fetch manually: job events go only into admin's connection
 	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let event = read_ws_kind(&mut admin_ws, &mut admin_buf, "job").await;
@@ -565,7 +567,7 @@ async fn updates_ws_events_filtered_per_user() {
 	let leaked = tokio::time::timeout(Duration::from_millis(500), read_ws_frame(&mut bob_ws, &mut bob_buf)).await;
 	assert!(leaked.is_err(), "bob must not see admin's update events");
 
-	// 等 fetch 收尾
+	// wait for the fetch to settle
 	let deadline = Instant::now() + Duration::from_secs(10);
 	loop {
 		let (_, body) = as_user(&users.app, &users.admin, "GET", "/api/v1/update/summary", None).await;
@@ -576,7 +578,7 @@ async fn updates_ws_events_filtered_per_user() {
 		tokio::time::sleep(Duration::from_millis(100)).await;
 	}
 
-	// fetch 归属 admin：bob 新连进来的快照按闲置呈现，admin 的带真实计数
+	// the fetch belongs to admin: bob's fresh-connection snapshot renders as idle, admin's carries real counts
 	let (mut bob_ws2, mut bob_buf2) = connect_ws(addr, "/api/v1/update/ws", Some(&users.bob)).await;
 	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut bob_ws2, &mut bob_buf2).await).expect("snapshot");
 	assert_eq!(snapshot["running"], false);
@@ -601,8 +603,8 @@ async fn update_summary_rest_scoped_per_user() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// admin 手动触发 fetch 并等它收尾：归属 admin 的计数对 bob 不可见。
-	// fetch 是 spawn 出去的，running 翻真之前轮询会读到上一次的快照，直接等到计数落地
+	// admin triggers fetch manually and waits for it to settle: the counts belonging to admin are invisible to bob.
+	// the fetch is spawned, so polling before running flips true reads the previous snapshot; just wait until the counts land
 	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let deadline = Instant::now() + Duration::from_secs(10);

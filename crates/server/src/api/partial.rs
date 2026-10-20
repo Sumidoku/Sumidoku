@@ -1,7 +1,7 @@
-//! send_partial_result 的 NDJSON 流式下发：客户端用 `Accept: application/x-ndjson`
-//! 显式 opt-in，同一请求内 partial 事件按到达顺序写行，终态事件收尾；
-//! 不带该 Accept 的请求完全走原有缓冲路径。连接即 key：客户端断开时
-//! body 流被丢弃，后续事件发送失败即止，源调用继续跑完、结果丢弃
+//! NDJSON streaming of send_partial_result: the client explicitly opts in with `Accept: application/x-ndjson`;
+//! within one request, partial events are written as lines in arrival order and a terminal event closes the stream;
+//! requests without that Accept take the original buffered path untouched. The connection is the key: when the
+//! client disconnects, the body stream is dropped, later event sends fail and stop — the source call runs to completion and its result is discarded
 
 use crate::error::{ApiError, ApiResult};
 use aidoku::{HomeLayout, Manga, MangaPageResult};
@@ -48,14 +48,14 @@ pub fn ndjson_response(rx: mpsc::UnboundedReceiver<Bytes>) -> Response {
 		.expect("ndjson response")
 }
 
-// Value 序列化不会失败；发送失败即客户端断开，返回 false 让转发任务收尾
+// Value serialization cannot fail; a send failure means the client disconnected, so return false and let the forward task wind down
 pub(crate) fn send_line(tx: &mpsc::UnboundedSender<Bytes>, event: &Value) -> bool {
 	let mut buf = serde_json::to_vec(event).unwrap_or_default();
 	buf.push(b'\n');
 	tx.send(Bytes::from(buf)).is_ok()
 }
 
-/// 流已经开始、状态码已提交，源调用失败只能以终态 error 事件表达
+/// The stream has started and the status code is committed, so a source-call failure can only be expressed as a terminal error event
 fn source_error_event(e: SourceError) -> Value {
 	let e = ApiError::from(e);
 	json!({"type": "error", "error": {"code": e.code(), "message": e.message()}})
@@ -65,7 +65,7 @@ fn panic_event() -> Value {
 	json!({"type": "error", "error": {"code": "source_error", "message": "source call panicked"}})
 }
 
-/// 终态事件的 payload 与不带 Accept 的响应体是同一个 JSON 值
+/// The terminal event's payload is the same JSON value as the response body without the Accept header
 pub async fn forward_home(
 	mut partials: mpsc::UnboundedReceiver<HomePartial>,
 	call: JoinHandle<Result<HomeLayout, SourceError>>,
@@ -127,9 +127,9 @@ pub async fn forward_search(
 	let _ = send_line(&tx, &event);
 }
 
-/// manga 更新（register/refresh）的转发：partial 与搜索同形（完整 Manga 快照，
-/// 对齐上游 partialMangaPublisher）；终态 payload 是各端点自己的响应体，
-/// 源调用与落库都在 call 里，失败以终态 error 事件表达
+/// Forwarding for manga updates (register/refresh): partials have the same shape as search (full Manga snapshots,
+/// aligned with upstream's partialMangaPublisher); the terminal payload is each endpoint's own response body.
+/// The source call and the DB writes live in call; failures are expressed as a terminal error event
 pub async fn forward_manga_update(
 	mut partials: mpsc::UnboundedReceiver<Manga>,
 	call: JoinHandle<ApiResult<Value>>,

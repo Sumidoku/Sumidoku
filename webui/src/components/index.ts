@@ -1,4 +1,4 @@
-// 组件统一出口，页面只从这里引，后续波次加组件也挂到这里
+// Single export point for components; pages import only from here, and new components are added here too
 export { Badge } from './Badge';
 export { Button } from './Button';
 export type { ButtonProps } from './Button';

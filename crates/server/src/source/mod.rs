@@ -31,7 +31,7 @@ pub struct SkippedSource {
 	pub reason: String,
 }
 
-/// source.key 只允许这组字符（保留前缀 local/komga/kavita/suwayomi）
+/// source.key allows only this character set (reserved prefixes local/komga/kavita/suwayomi)
 pub(crate) fn valid_source_key(key: &str) -> bool {
 	!key.is_empty()
 		&& key
@@ -39,7 +39,7 @@ pub(crate) fn valid_source_key(key: &str) -> bool {
 			.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
-/// 目录挂载扫描：一级子目录（source.json + main.wasm）与 .aix 包（zip，Payload/ 布局）都视为源包
+/// Directory-mount scan: first-level subdirectories (source.json + main.wasm) and .aix packages (zip, Payload/ layout) both count as source packages
 pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOutcome> {
 	let mut outcome = ScanOutcome {
 		installed: Vec::new(),
@@ -94,7 +94,7 @@ pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOut
 	Ok(outcome)
 }
 
-/// 清单解析结果与载荷位置；目录源与 .aix 共用同一注册路径
+/// The manifest parse result and the payload location; directory sources and .aix share one registration path
 struct SourcePackage {
 	doc: serde_json::Value,
 	wasm_path: String,
@@ -130,14 +130,14 @@ async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), S
 	.await
 }
 
-/// .aix 注册的统一入口：目录扫描与仓库安装共用；成功返回 (key, 是否更新既有源)
+/// The single entry for .aix registration: shared by directory scan and repo install; on success returns (key, whether an existing source was updated)
 pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, bool), String> {
 	let path_buf = path.to_path_buf();
-	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
+	// Zip parsing is synchronous IO, offloaded to the blocking pool; package contents stay in memory, never extracted to disk
 	let (doc, settings, icon) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
 		.await
 		.map_err(|e| format!("join: {e}"))??;
-	// 包内嵌图标落盘到包旁，供 /sources/{id}/icon 读取（Aidoku 从解包目录读 icon.png）
+	// The embedded icon lands next to the package for /sources/{id}/icon to read (Aidoku reads icon.png from the unpacked directory)
 	let icon_path = write_aix_icon(path, icon).await;
 	register_source(
 		state,
@@ -151,8 +151,8 @@ pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(Strin
 	.await
 }
 
-/// 把 .aix 的 `Payload/icon.png` 写到包旁的 `<name>.png`；无图标时清掉遗留文件。
-/// 写失败只告警，不阻断注册
+/// Writes the .aix's `Payload/icon.png` to `<name>.png` next to the package; without an icon, removes any leftover file.
+/// A write failure only warns and does not block registration
 async fn write_aix_icon(aix_path: &Path, icon: Option<Vec<u8>>) -> Option<String> {
 	let icon_path = aix_path.with_extension("png");
 	let Some(bytes) = icon else {
@@ -178,9 +178,9 @@ fn read_aix_package(path: &Path) -> Result<AixPackage, String> {
 	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX)?;
 	let doc: serde_json::Value =
 		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
-	// 载荷必须真实读得出（顺带校验 CRC），扫描不留存字节
+	// The payload must be genuinely readable (CRC checked along the way); the scan does not retain the bytes
 	read_zip_entry(&mut archive, WASM_ENTRY, WASM_PAYLOAD_MAX)?;
-	// 图标可选：老包或纯 wasm 包可能没有
+	// The icon is optional: old packages or bare wasm packages may not have one
 	let icon = read_optional_zip_entry(&mut archive, ICON_ENTRY, ICON_ENTRY_MAX)?;
 	let settings = read_zip_entry(&mut archive, SETTINGS_ENTRY, JSON_ENTRY_MAX)
 		.ok()
@@ -205,7 +205,7 @@ async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
 	}
 }
 
-/// 成功返回 (key, 是否更新既有源)
+/// On success returns (key, whether an existing source was updated)
 async fn register_source(state: &AppState, package: SourcePackage) -> Result<(String, bool), String> {
 	let pool = &state.pool;
 	let doc = &package.doc;
@@ -227,13 +227,13 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.unwrap_or(&key)
 		.to_string();
 	let version = info.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
-	// Aidoku 的 breakingChangeVersion 在 manifest 的 config 节（SourceInfo.Configuration）
+	// Aidoku's breakingChangeVersion lives in the manifest's config section (SourceInfo.Configuration)
 	let breaking_change_version = doc
 		.get("config")
 		.and_then(|c| c.get("breakingChangeVersion"))
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
-	// config 节原文落库：DTO 暴露与 per-source 并发帽都从这里读
+	// The raw config section lands in the DB: the DTO exposure and the per-source concurrency cap both read it
 	let config = doc
 		.get("config")
 		.filter(|c| c.is_object())
@@ -246,9 +246,9 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.get("contentRating")
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
-	// languages 允许 {"code","isDefault"} 对象形式，列里只落语言码：消费端全按
-	// [String] 解码，原样落库会让源列表等查询 500；isDefault 由读清单原文的
-	// 合成/播种路径消费
+	// languages allows the {"code","isDefault"} object form, but the column stores only language codes: every
+	// consumer decodes [String], and storing the raw form would 500 the source list and other queries; isDefault is
+	// consumed by the synthesis/seeding paths that read the manifest text
 	let languages = serde_json::json!(source_languages(doc)
 		.into_iter()
 		.map(|(code, _)| code)
@@ -263,13 +263,13 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.fetch_optional(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-	// 动态值是 base_url 的真相源：落列后合成设置的候选与种子、登录 host 兜底都从行里出
+	// The dynamic value is the source of truth for base_url: once stored, the synthesized setting's candidates and seed and the login host fallback all come from the row
 	let (dynamic, features) = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc)
 		.await
 		.unwrap_or_else(|| (String::new(), "{}".to_string()));
 	let base_url = if dynamic.is_empty() { base_url } else { Some(dynamic) };
 	let (id, updated) = if let Some((id,)) = existing {
-		// 老源保留 enabled 与 source_setting，只刷新元数据
+		// An existing source keeps enabled and source_setting; only the metadata is refreshed
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
 			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ?, features = ? WHERE id = ?",
@@ -318,12 +318,13 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	Ok((key, updated))
 }
 
-/// #147/0010 之前装的旧行 manifest 派生元数据可能缺失：config（config 列加入前装的）、
-/// features（0010 列加入前装的）与 breaking_change_version（旧注册没解析 manifest 的恒为 0，
-/// 跨 breaking 更新的 rekey 判定会失效）。逐源读包补 stamping，COALESCE/MAX 只填缺口：
-/// config/features 只补 NULL 列，breaking 单调取 MAX（不回退已有值）。启动后后台串行跑，
-/// 不挡服务起；单个源失败（包损坏/编译失败）留 NULL，DTO 按未知处理（不藏主页入口）。
-/// 新装的源注册时已 stamping，不在这趟里
+/// Old rows installed before #147/0010 may miss manifest-derived metadata: config (installed before the config
+/// column), features (before the 0010 column), and breaking_change_version (always 0 from old registrations that
+/// never parsed the manifest, which breaks the rekey check on cross-breaking updates). Read each package and stamp
+/// them, COALESCE/MAX filling only the gaps: config/features only fill NULL columns, breaking takes the monotonic
+/// MAX (never regressing an existing value). Runs serially in the background after startup without blocking the
+/// service; a single source's failure (corrupt package/compile failure) leaves NULL, and the DTO treats that as
+/// unknown (the home entry point is not hidden). Newly installed sources are stamped at registration and are not in this pass
 pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
 	let rows: Vec<(i64, String)> = match sqlx::query_as(
 		"SELECT id, wasm_path FROM source WHERE (config IS NULL OR features IS NULL) AND kind = 'aidoku'",
@@ -371,9 +372,9 @@ pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
 	}
 }
 
-/// 回填用：从源包读 manifest 的 config 节原文（透传口径与注册一致，未知键不丢）
-/// 和 config.breakingChangeVersion（rekey 判定依赖，旧注册可能没解析过）。
-/// 裸 wasm 包没有 manifest，返回 (None, 0)——该行 config 保持 NULL
+/// For backfill: reads the manifest's raw config section from the package (pass-through convention identical to
+/// registration, unknown keys kept) and config.breakingChangeVersion (the rekey check depends on it; old
+/// registrations may never have parsed it). A bare wasm package has no manifest, so return (None, 0) — that row's config stays NULL
 fn read_manifest_config(path: &Path) -> Result<(Option<String>, i64), String> {
 	use aidoku_wasm::package::{JSON_ENTRY_MAX, MANIFEST_ENTRY, read_zip_entry};
 	let is_zip = std::fs::File::open(path)
@@ -398,8 +399,8 @@ fn read_manifest_config(path: &Path) -> Result<(Option<String>, i64), String> {
 	Ok((config.map(|c| c.to_string()), breaking))
 }
 
-/// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
-/// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错
+/// Mirrors the register(defaults:) semantics of Aidoku installing a source: seeds the language list and settings.json defaults.
+/// The source reads these keys at runtime via defaults.get (e.g. mangadex's contentRating) and fails outright when they are missing
 pub(crate) async fn seed_source_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -410,8 +411,8 @@ pub(crate) async fn seed_source_defaults(
 	if let Some((key, langs)) = default_languages(doc) {
 		seeds.push((key, langs));
 	}
-	// allowsBaseUrlSelect 时 App 会合成 base url 设置，默认候选列表第一个
-	// （动态解析值前置进 info.url + info.urls）；copymanga 等源 defaults.get("url") 必读
+	// With allowsBaseUrlSelect the app synthesizes a base-url setting defaulting to the first candidate
+	// (the dynamically resolved value prepended to info.url + info.urls); sources like copymanga always read defaults.get("url")
 	let allows_select = doc
 		.get("config")
 		.and_then(|c| c.get("allowsBaseUrlSelect"))
@@ -434,8 +435,8 @@ pub(crate) async fn seed_source_defaults(
 	seed_defaults(pool, source_id, seeds).await
 }
 
-/// 成功 `get_settings` 后调：把源在代码里声明的默认值播种进库，对齐 AidokuRunner
-/// 在 getSettings() 里 `register(defaults:)` 的行为
+/// Called after a successful `get_settings`: seeds the defaults the source declares in code into the DB, mirroring
+/// AidokuRunner's `register(defaults:)` inside getSettings()
 pub(crate) async fn seed_dynamic_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -446,9 +447,10 @@ pub(crate) async fn seed_dynamic_defaults(
 	seed_defaults(pool, source_id, seeds).await
 }
 
-/// 播种默认值：行不存在直接种；已存在时仅当现存值仍等于上次播种的默认才写新默认
-/// （UserDefaults register(defaults:) 的物化版——没设过的键永远解析到当前默认），
-/// 用户改过的值保留。迁移前入库的行 seeded_value 为 NULL，一律按用户值保守处理
+/// Seeds defaults: a missing row is seeded directly; an existing row gets the new default only when its current
+/// value still equals the previously seeded one (a materialized UserDefaults register(defaults:) — a key never set
+/// always resolves to the current default); user-changed values are kept. Rows stored before the migration have
+/// seeded_value NULL and are conservatively treated as user values
 async fn seed_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -474,7 +476,7 @@ async fn seed_defaults(
 	Ok(())
 }
 
-/// 源声明的 base url 列表：info.url 在前，info.urls 按顺序追加（对齐 AidokuRunner 的 urls 组装）
+/// The source-declared base url list: info.url first, then info.urls in order (mirroring AidokuRunner's urls assembly)
 pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
 	let info = doc.get("info");
 	let mut urls: Vec<String> = info
@@ -489,9 +491,10 @@ pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
 	urls
 }
 
-/// 合成 base-url 设置的候选列表：持久化的 base_url（动态解析值或包内静态值）按
-/// AidokuRunner 语义前置，已存在于包内列表则不重复。注册时行内 base_url 总是
-/// 当前包的解析结果，设置端点与播种共用同一组装，候选与默认不会分叉
+/// The candidate list for the synthesized base-url setting: the persisted base_url (dynamically resolved value or
+/// the package's static value) is prepended per AidokuRunner semantics, unless already in the package list. At
+/// registration the row's base_url is always the current package's resolution, and the settings endpoint and seeding
+/// share this assembly, so candidates and the default never diverge
 pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -> Vec<String> {
 	let mut urls = source_urls(doc);
 	if let Some(persisted) = persisted
@@ -502,10 +505,11 @@ pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -
 	urls
 }
 
-/// 安装/更新时解析动态 base URL（features.base_url 门控，对齐 AidokuRunner init 的
-/// `try? getBaseUrl()`：导出缺失、调用失败、返回值非法都只告警并回退包内静态值）。
-/// 一次性实例带库内现有 defaults/cookies——Runner 解析时 UserDefaults 已有上次注册值；
-/// 新装源为空。features 一并返回，注册落库供 DTO 暴露能力位（如 hasHome）
+/// Resolves the dynamic base URL at install/update (gated on features.base_url, mirroring AidokuRunner init's
+/// `try? getBaseUrl()`: a missing export, a failed call, or an invalid return value only warns and falls back to the
+/// package's static value). The one-shot instance carries the DB's current defaults/cookies — Runner resolves with
+/// UserDefaults already holding the last registration's values; a fresh install has none. features is returned too,
+/// so registration can store it for the DTO capability bits (e.g. hasHome)
 async fn resolve_dynamic_base_url(
 	state: &AppState,
 	key: &str,
@@ -555,7 +559,7 @@ async fn resolve_dynamic_base_url(
 	Some((resolved.unwrap_or_default(), features))
 }
 
-/// 源声明的语言列表：(code, isDefault)，按声明顺序；字符串项无 isDefault 标记
+/// The source-declared language list: (code, isDefault), in declaration order; string entries carry no isDefault mark
 pub(crate) fn source_languages(doc: &serde_json::Value) -> Vec<(String, bool)> {
 	let Some(langs) = doc
 		.get("info")
@@ -587,7 +591,7 @@ pub(crate) fn source_languages(doc: &serde_json::Value) -> Vec<(String, bool)> {
 	codes
 }
 
-/// languageSelectType == "single" 时语言设置是单选（键 language），否则多选（键 languages）
+/// With languageSelectType == "single" the language setting is single-choice (key language), otherwise multi-choice (key languages)
 pub(crate) fn language_select_single(doc: &serde_json::Value) -> bool {
 	doc.get("config")
 		.and_then(|c| c.get("languageSelectType"))
@@ -595,8 +599,8 @@ pub(crate) fn language_select_single(doc: &serde_json::Value) -> bool {
 		== Some("single")
 }
 
-/// 服务端没有设备语言，默认退化为 isDefault 优先，都没有取第一个
-/// （AidokuRunner 按设备语言取交集，差异记录在 docs/architecture.md）
+/// The server has no device language, so the default degrades to isDefault-first, falling back to the first entry
+/// (AidokuRunner intersects with the device language; the difference is recorded in docs/architecture.md)
 pub(crate) fn default_language_pick(langs: &[(String, bool)]) -> Vec<String> {
 	let picked: Vec<String> = langs
 		.iter()
@@ -613,8 +617,8 @@ pub(crate) fn default_language_pick(langs: &[(String, bool)]) -> Vec<String> {
 	}
 }
 
-/// 多语言源的语言设置种子：>1 种语言才存在该设置；键与值类型随 languageSelectType
-/// （multiple → languages: StringArray，single → language: String）。
+/// The language-setting seed for multi-language sources: the setting exists only with >1 language; key and value
+/// type follow languageSelectType (multiple → languages: StringArray, single → language: String).
 fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> {
 	let langs = source_languages(doc);
 	if langs.len() < 2 {
@@ -635,15 +639,15 @@ fn collect_setting_defaults(
 	let Some(items) = items.as_array() else { return };
 	for item in items {
 		let ty = item.get("type").and_then(|v| v.as_str());
-		// group 与 page 都是容器：AidokuRunner 的 loadSettingsDefaults 两者都递归
+		// group and page are both containers: AidokuRunner's loadSettingsDefaults recurses into both
 		if matches!(ty, Some("group") | Some("page")) {
 			if let Some(children) = item.get("items") {
 				collect_setting_defaults(children, out);
 			}
 			continue;
 		}
-		// 对齐 AidokuRunner loadSettingsDefaults：显式 default 优先（null 视同缺失）；
-		// 缺失时 select/picker 落第一个候选值，switch 落 false，其余不播种
+		// Mirroring AidokuRunner loadSettingsDefaults: an explicit default wins (null counts as absent);
+		// when absent, select/picker fall to the first candidate, switch to false, the rest are not seeded
 		let default = item
 			.get("default")
 			.filter(|v| !v.is_null())
@@ -662,7 +666,7 @@ fn collect_setting_defaults(
 		else {
 			continue;
 		};
-		// Null 种下后 defaults.get 一样是无效值，不浪费一行
+		// Seeding Null would still be an invalid value for defaults.get, so don't waste a row
 		let value = json_to_default_value(&default);
 		if !matches!(value, DefaultValue::Null) {
 			out.push((key.to_string(), value));
@@ -670,8 +674,8 @@ fn collect_setting_defaults(
 	}
 }
 
-/// 动态设置（`get_settings` 导出的嵌套 shape）的默认值，规则同 `collect_setting_defaults`：
-/// group/page 递归，select/picker 无显式默认落第一个候选值，其余只在有 default 时取
+/// Defaults of dynamic settings (the nested shape exported by `get_settings`), same rules as `collect_setting_defaults`:
+/// group/page recurse, select/picker without an explicit default fall to the first candidate, the rest are taken only when a default exists
 fn collect_dynamic_defaults(
 	items: &[serde_json::Value],
 	out: &mut Vec<(String, DefaultValue)>,
@@ -697,7 +701,7 @@ fn collect_dynamic_defaults(
 	}
 }
 
-/// 一个动态设置项的默认值；无显式默认时 select/picker 退化为第一个候选值
+/// The default of one dynamic setting item; without an explicit default, select/picker degrade to the first candidate
 fn dynamic_default(value: &serde_json::Value) -> Option<serde_json::Value> {
 	let (kind, body) = value.as_object()?.iter().next()?;
 	if let Some(default) = body.get("default").filter(|v| !v.is_null()) {
@@ -713,8 +717,8 @@ fn dynamic_default(value: &serde_json::Value) -> Option<serde_json::Value> {
 	}
 }
 
-/// 按 (source_id, key) upsert 详情字段；时间戳由调用方按需打点。
-/// 收连接而不是连接池：迁移等场景要把 upsert 包进调用方自己的事务
+/// Upserts the detail fields by (source_id, key); timestamps are stamped by the caller as needed.
+/// Takes a connection rather than the pool: migration and similar flows wrap the upsert in their own transaction
 pub async fn upsert_manga(
 	conn: &mut sqlx::SqliteConnection,
 	source_id: i64,
@@ -783,9 +787,10 @@ pub async fn upsert_manga(
 	Ok(id)
 }
 
-/// 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
-/// protected 里的章节 key 永不当消失处理（本地源扫描读失败的条目，kmrs 失败目录保护）。
-/// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
+/// Chapter reconciliation: source_order takes the index in the source's response; a vanished chapter with a
+/// download row is locked and kept, otherwise deleted. Chapter keys in protected are never treated as vanished
+/// (entries the local source's scan failed to read — kmrs's failed-directory protection).
+/// Returns the chapter ids inserted by this reconciliation (update detection uses them to spot new chapters)
 pub async fn reconcile_chapters(
 	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
@@ -793,7 +798,7 @@ pub async fn reconcile_chapters(
 	protected: &[String],
 ) -> ApiResult<Vec<i64>> {
 	let now = unix_now();
-	// 源恰好一种语言时给缺语言的章节补上（对齐 AidokuRunner）
+	// When the source has exactly one language, fill it into language-less chapters (mirroring AidokuRunner)
 	let fill_language: Option<String> =
 		sqlx::query_as::<_, (sqlx::types::Json<Vec<String>>,)>(
 			"SELECT s.languages FROM manga m JOIN source s ON s.id = m.source_id WHERE m.id = ?",
@@ -895,7 +900,7 @@ pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	row.ok_or_else(|| ApiError::not_found("manga not found"))
 }
 
-/// 列表端点批量取行：一条 IN 查询替代逐行 manga_row
+/// Batch row fetch for list endpoints: one IN query instead of a manga_row per row
 pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<HashMap<i64, MangaRow>> {
 	if ids.is_empty() {
 		return Ok(HashMap::new());
@@ -929,12 +934,12 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	row.ok_or_else(|| ApiError::not_found("chapter not found"))
 }
 
-/// 内置本地源（kind = local）没有 wasm 实例，章节/页面/封面全走文件系统分支
+/// The built-in local source (kind = local) has no wasm instance; chapters/pages/covers all take the filesystem branch
 pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
-/// 内置 OPDS 源（kind = opds）同样没有 wasm 实例，目录回源走 opds_source 分支
+/// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
 pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
 }
@@ -947,7 +952,7 @@ async fn source_kind(pool: &SqlitePool, source_id: i64) -> ApiResult<String> {
 	Ok(kind.map(|(k,)| k).unwrap_or_default())
 }
 
-/// 读 page 缓存；miss 或 refresh 时从源拉 get_page_list 并整批落缓存
+/// Reads the page cache; on miss or refresh, pulls get_page_list from the source and stores the batch in the cache
 pub async fn load_pages(
 	state: &Arc<AppState>,
 	chapter_id: i64,
@@ -973,8 +978,8 @@ pub async fn load_pages(
 			&chapter.key,
 		)
 		.await?;
-		// 本地章没有物化 blob，但可能有降采样变体：页行重写时一并失效（在线路径由
-		// materialize_image_pages 的整目录清掉承担同一职责）
+		// A local chapter has no materialized blobs, but may have downsample variants: invalidate them when the page
+		// rows are rewritten (on the online path, materialize_image_pages' whole-directory removal carries the same duty)
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
 		let rows: Vec<serde_json::Value> = entries
 			.iter()
@@ -982,7 +987,7 @@ pub async fn load_pages(
 			.collect();
 		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	} else if source_is_opds(&state.pool, manga.source_id).await? {
-		// CBZ 兜底的落盘缓存随页行重写失效，与 blob 目录同一纪律；先删再拉保证 refresh 拿新包
+		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
 		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
 		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
@@ -1017,7 +1022,7 @@ pub async fn load_pages(
 	Ok(stored)
 }
 
-/// 整章页行重写：删除重插并回写 page_count；变体缓存按目录生命周期随之失效
+/// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count; the variant cache expires with the directory lifecycle
 async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value]) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(pool).await?;
 	sqlx::query("DELETE FROM page WHERE chapter_id = ?")
@@ -1041,8 +1046,8 @@ async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json:
 	Ok(())
 }
 
-/// has_description 且未内联 description 的页按 Aidoku 语义回源调 get_page_description
-/// 取文本；与 image 物化同一纪律：任一页失败整章失败，下轮整章重写清掉半成品
+/// Pages with has_description but no inlined description call back to the source's get_page_description for the
+/// text, per Aidoku semantics; same discipline as image materialization: any page's failure fails the chapter, and the next wholesale rewrite clears the half-done state
 async fn fetch_page_descriptions(handle: &SourceHandle, pages: &mut [aidoku::Page]) -> ApiResult<()> {
 	for page in pages.iter_mut() {
 		if !page.has_description || page.description.is_some() {
@@ -1053,15 +1058,15 @@ async fn fetch_page_descriptions(handle: &SourceHandle, pages: &mut [aidoku::Pag
 	Ok(())
 }
 
-/// Page 不实现 Clone 而宿主调用按值消费：深拷走 JSON 往返（四种 content 变体的
-/// serde 表示对称，Image 的 rid 反序列化回来是 externally_managed 不触发回收）
+/// Page does not implement Clone while host calls consume by value: deep-copy via a JSON round trip (the four
+/// content variants' serde representations are symmetric, and an Image rid deserializes back as externally_managed, triggering no recycling)
 fn clone_page(page: &aidoku::Page) -> ApiResult<aidoku::Page> {
 	Ok(serde_json::from_value(serde_json::to_value(page)?)?)
 }
 
-/// Image 页物化：RID 只在当前 actor 会话里有效，字节落 blob 文件后 JSON 只存
-/// 文件名（{"Image": "<idx>.png"}），这是重启与 actor 重建后仍能取页的唯一形态。
-/// 任一页取字节失败整章失败，blob 目录下轮的整章重写会清掉半成品
+/// Image page materialization: an RID is valid only in the current actor session, so once the bytes land in a blob
+/// file the JSON stores just the file name ({"Image": "<idx>.png"}) — the only form that still resolves after a
+/// restart or actor rebuild. Any page's byte fetch failing fails the whole chapter, and the blob directory's next wholesale rewrite clears the half-done state
 async fn materialize_image_pages(
 	state: &Arc<AppState>,
 	handle: &SourceHandle,
@@ -1093,8 +1098,8 @@ async fn materialize_image_pages(
 	Ok(contents)
 }
 
-/// 物化过的 Image 页读字节：blob 文件名只由 load_pages 写入（<idx>.png），
-/// 但仍按文件名基元校验一遍防路径逃逸
+/// Reads the bytes of a materialized Image page: blob file names are only ever written by load_pages (<idx>.png),
+/// but the name is still validated as a single path component against traversal
 pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str) -> ApiResult<Vec<u8>> {
 	if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
 		return Err(ApiError::bad_request("invalid page blob name"));
@@ -1109,7 +1114,7 @@ pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str)
 		.map_err(|_| ApiError::not_found("page blob not found"))
 }
 
-/// 启动清扫：chapter 行没了的 blob 目录整棵删掉（章节对账删除后只剩这里能回收）
+/// Startup sweep: blob directories whose chapter row is gone are removed whole (after chapter reconciliation deletes rows, this is the only place left that can reclaim them)
 pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 	let mut read_dir = match tokio::fs::read_dir(dir).await {
 		Ok(read_dir) => read_dir,
@@ -1130,8 +1135,8 @@ pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 	}
 }
 
-/// 有界读响应体：头声明长度超线快败；压缩/无头长度靠流式累计截停（同 repo::fetch_capped
-/// 模式）。max 为 0 不设限
+/// Bounded response-body read: a header-declared length over the cap fails fast; compressed/unannounced lengths are
+/// stopped by streaming accumulation (the repo::fetch_capped pattern). max = 0 means unlimited
 pub(crate) async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
@@ -1164,8 +1169,8 @@ fn fetch_err(e: crate::source::routed::FetchError) -> ApiError {
 	ApiError::bad_gateway(format!("upstream request failed: {e}"))
 }
 
-/// 裸 GET，不经过源的 image_request 改造。调用方全是 zip 页：整章压缩包是单个
-/// 大 body，走 net_zip_body_max_mb 专用高帽而不是页图帽
+/// A bare GET without the source's image_request transformation. Every caller is a zip page: a whole-chapter
+/// archive is a single large body, so it takes the dedicated higher net_zip_body_max_mb cap instead of the page-image cap
 pub async fn http_get(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1187,7 +1192,7 @@ pub async fn http_get(
 	read_body(response, max).await
 }
 
-/// 图像取回的完整结果：字节之外带状态与头，process_*_image 构造 ImageResponse 要用
+/// The complete result of an image fetch: bytes plus status and headers, which process_*_image needs to build the ImageResponse
 pub struct RemoteImage {
 	pub bytes: Vec<u8>,
 	pub mime: Option<String>,
@@ -1206,7 +1211,7 @@ fn flatten_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)
 	flat
 }
 
-/// 按源特性拉图：有 image_request 用源给的 spec 发请求，否则裸 GET
+/// Fetches an image per the source's capabilities: with image_request, send the request from the source-given spec; otherwise a bare GET
 pub async fn fetch_remote(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1270,11 +1275,11 @@ pub async fn fetch_remote(
 	})
 }
 
-/// 处理器输出统一编码成 PNG（无损且源侧解码链路已有）
+/// Processor output is uniformly encoded as PNG (lossless, and the source-side decode chain already exists)
 const PROCESSED_MIME: &str = "image/png";
 
-/// 页图拉取：fetch_remote 之后源有 page_image_processor 就过一道处理；
-/// opds 源没有处理器与实例，页图走 basic 凭据的裸 GET
+/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present;
+/// an opds source has neither processor nor instance, so page images take a bare GET with basic credentials
 pub async fn fetch_page_image(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1297,7 +1302,7 @@ pub async fn fetch_page_image(
 	Ok((bytes, Some(PROCESSED_MIME.into())))
 }
 
-/// 封面拉取：同上，走 cover_image_processor；opds 源同页图臂
+/// Cover fetch: same as above, through cover_image_processor; opds sources take the page-image arm
 pub async fn fetch_cover_image(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1329,7 +1334,7 @@ fn process_input(image: RemoteImage, url: &str) -> aidoku_wasm::ProcessImageInpu
 
 const COVER_DEFAULT_MIME: &str = "image/jpeg";
 
-/// OPDS 封面取字节：流程同 cover.rs（新鲜磁盘缓存优先，miss 回源拉取并写缓存）
+/// OPDS cover byte fetch: same flow as cover.rs (fresh disk cache first, on miss pull from upstream and write the cache)
 pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let manga = manga_row(&state.pool, manga_id).await?;
 	let covers_dir = state.config.covers_dir.clone();
@@ -1362,7 +1367,7 @@ fn cover_sidecar_path(cache_path: &Path) -> std::path::PathBuf {
 	))
 }
 
-/// 缓存命中条件：文件存在且 manga 详情没在缓存写入之后重新拉过（last_fetched_at <= mtime）
+/// Cache-hit condition: the file exists and the manga details were not re-fetched after the cache write (last_fetched_at <= mtime)
 async fn cover_cache_read(cache_path: &Path, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
 	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
 	let mtime = metadata
@@ -1386,7 +1391,7 @@ async fn cover_cache_read(cache_path: &Path, last_fetched_at: Option<i64>) -> Op
 	Some((bytes, mime))
 }
 
-/// 先写 tmp 再 rename，避免并发读到写了一半的缓存
+/// Writes tmp first then renames, so a concurrent read never sees a half-written cache
 async fn cover_cache_write(covers_dir: &Path, id: i64, bytes: &[u8], mime: &str) -> std::io::Result<()> {
 	let tmp = covers_dir.join(format!(".{id}.tmp"));
 	tokio::fs::write(&tmp, bytes).await?;
@@ -1397,7 +1402,7 @@ async fn cover_cache_write(covers_dir: &Path, id: i64, bytes: &[u8], mime: &str)
 	Ok(())
 }
 
-/// LRU：缓存文件数超上限时按 mtime 最旧先删（连同 sidecar）
+/// LRU: when the cache file count exceeds the cap, delete oldest by mtime first (sidecar included)
 fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
 	let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
 	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
@@ -1405,7 +1410,7 @@ fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
 	};
 	for entry in read_dir.flatten() {
 		let name = entry.file_name();
-		// 只数封面本体（文件名是纯 manga id），sidecar 与 tmp 随本体连带处理
+		// Only count the cover bodies (file name is a bare manga id); sidecars and tmp files are handled along with their body
 		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
 			continue;
 		}
@@ -1428,7 +1433,7 @@ fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
 	}
 }
 
-/// OPDS-PSE 页图取字节：流程同 page.rs（Url 走 fetch_page_image、Zip 解包、Image 读物化 blob）
+/// OPDS-PSE page-image byte fetch: same flow as page.rs (Url via fetch_page_image, Zip unpacked, Image reads the materialized blob)
 pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let pages = load_pages(state, chapter_id, false).await?;
@@ -1527,7 +1532,7 @@ mod tests {
 			candidate_urls(&doc, Some("https://dyn.example")),
 			vec!["https://dyn.example", "https://a.example", "https://b.example"]
 		);
-		// 持久值已在包内列表不重复（未解析时持久值即 info.url）
+		// A persisted value already in the package list is not duplicated (when unresolved, the persisted value is info.url)
 		assert_eq!(
 			candidate_urls(&doc, Some("https://a.example")),
 			vec!["https://a.example", "https://b.example"]
@@ -1536,14 +1541,14 @@ mod tests {
 			candidate_urls(&doc, None),
 			vec!["https://a.example", "https://b.example"]
 		);
-		// 包内无 url 时持久值单独成候选
+		// With no url in the package, the persisted value alone becomes a candidate
 		let bare = json!({"info": {}});
 		assert_eq!(candidate_urls(&bare, Some("https://dyn.example")), vec!["https://dyn.example"]);
 	}
 
 	#[test]
 	fn clone_page_round_trips_all_content_variants() {
-		// Image 变体只能从 serde 反序列化构造（ImageRef::from 是 vendor 私有的）
+		// The Image variant can only be constructed by serde deserialization (ImageRef::from is private to the vendor crate)
 		let raws = [
 			json!({"content": {"Text": "body"}, "thumbnail": null, "has_description": true, "description": null}),
 			json!({"content": {"Url": ["https://x.test/p.png", null]}, "thumbnail": "https://x.test/t.png",
@@ -1629,8 +1634,8 @@ mod tests {
 		assert!(!m.contains_key("seg"));
 	}
 
-	/// 裸 HTTP/1.1 mock：announce_length=false 时不写 content-length，
-	/// 靠 connection: close 收尾，验流式累计路径
+	/// Bare HTTP/1.1 mock: with announce_length=false it writes no content-length,
+	/// closing the connection instead, to exercise the streaming accumulation path
 	fn body_server(body: Vec<u8>, announce_length: bool) -> String {
 		use std::io::{Read, Write};
 		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
@@ -1675,7 +1680,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_at_cap_passes_over_cap_fails() {
-		// 边界钉死：恰好等于帽值通过，超一字节即败
+		// Boundary pinned: exactly the cap passes, one byte over fails
 		let addr = body_server(vec![b'x'; 1024], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 1024).await.expect("恰好在帽内");
 		assert_eq!(bytes.len(), 1024);
@@ -1689,7 +1694,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_unannounced_over_cap_fails() {
-		// 无 content-length：流式累计截停
+		// No content-length: stopped by streaming accumulation
 		let addr = body_server(vec![b'x'; 2048], false);
 		let err = read_body(get_response(&addr).await, 1024)
 			.await
@@ -1699,7 +1704,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_zero_cap_is_unlimited() {
-		// 0 是显式逃生门：配置面文档化的契约，钉住
+		// 0 is the explicit escape hatch: a contract documented on the config surface, pinned here
 		let addr = body_server(vec![b'x'; 2048], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 0).await.expect("0 不设限");
 		assert_eq!(bytes.len(), 2048);

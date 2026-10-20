@@ -1,9 +1,11 @@
 #![no_std]
-//! NotificationHandler 导出的端到端验证源：
-//! handle_notification 把收到的字符串记进实例状态，get_dynamic_settings 把它
-//! 编进 echo 设置的标题，宿主侧经 GET /sources/{id}/settings 读回断言送达。
-//! 静态 settings.json 与动态项的合并去重也靠它（动态键 notifyOnly、与静态
-//! 撞车的 dup）。断言方在 crates/server/tests/source_settings.rs。
+//! End-to-end verification source for the NotificationHandler export:
+//! handle_notification records the received string into instance state, and
+//! get_dynamic_settings weaves it into the echo setting's title; the host side reads it
+//! back via GET /sources/{id}/settings to assert delivery. The merge/dedup of static
+//! settings.json and dynamic items also depends on it (the dynamic-only key notifyOnly
+//! and dup, which collides with a static one). The asserting side is
+//! crates/server/tests/source_settings.rs.
 use aidoku::{
 	Chapter, FilterValue, Manga, MangaPageResult, NotificationHandler, Page, Result, Setting, Source,
 	TextSetting, ToggleSetting,

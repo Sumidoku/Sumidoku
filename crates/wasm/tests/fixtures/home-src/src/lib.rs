@@ -1,10 +1,12 @@
 #![no_std]
-//! 主页组件字段保真（issue #76 Defect 4）的端到端验证源：get_home 固定返回
-//! 六个组件，把 Aidoku 主页契约里 web UI 容易丢的字段全部设上——
-//! ImageScroller 的 subtitle/width/height/auto_scroll_interval、BigScroller 的
-//! tags/content_rating、Scroller 的 subtitle、MangaList/MangaChapterList 的
-//! page_size 与 MangaList 链接内嵌 Manga 的 tags。
-//! 断言方在 crates/server/tests/home.rs；web UI 冒烟按字段逐项核对渲染。
+//! End-to-end verification source for home-component field fidelity (issue #76 Defect 4):
+//! get_home always returns six components with every field the web UI tends to drop in
+//! Aidoku's home contract set — ImageScroller's subtitle/width/height/
+//! auto_scroll_interval, BigScroller's tags/content_rating, Scroller's subtitle,
+//! MangaList/MangaChapterList's page_size, and the tags of the Manga embedded in a
+//! MangaList link.
+//! The asserting side is crates/server/tests/home.rs; the web UI smoke checks rendering
+//! field by field.
 use aidoku::{
 	Chapter, ContentRating, FilterValue, Home, HomeComponent, HomeComponentValue, HomeLayout, Link,
 	LinkValue, Manga, MangaPageResult, MangaWithChapter, Page, Result, Source,
@@ -68,7 +70,7 @@ impl Home for HomeSource {
 			title: Some(String::from("Banners")),
 			subtitle: None,
 			value: HomeComponentValue::ImageScroller {
-				// 6 张横幅才能在常见桌面宽度下溢出容器，自动滚动才有可滚区间
+				// Only 6 banners overflow the container at common desktop widths, giving auto-scroll a scrollable range
 				links: (1..=6)
 					.map(|n| Link {
 						title: format!("Banner {n}"),

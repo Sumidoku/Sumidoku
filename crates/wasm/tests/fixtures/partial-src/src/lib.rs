@@ -1,11 +1,12 @@
 #![no_std]
-//! send_partial_result 流式加载的端到端验证源：
-//! get_home 先推 Layout 占位（A/B 空组件），再推 3 个 Component partial
-//!（A 填充、B 填充、C 新增），终态布局与 partial 不同以证明终态权威；
-//! get_search_manga_list 中途推 3 条 Manga partial 再回 2 条终态；
-//! get_manga_update 按请求的 needs_details/needs_chapters 推对应快照
-//!（详情快照 → 详情+两章快照），终态三章，同样与 partial 不同。
-//! 事件顺序与载荷由 crates/wasm/tests/partial_result.rs 断言。
+//! End-to-end verification source for send_partial_result streaming:
+//! get_home first pushes a Layout placeholder (empty components A/B), then 3 Component
+//! partials (A filled, B filled, C new); the final layout differs from the partials to
+//! prove the final state is authoritative; get_search_manga_list pushes 3 Manga partials
+//! midway and then returns 2 final entries; get_manga_update pushes snapshots according
+//! to the request's needs_details/needs_chapters (details snapshot → details+two-chapters
+//! snapshot), with a final state of three chapters, again differing from the partials.
+//! Event order and payloads are asserted by crates/wasm/tests/partial_result.rs.
 use aidoku::{
 	alloc::{String, Vec, vec},
 	imports::{defaults::defaults_get, std::send_partial_result, std::sleep},
@@ -16,8 +17,8 @@ use aidoku::{
 
 struct PartialSource;
 
-// 端到端演示用：设置 partial_delay（秒）后每个事件之间停一下，渐进渲染才看得见；
-// 测试不设这个键，零延迟
+// For end-to-end demos: set partial_delay (seconds) to pause between events so progressive
+// rendering is visible; tests do not set this key, so zero delay
 fn delay() {
 	let secs = defaults_get::<i32>("partial_delay").unwrap_or(0);
 	if secs > 0 {

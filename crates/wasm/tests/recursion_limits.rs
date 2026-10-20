@@ -1,6 +1,7 @@
-//! 深度递归的崩溃防护：递归超 wasmi 引擎上限必须优雅 trap（不物理溢出
-//! actor 线程栈拖垮全进程），且 trap 后实例可复用。guest 是自递归 WAT，
-//! 每帧夹带 host 调用（解析器类负载的真实形态）
+//! Crash protection for deep recursion: recursion past the wasmi engine limit must trap
+//! gracefully (not physically overflow the actor thread's stack and drag down the whole
+//! process), and the instance must stay usable after the trap. The guest is self-recursive
+//! WAT with a host call riding in every frame (the real shape of parser-style workloads)
 use aidoku_wasm::{
 	DirectPolicy, Error, Limits, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -15,8 +16,8 @@ fn recursion_guest() -> PathBuf {
 		r#"(module
   (import "std" "current_date" (func $now (result f64)))
   (memory (export "memory") 1)
-  ;; 合法 ABI 结果（len=10 + cap=0 + postcard 空 MangaPageResult [0,0]），
-  ;; 递归完返回它，宿主按空列表解析
+  ;; Valid ABI result (len=10 + cap=0 + postcard empty MangaPageResult [0,0]);
+  ;; returned after the recursion, the host parses it as an empty list
   (data (i32.const 1024) "\0a\00\00\00\00\00\00\00\00\00")
   (func $rec (param i32) (result i32)
     (drop (call $now))
@@ -68,8 +69,9 @@ fn listing() -> aidoku::Listing {
 #[tokio::test]
 async fn deep_recursion_traps_gracefully_and_instance_survives() {
 	let handle = spawn().await;
-	// wasmi 默认递归上限 1000：2000 层必须 trap 而非物理溢出 actor 栈
-	// （#213：source-zh.godamanga 线程 stack overflow 直接 abort 全进程）
+	// wasmi's default recursion limit is 1000: 2000 frames must trap instead of physically
+	// overflowing the actor stack (#213: the source-zh.godamanga thread's stack overflow
+	// aborted the whole process)
 	let err = handle
 		.get_manga_list(listing(), 2000)
 		.await
@@ -78,7 +80,7 @@ async fn deep_recursion_traps_gracefully_and_instance_survives() {
 		Error::Trap(msg) => assert_eq!(msg, "call stack exhausted"),
 		other => panic!("expected stack-exhaustion trap, got {other}"),
 	}
-	// trap 后实例不废：浅调用照常
+	// The instance is not dead after the trap: shallow calls work as usual
 	handle
 		.get_manga_list(listing(), 10)
 		.await
@@ -88,7 +90,7 @@ async fn deep_recursion_traps_gracefully_and_instance_survives() {
 #[tokio::test]
 async fn deep_recursion_within_limit_completes() {
 	let handle = spawn().await;
-	// 上限内深度在加大后的 actor 栈上必须跑得完（2 MiB 默认栈曾物理溢出）
+	// Depth within the limit must complete on the enlarged actor stack (the 2 MiB default stack used to physically overflow)
 	handle
 		.get_manga_list(listing(), 900)
 		.await

@@ -45,15 +45,15 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub fn router(state: Arc<AppState>) -> Router {
-	// 公开面：健康检查 + 认证自身（登录都进不来就死锁了）
+	// Public surface: health check + auth itself (if login can't be reached, everything deadlocks)
 	let public = Router::new()
 		.route("/health", get(health))
 		.route("/api/v1/version", get(version))
 		.route("/api/v1/auth/status", get(crate::auth::status))
 		.route("/api/v1/auth/login", post(crate::auth::login))
 		.route("/api/v1/auth/logout", post(crate::auth::logout));
-	// admin 专属面：全局状态与配置（用户/源与仓库/源设置与登录/服务端备份恢复）。
-	// require_admin 读 require_auth 注入的角色，route_layer 在内层后跑
+	// Admin-only surface: global state and config (users/sources & repos/source settings & login/server-side backup restore).
+	// require_admin reads the role injected by require_auth; route_layer runs after it on the inner layer
 	let admin = Router::new()
 		.route("/api/v1/users", get(users::list_users).post(users::create_user))
 		.route(
@@ -253,7 +253,7 @@ async fn get_source_icon(
 	Ok(cover::bytes_response(bytes, mime, 86400))
 }
 
-/// 动态能力（filters/listings）不支持时按端点约定 404 unsupported
+/// When a dynamic capability (filters/listings) is unsupported, the endpoint convention answers 404 unsupported
 fn dynamic_capability_error(e: SourceError) -> ApiError {
 	match e {
 		SourceError::Unimplemented => ApiError::unsupported_404("feature not supported by source"),
@@ -264,8 +264,8 @@ fn dynamic_capability_error(e: SourceError) -> ApiError {
 	}
 }
 
-/// 读源包里的静态 json（source.json/settings.json/filters.json）；
-/// 目录源读 wasm_path 同级文件，.aix 源从 zip 内 `Payload/` 取；缺失或解析失败都按 None 处理
+/// Reads a static json from the source package (source.json/settings.json/filters.json);
+/// directory sources read the file next to wasm_path, .aix sources take it from the zip's `Payload/`; missing or unparsable both yield None
 async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option<Value>> {
 	let row = source_row(state, id).await?;
 	let Some(raw) = read_package_file(&row.wasm_path, file).await else {
@@ -274,7 +274,7 @@ async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option
 	Ok(serde_json::from_slice(&raw).ok())
 }
 
-/// 目录源与 .aix 源共用的静态文件读取：先找 wasm_path 同级文件，再退回 zip 内 `Payload/<file>`
+/// Static-file read shared by directory and .aix sources: try the file next to wasm_path first, then fall back to the zip's `Payload/<file>`
 async fn read_package_file(wasm_path: &str, file: &str) -> Option<Vec<u8>> {
 	let path = std::path::PathBuf::from(wasm_path);
 	if let Some(dir) = path.parent()
@@ -289,7 +289,7 @@ async fn read_package_file(wasm_path: &str, file: &str) -> Option<Vec<u8>> {
 		.flatten()
 }
 
-/// 从 `.aix`（zip）读取 `Payload/` 下的条目；非 zip 或条目缺失都按 None 处理
+/// Reads an entry under `Payload/` from an `.aix` (zip); non-zip or missing entry both yield None
 fn read_aix_entry(path: &std::path::Path, entry: &str) -> Option<Vec<u8>> {
 	use aidoku_wasm::package::{JSON_ENTRY_MAX, read_zip_entry};
 	let file = std::fs::File::open(path).ok()?;
@@ -302,8 +302,8 @@ async fn get_filters(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后；
-	// 静态项归一成动态导出的形状（动态项已是该形状，原样透传）
+	// Aligned with AidokuRunner: static filters first, dynamic exported results appended;
+	// static items are normalized into the dynamic-export shape (dynamic items already have it, passed through as-is)
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
 		&& let Some(filters) = doc.get("filters")
@@ -341,7 +341,7 @@ pub struct SearchRequest {
 	pub filters: Option<Vec<FilterValue>>,
 }
 
-/// 已入库漫画的 key → 内部 id，流式与非流式搜索共用同一份 attach 语义
+/// key → internal id for in-library manga; streaming and non-streaming search share the same attach semantics
 pub(crate) async fn known_manga_ids(state: &AppState, source_id: i64) -> ApiResult<HashMap<String, i64>> {
 	let known: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ?")
 		.bind(source_id)
@@ -366,7 +366,7 @@ pub(crate) fn manga_json_with_ids(
 	Ok(value)
 }
 
-/// 搜索/列表返回的源侧 Manga 附加 sourceId；已入库的再附内部 id
+/// Attaches sourceId to source-side Manga from search/list results; in-library ones also get the internal id
 pub(crate) async fn attach_internal_ids(
 	state: &AppState,
 	source_id: i64,
@@ -379,10 +379,10 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
-/// 本地源的浏览/搜索：实扫 local 根目录，query 非空按目录名子串过滤（大小写不敏感，
-/// 同 Suwayomi LocalSource 的 contains(query, ignoreCase = true)）。浏览保持轻量——
-/// key/title 就是目录名，ComicInfo 与封面都留给打开时 find_or_register_manga 解析；
-/// 单页全量返回，hasNextPage 恒 false
+/// Browse/search for the local source: actually scans the local root; a non-empty query filters by directory-name
+/// substring (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
+/// lightweight — key/title are just the directory name; ComicInfo and the cover are left for find_or_register_manga
+/// to resolve on open; everything returns in one page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
 	let dirs = crate::local::scan_manga_dirs(&state.config.local_dir()).await?;
 	let needle = query
@@ -411,7 +411,7 @@ async fn search_source(
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
-	// 本地源没有源调用可流：一律缓冲路径（ndjson 客户端按非流式终态处理，同 register 本地臂）
+	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal, same as register's local arm)
 	if crate::source::source_is_local(&state.pool, id).await? {
 		let entries = local_search(&state, id, body.query.as_deref()).await?;
 		return Ok(Json(json!({
@@ -420,7 +420,7 @@ async fn search_source(
 		}))
 		.into_response());
 	}
-	// opds 源同样没有源调用可流；degraded 标记目录缺 OpenSearch、结果只是遍历过滤
+	// opds sources likewise have no source call to stream; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 	if crate::source::source_is_opds(&state.pool, id).await? {
 		let outcome = crate::opds_source::search(&state, id, body.query.as_deref()).await?;
 		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
@@ -460,8 +460,8 @@ async fn get_listings(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后；
-	// 两种来源统一归一成 listing_json 的形状，kind 静态是数值、动态是枚举名
+	// Aligned with AidokuRunner: static listings first, dynamic exported results appended;
+	// both sources are normalized to the listing_json shape, where kind is a number for static and an enum name for dynamic
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
 		&& let Some(items) = doc.get("listings").and_then(|v| v.as_array())
@@ -494,8 +494,8 @@ pub struct PageQuery {
 	pub page: Option<i32>,
 }
 
-/// 静态（source.json listings）在前、动态导出结果追加在后，与 get_listings 端点同序；
-/// 动态拉取失败只记日志按纯静态继续，不拖累 manga 列表
+/// Static (source.json listings) first, dynamic exported results appended, same order as the get_listings endpoint;
+/// a failed dynamic fetch is only logged and we continue static-only, not dragging the manga list down
 async fn combined_listings(
 	state: &AppState,
 	id: i64,
@@ -525,8 +525,8 @@ async fn get_manga_list(
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
 	let handle = state.get_handle(id).await?;
-	// 按 id 在源声明的 listings 里找真实 listing（Aidoku 只会传源自己给的对象）；
-	// 找不到时透传 id 本身，源自行决定怎么响应，与既有行为一致
+	// Looks up the real listing by id among the source-declared listings (Aidoku only ever passes objects the source itself gave);
+	// when not found, the id itself is passed through and the source decides how to respond, matching existing behavior
 	let listing = combined_listings(&state, id, &handle)
 		.await?
 		.into_iter()
@@ -544,8 +544,8 @@ async fn get_manga_list(
 	})))
 }
 
-/// 组件数组定序即稳定标识：流式请求里 send_partial_result 的部分结果按下标增量替换，
-/// 不破坏现有字段；下标由 wasm 层按上游 title 匹配语义解析（见 partial.rs）
+/// The component array's order is the stable identity: in a streaming request, send_partial_result partials replace
+/// by index incrementally without disturbing existing fields; the index is resolved by the wasm layer with upstream title-matching semantics (see partial.rs)
 async fn get_home(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -556,7 +556,7 @@ async fn get_home(
 		let home = handle.get_home().await.map_err(dynamic_capability_error)?;
 		return Ok(Json(serde_json::to_value(home)?).into_response());
 	}
-	// 能力缺失要在流开始前返回 404，保持与非流式相同的状态码契约
+	// A missing capability must return 404 before the stream starts, keeping the same status-code contract as non-streaming
 	if !handle.features().home {
 		return Err(dynamic_capability_error(SourceError::Unsupported("get_home")));
 	}
@@ -576,9 +576,9 @@ pub(crate) async fn current_values(state: &AppState, source_id: i64) -> ApiResul
 	Ok(Value::Object(values))
 }
 
-/// 设置定义加载：静态 settings.json 与动态 get_settings 合并（静态在前、动态追加、
-/// 同键去重，对齐 AidokuRunner 的 staticSettings + getSettings()）；动态项顺带播种
-/// 默认值，对齐 Runner 的 register(defaults:)
+/// Settings-definition loading: static settings.json merged with dynamic get_settings (static first, dynamic appended,
+/// same-key deduped — aligned with AidokuRunner's staticSettings + getSettings()); dynamic items also seed
+/// default values, aligned with Runner's register(defaults:)
 pub(crate) async fn load_settings_items(
 	state: &AppState,
 	id: i64,
@@ -614,8 +614,8 @@ async fn get_source_settings(
 		.unwrap_or_else(|| json!({}));
 	let row = source_row(&state, id).await?;
 	let mut items = load_settings_items(&state, id, &handle).await?;
-	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）；
-	// 源已自行声明同名键时跳过合成项，避免列表里出现两个同键设置
+	// Synthetic settings rank before static/dynamic settings, aligned with AidokuRunner's extraSettings (language before base url);
+	// when the source itself already declares the same key, the synthetic item is skipped so the list never shows two same-key settings
 	let declared = settings::declared_keys(&items);
 	let mut extras: Vec<Value> = Vec::new();
 	if let Some(language) = settings::language_setting(&doc)
@@ -638,8 +638,8 @@ async fn get_source_settings(
 	})))
 }
 
-/// serde_urlencoded 不收重复键；notify 可重复（一次保存可能改多个带
-/// notification 的设置，逐个送达），改用手工解析
+/// serde_urlencoded rejects duplicate keys; notify may repeat (one save can change several settings with
+/// notifications, delivered one by one), so parse by hand
 fn notify_params(raw: Option<&str>) -> Vec<String> {
 	raw.map(|q| {
 		url::form_urlencoded::parse(q.as_bytes())
@@ -672,7 +672,7 @@ async fn put_source_settings(
 		}
 		tx.commit().await?;
 	}
-	// 实例在跑才热重启；没跑的下一次懒加载自然吃到新 defaults
+	// Hot-restart only when the instance is running; a stopped one picks up the new defaults on its next lazy load
 	let handle = state
 		.sources
 		.read()
@@ -701,8 +701,8 @@ pub struct NotifyRequest {
 	pub notification: String,
 }
 
-/// 直接给在跑（或懒加载拉起）的实例送 notification，不重启——Button 设置的
-/// 按下语义（Aidoku app：按下即 handleNotification，实例状态保留）
+/// Sends the notification straight to the running (or lazily started) instance without a restart — the press
+/// semantics of a Button setting (Aidoku app: pressing fires handleNotification, instance state kept)
 async fn notify_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -716,7 +716,7 @@ async fn notify_source(
 	Ok(Json(json!({ "ok": true })))
 }
 
-/// 实例在跑才热重启（换 defaults/cookies）；没跑的下一次懒加载自然吃到新值
+/// Hot-restart only when the instance is running (swapping defaults/cookies); a stopped one picks up the new values on its next lazy load
 pub(crate) async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()> {
 	let handle = state
 		.sources
@@ -735,7 +735,7 @@ pub(crate) async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()
 	Ok(())
 }
 
-/// 清空该源的 settings 覆盖值后按包内静态 schema 重新播种默认值（对齐重装语义）
+/// Clears the source's settings overrides and re-seeds defaults from the package's static schema (aligned with reinstall semantics)
 async fn reset_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -757,7 +757,7 @@ async fn reset_source_settings(
 	Ok(Json(json!({ "values": values })))
 }
 
-/// 清该源的登录 cookie 并重启实例；不动封面缓存与下载
+/// Clears the source's login cookies and restarts the instance; cover cache and downloads are untouched
 async fn clear_source_cache(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -779,7 +779,7 @@ pub struct BasicLoginRequest {
 	pub password: String,
 }
 
-/// 基本登录：凭据交给源校验，成功后由源内 sink 落库（username/password/marker）
+/// Basic login: credentials go to the source for verification; on success the in-source sink persists them (username/password/marker)
 async fn basic_login(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -807,8 +807,8 @@ pub struct RegisterMangaRequest {
 	pub source_id: i64,
 	#[serde(default)]
 	pub manga_key: String,
-	/// 客户端手里的搜索条目；有它就以它为 get_manga_update 入参，
-	/// 源没改动的字段（典型是 cover）才不会丢
+	/// The search entry in the client's hands; when present it becomes the get_manga_update input,
+	/// so fields the source did not change (typically cover) are not lost
 	pub manga: Option<Manga>,
 }
 
@@ -833,12 +833,12 @@ async fn register_manga(
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
-	// 本地源没有源调用可流：一律走缓冲路径（ndjson 客户端按非流式终态处理）
+	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal)
 	if crate::source::source_is_local(&state.pool, body.source_id).await? {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
 	}
-	// opds 源同本地臂：回源是目录 feed 拉取，没有 partial 流
+	// opds sources same as the local arm: fetching upstream is a catalog feed pull, with no partial stream
 	if crate::source::source_is_opds(&state.pool, body.source_id).await? {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
@@ -847,7 +847,7 @@ async fn register_manga(
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
 	}
-	// 已登记命中没有源调用可流：直接缓冲响应，客户端按非流式终态处理
+	// An already-registered hit has no source call to stream: answer buffered directly, the client treats it as a non-streaming terminal
 	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(body.source_id)
 		.bind(&initial.key)
@@ -879,8 +879,8 @@ async fn register_manga(
 	Ok(partial::ndjson_response(line_rx))
 }
 
-/// (source, key) 已有 manga 行就直接命中；没有则回源拉详情 + 章节登记（不入库），
-/// 浏览页点开条目与深链落地共用这条路径
+/// When (source, key) already has a manga row, hit it directly; otherwise fetch details + chapters from the source and
+/// register (not shelved) — the path shared by opening an entry from the browse page and by deep-link landing
 pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64, initial: Manga) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
@@ -936,10 +936,10 @@ pub struct DeepLinkRequest {
 	pub url: String,
 }
 
-/// 把 URL 交给源的 handle_deep_link 并解析成前端可直接导航的目标：Manga/Chapter
-/// 变体按 (source, key) 登记/命中 manga 行后回内部 id——chapter key 不在章节列表里
-/// 时 chapterId 为 null，前端落到 manga 页；Listing 原样回传，由前端切到该列表；
-/// 源不认这个 URL 时 result 为 null
+/// Hands the URL to the source's handle_deep_link and resolves it into a target the frontend can navigate to
+/// directly: Manga/Chapter variants register/hit the manga row by (source, key) and return the internal id — when
+/// the chapter key is not in the chapter list, chapterId is null and the frontend lands on the manga page; Listing
+/// is passed through as-is for the frontend to switch to; when the source does not recognize the URL, result is null
 async fn deep_link(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -1047,7 +1047,7 @@ pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -
 	Ok(value)
 }
 
-/// viewer_flags 非零即用户阅读方向覆盖：响应 viewer 用覆盖值，库里的源值不动
+/// A non-zero viewer_flags is the user's reading-direction override: the response's viewer uses the override, the stored source value untouched
 fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_flags: i64) -> ApiResult<()> {
 	if viewer_flags != 0 {
 		object.insert("viewer".into(), serde_json::to_value(viewer_from_int(viewer_flags))?);
@@ -1055,8 +1055,8 @@ fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_fla
 	Ok(())
 }
 
-/// 列表端点的批量版 manga_json：三条 IN 查询替代逐行三查询，输出与入参同序；
-/// 缺行按单查缺省（0 / false / 空数组）补齐
+/// Batch manga_json for list endpoints: three IN queries instead of three queries per row, output in input order;
+/// missing rows are filled with the single-fetch defaults (0 / false / empty array)
 pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
 	if rows.is_empty() {
 		return Ok(Vec::new());
@@ -1127,7 +1127,7 @@ pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&Ma
 	Ok(out)
 }
 
-/// history/update 的漫画列：批量取行再批量序列化，输出与 ids 同序；缺行同 manga_row 的 404
+/// The manga column for history/update: batch-fetch rows then batch-serialize, output in ids order; a missing row is the same 404 as manga_row
 pub(crate) async fn manga_json_by_ids(state: &AppState, user_id: i64, ids: &[i64]) -> ApiResult<Vec<Value>> {
 	let rows = manga_rows_by_ids(&state.pool, ids).await?;
 	let refs: Vec<&MangaRow> = ids
@@ -1138,8 +1138,8 @@ pub(crate) async fn manga_json_by_ids(state: &AppState, user_id: i64, ids: &[i64
 	manga_json_batch(state, user_id, &refs).await
 }
 
-/// f32 经 serde_json 会先转 f64 再按 f64 最短表示打印（281.1 变 281.1000061035156），
-/// 用 f32 自己的最短表示还原成干净小数
+/// serde_json prints an f32 by widening to f64 with f64's shortest representation (281.1 becomes 281.1000061035156),
+/// so re-render with f32's own shortest representation to get the clean decimal back
 fn f32_json(value: f64) -> Value {
 	format!("{}", value as f32)
 		.parse::<f64>()
@@ -1169,7 +1169,7 @@ pub(crate) fn chapter_json(row: &ChapterRow, progress: Option<&ChapterProgress>)
 }
 
 pub(crate) fn progress_of(row: &ChapterUserRow) -> Option<ChapterProgress> {
-	// last_page_read 列非空，LEFT JOIN 出 NULL 即用户行不存在
+	// The last_page_read column is non-null, so a NULL from the LEFT JOIN means the user row does not exist
 	row.last_page_read.map(|last_page_read| ChapterProgress {
 		last_page_read,
 		is_read: row.is_read.unwrap_or(false),
@@ -1187,7 +1187,7 @@ async fn get_manga(
 ) -> ApiResult<Response> {
 	let mut row = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
-		// 本地源刷新 = 重扫目录；没有源调用可流，ndjson 一样回缓冲响应
+		// Local-source refresh = rescan the directory; no source call to stream, ndjson gets the buffered response too
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
 			let mut update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &row.key).await?;
 			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
@@ -1196,7 +1196,7 @@ async fn get_manga(
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
-		// opds 源刷新 = 重拉条目 feed，同本地臂无流可发
+		// opds-source refresh = re-pull the entry feed; like the local arm, nothing to stream
 		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
 			let mut updated = crate::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
 			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
@@ -1239,7 +1239,7 @@ pub struct UpdateMangaRequest {
 	pub incognito: Option<bool>,
 }
 
-/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
+/// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid values is 400; an empty body is a no-op
 async fn update_manga(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -1260,7 +1260,7 @@ async fn update_manga(
 			.await?;
 	}
 	if let Some(incognito) = patch.incognito {
-		// manga_user 行可能不存在（未入库）：单本隐身不依赖入库状态，upsert 建行
+		// The manga_user row may not exist (not in library): per-manga incognito does not depend on library state, upsert creates the row
 		sqlx::query(
 			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET incognito = excluded.incognito",
@@ -1284,7 +1284,7 @@ async fn get_chapters(
 ) -> ApiResult<Response> {
 	let manga = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
-		// 本地源刷新 = 重扫目录；读失败的章节条目进对账保护集，不当消失删除
+		// Local-source refresh = rescan the directory; chapter entries that fail to read go into the reconcile protection set, not treated as vanished-and-deleted
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
 			let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
 			let mut conn = state.pool.acquire().await?;
@@ -1302,7 +1302,7 @@ async fn get_chapters(
 				.await?;
 			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
 		}
-		// opds 源刷新 = 重拉条目 feed；远端消失的章节按统一对账规则处理
+		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
 		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
 			let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
 			let mut conn = state.pool.acquire().await?;
@@ -1401,8 +1401,8 @@ async fn get_pages(
 	Ok(Json(json!(out)))
 }
 
-/// 用户态设置键：库里按 user.<id>.<key> 命名空间存放，API 面只见裸键；
-/// 别人的命名空间键既不可见也不可写。目前只有隐身开关，新增键读写两侧一起加
+/// User-scoped setting keys: stored in the DB under the user.<id>.<key> namespace, the API only ever sees bare keys;
+/// other users' namespace keys are neither visible nor writable. Only the incognito toggle for now; new keys are added on both the read and write sides together
 pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &["incognito.enabled"];
 
 pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
@@ -1429,8 +1429,8 @@ async fn get_settings(
 		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
-	// 生效中的本地目录来自 config 分层（文件/env），不是 setting 表的可写键：
-	// 只读注入响应（camelCase 与表内点分键区分）
+	// The effective local directory comes from config layering (file/env), not a writable setting-table key:
+	// inject it read-only into the response (camelCase, distinct from the dotted keys in the table)
 	map.insert(
 		"localDir".into(),
 		json!(state.config.local_dir().to_string_lossy()),
@@ -1443,7 +1443,7 @@ async fn put_settings(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
-	// 全局键是配置面：reader 只能写自己命名空间里的用户态键（隐身开关）
+	// Global keys are the config surface: a reader may only write user-scoped keys in its own namespace (the incognito toggle)
 	if user.role != "admin"
 		&& let Some(key) = body.keys().find(|key| !USER_SCOPED_SETTING_KEYS.contains(&key.as_str()))
 	{
@@ -1451,11 +1451,11 @@ async fn put_settings(
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
-		// 只读注入键：落库只会被 GET 的注入值遮蔽，不如不存
+		// Read-only injected key: storing it would only be shadowed by GET's injected value, so don't store it
 		if key == "localDir" {
 			continue;
 		}
-		// 命名空间键由服务端按请求身份生成，直接写 user.* 一律不收
+		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
 		if key.starts_with("user.") {
 			continue;
 		}

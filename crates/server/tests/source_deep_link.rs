@@ -1,10 +1,11 @@
-//! 深链端点（issue #137）：POST /api/v1/sources/{id}/deep-link 把 URL 交给源的
-//! handle_deep_link，Manga/Chapter 变体在服务端解析（必要时按 register_manga
-//! 同款流程登记）成内部 mangaId/chapterId，Listing 变体原样返回给前端导航。
-//! fixture 源在 crates/wasm/tests/fixtures/deeplink-src（no_std cdylib），重建方式：
-//! `cd crates/wasm/tests/fixtures/deeplink-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_deeplink.wasm
-//! 复制为 crates/wasm/tests/fixtures/deeplink/main.wasm。
+//! Deep-link endpoint (issue #137): POST /api/v1/sources/{id}/deep-link hands the URL to the source's
+//! handle_deep_link; Manga/Chapter variants are resolved server-side (registered when needed via the
+//! same flow as register_manga) into internal mangaId/chapterId, while Listing variants are returned
+//! as-is for frontend navigation. The fixture source lives in
+//! crates/wasm/tests/fixtures/deeplink-src (no_std cdylib); rebuild with
+//! `cd crates/wasm/tests/fixtures/deeplink-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_deeplink.wasm
+//! to crates/wasm/tests/fixtures/deeplink/main.wasm.
 mod common;
 
 use axum::Router;
@@ -13,7 +14,7 @@ use common::{TestApp, base_config, baseurl_wasm_path, deeplink_wasm_path, instal
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
-/// deeplink（有 DeepLinkHandler）+ baseurl（无导出，404 unsupported 对照）双源的 app
+/// App with two sources: deeplink (has DeepLinkHandler) + baseurl (no export, the 404 unsupported control)
 async fn dual_source_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	install_fixture_source(&tmp, "en.deeplink", "DeepLink Source", &deeplink_wasm_path());
@@ -61,13 +62,13 @@ async fn deep_link_resolves_manga_and_chapter_ids() {
 	let manga_id = result["mangaId"].as_i64().expect("mangaId resolved");
 	assert!(result["chapterId"].is_null(), "{body}");
 
-	// 登记即拉详情：标题来自 fixture 的 get_manga_update
+	// Registration fetches details immediately: the title comes from the fixture's get_manga_update
 	let (status, manga) = request(&app.app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{manga}");
 	assert_eq!(manga["title"], "Deep Manga m1");
 	assert_eq!(manga["inLibrary"], false);
 
-	// 重复解析命中已有行，id 不变
+	// Resolving again hits the existing row; the id is unchanged
 	let (status, body) = deep_link(&app.app, source_id, "https://deeplink.fixture/manga/m1").await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["result"]["mangaId"], manga_id);

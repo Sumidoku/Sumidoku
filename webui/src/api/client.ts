@@ -17,7 +17,7 @@ export function setToken(token: string) {
 	try {
 		localStorage.setItem(TOKEN_KEY, token);
 	} catch {
-		// 隐私模式写不进去，靠内存态撑本次会话（刷新后需重新登录）
+		// Private mode blocks the write, so the in-memory token carries this session (re-login required after refresh)
 	}
 }
 
@@ -26,11 +26,11 @@ export function clearToken() {
 	try {
 		localStorage.removeItem(TOKEN_KEY);
 	} catch {
-		// 同上
+		// Same as above
 	}
 }
 
-/** 401 归一处理：清 token 跳登录页；登录/改密码请求由页面本地处理（防循环、防误踢） */
+/** Unified 401 handling: clear the token and jump to the login page; login/password-change requests are handled locally by the page (avoids loops and false kicks) */
 function handleUnauthorized(path: string) {
 	if (location.pathname === '/login' || path === '/auth/login' || path === '/auth/password') return;
 	clearToken();
@@ -42,7 +42,7 @@ function authHeaders(): Record<string, string> {
 	return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** <img>/<a>/WebSocket 发不了 Authorization 头，媒体与流地址带 query token */
+/** <img>/<a>/WebSocket cannot send an Authorization header, so media and stream URLs carry the token as a query param */
 export function withToken(url: string): string {
 	const token = getToken();
 	if (!token) return url;
@@ -65,13 +65,13 @@ export class ApiError extends Error {
 export interface ApiOptions {
 	method?: string;
 	body?: unknown;
-	/** 探测性请求（如 404 表示不支持 listings）不弹错误提示 */
+	/** Probing requests (e.g. a 404 meaning listings are unsupported) don't pop an error toast */
 	silent?: boolean;
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	const { method = 'GET', body, silent = false } = opts;
-	// 二进制上传（.aib）不走 JSON 编码
+	// Binary uploads (.aib) skip JSON encoding
 	const raw = body instanceof Blob || body instanceof ArrayBuffer;
 	let res: Response;
 	try {
@@ -96,7 +96,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 			if (data?.error?.code) code = String(data.error.code);
 			if (data?.error?.message) message = String(data.error.message);
 		} catch {
-			// 错误体不是 JSON 时保留默认文案
+			// Keep the default message when the error body is not JSON
 		}
 		const err = new ApiError(res.status, code, message);
 		if (res.status === 401) handleUnauthorized(path);
@@ -107,15 +107,15 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 	return (await res.json()) as T;
 }
 
-/** v 是版本标记（传 manga.cover）：换封面后端点 URL 不变而响应 max-age=86400 可缓存，没它浏览器一直用旧图 */
+/** v is a version marker (pass manga.cover): after a cover change the endpoint URL is unchanged while the response is cacheable with max-age=86400 — without it the browser keeps showing the old image */
 export const coverUrl = (mangaId: number, v?: string | null) => {
 	const base = withToken(`${BASE}/manga/${mangaId}/cover`);
-	// base 不一定带 query（没 token 时 withToken 原样返回），分隔符要自己判
+	// base may carry no query (withToken returns it unchanged without a token), so detect the separator ourselves
 	const sep = base.includes('?') ? '&' : '?';
 	return v ? `${base}${sep}v=${encodeURIComponent(v)}` : base;
 };
 
-/** NDJSON 流式响应里 partial 之外的两个终态事件形状 */
+/** The two terminal event shapes besides partial in an NDJSON streaming response */
 type StreamTerminal<TFinal> =
 	| { type: 'final'; payload: TFinal }
 	| { type: 'error'; error: { code: string; message: string } };
@@ -125,14 +125,15 @@ export interface ApiStreamOptions<TPartial extends { type: string }> {
 	body?: unknown;
 	silent?: boolean;
 	signal?: AbortSignal;
-	/** 每个 partial 事件到达时调用（按服务端发送顺序） */
+	/** Called for each partial event as it arrives (in the server's send order) */
 	onEvent: (event: TPartial) => void;
 }
 
 /**
- * 流式请求：Accept: application/x-ndjson 显式 opt-in，partial 事件逐行回调，
- * resolve 终态 payload（与非流式响应体同形）。服务端不支持流式
- * （content-type 不是 ndjson）时回退整包 JSON，行为与 api() 一致
+ * Streaming request: Accept: application/x-ndjson is an explicit opt-in, partial events are called back
+ * line by line, and the promise resolves with the terminal payload (same shape as a non-streaming response
+ * body). When the server does not support streaming (content-type is not ndjson), falls back to whole-body
+ * JSON, behaving exactly like api()
  */
 export async function apiStream<TFinal, TPartial extends { type: string }>(
 	path: string,
@@ -165,7 +166,7 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 			if (data?.error?.code) code = String(data.error.code);
 			if (data?.error?.message) message = String(data.error.message);
 		} catch {
-			// 错误体不是 JSON 时保留默认文案
+			// Keep the default message when the error body is not JSON
 		}
 		const err = new ApiError(res.status, code, message);
 		if (res.status === 401) handleUnauthorized(path);
@@ -223,16 +224,16 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 export const pageUrl = (chapterId: number, index: number, width?: number) =>
 	withToken(`${BASE}/chapter/${chapterId}/page/${index}${width ? `?width=${width}` : ''}`);
 
-/** 已下载章节的 CBZ 文件地址，配 `<a download>` 直接触发浏览器下载 */
+/** CBZ file URL of a downloaded chapter; pair with `<a download>` to trigger a browser download */
 export const chapterFileUrl = (chapterId: number) =>
 	withToken(`${BASE}/chapter/${chapterId}/file`);
 
-/** 全量备份下载地址，配 `<a download>` 触发浏览器保存 */
+/** Full backup download URL; pair with `<a download>` to make the browser save it */
 export const backupUrl = () => withToken(`${BASE}/backup`);
 
 export const sourceIconUrl = (sourceId: number) =>
 	withToken(`${BASE}/sources/${sourceId}/icon`);
 
-/** 源图床防盗链要的头只有服务端能按源声明带上，browse/home 封面经服务端代理取回 */
+/** Only the server can attach the anti-hotlink headers a source image host declares, so browse/home covers are fetched through the server proxy */
 export const sourceImageUrl = (sourceId: number, url: string) =>
 	withToken(`${BASE}/sources/${sourceId}/image?url=${encodeURIComponent(url)}`);

@@ -1,4 +1,4 @@
-// 图标加载失败的色块底色：按 key hash 从 8 色板取，同源每次渲染颜色一致
+// Fallback swatch color when an icon fails to load: hashed from the key into an 8-color palette, so the same source renders the same color every time
 const ICON_COLORS = [
 	'#7c6cf0',
 	'#4f8ef7',

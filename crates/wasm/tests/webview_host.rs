@@ -1,8 +1,8 @@
-//! js host 模块 webview_* 沙箱语义的端到端测试。
-//! fixture 源在 tests/fixtures/webview-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the webview_* sandbox semantics of the js host module.
+//! The fixture source lives in tests/fixtures/webview-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/webview-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_webview.wasm
-//! 复制为 tests/fixtures/webview/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_webview.wasm
+//! over tests/fixtures/webview/main.wasm.
 use aidoku_wasm::{
 	DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
 };

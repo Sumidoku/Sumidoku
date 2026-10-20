@@ -1,6 +1,6 @@
-//! 跨源聚合搜索：对请求里的每个源并发执行单源搜索，单源失败只落该源的
-//! error 项，不拖垮整请求。NDJSON 时按完成序每源发一个 source/sourceError
-//! 事件，终态 payload 与缓冲响应同值
+//! Cross-source aggregate search: runs the single-source search concurrently for every source in the request; a
+//! single source's failure only lands in that source's error entry and never sinks the whole request. With NDJSON,
+//! each source emits one source/sourceError event in completion order, and the terminal payload equals the buffered response
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -17,7 +17,7 @@ use tokio::task::JoinSet;
 
 use super::partial;
 
-/// 每请求的源搜索并发上限；全局准入由实例共享的 call_semaphore 背压，这里只限单请求扇出
+/// Per-request concurrency cap for source searches; global admission is back-pressured by the instance-shared call_semaphore, this only limits one request's fan-out
 const GLOBAL_SEARCH_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +37,7 @@ pub async fn search_all(
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
-	// 重复 id 只搜一次，顺序按首现归位；客户端筛选态异常时不至于对同一源发双倍调用
+	// A duplicated id is searched only once, ordered by first appearance; a broken client filter state must not fire double calls at the same source
 	let mut ids: Vec<i64> = Vec::with_capacity(body.source_ids.len());
 	for id in body.source_ids {
 		if !ids.contains(&id) {
@@ -56,8 +56,8 @@ pub async fn search_all(
 	Ok(partial::ndjson_response(line_rx))
 }
 
-/// 聚合执行：每源一个任务，完成一个发一个事件（events 为 None 即纯缓冲路径）；
-/// 返回值按请求顺序归位，与事件的完成序无关
+/// Aggregate execution: one task per source, one event per completion (events = None is the pure buffered path);
+/// the return values land back in request order, independent of the events' completion order
 pub(crate) async fn run_global_search(
 	state: &Arc<AppState>,
 	ids: &[i64],
@@ -84,7 +84,7 @@ pub(crate) async fn run_global_search(
 		let (index, entry) = match joined {
 			Ok((_, pair)) => pair,
 			Err(e) => {
-				// panic 同样只落该源的 error 项；id 在 spawn 时已登记，必然查得到
+				// A panic likewise only lands in that source's error entry; the id was registered at spawn time and is necessarily found
 				let index = task_index[&e.id()];
 				(index, error_entry(ids[index], "source_error", "source call panicked"))
 			}
@@ -94,7 +94,7 @@ pub(crate) async fn run_global_search(
 				Some(error) => json!({"type": "sourceError", "sourceId": ids[index], "error": error}),
 				None => json!({"type": "source", "source": entry}),
 			};
-			// 客户端断开即止发；任务照常跑完，结果丢弃与既有流式端点同一约定
+			// Stop sending once the client disconnects; tasks still run to completion and results are discarded, same convention as the existing streaming endpoints
 			if !partial::send_line(tx, &event) {
 				events = None;
 			}
@@ -107,16 +107,16 @@ pub(crate) async fn run_global_search(
 		.collect()
 }
 
-/// 单源搜索的执行与落形：handle 解析、源调用、id 附加任何一步失败都归成该源的
-/// error 项；成功形状与非流式单源搜索响应一致，外加 sourceId
+/// Execution and shaping of a single-source search: any failure in handle resolution, the source call, or id
+/// attaching is folded into that source's error entry; the success shape matches the non-streaming single-source search response, plus sourceId
 async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>, page: i32) -> Value {
 	let outcome: ApiResult<(Vec<Value>, bool, bool)> = async {
-		// 本地源没有 wasm 实例，与单源端点同一臂实扫目录；跨源聚合不因它落 error 项
+		// The local source has no wasm instance; scan the directory on the same arm as the single-source endpoint, without degrading the aggregate into an error entry
 		if crate::source::source_is_local(&state.pool, source_id).await? {
 			let entries = super::local_search(state, source_id, query.as_deref()).await?;
 			return Ok((entries, false, false));
 		}
-		// opds 源同本地臂；degraded 标记目录缺 OpenSearch、结果只是遍历过滤
+		// opds sources same as the local arm; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 		if crate::source::source_is_opds(&state.pool, source_id).await? {
 			let outcome = crate::opds_source::search(state, source_id, query.as_deref()).await?;
 			let entries = super::attach_internal_ids(state, source_id, outcome.entries).await?;
@@ -135,7 +135,7 @@ async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>
 				"entries": entries,
 				"hasNextPage": has_next_page,
 			});
-			// degraded 只在 opds 遍历兜底时出现，不给 wasm/本地臂的结果添新字段
+			// degraded appears only on the opds traversal fallback; don't add a new field to the wasm/local arms' results
 			if degraded {
 				value["degraded"] = json!(true);
 			}

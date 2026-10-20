@@ -93,7 +93,7 @@ function stored(key: string, fallback: string): string {
 
 function AppearanceSection() {
 	const [theme, setTheme] = useTheme();
-	// 旧版设置页把「滚动」存成了 vertical，阅读器只认 continuous，读入时归一
+	// The old settings page stored "scroll" as vertical, while the reader only knows continuous; normalize on read
 	const [mode, setMode] = useState(() => {
 		const m = stored(READER_MODE_KEY, 'paged');
 		return m === 'vertical' ? 'continuous' : m;
@@ -105,7 +105,7 @@ function AppearanceSection() {
 		try {
 			localStorage.setItem(key, value);
 		} catch {
-			// 隐私模式写不进去也照常切换，只是不持久化
+			// Private mode blocks the write but the setting still switches, just without persisting
 		}
 	}
 
@@ -183,7 +183,7 @@ function SecuritySection() {
 		if (!current || !next || pending) return;
 		setPending(true);
 		try {
-			// 改密码会吊销全部会话 token，成功后必须重新登录
+			// Changing the password revokes all session tokens, so success forces a re-login
 			await api('/auth/password', {
 				method: 'PUT',
 				body: { currentPassword: current, newPassword: next },
@@ -499,7 +499,7 @@ function CategoriesSection() {
 
 interface KvRow {
 	key: string;
-	/** JSON 文本，保存时再解析 */
+	/** JSON text, parsed at save time */
 	text: string;
 	isNew?: boolean;
 }
@@ -508,14 +508,14 @@ function parseVal(text: string): unknown {
 	try {
 		return JSON.parse(text);
 	} catch {
-		// 不是合法 JSON 时按字符串存
+		// Store as a string when it is not valid JSON
 		return text;
 	}
 }
 
 function LocalSourceSection() {
 	const settings = useServerSettings();
-	// localDir 是服务端注入的只读字段（config 分层值），不是 setting 表键
+	// localDir is a read-only field injected by the server (a config-layer value), not a settings-table key
 	const dir = settings.data?.['localDir'];
 
 	return (
@@ -545,7 +545,7 @@ function ServerSettingsSection() {
 	useEffect(() => {
 		if (query.data && rows === null) {
 			setRows(
-				// localDir 是只读注入字段，不进键值编辑（见「本地源」区）
+				// localDir is a read-only injected field and does not enter key-value editing (see the "Local source" section)
 				Object.entries(query.data)
 					.filter(([key]) => key !== 'localDir')
 					.map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' }))
@@ -591,7 +591,7 @@ function ServerSettingsSection() {
 										value={row.key}
 										readOnly={!row.isNew}
 										onChange={(e) => {
-											// 更新函数延后执行时 currentTarget 已被置 null，必须先取值
+											// currentTarget is already null by the time the deferred updater runs, so take the value first
 											const v = e.currentTarget.value;
 											setRows((cur) => (cur ?? []).map((r, j) => (j === i ? { ...r, key: v } : r)));
 										}}
@@ -738,7 +738,7 @@ function suwayomiGroupName(g: SuwayomiSourceGroup): string {
 	return g.mihonSourceName || `未知源 ${g.mihonSourceId}`;
 }
 
-/** unmatched 组的映射下拉：同名候选排前，其余已装源在后；留空即整组跳过 */
+/** Mapping dropdown for an unmatched group: same-name candidates first, then the other installed sources; left empty the whole group is skipped */
 function SuwayomiMappingSelect({
 	group,
 	value,
@@ -814,7 +814,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResult } | null>(null);
 	const [swMapping, setSwMapping] = useState<Record<string, string>>({});
 	const [swResult, setSwResult] = useState<SuwayomiImportResult | null>(null);
-	// settings/sourceSettings 两段写全局状态，服务端对 reader 拒收（403），选项一并藏掉
+	// The settings/sourceSettings sections write global state; the server rejects them for readers (403), so the options are hidden too
 	const sections = isAdmin
 		? BACKUP_SECTIONS
 		: BACKUP_SECTIONS.filter((s) => s.key === 'library' || s.key === 'categories' || s.key === 'progress');
@@ -829,7 +829,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 			setSwMapping({});
 			setSwResult(null);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -848,7 +848,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 			const res = await importSuwayomi.mutateAsync({ file: sw.file, dryRun: false, mapping: swMapping });
 			setSwResult(res);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -867,7 +867,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 			setAib({ file, preview: dryPreview });
 			setAibResult(null);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -877,7 +877,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 			const res = await importAidoku.mutateAsync({ file: aib.file, dryRun: false });
 			setAibResult(res);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -888,7 +888,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 
 	async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.currentTarget.files?.[0];
-		// 清空 value 让同一文件能再次触发 change
+		// Clear value so picking the same file again still fires change
 		e.currentTarget.value = '';
 		if (!file) return;
 		let doc: unknown;
@@ -923,7 +923,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 			const res = await restore.mutateAsync({ doc: preview.doc, sections: picked });
 			setResult(res);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -1261,7 +1261,7 @@ function ScheduledBackupSection() {
 			setResult(res);
 			setConfirming(null);
 		} catch {
-			// api() 已弹错误提示
+			// api() already popped an error toast
 		}
 	}
 
@@ -1429,7 +1429,7 @@ function AboutSection() {
 					setLatest({ tag: rel.tag_name, url: rel.html_url });
 				}
 			} catch {
-				// 离线/限流是常态：静默降级，只显示本地版本
+				// Offline/rate-limiting is normal: degrade silently and show only the local version
 			}
 		})();
 		return () => {
@@ -1479,7 +1479,7 @@ function AboutSection() {
 }
 
 export default function SettingsPage() {
-	// 服务端 403 是真门禁，这里只是不让 reader 看到注定失败的入口
+	// The server's 403 is the real gate; here we just keep readers from seeing entries that are doomed to fail
 	const isAdmin = useIsAdmin();
 	return (
 		<div className="page container settings-page">

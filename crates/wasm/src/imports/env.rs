@@ -21,7 +21,7 @@ pub fn send_partial_result(ctx: &mut impl Ctx, value: i32) {
 	if value < 0 {
 		return;
 	}
-	// 无在途流式调用时 sink 为空，部分结果按 ABI 约定丢弃
+	// With no in-flight streaming call the sink is empty, and partial results are dropped per the ABI contract
 	if ctx.host().partial_sink.is_none() {
 		return;
 	}

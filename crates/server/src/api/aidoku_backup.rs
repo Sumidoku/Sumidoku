@@ -1,5 +1,5 @@
-//! Aidoku .aib 导入：binary plist 编码的 Codable Backup（Aidoku/Aidoku Core/Backup/Models），
-//! additive 合并语义与 BackupDoc 恢复的 upsert 不同，合并原语见 import_merge
+//! Aidoku .aib import: a binary-plist-encoded Codable Backup (Aidoku/Aidoku Core/Backup/Models);
+//! the additive merge semantics differ from BackupDoc restore's upsert — see import_merge for the merge primitives
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
@@ -25,7 +25,7 @@ pub struct AidokuImportQuery {
 	pub dry_run: bool,
 }
 
-// 以下结构只声明消费的字段，未知字段容忍忽略；字段名对齐 Aidoku 的 Codable 键
+// The structs below declare only the consumed fields, unknown fields tolerated; field names follow Aidoku's Codable keys
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AibBackup {
@@ -37,7 +37,7 @@ struct AibBackup {
 	manga: Vec<AibManga>,
 	#[serde(default)]
 	chapters: Vec<AibChapter>,
-	// Aidoku 会写出裸字符串或 {title,sort,group,data} 对象两种形态，按 Value 手工取 title
+	// Aidoku writes either a bare string or a {title,sort,group,data} object, so take the title from a Value by hand
 	#[serde(default)]
 	categories: Vec<plist::Value>,
 }
@@ -125,7 +125,7 @@ struct Skipped {
 	reason: &'static str,
 }
 
-/// Swift Date 在 plist 里是 CFAbsoluteTime，plist crate 已归一到 SystemTime
+/// A Swift Date in a plist is CFAbsoluteTime; the plist crate has already normalized it to SystemTime
 fn date_to_unix(date: plist::Date) -> i64 {
 	let time: std::time::SystemTime = date.into();
 	time.duration_since(std::time::UNIX_EPOCH)
@@ -133,7 +133,7 @@ fn date_to_unix(date: plist::Date) -> i64 {
 		.unwrap_or(0)
 }
 
-/// Aidoku 存的是 contentRating.rawValue - 1（>0 时），0 混淆了 unknown/safe，按 unknown 处理
+/// Aidoku stores contentRating.rawValue - 1 (when >0); 0 conflates unknown/safe, treated as unknown
 fn content_rating_from_aib(nsfw: i64) -> i64 {
 	match nsfw {
 		1 => 2,
@@ -190,7 +190,7 @@ pub async fn import_aidoku_backup(
 	Ok(Json(result))
 }
 
-/// 校验 + 单事务导入；dry-run 走同一执行路径，末尾回滚代替提交，报告与真跑一致
+/// Validation + single-transaction import; dry-run takes the same execution path and rolls back instead of committing at the end, so the report matches a real run
 pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_run: bool) -> ApiResult<Value> {
 	let doc: AibBackup = plist::from_bytes(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid aidoku backup: {e}")))?;
@@ -249,7 +249,7 @@ pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_
 	}))
 }
 
-/// 顶层 categories 数组先建行；书库条目里只出现引用形态的分类在 import_library 里懒建
+/// The top-level categories array creates rows first; categories that appear only as references inside library entries are created lazily in import_library
 async fn import_categories(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
@@ -359,7 +359,7 @@ async fn import_progress(
 			.map(|c| aib_chapter_meta(c))
 			.transpose()?;
 		let chapter_id = ensure_chapter_row(tx, manga_id, &entry.chapter_id, meta.as_ref()).await?;
-		// Aidoku 里 -1 是「读完」标记不是页码，负数一律按 0 处理
+		// In Aidoku, -1 is a "finished" marker, not a page number; negatives all count as 0
 		let last_page_read = entry.progress.unwrap_or(0).max(0);
 		let last_read_at = entry.date_read.map(date_to_unix);
 		merge_chapter_progress(tx, user_id, chapter_id, last_page_read, entry.completed, last_read_at).await?;

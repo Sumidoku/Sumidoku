@@ -1,7 +1,8 @@
-//! 写事务 BEGIN IMMEDIATE 的确定性对账（#222 的 CI flake 机制）：
-//! deferred 事务先读后写，升级写锁时若快照已被并发提交改写，必撞
-//! SQLITE_BUSY_SNAPSHOT（extended 517，busy_timeout 不覆盖）——update_chapter
-//! 偶发 500 的成因；同一交错下 begin_write 的 IMMEDIATE 事务无此窗口。
+//! Deterministic reconciliation of BEGIN IMMEDIATE write transactions (the CI flake mechanism of #222):
+//! a deferred transaction reads first and writes later; if its snapshot has been rewritten by a
+//! concurrent commit when it upgrades to a write lock, it always hits SQLITE_BUSY_SNAPSHOT
+//! (extended 517, not covered by busy_timeout) — the cause of the intermittent 500s in
+//! update_chapter; begin_write's IMMEDIATE transaction has no such window under the same interleaving.
 mod common;
 
 use sumidoku_server::db::{begin_write, create_pool};
@@ -17,7 +18,7 @@ async fn migrated_pool() -> (tempfile::TempDir, sqlx::SqlitePool) {
 	(tmp, pool)
 }
 
-/// 并发提交者：另一连接把种子行改写（下载 worker 状态翻转同款角色）
+/// Concurrent committer: another connection rewrites the seed row (the same role as the download worker's state flip)
 async fn concurrent_commit(pool: &sqlx::SqlitePool) {
 	sqlx::query("UPDATE setting SET value = '1' WHERE key = 'k'")
 		.execute(pool)
@@ -53,7 +54,7 @@ async fn immediate_write_tx_survives_the_same_interleaving() {
 		.fetch_optional(&mut *tx)
 		.await
 		.expect("read in tx");
-	// IMMEDIATE 事务持锁期间，并发写者只会在 busy_timeout 内排队，不再产出 500 类错误
+	// While the IMMEDIATE transaction holds its lock, concurrent writers just queue within busy_timeout instead of producing 500-class errors
 	let other = pool.clone();
 	let waiter = tokio::spawn(async move { concurrent_commit(&other).await });
 	sqlx::query("INSERT INTO setting (key, value) VALUES ('k2', 'x')")

@@ -1,5 +1,5 @@
 export interface ProgressBarProps {
-	/** 0~1；不传或 null 表示总量未知，走不定态动画 */
+	/** 0~1; omitted or null means the total is unknown and the indeterminate animation is used */
 	value?: number | null;
 }
 

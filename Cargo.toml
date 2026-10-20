@@ -16,17 +16,22 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# opt=3 + CU=1 + fat LTO：解释器（wasmi）的执行速度直接挂在宿主优化上
-# （JIT 不受影响），编译密集源负载实测 2.6x（600 次正则编译 1505→575ms，
-# wasmi-labs/wasmi#2059 的对照矩阵），代价是 release 编译变慢
+# opt=3 + CU=1 + fat LTO: the (wasmi) interpreter's execution speed scales
+# directly with host optimization (JIT is unaffected); measured 2.6x on a
+# compile-heavy source workload (600 regex compiles 1505→575ms, the
+# comparison matrix in wasmi-labs/wasmi#2059), at the cost of slower
+# release builds
 [profile.release]
 opt-level = 3
 codegen-units = 1
 lto = true
 strip = true
 
-# macOS 的 unpacked 默认值让每个测试二进制链接后都跑一遍 dsymutil，其内存随二进制
-# 大小走（本仓测试二进制多且静态链 boa 等大 crate，单个 dsymutil 可达 GB 级，并行数个即十几 GB）；
-# 关掉后调试符号留在二进制内，lldb 照常，release（debug=0）不受影响
+# macOS's unpacked default runs dsymutil once per test binary after
+# linking, and its memory scales with binary size (this repo has many test
+# binaries statically linking big crates like boa, so one dsymutil can hit
+# GB scale and a few in parallel reach tens of GB); with it off, debug
+# symbols stay in the binary, lldb works as usual, and release (debug=0)
+# is unaffected
 [profile.dev]
 split-debuginfo = "off"

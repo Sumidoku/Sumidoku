@@ -134,8 +134,9 @@ impl CookieJar {
 		if pairs.is_empty() { None } else { Some(pairs.join("; ")) }
 	}
 
-	/// 浏览器回流的 cookie 按 Domain 属性直接落库（无 Set-Cookie 原文可解析）；
-	/// 与 store 一样经 sink 持久化，否则登录态只活内存、重启即丢
+	/// Cookies flowing back from the browser land in the jar directly by their Domain
+	/// attribute (there is no raw Set-Cookie to parse); persisted via the sink like store,
+	/// otherwise the login state lives only in memory and is lost on restart
 	pub fn insert(&mut self, domain: &str, name: &str, value: &str) {
 		if domain.is_empty() || name.is_empty() {
 			return;
@@ -186,7 +187,7 @@ impl CookieJar {
 	}
 }
 
-// wasmi host 参数没有 u8，method 的 0..=8 校验在函数体内
+// wasmi host params have no u8, so the 0..=8 check on method lives in the function body
 pub fn init(ctx: &mut impl Ctx, method: i32) -> FFIResult {
 	let method = match method {
 		0 => HttpMethod::Get,
@@ -205,7 +206,7 @@ pub fn init(ctx: &mut impl Ctx, method: i32) -> FFIResult {
 		.store(StoreItem::Request(Box::new(NetRequest::new(method))))
 }
 
-/// perform 的失败面，映射到 send 的 FFI 错误码
+/// The failure surface of perform, mapped to send's FFI error codes
 #[derive(Debug)]
 pub(crate) enum SendFailure {
 	InvalidUrl,
@@ -213,9 +214,11 @@ pub(crate) enum SendFailure {
 	BodyTooLarge,
 }
 
-/// 按 policy 路由发出一个请求：429/5xx 退避重试、直连撞 CF 挑战经 trawl
-/// 升级一次、响应 Set-Cookie 入 jar。
-/// 任何 HTTP 响应（含非 2xx）都写回 request.response；只有网络层失败才报错。
+/// Send a request routed per policy: back off and retry on 429/5xx, escalate once via
+/// trawl when a direct connection hits a CF challenge, and put response Set-Cookie into
+/// the jar.
+/// Any HTTP response (including non-2xx) is written back to request.response; only
+/// network-layer failures are errors.
 pub(crate) fn perform(
 	net: &mut crate::runtime::env::NetState,
 	request: &mut NetRequest,
@@ -232,8 +235,8 @@ pub(crate) fn perform(
 
 	net.rate.acquire();
 
-	// 请求头只组装一次：重试与 CF 升级重发同一份头，放循环里会把 jar
-	// cookie 反复拼进 Cookie
+	// Request headers are assembled only once: retries and the CF escalation resend the
+	// same set; doing it inside the loop would splice jar cookies into Cookie again and again
 	if !request.headers.contains_key(USER_AGENT) {
 		let ua = net
 			.policy
@@ -258,7 +261,7 @@ pub(crate) fn perform(
 			}
 		}
 	}
-	// 对齐 Aidoku：jar cookie 拼在源自带 Cookie 前面，而不是源设了就丢掉 jar
+	// Aligned with Aidoku: jar cookies are spliced ahead of the source's own Cookie header, not dropped when the source sets one
 	if let Some(jar_header) = net.jar.header_for(&url) {
 		let merged = match request.headers.get(COOKIE).and_then(|v| v.to_str().ok()) {
 			Some(existing) if !existing.is_empty() => format!("{jar_header}; {existing}"),
@@ -278,7 +281,7 @@ pub(crate) fn perform(
 			.request(request.method.into(), url.as_str())
 			.headers(request.headers.clone())
 			.timeout(timeout);
-		// 重试也要带 body：take 会让第二次尝试（含 trawl 升级）丢 POST 载荷
+		// Retries must carry the body too: take would make the second attempt (including the trawl escalation) lose the POST payload
 		if let Some(body) = request.body.clone() {
 			builder = builder.body(body);
 		}
@@ -286,7 +289,7 @@ pub(crate) fn perform(
 			return Err(SendFailure::Request);
 		};
 		let status = response.status();
-		// CF 升级先于退避：503 挑战页不该白烧直连的退避次数
+		// CF escalation comes before backoff: a 503 challenge page must not burn the direct connection's backoff attempts for nothing
 		if !escalated
 			&& route == NetRoute::Direct
 			&& crate::traits::is_cf_challenge(status, response.headers())
@@ -339,8 +342,10 @@ enum BodyRead {
 	Request,
 }
 
-/// 有界读响应体：头声明长度超线直接快败；压缩响应的头长度是压缩后尺寸（甚至缺席），
-/// 进内存的是 decoded 字节，流式累计截停才是真防线。max 为 0 不设限
+/// Bounded response-body read: when the header-declared length exceeds the cap, fail fast;
+/// for compressed responses the header length is the compressed size (or even absent) and
+/// what lands in memory is decoded bytes, so cutting off by streaming accumulation is the
+/// real defense. max = 0 means unlimited
 fn read_body_capped(mut response: reqwest::blocking::Response, max: u64) -> std::result::Result<Vec<u8>, BodyRead> {
 	if max > 0
 		&& let Some(len) = response.content_length()
@@ -385,7 +390,7 @@ fn common_send(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
 	match result {
 		Ok(()) => Result::Success.into(),
 		Err(SendFailure::InvalidUrl) => Result::InvalidUrl.into(),
-		// ABI 没有「body 超限」专用码，源只能拿 RequestError，帽值与原因进上面的源日志
+		// The ABI has no dedicated "body over cap" code, so the source only gets RequestError; the cap and the reason go into the source log above
 		Err(SendFailure::Request | SendFailure::BodyTooLarge) => Result::RequestError.into(),
 	}
 }
@@ -582,9 +587,10 @@ pub fn html(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
 	ctx.host().store.store(StoreItem::HtmlDocument(document))
 }
 
-/// 按响应体的 charset 解码：BOM → Content-Type → `<meta charset>` → UTF-8 兜底。
-/// Aidoku 宿主由 URLSession/SwiftSoup 处理这一步，reqwest 不管，
-/// 旧实现直接在字节上跑 from_utf8，非 UTF-8 页面被整页判失败
+/// Decode by the response body's charset: BOM → Content-Type → `<meta charset>` → UTF-8
+/// fallback. The Aidoku host has URLSession/SwiftSoup handle this step and reqwest does
+/// not; the old implementation ran from_utf8 on the bytes directly, and non-UTF-8 pages
+/// were failed wholesale
 fn decode_body(headers: &HeaderMap, data: &[u8]) -> String {
 	let (text, _, _) = detect_encoding(headers, data).decode(data);
 	text.into_owned()
@@ -626,7 +632,7 @@ fn charset_from_content_type(value: &str) -> Option<&str> {
 	None
 }
 
-/// 从文档前 1024 字节里嗅探 `<meta charset>` / `<meta http-equiv=content-type>`
+/// Sniff `<meta charset>` / `<meta http-equiv=content-type>` from the document's first 1024 bytes
 fn meta_charset(data: &[u8]) -> Option<&'static encoding_rs::Encoding> {
 	let head: String = data[..data.len().min(1024)].iter().map(|&b| char::from(b)).collect();
 	let idx = head.to_ascii_lowercase().find("charset")?;
@@ -669,7 +675,7 @@ mod tests {
 		trawl: Option<String>,
 	}
 
-	/// 与帽无关的既有测试一律给宽松上限，帽的行为由专门测试钉
+	/// Existing tests unrelated to the cap all get a generous limit; the cap's behavior is pinned by dedicated tests
 	const TEST_BODY_MAX: u64 = 64 * 1024 * 1024;
 
 	impl NetPolicy for EscalationPolicy {
@@ -692,8 +698,9 @@ mod tests {
 		heads: Arc<Mutex<Vec<String>>>,
 	}
 
-	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
-	/// handler 收到请求头文本、回完整响应字节。源头与 trawl 代理共用。
+	/// Bare HTTP/1.1 mock: one request per connection (the response carries connection:
+	/// close); the handler receives the request-head text and returns complete response
+	/// bytes. Shared by the origin and the trawl proxy.
 	fn mock_server(handler: impl Fn(&str) -> Vec<u8> + Send + 'static) -> MockServer {
 		let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
 		let port = listener.local_addr().expect("local addr").port();
@@ -801,7 +808,7 @@ mod tests {
 			trawl.heads()[0].lines().next().unwrap_or_default()
 		);
 
-		// clearance 已入 jar：后续请求直连带出，不再惊动 trawl
+		// The clearance is in the jar: later requests carry it over direct connections without disturbing trawl
 		let second = get(&mut net, &url);
 		assert_eq!(second.status, StatusCode::OK);
 		assert_eq!(second.data, b"direct-with-clearance");
@@ -851,7 +858,7 @@ mod tests {
 
 		let mut request = NetRequest::new(HttpMethod::Get);
 		request.url = Some(url.clone());
-		// 源自带的套件成员必须赢过套件缺省值，且只能有一个：缺省值先塞会并成两个同名头
+		// A suite member provided by the source must win over the suite default, and there can only be one: inserting the default first would merge into two same-named headers
 		request
 			.headers
 			.insert(reqwest::header::ACCEPT, HeaderValue::from_static("application/json"));
@@ -892,18 +899,19 @@ mod tests {
 		let head = origin.heads().join("\n").to_ascii_lowercase();
 		for &(name, _) in crate::traits::BROWSER_HEADERS {
 			if name == "accept" {
-				// reqwest 自己兜底 accept: */*，只能钉套件值不在
+				// reqwest falls back to accept: */* on its own, so we can only pin that the suite value is absent
 				assert!(!head.contains("accept: text/html"), "{head}");
 				continue;
 			}
 			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
 		}
-		// 旋钮只管套件：UA 兜底照补
+		// The knob only governs the suite: the UA fallback is still added
 		assert!(head.contains("user-agent:"), "{head}");
 	}
 
-	/// 实测冒烟（wasm 阻塞 net 宿主）：打真实站点，只手动跑。
-	/// 断言面与 server 侧冒烟一致：协议回声 h2、被动 CF 样本站 200 非挑战页、正常站无回归。
+	/// Live smoke (wasm blocking net host): hits real sites, run manually only.
+	/// Same assertion surface as the server-side smoke: protocol echo h2, a passive-CF
+	/// sample site returning 200 with no challenge page, and no regression on a normal site.
 	#[test]
 	#[ignore = "打真实站点，只手动跑"]
 	fn smoke_wasm_net_host_fingerprint() {
@@ -937,7 +945,7 @@ mod tests {
 
 	#[test]
 	fn jar_sink_fires_on_set_and_expiry() {
-		// jar 变更必须同步给 sink（持久化的唯一通道）：写入发 Some，真实删除发 None
+		// Jar changes must be synced to the sink (the only persistence channel): a write fires Some, a real delete fires None
 		struct RecSink(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
 		impl CookieSink for RecSink {
 			fn set(&self, domain: &str, name: &str, value: Option<&str>) {
@@ -968,7 +976,7 @@ mod tests {
 
 	#[test]
 	fn jar_insert_fires_sink_for_browser_reflux() {
-		// 浏览器回流（insert）与 store 同一条持久化通道，否则登录态重启即丢
+		// Browser reflux (insert) shares the same persistence channel as store, otherwise the login state is lost on restart
 		struct RecSink(std::sync::Mutex<Vec<(String, String, Option<String>)>>);
 		impl CookieSink for RecSink {
 			fn set(&self, domain: &str, name: &str, value: Option<&str>) {
@@ -992,7 +1000,7 @@ mod tests {
 
 	#[test]
 	fn jar_refill_round_trip() {
-		// 持久化回填的 jar 按域名（含子域后缀）组 Cookie 头
+		// The jar backfilled from persistence builds the Cookie header by domain (including subdomain suffixes)
 		let domains = HashMap::from([(
 			"example.com".to_string(),
 			HashMap::from([("sid".to_string(), "abc".to_string())]),
@@ -1004,7 +1012,7 @@ mod tests {
 
 	#[test]
 	fn cookie_header_merges_jar_with_source() {
-		// jar cookie 与源自带 Cookie 合并，而不是源设了就丢掉 jar（对齐 Aidoku）
+		// jar cookies are merged with the source's own Cookie header, not dropped when the source sets one (aligned with Aidoku)
 		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let domains = HashMap::from([(
 			"127.0.0.1".to_string(),
@@ -1023,7 +1031,7 @@ mod tests {
 
 	#[test]
 	fn accept_language_default_is_sent() {
-		// 源没设时补默认 Accept-Language（部分 WAF 缺它就 403）
+		// Add the default Accept-Language when the source does not set one (some WAFs 403 without it)
 		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
@@ -1036,7 +1044,7 @@ mod tests {
 
 	#[test]
 	fn accept_language_uses_source_value() {
-		// 宿主按源语言推导的值，替代内置默认
+		// The host's value derived from the source languages replaces the built-in default
 		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		net.accept_language = "zh-CN,zh;q=0.9".into();
@@ -1068,7 +1076,7 @@ mod tests {
 		assert_eq!(decode_body(&HeaderMap::new(), "中文".as_bytes()), "中文");
 	}
 
-	/// GBK 编码的极简页面：可选 meta 声明 + 一个 p.t 段落
+	/// Minimal GBK-encoded page: optional meta declaration + one p.t paragraph
 	fn gbk_page(with_meta: bool, text: &str) -> Vec<u8> {
 		let mut body = b"<html><head>".to_vec();
 		if with_meta {
@@ -1086,8 +1094,8 @@ mod tests {
 		enc.finish().expect("gzip finish")
 	}
 
-	/// 线格式是 zlib 包装：tower-http 的 decompression 把 deflate 映射到
-	/// ZlibDecoder，裸 DeflateEncoder 的流解不开
+	/// The wire format is zlib-wrapped: tower-http's decompression maps deflate to
+	/// ZlibDecoder, and a bare DeflateEncoder stream cannot be unpacked
 	fn deflate_body(data: &[u8]) -> Vec<u8> {
 		let mut enc = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
 		enc.write_all(data).expect("deflate");
@@ -1100,8 +1108,9 @@ mod tests {
 		enc.into_inner()
 	}
 
-	/// 无引擎宿主：经 TestCtx 直接驱动 net FFI（init/set_url/send/html），
-	/// 再借 imports::html 的 FFI 验证选择器命中，不需要真 wasm guest
+	/// Engine-less host: drive the net FFI (init/set_url/send/html) directly through
+	/// TestCtx, then verify selector hits via the imports::html FFI — no real wasm guest
+	/// needed
 	struct Ffi {
 		ctx: TestCtx,
 	}
@@ -1115,7 +1124,7 @@ mod tests {
 			Self { ctx: TestCtx::new(env) }
 		}
 
-		/// init(GET) → set_url → send → html，返回文档 rid；任一步失败即断言
+		/// init(GET) → set_url → send → html, returning the document rid; any failed step asserts
 		fn fetch_html(&mut self, url: &str) -> Rid {
 			let rid = init(&mut self.ctx, 0);
 			assert!(rid > 0, "init 返回 {rid}");
@@ -1142,7 +1151,7 @@ mod tests {
 
 	#[test]
 	fn html_decodes_gbk_via_content_type() {
-		// content-type 声明 gbk：html() 按 charset 解码成功，选择器命中中文
+		// content-type declares gbk: html() decodes by the charset successfully and the selector hits the Chinese text
 		let page = gbk_page(false, "中文标题");
 		let server = mock_server(move |_head| {
 			respond_bytes("200 OK", &["content-type: text/html; charset=gbk"], &page)
@@ -1154,7 +1163,7 @@ mod tests {
 
 	#[test]
 	fn html_decodes_gbk_via_meta_charset() {
-		// 头里没有 charset 时嗅探文档内的 <meta charset>
+		// When the header has no charset, sniff the <meta charset> inside the document
 		let page = gbk_page(true, "中文标题");
 		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-type: text/html"], &page));
 		let mut ffi = Ffi::new();
@@ -1164,7 +1173,7 @@ mod tests {
 
 	#[test]
 	fn html_replaces_invalid_utf8_without_markers() {
-		// 无 BOM/声明的非法 UTF-8 走 replacement 解码，html() 不返回 InvalidString
+		// Illegal UTF-8 with no BOM/declaration goes through replacement decoding; html() does not return InvalidString
 		let body = b"<html><body><p class=\"t\">caf\xE9\x80</p></body></html>".to_vec();
 		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-type: text/html"], &body));
 		let mut ffi = Ffi::new();
@@ -1174,7 +1183,7 @@ mod tests {
 		assert!(text.contains('\u{FFFD}'), "text: {text:?}");
 	}
 
-	/// 源自己覆写 Accept-Encoding 的请求（issue 里 br/deflate 失守的场景）
+	/// A request where the source overrides Accept-Encoding itself (the scenario where br/deflate were lost in the issue)
 	fn get_with_accept_encoding(server: &MockServer, accept_encoding: &str) -> NetResponse {
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
@@ -1190,7 +1199,7 @@ mod tests {
 
 	#[test]
 	fn gzip_body_is_decoded() {
-		// 默认路径不回归：声明并接受 gzip
+		// No regression on the default path: gzip is declared and accepted
 		let server = mock_server(|_head| respond_bytes("200 OK", &["content-encoding: gzip"], &gzip_body(b"gzip-body")));
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
@@ -1212,7 +1221,7 @@ mod tests {
 
 	#[test]
 	fn accept_encoding_defaults_to_gzip_br_deflate() {
-		// 对齐 URLSession 的协商集：源不设时三种编码都声明（补头只在空位发生）
+		// Aligned with URLSession's negotiation set: when the source does not set one, all three encodings are declared (header filling only happens in empty slots)
 		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/x", server.addr)).unwrap();
@@ -1230,7 +1239,7 @@ mod tests {
 
 	#[test]
 	fn cookie_header_uses_jar_when_source_silent() {
-		// 源没设 Cookie 时行为不变：只带 jar 值
+		// Behavior is unchanged when the source does not set a Cookie header: only the jar value is sent
 		let server = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let domains = HashMap::from([(
 			"127.0.0.1".to_string(),
@@ -1255,7 +1264,7 @@ mod tests {
 
 	#[test]
 	fn body_at_cap_is_stored() {
-		// 边界钉死：恰好等于帽值通过，超一字节即败
+		// Pin the boundary down: exactly at the cap passes, one byte over fails
 		let body = vec![b'x'; 1024];
 		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
 		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
@@ -1288,7 +1297,7 @@ mod tests {
 
 	#[test]
 	fn unannounced_over_cap_fails_while_streaming() {
-		// 无 content-length 的响应靠流式累计截停，而不是读满才发现
+		// A response without content-length is cut off by streaming accumulation, not discovered after reading to the end
 		let body = vec![b'x'; 2048];
 		let server = mock_server(move |_head| {
 			let mut out = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\nconnection: close\r\n\r\n".to_vec();
@@ -1305,7 +1314,7 @@ mod tests {
 
 	#[test]
 	fn gzip_decoded_bytes_count_against_cap() {
-		// 头里 content-length 是压缩后的尺寸，进内存的是 decoded 量：帽按 decoded 计
+		// The header's content-length is the compressed size while what lands in memory is the decoded amount: the cap counts decoded bytes
 		let body = gzip_body(&vec![b'x'; 2048]);
 		assert!((body.len() as u64) < 1024, "夹具前提：压缩后小于帽");
 		let server = mock_server(move |_head| respond_bytes("200 OK", &["content-encoding: gzip"], &body));
@@ -1319,7 +1328,7 @@ mod tests {
 
 	#[test]
 	fn send_reports_request_error_and_stores_nothing_over_cap() {
-		// 源侧的表面：send 拿 -10（ABI 无超限专用码），响应不落 store
+		// The source-side surface: send gets -10 (the ABI has no dedicated over-cap code) and the response does not land in the store
 		let body = vec![b'x'; 2048];
 		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
 		let mut ffi = Ffi::new();

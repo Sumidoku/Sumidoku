@@ -36,14 +36,14 @@ const router = createBrowserRouter([
 			{ path: '*', element: <NotFound /> }
 		]
 	},
-	// 阅读器全屏，不带 AppLayout 导航
+	// The reader is full-screen, without the AppLayout navigation
 	{ path: '/reader/:chapterId', element: <ReaderPage /> },
-	// 登录页同样独立布局（未认证时不渲染任何受保护页面）
+	// The login page also has a standalone layout (no protected page renders while unauthenticated)
 	{ path: '/login', element: <LoginPage /> }
 ]);
 
-// 浏览页有按进页参数一次性初始化的状态（存储的筛选值、深链参数），
-// 同路由换 sourceId 不会自动重挂载，用 key 强制重置，避免源间串筛选
+// The browse page has state initialized once from the entry params (stored filter values, deep-link params);
+// switching sourceId on the same route does not remount it, so force a reset with key to avoid filters leaking across sources
 function SourceBrowseRoute() {
 	const { sourceId } = useParams();
 	return <SourceBrowsePage key={sourceId} />;

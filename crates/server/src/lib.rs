@@ -15,7 +15,7 @@ pub mod state;
 pub mod update;
 pub mod webui_assets;
 
-/// 内置 admin（user 1）：定时备份固定以它构造全量导出（见 backup/mod.rs）
+/// Built-in admin (user 1): scheduled backups always build the full export as it (see backup/mod.rs)
 pub(crate) const USER_ID: i64 = 1;
 pub(crate) const PAGE_SIZE: i64 = 50;
 
@@ -56,7 +56,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 			state.config.repo_refresh_interval_hours,
 		));
 	}
-	// 旧行 features 回填：后台串行编译补 stamping，不挡启动
+	// Backfill features on old rows: compile and stamp serially in the background without blocking startup
 	{
 		let pool = state.pool.clone();
 		tokio::spawn(async move { source::backfill_source_metadata(&pool).await });
@@ -71,7 +71,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 		));
 	}
 	if state.config.rss_threshold_mb > 0 {
-		// 读不出 RSS 的平台（Windows）监控无从谈起，只记一次日志
+		// On platforms where RSS is unreadable (Windows) there is nothing to monitor; log once and move on
 		if rss::current_rss().is_some() {
 			tokio::spawn(state::run_rss_monitor(
 				state.clone(),
@@ -100,14 +100,14 @@ fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 	app.route("/", get(|| async { "Sumidoku API server (webui not built)" }))
 }
 
-/// 磁盘分支：SUMIDOKU_WEBUI_DIR 显式指向真实目录（开发/Docker 挂载）时优先
+/// Disk branch: wins when SUMIDOKU_WEBUI_DIR explicitly points at a real directory (dev/Docker mount)
 fn webui_disk_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
-	// not_found_service 会把响应状态码强制改成 404（给 404 页用的），SPA 要 200，用 fallback
+	// not_found_service forces the response status to 404 (meant for 404 pages); the SPA needs 200, so use fallback
 	let serve = ServeDir::new(webui_dir).fallback(ServeFile::new(webui_dir.join("index.html")));
 	app.fallback(move |req: Request| {
 		let serve = serve.clone();
 		async move {
-			// /api 与 /opds 不许进 SPA fallback，未知 API 路径保持 JSON 404
+			// /api and /opds must not enter the SPA fallback; unknown API paths keep the JSON 404
 			let path = req.uri().path();
 			if path.starts_with("/api") || path.starts_with("/opds") {
 				return ApiError::not_found("route not found").into_response();
@@ -121,7 +121,7 @@ fn webui_disk_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 }
 
 async fn webui_embedded_fallback(req: Request) -> Response {
-	// /api 与 /opds 不许进 SPA fallback，未知 API 路径保持 JSON 404
+	// /api and /opds must not enter the SPA fallback; unknown API paths keep the JSON 404
 	let path = req.uri().path();
 	if path.starts_with("/api") || path.starts_with("/opds") {
 		return ApiError::not_found("route not found").into_response();
@@ -132,7 +132,7 @@ async fn webui_embedded_fallback(req: Request) -> Response {
 	if let Some((mime, body)) = webui_assets::get(&normalized) {
 		return webui_assets::embedded_response(&normalized, mime, body);
 	}
-	// SPA 前端路由：未命中的非 API 路径回退 index.html
+	// SPA client-side routing: unmatched non-API paths fall back to index.html
 	match webui_assets::get("index.html") {
 		Some((mime, body)) => webui_assets::embedded_response("index.html", mime, body),
 		None => ApiError::not_found("route not found").into_response(),

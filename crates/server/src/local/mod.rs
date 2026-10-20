@@ -1,7 +1,7 @@
-//! 内置本地源的文件系统侧：实时遍历 local_dir（无索引表，打开/上架才落库），
-//! 章节目录约定 = 漫画目录下的子目录（图片章）或单个 *.cbz/*.zip。
-//! 失败目录保护（借 kmrs）：读失败的条目录 failed 由调用方带进对账保护集，
-//! 整趟扫描中途失败直接报错——拿半份清单对账会把没扫到的章节误当已删除。
+//! Filesystem side of the built-in local source: walks local_dir live (no index table; rows land in the DB only on open/shelve),
+//! chapter convention = a subdirectory of the manga directory (image chapter) or a single *.cbz/*.zip.
+//! Failed-entry protection (borrowed from kmrs): entries that fail to read are recorded in `failed` and the caller carries them into the reconcile protection set;
+//! a scan that fails midway errors out outright — reconciling against half a listing would mistake unscanned chapters for deleted ones.
 
 pub mod chapter_number;
 pub mod comic_info;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"];
 const ARCHIVE_EXTS: &[&str] = &["cbz", "zip"];
 
-/// 本地源扫描出的一章：key 是条目全名（压缩包含扩展名），name 是展示名
+/// One chapter scanned by the local source: key is the full entry name (archive extension included), name is the display name
 pub struct LocalChapter {
 	pub key: String,
 	pub name: String,
@@ -29,13 +29,13 @@ pub struct LocalChapter {
 	pub is_archive: bool,
 }
 
-/// manga_update 的结果：源侧 Manga 快照 + 读失败的章节条目名（对账保护集）
+/// Result of manga_update: the source-side Manga snapshot + chapter entry names that failed to read (reconcile protection set)
 pub struct LocalUpdate {
 	pub manga: Manga,
 	pub protected: Vec<String>,
 }
 
-/// key 必须恰好是一个路径分量：API 入参可任意构造，不挡就会逃出 local_dir
+/// key must be exactly one path component: API input can be anything, and without this guard it would escape local_dir
 fn valid_component(key: &str) -> bool {
 	!key.is_empty() && key != "." && key != ".." && !key.contains(['/', '\\'])
 }
@@ -54,7 +54,7 @@ fn has_ext(name: &str, exts: &[&str]) -> bool {
 		.is_some_and(|ext| exts.iter().any(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-/// 页图/封面的 mime：按扩展名静态映射，与在线页 mime_for 同一组类型
+/// mime for page images/covers: static mapping by extension, the same set of types as the online-page mime_for
 pub fn image_mime(path: &str) -> &'static str {
 	let ext = path
 		.rsplit('.')
@@ -80,8 +80,8 @@ fn io_scan_err(e: &std::io::Error) -> ApiError {
 	}
 }
 
-/// 浏览入口（实扫 local 根目录）：漫画 = 一级子目录；点开头、@eaDir、
-/// 不可读项跳过；按目录名去重。PR-2 的浏览/刷新按钮直接调这层
+/// Browse entry point (actually scans the local root): manga = first-level subdirectories; dot-prefixed, @eaDir, and
+/// unreadable entries are skipped; deduped by directory name. PR-2's browse/refresh buttons call this layer directly
 pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
 	let mut read_dir = match tokio::fs::read_dir(local_dir).await {
 		Ok(read_dir) => read_dir,
@@ -99,8 +99,8 @@ pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
 		if name.starts_with('.') || name == "@eaDir" || !seen.insert(name.clone()) {
 			continue;
 		}
-		// DirEntry::metadata 不跟随 symlink（悬垂链也拿到 link 自身），
-		// 跟上游 isDirectory 语义对齐必须按路径 stat
+		// DirEntry::metadata does not follow symlinks (a dangling link still yields the link itself);
+		// matching upstream isDirectory semantics requires stat by path
 		let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
 			continue;
 		};
@@ -112,8 +112,8 @@ pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
 	Ok(out)
 }
 
-/// 单本漫画的章节扫描：返回排序后的章节列表与读失败的条目名。
-/// 排序同 Suwayomi LocalSource：章节号降序（未解析出按 -1 沉底），平手按展示名降序自然序
+/// Chapter scan of a single manga: returns the sorted chapter list and the entry names that failed to read.
+/// Sort order matches Suwayomi LocalSource: chapter number descending (unparsed counts as -1 and sinks to the bottom), ties broken by display name in descending natural order
 pub async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<LocalChapter>, Vec<String>)> {
 	require_component(manga_key)?;
 	let dir = local_dir.join(manga_key);
@@ -129,8 +129,8 @@ pub async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<
 		if name.starts_with('.') || name == "@eaDir" {
 			continue;
 		}
-		// 同 scan_manga_dirs：必须跟随 symlink（悬垂链目标已删时 stat 失败，
-		// 正是 failed → protected 的条目级失败目录保护路径）
+		// Same as scan_manga_dirs: symlinks must be followed (stat fails when a dangling link's target is gone —
+		// exactly the failed → protected per-entry failed-directory protection path)
 		let metadata = match tokio::fs::metadata(entry.path()).await {
 			Ok(metadata) => metadata,
 			Err(e) => {
@@ -187,8 +187,8 @@ fn to_aidoku_chapter(chapter: &LocalChapter) -> Chapter {
 	}
 }
 
-/// 「回源拉详情 + 章节」的本地对应物：扫描漫画目录，产出与 get_manga_update
-/// 同形的 Manga 快照（含 chapters），供 upsert_manga + reconcile_chapters 复用
+/// The local counterpart of "fetch details + chapters from the source": scans the manga directory and produces a
+/// Manga snapshot (including chapters) of the same shape as get_manga_update, for upsert_manga + reconcile_chapters to reuse
 pub async fn manga_update(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<LocalUpdate> {
 	let (chapters, failed) = scan_chapters(local_dir, manga_key).await?;
 	let mut manga = Manga {
@@ -219,9 +219,9 @@ pub async fn manga_update(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str
 	})
 }
 
-/// ComicInfo 读取顺序同 Suwayomi：漫画目录顶层优先；顶层文件存在即以其为准
-/// （解析失败也算），不下探压缩包；
-/// 否则按章节序从首个带 ComicInfo.xml 的压缩包抽取（只在内存解析，不回写用户目录）
+/// ComicInfo read order, same as Suwayomi: the manga directory's top level wins; if the top-level file exists it is
+/// authoritative (even when parsing fails) and archives are not consulted;
+/// otherwise extract from the first archive with a ComicInfo.xml in chapter order (parsed in memory only, never written back to the user's directory)
 async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter]) -> Option<comic_info::ComicInfo> {
 	let top_level = local_dir.join(manga_key).join(comic_info::COMIC_INFO_FILE);
 	match tokio::fs::read(&top_level).await {
@@ -254,7 +254,7 @@ async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str,
 	None
 }
 
-/// 章节页清单：图片章列图片文件，压缩包章列图片条目；都按大小写不敏感自然序
+/// Chapter page listing: image chapters list image files, archive chapters list image entries; both in case-insensitive natural order
 pub async fn chapter_pages(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
 	require_component(manga_key)?;
 	require_component(chapter_key)?;
@@ -306,14 +306,14 @@ pub async fn chapter_pages(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 	Err(ApiError::bad_request("unsupported local chapter format"))
 }
 
-/// 压缩包内的图片条目：目录项、点开头、__MACOSX 资源叉都不算页（opds 源 CBZ 拆页共用本规则）
+/// Image entries inside an archive: directory entries, dot-prefixed names, and __MACOSX resource forks are not pages (the opds source's CBZ page splitting shares this rule)
 pub(crate) fn is_image_entry(name: &str) -> bool {
 	!name.ends_with('/')
 		&& !name.split('/').any(|part| part.starts_with('.') || part == "__MACOSX")
 		&& has_ext(name, IMAGE_EXTS)
 }
 
-/// 读单页字节：图片章读单文件，压缩包章按条目名抽（句柄走 LRU）
+/// Reads one page's bytes: image chapters read a single file, archive chapters extract by entry name (handles come from the LRU)
 pub async fn read_page(
 	local_dir: &Path,
 	zip: &Arc<ZipCache>,
@@ -347,8 +347,8 @@ pub async fn read_page(
 		})
 }
 
-/// 封面回退链（Suwayomi 语义）：漫画目录 cover.* 侧车 → 章节列表末尾章的
-/// 第一页（按号降序的末尾即最旧一章）→ None（调用方回 404，界面出占位图）
+/// Cover fallback chain (Suwayomi semantics): a cover.* sidecar in the manga directory → the first page of the last
+/// chapter in the list (descending by number, so the last is the oldest chapter) → None (the caller answers 404 and the UI shows a placeholder)
 pub async fn resolve_cover(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<Option<(Vec<u8>, String)>> {
 	require_component(manga_key)?;
 	let dir = local_dir.join(manga_key);
@@ -396,7 +396,7 @@ pub async fn resolve_cover(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 	Ok(Some((bytes, image_mime(first).to_string())))
 }
 
-/// 页内容 JSON 的 Local 变体：值是章节内的页条目名（图片章的文件名 / 压缩包条目路径）
+/// The Local variant of page-content JSON: the value is the page entry name within the chapter (image chapter's file name / archive entry path)
 pub fn page_content_json(entry: &str) -> Value {
 	serde_json::json!({
 		"content": { "Local": entry },

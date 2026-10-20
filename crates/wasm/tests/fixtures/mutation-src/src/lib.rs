@@ -1,7 +1,7 @@
 #![no_std]
-//! html 模块 9 个 DOM mutation host 函数的端到端验证源：
-//! get_page_description 把每个函数的调用结果与读回值拼成确定字符串，
-//! 由 crates/wasm/tests/html_mutation.rs 断言全文。
+//! End-to-end verification source for the 9 DOM mutation host functions of the html
+//! module: get_page_description assembles each function's call result and read-back value
+//! into a deterministic string, asserted in full by crates/wasm/tests/html_mutation.rs.
 use aidoku::{
 	alloc::{String, Vec},
 	imports::html::{Html, HtmlError},

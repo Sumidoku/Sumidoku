@@ -4,13 +4,13 @@ import { ChipDropdown } from './ChipDropdown';
 export interface TriStateDropdownProps {
 	label: string;
 	options: { key: string; label: string }[];
-	/** 每个选项的三态：1 包含 / -1 排除 / 缺省未选 */
+	/** Tri-state per option: 1 include / -1 exclude / absent = unselected */
 	states: Record<string, 1 | -1>;
 	onCycle: (key: string) => void;
 }
 
-/** 三态多选下拉：chip 展示选中计数，菜单项点击循环 未选 → 包含 → 排除；
- * 菜单不收起（Aidoku menuActionDismissDisabled），连续多选 */
+/** Tri-state multi-select dropdown: the chip shows the selection count, clicking a menu item cycles unselected → include → exclude;
+ * the menu stays open (Aidoku menuActionDismissDisabled) for consecutive multi-select */
 export function TriStateDropdown({ label, options, states, onCycle }: TriStateDropdownProps) {
 	const count = Object.keys(states).length;
 	return (

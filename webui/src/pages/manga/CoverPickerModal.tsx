@@ -30,7 +30,7 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 		);
 	}
 
-	// 源没导出 get_alternate_covers 时服务端按约定 501，按「没有备选」显示而不是报错
+	// When the source doesn't export get_alternate_covers the server 501s by convention; show as "no alternates" instead of an error
 	const unsupported = coversQuery.error instanceof ApiError && coversQuery.error.status === 501;
 	const covers = coversQuery.data ?? [];
 
@@ -70,7 +70,7 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 								title={current ? '当前封面' : '设为封面'}
 								onClick={() => pick(url)}
 							>
-								{/* 防盗链源的图直连必 403，统一走服务端代理 */}
+								{/* Images of anti-hotlink sources always 403 on direct hits, so they all go through the server proxy */}
 								<img src={sourceImageUrl(manga.sourceId!, url)} alt="" loading="lazy" />
 								{current && (
 									<span className="cover-picker__badge">

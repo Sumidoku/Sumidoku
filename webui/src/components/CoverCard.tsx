@@ -7,12 +7,12 @@ export interface CoverCardProps {
 	src?: string | null;
 	title: string;
 	subtitle?: ReactNode;
-	/** >0 时在封面右上角显示未读角标 */
+	/** Show an unread badge at the cover's top-right corner when > 0 */
 	unreadCount?: number;
-	/** 二选一：内部跳转走 to，自定义行为（如先注册再跳）走 onClick */
+	/** Pick one: internal navigation uses `to`, custom behavior (e.g. register-then-navigate) uses onClick */
 	to?: string;
 	onClick?: () => void;
-	/** 点击后异步跳转中置灰防连点 */
+	/** Dimmed while an async navigation triggered by the click is in flight, preventing double clicks */
 	busy?: boolean;
 }
 

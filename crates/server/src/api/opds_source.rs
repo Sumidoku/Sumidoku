@@ -1,4 +1,4 @@
-//! OPDS 实例注册的 admin 端点：name + 目录 URL + 可选 basic 凭据，多实例并存
+//! The admin endpoint for OPDS instance registration: name + catalog URL + optional basic credentials; multiple instances coexist
 
 use super::repo::source_json;
 use crate::error::ApiResult;
@@ -30,6 +30,6 @@ pub async fn register_opds_source(
 		body.password.as_deref(),
 	)
 	.await?;
-	// 新实例不进任何仓库缓存：latest/pinned 空表，DTO 与列表端点同形
+	// A new instance is in no repo cache: latest/pinned are empty maps; the DTO matches the list endpoint's shape
 	Ok(Json(source_json(&row, &Default::default(), &Default::default())))
 }

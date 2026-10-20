@@ -1,15 +1,17 @@
 use aidoku::{HomeComponent, HomeLayout, HomePartialResult};
 
-/// get_home 流式调用的部分结果事件：Component 的下标已按上游 title 匹配语义
-/// 解析好，消费者直接按数组下标替换/追加，不需要自己维护累积状态
+/// Partial-result event of a streaming get_home call: the Component index is already resolved
+/// per the upstream title-match semantics, so consumers replace/append by array index
+/// directly without keeping accumulation state of their own
 #[derive(Debug, Clone, PartialEq)]
 pub enum HomePartial {
 	Layout(HomeLayout),
 	Component { index: usize, component: HomeComponent },
 }
 
-/// 对齐 AidokuRunner getHome 的累积语义：Component 按 title 匹配替换（无匹配追加
-/// 尾部）；源返回空终态布局时，部分结果的累积结果替代终态
+/// Matches AidokuRunner getHome's accumulation semantics: a Component replaces by title
+/// match (appended at the tail when nothing matches); when the source returns an empty
+/// final layout, the accumulated partial results take the final state's place
 #[derive(Debug, Default, Clone)]
 pub struct HomeAccumulator {
 	current: Vec<HomeComponent>,

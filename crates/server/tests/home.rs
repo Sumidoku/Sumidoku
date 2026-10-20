@@ -1,8 +1,8 @@
-//! 主页端点契约。字段透传用例的 fixture 源在 crates/wasm/tests/fixtures/home-src
-//! （no_std cdylib），重建方式：
-//! `cd crates/wasm/tests/fixtures/home-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_home.wasm
-//! 复制为 crates/wasm/tests/fixtures/home/main.wasm。
+//! Home endpoint contract. The fixture source for the field pass-through cases lives in
+//! crates/wasm/tests/fixtures/home-src (no_std cdylib); rebuild with
+//! `cd crates/wasm/tests/fixtures/home-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_home.wasm
+//! to crates/wasm/tests/fixtures/home/main.wasm.
 mod common;
 
 use axum::http::StatusCode;
@@ -38,7 +38,7 @@ async fn home_layout_serialized() {
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// fixture 主页固定 7 个组件，按序覆盖 6 种 kind（无 ImageScroller）
+	// the fixture home has a fixed 7 components covering 6 kinds in order (no ImageScroller)
 	let components = body["components"].as_array().expect("components array");
 	assert_eq!(components.len(), 7);
 	let kinds: Vec<&str> = components
@@ -100,16 +100,16 @@ async fn home_layout_serialized() {
 	assert_eq!(links[1]["value"]["Manga"]["key"], "1");
 	assert_eq!(links[2]["value"]["Listing"]["id"], "listing");
 
-	// 未安装的源 404 not_found
+	// an uninstalled source 404s with not_found
 	let (status, body) = request(&app, "GET", "/api/v1/sources/999/home", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
 }
 
-/// home fixture 把组件里易丢的字段全部设上，断言端点原样透传：
-/// ImageScroller 的 subtitle/width/height/auto_scroll_interval、BigScroller 的
-/// tags/content_rating、Scroller 的 subtitle、MangaList/MangaChapterList 的
-/// page_size 与 MangaList 链接内嵌 Manga 的 tags
+/// The home fixture sets every easily-dropped component field and asserts the endpoint passes them
+/// through verbatim: ImageScroller's subtitle/width/height/auto_scroll_interval, BigScroller's
+/// tags/content_rating, Scroller's subtitle, MangaList/MangaChapterList's page_size, and the tags of
+/// the Manga embedded in a MangaList link
 #[tokio::test]
 async fn home_component_fields_pass_through() {
 	let TestApp { app, tmp, .. } = test_app().await;
@@ -162,7 +162,7 @@ async fn home_component_fields_pass_through() {
 
 #[tokio::test]
 async fn home_unsupported_source_404() {	let TestApp { app, tmp, .. } = test_app().await;
-	// mutation fixture 只导出 Source + get_page_description，没有 get_home
+	// mutation fixture only exports Source + get_page_description, no get_home
 	common::install_fixture_source(&tmp, "en.mutation", "Mutation Source", &common::mutation_wasm_path());
 	let ids = scan_and_source_ids(&app).await;
 	let source_id = ids

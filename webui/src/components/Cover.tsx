@@ -6,11 +6,11 @@ export interface CoverProps {
 	alt?: string;
 }
 
-/** 统一 2:3 封面：加载中显示 shimmer，失败回退标题占位（窄尺寸容器查询切成首字大字） */
+/** Uniform 2:3 cover: shimmer while loading, title placeholder on failure (container query switches to a large first character at narrow sizes) */
 export function Cover({ src, title, alt }: CoverProps) {
 	const [failed, setFailed] = useState(false);
 	const [loaded, setLoaded] = useState(false);
-	// 失败是按 src 记的：换封面这类原地换 src 的场景，旧图的失败不能锁死新图
+	// Failure is tracked per src: when the src is swapped in place (e.g. changing a cover), the old image's failure must not lock out the new one
 	useEffect(() => {
 		setFailed(false);
 		setLoaded(false);

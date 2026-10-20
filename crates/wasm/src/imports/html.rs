@@ -218,7 +218,7 @@ pub fn set_attr(
 	let Some(item) = ctx.host().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	// 客户端 Node/Element 都有 set_attr；文本/注释节点挂不了属性，报 InvalidDescriptor
+	// The client has set_attr on both Node and Element; text/comment nodes cannot hold attributes, so report InvalidDescriptor
 	let Some(node) = item.as_html_node() else {
 		return Result::InvalidDescriptor.into();
 	};
@@ -644,7 +644,7 @@ pub fn remove(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
 	let Some(item) = ctx.host().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	// 客户端 Element.remove 与 ElementList.remove 共用此函数
+	// The client's Element.remove and ElementList.remove share this function
 	if let Some(element) = item.as_html_element() {
 		if element.0.detach().is_none() {
 			return Result::NoResult.into();
@@ -674,8 +674,9 @@ pub fn select(
 	let Some(item) = ctx.host().store.get_mut(rid) else {
 		return Result::InvalidDescriptor.into();
 	};
-	// Aidoku 宿主的 select 不分 Document/Element，SwiftSoup 对无命中返回空
-	// Elements——空结果一律存空列表，None 只留给无效查询
+	// The Aidoku host's select does not distinguish Document/Element, and SwiftSoup
+	// returns empty Elements on no match — an empty result always stores an empty list;
+	// None is reserved for invalid queries
 	let root = if let Some(document) = item.as_html_document() {
 		QueryRoot::Document(document)
 	} else if let Some(element) = item.as_html_element() {
@@ -858,7 +859,7 @@ mod tests {
 <div id="a" class="x y"><p class="del">gone</p><p>keep</p></div>
 </body></html>"#;
 
-	// 无效的 UTF-8（0xFF）触发 read_string 的 Utf8 错误，host 侧统一报 InvalidString
+	// Invalid UTF-8 (0xFF) triggers read_string's Utf8 error; the host side uniformly reports InvalidString
 	fn invalid_utf8(h: &mut Harness) -> (u32, u32) {
 		h.write_bytes(&[0xFF, 0xFE])
 	}
@@ -876,7 +877,7 @@ mod tests {
 		let attr_rid = h.attr_of(el, "href");
 		assert_eq!(h.stored_string(attr_rid), "/x");
 
-		// 已存在的 key 覆盖旧值
+		// An existing key overwrites the old value
 		let (vp, vl) = h.write_str("/y");
 		assert_eq!(set_attr(&mut h.ctx, el, kp, kl, vp, vl), 0);
 		let attr_rid = h.attr_of(el, "href");
@@ -884,7 +885,7 @@ mod tests {
 
 		assert_eq!(remove_attr(&mut h.ctx, el, kp, kl), 0);
 		assert_eq!(h.attr_of(el, "href"), -5);
-		// jsoup removeAttr 对不存在的属性也是成功
+		// jsoup removeAttr succeeds on a missing attribute too
 		assert_eq!(remove_attr(&mut h.ctx, el, kp, kl), 0);
 	}
 
@@ -896,15 +897,15 @@ mod tests {
 		let (kp, kl) = h.write_str("href");
 		let (vp, vl) = h.write_str("/x");
 
-		// 正例锚点：错误码断言必须建立在函数已实现的前提下（stub 全返回 -1 会造成假绿）
+		// Positive anchor: error-code assertions must rest on the function being implemented (a stub returning -1 for everything would fake green)
 		assert_eq!(set_attr(&mut h.ctx, el, kp, kl, vp, vl), 0);
-		// 无效 descriptor
+		// Invalid descriptor
 		assert_eq!(set_attr(&mut h.ctx, 9999, kp, kl, vp, vl), -1);
 		assert_eq!(remove_attr(&mut h.ctx, 9999, kp, kl), -1);
-		// document 不是元素，attr 操作报 InvalidDescriptor
+		// A document is not an element; attr operations report InvalidDescriptor
 		assert_eq!(set_attr(&mut h.ctx, doc, kp, kl, vp, vl), -1);
 		assert_eq!(remove_attr(&mut h.ctx, doc, kp, kl), -1);
-		// 无效字符串（非法 UTF-8）
+		// Invalid string (illegal UTF-8)
 		let (bp, bl) = invalid_utf8(&mut h);
 		assert_eq!(set_attr(&mut h.ctx, el, bp, bl, vp, vl), -2);
 		assert_eq!(set_attr(&mut h.ctx, el, kp, kl, bp, bl), -2);
@@ -922,7 +923,7 @@ mod tests {
 		assert_eq!(set_text(&mut h.ctx, p, tp, tl), 0);
 		assert_eq!(h.text_of(p), "new & <b>");
 		assert_eq!(h.outer_html_of(p), r#"<p class="del">new &amp; &lt;b&gt;</p>"#);
-		// 同一个文档上的其他查询能看到 mutation
+		// Other queries on the same document see the mutation
 		let again = h.select_first(doc, "p.del");
 		assert_eq!(h.text_of(again), "new & <b>");
 	}
@@ -934,7 +935,7 @@ mod tests {
 		let el = h.select_first(doc, "#a");
 		let (tp, tl) = h.write_str("x");
 
-		// 正例锚点，防 stub 假绿
+		// Positive anchor, guarding against stub fake-green
 		assert_eq!(set_text(&mut h.ctx, el, tp, tl), 0);
 		assert_eq!(set_text(&mut h.ctx, 9999, tp, tl), -1);
 		assert_eq!(set_text(&mut h.ctx, doc, tp, tl), -1);
@@ -951,11 +952,11 @@ mod tests {
 		let (hp, hl) = h.write_str(r#"<span class="s">hi</span> tail"#);
 		assert_eq!(set_html(&mut h.ctx, el, hp, hl), 0);
 		assert_eq!(h.html_of(el), r#"<span class="s">hi</span> tail"#);
-		// 解析出的 fragment 是真实节点，可以继续 select
+		// The parsed fragment consists of real nodes and can be selected further
 		let span = h.select_first(el, "span.s");
 		assert!(span > 0);
 		assert_eq!(h.text_of(span), "hi");
-		// 旧子节点已被替换
+		// The old child nodes have been replaced
 		assert_eq!(h.select_first(el, "p.del"), -5);
 	}
 
@@ -966,7 +967,7 @@ mod tests {
 		let el = h.select_first(doc, "#a");
 		let (hp, hl) = h.write_str("<b>x</b>");
 
-		// 正例锚点，防 stub 假绿
+		// Positive anchor, guarding against stub fake-green
 		assert_eq!(set_html(&mut h.ctx, el, hp, hl), 0);
 		assert_eq!(set_html(&mut h.ctx, 9999, hp, hl), -1);
 		assert_eq!(set_html(&mut h.ctx, doc, hp, hl), -1);
@@ -988,7 +989,7 @@ mod tests {
 		assert_eq!(append(&mut h.ctx, el, p2, l2), 0);
 		assert_eq!(h.html_of(el), "<b>first</b><p>mid</p><i>last</i>");
 
-		// 多节点 fragment 保持相对顺序
+		// A multi-node fragment keeps its relative order
 		let (p3, l3) = h.write_str("t1<s>1</s>t2");
 		assert_eq!(append(&mut h.ctx, el, p3, l3), 0);
 		assert_eq!(h.html_of(el), "<b>first</b><p>mid</p><i>last</i>t1<s>1</s>t2");
@@ -1005,7 +1006,7 @@ mod tests {
 		let el = h.select_first(doc, "#a");
 		let (hp, hl) = h.write_str("<b>x</b>");
 
-		// 正例锚点，防 stub 假绿
+		// Positive anchor, guarding against stub fake-green
 		assert_eq!(prepend(&mut h.ctx, el, hp, hl), 0);
 		assert_eq!(append(&mut h.ctx, el, hp, hl), 0);
 		assert_eq!(prepend(&mut h.ctx, 9999, hp, hl), -1);
@@ -1028,16 +1029,16 @@ mod tests {
 		assert_eq!(add_class(&mut h.ctx, el, cp, cl), 0);
 		assert_eq!(h.class_name_of(el), "x y z");
 		assert_eq!(has_class(&mut h.ctx, el, cp, cl), 1);
-		// 重复添加是幂等的（jsoup 集合语义）
+		// Adding again is idempotent (jsoup set semantics)
 		assert_eq!(add_class(&mut h.ctx, el, cp, cl), 0);
 		assert_eq!(h.class_name_of(el), "x y z");
-		// 新 class 对后续 select 可见
+		// The new class is visible to later selects
 		assert!(h.select_first(doc, "#a.z") > 0);
 
 		let (yp, yl) = h.write_str("y");
 		assert_eq!(remove_class(&mut h.ctx, el, yp, yl), 0);
 		assert_eq!(h.class_name_of(el), "x z");
-		// 移除不存在的 class 也是成功
+		// Removing a nonexistent class is also a success
 		assert_eq!(remove_class(&mut h.ctx, el, yp, yl), 0);
 		assert_eq!(h.class_name_of(el), "x z");
 		assert!(h.select_first(doc, "#a.y") == -5);
@@ -1050,7 +1051,7 @@ mod tests {
 		let el = h.select_first(doc, "#a");
 		let (cp, cl) = h.write_str("z");
 
-		// 正例锚点，防 stub 假绿
+		// Positive anchor, guarding against stub fake-green
 		assert_eq!(add_class(&mut h.ctx, el, cp, cl), 0);
 		assert_eq!(remove_class(&mut h.ctx, el, cp, cl), 0);
 		assert_eq!(add_class(&mut h.ctx, 9999, cp, cl), -1);
@@ -1070,13 +1071,13 @@ mod tests {
 		assert!(p > 0);
 
 		assert_eq!(remove(&mut h.ctx, p), 0);
-		// 文档里查不到了
+		// No longer found in the document
 		let list = h.select(doc, "p");
 		assert!(list > 0);
 		assert_eq!(size(&mut h.ctx, list), 1);
 		let remaining = h.select_first(doc, "p");
 		assert_eq!(h.text_of(remaining), "keep");
-		// 被摘下的元素自身仍可读写（ego-tree detach 保留子树，对齐 jsoup remove 后元素仍可用）
+		// The detached element itself stays readable/writable (ego-tree detach keeps the subtree; aligned with jsoup, where the element is still usable after remove)
 		assert_eq!(h.text_of(p), "gone");
 		assert_eq!(parent(&mut h.ctx, p), -5);
 	}
@@ -1101,17 +1102,18 @@ mod tests {
 		let doc = h.parse_doc(DOC);
 		let el = h.select_first(doc, "#a");
 
-		// 正例锚点，防 stub 假绿
+		// Positive anchor, guarding against stub fake-green
 		assert_eq!(remove(&mut h.ctx, el), 0);
 		assert_eq!(remove(&mut h.ctx, 9999), -1);
-		// document 不是 Element/ElementList
+		// A document is not an Element/ElementList
 		assert_eq!(remove(&mut h.ctx, doc), -1);
 	}
 
 	#[test]
 	fn select_empty_result_stores_empty_list_on_all_roots() {
-		// F（issue #83）：Aidoku 宿主的 select 不分 Document/Element，SwiftSoup
-		// 对无命中返回空 Elements——三种根的空结果都存空列表，只有无效查询报错
+		// F (issue #83): the Aidoku host's select does not distinguish Document/Element,
+		// and SwiftSoup returns empty Elements on no match — an empty result on all three
+		// roots stores an empty list; only an invalid query errors
 		let mut h = Harness::new();
 		let doc = h.parse_doc(DOC);
 		let el = h.select_first(doc, "#a");
@@ -1130,8 +1132,10 @@ mod tests {
 
 	#[test]
 	fn select_empty_result_document_arm_and_error_codes() {
-		// pin：document 根空结果本就存空列表；无效查询三种根统一报 InvalidQuery；
-		// select_first 无命中仍报 NoResult（jsoup selectFirst → null 语义，不在 F 范围）
+		// pin: an empty result on the document root has always stored an empty list; an
+		// invalid query uniformly reports InvalidQuery on all three roots; select_first
+		// with no match still reports NoResult (jsoup selectFirst → null semantics, outside
+		// the scope of F)
 		let mut h = Harness::new();
 		let doc = h.parse_doc(DOC);
 		let el = h.select_first(doc, "#a");

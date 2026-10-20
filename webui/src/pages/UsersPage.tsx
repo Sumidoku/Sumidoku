@@ -132,7 +132,7 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 	const update = useUpdateUser();
 	const del = useDeleteUser();
 	const [confirming, setConfirming] = useState(false);
-	// user 1 是内置 admin：服务端拒删（400），入口直接不给
+	// user 1 is the built-in admin: the server refuses to delete it (400), so the entry is simply not offered
 	const builtin = user.id === 1;
 
 	async function changeRole(role: string) {
@@ -209,12 +209,12 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 export default function UsersPage() {
 	const whoami = useWhoami();
 	const isAdmin = useIsAdmin();
-	// 身份未确认前不发请求：reader 直达时省一次注定 403 的列表拉取
+	// No requests before the identity is known: a reader arriving directly is spared a list fetch doomed to 403
 	const users = useUsers(isAdmin);
 	const [creating, setCreating] = useState(false);
 	const [resetting, setResetting] = useState<ManagedUser | null>(null);
 
-	// reader 没有入口可点，直达 URL 时回设置页（服务端 403 是真门禁）
+	// A reader has no entries to click, so a direct URL visit bounces to the settings page (the server's 403 is the real gate)
 	if (whoami.data && !isAdmin) {
 		return <Navigate to="/settings" replace />;
 	}

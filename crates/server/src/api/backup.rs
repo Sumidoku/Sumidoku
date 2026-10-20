@@ -1,5 +1,5 @@
-//! 全量备份：导出/导入单用户的库、分类、进度、设置与源设置。
-//! BackupDoc 是对外契约（version 字段演进），之后 .aib/.tachibk 导入器也映射到它
+//! Full backup: export/import of one user's library, categories, progress, settings, and source settings.
+//! BackupDoc is the external contract (evolves via the version field); the .aib/.tachibk importers map onto it too
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{default_value_to_json, json_to_default_value, unix_now};
@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub const BACKUP_VERSION: i64 = 1;
-/// 大库备份可达几十 MB，放宽该路由的 body 上限
+/// A large-library backup can reach tens of MB, so this route's body cap is raised
 pub const BODY_MAX: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,7 +114,7 @@ pub struct BackupCategory {
 	pub manga: Vec<BackupMangaRef>,
 }
 
-/// 章节元数据快照：全新实例还没有章节行，恢复进度时按它补行（已存在则不动，源刷新会覆盖）
+/// Chapter metadata snapshot: a fresh instance has no chapter rows yet, so restoring progress creates rows from it (existing rows are untouched; the source refresh overwrites)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupChapter {
@@ -201,16 +201,16 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-/// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构。
-/// 用户态数据（库/分类/进度）只含 user_id 的行；非 admin 的文档剥掉全局 settings
-/// （只留本人命名空间键翻译回的裸键）与整个 source_settings——
-/// 源登录凭据是全局共享的（决策点 5），reader 导出只给 self-data（决策点 11）
+/// Export-document construction: shared by the GET handler and the scheduled-backup scheduler, producing byte-identical output.
+/// User-scoped data (library/categories/progress) contains only user_id's rows; a non-admin document strips the global settings
+/// (keeping only the bare keys translated back from the owner's namespace keys) and all of source_settings —
+/// source login credentials are globally shared (decision point 5), and a reader export gets self-data only (decision point 11)
 pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> ApiResult<BackupDoc> {
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
 			.await?;
-	// 源归属哪个 repo 没有显式外键，拿缓存 index 里首个含同 key 条目的 repo 顶数
+	// There is no explicit FK for which repo a source belongs to, so use the first repo in the cached index containing the same key
 	let repos: Vec<SourceRepoRow> = repo::list_repos(pool).await?;
 	let mut repo_of: HashMap<String, String> = HashMap::new();
 	for row in &repos {
@@ -302,7 +302,7 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		})
 		.collect();
 
-	// 全默认的行不携带任何用户状态，导出去重（is_downloaded 不在备份范围）
+	// All-default rows carry no user state and are deduped out of the export (is_downloaded is out of backup scope)
 	let progress_rows: Vec<ExportProgressRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key AS manga_key, c.key, c.title, c.number, c.volume,
 		 c.scanlators, c.language, c.thumbnail, c.url, c.date_uploaded, c.source_order, c.page_count,
@@ -350,8 +350,8 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 	let mut settings = BTreeMap::new();
 	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
-		// 用户态命名空间键只导出属主的，还原成裸键（与 /settings API 面同契约）；
-		// 其余键全是配置面，非 admin 一律不进文档
+		// User-scoped namespace keys are exported only for the owner, restored to bare keys (same contract as the /settings API);
+		// all other keys are config-side and never enter a non-admin document
 		let key = if key.starts_with("user.") {
 			match key.strip_prefix(&own_prefix) {
 				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
@@ -362,12 +362,12 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		} else {
 			continue;
 		};
-		// 坏行不该让备份整个失败，按原样字符串导出
+		// A corrupt row must not fail the whole backup; export it as the raw string
 		let value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
 		settings.insert(key, value);
 	}
 
-	// 非 admin 整段不查：源设置携登录凭据，reader 的文档里一个字节都不该出现
+	// Non-admin skips this whole query: source settings carry login credentials and not a byte of them may appear in a reader's document
 	let mut source_settings: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
 	if admin {
 		let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
@@ -425,7 +425,7 @@ pub struct ImportQuery {
 	pub sections: Option<String>,
 }
 
-/// 服务器备份目录里的既有备份，新到旧
+/// Existing backups in the server backup directory, newest first
 pub async fn list_backups(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let dir = crate::backup::backups_dir(&state.pool, &state.config).await?;
 	let files: Vec<Value> = crate::backup::list_backup_files(&dir)
@@ -441,7 +441,7 @@ pub struct RestoreRequest {
 	pub name: String,
 }
 
-/// 从备份目录里已有的文件恢复：服务端读文件，走与上传导入同一条校验+事务路径
+/// Restores from a file already in the backup directory: the server reads the file, taking the same validate+transaction path as an upload import
 pub async fn restore_backup(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -515,8 +515,8 @@ pub async fn import_backup(
 	Ok(Json(result))
 }
 
-/// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用。
-/// 用户态段落（库/分类/进度）归属 user_id；settings/sourceSettings 是全局状态，仅 admin 可恢复
+/// The validate + single-transaction import executor: shared by the POST handler and the "restore from existing backup" endpoint.
+/// User-scoped sections (library/categories/progress) belong to user_id; settings/sourceSettings are global state, restorable by admin only
 pub async fn import_backup_doc(
 	state: &AppState,
 	user_id: i64,
@@ -566,7 +566,7 @@ pub async fn import_backup_doc(
 		}
 		tx.commit().await?;
 	}
-	// 源设置可能换了凭据，热重启在跑的实例；失败不回滚（导入已提交，重启等下次懒加载）
+	// Source settings may have changed credentials, so hot-restart running instances; a failure does not roll back (the import is committed; the restart waits for the next lazy load)
 	for id in touched_sources {
 		if let Err(e) = crate::api::restart_if_loaded(state, id).await {
 			tracing::warn!(source_id = id, "restart after backup import failed: {}", e.message());
@@ -796,7 +796,7 @@ async fn restore_progress(
 			));
 			continue;
 		};
-		// fetched_at = 0 标记是备份补的行，等源刷新覆盖；已存在的章节保留更新的元数据
+		// fetched_at = 0 marks a row created by the backup, to be overwritten by the source refresh; existing chapters keep their newer metadata
 		sqlx::query(
 			"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators,
 			 language, thumbnail, url, date_uploaded, source_order, page_count, fetched_at)
@@ -822,7 +822,7 @@ async fn restore_progress(
 				.bind(&entry.chapter.key)
 				.fetch_one(&mut **tx)
 				.await?;
-		// is_downloaded 指向本机文件，备份不携带也不覆盖
+		// is_downloaded points at local files; the backup neither carries nor overwrites it
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
 			 last_read_at) VALUES (?, ?, ?, ?, ?, ?)
@@ -850,7 +850,7 @@ async fn restore_settings(
 	restored: &mut Restored,
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
-		// 备份里的用户态键写回属主的命名空间；user.* 字面键不收（同 /settings PUT 规则）
+		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
 		if key.starts_with("user.") {
 			continue;
 		}

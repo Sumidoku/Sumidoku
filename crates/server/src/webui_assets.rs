@@ -6,7 +6,7 @@ use rust_embed::RustEmbed;
 #[folder = "../../webui/build"]
 pub struct WebuiAssets;
 
-/// mime 由 rust-embed 按扩展名猜；path 需先过 normalize_embed_path
+/// mime is guessed by rust-embed from the extension; path must go through normalize_embed_path first
 pub fn get(path: &str) -> Option<(String, Vec<u8>)> {
 	let file = WebuiAssets::get(path)?;
 	Some((file.metadata.mimetype().to_string(), file.data.into_owned()))
@@ -16,7 +16,7 @@ pub fn has_index() -> bool {
 	WebuiAssets::get("index.html").is_some()
 }
 
-/// URL 路径 → embed 相对路径；含 ParentDir 等非常规分量时拒绝（防穿越）
+/// URL path → embed-relative path; rejects anything with unusual components such as ParentDir (traversal guard)
 pub(crate) fn normalize_embed_path(path: &str) -> Option<String> {
 	let mut out = std::path::PathBuf::new();
 	for component in std::path::Path::new(path.trim_start_matches('/')).components() {
@@ -33,7 +33,7 @@ pub(crate) fn embed_cache_control(path: &str) -> &'static str {
 	if path == "index.html" || path == "404.html" {
 		"no-cache"
 	} else if path.starts_with("assets/") || path.starts_with("_app/") {
-		// 构建产物文件名带内容 hash，可变内容不会复用同一 URL
+		// Build artifacts carry a content hash in the file name, so changing content never reuses a URL
 		"public, max-age=31536000, immutable"
 	} else {
 		"private, max-age=3600"

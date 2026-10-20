@@ -20,7 +20,7 @@ import { applyPrefs, DEFAULT_PREFS, loadPrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import './reader.css';
 
-// continuous 是旧版 localStorage 里「滚动」的存值，改名会丢老用户设置
+// continuous is the stored value for "scroll" in the old localStorage; renaming it would lose existing users' settings
 type Mode = 'paged' | 'continuous' | 'webtoon';
 type Dir = 'ltr' | 'rtl';
 
@@ -34,10 +34,10 @@ function readMode(): Mode {
 	try {
 		const m = localStorage.getItem('sumidoku.reader.mode');
 		if (m === 'paged' || m === 'continuous' || m === 'webtoon') return m;
-		// 旧版设置页把「滚动」误存为 vertical，等价成 continuous
+		// The old settings page mistakenly stored "scroll" as vertical; treat it as continuous
 		if (m === 'vertical') return 'continuous';
 	} catch {
-		// 隐私模式读不到存储就用默认
+		// In private mode storage is unreadable, so fall back to the default
 	}
 	return 'paged';
 }
@@ -46,7 +46,7 @@ function readDir(): Dir {
 	try {
 		if (localStorage.getItem('sumidoku.reader.dir') === 'rtl') return 'rtl';
 	} catch {
-		// 同上
+		// Same as above
 	}
 	return 'ltr';
 }
@@ -55,12 +55,12 @@ function isText(p: PageData | undefined | null): p is PageData & { content: { Te
 	return !!p?.content && typeof p.content === 'object' && 'Text' in p.content;
 }
 
-/** Image 变体服务端直接 501，前端也没有渲染途径 */
+/** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: PageData): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
 }
 
-// hasDescription 页的展示文本是 description（服务端已回源取好），其余文本页走 content.Text
+// A hasDescription page displays its description (already fetched by the server); other text pages use content.Text
 function pageText(p: PageData | undefined | null): string | null {
 	if (!p) return null;
 	if (p.hasDescription && typeof p.description === 'string') return p.description;
@@ -68,12 +68,12 @@ function pageText(p: PageData | undefined | null): string | null {
 	return null;
 }
 
-// 沿用旧版信任模型，markdown 结果不做 sanitize
+// Keep the old trust model: markdown output is not sanitized
 function md(text: string): string {
 	return marked.parse(text, { async: false }) as string;
 }
 
-// 页图降采样的目标宽 = 显示容器 CSS 宽 × DPR，服务端再按 256 向上取桶；条漫/翻页铺满屏宽，滚动栏上限 780
+// Page-image downsampling target width = display container CSS width × DPR, bucketed up to 256 by the server; webtoon/paged fill the screen width, continuous caps at 780
 function readImgWidth(mode: Mode): number {
 	const css = mode === 'continuous' ? Math.min(window.innerWidth, 780) : window.innerWidth;
 	return Math.max(1, Math.round(css * (window.devicePixelRatio || 1)));
@@ -95,7 +95,7 @@ export default function ReaderPage() {
 			</div>
 		);
 	}
-	// key 钉在 chapterId 上，切章整体重挂载，页码/上报队列/observer 随之重置
+	// key pins on chapterId: switching chapters remounts the whole thing, resetting page number, report queue, and observer
 	return <ReaderCore key={chapterId} chapterId={chapterId} mangaId={mangaId} startPage={startPage} />;
 }
 
@@ -117,7 +117,7 @@ function ReaderCore({
 	const navEnabled = mangaId !== null;
 	const mangaQuery = useManga(mangaId ?? 0, { enabled: navEnabled, silent: true });
 	const chaptersQuery = useMangaChapters(mangaId ?? 0, { enabled: navEnabled, silent: true });
-	// 原列表保留给章节标题/续读进度；排序/筛选后的列表只用于上一章/下一章导航
+	// The raw list is kept for chapter titles/resume progress; the sorted/filtered list only drives prev/next-chapter navigation
 	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
 	const chapters = useMemo(() => applyPrefs(rawChapters, prefs), [rawChapters, prefs]);
@@ -131,13 +131,13 @@ function ReaderCore({
 	const idxRef = useRef(0);
 	const [idx, setIdxState] = useState(0);
 	const furthestRef = useRef(0);
-	// 滚动/条漫模式下视口顶部所在的页，用于页码显示；furthest 只用于进度上报
+	// In continuous/webtoon mode, the page at the viewport top, used for the page display; furthest is only for progress reporting
 	const curRef = useRef(0);
 	const [cur, setCurState] = useState(0);
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
 
-	// 文本页在翻页模式下按视口切成多栏，col 是当前栏；textLayout 是实测的栏宽/间距/栏数
+	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
 	const colRef = useRef(0);
 	const [col, setColState] = useState(0);
 	const [textLayout, setTextLayout] = useState({ w: 0, gap: 0, cols: 1 });
@@ -148,15 +148,15 @@ function ReaderCore({
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
 	const curText = pageText(curPage);
-	// 文本章在服务端就是单页，这种章的分页单位是栏而不是页
+	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
-	// 标题/续读用原列表，避免当前章被筛掉时丢了副标题和进度
+	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
 	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
 	const pos = chapters.findIndex((c) => c.id === chapterId);
 	const prevCh = pos > 0 ? chapters[pos - 1] : null;
 	const nextCh = pos >= 0 && pos < chapters.length - 1 ? chapters[pos + 1] : null;
 	const shown = mode === 'paged' ? idx : cur;
-	// 文本单页章的分页单位是栏，其余是页
+	// The pagination unit of a text-only chapter is the column; everything else's is the page
 	const navTotal = textOnly ? textLayout.cols : total;
 	const navPos = textOnly ? col : shown;
 	const mangaTitle = mangaQuery.data?.title ?? '';
@@ -180,7 +180,7 @@ function ReaderCore({
 		setColState(c);
 	}
 
-	// 窗口尺寸变化后按新宽度重新取变体，防抖避免拖拽缩放期间反复拉图
+	// After a window resize, refetch variants at the new width; debounced so dragging the window doesn't refetch images repeatedly
 	useEffect(() => {
 		setImgWidth(readImgWidth(mode));
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -201,7 +201,7 @@ function ReaderCore({
 		readReported: boolean;
 	}>({ timer: undefined, pending: null, readReported: false });
 
-	// 进度上报防抖 300ms，失败静默不打断阅读；到章节末尾顺带标已读，一章只标一次
+	// Progress reports debounce 300ms and fail silently without interrupting reading; reaching the chapter end also marks it read, once per chapter
 	function flushProgress() {
 		const r = reportRef.current;
 		if (r.timer !== undefined) {
@@ -235,7 +235,7 @@ function ReaderCore({
 		r.timer = setTimeout(flushProgress, 300);
 	}
 
-	// 退出时防抖队列里可能还有未上报进度，先补发再卸载
+	// The debounce queue may still hold unreported progress on exit; flush it before unmounting
 	const flushRef = useRef(flushProgress);
 	flushRef.current = flushProgress;
 	useEffect(() => () => flushRef.current(), []);
@@ -266,8 +266,8 @@ function ReaderCore({
 		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`);
 	}
 
-	// 翻到边界直接换章：最后一页再往前 = 下一章，第一页再往回 = 上一章
-	// 文本页先逐栏翻，栏翻完再走页/章的边界
+	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
+	// Text pages turn column by column first; only when the columns run out does the page/chapter boundary apply
 	function turn(forward: boolean) {
 		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
@@ -329,7 +329,7 @@ function ReaderCore({
 		try {
 			localStorage.setItem('sumidoku.reader.mode', m);
 		} catch {
-			// 隐私模式不持久化也照常切换
+			// Private mode blocks persistence but the mode still switches
 		}
 	}
 
@@ -338,7 +338,7 @@ function ReaderCore({
 		try {
 			localStorage.setItem('sumidoku.reader.dir', d);
 		} catch {
-			// 同上
+			// Same as above
 		}
 	}
 
@@ -348,7 +348,7 @@ function ReaderCore({
 			?.scrollIntoView({ block: 'start', behavior: 'instant' });
 	}
 
-	// 起始页：?page > 章节阅读进度 > 0；章节导航数据没就位前不动，免得按错的进度定位
+	// Start page: ?page > chapter reading progress > 0; don't move before chapter navigation data is in place, to avoid landing on the wrong progress
 	const navReady = !navEnabled || chaptersQuery.isFetched;
 	useLayoutEffect(() => {
 		if (!pages || !navReady || initedRef.current) return;
@@ -366,23 +366,23 @@ function ReaderCore({
 		if (mode !== 'paged') scrollToPage(initial);
 	});
 
-	// 切到滚动/条漫后定位回当前页
+	// After switching to continuous/webtoon, position back to the current page
 	const prevModeRef = useRef(mode);
 	useLayoutEffect(() => {
 		if (prevModeRef.current === mode) return;
 		prevModeRef.current = mode;
 		if (mode === 'paged') {
-			// 回到翻页时对齐到滚动模式当前页，而不是离开时停留的 idx
+			// Returning to paged aligns to the continuous mode's current page, not the idx left behind when switching away
 			setIdx(curRef.current);
 			setCol(0);
 		} else {
-			// 进入滚动/条漫时，页码回到翻页模式当前页，而不是沿用历史最远页
+			// Entering continuous/webtoon returns the page number to the paged mode's current page, not the historical furthest page
 			setCur(idxRef.current);
 			if (initedRef.current) scrollToPage(idxRef.current);
 		}
 	}, [mode]);
 
-	// 翻页模式下把文本页按视口切成等宽多栏；实测栏数用于分页和小节跳转
+	// In paged mode, split text pages into viewport-wide equal columns; the measured column count drives pagination and section jumps
 	useLayoutEffect(() => {
 		if (mode !== 'paged') return;
 		const el = textColsRef.current;
@@ -404,7 +404,7 @@ function ReaderCore({
 		return () => ro.disconnect();
 	}, [mode, idx, pages]);
 
-	// 滚动/条漫模式进度 = 进入过视口的最大页码
+	// Continuous/webtoon progress = the highest page number that has entered the viewport
 	useEffect(() => {
 		if (mode === 'paged' || !pages || !navReady) return;
 		const root = contRef.current;
@@ -424,7 +424,7 @@ function ReaderCore({
 		return () => ob.disconnect();
 	}, [mode, pages, navReady]);
 
-	// 滚动/条漫模式页码 = 覆盖视口顶部的那一页，随滚动实时更新
+	// Continuous/webtoon page number = the page covering the viewport top, updated live while scrolling
 	useEffect(() => {
 		if (mode === 'paged' || !pages || !navReady) return;
 		const root = contRef.current;
@@ -446,7 +446,7 @@ function ReaderCore({
 		};
 		update();
 		window.addEventListener('scroll', onScroll, { passive: true });
-		// 图片懒加载会改变容器高度，用 ResizeObserver 重算当前页
+		// Lazy-loaded images change the container height, so recompute the current page with a ResizeObserver
 		const ro = new ResizeObserver(onScroll);
 		ro.observe(root);
 		return () => {
@@ -456,7 +456,7 @@ function ReaderCore({
 		};
 	}, [mode, pages, navReady]);
 
-	// 轻点中部呼出工具栏，滑动不触发
+	// A light tap in the middle summons the toolbar; swipes don't trigger it
 	const downRef = useRef({ x: 0, y: 0 });
 	function onPointerDown(e: RPointerEvent) {
 		downRef.current = { x: e.clientX, y: e.clientY };

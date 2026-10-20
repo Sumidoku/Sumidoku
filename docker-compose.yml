@@ -1,21 +1,22 @@
 services:
   sumidoku:
     image: sumidoku/sumidoku:latest
-    # 本地改从源码构建:先按 Dockerfile 顶部注释摆好 dist/ 布局,再
+    # to build from source locally instead: lay out dist/ per the comment
+    # at the top of the Dockerfile, then
     # docker build -t sumidoku/sumidoku:latest .
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config       # 数据库、设置、封面缓存、源包
+      - ./config:/config       # database, settings, cover cache, source packages
       - ./downloads:/downloads
-      - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
+      - trawl-ca:/trawl-ca:ro  # TRAWL shared CA
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
-      # 复用本 compose 的 trawl（≥ v1.9.1）作 webview 浏览器后端
+      # reuse this compose's trawl (≥ v1.9.1) as the webview browser backend
       # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
-      # 全站认证（web 界面/REST/OPDS 同一密码）
+      # site-wide auth (web UI/REST/OPDS share one password)
       # - SUMIDOKU_AUTH_PASSWORD=
       # - SUMIDOKU_AUTH_API_KEYS=key1,key2
     depends_on:
@@ -29,12 +30,12 @@ services:
       - MITM_PORT=8192
       - MITM_CA_DIR=/data/proxy-ca
       - MITM_MAX_TIER=3
-      # 这套 compose 不带 redis，会话缓存落进程内存
+      # this compose ships no redis; the session cache lives in process memory
       - SESSION_CACHE_DRIVER=memory
     volumes:
       - trawl-ca:/data/proxy-ca
       - trawl-data:/data
-    # 不暴露端口，仅 compose 内网可达
+    # no ports exposed; reachable only on the compose internal network
 
 volumes:
   trawl-ca:

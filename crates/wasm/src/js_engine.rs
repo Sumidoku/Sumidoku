@@ -1,21 +1,23 @@
-//! Boa 引擎封装（与上游 aidoku-rs 同引擎，纯 Rust 无交叉编译风险）：一个 ABI
-//! context 对应一个独立 Context，context 间天然隔离。
-//! 裸 Context 只有 ECMAScript 内置对象：无 console/fetch/setTimeout/loader，
-//! JS 的宿主能力只有 wasm ABI 暴露的那些。
+//! Boa engine wrapper (same engine as upstream aidoku-rs, pure Rust, no cross-compile
+//! risk): one ABI context maps to one independent Context, so contexts are naturally
+//! isolated. A bare Context only has ECMAScript built-ins: no console/fetch/setTimeout/
+//! loader — JS's host capabilities are only the ones the wasm ABI exposes.
 //!
-//! 限制落点（Boa 0.21 无内存上限 API，硬内存顶不可落地，见 PR 讨论）：
-//! - 脚本入口 wall-clock 超时：evaluate_async_with_budget 每 budget 条 VM 指令
-//!   让出一次，poll 间隙查 deadline；超时即丢弃整个 Context 重建——被中断的 VM
-//!   半帧状态没有公开 API 能恢复，继续用不安全
-//! - promise reaction job（then 回调走同步 job.call，budget 够不着）里的死循环
-//!   靠 RuntimeLimits 的 loop_iteration_limit 兜底：VM 在每次循环回边检查，
-//!   与谁驱动无关
+//! Where limits land (Boa 0.21 has no memory-cap API, so a hard memory ceiling cannot be
+//! implemented — see the PR discussion):
+//! - Wall-clock timeout at the script entry: evaluate_async_with_budget yields once every
+//!   budget VM instructions and checks the deadline between polls; on timeout the whole
+//!   Context is dropped and rebuilt — no public API can recover the half-frame state of an
+//!   interrupted VM, so continuing to use it is unsafe
+//! - Infinite loops inside promise reaction jobs (then callbacks run via synchronous
+//!   job.call, which the budget cannot reach) are backstopped by RuntimeLimits'
+//!   loop_iteration_limit: the VM checks on every loop back-edge, independent of who drives
 
 use boa_engine::{Context, JsString, JsValue, Script, Source};
 use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 use std::time::{Duration, Instant};
 
-// 每次 deadline 检查之间让 VM 跑的指令配额：大了超时误差大，小了 poll 开销占比高
+// Instruction quota the VM runs between deadline checks: too big and the timeout error grows, too small and the poll overhead dominates
 const YIELD_BUDGET: u32 = 8192;
 
 pub struct JsEngine {
@@ -39,7 +41,7 @@ impl JsEngine {
 		context
 	}
 
-	// webview 的 document 替换语义要求丢弃全部全局状态重来，与超时重建同一条路径
+	// webview's document-replacement semantics require dropping all global state and starting over — same path as the timeout rebuild
 	pub fn reset(&mut self) {
 		self.context = Self::new_context(self.loop_max);
 	}
@@ -49,10 +51,11 @@ impl JsEngine {
 		to_js_string(&mut self.context, &value)
 	}
 
-	// 与 AidokuRunner(iOS) 的 evaluateAsyncScript 对齐：脚本结果若是 Promise 就驱动
-	// job 队列等它 settle 取 resolve 值，否则直接取原值；拒绝算失败。job 队列排空后
-	// 仍 Pending 的 Promise 永远不会再推进（引擎没注册任何 host 异步源），立即失败
-	// 而不是空转等超时
+	// Aligned with AidokuRunner(iOS)'s evaluateAsyncScript: if the script result is a
+	// Promise, drive the job queue until it settles and take the resolve value, otherwise
+	// take the raw value; rejection counts as failure. A Promise still Pending after the
+	// job queue drains will never advance again (the engine has no host async sources
+	// registered), so fail immediately instead of idling until the timeout
 	pub fn eval_async(&mut self, source: &str) -> Result<String, String> {
 		let value = self.run_script(source)?;
 		let Some(promise) = value.as_promise() else {

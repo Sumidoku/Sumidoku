@@ -1,10 +1,10 @@
-//! 进程当前 RSS 读取。macOS 走 mach task_info，Linux 读 /proc/self/statm；
-//! 其余平台恒 None，build_app 据此不启动 RSS 监控
+//! Reads the process's current RSS. macOS goes through mach task_info, Linux reads /proc/self/statm;
+//! other platforms always return None, and build_app uses that to skip the RSS monitor
 
 #[cfg(target_os = "macos")]
 pub fn current_rss() -> Option<u64> {
-	// libc 的 mach_task_self() 标了 deprecated（指向 mach2）；符号只是读
-	// mach_task_self_ 全局，为几行 FFI 新引一个 crate 不值，自己声明
+	// libc's mach_task_self() is marked deprecated (pointing at mach2); the symbol only reads
+	// the mach_task_self_ global, and a new crate for a few lines of FFI is not worth it, so declare it here
 	unsafe extern "C" {
 		static mach_task_self_: libc::mach_port_t;
 	}
@@ -21,14 +21,14 @@ pub fn current_rss() -> Option<u64> {
 	if kr != libc::KERN_SUCCESS {
 		return None;
 	}
-	// mach_task_basic_info 是 repr(packed(4))，按值拷贝避免未对齐引用
+	// mach_task_basic_info is repr(packed(4)); copy by value to avoid an unaligned reference
 	let resident_size = info.resident_size;
 	Some(resident_size)
 }
 
 #[cfg(target_os = "linux")]
 pub fn current_rss() -> Option<u64> {
-	// statm 第二字段是常驻内存页数
+	// statm's second field is the resident memory page count
 	let raw = std::fs::read_to_string("/proc/self/statm").ok()?;
 	let pages: u64 = raw.split_whitespace().nth(1)?.parse().ok()?;
 	let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };

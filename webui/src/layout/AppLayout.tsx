@@ -37,7 +37,7 @@ function ThemeToggle() {
 	);
 }
 
-/** 阅读器全屏不进这里（路由层挂在 AppLayout 之外） */
+/** The full-screen reader does not come through here (its route hangs outside AppLayout) */
 export function AppLayout() {
 	return (
 		<div className="app">
@@ -76,7 +76,7 @@ export function AppLayout() {
 		<main className="app__content">
 			<Outlet />
 		</main>
-		{/* 新导航滚到顶、前进后退恢复各自位置；阅读器在布局外，自带滚动管理不受影响 */}
+		{/* New navigation scrolls to top, forward/back restores each page's own position; the reader lives outside the layout with its own scroll management, unaffected */}
 		<ScrollRestoration />
 
 			<nav className="app__tabbar">

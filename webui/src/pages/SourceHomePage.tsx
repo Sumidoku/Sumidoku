@@ -38,7 +38,7 @@ export default function SourceHomePage() {
 			const { id } = await register.mutateAsync({ sourceId, manga: m });
 			navigate(`/manga/${id}`);
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		} finally {
 			setPendingKey(null);
 		}
@@ -72,7 +72,7 @@ export default function SourceHomePage() {
 		return link.value !== null && 'Manga' in link.value && pendingKey === link.value.Manga.key;
 	}
 
-	/** 防盗链要的头只有服务端能按源声明带上，封面统一走服务端代理 */
+	/** Only the server can attach the anti-hotlink headers a source declares, so covers all go through the server proxy */
 	function proxyImage(url: string | null): string | null {
 		return url ? sourceImageUrl(sourceId, url) : url;
 	}
@@ -92,10 +92,10 @@ export default function SourceHomePage() {
 	}
 
 	const home = homeQuery.data;
-	// 流式加载中 partial 已写进缓存：有数据就边到边渲染，骨架只留给全无数据时
+	// During streaming, partials are already written to the cache: render edge-to-edge as soon as there is data; skeletons are only for when there is nothing at all
 	const showSkeleton = (!home && homeQuery.isPending) || (home !== null && home !== undefined && home.components.length === 0 && homeQuery.isFetching);
-	// layout 事件先到（组件槽位带真实标题、payload 为空），component 事件按 title 替换填实；
-	// 流式期间未填实的槽位Aidoku redacted+shimmering 同款渲染骨架，到位即换真身
+	// layout events arrive first (component slots carry real titles with empty payloads); component events fill the slots by title;
+	// during streaming an unfilled slot renders the Aidoku redacted+shimmering style skeleton, swapped for the real thing once it lands
 	const streaming = homeQuery.isFetching;
 
 	return (
@@ -240,7 +240,7 @@ export default function SourceHomePage() {
 					</button>
 				);
 			};
-			// page_size 是横向分页语义：每页 page_size 条竖排成一列，列间横滑翻页
+			// page_size is horizontal-pagination semantics: each page stacks page_size entries vertically into a column, and columns are swiped through sideways
 			if (page_size && page_size > 0) {
 				return (
 					<div className="home-hrow home-pages">
@@ -320,12 +320,12 @@ export default function SourceHomePage() {
 				</div>
 			);
 		}
-		// 未知组件种类：保留区块标题，正文跳过
+		// Unknown component kind: keep the section title, skip the body
 		return null;
 	}
 }
 
-/** 流式期间组件还没填实的判定：layout 槽位的 payload 各变体条目数组为空 */
+/** Whether a component is still unfilled during streaming: the layout slot's payload entry array is empty in every variant */
 function isPendingComponent(c: HomeComponent): boolean {
 	const v = c.value;
 	if ('ImageScroller' in v) return v.ImageScroller.links.length === 0;
@@ -337,10 +337,10 @@ function isPendingComponent(c: HomeComponent): boolean {
 	return v.Links.length === 0;
 }
 
-/** 未到组件的类型化骨架（Aidoku redacted+shimmering 同款占位）；标题由 HomeSection 用槽位真实标题渲染 */
+/** Typed skeleton for components that have not arrived (Aidoku redacted+shimmering style placeholder); the title is rendered by HomeSection from the slot's real title */
 function PendingBody({ c }: { c: HomeComponent }) {
 	const v = c.value;
-	// 列表形：行骨架
+	// List shapes: row skeletons
 	if ('MangaList' in v || 'MangaChapterList' in v || 'Links' in v) {
 		return (
 			<div className="home-rows">
@@ -350,7 +350,7 @@ function PendingBody({ c }: { c: HomeComponent }) {
 			</div>
 		);
 	}
-	// 筛选 chips：chip 骨架
+	// Filter chips: chip skeletons
 	if ('Filters' in v) {
 		return (
 			<div className="home-chips">
@@ -360,7 +360,7 @@ function PendingBody({ c }: { c: HomeComponent }) {
 			</div>
 		);
 	}
-	// 横幅轮播：按声明的宽高比铺横幅骨架
+	// Banner carousel: lay out banner skeletons at the declared aspect ratio
 	if ('ImageScroller' in v) {
 		const { width, height } = v.ImageScroller;
 		const ratio = width && height && width > 0 && height > 0 ? `${width} / ${height}` : '16 / 9';
@@ -372,7 +372,7 @@ function PendingBody({ c }: { c: HomeComponent }) {
 			</div>
 		);
 	}
-	// Scroller / BigScroller：封面横排骨架
+	// Scroller / BigScroller: horizontal cover skeletons
 	return (
 		<div className="home-hrow">
 			{Array.from({ length: 5 }, (_, i) => (
@@ -417,7 +417,7 @@ function HomeSection({
 	);
 }
 
-/** ImageScroller 正文：横幅底部叠标题/副标题，auto_scroll_interval 驱动自动横滚 */
+/** ImageScroller body: title/subtitle overlaid at the banner bottom, auto_scroll_interval drives the auto sideways scrolling */
 function HomeImageScroller({
 	value,
 	onOpenLink
@@ -456,8 +456,8 @@ function HomeImageScroller({
 }
 
 /**
- * auto_scroll_interval（秒）驱动的横向自动滚动：每次前进到下一项，到头回卷。
- * 指针悬停时暂停，避免和用户的手动滑动打架
+ * Horizontal auto-scrolling driven by auto_scroll_interval (seconds): advance to the next item each tick,
+ * wrapping around at the end. Paused while the pointer hovers, so it never fights the user's own swiping
  */
 function useAutoScroll(interval: number | null, itemCount: number) {
 	const rowRef = useRef<HTMLDivElement | null>(null);
@@ -467,7 +467,7 @@ function useAutoScroll(interval: number | null, itemCount: number) {
 		const id = window.setInterval(() => {
 			const el = rowRef.current;
 			if (!el) return;
-			// 子项 offsetLeft 以 .home-hrow（position:relative）为参照，与 scrollLeft 同坐标系
+			// a child's offsetLeft is relative to .home-hrow (position:relative), the same coordinate system as scrollLeft
 			const next = Array.from(el.children).find((c) => (c as HTMLElement).offsetLeft > el.scrollLeft + 8);
 			el.scrollTo({ left: next ? (next as HTMLElement).offsetLeft : 0, behavior: 'smooth' });
 		}, interval * 1000);

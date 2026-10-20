@@ -1,4 +1,4 @@
-/* ============ 漫画详情页 ============ */
+/* ============ Manga detail page ============ */
 
 .manga-hero {
 	position: relative;
@@ -22,7 +22,7 @@
 	background: linear-gradient(180deg, rgba(12, 14, 18, 0.42), rgba(12, 14, 18, 0.78));
 }
 
-/* 暗主题 hero 压在暗化封面上，前景固定浅色系 */
+/* The dark-theme hero sits on a darkened cover, so the foreground stays in the light palette */
 .manga-hero__body {
 	position: relative;
 	display: flex;
@@ -162,7 +162,7 @@
 	margin-top: 16px;
 }
 
-/* hero 里的 ghost 按钮在暗化封图上要兜底底色才不致发虚 */
+/* Ghost buttons inside the hero need a backing fill over the darkened cover art to keep from looking washed out */
 .manga-hero__actions .btn {
 	background: rgba(23, 26, 33, 0.66);
 	border-color: rgba(255, 255, 255, 0.18);
@@ -194,7 +194,7 @@
 	color: #fff;
 }
 
-/* 亮主题 hero 浅化：封面 blur 铺底 + 白色半透明遮罩，前景回落页面 token */
+/* Light-theme hero goes lighter: blurred cover base + white translucent scrim, foreground falls back to page tokens */
 [data-theme='light'] .manga-hero__bg {
 	filter: blur(40px) brightness(1.08);
 }
@@ -248,7 +248,7 @@
 	color: var(--text);
 }
 
-/* ============ 更多菜单 ============ */
+/* ============ More menu ============ */
 
 .manga-menu {
 	position: relative;
@@ -284,7 +284,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	color: var(--text-faint);
 }
 
-/* ============ 章节区 ============ */
+/* ============ Chapter section ============ */
 
 .manga-chaps {
 	margin-top: 22px;
@@ -316,7 +316,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	max-width: 260px;
 }
 
-/* 排序/语言下拉在工具行里保持紧凑，不撑满整行 */
+/* The sort/language dropdowns stay compact in the toolbar row instead of stretching full width */
 .manga-chaps__tools .select {
 	font-size: 13px;
 }
@@ -332,7 +332,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	flex-wrap: wrap;
 }
 
-/* 三态 chip 的排除态：划线 + 降透明度，与「含」的 accent 色区分 */
+/* The tri-state chip's excluded state: strikethrough + lowered opacity, distinct from the "include" accent color */
 .chip--exclude {
 	text-decoration: line-through;
 	opacity: 0.75;
@@ -351,7 +351,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	color: var(--text-dim);
 }
 
-/* ============ 章节行 ============ */
+/* ============ Chapter row ============ */
 
 .chapter-row {
 	position: relative;
@@ -426,7 +426,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	white-space: nowrap;
 }
 
-/* 已读行整行降透明度去噪，状态区只保留有信息量的图标与进度 */
+/* Read rows dim entirely to de-noise; the status area keeps only the informative icons and progress */
 .chapter-row--read {
 	opacity: 0.55;
 }
@@ -495,12 +495,12 @@ button.manga-menu__row:hover:not(:disabled) {
 	background: color-mix(in srgb, var(--success) 14%, transparent);
 }
 
-/* 浮动批量条会盖住列表末行，选择模式给容器垫出操作条高度 + 16px */
+/* The floating batch bar covers the list's last row, so in select mode the container is padded by the bar height + 16px */
 .manga-chaps__list--selecting {
 	padding-bottom: 74px;
 }
 
-/* ============ 批量操作条 ============ */
+/* ============ Batch action bar ============ */
 
 .manga-batch {
 	position: fixed;
@@ -528,7 +528,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	font-variant-numeric: tabular-nums;
 }
 
-/* ============ 分类弹窗 ============ */
+/* ============ Category modal ============ */
 
 .manga-cats {
 	display: flex;
@@ -550,7 +550,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	background: var(--bg-hover);
 }
 
-/* ============ 更换封面 ============ */
+/* ============ Cover picker ============ */
 
 .manga-hero__cover-edit {
 	position: absolute;
@@ -650,7 +650,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	}
 }
 
-/* ============ 骨架与响应式 ============ */
+/* ============ Skeletons and responsive ============ */
 
 .manga-skeleton {
 	display: flex;
@@ -688,13 +688,13 @@ button.manga-menu__row:hover:not(:disabled) {
 		font-size: 18px;
 	}
 
-	/* 右缘渐隐提示标签行可横滚 */
+	/* The right-edge fade hints that the tag row scrolls horizontally */
 	.manga-hero__tags {
 		mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
 		-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
 	}
 
-	/* 移动端批量条贴着 tab bar 且可能折行 */
+	/* On mobile the batch bar hugs the tab bar and may wrap */
 	.manga-chaps__list--selecting {
 		padding-bottom: 128px;
 	}

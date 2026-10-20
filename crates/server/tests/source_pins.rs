@@ -6,7 +6,7 @@ use common::{TestApp, base_config, fixture_dir, install_fixture_source, request,
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
-/// 装三个 fixture 源（example + 两个同源 wasm 的复制源），返回按 id 排序的列表
+/// Installs three fixture sources (example + two copies of the same wasm) and returns the list sorted by id
 async fn install_three(app: &Router, tmp: &tempfile::TempDir) -> Vec<Value> {
 	install_fixture_source(tmp, "en.second", "Second Source", &fixture_dir().join("main.wasm"));
 	install_fixture_source(tmp, "en.third", "Third Source", &fixture_dir().join("main.wasm"));
@@ -54,7 +54,7 @@ async fn pin_unpin_cycle() {
 	let second = by_key(&sources, "en.second");
 	let third = by_key(&sources, "en.third");
 
-	// pin 追加到列表尾：second → 0，first → 1，third → 2
+	// pin appends to the end of the list: second → 0, first → 1, third → 2
 	let (status, body) = patch_pin(&app, id_of(&second), true).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinned"], true, "{body}");
@@ -66,14 +66,14 @@ async fn pin_unpin_cycle() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinOrder"], 2, "{body}");
 
-	// 重复 pin 幂等：不换序、不重复入列
+	// repeated pin is idempotent: no reordering, no duplicate entry
 	let (status, body) = patch_pin(&app, id_of(&second), true).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinOrder"], 0, "{body}");
 	let sources = list_sources(&app).await;
 	assert_eq!(sources.iter().filter(|s| s["pinned"] == true).count(), 3);
 
-	// unpin 中间的 second：first 前移，third 保持最后
+	// unpinning second in the middle: first moves up, third stays last
 	let (status, body) = patch_pin(&app, id_of(&second), false).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinned"], false, "{body}");
@@ -82,12 +82,12 @@ async fn pin_unpin_cycle() {
 	assert_eq!(by_key(&sources, "en.example-source")["pinOrder"], 0);
 	assert_eq!(by_key(&sources, "en.third")["pinOrder"], 1);
 	assert_eq!(by_key(&sources, "en.second")["pinned"], false);
-	// 重复 unpin 幂等
+	// repeated unpin is idempotent
 	let (status, body) = patch_pin(&app, id_of(&second), false).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinned"], false, "{body}");
 
-	// 空 body / 缺 pinned 字段为无操作
+	// empty body / missing pinned field is a no-op
 	let (status, body) = request(&app, "PATCH", &format!("/api/v1/sources/{}", id_of(&first)), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinned"], true, "{body}");
@@ -101,7 +101,7 @@ async fn pin_unpin_cycle() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["pinned"], true, "{body}");
 
-	// 非法值 400，不落库
+	// invalid value 400s and is not persisted
 	let (status, body) = request(
 		&app,
 		"PATCH",
@@ -114,7 +114,7 @@ async fn pin_unpin_cycle() {
 	let sources = list_sources(&app).await;
 	assert_eq!(by_key(&sources, "en.example-source")["pinned"], true);
 
-	// 源不存在 404
+	// nonexistent source 404s
 	let (status, _) = patch_pin(&app, 999, true).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
@@ -131,7 +131,7 @@ async fn reorder_pinned_validates_set() {
 		assert_eq!(status, StatusCode::OK);
 	}
 
-	// 合法换序：[first, second, third] → [third, first, second]
+	// valid reorder: [first, second, third] → [third, first, second]
 	let (status, body) = reorder(&app, &["en.third", "en.example-source", "en.second"]).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let sources = list_sources(&app).await;
@@ -139,7 +139,7 @@ async fn reorder_pinned_validates_set() {
 	assert_eq!(by_key(&sources, "en.example-source")["pinOrder"], 1);
 	assert_eq!(by_key(&sources, "en.second")["pinOrder"], 2);
 
-	// 集合必须一致：少 id / 多 id / 重复 id / 未 pin 的 key / 不存在的 key / 非法形状全部 400，且顺序不变
+	// the set must match exactly: missing id / extra id / duplicate id / unpinned key / nonexistent key / malformed shape all 400, and the order is unchanged
 	for bad in [
 		json!({"ids": ["en.third", "en.example-source"]}),
 		json!({"ids": ["en.third", "en.example-source", "en.second", "en.extra"]}),
@@ -169,13 +169,13 @@ async fn delete_source_prunes_pinned() {
 		assert_eq!(status, StatusCode::OK);
 	}
 
-	// 卸载列表头的 first：key 从列表剔除，second 前移为 0
+	// uninstalling first at the head of the list: its key is removed from the list, second moves up to 0
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/sources/{}", id_of(&first)), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	let sources = list_sources(&app).await;
 	assert_eq!(by_key(&sources, "en.second")["pinOrder"], 0);
 
-	// 卸载后 reorder 只认剩余集合：stale key 或「已装但未 pin」的 key 都 400
+	// after uninstall, reorder only accepts the remaining set: a stale key or an "installed but not pinned" key both 400
 	let (status, body) = reorder(&app, &["en.example-source", "en.second"]).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 	let (status, body) = reorder(&app, &["en.third"]).await;
@@ -194,7 +194,7 @@ async fn pins_survive_restart() {
 	assert_eq!(status, StatusCode::OK);
 	drop(app);
 
-	// 重启：新 AppState、新连接池，同一份数据文件
+	// restart: new AppState, new connection pool, same data files
 	let app = build_app(base_config(&tmp)).await.expect("rebuild app");
 	let sources = list_sources(&app).await;
 	assert_eq!(by_key(&sources, "en.second")["pinOrder"], 0);

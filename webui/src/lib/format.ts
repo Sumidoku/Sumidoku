@@ -1,4 +1,4 @@
-// date_uploaded 来自源端，时间戳（秒/毫秒）与日期字符串都出现过，统一归一到毫秒
+// date_uploaded comes from the source; both timestamps (seconds/milliseconds) and date strings occur, so normalize everything to milliseconds
 export function toMillis(v: number | string | null | undefined): number | null {
 	if (v === null || v === undefined) return null;
 	if (typeof v === 'number') {

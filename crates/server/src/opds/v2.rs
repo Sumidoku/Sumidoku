@@ -42,7 +42,7 @@ fn feed_response(feed: &Value) -> Response {
 		.expect("feed response")
 }
 
-/// 每个 feed 都带 start/search，客户端在任何一层都能回根或发起搜索
+/// Every feed carries start/search, so the client can return to the root or start a search from any level
 fn feed_links(base: &str, self_href: &str, next_href: Option<&str>) -> Vec<Value> {
 	let mut links = vec![
 		json!({"rel": "self", "href": self_href, "type": FEED}),
@@ -120,7 +120,7 @@ fn chapter_publication(base: &str, row: &OpdsChapterRow) -> Value {
 		},
 	});
 	let obj = publication.as_object_mut().expect("publication object");
-	// 未下载的章没有可交付产物，给不出 acquisition link，留空好过瞎指
+	// An undownloaded chapter has no deliverable artifact, so no acquisition link can be given; leaving it out beats pointing at nothing
 	if row.download_path.as_deref().is_some_and(|p| !p.is_empty()) {
 		obj.insert(
 			"links".into(),

@@ -1,15 +1,15 @@
-//! 从章节名解析章节号（Tachiyomi ChapterRecognition 的子集，按 issue 点名的
-//! 正则形态）：`第?N话`（含 話/回/卷）、`ch.?\s*N`（含 chapter）、`vol.?\s*N`
-//! （含 volume）。三类按此序取首个命中；都落空返回 None，由调用方退自然序。
+//! Parses chapter numbers from chapter names (a subset of Tachiyomi's ChapterRecognition, the regex forms
+//! named in the issue): `第?N话` (also 話/回/卷), `ch.?\s*N` (also chapter), `vol.?\s*N`
+//! (also volume). The three forms are tried in this order and the first hit wins; if none match, returns None and the caller falls back to natural order.
 
-/// 章节号解析入口：CJK 计数形态优先，其次 chapter 系，最后 volume 系
+/// Chapter-number parse entry point: CJK counting form first, then the chapter family, then the volume family
 pub fn parse_chapter_number(name: &str) -> Option<f32> {
 	parse_cjk(name)
 		.or_else(|| parse_keyword(name, &["chapter", "ch"]))
 		.or_else(|| parse_keyword(name, &["volume", "vol"]))
 }
 
-/// `第?N话`：计数字（话/話/回/卷）前紧邻的十进制数，「第」可缺席
+/// `第?N话`: the decimal number immediately before the counting character (话/話/回/卷); 第 may be absent
 fn parse_cjk(name: &str) -> Option<f32> {
 	let chars: Vec<char> = name.chars().collect();
 	for (i, c) in chars.iter().enumerate() {
@@ -35,8 +35,8 @@ fn parse_cjk(name: &str) -> Option<f32> {
 	None
 }
 
-/// 关键词后跟数字：关键词前不能紧贴字母数字（school 里的 ch 不算），
-/// 后容许 `.` 与空白再跟数字；keywords 长的在前避免 chapter 被 ch 截胡
+/// Number after a keyword: the keyword must not be immediately preceded by an alphanumeric (the ch in school
+/// does not count); a `.` and whitespace may sit between keyword and number; keywords are longest-first so chapter is not cut off by ch
 fn parse_keyword(name: &str, keywords: &[&str]) -> Option<f32> {
 	let lower = name.to_lowercase();
 	let bytes = lower.as_bytes();

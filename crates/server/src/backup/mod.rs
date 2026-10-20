@@ -1,5 +1,5 @@
-//! 定时自动备份：按 setting 表 backup.* 周期落盘、按保留数裁剪，启动补跑 overdue。
-//! 文档构造复用 api::backup::build_backup_doc，与 GET /api/v1/backup 下载同构。
+//! Scheduled automatic backups: writes on the backup.* setting cadence, prunes by retention count, catches up overdue runs at startup.
+//! The document is built with api::backup::build_backup_doc, the same shape as the GET /api/v1/backup download.
 
 use crate::api::backup::build_backup_doc;
 use crate::config::Config;
@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 到期检查的唤醒粒度；interval 以小时计，分钟级漂移无感
+/// Wake granularity of the due check; intervals are in hours, so minute-level drift is imperceptible
 const CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct BackupScheduler {
@@ -25,7 +25,7 @@ impl BackupScheduler {
 		Self::with_tick_interval(pool, config, CHECK_INTERVAL)
 	}
 
-	/// 测试注入短周期驱动 run()；生产走 new 的默认粒度
+	/// Tests inject a short tick to drive run(); production uses new's default granularity
 	pub fn with_tick_interval(pool: SqlitePool, config: Config, tick: Duration) -> Arc<Self> {
 		Arc::new(Self { pool, config, tick })
 	}
@@ -33,8 +33,8 @@ impl BackupScheduler {
 	pub async fn run(self: Arc<Self>) {
 		let mut ticker = tokio::time::interval(self.tick);
 		loop {
-			// interval 首 tick 立即完成，启动时的 overdue 检查就是第一次迭代；
-			// 每轮重读 setting，运行期改配置下个周期即生效
+			// interval's first tick completes immediately, so the startup overdue check is the first iteration;
+			// settings are re-read every round, so runtime config changes take effect next cycle
 			ticker.tick().await;
 			if let Err(e) = self.run_if_due().await {
 				tracing::warn!("scheduled backup failed: {e:?}");
@@ -42,7 +42,7 @@ impl BackupScheduler {
 		}
 	}
 
-	/// 到点才跑：enabled 且（从未备份过 或 距 last_run 已满一个周期）
+	/// Runs only when due: enabled and (never backed up or a full interval has passed since last_run)
 	pub async fn run_if_due(&self) -> ApiResult<bool> {
 		let settings = BackupSettings::load(&self.pool, &self.config).await?;
 		if !settings.enabled {
@@ -59,15 +59,15 @@ impl BackupScheduler {
 		Ok(true)
 	}
 
-	/// 无条件产出一份备份并裁剪（手动触发与测试用；last_run 随之更新）
+	/// Unconditionally produces one backup and prunes (manual trigger and tests; last_run is updated too)
 	pub async fn run_once(&self) -> ApiResult<PathBuf> {
 		let settings = BackupSettings::load(&self.pool, &self.config).await?;
 		self.write_backup(&settings).await
 	}
 
 	async fn write_backup(&self, settings: &BackupSettings) -> ApiResult<PathBuf> {
-		// 定时备份是服务端全量导出：固定内置 admin 身份构造，按请求者角色裁剪
-		// （reader 只有 self-data）只管 GET /api/v1/backup，管不到这里
+		// Scheduled backup is a server-side full export: always built with the built-in admin identity; the
+		// per-requester trimming (reader gets self-data only) only applies to GET /api/v1/backup, not here
 		let doc = build_backup_doc(&self.pool, crate::USER_ID, true).await?;
 		let body = serde_json::to_vec(&doc)?;
 		tokio::fs::create_dir_all(&settings.dir)
@@ -78,7 +78,7 @@ impl BackupScheduler {
 			chrono::Utc::now().format("%Y%m%d-%H%M%S")
 		);
 		let path = settings.dir.join(&name);
-		// 先写临时文件再改名：中途崩溃不留半截 .json 被列表当成可恢复备份
+		// Write a temp file then rename: a crash midway must not leave a half-written .json the list would treat as restorable
 		let tmp = settings.dir.join(format!("{name}.tmp"));
 		tokio::fs::write(&tmp, &body)
 			.await
@@ -87,7 +87,7 @@ impl BackupScheduler {
 			.await
 			.map_err(|e| ApiError::internal(format!("rename backup: {e}")))?;
 		set_last_run(&self.pool, unix_now()).await?;
-		// 裁剪失败不拖垮本次备份，留到下个周期再试
+		// A prune failure must not sink this backup; retry next cycle
 		if let Err(e) = prune(&settings.dir, settings.retention_count).await {
 			tracing::warn!("backup prune failed: {e:?}");
 		}
@@ -103,7 +103,7 @@ struct BackupSettings {
 }
 
 impl BackupSettings {
-	/// env（config 层）优先，其次 setting 表，最后内置默认
+	/// env (config layer) first, then the setting table, then built-in defaults
 	async fn load(pool: &SqlitePool, config: &Config) -> ApiResult<Self> {
 		let enabled = match config.backup_enabled {
 			Some(v) => v,
@@ -129,7 +129,7 @@ impl BackupSettings {
 		};
 		Ok(Self {
 			enabled,
-			// 0 会把每次检查都判成 overdue 等于每分钟写一份；上限防 u64 乘法溢出
+			// 0 would judge every check overdue, writing one backup per minute; the cap prevents u64 multiply overflow
 			interval_hours: interval_hours.clamp(1, 8760),
 			retention_count,
 			dir: backups_dir(pool, config).await?,
@@ -137,7 +137,7 @@ impl BackupSettings {
 	}
 }
 
-/// 单键读取；通用 PUT 允许任意 JSON，类型不合时按未设置处理
+/// Single-key read; the generic PUT accepts any JSON, so a wrong type is treated as unset
 async fn setting_json(pool: &SqlitePool, key: &str) -> ApiResult<Option<Value>> {
 	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
 		.bind(key)
@@ -163,7 +163,7 @@ async fn set_last_run(pool: &SqlitePool, at: i64) -> ApiResult<()> {
 	Ok(())
 }
 
-/// 备份落点：env（config.backup_dir）> setting backup.dir > 默认 <config_dir>/backups
+/// Backup destination: env (config.backup_dir) > setting backup.dir > default <config_dir>/backups
 pub async fn backups_dir(pool: &SqlitePool, config: &Config) -> ApiResult<PathBuf> {
 	if let Some(dir) = &config.backup_dir {
 		return Ok(dir.clone());
@@ -178,8 +178,8 @@ pub async fn backups_dir(pool: &SqlitePool, config: &Config) -> ApiResult<PathBu
 	Ok(config.default_backups_dir())
 }
 
-/// 只认 sumidoku-backup-<yyyymmdd>-<HHMMSS>.json（UTC）；返回文件名里的时间戳。
-/// 恢复端点拿它当文件名白名单：pattern 锚定首尾，「..」之类永远匹配不上
+/// Accepts only sumidoku-backup-<yyyymmdd>-<HHMMSS>.json (UTC); returns the timestamp from the file name.
+/// The restore endpoint uses it as a file-name whitelist: the pattern anchors both ends, so ".." can never match
 pub fn parse_backup_name(name: &str) -> Option<i64> {
 	let stamp = name.strip_prefix("sumidoku-backup-")?.strip_suffix(".json")?;
 	let dt = chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%d-%H%M%S").ok()?;
@@ -193,7 +193,7 @@ pub struct BackupFileInfo {
 	pub created_at: i64,
 }
 
-/// 目录里符合命名格式的备份，新到旧排序；目录不存在按空列表
+/// Backups in the directory matching the naming format, newest first; a missing directory reads as an empty list
 pub async fn list_backup_files(dir: &Path) -> ApiResult<Vec<BackupFileInfo>> {
 	let mut read_dir = match tokio::fs::read_dir(dir).await {
 		Ok(read_dir) => read_dir,
@@ -218,13 +218,13 @@ pub async fn list_backup_files(dir: &Path) -> ApiResult<Vec<BackupFileInfo>> {
 			created_at,
 		});
 	}
-	// 固定格式下名字序即时间序
+	// With the fixed format, name order is time order
 	out.sort_by(|a, b| b.name.cmp(&a.name));
 	Ok(out)
 }
 
-/// 保留最新 max(keep, 1) 份，删掉更老的：最新一个永不删，keep=0 也保底。
-/// 单个删除失败只记日志不中断；返回删除份数
+/// Keeps the newest max(keep, 1) files and deletes older ones: the newest is never deleted, even with keep=0.
+/// A single delete failure is only logged, not fatal; returns the number deleted
 pub async fn prune(dir: &Path, keep: u32) -> ApiResult<usize> {
 	let files = list_backup_files(dir).await?;
 	let keep = (keep as usize).max(1);

@@ -22,23 +22,23 @@ const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
 #[serde(rename_all = "camelCase")]
 pub struct LibraryQuery {
 	pub category_id: Option<i64>,
-	/// 迁移批量流程按源筛条目
+	/// The migration batch flow filters entries by source
 	pub source_id: Option<i64>,
 	pub page: Option<i64>,
 	pub search: Option<String>,
 	pub sort: Option<String>,
 	pub filter: Option<String>,
-	/// 逗号分隔的布尔筛选排除集（与 filter 同词表）：unread 排除=全部已读，以此类推
+	/// Comma-separated exclusion set for boolean filters (same vocabulary as filter): unread excluded = everything read, and so on
 	pub filter_exclude: Option<String>,
-	/// 逗号分隔的 manga 级分级值（1..=3），包含集
+	/// Comma-separated manga-level rating values (1..=3), inclusion set
 	pub content_rating: Option<String>,
 	pub content_rating_exclude: Option<String>,
-	/// 逗号分隔的源 id，包含集
+	/// Comma-separated source ids, inclusion set
 	pub source: Option<String>,
 	pub source_exclude: Option<String>,
 }
 
-/// LIKE 的 %/_ 是通配符，用户搜索词里的字面量与转义符本身都要前置转义
+/// LIKE's %/_ are wildcards, so literal occurrences and the escape character itself in the user's search term must be escaped upfront
 fn escape_like(raw: &str) -> String {
 	let mut out = String::with_capacity(raw.len());
 	for c in raw.chars() {
@@ -50,7 +50,7 @@ fn escape_like(raw: &str) -> String {
 	out
 }
 
-/// 返回排序子句与其中是否带一个 user_id 绑定（lastRead/unread 的子查询按用户取数）
+/// Returns the ORDER BY clause and whether it carries a user_id bind (the lastRead/unread subqueries read per user)
 fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	const LAST_READ: &str = " ORDER BY (SELECT MAX(cu.last_read_at) FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
@@ -61,7 +61,7 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	match sort {
 		None | Some("added") => Ok((" ORDER BY mu.in_library_at DESC, m.id ASC", false)),
 		Some("title") => Ok((" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC", false)),
-		// SQLite 里 NULL 比任何值小，DESC 天然落最后
+		// In SQLite NULL sorts below any value, so DESC naturally sinks it to the end
 		Some("lastRead") => Ok((LAST_READ, true)),
 		Some("unread") => Ok((UNREAD, true)),
 		Some(other) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
@@ -85,7 +85,7 @@ fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 	Ok(format!("{head}{column})"))
 }
 
-/// 逗号分隔的整数列表：整段空白或空段视为缺席，非空段非法即 400（同 sort/filter 风格）
+/// Comma-separated integer list: an all-blank value or blank segments count as absent, a non-blank illegal segment is a 400 (same style as sort/filter)
 fn parse_int_list(raw: &str, param: &str, valid: impl Fn(i64) -> bool) -> ApiResult<Vec<i64>> {
 	let mut out = Vec::new();
 	for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
@@ -112,8 +112,8 @@ pub async fn list_library(
 	}
 	let (order_by, order_user_bind) = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
-	// bind 顺序与 SQL 子句一致：user → search → categoryId → 分级包含 → 分级排除 →
-	// 源包含 → 源排除 → sourceId → 筛选子句逐个 user → 排序子句 user
+	// bind order follows the SQL clauses: user → search → categoryId → rating include → rating exclude →
+	// source include → source exclude → sourceId → one user per filter clause → user for the ORDER BY clause
 	let rating_in = match &query.content_rating {
 		Some(raw) => parse_int_list(raw, "contentRating", |v| (1..=3).contains(&v))?,
 		None => Vec::new(),
@@ -134,7 +134,7 @@ pub async fn list_library(
 	if search.is_some() {
 		sql.push_str(" AND m.title LIKE '%'||?||'%' ESCAPE '\\'");
 	}
-	// categoryId=0 指「在库但未分类」，其余 id 指该分类下；缺省不过滤
+	// categoryId=0 means "in library but uncategorized", any other id means under that category; absent means no filtering
 	match query.category_id {
 		None => {}
 		Some(0) => sql.push_str(
@@ -276,7 +276,7 @@ pub async fn add_to_library(
 		}
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	// 已在库的保留首次入库时间
+	// Entries already in the library keep their first-shelved time
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
@@ -361,7 +361,7 @@ fn category_json(row: &CategoryRow) -> Value {
 	})
 }
 
-/// 分类按请求用户归属：别人的分类 id 与不存在同按 404，不泄露存在性
+/// Categories belong to the requesting user: someone else's category id and a nonexistent one both get 404, not leaking existence
 async fn category_row(pool: &SqlitePool, user_id: i64, id: i64) -> ApiResult<CategoryRow> {
 	let row: Option<CategoryRow> =
 		sqlx::query_as(&format!("{CATEGORY_SELECT} AND c.id = ?"))
@@ -373,8 +373,8 @@ async fn category_row(pool: &SqlitePool, user_id: i64, id: i64) -> ApiResult<Cat
 	row.ok_or_else(|| ApiError::not_found("category not found"))
 }
 
-/// 书库内每个源的条目数（书库图源筛选下拉的计数与自动隐藏用）。
-/// 含已停用源的条目——库内漫画不随源停用消失
+/// Entry count per source in the library (for the library source-filter dropdown's counts and auto-hiding).
+/// Includes entries of disabled sources — library manga do not vanish when a source is disabled
 pub async fn source_counts(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -484,7 +484,7 @@ fn check_include_in(field: &str, value: i64) -> ApiResult<i64> {
 	}
 }
 
-/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
+/// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid values is 400; an empty body is a no-op
 pub async fn update_category(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,

@@ -10,7 +10,7 @@ use tower::ServiceExt;
 
 const ACQUISITION: &str = "http://opds-spec.org/acquisition";
 
-/// OPDS 断言要看绝对 URL，请求固定带 Host + X-Forwarded-Proto
+/// OPDS assertions inspect absolute URLs, so requests always carry Host + X-Forwarded-Proto
 async fn opds_get(app: &Router, path: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
 	opds_get_auth(app, path, None).await
 }
@@ -34,7 +34,7 @@ async fn opds_get_auth(app: &Router, path: &str, auth: Option<&str>) -> (StatusC
 	(status, headers, bytes.to_vec())
 }
 
-/// 起 app 并注册 + 入库一本漫画；downloads_dir 指进 tmp，build_app 的 create_dir_all 不落仓库目录
+/// Boots the app and registers + shelves one manga; downloads_dir points into tmp, so build_app's create_dir_all doesn't touch the repo directory
 async fn opds2_app() -> (TestApp, i64) {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -77,7 +77,7 @@ async fn catalog_feeds() {
 	let (_, manga) = request(app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	let title = manga["title"].as_str().expect("title").to_string();
 
-	// root：metadata + self/start/search 链接 + 五个导航入口
+	// root: metadata + self/start/search links + five navigation entries
 	let root = feed(app, "/opds/v2/root").await;
 	assert_eq!(root["metadata"]["title"], "Sumidoku");
 	let links = root["links"].as_array().expect("links");
@@ -97,7 +97,7 @@ async fn catalog_feeds() {
 		assert_eq!(entry["type"], "application/opds+json");
 	}
 
-	// library：单本 manga 的 publication 形状 + 绝对 URL
+	// library: publication shape for a single manga + absolute URLs
 	let library = feed(app, "/opds/v2/library").await;
 	assert_eq!(library["metadata"]["title"], "Library");
 	let pubs = library["publications"].as_array().expect("publications");
@@ -114,7 +114,7 @@ async fn catalog_feeds() {
 	assert_eq!(pub_self["href"], format!("https://opds.test/opds/v2/series/{manga_id}"));
 	assert_eq!(pub_self["type"], "application/opds+json");
 
-	// author/artist/description 有值才给
+	// author/artist/description are only present when set
 	sqlx::query("UPDATE manga SET authors = '[\"Alice\", \"Alicia\"]', artists = '[\"Bob\"]', description = 'Desc & <b>' WHERE id = ?")
 		.bind(manga_id)
 		.execute(&pool)
@@ -126,7 +126,7 @@ async fn catalog_feeds() {
 	assert_eq!(meta["artist"], json!(["Bob"]));
 	assert_eq!(meta["description"], "Desc & <b>");
 
-	// 转义：特殊字符走 JSON 字符串语义，解析后必须原样
+	// escaping: special characters follow JSON string semantics and must come back verbatim after parsing
 	sqlx::query("UPDATE manga SET title = ? WHERE id = ?")
 		.bind("A & B <C> \"D\"")
 		.bind(manga_id)
@@ -136,7 +136,7 @@ async fn catalog_feeds() {
 	let library = feed(app, "/opds/v2/library").await;
 	assert_eq!(library["publications"][0]["metadata"]["title"], "A & B <C> \"D\"");
 
-	// categories：导航 + 分类 feed
+	// categories: navigation + category feed
 	let row = sqlx::query("INSERT INTO category (user_id, name, sort_order) VALUES (1, 'Drama', 0)")
 		.execute(&pool)
 		.await
@@ -157,7 +157,7 @@ async fn catalog_feeds() {
 	assert_eq!(category["metadata"]["title"], "Drama");
 	assert_eq!(category["publications"].as_array().expect("publications").len(), 1);
 
-	// sources：导航 + 源 feed
+	// sources: navigation + source feed
 	let (source_id, source_name): (i64, String) =
 		sqlx::query_as("SELECT s.id, s.name FROM source s JOIN manga m ON m.source_id = s.id WHERE m.id = ?")
 			.bind(manga_id)
@@ -166,7 +166,7 @@ async fn catalog_feeds() {
 			.expect("source row");
 	let sources = feed(app, "/opds/v2/sources").await;
 	let nav = sources["navigation"].as_array().expect("navigation");
-	// 内置本地源随迁移落库，无漫画也出现在源目录（与空 aidoku 源同一契约）
+	// the built-in local source is persisted by the migration and appears in the source catalog even with no manga (same contract as an empty aidoku source)
 	assert_eq!(nav.len(), 2, "sources: {sources}");
 	assert_eq!(nav[0]["title"], "Local");
 	let entry = nav
@@ -177,7 +177,7 @@ async fn catalog_feeds() {
 	let source = feed(app, &format!("/opds/v2/sources/{source_id}")).await;
 	assert_eq!(source["publications"].as_array().expect("publications").len(), 1);
 
-	// series：先给一章落页缓存（page_count=2），再插 finished 下载行
+	// series: populate the page cache for one chapter first (page_count=2), then insert a finished download row
 	let chapters = first_chapters(app, manga_id).await;
 	let chapter_id = chapters[0]["id"].as_i64().expect("chapter id");
 	let other_chapter_id = chapters[1]["id"].as_i64().expect("chapter id");
@@ -211,7 +211,7 @@ async fn catalog_feeds() {
 		format!("https://opds.test/opds/v1.2/stream/{chapter_id}/0")
 	);
 	assert_eq!(downloaded["images"][0]["type"], "image/jpeg");
-	// 未下载且未加载页列表的章：无 acquisition 链接、无 images，但照常出现
+	// a chapter neither downloaded nor with a loaded page list: no acquisition link, no images, but still listed as usual
 	let other = pubs
 		.iter()
 		.find(|p| p["metadata"]["identifier"] == format!("urn:sumidoku:chapter:{other_chapter_id}"))
@@ -228,7 +228,7 @@ async fn catalog_feeds() {
 		.count();
 	assert_eq!(acq_count, 1, "only the downloaded chapter gets a zip link: {series}");
 
-	// updates：章节 publication，数与章节总数一致
+	// updates: chapter publications, count matches the total chapter count
 	let updates = feed(app, "/opds/v2/updates").await;
 	let pubs = updates["publications"].as_array().expect("publications");
 	assert_eq!(pubs.len(), chapters.len(), "updates: {updates}");
@@ -242,7 +242,7 @@ async fn catalog_feeds() {
 		);
 	}
 
-	// history：打了进度后出现该 manga
+	// history: the manga appears after progress is recorded
 	let (status, _) = request(
 		app,
 		"PATCH",
@@ -256,7 +256,7 @@ async fn catalog_feeds() {
 	assert_eq!(pubs.len(), 1, "history: {history}");
 	assert_eq!(pubs[0]["metadata"]["identifier"], format!("urn:sumidoku:manga:{manga_id}"));
 
-	// search：命中与未命中
+	// search: hit and miss
 	let search = feed(app, "/opds/v2/search?q=B").await;
 	let pubs = search["publications"].as_array().expect("publications");
 	assert_eq!(pubs.len(), 1, "search: {search}");
@@ -264,7 +264,7 @@ async fn catalog_feeds() {
 	let search = feed(app, "/opds/v2/search?q=zzz-no-match").await;
 	assert_eq!(search["publications"].as_array().expect("publications").len(), 0);
 
-	// 404：不存在的 series/category/source 走 JSON 错误
+	// 404: nonexistent series/category/source return JSON errors
 	let (status, _, _) = opds_get(app, "/opds/v2/series/99999").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	let (status, _, _) = opds_get(app, "/opds/v2/categories/99999").await;
@@ -272,7 +272,7 @@ async fn catalog_feeds() {
 	let (status, _, _) = opds_get(app, "/opds/v2/sources/99999").await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 
-	// 分页：补 50 本入库，page 1 有 next，page 2 收尾无 next
+	// pagination: shelve 50 more, page 1 has next, page 2 is the tail with no next
 	let (source_id,): (i64,) = sqlx::query_as("SELECT source_id FROM manga WHERE id = ?")
 		.bind(manga_id)
 		.fetch_one(&pool)
@@ -318,7 +318,7 @@ async fn basic_auth_guard() {
 	config.basic_password = Some("secret".into());
 	let app = build_app(config).await.expect("build app");
 
-	// 无头 401 + WWW-Authenticate
+	// no credentials: 401 + WWW-Authenticate
 	let (status, headers, _) = opds_get(&app, "/opds/v2/root").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
@@ -326,15 +326,15 @@ async fn basic_auth_guard() {
 		"Basic realm=\"Sumidoku OPDS\""
 	);
 
-	// 错误密码 401（admin:wrong）
+	// wrong password: 401 (admin:wrong)
 	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46d3Jvbmc=")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-	// 真实用户名+密码 200（admin:secret）
+	// real username+password: 200 (admin:secret)
 	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46c2VjcmV0")).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// API 路由不受 OPDS Basic 影响
+	// API routes are unaffected by OPDS Basic
 	let (status, body) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["status"], "ok");

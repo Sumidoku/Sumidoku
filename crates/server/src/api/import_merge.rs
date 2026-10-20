@@ -1,6 +1,6 @@
-//! 外部 App 备份导入（.aib / .tachibk）共用的 additive 合并原语：
-//! 已存在库条目优先（元数据不覆盖、入库时间保留），进度取 max(last_page_read)、
-//! is_read 取 OR、last_read_at NULL 安全取较新；is_bookmarked 不携带不覆盖
+//! Additive merge primitives shared by external-app backup imports (.aib / .tachibk):
+//! existing library entries win (metadata not overwritten, in-library time kept), progress takes max(last_page_read),
+//! is_read takes OR, last_read_at takes the newer NULL-safely; is_bookmarked is neither carried nor overwritten
 
 use crate::error::ApiResult;
 use sqlx::{Sqlite, Transaction};
@@ -12,7 +12,7 @@ pub struct ImportCounts {
 	pub progress: i64,
 }
 
-/// 同名分类已存在就原样使用（sort_order/三态以现有为准），新分类排到末尾
+/// A same-named existing category is used as-is (sort_order/the tri-state flags stay as they are); new categories append at the end
 pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, name: &str) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
@@ -48,7 +48,7 @@ pub async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> Ap
 	Ok(row.map(|(id,)| id))
 }
 
-/// manga 行元数据的中间形态：各导入器把自家备份模型归一到它
+/// Intermediate shape of a manga row's metadata: each importer normalizes its own backup model onto it
 pub struct MangaMeta<'a> {
 	pub title: &'a str,
 	pub authors: String,
@@ -61,7 +61,7 @@ pub struct MangaMeta<'a> {
 	pub url: Option<&'a str>,
 }
 
-/// manga 行缺失时按备份元数据补行；initialized=0，等下次源刷新补全
+/// Creates the manga row from backup metadata when missing; initialized=0, to be completed by the next source refresh
 pub async fn ensure_manga_row(
 	tx: &mut Transaction<'_, Sqlite>,
 	source_id: i64,
@@ -106,7 +106,7 @@ pub async fn ensure_manga_row(
 	Ok(id)
 }
 
-/// 章节行元数据的中间形态
+/// Intermediate shape of a chapter row's metadata
 pub struct ChapterMeta<'a> {
 	pub title: Option<&'a str>,
 	pub number: Option<f64>,
@@ -118,7 +118,7 @@ pub struct ChapterMeta<'a> {
 	pub source_order: i64,
 }
 
-/// 章节行缺失时按备份元数据补行（fetched_at=0 标记是备份补的，等源刷新覆盖）
+/// Creates the chapter row from backup metadata when missing (fetched_at=0 marks a backup-created row, to be overwritten by the source refresh)
 pub async fn ensure_chapter_row(
 	tx: &mut Transaction<'_, Sqlite>,
 	manga_id: i64,
@@ -161,7 +161,7 @@ pub async fn ensure_chapter_row(
 	Ok(id)
 }
 
-/// 补入库旗标：已入库的保留现有 in_library_at（现有条目优先），未入库的用备份的入库时间
+/// Sets the in-library flag: already-shelved entries keep their existing in_library_at (existing entries win), unshelved ones take the backup's shelving time
 pub async fn mark_in_library(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
@@ -184,7 +184,7 @@ pub async fn mark_in_library(
 	Ok(())
 }
 
-/// 进度合并：页码取大、已读取 OR、时间 NULL 安全取新；is_bookmarked 是本机状态，备份不携带也不覆盖
+/// Progress merge: page number takes the max, is_read takes OR, timestamp takes the newer NULL-safely; is_bookmarked is local state, neither carried nor overwritten
 pub async fn merge_chapter_progress(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,

@@ -59,14 +59,14 @@ export default function UpdatesPage() {
 			}
 			if (m.type !== 'job') return;
 			const { type: _t, ...job } = m;
-			// 同一本漫画的连续事件只留最新一条，动态列表才不被刷屏
+			// Consecutive events for the same manga keep only the newest, so the live list doesn't get flooded
 			setJobs((cur) =>
 				[{ ...job, seq: ++jobSeq.current }, ...cur.filter((j) => j.mangaId !== job.mangaId)].slice(
 					0,
 					50
 				)
 			);
-			// 收到 job 事件说明有任务在跑；契约没有整轮结束事件，running 落停靠轮询对账
+			// A job event means work is running; the contract has no round-finished event, so running settles via polling reconciliation
 			setSummary((s) => (s && !s.running ? { ...s, running: true } : s));
 		}
 
@@ -81,14 +81,14 @@ export default function UpdatesPage() {
 		return unsub;
 	}, []);
 
-	// 运行中每 4s 拉一次 summary 对账：计数刷新 + running 落停（WS 不推整轮结束事件）
+	// While running, poll the summary every 4s to reconcile: refresh counts + settle running (the WS pushes no round-finished event)
 	useEffect(() => {
 		if (!summary?.running) return;
 		const t = setInterval(async () => {
 			try {
 				setSummary(await api<UpdateSummary>('/update/summary', { silent: true }));
 			} catch {
-				// 失败等下一轮
+				// On failure, wait for the next round
 			}
 		}, 4000);
 		return () => clearInterval(t);

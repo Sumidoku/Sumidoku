@@ -1,5 +1,5 @@
-//! 用户管理（admin 专属面）：列表/建号/改号/删号。
-//! 免认证部署没有登录概念，全部端点以先设密码为前提（未启用认证一律 400）
+//! User management (admin-only surface): list/create/update/delete.
+//! Auth-free deployments have no login concept, so every endpoint presupposes a password is set (400 when auth is not enabled)
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -23,7 +23,7 @@ fn user_json(id: i64, username: &str, role: &str, created_at: i64) -> Value {
 	json!({ "id": id, "username": username, "role": role, "createdAt": created_at })
 }
 
-/// 列表不带 password_hash：凭证材料永不出库
+/// The list never carries password_hash: credential material never leaves the DB
 pub async fn list_users(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	refuse_when_auth_disabled(&state).await?;
 	let rows: Vec<(i64, String, String, i64)> =
@@ -102,7 +102,7 @@ pub struct UpdateUserRequest {
 	pub password: Option<String>,
 }
 
-/// 改号：用户名/角色/重置密码按字段缺席与否逐项生效；重置密码吊销该用户全部会话
+/// Update: username/role/password-reset take effect field by field when present; a password reset revokes all of the user's sessions
 pub async fn update_user(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -154,7 +154,7 @@ pub async fn update_user(
 			.bind(id)
 			.execute(&state.pool)
 			.await?;
-		// 与自助改密同语义：重置即全端下线
+		// Same semantics as self-service password change: a reset logs out every client
 		sqlx::query("DELETE FROM auth_token WHERE user_id = ?")
 			.bind(id)
 			.execute(&state.pool)
@@ -169,8 +169,8 @@ pub async fn update_user(
 	Ok(Json(user_json(id, &username, &role, created_at)))
 }
 
-/// 删号：user 1 是内置 admin 不可删。用户态行（库/进度/分类/下载/token）全部 FK 级联，
-/// 下载产物文件是多用户共享的确定性路径，不随删号清理
+/// Deletion: user 1 is the built-in admin and cannot be deleted. User-scoped rows (library/progress/categories/downloads/tokens) all FK-cascade;
+/// downloaded artifact files are deterministic paths shared across users and are not cleaned up on deletion
 pub async fn delete_user(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
 	refuse_when_auth_disabled(&state).await?;
 	if id == 1 {
@@ -184,7 +184,7 @@ pub async fn delete_user(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 		return Err(ApiError::not_found("user not found"));
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	// user.<id>.* 命名空间键在 setting 表里没有外键，级联够不着
+	// user.<id>.* namespace keys have no foreign key in the setting table, so the cascade cannot reach them
 	sqlx::query("DELETE FROM setting WHERE key LIKE ?")
 		.bind(format!("user.{id}.%"))
 		.execute(&mut *tx)

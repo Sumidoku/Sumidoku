@@ -1,5 +1,5 @@
-//! 打开的 CBZ 句柄 LRU：重开压缩包要重读整个中央目录，逐页抽一章会每页付一次。
-//! 容量钉 16（kmrs 同款）；全局一把锁，单次持锁只抽一个条目，争用代价可忽略。
+//! LRU of open CBZ handles: reopening an archive re-reads the whole central directory, so extracting a chapter page by page would pay that per page.
+//! Capacity pinned at 16 (same as kmrs); one global lock, each hold extracts a single entry, so contention cost is negligible.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ pub struct ZipCache {
 
 struct ZipCacheInner {
 	archives: HashMap<PathBuf, zip::ZipArchive<std::fs::File>>,
-	/// 前旧后新；命中挪尾，满员逐首
+	/// Oldest at the front, newest at the back; a hit moves to the back, a full cache evicts the front
 	recency: VecDeque<PathBuf>,
 }
 
@@ -133,7 +133,7 @@ mod tests {
 		assert!(!cache.is_cached(&paths[0]), "最早打开的应被逐出");
 		assert!(cache.is_cached(&paths[ZIP_CACHE_CAPACITY]));
 
-		// 命中刷新近因：再摸一遍 1 号，下次满员逐的是 2 号
+		// A hit refreshes recency: touch #1 again, and the next capacity eviction removes #2
 		cache.read_entry(&paths[1], "p.png").expect("read");
 		let extra = tmp.path().join("extra.cbz");
 		make_zip(&extra, &[("p.png", b"x")]);

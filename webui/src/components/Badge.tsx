@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-/** 小型计数角标；覆盖在封面右上角用 CoverCard 的 badge，这里只做内联场景 */
+/** Small count badge; for overlaying on a cover's top-right corner use CoverCard's badge — this one is only for inline use */
 export function Badge({ children }: { children: ReactNode }) {
 	return <span className="badge">{children}</span>;
 }

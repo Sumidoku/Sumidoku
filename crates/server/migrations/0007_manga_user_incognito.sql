@@ -1,2 +1,2 @@
--- 单本隐身：开启后该漫画的进度写入不再刷新 chapter_user.last_read_at，历史保持现状
+-- Per-manga incognito: once enabled, progress writes for that manga no longer refresh chapter_user.last_read_at; history stays as-is
 ALTER TABLE manga_user ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0;

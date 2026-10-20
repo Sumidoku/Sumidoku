@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
 import { IconButton } from '../../components';
 
-// 弹层走 portal：hero 容器 overflow:hidden，absolute 定位会被裁掉
+// The popover goes through a portal: the hero container is overflow:hidden, so absolute positioning would be clipped
 export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [pos, setPos] = useState<{ top: number; right: number } | null>(null);

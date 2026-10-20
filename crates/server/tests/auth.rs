@@ -7,10 +7,10 @@ use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
 const PASSWORD: &str = "secret";
-/// base64("admin:secret")，OPDS 真实凭证时代的管理员组合
+/// base64("admin:secret"), the admin combination from the real-credentials era of OPDS
 const ADMIN_BASIC: &str = "Basic YWRtaW46c2VjcmV0";
 
-/// 统一凭证模型下 basic_password 是 auth.password 的 legacy 别名，同样开启全站认证
+/// Under the unified credential model basic_password is the legacy alias of auth.password and likewise enables site-wide auth
 async fn password_app() -> (Router, tempfile::TempDir) {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
@@ -38,7 +38,7 @@ async fn auth_disabled_by_default() {
 	let (status, body) = request(&app.app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], false);
-	// 未配置密码时全站开放（兼容契约）
+	// with no password configured the site is fully open (compatibility contract)
 	let (status, _) = request(&app.app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 }
@@ -52,13 +52,13 @@ async fn requires_credentials() {
 		body,
 		json!({"error": {"code": "unauthorized", "message": "authentication required"}})
 	);
-	// status 端点永远公开，SPA 靠它决定要不要跳登录页
+	// the status endpoint is always public; the SPA relies on it to decide whether to jump to the login page
 	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], true);
 }
 
-/// 安全类报错对外归一：无凭证、坏 token、错密码、不存在的用户，客户端看到同一形状
+/// Security errors are unified externally: no credentials, bad token, wrong password, and nonexistent user all look the same to the client
 #[tokio::test]
 async fn uniform_401_shape() {
 	let (app, _tmp) = password_app().await;
@@ -78,7 +78,7 @@ async fn uniform_401_shape() {
 	let (status, wrong_login) = login(&app, "admin", "wrong").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(no_cred, wrong_login);
-	// 用户不存在与密码错误不可区分
+	// nonexistent user and wrong password are indistinguishable
 	let (status, no_such_user) = login(&app, "nobody", PASSWORD).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(no_cred, no_such_user);
@@ -98,7 +98,7 @@ async fn login_token_flow() {
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// <img>/WebSocket 发不了 Authorization 头，媒体与流端点接受 query 传 token
+	// <img>/WebSocket can't send the Authorization header, so media and streaming endpoints accept the token via query
 	let (status, _) = request(
 		&app,
 		"GET",
@@ -109,7 +109,7 @@ async fn login_token_flow() {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 会话 token 在库里归属登录用户
+/// A session token belongs to the logged-in user in the DB
 #[tokio::test]
 async fn token_carries_user_identity() {
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -139,7 +139,7 @@ async fn logout_revokes_token() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 用户被删时其会话 token 随外键级联一并清除
+/// When a user is deleted, their session tokens are wiped by the foreign-key cascade
 #[tokio::test]
 async fn token_dies_with_its_user() {
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -165,11 +165,11 @@ async fn change_password() {
 	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let token = body["token"].as_str().expect("token").to_string();
 	let auth = format!("Bearer {token}");
-	// 第二个会话，用来区分「吊销自己全部 token」的作用范围
+	// a second session, to tell apart the scope of "revoke all of one's own tokens"
 	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let other = format!("Bearer {}", body["token"].as_str().expect("token"));
 
-	// 旧密码不对，改密码被拒
+	// wrong old password: the change is rejected
 	let (status, _, _) = request_with_headers(
 		&app,
 		"PUT",
@@ -190,12 +190,12 @@ async fn change_password() {
 	.await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 
-	// 改密码吊销该用户全部会话 token
+	// changing the password revokes all of the user's session tokens
 	for auth in [&auth, &other] {
 		let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", auth)]).await;
 		assert_eq!(status, StatusCode::UNAUTHORIZED);
 	}
-	// 旧密码失效，新密码可登录
+	// the old password is dead, the new one logs in
 	let (status, _) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let (status, _) = login(&app, "admin", "new-secret").await;
@@ -211,7 +211,7 @@ async fn opds_uses_real_credentials() {
 		headers[header::WWW_AUTHENTICATE],
 		"Basic realm=\"Sumidoku OPDS\""
 	);
-	// 错误密码（admin:wrong）
+	// wrong password (admin:wrong)
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",
@@ -221,7 +221,7 @@ async fn opds_uses_real_credentials() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// 任意用户名时代结束：user:secret 不再放行
+	// the any-username era is over: user:secret no longer passes
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",
@@ -231,7 +231,7 @@ async fn opds_uses_real_credentials() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// 真实用户名+密码，v1.2 与 v2 都过
+	// real username+password passes on both v1.2 and v2
 	for path in ["/opds/v1.2/root", "/opds/v2/root"] {
 		let (status, _, _) = request_with_headers(&app, "GET", path, None, &[("authorization", ADMIN_BASIC)]).await;
 		assert_eq!(status, StatusCode::OK, "{path}");
@@ -243,11 +243,11 @@ async fn public_surface_stays_open() {
 	let (app, _tmp) = password_app().await;
 	let (status, _) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
-	// 版本串不敏感，与 /health 一样免鉴权
+	// the version string is not sensitive; like /health it skips auth
 	let (status, body) = request(&app, "GET", "/api/v1/version", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
-	// 静态资源永远公开，SPA 要能加载出登录页
+	// static assets are always public so the SPA can load the login page
 	let (status, _) = request(&app, "GET", "/", None).await;
 	assert_eq!(status, StatusCode::OK);
 }
@@ -272,7 +272,7 @@ async fn auth_password_wins_over_legacy_alias() {
 	config.auth.password = Some(PASSWORD.into());
 	config.basic_password = Some("legacy-only".into());
 	let app = build_app(config).await.expect("build app");
-	// 两个都配时 legacy 别名不生效
+	// when both are configured, the legacy alias has no effect
 	let (status, _) = login(&app, "admin", "legacy-only").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let (status, _) = login(&app, "admin", PASSWORD).await;
@@ -306,7 +306,7 @@ async fn api_keys_authenticate_without_login() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 配置面密码每次启动覆盖库内哈希：改过的密码遇重启以配置为准（headless 部署语义）
+/// The configured password overwrites the in-DB hash on every startup: a changed password yields to the config on restart (headless deployment semantics)
 #[tokio::test]
 async fn config_password_reseeds_on_restart() {
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -334,14 +334,15 @@ async fn config_password_reseeds_on_restart() {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 旧库迁移：auth_credential 的站点密码成为 admin 密码，旧 token 会话保留并归到 user 1，
-/// 隐身键搬进 user.1 命名空间，download 行保留且表变复合主键
+/// Old-DB migration: auth_credential's site password becomes the admin password, old token sessions
+/// are kept and assigned to user 1, the incognito key moves into the user.1 namespace, and download
+/// rows are kept with the table gaining a composite primary key
 #[tokio::test]
 async fn migration_from_site_password_era() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let db_url = format!("sqlite://{}/test.db?mode=rwc", tmp.path().display());
 	let pool = sqlx::SqlitePool::connect(&db_url).await.expect("pool");
-	// 重放 0012 之前的迁移并补记账，build_app 的 migrate 只该跑 0012
+	// replay the migrations before 0012 with bookkeeping filled in, so build_app's migrate only runs 0012
 	sqlx::raw_sql(
 		"CREATE TABLE IF NOT EXISTS _sqlx_migrations (
 		 version BIGINT PRIMARY KEY,
@@ -372,7 +373,7 @@ async fn migration_from_site_password_era() {
 		.await
 		.expect("migration bookkeeping");
 	}
-	// 旧世界残骸：站点密码、无 user 列的会话 token、全局隐身键、单行主键的 download
+	// old-world relics: the site password, a session token without a user column, the global incognito key, a download table with a single-column primary key
 	let site_hash = sumidoku_server::auth::hash_password(PASSWORD).expect("hash");
 	sqlx::query("INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)")
 		.bind(&site_hash)
@@ -410,11 +411,11 @@ async fn migration_from_site_password_era() {
 	let config = base_config(&tmp);
 	let app = build_app(config).await.expect("build app");
 
-	// 站点密码直接登录 admin
+	// the site password logs in as admin directly
 	let (status, body) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["user"]["id"], 1);
-	// 旧 token 仍有效（迁移回填 user 1，会话不丢）
+	// the old token still works (the migration backfills user 1, the session is not lost)
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",

@@ -5,7 +5,7 @@ export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 	children: ReactNode;
 }
 
-/** 带箭头的原生 select 包装，保留键盘与移动端原生体验 */
+/** Native select wrapper with a chevron, keeping the native keyboard and mobile experience */
 export function Select({ children, className, ...rest }: SelectProps) {
 	return (
 		<span className={className ? `select ${className}` : 'select'}>

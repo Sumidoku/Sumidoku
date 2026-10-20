@@ -1,5 +1,6 @@
-//! canvas 字节管线端到端：fixture 源（tests/fixtures/canvas-src）出 Image 页，
-//! reader 端点、下载落盘、process_page_image/process_cover_image 三条链路各验一次。
+//! End-to-end canvas byte pipeline: the fixture source (tests/fixtures/canvas-src) emits Image pages,
+//! exercised once through each of three paths: reader endpoint, download-to-disk, and
+//! process_page_image/process_cover_image.
 mod common;
 
 use axum::Router;
@@ -12,7 +13,7 @@ use std::io::Cursor;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 
-// 1x1 透明 PNG，处理器链路的上游图床载荷
+// 1x1 transparent PNG, the upstream image-host payload for the processor path
 const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
 	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
@@ -115,7 +116,7 @@ async fn image_pages_read_through_reader_endpoint() {
 	let manga_id = register_canvas_manga(&app).await;
 	let chapter_id = canvas_chapter(&app, manga_id).await;
 
-	// 触发 load_pages 物化；落库的 content 应只剩 blob 文件名
+	// Triggers load_pages materialization; the persisted content should be reduced to just the blob file name
 	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let pool = connect_db(&t.db_path).await;
@@ -205,7 +206,7 @@ async fn processors_transform_fetched_images() {
 	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// Url 页过 process_page_image：fixture 恒返回 2x2 蓝块
+	// A Url page goes through process_page_image: the fixture always returns a 2x2 blue block
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	let pool = connect_db(&t.db_path).await;
 	let stored = json!({
@@ -224,7 +225,7 @@ async fn processors_transform_fetched_images() {
 	assert_eq!(blue.dimensions(), (2, 2));
 	assert_solid(&blue, [0, 0, 255, 255], "processed page");
 
-	// 封面过 process_cover_image：fixture 恒返回 3x3 绿块
+	// The cover goes through process_cover_image: the fixture always returns a 3x3 green block
 	sqlx::query("UPDATE manga SET cover_url = ? WHERE id = ?")
 		.bind(format!("http://127.0.0.1:{port}/img.png"))
 		.bind(manga_id)

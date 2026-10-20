@@ -1,15 +1,16 @@
-//! 源的 OAuth 登录（Login setting，method: "oauth"）。
+//! OAuth login for sources (Login setting, method: "oauth").
 //!
-//! Aidoku 里 OAuth 由 app 层完成（SettingView.swift）：源只声明授权地址与 PKCE/
-//! token_url，宿主构建授权 URL、跑 web-auth 会话、拿回调里的 code 换令牌，结果串
-//! 存在设置键下。浏览器 SPA 拦不到自定义 scheme 的重定向（callback_scheme 通常
-//! 是私有 scheme，ASWebAuthenticationSession 的等价物不存在），所以回调这一步
-//! 由用户手动粘贴完成：start 给出授权 URL（新标签打开），complete 解析粘贴的
-//! 回调串，两条分支与 Aidoku 对齐——
-//! - pkce 且声明 token_url：POST grant_type=authorization_code&code&code_verifier
-//!   [&redirect_uri][&client_id]（参数不 percent-encode，redirect_uri/client_id
-//!   捕获自授权地址的 query）到 token_url，原始响应串存进 <key>；
-//! - 否则：回调串存进 <key>，并送达设置的 notification。
+//! In Aidoku, OAuth is completed at the app layer (SettingView.swift): the source only declares the authorization
+//! address and PKCE/token_url, and the host builds the authorization URL, runs the web-auth session, exchanges the
+//! code from the callback for a token, and stores the result string under the setting key. A browser SPA cannot
+//! intercept a custom-scheme redirect (callback_scheme is usually a private scheme, and there is no
+//! ASWebAuthenticationSession equivalent), so the callback step is done by the user pasting it manually: start
+//! returns the authorization URL (opened in a new tab), complete parses the pasted callback string — two branches,
+//! aligned with Aidoku:
+//! - pkce with a declared token_url: POST grant_type=authorization_code&code&code_verifier
+//!   [&redirect_uri][&client_id] (parameters are not percent-encoded; redirect_uri/client_id are captured from the
+//!   authorization address's query) to token_url, and the raw response string is stored under <key>;
+//! - otherwise: the callback string is stored under <key> and the setting's notification is delivered.
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, load_defaults};
@@ -25,10 +26,10 @@ use std::sync::Arc;
 
 use super::login::{LoginSettingInfo, find_login_setting, resolve_login_url, upsert_setting};
 
-/// 令牌响应的读取上限：正常是几百字节的 JSON，超限说明 token_url 指错了地方，
-/// 无上限会把异常响应写进设置库
+/// Read cap for the token response: normally a few hundred bytes of JSON, so exceeding it means token_url points
+/// at the wrong place; without a cap a pathological response would be written into the settings DB
 const TOKEN_BODY_MAX: usize = 1024 * 1024;
-/// 交换卡在用户交互路径上（「完成」按钮在等），不能沿默认的无限等待
+/// The exchange sits on the user-interaction path (the "done" button is waiting), so it cannot inherit the default unbounded wait
 const TOKEN_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[derive(Debug, Deserialize)]
@@ -41,18 +42,18 @@ pub struct OAuthStartRequest {
 #[serde(rename_all = "camelCase")]
 pub struct OAuthCompleteRequest {
 	pub key: String,
-	/// 用户粘贴的回调 URL（授权完成后浏览器地址栏里的重定向串）
+	/// The callback URL pasted by the user (the redirect string in the browser's address bar after authorization completes)
 	pub url: String,
 }
 
-/// verifier：Aidoku generateCodeVerifier 同构，128 字符取自 unreserved 集
+/// verifier: isomorphic with Aidoku's generateCodeVerifier, 128 characters from the unreserved set
 fn generate_code_verifier() -> String {
 	const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
 	let mut verifier = String::with_capacity(128);
 	let mut buf = [0u8; 128];
 	while verifier.len() < 128 {
 		OsRng.fill_bytes(&mut buf);
-		// 198 是不超 256 的 66 的最大整数倍，之外的丢弃，消取模偏差
+		// 198 is the largest multiple of 66 not exceeding 256; values beyond it are discarded, removing modulo bias
 		for &b in &buf {
 			if b < 198 && verifier.len() < 128 {
 				verifier.push(CHARSET[(b % 66) as usize] as char);
@@ -62,7 +63,7 @@ fn generate_code_verifier() -> String {
 	verifier
 }
 
-/// challenge：非填充 base64url(SHA-256(verifier))，Aidoku generateCodeChallenge 同构
+/// challenge: unpadded base64url(SHA-256(verifier)), isomorphic with Aidoku's generateCodeChallenge
 fn code_challenge(verifier: &str) -> String {
 	base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sha2::Sha256::digest(verifier.as_bytes()))
 }
@@ -83,8 +84,8 @@ async fn resolve_oauth_setting(
 	Ok((setting, handle))
 }
 
-/// 构建授权 URL：pkce 时先把 verifier 落库（complete 换令牌要用，跨重启也在），
-/// 再在既有 query 后追加 code_challenge 三件套（Aidoku 的 URLComponents 语义）
+/// Builds the authorization URL: with pkce, first persist the verifier (complete needs it for the token exchange,
+/// and it survives restarts), then append the code_challenge trio after any existing query (Aidoku's URLComponents semantics)
 pub async fn oauth_start(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -114,9 +115,9 @@ pub async fn oauth_start(
 	Ok(Json(json!({ "url": url.to_string() })))
 }
 
-/// 交换分支的请求体：参数逐值拼接不 percent-encode（Aidoku 的
-/// `parameters.map { "k=v" }.joined("&")` 同构）；redirect_uri/client_id
-/// 捕获自授权地址的 query（与 start 同一套三级解析，缺哪个省哪个）
+/// The exchange branch's request body: parameters concatenated value by value without percent-encoding (isomorphic
+/// with Aidoku's `parameters.map { "k=v" }.joined("&")`); redirect_uri/client_id are captured from the
+/// authorization address's query (same three-level resolution as start; whichever is missing is omitted)
 async fn exchange_code(
 	state: &Arc<AppState>,
 	id: i64,
@@ -177,7 +178,7 @@ async fn exchange_code(
 		Ok(result) => result?,
 		Err(_) => return Err(ApiError::bad_gateway("oauth token request timed out")),
 	};
-	// Aidoku 不看 HTTP 状态码：响应体原文落库（错误页也照存），保持同口径
+	// Aidoku ignores the HTTP status: the response body is stored verbatim (even an error page), keeping the same convention
 	Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -212,8 +213,8 @@ pub async fn oauth_complete(
 		upsert_setting(&state.pool, id, &body.key, DefaultValue::String(result)).await?;
 		super::restart_if_loaded(&state, id).await?;
 	} else {
-		// 回调串即登录态（源自己解析里面的 token/code），存规范化后的绝对串（Aidoku 的
-		// callback.absoluteString）；notification 失败只记日志，与 Aidoku 的 do/catch 同口径
+		// The callback string is the login state (the source parses the token/code out of it); store the normalized
+		// absolute string (Aidoku's callback.absoluteString); a notification failure is only logged, same as Aidoku's do/catch
 		upsert_setting(
 			&state.pool,
 			id,

@@ -10,7 +10,7 @@ export interface ModalProps {
 	onClose: () => void;
 	children: ReactNode;
 	footer?: ReactNode;
-	/** 追加到面板的类名，用来放宽宽度等 */
+	/** Class name appended to the panel, e.g. to widen it */
 	panelClassName?: string;
 }
 

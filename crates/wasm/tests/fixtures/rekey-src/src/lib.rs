@@ -1,8 +1,9 @@
 #![no_std]
-//! breaking-change key 迁移的端到端验证源：
-//! 搜索固定给出 old/ 前缀的两本 manga（外加 old/broken），章节 key 挂在 manga key 下；
-//! MigrationHandler 把 old/ 前缀改写成 new/，old/broken 及其章节返回空串走 warnings 路径。
-//! 断言方在 crates/server/tests/source_rekey.rs。
+//! End-to-end verification source for breaking-change key migration:
+//! search always returns two mangas with the old/ prefix (plus old/broken), with chapter
+//! keys nested under the manga key; MigrationHandler rewrites the old/ prefix to new/,
+//! while old/broken and its chapters return empty strings to take the warnings path.
+//! The asserting side is crates/server/tests/source_rekey.rs.
 use aidoku::{
 	alloc::{String, Vec, string::ToString, vec},
 	prelude::*,
@@ -11,7 +12,7 @@ use aidoku::{
 
 struct RekeySource;
 
-/// old/ 前缀改 new/；old/broken 一支返回空串模拟映射失败，其余原样返回
+/// Rewrite the old/ prefix to new/; the old/broken branch returns an empty string to simulate a mapping failure, everything else passes through as-is
 fn remap(key: &str) -> String {
 	if key.starts_with("old/broken") {
 		return String::new();

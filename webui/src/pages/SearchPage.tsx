@@ -23,12 +23,12 @@ import { Button, CoverCard, EmptyState, Input, Skeleton, TriStateDropdown } from
 
 type FilterGroup = 'ratings' | 'langs' | 'sources';
 
-/** 三态循环的下一态：未选 → 包含 → 排除 → 未选 */
+/** Next state of the tri-state cycle: unselected → include → exclude → unselected */
 function nextTri(cur: TriState | 0): TriState | 0 {
 	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
 }
 
-/** 三态单维度判定：有包含项时条目须命中其一，命中任一排除项即出局 */
+/** Per-dimension tri-state verdict: with any include selected the entry must hit one of them; hitting any exclude knocks it out */
 function triAllows(states: Record<string, TriState>, keys: string[]): boolean {
 	let includes = 0;
 	let includeHit = false;
@@ -60,7 +60,7 @@ export default function SearchPage() {
 	const [filters, setFilters] = useState<GlobalSearchFilterPrefs>(loadGlobalSearchFilters);
 	useEffect(() => saveGlobalSearchFilters(filters), [filters]);
 
-	// 输入防抖 500ms，与源内搜索一致
+	// 500ms input debounce, same as in-source search
 	const [input, setInput] = useState('');
 	const [query, setQuery] = useState('');
 	useEffect(() => {
@@ -68,7 +68,7 @@ export default function SearchPage() {
 		return () => clearTimeout(t);
 	}, [input]);
 
-	// 停用源不参与也不进筛选候选；展示与候选顺序按源名（浏览页同口径）
+	// Disabled sources neither participate nor appear as filter candidates; display and candidate order follow source name (same convention as the browse page)
 	const sources = useMemo(
 		() => (sourcesQuery.data ?? []).filter((s) => s.enabled).sort(compareSourceName),
 		[sourcesQuery.data]
@@ -81,7 +81,7 @@ export default function SearchPage() {
 				if (code && !isMultiLanguage(code)) set.add(code);
 			}
 		}
-		// 与 Aidoku 一致：多语言哨兵恒在列表首位
+		// Same as Aidoku: the multi-language sentinel always sits at the top of the list
 		return [MULTI_LANGUAGE, ...[...set].sort(compareLanguageLabel)];
 	}, [sources]);
 
@@ -96,7 +96,7 @@ export default function SearchPage() {
 	}, [search.data]);
 
 	const register = useRegisterManga();
-	// busy 态用 `<sourceId>:<key>` 复合键：不同源可能撞同 key，单 key 会互相误标
+	// The busy state uses a `<sourceId>:<key>` composite key: different sources can collide on the same key, and a bare key would cross-mark them
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
 	async function openEntry(m: Manga) {
@@ -104,7 +104,7 @@ export default function SearchPage() {
 			navigate(`/manga/${m.id}`);
 			return;
 		}
-		// 聚合结果的条目都带着自己的 sourceId，登记必须落到它的属主源上
+		// Every entry of an aggregate result carries its own sourceId, so registration must land on its owning source
 		const owner = m.sourceId;
 		if (owner === undefined || pendingKey) return;
 		setPendingKey(`${owner}:${m.key}`);
@@ -112,7 +112,7 @@ export default function SearchPage() {
 			const { id } = await register.mutateAsync({ sourceId: owner, manga: m });
 			navigate(`/manga/${id}`);
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		} finally {
 			setPendingKey(null);
 		}
@@ -132,8 +132,8 @@ export default function SearchPage() {
 		});
 	}
 
-	// 无结果源不占 section（其余源还在流式到达，空壳会刷屏）；
-	// 全部跑完且一个结果都没有才落全局空态
+	// A source with no results takes no section (other sources are still streaming in, so empty shells would flood the screen);
+	// only when everything has finished without a single result does the global empty state show
 	const visible = selected.filter((s) => {
 		const r = resultsById.get(s.id);
 		return !r || r.error !== undefined || r.entries.length > 0;

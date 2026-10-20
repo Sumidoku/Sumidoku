@@ -1,8 +1,10 @@
 #![no_std]
-//! 动态 base URL 链路的端到端验证源（issue #136）：
-//! get_base_url 返回 defaults 里 dynamic_url 的值——测试经 PUT settings 注入，
-//! 模拟源更新后解析结果变化；缺省回退固定值。值为 "fail" 时 bail，
-//! 验证导出失败回退包内静态 URL。断言方在 crates/server/tests/source_base_url.rs。
+//! End-to-end verification source for the dynamic base URL chain (issue #136):
+//! get_base_url returns the value of dynamic_url in defaults — the test injects it via
+//! PUT settings, simulating a changed resolution after a source update; the default falls
+//! back to a fixed value. The value "fail" bails, verifying that a failing export falls
+//! back to the static URL inside the package. The asserting side is
+//! crates/server/tests/source_base_url.rs.
 use aidoku::{
 	BaseUrlProvider, Chapter, FilterValue, Manga, MangaPageResult, Page, Result, Source,
 	alloc::{String, Vec},

@@ -23,9 +23,9 @@ fn repo_json(row: &SourceRepoRow) -> Value {
 	})
 }
 
-/// 已装源 DTO 统一出口：list/install/update/patch 同形；updateVersion 取各 repo
-/// 缓存里的最新版（严格大于已装才给值），无 repo 或无更新时为 null；
-/// pinOrder 是 browse.pinned_sources 里的下标，未置顶为 null
+/// Single outlet for the installed-source DTO: list/install/update/patch share one shape; updateVersion takes the
+/// newest version across the repo caches (a value only when strictly greater than installed), null when there is no
+/// repo or no update; pinOrder is the index inside browse.pinned_sources, null when not pinned
 pub(crate) fn source_json(
 	row: &SourceRow,
 	latest: &HashMap<String, (i64, i64)>,
@@ -34,9 +34,9 @@ pub(crate) fn source_json(
 	let update = latest
 		.get(&row.key)
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
-	// Aidoku 语义的弃用标识：外部安装（repo_id 非空）且 key 已不在任何仓库 index 里
+	// Aidoku's deprecation semantics: installed externally (repo_id non-null) and the key is no longer in any repo index
 	let missing_from_repos = row.repo_id.is_some() && !latest.contains_key(&row.key);
-	// 主页能力位：注册时 stamping；旧行未 stamping 为 null，消费端按未知处理（不藏入口）
+	// Home capability bit: stamped at registration; old unstamped rows are null, and consumers treat that as unknown (the entry point is not hidden)
 	let has_home = row
 		.features
 		.as_deref()
@@ -109,7 +109,7 @@ pub async fn refresh_repo(
 pub struct BrowseQuery {
 	pub lang: Option<String>,
 	pub query: Option<String>,
-	/// 逗号分隔的内容分级白名单（Aidoku SourceContentRating 数值）；缺省不过滤
+	/// Comma-separated content-rating whitelist (Aidoku SourceContentRating numbers); absent means no filtering
 	#[serde(rename = "contentRating")]
 	pub content_rating: Option<String>,
 }
@@ -127,7 +127,7 @@ pub async fn browse_sources(
 			.filter(|l| !l.is_empty())
 			.collect(),
 		query: query.query.unwrap_or_default().trim().to_string(),
-		// Some(空串) 表示一个分级都不选：解析成空集，匹配不到任何源
+		// Some(empty string) means no rating selected at all: parses to an empty set, matching no source
 		content_ratings: query
 			.content_rating
 			.map(|s| s.split(',').filter_map(|v| v.trim().parse::<i64>().ok()).collect()),

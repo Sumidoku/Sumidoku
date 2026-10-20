@@ -15,11 +15,11 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// 会话 token 30 天滚动：剩余不足一半时随用续期
+/// Session tokens roll for 30 days: renewed on use once less than half remains
 const TOKEN_TTL_SECS: i64 = 30 * 24 * 3600;
 const TOKEN_RENEW_BELOW_SECS: i64 = TOKEN_TTL_SECS / 2;
 
-/// web 登录是低频人肉操作，内存参数调低于 RFC 推荐值换延迟（OWASP 下限 m=7MiB/t=3）
+/// Web login is a low-frequency human operation, so the memory parameter is tuned below the RFC recommendation for latency (OWASP floor m=7MiB/t=3)
 fn argon() -> Argon2<'static> {
 	Argon2::new(
 		Algorithm::Argon2id,
@@ -53,7 +53,7 @@ pub fn sha256_hex(raw: &str) -> String {
 	out
 }
 
-/// 一次请求解析出的登录身份；require_auth / OPDS basic_auth 注入 request extensions
+/// The login identity resolved from one request; require_auth / OPDS basic_auth inject it into request extensions
 #[derive(Debug, Clone)]
 pub struct AuthUser {
 	pub id: i64,
@@ -62,8 +62,8 @@ pub struct AuthUser {
 }
 
 impl AuthUser {
-	/// 内置 admin（user 1 的种子值）：免密码部署与配置面 api_keys 都按 admin 身份行事，
-	/// 此刻用户名只用于展示，免查库
+	/// Built-in admin (seed value of user 1): passwordless deployments and config-side api_keys both act as
+	/// admin; the username here is display-only, no DB lookup
 	pub(crate) fn admin() -> Self {
 		Self {
 			id: 1,
@@ -74,12 +74,12 @@ impl AuthUser {
 }
 
 pub struct AuthState {
-	/// user 1 的 argon2 PHC 串内存副本（认证开关只看它：多用户以 admin 先设密码为前提）；
-	/// None = 认证关闭（未配置密码，0.2.0 行为）
+	/// In-memory copy of user 1's argon2 PHC string (the auth switch reads only it: multi-user presupposes
+	/// admin sets a password first); None = auth disabled (no password configured, 0.2.0 behavior)
 	admin_password_hash: RwLock<Option<String>>,
-	/// 配置面 API key 的 sha256 指纹，内存常驻
+	/// sha256 fingerprints of the config-side API keys, resident in memory
 	api_key_hashes: HashSet<String>,
-	/// OPDS 每页图一次请求，逐次 argon2 太贵；缓存上一次验证通过的 (用户名, 密码指纹, 身份)
+	/// OPDS fires one request per page image, so per-request argon2 is too expensive; cache the last verified (username, password fingerprint, identity)
 	basic_cache: RwLock<Option<(String, String, AuthUser)>>,
 }
 
@@ -96,7 +96,7 @@ impl AuthState {
 		self.admin_password_hash.read().await.is_some()
 	}
 
-	/// 用户记录变更（删号/重置密码/换角色）后，OPDS 缓存的身份一并作废
+	/// After a user record changes (deletion/password reset/role change), the OPDS-cached identity is voided too
 	pub(crate) async fn invalidate_basic_cache(&self) {
 		*self.basic_cache.write().await = None;
 	}
@@ -106,8 +106,9 @@ impl AuthState {
 	}
 }
 
-/// 启动时落实 admin 密码：config/env 配置面优先（覆盖库内哈希），否则沿用库内已存哈希；
-/// 库内为空串 = 认证关闭。改密码端点只写库，重启遇配置面密码仍以配置面为准
+/// Establishes the admin password at startup: the config/env side wins (overriding the stored hash), otherwise
+/// keeps the hash already in the DB; an empty string in the DB = auth disabled. The change-password endpoint
+/// only writes the DB; on restart a config-side password still wins
 pub async fn init(state: &AppState) -> Result<(), Error> {
 	if let Some(password) = state.config.effective_password() {
 		let hash = hash_password(password)?;
@@ -125,7 +126,7 @@ pub async fn init(state: &AppState) -> Result<(), Error> {
 	Ok(())
 }
 
-/// 从 Authorization: Bearer 或 access_token query 取凭证（<img>/WebSocket 发不了头）
+/// Takes the credential from Authorization: Bearer or the access_token query (<img>/WebSocket cannot send headers)
 fn presented_token(req: &Request) -> Option<String> {
 	if let Some(value) = req
 		.headers()
@@ -144,7 +145,7 @@ fn presented_token(req: &Request) -> Option<String> {
 	None
 }
 
-/// 用户名+密码核验：用户不存在与密码错误走同一路径，对外只有 401 同形状
+/// Username+password verification: unknown user and wrong password take the same path, so externally there is only one uniform 401
 async fn verify_user_credentials(
 	pool: &sqlx::SqlitePool,
 	username: &str,
@@ -164,7 +165,7 @@ async fn verify_user_credentials(
 	Ok(Some(AuthUser { id, username, role }))
 }
 
-/// 会话 token：sha256 指纹查库，JOIN user 顺带核验归属用户还在；未过期则滚动续期
+/// Session token: look up by sha256 fingerprint, JOIN user to verify the owner still exists; renewed on a rolling basis while unexpired
 async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
 	let now = crate::model::unix_now();
 	let row: Option<(i64, i64, String, String)> = sqlx::query_as(
@@ -201,13 +202,13 @@ async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Optio
 	session_user(state, &fingerprint).await
 }
 
-/// /api/v1 统一认证：认证关闭时一切请求当内置 admin；凭证无效/缺席一律 401 同形状
+/// Uniform /api/v1 auth: with auth disabled every request is the built-in admin; invalid/absent credentials always get the same uniform 401
 pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
 		req.extensions_mut().insert(AuthUser::admin());
 		return next.run(req).await;
 	}
-	// axum Body 是 UnsyncBoxBody（不 Sync），&Request 不能跨 await 持有，先取走凭证
+	// axum Body is UnsyncBoxBody (not Sync), so &Request cannot be held across await; take the credential first
 	let token = presented_token(&req);
 	match bearer_user(&state, token).await {
 		Ok(Some(user)) => {
@@ -219,8 +220,8 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, 
 	}
 }
 
-/// admin 专属面统一门禁：跟在 require_auth 之后读注入的角色，reader 一律 403；
-/// 认证关闭时注入的是内置 admin，免密码部署行为不变
+/// Uniform gate for admin-only surfaces: runs after require_auth and reads the injected role, readers always get 403;
+/// with auth disabled the injected identity is the built-in admin, so passwordless deployments behave unchanged
 pub async fn require_admin(req: Request, next: Next) -> Response {
 	match req.extensions().get::<AuthUser>() {
 		Some(user) if user.role == "admin" => next.run(req).await,
@@ -235,7 +236,7 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-/// 认证开关 + 当前凭证身份：SPA 刷新后只剩 token，靠它恢复账号显示；认证关闭时 user 恒 null
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
 pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
 	let enabled = state.auth.enabled().await;
 	let user = match enabled {
@@ -267,7 +268,7 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 		.bind(expires_at)
 		.execute(&state.pool)
 		.await?;
-	// 顺手清掉过期 token，表只随活跃会话增长
+	// Also sweep expired tokens along the way, so the table grows only with active sessions
 	sqlx::query("DELETE FROM auth_token WHERE expires_at <= ?")
 		.bind(now)
 		.execute(&state.pool)
@@ -279,7 +280,7 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 	})))
 }
 
-/// 吊销呈上来的 bearer；无凭证/未知 token 也 204，不泄露 token 有效性
+/// Revokes the presented bearer; missing credential/unknown token also gets 204, not leaking token validity
 pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> StatusCode {
 	if let Some(token) = presented_token(&req) {
 		let _ = sqlx::query("DELETE FROM auth_token WHERE token_hash = ?")
@@ -297,7 +298,7 @@ pub struct PasswordChangeRequest {
 	pub new_password: String,
 }
 
-/// 改密码：只能改自己的；验旧换新后吊销自己全部会话 token（改密即全端下线）
+/// Password change: self only; after verifying the old one and storing the new, revoke all own session tokens (a password change logs out every client)
 pub async fn change_password(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<AuthUser>,
@@ -336,7 +337,7 @@ pub async fn change_password(
 	Ok(StatusCode::NO_CONTENT)
 }
 
-/// OPDS Basic 核验真实用户名+密码（§9 恒 Basic 语义不变）；命中缓存免逐次 argon2
+/// OPDS Basic verifies real username+password (§9 keeps Basic semantics); a cache hit avoids per-request argon2
 pub(crate) async fn basic_user(state: &AppState, headers: &axum::http::HeaderMap) -> ApiResult<Option<AuthUser>> {
 	let cred = headers
 		.get(axum::http::header::AUTHORIZATION)

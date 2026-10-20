@@ -1,4 +1,4 @@
-// 各测试二进制只用到部分公共件
+// each test binary uses only part of the shared helpers
 #![allow(dead_code)]
 
 use axum::Router;
@@ -14,67 +14,67 @@ pub fn fixture_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/example")
 }
 
-/// 无 home 导出能力的 fixture 载荷，用于 unsupported 分支
+/// Fixture payload without a home export, for the unsupported branch
 pub fn mutation_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/mutation/main.wasm")
 }
 
-/// 发 partial 结果的 fixture 载荷，用于流式 NDJSON 分支
+/// Fixture payload that emits partial results, for the streaming NDJSON branch
 pub fn partial_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/partial/main.wasm")
 }
 
-/// canvas 绘制与图像处理器的 fixture 载荷
+/// Fixture payload for canvas drawing and the image processors
 pub fn canvas_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/canvas/main.wasm")
 }
 
-/// 带 MigrationHandler 的 fixture 载荷，用于 breaking-change 原地重键链路
+/// Fixture payload with a MigrationHandler, for the breaking-change in-place rekey path
 pub fn rekey_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/rekey/main.wasm")
 }
 
-/// 实现 ImageRequestProvider 的 fixture 载荷，用于 /sources/{id}/image 代理链路
+/// Fixture payload implementing ImageRequestProvider, for the /sources/{id}/image proxy path
 pub fn imgreq_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/imgreq/main.wasm")
 }
 
-/// 声明 page/cover 图像处理器的 fixture 载荷，用于处理器拿原始响应字节的契约链路
+/// Fixture payload declaring page/cover image processors, for the contract path where processors get raw response bytes
 pub fn rawimg_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/rawimg/main.wasm")
 }
 
-/// 导出 handle_web_login 的 fixture 载荷，用于网页登录链路
+/// Fixture payload exporting handle_web_login, for the web login path
 pub fn weblogin_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin/main.wasm")
 }
 
-/// 导出 handle_notification 与动态设置的 fixture 载荷，用于设置合并与通知送达链路
+/// Fixture payload exporting handle_notification and dynamic settings, for the settings merge and notification delivery path
 pub fn notify_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/notify/main.wasm")
 }
 
-/// 同款登录设置但不导出 handle_web_login 的对照载荷
+/// Control payload with the same login settings but no handle_web_login export
 pub fn weblogin_plain_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin-plain/main.wasm")
 }
 
-/// OAuth 登录（method: "oauth"）三分支的 fixture 载荷
+/// Fixture payload for the three OAuth login (method: "oauth") branches
 pub fn oauth_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/oauth/main.wasm")
 }
 
-/// 页描述（PageDescriptionProvider）链路的 fixture 载荷
+/// Fixture payload for the page description (PageDescriptionProvider) path
 pub fn pagedesc_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/pagedesc/main.wasm")
 }
 
-/// 备选封面（AlternateCoverProvider）链路的 fixture 载荷
+/// Fixture payload for the alternate covers (AlternateCoverProvider) path
 pub fn altcovers_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/altcovers/main.wasm")
 }
 
-/// 导出 get_base_url 的 fixture 载荷，用于安装/更新时的动态 base URL 解析链路
+/// Fixture payload exporting get_base_url, for the dynamic base URL resolution path at install/update time
 pub fn baseurl_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/baseurl/main.wasm")
 }
@@ -83,17 +83,17 @@ pub fn deeplink_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/deeplink/main.wasm")
 }
 
-/// 回显收到 listing 的 fixture 载荷，用于 listing 透传与 source config DTO 链路
+/// Fixture payload that echoes the listing it received, for the listing pass-through and source config DTO path
 pub fn listing_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/listing/main.wasm")
 }
 
-/// 主页组件字段全设的 fixture 载荷，用于 home 端点透传契约
+/// Fixture payload with every home component field set, for the home endpoint pass-through contract
 pub fn home_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/home/main.wasm")
 }
 
-/// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
+/// Registers an extra fixture source in the sources directory (installed at scan time)
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let doc = serde_json::json!({
 		"info": {"id": key, "name": name, "version": 1, "languages": ["en"]}
@@ -101,7 +101,7 @@ pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wa
 	install_fixture_source_with_doc(tmp, &doc, wasm);
 }
 
-/// 带自定义 source.json（listings/config 等节）的 fixture 源登记；info.id 取 doc 里的 id
+/// Registers a fixture source with a custom source.json (listings/config sections, etc.); info.id comes from the doc's id
 pub fn install_fixture_source_with_doc(tmp: &tempfile::TempDir, doc: &Value, wasm: &std::path::Path) {
 	let key = doc["info"]["id"].as_str().expect("fixture info.id");
 	let dir = tmp.path().join("sources").join(key);
@@ -157,7 +157,7 @@ pub async fn request_full(
 	request_full_accept(app, method, path, body, None).await
 }
 
-/// NDJSON 流式请求：响应体按行解析成事件数组
+/// NDJSON streaming request: the response body is parsed line by line into an event array
 pub async fn request_ndjson(
 	app: &Router,
 	method: &str,
@@ -203,7 +203,7 @@ async fn request_full_accept(
 	(status, headers, bytes.to_vec())
 }
 
-/// 二进制 body 请求（.aib 这类上传）：content-type 由调用方指定
+/// Binary body request (uploads like .aib): the caller specifies the content-type
 pub async fn request_bytes(
 	app: &Router,
 	method: &str,
@@ -226,7 +226,7 @@ pub async fn request_bytes(
 	(status, headers, bytes.to_vec())
 }
 
-/// 自带请求头的通用请求（认证测试要挂 Authorization）
+/// Generic request with caller-supplied headers (auth tests need to attach Authorization)
 pub async fn request_with_headers(
 	app: &Router,
 	method: &str,
@@ -256,7 +256,7 @@ pub async fn request_with_headers(
 	(status, resp_headers, bytes.to_vec())
 }
 
-/// sources 列表按 key 找条目：内置本地源随迁移落库（全新库 id 最小），按下标取行已不可靠
+/// Finds an entry in the sources list by key: the built-in local source is persisted by the migration (smallest id on a fresh DB), so indexing by position is no longer reliable
 pub fn source_by_key<'a>(body: &'a Value, key: &str) -> &'a Value {
 	body.as_array()
 		.expect("sources array")
@@ -265,7 +265,7 @@ pub fn source_by_key<'a>(body: &'a Value, key: &str) -> &'a Value {
 		.unwrap_or_else(|| panic!("source {key} not found in {body}"))
 }
 
-/// scan 安装 example-source 并注册第一本搜索结果的漫画，返回内部 manga id
+/// Installs example-source via scan and registers the manga of the first search result, returning the internal manga id
 pub async fn register_example_manga(app: &Router) -> i64 {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -300,7 +300,7 @@ pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {
 		.expect("connect db")
 }
 
-/// 全表逻辑 dump：WAL 模式下文件字节不代表逻辑状态，逐表按 rowid 取 quote 文本对账
+/// Full-table logical dump: in WAL mode the file bytes don't represent logical state, so reconcile per table by rowid using quote() text
 pub async fn db_dump(db_path: &std::path::Path) -> String {
 	const TABLES: &[&str] = &[
 		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
@@ -335,14 +335,14 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	out
 }
 
-// 1x1 透明 PNG
+// 1x1 transparent PNG
 pub const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
 	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
 	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 
-/// 起个微型静态服务返字节（abort 即关站）
+/// Starts a minimal static server returning bytes (aborting the handle shuts it down)
 pub async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
 	let mut router = Router::new();
 	for (path, mime, bytes) in routes {
@@ -361,7 +361,7 @@ pub async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> 
 	(port, handle)
 }
 
-/// 页落缓存后把第 0 页改指本地图床，worker 走缓存即全离线
+/// Points page 0 at the local image host after pages are cached, so the worker runs fully offline via the cache
 pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port: u16) {
 	let stored = json!({
 		"content": {"Url": [format!("http://127.0.0.1:{port}/img.png"), null]},
@@ -377,7 +377,7 @@ pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port:
 		.expect("rewrite page 0");
 }
 
-/// 把 app 挂上随机端口真服务（WS 握手要走真实 TCP）
+/// Serves the app on a random port for real (the WS handshake needs real TCP)
 pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let addr = listener.local_addr().expect("local addr");
@@ -387,7 +387,7 @@ pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 	addr
 }
 
-/// 最小 WS 客户端：完成握手，返回流与头部之后的剩余缓冲（token 带 Authorization 头）
+/// Minimal WS client: completes the handshake and returns the stream plus the leftover buffer after the headers (token goes in the Authorization header)
 pub async fn connect_ws(
 	addr: std::net::SocketAddr,
 	path: &str,
@@ -420,7 +420,7 @@ pub async fn connect_ws(
 	(stream, rest)
 }
 
-/// 读一帧文本帧（服务端帧不掩码）
+/// Reads one text frame (server frames are not masked)
 pub async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
 	use tokio::io::AsyncReadExt;
 	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
@@ -449,7 +449,7 @@ pub async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>
 	payload
 }
 
-/// 读到指定 type 的事件帧为止（中间帧丢弃），10s 兜底
+/// Reads until an event frame of the given type arrives (intermediate frames discarded), 10s backstop
 pub async fn read_ws_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
 	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 	loop {

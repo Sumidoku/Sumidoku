@@ -1,8 +1,8 @@
-//! 源设置的合并、通知送达与默认值刷新端点测试。
-//! fixture 源：notify（导出 get_dynamic_settings 与 handle_notification，收到
-//! 的 notification 编进 echo 设置标题，经 GET settings 读回断言送达）。
-//! fixture 重建：`cd tests/fixtures/notify-src && cargo build --release --target
-//! wasm32-unknown-unknown`，产物复制为 ../notify/main.wasm。
+//! Endpoint tests for source settings merging, notification delivery, and default-value refresh.
+//! Fixture source: notify (exports get_dynamic_settings and handle_notification; each received
+//! notification is woven into the echo setting's title, read back via GET settings to assert delivery).
+//! Fixture rebuild: `cd tests/fixtures/notify-src && cargo build --release --target
+//! wasm32-unknown-unknown`, then copy the artifact to ../notify/main.wasm.
 mod common;
 
 use axum::http::StatusCode;
@@ -10,7 +10,7 @@ use axum::Router;
 use common::{TestApp, request, test_app};
 use serde_json::{Value, json};
 
-/// 登记 notify fixture 源：两种语言（验证合成语言设置仍排最前），可带静态 settings.json
+/// Registers the notify fixture source: two languages (to verify the synthesized language setting still sorts first), optionally with a static settings.json
 fn install_notify_source(tmp: &tempfile::TempDir, settings: Option<&str>) {
 	let dir = tmp.path().join("sources").join("en.notify");
 	std::fs::create_dir_all(&dir).expect("mkdir fixture source");
@@ -28,7 +28,7 @@ fn install_notify_source(tmp: &tempfile::TempDir, settings: Option<&str>) {
 	}
 }
 
-/// 无动态设置的静态源（mutation 载荷），供默认值刷新测试改写版本
+/// A static source without dynamic settings (mutation payload), version-bumped by the default-refresh test
 fn write_static_source(dir: &std::path::Path, version: i64, url: &str, settings: &str) {
 	std::fs::create_dir_all(dir).expect("mkdir");
 	std::fs::write(
@@ -69,7 +69,7 @@ async fn settings_body(app: &Router, source_id: i64) -> Value {
 	body
 }
 
-/// 摊平 group/page，返回全部叶子设置（合并断言按 key 找项用）
+/// Flattens groups/pages and returns all leaf settings (merge assertions look items up by key)
 fn flatten(items: &[Value]) -> Vec<&Value> {
 	let mut out = Vec::new();
 	for item in items {
@@ -102,12 +102,12 @@ async fn static_and_dynamic_settings_merge_with_dedup() {
 
 	let body = settings_body(&app.app, id).await;
 	let list = body["settings"].as_array().expect("settings array");
-	// 合成语言设置排在最前（extraSettings 语义）
+	// the synthesized language setting sorts first (extraSettings semantics)
 	assert_eq!(list[0]["key"], "__language", "{body}");
 
 	let leaves = flatten(&list[1..]);
 	let keys: Vec<&str> = leaves.iter().filter_map(|s| s["key"].as_str()).collect();
-	// 静态项在动态项之前；撞键的动态 dup 被去重，保留静态声明
+	// static items come before dynamic ones; the key-colliding dynamic dup is deduped away, keeping the static declaration
 	let static_pos = keys.iter().position(|k| *k == "staticOnly").expect("staticOnly present");
 	let echo_pos = keys.iter().position(|k| *k == "echo").expect("echo present");
 	assert!(static_pos < echo_pos, "静态应排在动态前: {keys:?}");
@@ -125,13 +125,13 @@ async fn put_settings_delivers_notifications() {
 	let id = source_id_by_key(&app.app, "en.notify").await;
 	let path = format!("/api/v1/sources/{id}/settings");
 
-	// 触发实例加载；echo 初始标题 none
+	// triggers instance loading; echo's initial title is none
 	let body = settings_body(&app.app, id).await;
 	let leaves = flatten(body["settings"].as_array().expect("settings array"));
 	let echo = leaves.iter().find(|s| s["key"] == "echo").expect("echo setting");
 	assert_eq!(echo["title"], "none", "{body}");
 
-	// 不带 notify 的保存不触发通知
+	// a save without notify triggers no notification
 	let (status, _) = request(&app.app, "PUT", &path, Some(json!({"echo": "x"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let body = settings_body(&app.app, id).await;
@@ -139,7 +139,7 @@ async fn put_settings_delivers_notifications() {
 	let echo = leaves.iter().find(|s| s["key"] == "echo").expect("echo setting");
 	assert_eq!(echo["title"], "none", "无 notify 不应触发: {body}");
 
-	// 多个 notify 按序送达，最后一个成为实例里的最新状态
+	// multiple notify values are delivered in order; the last becomes the instance's latest state
 	let (status, body) = request(
 		&app.app,
 		"PUT",
@@ -175,7 +175,7 @@ async fn notify_endpoint_invokes_source_action() {
 	let echo = leaves.iter().find(|s| s["key"] == "echo").expect("echo setting");
 	assert_eq!(echo["title"], "direct", "{body}");
 
-	// 无 notification 能力的源按端点约定 501
+	// a source without the notification capability 501s per the endpoint contract
 	let mutation_id = source_id_by_key(&app.app, "en.mutation").await;
 	let (status, _) = request(
 		&app.app,
@@ -206,7 +206,7 @@ async fn source_update_refreshes_untouched_defaults() {
 	assert_eq!(body["values"]["quality"], "low", "{body}");
 	assert_eq!(body["values"]["url"], "https://v1.example", "{body}");
 
-	// 用户改过 mode；quality 与 url 不动
+	// the user changed mode; quality and url stay untouched
 	let (status, _) = request(
 		&app.app,
 		"PUT",
@@ -216,7 +216,7 @@ async fn source_update_refreshes_untouched_defaults() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 源升级：默认 quality 改 high、base url 换域名、mode 默认不变
+	// source upgrade: quality default changes to high, base url changes domain, mode default unchanged
 	write_static_source(
 		&dir,
 		2,
@@ -234,7 +234,7 @@ async fn source_update_refreshes_untouched_defaults() {
 	assert_eq!(body["values"]["mode"], "b", "用户改过的值必须保留: {body}");
 }
 
-/// 单语言、单地址的源不合成语言/线路设置（example fixture：languages ["en"]，无 urls）
+/// A single-language, single-URL source gets no synthesized language/line settings (example fixture: languages ["en"], no urls)
 #[tokio::test]
 async fn single_language_source_has_no_synthesized_settings() {
 	let app = test_app().await;
@@ -247,7 +247,7 @@ async fn single_language_source_has_no_synthesized_settings() {
 	assert!(!keys.contains(&"url"), "{keys:?}");
 }
 
-/// languageSelectType == "single" 时多语言源出单选 language 设置，带 content 刷新语义
+/// With languageSelectType == "single", a multi-language source gets a single-select language setting carrying content refresh semantics
 #[tokio::test]
 async fn multi_language_single_select_setting() {
 	let app = test_app().await;
@@ -267,7 +267,7 @@ async fn multi_language_single_select_setting() {
 	scan(&app.app).await;
 	let id = source_id_by_key(&app.app, "en.single-lang").await;
 
-	// 清单的对象形式在 DTO 里归一成语言码，源列表不会解码失败
+	// the manifest's object form is normalized to language codes in the DTO, so the source list doesn't fail to decode
 	let (status, body) = request(&app.app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let source = body

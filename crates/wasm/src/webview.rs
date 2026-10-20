@@ -1,21 +1,27 @@
-//! WebView 的服务器端沙箱建模：服务器没有浏览器，ABI 里纯脚本运行语义的函数
-//! 落在 JsEngine 上——一个 webview 一个独立引擎实例，与 js context 互不共享
-//! （对齐 iOS AidokuRunner 的 WebViewHandler / IsolatedJSContext 分离）。
+//! Server-side sandbox modeling of WebView: the server has no browser, so ABI functions with
+//! pure script-execution semantics land on JsEngine — one webview gets one independent engine
+//! instance, shared with no js context (mirroring iOS AidokuRunner's WebViewHandler /
+//! IsolatedJSContext split).
 //!
-//! 页面建模的取舍（没有 DOM，document 无法诚实提供，不造假半残 API）：
-//! - 只装两个浏览器全局：window = globalThis、location.href = base URL（无
-//!   base URL 时 about:blank，对齐 loadHTMLString 的空基址行为）；页面脚本最
-//!   常碰的 window.x / location.href 因此可用，碰 document.* 的会抛错进日志
-//! - load_html 对齐 loadHTMLString 的 document 替换语义：重建引擎（旧全局随
-//!   旧 document 消失），按文档序执行内联 <script>；每个脚本独立成败，单个
-//!   抛错只进日志，不影响加载结果与后续脚本（浏览器同此行为）
-//! - 带 src 的脚本跳过：沙箱没有 document loader 不去抓网络资源；type 非
-//!   JavaScript（如 application/json）按浏览器规则不执行；type=module 按
-//!   classic 跑——裸 Context 没有 module 求值入口，模块特有语法会报错进日志
-//! - user script 按注入时机包在页面脚本前后（at_document_start/end），
-//!   for_main_frame_only 忽略：沙箱没有 frame 概念
-//! - 超时重建引擎是 JsEngine 的既有行为，页面状态（含上面两个 shim）随之
-//!   丢弃，与 context_* 超时丢全局状态同一契约
+//! Trade-offs of page modeling (there is no DOM; document cannot be provided honestly, so we
+//! do not fake a half-broken API):
+//! - Only two browser globals are installed: window = globalThis and location.href = base URL
+//!   (about:blank when there is no base URL, matching loadHTMLString's empty-base behavior);
+//!   the window.x / location.href that page scripts touch most therefore work, while touching
+//!   document.* throws and lands in the log
+//! - load_html matches loadHTMLString's document-replacement semantics: the engine is rebuilt
+//!   (old globals vanish with the old document) and inline <script>s run in document order;
+//!   each script succeeds or fails on its own — a single throw only goes to the log and
+//!   affects neither the load result nor later scripts (same as a browser)
+//! - Scripts with src are skipped: the sandbox has no document loader and fetches no network
+//!   resources; a non-JavaScript type (e.g. application/json) is not executed per browser
+//!   rules; type=module runs as classic — a bare Context has no module evaluation entry, so
+//!   module-specific syntax errors into the log
+//! - User scripts wrap page scripts by injection timing (at_document_start/end);
+//!   for_main_frame_only is ignored: the sandbox has no frame concept
+//! - Rebuilding the engine on timeout is existing JsEngine behavior; page state (including
+//!   the two shims above) is dropped with it, same contract as context_* dropping global
+//!   state on timeout
 
 use crate::js_engine::JsEngine;
 use scraper::{Html, Selector};
@@ -46,7 +52,7 @@ impl WebView {
 		}
 	}
 
-	// 返回要进源日志的行：脚本错误与被跳过的外链脚本
+	// Returns the lines for the source log: script errors and skipped external scripts
 	pub fn load_html(&mut self, html: &str, base_url: Option<&str>) -> Vec<String> {
 		self.engine.reset();
 		self.install_shim(base_url);
@@ -73,7 +79,7 @@ impl WebView {
 
 	fn install_shim(&mut self, base_url: Option<&str>) {
 		let href = serde_json::to_string(base_url.unwrap_or("about:blank")).expect("str 序列化不会失败");
-		// shim 源码是固定模板，装不上只可能是引擎本身已坏，留给后续 eval 报错
+		// The shim source is a fixed template; failing to install it can only mean the engine itself is broken — leave it for later eval calls to report
 		let _ = self.engine.eval(&format!("var window = globalThis; var location = {{ href: {href} }};"));
 	}
 }
@@ -101,8 +107,9 @@ fn extract_scripts(html: &str, logs: &mut Vec<String>) -> Vec<String> {
 	scripts
 }
 
-// 与浏览器的脚本执行规则对齐：缺省/空 type 与 JavaScript MIME 才执行，
-// module 按 classic 跑（见模块头），importmap/JSON 等数据块不执行
+// Aligned with browser script-execution rules: only a missing/empty type or a JavaScript
+// MIME executes; module runs as classic (see the module header); importmap/JSON and other
+// data blocks do not execute
 fn is_javascript_type(ty: Option<&str>) -> bool {
 	let Some(ty) = ty else { return true };
 	let ty = ty.trim();
