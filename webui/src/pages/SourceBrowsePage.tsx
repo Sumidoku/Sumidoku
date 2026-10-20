@@ -12,7 +12,7 @@ import {
 	TriangleAlert,
 	X
 } from 'lucide-react';
-import { sourceImageUrl } from '../api/client';
+import { coverUrl, sourceImageUrl } from '../api/client';
 import {
 	useDeepLink,
 	useListing,
@@ -144,8 +144,10 @@ export default function SourceBrowsePage() {
 
 	const source = useSource(sourceId);
 	const sourceEnabled = source.data?.enabled ?? true;
-	const filtersQuery = useSourceFilters(sourceId, sourceEnabled);
-	const listingsQuery = useSourceListings(sourceId, sourceEnabled);
+	const isLocal = source.data?.kind === 'local';
+	// 本地源没有 filters/listings 概念（端点 404 unsupported），不发起这两个查询
+	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isLocal);
+	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isLocal);
 
 	// hidesFiltersWhileSearching：搜索态藏起过滤器，且搜索请求不带过滤器值
 	// （AidokuRunner 在 query 非空时直接清空 filters 再调源）
@@ -283,6 +285,13 @@ export default function SourceBrowsePage() {
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
+	// 在线条目封面走源图代理；本地条目浏览不解析封面（轻量），已入库的用漫画封面缓存
+	function entryCover(m: Manga): string | null {
+		if (m.cover) return sourceImageUrl(sourceId, m.cover);
+		if (isLocal && m.id) return coverUrl(m.id);
+		return m.cover;
+	}
+
 	async function openEntry(m: Manga) {
 		if (m.id) {
 			navigate(`/manga/${m.id}`);
@@ -352,17 +361,19 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
-				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示 */}
-				{source.data?.hasHome !== false && (
+				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示。本地源无此能力 */}
+				{!isLocal && source.data?.hasHome !== false && (
 					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 						<House size={15} />
 						主页
 					</Button>
 				)}
-				<Button onClick={() => setShowLink(true)}>
-					<Link2 size={15} />
-					打开链接
-				</Button>
+				{!isLocal && (
+					<Button onClick={() => setShowLink(true)}>
+						<Link2 size={15} />
+						打开链接
+					</Button>
+				)}
 			</div>
 
 			{listings && (
@@ -390,7 +401,7 @@ export default function SourceBrowsePage() {
 						<Input
 							icon={<Search size={15} />}
 							type="search"
-							placeholder="搜索漫画标题…"
+							placeholder={isLocal ? '搜索本地目录…' : '搜索漫画标题…'}
 							value={input}
 							onChange={(e) => setInput(e.currentTarget.value)}
 						/>
@@ -486,7 +497,7 @@ export default function SourceBrowsePage() {
 									disabled={pendingKey === m.key}
 									onClick={() => void openEntry(m)}
 								>
-									<Cover src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover} title={m.title} />
+									<Cover src={entryCover(m)} title={m.title} />
 									<span className="home-row__main">
 										<span className="home-row__title">{m.title}</span>
 										<span className="home-row__subtitle">{m.authors?.[0] ?? statusText(m.status)}</span>
@@ -502,7 +513,7 @@ export default function SourceBrowsePage() {
 							{entries.map((m, i) => (
 								<CoverCard
 									key={m.key + i}
-									src={m.cover ? sourceImageUrl(sourceId, m.cover) : m.cover}
+									src={entryCover(m)}
 									title={m.title}
 									subtitle={m.authors?.[0] ?? statusText(m.status)}
 									busy={pendingKey === m.key}

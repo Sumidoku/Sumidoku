@@ -130,7 +130,9 @@ export default function MangaDetailPage() {
 	// manifest 声明优先（Aidoku config?.supportsX ?? 推导）；过滤器列表是未声明时的兜底。
 	// manga 未到时以 0 占位：source 查不到、filters 404 成空列表，自然都不可点
 	const sourceQuery = useSource(manga?.sourceId ?? 0);
-	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0);
+	// 本地源没有 filters 概念（端点 404），不发起查询
+	const isLocal = sourceQuery.data?.kind === 'local';
+	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0, !isLocal);
 
 	const [descOpen, setDescOpen] = useState(false);
 	const [removeOpen, setRemoveOpen] = useState(false);
@@ -592,6 +594,21 @@ export default function MangaDetailPage() {
 					<span className="faint">
 						共 {chapters.length} 章 · 未读 {unread}
 					</span>
+					{/* 本地源没有文件系统监视：新增/删除章节只能靠手动重扫，按钮放醒目位置 */}
+					{isLocal && (
+						<Button
+							size="sm"
+							disabled={refreshChapters.isPending}
+							onClick={() =>
+								refreshChapters.mutate(mangaId, {
+									onSuccess: () => pushToast('章节列表已刷新', 'info')
+								})
+							}
+						>
+							{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
+							刷新
+						</Button>
+					)}
 				</div>
 
 				{selecting ? (
@@ -730,6 +747,7 @@ export default function MangaDetailPage() {
 								onActivate={() => activate(c)}
 								dlState={dlStateOf(c)}
 								onDownload={() => downloadChapter(c)}
+								hideDownload={isLocal}
 								onToggleBookmark={() => {
 									if (c.id < 0) return;
 									updateChapter.mutate({ id: c.id, mangaId, isBookmarked: !c.isBookmarked });
@@ -774,14 +792,16 @@ export default function MangaDetailPage() {
 					>
 						取消书签
 					</Button>
-					<Button
-						size="sm"
-						variant="primary"
-						disabled={selected.size === 0 || batchBusy}
-						onClick={downloadSelected}
-					>
-						下载
-					</Button>
+					{!isLocal && (
+						<Button
+							size="sm"
+							variant="primary"
+							disabled={selected.size === 0 || batchBusy}
+							onClick={downloadSelected}
+						>
+							下载
+						</Button>
+					)}
 				</div>
 			)}
 

@@ -498,6 +498,28 @@ function parseVal(text: string): unknown {
 	}
 }
 
+function LocalSourceSection() {
+	const settings = useServerSettings();
+	// localDir 是服务端注入的只读字段（config 分层值），不是 setting 表键
+	const dir = settings.data?.['localDir'];
+
+	return (
+		<Section
+			title="本地源"
+			desc="直接阅读服务器本地目录里的漫画（浏览页的 Local 源）；目录只读展示，由配置文件 local_dir 或 SUMIDOKU_LOCAL_DIR 设置，改动重启后生效"
+		>
+			{settings.isPending ? (
+				<Skeleton height={24} />
+			) : (
+				<div className="settings-row">
+					<span className="settings-row__label">本地目录</span>
+					<code>{typeof dir === 'string' ? dir : '未知'}</code>
+				</div>
+			)}
+		</Section>
+	);
+}
+
 function ServerSettingsSection() {
 	const query = useServerSettings();
 	const save = useSaveServerSettings();
@@ -508,7 +530,10 @@ function ServerSettingsSection() {
 	useEffect(() => {
 		if (query.data && rows === null) {
 			setRows(
-				Object.entries(query.data).map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' }))
+				// localDir 是只读注入字段，不进键值编辑（见「本地源」区）
+				Object.entries(query.data)
+					.filter(([key]) => key !== 'localDir')
+					.map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' }))
 			);
 		}
 	}, [query.data, rows]);
@@ -1329,6 +1354,7 @@ export default function SettingsPage() {
 			<IncognitoSection />
 			<SecuritySection />
 			<CategoriesSection />
+			<LocalSourceSection />
 			<ServerSettingsSection />
 			<BackupSection />
 			<ScheduledBackupSection />
