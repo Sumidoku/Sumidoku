@@ -881,11 +881,12 @@ function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipP
 		<ChipDropdown active={active} label={f.title ?? ''}>
 			{(close) => (
 				<>
-					{cur !== '' && (
-						<ChipMenuItem checked onClick={() => pick('', close)}>
-							未选
-						</ChipMenuItem>
-					)}
+				{cur !== '' && (
+					// the reset entry is an action, not a state: no checkmark
+					<ChipMenuItem onClick={() => pick('', close)}>
+						重置
+					</ChipMenuItem>
+				)}
 					{(f.options ?? []).map((opt, i) => {
 						const key = optionKey(f, i);
 						return (
