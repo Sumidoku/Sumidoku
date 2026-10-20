@@ -45,19 +45,20 @@ pub fn set(
 	ctx: &mut impl Ctx,
 	key_ptr: Ptr,
 	len: u32,
-	kind: u8,
+	kind: i32,
 	value_ptr: Ptr,
 ) -> FFIResult {
 	let Ok(key) = ctx.read_string(key_ptr, len) else {
 		return Result::InvalidKey.into();
 	};
-	if kind > 6 {
+	// wasmi host 参数没有 u8，kind 的 0..=6 校验在函数体内
+	if !(0..=6).contains(&kind) {
 		return Result::InvalidValue.into();
 	}
 	let Ok(data) = ctx.read_item_bytes(value_ptr) else {
 		return Result::FailedDecoding.into();
 	};
-	let value = match DefaultKind::from(kind) {
+	let value = match DefaultKind::from(kind as u8) {
 		DefaultKind::Data => Ok(DefaultValue::Data(data)),
 		DefaultKind::Bool => postcard::from_bytes(&data).map(DefaultValue::Bool),
 		DefaultKind::Int => postcard::from_bytes(&data).map(DefaultValue::Int),

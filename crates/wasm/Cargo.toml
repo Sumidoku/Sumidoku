@@ -7,9 +7,7 @@ publish = false
 
 [dependencies]
 aidoku.workspace = true
-wasmer.workspace = true
-wasmer-middlewares = "7.5"
-wasmer-compiler = "7.5"
+wasmi = "2.0"
 image = "0.25"
 postcard.workspace = true
 serde.workspace = true

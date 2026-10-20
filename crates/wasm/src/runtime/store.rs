@@ -66,11 +66,6 @@ pub enum StoreItem {
 	WebView(Box<crate::webview::WebView>),
 }
 
-// HtmlDocument/JsContext 等内部类型非 Send，但实例与 store 只活在单个 actor
-// 线程内不跨线程，unsafe 实现只为满足 wasmer FunctionEnv 的 Send/Sync 约束。
-unsafe impl Send for StoreItem {}
-unsafe impl Sync for StoreItem {}
-
 impl StoreItem {
 	pub fn as_string(&self) -> Option<&String> {
 		if let StoreItem::String(s) = self { Some(s) } else { None }

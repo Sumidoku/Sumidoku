@@ -556,8 +556,10 @@ pub fn new_font(ctx: &mut impl Ctx, name_ptr: Ptr, name_len: u32) -> FFIResult {
 	ctx.host().store.store(StoreItem::Font(id))
 }
 
-pub fn system_font(ctx: &mut impl Ctx, weight: u8) -> Rid {
-	let id = fonts::resolve_system(weight);
+// wasmi host 参数没有 u8；try_from 失败的越界值走 vendor FontWeight 的
+// 未知值兜底（映射到 Regular）
+pub fn system_font(ctx: &mut impl Ctx, weight: i32) -> Rid {
+	let id = fonts::resolve_system(u8::try_from(weight).unwrap_or(u8::MAX));
 	ctx.host().store.store(StoreItem::Font(id))
 }
 

@@ -9,395 +9,382 @@ mod std;
 pub use net::{CookieJar, HttpMethod, NetRequest};
 
 use crate::WasmEnv;
+use crate::runtime::env::WasmiCtx;
 use crate::runtime::store::{Ptr, Rid};
-use wasmer::*;
+use wasmi::{Caller, Linker};
 
-pub fn generate_imports(store: &mut Store, env: &FunctionEnv<WasmEnv>) -> Imports {
-	imports! {
-		"env" => {
-			"abort" => Function::new_typed_with_env(store, env, |mut c: FunctionEnvMut<WasmEnv>| { env::abort(&mut c); }),
-			"print" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, ptr: Ptr, len: u32| { env::print(&mut c, ptr, len); },
-			),
-			"sleep" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, seconds: i32| { env::sleep(&mut c, seconds); },
-			),
-			"send_partial_result" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, value: i32| { env::send_partial_result(&mut c, value); },
-			),
-		},
-		"std" => {
-			"destroy" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { std::destroy(&mut c, rid); },
-			),
-			"buffer_len" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { std::buffer_len(&mut c, rid) },
-			),
-			"read_buffer" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, size: u32| { std::read_buffer(&mut c, rid, ptr, size) },
-			),
-			"current_date" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>| { std::current_date(&mut c) },
-			),
-			"utc_offset" => Function::new_typed_with_env(store, env, |mut c: FunctionEnvMut<WasmEnv>| { std::utc_offset(&mut c) }),
-			"parse_date" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, date_str: Ptr, date_len: u32, format_str: Ptr, format_len: u32, locale_str: Ptr, locale_len: u32, timezone_str: Ptr, timezone_len: u32| { std::parse_date(&mut c, date_str, date_len, format_str, format_len, locale_str, locale_len, timezone_str, timezone_len) },
-			),
-		},
-		"defaults" => {
-			"get" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, key_ptr: Ptr, len: u32| { defaults::get(&mut c, key_ptr, len) },
-			),
-			"set" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, key_ptr: Ptr, len: u32, kind: u8, value_ptr: Ptr| { defaults::set(&mut c, key_ptr, len, kind, value_ptr) },
-			),
-		},
-		"canvas" => {
-			"new_context" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, width: f32, height: f32| { canvas::new_context(&mut c, width, height) },
-			),
-			"set_transform" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, translate_x: f32, translate_y: f32, scale_x: f32, scale_y: f32, rotate_angle: f32| { canvas::set_transform(&mut c, context, translate_x, translate_y, scale_x, scale_y, rotate_angle) },
-			),
-			"draw_image" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, image: Rid, dst_x: f32, dst_y: f32, dst_width: f32, dst_height: f32| { canvas::draw_image(&mut c, context, image, dst_x, dst_y, dst_width, dst_height) },
-			),
-			"copy_image" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, image: Rid, src_x: f32, src_y: f32, src_width: f32, src_height: f32, dst_x: f32, dst_y: f32, dst_width: f32, dst_height: f32| { canvas::copy_image(&mut c, context, image, src_x, src_y, src_width, src_height, dst_x, dst_y, dst_width, dst_height) },
-			),
-			"fill" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, path_ptr: Ptr, r: f32, g: f32, b: f32, a: f32| { canvas::fill(&mut c, context, path_ptr, r, g, b, a) },
-			),
-			"stroke" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, path_ptr: Ptr, style_ptr: Ptr| { canvas::stroke(&mut c, context, path_ptr, style_ptr) },
-			),
-			"draw_text" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid, text_ptr: Ptr, text_len: u32, size: f32, x: f32, y: f32, font: Rid, r: f32, g: f32, b: f32, a: f32| { canvas::draw_text(&mut c, context, text_ptr, text_len, size, x, y, font, r, g, b, a) },
-			),
-			"get_image" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, context: Rid| { canvas::get_image(&mut c, context) },
-			),
-			"new_font" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, name_ptr: Ptr, name_len: u32| { canvas::new_font(&mut c, name_ptr, name_len) },
-			),
-			"system_font" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, weight: u8| { canvas::system_font(&mut c, weight) },
-			),
-			"load_font" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, url_ptr: Ptr, url_len: u32| { canvas::load_font(&mut c, url_ptr, url_len) },
-			),
-			"new_image" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, data_ptr: Ptr, data_len: u32| { canvas::new_image(&mut c, data_ptr, data_len) },
-			),
-			"get_image_data" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, image_rid: Rid| { canvas::get_image_data(&mut c, image_rid) },
-			),
-			"get_image_width" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, image_rid: Rid| { canvas::get_image_width(&mut c, image_rid) },
-			),
-			"get_image_height" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, image_rid: Rid| { canvas::get_image_height(&mut c, image_rid) },
-			),
-		},
-		"js" => {
-			"context_create" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>| { js::context_create(&mut c) },
-			),
-			"context_eval" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_eval(&mut c, rid, string_ptr, len) },
-			),
-			"context_eval_async" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_eval_async(&mut c, rid, string_ptr, len) },
-			),
-			"context_get" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_get(&mut c, rid, string_ptr, len) },
-			),
-			"webview_create" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>| { js::webview_create(&mut c) },
-			),
-			"webview_set_rule_list" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, _string_ptr: Ptr, _len: u32| { js::webview_set_rule_list(&mut c, webview, _string_ptr, _len) },
-			),
-			"webview_load" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, request: Rid| { js::webview_load(&mut c, webview, request) },
-			),
-			"webview_load_html" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32, url_ptr: Ptr, url_len: u32| { js::webview_load_html(&mut c, webview, string_ptr, len, url_ptr, url_len) },
-			),
-			"webview_wait_for_load" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid| { js::webview_wait_for_load(&mut c, webview) },
-			),
-			"webview_eval" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32| { js::webview_eval(&mut c, webview, string_ptr, len) },
-			),
-			"webview_eval_async" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32| { js::webview_eval_async(&mut c, webview, string_ptr, len) },
-			),
-			"webview_add_user_script" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32, at_document_end: i32, _for_main_frame_only: i32| { js::webview_add_user_script(&mut c, webview, string_ptr, len, at_document_end, _for_main_frame_only) },
-			),
-			"webview_get_cookies" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid| { js::webview_get_cookies(&mut c, webview) },
-			),
-			"webview_delete_cookie" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, webview: Rid, name_ptr: Ptr, name_len: u32, value_ptr: Ptr, value_len: u32, domain_ptr: Ptr, domain_len: u32| { js::webview_delete_cookie(&mut c, webview, name_ptr, name_len, value_ptr, value_len, domain_ptr, domain_len) },
-			),
-		},
-		"html" => {
-			"parse" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, html_ptr: Ptr, html_len: u32, base_url_ptr: Ptr, base_url_len: u32| { html::parse(&mut c, html_ptr, html_len, base_url_ptr, base_url_len) },
-			),
-			"parse_fragment" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, html_ptr: Ptr, html_len: u32, base_url_ptr: Ptr, base_url_len: u32| { html::parse_fragment(&mut c, html_ptr, html_len, base_url_ptr, base_url_len) },
-			),
-			"escape" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, text_ptr: Ptr, text_len: u32| { html::escape(&mut c, text_ptr, text_len) },
-			),
-			"unescape" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, text_ptr: Ptr, text_len: u32| { html::unescape(&mut c, text_ptr, text_len) },
-			),
-			"kind" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::kind(&mut c, rid) },
-			),
-			"child_nodes" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::child_nodes(&mut c, rid) },
-			),
-			"has_attr" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, attr_ptr: Ptr, attr_len: u32| { html::has_attr(&mut c, rid, attr_ptr, attr_len) },
-			),
-			"set_attr" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32, value_ptr: Ptr, value_len: u32| { html::set_attr(&mut c, rid, key_ptr, key_len, value_ptr, value_len) },
-			),
-			"remove_attr" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, attr_ptr: Ptr, attr_len: u32| { html::remove_attr(&mut c, rid, attr_ptr, attr_len) },
-			),
-			"set_text" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, text_ptr: Ptr, text_len: u32| { html::set_text(&mut c, rid, text_ptr, text_len) },
-			),
-			"set_html" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::set_html(&mut c, rid, html_ptr, html_len) },
-			),
-			"prepend" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::prepend(&mut c, rid, html_ptr, html_len) },
-			),
-			"append" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::append(&mut c, rid, html_ptr, html_len) },
-			),
-			"children" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::children(&mut c, rid) },
-			),
-			"base_uri" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::base_uri(&mut c, rid) },
-			),
-			"own_text" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::own_text(&mut c, rid) },
-			),
-			"data" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::data(&mut c, rid) },
-			),
-			"id" => Function::new_typed_with_env(store, env, |mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::id(&mut c, rid) }),
-			"tag_name" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::tag_name(&mut c, rid) },
-			),
-			"class_name" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::class_name(&mut c, rid) },
-			),
-			"has_class" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::has_class(&mut c, rid, class_ptr, class_len) },
-			),
-			"add_class" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::add_class(&mut c, rid, class_ptr, class_len) },
-			),
-			"remove_class" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::remove_class(&mut c, rid, class_ptr, class_len) },
-			),
-			"parent" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::parent(&mut c, rid) },
-			),
-			"siblings" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::siblings(&mut c, rid) },
-			),
-			"next" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::next(&mut c, rid) },
-			),
-			"previous" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::previous(&mut c, rid) },
-			),
-			"first" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::first(&mut c, rid) },
-			),
-			"last" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::last(&mut c, rid) },
-			),
-			"get" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, index: u32| { html::get(&mut c, rid, index) },
-			),
-			"size" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::size(&mut c, rid) },
-			),
-			"attr" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: u32, key_len: u32| { html::attr(&mut c, rid, key_ptr, key_len) },
-			),
-			"outer_html" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::outer_html(&mut c, rid) },
-			),
-			"remove" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::remove(&mut c, rid) },
-			),
-			"select" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, query_ptr: Ptr, query_len: u32| { html::select(&mut c, rid, query_ptr, query_len) },
-			),
-			"select_first" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, query_ptr: Ptr, query_len: u32| { html::select_first(&mut c, rid, query_ptr, query_len) },
-			),
-			"text" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::text(&mut c, rid) },
-			),
-			"untrimmed_text" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::untrimmed_text(&mut c, rid) },
-			),
-			"html" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { html::html(&mut c, rid) },
-			),
-		},
-		"net" => {
-			"init" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, method: u8| { net::init(&mut c, method) },
-			),
-			"send" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::send(&mut c, rid) },
-			),
-			"send_all" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid_ptr: Ptr, len: u32| { net::send_all(&mut c, rid_ptr, len) },
-			),
-			"set_url" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, len: u32| { net::set_url(&mut c, rid, ptr, len) },
-			),
-			"set_header" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32, val_ptr: Ptr, val_len: u32| { net::set_header(&mut c, rid, key_ptr, key_len, val_ptr, val_len) },
-			),
-			"set_body" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, len: u32| { net::set_body(&mut c, rid, ptr, len) },
-			),
-			"set_timeout" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, value: f64| { net::set_timeout(&mut c, rid, value) },
-			),
-			"data_len" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::data_len(&mut c, rid) },
-			),
-			"read_data" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, buffer: Ptr, size: u32| { net::read_data(&mut c, rid, buffer, size) },
-			),
-			"get_image" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::get_image(&mut c, rid) },
-			),
-			"get_status_code" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::get_status_code(&mut c, rid) },
-			),
-			"get_url" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::get_url(&mut c, rid) },
-			),
-			"get_header" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32| { net::get_header(&mut c, rid, key_ptr, key_len) },
-			),
-			"html" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, rid: Rid| { net::html(&mut c, rid) },
-			),
-			"set_rate_limit" => Function::new_typed_with_env(
-				store, env,
-				|mut c: FunctionEnvMut<WasmEnv>, permits: i32, period: i32, unit: i32| { net::set_rate_limit(&mut c, permits, period, unit); },
-			),
-		},
-	}
+/// 注册全部源 ABI import：闭包只做 Caller→Ctx 的引擎接线，函数体全在 Ctx 共享层
+pub fn register_imports(linker: &mut Linker<WasmEnv>) -> Result<(), wasmi::Error> {
+	linker.func_wrap("env", "abort", |mut c: Caller<'_, WasmEnv>| { env::abort(&mut WasmiCtx::new(&mut c)); })?;
+	linker.func_wrap(
+		"env", "print",
+		|mut c: Caller<'_, WasmEnv>, ptr: Ptr, len: u32| { env::print(&mut WasmiCtx::new(&mut c), ptr, len); },
+	)?;
+	linker.func_wrap(
+		"env", "sleep",
+		|mut c: Caller<'_, WasmEnv>, seconds: i32| { env::sleep(&mut WasmiCtx::new(&mut c), seconds); },
+	)?;
+	linker.func_wrap(
+		"env", "send_partial_result",
+		|mut c: Caller<'_, WasmEnv>, value: i32| { env::send_partial_result(&mut WasmiCtx::new(&mut c), value); },
+	)?;
+	linker.func_wrap(
+		"std", "destroy",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { std::destroy(&mut WasmiCtx::new(&mut c), rid); },
+	)?;
+	linker.func_wrap(
+		"std", "buffer_len",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { std::buffer_len(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"std", "read_buffer",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, ptr: Ptr, size: u32| { std::read_buffer(&mut WasmiCtx::new(&mut c), rid, ptr, size) },
+	)?;
+	linker.func_wrap(
+		"std", "current_date",
+		|mut c: Caller<'_, WasmEnv>| { std::current_date(&mut WasmiCtx::new(&mut c)) },
+	)?;
+	linker.func_wrap("std", "utc_offset", |mut c: Caller<'_, WasmEnv>| { std::utc_offset(&mut WasmiCtx::new(&mut c)) })?;
+	linker.func_wrap(
+		"std", "parse_date",
+		|mut c: Caller<'_, WasmEnv>, date_str: Ptr, date_len: u32, format_str: Ptr, format_len: u32, locale_str: Ptr, locale_len: u32, timezone_str: Ptr, timezone_len: u32| { std::parse_date(&mut WasmiCtx::new(&mut c), date_str, date_len, format_str, format_len, locale_str, locale_len, timezone_str, timezone_len) },
+	)?;
+	linker.func_wrap(
+		"defaults", "get",
+		|mut c: Caller<'_, WasmEnv>, key_ptr: Ptr, len: u32| { defaults::get(&mut WasmiCtx::new(&mut c), key_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"defaults", "set",
+		|mut c: Caller<'_, WasmEnv>, key_ptr: Ptr, len: u32, kind: i32, value_ptr: Ptr| { defaults::set(&mut WasmiCtx::new(&mut c), key_ptr, len, kind, value_ptr) },
+	)?;
+	linker.func_wrap(
+		"canvas", "new_context",
+		|mut c: Caller<'_, WasmEnv>, width: f32, height: f32| { canvas::new_context(&mut WasmiCtx::new(&mut c), width, height) },
+	)?;
+	linker.func_wrap(
+		"canvas", "set_transform",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, translate_x: f32, translate_y: f32, scale_x: f32, scale_y: f32, rotate_angle: f32| { canvas::set_transform(&mut WasmiCtx::new(&mut c), context, translate_x, translate_y, scale_x, scale_y, rotate_angle) },
+	)?;
+	linker.func_wrap(
+		"canvas", "draw_image",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, image: Rid, dst_x: f32, dst_y: f32, dst_width: f32, dst_height: f32| { canvas::draw_image(&mut WasmiCtx::new(&mut c), context, image, dst_x, dst_y, dst_width, dst_height) },
+	)?;
+	linker.func_wrap(
+		"canvas", "copy_image",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, image: Rid, src_x: f32, src_y: f32, src_width: f32, src_height: f32, dst_x: f32, dst_y: f32, dst_width: f32, dst_height: f32| { canvas::copy_image(&mut WasmiCtx::new(&mut c), context, image, src_x, src_y, src_width, src_height, dst_x, dst_y, dst_width, dst_height) },
+	)?;
+	linker.func_wrap(
+		"canvas", "fill",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, path_ptr: Ptr, r: f32, g: f32, b: f32, a: f32| { canvas::fill(&mut WasmiCtx::new(&mut c), context, path_ptr, r, g, b, a) },
+	)?;
+	linker.func_wrap(
+		"canvas", "stroke",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, path_ptr: Ptr, style_ptr: Ptr| { canvas::stroke(&mut WasmiCtx::new(&mut c), context, path_ptr, style_ptr) },
+	)?;
+	linker.func_wrap(
+		"canvas", "draw_text",
+		|mut c: Caller<'_, WasmEnv>, context: Rid, text_ptr: Ptr, text_len: u32, size: f32, x: f32, y: f32, font: Rid, r: f32, g: f32, b: f32, a: f32| { canvas::draw_text(&mut WasmiCtx::new(&mut c), context, text_ptr, text_len, size, x, y, font, r, g, b, a) },
+	)?;
+	linker.func_wrap(
+		"canvas", "get_image",
+		|mut c: Caller<'_, WasmEnv>, context: Rid| { canvas::get_image(&mut WasmiCtx::new(&mut c), context) },
+	)?;
+	linker.func_wrap(
+		"canvas", "new_font",
+		|mut c: Caller<'_, WasmEnv>, name_ptr: Ptr, name_len: u32| { canvas::new_font(&mut WasmiCtx::new(&mut c), name_ptr, name_len) },
+	)?;
+	linker.func_wrap(
+		"canvas", "system_font",
+		|mut c: Caller<'_, WasmEnv>, weight: i32| { canvas::system_font(&mut WasmiCtx::new(&mut c), weight) },
+	)?;
+	linker.func_wrap(
+		"canvas", "load_font",
+		|mut c: Caller<'_, WasmEnv>, url_ptr: Ptr, url_len: u32| { canvas::load_font(&mut WasmiCtx::new(&mut c), url_ptr, url_len) },
+	)?;
+	linker.func_wrap(
+		"canvas", "new_image",
+		|mut c: Caller<'_, WasmEnv>, data_ptr: Ptr, data_len: u32| { canvas::new_image(&mut WasmiCtx::new(&mut c), data_ptr, data_len) },
+	)?;
+	linker.func_wrap(
+		"canvas", "get_image_data",
+		|mut c: Caller<'_, WasmEnv>, image_rid: Rid| { canvas::get_image_data(&mut WasmiCtx::new(&mut c), image_rid) },
+	)?;
+	linker.func_wrap(
+		"canvas", "get_image_width",
+		|mut c: Caller<'_, WasmEnv>, image_rid: Rid| { canvas::get_image_width(&mut WasmiCtx::new(&mut c), image_rid) },
+	)?;
+	linker.func_wrap(
+		"canvas", "get_image_height",
+		|mut c: Caller<'_, WasmEnv>, image_rid: Rid| { canvas::get_image_height(&mut WasmiCtx::new(&mut c), image_rid) },
+	)?;
+	linker.func_wrap(
+		"js", "context_create",
+		|mut c: Caller<'_, WasmEnv>| { js::context_create(&mut WasmiCtx::new(&mut c)) },
+	)?;
+	linker.func_wrap(
+		"js", "context_eval",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_eval(&mut WasmiCtx::new(&mut c), rid, string_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"js", "context_eval_async",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_eval_async(&mut WasmiCtx::new(&mut c), rid, string_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"js", "context_get",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32| { js::context_get(&mut WasmiCtx::new(&mut c), rid, string_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_create",
+		|mut c: Caller<'_, WasmEnv>| { js::webview_create(&mut WasmiCtx::new(&mut c)) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_set_rule_list",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, _string_ptr: Ptr, _len: u32| { js::webview_set_rule_list(&mut WasmiCtx::new(&mut c), webview, _string_ptr, _len) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_load",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, request: Rid| { js::webview_load(&mut WasmiCtx::new(&mut c), webview, request) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_load_html",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32, url_ptr: Ptr, url_len: u32| { js::webview_load_html(&mut WasmiCtx::new(&mut c), webview, string_ptr, len, url_ptr, url_len) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_wait_for_load",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid| { js::webview_wait_for_load(&mut WasmiCtx::new(&mut c), webview) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_eval",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32| { js::webview_eval(&mut WasmiCtx::new(&mut c), webview, string_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_eval_async",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32| { js::webview_eval_async(&mut WasmiCtx::new(&mut c), webview, string_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_add_user_script",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32, at_document_end: i32, _for_main_frame_only: i32| { js::webview_add_user_script(&mut WasmiCtx::new(&mut c), webview, string_ptr, len, at_document_end, _for_main_frame_only) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_get_cookies",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid| { js::webview_get_cookies(&mut WasmiCtx::new(&mut c), webview) },
+	)?;
+	linker.func_wrap(
+		"js", "webview_delete_cookie",
+		|mut c: Caller<'_, WasmEnv>, webview: Rid, name_ptr: Ptr, name_len: u32, value_ptr: Ptr, value_len: u32, domain_ptr: Ptr, domain_len: u32| { js::webview_delete_cookie(&mut WasmiCtx::new(&mut c), webview, name_ptr, name_len, value_ptr, value_len, domain_ptr, domain_len) },
+	)?;
+	linker.func_wrap(
+		"html", "parse",
+		|mut c: Caller<'_, WasmEnv>, html_ptr: Ptr, html_len: u32, base_url_ptr: Ptr, base_url_len: u32| { html::parse(&mut WasmiCtx::new(&mut c), html_ptr, html_len, base_url_ptr, base_url_len) },
+	)?;
+	linker.func_wrap(
+		"html", "parse_fragment",
+		|mut c: Caller<'_, WasmEnv>, html_ptr: Ptr, html_len: u32, base_url_ptr: Ptr, base_url_len: u32| { html::parse_fragment(&mut WasmiCtx::new(&mut c), html_ptr, html_len, base_url_ptr, base_url_len) },
+	)?;
+	linker.func_wrap(
+		"html", "escape",
+		|mut c: Caller<'_, WasmEnv>, text_ptr: Ptr, text_len: u32| { html::escape(&mut WasmiCtx::new(&mut c), text_ptr, text_len) },
+	)?;
+	linker.func_wrap(
+		"html", "unescape",
+		|mut c: Caller<'_, WasmEnv>, text_ptr: Ptr, text_len: u32| { html::unescape(&mut WasmiCtx::new(&mut c), text_ptr, text_len) },
+	)?;
+	linker.func_wrap(
+		"html", "kind",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::kind(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "child_nodes",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::child_nodes(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "has_attr",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, attr_ptr: Ptr, attr_len: u32| { html::has_attr(&mut WasmiCtx::new(&mut c), rid, attr_ptr, attr_len) },
+	)?;
+	linker.func_wrap(
+		"html", "set_attr",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32, value_ptr: Ptr, value_len: u32| { html::set_attr(&mut WasmiCtx::new(&mut c), rid, key_ptr, key_len, value_ptr, value_len) },
+	)?;
+	linker.func_wrap(
+		"html", "remove_attr",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, attr_ptr: Ptr, attr_len: u32| { html::remove_attr(&mut WasmiCtx::new(&mut c), rid, attr_ptr, attr_len) },
+	)?;
+	linker.func_wrap(
+		"html", "set_text",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, text_ptr: Ptr, text_len: u32| { html::set_text(&mut WasmiCtx::new(&mut c), rid, text_ptr, text_len) },
+	)?;
+	linker.func_wrap(
+		"html", "set_html",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::set_html(&mut WasmiCtx::new(&mut c), rid, html_ptr, html_len) },
+	)?;
+	linker.func_wrap(
+		"html", "prepend",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::prepend(&mut WasmiCtx::new(&mut c), rid, html_ptr, html_len) },
+	)?;
+	linker.func_wrap(
+		"html", "append",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, html_ptr: Ptr, html_len: u32| { html::append(&mut WasmiCtx::new(&mut c), rid, html_ptr, html_len) },
+	)?;
+	linker.func_wrap(
+		"html", "children",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::children(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "base_uri",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::base_uri(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "own_text",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::own_text(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "data",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::data(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap("html", "id", |mut c: Caller<'_, WasmEnv>, rid: Rid| { html::id(&mut WasmiCtx::new(&mut c), rid) })?;
+	linker.func_wrap(
+		"html", "tag_name",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::tag_name(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "class_name",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::class_name(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "has_class",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::has_class(&mut WasmiCtx::new(&mut c), rid, class_ptr, class_len) },
+	)?;
+	linker.func_wrap(
+		"html", "add_class",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::add_class(&mut WasmiCtx::new(&mut c), rid, class_ptr, class_len) },
+	)?;
+	linker.func_wrap(
+		"html", "remove_class",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, class_ptr: Ptr, class_len: u32| { html::remove_class(&mut WasmiCtx::new(&mut c), rid, class_ptr, class_len) },
+	)?;
+	linker.func_wrap(
+		"html", "parent",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::parent(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "siblings",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::siblings(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "next",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::next(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "previous",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::previous(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "first",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::first(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "last",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::last(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "get",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, index: u32| { html::get(&mut WasmiCtx::new(&mut c), rid, index) },
+	)?;
+	linker.func_wrap(
+		"html", "size",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::size(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "attr",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, key_ptr: u32, key_len: u32| { html::attr(&mut WasmiCtx::new(&mut c), rid, key_ptr, key_len) },
+	)?;
+	linker.func_wrap(
+		"html", "outer_html",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::outer_html(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "remove",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::remove(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "select",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, query_ptr: Ptr, query_len: u32| { html::select(&mut WasmiCtx::new(&mut c), rid, query_ptr, query_len) },
+	)?;
+	linker.func_wrap(
+		"html", "select_first",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, query_ptr: Ptr, query_len: u32| { html::select_first(&mut WasmiCtx::new(&mut c), rid, query_ptr, query_len) },
+	)?;
+	linker.func_wrap(
+		"html", "text",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::text(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "untrimmed_text",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::untrimmed_text(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"html", "html",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { html::html(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "init",
+		|mut c: Caller<'_, WasmEnv>, method: i32| { net::init(&mut WasmiCtx::new(&mut c), method) },
+	)?;
+	linker.func_wrap(
+		"net", "send",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::send(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "send_all",
+		|mut c: Caller<'_, WasmEnv>, rid_ptr: Ptr, len: u32| { net::send_all(&mut WasmiCtx::new(&mut c), rid_ptr, len) },
+	)?;
+	linker.func_wrap(
+		"net", "set_url",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, ptr: Ptr, len: u32| { net::set_url(&mut WasmiCtx::new(&mut c), rid, ptr, len) },
+	)?;
+	linker.func_wrap(
+		"net", "set_header",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32, val_ptr: Ptr, val_len: u32| { net::set_header(&mut WasmiCtx::new(&mut c), rid, key_ptr, key_len, val_ptr, val_len) },
+	)?;
+	linker.func_wrap(
+		"net", "set_body",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, ptr: Ptr, len: u32| { net::set_body(&mut WasmiCtx::new(&mut c), rid, ptr, len) },
+	)?;
+	linker.func_wrap(
+		"net", "set_timeout",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, value: f64| { net::set_timeout(&mut WasmiCtx::new(&mut c), rid, value) },
+	)?;
+	linker.func_wrap(
+		"net", "data_len",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::data_len(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "read_data",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, buffer: Ptr, size: u32| { net::read_data(&mut WasmiCtx::new(&mut c), rid, buffer, size) },
+	)?;
+	linker.func_wrap(
+		"net", "get_image",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::get_image(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "get_status_code",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::get_status_code(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "get_url",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::get_url(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "get_header",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32| { net::get_header(&mut WasmiCtx::new(&mut c), rid, key_ptr, key_len) },
+	)?;
+	linker.func_wrap(
+		"net", "html",
+		|mut c: Caller<'_, WasmEnv>, rid: Rid| { net::html(&mut WasmiCtx::new(&mut c), rid) },
+	)?;
+	linker.func_wrap(
+		"net", "set_rate_limit",
+		|mut c: Caller<'_, WasmEnv>, permits: i32, period: i32, unit: i32| { net::set_rate_limit(&mut WasmiCtx::new(&mut c), permits, period, unit); },
+	)?;
+	Ok(())
 }

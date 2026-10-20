@@ -186,7 +186,8 @@ impl CookieJar {
 	}
 }
 
-pub fn init(ctx: &mut impl Ctx, method: u8) -> FFIResult {
+// wasmi host 参数没有 u8，method 的 0..=8 校验在函数体内
+pub fn init(ctx: &mut impl Ctx, method: i32) -> FFIResult {
 	let method = match method {
 		0 => HttpMethod::Get,
 		1 => HttpMethod::Post,

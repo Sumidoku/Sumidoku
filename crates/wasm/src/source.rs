@@ -1,8 +1,8 @@
 use crate::error::{Error, Result};
 use crate::features::SourceFeatures;
 use crate::imports::HttpMethod;
-use crate::runtime::env::WasmEnv;
-use crate::runtime::limits::{Limits, LimitedTunables};
+use crate::runtime::env::{Ctx, WasmEnv};
+use crate::runtime::limits::Limits;
 use crate::runtime::store::{DefaultValue, GlobalStore, Rid, StoreItem};
 use crate::traits::{CookieSink, DefaultsSink, HostLogger, NetPolicy};
 use aidoku::{
@@ -14,10 +14,7 @@ use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use wasmer::sys::{CompilerConfig, Cranelift, EngineBuilder};
-use wasmer::{FunctionEnv, Instance, Module, Store, Value};
-use wasmer_middlewares::Metering;
-use wasmer_middlewares::metering::{MeteringPoints, get_remaining_points, set_remaining_points};
+use wasmi::{Instance, Store, TrapCode, Val};
 
 #[derive(Clone)]
 pub struct SourceConfig {
@@ -78,35 +75,48 @@ pub struct ProcessImageInput {
 	pub request_headers: Vec<(String, String)>,
 }
 
-type CostFn = fn(&wasmer::wasmparser::Operator) -> u64;
-
-fn operator_cost(_operator: &wasmer::wasmparser::Operator) -> u64 {
-	1
-}
-
 pub(crate) struct SourceInstance {
-	store: Store,
+	store: Store<WasmEnv>,
 	instance: Instance,
-	env: FunctionEnv<WasmEnv>,
-	// 持有 Arc 让 middleware 与 engine 同生命周期
-	_metering: Arc<Metering<CostFn>>,
+	memory: wasmi::Memory,
 	pub features: SourceFeatures,
 	limits: Limits,
+}
+
+/// 导出调用前后宿主侧读写 guest 内存与 store 的通道（read_result/store_arg）
+impl Ctx for SourceInstance {
+	fn host(&mut self) -> &mut WasmEnv {
+		self.store.data_mut()
+	}
+
+	fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>> {
+		let data = self.memory.data(&self.store);
+		let end = ptr.checked_add(len)? as usize;
+		Some(data.get(ptr as usize..end)?.to_vec())
+	}
+
+	fn mem_write(&mut self, ptr: u32, bytes: &[u8]) -> bool {
+		let Some(end) = ptr.checked_add(bytes.len() as u32) else {
+			return false;
+		};
+		let data = self.memory.data_mut(&mut self.store);
+		let Some(slot) = data.get_mut(ptr as usize..end as usize) else {
+			return false;
+		};
+		slot.copy_from_slice(bytes);
+		true
+	}
 }
 
 impl SourceInstance {
 	pub fn build(config: &SourceConfig) -> Result<Self> {
 		let wasm_bytes = crate::package::read_wasm_payload(&config.wasm_path)?;
 
-		let metering: Arc<Metering<CostFn>> = Arc::new(Metering::new(config.limits.fuel, operator_cost as CostFn));
-		let mut compiler = Cranelift::default();
-		compiler.push_middleware(metering.clone());
-		let mut engine = EngineBuilder::new(compiler).engine();
-		engine.set_tunables(LimitedTunables::new(config.limits.memory_max));
-		let mut store = Store::new(engine);
-
-		let module = Module::new(&store, &wasm_bytes)
-			.map_err(|e| Error::Instance(format!("compile module: {e}")))?;
+		let mut engine_config = wasmi::Config::default();
+		engine_config.consume_fuel(true);
+		let engine = wasmi::Engine::new(&engine_config);
+		let module = wasmi::Module::new(&engine, &wasm_bytes)
+			.map_err(|e| Error::Instance(format!("translate module: {e}")))?;
 		let features = SourceFeatures::from_module(&module);
 
 		let mut net = crate::runtime::env::NetState::new(
@@ -115,50 +125,55 @@ impl SourceInstance {
 		);
 		net.accept_language = config.accept_language.clone();
 
-		let env = FunctionEnv::new(
-			&mut store,
-			WasmEnv {
-				memory: None,
-				store: GlobalStore::new(),
-				defaults: crate::runtime::env::Defaults::new(
-					config.defaults.clone(),
-					config.sink.clone(),
-					config.key.clone(),
+		let memory_max = usize::try_from(config.limits.memory_max)
+			.map_err(|_| Error::Instance("memory_max does not fit usize".into()))?;
+		let env = WasmEnv {
+			memory: None,
+			limiter: wasmi::StoreLimitsBuilder::new().memory_size(memory_max).build(),
+			store: GlobalStore::new(),
+			defaults: crate::runtime::env::Defaults::new(
+				config.defaults.clone(),
+				config.sink.clone(),
+				config.key.clone(),
+			),
+			net,
+			browser: match &config.browser_trawl {
+				Some(api) => crate::browser::BrowserState::new_trawl(
+					&config.key,
+					api,
+					config.limits.browser_timeout,
 				),
-				net,
-				browser: match &config.browser_trawl {
-					Some(api) => crate::browser::BrowserState::new_trawl(
-						&config.key,
-						api,
-						config.limits.browser_timeout,
-					),
-					None => crate::browser::BrowserState::new(
-						config.browser_ws.clone(),
-						config.limits.browser_timeout,
-					),
-				},
-				limits: config.limits.clone(),
-				source_key: config.key.clone(),
-				logger: config.logger.clone(),
-				partial_sink: None,
+				None => crate::browser::BrowserState::new(
+					config.browser_ws.clone(),
+					config.limits.browser_timeout,
+				),
 			},
-		);
-		let imports = crate::imports::generate_imports(&mut store, &env);
-		let instance = Instance::new(&mut store, &module, &imports)
+			limits: config.limits.clone(),
+			source_key: config.key.clone(),
+			logger: config.logger.clone(),
+			partial_sink: None,
+		};
+		let mut store = Store::new(&engine, env);
+		store
+			.set_fuel(config.limits.fuel)
+			.map_err(|e| Error::Instance(format!("set fuel: {e}")))?;
+		store.limiter(|data| &mut data.limiter);
+
+		let mut linker = wasmi::Linker::new(&engine);
+		crate::imports::register_imports(&mut linker)
+			.map_err(|e| Error::Instance(format!("link imports: {e}")))?;
+		let instance = linker
+			.instantiate_and_start(&mut store, &module)
 			.map_err(|e| Error::Instance(format!("instantiate: {e}")))?;
-		{
-			let memory = instance
-				.exports
-				.get_memory("memory")
-				.map_err(|e| Error::Instance(format!("source exports no memory: {e}")))?;
-			env.as_mut(&mut store).memory = Some(memory.clone());
-		}
+		let memory = instance
+			.get_memory(&store, "memory")
+			.ok_or_else(|| Error::Instance("source exports no memory".into()))?;
+		store.data_mut().memory = Some(memory);
 
 		let mut source = Self {
 			store,
 			instance,
-			env,
-			_metering: metering,
+			memory,
 			features,
 			limits: config.limits.clone(),
 		};
@@ -166,18 +181,19 @@ impl SourceInstance {
 		Ok(source)
 	}
 
-	fn call_raw(&mut self, name: &str, args: &[Value]) -> Result<i32> {
-		set_remaining_points(&mut self.store, &self.instance, self.limits.fuel);
+	fn call_raw(&mut self, name: &str, args: &[Val]) -> Result<i32> {
+		self.store
+			.set_fuel(self.limits.fuel)
+			.map_err(|e| Error::Instance(format!("set fuel: {e}")))?;
 		let function = self
 			.instance
-			.exports
-			.get_function(name)
-			.map_err(|_| Error::Unsupported("missing export"))?
-			.clone();
-		match function.call(&mut self.store, args) {
-			Ok(values) => Ok(values.first().and_then(|v| v.i32()).unwrap_or(0)),
+			.get_func(&self.store, name)
+			.ok_or(Error::Unsupported("missing export"))?;
+		let mut results = vec![Val::I32(0); function.ty(&self.store).results().len()];
+		match function.call(&mut self.store, args, &mut results) {
+			Ok(()) => Ok(results.first().and_then(|v| v.i32()).unwrap_or(0)),
 			Err(e) => {
-				if let MeteringPoints::Exhausted = get_remaining_points(&mut self.store, &self.instance) {
+				if e.as_trap_code() == Some(TrapCode::OutOfFuel) {
 					Err(Error::Trap("out of fuel".into()))
 				} else {
 					Err(Error::Trap(e.to_string()))
@@ -192,8 +208,8 @@ impl SourceInstance {
 
 	fn store_arg<T: Serialize>(&mut self, value: &T, transient: &mut Vec<Rid>) -> Result<Rid> {
 		let rid = self
-			.env
-			.as_mut(&mut self.store)
+			.store
+			.data_mut()
 			.store
 			.store_encoded(value)
 			.map_err(|e| Error::Instance(format!("encode argument: {e}")))?;
@@ -204,8 +220,8 @@ impl SourceInstance {
 	// 仅用于宏里经 read_string 读取的参数（裸 UTF-8）；read::<String> 的参数必须走 store_arg
 	fn store_string(&mut self, value: Option<&str>, transient: &mut Vec<Rid>) -> Rid {
 		let rid = self
-			.env
-			.as_mut(&mut self.store)
+			.store
+			.data_mut()
 			.store
 			.store(StoreItem::String(value.unwrap_or_default().to_string()));
 		transient.push(rid);
@@ -213,9 +229,9 @@ impl SourceInstance {
 	}
 
 	fn cleanup(&mut self, transient: Vec<Rid>) {
-		let env = self.env.as_mut(&mut self.store);
+		let host = self.store.data_mut();
 		for rid in transient {
-			env.store.remove(rid);
+			host.store.remove(rid);
 		}
 	}
 
@@ -224,22 +240,16 @@ impl SourceInstance {
 			return Err(Error::from_code(ret));
 		}
 		let ptr = ret as u32;
-		let head = self.env.as_ref(&self.store).read_u32(&self.store, ptr)?;
+		let head = self.read_u32(ptr)?;
 		let result = if head == u32::MAX {
-			let real_len = self.env.as_ref(&self.store).read_u32(&self.store, ptr + 8)?;
-			let msg = self
-				.env
-				.as_ref(&self.store)
-				.read_bytes(&self.store, ptr + 12, real_len.saturating_sub(12))?;
+			let real_len = self.read_u32(ptr + 8)?;
+			let msg = self.read_bytes(ptr + 12, real_len.saturating_sub(12))?;
 			Err(Error::Message(String::from_utf8_lossy(&msg).into_owned()))
 		} else {
 			if head < 8 {
 				return Err(Error::Instance("invalid result header".into()));
 			}
-			let payload = self
-				.env
-				.as_ref(&self.store)
-				.read_bytes(&self.store, ptr + 8, head - 8)?;
+			let payload = self.read_bytes(ptr + 8, head - 8)?;
 			postcard::from_bytes(&payload).map_err(|_| Error::Deserialize)
 		};
 		self.free_result(ret);
@@ -247,13 +257,10 @@ impl SourceInstance {
 	}
 
 	fn free_result(&mut self, ptr: i32) {
-		if let Ok(free) = self
-			.instance
-			.exports
-			.get_typed_function::<i32, ()>(&self.store, "free_result")
+		if let Ok(free) = self.instance.get_typed_func::<i32, ()>(&self.store, "free_result")
 			&& let Err(e) = free.call(&mut self.store, ptr)
 		{
-			self.env.as_ref(&self.store).log(&format!("free_result failed: {e}"));
+			self.host().log(&format!("free_result failed: {e}"));
 		}
 	}
 
@@ -263,7 +270,7 @@ impl SourceInstance {
 
 	/// 把值写进运行中实例的 defaults，经 sink 持久化（供登录成功后提交凭据）
 	fn set_default(&mut self, key: String, value: DefaultValue) {
-		self.env.as_mut(&mut self.store).defaults.set(key, value);
+		self.store.data_mut().defaults.set(key, value);
 	}
 
 	// 部分结果 sink 只在单个导出调用期间挂上，调用结束（含 trap）即摘，
@@ -273,9 +280,9 @@ impl SourceInstance {
 		sink: crate::runtime::env::PartialSink,
 		f: impl FnOnce(&mut Self) -> Result<T>,
 	) -> Result<T> {
-		self.env.as_mut(&mut self.store).partial_sink = Some(sink);
+		self.store.data_mut().partial_sink = Some(sink);
 		let result = f(self);
-		self.env.as_mut(&mut self.store).partial_sink = None;
+		self.store.data_mut().partial_sink = None;
 		result
 	}
 
@@ -513,8 +520,8 @@ impl SourceInstance {
 		};
 		let ret = self.call_raw("get_image_request", &[url_rid.into(), context_rid.into()]);
 		let result = ret.and_then(|r| self.read_result::<i32>(r)).and_then(|rid| {
-			let env = self.env.as_mut(&mut self.store);
-			let request = env
+			let host = self.store.data_mut();
+			let request = host
 				.store
 				.get_mut(rid)
 				.and_then(|item| item.as_request())
@@ -533,7 +540,7 @@ impl SourceInstance {
 					.collect(),
 				body: request.body.clone(),
 			};
-			env.store.remove(rid);
+			host.store.remove(rid);
 			Ok(spec)
 		});
 		self.cleanup(t);
@@ -541,8 +548,8 @@ impl SourceInstance {
 	}
 
 	fn image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
-		let env = self.env.as_mut(&mut self.store);
-		let image = env
+		let host = self.store.data_mut();
+		let image = host
 			.store
 			.get(rid)
 			.and_then(|item| item.as_image_data())
@@ -555,7 +562,7 @@ impl SourceInstance {
 	/// 取走图像字节：无论成败都回收 rid，否则每拉一次 page list store 只涨不消
 	pub fn take_image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
 		let result = self.image_png(rid);
-		self.env.as_mut(&mut self.store).store.remove(rid);
+		self.store.data_mut().store.remove(rid);
 		result
 	}
 
@@ -570,8 +577,8 @@ impl SourceInstance {
 		// Aidoku 契约：声明了处理器就把原始响应字节交给源（源包原话 "Aidoku skips its
 		// own decoding step for sources that declare a processor"），解码与否是源的事
 		let image_rid = {
-			let env = self.env.as_mut(&mut self.store);
-			env.store.store(StoreItem::ImageBytes(input.bytes))
+			let host = self.store.data_mut();
+			host.store.store(StoreItem::ImageBytes(input.bytes))
 		};
 		let response = aidoku::ImageResponse {
 			code: input.status,
@@ -599,7 +606,7 @@ impl SourceInstance {
 		}
 		let ret = self.call_raw(export, &args);
 		let result = ret.and_then(|r| self.read_result::<i32>(r));
-		self.env.as_mut(&mut self.store).store.remove(image_rid);
+		self.store.data_mut().store.remove(image_rid);
 		self.cleanup(t);
 		let result_rid = result?;
 		self.take_image_png(result_rid)

@@ -6,14 +6,14 @@ use crate::{Error, Result};
 use reqwest::blocking::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
-use wasmer::{Memory, MemoryView, WasmPtr};
 
 /// 在途请求的部分结果消费者：入参是源 encode 的 postcard 载荷。
 /// 挂在 WasmEnv 上随调用设置/清除，actor 串行保证同时只有一个调用持有
 pub type PartialSink = Box<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct WasmEnv {
-	pub memory: Option<Memory>,
+	pub memory: Option<wasmi::Memory>,
+	pub limiter: wasmi::StoreLimits,
 	pub store: GlobalStore,
 	pub defaults: Defaults,
 	pub net: NetState,
@@ -27,115 +27,6 @@ pub struct WasmEnv {
 impl WasmEnv {
 	pub fn log(&self, message: &str) {
 		self.logger.log(&self.source_key, message);
-	}
-
-	pub fn read_u32(&self, store: &(impl wasmer::AsStoreRef + ?Sized), ptr: u32) -> Result<u32> {
-		let memory_view = self.memory_view(store)?;
-		let ptr: WasmPtr<u32> = WasmPtr::new(ptr);
-		Ok(ptr.read(&memory_view).unwrap_or(0))
-	}
-
-	pub fn read_values<T: wasmer::ValueType>(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		len: u32,
-	) -> Result<Vec<T>> {
-		if len == 0 {
-			return Ok(Vec::new());
-		}
-		let memory_view = self.memory_view(store)?;
-		let ptr: WasmPtr<T> = WasmPtr::new(ptr);
-		let mut data = Vec::new();
-		let slice = ptr.slice(&memory_view, len).map_err(|e| Error::Instance(e.to_string()))?;
-		for cell in slice.iter() {
-			data.push(cell.read().map_err(|e| Error::Instance(e.to_string()))?);
-		}
-		Ok(data)
-	}
-
-	pub fn read_bytes(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		len: u32,
-	) -> Result<Vec<u8>> {
-		if len == 0 {
-			return Ok(Vec::new());
-		}
-		let memory_view = self.memory_view(store)?;
-		let mut data = vec![0u8; len as usize];
-		memory_view
-			.read(ptr as u64, &mut data)
-			.map_err(|e| Error::Instance(e.to_string()))?;
-		Ok(data)
-	}
-
-	pub fn read_item_bytes(&self, store: &(impl wasmer::AsStoreRef + ?Sized), ptr: u32) -> Result<Vec<u8>> {
-		let len = self.read_u32(store, ptr)?;
-		if len < 8 {
-			return Err(Error::Instance("invalid item header".into()));
-		}
-		self.read_bytes(store, ptr + 8, len - 8)
-	}
-
-	pub fn read_string(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		len: u32,
-	) -> Result<String> {
-		let bytes = self.read_bytes(store, ptr, len)?;
-		String::from_utf8(bytes).map_err(|_| Error::Utf8)
-	}
-
-	pub fn write_buffer(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		bytes: &[u8],
-	) -> Result<()> {
-		let memory_view = self.memory_view(store)?;
-		memory_view
-			.write(ptr as u64, bytes)
-			.map_err(|e| Error::Instance(e.to_string()))
-	}
-
-	pub fn write_string(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		s: &str,
-	) -> Result<()> {
-		self.write_buffer(store, ptr, s.as_bytes())
-	}
-
-	pub fn write_values<T: wasmer::ValueType>(
-		&self,
-		store: &(impl wasmer::AsStoreRef + ?Sized),
-		ptr: u32,
-		values: Vec<T>,
-	) -> Result<()> {
-		let memory_view = self.memory_view(store)?;
-		let ptr: WasmPtr<T> = WasmPtr::new(ptr);
-		let slice = ptr
-			.slice(&memory_view, values.len() as u32)
-			.map_err(|e| Error::Instance(e.to_string()))?;
-		for (idx, val) in values.into_iter().enumerate() {
-			slice.write(idx as u64, val).map_err(|e| Error::Instance(e.to_string()))?;
-		}
-		Ok(())
-	}
-
-	fn memory_view<'a>(
-		&self,
-		store: &'a (impl wasmer::AsStoreRef + ?Sized),
-	) -> Result<MemoryView<'a>> {
-		let memory = self
-			.memory
-			.as_ref()
-			.ok_or_else(|| Error::Instance("memory not initialized".into()))?;
-		Ok(memory.view(store))
 	}
 }
 
@@ -193,10 +84,6 @@ pub trait Ctx {
 		}
 	}
 
-	fn write_string(&mut self, ptr: u32, s: &str) -> Result<()> {
-		self.write_buffer(ptr, s.as_bytes())
-	}
-
 	fn write_i32s(&mut self, ptr: u32, values: &[i32]) -> Result<()> {
 		let mut bytes = Vec::with_capacity(values.len() * 4);
 		for v in values {
@@ -206,23 +93,45 @@ pub trait Ctx {
 	}
 }
 
-impl Ctx for wasmer::FunctionEnvMut<'_, WasmEnv> {
+/// wasmi 侧的 Ctx 实装：Caller 的内存访问与宿主状态访问分时复用同一 &mut。
+/// memory 句柄在函数体内现取——实例化完成前 WasmEnv.memory 还是 None
+pub(crate) struct WasmiCtx<'a, 'b> {
+	caller: &'a mut wasmi::Caller<'b, WasmEnv>,
+	memory: wasmi::Memory,
+}
+
+impl<'a, 'b> WasmiCtx<'a, 'b> {
+	pub(crate) fn new(caller: &'a mut wasmi::Caller<'b, WasmEnv>) -> Self {
+		let memory = caller
+			.data()
+			.memory
+			.or_else(|| caller.get_export("memory").and_then(wasmi::Extern::into_memory))
+			.expect("source exports memory");
+		Self { caller, memory }
+	}
+}
+
+impl Ctx for WasmiCtx<'_, '_> {
 	fn host(&mut self) -> &mut WasmEnv {
-		self.data_mut()
+		self.caller.data_mut()
 	}
 
 	fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>> {
-		let memory = self.data().memory.as_ref()?;
-		let mut data = vec![0u8; len as usize];
-		memory.view(self).read(ptr as u64, &mut data).ok()?;
-		Some(data)
+		let data = self.memory.data(&*self.caller);
+		let end = ptr.checked_add(len)? as usize;
+		Some(data.get(ptr as usize..end)?.to_vec())
 	}
 
 	fn mem_write(&mut self, ptr: u32, bytes: &[u8]) -> bool {
-		let Some(memory) = self.data().memory.as_ref() else {
+		let Some(end) = ptr.checked_add(bytes.len() as u32) else {
 			return false;
 		};
-		memory.view(self).write(ptr as u64, bytes).is_ok()
+		let data = self.memory.data_mut(&mut *self.caller);
+		let Some(slot) = data.get_mut(ptr as usize..end as usize) else {
+			return false;
+		};
+		slot.copy_from_slice(bytes);
+		true
 	}
 }
 
@@ -309,6 +218,7 @@ pub(crate) mod test_ctx {
 		pub(crate) fn for_test(limits: Limits, browser: crate::browser::BrowserState) -> Self {
 			Self {
 				memory: None,
+				limiter: wasmi::StoreLimitsBuilder::new().build(),
 				store: GlobalStore::new(),
 				defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
 				net: NetState::new(
