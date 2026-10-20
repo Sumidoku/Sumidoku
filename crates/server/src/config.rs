@@ -14,9 +14,7 @@ pub struct NetConfig {
 	/// 直连请求补浏览器头套件（BROWSER_HEADERS）：sec-fetch-* 的导航语义对
 	/// API/XHR 是轻度失真，关掉换语义诚实；被动盾核对套件存在性，关了更容易 403
 	pub browser_headers: bool,
-	/// CDP websocket 地址（ws://…），未配置时 webview 浏览器函数显式不支持
-	pub browser_ws: Option<String>,
-	/// trawl session API 地址（http://…）；与 browser_ws 互斥（build_app 校验）
+	/// trawl session API 地址（http://…），未配置时 webview 浏览器函数显式不支持
 	pub browser_trawl: Option<String>,
 }
 
@@ -30,7 +28,6 @@ impl Default for NetConfig {
 			proxy: None,
 			allow_direct_fallback: false,
 			browser_headers: true,
-			browser_ws: None,
 			browser_trawl: None,
 		}
 	}
@@ -138,7 +135,6 @@ struct NetConfigFile {
 	proxy: Option<String>,
 	allow_direct_fallback: Option<bool>,
 	browser_headers: Option<bool>,
-	browser_ws: Option<String>,
 	browser_trawl: Option<String>,
 }
 
@@ -354,9 +350,6 @@ impl Config {
 			if net.proxy.is_some() {
 				self.net.proxy = net.proxy;
 			}
-			if net.browser_ws.is_some() {
-				self.net.browser_ws = net.browser_ws;
-			}
 			if net.browser_trawl.is_some() {
 				self.net.browser_trawl = net.browser_trawl;
 			}
@@ -511,9 +504,6 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_PROXY") {
 			self.net.proxy = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_WS") {
-			self.net.browser_ws = Some(v);
-		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_TRAWL") {
 			self.net.browser_trawl = Some(v);
 		}
@@ -540,25 +530,6 @@ fn split_csv(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-
-	#[test]
-	fn browser_ws_from_file() {
-		let mut config = Config::default();
-		assert_eq!(config.net.browser_ws, None);
-		let file: ConfigFile = toml::from_str("[net]\nbrowser_ws = \"ws://browserless:3000\"\n").expect("toml");
-		config.apply_file(file);
-		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://browserless:3000"));
-	}
-
-	#[test]
-	fn browser_ws_from_env() {
-		// nextest 每测试一个进程，改环境变量不串扰
-		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_WS", "ws://127.0.0.1:3000") };
-		let mut config = Config::default();
-		config.apply_env();
-		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_WS") };
-		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://127.0.0.1:3000"));
-	}
 
 	#[test]
 	fn browser_trawl_from_file() {
