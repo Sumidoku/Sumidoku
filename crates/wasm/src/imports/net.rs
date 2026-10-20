@@ -1,6 +1,8 @@
 use crate::{
-	WasmEnv,
-	runtime::store::{FFIResult, ImageData, Ptr, Rid, StoreItem},
+	runtime::{
+		env::Ctx,
+		store::{FFIResult, ImageData, Ptr, Rid, StoreItem},
+	},
 	traits::NetRoute,
 };
 use image::ImageReader;
@@ -11,7 +13,6 @@ use reqwest::{
 use crate::traits::CookieSink;
 use std::{collections::HashMap, io::{Cursor, Read}, str::FromStr, sync::Arc, time::Duration};
 use url::Url;
-use wasmer::FunctionEnvMut;
 
 const FALLBACK_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 const MAX_ATTEMPTS: u32 = 3;
@@ -185,7 +186,7 @@ impl CookieJar {
 	}
 }
 
-pub fn init(mut env: FunctionEnvMut<WasmEnv>, method: u8) -> FFIResult {
+pub fn init(ctx: &mut impl Ctx, method: u8) -> FFIResult {
 	let method = match method {
 		0 => HttpMethod::Get,
 		1 => HttpMethod::Post,
@@ -198,7 +199,7 @@ pub fn init(mut env: FunctionEnvMut<WasmEnv>, method: u8) -> FFIResult {
 		8 => HttpMethod::Trace,
 		_ => return Result::InvalidMethod.into(),
 	};
-	env.data_mut()
+	ctx.host()
 		.store
 		.store(StoreItem::Request(Box::new(NetRequest::new(method))))
 }
@@ -363,8 +364,8 @@ fn read_body_capped(mut response: reqwest::blocking::Response, max: u64) -> std:
 	Ok(out)
 }
 
-fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let data = env.data_mut();
+fn common_send(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let data = ctx.host();
 	let Some(request) = data.store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Result::InvalidDescriptor.into();
 	};
@@ -388,24 +389,24 @@ fn common_send(env: &mut FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 	}
 }
 
-pub fn send(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	common_send(&mut env, rid)
+pub fn send(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	common_send(ctx, rid)
 }
 
-pub fn send_all(mut env: FunctionEnvMut<WasmEnv>, rid_ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(rids) = env.data().read_values::<Rid>(&env, rid_ptr, len) else {
+pub fn send_all(ctx: &mut impl Ctx, rid_ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(rids) = ctx.read_i32s(rid_ptr, len) else {
 		return Result::InvalidDescriptor.into();
 	};
 	let mut errors = Vec::new();
 	let mut was_error = false;
 	for rid in rids {
-		let result = common_send(&mut env, rid);
+		let result = common_send(ctx, rid);
 		if result != Into::<i32>::into(Result::Success) {
 			was_error = true;
 		}
 		errors.push(result);
 	}
-	if env.data().write_values(&env, rid_ptr, errors).is_err() {
+	if ctx.write_i32s(rid_ptr, &errors).is_err() {
 		Result::FailedMemoryWrite.into()
 	} else if was_error {
 		Result::RequestError.into()
@@ -414,14 +415,14 @@ pub fn send_all(mut env: FunctionEnvMut<WasmEnv>, rid_ptr: Ptr, len: u32) -> FFI
 	}
 }
 
-pub fn set_url(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(string) = env.data().read_string(&env, ptr, len) else {
+pub fn set_url(ctx: &mut impl Ctx, rid: Rid, ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(string) = ctx.read_string(ptr, len) else {
 		return Result::InvalidString.into();
 	};
 	let Ok(url) = Url::parse(&string) else {
 		return Result::InvalidUrl.into();
 	};
-	let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
+	let Some(request) = ctx.host().store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	request.url = Some(url);
@@ -429,17 +430,17 @@ pub fn set_url(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, len: u32) -
 }
 
 pub fn set_header(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	rid: Rid,
 	key_ptr: Ptr,
 	key_len: u32,
 	val_ptr: Ptr,
 	val_len: u32,
 ) -> FFIResult {
-	let Ok(key) = env.data().read_string(&env, key_ptr, key_len) else {
+	let Ok(key) = ctx.read_string(key_ptr, key_len) else {
 		return Result::InvalidString.into();
 	};
-	let Ok(val) = env.data().read_string(&env, val_ptr, val_len) else {
+	let Ok(val) = ctx.read_string(val_ptr, val_len) else {
 		return Result::InvalidString.into();
 	};
 	let Ok(name) = HeaderName::from_str(&key) else {
@@ -448,26 +449,26 @@ pub fn set_header(
 	let Ok(value) = HeaderValue::from_str(&val) else {
 		return Result::InvalidString.into();
 	};
-	let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
+	let Some(request) = ctx.host().store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	request.headers.insert(name, value);
 	Result::Success.into()
 }
 
-pub fn set_body(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(body) = env.data().read_bytes(&env, ptr, len) else {
+pub fn set_body(ctx: &mut impl Ctx, rid: Rid, ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(body) = ctx.read_bytes(ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
+	let Some(request) = ctx.host().store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	request.body = Some(body);
 	Result::Success.into()
 }
 
-pub fn set_timeout(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, value: f64) -> FFIResult {
-	let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
+pub fn set_timeout(ctx: &mut impl Ctx, rid: Rid, value: f64) -> FFIResult {
+	let Some(request) = ctx.host().store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	request.timeout = Some(value);
@@ -475,12 +476,12 @@ pub fn set_timeout(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, value: f64) -> FF
 }
 
 fn with_response<T>(
-	env: &mut FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	rid: Rid,
 	missing: Result,
 	f: impl FnOnce(&NetResponse) -> T,
 ) -> std::result::Result<T, i32> {
-	let Some(request) = env.data_mut().store.get_mut(rid).and_then(|item| item.as_request()) else {
+	let Some(request) = ctx.host().store.get_mut(rid).and_then(|item| item.as_request()) else {
 		return Err(Result::InvalidDescriptor.into());
 	};
 	let Some(response) = request.response.as_ref() else {
@@ -489,30 +490,30 @@ fn with_response<T>(
 	Ok(f(response))
 }
 
-pub fn data_len(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	match with_response(&mut env, rid, Result::MissingResponse, |r| r.data.len() as i32) {
+pub fn data_len(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	match with_response(ctx, rid, Result::MissingResponse, |r| r.data.len() as i32) {
 		Ok(v) => v,
 		Err(e) => e,
 	}
 }
 
-pub fn read_data(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, buffer: Ptr, size: u32) -> FFIResult {
-	let data = match with_response(&mut env, rid, Result::MissingResponse, |r| r.data.clone()) {
+pub fn read_data(ctx: &mut impl Ctx, rid: Rid, buffer: Ptr, size: u32) -> FFIResult {
+	let data = match with_response(ctx, rid, Result::MissingResponse, |r| r.data.clone()) {
 		Ok(d) => d,
 		Err(e) => return e,
 	};
 	if size as usize > data.len() {
 		return Result::FailedMemoryWrite.into();
 	}
-	if env.data().write_buffer(&env, buffer, &data[..size as usize]).is_err() {
+	if ctx.write_buffer(buffer, &data[..size as usize]).is_err() {
 		Result::FailedMemoryWrite.into()
 	} else {
 		Result::Success.into()
 	}
 }
 
-pub fn get_image(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let data = match with_response(&mut env, rid, Result::MissingResponse, |r| r.data.clone()) {
+pub fn get_image(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let data = match with_response(ctx, rid, Result::MissingResponse, |r| r.data.clone()) {
 		Ok(d) => d,
 		Err(e) => return e,
 	};
@@ -527,32 +528,32 @@ pub fn get_image(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
 	};
 	let (width, height) = rgba.dimensions();
 	let image = ImageData::from_rgba8(rgba.into_raw(), width, height);
-	env.data_mut().store.store(StoreItem::ImageData(image))
+	ctx.host().store.store(StoreItem::ImageData(image))
 }
 
-pub fn get_status_code(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	match with_response(&mut env, rid, Result::MissingResponse, |r| r.status.as_u16() as i32) {
+pub fn get_status_code(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	match with_response(ctx, rid, Result::MissingResponse, |r| r.status.as_u16() as i32) {
 		Ok(v) => v,
 		Err(e) => e,
 	}
 }
 
-pub fn get_url(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let url = match with_response(&mut env, rid, Result::MissingResponse, |r| r.url.as_str().to_string()) {
+pub fn get_url(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let url = match with_response(ctx, rid, Result::MissingResponse, |r| r.url.as_str().to_string()) {
 		Ok(u) => u,
 		Err(e) => return e,
 	};
-	env.data_mut().store.store(StoreItem::String(url))
+	ctx.host().store.store(StoreItem::String(url))
 }
 
-pub fn get_header(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_len: u32) -> FFIResult {
-	let Ok(key) = env.data().read_string(&env, key_ptr, key_len) else {
+pub fn get_header(ctx: &mut impl Ctx, rid: Rid, key_ptr: Ptr, key_len: u32) -> FFIResult {
+	let Ok(key) = ctx.read_string(key_ptr, key_len) else {
 		return Result::InvalidString.into();
 	};
 	let Ok(name) = HeaderName::from_str(&key) else {
 		return Result::InvalidString.into();
 	};
-	let value = match with_response(&mut env, rid, Result::MissingResponse, |r| {
+	let value = match with_response(ctx, rid, Result::MissingResponse, |r| {
 		r.headers
 			.get_all(&name)
 			.iter()
@@ -566,18 +567,18 @@ pub fn get_header(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, key_ptr: Ptr, key_
 	if value.is_empty() {
 		return Result::MissingData.into();
 	}
-	env.data_mut().store.store(StoreItem::String(value))
+	ctx.host().store.store(StoreItem::String(value))
 }
 
-pub fn html(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let (text, url) = match with_response(&mut env, rid, Result::MissingResponse, |r| {
+pub fn html(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let (text, url) = match with_response(ctx, rid, Result::MissingResponse, |r| {
 		(decode_body(&r.headers, &r.data), r.url.as_str().to_string())
 	}) {
 		Ok(p) => p,
 		Err(e) => return e,
 	};
 	let document = crate::html_dom::HtmlDocument::parse(&text, Some(&url));
-	env.data_mut().store.store(StoreItem::HtmlDocument(document))
+	ctx.host().store.store(StoreItem::HtmlDocument(document))
 }
 
 /// 按响应体的 charset 解码：BOM → Content-Type → `<meta charset>` → UTF-8 兜底。
@@ -646,23 +647,22 @@ fn meta_charset(data: &[u8]) -> Option<&'static encoding_rs::Encoding> {
 	encoding_rs::Encoding::for_label(label.as_bytes())
 }
 
-pub fn set_rate_limit(mut env: FunctionEnvMut<WasmEnv>, permits: i32, period: i32, unit: i32) {
-	env.data_mut().net.rate.set_rate(permits, period, unit);
+pub fn set_rate_limit(ctx: &mut impl Ctx, permits: i32, period: i32, unit: i32) {
+	ctx.host().net.rate.set_rate(permits, period, unit);
 }
 
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::runtime::env::{Defaults, NetState};
+	use crate::WasmEnv;
+	use crate::runtime::env::{NetState, test_ctx::TestCtx};
 	use crate::runtime::limits::Limits;
-	use crate::runtime::store::GlobalStore;
-	use crate::traits::{DirectPolicy, NetPolicy, NetRoute, NoopDefaultsSink, StdoutLogger};
+	use crate::traits::{DirectPolicy, NetPolicy, NetRoute};
 	use std::io::{Read, Write};
 	use std::net::TcpListener;
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
-	use wasmer::{Function, FunctionEnv, Memory, MemoryType, Pages, Store, Value};
 
 	struct EscalationPolicy {
 		trawl: Option<String>,
@@ -1099,89 +1099,40 @@ mod tests {
 		enc.into_inner()
 	}
 
-	/// 最小 wasmer 宿主：直接驱动 net FFI（init/set_url/send/html），
+	/// 无引擎宿主：经 TestCtx 直接驱动 net FFI（init/set_url/send/html），
 	/// 再借 imports::html 的 FFI 验证选择器命中，不需要真 wasm guest
 	struct Ffi {
-		store: Store,
-		env: FunctionEnv<WasmEnv>,
-		memory: Memory,
-		bump: u32,
+		ctx: TestCtx,
 	}
 
 	impl Ffi {
 		fn new() -> Self {
-			let mut store = Store::default();
-			let memory = Memory::new(&mut store, MemoryType::new(Pages(4), None, false)).unwrap();
-			let env = FunctionEnv::new(
-				&mut store,
-				WasmEnv {
-					memory: Some(memory.clone()),
-					store: GlobalStore::new(),
-					defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
-					net: NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default()),
-					browser: crate::browser::BrowserState::new(None, Duration::from_secs(1)),
-					limits: Limits::default(),
-					source_key: "test".into(),
-					logger: Arc::new(StdoutLogger),
-					partial_sink: None,
-				},
+			let env = WasmEnv::for_test(
+				Limits::default(),
+				crate::browser::BrowserState::new(None, Duration::from_secs(1)),
 			);
-			// 指针 0 起是合法内存，测试数据从 1024 起 bump 写入避免踩到空指针路径
-			Self { store, env, memory, bump: 1024 }
-		}
-
-		fn write_str(&mut self, s: &str) -> (i32, i32) {
-			let ptr = self.bump;
-			self.bump += s.len() as u32 + 64;
-			self.memory.view(&self.store).write(ptr as u64, s.as_bytes()).unwrap();
-			(ptr as i32, s.len() as i32)
-		}
-
-		fn call1(&mut self, f: fn(FunctionEnvMut<WasmEnv>, Rid) -> FFIResult, a: i32) -> i32 {
-			Function::new_typed_with_env(&mut self.store, &self.env, f)
-				.call(&mut self.store, &[Value::I32(a)])
-				.unwrap()
-				.first()
-				.unwrap()
-				.i32()
-				.unwrap()
-		}
-
-		fn call3(&mut self, f: fn(FunctionEnvMut<WasmEnv>, Rid, Ptr, u32) -> FFIResult, a: i32, b: i32, c: i32) -> i32 {
-			Function::new_typed_with_env(&mut self.store, &self.env, f)
-				.call(&mut self.store, &[Value::I32(a), Value::I32(b), Value::I32(c)])
-				.unwrap()
-				.first()
-				.unwrap()
-				.i32()
-				.unwrap()
+			Self { ctx: TestCtx::new(env) }
 		}
 
 		/// init(GET) → set_url → send → html，返回文档 rid；任一步失败即断言
 		fn fetch_html(&mut self, url: &str) -> Rid {
-			let rid = Function::new_typed_with_env(&mut self.store, &self.env, init)
-				.call(&mut self.store, &[Value::I32(0)])
-				.unwrap()
-				.first()
-				.unwrap()
-				.i32()
-				.unwrap();
+			let rid = init(&mut self.ctx, 0);
 			assert!(rid > 0, "init 返回 {rid}");
-			let (p, l) = self.write_str(url);
-			assert_eq!(self.call3(set_url, rid, p, l), 0, "set_url");
-			assert_eq!(self.call1(send, rid), 0, "send");
-			let doc = self.call1(html, rid);
+			let (p, l) = self.ctx.write_str(url);
+			assert_eq!(set_url(&mut self.ctx, rid, p, l), 0, "set_url");
+			assert_eq!(send(&mut self.ctx, rid), 0, "send");
+			let doc = html(&mut self.ctx, rid);
 			assert!(doc > 0, "html 返回 {doc}");
 			doc
 		}
 
 		fn select_text(&mut self, doc: Rid, query: &str) -> String {
-			let (p, l) = self.write_str(query);
-			let el = self.call3(crate::imports::html::select_first, doc, p, l);
+			let (p, l) = self.ctx.write_str(query);
+			let el = crate::imports::html::select_first(&mut self.ctx, doc, p, l);
 			assert!(el > 0, "select_first({query}) 返回 {el}");
-			let s = self.call1(crate::imports::html::text, el);
+			let s = crate::imports::html::text(&mut self.ctx, el);
 			assert!(s > 0, "text 返回 {s}");
-			let Some(StoreItem::String(text)) = self.env.as_ref(&self.store).store.get(s) else {
+			let Some(StoreItem::String(text)) = self.ctx.env.store.get(s) else {
 				panic!("rid {s} 不是 StoreItem::String");
 			};
 			text.clone()
@@ -1371,18 +1322,12 @@ mod tests {
 		let body = vec![b'x'; 2048];
 		let server = mock_server(move |_head| respond_bytes("200 OK", &[], &body));
 		let mut ffi = Ffi::new();
-		ffi.env.as_mut(&mut ffi.store).limits.net_body_max = 1024;
-		let rid = Function::new_typed_with_env(&mut ffi.store, &ffi.env, init)
-			.call(&mut ffi.store, &[Value::I32(0)])
-			.unwrap()
-			.first()
-			.unwrap()
-			.i32()
-			.unwrap();
+		ffi.ctx.env.limits.net_body_max = 1024;
+		let rid = init(&mut ffi.ctx, 0);
 		assert!(rid > 0, "init 返回 {rid}");
-		let (p, l) = ffi.write_str(&format!("http://{}/x", server.addr));
-		assert_eq!(ffi.call3(set_url, rid, p, l), 0, "set_url");
-		assert_eq!(ffi.call1(send, rid), -10, "超限必须失败而不是无界缓冲");
-		assert_eq!(ffi.call1(data_len, rid), -8, "超限响应不得可读");
+		let (p, l) = ffi.ctx.write_str(&format!("http://{}/x", server.addr));
+		assert_eq!(set_url(&mut ffi.ctx, rid, p, l), 0, "set_url");
+		assert_eq!(send(&mut ffi.ctx, rid), -10, "超限必须失败而不是无界缓冲");
+		assert_eq!(data_len(&mut ffi.ctx, rid), -8, "超限响应不得可读");
 	}
 }

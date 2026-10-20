@@ -3,14 +3,16 @@
 //! 颜色分量 0-255/alpha 0-1、path/style 为 postcard 载荷），错误码以
 //! vendor/aidoku/src/imports/canvas.rs 的 CanvasError 为准。
 use crate::{
-	WasmEnv, fonts,
-	runtime::store::{CanvasState, FFIResult, ImageData, Ptr, Rid, StoreItem},
+	fonts,
+	runtime::{
+		env::Ctx,
+		store::{CanvasState, FFIResult, ImageData, Ptr, Rid, StoreItem},
+	},
 };
 use tiny_skia::{
 	Color, FillRule, FilterQuality, Paint, PathBuilder, Pattern, Pixmap, Rect, SpreadMode, Stroke,
 	StrokeDash, Transform,
 };
-use wasmer::FunctionEnvMut;
 
 /// 画布像素总量上限：长条拼接页可能上万高，按 64M 像素（256MB RGBA）封顶
 const MAX_CANVAS_PIXELS: u64 = 64 * 1024 * 1024;
@@ -216,7 +218,7 @@ fn blit(
 		.fill_rect(rect, &paint, canvas.transform, None);
 }
 
-pub fn new_context(mut env: FunctionEnvMut<WasmEnv>, width: f32, height: f32) -> Rid {
+pub fn new_context(ctx: &mut impl Ctx, width: f32, height: f32) -> Rid {
 	if !width.is_finite()
 		|| !height.is_finite()
 		|| width <= 0.0
@@ -230,14 +232,14 @@ pub fn new_context(mut env: FunctionEnvMut<WasmEnv>, width: f32, height: f32) ->
 	let Some(pixmap) = Pixmap::new(width as u32, height as u32) else {
 		return Result::InvalidContext.into();
 	};
-	env.data_mut().store.store(StoreItem::Canvas(Box::new(CanvasState {
+	ctx.host().store.store(StoreItem::Canvas(Box::new(CanvasState {
 		pixmap,
 		transform: Transform::identity(),
 	})))
 }
 
 pub fn set_transform(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	translate_x: f32,
 	translate_y: f32,
@@ -245,8 +247,7 @@ pub fn set_transform(
 	scale_y: f32,
 	rotate_angle: f32,
 ) -> FFIResult {
-	let Some(canvas) = env
-		.data_mut()
+	let Some(canvas) = ctx.host()
 		.store
 		.get_mut(context)
 		.and_then(|item| item.as_canvas())
@@ -264,12 +265,12 @@ pub fn set_transform(
 /// take/restore 模式：canvas 与 image 可能同 store，先取出 image（所有权），
 /// 画完放回原 rid；图被反复绘制时避免每次全量克隆像素
 fn with_image(
-	env: &mut FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	image_rid: Rid,
 	f: impl FnOnce(&mut CanvasState, &ImageData),
 ) -> FFIResult {
-	let data = env.data_mut();
+	let data = ctx.host();
 	let Some(StoreItem::ImageData(image)) = data.store.take(image_rid) else {
 		if let Some(item) = data.store.take(image_rid) {
 			data.store.restore(image_rid, item);
@@ -286,7 +287,7 @@ fn with_image(
 }
 
 pub fn draw_image(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	image: Rid,
 	dst_x: f32,
@@ -294,7 +295,7 @@ pub fn draw_image(
 	dst_width: f32,
 	dst_height: f32,
 ) -> FFIResult {
-	with_image(&mut env, context, image, |canvas, image| {
+	with_image(ctx, context, image, |canvas, image| {
 		blit(canvas, image, 0.0, 0.0, image.width as f32, image.height as f32, dst_x, dst_y, dst_width, dst_height);
 	})
 }
@@ -302,7 +303,7 @@ pub fn draw_image(
 // 签名由源 ABI 固定，无法归并参数
 #[allow(clippy::too_many_arguments)]
 pub fn copy_image(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	image: Rid,
 	src_x: f32,
@@ -317,13 +318,13 @@ pub fn copy_image(
 	if src_width <= 0.0 || src_height <= 0.0 {
 		return Result::InvalidSrcRect.into();
 	}
-	with_image(&mut env, context, image, |canvas, image| {
+	with_image(ctx, context, image, |canvas, image| {
 		blit(canvas, image, src_x, src_y, src_width, src_height, dst_x, dst_y, dst_width, dst_height);
 	})
 }
 
 pub fn fill(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	path_ptr: Ptr,
 	r: f32,
@@ -331,17 +332,14 @@ pub fn fill(
 	b: f32,
 	a: f32,
 ) -> FFIResult {
-	let Some(path) = env
-		.data()
-		.read_item_bytes(&env, path_ptr)
+	let Some(path) = ctx.read_item_bytes(path_ptr)
 		.ok()
 		.and_then(|bytes| read_postcard::<aidoku::canvas::Path>(&bytes))
 		.and_then(|path| convert_path(&path))
 	else {
 		return Result::InvalidPath.into();
 	};
-	let Some(canvas) = env
-		.data_mut()
+	let Some(canvas) = ctx.host()
 		.store
 		.get_mut(context)
 		.and_then(|item| item.as_canvas())
@@ -356,30 +354,25 @@ pub fn fill(
 }
 
 pub fn stroke(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	path_ptr: Ptr,
 	style_ptr: Ptr,
 ) -> FFIResult {
-	let Some(path) = env
-		.data()
-		.read_item_bytes(&env, path_ptr)
+	let Some(path) = ctx.read_item_bytes(path_ptr)
 		.ok()
 		.and_then(|bytes| read_postcard::<aidoku::canvas::Path>(&bytes))
 		.and_then(|path| convert_path(&path))
 	else {
 		return Result::InvalidPath.into();
 	};
-	let Some(style) = env
-		.data()
-		.read_item_bytes(&env, style_ptr)
+	let Some(style) = ctx.read_item_bytes(style_ptr)
 		.ok()
 		.and_then(|bytes| read_postcard::<aidoku::canvas::StrokeStyle>(&bytes))
 	else {
 		return Result::InvalidStyle.into();
 	};
-	let Some(canvas) = env
-		.data_mut()
+	let Some(canvas) = ctx.host()
 		.store
 		.get_mut(context)
 		.and_then(|item| item.as_canvas())
@@ -418,7 +411,7 @@ pub fn stroke(
 
 #[allow(clippy::too_many_arguments)]
 pub fn draw_text(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	context: Rid,
 	text_ptr: Ptr,
 	text_len: u32,
@@ -431,14 +424,13 @@ pub fn draw_text(
 	b: f32,
 	a: f32,
 ) -> FFIResult {
-	let Ok(text) = env.data().read_string(&env, text_ptr, text_len) else {
+	let Ok(text) = ctx.read_string(text_ptr, text_len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(font_id) = env.data().store.get(font).and_then(|item| item.as_font()) else {
+	let Some(font_id) = ctx.host().store.get(font).and_then(|item| item.as_font()) else {
 		return Result::InvalidFont.into();
 	};
-	let Some(canvas) = env
-		.data_mut()
+	let Some(canvas) = ctx.host()
 		.store
 		.get_mut(context)
 		.and_then(|item| item.as_canvas())
@@ -538,9 +530,8 @@ impl ttf_parser::OutlineBuilder for GlyphBuilder {
 	}
 }
 
-pub fn get_image(mut env: FunctionEnvMut<WasmEnv>, context: Rid) -> Rid {
-	let Some(canvas) = env
-		.data_mut()
+pub fn get_image(ctx: &mut impl Ctx, context: Rid) -> Rid {
+	let Some(canvas) = ctx.host()
 		.store
 		.get_mut(context)
 		.and_then(|item| item.as_canvas())
@@ -552,33 +543,33 @@ pub fn get_image(mut env: FunctionEnvMut<WasmEnv>, context: Rid) -> Rid {
 		width: canvas.pixmap.width() as i32,
 		height: canvas.pixmap.height() as i32,
 	};
-	env.data_mut().store.store(StoreItem::ImageData(image))
+	ctx.host().store.store(StoreItem::ImageData(image))
 }
 
-pub fn new_font(mut env: FunctionEnvMut<WasmEnv>, name_ptr: Ptr, name_len: u32) -> FFIResult {
-	let Ok(name) = env.data().read_string(&env, name_ptr, name_len) else {
+pub fn new_font(ctx: &mut impl Ctx, name_ptr: Ptr, name_len: u32) -> FFIResult {
+	let Ok(name) = ctx.read_string(name_ptr, name_len) else {
 		return Result::InvalidString.into();
 	};
 	let Some(id) = fonts::resolve_family_strict(&name) else {
 		return Result::InvalidFont.into();
 	};
-	env.data_mut().store.store(StoreItem::Font(id))
+	ctx.host().store.store(StoreItem::Font(id))
 }
 
-pub fn system_font(mut env: FunctionEnvMut<WasmEnv>, weight: u8) -> Rid {
+pub fn system_font(ctx: &mut impl Ctx, weight: u8) -> Rid {
 	let id = fonts::resolve_system(weight);
-	env.data_mut().store.store(StoreItem::Font(id))
+	ctx.host().store.store(StoreItem::Font(id))
 }
 
-pub fn load_font(mut env: FunctionEnvMut<WasmEnv>, url_ptr: Ptr, url_len: u32) -> FFIResult {
-	let Ok(url_str) = env.data().read_string(&env, url_ptr, url_len) else {
+pub fn load_font(ctx: &mut impl Ctx, url_ptr: Ptr, url_len: u32) -> FFIResult {
+	let Ok(url_str) = ctx.read_string(url_ptr, url_len) else {
 		return Result::InvalidString.into();
 	};
 	let Ok(url) = url::Url::parse(&url_str) else {
 		return Result::FontLoadFailed.into();
 	};
 	// 字体下载与 net 模块同一条出口，代理/限流策略不绕开
-	let data = env.data_mut();
+	let data = ctx.host();
 	let mut request = crate::imports::NetRequest::new(crate::imports::HttpMethod::Get);
 	request.url = Some(url);
 	let timeout = data.limits.net_timeout_default;
@@ -595,11 +586,11 @@ pub fn load_font(mut env: FunctionEnvMut<WasmEnv>, url_ptr: Ptr, url_len: u32) -
 	let Some(id) = fonts::load_bytes(response.data) else {
 		return Result::FontLoadFailed.into();
 	};
-	env.data_mut().store.store(StoreItem::Font(id))
+	ctx.host().store.store(StoreItem::Font(id))
 }
 
-pub fn new_image(mut env: FunctionEnvMut<WasmEnv>, data_ptr: Ptr, data_len: u32) -> FFIResult {
-	let Ok(data) = env.data().read_bytes(&env, data_ptr, data_len) else {
+pub fn new_image(ctx: &mut impl Ctx, data_ptr: Ptr, data_len: u32) -> FFIResult {
+	let Ok(data) = ctx.read_bytes(data_ptr, data_len) else {
 		return Result::InvalidImage.into();
 	};
 	let cursor = std::io::Cursor::new(data);
@@ -613,12 +604,11 @@ pub fn new_image(mut env: FunctionEnvMut<WasmEnv>, data_ptr: Ptr, data_len: u32)
 	};
 	let (width, height) = rgba.dimensions();
 	let image = ImageData::from_rgba8(rgba.into_raw(), width, height);
-	env.data_mut().store.store(StoreItem::ImageData(image))
+	ctx.host().store.store(StoreItem::ImageData(image))
 }
 
-pub fn get_image_data(mut env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> FFIResult {
-	let Some(bytes) = env
-		.data()
+pub fn get_image_data(ctx: &mut impl Ctx, image_rid: Rid) -> FFIResult {
+	let Some(bytes) = ctx.host()
 		.store
 		.get(image_rid)
 		.and_then(|item| match item {
@@ -629,12 +619,11 @@ pub fn get_image_data(mut env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> FFIRe
 	else {
 		return Result::InvalidImagePointer.into();
 	};
-	env.data_mut().store.store(StoreItem::Encoded(bytes))
+	ctx.host().store.store(StoreItem::Encoded(bytes))
 }
 
-pub fn get_image_width(env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> f32 {
-	let Some(image) = env
-		.data()
+pub fn get_image_width(ctx: &mut impl Ctx, image_rid: Rid) -> f32 {
+	let Some(image) = ctx.host()
 		.store
 		.get(image_rid)
 		.and_then(|item| item.as_image_data())
@@ -644,9 +633,8 @@ pub fn get_image_width(env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> f32 {
 	image.width as f32
 }
 
-pub fn get_image_height(env: FunctionEnvMut<WasmEnv>, image_rid: Rid) -> f32 {
-	let Some(image) = env
-		.data()
+pub fn get_image_height(ctx: &mut impl Ctx, image_rid: Rid) -> f32 {
+	let Some(image) = ctx.host()
 		.store
 		.get(image_rid)
 		.and_then(|item| item.as_image_data())

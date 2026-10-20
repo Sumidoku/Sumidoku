@@ -139,6 +139,93 @@ impl WasmEnv {
 	}
 }
 
+/// import 函数体与引擎之间的唯一接口：宿主状态 + guest 线性内存读写。
+/// 函数体内的 host()/mem_* 调用不得互相持有（&mut 重入），取到 owned 数据就放下
+pub trait Ctx {
+	fn host(&mut self) -> &mut WasmEnv;
+	fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>>;
+	fn mem_write(&mut self, ptr: u32, bytes: &[u8]) -> bool;
+
+	fn read_u32(&self, ptr: u32) -> Result<u32> {
+		let bytes = self.mem_read(ptr, 4);
+		Ok(bytes
+			.and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
+			.map(u32::from_le_bytes)
+			.unwrap_or(0))
+	}
+
+	fn read_i32s(&self, ptr: u32, len: u32) -> Result<Vec<i32>> {
+		if len == 0 {
+			return Ok(Vec::new());
+		}
+		let bytes = self
+			.mem_read(ptr, len * 4)
+			.ok_or_else(|| Error::Instance("memory read out of bounds".into()))?;
+		Ok(bytes.as_chunks::<4>().0.iter().map(|c| i32::from_le_bytes(*c)).collect())
+	}
+
+	fn read_bytes(&self, ptr: u32, len: u32) -> Result<Vec<u8>> {
+		if len == 0 {
+			return Ok(Vec::new());
+		}
+		self.mem_read(ptr, len)
+			.ok_or_else(|| Error::Instance("memory read out of bounds".into()))
+	}
+
+	fn read_item_bytes(&self, ptr: u32) -> Result<Vec<u8>> {
+		let len = self.read_u32(ptr)?;
+		if len < 8 {
+			return Err(Error::Instance("invalid item header".into()));
+		}
+		self.read_bytes(ptr + 8, len - 8)
+	}
+
+	fn read_string(&self, ptr: u32, len: u32) -> Result<String> {
+		let bytes = self.read_bytes(ptr, len)?;
+		String::from_utf8(bytes).map_err(|_| Error::Utf8)
+	}
+
+	fn write_buffer(&mut self, ptr: u32, bytes: &[u8]) -> Result<()> {
+		if self.mem_write(ptr, bytes) {
+			Ok(())
+		} else {
+			Err(Error::Instance("memory write out of bounds".into()))
+		}
+	}
+
+	fn write_string(&mut self, ptr: u32, s: &str) -> Result<()> {
+		self.write_buffer(ptr, s.as_bytes())
+	}
+
+	fn write_i32s(&mut self, ptr: u32, values: &[i32]) -> Result<()> {
+		let mut bytes = Vec::with_capacity(values.len() * 4);
+		for v in values {
+			bytes.extend_from_slice(&v.to_le_bytes());
+		}
+		self.write_buffer(ptr, &bytes)
+	}
+}
+
+impl Ctx for wasmer::FunctionEnvMut<'_, WasmEnv> {
+	fn host(&mut self) -> &mut WasmEnv {
+		self.data_mut()
+	}
+
+	fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>> {
+		let memory = self.data().memory.as_ref()?;
+		let mut data = vec![0u8; len as usize];
+		memory.view(self).read(ptr as u64, &mut data).ok()?;
+		Some(data)
+	}
+
+	fn mem_write(&mut self, ptr: u32, bytes: &[u8]) -> bool {
+		let Some(memory) = self.data().memory.as_ref() else {
+			return false;
+		};
+		memory.view(self).write(ptr as u64, bytes).is_ok()
+	}
+}
+
 pub struct Defaults {
 	map: HashMap<String, DefaultValue>,
 	sink: Arc<dyn DefaultsSink>,
@@ -206,5 +293,85 @@ impl NetState {
 			self.clients.insert(route.clone(), client);
 		}
 		Ok(self.clients.get(route).expect("client just inserted"))
+	}
+}
+
+#[cfg(test)]
+pub(crate) mod test_ctx {
+	use super::*;
+	use crate::runtime::limits::Limits;
+	use crate::runtime::store::GlobalStore;
+	use crate::traits::{DirectPolicy, NoopDefaultsSink, StdoutLogger};
+	use std::collections::HashMap;
+	use std::sync::Arc;
+
+	impl WasmEnv {
+		pub(crate) fn for_test(limits: Limits, browser: crate::browser::BrowserState) -> Self {
+			Self {
+				memory: None,
+				store: GlobalStore::new(),
+				defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
+				net: NetState::new(
+					Arc::new(DirectPolicy { user_agent: None }),
+					crate::imports::CookieJar::default(),
+				),
+				browser,
+				limits,
+				source_key: "test".into(),
+				logger: Arc::new(StdoutLogger),
+				partial_sink: None,
+			}
+		}
+	}
+
+	/// 无引擎的 Ctx 实装：平坦 Vec 当线性内存，import 单测直接驱动函数体。
+	/// 指针 0 起是合法内存，测试数据从 1024 起 bump 写入避免踩到空指针路径
+	pub(crate) struct TestCtx {
+		pub env: WasmEnv,
+		memory: Vec<u8>,
+		bump: u32,
+	}
+
+	impl TestCtx {
+		pub(crate) fn new(env: WasmEnv) -> Self {
+			Self {
+				env,
+				memory: vec![0; 4 * 64 * 1024],
+				bump: 1024,
+			}
+		}
+
+		pub(crate) fn write_bytes(&mut self, bytes: &[u8]) -> (u32, u32) {
+			let ptr = self.bump;
+			self.bump += bytes.len() as u32 + 64;
+			assert!(self.mem_write(ptr, bytes), "测试写入越界");
+			(ptr, bytes.len() as u32)
+		}
+
+		pub(crate) fn write_str(&mut self, s: &str) -> (u32, u32) {
+			self.write_bytes(s.as_bytes())
+		}
+	}
+
+	impl Ctx for TestCtx {
+		fn host(&mut self) -> &mut WasmEnv {
+			&mut self.env
+		}
+
+		fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>> {
+			let end = ptr.checked_add(len)? as usize;
+			Some(self.memory.get(ptr as usize..end)?.to_vec())
+		}
+
+		fn mem_write(&mut self, ptr: u32, bytes: &[u8]) -> bool {
+			let Some(end) = ptr.checked_add(bytes.len() as u32) else {
+				return false;
+			};
+			let Some(slot) = self.memory.get_mut(ptr as usize..end as usize) else {
+				return false;
+			};
+			slot.copy_from_slice(bytes);
+			true
+		}
 	}
 }
