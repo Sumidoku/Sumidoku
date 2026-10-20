@@ -291,7 +291,8 @@ impl AppState {
 		let Some((key, wasm_path, kind, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
-		if kind == crate::model::SOURCE_KIND_LOCAL {
+		// 内置源（local/opds）没有 wasm 载荷，凡要走实例的能力一律 404 unsupported
+		if kind == crate::model::SOURCE_KIND_LOCAL || kind == crate::model::SOURCE_KIND_OPDS {
 			return Err(ApiError::unsupported_404("feature not supported by source"));
 		}
 		if !enabled {

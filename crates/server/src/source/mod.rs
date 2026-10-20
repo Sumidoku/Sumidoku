@@ -326,7 +326,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 /// 新装的源注册时已 stamping，不在这趟里
 pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
 	let rows: Vec<(i64, String)> = match sqlx::query_as(
-		"SELECT id, wasm_path FROM source WHERE (config IS NULL OR features IS NULL) AND kind != 'local'",
+		"SELECT id, wasm_path FROM source WHERE (config IS NULL OR features IS NULL) AND kind = 'aidoku'",
 	)
 	.fetch_all(pool)
 	.await
@@ -931,11 +931,20 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 
 /// 内置本地源（kind = local）没有 wasm 实例，章节/页面/封面全走文件系统分支
 pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
+	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
+}
+
+/// 内置 OPDS 源（kind = opds）同样没有 wasm 实例，目录回源走 opds_source 分支
+pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
+	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
+}
+
+async fn source_kind(pool: &SqlitePool, source_id: i64) -> ApiResult<String> {
 	let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM source WHERE id = ?")
 		.bind(source_id)
 		.fetch_optional(pool)
 		.await?;
-	Ok(kind.is_some_and(|(k,)| k == crate::model::SOURCE_KIND_LOCAL))
+	Ok(kind.map(|(k,)| k).unwrap_or_default())
 }
 
 /// 读 page 缓存；miss 或 refresh 时从源拉 get_page_list 并整批落缓存
@@ -1117,7 +1126,7 @@ pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 
 /// 有界读响应体：头声明长度超线快败；压缩/无头长度靠流式累计截停（同 repo::fetch_capped
 /// 模式）。max 为 0 不设限
-async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
+pub(crate) async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
 		.get(reqwest::header::CONTENT_TYPE)

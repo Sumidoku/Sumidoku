@@ -160,6 +160,11 @@ impl Config {
 		self.config_dir.join("page-blobs")
 	}
 
+	/// OPDS 源 acquisition 压缩包的落盘缓存（<chapter_id> 命名），页行重写时失效重拉
+	pub fn opds_cbz_dir(&self) -> PathBuf {
+		self.config_dir.join("opds-cbz")
+	}
+
 	/// 定时备份的默认落点；backup_dir（env）或 setting 表 backup.dir 都可改
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")

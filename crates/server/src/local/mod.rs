@@ -306,8 +306,8 @@ pub async fn chapter_pages(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 	Err(ApiError::bad_request("unsupported local chapter format"))
 }
 
-/// 压缩包内的图片条目：目录项、点开头、__MACOSX 资源叉都不算页
-fn is_image_entry(name: &str) -> bool {
+/// 压缩包内的图片条目：目录项、点开头、__MACOSX 资源叉都不算页（opds 源 CBZ 拆页共用本规则）
+pub(crate) fn is_image_entry(name: &str) -> bool {
 	!name.ends_with('/')
 		&& !name.split('/').any(|part| part.starts_with('.') || part == "__MACOSX")
 		&& has_ext(name, IMAGE_EXTS)

@@ -8,6 +8,7 @@ pub mod listings;
 pub mod login;
 pub mod migrate;
 pub mod oauth;
+pub mod opds_source;
 pub mod page;
 pub mod partial;
 pub mod pins;
@@ -59,6 +60,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 			patch(users::update_user).delete(users::delete_user),
 		)
 		.route("/api/v1/sources/scan", post(scan_sources))
+		.route("/api/v1/sources/opds", post(opds_source::register_opds_source))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
