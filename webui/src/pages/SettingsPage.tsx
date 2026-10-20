@@ -14,12 +14,15 @@ import {
 } from 'lucide-react';
 import { ApiError, api, backupUrl, clearToken } from '../api/client';
 import {
+	qk,
+	queryClient,
 	useBackupFiles,
 	useCategories,
 	useCreateCategory,
 	useDeleteCategory,
 	useImportAidoku,
 	useImportSuwayomi,
+	useIsAdmin,
 	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
@@ -27,11 +30,13 @@ import {
 	useRestoreNamedBackup,
 	useSaveServerSettings,
 	useServerSettings,
-	useSources
+	useSources,
+	useWhoami
 } from '../api/hooks';
 import type {
 	AidokuImportResult,
 	AidokuImportSkipped,
+	AuthStatus,
 	BackupFileEntry,
 	BackupRestoreResult,
 	Category,
@@ -168,16 +173,10 @@ function IncognitoSection() {
 
 function SecuritySection() {
 	const navigate = useNavigate();
-	const [enabled, setEnabled] = useState<boolean | null>(null);
+	const whoami = useWhoami();
 	const [current, setCurrent] = useState('');
 	const [next, setNext] = useState('');
 	const [pending, setPending] = useState(false);
-
-	useEffect(() => {
-		api<{ enabled: boolean }>('/auth/status', { silent: true })
-			.then((s) => setEnabled(s.enabled))
-			.catch(() => setEnabled(null));
-	}, []);
 
 	async function submit() {
 		if (!current || !next || pending) return;
@@ -202,11 +201,17 @@ function SecuritySection() {
 	async function logout() {
 		await api('/auth/logout', { method: 'POST', silent: true }).catch(() => {});
 		clearToken();
+		queryClient.setQueryData(qk.whoami, (cur: AuthStatus | undefined) =>
+			cur ? { ...cur, user: null } : cur
+		);
 		navigate('/login');
 	}
 
+	const enabled = whoami.data === undefined ? null : whoami.data.enabled;
+	const user = whoami.data?.user ?? null;
+
 	return (
-		<Section title="安全" desc="web 界面、REST API 与 OPDS 共用同一密码；API key 走服务端配置">
+		<Section title="安全" desc="web 界面、REST API 与 OPDS 共用同一套用户名密码；API key 走服务端配置">
 			{enabled === null ? (
 				<Skeleton height={48} />
 			) : !enabled ? (
@@ -215,6 +220,15 @@ function SecuritySection() {
 				</p>
 			) : (
 				<>
+					{user && (
+						<div className="settings-row">
+							<span className="settings-row__label">当前账号</span>
+							<span className="settings-security__account">
+								{user.username}
+								<Badge>{user.role === 'admin' ? '管理员' : '读者'}</Badge>
+							</span>
+						</div>
+					)}
 					<div className="settings-row">
 						<span className="settings-row__label">当前密码</span>
 						<Input
@@ -784,7 +798,7 @@ function SuwayomiImportResultView({ result }: { result: SuwayomiImportResult }) 
 	);
 }
 
-function BackupSection() {
+function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 	const restore = useRestoreBackup();
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [preview, setPreview] = useState<BackupPreview | null>(null);
@@ -799,6 +813,10 @@ function BackupSection() {
 	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResult } | null>(null);
 	const [swMapping, setSwMapping] = useState<Record<string, string>>({});
 	const [swResult, setSwResult] = useState<SuwayomiImportResult | null>(null);
+	// settings/sourceSettings 两段写全局状态，服务端对 reader 拒收（403），选项一并藏掉
+	const sections = isAdmin
+		? BACKUP_SECTIONS
+		: BACKUP_SECTIONS.filter((s) => s.key === 'library' || s.key === 'categories' || s.key === 'progress');
 
 	async function onSwFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.currentTarget.files?.[0];
@@ -890,7 +908,7 @@ function BackupSection() {
 			createdAt: typeof createdAt === 'number' ? createdAt : null,
 			counts: previewCounts(doc as Record<string, unknown>)
 		});
-		setPicked(BACKUP_SECTIONS.map((s) => s.key));
+		setPicked(sections.map((s) => s.key));
 		setResult(null);
 	}
 
@@ -1099,7 +1117,7 @@ function BackupSection() {
 									: '选择要恢复的内容：'}
 							</p>
 							<div className="settings-backup__sections">
-								{BACKUP_SECTIONS.map((s) => (
+								{sections.map((s) => (
 									<label key={s.key} className="settings-backup__section">
 										<input
 											type="checkbox"
@@ -1321,6 +1339,18 @@ function ScheduledBackupSection() {
 	);
 }
 
+function UsersSection() {
+	const navigate = useNavigate();
+	return (
+		<Section title="用户" desc="多用户账号与角色：管理员管理全部账号与全局状态，读者只有自己的书库、进度与分类">
+			<div className="settings-row">
+				<span className="settings-row__label">账号与角色</span>
+				<Button onClick={() => navigate('/users')}>管理用户</Button>
+			</div>
+		</Section>
+	);
+}
+
 function AboutSection() {
 	return (
 		<Section title="关于" desc="接口入口与项目地址">
@@ -1347,17 +1377,20 @@ function AboutSection() {
 }
 
 export default function SettingsPage() {
+	// 服务端 403 是真门禁，这里只是不让 reader 看到注定失败的入口
+	const isAdmin = useIsAdmin();
 	return (
 		<div className="page container settings-page">
 			<PageHeader title="设置" />
 			<AppearanceSection />
 			<IncognitoSection />
 			<SecuritySection />
+			{isAdmin && <UsersSection />}
 			<CategoriesSection />
-			<LocalSourceSection />
-			<ServerSettingsSection />
-			<BackupSection />
-			<ScheduledBackupSection />
+			{isAdmin && <LocalSourceSection />}
+			{isAdmin && <ServerSettingsSection />}
+			<BackupSection isAdmin={isAdmin} />
+			{isAdmin && <ScheduledBackupSection />}
 			<AboutSection />
 		</div>
 	);

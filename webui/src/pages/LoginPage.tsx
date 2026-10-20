@@ -2,16 +2,20 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen } from 'lucide-react';
 import { ApiError, api, setToken } from '../api/client';
+import { qk, queryClient } from '../api/hooks';
+import type { AccountUser } from '../api/types';
 import { Button, Input } from '../components';
 import './login.css';
 
 interface LoginResponse {
 	token: string;
 	expiresAt: number;
+	user: AccountUser;
 }
 
 export default function LoginPage() {
 	const navigate = useNavigate();
+	const [username, setUsername] = useState('');
 	const [password, setPassword] = useState('');
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState('');
@@ -26,20 +30,22 @@ export default function LoginPage() {
 	}, [navigate]);
 
 	async function submit() {
-		if (!password || pending) return;
+		if (!username || !password || pending) return;
 		setPending(true);
 		setError('');
 		try {
 			const res = await api<LoginResponse>('/auth/login', {
 				method: 'POST',
-				body: { password },
+				body: { username, password },
 				silent: true
 			});
 			setToken(res.token);
+			// 登录响应自带身份：直接写缓存，省得进首页后 whoami 先回一拍 null
+			queryClient.setQueryData(qk.whoami, { enabled: true, user: res.user });
 			navigate('/', { replace: true });
 		} catch (e) {
-			// 401 对外形状统一，不区分「没配密码」与「密码错」
-			setError(e instanceof ApiError && e.status === 401 ? '密码错误' : '登录失败，请稍后重试');
+			// 401 对外形状统一，不区分「用户不存在」与「密码错」
+			setError(e instanceof ApiError && e.status === 401 ? '用户名或密码错误' : '登录失败，请稍后重试');
 		} finally {
 			setPending(false);
 		}
@@ -58,16 +64,23 @@ export default function LoginPage() {
 					<BookOpen size={28} />
 					<h1>Sumidoku</h1>
 				</div>
-				<p className="login-card__hint">此服务器已启用认证，请输入密码</p>
+				<p className="login-card__hint">此服务器已启用认证，请输入用户名和密码</p>
+				<Input
+					placeholder="用户名"
+					autoFocus
+					autoComplete="username"
+					value={username}
+					onChange={(e) => setUsername(e.currentTarget.value)}
+				/>
 				<Input
 					type="password"
 					placeholder="密码"
-					autoFocus
+					autoComplete="current-password"
 					value={password}
 					onChange={(e) => setPassword(e.currentTarget.value)}
 				/>
 				{error && <p className="login-card__error">{error}</p>}
-				<Button variant="primary" type="submit" loading={pending} disabled={!password}>
+				<Button variant="primary" type="submit" loading={pending} disabled={!username || !password}>
 					登录
 				</Button>
 			</form>

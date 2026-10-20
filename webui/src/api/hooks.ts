@@ -9,6 +9,7 @@ import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
 	AidokuImportResult,
+	AuthStatus,
 	BackupListResponse,
 	BackupRestoreResult,
 	Category,
@@ -26,6 +27,7 @@ import type {
 	LibrarySort,
 	LibrarySourceCount,
 	Listing,
+	ManagedUser,
 	Manga,
 	MangaDetail,
 	MangaPage,
@@ -67,7 +69,9 @@ export const qk = {
 	sourceFilters: (sourceId: number) => ['sources', sourceId, 'filters'] as const,
 	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
 	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
-	backups: ['backups'] as const
+	backups: ['backups'] as const,
+	whoami: ['whoami'] as const,
+	users: ['users'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -98,6 +102,61 @@ async function nullOn404<T>(p: Promise<T>): Promise<T | null> {
 export function useSources() {
 	return useQuery({ queryKey: qk.sources, queryFn: () => api<Source[]>('/sources') });
 }
+
+// ---- 认证身份与用户管理 ----
+
+/** 登录页/设置页之外的常态身份来源；silent：未登录的 401 交给全局跳转，不弹 toast */
+export function useWhoami() {
+	return useQuery({
+		queryKey: qk.whoami,
+		queryFn: () => api<AuthStatus>('/auth/status', { silent: true })
+	});
+}
+
+/**
+ * 管理入口的展示开关（真门禁在服务端 403）。免认证部署一切按内置 admin；
+ * 身份未取到时按非 admin 渲染——管理入口晚一拍出现，胜过给 reader 闪一下再消失
+ */
+export function useIsAdmin(): boolean {
+	const whoami = useWhoami();
+	if (!whoami.data) return false;
+	return !whoami.data.enabled || whoami.data.user?.role === 'admin';
+}
+
+export function useUsers(enabled = true) {
+	return useQuery({ queryKey: qk.users, queryFn: () => api<ManagedUser[]>('/users'), enabled });
+}
+
+export function useCreateUser() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (body: { username: string; password: string; role: string }) =>
+			api<ManagedUser>('/users', { method: 'POST', body, silent: true }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.users })
+	});
+}
+
+/** 改自己（角色/用户名）会影响账号显示，whoami 一并失效 */
+export function useUpdateUser() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, ...body }: { id: number; username?: string; role?: string; password?: string }) =>
+			api<ManagedUser>(`/users/${id}`, { method: 'PATCH', body, silent: true }),
+		onSuccess: () => {
+			void qc.invalidateQueries({ queryKey: qk.users });
+			void qc.invalidateQueries({ queryKey: qk.whoami });
+		}
+	});
+}
+
+export function useDeleteUser() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (id: number) => api(`/users/${id}`, { method: 'DELETE' }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.users })
+	});
+}
+
 
 /** 从源列表里取单个源；没有独立的 GET /sources/{id} 端点 */
 export function useSource(id: number) {

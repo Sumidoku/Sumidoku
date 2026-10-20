@@ -682,3 +682,25 @@ export interface MigrateRequest {
 	mode: MigrateMode;
 	entries: MigrateEntryBody[];
 }
+
+// ---- 用户与认证 ----
+
+export interface AccountUser {
+	id: number;
+	username: string;
+	role: 'admin' | 'reader';
+}
+
+/** GET /auth/status：enabled 为 false 时 user 恒 null（免认证部署一切按内置 admin） */
+export interface AuthStatus {
+	enabled: boolean;
+	user: AccountUser | null;
+}
+
+/** 用户管理列表项；凭证材料永不出服务端，这里没有密码字段 */
+export interface ManagedUser {
+	id: number;
+	username: string;
+	role: 'admin' | 'reader';
+	createdAt: number;
+}
