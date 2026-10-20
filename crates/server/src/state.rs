@@ -54,6 +54,8 @@ pub struct AppState {
 	pub cookie_tx: mpsc::UnboundedSender<CookieWrite>,
 	pub http: RoutedClients,
 	pub policy: Arc<SumidokuNetPolicy>,
+	/// 本地源 CBZ 句柄 LRU（按需抽单页，重开包要重读中央目录）
+	pub local_zip: Arc<crate::local::ZipCache>,
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
@@ -147,8 +149,15 @@ pub async fn load_cookies(
 	Ok(cookies)
 }
 
-/// source 行里组装实例启动配置所需的列（key, wasm_path, enabled, languages, config）
-type SourceConfigRow = (String, String, bool, sqlx::types::Json<Vec<String>>, Option<String>);
+/// source 行里组装实例启动配置所需的列（key, wasm_path, kind, enabled, languages, config）
+type SourceConfigRow = (
+	String,
+	String,
+	String,
+	bool,
+	sqlx::types::Json<Vec<String>>,
+	Option<String>,
+);
 
 impl AppState {
 	pub fn new(
@@ -171,6 +180,7 @@ impl AppState {
 			cookie_tx,
 			http,
 			policy,
+			local_zip: Arc::new(crate::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
 			browser_logins: tokio::sync::OnceCell::new(),
@@ -276,13 +286,16 @@ impl AppState {
 	/// 顺带把 manifest config.maximumParallelRequests 换算成每源调用准入帽
 	async fn source_config(&self, source_id: i64) -> ApiResult<(SourceConfig, Option<Arc<Semaphore>>)> {
 		let row: Option<SourceConfigRow> =
-			sqlx::query_as("SELECT key, wasm_path, enabled, languages, config FROM source WHERE id = ?")
+			sqlx::query_as("SELECT key, wasm_path, kind, enabled, languages, config FROM source WHERE id = ?")
 				.bind(source_id)
 				.fetch_optional(&self.pool)
 				.await?;
-		let Some((key, wasm_path, enabled, languages, source_manifest_config)) = row else {
+		let Some((key, wasm_path, kind, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
+		if kind == crate::model::SOURCE_KIND_LOCAL {
+			return Err(ApiError::unsupported_404("feature not supported by source"));
+		}
 		if !enabled {
 			return Err(ApiError::source_disabled(&key));
 		}

@@ -2,7 +2,7 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{connect_db, register_example_manga, request, request_full, test_app};
+use common::{connect_db, register_example_manga, request, request_full, source_by_key, test_app};
 use serde_json::{Value, json};
 
 async fn chapter_ids(app: &Router, manga_id: i64) -> Vec<i64> {
@@ -38,7 +38,9 @@ async fn register_two_manga(app: &Router) -> (i64, i64) {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, body) = request(app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let (_, body) = request(
 		app,
 		"POST",

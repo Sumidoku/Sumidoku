@@ -81,6 +81,8 @@ pub struct Config {
 	pub backup_retention_count: Option<u32>,
 	/// 备份落点，允许在 config_dir 外
 	pub backup_dir: Option<PathBuf>,
+	/// 本地漫画根目录（内置本地源的扫描目标）；None = <config_dir>/local
+	pub local_dir: Option<PathBuf>,
 	/// legacy：auth.password 的兼容别名，只在 auth.password 缺席时生效
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
@@ -118,6 +120,7 @@ impl Default for Config {
 			backup_interval_hours: None,
 			backup_retention_count: None,
 			backup_dir: None,
+			local_dir: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -164,6 +167,13 @@ impl Config {
 	/// 定时备份的默认落点；backup_dir（env）或 setting 表 backup.dir 都可改
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")
+	}
+
+	/// 本地漫画根目录：显式配置优先（可在 config_dir 外），缺省钉在 config_dir 下
+	pub fn local_dir(&self) -> PathBuf {
+		self.local_dir
+			.clone()
+			.unwrap_or_else(|| self.config_dir.join("local"))
 	}
 
 	/// 组装透传给 wasm 运行时的实例上限；sleep/net/js/browser 各档不开放配置
@@ -214,6 +224,7 @@ struct ConfigFile {
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
 	backup_dir: Option<PathBuf>,
+	local_dir: Option<PathBuf>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
@@ -312,6 +323,9 @@ impl Config {
 		}
 		if file.backup_dir.is_some() {
 			self.backup_dir = file.backup_dir;
+		}
+		if file.local_dir.is_some() {
+			self.local_dir = file.local_dir;
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
@@ -469,6 +483,9 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_DIR") {
 			self.backup_dir = Some(PathBuf::from(v));
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_DIR") {
+			self.local_dir = Some(PathBuf::from(v));
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
@@ -664,6 +681,30 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_HEADERS") };
 		assert!(!config.net.browser_headers);
+	}
+
+	#[test]
+	fn local_dir_from_file_and_env() {
+		assert_eq!(Config::default().local_dir, None);
+		let file: ConfigFile = toml::from_str("local_dir = \"/manga/local\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_dir(), PathBuf::from("/manga/local"));
+
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIR", "/manga/env-local") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_DIR") };
+		assert_eq!(config.local_dir(), PathBuf::from("/manga/env-local"));
+	}
+
+	#[test]
+	fn local_dir_defaults_under_config_dir() {
+		let config = Config {
+			config_dir: PathBuf::from("/data"),
+			..Config::default()
+		};
+		assert_eq!(config.local_dir(), PathBuf::from("/data/local"));
 	}
 
 	#[test]

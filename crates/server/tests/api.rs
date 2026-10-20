@@ -1,7 +1,7 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{TestApp, register_example_manga, request, request_full, test_app};
+use common::{TestApp, register_example_manga, request, request_full, source_by_key, test_app};
 use serde_json::json;
 
 // 1x1 透明 PNG
@@ -38,15 +38,18 @@ async fn full_flow() {
 	assert_eq!(body["installed"], json!([]));
 	assert_eq!(body["updated"], json!(["en.example-source"]));
 
-	// sources 列表
+	// sources 列表：内置本地源随迁移落库，钉死大 id 恒排在用户源之后
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let sources = body.as_array().expect("sources array");
-	assert_eq!(sources.len(), 1);
-	assert_eq!(sources[0]["key"], "en.example-source");
-	assert_eq!(sources[0]["name"], "Example Source");
-	assert_eq!(sources[0]["enabled"], true);
-	let source_id = sources[0]["id"].as_i64().expect("source id");
+	assert_eq!(sources.len(), 2);
+	assert_eq!(sources[0]["key"], "local.local");
+	assert_eq!(sources[0]["kind"], "local");
+	assert_eq!(sources[1]["key"], "en.example-source");
+	assert_eq!(sources[1]["name"], "Example Source");
+	assert_eq!(sources[1]["enabled"], true);
+	assert_eq!(sources[1]["kind"], "aidoku");
+	let source_id = sources[1]["id"].as_i64().expect("source id");
 
 	// 搜索 20 条
 	let search_path = format!("/api/v1/sources/{source_id}/search");
@@ -165,7 +168,9 @@ async fn reset_and_clear_source_state() {
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, sources) = request(&app, "GET", "/api/v1/sources", None).await;
-	let source_id = sources[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&sources, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let settings_path = format!("/api/v1/sources/{source_id}/settings");
 
 	// 覆盖一个设置项
@@ -210,7 +215,9 @@ async fn source_icon() {
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let icon_path = format!("/api/v1/sources/{source_id}/icon");
 
 	// 源无 icon → 404

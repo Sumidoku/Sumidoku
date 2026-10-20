@@ -127,7 +127,11 @@ async fn search_ndjson_streams_manga_deltas() {
 async fn stream_without_partials_has_only_final() {
 	let TestApp { app, tmp: _tmp, .. } = test_app().await;
 	let ids = scan_sources(&app).await;
-	let source_id = ids[0].1;
+	let source_id = ids
+		.iter()
+		.find(|(key, _)| key == "en.example-source")
+		.map(|(_, id)| *id)
+		.expect("example source id");
 
 	// example fixture 不发 partial：流里只有终态事件
 	let (status, _, events) =

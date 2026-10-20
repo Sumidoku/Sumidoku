@@ -29,7 +29,11 @@ async fn scan_and_source_ids(app: &axum::Router) -> Vec<(String, i64)> {
 async fn home_layout_serialized() {
 	let TestApp { app, tmp: _tmp, .. } = test_app().await;
 	let ids = scan_and_source_ids(&app).await;
-	let source_id = ids[0].1;
+	let source_id = ids
+		.iter()
+		.find(|(key, _)| key == "en.example-source")
+		.map(|(_, id)| *id)
+		.expect("example source id");
 
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);

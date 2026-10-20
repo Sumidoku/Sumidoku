@@ -256,13 +256,24 @@ pub async fn request_with_headers(
 	(status, resp_headers, bytes.to_vec())
 }
 
+/// sources 列表按 key 找条目：内置本地源随迁移落库（全新库 id 最小），按下标取行已不可靠
+pub fn source_by_key<'a>(body: &'a Value, key: &str) -> &'a Value {
+	body.as_array()
+		.expect("sources array")
+		.iter()
+		.find(|s| s["key"] == key)
+		.unwrap_or_else(|| panic!("source {key} not found in {body}"))
+}
+
 /// scan 安装 example-source 并注册第一本搜索结果的漫画，返回内部 manga id
 pub async fn register_example_manga(app: &Router) -> i64 {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let (status, body) = request(
 		app,
 		"POST",
