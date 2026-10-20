@@ -287,7 +287,7 @@ async fn backup_export_scoped_to_requesting_user() {
 
 	let manga_id = register_manga_as(app, admin).await;
 	let chapter_id = first_chapter_as(app, admin, manga_id).await;
-	let (status, body) = as_user(app, admin, "POST", "/api/v1/categories", Some(json!({"name": "Action"}))).await;
+	let (status, _) = as_user(app, admin, "POST", "/api/v1/categories", Some(json!({"name": "Action"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(app, admin, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
