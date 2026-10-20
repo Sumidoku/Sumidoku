@@ -46,6 +46,16 @@ pub struct UpdateSummary {
 	pub user_id: Option<i64>,
 }
 
+impl UpdateSummary {
+	/// 按请求用户裁剪：别人手动触发的 fetch 与本用户无关，按闲置呈现；union（无归属）全员可见
+	pub fn visible_to(self, user_id: i64) -> Self {
+		match self.user_id {
+			Some(owner) if owner != user_id => Self::default(),
+			_ => self,
+		}
+	}
+}
+
 /// 库更新检测：定时或手动触发全量 fetch，分类 include_in_update 三态过滤。
 pub struct UpdateScheduler {
 	// Weak 防循环引用：AppState 经 OnceCell 持有本调度器

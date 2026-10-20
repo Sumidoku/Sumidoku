@@ -14,7 +14,7 @@ pub mod state;
 pub mod update;
 pub mod webui_assets;
 
-/// 内置 admin（user 1）：定时备份路径暂以它为归属用户，多用户定时备份语义属后续切片
+/// 内置 admin（user 1）：定时备份固定以它构造全量导出（见 backup/mod.rs）
 pub(crate) const USER_ID: i64 = 1;
 pub(crate) const PAGE_SIZE: i64 = 50;
 

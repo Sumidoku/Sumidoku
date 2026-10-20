@@ -6,12 +6,15 @@ transactional and reports what it skipped and why.
 
 ## Full backup (export / import)
 
-`GET /api/v1/backup` downloads the full library state — library membership
-and manga metadata, categories, reading progress, app settings and source
-settings — as one JSON document with a `version` field (currently `1`;
-unknown versions are rejected with `400`). `POST /api/v1/backup` imports it
-back, optionally limited with
-`?sections=library,categories,progress,settings,sourceSettings`. Import
+`GET /api/v1/backup` downloads the requesting user's library state —
+library membership and manga metadata, categories, reading progress —
+plus, for admins, app settings and source settings, as one JSON document
+with a `version` field (currently `1`; unknown versions are rejected with
+`400`). A reader's export carries self-data only: no app settings, no
+source settings. `POST /api/v1/backup` imports it back into the
+requesting user's own state, optionally limited with
+`?sections=library,categories,progress,settings,sourceSettings` (the two
+settings sections require the admin role). Import
 upserts by natural key (source key + manga key, chapter key, category
 name) inside a single transaction, so a failed or invalid backup leaves
 the database untouched; entries whose source is not installed are skipped
@@ -35,8 +38,9 @@ override for headless deployments:
 | `backup.dir` | `SUMIDOKU_BACKUP_DIR` | `<config>/backups` | destination directory |
 
 When enabled, a background task writes
-`sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) every interval — the same
-document `GET /api/v1/backup` serves — stamps `backup.last_run`, and
+`sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) every interval — a
+server-side full export built as the built-in admin, the same document an
+admin's `GET /api/v1/backup` serves — stamps `backup.last_run`, and
 deletes files beyond the retention count, oldest first; the newest file is
 never deleted, even with `backup.retention_count = 0`. At startup, if more
 than one interval elapsed since `backup.last_run` (or no backup was ever
