@@ -20,6 +20,69 @@ enum Cmd {
 	Job(Job),
 }
 
+/// What the per-call log line reports as `entries`; the default is None for results
+/// where a count is meaningless (login, notification, image bytes, URLs)
+trait CallEntries {
+	fn entries(&self) -> Option<usize> {
+		None
+	}
+}
+
+impl CallEntries for MangaPageResult {
+	fn entries(&self) -> Option<usize> {
+		Some(self.entries.len())
+	}
+}
+
+impl CallEntries for Manga {
+	fn entries(&self) -> Option<usize> {
+		self.chapters.as_ref().map(Vec::len)
+	}
+}
+
+impl CallEntries for HomeLayout {
+	fn entries(&self) -> Option<usize> {
+		Some(self.components.len())
+	}
+}
+
+impl CallEntries for Vec<Page> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Filter> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Setting> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Listing> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<String> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<u8> {}
+impl CallEntries for String {}
+impl CallEntries for bool {}
+impl CallEntries for () {}
+impl CallEntries for ImageRequestSpec {}
+impl CallEntries for Option<DeepLinkResult> {}
+
 struct Inner {
 	tx: mpsc::Sender<Cmd>,
 	thread_alive: Arc<AtomicBool>,
@@ -133,8 +196,9 @@ impl SourceHandle {
 			.load(Ordering::SeqCst)
 	}
 
-	async fn call<T: Send + 'static>(
+	async fn call<T: Send + 'static + CallEntries>(
 		&self,
+		op: &'static str,
 		job: impl FnOnce(&mut SourceInstance) -> Result<T> + Send + 'static,
 	) -> Result<T> {
 		// Take the per-source cap before occupying the global one: a source that declares
@@ -157,19 +221,50 @@ impl SourceHandle {
 			.map_err(|_| Error::Instance("call semaphore closed".into()))?;
 		let (reply_tx, reply_rx) = oneshot::channel::<Result<T>>();
 		let tx = self.inner.read().expect("inner lock").tx.clone();
-		tx.send(Cmd::Job(Box::new(move |instance| {
-			let _ = reply_tx.send(job(instance));
-		})))
-		.await
-		.map_err(|_| Error::Instance("actor thread dead".into()))?;
-		match tokio::time::timeout(self.call_timeout, reply_rx).await {
+		let start = std::time::Instant::now();
+		if tx
+			.send(Cmd::Job(Box::new(move |instance| {
+				let _ = reply_tx.send(job(instance));
+			})))
+			.await
+			.is_err()
+		{
+			let result = Err(Error::Instance("actor thread dead".into()));
+			self.log_outcome(op, start.elapsed(), &result);
+			return result;
+		}
+		let result = match tokio::time::timeout(self.call_timeout, reply_rx).await {
 			Ok(Ok(result)) => result,
 			Ok(Err(_closed)) => Err(Error::Trap("source call panicked".into())),
 			Err(_elapsed) => {
+				let result = Err(Error::Timeout);
+				// Logged before the rebuild so the duration reflects the call itself
+				self.log_outcome(op, start.elapsed(), &result);
 				// Timeout circuit breaker: the old thread may be stuck inside a host call, so swap the thread and rebuild the instance
 				let defaults = self.config.read().expect("config lock").defaults.clone();
 				let _ = self.restart(defaults).await;
-				Err(Error::Timeout)
+				return result;
+			}
+		};
+		self.log_outcome(op, start.elapsed(), &result);
+		result
+	}
+
+	/// One structured line per source call, at the chokepoint every op funnels through;
+	/// errors go through log_safe because guest/reqwest text can carry full URLs
+	fn log_outcome<T: CallEntries>(&self, op: &'static str, dur: Duration, result: &Result<T>) {
+		let dur_ms = dur.as_millis() as u64;
+		match result {
+			Ok(value) => {
+				if let Some(entries) = value.entries() {
+					tracing::info!(source = %self.key, op = %op, dur_ms, entries, "source call");
+				} else {
+					tracing::info!(source = %self.key, op = %op, dur_ms, "source call");
+				}
+			}
+			Err(e) => {
+				let error = e.log_safe();
+				tracing::warn!(source = %self.key, op = %op, dur_ms, error = error.as_str(), "source call");
 			}
 		}
 	}
@@ -211,7 +306,7 @@ impl SourceHandle {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		self.call(move |i| i.get_search_manga_list(query, page, filters)).await
+		self.call("search", move |i| i.get_search_manga_list(query, page, filters)).await
 	}
 
 	pub async fn get_manga_update(
@@ -220,20 +315,20 @@ impl SourceHandle {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		self.call(move |i| i.get_manga_update(&manga, needs_details, needs_chapters))
+		self.call("manga_update", move |i| i.get_manga_update(&manga, needs_details, needs_chapters))
 			.await
 	}
 
 	pub async fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		self.call(move |i| i.get_page_list(&manga, &chapter)).await
+		self.call("page_list", move |i| i.get_page_list(&manga, &chapter)).await
 	}
 
 	pub async fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		self.call(move |i| i.get_manga_list(&listing, page)).await
+		self.call("listing", move |i| i.get_manga_list(&listing, page)).await
 	}
 
 	pub async fn get_home(&self) -> Result<HomeLayout> {
-		self.call(|i| i.get_home()).await
+		self.call("home", |i| i.get_home()).await
 	}
 
 	/// Streaming get_home: partial results the source pushes via send_partial_result
@@ -243,7 +338,7 @@ impl SourceHandle {
 		&self,
 		partials: mpsc::UnboundedSender<HomePartial>,
 	) -> Result<HomeLayout> {
-		self.call(move |i| {
+		self.call("home", move |i| {
 			let acc = Arc::new(Mutex::new(HomeAccumulator::default()));
 			let sink_acc = acc.clone();
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
@@ -274,7 +369,7 @@ impl SourceHandle {
 		filters: Vec<FilterValue>,
 		partials: mpsc::UnboundedSender<Manga>,
 	) -> Result<MangaPageResult> {
-		self.call(move |i| {
+		self.call("search", move |i| {
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
 				match postcard::from_bytes::<Manga>(bytes) {
 					Ok(manga) => {
@@ -299,7 +394,7 @@ impl SourceHandle {
 		needs_chapters: bool,
 		partials: mpsc::UnboundedSender<Manga>,
 	) -> Result<Manga> {
-		self.call(move |i| {
+		self.call("manga_update", move |i| {
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
 				match postcard::from_bytes::<Manga>(bytes) {
 					Ok(manga) => {
@@ -314,31 +409,31 @@ impl SourceHandle {
 	}
 
 	pub async fn get_filters(&self) -> Result<Vec<Filter>> {
-		self.call(|i| i.get_filters()).await
+		self.call("filters", |i| i.get_filters()).await
 	}
 
 	pub async fn get_settings(&self) -> Result<Vec<Setting>> {
-		self.call(|i| i.get_settings()).await
+		self.call("settings", |i| i.get_settings()).await
 	}
 
 	pub async fn get_listings(&self) -> Result<Vec<Listing>> {
-		self.call(|i| i.get_listings()).await
+		self.call("listings", |i| i.get_listings()).await
 	}
 
 	pub async fn get_page_description(&self, page: Page) -> Result<String> {
-		self.call(move |i| i.get_page_description(&page)).await
+		self.call("page_description", move |i| i.get_page_description(&page)).await
 	}
 
 	pub async fn get_alternate_covers(&self, manga: Manga) -> Result<Vec<String>> {
-		self.call(move |i| i.get_alternate_covers(&manga)).await
+		self.call("alternate_covers", move |i| i.get_alternate_covers(&manga)).await
 	}
 
 	pub async fn get_base_url(&self) -> Result<String> {
-		self.call(|i| i.get_base_url()).await
+		self.call("base_url", |i| i.get_base_url()).await
 	}
 
 	pub async fn handle_notification(&self, key: String) -> Result<()> {
-		self.call(move |i| i.handle_notification(&key)).await
+		self.call("notification", move |i| i.handle_notification(&key)).await
 	}
 
 	pub async fn handle_basic_login(
@@ -347,16 +442,16 @@ impl SourceHandle {
 		username: String,
 		password: String,
 	) -> Result<bool> {
-		self.call(move |i| i.handle_basic_login(&key, &username, &password))
+		self.call("basic_login", move |i| i.handle_basic_login(&key, &username, &password))
 			.await
 	}
 
 	pub async fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
-		self.call(move |i| i.handle_web_login(&key, &cookies)).await
+		self.call("web_login", move |i| i.handle_web_login(&key, &cookies)).await
 	}
 
 	pub async fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
-		self.call(move |i| i.handle_deep_link(&url)).await
+		self.call("deep_link", move |i| i.handle_deep_link(&url)).await
 	}
 
 	pub async fn handle_key_migration(
@@ -365,8 +460,10 @@ impl SourceHandle {
 		manga_key: String,
 		chapter_key: Option<String>,
 	) -> Result<String> {
-		self.call(move |i| i.handle_key_migration(kind, &manga_key, chapter_key.as_deref()))
-			.await
+		self.call("key_migration", move |i| {
+			i.handle_key_migration(kind, &manga_key, chapter_key.as_deref())
+		})
+		.await
 	}
 
 	pub async fn get_image_request(
@@ -374,12 +471,13 @@ impl SourceHandle {
 		url: String,
 		context: Option<PageContext>,
 	) -> Result<ImageRequestSpec> {
-		self.call(move |i| i.get_image_request(&url, context.as_ref())).await
+		self.call("image_request", move |i| i.get_image_request(&url, context.as_ref()))
+			.await
 	}
 
 	/// Resolve the in-source handle of a PageContent::Image back into PNG bytes and reclaim the rid
 	pub async fn take_page_image(&self, rid: i32) -> Result<Vec<u8>> {
-		self.call(move |i| i.take_image_png(rid)).await
+		self.call("take_page_image", move |i| i.take_image_png(rid)).await
 	}
 
 	pub async fn process_page_image(
@@ -387,10 +485,11 @@ impl SourceHandle {
 		input: crate::source::ProcessImageInput,
 		context: Option<PageContext>,
 	) -> Result<Vec<u8>> {
-		self.call(move |i| i.process_page_image(input, context.as_ref())).await
+		self.call("process_page_image", move |i| i.process_page_image(input, context.as_ref()))
+			.await
 	}
 
 	pub async fn process_cover_image(&self, input: crate::source::ProcessImageInput) -> Result<Vec<u8>> {
-		self.call(move |i| i.process_cover_image(input)).await
+		self.call("process_cover_image", move |i| i.process_cover_image(input)).await
 	}
 }

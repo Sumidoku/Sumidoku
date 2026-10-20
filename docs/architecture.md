@@ -704,6 +704,11 @@ export call, a per-call timeout that fuses and restarts the instance, and
 a linear-memory cap enforced through wasmi `StoreLimits` — the server
 sets these from its own config when it
 spawns an instance, defaulting the memory cap to 128 MiB.
+Every export call funnels through the actor's private `call`, which logs
+one structured line per outcome — `source`/`op`/`dur_ms`, plus the entry
+count on success at info or a sanitized error at warn; guest and reqwest
+error text can embed full URLs, so payloads are scrubbed down to the host
+and capped before they reach the log.
 The net host (`imports/net.rs`) aligns request behavior with the
 Aidoku/URLSession host. Response bodies are buffered under a
 configurable cap (`net_body_max_mb`, default 32 MiB, decoded bytes —
