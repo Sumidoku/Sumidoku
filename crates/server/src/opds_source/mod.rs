@@ -643,13 +643,18 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 		&& let Some(count) = pse.pse_count
 		&& count > 0
 	{
-		let template = Catalog::resolve(&feed_url, &pse.href)?;
-		if !template.contains("{pageNumber}") {
+		// 先替换占位符再解析：{pageNumber} 的花括号过 Url::join 会被百分号编码
+		if !pse.href.contains("{pageNumber}") {
 			return Err(ApiError::bad_gateway("opds page streaming link missing {pageNumber}"));
 		}
-		return Ok((0..count)
-			.map(|i| page_url_json(template.replace("{pageNumber}", &i.to_string())))
-			.collect());
+		let mut urls = Vec::with_capacity(count as usize);
+		for i in 0..count {
+			urls.push(page_url_json(Catalog::resolve(
+				&feed_url,
+				&pse.href.replace("{pageNumber}", &i.to_string()),
+			)?));
+		}
+		return Ok(urls);
 	}
 	let acquisition = entry
 		.acquisition()
