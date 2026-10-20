@@ -4,9 +4,7 @@ import { Settings } from 'lucide-react';
 import {
 	invalidateForRefreshes,
 	useBasicLogin,
-	useCancelBrowserLogin,
 	useClearSourceCache,
-	useCompleteBrowserLogin,
 	useLoginLogout,
 	useNotifySource,
 	useOAuthLoginComplete,
@@ -14,7 +12,6 @@ import {
 	useResetSourceSettings,
 	useSaveSourceSettings,
 	useSourceSettings,
-	useStartBrowserLogin,
 	useWebLogin
 } from '../../api/hooks';
 import type { Setting } from '../../api/types';
@@ -42,9 +39,6 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	const clearCache = useClearSourceCache(sourceId);
 	const login = useBasicLogin(sourceId);
 	const webLogin = useWebLogin(sourceId);
-	const startBrowserLogin = useStartBrowserLogin(sourceId);
-	const completeBrowserLogin = useCompleteBrowserLogin(sourceId);
-	const cancelBrowserLogin = useCancelBrowserLogin(sourceId);
 	const loginLogout = useLoginLogout(sourceId);
 	const oauthStart = useOAuthLoginStart(sourceId);
 	const oauthComplete = useOAuthLoginComplete(sourceId);
@@ -113,16 +107,6 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		pushToast('登录成功', 'info');
 	}
 
-	async function onCompleteBrowserLogin(key: string, session: string) {
-		await completeBrowserLogin.mutateAsync({ key, session });
-		setEdits({});
-		pushToast('登录成功', 'info');
-	}
-
-	async function onCancelBrowserLogin(key: string, session: string) {
-		await cancelBrowserLogin.mutateAsync({ key, session });
-	}
-
 	async function onLogoutLogin(key: string, clearCookies: boolean) {
 		await loginLogout.mutateAsync({ key, clearCookies });
 		setEdits({});
@@ -141,7 +125,6 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 				<SettingItem
 					key={setting.key}
 					setting={setting}
-					sourceId={sourceId}
 					values={data.values}
 					edits={edits}
 					onEdit={(k, v) => setEdits((cur) => ({ ...cur, [k]: v }))}
@@ -149,10 +132,6 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 					onSubmitLogin={onSubmitLogin}
 					onSubmitWebLogin={onSubmitWebLogin}
 					onLogoutLogin={onLogoutLogin}
-					browserLogin={data.capabilities?.browserLogin === true}
-					onStartBrowserLogin={(key) => startBrowserLogin.mutateAsync(key)}
-					onCompleteBrowserLogin={onCompleteBrowserLogin}
-					onCancelBrowserLogin={onCancelBrowserLogin}
 					onStartOAuth={(key) => oauthStart.mutateAsync(key)}
 					onCompleteOAuth={onCompleteOAuth}
 				/>
