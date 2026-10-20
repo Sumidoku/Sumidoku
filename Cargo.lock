@@ -65,6 +65,7 @@ dependencies = [
  "ttf-parser",
  "url",
  "wasmi",
+ "wat",
  "zip",
 ]
 
@@ -4855,6 +4856,7 @@ checksum = "974d643b125b272607e2fff8012ea14a8328acd7621e4bafa7afb32500052b1b"
 dependencies = [
  "bitflags",
  "indexmap",
+ "semver",
 ]
 
 [[package]]
