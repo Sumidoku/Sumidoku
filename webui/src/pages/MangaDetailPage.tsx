@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import {
 	qk,
@@ -386,6 +386,13 @@ export default function MangaDetailPage() {
 		navigate(`/browse/${manga.sourceId}?filters=${q}`);
 	}
 
+	function goBack() {
+		// history.state.idx counts SPA navigations: 0 means this page was entered directly (fresh load/deep link),
+		// where -1 would leave the app — fall back to the library
+		if (window.history.state?.idx > 0) navigate(-1);
+		else navigate('/library');
+	}
+
 	return (
 		<div className="page container">
 			<div className="manga-hero">
@@ -394,6 +401,9 @@ export default function MangaDetailPage() {
 					style={{ backgroundImage: `url("${coverUrl(mangaId, manga.cover)}")` }}
 				/>
 				<div className="manga-hero__scrim" />
+				<IconButton className="manga-hero__back" label="返回上一级" onClick={goBack}>
+					<ArrowLeft size={18} />
+				</IconButton>
 				<div className="manga-hero__body">
 					<div className="manga-hero__cover">
 						{manga.content_rating === 'NSFW' && <span className="manga-hero__nsfw">NSFW</span>}
