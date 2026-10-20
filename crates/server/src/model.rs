@@ -2,11 +2,18 @@ use aidoku::{Chapter, ContentRating, Manga, MangaStatus, UpdateStrategy, Viewer}
 use aidoku_wasm::DefaultValue;
 use serde_json::Value;
 
+/// source.kind：内置本地源；其余一律 aidoku（迁移默认值）
+pub const SOURCE_KIND_LOCAL: &str = "local";
+
+/// 内置本地源的保留 key：不允许任何 wasm 包注册占用
+pub const LOCAL_SOURCE_KEY: &str = "local.local";
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct SourceRow {
 	pub id: i64,
 	pub key: String,
 	pub name: String,
+	pub kind: String,
 	pub version: i64,
 	pub languages: sqlx::types::Json<Vec<String>>,
 	pub content_rating: i64,
@@ -23,6 +30,12 @@ pub struct SourceRow {
 	pub repo_id: Option<i64>,
 	/// SourceFeatures 序列化原文，注册时 stamping；旧行未 stamping 为 NULL（能力未知）
 	pub features: Option<String>,
+}
+
+impl SourceRow {
+	pub fn is_local(&self) -> bool {
+		self.kind == SOURCE_KIND_LOCAL
+	}
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -126,7 +139,8 @@ pub fn viewer_from_int(v: i64) -> Viewer {
 	}
 }
 
-fn update_strategy_from_int(v: i64) -> UpdateStrategy {
+/// upsert 冲突更新回写 update_strategy：调用方先还原行里现值，用户改的 Never 才不被冲掉
+pub fn update_strategy_from_int(v: i64) -> UpdateStrategy {
 	match v {
 		1 => UpdateStrategy::Never,
 		_ => UpdateStrategy::Always,

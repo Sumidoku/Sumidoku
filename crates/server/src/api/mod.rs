@@ -174,7 +174,7 @@ async fn health() -> Json<Value> {
 
 pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
 	let row: Option<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source WHERE id = ?",
 	)
 	.bind(id)
@@ -185,7 +185,7 @@ pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow
 
 async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
@@ -206,6 +206,9 @@ async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 
 async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
 	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		return Err(ApiError::bad_request("the built-in local source cannot be deleted"));
+	}
 	state.evict_source(id).await;
 	sqlx::query("DELETE FROM source WHERE id = ?")
 		.bind(id)

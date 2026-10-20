@@ -50,6 +50,7 @@ pub(crate) fn source_json(
 		"id": row.id,
 		"key": row.key,
 		"name": row.name,
+		"kind": row.kind,
 		"version": row.version,
 		"languages": row.languages.0,
 		"contentRating": row.content_rating,

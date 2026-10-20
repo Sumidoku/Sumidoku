@@ -147,8 +147,15 @@ pub async fn load_cookies(
 	Ok(cookies)
 }
 
-/// source 行里组装实例启动配置所需的列（key, wasm_path, enabled, languages, config）
-type SourceConfigRow = (String, String, bool, sqlx::types::Json<Vec<String>>, Option<String>);
+/// source 行里组装实例启动配置所需的列（key, wasm_path, kind, enabled, languages, config）
+type SourceConfigRow = (
+	String,
+	String,
+	String,
+	bool,
+	sqlx::types::Json<Vec<String>>,
+	Option<String>,
+);
 
 impl AppState {
 	pub fn new(
@@ -276,13 +283,16 @@ impl AppState {
 	/// 顺带把 manifest config.maximumParallelRequests 换算成每源调用准入帽
 	async fn source_config(&self, source_id: i64) -> ApiResult<(SourceConfig, Option<Arc<Semaphore>>)> {
 		let row: Option<SourceConfigRow> =
-			sqlx::query_as("SELECT key, wasm_path, enabled, languages, config FROM source WHERE id = ?")
+			sqlx::query_as("SELECT key, wasm_path, kind, enabled, languages, config FROM source WHERE id = ?")
 				.bind(source_id)
 				.fetch_optional(&self.pool)
 				.await?;
-		let Some((key, wasm_path, enabled, languages, source_manifest_config)) = row else {
+		let Some((key, wasm_path, kind, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
+		if kind == crate::model::SOURCE_KIND_LOCAL {
+			return Err(ApiError::unsupported_404("feature not supported by source"));
+		}
 		if !enabled {
 			return Err(ApiError::source_disabled(&key));
 		}

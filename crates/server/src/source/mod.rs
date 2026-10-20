@@ -218,6 +218,9 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	if !valid_source_key(&key) {
 		return Err(format!("invalid source key {key:?}"));
 	}
+	if key == crate::model::LOCAL_SOURCE_KEY {
+		return Err(format!("source key {key:?} is reserved for the built-in local source"));
+	}
 	let name = info
 		.get("name")
 		.and_then(|v| v.as_str())
@@ -323,7 +326,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 /// 新装的源注册时已 stamping，不在这趟里
 pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
 	let rows: Vec<(i64, String)> = match sqlx::query_as(
-		"SELECT id, wasm_path FROM source WHERE config IS NULL OR features IS NULL",
+		"SELECT id, wasm_path FROM source WHERE (config IS NULL OR features IS NULL) AND kind != 'local'",
 	)
 	.fetch_all(pool)
 	.await
