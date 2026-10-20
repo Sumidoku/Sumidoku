@@ -1,0 +1,222 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* 暗色跟随 [data-theme="dark"]（现有主题开关写的是 data-theme，不是 .dark） */
+@custom-variant dark (&:is([data-theme='dark'] *));
+
+/* 「暗夜书房」基调：暗色优先、低饱和底 + 品牌红 accent（logo #cf161b，暗色下提亮保对比）。
+   旧 token 名原样保留，未迁移到 Tailwind 的组件/页面 CSS 仍可用 var(--accent) 等。 */
+:root,
+[data-theme='dark'] {
+	color-scheme: dark;
+	--bg: #100f12;
+	--bg-elev: #18161a;
+	--bg-hover: #211e24;
+	--text: #e8eaf0;
+	--text-dim: #9aa1b2;
+	--text-faint: #6b7280;
+	--accent: #ed4248;
+	--accent-hover: #f25459;
+	--accent-soft: rgba(237, 66, 72, 0.1);
+	--accent-solid: #cf161b;
+	--accent-solid-hover: #b01216;
+	--danger: #f4673b;
+	--success: #3fb68b;
+	--warning: #d9a03f;
+	--border: #29262c;
+	--shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+	--r-sm: 8px;
+	--r-md: 12px;
+	--r-lg: 16px;
+
+	/* shadcn 专用变量（不与旧名冲突的新名）→ 指向上面的语义色 */
+	--radius: 12px;
+	--primary-foreground: #ffffff;
+	--destructive-foreground: #ffffff;
+}
+
+[data-theme='light'] {
+	color-scheme: light;
+	--bg: #f6f7f9;
+	--bg-elev: #ffffff;
+	--bg-hover: #eef0f4;
+	--text: #1a1d26;
+	--text-dim: #5b6172;
+	--text-faint: #9aa1b2;
+	--accent: #cf161b;
+	--accent-hover: #b01216;
+	--accent-soft: rgba(207, 22, 27, 0.1);
+	--accent-solid: #cf161b;
+	--accent-solid-hover: #b01216;
+	--danger: #d9482e;
+	--success: #2f9e77;
+	--warning: #c08a2e;
+	--border: #e3e6ec;
+	--shadow: 0 8px 24px rgba(20, 24, 40, 0.08);
+	--r-sm: 8px;
+	--r-md: 12px;
+	--r-lg: 16px;
+
+	--radius: 12px;
+	--primary-foreground: #ffffff;
+	--destructive-foreground: #ffffff;
+}
+
+/* Tailwind/shadcn 色板映射到旧 token（bg-background / text-foreground / bg-primary 等工具类由此而来） */
+@theme inline {
+	--color-background: var(--bg);
+	--color-foreground: var(--text);
+	--color-card: var(--bg-elev);
+	--color-card-foreground: var(--text);
+	--color-popover: var(--bg-elev);
+	--color-popover-foreground: var(--text);
+	--color-primary: var(--accent-solid);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--bg-hover);
+	--color-secondary-foreground: var(--text);
+	--color-muted: var(--bg-elev);
+	--color-muted-foreground: var(--text-dim);
+	--color-accent: var(--bg-hover);
+	--color-accent-foreground: var(--text);
+	--color-destructive: var(--danger);
+	--color-destructive-foreground: var(--destructive-foreground);
+	--color-border: var(--border);
+	--color-input: var(--border);
+	--color-ring: var(--accent);
+
+	--radius-sm: var(--r-sm);
+	--radius-md: var(--r-md);
+	--radius-lg: var(--r-lg);
+	--radius-xl: calc(var(--r-lg) + 4px);
+
+	--font-sans:
+		-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+		'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+}
+
+@layer base {
+	*,
+	*::before,
+	*::after {
+		box-sizing: border-box;
+	}
+
+	html,
+	body {
+		margin: 0;
+		padding: 0;
+	}
+
+	body {
+		background: var(--bg);
+		color: var(--text);
+		font-family: var(--font-sans);
+		font-size: 15px;
+		line-height: 1.6;
+		font-variant-numeric: tabular-nums;
+		-webkit-tap-highlight-color: transparent;
+		transition: background 0.2s;
+	}
+
+	img {
+		display: block;
+	}
+
+	a {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	button,
+	input,
+	select,
+	textarea {
+		font: inherit;
+		color: inherit;
+	}
+
+	button {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
+
+	button:disabled {
+		cursor: not-allowed;
+	}
+
+	h1,
+	h2,
+	h3,
+	h4,
+	p {
+		margin: 0;
+	}
+
+	::selection {
+		background: color-mix(in srgb, var(--accent) 35%, transparent);
+	}
+
+	:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+		border-radius: var(--r-sm);
+	}
+
+	::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+	}
+
+	::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 999px;
+		border: 2px solid var(--bg);
+	}
+
+	::-webkit-scrollbar-thumb:hover {
+		background: var(--text-faint);
+	}
+
+	::-webkit-scrollbar-track {
+		background: transparent;
+	}
+}
+
+@layer components {
+	.container {
+		max-width: 1200px;
+		margin: 0 auto;
+	}
+
+	/* 页面进场合一：fade + 轻微上浮 */
+	.page {
+		animation: page-in 0.2s ease-out;
+	}
+
+	@keyframes page-in {
+		from {
+			opacity: 0;
+			transform: translateY(4px);
+		}
+	}
+
+	.muted {
+		color: var(--text-dim);
+	}
+
+	.faint {
+		color: var(--text-faint);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

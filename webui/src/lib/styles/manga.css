@@ -1,0 +1,924 @@
+/* ============ 漫画详情页 (manga detail page) ============ */
+/* Shared by the manga detail route and its subcomponents. Portalled markup
+   (Modal / DropdownMenu content) escapes Svelte scoped styles, so these live
+   in a global stylesheet imported once by the page. */
+
+.manga-hero {
+	position: relative;
+	overflow: hidden;
+	border-radius: var(--r-lg);
+	border: 1px solid var(--border);
+}
+
+.manga-hero__bg {
+	position: absolute;
+	inset: -48px;
+	background-color: var(--bg-elev);
+	background-size: cover;
+	background-position: center;
+	filter: blur(40px) brightness(0.6);
+}
+
+.manga-hero__scrim {
+	position: absolute;
+	inset: 0;
+	background: linear-gradient(180deg, rgba(12, 14, 18, 0.42), rgba(12, 14, 18, 0.78));
+}
+
+/* 暗主题 hero 压在暗化封面上，前景固定浅色系 */
+.manga-hero__body {
+	position: relative;
+	display: flex;
+	gap: 20px;
+	padding: 22px;
+	color: #eef0f5;
+}
+
+.manga-hero__cover {
+	position: relative;
+	width: 180px;
+	flex: none;
+	align-self: flex-start;
+	box-shadow: var(--shadow);
+	border-radius: var(--r-md);
+}
+
+.manga-hero__nsfw {
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	z-index: 1;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--danger);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 700;
+	letter-spacing: 0.4px;
+}
+
+.manga-hero__info {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.manga-hero__title {
+	font-size: 22px;
+	font-weight: 700;
+	line-height: 1.35;
+	display: -webkit-box;
+	line-clamp: 2;
+	-webkit-line-clamp: 2;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.manga-hero__creators {
+	margin-top: 5px;
+	font-size: 13.5px;
+	color: rgba(238, 240, 245, 0.72);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.manga-hero__creator {
+	padding: 0;
+	border: 0;
+	background: none;
+	font: inherit;
+	color: inherit;
+	cursor: pointer;
+}
+
+.manga-hero__creator:hover {
+	color: var(--accent-hover);
+	text-decoration: underline;
+}
+
+.manga-hero__chips {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 10px;
+}
+
+.manga-hero__source {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-size: 12.5px;
+	color: rgba(238, 240, 245, 0.72);
+	padding: 3px 6px;
+	border-radius: var(--r-sm);
+}
+
+.manga-hero__source:hover {
+	color: #fff;
+	background: rgba(255, 255, 255, 0.1);
+}
+
+.manga-hero__tags {
+	display: flex;
+	gap: 6px;
+	overflow-x: auto;
+	margin-top: 10px;
+	padding-bottom: 2px;
+	scrollbar-width: none;
+}
+
+.manga-hero__tags::-webkit-scrollbar {
+	display: none;
+}
+
+.manga-hero__desc {
+	margin-top: 10px;
+	font-size: 13.5px;
+	line-height: 1.65;
+	color: rgba(238, 240, 245, 0.78);
+	white-space: pre-wrap;
+}
+
+.manga-hero__desc--clamp {
+	display: -webkit-box;
+	line-clamp: 3;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+
+.manga-hero__desc-toggle {
+	align-self: flex-start;
+	padding: 3px 0 0;
+	font-size: 13px;
+	color: var(--accent-hover);
+}
+
+.manga-hero__actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-top: 16px;
+}
+
+/* hero 里的 ghost 按钮在暗化封图上要兜底底色才不致发虚 */
+.manga-hero__actions .btn {
+	background: rgba(23, 26, 33, 0.66);
+	border-color: rgba(255, 255, 255, 0.18);
+	color: #eef0f5;
+	backdrop-filter: blur(6px);
+}
+
+.manga-hero__actions .btn:hover:not(:disabled) {
+	background: rgba(35, 39, 50, 0.8);
+}
+
+.manga-hero__actions .btn--primary {
+	background: var(--accent-solid);
+	border-color: var(--accent-solid);
+	color: #fff;
+}
+
+.manga-hero__actions .btn--danger {
+	color: #ff8a80;
+	border-color: rgba(229, 83, 75, 0.55);
+}
+
+.manga-hero__actions .icon-btn {
+	color: rgba(238, 240, 245, 0.78);
+}
+
+.manga-hero__actions .icon-btn:hover:not(:disabled) {
+	background: rgba(255, 255, 255, 0.12);
+	color: #fff;
+}
+
+/* 亮主题 hero 浅化：封面 blur 铺底 + 白色半透明遮罩，前景回落页面 token */
+[data-theme='light'] .manga-hero__bg {
+	filter: blur(40px) brightness(1.08);
+}
+
+[data-theme='light'] .manga-hero__scrim {
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.84));
+}
+
+[data-theme='light'] .manga-hero__body {
+	color: var(--text);
+}
+
+[data-theme='light'] .manga-hero__creators,
+[data-theme='light'] .manga-hero__source,
+[data-theme='light'] .manga-hero__desc {
+	color: var(--text-dim);
+}
+
+[data-theme='light'] .manga-hero__source:hover {
+	color: var(--text);
+	background: rgba(0, 0, 0, 0.06);
+}
+
+[data-theme='light'] .manga-hero__actions .btn {
+	background: color-mix(in srgb, var(--bg-elev) 86%, transparent);
+	border-color: var(--border);
+	color: var(--text);
+}
+
+[data-theme='light'] .manga-hero__actions .btn:hover:not(:disabled) {
+	background: var(--bg-elev);
+}
+
+[data-theme='light'] .manga-hero__actions .btn--primary {
+	background: var(--accent-solid);
+	border-color: var(--accent-solid);
+	color: #fff;
+}
+
+[data-theme='light'] .manga-hero__actions .btn--danger {
+	color: var(--danger);
+	border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+[data-theme='light'] .manga-hero__actions .icon-btn {
+	color: var(--text-dim);
+}
+
+[data-theme='light'] .manga-hero__actions .icon-btn:hover:not(:disabled) {
+	background: rgba(0, 0, 0, 0.06);
+	color: var(--text);
+}
+
+/* ============ 更多菜单 (more menu) ============ */
+
+.manga-menu {
+	position: relative;
+}
+
+/* bits-ui 的 DropdownMenu content 自带浮层卡片样式，这里只定宽；
+   w-(--bits-dropdown-menu-anchor-width) 会贴着触发按钮宽度，必须覆盖 */
+.manga-menu__content {
+	width: 240px !important;
+}
+
+.manga-menu__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	width: 100%;
+	padding: 9px 10px;
+	border-radius: var(--r-sm);
+	font-size: 14px;
+	text-align: left;
+}
+
+button.manga-menu__row:hover:not(:disabled) {
+	background: var(--bg-hover);
+}
+
+.manga-menu__hint {
+	padding: 0 10px 6px;
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+/* ============ 章节区 (chapters) ============ */
+
+.manga-chaps {
+	margin-top: 22px;
+}
+
+.manga-chaps__head {
+	display: flex;
+	align-items: baseline;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.manga-chaps__head h2 {
+	font-size: 17px;
+	font-weight: 600;
+}
+
+.manga-chaps__tools {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.manga-chaps__tools .input {
+	flex: 1;
+	min-width: 140px;
+	max-width: 260px;
+}
+
+/* 排序/语言下拉在工具行里保持紧凑，不撑满整行 */
+.manga-chaps__tools .select {
+	font-size: 13px;
+}
+
+.manga-chaps__tools .select__field {
+	padding: 7px 28px 7px 10px;
+	font-size: 13px;
+}
+
+.manga-chaps__filters {
+	display: flex;
+	gap: 6px;
+	flex-wrap: wrap;
+}
+
+/* 三态 chip 的排除态：划线 + 降透明度，与「含」的 accent 色区分 */
+.chip--exclude {
+	text-decoration: line-through;
+	opacity: 0.75;
+}
+
+.manga-chaps__select-tools {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.manga-chaps__selected {
+	font-size: 13.5px;
+	color: var(--text-dim);
+}
+
+/* ============ 章节行 (chapter row) ============ */
+
+.chapter-row {
+	position: relative;
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 10px 8px;
+	border-bottom: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	cursor: pointer;
+	text-align: left;
+}
+
+.chapter-row:hover {
+	background: var(--bg-hover);
+}
+
+.chapter-row--selected {
+	background: var(--accent-soft);
+}
+
+.chapter-row--selected::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 8px;
+	bottom: 8px;
+	width: 3px;
+	border-radius: 999px;
+	background: var(--accent);
+}
+
+.chapter-row__check {
+	width: 20px;
+	height: 20px;
+	flex: none;
+	border-radius: 50%;
+	border: 2px solid var(--border);
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	color: #fff;
+}
+
+.chapter-row--selected .chapter-row__check {
+	background: var(--accent);
+	border-color: var(--accent);
+}
+
+.chapter-row__num {
+	width: 44px;
+	flex: none;
+	text-align: center;
+	font-size: 18px;
+	font-weight: 700;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+.chapter-row__main {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+
+.chapter-row__title {
+	font-size: 14.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* 已读行整行降透明度去噪，状态区只保留有信息量的图标与进度 */
+.chapter-row--read {
+	opacity: 0.55;
+}
+
+.chapter-row:hover .chapter-row__title {
+	color: var(--accent);
+}
+
+.chapter-row__meta {
+	display: flex;
+	gap: 10px;
+	margin-top: 2px;
+	font-size: 12.5px;
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.chapter-row__status {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	flex: none;
+	font-size: 12.5px;
+}
+
+.chapter-row__lock {
+	display: inline-flex;
+	color: var(--text-faint);
+}
+
+.chapter-row__bm {
+	display: inline-flex;
+	color: var(--accent);
+}
+
+.chapter-row__dl-ok {
+	display: inline-flex;
+	color: var(--success);
+}
+
+.chapter-row__prog {
+	color: var(--accent);
+	font-variant-numeric: tabular-nums;
+}
+
+.chapter-row__actions {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	flex: none;
+}
+
+.chapter-row__cbz {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 34px;
+	border-radius: var(--r-sm);
+	color: var(--success);
+}
+
+.chapter-row__cbz:hover {
+	background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+/* 浮动批量条会盖住列表末行，选择模式给容器垫出操作条高度 + 16px */
+.manga-chaps__list--selecting {
+	padding-bottom: 74px;
+}
+
+/* ============ 批量操作条 (batch bar) ============ */
+
+.manga-batch {
+	position: fixed;
+	left: 50%;
+	transform: translateX(-50%);
+	bottom: 18px;
+	z-index: 80;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: center;
+	max-width: calc(100vw - 24px);
+	padding: 10px 14px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+	backdrop-filter: blur(10px);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow);
+}
+
+.manga-batch__count {
+	font-size: 13px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+/* ============ 分类弹窗 (categories modal) ============ */
+
+.manga-cats {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.manga-cats__item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 6px;
+	border-radius: var(--r-sm);
+	cursor: pointer;
+}
+
+.manga-cats__item:hover {
+	background: var(--bg-hover);
+}
+
+/* ============ 更换封面 (cover picker) ============ */
+
+.manga-hero__cover-edit {
+	position: absolute;
+	left: 50%;
+	bottom: 8px;
+	transform: translateX(-50%);
+	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 10px;
+	border: none;
+	border-radius: 999px;
+	background: rgba(14, 16, 22, 0.78);
+	color: #eef0f5;
+	font-size: 12px;
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.manga-hero__cover-edit:hover {
+	background: rgba(14, 16, 22, 0.94);
+}
+
+.cover-picker {
+	max-width: 640px;
+}
+
+.cover-picker__loading {
+	display: flex;
+	justify-content: center;
+	padding: 40px 0;
+}
+
+.cover-picker__grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 12px;
+}
+
+.cover-picker__cell {
+	position: relative;
+	display: block;
+	width: 100%;
+	aspect-ratio: 2 / 3;
+	padding: 0;
+	border: 2px solid transparent;
+	border-radius: var(--r-md);
+	overflow: hidden;
+	background: var(--bg-elev);
+	cursor: pointer;
+}
+
+.cover-picker__cell img {
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.cover-picker__cell--current {
+	border-color: var(--accent-solid);
+}
+
+.cover-picker__cell:disabled {
+	cursor: default;
+}
+
+.cover-picker__badge {
+	position: absolute;
+	left: 6px;
+	bottom: 6px;
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	background: var(--accent-solid);
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+}
+
+.cover-picker__busy {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.45);
+	color: #fff;
+}
+
+@media (max-width: 640px) {
+	.cover-picker__grid {
+		grid-template-columns: repeat(2, 1fr);
+	}
+}
+
+/* ============ 骨架与响应式 (skeleton & responsive) ============ */
+
+.manga-skeleton {
+	display: flex;
+	gap: 20px;
+	padding: 22px;
+	border-radius: var(--r-lg);
+	border: 1px solid var(--border);
+}
+
+/* 封面位骨架在 flex 行里不随信息区挤压（对应 React 的 flex:none 内联样式） */
+.manga-skeleton .skeleton--cover {
+	flex: none;
+}
+
+.manga-skeleton__info {
+	flex: 1;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.manga-skeleton-rows {
+	margin-top: 22px;
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+@media (max-width: 767px) {
+	.manga-hero__body {
+		gap: 14px;
+		padding: 16px;
+	}
+
+	.manga-hero__cover {
+		width: 112px;
+	}
+
+	.manga-hero__title {
+		font-size: 18px;
+	}
+
+	/* 右缘渐隐提示标签行可横滚 */
+	.manga-hero__tags {
+		mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+		-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+	}
+
+	/* 移动端批量条贴着 tab bar 且可能折行 */
+	.manga-chaps__list--selecting {
+		padding-bottom: 128px;
+	}
+
+	.manga-batch {
+		bottom: calc(66px + env(safe-area-inset-bottom));
+		border-radius: var(--r-lg);
+	}
+}
+
+/* ============ 切换图源弹窗 (migrate modal, used by MigrateModal) ============ */
+
+/* 目标组合选择器 */
+.dest-picker h4 {
+	margin: 12px 0 8px;
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.dest-picker__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.dest-picker__list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.dest-picker__row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: var(--bg-elev);
+}
+
+.dest-picker__row--dragging {
+	opacity: 0.5;
+}
+
+.dest-picker__row--over {
+	border-color: var(--accent);
+}
+
+.dest-picker__row--add {
+	cursor: pointer;
+	color: var(--text);
+	font: inherit;
+	text-align: left;
+	width: 100%;
+}
+
+.dest-picker__row--add:hover {
+	background: var(--bg-hover);
+}
+
+.dest-picker__grip {
+	cursor: grab;
+	color: var(--text-faint);
+	display: inline-flex;
+	touch-action: none;
+}
+
+.dest-picker__order {
+	flex: none;
+	width: 18px;
+	text-align: center;
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.dest-picker__icon {
+	flex: none;
+	width: 24px;
+	height: 24px;
+	border-radius: 6px;
+	overflow: hidden;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: var(--bg-hover);
+}
+
+.dest-picker__icon img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+
+.dest-picker__icon--fallback {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.dest-picker__name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.dest-picker__pin {
+	flex: none;
+	font-size: 11px;
+	color: var(--accent);
+}
+
+.dest-picker__remove {
+	flex: none;
+	display: inline-flex;
+	border: none;
+	background: none;
+	color: var(--text-faint);
+	cursor: pointer;
+	padding: 2px;
+}
+
+.dest-picker__remove:hover {
+	color: var(--danger);
+}
+
+.migrate-row__cover {
+	flex: none;
+	width: 36px;
+	aspect-ratio: 2 / 3;
+	border-radius: 4px;
+	overflow: hidden;
+}
+
+.migrate-row__title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 14px;
+}
+
+.migrate-row__meta {
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.migrate-rematch__list {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	max-height: 50vh;
+	overflow-y: auto;
+}
+
+.migrate-rematch__item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	padding: 8px 10px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	background: var(--bg-elev);
+	color: var(--text);
+	font: inherit;
+	cursor: pointer;
+	text-align: left;
+}
+
+.migrate-rematch__item:hover {
+	background: var(--bg-hover);
+}
+
+.migrate-rematch__title {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.migrate-rematch__source {
+	flex: none;
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
+.migrate-single {
+	width: min(560px, 92vw);
+}
+
+.migrate-single__bar {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin: 12px 0;
+}
+
+.migrate-single__pair {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.migrate-single__actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+	margin-bottom: 10px;
+}
+
+.migrate-single__error {
+	color: var(--danger);
+	font-size: 13px;
+}
+
+.migrate-single__confirm .muted {
+	font-size: 13px;
+}

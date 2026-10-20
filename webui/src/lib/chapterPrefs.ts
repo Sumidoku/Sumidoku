@@ -1,4 +1,4 @@
-import type { Chapter } from '../api/types';
+import type { Chapter } from './api/types';
 import { toMillis } from './format';
 
 // 章节列表的排序/筛选设置，按漫画存 localStorage，详情页与阅读器共用同一份

@@ -1,0 +1,21 @@
+// 组件统一出口，页面只从这里引
+export { default as Badge } from './Badge.svelte';
+export { default as Button } from './Button.svelte';
+export { default as Chip } from './Chip.svelte';
+export { default as ChipDropdown } from './ChipDropdown.svelte';
+export { default as Cover } from './Cover.svelte';
+export { default as CoverCard } from './CoverCard.svelte';
+export { default as EmptyState } from './EmptyState.svelte';
+export { default as IconButton } from './IconButton.svelte';
+export { default as InfiniteList } from './InfiniteList.svelte';
+export { default as Input } from './Input.svelte';
+export { default as Modal } from './Modal.svelte';
+export { default as PageHeader } from './PageHeader.svelte';
+export { default as ProgressBar } from './ProgressBar.svelte';
+export { default as SegmentedControl } from './SegmentedControl.svelte';
+export { default as Select } from './Select.svelte';
+export { default as Skeleton } from './Skeleton.svelte';
+export { default as Spinner } from './Spinner.svelte';
+export { default as Switch } from './Switch.svelte';
+export { default as Tabs } from './Tabs.svelte';
+export { pushToast } from './toast';

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="theme-color" content="#0f1115" />
+		<link rel="icon" type="image/svg+xml" href="%sveltekit.assets%/icon.svg" />
+		<!-- 标题硬编码在此：静态回退的 index.html 才带它，docker 冒烟会 grep 这行 -->
+		<title>Sumidoku</title>
+		<script>
+			// 首屏前先落主题，避免暗色用户看到一帧亮色
+			try {
+				var t = localStorage.getItem('sumidoku.theme');
+				if (t === 'system') {
+					document.documentElement.dataset.theme = window.matchMedia(
+						'(prefers-color-scheme: dark)'
+					).matches
+						? 'dark'
+						: 'light';
+				} else if (t === 'light' || t === 'dark') {
+					document.documentElement.dataset.theme = t;
+				}
+			} catch (e) {}
+		</script>
+		%sveltekit.head%
+	</head>
+	<body>
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>

@@ -1,4 +1,4 @@
-import type { FilterValue } from '../api/types';
+import type { FilterValue } from './api/types';
 
 // 图源浏览页的筛选值，按源存 localStorage；下次进页回填，源改版后对不上的 id 在回填时被静默丢弃
 

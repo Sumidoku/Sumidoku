@@ -1,0 +1,238 @@
+<script lang="ts">
+	import { page } from '$app/state';
+	import { _ } from 'svelte-i18n';
+	import Library from '@lucide/svelte/icons/library';
+	import Compass from '@lucide/svelte/icons/compass';
+	import Search from '@lucide/svelte/icons/search';
+	import Clock from '@lucide/svelte/icons/clock';
+	import Download from '@lucide/svelte/icons/download';
+	import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+	import Settings from '@lucide/svelte/icons/settings';
+	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
+	import LanguageSwitcher from '$lib/components/LanguageSwitcher.svelte';
+
+	let { children } = $props();
+
+	const NAV = [
+		{ to: '/library', key: 'nav.library', icon: Library },
+		{ to: '/browse', key: 'nav.browse', icon: Compass },
+		{ to: '/search', key: 'nav.search', icon: Search },
+		{ to: '/history', key: 'nav.history', icon: Clock },
+		{ to: '/downloads', key: 'nav.downloads', icon: Download },
+		{ to: '/updates', key: 'nav.updates', icon: RefreshCw },
+		{ to: '/settings', key: 'nav.settings', icon: Settings }
+	] as const;
+
+	const isActive = (to: string) =>
+		page.url.pathname === to || page.url.pathname.startsWith(to + '/');
+</script>
+
+<div class="app">
+	<aside class="app__sidebar">
+		<a href="/library" class="app__logo">
+			<img class="app__logo-mark" src="/icon.svg" alt="" />
+			<span class="app__logo-text">Sumidoku</span>
+		</a>
+		<nav class="side-nav">
+			{#each NAV as item (item.to)}
+				<a href={item.to} class="side-nav__item" class:side-nav__item--active={isActive(item.to)}>
+					<item.icon size={18} />
+					<span>{$_(item.key)}</span>
+				</a>
+			{/each}
+		</nav>
+		<div class="app__sidebar-foot">
+			<LanguageSwitcher />
+			<ThemeToggle />
+		</div>
+	</aside>
+
+	<header class="app__topbar">
+		<a href="/library" class="app__logo app__logo--sm">
+			<img class="app__logo-mark" src="/icon.svg" alt="" />
+			<span class="app__logo-text">Sumidoku</span>
+		</a>
+		<div class="app__topbar-actions">
+			<LanguageSwitcher />
+			<ThemeToggle />
+		</div>
+	</header>
+
+	<main class="app__content">
+		{@render children?.()}
+	</main>
+
+	<nav class="app__tabbar">
+		{#each NAV as item (item.to)}
+			<a href={item.to} class="tabbar__item" class:tabbar__item--active={isActive(item.to)}>
+				<item.icon size={20} />
+				<span class="tabbar__label">{$_(item.key)}</span>
+			</a>
+		{/each}
+	</nav>
+</div>
+
+<style>
+	/* 桌面 ≥768px：固定左侧栏 232px；移动 <768px：顶部 56px 栏 + 底部 56px tab bar */
+	.app__sidebar {
+		display: none;
+	}
+
+	.app__topbar {
+		position: sticky;
+		top: 0;
+		z-index: 50;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		height: 56px;
+		padding: 0 12px;
+		background: color-mix(in srgb, var(--bg) 88%, transparent);
+		backdrop-filter: blur(10px);
+		border-bottom: 1px solid var(--border);
+	}
+
+	.app__topbar-actions {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+	}
+
+	.app__tabbar {
+		position: fixed;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 50;
+		display: flex;
+		height: calc(56px + env(safe-area-inset-bottom));
+		padding-bottom: env(safe-area-inset-bottom);
+		background: color-mix(in srgb, var(--bg) 92%, transparent);
+		backdrop-filter: blur(10px);
+		border-top: 1px solid var(--border);
+	}
+
+	.tabbar__item {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 2px;
+		color: var(--text-faint);
+		transition: color 0.15s;
+	}
+
+	.tabbar__label {
+		font-size: 10px;
+		line-height: 1.2;
+	}
+
+	.tabbar__item--active {
+		color: var(--accent);
+	}
+
+	.app__content {
+		padding: 16px 16px calc(24px + 56px + env(safe-area-inset-bottom));
+		min-height: 100dvh;
+	}
+
+	.app__logo {
+		display: inline-flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.app__logo-mark {
+		display: block;
+		width: 34px;
+		height: 34px;
+		border-radius: 8px;
+		flex: none;
+	}
+
+	.app__logo--sm .app__logo-mark {
+		width: 30px;
+		height: 30px;
+	}
+
+	.app__logo-text {
+		font-size: 17px;
+		font-weight: 700;
+		letter-spacing: 0.3px;
+	}
+
+	@media (min-width: 768px) {
+		.app__sidebar {
+			position: fixed;
+			top: 0;
+			left: 0;
+			bottom: 0;
+			z-index: 50;
+			display: flex;
+			flex-direction: column;
+			width: 232px;
+			padding: 18px 12px;
+			background: var(--bg-elev);
+			border-right: 1px solid var(--border);
+		}
+
+		.app__logo {
+			padding: 0 8px;
+			margin-bottom: 22px;
+		}
+
+		.side-nav {
+			display: flex;
+			flex-direction: column;
+			gap: 2px;
+			flex: 1;
+		}
+
+		.side-nav__item {
+			position: relative;
+			display: flex;
+			align-items: center;
+			gap: 11px;
+			padding: 9px 12px;
+			border-radius: var(--r-sm);
+			color: var(--text-dim);
+			font-size: 14.5px;
+			transition:
+				background 0.15s,
+				color 0.15s;
+		}
+
+		.side-nav__item:hover {
+			background: var(--bg-hover);
+			color: var(--text);
+		}
+
+		.side-nav__item--active {
+			background: var(--accent-soft);
+			color: var(--accent);
+			font-weight: 600;
+		}
+
+		.app__sidebar-foot {
+			display: flex;
+			align-items: center;
+			justify-content: flex-end;
+			gap: 4px;
+			padding: 8px 4px 0;
+			border-top: 1px solid var(--border);
+		}
+
+		.app__topbar,
+		.app__tabbar {
+			display: none;
+		}
+
+		.app__content {
+			margin-left: 232px;
+			padding: 26px 32px 48px;
+			min-height: 100dvh;
+		}
+	}
+</style>

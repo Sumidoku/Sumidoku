@@ -1,19 +1,16 @@
 {
+	"extends": "$app/tsconfig",
+	"include": ["src", "test", "*"],
+	"exclude": ["src/service-worker"],
 	"compilerOptions": {
-		"target": "ES2022",
-		"lib": ["DOM", "DOM.Iterable", "ES2022"],
-		"module": "ESNext",
-		"moduleResolution": "bundler",
-		"jsx": "react-jsx",
-		"strict": true,
-		"noEmit": true,
-		"skipLibCheck": true,
+		"allowJs": true,
+		"checkJs": true,
 		"esModuleInterop": true,
-		"isolatedModules": true,
 		"forceConsistentCasingInFileNames": true,
-		"noUnusedLocals": true,
-		"noUnusedParameters": true,
-		"noFallthroughCasesInSwitch": true
-	},
-	"include": ["src", "vite.config.ts"]
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"sourceMap": true,
+		"strict": true,
+		"moduleResolution": "bundler"
+	}
 }

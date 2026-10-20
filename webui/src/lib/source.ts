@@ -1,18 +1,33 @@
 // 源元数据展示：语言码 → 人类可读名称，内容分级 → Aidoku 三档文案。
-// 语言名沿用浏览器 Locale（与 Aidoku 的 SourceLanguage.displayName 同口径），
+// 语言名跟随当前 UI 语言（svelte-i18n 的 locale），
 // multi/all 是 Aidoku 的多语言哨兵，不在 Intl 里，单独给名。
+import { get } from 'svelte/store';
+import { _, locale } from 'svelte-i18n';
 
-let displayNames: Intl.DisplayNames | null | undefined;
+/** 非组件环境里的翻译取值（i18n 在根布局已 await 初始化） */
+function t(key: string): string {
+	try {
+		return get(_)(key) as string;
+	} catch {
+		return key;
+	}
+}
+
+function currentLocale(): string | undefined {
+	try {
+		return (get(locale) as string | null) ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
 
 function getDisplayNames(): Intl.DisplayNames | null {
-	if (displayNames === undefined) {
-		try {
-			displayNames = new Intl.DisplayNames(undefined, { type: 'language' });
-		} catch {
-			displayNames = null;
-		}
+	try {
+		const loc = currentLocale();
+		return new Intl.DisplayNames(loc ? [loc] : undefined, { type: 'language' });
+	} catch {
+		return null;
 	}
-	return displayNames;
 }
 
 /** 多语言源的哨兵码：Aidoku 用 multi，个别 index 用 all */
@@ -26,7 +41,7 @@ export function isMultiLanguage(code: string): boolean {
 
 export function languageLabel(code: string): string {
 	const normalized = code.trim().toLowerCase();
-	if (MULTI_CODES.has(normalized)) return '多语言';
+	if (MULTI_CODES.has(normalized)) return t('source.multiLanguage');
 	return getDisplayNames()?.of(normalized) ?? code;
 }
 
@@ -42,28 +57,31 @@ export function compareSourceName(
 ): number {
 	const byName = a.name.localeCompare(b.name, 'und');
 	if (byName !== 0) return byName;
-	return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+	if (a.key < b.key) return -1;
+	if (a.key > b.key) return 1;
+	return 0;
 }
 
 // Aidoku 的 SourceContentRating：0 安全 / 1 含 NSFW / 2 主要 NSFW
 export interface ContentRatingLevel {
 	value: number;
-	label: string;
+	/** 读取时翻译：getter 让 level.label 始终返回当前语言文案 */
+	readonly label: string;
 	color: 'accent' | 'warning' | 'danger';
 }
 
 export const CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
-	{ value: 0, label: '安全', color: 'accent' },
-	{ value: 1, label: '含 NSFW', color: 'warning' },
-	{ value: 2, label: 'NSFW', color: 'danger' }
+	{ value: 0, get label() { return t('rating.sourceSafe'); }, color: 'accent' },
+	{ value: 1, get label() { return t('rating.sourceNsfwSome'); }, color: 'warning' },
+	{ value: 2, get label() { return t('rating.sourceNsfw'); }, color: 'danger' }
 ];
 
 // 漫画级内容分级（manga.content_rating，Aidoku ContentRating）：1 安全 / 2 建议 / 3 NSFW；
 // 与上方源级 0/1/2 是两套刻度，别混用
 export const MANGA_CONTENT_RATING_LEVELS: ContentRatingLevel[] = [
-	{ value: 1, label: '安全', color: 'accent' },
-	{ value: 2, label: '建议', color: 'warning' },
-	{ value: 3, label: 'NSFW', color: 'danger' }
+	{ value: 1, get label() { return t('rating.mangaSafe'); }, color: 'accent' },
+	{ value: 2, get label() { return t('rating.mangaSuggestive'); }, color: 'warning' },
+	{ value: 3, get label() { return t('rating.mangaNsfw'); }, color: 'danger' }
 ];
 
 function levelOf(value: number): ContentRatingLevel {
