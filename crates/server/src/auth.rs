@@ -219,6 +219,15 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, 
 	}
 }
 
+/// admin 专属面统一门禁：跟在 require_auth 之后读注入的角色，reader 一律 403；
+/// 认证关闭时注入的是内置 admin，免密码部署行为不变
+pub async fn require_admin(req: Request, next: Next) -> Response {
+	match req.extensions().get::<AuthUser>() {
+		Some(user) if user.role == "admin" => next.run(req).await,
+		_ => ApiError::forbidden("admin role required").into_response(),
+	}
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {

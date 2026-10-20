@@ -450,7 +450,7 @@ pub async fn restore_backup(
 		}
 		Err(e) => return Err(ApiError::internal(format!("read backup: {e}"))),
 	};
-	let result = import_backup_doc(&state, user.id, None, &bytes).await?;
+	let result = import_backup_doc(&state, user.id, true, None, &bytes).await?;
 	Ok(Json(result))
 }
 
@@ -503,19 +503,25 @@ pub async fn import_backup(
 	Query(query): Query<ImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let result = import_backup_doc(&state, user.id, query.sections.as_deref(), &body).await?;
+	let result = import_backup_doc(&state, user.id, user.role == "admin", query.sections.as_deref(), &body).await?;
 	Ok(Json(result))
 }
 
 /// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用。
-/// 用户态段落（库/分类/进度）归属 user_id
+/// 用户态段落（库/分类/进度）归属 user_id；settings/sourceSettings 是全局状态，仅 admin 可恢复
 pub async fn import_backup_doc(
 	state: &AppState,
 	user_id: i64,
+	admin: bool,
 	sections_query: Option<&str>,
 	body: &[u8],
 ) -> ApiResult<Value> {
 	let sections = parse_sections(sections_query)?;
+	if !admin && (sections.contains(&Section::Settings) || sections.contains(&Section::SourceSettings)) {
+		return Err(ApiError::forbidden(
+			"settings and sourceSettings sections require the admin role",
+		));
+	}
 	let raw: Value = serde_json::from_slice(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid backup document: {e}")))?;
 	let version = raw.get("version").and_then(Value::as_i64);

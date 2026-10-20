@@ -45,6 +45,10 @@ impl ApiError {
 		)
 	}
 
+	pub fn forbidden(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::FORBIDDEN, "forbidden", message)
+	}
+
 	/// 源不支持某动态能力时按端点约定返回 404，但 code 仍是 unsupported
 	pub fn unsupported_404(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::NOT_FOUND, "unsupported", message)
