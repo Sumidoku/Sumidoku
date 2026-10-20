@@ -40,6 +40,13 @@ function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
 }
 
+/** 与漫画详情页章节筛选同款的三态 chip 提示 */
+function triTitle(label: string, t: 1 | -1 | 0): string {
+	if (t === 1) return `当前只显示有${label}的漫画，点击改为排除`;
+	if (t === -1) return `当前排除有${label}的漫画，点击关闭筛选`;
+	return `当前不筛选${label}，点击改为只显示`;
+}
+
 function cycled(sel: TriStateSelection, key: string): TriStateSelection {
 	const next = { ...sel };
 	const v = nextTri(next[key] ?? 0);
@@ -53,7 +60,7 @@ export default function LibraryPage() {
 	const [searchInput, setSearchInput] = useState('');
 	const [search, setSearch] = useState('');
 	const [sort, setSort] = useState<LibrarySort>('added');
-	const [filters, setFilters] = useState<LibraryFilter[]>([]);
+	const [filterTri, setFilterTri] = useState<TriStateSelection>({});
 	const [ratings, setRatings] = useState<TriStateSelection>({});
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>({});
 
@@ -66,7 +73,7 @@ export default function LibraryPage() {
 	const query = useLibrary(categoryId, {
 		search: search || undefined,
 		sort,
-		filter: filters,
+		filters: filterTri,
 		ratings,
 		sources: sourceTri
 	});
@@ -100,16 +107,12 @@ export default function LibraryPage() {
 	const ratingCount = Object.keys(ratings).length;
 	const sourceCount = Object.keys(sourceTri).length;
 	const filtering =
-		search !== '' || filters.length > 0 || ratingCount > 0 || sourceCount > 0;
-
-	function toggleFilter(f: LibraryFilter) {
-		setFilters((cur) => (cur.includes(f) ? cur.filter((x) => x !== f) : [...cur, f]));
-	}
+		search !== '' || Object.keys(filterTri).length > 0 || ratingCount > 0 || sourceCount > 0;
 
 	function clearFilters() {
 		setSearchInput('');
 		setSearch('');
-		setFilters([]);
+		setFilterTri({});
 		setRatings({});
 		setSourceTri({});
 	}
@@ -154,33 +157,32 @@ export default function LibraryPage() {
 			/>
 
 			<div className="library__filters">
-				{FILTER_OPTIONS.map((o) => (
-					<Chip
-						key={o.value}
-						color={filters.includes(o.value) ? 'accent' : 'default'}
-						onClick={() => toggleFilter(o.value)}
-					>
-						{o.label}
-					</Chip>
-				))}
-			</div>
-
-			<div className="library__filters" role="group" aria-label="内容分级与图源">
-				{MANGA_CONTENT_RATING_LEVELS.map((level) => {
-					const st = ratings[String(level.value)] ?? 0;
+				{/* 与漫画详情页章节筛选同款的三态 chips：未选 → 包含 → 排除 */}
+				{FILTER_OPTIONS.map((o) => {
+					const st = filterTri[o.value] ?? 0;
 					return (
 						<Chip
-							key={level.value}
+							key={o.value}
 							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
-							title="点击切换：包含 / 排除 / 不选"
-							onClick={() => setRatings((cur) => cycled(cur, String(level.value)))}
+							className={st === -1 ? 'chip--exclude' : undefined}
+							title={triTitle(o.label, st)}
+							onClick={() => setFilterTri((cur) => cycled(cur, o.value))}
 						>
 							{st === -1 ? '− ' : ''}
-							{level.label}
+							{o.label}
 						</Chip>
 					);
 				})}
-				{/* 与跨源搜索页同款的图源三态下拉（含停用源：库内条目可能属于它们） */}
+			</div>
+
+			<div className="library__filters" role="group" aria-label="内容分级与图源">
+				{/* 与跨源搜索页同款的三态下拉；图源含停用源——库内条目可能属于它们 */}
+				<TriStateDropdown
+					label="分级"
+					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
+					states={ratings}
+					onCycle={(k) => setRatings((cur) => cycled(cur, k))}
+				/>
 				<TriStateDropdown
 					label="图源"
 					options={triOptions}

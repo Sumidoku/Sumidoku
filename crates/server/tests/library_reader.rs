@@ -647,6 +647,20 @@ async fn library_search_sort_filter() {
 	let (status, _) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 
+	// 排除语义：unread 排除=全部已读；与包含组合取交集（b 已下载但有未读，被排除）
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![c]);
+	let (_, body) = request(
+		&app,
+		"GET",
+		"/api/v1/library?filter=downloaded&filterExclude=unread",
+		None,
+	)
+	.await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	let (status, _) = request(&app, "GET", "/api/v1/library?filterExclude=bogus", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
 	// 组合：搜索 + title 排序
 	let (_, body) = request(
 		&app,

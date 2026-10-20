@@ -23,7 +23,6 @@ import type {
 	GlobalSearchStreamEvent,
 	HomeLayout,
 	HomeStreamEvent,
-	LibraryFilter,
 	LibraryPage,
 	LibrarySort,
 	LibrarySourceCount,
@@ -113,7 +112,8 @@ export function useSource(id: number) {
 export interface LibraryBrowse {
 	search?: string;
 	sort?: LibrarySort;
-	filter?: LibraryFilter[];
+	/** 布尔筛选三态（unread/downloaded/bookmarked 键）：1 包含 / -1 排除 */
+	filters?: TriStateSelection;
 	/** 迁移批量流程按源筛条目 */
 	sourceId?: number;
 	/** 内容分级三态（manga 级 1..=3 → 1 包含 / -1 排除） */
@@ -135,18 +135,20 @@ function triParams(sel: TriStateSelection | undefined): [string?, string?] {
 }
 
 export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse = {}) {
-	const { search, sort, filter, sourceId, ratings, sources } = browse;
+	const { search, sort, filters, sourceId, ratings, sources } = browse;
+	const [filterInc, filterExc] = triParams(filters);
 	const [ratingInc, ratingExc] = triParams(ratings);
 	const [sourceInc, sourceExc] = triParams(sources);
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filter, sourceId, ratings, sources }],
+		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filters, sourceId, ratings, sources }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
 			if (categoryId !== undefined) qs.set('categoryId', String(categoryId));
 			if (sourceId !== undefined) qs.set('sourceId', String(sourceId));
 			if (search) qs.set('search', search);
 			if (sort) qs.set('sort', sort);
-			if (filter && filter.length > 0) qs.set('filter', filter.join(','));
+			if (filterInc) qs.set('filter', filterInc);
+			if (filterExc) qs.set('filterExclude', filterExc);
 			if (ratingInc) qs.set('contentRating', ratingInc);
 			if (ratingExc) qs.set('contentRatingExclude', ratingExc);
 			if (sourceInc) qs.set('source', sourceInc);
