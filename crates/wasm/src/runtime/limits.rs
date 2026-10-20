@@ -2,7 +2,10 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Limits {
-	/// 单次导出调用的指令预算（wasmi fuel）：每次调用前重置，耗尽即 trap
+	/// 单次导出调用的指令预算（wasmi fuel）：每次调用前重置，耗尽即 trap。
+	/// 10B 会把 godamanga 这类病态源的长章列表（数千章 × 每章现编正则，实测
+	/// 3875 章纯计算 ~7s ≈ 50B）打死；wall-clock 的 call_timeout 才是主兜底，
+	/// fuel 只防「超时内的指令级失控」，放 100B
 	pub fuel: u64,
 	/// 调用级 wall-clock 超时，超时熔断重启实例
 	pub call_timeout: Duration,
@@ -25,7 +28,7 @@ pub struct Limits {
 impl Default for Limits {
 	fn default() -> Self {
 		Self {
-			fuel: 10_000_000_000,
+			fuel: 100_000_000_000,
 			call_timeout: Duration::from_secs(60),
 			sleep_max: Duration::from_secs(10),
 			net_timeout_default: Duration::from_secs(30),
