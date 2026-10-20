@@ -415,6 +415,55 @@ async fn download_shared_artifact_between_users() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// move_path 目标是共享内容区：两行渲染同一绝对目标，删除只清无人引用的一刻
+#[tokio::test]
+async fn download_moved_artifact_shared_between_users() {
+	let users = two_user_app().await;
+	let app = &users.app;
+	let (admin, bob) = (&users.admin, &users.bob);
+	let move_root = users.tmp.path().join("library");
+	let template = format!("{}/{{manga}}/{{filename}}", move_root.display());
+	let (status, _) = as_user(
+		app,
+		admin,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"download.move_path": template})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let (_manga_id, chapter_id) = prepared_chapter(&users, port).await;
+
+	// A 下完并移动到共享内容区，行存绝对路径
+	let (status, _) = as_user(app, admin, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status_as(app, admin, chapter_id, "finished").await;
+	let path = entry["path"].as_str().expect("download path").to_string();
+	assert!(std::path::Path::new(&path).is_absolute(), "{path}");
+	let artifact = std::path::PathBuf::from(&path);
+	assert!(artifact.is_file());
+
+	// B 入队同一章：移动后的产物经绝对路径命中共享，两行指向同一文件
+	let (status, body) = as_user(app, bob, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([]));
+	let entry = wait_download_status_as(app, bob, chapter_id, "finished").await;
+	assert_eq!(entry["path"].as_str().expect("download path"), path);
+
+	// A 删自己的行：B 还引用同一绝对路径，文件留着，B 照常能取
+	let (status, _) = as_user(app, admin, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(artifact.exists());
+	let (status, _) = as_user(app, bob, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// B 也删：没人引用了，共享文件清掉
+	let (status, _) = as_user(app, bob, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!artifact.exists());
+}
+
 #[tokio::test]
 async fn download_cancel_only_removes_own_row() {
 	let users = two_user_app().await;

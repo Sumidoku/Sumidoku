@@ -725,7 +725,7 @@ async fn chapter_file(
 		&& status == "finished"
 		&& !path.is_empty()
 	{
-		let full = state.config.downloads_dir.join(&path);
+		let full = crate::download::product_path(&state.config.downloads_dir, &path);
 		let bytes = match tokio::fs::read(&full).await {
 			Ok(bytes) => bytes,
 			Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

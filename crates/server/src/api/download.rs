@@ -104,9 +104,10 @@ pub async fn stop_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Jso
 	Ok(Json(json!({ "running": false })))
 }
 
-/// 产物可能是 cbz 文件也可能是 folder 目录
-async fn remove_product(downloads_dir: &std::path::Path, rel_path: &str) {
-	let target = downloads_dir.join(rel_path);
+/// 产物可能是 cbz 文件也可能是 folder 目录；路径解析走统一约定（绝对原样/相对并 downloads_dir）。
+/// 已缺失的产物（挂载掉线、手动清过、共享目标已被另一行删掉）按已删处理
+async fn remove_product(downloads_dir: &std::path::Path, path: &str) {
+	let target = crate::download::product_path(downloads_dir, path);
 	if target.is_dir() {
 		let _ = tokio::fs::remove_dir_all(&target).await;
 	} else {
@@ -247,7 +248,7 @@ pub async fn get_chapter_file(
 	let Some(path) = path else {
 		return Err(ApiError::not_found("chapter file not found"));
 	};
-	let bytes = match tokio::fs::read(manager.downloads_dir().join(&path)).await {
+	let bytes = match tokio::fs::read(crate::download::product_path(manager.downloads_dir(), &path)).await {
 		Ok(bytes) => bytes,
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 			return Err(ApiError::not_found("chapter file not found"));

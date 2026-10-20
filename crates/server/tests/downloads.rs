@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
+use sumidoku_server::download::sanitize;
 
 /// 下载测试需要 downloads_dir 落在 tmp（base_config 不管它，默认 ./downloads 会污染仓库）
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
@@ -171,6 +172,246 @@ async fn download_full_flow() {
 	assert!(!cbz_path.exists());
 	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// 渲染期望路径用的元数据镜像（chapter_display 与 author 空回退同服务端规则）
+struct ChapterMeta {
+	source: String,
+	title: String,
+	author: String,
+	chapter: String,
+}
+
+async fn chapter_meta(pool: &sqlx::SqlitePool, chapter_id: i64) -> ChapterMeta {
+	let (title, authors, number, chapter_title, chapter_key, source): (
+		String,
+		String,
+		Option<f64>,
+		Option<String>,
+		String,
+		String,
+	) = sqlx::query_as(
+		"SELECT m.title, m.authors, c.number, c.title, c.key, s.name FROM chapter c
+		 JOIN manga m ON m.id = c.manga_id JOIN source s ON s.id = m.source_id WHERE c.id = ?",
+	)
+	.bind(chapter_id)
+	.fetch_one(pool)
+	.await
+	.expect("chapter meta");
+	let authors: Vec<String> = serde_json::from_str(&authors).expect("authors json");
+	let chapter = match (number, chapter_title) {
+		(Some(n), _) => format!("第 {n} 话"),
+		(None, Some(t)) => t,
+		(None, None) => chapter_key,
+	};
+	ChapterMeta {
+		source,
+		title,
+		author: if authors.is_empty() { "Unknown".into() } else { authors.join(", ") },
+		chapter,
+	}
+}
+
+fn default_rel_path(meta: &ChapterMeta) -> String {
+	format!(
+		"{}/{}/{}.cbz",
+		sanitize(&meta.source),
+		sanitize(&meta.title),
+		sanitize(&meta.chapter)
+	)
+}
+
+/// 模板变量的镜像：空/缺失落 Unknown，其余过 sanitize（与服务端 move_var 同规则）
+fn template_var(raw: &str) -> String {
+	if raw.trim().is_empty() { "Unknown".into() } else { sanitize(raw) }
+}
+
+#[tokio::test]
+async fn download_move_to_absolute_template_target() {
+	let t = downloads_app(|config| {
+		let root = config.downloads_dir.parent().expect("tmp root").join("library");
+		config.download_move_path = Some(format!("{}/{{author}}/{{manga}}/{{filename}}", root.display()));
+	})
+	.await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	let target = move_root
+		.join(template_var(&meta.author))
+		.join(template_var(&meta.title))
+		.join(format!("{}.cbz", template_var(&meta.chapter)));
+	assert_eq!(stored, target.to_str().expect("utf8 target"), "moved download stores the absolute target");
+	let (db_path,): (String,) = sqlx::query_as("SELECT path FROM download WHERE chapter_id = ?")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("db path");
+	assert_eq!(db_path, stored);
+	assert!(target.is_file(), "product moved to {}", target.display());
+	assert!(
+		!t.tmp.path().join("downloads").join(default_rel_path(&meta)).exists(),
+		"default location must be empty after the move"
+	);
+
+	// 读页与 OPDS 流式照常（统一路径解析：绝对原样）
+	let bytes = std::fs::read(&target).expect("read moved cbz");
+	let (status, _, file_bytes) =
+		request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(file_bytes, bytes);
+	let (status, _, opds_bytes) =
+		request_full(&app, "GET", &format!("/opds/v1.2/file/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(opds_bytes, bytes);
+
+	// 删除走记录的绝对路径
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists());
+}
+
+#[tokio::test]
+async fn download_move_via_setting_and_overwrites_target() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let template = format!("{}/{{manga}}", move_root.display());
+	let (status, body) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"download.move_path": template})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["download.move_path"], json!(template));
+
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+	let (manga_key,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("manga key");
+	let (chapter_key,): (String,) = sqlx::query_as("SELECT key FROM chapter WHERE id = ?")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("chapter key");
+
+	// 模板无 {filename} → 目录语义：默认产物名追加其下
+	let target = move_root
+		.join(template_var(&meta.title))
+		.join(format!("{}.cbz", template_var(&meta.chapter)));
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	assert_eq!(entry["path"].as_str().expect("path"), target.to_str().expect("utf8 target"));
+	assert!(target.is_file());
+
+	// 重下覆盖：删掉行（删除必须清掉记录的绝对路径产物）后在目标处放垃圾文件，
+	// 重下必须替换成真 cbz 而不是留重复
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists(), "delete must remove the moved product");
+	std::fs::create_dir_all(target.parent().expect("target parent")).expect("mkdir target parent");
+	std::fs::write(&target, b"junk").expect("write junk");
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let bytes = std::fs::read(&target).expect("read replaced cbz");
+	assert_cbz(&bytes, "en.example-source", &manga_key, &chapter_key, 2);
+}
+
+#[tokio::test]
+async fn download_move_failure_keeps_product_in_place() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	// 移动目标父级被同名文件堵住：建目录必败 → 产物留原位、下载照常 finished
+	let blocker = t.tmp.path().join("blocker");
+	std::fs::write(&blocker, b"x").expect("write blocker");
+	let template = format!("{}/sub/{{filename}}", blocker.display());
+	let (status, _) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"download.move_path": template})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	assert!(
+		!std::path::Path::new(&stored).is_absolute(),
+		"failed move keeps the relative path: {stored}"
+	);
+	assert_eq!(stored, default_rel_path(&meta));
+	let product = t.tmp.path().join("downloads").join(&stored);
+	assert!(product.is_file(), "product kept at {}", product.display());
+}
+
+#[tokio::test]
+async fn download_move_folder_format_moves_directory() {
+	let t = downloads_app(|config| {
+		config.download_format = "folder".into();
+		let root = config.downloads_dir.parent().expect("tmp root").join("library");
+		config.download_move_path = Some(format!("{}/{{manga}}/{{filename}}", root.display()));
+	})
+	.await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	let target = move_root.join(template_var(&meta.title)).join(template_var(&meta.chapter));
+	assert_eq!(stored, target.to_str().expect("utf8 target"));
+	assert!(target.is_dir(), "folder product moved to {}", target.display());
+	assert!(target.join("ComicInfo.xml").is_file());
+	assert!(target.join("000.png").is_file());
+
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists());
 }
 
 #[tokio::test]

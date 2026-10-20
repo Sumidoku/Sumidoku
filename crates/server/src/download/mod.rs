@@ -131,7 +131,7 @@ impl DownloadManager {
 		.await
 		.ok()?;
 		let (path, format) = row?;
-		let exists = tokio::fs::try_exists(self.downloads_dir.join(&path)).await.ok()?;
+		let exists = tokio::fs::try_exists(product_path(&self.downloads_dir, &path)).await.ok()?;
 		exists.then_some((path, format))
 	}
 
@@ -636,14 +636,43 @@ impl DownloadManager {
 
 		let comic_info = comic_info_xml(&source_key, &manga, &chapter, total);
 		let rel_dir = format!("{}/{}", sanitize(&source_name), sanitize(&manga.title));
-		let base = sanitize(&chapter_display(&chapter));
-		let rel_path = if format == "folder" {
-			format!("{rel_dir}/{base}")
+		let chapter_name = chapter_display(&chapter);
+		let base = sanitize(&chapter_name);
+		let product_name = if format == "folder" {
+			base.clone()
 		} else {
-			format!("{rel_dir}/{base}.cbz")
+			format!("{base}.cbz")
 		};
+		let rel_path = format!("{rel_dir}/{product_name}");
 		package(&self.downloads_dir, &tmp_dir, &rel_path, &format, &files, &comic_info).await?;
-		Ok((total, rel_path))
+		let Some(template) = move_template(&self.pool, &state.config).await else {
+			return Ok((total, rel_path));
+		};
+		let vars = MoveVars {
+			source: &source_name,
+			title: &manga.title,
+			authors: &manga.authors.0,
+			artists: &manga.artists.0,
+			chapter: &chapter_name,
+			filename: &base,
+		};
+		let rendered = move_target(&template, &vars, &format, &product_name);
+		let (dest, stored) = match rendered.is_absolute() {
+			true => (rendered.clone(), rendered.to_string_lossy().into_owned()),
+			// 相对模板并到 downloads_dir 下，行里仍存相对路径，读取侧解析约定不变
+			false => (
+				self.downloads_dir.join(&rendered),
+				rendered.to_string_lossy().into_owned(),
+			),
+		};
+		match move_product(&self.downloads_dir.join(&rel_path), &dest).await {
+			Ok(()) => Ok((total, stored)),
+			// 移动失败（挂载掉线/权限/盘满）不拖垮下载：产物留原位，行存原相对路径
+			Err(e) => {
+				tracing::warn!(chapter_id, "download move to {} failed, product kept in place: {e}", dest.display());
+				Ok((total, rel_path))
+			}
+		}
 	}
 }
 
@@ -830,6 +859,186 @@ async fn package(
 	Ok(())
 }
 
+/// 下载行 path 的解析约定：绝对路径原样（已移动产物），相对路径并到 downloads_dir
+pub fn product_path(downloads_dir: &Path, path: &str) -> PathBuf {
+	let stored = Path::new(path);
+	if stored.is_absolute() {
+		stored.to_path_buf()
+	} else {
+		downloads_dir.join(stored)
+	}
+}
+
+/// 移动模板分层：env（config.download_move_path）> setting 表 download.move_path > 空（不动）
+async fn move_template(pool: &SqlitePool, config: &crate::config::Config) -> Option<String> {
+	let raw = match &config.download_move_path {
+		Some(v) => Some(v.clone()),
+		None => {
+			let row: Option<(String,)> =
+				match sqlx::query_as("SELECT value FROM setting WHERE key = 'download.move_path'")
+					.fetch_optional(pool)
+					.await
+				{
+					Ok(row) => row,
+					Err(e) => {
+						tracing::warn!("download move_path setting read failed: {e}");
+						None
+					}
+				};
+			row.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+		}
+	};
+	raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// 模板变量：每个值先过 sanitize 剥路径分隔符（防元数据注入目录穿越），空/未知变量落 Unknown
+struct MoveVars<'a> {
+	source: &'a str,
+	title: &'a str,
+	authors: &'a [String],
+	artists: &'a [String],
+	chapter: &'a str,
+	/// 打包产物的默认基名（不含扩展名），同时充当「模板渲染结果是完整文件名」的开关
+	filename: &'a str,
+}
+
+fn render_move_template(template: &str, vars: &MoveVars) -> String {
+	let mut out = String::with_capacity(template.len());
+	let mut rest = template;
+	while let Some(start) = rest.find('{') {
+		out.push_str(&rest[..start]);
+		let after = &rest[start + 1..];
+		match after.find('}') {
+			Some(end) => {
+				out.push_str(&move_var(&after[..end], vars));
+				rest = &after[end + 1..];
+			}
+			None => {
+				out.push('{');
+				rest = after;
+			}
+		}
+	}
+	out.push_str(rest);
+	out
+}
+
+fn move_var(name: &str, vars: &MoveVars) -> String {
+	let raw = match name {
+		"source" => vars.source.to_string(),
+		"title" | "manga" => vars.title.to_string(),
+		"author" => vars.authors.join(", "),
+		"artist" => vars.artists.join(", "),
+		"chapter" => vars.chapter.to_string(),
+		"filename" => vars.filename.to_string(),
+		_ => String::new(),
+	};
+	if raw.trim().is_empty() { "Unknown".into() } else { sanitize(&raw) }
+}
+
+const ARCHIVE_EXTS: &[&str] = &["cbz", "zip", "cbr", "cb7", "cbt", "rar", "7z", "tar"];
+
+fn has_archive_ext(path: &str) -> bool {
+	Path::new(path)
+		.extension()
+		.and_then(|e| e.to_str())
+		.map(|e| ARCHIVE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+		.unwrap_or(false)
+}
+
+/// 渲染移动目标：模板含 {filename} 时结果是完整文件名（cbz 格式无已知压缩扩展名补 .cbz），
+/// 否则结果是目录、默认产物名追加其下
+fn move_target(template: &str, vars: &MoveVars, format: &str, product_name: &str) -> PathBuf {
+	let rendered = render_move_template(template, vars);
+	if !template.contains("{filename}") {
+		return Path::new(&rendered).join(product_name);
+	}
+	if format != "folder" && !has_archive_ext(&rendered) {
+		return PathBuf::from(format!("{rendered}.cbz"));
+	}
+	PathBuf::from(rendered)
+}
+
+/// 产物搬家：目标是共享内容区（同人重下/多用户同章渲染同一目标，内容相同覆盖即可），
+/// rename 跨设备（挂载盘常态）回退 copy+remove
+async fn move_product(src: &Path, dest: &Path) -> Result<(), String> {
+	if let Some(parent) = dest.parent() {
+		tokio::fs::create_dir_all(parent)
+			.await
+			.map_err(|e| format!("create move target dir: {e}"))?;
+	}
+	remove_path(dest).await?;
+	match tokio::fs::rename(src, dest).await {
+		Ok(()) => return Ok(()),
+		Err(e) if e.kind() != std::io::ErrorKind::CrossesDevices => {
+			return Err(format!("rename product: {e}"));
+		}
+		_ => {}
+	}
+	if src.is_dir() {
+		copy_dir_all(src, dest).await?;
+		tokio::fs::remove_dir_all(src)
+			.await
+			.map_err(|e| format!("remove moved dir: {e}"))?;
+	} else {
+		tokio::fs::copy(src, dest)
+			.await
+			.map_err(|e| format!("copy product: {e}"))?;
+		tokio::fs::remove_file(src)
+			.await
+			.map_err(|e| format!("remove moved file: {e}"))?;
+	}
+	Ok(())
+}
+
+/// 清目标位；已缺失（挂载掉线/手动清过）视为已删
+async fn remove_path(path: &Path) -> Result<(), String> {
+	let result = if path.is_dir() {
+		tokio::fs::remove_dir_all(path).await
+	} else {
+		tokio::fs::remove_file(path).await
+	};
+	match result {
+		Ok(()) => Ok(()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+		Err(e) => Err(format!("clear move target: {e}")),
+	}
+}
+
+fn copy_dir_all<'a>(
+	src: &'a Path,
+	dst: &'a Path,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+	Box::pin(async move {
+		tokio::fs::create_dir_all(dst)
+			.await
+			.map_err(|e| format!("create dir {}: {e}", dst.display()))?;
+		let mut entries = tokio::fs::read_dir(src)
+			.await
+			.map_err(|e| format!("read dir {}: {e}", src.display()))?;
+		while let Some(entry) = entries
+			.next_entry()
+			.await
+			.map_err(|e| format!("read dir {}: {e}", src.display()))?
+		{
+			let from = entry.path();
+			let to = dst.join(entry.file_name());
+			let kind = entry
+				.file_type()
+				.await
+				.map_err(|e| format!("stat {}: {e}", from.display()))?;
+			if kind.is_dir() {
+				copy_dir_all(&from, &to).await?;
+			} else {
+				tokio::fs::copy(&from, &to)
+					.await
+					.map_err(|e| format!("copy {}: {e}", from.display()))?;
+			}
+		}
+		Ok(())
+	})
+}
+
 fn write_cbz(
 	tmp_dir: &Path,
 	target: &Path,
@@ -943,5 +1152,156 @@ pub fn sanitize(name: &str) -> String {
 		"_".into()
 	} else {
 		truncated
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn vars() -> MoveVars<'static> {
+		MoveVars {
+			source: "Example Source",
+			title: "Example Manga",
+			authors: &[],
+			artists: &[],
+			chapter: "第 1 话",
+			filename: "第 1 话",
+		}
+	}
+
+	#[test]
+	fn template_substitutes_all_variables() {
+		let authors = vec!["Author A".to_string(), "Author B".to_string()];
+		let artists = vec!["Artist C".to_string()];
+		let vars = MoveVars {
+			authors: &authors,
+			artists: &artists,
+			..vars()
+		};
+		let out = render_move_template("/lib/{source}/{manga}/{author}/{artist}/{chapter}/{filename}", &vars);
+		assert_eq!(out, "/lib/Example Source/Example Manga/Author A, Author B/Artist C/第 1 话/第 1 话");
+	}
+
+	#[test]
+	fn template_title_aliases_manga() {
+		assert_eq!(
+			render_move_template("{title}", &vars()),
+			render_move_template("{manga}", &vars())
+		);
+	}
+
+	#[test]
+	fn template_empty_and_unknown_variables_become_unknown() {
+		// authors/artists 空回退 Unknown；未知名也落 Unknown
+		let out = render_move_template("{author}/{artist}/{scanlator}", &vars());
+		assert_eq!(out, "Unknown/Unknown/Unknown");
+	}
+
+	#[test]
+	fn template_values_are_sanitized_against_traversal() {
+		let vars = MoveVars {
+			title: "../../etc/passwd",
+			chapter: "a/b\\c:d",
+			..vars()
+		};
+		let out = render_move_template("/lib/{manga}/{chapter}", &vars);
+		assert_eq!(out, "/lib/etcpasswd/abcd");
+	}
+
+	#[test]
+	fn template_unclosed_brace_stays_literal() {
+		assert_eq!(render_move_template("/lib/{manga", &vars()), "/lib/{manga");
+	}
+
+	#[test]
+	fn target_without_filename_var_is_directory() {
+		let target = move_target("/lib/{author}/{manga}", &vars(), "cbz", "第 1 话.cbz");
+		assert_eq!(target, PathBuf::from("/lib/Unknown/Example Manga/第 1 话.cbz"));
+		let target = move_target("/lib/{manga}", &vars(), "folder", "第 1 话");
+		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话"));
+	}
+
+	#[test]
+	fn target_with_filename_var_is_full_name() {
+		let target = move_target("/lib/{manga}/{filename}", &vars(), "cbz", "第 1 话.cbz");
+		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话.cbz"));
+	}
+
+	#[test]
+	fn target_with_filename_var_appends_cbz_only_without_archive_ext() {
+		let target = move_target("/lib/{manga}/{filename}.zip", &vars(), "cbz", "第 1 话.cbz");
+		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话.zip"));
+		// folder 格式产物是目录，永不补扩展名
+		let target = move_target("/lib/{manga}/{filename}", &vars(), "folder", "第 1 话");
+		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话"));
+	}
+
+	#[test]
+	fn target_relative_and_absolute_render_as_is() {
+		let target = move_target("moved/{filename}", &vars(), "cbz", "第 1 话.cbz");
+		assert_eq!(target, PathBuf::from("moved/第 1 话.cbz"));
+		assert!(!target.is_absolute());
+		let target = move_target("/mnt/lib/{filename}", &vars(), "cbz", "第 1 话.cbz");
+		assert!(target.is_absolute());
+	}
+
+	#[test]
+	fn product_path_absolute_as_is_relative_joined() {
+		let downloads_dir = Path::new("/downloads");
+		assert_eq!(
+			product_path(downloads_dir, "/mnt/lib/a.cbz"),
+			PathBuf::from("/mnt/lib/a.cbz")
+		);
+		assert_eq!(
+			product_path(downloads_dir, "Source/Manga/a.cbz"),
+			PathBuf::from("/downloads/Source/Manga/a.cbz")
+		);
+	}
+
+	#[tokio::test]
+	async fn move_product_renames_file_and_replaces_target() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let src = tmp.path().join("in/a.cbz");
+		let dest = tmp.path().join("out/a.cbz");
+		std::fs::create_dir_all(src.parent().expect("src parent")).expect("mkdir src");
+		std::fs::write(&src, b"new").expect("write src");
+		std::fs::create_dir_all(dest.parent().expect("dest parent")).expect("mkdir dest");
+		std::fs::write(&dest, b"old").expect("write dest");
+
+		move_product(&src, &dest).await.expect("move");
+		assert!(!src.exists());
+		assert_eq!(std::fs::read(&dest).expect("read dest"), b"new");
+	}
+
+	#[tokio::test]
+	async fn move_product_replaces_directory_target() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let src = tmp.path().join("in/chapter");
+		let dest = tmp.path().join("out/chapter");
+		std::fs::create_dir_all(&src).expect("mkdir src");
+		std::fs::write(src.join("000.png"), b"new").expect("write page");
+		std::fs::create_dir_all(&dest).expect("mkdir dest");
+		std::fs::write(dest.join("stale.png"), b"old").expect("write stale page");
+
+		move_product(&src, &dest).await.expect("move");
+		assert!(!src.exists());
+		assert!(!dest.join("stale.png").exists());
+		assert_eq!(std::fs::read(dest.join("000.png")).expect("read page"), b"new");
+	}
+
+	#[tokio::test]
+	async fn move_product_failure_keeps_source() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let src = tmp.path().join("in/a.cbz");
+		std::fs::create_dir_all(src.parent().expect("src parent")).expect("mkdir src");
+		std::fs::write(&src, b"data").expect("write src");
+		// 目标父路径被同名文件堵住：建目录必败，产物必须留在原位
+		let blocker = tmp.path().join("blocker");
+		std::fs::write(&blocker, b"x").expect("write blocker");
+
+		let result = move_product(&src, &blocker.join("a.cbz")).await;
+		assert!(result.is_err());
+		assert!(src.exists(), "source product must stay in place");
 	}
 }

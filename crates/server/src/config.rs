@@ -55,6 +55,8 @@ pub struct Config {
 	pub downloads_dir: PathBuf,
 	pub download_concurrency: usize,
 	pub download_format: String,
+	/// setting 表 download.move_path 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
+	pub download_move_path: Option<String>,
 	pub update_interval_hours: u64,
 	/// 源仓库 index 定时刷新周期（小时）；0 = 关闭，只靠手动刷新
 	pub repo_refresh_interval_hours: u64,
@@ -101,6 +103,7 @@ impl Default for Config {
 			downloads_dir: PathBuf::from("./downloads"),
 			download_concurrency: 3,
 			download_format: "cbz".into(),
+			download_move_path: None,
 			update_interval_hours: 0,
 			repo_refresh_interval_hours: 1,
 			auto_download_new_chapters: false,
@@ -209,6 +212,7 @@ struct ConfigFile {
 	downloads_dir: Option<PathBuf>,
 	download_concurrency: Option<usize>,
 	download_format: Option<String>,
+	download_move_path: Option<String>,
 	update_interval_hours: Option<u64>,
 	repo_refresh_interval_hours: Option<u64>,
 	auto_download_new_chapters: Option<bool>,
@@ -276,6 +280,9 @@ impl Config {
 		}
 		if let Some(v) = file.download_format {
 			self.download_format = v;
+		}
+		if file.download_move_path.is_some() {
+			self.download_move_path = file.download_move_path;
 		}
 		if let Some(v) = file.update_interval_hours {
 			self.update_interval_hours = v;
@@ -403,6 +410,9 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_FORMAT") {
 			self.download_format = v;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_MOVE_PATH") {
+			self.download_move_path = Some(v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_UPDATE_INTERVAL_HOURS")
 			&& let Ok(n) = v.parse()
