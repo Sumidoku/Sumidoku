@@ -5,6 +5,7 @@ import { coverUrl } from '../api/client';
 import { useCategories, useLibrary, useLibrarySourceCounts, useSources } from '../api/hooks';
 import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
 import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
+import { loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
 import {
 	Button,
 	Chip,
@@ -53,14 +54,32 @@ function cycled(sel: TriStateSelection, key: string): TriStateSelection {
 	return next;
 }
 
+/** Drops entries whose key is not in `valid` (and not one of `extras`); returns the original object when nothing changed */
+function pruneSelection(
+	sel: TriStateSelection,
+	valid: ReadonlySet<string>,
+	...extras: string[]
+): TriStateSelection {
+	let changed = false;
+	const next: TriStateSelection = {};
+	for (const [k, v] of Object.entries(sel)) {
+		if (valid.has(k) || extras.includes(k)) next[k] = v;
+		else changed = true;
+	}
+	return changed ? next : sel;
+}
+
 export default function LibraryPage() {
 	const [searchInput, setSearchInput] = useState('');
 	const [search, setSearch] = useState('');
 	const [sort, setSort] = useState<LibrarySort>('added');
-	const [filterTri, setFilterTri] = useState<TriStateSelection>({});
-	const [ratings, setRatings] = useState<TriStateSelection>({});
-	const [sourceTri, setSourceTri] = useState<TriStateSelection>({});
-	const [categoryTri, setCategoryTri] = useState<TriStateSelection>({});
+	// Chip states restore from localStorage (search input and sort stay session-local); the prefs are
+	// loaded once — the pruning effect below drops ids that no longer exist
+	const [initialPrefs] = useState(loadLibraryFilters);
+	const [filterTri, setFilterTri] = useState<TriStateSelection>(initialPrefs.filters);
+	const [ratings, setRatings] = useState<TriStateSelection>(initialPrefs.ratings);
+	const [sourceTri, setSourceTri] = useState<TriStateSelection>(initialPrefs.sources);
+	const [categoryTri, setCategoryTri] = useState<TriStateSelection>(initialPrefs.categories);
 
 	useEffect(() => {
 		const t = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -78,6 +97,22 @@ export default function LibraryPage() {
 	const categories = useCategories();
 	const sourcesQuery = useSources();
 	const countsQuery = useLibrarySourceCounts();
+
+	// Persist the chip states across sessions (the clear-filters button and chip clicks flow through the same setters)
+	useEffect(() => {
+		saveLibraryFilters({ filters: filterTri, ratings, sources: sourceTri, categories: categoryTri });
+	}, [filterTri, ratings, sourceTri, categoryTri]);
+
+	// Restored ids may belong to since-deleted categories or uninstalled sources: a stale include id
+	// would filter the library down to nothing with no chip showing why, so drop unknown ids once
+	// both lists are loaded (ratings keys are the fixed 1..=3 set and filters the fixed flag vocabulary)
+	useEffect(() => {
+		if (!categories.data || !sourcesQuery.data) return;
+		setCategoryTri((cur) =>
+			pruneSelection(cur, new Set((categories.data ?? []).map((c) => String(c.id))), UNCATEGORIZED)
+		);
+		setSourceTri((cur) => pruneSelection(cur, new Set(sourcesQuery.data?.map((s) => String(s.id)))));
+	}, [categories.data, sourcesQuery.data]);
 	const counts = useMemo(() => {
 		const map = new Map<number, number>();
 		for (const c of countsQuery.data ?? []) map.set(c.sourceId, c.count);
