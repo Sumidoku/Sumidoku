@@ -4,6 +4,7 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
 use crate::state::AppState;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
 use serde::Deserialize;
@@ -181,15 +182,16 @@ fn aib_chapter_meta(c: &AibChapter) -> ApiResult<ChapterMeta<'_>> {
 
 pub async fn import_aidoku_backup(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<AidokuImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let result = import_aidoku_doc(&state, &body, query.dry_run).await?;
+	let result = import_aidoku_doc(&state, user.id, &body, query.dry_run).await?;
 	Ok(Json(result))
 }
 
 /// 校验 + 单事务导入；dry-run 走同一执行路径，末尾回滚代替提交，报告与真跑一致
-pub async fn import_aidoku_doc(state: &AppState, body: &[u8], dry_run: bool) -> ApiResult<Value> {
+pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_run: bool) -> ApiResult<Value> {
 	let doc: AibBackup = plist::from_bytes(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid aidoku backup: {e}")))?;
 
@@ -209,10 +211,10 @@ pub async fn import_aidoku_doc(state: &AppState, body: &[u8], dry_run: bool) -> 
 	let mut seen_categories: HashSet<String> = HashSet::new();
 	{
 		let mut tx = state.pool.begin().await?;
-		import_categories(&mut tx, &doc, &mut seen_categories).await?;
-		import_library(&mut tx, &doc, &manga_meta, &mut imported, &mut skipped, &mut seen_categories)
+		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
+		import_library(&mut tx, user_id, &doc, &manga_meta, &mut imported, &mut skipped, &mut seen_categories)
 			.await?;
-		import_progress(&mut tx, &doc, &manga_meta, &chapter_meta, &mut imported, &mut skipped)
+		import_progress(&mut tx, user_id, &doc, &manga_meta, &chapter_meta, &mut imported, &mut skipped)
 			.await?;
 		imported.categories = seen_categories.len() as i64;
 		if dry_run {
@@ -250,6 +252,7 @@ pub async fn import_aidoku_doc(state: &AppState, body: &[u8], dry_run: bool) -> 
 /// 顶层 categories 数组先建行；书库条目里只出现引用形态的分类在 import_library 里懒建
 async fn import_categories(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &AibBackup,
 	seen: &mut HashSet<String>,
 ) -> ApiResult<()> {
@@ -257,7 +260,7 @@ async fn import_categories(
 		let title = category_title(value)
 			.filter(|t| !t.trim().is_empty())
 			.ok_or_else(|| ApiError::bad_request("aidoku category must have a non-empty title"))?;
-		ensure_category(tx, title.trim()).await?;
+		ensure_category(tx, user_id, title.trim()).await?;
 		seen.insert(title.trim().to_string());
 	}
 	Ok(())
@@ -265,6 +268,7 @@ async fn import_categories(
 
 async fn import_library(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &AibBackup,
 	manga_meta: &HashMap<(&str, &str), &AibManga>,
 	imported: &mut ImportCounts,
@@ -293,20 +297,21 @@ async fn import_library(
 			.transpose()?;
 		let manga_id = ensure_manga_row(tx, source_id, &entry.manga_id, meta.as_ref()).await?;
 		let in_library_at = entry.date_added.map(date_to_unix).unwrap_or_else(unix_now);
-		mark_in_library(tx, manga_id, in_library_at).await?;
+		mark_in_library(tx, user_id, manga_id, in_library_at).await?;
 		for name in &entry.categories {
 			let name = name.trim();
 			if name.is_empty() {
 				continue;
 			}
-			let category_id = ensure_category(tx, name).await?;
+			let category_id = ensure_category(tx, user_id, name).await?;
 			seen_categories.insert(name.to_string());
 			sqlx::query(
 				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, 1)",
+				 VALUES (?, ?, ?)",
 			)
 			.bind(category_id)
 			.bind(manga_id)
+			.bind(user_id)
 			.execute(&mut **tx)
 			.await?;
 		}
@@ -317,6 +322,7 @@ async fn import_library(
 
 async fn import_progress(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &AibBackup,
 	manga_meta: &HashMap<(&str, &str), &AibManga>,
 	chapter_meta: &HashMap<(&str, &str, &str), &AibChapter>,
@@ -356,7 +362,7 @@ async fn import_progress(
 		// Aidoku 里 -1 是「读完」标记不是页码，负数一律按 0 处理
 		let last_page_read = entry.progress.unwrap_or(0).max(0);
 		let last_read_at = entry.date_read.map(date_to_unix);
-		merge_chapter_progress(tx, chapter_id, last_page_read, entry.completed, last_read_at).await?;
+		merge_chapter_progress(tx, user_id, chapter_id, last_page_read, entry.completed, last_read_at).await?;
 		imported.progress += 1;
 	}
 	Ok(())

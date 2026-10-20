@@ -13,9 +13,10 @@ pub struct ImportCounts {
 }
 
 /// 同名分类已存在就原样使用（sort_order/三态以现有为准），新分类排到末尾
-pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, name: &str) -> ApiResult<i64> {
+pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, name: &str) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
-		sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ?")
+		sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
+			.bind(user_id)
 			.bind(name)
 			.fetch_optional(&mut **tx)
 			.await?;
@@ -23,13 +24,15 @@ pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, name: &str) -> Ap
 		return Ok(id);
 	}
 	let (next,): (i64,) =
-		sqlx::query_as("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM category WHERE user_id = 1")
+		sqlx::query_as("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM category WHERE user_id = ?")
+			.bind(user_id)
 			.fetch_one(&mut **tx)
 			.await?;
 	let result = sqlx::query(
 		"INSERT INTO category (user_id, name, sort_order, is_default, include_in_update, include_in_download)
-		 VALUES (1, ?, ?, 0, 0, 0)",
+		 VALUES (?, ?, ?, 0, 0, 0)",
 	)
+	.bind(user_id)
 	.bind(name)
 	.bind(next)
 	.execute(&mut **tx)
@@ -161,18 +164,20 @@ pub async fn ensure_chapter_row(
 /// 补入库旗标：已入库的保留现有 in_library_at（现有条目优先），未入库的用备份的入库时间
 pub async fn mark_in_library(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	manga_id: i64,
 	in_library_at: i64,
 ) -> ApiResult<()> {
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at)
-		 VALUES (?, 1, 1, ?)
+		 VALUES (?, ?, 1, ?)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET
 		 in_library = 1,
 		 in_library_at = CASE WHEN manga_user.in_library != 0 THEN manga_user.in_library_at
 		 ELSE excluded.in_library_at END",
 	)
 	.bind(manga_id)
+	.bind(user_id)
 	.bind(in_library_at)
 	.execute(&mut **tx)
 	.await?;
@@ -182,6 +187,7 @@ pub async fn mark_in_library(
 /// 进度合并：页码取大、已读取 OR、时间 NULL 安全取新；is_bookmarked 是本机状态，备份不携带也不覆盖
 pub async fn merge_chapter_progress(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	chapter_id: i64,
 	last_page_read: i64,
 	is_read: bool,
@@ -189,7 +195,7 @@ pub async fn merge_chapter_progress(
 ) -> ApiResult<()> {
 	sqlx::query(
 		"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
-		 last_read_at) VALUES (?, 1, ?, ?, 0, ?)
+		 last_read_at) VALUES (?, ?, ?, ?, 0, ?)
 		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 		 last_page_read = MAX(chapter_user.last_page_read, excluded.last_page_read),
 		 is_read = MAX(chapter_user.is_read, excluded.is_read),
@@ -199,6 +205,7 @@ pub async fn merge_chapter_progress(
 		 ELSE MAX(chapter_user.last_read_at, excluded.last_read_at) END",
 	)
 	.bind(chapter_id)
+	.bind(user_id)
 	.bind(last_page_read)
 	.bind(is_read)
 	.bind(last_read_at)

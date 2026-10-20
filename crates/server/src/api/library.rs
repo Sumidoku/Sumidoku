@@ -3,7 +3,8 @@ use crate::error::{ApiError, ApiResult};
 use crate::model::{LibraryEntryRow, MangaRow, unix_now};
 use crate::source::manga_row;
 use crate::state::AppState;
-use crate::{PAGE_SIZE, USER_ID};
+use crate::PAGE_SIZE;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
-	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1";
 
 #[derive(Debug, Deserialize)]
@@ -49,29 +50,30 @@ fn escape_like(raw: &str) -> String {
 	out
 }
 
-fn library_order_by(sort: Option<&str>) -> ApiResult<&'static str> {
+/// 返回排序子句与其中是否带一个 user_id 绑定（lastRead/unread 的子查询按用户取数）
+fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	const LAST_READ: &str = " ORDER BY (SELECT MAX(cu.last_read_at) FROM chapter c
-		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id) DESC, m.id ASC";
 	const UNREAD: &str = " ORDER BY (SELECT COUNT(*) FROM chapter c
-		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id AND cu.is_read = 0) DESC, m.id ASC";
 	match sort {
-		None | Some("added") => Ok(" ORDER BY mu.in_library_at DESC, m.id ASC"),
-		Some("title") => Ok(" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC"),
+		None | Some("added") => Ok((" ORDER BY mu.in_library_at DESC, m.id ASC", false)),
+		Some("title") => Ok((" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC", false)),
 		// SQLite 里 NULL 比任何值小，DESC 天然落最后
-		Some("lastRead") => Ok(LAST_READ),
-		Some("unread") => Ok(UNREAD),
+		Some("lastRead") => Ok((LAST_READ, true)),
+		Some("unread") => Ok((UNREAD, true)),
 		Some(other) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
 	}
 }
 
 fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
-		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id AND ";
 	const NOT_EXISTS: &str = " AND NOT EXISTS (SELECT 1 FROM chapter c
-		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id AND ";
 	let column = match filter {
 		"unread" => "cu.is_read = 0",
@@ -101,15 +103,17 @@ fn in_placeholders(len: usize) -> String {
 
 pub async fn list_library(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<LibraryQuery>,
 ) -> ApiResult<Json<Value>> {
 	let page = query.page.unwrap_or(1);
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
-	let order_by = library_order_by(query.sort.as_deref())?;
+	let (order_by, order_user_bind) = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
-	// bind 顺序与 SQL 子句一致：search → categoryId → 分级包含 → 分级排除 → 源包含 → 源排除
+	// bind 顺序与 SQL 子句一致：user → search → categoryId → 分级包含 → 分级排除 →
+	// 源包含 → 源排除 → sourceId → 筛选子句逐个 user → 排序子句 user
 	let rating_in = match &query.content_rating {
 		Some(raw) => parse_int_list(raw, "contentRating", |v| (1..=3).contains(&v))?,
 		None => Vec::new(),
@@ -131,20 +135,18 @@ pub async fn list_library(
 		sql.push_str(" AND m.title LIKE '%'||?||'%' ESCAPE '\\'");
 	}
 	// categoryId=0 指「在库但未分类」，其余 id 指该分类下；缺省不过滤
-	let mut category = None;
 	match query.category_id {
 		None => {}
 		Some(0) => sql.push_str(
 			" AND NOT EXISTS (SELECT 1 FROM category_manga cm
-			 WHERE cm.manga_id = m.id AND cm.user_id = 1)",
+			 WHERE cm.manga_id = m.id AND cm.user_id = ?)",
 		),
 		Some(category_id) => {
-			category_row(&state.pool, category_id).await?;
+			category_row(&state.pool, user.id, category_id).await?;
 			sql.push_str(
 				" AND EXISTS (SELECT 1 FROM category_manga cm
-				 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND cm.category_id = ?)",
+				 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = ?)",
 			);
-			category = Some(category_id);
 		}
 	}
 	if !rating_in.is_empty() {
@@ -168,24 +170,29 @@ pub async fn list_library(
 	if query.source_id.is_some() {
 		sql.push_str(" AND m.source_id = ?");
 	}
+	let mut filter_user_binds = 0usize;
 	if let Some(raw) = &query.filter {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
 			sql.push_str(&library_filter_clause(token, false)?);
+			filter_user_binds += 1;
 		}
 	}
 	if let Some(raw) = &query.filter_exclude {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
 			sql.push_str(&library_filter_clause(token, true)?);
+			filter_user_binds += 1;
 		}
 	}
 	sql.push_str(order_by);
 	sql.push_str(" LIMIT ? OFFSET ?");
-	let mut q = sqlx::query_as::<_, LibraryEntryRow>(&sql);
+	let mut q = sqlx::query_as::<_, LibraryEntryRow>(&sql).bind(user.id);
 	if let Some(search) = &search {
 		q = q.bind(escape_like(search));
 	}
-	if let Some(category_id) = category {
-		q = q.bind(category_id);
+	match query.category_id {
+		None => {}
+		Some(0) => q = q.bind(user.id),
+		Some(category_id) => q = q.bind(user.id).bind(category_id),
 	}
 	for v in rating_in {
 		q = q.bind(v);
@@ -202,6 +209,12 @@ pub async fn list_library(
 	if let Some(source_id) = query.source_id {
 		q = q.bind(source_id);
 	}
+	for _ in 0..filter_user_binds {
+		q = q.bind(user.id);
+	}
+	if order_user_bind {
+		q = q.bind(user.id);
+	}
 	let rows = q
 		.bind(PAGE_SIZE + 1)
 		.bind((page - 1) * PAGE_SIZE)
@@ -214,17 +227,17 @@ pub async fn list_library(
 		let placeholders = page_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 		let unread_sql = format!(
 			"SELECT c.manga_id, COUNT(*) FROM chapter c
-			 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1 AND cu.is_read = 0
+			 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 0
 			 WHERE c.manga_id IN ({placeholders}) GROUP BY c.manga_id"
 		);
-		let mut q = sqlx::query_as::<_, (i64, i64)>(&unread_sql);
+		let mut q = sqlx::query_as::<_, (i64, i64)>(&unread_sql).bind(user.id);
 		for row in &page_rows {
 			q = q.bind(row.manga.id);
 		}
 		unread = q.fetch_all(&state.pool).await?.into_iter().collect();
 	}
 	let manga_refs: Vec<&MangaRow> = page_rows.iter().map(|row| &row.manga).collect();
-	let values = manga_json_batch(&state, &manga_refs).await?;
+	let values = manga_json_batch(&state, user.id, &manga_refs).await?;
 	let mut entries = Vec::with_capacity(page_rows.len());
 	for (row, mut value) in page_rows.into_iter().zip(values) {
 		let object = value
@@ -253,59 +266,66 @@ pub struct AddToLibraryRequest {
 
 pub async fn add_to_library(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<AddToLibraryRequest>,
 ) -> ApiResult<Json<Value>> {
 	let manga = manga_row(&state.pool, body.manga_id).await?;
 	if let Some(category_ids) = &body.category_ids {
 		for category_id in category_ids {
-			category_row(&state.pool, *category_id).await?;
+			category_row(&state.pool, user.id, *category_id).await?;
 		}
 	}
 	let mut tx = state.pool.begin().await?;
 	// 已在库的保留首次入库时间
 	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, 1, 1, ?)
+		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
 	)
 	.bind(manga.id)
+	.bind(user.id)
 	.bind(unix_now())
 	.execute(&mut *tx)
 	.await?;
 	if let Some(category_ids) = &body.category_ids {
-		sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = 1")
+		sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(manga.id)
+			.bind(user.id)
 			.execute(&mut *tx)
 			.await?;
 		for category_id in category_ids {
 			sqlx::query(
 				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, 1)",
+				 VALUES (?, ?, ?)",
 			)
 			.bind(category_id)
 			.bind(manga.id)
+			.bind(user.id)
 			.execute(&mut *tx)
 			.await?;
 		}
 	}
 	tx.commit().await?;
-	Ok(Json(manga_json(&state, &manga).await?))
+	Ok(Json(manga_json(&state, user.id, &manga).await?))
 }
 
 pub async fn remove_from_library(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
 	manga_row(&state.pool, manga_id).await?;
 	let mut tx = state.pool.begin().await?;
 	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 0)
+		"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
 	)
 	.bind(manga_id)
+	.bind(user.id)
 	.execute(&mut *tx)
 	.await?;
-	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = 1")
+	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 		.bind(manga_id)
+		.bind(user.id)
 		.execute(&mut *tx)
 		.await?;
 	tx.commit().await?;
@@ -326,8 +346,8 @@ struct CategoryRow {
 const CATEGORY_SELECT: &str = "SELECT c.id, c.name, c.sort_order, c.is_default,
 	 c.include_in_update, c.include_in_download,
 	 (SELECT COUNT(*) FROM category_manga cm
-	  WHERE cm.category_id = c.id AND cm.user_id = 1) AS manga_count
-	 FROM category c WHERE c.user_id = 1";
+	  WHERE cm.category_id = c.id AND cm.user_id = ?) AS manga_count
+	 FROM category c WHERE c.user_id = ?";
 
 fn category_json(row: &CategoryRow) -> Value {
 	json!({
@@ -341,9 +361,12 @@ fn category_json(row: &CategoryRow) -> Value {
 	})
 }
 
-async fn category_row(pool: &SqlitePool, id: i64) -> ApiResult<CategoryRow> {
+/// 分类按请求用户归属：别人的分类 id 与不存在同按 404，不泄露存在性
+async fn category_row(pool: &SqlitePool, user_id: i64, id: i64) -> ApiResult<CategoryRow> {
 	let row: Option<CategoryRow> =
 		sqlx::query_as(&format!("{CATEGORY_SELECT} AND c.id = ?"))
+			.bind(user_id)
+			.bind(user_id)
 			.bind(id)
 			.fetch_optional(pool)
 			.await?;
@@ -352,12 +375,16 @@ async fn category_row(pool: &SqlitePool, id: i64) -> ApiResult<CategoryRow> {
 
 /// 书库内每个源的条目数（书库图源筛选下拉的计数与自动隐藏用）。
 /// 含已停用源的条目——库内漫画不随源停用消失
-pub async fn source_counts(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+pub async fn source_counts(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let rows: Vec<(i64, i64)> = sqlx::query_as(
 		"SELECT m.source_id, COUNT(*) FROM manga m
-		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 		 WHERE mu.in_library = 1 GROUP BY m.source_id",
 	)
+	.bind(user.id)
 	.fetch_all(&state.pool)
 	.await?;
 	let out: Vec<Value> = rows
@@ -367,12 +394,21 @@ pub async fn source_counts(State(state): State<Arc<AppState>>) -> ApiResult<Json
 	Ok(Json(json!(out)))
 }
 
-pub async fn list_categories(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+pub async fn list_categories(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	Ok(Json(categories_json(&state, user.id).await?))
+}
+
+async fn categories_json(state: &AppState, user_id: i64) -> ApiResult<Value> {
 	let rows: Vec<CategoryRow> =
 		sqlx::query_as(&format!("{CATEGORY_SELECT} ORDER BY c.sort_order ASC, c.id ASC"))
+			.bind(user_id)
+			.bind(user_id)
 			.fetch_all(&state.pool)
 			.await?;
-	Ok(Json(json!(rows.iter().map(category_json).collect::<Vec<_>>())))
+	Ok(json!(rows.iter().map(category_json).collect::<Vec<_>>()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,17 +416,19 @@ pub struct CategoryNameRequest {
 	pub name: String,
 }
 
-async fn ensure_unique_name(pool: &SqlitePool, name: &str, except_id: Option<i64>) -> ApiResult<()> {
+async fn ensure_unique_name(pool: &SqlitePool, user_id: i64, name: &str, except_id: Option<i64>) -> ApiResult<()> {
 	let duplicate: Option<(i64,)> = match except_id {
 		Some(id) => {
-			sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ? AND id != ?")
+			sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ? AND id != ?")
+				.bind(user_id)
 				.bind(name)
 				.bind(id)
 				.fetch_optional(pool)
 				.await?
 		}
 		None => {
-			sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ?")
+			sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
+				.bind(user_id)
 				.bind(name)
 				.fetch_optional(pool)
 				.await?
@@ -404,28 +442,31 @@ async fn ensure_unique_name(pool: &SqlitePool, name: &str, except_id: Option<i64
 
 pub async fn create_category(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<CategoryNameRequest>,
 ) -> ApiResult<Json<Value>> {
 	let name = body.name.trim();
 	if name.is_empty() {
 		return Err(ApiError::bad_request("name must not be empty"));
 	}
-	ensure_unique_name(&state.pool, name, None).await?;
+	ensure_unique_name(&state.pool, user.id, name, None).await?;
 	let (sort_order,): (i64,) =
-		sqlx::query_as("SELECT COALESCE(MAX(sort_order) + 1, 0) FROM category WHERE user_id = 1")
+		sqlx::query_as("SELECT COALESCE(MAX(sort_order) + 1, 0) FROM category WHERE user_id = ?")
+			.bind(user.id)
 			.fetch_one(&state.pool)
 			.await?;
 	sqlx::query("INSERT INTO category (user_id, name, sort_order) VALUES (?, ?, ?)")
-		.bind(USER_ID)
+		.bind(user.id)
 		.bind(name)
 		.bind(sort_order)
 		.execute(&state.pool)
 	.await?;
-	let (id,): (i64,) = sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ?")
+	let (id,): (i64,) = sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
+		.bind(user.id)
 		.bind(name)
 		.fetch_one(&state.pool)
 		.await?;
-	Ok(Json(category_json(&category_row(&state.pool, id).await?)))
+	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -446,10 +487,11 @@ fn check_include_in(field: &str, value: i64) -> ApiResult<i64> {
 /// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
 pub async fn update_category(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
-	let row = category_row(&state.pool, id).await?;
+	let row = category_row(&state.pool, user.id, id).await?;
 	let patch = match body {
 		None => UpdateCategoryRequest::default(),
 		Some(Json(value)) => serde_json::from_value(value)
@@ -469,7 +511,7 @@ pub async fn update_category(
 			if name.is_empty() {
 				return Err(ApiError::bad_request("name must not be empty"));
 			}
-			ensure_unique_name(&state.pool, name, Some(id)).await?;
+			ensure_unique_name(&state.pool, user.id, name, Some(id)).await?;
 			Some(name.to_string())
 		}
 		None => None,
@@ -479,24 +521,27 @@ pub async fn update_category(
 	}
 	sqlx::query(
 		"UPDATE category SET name = ?, include_in_update = ?, include_in_download = ?
-		 WHERE id = ? AND user_id = 1",
+		 WHERE id = ? AND user_id = ?",
 	)
 	.bind(name.as_deref().unwrap_or(&row.name))
 	.bind(include_in_update.unwrap_or(row.include_in_update))
 	.bind(include_in_download.unwrap_or(row.include_in_download))
 	.bind(id)
+	.bind(user.id)
 	.execute(&state.pool)
 	.await?;
-	Ok(Json(category_json(&category_row(&state.pool, id).await?)))
+	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
 pub async fn delete_category(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	category_row(&state.pool, id).await?;
-	sqlx::query("DELETE FROM category WHERE id = ? AND user_id = 1")
+	category_row(&state.pool, user.id, id).await?;
+	sqlx::query("DELETE FROM category WHERE id = ? AND user_id = ?")
 		.bind(id)
+		.bind(user.id)
 		.execute(&state.pool)
 		.await?;
 	Ok(StatusCode::NO_CONTENT)
@@ -509,18 +554,20 @@ pub struct ReorderRequest {
 
 pub async fn reorder_categories(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<ReorderRequest>,
 ) -> ApiResult<Json<Value>> {
 	let mut tx = state.pool.begin().await?;
 	for (index, id) in body.ids.iter().enumerate() {
-		sqlx::query("UPDATE category SET sort_order = ? WHERE id = ? AND user_id = 1")
+		sqlx::query("UPDATE category SET sort_order = ? WHERE id = ? AND user_id = ?")
 			.bind(index as i64)
 			.bind(id)
+			.bind(user.id)
 			.execute(&mut *tx)
 			.await?;
 	}
 	tx.commit().await?;
-	list_categories(State(state)).await
+	Ok(Json(categories_json(&state, user.id).await?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -531,36 +578,40 @@ pub struct SetCategoriesRequest {
 
 pub async fn set_manga_categories(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(body): Json<SetCategoriesRequest>,
 ) -> ApiResult<Json<Value>> {
 	let manga = manga_row(&state.pool, id).await?;
 	let in_library: Option<(bool,)> =
-		sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(id)
+			.bind(user.id)
 			.fetch_optional(&state.pool)
 			.await?;
 	if !in_library.map(|(flag,)| flag).unwrap_or(false) {
 		return Err(ApiError::not_in_library("manga not in library"));
 	}
 	for category_id in &body.category_ids {
-		category_row(&state.pool, *category_id).await?;
+		category_row(&state.pool, user.id, *category_id).await?;
 	}
 	let mut tx = state.pool.begin().await?;
-	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = 1")
+	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 		.bind(id)
+		.bind(user.id)
 		.execute(&mut *tx)
 		.await?;
 	for category_id in &body.category_ids {
 		sqlx::query(
 			"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-			 VALUES (?, ?, 1)",
+			 VALUES (?, ?, ?)",
 		)
 		.bind(category_id)
 		.bind(id)
+		.bind(user.id)
 		.execute(&mut *tx)
 		.await?;
 	}
 	tx.commit().await?;
-	Ok(Json(manga_json(&state, &manga).await?))
+	Ok(Json(manga_json(&state, user.id, &manga).await?))
 }

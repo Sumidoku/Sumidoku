@@ -5,6 +5,7 @@ use crate::model::{SourceRow, unix_now};
 use crate::source::{manga_row, reconcile_chapters, repo, upsert_manga};
 use crate::state::AppState;
 use aidoku::Manga;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
 use serde::Deserialize;
@@ -12,8 +13,11 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 迁移源清单：已装源全量下发（目标组合选择器也要用），mangaCount 是在库条数
-pub async fn migrate_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+/// 迁移源清单：已装源全量下发（目标组合选择器也要用），mangaCount 是请求用户的在库条数
+pub async fn migrate_sources(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
 		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source ORDER BY id",
@@ -22,9 +26,10 @@ pub async fn migrate_sources(State(state): State<Arc<AppState>>) -> ApiResult<Js
 	.await?;
 	let counts: HashMap<i64, i64> = sqlx::query_as(
 		"SELECT m.source_id, COUNT(*) FROM manga m
-		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 AND mu.in_library = 1
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ? AND mu.in_library = 1
 		 GROUP BY m.source_id",
 	)
+	.bind(user.id)
 	.fetch_all(&state.pool)
 	.await?
 	.into_iter()
@@ -139,6 +144,7 @@ fn failed_with(reason: &'static str, message: String) -> EntryRun {
 /// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法形状/非法 mode 400
 pub async fn migrate_execute(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
 	let body = body.ok_or_else(|| ApiError::bad_request("missing body"))?;
@@ -155,7 +161,7 @@ pub async fn migrate_execute(
 	// 批次串行：单条目一个事务，部分失败不回滚已完成条目，逐条给 ok/reason
 	let mut results = Vec::with_capacity(request.entries.len());
 	for entry in &request.entries {
-		let run = run_entry(&state, request.mode, entry).await?;
+		let run = run_entry(&state, user.id, request.mode, entry).await?;
 		let value = match run {
 			EntryRun::Ok(outcome) => json!({
 				"fromMangaId": entry.from_manga_id,
@@ -177,6 +183,7 @@ pub async fn migrate_execute(
 
 async fn run_entry(
 	state: &Arc<AppState>,
+	user_id: i64,
 	mode: MigrateMode,
 	entry: &MigrateEntry,
 ) -> ApiResult<EntryRun> {
@@ -192,8 +199,9 @@ async fn run_entry(
 		return Ok(failed("same_source"));
 	}
 	let origin_user: Option<(bool, Option<i64>)> =
-		sqlx::query_as("SELECT in_library, in_library_at FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_as("SELECT in_library, in_library_at FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_optional(&state.pool)
 			.await?;
 	if !origin_user.map(|(flag, _)| flag).unwrap_or(false) {
@@ -241,29 +249,33 @@ async fn run_entry(
 
 	// 入库态搬运：目标已在库保留它自己的首次入库时间，否则继承源条目的
 	let origin_at: Option<i64> =
-		sqlx::query_scalar("SELECT in_library_at FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT in_library_at FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_optional(&mut *tx)
 			.await?;
 	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, 1, 1, ?)
+		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
 	)
 	.bind(to_manga_id)
+	.bind(user_id)
 	.bind(origin_at.unwrap_or_else(unix_now))
 	.execute(&mut *tx)
 	.await?;
 
 	// 分类是并集：目标原有分类保留，源条目的补进来
 	let category_ids: Vec<i64> =
-		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_all(&mut *tx)
 			.await?;
 	for category_id in &category_ids {
-		sqlx::query("INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
+		sqlx::query("INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, ?)")
 			.bind(category_id)
 			.bind(to_manga_id)
+			.bind(user_id)
 			.execute(&mut *tx)
 			.await?;
 	}
@@ -271,9 +283,10 @@ async fn run_entry(
 	let origin_progress: Vec<OriginProgress> = sqlx::query_as(
 		"SELECT c.key, c.number, c.volume, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter_user cu JOIN chapter c ON c.id = cu.chapter_id
-		 WHERE cu.user_id = 1 AND c.manga_id = ?
+		 WHERE cu.user_id = ? AND c.manga_id = ?
 		 AND (cu.last_page_read > 0 OR cu.is_read = 1 OR cu.is_bookmarked = 1 OR cu.last_read_at IS NOT NULL)",
 	)
+	.bind(user_id)
 	.bind(origin.id)
 	.fetch_all(&mut *tx)
 	.await?;
@@ -294,7 +307,7 @@ async fn run_entry(
 		// 目标已有进度保留较新值：页码取大、已读/书签取或、阅读时间取新
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at)
-			 VALUES (?, 1, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 			 last_page_read = MAX(last_page_read, excluded.last_page_read),
 			 is_read = MAX(is_read, excluded.is_read),
@@ -305,6 +318,7 @@ async fn run_entry(
 			 ELSE MAX(last_read_at, excluded.last_read_at) END",
 		)
 		.bind(target.id)
+		.bind(user_id)
 		.bind(row.last_page_read)
 		.bind(row.is_read)
 		.bind(row.is_bookmarked)
@@ -317,14 +331,16 @@ async fn run_entry(
 		MigrateMode::Copy => {}
 		MigrateMode::Migrate | MigrateMode::MigrateWithHistory => {
 			sqlx::query(
-				"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 0)
+				"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
 				 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
 			)
 			.bind(origin.id)
+			.bind(user_id)
 			.execute(&mut *tx)
 			.await?;
-			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = 1")
+			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 				.bind(origin.id)
+				.bind(user_id)
 				.execute(&mut *tx)
 				.await?;
 			// chapter_user 还背着下载标记，清进度只重置进度字段不删行
@@ -332,8 +348,9 @@ async fn run_entry(
 				sqlx::query(
 					"UPDATE chapter_user SET last_page_read = 0, is_read = 0, is_bookmarked = 0,
 					 last_read_at = NULL
-					 WHERE user_id = 1 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
+					 WHERE user_id = ? AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 				)
+				.bind(user_id)
 				.bind(origin.id)
 				.execute(&mut *tx)
 				.await?;

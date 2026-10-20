@@ -6,6 +6,7 @@ use crate::model::{default_value_to_json, json_to_default_value, unix_now};
 use crate::source::repo::{self, SourceRepoRow};
 use crate::state::AppState;
 use aidoku_wasm::DefaultValue;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Json, Response};
@@ -200,8 +201,9 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-/// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构
-pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
+/// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构。
+/// 用户态数据（库/分类/进度）只含 user_id 的行
+pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64) -> ApiResult<BackupDoc> {
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
@@ -230,9 +232,10 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.incognito, mu.sort_key
 		 FROM manga m
 		 JOIN source s ON s.id = m.source_id
-		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 		 ORDER BY m.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let library = manga_rows
@@ -262,16 +265,18 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 
 	let category_rows: Vec<(i64, String, i64, bool, i64, i64)> = sqlx::query_as(
 		"SELECT id, name, sort_order, is_default, include_in_update, include_in_download
-		 FROM category WHERE user_id = 1 ORDER BY sort_order, id",
+		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let member_rows: Vec<(i64, String, String)> = sqlx::query_as(
 		"SELECT cm.category_id, s.key, m.key FROM category_manga cm
 		 JOIN manga m ON m.id = cm.manga_id
 		 JOIN source s ON s.id = m.source_id
-		 WHERE cm.user_id = 1 ORDER BY m.id",
+		 WHERE cm.user_id = ? ORDER BY m.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let mut members: HashMap<i64, Vec<BackupMangaRef>> = HashMap::new();
@@ -304,10 +309,11 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		 JOIN chapter c ON c.id = cu.chapter_id
 		 JOIN manga m ON m.id = c.manga_id
 		 JOIN source s ON s.id = m.source_id
-		 WHERE cu.user_id = 1
+		 WHERE cu.user_id = ?
 		 AND (cu.last_page_read != 0 OR cu.is_read != 0 OR cu.is_bookmarked != 0 OR cu.last_read_at IS NOT NULL)
 		 ORDER BY c.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let progress = progress_rows
@@ -378,8 +384,11 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	Ok(doc)
 }
 
-pub async fn export_backup(State(state): State<Arc<AppState>>) -> ApiResult<Response> {
-	let doc = build_backup_doc(&state.pool).await?;
+pub async fn export_backup(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Response> {
+	let doc = build_backup_doc(&state.pool, user.id).await?;
 	let body = serde_json::to_vec(&doc)?;
 	let date = chrono::Utc::now().format("%Y%m%d");
 	let disposition = format!("attachment; filename=\"sumidoku-backup-{date}.json\"");
@@ -417,6 +426,7 @@ pub struct RestoreRequest {
 /// 从备份目录里已有的文件恢复：服务端读文件，走与上传导入同一条校验+事务路径
 pub async fn restore_backup(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<RestoreRequest>,
 ) -> ApiResult<Json<Value>> {
 	if crate::backup::parse_backup_name(&body.name).is_none() {
@@ -430,7 +440,7 @@ pub async fn restore_backup(
 		}
 		Err(e) => return Err(ApiError::internal(format!("read backup: {e}"))),
 	};
-	let result = import_backup_doc(&state, None, &bytes).await?;
+	let result = import_backup_doc(&state, user.id, None, &bytes).await?;
 	Ok(Json(result))
 }
 
@@ -479,16 +489,19 @@ struct Restored {
 
 pub async fn import_backup(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<ImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let result = import_backup_doc(&state, query.sections.as_deref(), &body).await?;
+	let result = import_backup_doc(&state, user.id, query.sections.as_deref(), &body).await?;
 	Ok(Json(result))
 }
 
-/// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用
+/// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用。
+/// 用户态段落（库/分类/进度）归属 user_id
 pub async fn import_backup_doc(
 	state: &AppState,
+	user_id: i64,
 	sections_query: Option<&str>,
 	body: &[u8],
 ) -> ApiResult<Value> {
@@ -512,13 +525,13 @@ pub async fn import_backup_doc(
 	{
 		let mut tx = state.pool.begin().await?;
 		if sections.contains(&Section::Library) {
-			restore_library(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_library(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Categories) {
-			restore_categories(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_categories(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Progress) {
-			restore_progress(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_progress(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Settings) {
 			restore_settings(&mut tx, &doc, &mut restored).await?;
@@ -557,6 +570,7 @@ async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> ApiRes
 
 async fn restore_library(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
@@ -610,13 +624,14 @@ async fn restore_library(
 				.await?;
 		sqlx::query(
 			"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, incognito, sort_key)
-			 VALUES (?, 1, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET
 			 in_library = excluded.in_library, in_library_at = excluded.in_library_at,
 			 viewer_flags = excluded.viewer_flags, incognito = excluded.incognito,
 			 sort_key = excluded.sort_key",
 		)
 		.bind(manga_id)
+		.bind(user_id)
 		.bind(entry.in_library)
 		.bind(entry.in_library_at)
 		.bind(entry.viewer_flags)
@@ -640,6 +655,7 @@ fn check_include_in(category: &str, field: &str, value: i64) -> ApiResult<i64> {
 
 async fn restore_categories(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
@@ -651,7 +667,8 @@ async fn restore_categories(
 		check_include_in(&category.name, "includeInUpdate", category.include_in_update)?;
 		check_include_in(&category.name, "includeInDownload", category.include_in_download)?;
 		let existing: Option<(i64,)> =
-			sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ?")
+			sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
+				.bind(user_id)
 				.bind(&category.name)
 				.fetch_optional(&mut **tx)
 				.await?;
@@ -673,8 +690,9 @@ async fn restore_categories(
 			None => {
 				let result = sqlx::query(
 					"INSERT INTO category (user_id, name, sort_order, is_default, include_in_update,
-					 include_in_download) VALUES (1, ?, ?, ?, ?, ?)",
+					 include_in_download) VALUES (?, ?, ?, ?, ?, ?)",
 				)
+				.bind(user_id)
 				.bind(&category.name)
 				.bind(category.sort_order)
 				.bind(category.is_default)
@@ -708,10 +726,11 @@ async fn restore_categories(
 			};
 			sqlx::query(
 				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, 1)",
+				 VALUES (?, ?, ?)",
 			)
 			.bind(category_id)
 			.bind(manga_id)
+			.bind(user_id)
 			.execute(&mut **tx)
 			.await?;
 		}
@@ -722,6 +741,7 @@ async fn restore_categories(
 
 async fn restore_progress(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
@@ -781,12 +801,13 @@ async fn restore_progress(
 		// is_downloaded 指向本机文件，备份不携带也不覆盖
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
-			 last_read_at) VALUES (?, 1, ?, ?, ?, ?)
+			 last_read_at) VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 			 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
 			 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at",
 		)
 		.bind(chapter_id)
+		.bind(user_id)
 		.bind(entry.last_page_read)
 		.bind(entry.is_read)
 		.bind(entry.is_bookmarked)

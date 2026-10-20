@@ -35,7 +35,7 @@ use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
+use axum::{Extension, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -959,15 +959,16 @@ pub(crate) fn wants_refresh(query: &RefreshQuery) -> bool {
 	matches!(query.refresh.as_deref(), Some("") | Some("1") | Some("true"))
 }
 
-pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
+pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -> ApiResult<Value> {
 	let (chapter_count,): (i64,) =
 		sqlx::query_as("SELECT COUNT(*) FROM chapter WHERE manga_id = ?")
 			.bind(row.id)
 			.fetch_one(&state.pool)
 			.await?;
 	let manga_user: Option<(bool, i64, bool)> =
-		sqlx::query_as("SELECT in_library, viewer_flags, incognito FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_as("SELECT in_library, viewer_flags, incognito FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(row.id)
+			.bind(user_id)
 			.fetch_optional(&state.pool)
 			.await?;
 	let mut value = serde_json::to_value(manga_from_row(row))?;
@@ -990,8 +991,9 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 		json!(manga_user.map(|(_, _, incognito)| incognito).unwrap_or(false)),
 	);
 	let category_ids: Vec<i64> =
-		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(row.id)
+			.bind(user_id)
 			.fetch_all(&state.pool)
 			.await?;
 	object.insert("categoryIds".into(), json!(category_ids));
@@ -1008,7 +1010,7 @@ fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_fla
 
 /// 列表端点的批量版 manga_json：三条 IN 查询替代逐行三查询，输出与入参同序；
 /// 缺行按单查缺省（0 / false / 空数组）补齐
-pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
+pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
 	if rows.is_empty() {
 		return Ok(Vec::new());
 	}
@@ -1022,9 +1024,9 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 	}
 	let chapter_counts: HashMap<i64, i64> = q.fetch_all(&state.pool).await?.into_iter().collect();
 	let library_sql = format!(
-		"SELECT manga_id, in_library, viewer_flags, incognito FROM manga_user WHERE user_id = 1 AND manga_id IN ({placeholders})"
+		"SELECT manga_id, in_library, viewer_flags, incognito FROM manga_user WHERE user_id = ? AND manga_id IN ({placeholders})"
 	);
-	let mut q = sqlx::query_as::<_, (i64, bool, i64, bool)>(&library_sql);
+	let mut q = sqlx::query_as::<_, (i64, bool, i64, bool)>(&library_sql).bind(user_id);
 	for row in rows {
 		q = q.bind(row.id);
 	}
@@ -1035,9 +1037,9 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 		.map(|(id, in_library, flags, incognito)| (id, (in_library, flags, incognito)))
 		.collect();
 	let category_sql = format!(
-		"SELECT manga_id, category_id FROM category_manga WHERE user_id = 1 AND manga_id IN ({placeholders})"
+		"SELECT manga_id, category_id FROM category_manga WHERE user_id = ? AND manga_id IN ({placeholders})"
 	);
-	let mut q = sqlx::query_as::<_, (i64, i64)>(&category_sql);
+	let mut q = sqlx::query_as::<_, (i64, i64)>(&category_sql).bind(user_id);
 	for row in rows {
 		q = q.bind(row.id);
 	}
@@ -1079,14 +1081,14 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 }
 
 /// history/update 的漫画列：批量取行再批量序列化，输出与 ids 同序；缺行同 manga_row 的 404
-pub(crate) async fn manga_json_by_ids(state: &AppState, ids: &[i64]) -> ApiResult<Vec<Value>> {
+pub(crate) async fn manga_json_by_ids(state: &AppState, user_id: i64, ids: &[i64]) -> ApiResult<Vec<Value>> {
 	let rows = manga_rows_by_ids(&state.pool, ids).await?;
 	let refs: Vec<&MangaRow> = ids
 		.iter()
 		.map(|id| rows.get(id))
 		.collect::<Option<Vec<_>>>()
 		.ok_or_else(|| ApiError::not_found("manga not found"))?;
-	manga_json_batch(state, &refs).await
+	manga_json_batch(state, user_id, &refs).await
 }
 
 /// f32 经 serde_json 会先转 f64 再按 f64 最短表示打印（281.1 变 281.1000061035156），
@@ -1131,6 +1133,7 @@ pub(crate) fn progress_of(row: &ChapterUserRow) -> Option<ChapterProgress> {
 
 async fn get_manga(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 	headers: HeaderMap,
@@ -1144,7 +1147,7 @@ async fn get_manga(
 			let mut conn = state.pool.acquire().await?;
 			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
 			row = manga_row(&state.pool, id).await?;
-			return Ok(Json(manga_json(&state, &row).await?).into_response());
+			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
 		let handle = state.get_handle(row.source_id).await?;
 		if partial::wants_ndjson(&headers) {
@@ -1152,12 +1155,13 @@ async fn get_manga(
 			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
 			let input = manga_from_row(&row);
 			let source_id = row.source_id;
+			let user_id = user.id;
 			let call = tokio::spawn(async move {
 				let updated = handle.get_manga_update_streaming(input, true, false, partial_tx).await?;
 				let mut conn = state.pool.acquire().await?;
 				upsert_manga(&mut conn, source_id, &updated, true, true, false).await?;
 				let row = manga_row(&state.pool, id).await?;
-				manga_json(&state, &row).await
+				manga_json(&state, user_id, &row).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
 			return Ok(partial::ndjson_response(line_rx));
@@ -1169,7 +1173,7 @@ async fn get_manga(
 		upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
 		row = manga_row(&state.pool, id).await?;
 	}
-	Ok(Json(manga_json(&state, &row).await?).into_response())
+	Ok(Json(manga_json(&state, user.id, &row).await?).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1182,6 +1186,7 @@ pub struct UpdateMangaRequest {
 /// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
 async fn update_manga(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
@@ -1201,20 +1206,22 @@ async fn update_manga(
 	if let Some(incognito) = patch.incognito {
 		// manga_user 行可能不存在（未入库）：单本隐身不依赖入库状态，upsert 建行
 		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, 1, ?)
+			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET incognito = excluded.incognito",
 		)
 		.bind(id)
+		.bind(user.id)
 		.bind(incognito)
 		.execute(&state.pool)
 		.await?;
 	}
 	let row = manga_row(&state.pool, id).await?;
-	Ok(Json(manga_json(&state, &row).await?))
+	Ok(Json(manga_json(&state, user.id, &row).await?))
 }
 
 async fn get_chapters(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 	headers: HeaderMap,
@@ -1237,12 +1244,13 @@ async fn get_chapters(
 				.bind(id)
 				.execute(&mut *conn)
 				.await?;
-			return Ok(Json(chapters_json(&state, id).await?).into_response());
+			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
 		}
 		let handle = state.get_handle(manga.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
 			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+			let user_id = user.id;
 			let call = tokio::spawn(async move {
 				let updated = handle
 					.get_manga_update_streaming(manga_from_row(&manga), false, true, partial_tx)
@@ -1254,7 +1262,7 @@ async fn get_chapters(
 					.bind(id)
 					.execute(&mut *conn)
 					.await?;
-				chapters_json(&state, id).await
+				chapters_json(&state, user_id, id).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
 			return Ok(partial::ndjson_response(line_rx));
@@ -1270,23 +1278,25 @@ async fn get_chapters(
 			.execute(&mut *conn)
 			.await?;
 	}
-	Ok(Json(chapters_json(&state, id).await?).into_response())
+	Ok(Json(chapters_json(&state, user.id, id).await?).into_response())
 }
 
-async fn chapters_json(state: &AppState, manga_id: i64) -> ApiResult<Value> {
+async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64) -> ApiResult<Value> {
 	let rows: Vec<ChapterUserRow> = sqlx::query_as(
 		"SELECT c.*, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter c
-		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = ? ORDER BY c.source_order ASC",
 	)
+	.bind(user_id)
 	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?;
 	let downloaded: HashSet<i64> = sqlx::query_scalar(
-		"SELECT chapter_id FROM chapter_user WHERE user_id = 1 AND is_downloaded = 1
+		"SELECT chapter_id FROM chapter_user WHERE user_id = ? AND is_downloaded = 1
 		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 	)
+	.bind(user_id)
 	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?

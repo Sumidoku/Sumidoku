@@ -9,6 +9,7 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
 use crate::state::AppState;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
 use prost::Message;
@@ -290,17 +291,19 @@ fn parse_mapping(raw: Option<&str>) -> ApiResult<HashMap<i64, String>> {
 
 pub async fn import_suwayomi_backup(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<SuwayomiImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
 	let mapping = parse_mapping(query.source_mapping.as_deref())?;
-	let result = import_suwayomi_doc(&state, &body, query.dry_run, &mapping).await?;
+	let result = import_suwayomi_doc(&state, user.id, &body, query.dry_run, &mapping).await?;
 	Ok(Json(result))
 }
 
 /// 校验 + 单事务导入；dry-run 走同一执行路径，末尾回滚代替提交，报告与真跑一致
 pub async fn import_suwayomi_doc(
 	state: &AppState,
+	user_id: i64,
 	body: &[u8],
 	dry_run: bool,
 	mapping: &HashMap<i64, String>,
@@ -370,7 +373,7 @@ pub async fn import_suwayomi_doc(
 	let mut seen_categories: HashSet<String> = HashSet::new();
 	{
 		let mut tx = state.pool.begin().await?;
-		import_categories(&mut tx, &doc, &mut seen_categories).await?;
+		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
 		for ((mihon_id, mangas), resolution) in groups.iter().zip(&resolutions) {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let Some(source_key) = resolution.key() else {
@@ -386,7 +389,7 @@ pub async fn import_suwayomi_doc(
 				continue;
 			};
 			let source_id = installed_id_by_key[source_key];
-			import_group(&mut tx, &doc, source_id, mangas, &mut imported, &mut seen_categories)
+			import_group(&mut tx, user_id, &doc, source_id, mangas, &mut imported, &mut seen_categories)
 				.await?;
 		}
 		imported.categories = seen_categories.len() as i64;
@@ -446,6 +449,7 @@ pub async fn import_suwayomi_doc(
 /// 顶层 categories 数组先建行；成员引用按 order 回查这张表
 async fn import_categories(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &TachiBackup,
 	seen: &mut HashSet<String>,
 ) -> ApiResult<()> {
@@ -454,7 +458,7 @@ async fn import_categories(
 		if name.is_empty() {
 			return Err(ApiError::bad_request("suwayomi category must have a non-empty name"));
 		}
-		ensure_category(tx, name).await?;
+		ensure_category(tx, user_id, name).await?;
 		seen.insert(name.to_string());
 	}
 	Ok(())
@@ -462,6 +466,7 @@ async fn import_categories(
 
 async fn import_group(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &TachiBackup,
 	source_id: i64,
 	mangas: &[&TachiManga],
@@ -490,7 +495,7 @@ async fn import_group(
 		let manga_id = ensure_manga_row(tx, source_id, &manga.url, Some(&meta)).await?;
 		if manga.favorite.unwrap_or(true) {
 			let in_library_at = ms_to_unix(manga.date_added).unwrap_or_else(unix_now);
-			mark_in_library(tx, manga_id, in_library_at).await?;
+			mark_in_library(tx, user_id, manga_id, in_library_at).await?;
 			for order in &manga.categories {
 				let Some(name) = category_by_order.get(order) else {
 					continue;
@@ -499,14 +504,15 @@ async fn import_group(
 				if name.is_empty() {
 					continue;
 				}
-				let category_id = ensure_category(tx, name).await?;
+				let category_id = ensure_category(tx, user_id, name).await?;
 				seen_categories.insert(name.to_string());
 				sqlx::query(
 					"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-					 VALUES (?, ?, 1)",
+					 VALUES (?, ?, ?)",
 				)
 				.bind(category_id)
 				.bind(manga_id)
+				.bind(user_id)
 				.execute(&mut **tx)
 				.await?;
 			}
@@ -537,6 +543,7 @@ async fn import_group(
 				.and_then(|ts| ms_to_unix(*ts));
 			merge_chapter_progress(
 				tx,
+				user_id,
 				chapter_id,
 				chapter.last_page_read.max(0),
 				chapter.read,
@@ -551,7 +558,7 @@ async fn import_group(
 				continue;
 			}
 			let chapter_id = ensure_chapter_row(tx, manga_id, &entry.url, None).await?;
-			merge_chapter_progress(tx, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
+			merge_chapter_progress(tx, user_id, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
 			imported.progress += 1;
 		}
 	}
