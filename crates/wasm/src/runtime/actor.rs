@@ -75,6 +75,10 @@ impl SourceHandle {
 		let config = config.clone();
 		std::thread::Builder::new()
 			.name(format!("source-{}", config.key))
+			// wasmi 把 guest 调用展开成 native 递归帧：默认 2 MiB 栈在递归上限
+			// （1000 层）内就可能物理溢出直接 abort 全进程（#213）。8 MiB 虚拟
+			// 预留惰性提交，不用不花 RSS。
+			.stack_size(8 * 1024 * 1024)
 			.spawn(move || {
 				let mut instance = match SourceInstance::build(&config) {
 					Ok(instance) => {
