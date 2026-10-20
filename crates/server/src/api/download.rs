@@ -281,6 +281,10 @@ pub async fn downloads_ws(
 				event = rx.recv() => {
 					match event {
 						Ok(event) => {
+							// 行事件只发行属用户；running 是全局管理器状态，全员广播
+							if event.user_id.is_some_and(|owner| owner != user.id) {
+								continue;
+							}
 							let text = serde_json::to_string(&event).unwrap_or_default();
 							if socket.send(Message::Text(text.into())).await.is_err() {
 								return;

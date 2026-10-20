@@ -99,10 +99,20 @@ pub async fn get_recent(
 	})))
 }
 
-pub async fn updates_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
+pub async fn updates_ws(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	ws: WebSocketUpgrade,
+) -> Response {
 	let scheduler = state.updater();
 	ws.on_upgrade(move |mut socket: WebSocket| async move {
-		let mut snapshot = serde_json::to_value(scheduler.summary().await).unwrap_or_default();
+		// 别人手动触发的 fetch 与本连接无关，快照按闲置呈现；union（无归属）全员可见
+		let summary = scheduler.summary().await;
+		let visible = match summary.user_id {
+			Some(owner) if owner != user.id => crate::update::UpdateSummary::default(),
+			_ => summary,
+		};
+		let mut snapshot = serde_json::to_value(visible).unwrap_or_default();
 		if let Some(object) = snapshot.as_object_mut() {
 			object.insert("type".into(), json!("summary"));
 		}
@@ -119,6 +129,9 @@ pub async fn updates_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade
 				event = rx.recv() => {
 					match event {
 						Ok(event) => {
+							if event.user_id != Some(user.id) {
+								continue;
+							}
 							let text = serde_json::to_string(&event).unwrap_or_default();
 							if socket.send(Message::Text(text.into())).await.is_err() {
 								return;
