@@ -1,6 +1,7 @@
 //! 内置本地源契约：迁移落库不可删 / 实扫去重与跳过规则 / 打开才落库 /
 //! 页字节与页序（图片章与 CBZ 一致）/ 章节号排序 / ComicInfo 映射 /
-//! 封面回退链 / 刷新重扫 / 失败目录保护 / local_dir 配置覆盖
+//! 封面回退链 / 刷新重扫 / 失败目录保护 / local_dir 配置覆盖 /
+//! 浏览搜索臂（实扫 + 子串过滤，单源与跨源聚合同形）/ listings 404 unsupported
 mod common;
 
 use axum::Router;
@@ -589,4 +590,144 @@ async fn update_scheduler_rescans_local_library() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["failed"], 0, "{body}");
 	assert_eq!(body["complete"], 1, "{body}");
+}
+
+#[tokio::test]
+async fn browse_search_scans_dirs_and_filters() {
+	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let source_id = local_source_id(&app).await;
+
+	// 空 query（缺省与纯空白）全量：浏览 = 实扫，条目同在线搜索形状（sourceId 附带）
+	for body in [json!({}), json!({"query": "  "})] {
+		let (status, body) = request(
+			&app,
+			"POST",
+			&format!("/api/v1/sources/{source_id}/search"),
+			Some(body),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+		assert_eq!(body["hasNextPage"], false);
+		let entries = body["entries"].as_array().expect("entries array");
+		let titles: Vec<&str> = entries.iter().map(|e| e["title"].as_str().unwrap()).collect();
+		assert_eq!(titles, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
+		for entry in entries {
+			assert_eq!(entry["sourceId"], source_id);
+			assert_eq!(entry["key"], entry["title"]);
+			assert!(entry["id"].is_null(), "未入库的条目不带内部 id: {entry}");
+		}
+	}
+
+	// 子串过滤大小写不敏感
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"query": "aLP"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let entries = body["entries"].as_array().expect("entries array");
+	assert_eq!(entries.len(), 1);
+	assert_eq!(entries[0]["title"], "Alpha");
+
+	// 已入库的条目附内部 id，浏览页据此直接进详情页
+	let manga_id = register_local(&app, "Beta").await;
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"query": "beta"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["entries"][0]["id"], manga_id);
+
+	// 扫不到的目录名：空集不是错误
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"query": "nope"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["entries"], json!([]));
+}
+
+#[tokio::test]
+async fn aggregate_search_includes_local_source() {
+	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let source_id = local_source_id(&app).await;
+
+	// 跨源聚合选中本地源时出结果项，不是 unsupported 的 error 项
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/search",
+		Some(json!({"query": "gamma", "sourceIds": [source_id]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let sources = body["sources"].as_array().expect("sources array");
+	assert_eq!(sources.len(), 1);
+	let entry = &sources[0];
+	assert_eq!(entry["sourceId"], source_id);
+	assert!(entry.get("error").is_none(), "{entry}");
+	assert_eq!(entry["hasNextPage"], false);
+	let entries = entry["entries"].as_array().expect("entries array");
+	assert_eq!(entries.len(), 1);
+	assert_eq!(entries[0]["title"], "Gamma");
+	assert_eq!(entries[0]["sourceId"], source_id);
+}
+
+#[tokio::test]
+async fn settings_expose_local_dir_read_only() {
+	let TestApp { app, tmp, db_path } = local_app().await;
+	let effective = tmp.path().join("local").to_string_lossy().into_owned();
+
+	// GET 注入生效中的本地目录（config 分层值，默认 <config_dir>/local）
+	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localDir"], json!(effective));
+
+	// 同键 PUT 被跳过：读回仍是 config 值，其余键照常落库
+	let (status, body) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"localDir": "/elsewhere", "incognito.enabled": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localDir"], json!(effective));
+	assert_eq!(body["incognito.enabled"], true);
+
+	// 跳过不是遮蔽：setting 表里没有 localDir 行
+	let pool = common::connect_db(&db_path).await;
+	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDir'")
+		.fetch_optional(&pool)
+		.await
+		.expect("query setting");
+	assert!(row.is_none(), "localDir 不应落 setting 表");
+}
+
+#[tokio::test]
+async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let source_id = local_source_id(&app).await;
+
+	// 本地源没有 listings 概念：与缺该能力的 wasm 源同一契约，404 unsupported
+	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(body["error"]["code"], "unsupported");
+
+	let (status, body) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings/latest"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(body["error"]["code"], "unsupported");
 }

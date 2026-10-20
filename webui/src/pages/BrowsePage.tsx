@@ -183,28 +183,33 @@ function SourceCard({
 			>
 				{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 			</IconButton>
-			{s.hasHome !== false && (
-				<IconButton
-					label={`${s.name} 主页`}
-					onClick={(e) => {
-						e.stopPropagation();
-						navigate(`/browse/${s.id}/home`);
-					}}
-				>
-					<House size={17} />
-				</IconButton>
+			{/* 内置本地源：无 wasm 能力（主页/设置 404），且不可卸载（服务端 400） */}
+			{s.kind !== 'local' && (
+				<>
+					{s.hasHome !== false && (
+						<IconButton
+							label={`${s.name} 主页`}
+							onClick={(e) => {
+								e.stopPropagation();
+								navigate(`/browse/${s.id}/home`);
+							}}
+						>
+							<House size={17} />
+						</IconButton>
+					)}
+					<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
+					<IconButton
+						label={`卸载 ${s.name}`}
+						variant="danger"
+						onClick={(e) => {
+							e.stopPropagation();
+							onDelete(s);
+						}}
+					>
+						<Trash size={17} />
+					</IconButton>
+				</>
 			)}
-			<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
-			<IconButton
-				label={`卸载 ${s.name}`}
-				variant="danger"
-				onClick={(e) => {
-					e.stopPropagation();
-					onDelete(s);
-				}}
-			>
-				<Trash size={17} />
-			</IconButton>
 		</div>
 	);
 }

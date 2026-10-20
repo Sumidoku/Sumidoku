@@ -18,6 +18,9 @@ Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a sin
   work server-side.
 - **Source repositories** — add Aidoku-style source repos, browse with
   language/NSFW filters, one-click install and update.
+- **Local source** — a built-in source reads manga straight from a local
+  directory (`<manga>/<chapter>` image folders or CBZ files), with
+  `ComicInfo.xml` metadata and cover fallback.
 - **Library and reading** — categories, reading progress, history,
   chapter downloads, scheduled library updates, and OPDS 1.2 + 2.0
   catalogs for KOReader and other readers.

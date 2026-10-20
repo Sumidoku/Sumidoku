@@ -15,6 +15,8 @@ interface ChapterRowProps {
 	onActivate: () => void;
 	dlState: ChapterDlState;
 	onDownload: () => void;
+	/** 本地漫画的文件本来就在盘上，不渲染下载入口 */
+	hideDownload?: boolean;
 	onToggleBookmark: () => void;
 	bookmarkPending: boolean;
 }
@@ -26,6 +28,7 @@ export function ChapterRow({
 	onActivate,
 	dlState,
 	onDownload,
+	hideDownload,
 	onToggleBookmark,
 	bookmarkPending
 }: ChapterRowProps) {
@@ -90,7 +93,8 @@ export function ChapterRow({
 			</span>
 			{!selecting && (
 				<span className="chapter-row__actions">
-					{c.isDownloaded ? (
+					{!hideDownload &&
+						(c.isDownloaded ? (
 						<a
 							className="chapter-row__cbz"
 							href={chapterFileUrl(c.id)}
@@ -115,7 +119,7 @@ export function ChapterRow({
 						<IconButton label={dlState === 'pending' ? '正在加入下载队列' : '已在下载队列中'} disabled>
 							<Spinner size={15} />
 						</IconButton>
-					)}
+					))}
 					<IconButton
 						label={c.isBookmarked ? '取消书签' : '加书签'}
 						disabled={bookmarkPending}

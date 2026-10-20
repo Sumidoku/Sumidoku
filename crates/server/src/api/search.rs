@@ -111,6 +111,11 @@ pub(crate) async fn run_global_search(
 /// error 项；成功形状与非流式单源搜索响应一致，外加 sourceId
 async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>, page: i32) -> Value {
 	let outcome: ApiResult<(Vec<Value>, bool)> = async {
+		// 本地源没有 wasm 实例，与单源端点同一臂实扫目录；跨源聚合不因它落 error 项
+		if crate::source::source_is_local(&state.pool, source_id).await? {
+			let entries = super::local_search(state, source_id, query.as_deref()).await?;
+			return Ok((entries, false));
+		}
 		let handle = state.get_handle(source_id).await?;
 		let result = handle.get_search_manga_list(query, page, Vec::new()).await?;
 		let entries = super::attach_internal_ids(state, source_id, result.entries).await?;

@@ -5,6 +5,8 @@ export interface Source {
 	id: number;
 	key: string;
 	name: string;
+	/** 源种类；local 是内置本地源（无 wasm 实例，filters/listings/home/深链一律 404） */
+	kind: 'aidoku' | 'local';
 	/** 源包版本号，服务端是 i64 */
 	version: number;
 	languages: string[];
