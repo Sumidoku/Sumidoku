@@ -46,6 +46,7 @@ import type {
 } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
+import { compareVersions } from '../lib/version';
 import {
 	Badge,
 	Button,
@@ -1407,6 +1408,37 @@ function UsersSection() {
 }
 
 function AboutSection() {
+	const [version, setVersion] = useState<string | null>(null);
+	const [latest, setLatest] = useState<{ tag: string; url: string } | null>(null);
+	useEffect(() => {
+		let cancelled = false;
+		(async () => {
+			let v: string;
+			try {
+				v = (await api<{ version: string }>('/version', { silent: true })).version;
+			} catch {
+				return;
+			}
+			if (cancelled) return;
+			setVersion(v);
+			try {
+				const res = await fetch('https://api.github.com/repos/Sumidoku/Sumidoku/releases/latest');
+				if (!res.ok) return;
+				const rel = (await res.json()) as { tag_name?: string; html_url?: string };
+				if (!cancelled && rel.tag_name && rel.html_url) {
+					setLatest({ tag: rel.tag_name, url: rel.html_url });
+				}
+			} catch {
+				// 离线/限流是常态：静默降级，只显示本地版本
+			}
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+	const newer = version && latest ? compareVersions(latest.tag, version) : null;
+	const update = newer !== null && newer > 0 ? latest : null;
+	const upToDate = newer !== null && newer <= 0;
 	return (
 		<Section title="关于" desc="接口入口与项目地址">
 			<div className="settings-about">
@@ -1414,6 +1446,21 @@ function AboutSection() {
 					<strong>Sumidoku</strong> · 自建漫画服务器
 				</p>
 				<p className="muted">REST API：/api/v1 · OPDS：/opds/v1.2</p>
+				{version && (
+					<p className="muted">
+						当前版本 v{version}
+						{update && (
+							<>
+								{' · '}
+								<a className="setting-link" href={update.url} target="_blank" rel="noreferrer">
+									有新版本 {update.tag}
+									<ExternalLink size={13} />
+								</a>
+							</>
+						)}
+						{upToDate && ' · 已是最新'}
+					</p>
+				)}
 				<p className="faint">
 					OPDS 客户端用 Basic 认证，密码与 web 界面相同（配置 SUMIDOKU_AUTH_PASSWORD 启用）
 				</p>
