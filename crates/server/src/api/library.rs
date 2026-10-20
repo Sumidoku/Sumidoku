@@ -164,18 +164,30 @@ pub async fn list_library(
 			);
 		}
 	}
+	// OR within the include set: real ids and the 0 arm (uncategorized) are alternatives,
+	// so mixed sets must be one parenthesized OR group, not separate ANDed clauses
+	let mut cat_in_arms: Vec<String> = Vec::new();
 	if !cat_in_links.is_empty() {
-		sql.push_str(&format!(
-			" AND EXISTS (SELECT 1 FROM category_manga cm
+		cat_in_arms.push(format!(
+			"EXISTS (SELECT 1 FROM category_manga cm
 			 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id IN ({}))",
 			in_placeholders(cat_in_links.len())
 		));
 	}
 	if cat_in.contains(&0) {
-		sql.push_str(
-			" AND NOT EXISTS (SELECT 1 FROM category_manga cm
-			 WHERE cm.manga_id = m.id AND cm.user_id = ?)",
+		cat_in_arms.push(
+			"NOT EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ?)"
+				.into(),
 		);
+	}
+	if cat_in_arms.len() == 1 {
+		sql.push_str(" AND ");
+		sql.push_str(&cat_in_arms[0]);
+	} else if !cat_in_arms.is_empty() {
+		sql.push_str(" AND (");
+		sql.push_str(&cat_in_arms.join(" OR "));
+		sql.push(')');
 	}
 	if !cat_ex_links.is_empty() {
 		sql.push_str(&format!(
