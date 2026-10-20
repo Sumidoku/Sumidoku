@@ -1333,12 +1333,32 @@ async fn get_pages(
 	Ok(Json(json!(out)))
 }
 
-async fn get_settings(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+/// 用户态设置键：库里按 user.<id>.<key> 命名空间存放，API 面只见裸键；
+/// 别人的命名空间键既不可见也不可写。目前只有隐身开关，新增键读写两侧一起加
+pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &["incognito.enabled"];
+
+pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
+	format!("user.{user_id}.{key}")
+}
+
+async fn get_settings(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM setting ORDER BY key")
 		.fetch_all(&state.pool)
 		.await?;
 	let mut map = serde_json::Map::new();
+	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
+		if key.starts_with("user.") {
+			if let Some(scoped) = key.strip_prefix(&own_prefix)
+				&& USER_SCOPED_SETTING_KEYS.contains(&scoped)
+			{
+				map.insert(scoped.into(), serde_json::from_str(&raw)?);
+			}
+			continue;
+		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
 	// 生效中的本地目录来自 config 分层（文件/env），不是 setting 表的可写键：
@@ -1352,6 +1372,7 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 
 async fn put_settings(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
 	let mut tx = state.pool.begin().await?;
@@ -1360,15 +1381,23 @@ async fn put_settings(
 		if key == "localDir" {
 			continue;
 		}
+		// 命名空间键由服务端按请求身份生成，直接写 user.* 一律不收
+		if key.starts_with("user.") {
+			continue;
+		}
+		let stored_key = match USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
+			true => user_setting_key(user.id, key),
+			false => key.clone(),
+		};
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 		)
-		.bind(key)
+		.bind(&stored_key)
 		.bind(serde_json::to_string(value)?)
 		.execute(&mut *tx)
 		.await?;
 	}
 	tx.commit().await?;
-	get_settings(State(state)).await
+	get_settings(State(state), Extension(user)).await
 }

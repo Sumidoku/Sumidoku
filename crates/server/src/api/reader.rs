@@ -60,10 +60,11 @@ impl ProgressPatch {
 	}
 }
 
-/// 隐身判定：全局 setting 的 incognito.enabled 或该章节所属漫画的 manga_user.incognito，
-/// 任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
+/// 隐身判定：该用户命名空间键 user.<id>.incognito.enabled 或该章节所属漫画的
+/// manga_user.incognito，任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
 async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user_id: i64, chapter_id: i64) -> ApiResult<bool> {
-	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'incognito.enabled'")
+	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
+		.bind(crate::api::user_setting_key(user_id, "incognito.enabled"))
 		.fetch_optional(&mut **tx)
 		.await?;
 	if global

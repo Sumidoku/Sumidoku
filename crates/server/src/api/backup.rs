@@ -346,7 +346,17 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64) -> ApiResult<Back
 			.fetch_all(pool)
 			.await?;
 	let mut settings = BTreeMap::new();
+	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
+		// 用户态命名空间键只导出属主的，还原成裸键（与 /settings API 面同契约）
+		let key = if key.starts_with("user.") {
+			match key.strip_prefix(&own_prefix) {
+				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
+				_ => continue,
+			}
+		} else {
+			key
+		};
 		// 坏行不该让备份整个失败，按原样字符串导出
 		let value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
 		settings.insert(key, value);
@@ -534,7 +544,7 @@ pub async fn import_backup_doc(
 			restore_progress(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Settings) {
-			restore_settings(&mut tx, &doc, &mut restored).await?;
+			restore_settings(&mut tx, user_id, &doc, &mut restored).await?;
 		}
 		if sections.contains(&Section::SourceSettings) {
 			restore_source_settings(&mut tx, &doc, &mut restored, &mut warnings, &mut touched_sources)
@@ -821,15 +831,24 @@ async fn restore_progress(
 
 async fn restore_settings(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
+		// 备份里的用户态键写回属主的命名空间；user.* 字面键不收（同 /settings PUT 规则）
+		if key.starts_with("user.") {
+			continue;
+		}
+		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
+			true => crate::api::user_setting_key(user_id, key),
+			false => key.clone(),
+		};
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 		)
-		.bind(key)
+		.bind(&stored_key)
 		.bind(serde_json::to_string(value)?)
 		.execute(&mut **tx)
 		.await?;
