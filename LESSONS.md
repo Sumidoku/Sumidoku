@@ -6,6 +6,42 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Reimplementing an Aidoku host import means matching the reference behavior
+on the exact inputs sources produce, not just the common path — entity
+coverage and charset detection both bite.** Sumidoku's `html.unescape`
+decoded only `&amp;`/`&lt;`/`&gt;` while sources expect SwiftSoup's full
+HTML5 table (`&quot;`, `&#39;`, `&nbsp;` came through as literal text), and
+the net host's body decoding trusted the Content-Type charset ahead of
+UTF-8, so a UTF-8 page served under a lying `iso-8859-1` label decoded as
+windows-1252 — chapter lists showed `ç¬¬1è©±` where Aidoku showed `第1話`.
+The HTML `text()`/`attr()` extraction path was already equivalent
+(html5ever decodes entities at tokenize time), which hid the gap: it only
+surfaces for sources calling `unescape` explicitly or for servers that lie
+about the charset. When a host import reimplements an Aidoku/SwiftSoup
+behavior, compare against the reference on adversarial inputs (full entity
+table, lying or missing charset declarations) before merging.
+- Evidence: 2026-10-21, chapter-title garble report: `ç¬¬1è©±` byte-decodes
+  to `第1話`; `unescape_str` matched 3 entities; the decode-order fix was
+  validated against a lying-header page, a GBK page with its meta past the
+  1024-byte sniff window, and BOM-less declared UTF-16.
+
+**`cargo test` cannot link any test binary that pulls the vendored aidoku
+rlib on the windows-gnu toolchain (pre-existing, unrelated to local
+changes): its `#[link(wasm_import_module)]` externs (`html.text`,
+`std.current_date`, `defaults.get`, …) stay unresolved natively — only
+`std.destroy` has a host stub, and it hits `aidoku-wasm` as well as
+`sumidoku-server` lib tests. `cargo check --all-targets` and clippy still
+type-check everything, release binaries build fine (binaries never
+reference those symbols), and CI's nextest runs on Linux where the link
+succeeds; on Windows, verify behavior-sensitive changes with a scratch
+crate against the same dependency versions, or run the tests under WSL.**
+- Evidence: 2026-10-21, chapter-title fixes: `cargo test -p aidoku-wasm
+  --lib` and `-p sumidoku-server` both failed at link with undefined
+  `text`/`get`/`current_date` on a clean tree (git-stash confirmed); the
+  new `decode_body`/`unescape_str` logic was validated in a scratch crate
+  copied verbatim, and the same sources compiled clean under `cargo
+  check`/`clippy`.
+
 **When research shows an issue diverges from upstream, take the
 divergence back to the issue before implementing — the issue text can
 be wrong.** An implementation merged exactly per the issue text, with
