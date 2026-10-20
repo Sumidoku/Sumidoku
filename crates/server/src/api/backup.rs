@@ -202,8 +202,10 @@ struct ExportProgressRow {
 }
 
 /// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构。
-/// 用户态数据（库/分类/进度）只含 user_id 的行
-pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64) -> ApiResult<BackupDoc> {
+/// 用户态数据（库/分类/进度）只含 user_id 的行；非 admin 的文档剥掉全局 settings
+/// （只留本人命名空间键翻译回的裸键）与整个 source_settings——
+/// 源登录凭据是全局共享的（决策点 5），reader 导出只给 self-data（决策点 11）
+pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> ApiResult<BackupDoc> {
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
@@ -348,36 +350,42 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64) -> ApiResult<Back
 	let mut settings = BTreeMap::new();
 	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
-		// 用户态命名空间键只导出属主的，还原成裸键（与 /settings API 面同契约）
+		// 用户态命名空间键只导出属主的，还原成裸键（与 /settings API 面同契约）；
+		// 其余键全是配置面，非 admin 一律不进文档
 		let key = if key.starts_with("user.") {
 			match key.strip_prefix(&own_prefix) {
 				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
 				_ => continue,
 			}
-		} else {
+		} else if admin {
 			key
+		} else {
+			continue;
 		};
 		// 坏行不该让备份整个失败，按原样字符串导出
 		let value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
 		settings.insert(key, value);
 	}
 
-	let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
-		"SELECT s.key, ss.key, ss.value FROM source_setting ss
-		 JOIN source s ON s.id = ss.source_id ORDER BY s.key, ss.key",
-	)
-	.fetch_all(pool)
-	.await?;
+	// 非 admin 整段不查：源设置携登录凭据，reader 的文档里一个字节都不该出现
 	let mut source_settings: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
-	for (source_key, key, raw) in source_setting_rows {
-		match serde_json::from_str::<DefaultValue>(&raw) {
-			Ok(value) => {
-				source_settings
-					.entry(source_key)
-					.or_default()
-					.insert(key, default_value_to_json(&value));
+	if admin {
+		let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
+			"SELECT s.key, ss.key, ss.value FROM source_setting ss
+			 JOIN source s ON s.id = ss.source_id ORDER BY s.key, ss.key",
+		)
+		.fetch_all(pool)
+		.await?;
+		for (source_key, key, raw) in source_setting_rows {
+			match serde_json::from_str::<DefaultValue>(&raw) {
+				Ok(value) => {
+					source_settings
+						.entry(source_key)
+						.or_default()
+						.insert(key, default_value_to_json(&value));
+				}
+				Err(e) => tracing::warn!(source_key, key, "skip unparsable source_setting: {e}"),
 			}
-			Err(e) => tracing::warn!(source_key, key, "skip unparsable source_setting: {e}"),
 		}
 	}
 
@@ -398,7 +406,7 @@ pub async fn export_backup(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Response> {
-	let doc = build_backup_doc(&state.pool, user.id).await?;
+	let doc = build_backup_doc(&state.pool, user.id, user.role == "admin").await?;
 	let body = serde_json::to_vec(&doc)?;
 	let date = chrono::Utc::now().format("%Y%m%d");
 	let disposition = format!("attachment; filename=\"sumidoku-backup-{date}.json\"");
@@ -450,7 +458,7 @@ pub async fn restore_backup(
 		}
 		Err(e) => return Err(ApiError::internal(format!("read backup: {e}"))),
 	};
-	let result = import_backup_doc(&state, user.id, None, &bytes).await?;
+	let result = import_backup_doc(&state, user.id, true, None, &bytes).await?;
 	Ok(Json(result))
 }
 
@@ -503,19 +511,25 @@ pub async fn import_backup(
 	Query(query): Query<ImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let result = import_backup_doc(&state, user.id, query.sections.as_deref(), &body).await?;
+	let result = import_backup_doc(&state, user.id, user.role == "admin", query.sections.as_deref(), &body).await?;
 	Ok(Json(result))
 }
 
 /// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用。
-/// 用户态段落（库/分类/进度）归属 user_id
+/// 用户态段落（库/分类/进度）归属 user_id；settings/sourceSettings 是全局状态，仅 admin 可恢复
 pub async fn import_backup_doc(
 	state: &AppState,
 	user_id: i64,
+	admin: bool,
 	sections_query: Option<&str>,
 	body: &[u8],
 ) -> ApiResult<Value> {
 	let sections = parse_sections(sections_query)?;
+	if !admin && (sections.contains(&Section::Settings) || sections.contains(&Section::SourceSettings)) {
+		return Err(ApiError::forbidden(
+			"settings and sourceSettings sections require the admin role",
+		));
+	}
 	let raw: Value = serde_json::from_slice(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid backup document: {e}")))?;
 	let version = raw.get("version").and_then(Value::as_i64);

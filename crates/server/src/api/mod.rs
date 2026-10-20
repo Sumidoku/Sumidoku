@@ -17,6 +17,7 @@ pub mod search;
 pub mod settings;
 pub mod suwayomi_backup;
 pub mod update;
+pub mod users;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
@@ -49,21 +50,18 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/auth/status", get(crate::auth::status))
 		.route("/api/v1/auth/login", post(crate::auth::login))
 		.route("/api/v1/auth/logout", post(crate::auth::logout));
-	let protected = Router::new()
-		.route("/api/v1/sources", get(list_sources))
+	// admin 专属面：全局状态与配置（用户/源与仓库/源设置与登录/服务端备份恢复）。
+	// require_admin 读 require_auth 注入的角色，route_layer 在内层后跑
+	let admin = Router::new()
+		.route("/api/v1/users", get(users::list_users).post(users::create_user))
+		.route(
+			"/api/v1/users/{id}",
+			patch(users::update_user).delete(users::delete_user),
+		)
 		.route("/api/v1/sources/scan", post(scan_sources))
-		.route("/api/v1/search", post(search::search_all))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
-		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
-		.route("/api/v1/sources/{id}/image", get(cover::get_source_image))
-		.route("/api/v1/sources/{id}/filters", get(get_filters))
-		.route("/api/v1/sources/{id}/search", post(search_source))
-		.route("/api/v1/sources/{id}/listings", get(get_listings))
-		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
-		.route("/api/v1/sources/{id}/home", get(get_home))
-		.route("/api/v1/sources/{id}/deep-link", post(deep_link))
 		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
 		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
 		.route("/api/v1/sources/{id}/notify", post(notify_source))
@@ -73,6 +71,29 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/login/oauth/start", post(oauth::oauth_start))
 		.route("/api/v1/sources/{id}/login/oauth/complete", post(oauth::oauth_complete))
 		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
+		.route(
+			"/api/v1/source-repos",
+			get(repo::list_repos).post(repo::add_repo),
+		)
+		.route("/api/v1/source-repos/{id}", delete(repo::delete_repo))
+		.route("/api/v1/source-repos/{id}/refresh", post(repo::refresh_repo))
+		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
+		.route("/api/v1/source-repos/install", post(repo::install_source))
+		.route("/api/v1/source-repos/update-all", post(repo::update_all))
+		.route("/api/v1/backups", get(backup::list_backups))
+		.route("/api/v1/backups/restore", post(backup::restore_backup))
+		.route_layer(axum::middleware::from_fn(crate::auth::require_admin));
+	let protected = Router::new()
+		.route("/api/v1/sources", get(list_sources))
+		.route("/api/v1/search", post(search::search_all))
+		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
+		.route("/api/v1/sources/{id}/image", get(cover::get_source_image))
+		.route("/api/v1/sources/{id}/filters", get(get_filters))
+		.route("/api/v1/sources/{id}/search", post(search_source))
+		.route("/api/v1/sources/{id}/listings", get(get_listings))
+		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
+		.route("/api/v1/sources/{id}/home", get(get_home))
+		.route("/api/v1/sources/{id}/deep-link", post(deep_link))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
@@ -126,8 +147,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 				.post(backup::import_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
-		.route("/api/v1/backups", get(backup::list_backups))
-		.route("/api/v1/backups/restore", post(backup::restore_backup))
 		.route(
 			"/api/v1/import/aidoku",
 			post(aidoku_backup::import_aidoku_backup)
@@ -138,16 +157,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 			post(suwayomi_backup::import_suwayomi_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
-		.route(
-			"/api/v1/source-repos",
-			get(repo::list_repos).post(repo::add_repo),
-		)
-		.route("/api/v1/source-repos/{id}", delete(repo::delete_repo))
-		.route("/api/v1/source-repos/{id}/refresh", post(repo::refresh_repo))
-		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
-		.route("/api/v1/source-repos/install", post(repo::install_source))
-		.route("/api/v1/source-repos/update-all", post(repo::update_all))
 		.route("/api/v1/auth/password", put(crate::auth::change_password))
+		.merge(admin)
 		.layer(axum::middleware::from_fn_with_state(
 			state.clone(),
 			crate::auth::require_auth,
@@ -1375,6 +1386,12 @@ async fn put_settings(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
+	// 全局键是配置面：reader 只能写自己命名空间里的用户态键（隐身开关）
+	if user.role != "admin"
+		&& let Some(key) = body.keys().find(|key| !USER_SCOPED_SETTING_KEYS.contains(&key.as_str()))
+	{
+		return Err(ApiError::forbidden(format!("setting {key} requires the admin role")));
+	}
 	let mut tx = state.pool.begin().await?;
 	for (key, value) in &body {
 		// 只读注入键：落库只会被 GET 的注入值遮蔽，不如不存

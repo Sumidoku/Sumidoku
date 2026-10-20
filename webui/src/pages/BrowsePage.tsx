@@ -15,6 +15,7 @@ import {
 import { sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
+	useIsAdmin,
 	usePinSource,
 	useReorderPinned,
 	useScanSources,
@@ -100,11 +101,13 @@ interface CardDnd {
 
 function SourceCard({
 	source: s,
+	isAdmin,
 	dnd,
 	onTogglePin,
 	onDelete
 }: {
 	source: Source;
+	isAdmin: boolean;
 	dnd?: CardDnd;
 	onTogglePin: (s: Source) => void;
 	onDelete: (s: Source) => void;
@@ -173,16 +176,18 @@ function SourceCard({
 					</div>
 				)}
 			</div>
-			{s.updateVersion !== null && <UpdateButton source={s} />}
-			<IconButton
-				label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
-				onClick={(e) => {
-					e.stopPropagation();
-					onTogglePin(s);
-				}}
-			>
-				{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
-			</IconButton>
+			{s.updateVersion !== null && isAdmin && <UpdateButton source={s} />}
+			{isAdmin && (
+				<IconButton
+					label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
+					onClick={(e) => {
+						e.stopPropagation();
+						onTogglePin(s);
+					}}
+				>
+					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+				</IconButton>
+			)}
 			{/* 内置本地源：无 wasm 能力（主页/设置 404），且不可卸载（服务端 400） */}
 			{s.kind !== 'local' && (
 				<>
@@ -197,17 +202,19 @@ function SourceCard({
 							<House size={17} />
 						</IconButton>
 					)}
-					<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
-					<IconButton
-						label={`卸载 ${s.name}`}
-						variant="danger"
-						onClick={(e) => {
-							e.stopPropagation();
-							onDelete(s);
-						}}
-					>
-						<Trash size={17} />
-					</IconButton>
+					{isAdmin && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
+					{isAdmin && (
+						<IconButton
+							label={`卸载 ${s.name}`}
+							variant="danger"
+							onClick={(e) => {
+								e.stopPropagation();
+								onDelete(s);
+							}}
+						>
+							<Trash size={17} />
+						</IconButton>
+					)}
 				</>
 			)}
 		</div>
@@ -221,6 +228,7 @@ export default function BrowsePage() {
 	const updateAll = useUpdateAllSources();
 	const pin = usePinSource();
 	const reorderPinned = useReorderPinned();
+	const isAdmin = useIsAdmin();
 	const navigate = useNavigate();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
@@ -312,33 +320,38 @@ export default function BrowsePage() {
 								<ArrowLeftRight size={15} />
 								迁移
 							</Button>
-							{updateCount > 0 && (
+							{isAdmin && updateCount > 0 && (
 								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
 									<CircleArrowUp size={15} />
 									全部更新（{updateCount}）
 								</Button>
 							)}
-							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
-								<ScanSearch size={15} />
-								扫描源目录
-							</Button>
+							{isAdmin && (
+								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
+									<ScanSearch size={15} />
+									扫描源目录
+								</Button>
+							)}
 						</>
 					) : undefined
 				}
 			/>
 
-			<div className="browse__tabs">
-				<SegmentedControl
-					options={[
-						{ value: 'installed', label: '已安装' },
-						{ value: 'repos', label: '源仓库' }
-					]}
-					value={tab}
-					onChange={setTab}
-				/>
-			</div>
+			{/* 源仓库是管理面（reader 服务端 403），tab 整体只给 admin */}
+			{isAdmin && (
+				<div className="browse__tabs">
+					<SegmentedControl
+						options={[
+							{ value: 'installed', label: '已安装' },
+							{ value: 'repos', label: '源仓库' }
+						]}
+						value={tab}
+						onChange={setTab}
+					/>
+				</div>
+			)}
 
-			{tab === 'repos' ? (
+			{isAdmin && tab === 'repos' ? (
 				<ReposPanel />
 			) : sources.isPending ? (
 				<div className="source-list">
@@ -350,7 +363,11 @@ export default function BrowsePage() {
 				<EmptyState
 					icon={PackageOpen}
 					title="还没有安装源"
-					hint="把源包放进服务器的 sources 目录然后点「扫描源目录」，或到「源仓库」一键安装"
+					hint={
+						isAdmin
+							? '把源包放进服务器的 sources 目录然后点「扫描源目录」，或到「源仓库」一键安装'
+							: '还没有可用源，请联系管理员安装'
+					}
 				/>
 			) : (
 				<>
@@ -362,24 +379,29 @@ export default function BrowsePage() {
 									<SourceCard
 										key={s.id}
 										source={s}
-										dnd={{
-											dragging: dragIndex === i,
-											dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
-											onDragStart: (e) => {
-												e.dataTransfer.setData('text/plain', s.key);
-												e.dataTransfer.effectAllowed = 'move';
-												setDragIndex(i);
-											},
-											onDragOver: (e) => {
-												e.preventDefault();
-												setOverIndex(i);
-											},
-											onDrop: () => onDropPinned(i),
-											onDragEnd: () => {
-												setDragIndex(null);
-												setOverIndex(null);
-											}
-										}}
+										isAdmin={isAdmin}
+										dnd={
+											isAdmin
+												? {
+														dragging: dragIndex === i,
+														dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
+														onDragStart: (e) => {
+															e.dataTransfer.setData('text/plain', s.key);
+															e.dataTransfer.effectAllowed = 'move';
+															setDragIndex(i);
+														},
+														onDragOver: (e) => {
+															e.preventDefault();
+															setOverIndex(i);
+														},
+														onDrop: () => onDropPinned(i),
+														onDragEnd: () => {
+															setDragIndex(null);
+															setOverIndex(null);
+														}
+													}
+												: undefined
+										}
 										onTogglePin={(s) => void togglePin(s)}
 										onDelete={setPendingDelete}
 									/>
@@ -395,6 +417,7 @@ export default function BrowsePage() {
 									<SourceCard
 										key={s.id}
 										source={s}
+										isAdmin={isAdmin}
 										onTogglePin={(s) => void togglePin(s)}
 										onDelete={setPendingDelete}
 									/>
@@ -411,6 +434,7 @@ export default function BrowsePage() {
 							<SourceCard
 								key={s.id}
 								source={s}
+								isAdmin={isAdmin}
 								onTogglePin={(s) => void togglePin(s)}
 								onDelete={setPendingDelete}
 							/>
