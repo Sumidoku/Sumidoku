@@ -544,3 +544,27 @@ evidence of nothing.
   rawimg fixture had pinned the misreading. Fixed in #223 after
   reading the upstream Swift host; two sabotage cycles confirmed the
   realigned tests catch each bug.
+
+**A green pipeline that never executes the artifact proves nothing about
+the artifact.** Every gate exercises the source tree — build, clippy,
+tests — while the shipped binary can crash deterministically on a path
+no test drives; only running the artifact on that path catches it. And
+when a deployment reports 502s, read the process state before the app
+logic: restart count, `journalctl` `traps:` lines and coredumps say
+"crash-looping" faster than any handler theory.
+- Evidence: 2026-10-20, linux x86_64 binaries ≤0.17.1 SIGSEGV'd on
+  every async HTTPS fetch (`movaps` #GP in the TLS path) while CI
+  stayed green for two releases; the 502 a user saw was nginx answering
+  during container restart gaps, with four identical-offset cores in
+  the journal. Follow-ups tracked in #234.
+
+**The web UI gate is tsc-only, and by design no formatter ever runs —
+human review is the only style net.** The tree is hand-formatted with
+tabs and formatters are deliberately absent, so a diff that breaks the
+surrounding structure passes green. On web UI reviews, read each
+changed block's indentation against its untouched siblings; a block one
+level off with its continuations at the old depth is the signature.
+- Evidence: 2026-10-20, #237 dedented two JSX blocks in BrowsePage
+  while their continuation lines kept the old depth; the `web` job was
+  green and only eyeballing the diff caught it — fixed on the branch
+  (f0870fd) before merge.
