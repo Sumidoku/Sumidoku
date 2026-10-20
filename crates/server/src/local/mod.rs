@@ -99,7 +99,9 @@ pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
 		if name.starts_with('.') || name == "@eaDir" || !seen.insert(name.clone()) {
 			continue;
 		}
-		let Ok(metadata) = entry.metadata().await else {
+		// DirEntry::metadata 不跟随 symlink（悬垂链也拿到 link 自身），
+		// 跟上游 isDirectory 语义对齐必须按路径 stat
+		let Ok(metadata) = tokio::fs::metadata(entry.path()).await else {
 			continue;
 		};
 		if metadata.is_dir() {
@@ -127,7 +129,9 @@ pub async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<
 		if name.starts_with('.') || name == "@eaDir" {
 			continue;
 		}
-		let metadata = match entry.metadata().await {
+		// 同 scan_manga_dirs：必须跟随 symlink（悬垂链目标已删时 stat 失败，
+		// 正是 failed → protected 的条目级失败目录保护路径）
+		let metadata = match tokio::fs::metadata(entry.path()).await {
 			Ok(metadata) => metadata,
 			Err(e) => {
 				tracing::warn!(dir = %dir.display(), name, "skip unreadable local entry: {e}");
@@ -276,7 +280,7 @@ pub async fn chapter_pages(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 			if name.starts_with('.') {
 				continue;
 			}
-			let Ok(meta) = entry.metadata().await else {
+			let Ok(meta) = tokio::fs::metadata(entry.path()).await else {
 				continue;
 			};
 			if meta.is_file() && has_ext(&name, IMAGE_EXTS) {
@@ -366,7 +370,7 @@ pub async fn resolve_cover(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 		if name.starts_with('.') || !is_cover || !has_ext(&name, IMAGE_EXTS) {
 			continue;
 		}
-		let Ok(meta) = entry.metadata().await else {
+		let Ok(meta) = tokio::fs::metadata(entry.path()).await else {
 			continue;
 		};
 		if meta.is_file() {
