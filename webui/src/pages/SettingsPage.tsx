@@ -1145,6 +1145,61 @@ function formatSize(bytes: number): string {
 	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function DownloadMoveSection() {
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const [text, setText] = useState<string | null>(null);
+
+	useEffect(() => {
+		if (!settings.data) return;
+		if (text === null) setText(String(settings.data['download.move_path'] ?? ''));
+	}, [settings.data, text]);
+
+	const data = settings.data;
+	if (!data || text === null) {
+		return (
+			<Section
+				title="下载后移动"
+				desc="打包完成后把产物移动到模板渲染出的路径（如挂载的漫画库目录），留空不移动"
+			>
+				<Skeleton height={48} />
+			</Section>
+		);
+	}
+
+	const current = String(data['download.move_path'] ?? '');
+
+	function commit() {
+		if (text === null) return;
+		const value = text.trim();
+		if (value !== current) save.mutate({ 'download.move_path': value });
+	}
+
+	return (
+		<Section
+			title="下载后移动"
+			desc="打包完成后把产物移动到模板渲染出的路径（如挂载的漫画库目录），留空不移动；移动失败时产物保留在下载目录，下载不受影响"
+		>
+			<div className="settings-row">
+				<span className="settings-row__label">移动目标模板</span>
+				<Input
+					placeholder="/mnt/library/{author}/{manga}/{filename}"
+					value={text}
+					disabled={save.isPending}
+					onChange={(e) => setText(e.currentTarget.value)}
+					onBlur={commit}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter') commit();
+					}}
+				/>
+			</div>
+			<p className="faint settings-backup__hint">
+				{'变量：{source} 源名 · {title}/{manga} 漫画标题 · {author} 作者 · {artist} 画师 · {chapter} 章节名 · {filename} 默认文件名（不含扩展名）；模板含 {filename} 时渲染结果是完整文件名，否则当作目录并追加默认产物名。headless 部署可用 SUMIDOKU_DOWNLOAD_MOVE_PATH 覆盖'}
+			</p>
+		</Section>
+	);
+}
+
 function ScheduledBackupSection() {
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
@@ -1390,6 +1445,7 @@ export default function SettingsPage() {
 			{isAdmin && <LocalSourceSection />}
 			{isAdmin && <ServerSettingsSection />}
 			<BackupSection isAdmin={isAdmin} />
+			{isAdmin && <DownloadMoveSection />}
 			{isAdmin && <ScheduledBackupSection />}
 			<AboutSection />
 		</div>
