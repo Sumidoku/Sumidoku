@@ -228,7 +228,7 @@ impl AppState {
 
 	/// 内存压力逐出：按 last_used 从闲到忙逐个逐出，每逐一个复查 RSS，回到阈值内
 	/// 或无可逐实例为止。压力下 idle 阈值视为 0——响应流式/落盘、缓存都在磁盘，
-	/// 常驻 wasmer 实例是唯一可还的内存。在途实例（注册表外还有 Arc 引用）跳过不摘：
+	/// 常驻 WASM 实例是唯一可还的内存。在途实例（注册表外还有 Arc 引用）跳过不摘：
 	/// 摘了还不了内存，下次访问还会另起实例，短时反而双份
 	pub async fn evict_for_rss_pressure(
 		&self,
@@ -339,7 +339,7 @@ impl AppState {
 /// 空闲清扫的唤醒粒度；阈值默认半小时，分钟级漂移无感
 pub const IDLE_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// 周期清扫：把空闲超过 max_idle 的源实例逐出注册表（wasmer 线性内存只涨不消，
+/// 周期清扫：把空闲超过 max_idle 的源实例逐出注册表（WASM 线性内存只涨不消，
 /// 逐出是唯一把实例内存还给 OS 的途径）
 pub async fn run_idle_eviction(
 	state: Arc<AppState>,
