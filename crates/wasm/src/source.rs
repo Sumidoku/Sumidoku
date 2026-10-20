@@ -542,14 +542,18 @@ impl SourceInstance {
 
 	fn image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
 		let host = self.store.data_mut();
-		let image = host
+		let item = host
 			.store
 			.get(rid)
-			.and_then(|item| item.as_image_data())
 			.ok_or_else(|| Error::Instance(format!("invalid image rid {rid}")))?;
-		image
-			.encode_png()
-			.ok_or_else(|| Error::Instance("encode image png failed".into()))
+		match item {
+			StoreItem::ImageData(image) => image
+				.encode_png()
+				.ok_or_else(|| Error::Instance("encode image png failed".into())),
+			// 源透传了宿主解不出的原始字节：与 Aidoku 回退到原始 data 一致，原样交还
+			StoreItem::ImageBytes(raw) => Ok(raw.clone()),
+			_ => Err(Error::Instance(format!("invalid image rid {rid}"))),
+		}
 	}
 
 	/// 取走图像字节：无论成败都回收 rid，否则每拉一次 page list store 只涨不消
@@ -567,11 +571,15 @@ impl SourceInstance {
 		input: ProcessImageInput,
 	) -> Result<Vec<u8>> {
 		self.check(supported, export)?;
-		// Aidoku 契约：声明了处理器就把原始响应字节交给源（源包原话 "Aidoku skips its
-		// own decoding step for sources that declare a processor"），解码与否是源的事
+		// AidokuRunner `store(value:)` 语义：能解码的给像素（jmcomic 这类源要
+		// width/height/canvas 拼条带），解不出的加密字节才原样留给源自己解
 		let image_rid = {
 			let host = self.store.data_mut();
-			host.store.store(StoreItem::ImageBytes(input.bytes))
+			let item = match crate::imports::canvas::decode_image(&input.bytes) {
+				Some(image) => StoreItem::ImageData(image),
+				None => StoreItem::ImageBytes(input.bytes),
+			};
+			host.store.store(item)
 		};
 		let response = aidoku::ImageResponse {
 			code: input.status,
@@ -599,7 +607,11 @@ impl SourceInstance {
 		}
 		let ret = self.call_raw(export, &args);
 		let result = ret.and_then(|r| self.read_result::<i32>(r));
-		self.store.data_mut().store.remove(image_rid);
+		// 源可以原样透传输入图（jmcomic 的旧章节/gif 分支）：结果与入参同 rid 时
+		// 入参已是结果，删了它就取不回图
+		if result.as_ref().ok() != Some(&image_rid) {
+			self.store.data_mut().store.remove(image_rid);
+		}
 		self.cleanup(t);
 		let result_rid = result?;
 		self.take_image_png(result_rid)

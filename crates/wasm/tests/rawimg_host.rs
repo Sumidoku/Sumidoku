@@ -1,6 +1,6 @@
-//! 图像处理器拿原始响应字节的契约测试（issue #116）：
-//! 声明处理器的源，宿主跳过自己的解码，data() 必须是响应原始字节——
-//! 密文（不可解码）逐字节原样交给处理器，明文 PNG 同样原样给。
+//! 图像处理器入参的契约测试（issue #116），对齐 AidokuRunner `store(value:)` 语义：
+//! 宿主解不出的密文逐字节原样进处理器；可解码的响应以像素进处理器
+//! （data() 是 PNG 重编，width/height/canvas 可用，jmcomic 解密依赖这条路）。
 //! fixture 源在 tests/fixtures/rawimg-src/（no_std cdylib），重建方式：
 //! `cd tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`
 //! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
@@ -60,7 +60,7 @@ fn input(bytes: Vec<u8>) -> ProcessImageInput {
 	}
 }
 
-/// 处理器输出的 PNG 必须就是 plain.png 的 2x2 像素（解密→建图→重编全链路对账）
+/// 密文分支的输出：解密建图 → plain.png 的 2x2 像素（解密→建图→重编全链路对账）
 fn assert_plain_pixels(png: &[u8], label: &str) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
@@ -75,6 +75,26 @@ fn assert_plain_pixels(png: &[u8], label: &str) {
 			(1, 0) => [0, 255, 0, 255],
 			(0, 1) => [0, 0, 255, 255],
 			_ => [255, 255, 255, 255],
+		};
+		assert_eq!(px.0, expected, "{label} pixel ({x},{y})");
+	}
+}
+
+/// 可解码入参的输出：2x2 上下两行经画布互换（红绿/蓝白 → 蓝白/红绿）
+fn assert_swapped_pixels(png: &[u8], label: &str) {
+	let image = ImageReader::new(Cursor::new(png))
+		.with_guessed_format()
+		.expect("png format")
+		.decode()
+		.expect("png decode")
+		.to_rgba8();
+	assert_eq!(image.dimensions(), (2, 2), "{label} dimensions");
+	for (x, y, px) in image.enumerate_pixels() {
+		let expected = match (x, y) {
+			(0, 0) => [0, 0, 255, 255],
+			(1, 0) => [255, 255, 255, 255],
+			(0, 1) => [255, 0, 0, 255],
+			_ => [0, 255, 0, 255],
 		};
 		assert_eq!(px.0, expected, "{label} pixel ({x},{y})");
 	}
@@ -100,20 +120,43 @@ async fn processors_receive_undecodable_bytes_raw() {
 	assert_plain_pixels(&cover_png, "cover cipher");
 }
 
-/// 对照组：可解码的响应同样给原始字节（fixture 逐字节比对，重编过的 PNG 对不上）
+/// 可解码入参宿主给的是像素：fixture 校验尺寸 import 并经画布把两行互换
+/// （jmcomic 条带重组的迷你版），输出必须是互换后的像素
 #[tokio::test]
-async fn processors_receive_decodable_bytes_raw_too() {
+async fn processors_receive_decodable_bytes_as_pixels() {
 	let (handle, _) = spawn_fixture().await;
 
 	let page_png = handle
 		.process_page_image(input(PLAIN_PNG.to_vec()), None)
 		.await
 		.expect("process page plain");
-	assert_plain_pixels(&page_png, "page plain");
+	assert_swapped_pixels(&page_png, "page plain");
 
 	let cover_png = handle
 		.process_cover_image(input(PLAIN_PNG.to_vec()))
 		.await
 		.expect("process cover plain");
-	assert_plain_pixels(&cover_png, "cover plain");
+	assert_swapped_pixels(&cover_png, "cover plain");
+}
+
+/// 源原样透传输入图（jmcomic 旧章节/gif 分支同款）：可解码的出像素 PNG，
+/// 不可解码的原样交还原始字节（与 Aidoku 回退到原始 data 一致）
+#[tokio::test]
+async fn processor_passthrough_returns_input_unchanged() {
+	let (handle, _) = spawn_fixture().await;
+	let ctx: aidoku::PageContext = [("mode".to_string(), "passthrough".to_string())]
+		.into_iter()
+		.collect();
+
+	let page_png = handle
+		.process_page_image(input(PLAIN_PNG.to_vec()), Some(ctx.clone()))
+		.await
+		.expect("passthrough plain");
+	assert_plain_pixels(&page_png, "passthrough plain");
+
+	let raw = handle
+		.process_page_image(input(cipher()), Some(ctx))
+		.await
+		.expect("passthrough cipher");
+	assert_eq!(raw, cipher(), "undecodable passthrough must return raw bytes");
 }
