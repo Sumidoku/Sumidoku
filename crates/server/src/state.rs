@@ -54,6 +54,8 @@ pub struct AppState {
 	pub cookie_tx: mpsc::UnboundedSender<CookieWrite>,
 	pub http: RoutedClients,
 	pub policy: Arc<SumidokuNetPolicy>,
+	/// 本地源 CBZ 句柄 LRU（按需抽单页，重开包要重读中央目录）
+	pub local_zip: Arc<crate::local::ZipCache>,
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
@@ -178,6 +180,7 @@ impl AppState {
 			cookie_tx,
 			http,
 			policy,
+			local_zip: Arc::new(crate::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
 			browser_logins: tokio::sync::OnceCell::new(),

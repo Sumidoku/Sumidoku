@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod download;
 pub mod error;
+pub mod local;
 pub mod model;
 pub mod opds;
 pub mod rss;
