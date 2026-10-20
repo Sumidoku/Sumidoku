@@ -33,7 +33,7 @@ async fn patch_progress(app: &Router, chapter_id: i64, body: Value) -> Value {
 	resp
 }
 
-/// 注册搜索前两条结果，返回两个 manga id
+/// Registers the first two search results and returns the two manga ids
 async fn register_two_manga(app: &Router) -> (i64, i64) {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -71,12 +71,12 @@ async fn global_incognito_pauses_history() {
 	let chapters = chapter_ids(&app.app, manga_id).await;
 	let (ch1, ch2) = (chapters[0], chapters[1]);
 
-	// 基线：默认打戳，历史有条目
+	// baseline: timestamped by default, history has an entry
 	let resp = patch_progress(&app.app, ch1, json!({"lastPageRead": 3})).await;
 	assert!(resp["lastReadAt"].is_i64());
 	assert_eq!(history_len(&app.app).await, 1);
 
-	// 开全局隐身：进度照存，但不打戳、历史不增
+	// enabling global incognito: progress is still stored, but no timestamp and no history growth
 	let (status, _) = request(
 		&app.app,
 		"PUT",
@@ -89,7 +89,7 @@ async fn global_incognito_pauses_history() {
 	assert_eq!(resp["lastPageRead"], 5);
 	assert!(resp["lastReadAt"].is_null(), "隐身中不应刷新 lastReadAt: {resp}");
 	assert_eq!(history_len(&app.app).await, 1, "隐身中的阅读不应进历史");
-	// 批量端点同口径
+	// the batch endpoint follows the same rule
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -111,7 +111,7 @@ async fn global_incognito_pauses_history() {
 	assert_eq!(ch2_state["isRead"], true);
 	assert!(ch2_state["lastReadAt"].is_null(), "批量写入隐身中也不应打戳");
 
-	// 已有的时间戳既不刷新也不清掉（Aidoku：旧历史保持现状）
+	// existing timestamps are neither refreshed nor cleared (Aidoku: old history stays as-is)
 	let pool = connect_db(&app.db_path).await;
 	sqlx::query("UPDATE chapter_user SET last_read_at = 100 WHERE chapter_id = ?")
 		.bind(ch1)
@@ -122,7 +122,7 @@ async fn global_incognito_pauses_history() {
 	assert_eq!(resp["lastPageRead"], 6);
 	assert_eq!(resp["lastReadAt"], 100, "隐身中旧时间戳应保持不动");
 
-	// 关掉恢复记录
+	// turning it off resumes recording
 	let (status, _) = request(
 		&app.app,
 		"PUT",
@@ -143,7 +143,7 @@ async fn per_manga_incognito_pauses_history() {
 	let a_ch = chapter_ids(&app.app, a).await;
 	let b_ch = chapter_ids(&app.app, b).await;
 
-	// 单本开关：详情响应带出，未开的为 false
+	// per-manga switch: carried in the detail response, false when not enabled
 	let (status, body) = request(
 		&app.app,
 		"PATCH",
@@ -158,7 +158,7 @@ async fn per_manga_incognito_pauses_history() {
 	let (_, body) = request(&app.app, "GET", &format!("/api/v1/manga/{b}"), None).await;
 	assert_eq!(body["incognito"], false);
 
-	// 只影响该漫画：A 不打戳不进历史，B 照常
+	// affects only that manga: A gets no timestamp and no history, B is unaffected
 	let resp = patch_progress(&app.app, a_ch[0], json!({"lastPageRead": 3})).await;
 	assert!(resp["lastReadAt"].is_null(), "单本隐身不应打戳: {resp}");
 	assert_eq!(history_len(&app.app).await, 0);
@@ -166,7 +166,7 @@ async fn per_manga_incognito_pauses_history() {
 	assert!(resp["lastReadAt"].is_i64());
 	assert_eq!(history_len(&app.app).await, 1);
 
-	// 全局与单本是 OR：两个都开仍然不打戳
+	// global and per-manga are OR'ed: with both on, still no timestamp
 	let (status, _) = request(
 		&app.app,
 		"PUT",
@@ -186,7 +186,7 @@ async fn per_manga_incognito_pauses_history() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 关单本恢复记录
+	// turning off the per-manga switch resumes recording
 	let (status, body) = request(
 		&app.app,
 		"PATCH",
@@ -226,7 +226,7 @@ async fn backup_round_trips_incognito() {
 	let doc: Value = serde_json::from_slice(&bytes).expect("backup json");
 	assert_eq!(doc["library"][0]["incognito"], true, "导出应带单本隐身标志");
 
-	// 恢复到全新实例：标志跟书库条目一起走
+	// restoring into a fresh instance: the flag travels with the library entry
 	let b = test_app().await;
 	let (status, _) = request(&b.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -237,7 +237,7 @@ async fn backup_round_trips_incognito() {
 	let (_, body) = request(&b.app, "GET", &format!("/api/v1/manga/{b_manga_id}"), None).await;
 	assert_eq!(body["incognito"], true, "恢复后单本隐身应保持");
 
-	// 旧备份没有该字段：按 false 恢复，不报错
+	// old backups lack the field: restored as false without error
 	let mut old_doc = doc;
 	old_doc["library"][0]
 		.as_object_mut()

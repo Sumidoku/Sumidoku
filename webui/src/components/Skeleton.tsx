@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 export interface SkeletonProps {
 	width?: number | string;
 	height?: number | string;
-	/** 例 '2 / 3'，用于封面位骨架 */
+	/** e.g. '2 / 3', for cover-slot skeletons */
 	aspect?: string;
 	style?: CSSProperties;
 	className?: string;

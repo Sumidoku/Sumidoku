@@ -13,7 +13,7 @@ use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
 use sumidoku_server::download::sanitize;
 
-/// 下载测试需要 downloads_dir 落在 tmp（base_config 不管它，默认 ./downloads 会污染仓库）
+/// Download tests need downloads_dir inside tmp (base_config doesn't set it; the default ./downloads would pollute the repo)
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -127,7 +127,7 @@ async fn download_full_flow() {
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([chapter_id]));
-	// 重复入队被跳过
+	// a duplicate enqueue is skipped
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([]));
@@ -146,7 +146,7 @@ async fn download_full_flow() {
 	let bytes = std::fs::read(&cbz_path).expect("read cbz");
 	assert_cbz(&bytes, "en.example-source", &manga_key, &chapter_key, 2);
 
-	// 删了重下，产物字节完全一致
+	// delete and re-download: the artifact bytes are identical
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!cbz_path.exists());
@@ -174,7 +174,7 @@ async fn download_full_flow() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// 渲染期望路径用的元数据镜像（chapter_display 与 author 空回退同服务端规则）
+/// Metadata mirror for rendering expected paths (chapter_display and the author empty fallback follow the server's rules)
 struct ChapterMeta {
 	source: String,
 	title: String,
@@ -221,7 +221,7 @@ fn default_rel_path(meta: &ChapterMeta) -> String {
 	)
 }
 
-/// 模板变量的镜像：空/缺失落 Unknown，其余过 sanitize（与服务端 move_var 同规则）
+/// Mirror of a template variable: empty/missing falls back to Unknown, the rest goes through sanitize (same rules as the server's move_var)
 fn template_var(raw: &str) -> String {
 	if raw.trim().is_empty() { "Unknown".into() } else { sanitize(raw) }
 }
@@ -265,7 +265,7 @@ async fn download_move_to_absolute_template_target() {
 		"default location must be empty after the move"
 	);
 
-	// 读页与 OPDS 流式照常（统一路径解析：绝对原样）
+	// page reads and OPDS streaming work as usual (unified path resolution: absolute paths used verbatim)
 	let bytes = std::fs::read(&target).expect("read moved cbz");
 	let (status, _, file_bytes) =
 		request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
@@ -276,7 +276,7 @@ async fn download_move_to_absolute_template_target() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(opds_bytes, bytes);
 
-	// 删除走记录的绝对路径
+	// deletion uses the recorded absolute path
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!target.exists());
@@ -317,7 +317,7 @@ async fn download_move_via_setting_and_overwrites_target() {
 		.await
 		.expect("chapter key");
 
-	// 模板无 {filename} → 目录语义：默认产物名追加其下
+	// template without {filename} → directory semantics: the default artifact name is appended under it
 	let target = move_root
 		.join(template_var(&meta.title))
 		.join(format!("{}.cbz", template_var(&meta.chapter)));
@@ -327,8 +327,8 @@ async fn download_move_via_setting_and_overwrites_target() {
 	assert_eq!(entry["path"].as_str().expect("path"), target.to_str().expect("utf8 target"));
 	assert!(target.is_file());
 
-	// 重下覆盖：删掉行（删除必须清掉记录的绝对路径产物）后在目标处放垃圾文件，
-	// 重下必须替换成真 cbz 而不是留重复
+	// re-download overwrite: after deleting the row (deletion must remove the recorded absolute-path
+	// artifact), plant a junk file at the target; the re-download must replace it with a real cbz, not leave a duplicate
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!target.exists(), "delete must remove the moved product");
@@ -345,7 +345,7 @@ async fn download_move_via_setting_and_overwrites_target() {
 async fn download_move_failure_keeps_product_in_place() {
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
-	// 移动目标父级被同名文件堵住：建目录必败 → 产物留原位、下载照常 finished
+	// the move target's parent is blocked by a same-named file: mkdir must fail → the artifact stays in place and the download still finishes
 	let blocker = t.tmp.path().join("blocker");
 	std::fs::write(&blocker, b"x").expect("write blocker");
 	let template = format!("{}/sub/{{filename}}", blocker.display());
@@ -426,7 +426,7 @@ async fn download_pause_resume() {
 	let pool = connect_db(&t.db_path).await;
 	point_page_at_local(&pool, chapter_id, port).await;
 
-	// 先停再入队，不与 worker 抢跑；再 stop 一次把新入队的 queued 落成 paused
+	// stop first, then enqueue, avoiding a race with the worker; stop once more so the newly queued row lands as paused
 	let (status, _) = request(&app, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
@@ -493,7 +493,7 @@ async fn update_fetch_reconciles_and_recent() {
 	assert_eq!(body["entries"][0]["chapter"]["key"], "8");
 	assert_eq!(body["entries"][0]["manga"]["id"], manga_id);
 
-	// 未开 auto_download：download 表为空
+	// auto_download off: the download table is empty
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM download")
 		.fetch_one(&pool)
 		.await
@@ -524,7 +524,7 @@ async fn update_auto_download_enqueues_new_chapters() {
 	assert_eq!(body["started"], true);
 	wait_update_complete(&app, 1).await;
 
-	// 新章自动入下载队（worker 后续成败不影响入队事实）
+	// the new chapter is auto-enqueued (the worker's later success or failure doesn't change the enqueue fact)
 	let deadline = Instant::now() + Duration::from_secs(10);
 	loop {
 		let row: Option<(String,)> = sqlx::query_as(
@@ -553,7 +553,7 @@ async fn downloads_ws_pushes_snapshot() {
 	assert!(value["downloads"].is_array(), "{value}");
 	assert_eq!(value["running"], true, "{value}");
 
-	// stop → running 事件帧（chapterId=0 占位，running=false）
+	// stop → running event frame (chapterId=0 placeholder, running=false)
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let payload = read_ws_frame(&mut stream, &mut rest).await;

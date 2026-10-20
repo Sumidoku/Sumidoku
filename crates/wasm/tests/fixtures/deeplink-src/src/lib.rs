@@ -1,10 +1,11 @@
 #![no_std]
-//! 深链路由（DeepLinkHandler）的端到端验证源（issue #137）：
-//! https://deeplink.fixture/manga/{key} → Manga，
-//! https://deeplink.fixture/manga/{manga_key}/chapter/{key} → Chapter，
-//! https://deeplink.fixture/listing/{id} → Listing，其余 → None。
-//! get_manga_update 固定回 c1/c2 两章，端点据此把 chapter key 解析成内部 id。
-//! 断言方在 crates/server/tests/source_deep_link.rs 与 crates/wasm/tests/deep_link.rs。
+//! End-to-end verification source for deep-link routing (DeepLinkHandler) (issue #137):
+//! https://deeplink.fixture/manga/{key} → Manga,
+//! https://deeplink.fixture/manga/{manga_key}/chapter/{key} → Chapter,
+//! https://deeplink.fixture/listing/{id} → Listing, anything else → None.
+//! get_manga_update always returns the two chapters c1/c2, so the endpoint can resolve a
+//! chapter key to an internal id.
+//! The asserting sides are crates/server/tests/source_deep_link.rs and crates/wasm/tests/deep_link.rs.
 use aidoku::{
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Listing, ListingProvider, Manga,
 	MangaPageResult, Page, Result, Source,

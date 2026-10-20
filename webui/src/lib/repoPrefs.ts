@@ -1,4 +1,4 @@
-// 源仓库安装面板的语言过滤，存 localStorage，跨标签页与导航保留
+// Language filter of the repo install panel, stored in localStorage, kept across tabs and navigation
 
 const LANGS_KEY = 'sumidoku.repoPrefs.langs';
 
@@ -9,7 +9,7 @@ export function loadRepoLangs(): string[] {
 		const parsed: unknown = JSON.parse(raw);
 		return Array.isArray(parsed) ? parsed.filter((c): c is string => typeof c === 'string') : [];
 	} catch {
-		// 隐私模式读不到或坏 JSON 都回退空选，静默
+		// Private mode or broken JSON both fall back to no selection, silently
 		return [];
 	}
 }
@@ -18,6 +18,6 @@ export function saveRepoLangs(langs: string[]): void {
 	try {
 		localStorage.setItem(LANGS_KEY, JSON.stringify(langs));
 	} catch {
-		// 隐私模式写不进存储，静默降级（设置仅本轮生效）
+		// Private mode blocks the write; degrade silently (settings apply for this session only)
 	}
 }

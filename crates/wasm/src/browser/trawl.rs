@@ -1,25 +1,32 @@
-//! trawl session API 后端：每 webview rid 一个 keepPage session，
-//! id 取 sumidoku-<源 key 清洗>-<rid>，在 trawl 的 sessions 列表里能认出归属。
-//! HTTP 无持久连接，错误全部按单次失败（transient）处理——没有连接可断，
-//! 下一次操作自然重试：
-//! - 404/410（session 未知/过期、底层浏览器被换、eval 超时被 retire）→ 同 id
-//!   重建后重放一次；重建撞 409 说明并发侧已建好，直接采纳。session 丢失意味着
-//!   浏览器态（含登录 cookie）已不可恢复，重放得到的是全新 session 的诚实结果
-//! - 409 busy / 429 注册表满 / 503 sessions 不可用 → 单次失败交上层记日志
-//! - create 撞 409 → 采纳：Sumidoku 重启后 rid 计数归零，同 id session 可能还活着
+//! trawl session API backend: one keepPage session per webview rid, with id
+//! sumidoku-<sanitized source key>-<rid> so ownership is recognizable in trawl's sessions
+//! list. HTTP has no persistent connection, so every error is treated as a single-op
+//! (transient) failure — there is no connection to drop, and the next operation naturally
+//! retries:
+//! - 404/410 (session unknown/expired, underlying browser swapped, eval retired on timeout)
+//!   → recreate under the same id and replay once; if the recreate hits 409 a concurrent
+//!   side has already built it, so adopt it. A lost session means the browser state
+//!   (including login cookies) is unrecoverable; the replay yields the honest result of a
+//!   brand-new session
+//! - 409 busy / 429 registry full / 503 sessions unavailable → single-op failure, passed
+//!   up for logging
+//! - create hits 409 → adopt: after a Sumidoku restart the rid counter resets to zero and a
+//!   same-id session may still be alive
 //!
-//! eval 值契约（与 Boa 路径的 JS ToString 对齐到可对齐的部分）：string 原样、
-//! number/bool 字面、null（trawl 把 undefined 也映成 null）→ "null"；对象/数组
-//! 给紧凑 JSON——源 eval 是为提标量令牌，JSON 比 "[object Object]" 有用且可再 parse
+//! eval value contract (aligned with the Boa path's JS ToString where alignable): string
+//! as-is, number/bool literal, null (trawl maps undefined to null too) → "null";
+//! objects/arrays get compact JSON — sources eval to extract scalar tokens, and JSON is
+//! more useful than "[object Object]" and can be parsed again
 use super::{BrowserClient, BrowserConnector, BrowserCookie, BrowserError};
 use std::time::Duration;
 
-/// trawl 建 session 服务端最多等 30s 浏览器容量，客户端留出余量
+/// The trawl server waits at most 30s for browser capacity when creating a session; the client leaves extra headroom
 const SESSION_CREATE_TIMEOUT: Duration = Duration::from_secs(40);
-/// cookies/delete 是秒级操作
+/// cookies/delete are second-level operations
 const SESSION_OP_TIMEOUT: Duration = Duration::from_secs(30);
-/// 服务端 maxTimeout 先到期才能回干净错误（超时的 scrape/eval 会 retire session），
-/// 客户端超时必须宽于它，否则拿到的是无信息的中断
+/// The server-side maxTimeout must expire first to return a clean error (a timed-out
+/// scrape/eval retires the session); the client timeout must be wider than it, otherwise
+/// what we get is an uninformative interruption
 const CLIENT_GRACE: Duration = Duration::from_secs(10);
 
 pub struct TrawlConnector {
@@ -58,8 +65,8 @@ impl BrowserConnector for TrawlConnector {
 	}
 }
 
-/// trawl session id 只允许字母/数字/下划线/连字符（1-128），源 key 里的
-/// 点、空格等一律压成连字符
+/// A trawl session id only allows letters/digits/underscore/hyphen (1-128 chars); dots,
+/// spaces etc. in the source key are all squashed to hyphens
 fn sanitize_key(key: &str) -> String {
 	key.chars()
 		.map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
@@ -72,7 +79,7 @@ fn session_id(id_prefix: &str, label: &str) -> String {
 	id
 }
 
-/// 单次操作的失败：session_gone 触发同 id 重建重放，其余原样上报
+/// Failure of a single operation: session_gone triggers a same-id recreate and replay; anything else is reported as-is
 struct OpError {
 	message: String,
 	session_gone: bool,
@@ -101,7 +108,7 @@ struct TrawlClient {
 }
 
 impl TrawlClient {
-	/// session 丢失类错误（404/410）用同 id 重建并重放一次；重放再失败原样上报
+	/// Session-loss errors (404/410) are recreated under the same id and replayed once; if the replay fails again, report as-is
 	fn with_recreate<T>(&self, session: &str, op: impl Fn(&Self) -> Result<T, OpError>) -> Result<T, OpError> {
 		match op(self) {
 			Err(e) if e.session_gone => {
@@ -123,7 +130,7 @@ impl TrawlClient {
 			.send()
 			.map_err(|e| OpError::other(format!("trawl session create: {e}")))?;
 		match response.status().as_u16() {
-			// 409 = 同 id 旧 session 还活着：重启后幂等采纳（keepPage 同样由旧实例置位）
+			// 409 = an old session with the same id is still alive: adopt idempotently after a restart (keepPage was likewise set by the old instance)
 			201 | 409 => Ok(()),
 			status => Err(OpError::other(format!(
 				"trawl session create failed (http {status}): {}",
@@ -140,7 +147,7 @@ impl TrawlClient {
 			.send()
 			.map_err(|e| OpError::other(format!("trawl session delete: {e}")))?;
 		match response.status().as_u16() {
-			// 404 = 已过期/已丢，与删除同效
+			// 404 = already expired/lost, same effect as a delete
 			200 | 404 => Ok(()),
 			status => Err(OpError::other(format!(
 				"trawl session delete failed (http {status}): {}",
@@ -284,7 +291,7 @@ impl BrowserClient for TrawlClient {
 		Ok(self.with_recreate(context, |c| c.session_eval(context, source, timeout))?)
 	}
 
-	// FFI 按 connector 能力位拦截后不会走到这里；直连防御
+	// The FFI intercepts per the connector capability bits and never reaches here; this is direct defense
 	fn delete_cookie(
 		&mut self,
 		_context: &str,
@@ -300,8 +307,9 @@ impl BrowserClient for TrawlClient {
 	}
 }
 
-/// trawl 错误体两种形状：原生 {"error": …} 与 FlareSolverr 信封 {"message": …}，
-/// 都认不出来回原文（截断防爆日志）
+/// trawl error bodies come in two shapes: native {"error": …} and the FlareSolverr
+/// envelope {"message": …}; when neither is recognized, return the raw body (truncated to
+/// avoid flooding the log)
 fn error_message(body: &str) -> String {
 	serde_json::from_str::<serde_json::Value>(body)
 		.ok()
@@ -328,7 +336,7 @@ fn value_to_string(value: &serde_json::Value) -> String {
 	}
 }
 
-/// /scrape 响应只消费 cookies：导航后的 context 快照随响应一并回来，省一次往返
+/// Only the cookies of a /scrape response are consumed: the post-navigation context snapshot comes back with the response, saving a round trip
 #[derive(serde::Deserialize)]
 struct ScrapeResult {
 	#[serde(default)]
@@ -383,7 +391,7 @@ mod tests {
 	use std::io::{BufRead, Read, Write};
 	use std::sync::{Arc, Mutex};
 
-	/// 裸 HTTP/1.1 mock：每连接一个请求，记 (method, path, body) 后按 handler 应答
+	/// Bare HTTP/1.1 mock: one request per connection; records (method, path, body) and answers per the handler
 	struct MockTrawl {
 		url: String,
 		requests: Arc<Mutex<Vec<(String, String, String)>>>,
@@ -477,7 +485,7 @@ mod tests {
 		BrowserState::new_trawl("test", &mock.url, Duration::from_secs(5))
 	}
 
-	/// body 断言辅助：JSON 解析后按键对账，字段顺序/空白不影响
+	/// Body assertion helper: parse the JSON and reconcile by key, so field order/whitespace do not matter
 	fn body_json(requests: &[(String, String, String)], idx: usize) -> serde_json::Value {
 		serde_json::from_str(&requests[idx].2).expect("请求体是 JSON")
 	}
@@ -532,7 +540,7 @@ mod tests {
 	#[test]
 	fn create_conflict_adopts_existing_session() {
 		let mock = MockTrawl::new(|method, path, _| match (method, path) {
-			// 重启后 trawl 侧同 id session 还活着：409 采纳，不报错不重建
+			// After a restart, the same-id session is still alive on the trawl side: 409 is adopted, no error, no recreate
 			("POST", "/sessions") => (409, r#"{"error":"duplicate id"}"#.to_string()),
 			("POST", "/scrape") => ok_scrape("[]"),
 			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
@@ -705,7 +713,7 @@ mod tests {
 
 	#[test]
 	fn network_failure_is_transient_and_retried_next_call() {
-		// 绑定后立即释放拿到一个确定没人监听的端口
+		// Bind and immediately release to get a port nobody is listening on
 		let port = std::net::TcpListener::bind("127.0.0.1:0")
 			.expect("bind")
 			.local_addr()

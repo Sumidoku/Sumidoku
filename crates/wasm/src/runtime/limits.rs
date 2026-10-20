@@ -2,26 +2,27 @@ use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Limits {
-	/// 单次导出调用的指令预算（wasmi fuel）：每次调用前重置，耗尽即 trap。
-	/// 10B 会把 godamanga 这类病态源的长章列表（数千章 × 每章现编正则，实测
-	/// 3875 章纯计算 ~7s ≈ 50B）打死；wall-clock 的 call_timeout 才是主兜底，
-	/// fuel 只防「超时内的指令级失控」，放 100B
+	/// Instruction budget (wasmi fuel) for a single export call: reset before each call,
+	/// traps when exhausted. 10B would kill pathological sources like godamanga on long
+	/// chapter lists (thousands of chapters x a regex compiled per chapter — measured 3875
+	/// chapters of pure compute at ~7s ≈ 50B); the wall-clock call_timeout is the main
+	/// backstop, fuel only guards against instruction-level runaway within the timeout, so 100B
 	pub fuel: u64,
-	/// 调用级 wall-clock 超时，超时熔断重启实例
+	/// Per-call wall-clock timeout; on timeout the circuit breaker restarts the instance
 	pub call_timeout: Duration,
-	/// env.sleep 单次上限
+	/// Cap for a single env.sleep
 	pub sleep_max: Duration,
 	pub net_timeout_default: Duration,
 	pub net_timeout_max: Duration,
-	/// net host 单次响应体上限（解码后字节）；0 = 不设限
+	/// net host cap on a single response body (decoded bytes); 0 = unlimited
 	pub net_body_max: u64,
-	/// 实例线性内存上限（StoreLimits），memory.grow 超过即失败
+	/// Instance linear-memory cap (StoreLimits); memory.grow beyond it fails
 	pub memory_max: u64,
-	/// 单次 js eval 的执行上限（脚本入口 wall-clock，budget 让出点检查）
+	/// Execution cap for a single js eval (wall-clock at the script entry, checked at budget yield points)
 	pub js_timeout: Duration,
-	/// js 单循环迭代上限：promise reaction job 内死循环的最后兜底（VM 回边检查）
+	/// js single-loop iteration cap: the last backstop for infinite loops inside promise reaction jobs (VM back-edge check)
 	pub js_loop_max: u64,
-	/// webview 浏览器导航超时；必须低于 call_timeout，否则熔断先于超时生效
+	/// webview browser navigation timeout; must be below call_timeout, otherwise the circuit breaker fires before the timeout
 	pub browser_timeout: Duration,
 }
 
@@ -33,9 +34,9 @@ impl Default for Limits {
 			sleep_max: Duration::from_secs(10),
 			net_timeout_default: Duration::from_secs(30),
 			net_timeout_max: Duration::from_secs(120),
-			// 生态里最大的合法单体是长条漫整页图（常见几 MiB，极端约 20 MiB），32 MiB 留余量
+			// The largest legitimate single body in the ecosystem is a full-page long-strip manga image (commonly a few MiB, ~20 MiB at the extreme); 32 MiB leaves headroom
 			net_body_max: 32 * 1024 * 1024,
-			// Aidoku 源实测很少超 64 MiB；压太低会让 memory.grow 失败直接打死源
+			// Measured Aidoku sources rarely exceed 64 MiB; setting it too low would make memory.grow fail and kill sources outright
 			memory_max: 128 * 1024 * 1024,
 			js_timeout: Duration::from_secs(10),
 			js_loop_max: 1_000_000_000,

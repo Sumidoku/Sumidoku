@@ -23,14 +23,14 @@ pub struct SourceConfig {
 	pub limits: Limits,
 	pub defaults: HashMap<String, DefaultValue>,
 	pub sink: Arc<dyn DefaultsSink>,
-	/// 持久化的 cookie：domain → (name → value)，实例启动时回填 jar
+	/// Persisted cookies: domain → (name → value); the jar is backfilled from these when an instance starts
 	pub cookies: HashMap<String, HashMap<String, String>>,
 	pub cookie_sink: Arc<dyn CookieSink>,
 	pub policy: Arc<dyn NetPolicy>,
 	pub logger: Arc<dyn HostLogger>,
-	/// 源语言推导出的 Accept-Language 默认值；源没自带时由 net 宿主补上
+	/// Default Accept-Language derived from the source languages; the net host adds it when the source does not send one
 	pub accept_language: String,
-	/// trawl session API 地址（http://…）；None 时 webview 浏览器函数显式不支持
+	/// trawl session API address (http://…); when None, the webview browser functions are explicitly unsupported
 	pub browser_trawl: Option<String>,
 }
 
@@ -52,7 +52,7 @@ impl SourceConfig {
 	}
 }
 
-/// get_image_request 的结果：源在宿主 store 里构造好的请求规格
+/// Result of get_image_request: the request spec the source built in the host store
 #[derive(Debug, Clone)]
 pub struct ImageRequestSpec {
 	pub method: HttpMethod,
@@ -61,7 +61,7 @@ pub struct ImageRequestSpec {
 	pub body: Option<Vec<u8>>,
 }
 
-/// process_*_image 的入参：已取回的图像字节与构造 ImageResponse 所需的请求上下文
+/// Input of process_*_image: the fetched image bytes plus the request context needed to build the ImageResponse
 #[derive(Debug, Clone)]
 pub struct ProcessImageInput {
 	pub bytes: Vec<u8>,
@@ -79,7 +79,7 @@ pub(crate) struct SourceInstance {
 	limits: Limits,
 }
 
-/// 导出调用前后宿主侧读写 guest 内存与 store 的通道（read_result/store_arg）
+/// Channel for the host side to read/write guest memory and the store around an export call (read_result/store_arg)
 impl Ctx for SourceInstance {
 	fn host(&mut self) -> &mut WasmEnv {
 		self.store.data_mut()
@@ -210,7 +210,7 @@ impl SourceInstance {
 		Ok(rid)
 	}
 
-	// 仅用于宏里经 read_string 读取的参数（裸 UTF-8）；read::<String> 的参数必须走 store_arg
+	// Only for parameters the macro reads via read_string (raw UTF-8); parameters of read::<String> must go through store_arg
 	fn store_string(&mut self, value: Option<&str>, transient: &mut Vec<Rid>) -> Rid {
 		let rid = self
 			.store
@@ -261,13 +261,13 @@ impl SourceInstance {
 		if supported { Ok(()) } else { Err(Error::Unsupported(name)) }
 	}
 
-	/// 把值写进运行中实例的 defaults，经 sink 持久化（供登录成功后提交凭据）
+	/// Write a value into the running instance's defaults, persisted via the sink (for submitting credentials after a successful login)
 	fn set_default(&mut self, key: String, value: DefaultValue) {
 		self.store.data_mut().defaults.set(key, value);
 	}
 
-	// 部分结果 sink 只在单个导出调用期间挂上，调用结束（含 trap）即摘，
-	// 不泄漏到下一个调用
+	// The partial-result sink is attached only for the duration of a single export call
+	// and detached when the call ends (including on trap), so it never leaks into the next call
 	fn with_partials<T>(
 		&mut self,
 		sink: crate::runtime::env::PartialSink,
@@ -434,7 +434,7 @@ impl SourceInstance {
 		);
 		let result = ret.and_then(|r| self.read_result::<bool>(r));
 		self.cleanup(t);
-		// 对齐 Aidoku：登录成功后把凭据与该键的 marker 写进 defaults（经 sink 落库）
+		// Aligned with Aidoku: after a successful login, write the credentials and the key's marker into defaults (persisted via the sink)
 		if result.as_ref().is_ok_and(|ok| *ok) {
 			self.set_default(format!("{key}.username"), DefaultValue::String(username.to_string()));
 			self.set_default(format!("{key}.password"), DefaultValue::String(password.to_string()));
@@ -451,8 +451,9 @@ impl SourceInstance {
 			.iter()
 			.map(|k| cookies.get(k).cloned().unwrap_or_default())
 			.collect();
-		// 对齐 Aidoku 的先存后调：源在 handle_web_login 里靠 defaults_get_map
-		// 读回 `<key>.keys/.values` 取 cookie，不走参数
+		// Aligned with Aidoku's store-first-then-call: inside handle_web_login the source
+		// reads back `<key>.keys/.values` via defaults_get_map to get the cookies, not via
+		// parameters
 		self.set_default(format!("{key}.keys"), DefaultValue::StringArray(keys.clone()));
 		self.set_default(format!("{key}.values"), DefaultValue::StringArray(values.clone()));
 		let mut t = Vec::new();
@@ -465,8 +466,10 @@ impl SourceInstance {
 		);
 		let result = ret.and_then(|r| self.read_result::<bool>(r));
 		self.cleanup(t);
-		// marker 由服务端同步落库：web 登录成功后要重启实例换 cookie jar，
-		// 走 sink 异步写会跟重启读库竞态（basic_login 之后不重启才能那么写）
+		// The marker is persisted synchronously by the server: after a web login succeeds
+		// the instance is restarted to swap the cookie jar, and an async sink write would
+		// race the restart's read of the store (only basic_login, after which there is no
+		// restart, may write that way)
 		result
 	}
 
@@ -550,13 +553,13 @@ impl SourceInstance {
 			StoreItem::ImageData(image) => image
 				.encode_png()
 				.ok_or_else(|| Error::Instance("encode image png failed".into())),
-			// 源透传了宿主解不出的原始字节：与 Aidoku 回退到原始 data 一致，原样交还
+			// The source passed through raw bytes the host could not decode: consistent with Aidoku's fallback to the raw data, hand them back as-is
 			StoreItem::ImageBytes(raw) => Ok(raw.clone()),
 			_ => Err(Error::Instance(format!("invalid image rid {rid}"))),
 		}
 	}
 
-	/// 取走图像字节：无论成败都回收 rid，否则每拉一次 page list store 只涨不消
+	/// Take the image bytes away: the rid is reclaimed whether it succeeds or fails, otherwise the store only grows on every page-list fetch
 	pub fn take_image_png(&mut self, rid: Rid) -> Result<Vec<u8>> {
 		let result = self.image_png(rid);
 		self.store.data_mut().store.remove(rid);
@@ -571,8 +574,9 @@ impl SourceInstance {
 		input: ProcessImageInput,
 	) -> Result<Vec<u8>> {
 		self.check(supported, export)?;
-		// AidokuRunner `store(value:)` 语义：能解码的给像素（jmcomic 这类源要
-		// width/height/canvas 拼条带），解不出的加密字节才原样留给源自己解
+		// AidokuRunner `store(value:)` semantics: decodable inputs become pixels (sources
+		// like jmcomic need width/height/canvas to assemble strips); only encrypted bytes
+		// that cannot be decoded are left as-is for the source to decrypt itself
 		let image_rid = {
 			let host = self.store.data_mut();
 			let item = match crate::imports::canvas::decode_image(&input.bytes) {
@@ -588,7 +592,7 @@ impl SourceInstance {
 				url: Some(input.url),
 				headers: input.request_headers.into_iter().collect(),
 			},
-			// 宿主侧构造的引用必须 externally_managed，否则源 drop 时会 destroy
+			// A reference built on the host side must be externally_managed, otherwise the source destroys it on drop
 			image: aidoku::imports::canvas::ImageRef {
 				rid: image_rid,
 				externally_managed: true,
@@ -597,7 +601,7 @@ impl SourceInstance {
 		let mut t = Vec::new();
 		let response_rid = self.store_arg(&response, &mut t)?;
 		let mut args = vec![response_rid.into()];
-		// 外层 Option 区分导出签名：page 处理器带 context 参（None 传 -1），cover 处理器没有
+		// The outer Option distinguishes the export signatures: a page processor takes a context argument (None passed as -1), a cover processor does not
 		if let Some(context) = context {
 			let context_rid = match context {
 				Some(context) => self.store_arg(context, &mut t)?,
@@ -607,8 +611,9 @@ impl SourceInstance {
 		}
 		let ret = self.call_raw(export, &args);
 		let result = ret.and_then(|r| self.read_result::<i32>(r));
-		// 源可以原样透传输入图（jmcomic 的旧章节/gif 分支）：结果与入参同 rid 时
-		// 入参已是结果，删了它就取不回图
+		// The source may pass the input image through unchanged (jmcomic's old-chapter/gif
+		// branch): when the result has the same rid as the input, the input already is the
+		// result — removing it would make the image unretrievable
 		if result.as_ref().ok() != Some(&image_rid) {
 			self.store.data_mut().store.remove(image_rid);
 		}

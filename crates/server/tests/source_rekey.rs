@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-// ---- 本地 mock 源仓库（同 source_repo.rs 模式）：index 可换版，.aix 走 /files/* ----
+// ---- local mock source repo (same pattern as source_repo.rs): the index can be re-versioned, .aix served under /files/* ----
 
 #[derive(Clone, Default)]
 struct MockRepo {
@@ -74,7 +74,7 @@ async fn serve_repo() -> RepoServer {
 	}
 }
 
-/// 指定 wasm 载荷与可选 breakingChangeVersion 的 .aix 包
+/// An .aix package with the given wasm payload and optional breakingChangeVersion
 fn aix_bytes(wasm: &[u8], key: &str, version: i64, breaking: Option<i64>) -> Vec<u8> {
 	let config = match breaking {
 		Some(v) => format!(r#", "config": {{"breakingChangeVersion": {v}}}"#),
@@ -95,7 +95,7 @@ fn aix_bytes(wasm: &[u8], key: &str, version: i64, breaking: Option<i64>) -> Vec
 	cursor.into_inner()
 }
 
-/// 上架 key 的某个版本：index 指向 files/{key}-v{version}.aix
+/// Stages a version of key: the index points at files/{key}-v{version}.aix
 fn stage(repo: &RepoServer, key: &str, version: i64, wasm: &[u8], breaking: Option<i64>) {
 	repo.mock.set_index(json!([{
 		"id": key,
@@ -133,7 +133,7 @@ async fn install(app: &axum::Router, repo_id: i64, key: &str) -> i64 {
 	body["id"].as_i64().expect("source id")
 }
 
-/// 搜索并按标题注册一本 manga 且入书库，返回 (manga_id, key)
+/// Searches and registers one manga by title into the library, returning (manga_id, key)
 async fn register_library_manga(app: &axum::Router, source_id: i64, title: &str) -> (i64, String) {
 	let (status, body) = request(
 		app,
@@ -165,7 +165,7 @@ async fn register_library_manga(app: &axum::Router, source_id: i64, title: &str)
 	(id, key)
 }
 
-/// 章节列表里按章节号取 (id, key)
+/// Fetches (id, key) from the chapter list by chapter number
 async fn chapter_by_number(app: &axum::Router, manga_id: i64, number: f64) -> (i64, String) {
 	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -195,8 +195,9 @@ async fn set_progress(app: &axum::Router, chapter_id: i64, last_page: i64, is_re
 
 const KEY: &str = "en.rekey-source";
 
-/// 跨 breaking 带 MigrationHandler：原地重键，id 不变，进度/分类/下载标记全保留；
-/// old/broken 一支 handler 返回空串，整支留旧 key 进 warnings
+/// Crossing breaking with a MigrationHandler: rekeyed in place, ids unchanged, progress/categories/
+/// download marks all preserved; for the old/broken branch the handler returns an empty string, and
+/// the whole branch keeps its old key and goes into warnings
 #[tokio::test]
 async fn breaking_update_rekeys_in_place() {
 	let app = test_app().await;
@@ -206,7 +207,7 @@ async fn breaking_update_rekeys_in_place() {
 	let repo_id = add_repo(&app.app, &repo.url).await;
 	let source_id = install(&app.app, repo_id, KEY).await;
 
-	// 两本正常 + 一本映射失败，全部入库并带齐用户数据
+	// two normal + one failing-to-map, all shelved with full user data
 	let (manga1, key1) = register_library_manga(&app.app, source_id, "Rekey One").await;
 	let (manga2, key2) = register_library_manga(&app.app, source_id, "Rekey Two").await;
 	let (broken, broken_key) = register_library_manga(&app.app, source_id, "Broken Three").await;
@@ -230,7 +231,7 @@ async fn breaking_update_rekeys_in_place() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
-	// 下载标记直接落 chapter_user.is_downloaded（下载完成后的稳定态）
+	// the download mark goes straight into chapter_user.is_downloaded (the steady state after a completed download)
 	let pool = connect_db(&app.db_path).await;
 	sqlx::query("UPDATE chapter_user SET is_downloaded = 1 WHERE chapter_id = ?")
 		.bind(ch1)
@@ -238,7 +239,7 @@ async fn breaking_update_rekeys_in_place() {
 		.await
 		.expect("mark downloaded");
 
-	// repo 发布 v2：同 wasm 带 handler，manifest 跨 breakingChangeVersion=2
+	// the repo publishes v2: same wasm with handler, manifest crosses breakingChangeVersion=2
 	stage(&repo, KEY, 2, &rekey_wasm, Some(2));
 	refresh(&app.app, repo_id).await;
 	let (status, body) = request(&app.app, "POST", &format!("/api/v1/sources/{source_id}/update"), None).await;
@@ -249,7 +250,7 @@ async fn breaking_update_rekeys_in_place() {
 	assert_eq!(warnings.len(), 3, "broken manga + 2 chapters: {warnings:?}");
 	assert!(warnings.iter().all(|w| w.as_str().unwrap_or_default().contains("old/broken")), "{warnings:?}");
 
-	// manga：key 换血、id 不动、入库态与分类保留
+	// manga: keys rekeyed, ids unchanged, library state and categories preserved
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/manga/{manga1}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["key"], "new/manga-1", "{body}");
@@ -259,7 +260,7 @@ async fn breaking_update_rekeys_in_place() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["key"], "new/manga-2", "{body}");
 
-	// 章节：key 换血、id 不动、进度与下载标记保留
+	// chapters: keys rekeyed, ids unchanged, progress and download marks preserved
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/manga/{manga1}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let chapters = body.as_array().expect("chapters array");
@@ -272,7 +273,7 @@ async fn breaking_update_rekeys_in_place() {
 	assert_eq!(ch2_after["key"], "new/manga-1/ch-2", "{ch2_after}");
 	assert_eq!(ch2_after["lastPageRead"], 3, "{ch2_after}");
 
-	// 映射失败的一支原样保留
+	// the failing-to-map branch is kept as-is
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/manga/{broken}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["key"], "old/broken", "{body}");
@@ -287,7 +288,7 @@ async fn breaking_update_rekeys_in_place() {
 		.collect();
 	assert_eq!(keys, ["old/broken/ch-1", "old/broken/ch-2"], "{keys:?}");
 
-	// source_json 带上解析到的 breakingChangeVersion
+	// source_json carries the parsed breakingChangeVersion
 	let (status, body) = request(&app.app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let row = body
@@ -302,7 +303,7 @@ async fn breaking_update_rekeys_in_place() {
 	repo.serve.abort();
 }
 
-/// 跨 breaking 但新包无 MigrationHandler：标 migrationRequired，库行一个字节不动
+/// Crossing breaking but the new package has no MigrationHandler: flagged migrationRequired, DB rows untouched byte for byte
 #[tokio::test]
 async fn breaking_update_without_handler_flags_migration() {
 	let app = test_app().await;
@@ -315,7 +316,7 @@ async fn breaking_update_without_handler_flags_migration() {
 	let (ch1, _) = chapter_by_number(&app.app, manga1, 1.0).await;
 	set_progress(&app.app, ch1, 5, true).await;
 
-	// v2 换无 handler 的 mutation 载荷，跨 breaking
+	// v2 swaps in the handler-less mutation payload, crossing breaking
 	let mutation_wasm = std::fs::read(mutation_wasm_path()).expect("mutation wasm");
 	stage(&repo, KEY, 2, &mutation_wasm, Some(2));
 	refresh(&app.app, repo_id).await;
@@ -342,7 +343,7 @@ async fn breaking_update_without_handler_flags_migration() {
 	repo.serve.abort();
 }
 
-/// 不跨 breaking（无字段 / 库内无条目）就是一次普通更新
+/// Not crossing breaking (no field / no entries in the DB) is just a plain update
 #[tokio::test]
 async fn non_breaking_update_is_plain_update() {
 	let app = test_app().await;
@@ -353,7 +354,7 @@ async fn non_breaking_update_is_plain_update() {
 	let source_id = install(&app.app, repo_id, KEY).await;
 	let (manga1, _) = register_library_manga(&app.app, source_id, "Rekey One").await;
 
-	// v2 不带 breakingChangeVersion：正常更新不触发迁移
+	// v2 without breakingChangeVersion: a normal update doesn't trigger migration
 	stage(&repo, KEY, 2, &rekey_wasm, None);
 	refresh(&app.app, repo_id).await;
 	let (status, body) = request(&app.app, "POST", &format!("/api/v1/sources/{source_id}/update"), None).await;
@@ -364,7 +365,7 @@ async fn non_breaking_update_is_plain_update() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["key"], "old/manga-1", "{body}");
 
-	// v3 跨 breaking 但库里没有条目：无 handler 也不标 migrationRequired
+	// v3 crosses breaking but the DB has no entries: even without a handler, migrationRequired is not flagged
 	let mutation_wasm = std::fs::read(mutation_wasm_path()).expect("mutation wasm");
 	stage(&repo, "en.empty", 1, &rekey_wasm, None);
 	repo.mock.set_index(json!([
@@ -389,7 +390,7 @@ async fn non_breaking_update_is_plain_update() {
 	repo.serve.abort();
 }
 
-/// 重键目标已被别的行占用：占不动的行留旧 key 进 warnings，其余照迁，请求不炸
+/// The rekey target is already taken by another row: the blocked row keeps its old key and goes into warnings, the rest migrate, the request doesn't blow up
 #[tokio::test]
 async fn rekey_target_collision_warns_and_keeps_old_key() {
 	let app = test_app().await;
@@ -401,7 +402,7 @@ async fn rekey_target_collision_warns_and_keeps_old_key() {
 	let (manga1, _) = register_library_manga(&app.app, source_id, "Rekey One").await;
 	let (manga2, _) = register_library_manga(&app.app, source_id, "Rekey Two").await;
 
-	// 抢先占用 old/manga-1 的重键目标 key
+	// squat on old/manga-1's rekey target key first
 	let pool = connect_db(&app.db_path).await;
 	sqlx::query("INSERT INTO manga (source_id, key, title) VALUES (?, 'new/manga-1', 'squatter')")
 		.bind(source_id)
@@ -427,7 +428,7 @@ async fn rekey_target_collision_warns_and_keeps_old_key() {
 	repo.serve.abort();
 }
 
-/// update-all 按源带出 migrationRequired 与重键 warnings
+/// update-all reports migrationRequired and rekey warnings per source
 #[tokio::test]
 async fn update_all_reports_migration_per_source() {
 	let app = test_app().await;
@@ -435,7 +436,7 @@ async fn update_all_reports_migration_per_source() {
 	let rekey_wasm = std::fs::read(rekey_wasm_path()).expect("rekey wasm");
 	let mutation_wasm = std::fs::read(mutation_wasm_path()).expect("mutation wasm");
 
-	// 两个源都装 v1 并入库条目：en.rekey-source v2 带 handler，en.plain v2 无 handler
+	// both sources installed at v1 with shelved entries: en.rekey-source v2 has a handler, en.plain v2 doesn't
 	stage(&repo, KEY, 1, &rekey_wasm, None);
 	repo.mock.set_index(json!([
 		{"id": KEY, "name": KEY, "version": 1, "downloadURL": format!("files/{KEY}-v1.aix"), "languages": ["en"]},

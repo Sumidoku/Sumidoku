@@ -4,10 +4,10 @@ export type ChipColor = 'default' | 'accent' | 'danger' | 'success' | 'warning';
 
 export interface ChipProps {
 	color?: ChipColor;
-	/** 传了 onClick 就渲染成按钮（可点多选），否则是纯标签 */
+	/** Renders as a button when onClick is given (clickable multi-select), otherwise a plain label */
 	onClick?: () => void;
 	title?: string;
-	/** 追加到 chip 上的额外类名（如三态排除态 .chip--exclude） */
+	/** Extra class names appended to the chip (e.g. the tri-state excluded state .chip--exclude) */
 	className?: string;
 	children: ReactNode;
 }

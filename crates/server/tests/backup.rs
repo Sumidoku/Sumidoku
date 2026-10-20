@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
 
-/// 在实例 A 上造满各 section 的数据：入库+分类（含三态与排序）、两条进度、设置、源设置
+/// Fills every section with data on instance A: shelve + categories (with tri-state flags and ordering), two progress entries, settings, source settings
 async fn seed_full(app: &Router) {
 	let manga_id = register_example_manga(app).await;
 	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
@@ -86,7 +86,7 @@ async fn seed_full(app: &Router) {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 导出并校验响应头契约，返回解析后的备份文档
+/// Exports and validates the response header contract, returning the parsed backup document
 async fn export_doc(app: &Router) -> Value {
 	let (status, headers, bytes) = request_full(app, "GET", "/api/v1/backup", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -107,7 +107,7 @@ async fn export_doc(app: &Router) -> Value {
 	serde_json::from_slice(&bytes).expect("backup json")
 }
 
-/// 全新实例 B：fixture 源已就位（scan 入库），其余为空
+/// Fresh instance B: the fixture source is in place (installed via scan), everything else empty
 async fn fresh_target() -> TestApp {
 	let app = test_app().await;
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
@@ -122,7 +122,7 @@ async fn export_import_round_trip() {
 	let (_, a_library) = request(&a.app, "GET", "/api/v1/library", None).await;
 	let a_manga = a_library["entries"][0].clone();
 	let a_manga_id = a_manga["id"].as_i64().expect("manga id");
-	// 源侧 viewer 与章节 thumbnail 也要进备份往返
+	// the source-side viewer and chapter thumbnails must also round-trip through the backup
 	let pool = connect_db(&a.db_path).await;
 	sqlx::query("UPDATE manga SET viewer = 2 WHERE id = ?")
 		.bind(a_manga_id)
@@ -164,7 +164,7 @@ async fn export_import_round_trip() {
 	assert!(restored["settings"].as_i64().expect("settings count") >= 2);
 	assert!(restored["sourceSettings"].as_i64().expect("source settings count") >= 2);
 
-	// 书库与漫画元数据
+	// library and manga metadata
 	let (_, b_library) = request(&b.app, "GET", "/api/v1/library", None).await;
 	let entries = b_library["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 1);
@@ -175,7 +175,7 @@ async fn export_import_round_trip() {
 	assert_eq!(entries[0]["viewer"], "RightToLeft");
 	assert_eq!(entries[0]["inLibraryAt"], doc["library"][0]["inLibraryAt"]);
 
-	// 分类：顺序、三态、成员
+	// categories: order, tri-state flags, membership
 	let (_, body) = request(&b.app, "GET", "/api/v1/categories", None).await;
 	let cats = body.as_array().expect("categories");
 	assert_eq!(cats.len(), 2);
@@ -187,7 +187,7 @@ async fn export_import_round_trip() {
 	assert_eq!(cats[1]["includeInDownload"], 2);
 	assert_eq!(cats[1]["mangaCount"], 0);
 
-	// 进度按章节 key 挂回（全新实例只有这两条章节行）
+	// progress is reattached by chapter key (the fresh instance has only these two chapter rows)
 	let (_, a_chapters) = request(
 		&a.app,
 		"GET",
@@ -224,7 +224,7 @@ async fn export_import_round_trip() {
 		assert_eq!(b_ch["lastReadAt"], a_ch["lastReadAt"]);
 	}
 
-	// 应用设置与源设置（含凭据）
+	// app settings and source settings (including credentials)
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(settings["backup.test"], "on");
 	assert_eq!(settings["backup.num"], 42);
@@ -251,7 +251,7 @@ async fn import_rolls_back_on_invalid_row() {
 	let b = fresh_target().await;
 	let before = db_dump(&b.db_path).await;
 
-	// 排最后的分类三态越界：写库中途才触发，验证整体回滚
+	// the last category's tri-state value is out of range: it only trips mid-write, verifying the whole import rolls back
 	doc["categories"].as_array_mut().expect("categories").push(json!({
 		"name": "Broken",
 		"sortOrder": 9,
@@ -322,7 +322,7 @@ async fn import_skips_missing_sources_with_warnings() {
 	assert_eq!(body["restored"]["library"], 1);
 	assert_eq!(body["restored"]["progress"], 2);
 
-	// 有效条目照常恢复
+	// valid entries are restored as usual
 	let (_, lib) = request(&b.app, "GET", "/api/v1/library", None).await;
 	assert_eq!(lib["entries"].as_array().expect("entries").len(), 1);
 }

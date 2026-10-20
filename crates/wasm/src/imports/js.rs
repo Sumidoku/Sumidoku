@@ -1,11 +1,13 @@
-//! context_* 与 webview_* 的纯脚本子集由 Boa 实装（页面建模见 crate::webview）。
-//! 配置了 trawl 浏览器后端（net.browser_trawl 的 session API）时，
-//! webview_load/webview_get_cookies 走浏览器背衬（crate::browser），
-//! webview_eval/webview_eval_async 同样路由进浏览器页面；未配置时 eval 族维持
-//! Boa 页面模型，load/get_cookies 与 webview_set_rule_list 一样显式不支持：
-//! 返回 ABI 的 -1 家族错误码（JsError 没有 unsupported 专用码，上游 aidoku-rs
-//! 对这些函数也一律 -1），并在源日志点名函数与原因。webview_delete_cookie
-//! 恒显式不支持（trawl 无 cookie 编辑端点）。
+//! The pure-script subset of context_* and webview_* is implemented with Boa (page
+//! modeling: see crate::webview). With a trawl browser backend configured (the session
+//! API of net.browser_trawl), webview_load/webview_get_cookies go through the browser
+//! backing (crate::browser), and webview_eval/webview_eval_async are likewise routed into
+//! the browser page; when unconfigured, the eval family keeps the Boa page model while
+//! load/get_cookies, like webview_set_rule_list, are explicitly unsupported: they return
+//! the ABI's -1 family of error codes (JsError has no dedicated unsupported code, and
+//! upstream aidoku-rs also returns -1 for these functions) and name the function and
+//! reason in the source log. webview_delete_cookie is always explicitly unsupported
+//! (trawl has no cookie-edit endpoint).
 use crate::{
 	browser::{BrowserCookie, BrowserError},
 	imports::CookieJar,
@@ -17,7 +19,7 @@ use crate::{
 	webview::WebView,
 };
 
-// 变体名与 ABI 的 JsError 对齐，命名不由本仓决定
+// Variant names follow the ABI's JsError; naming is not this repo's call
 #[allow(clippy::enum_variant_names)]
 enum Result {
 	Success,
@@ -95,8 +97,9 @@ pub fn context_get(ctx: &mut impl Ctx, rid: Rid, string_ptr: Ptr, len: u32) -> F
 	}
 }
 
-// ABI 没有区分失败原因的错误码，统一 -1；细节进源日志（与 AidokuRunner 的
-// exceptionHandler 打印对齐），截断防止源用超长 rejection 值灌爆日志
+// The ABI has no error codes distinguishing failure causes, so everything is -1; details
+// go to the source log (aligned with AidokuRunner's exceptionHandler printing), truncated
+// so a source cannot flood the log with an overlong rejection value
 fn fail(ctx: &mut impl Ctx, msg: String) -> FFIResult {
 	let truncated: String = msg.chars().take(200).collect();
 	ctx.host().log(&format!("js failed: {truncated}"));
@@ -131,8 +134,9 @@ pub fn webview_load(ctx: &mut impl Ctx, webview: Rid, request: Rid) -> FFIResult
 	let Some(url) = req.url.clone() else {
 		return Result::InvalidRequest.into();
 	};
-	// 浏览器背衬的导航只有 GET（trawl scrape 定死 GET）；iOS 能整包 URLRequest
-	// （含 POST body）导航，服务器背衬诚实报失败，不静默退化成 GET
+	// The browser backing navigates with GET only (trawl scrape is fixed to GET); iOS can
+	// navigate with a whole URLRequest (including a POST body). The server backing honestly
+	// reports failure instead of silently degrading to GET
 	if req.method != crate::imports::HttpMethod::Get {
 		ctx.host().log("webview_load: only GET navigation is supported by the browser backend");
 		return Result::MissingResult.into();
@@ -181,7 +185,7 @@ pub fn webview_load_html(
 }
 
 pub fn webview_wait_for_load(ctx: &mut impl Ctx, webview: Rid) -> FFIResult {
-	// 沙箱里 load_html 同步完成，没有异步加载要等
+	// In the sandbox load_html completes synchronously; there is no async load to wait for
 	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
@@ -217,7 +221,7 @@ pub fn webview_eval_async(
 	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	};
-	// 浏览器后端的 eval 由服务端 await promise，eval 与 eval_async 天然同一路径
+	// With the browser backend, eval awaits the promise server-side, so eval and eval_async naturally share one path
 	if ctx.host().browser.supports_eval() {
 		return browser_eval(ctx, webview, &source, "webview_eval_async");
 	}
@@ -228,7 +232,7 @@ pub fn webview_eval_async(
 	}
 }
 
-// 浏览器后端的 eval 路径（trawl）：值回传契约见 browser/trawl.rs
+// The eval path of the browser backend (trawl): the value-return contract is in browser/trawl.rs
 fn browser_eval(ctx: &mut impl Ctx, webview: Rid, source: &str, name: &str) -> FFIResult {
 	match ctx.host().browser.eval(webview, source) {
 		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
@@ -274,12 +278,12 @@ pub fn webview_get_cookies(ctx: &mut impl Ctx, webview: Rid) -> FFIResult {
 	}
 }
 
-// 可选串参数：len == 0 缺席，否则按 UTF-8 读（读失败等同缺席）
+// Optional string parameter: len == 0 means absent, otherwise read as UTF-8 (a failed read counts as absent)
 fn read_opt(ctx: &mut impl Ctx, ptr: Ptr, len: u32) -> Option<String> {
 	if len == 0 { None } else { ctx.read_string(ptr, len).ok() }
 }
 
-// 签名由源 ABI 固定，无法归并参数
+// The signature is fixed by the source ABI; parameters cannot be merged
 #[allow(clippy::too_many_arguments)]
 pub fn webview_delete_cookie(
 	ctx: &mut impl Ctx,
@@ -297,12 +301,12 @@ pub fn webview_delete_cookie(
 	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
-	// trawl 后端没有 cookie 编辑端点：与 webview_set_rule_list 同款的显式不支持
+	// The trawl backend has no cookie-edit endpoint: explicitly unsupported, same as webview_set_rule_list
 	if !ctx.host().browser.supports_cookie_edit() {
 		ctx.host().log("webview_delete_cookie is not supported by the browser backend: trawl has no cookie-edit endpoint");
 		return Result::MissingResult.into();
 	}
-	// ABI 约定 name_len == -1 为清空全 store（上游 delete_all_cookies 的入参）
+	// The ABI defines name_len == -1 as clearing the whole store (the input of upstream delete_all_cookies)
 	if name_len == u32::MAX {
 		return match ctx.host().browser.clear_cookies(webview) {
 			Ok(()) => Result::Success.into(),
@@ -310,7 +314,7 @@ pub fn webview_delete_cookie(
 		};
 	}
 	let Some(name) = read_opt(ctx, name_ptr, name_len) else {
-		// 与 iOS 对齐：name 缺失且不是 -1 清空语义 → MissingCookie
+		// Aligned with iOS: name missing and not the -1 clear semantic → MissingCookie
 		return Result::MissingCookie.into();
 	};
 	let value = read_opt(ctx, value_ptr, value_len);
@@ -319,8 +323,9 @@ pub fn webview_delete_cookie(
 		Ok(cookies) => cookies,
 		Err(e) => return browser_fail(ctx, "webview_delete_cookie", &e),
 	};
-	// iOS 语义：按 name（可选 value/domain 收窄）取首个匹配删除，无匹配 -8。
-	// value 只作选择器，浏览器删除按 name+domain+path 定位
+	// iOS semantics: delete the first match by name (optionally narrowed by value/domain),
+	// -8 on no match. value acts only as a selector; the browser-side delete locates by
+	// name+domain+path
 	let found = cookies.iter().find(|c| {
 		c.name == name
 			&& value.as_deref().is_none_or(|v| c.value == *v)
@@ -338,8 +343,9 @@ pub fn webview_delete_cookie(
 	}
 }
 
-// 不支持的函数仍先校验 webview rid（对齐 iOS 的 InvalidHandler 优先级），
-// 其余参数不校验：操作本身不支持，参数没有消费方
+// An unsupported function still validates the webview rid first (aligned with iOS's
+// InvalidHandler priority); the other parameters are not validated: the operation itself
+// is unsupported, so the parameters have no consumer
 fn unsupported(ctx: &mut impl Ctx, webview: Rid, name: &str, why: &str) -> FFIResult {
 	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
@@ -348,7 +354,7 @@ fn unsupported(ctx: &mut impl Ctx, webview: Rid, name: &str, why: &str) -> FFIRe
 	Result::MissingResult.into()
 }
 
-/// ABI Cookie 的镜像：字段顺序即 postcard 线序，改名/换序都会破 ABI
+/// Mirror of the ABI Cookie: the field order is the postcard wire order — renaming or reordering fields breaks the ABI
 #[derive(serde::Serialize)]
 struct AbiCookie {
 	name: String,
@@ -374,16 +380,18 @@ impl From<BrowserCookie> for AbiCookie {
 	}
 }
 
-/// 浏览器会话 cookie 回流进源的会话 jar：登录流程成立的关键——webview_load
-/// 打开登录页，登录完成后源 API 请求自动带会话 cookie。域名按 cookie 自身的
-/// Domain 属性（去前导点）落库，与 jar 解析 Set-Cookie 的归属一致
+/// Browser-session cookies flow back into the source's session jar: the key to making the
+/// login flow work — webview_load opens the login page, and once login completes the
+/// source's API requests automatically carry the session cookie. The domain lands under
+/// the cookie's own Domain attribute (leading dot stripped), consistent with how the jar
+/// attributes a parsed Set-Cookie
 fn reflux(jar: &mut CookieJar, cookies: &[BrowserCookie]) {
 	for cookie in cookies {
 		jar.insert(cookie.domain.trim_start_matches('.'), &cookie.name, &cookie.value);
 	}
 }
 
-/// ABI 没有区分失败原因的错误码，浏览器失败统一 -1；细节进源日志
+/// The ABI has no error codes distinguishing failure causes, so browser failures are uniformly -1; details go to the source log
 fn browser_fail(ctx: &mut impl Ctx, name: &str, e: &BrowserError) -> FFIResult {
 	let truncated: String = e.message.chars().take(200).collect();
 	ctx.host().log(&format!("{name} failed: {truncated}"));
@@ -552,7 +560,7 @@ mod tests {
 		}
 	}
 
-	/// ABI Cookie 的解码镜像（编码侧 AbiCookie 字段顺序的逐字段对账）
+	/// Decoding mirror of the ABI Cookie (field-by-field reconciliation of the encoding side's AbiCookie field order)
 	#[derive(Debug, serde::Deserialize, PartialEq)]
 	struct WireCookie {
 		name: String,
@@ -596,7 +604,7 @@ mod tests {
 		let rid = h.eval_async(ctx, "(async () => 'async-ok')()");
 		assert!(rid > 0, "eval_async 返回 {rid}");
 		assert_eq!(h.stored_string(rid), "async-ok");
-		// 非 Promise 值等价于 await 原值
+		// A non-Promise value is equivalent to awaiting the raw value
 		let rid = h.eval_async(ctx, "1 + 1");
 		assert!(rid > 0, "eval_async 返回 {rid}");
 		assert_eq!(h.stored_string(rid), "2");
@@ -649,7 +657,7 @@ mod tests {
 		let ctx = h.create();
 		h.eval(ctx, "var before = 1");
 		assert_eq!(h.eval(ctx, "while (true) {}"), -1);
-		// 超时后 context 整体重建：引擎可用，但之前的全局状态被丢弃
+		// After a timeout the context is rebuilt wholesale: the engine works, but the previous global state is gone
 		assert_eq!(h.eval_to_string(ctx, "1 + 1"), "2");
 		let rid = h.get(ctx, "before");
 		assert!(rid > 0);
@@ -685,7 +693,7 @@ mod tests {
 		assert_eq!(h.wv_eval_to_string(wv, "token"), "tk42");
 		assert_eq!(h.wv_eval_to_string(wv, "doubled"), "tk42!");
 		assert_eq!(h.wv_eval_to_string(wv, "location.href"), "https://example.com/c/1");
-		// 再次 load_html 替换整个页面状态（对齐 loadHTMLString 的 document 替换语义）
+		// A second load_html replaces the whole page state (aligned with loadHTMLString's document-replacement semantics)
 		assert_eq!(h.wv_load_html(wv, "<script>var fresh = 1;</script>", None), 0);
 		assert_eq!(h.wv_eval_to_string(wv, "typeof token"), "undefined");
 		assert_eq!(h.wv_eval_to_string(wv, "location.href"), "about:blank");
@@ -772,8 +780,9 @@ mod tests {
 		assert_eq!(webview_load(&mut h.ctx, 9999, 9999), -4);
 		assert_eq!(webview_get_cookies(&mut h.ctx, 9999), -4);
 		assert_eq!(webview_delete_cookie(&mut h.ctx, 9999, p, l, 0, 0, 0, 0), -4);
-		// js context 与 webview 的 rid 不通用，跨种类使用各报各的错（对齐 iOS：
-		// webview 侧 -4 InvalidHandler，context 侧 -2 InvalidContext）
+		// rids are not interchangeable between js contexts and webviews; cross-kind use
+		// reports each side's own error (aligned with iOS: -4 InvalidHandler on the webview
+		// side, -2 InvalidContext on the context side)
 		let ctx = h.create();
 		assert_eq!(webview_eval(&mut h.ctx, ctx, p, l), -4);
 		let wv = h.wv_create();
@@ -836,7 +845,7 @@ mod tests {
 		let mut h = browser_harness(mock.clone());
 		let wv = h.wv_create();
 		let req = h.new_request(crate::imports::HttpMethod::Get, Some("https://login.example/form"));
-		// 登录页导航后浏览器侧有了会话 cookie
+		// After navigating to the login page, the browser side has the session cookie
 		mock.lock().expect("mock lock").cookies.insert(
 			"ctx-1".into(),
 			vec![crate::browser::mock::cookie("sid", "s3cret", ".login.example")],
@@ -847,7 +856,7 @@ mod tests {
 			let mock = mock.lock().expect("mock lock");
 			assert_eq!(mock.loads, vec![("ctx-1".to_string(), "https://login.example/form".to_string())]);
 		}
-		// 回流：源 API 请求自动带会话 cookie；Domain 前导点去掉后对子域名同样送出
+		// Reflux: the source's API requests automatically carry the session cookie; with the Domain leading dot stripped, it is also sent to subdomains
 		assert_eq!(h.jar_header("https://login.example/api"), Some("sid=s3cret".to_string()));
 		assert_eq!(h.jar_header("https://www.login.example/api"), Some("sid=s3cret".to_string()));
 		assert_eq!(h.jar_header("https://other.example/"), None);
@@ -879,7 +888,7 @@ mod tests {
 		let mock = std::sync::Arc::new(std::sync::Mutex::new(crate::browser::mock::MockState::default()));
 		let mut h = browser_harness(mock.clone());
 		let wv = h.wv_create();
-		// 尚未 load 过的 webview：iOS 语义是返回空列表而非报错，context 此时才创建
+		// A webview that has never loaded: iOS semantics are returning an empty list rather than an error; the context is only created now
 		let rid = h.wv_get_cookies(wv);
 		assert!(rid > 0, "空 cookie store 返回编码后的空列表: {rid}");
 		assert_eq!(decoded_cookies(&h, rid), vec![]);
@@ -919,19 +928,19 @@ mod tests {
 			],
 		);
 
-		// 无匹配 → -8
+		// No match → -8
 		assert_eq!(h.wv_delete_cookie(wv, Some("nope"), None, None, None), -8);
-		// value 作选择器不匹配 → -8
+		// value as a selector does not match → -8
 		assert_eq!(h.wv_delete_cookie(wv, Some("sid"), None, Some("wrong"), None), -8);
-		// name 匹配 → 0，浏览器侧删除（定位带 domain+path）
+		// name matches → 0, deleted on the browser side (located with domain+path)
 		assert_eq!(h.wv_delete_cookie(wv, Some("sid"), None, None, None), 0);
 		assert_eq!(
 			mock.lock().expect("mock lock").deleted,
 			vec![("ctx-1".to_string(), "sid".to_string(), Some(".login.example".to_string()), Some("/".to_string()))]
 		);
-		// 已删，再删 → -8
+		// Already deleted; deleting again → -8
 		assert_eq!(h.wv_delete_cookie(wv, Some("sid"), None, None, None), -8);
-		// name_len == -1 → 清空全 store
+		// name_len == -1 → clear the whole store
 		assert_eq!(h.wv_delete_cookie(wv, None, Some(u32::MAX), None, None), 0);
 		assert_eq!(mock.lock().expect("mock lock").cleared, vec!["ctx-1".to_string()]);
 		assert!(mock.lock().expect("mock lock").cookies.is_empty());
@@ -946,7 +955,7 @@ mod tests {
 		assert_eq!(h.wv_load(wv, req), 0);
 		h.destroy(wv);
 		assert_eq!(mock.lock().expect("mock lock").disposed, vec!["ctx-1".to_string()]);
-		// destroy 后 rid 失效，对齐 InvalidHandler
+		// After destroy the rid is invalid, aligned with InvalidHandler
 		assert_eq!(h.wv_get_cookies(wv), -4);
 		assert_eq!(h.wv_load(wv, req), -4);
 	}
@@ -961,7 +970,7 @@ mod tests {
 		assert_eq!(h.wv_load(wv, req), -1, "连不上浏览器对外归一 -1");
 		assert_eq!(h.wv_get_cookies(wv), -1);
 		assert_eq!(h.wv_delete_cookie(wv, Some("sid"), None, None, None), -1);
-		// 连接恢复后操作成功（重连语义在 browser.rs 单测覆盖）
+		// Operations succeed once the connection recovers (reconnect semantics are covered by the browser.rs unit tests)
 		mock.lock().expect("mock lock").fail_connect = false;
 		assert_eq!(h.wv_load(wv, req), 0);
 	}
@@ -1039,12 +1048,13 @@ mod tests {
 		assert!(mock.deleted.is_empty() && mock.cleared.is_empty(), "不触达浏览器");
 	}
 
-	// ---------- e2e 共享夹具：mock 站点与站点地址 ----------
+	// ---------- Shared e2e fixtures: mock site and site address ----------
 
 	type SeenRequests = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
-	/// 裸 HTTP/1.1 站点：/login?who=X 种会话 cookie，/api 记录 Cookie 头，
-	/// 其余路径 404（浏览器会来抓 favicon）。每连接一个请求。
+	/// Bare HTTP/1.1 site: /login?who=X plants a session cookie, /api records the Cookie
+	/// header, all other paths 404 (the browser comes for the favicon). One request per
+	/// connection.
 	struct MockSite {
 		port: u16,
 		seen: SeenRequests,
@@ -1084,7 +1094,7 @@ mod tests {
 					(
 						"200 OK",
 						format!("set-cookie: sess={who}-secret; Path=/\r\ncontent-type: text/html\r\n"),
-						// trawl 把 <100 字符的页面判为空壳加载失败，夹具页要垫过这条线
+						// trawl judges a page shorter than 100 chars as an empty-shell load failure, so the fixture page must be padded past that line
 						format!("<html><head><title>sign in</title></head><body><h1>member login</h1><form method=\"post\" action=\"/login\">login {who}</form><p>fixture page padded past the scraper's empty-shell threshold</p></body></html>"),
 					)
 				} else if path == "/api" {
@@ -1119,9 +1129,11 @@ mod tests {
 		}
 	}
 
-	/// 浏览器在容器里、测试进程在宿主机上：两边要用同一个地址访问 mock 站点，
-	/// jar 才能按 host 匹配。容器经网关回连宿主机，UDP connect 探出宿主出口 IP；
-	/// 探不到回退 host.docker.internal（Linux /docker 内运行时的惯用名）
+	/// The browser runs in a container while the test process runs on the host: both sides
+	/// must reach the mock site at the same address for the jar to match by host. The
+	/// container reaches back to the host over the gateway, and a UDP connect probes the
+	/// host's egress IP; if the probe fails, fall back to host.docker.internal (the
+	/// customary name when running inside Linux /docker)
 	fn e2e_site_host() -> String {
 		if let Ok(host) = std::env::var("SUMIDOKU_TEST_BROWSER_HOST")
 			&& !host.is_empty()
@@ -1138,7 +1150,7 @@ mod tests {
 	}
 
 
-	// ---------- e2e：trawl session 后端，SUMIDOKU_TEST_TRAWL_URL 指向才跑 ----------
+	// ---------- e2e: trawl session backend, runs only when SUMIDOKU_TEST_TRAWL_URL points at one ----------
 
 	fn e2e_trawl_harness() -> Option<Harness> {
 		let url = std::env::var("SUMIDOKU_TEST_TRAWL_URL").ok().filter(|v| !v.is_empty())?;
@@ -1171,11 +1183,11 @@ mod tests {
 			"cookie 形状: {:?}",
 			decoded_cookies(&h, rid)
 		);
-		// eval 打在驻留页的主 JS 环境：href 是刚导航的登录页
+		// eval lands in the resident page's main JS realm: href is the login page just navigated to
 		let rid = h.wv_eval(wv, "location.href");
 		assert!(rid > 0, "eval: {rid}");
 		assert_eq!(h.stored_string(rid), format!("{base}/login"));
-		// 源 API 请求自动带会话 cookie（net 栈从 jar 取）
+		// The source's API requests automatically carry the session cookie (the net stack takes it from the jar)
 		let api = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/api")));
 		assert_eq!(crate::imports::net::send(&mut h.ctx, api), 0);
 		assert_eq!(
@@ -1183,7 +1195,7 @@ mod tests {
 			Some("sess=alpha-secret".to_string()),
 			"API 请求带会话 cookie"
 		);
-		// destroy 立即 DELETE：新建的 webview 是干净 session
+		// destroy issues a DELETE immediately: a newly created webview is a clean session
 		h.destroy(wv);
 		let wv2 = h.wv_create();
 		let rid = h.wv_get_cookies(wv2);

@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 use tokio::sync::{Mutex, OwnedMutexGuard, RwLock, Semaphore, broadcast};
 use tokio::task::JoinSet;
 
-/// 全局同时更新的源数上限：源内串行、源间并行
+/// Global cap on sources updating at once: serial within a source, parallel across sources
 const UPDATE_SOURCE_CONCURRENCY: usize = 3;
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,7 +26,7 @@ pub struct UpdateEvent {
 	pub source_id: i64,
 	#[serde(rename = "addedChapters")]
 	pub added_chapters: i64,
-	/// 事件归属用户（该漫画在谁的书库里），WS 按连接用户过滤
+	/// The user the event belongs to (whose library this manga is in); WS filters per connection user
 	#[serde(skip)]
 	pub user_id: Option<i64>,
 }
@@ -41,13 +41,14 @@ pub struct UpdateSummary {
 	pub skipped: i64,
 	pub pending: i64,
 	pub last_run_at: Option<i64>,
-	/// 本次 fetch 的归属：None = 定时 union（全局进度全员可见），Some = 该用户手动触发
+	/// Ownership of this fetch: None = scheduled union (global progress visible to all), Some = manually triggered by that user
 	#[serde(skip)]
 	pub user_id: Option<i64>,
 }
 
 impl UpdateSummary {
-	/// 按请求用户裁剪：别人手动触发的 fetch 与本用户无关，按闲置呈现；union（无归属）全员可见
+	/// Trimmed for the requesting user: a fetch someone else triggered is irrelevant to this user and presented as
+	/// idle; a union (no owner) is visible to all
 	pub fn visible_to(self, user_id: i64) -> Self {
 		match self.user_id {
 			Some(owner) if owner != user_id => Self::default(),
@@ -56,9 +57,9 @@ impl UpdateSummary {
 	}
 }
 
-/// 库更新检测：定时或手动触发全量 fetch，分类 include_in_update 三态过滤。
+/// Library update detection: scheduled or manually triggered full fetches, filtered by the category include_in_update tri-state.
 pub struct UpdateScheduler {
-	// Weak 防循环引用：AppState 经 OnceCell 持有本调度器
+	// Weak prevents a reference cycle: AppState holds this scheduler through a OnceCell
 	state: Weak<AppState>,
 	pool: SqlitePool,
 	events: broadcast::Sender<UpdateEvent>,
@@ -97,7 +98,7 @@ impl UpdateScheduler {
 		self.running.load(Ordering::SeqCst)
 	}
 
-	/// 抢 fetch 互斥锁；抢不到说明已有 fetch 在跑（API 据此回 409）
+	/// Grabs the fetch mutex; failing means a fetch is already running (the API answers 409 from this)
 	pub fn try_acquire(&self) -> Option<OwnedMutexGuard<()>> {
 		self.fetch_lock.clone().try_lock_owned().ok()
 	}
@@ -108,7 +109,7 @@ impl UpdateScheduler {
 		}
 		let mut interval =
 			tokio::time::interval(std::time::Duration::from_secs(self.interval_hours * 3600));
-		// interval 首 tick 立即完成，首跑等满一个周期
+		// interval's first tick completes immediately, so the first run waits a full period
 		interval.tick().await;
 		loop {
 			interval.tick().await;
@@ -130,7 +131,7 @@ impl UpdateScheduler {
 		self.run_fetch(rows, owners, Some(user_id), guard).await;
 	}
 
-	/// 定时全量：所有用户书库的并集，同一漫画只回源拉一次；自动下载按各用户自己的过滤
+	/// Scheduled full sweep: the union of every user's library, with each manga fetched from its source only once; auto-download follows each user's own filtering
 	pub async fn fetch_union(self: &Arc<Self>, guard: OwnedMutexGuard<()>) {
 		let user_ids: Vec<i64> = match sqlx::query_scalar(
 			"SELECT DISTINCT user_id FROM manga_user WHERE in_library = 1 ORDER BY user_id",
@@ -147,7 +148,7 @@ impl UpdateScheduler {
 		let mut rows: Vec<MangaRow> = Vec::new();
 		let mut owners: HashMap<i64, Vec<i64>> = HashMap::new();
 		for user_id in user_ids {
-			// 逐用户复用同一套三态过滤，规则不与手动触发漂移
+			// Each user reuses the same tri-state filtering, so the rules never drift from a manual trigger
 			let user_rows = match select_manga(&self.pool, user_id, None).await {
 				Ok(rows) => rows,
 				Err(e) => {
@@ -285,7 +286,7 @@ impl UpdateScheduler {
 				let added = new_ids.len() as i64;
 				self.account("complete").await;
 				self.emit_for(interested, "complete", &manga, added);
-				// 本地漫画不进下载管理（文件本来就在本地），跳过新章自动下载
+				// Local manga never enters download management (the files are already local), so new-chapter auto-download is skipped
 				if added > 0 && self.auto_download && !is_local {
 					for &user_id in interested {
 						self.enqueue_new_chapters(user_id, manga.id, new_ids.clone()).await;
@@ -311,7 +312,7 @@ impl UpdateScheduler {
 		summary.pending = (summary.pending - 1).max(0);
 	}
 
-	/// auto_download_new_chapters 联动：每漫画最多取 limit 个最新章入下载队
+	/// auto_download_new_chapters linkage: at most limit newest chapters per manga go into the download queue
 	async fn enqueue_new_chapters(self: &Arc<Self>, user_id: i64, manga_id: i64, new_ids: Vec<i64>) {
 		let Some(state) = self.state.upgrade() else { return };
 		match download_allowed(&self.pool, user_id, manga_id).await {
@@ -322,7 +323,7 @@ impl UpdateScheduler {
 			}
 			_ => {}
 		}
-		// source_order 小的为源返回列表里的新章
+		// A smaller source_order marks a new chapter in the source's returned list
 		let placeholders = new_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 		let sql = format!(
 			"SELECT id FROM chapter WHERE id IN ({placeholders}) ORDER BY source_order ASC LIMIT ?"
@@ -355,8 +356,8 @@ impl UpdateScheduler {
 	}
 }
 
-/// 更新范围：该用户在库且未标记 never_update；分类 include_in_update 三态
-/// （有 INCLUDE 只跑 INCLUDE 分类下的，否则跑不在任何 EXCLUDE 分类的）
+/// Update scope: in this user's library and not marked never_update; the category include_in_update tri-state
+/// (with any INCLUDE, only entries under INCLUDE categories run; otherwise everything not in an EXCLUDE category runs)
 async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>) -> ApiResult<Vec<MangaRow>> {
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
@@ -409,7 +410,7 @@ async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>)
 	Ok(rows)
 }
 
-/// include_in_download 三态过滤，规则与更新范围一致
+/// include_in_download tri-state filtering, rules identical to the update scope
 async fn download_allowed(pool: &SqlitePool, user_id: i64, manga_id: i64) -> ApiResult<bool> {
 	let has_include: Option<(i64,)> =
 		sqlx::query_as("SELECT 1 FROM category WHERE user_id = ? AND include_in_download = 1 LIMIT 1")
@@ -513,7 +514,7 @@ mod tests {
 		let guard = scheduler.try_acquire().expect("fetch guard");
 		scheduler.fetch_union(guard).await;
 
-		// 并集覆盖两人的库，m3 在两人书库里也只回源拉一次
+		// The union covers both users' libraries, and m3, shelved by both, is still fetched from the source only once
 		let summary = scheduler.summary().await;
 		assert_eq!(summary.total, 3);
 		assert_eq!(summary.complete, 3);
@@ -546,7 +547,7 @@ mod tests {
 		let manga_id = add_manga(&state, source_id, "1").await;
 		add_to_library(&state, manga_id, 1).await;
 		add_to_library(&state, manga_id, 2).await;
-		// bob 的分类把同一本漫画标记为不自动下载
+		// bob's category marks the same manga as not auto-downloadable
 		let category_id: i64 = sqlx::query_scalar(
 			"INSERT INTO category (user_id, name, include_in_download) VALUES (2, 'blocked', 2) RETURNING id",
 		)

@@ -22,8 +22,8 @@ const MODE_HINT: Record<MigrateMode, string> = {
 };
 
 /**
- * 单条目切换图源：选目标组合 → 对全部目标源 3 并发标题搜索 → 用户挑匹配 →
- * 选模式执行（或仅查看条目）→ 跳目标页
+ * Switch a single entry to another source: pick the destination set → title-search all target sources
+ * with 3-way concurrency → user picks the match → execute with the chosen mode (or just view the entry) → jump to the target page
  */
 export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: () => void }) {
 	const navigate = useNavigate();

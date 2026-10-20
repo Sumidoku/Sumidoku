@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 迁移源清单：已装源全量下发（目标组合选择器也要用），mangaCount 是请求用户的在库条数
+/// Source list for migration: all installed sources (the target-side selector needs them too); mangaCount is the requesting user's in-library count
 pub async fn migrate_sources(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -60,8 +60,8 @@ pub struct LookupQuery {
 	pub query: Option<String>,
 }
 
-/// 跨源标题搜索：走源的正常搜索路径（含源的限速），候选附已入库的内部 id；
-/// query 缺省用源条目标题，批量行的「手动重搜」靠显式 query
+/// Cross-source title search: goes through the source's normal search path (including its rate limits); candidates
+/// get internal ids when already in library; an absent query uses the source entry's title, and a batch row's "manual re-search" passes an explicit query
 pub async fn migrate_lookup(
 	State(state): State<Arc<AppState>>,
 	Query(query): Query<LookupQuery>,
@@ -75,7 +75,7 @@ pub async fn migrate_lookup(
 	if title.trim().is_empty() {
 		return Err(ApiError::bad_request("lookup query is empty"));
 	}
-	// opds 目标没有 wasm 实例：走目录搜索臂（OpenSearch/遍历兜底），degraded 标记透出
+	// An opds target has no wasm instance: take the catalog search arm (OpenSearch/traversal fallback), the degraded flag passed through
 	if crate::source::source_is_opds(&state.pool, query.target_source_id).await? {
 		let outcome = crate::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
 		let candidates = attach_internal_ids(&state, query.target_source_id, outcome.entries).await?;
@@ -110,7 +110,7 @@ pub struct MigrateEntry {
 	pub from_manga_id: i64,
 	pub to_source_id: i64,
 	pub to_manga_key: String,
-	/// 客户端手里的候选条目；有它就以它为 get_manga_update 入参（同 register_manga 的语义）
+	/// The candidate entry in the client's hands; when present it becomes the get_manga_update input (same semantics as register_manga)
 	pub to_manga: Option<Manga>,
 }
 
@@ -131,7 +131,7 @@ struct EntryFailure {
 	message: Option<String>,
 }
 
-/// 条目级失败与 500 分开：reason 进逐条结果，数据库类错误照常掀掉整个请求
+/// Entry-level failures are kept apart from 500s: the reason goes into the per-entry result, while database-class errors still blow up the whole request
 enum EntryRun {
 	Ok(EntryOutcome),
 	Failed(EntryFailure),
@@ -151,7 +151,7 @@ fn failed_with(reason: &'static str, message: String) -> EntryRun {
 	})
 }
 
-/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法形状/非法 mode 400
+/// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid shapes/invalid mode is 400
 pub async fn migrate_execute(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -168,7 +168,7 @@ pub async fn migrate_execute(
 			return Err(ApiError::bad_request("toMangaKey must not be empty"));
 		}
 	}
-	// 批次串行：单条目一个事务，部分失败不回滚已完成条目，逐条给 ok/reason
+	// The batch runs serially: one transaction per entry, a partial failure does not roll back completed entries, each gets ok/reason
 	let mut results = Vec::with_capacity(request.entries.len());
 	for entry in &request.entries {
 		let run = run_entry(&state, user.id, request.mode, entry).await?;
@@ -203,8 +203,8 @@ async fn run_entry(
 	if source_row(state, entry.to_source_id).await.is_err() {
 		return Ok(failed("source_not_found"));
 	}
-	// 同源不同 key 是 breaking-change 的 forceMigrate 回退路径（新 key 另起一行，
-	// 进度按章节号搬）；只有原地搬自己（同 key）会清掉自身进度，必须拒
+	// Same source with a different key is the breaking-change forceMigrate fallback path (the new key starts a fresh row,
+	// progress carried by chapter number); only migrating onto yourself in place (same key) would wipe your own progress, so it must be refused
 	if origin.source_id == entry.to_source_id && origin.key == entry.to_manga_key {
 		return Ok(failed("same_source"));
 	}
@@ -218,7 +218,7 @@ async fn run_entry(
 		return Ok(failed("not_in_library"));
 	}
 
-	// 目标已存在且有章节就直接复用；否则回源拉详情顺带初始化章节（事务外，拿不到算条目失败）
+	// If the target already exists with chapters, reuse it directly; otherwise fetch details from the source, initializing chapters along the way (outside the transaction; a failed fetch counts as an entry failure)
 	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(entry.to_source_id)
 		.bind(&entry.to_manga_key)
@@ -238,7 +238,7 @@ async fn run_entry(
 	if to_manga_id.is_none() {
 		let mut initial = entry.to_manga.clone().unwrap_or_default();
 		initial.key = entry.to_manga_key.clone();
-		// opds 目标没有 wasm 实例：回源是目录 feed 拉取（url 由候选条目携带）
+		// An opds target has no wasm instance: fetching upstream is a catalog feed pull (the url comes with the candidate entry)
 		if crate::source::source_is_opds(&state.pool, entry.to_source_id).await? {
 			match crate::opds_source::manga_update(state, entry.to_source_id, initial).await {
 				Ok(updated) => fetched = Some(updated),
@@ -265,7 +265,7 @@ async fn run_entry(
 		(None, None) => unreachable!("fetched is Some when to_manga_id is None"),
 	};
 
-	// 入库态搬运：目标已在库保留它自己的首次入库时间，否则继承源条目的
+	// In-library state carry-over: a target already shelved keeps its own first-shelved time, otherwise it inherits the source entry's
 	let origin_at: Option<i64> =
 		sqlx::query_scalar("SELECT in_library_at FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
@@ -282,7 +282,7 @@ async fn run_entry(
 	.execute(&mut *tx)
 	.await?;
 
-	// 分类是并集：目标原有分类保留，源条目的补进来
+	// Categories are a union: the target's existing categories are kept, the source entry's are added in
 	let category_ids: Vec<i64> =
 		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
@@ -322,7 +322,7 @@ async fn run_entry(
 			));
 			continue;
 		};
-		// 目标已有进度保留较新值：页码取大、已读/书签取或、阅读时间取新
+		// Existing target progress keeps the newer values: page number takes the max, read/bookmarked take OR, read time takes the newer
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at)
 			 VALUES (?, ?, ?, ?, ?, ?)
@@ -361,7 +361,7 @@ async fn run_entry(
 				.bind(user_id)
 				.execute(&mut *tx)
 				.await?;
-			// chapter_user 还背着下载标记，清进度只重置进度字段不删行
+			// chapter_user also carries the download flag, so clearing progress only resets the progress fields without deleting the row
 			if mode == MigrateMode::Migrate {
 				sqlx::query(
 					"UPDATE chapter_user SET last_page_read = 0, is_read = 0, is_bookmarked = 0,
@@ -400,8 +400,8 @@ struct TargetChapter {
 	volume: Option<f64>,
 }
 
-/// 章节号精确匹配（重号取源序最小者）；源章节没有章节号才按卷号兜底，
-/// 且只落在目标同样没有章节号的章节上，避免卷号误吞正常章节
+/// Exact chapter-number match (duplicates take the smallest source_order); only when the source chapter has no
+/// chapter number does the volume number serve as fallback, and then only onto a target chapter that likewise has no chapter number, so volumes never swallow normal chapters
 fn match_target<'t>(targets: &'t [TargetChapter], row: &OriginProgress) -> Option<&'t TargetChapter> {
 	if let Some(number) = row.number {
 		return targets.iter().find(|t| t.number == Some(number));

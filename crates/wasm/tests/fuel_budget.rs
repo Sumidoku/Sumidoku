@@ -1,8 +1,10 @@
-//! fuel 预算的 DoS 语义：预算内结果正常、耗尽按 out-of-fuel trap、
-//! 逐调用重置不累计、trap 后实例可复用。guest 是测试内现编的 WAT：
-//! get_manga_list 的 page 参数即燃烧轮数，返回 data 段里的合法结果；
-//! get_search_manga_list 在循环里反复调 host（std.current_date），
-//! 钉 fuel 计费穿越 host 调用仍然生效
+//! DoS semantics of the fuel budget: within budget the result is normal, exhaustion traps
+//! as out-of-fuel, the budget resets per call without accumulating, and the instance stays
+//! usable after a trap. The guest is WAT compiled on the fly inside the test:
+//! get_manga_list's page parameter is the number of burn rounds and it returns a valid
+//! result from the data segment; get_search_manga_list calls a host function
+//! (std.current_date) repeatedly inside the loop, pinning that fuel accounting still
+//! applies across host calls
 use aidoku_wasm::{
 	DirectPolicy, Error, Limits, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -12,8 +14,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-// 燃烧量按计费指令数估：wasmi 每 IR 指令约 1 单位，一轮循环 ~5-7 条。
-// WITHIN 约 3M < BUDGET；FATAL 约 25M > BUDGET，两侧都留数倍余量，不依赖精确费率
+// Burn is estimated in billed instructions: wasmi charges about 1 unit per IR instruction
+// and one loop round is ~5-7. WITHIN is about 3M < BUDGET; FATAL about 25M > BUDGET —
+// both sides keep several-fold headroom and do not depend on the exact rate
 const FUEL_BUDGET: u64 = 10_000_000;
 const BURN_WITHIN: i32 = 500_000;
 const BURN_FATAL: i32 = 4_000_000;
@@ -26,8 +29,8 @@ fn listing() -> aidoku::Listing {
 	}
 }
 
-/// 现编燃烧 guest：静态 data 段存一份 ABI 布局（len+cap+postcard）的合法
-/// MangaPageResult，get_manga_list 烧完 page 轮就返回它
+/// On-the-fly burn guest: the static data segment holds a valid MangaPageResult in ABI
+/// layout (len+cap+postcard); get_manga_list returns it after burning page rounds
 fn burn_guest() -> PathBuf {
 	let payload = postcard::to_allocvec(&aidoku::MangaPageResult {
 		entries: vec![aidoku::Manga {
@@ -39,7 +42,7 @@ fn burn_guest() -> PathBuf {
 	})
 	.expect("encode result");
 	let mut item = ((payload.len() + 8) as i32).to_le_bytes().to_vec();
-	// cap 字段宿主侧不读，填 0
+	// The cap field is not read on the host side; fill 0
 	item.extend_from_slice(&[0, 0, 0, 0]);
 	item.extend_from_slice(&payload);
 	let data: String = item.iter().map(|b| format!("\\{b:02x}")).collect();
@@ -129,7 +132,7 @@ async fn budget_exhaustion_traps_out_of_fuel() {
 #[tokio::test]
 async fn budget_resets_per_call_and_instance_survives_trap() {
 	let handle = spawn(FUEL_BUDGET).await;
-	// 单次燃烧约为预算 1/3：不逐调用重置的话几轮内必累计爆掉（8 轮累计约 24M > 10M）
+	// A single burn is about 1/3 of the budget: without a per-call reset it would accumulate past the cap within a few rounds (8 rounds total ~24M > 10M)
 	for round in 0..8 {
 		handle
 			.get_manga_list(listing(), BURN_WITHIN)
@@ -141,7 +144,7 @@ async fn budget_resets_per_call_and_instance_survives_trap() {
 		.await
 		.expect_err("fatal burn must trap");
 	assert_out_of_fuel(err);
-	// trap 后实例不废：下一次调用拿到新的满预算照常跑
+	// The instance is not dead after the trap: the next call gets a fresh full budget and runs as usual
 	let result = handle
 		.get_manga_list(listing(), 1000)
 		.await
@@ -151,7 +154,7 @@ async fn budget_resets_per_call_and_instance_survives_trap() {
 
 #[tokio::test]
 async fn fuel_exhaustion_traps_across_host_calls() {
-	// 小预算加速 trap：host 调用本身不计费，但循环里的 call/br 逐条扣
+	// A small budget speeds up the trap: the host call itself is not billed, but the call/br instructions in the loop are charged one by one
 	let handle = spawn(100_000).await;
 	let err = handle
 		.get_search_manga_list(None, 1, Vec::new())

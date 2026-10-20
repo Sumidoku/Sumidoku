@@ -1,8 +1,8 @@
-//! 内置 OPDS 源（kind = opds，多实例）：OPDS 1.2（Atom）目录作为一等源，无 wasm 载荷。
-//! manga = 目录条目（<id> 为 key，条目 feed 链接为 url，刷新凭它回源）；chapters =
-//! 条目 feed 里的 acquisition entries；pages = OPDS-PSE 逐页流链接优先，缺失时下载
-//! acquisition 压缩包落盘、复用 local 的 ZipCache 拆页。basic 凭据存 source_setting，
-//! 注册/删除走 admin 面。OPDS 2.0（JSON）未覆盖，是 follow-up。
+//! The built-in OPDS source (kind = opds, multi-instance): OPDS 1.2 (Atom) catalogs as first-class sources, no wasm payload.
+//! manga = a catalog entry (<id> as key, the entry's feed link as url, which refreshes use to fetch upstream); chapters =
+//! acquisition entries in the entry feed; pages = OPDS-PSE per-page streaming links when present, otherwise the
+//! acquisition archive is downloaded to disk and split into pages with local's ZipCache. basic credentials live in
+//! source_setting; register/delete go through the admin surface. OPDS 2.0 (JSON) is not covered — a follow-up.
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, MangaRow, SOURCE_KIND_OPDS, SourceRow, unix_now};
@@ -17,15 +17,15 @@ use std::sync::Arc;
 const PSE_STREAM_REL: &str = "http://vaemendis.net/opds-pse/stream";
 const IMAGE_REL: &str = "http://opds-spec.org/image";
 const THUMBNAIL_REL: &str = "http://opds-spec.org/image/thumbnail";
-/// rel 以前缀匹配：acquisition/open-access、buy 等都是文件取回链接
+/// rel is prefix-matched: acquisition/open-access, buy, etc. are all file-retrieval links
 const ACQUISITION_PREFIX: &str = "http://opds-spec.org/acquisition";
-/// 降级遍历的失控保险：BFS 深度与总 feed 数双帽（Gutenberg 级目录不能全站爬）
+/// Runaway insurance for the degraded traversal: dual caps on BFS depth and total feed count (a Gutenberg-scale catalog must not be crawled whole)
 const TRAVERSE_MAX_DEPTH: usize = 2;
 const TRAVERSE_MAX_FEEDS: usize = 12;
-/// series feed 分页（rel=next）跟随上限：章节/页清单要全量，但目录坏了不能死循环
+/// Cap on following series-feed pagination (rel=next): chapter/page listings must be complete, but a broken catalog must not loop forever
 const FEED_MAX_PAGES: usize = 20;
 
-/// 单实例目录上下文：base_url 是注册的目录根；basic 凭据来自 source_setting（空 = 公共目录）
+/// Per-instance catalog context: base_url is the registered catalog root; basic credentials come from source_setting (empty = public catalog)
 pub struct Catalog {
 	base_url: String,
 	auth: Option<(String, String)>,
@@ -69,7 +69,7 @@ impl Catalog {
 		})
 	}
 
-	/// 有界 authed GET；非 2xx 连带状态码上报（401 即凭据错误的可见面）
+	/// Bounded authed GET; non-2xx surfaces the status code (401 is the visible face of wrong credentials)
 	pub async fn get_bytes(&self, state: &AppState, url: &str, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
 		let response = self
 			.request(state, url)?
@@ -83,7 +83,7 @@ impl Catalog {
 		crate::source::read_body(response, max).await
 	}
 
-	/// href 相对它所在 feed 的 URL 解析成绝对：Komga 发绝对链接，通用目录可能发相对
+	/// href resolves to absolute against the URL of the feed containing it: Komga sends absolute links, generic catalogs may send relative ones
 	fn resolve(feed_url: &str, href: &str) -> ApiResult<String> {
 		let base = reqwest::Url::parse(feed_url).map_err(|_| ApiError::bad_request("invalid feed url"))?;
 		base.join(href)
@@ -105,7 +105,7 @@ fn string_default(defaults: &std::collections::HashMap<String, DefaultValue>, ke
 	}
 }
 
-/// 目录条目的一个链接；pse_count 只出现在 OPDS-PSE 流链接上（pse:count 属性）
+/// One link of a catalog entry; pse_count appears only on OPDS-PSE stream links (the pse:count attribute)
 #[derive(Debug)]
 pub struct EntryLink {
 	pub rel: String,
@@ -129,7 +129,7 @@ impl FeedEntry {
 		self.links.iter().filter(move |l| l.rel == rel)
 	}
 
-	/// 册（acquisition entry）：有 acquisition 或 PSE 流链接，否则是可下钻的 series/导航条目
+	/// A book (acquisition entry): has an acquisition or PSE stream link; otherwise it is a drillable series/navigation entry
 	pub fn is_book(&self) -> bool {
 		self.acquisition().is_some() || self.pse().is_some()
 	}
@@ -142,7 +142,7 @@ impl FeedEntry {
 		self.links_by_rel(PSE_STREAM_REL).next()
 	}
 
-	/// 下钻链接：指向另一个 feed（atom 类型即 feed 标记，rel 多为 subsection）
+	/// Drill-down link: points at another feed (the atom type is the feed marker, rel is usually subsection)
 	pub fn feed_link(&self) -> Option<&EntryLink> {
 		self.links.iter().find(|l| l.type_.starts_with("application/atom+xml"))
 	}
@@ -169,20 +169,20 @@ impl Feed {
 	}
 }
 
-/// 元素/属性本地名（剥命名空间前缀）：Atom 默认命名空间无前缀，pse:* 属性剥成 count
+/// Element/attribute local name (namespace prefix stripped): Atom's default namespace has no prefix, and pse:* attributes strip down to count
 fn local_name(name: &str) -> &str {
 	name.rsplit(':').next().unwrap_or(name)
 }
 
-/// 事件流解析 Atom feed：serde 绑定搞不定 content 里混嵌的 <br/> 这类内联标记，
-/// 逐事件只认 entry/id/title/updated/content/summary/author/name/link 这一小组标签
+/// Event-stream parsing of an Atom feed: serde bindings cannot handle inline markup like <br/> mixed into content,
+/// so per event only the small tag set entry/id/title/updated/content/summary/author/name/link is recognized
 pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 	let mut reader = quick_xml::Reader::from_reader(bytes);
 	reader.config_mut().trim_text(true);
 	let mut feed = Feed::default();
 	let mut entry: Option<FeedEntry> = None;
 	let mut in_author = false;
-	// 正在收集文本的目标标签（本地名）；content/summary 内的嵌套标签不切换目标
+	// The tag (local name) currently collecting text; nested tags inside content/summary do not switch the target
 	let mut text_tag: Option<String> = None;
 	let mut text_buf = String::new();
 	let mut buf = Vec::new();
@@ -267,8 +267,8 @@ pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 	Ok(feed)
 }
 
-/// 文本事件之间的实体引用：五个预定义实体 + 十进制/十六进制字符引用，其余丢弃
-/// （未知命名实体拿不到 DTD 没法解析，标题里也不该出现）
+/// Entity references between text events: the five predefined entities + decimal/hex character references; anything
+/// else is dropped (unknown named entities cannot be resolved without the DTD and should not appear in titles anyway)
 fn resolve_ref(name: &str) -> Option<String> {
 	match name {
 		"amp" => return Some("&".into()),
@@ -295,7 +295,7 @@ fn push_link(feed: &mut Feed, entry: &mut Option<FeedEntry>, e: &quick_xml::even
 	};
 	for attr in e.attributes() {
 		let attr = attr.map_err(|e| e.to_string())?;
-		// normalized_value 解析预定义实体：href 查询串里的 &amp; 必须还原成 &
+		// normalized_value resolves predefined entities: an &amp; inside an href query string must come back as &
 		let value = attr
 			.normalized_value(quick_xml::XmlVersion::Implicit1_0)
 			.map_err(|e| e.to_string())?;
@@ -336,7 +336,7 @@ fn parse_rfc3339(text: &str) -> Option<i64> {
 		.ok()
 }
 
-/// OpenSearch 描述文档里的结果 URL 模板（第一个 Url 元素的 template 属性）
+/// The result URL template in an OpenSearch description document (the first Url element's template attribute)
 pub fn parse_opensearch_template(bytes: &[u8]) -> Option<String> {
 	let mut reader = quick_xml::Reader::from_reader(bytes);
 	let mut buf = Vec::new();
@@ -361,9 +361,9 @@ pub fn parse_opensearch_template(bytes: &[u8]) -> Option<String> {
 	}
 }
 
-/// 模板替换：{searchTerms}（含可选形 {?}）换成编码后的查询词，其余可选参数按缺省抹空。
-/// byte_serialize 的空格是 +（form 语义），查询串统一成 %20（输出里的 + 只可能来自空格，
-/// 原义 + 已被编成 %2B）
+/// Template substitution: {searchTerms} (including the optional {?} form) becomes the encoded query, other optional
+/// parameters are blanked as if defaulted. byte_serialize renders a space as + (form semantics), and the query string
+/// is unified to %20 (a + in the output can only come from a space, since a literal + was encoded as %2B)
 fn opensearch_url(template: &str, query: &str) -> String {
 	let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes())
 		.collect::<String>()
@@ -385,12 +385,12 @@ fn opensearch_url(template: &str, query: &str) -> String {
 
 pub struct SearchOutcome {
 	pub entries: Vec<Manga>,
-	/// 目录没有 OpenSearch 时退 feed 遍历的标记：结果只是标题子串过滤，不是真搜索
+	/// Marks the feed-traversal fallback when the catalog has no OpenSearch: results are just title substring filtering, not a real search
 	pub degraded: bool,
 }
 
-/// search 能力映射：OpenSearch 描述优先；缺失/不可用退 feed 遍历并标 degraded。
-/// query 空 = 浏览，直接遍历根目录（不算降级）
+/// search capability mapping: the OpenSearch description wins; when missing/unusable, fall back to feed traversal marked degraded.
+/// An empty query = browse, traversing the root directly (not counted as degraded)
 pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) -> ApiResult<SearchOutcome> {
 	let catalog = Catalog::load(state, source_id).await?;
 	let root_url = catalog.base_url.clone();
@@ -428,8 +428,8 @@ pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) 
 	})
 }
 
-/// 降级遍历：BFS 下钻（深度/总量双帽），可下钻条目作为 manga 候选；根 feed 的条目是
-/// 栏位（Komga 的 All series 等），候选只收 depth>=1 的 feed 里的条目
+/// Degraded traversal: BFS drill-down (dual depth/total caps), drillable entries become manga candidates; the root
+/// feed's entries are shelves (Komga's "All series" etc.), so candidates are only collected from feeds at depth>=1
 async fn traverse(
 	catalog: &Catalog,
 	state: &AppState,
@@ -500,8 +500,8 @@ async fn traverse(
 	Ok(out)
 }
 
-/// 可下钻条目 → 源侧 Manga：key 是条目 <id>，url 是下钻 feed 链接（回源的唯一凭据）；
-/// 册形条目（acquisition 直接挂在列表里）不进 manga 模型，是系列章节的料
+/// Drillable entry → source-side Manga: key is the entry <id>, url is the drill-down feed link (the only handle for
+/// fetching upstream); book-shaped entries (acquisition links straight in the list) do not enter the manga model — they are chapter material of a series
 fn feed_entries_to_manga(feed: &Feed, feed_url: &str) -> Vec<Manga> {
 	feed.entries
 		.iter()
@@ -527,8 +527,8 @@ fn feed_entries_to_manga(feed: &Feed, feed_url: &str) -> Vec<Manga> {
 		.collect()
 }
 
-/// 回源拉详情 + 章节的 opds 对应物：取条目 feed，acquisition entries 映射成章节；
-/// 分页（rel=next）跟随到全量。initial 提供 key 与 url（搜索结果/库行都带）
+/// The opds counterpart of fetching details + chapters from the source: pulls the entry feed and maps acquisition
+/// entries to chapters; pagination (rel=next) is followed to completion. initial provides key and url (search results/library rows both carry them)
 pub async fn manga_update(state: &Arc<AppState>, source_id: i64, initial: Manga) -> ApiResult<Manga> {
 	let catalog = Catalog::load(state, source_id).await?;
 	let feed_url = initial
@@ -572,7 +572,7 @@ pub async fn manga_update(state: &Arc<AppState>, source_id: i64, initial: Manga)
 	})
 }
 
-/// feed 首页 + rel=next 分页拼成全量条目列表（feed 级 title 只从首页出）
+/// The feed's first page plus rel=next pagination merged into the complete entry list (the feed-level title comes only from the first page)
 async fn fetch_feed_pages(catalog: &Catalog, state: &AppState, feed_url: &str, max_pages: usize) -> ApiResult<Feed> {
 	let first = catalog.get_feed(state, feed_url).await?;
 	let mut next = first.next_link().map(|l| l.href.clone());
@@ -596,8 +596,8 @@ async fn fetch_feed_pages(catalog: &Catalog, state: &AppState, feed_url: &str, m
 	Ok(merged)
 }
 
-/// 册条目 → 章节：url 优先 acquisition 文件链接（CBZ 兜底与下载都指它），
-/// 无文件链接退 PSE 流基址；number 按标题数字解析（卷级章是源特性，解析不出留空）
+/// Book entry → chapter: url prefers the acquisition file link (both the CBZ fallback and downloads point at it),
+/// falling back to the PSE stream base when there is no file link; number parses from the title's digits (volume-level chapters are a source feature, so an unparseable number stays empty)
 fn entry_to_chapter(entry: &FeedEntry, feed_url: &str) -> Option<Chapter> {
 	if !entry.is_book() {
 		return None;
@@ -624,8 +624,8 @@ fn entry_to_chapter(entry: &FeedEntry, feed_url: &str) -> Option<Chapter> {
 	})
 }
 
-/// load_pages 的 opds 臂：PSE 逐页链接展开成 Url 页（PSE 页码 0 基，Komga 端点 +1 实现），
-/// 否则下载 acquisition 压缩包落盘、ZipCache 列图片条目成 OpdsZip 页
+/// load_pages' opds arm: PSE per-page links expand into Url pages (PSE page numbers are 0-based; Komga's endpoint
+/// implements +1), otherwise the acquisition archive is downloaded to disk and ZipCache lists image entries into OpdsZip pages
 pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow) -> ApiResult<Vec<Value>> {
 	let catalog = Catalog::load(state, manga.source_id).await?;
 	let feed_url = manga
@@ -643,7 +643,7 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 		&& let Some(count) = pse.pse_count
 		&& count > 0
 	{
-		// 先替换占位符再解析：{pageNumber} 的花括号过 Url::join 会被百分号编码
+		// Replace the placeholder before parsing: {pageNumber}'s braces would be percent-encoded by Url::join
 		if !pse.href.contains("{pageNumber}") {
 			return Err(ApiError::bad_gateway("opds page streaming link missing {pageNumber}"));
 		}
@@ -665,7 +665,7 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 	Ok(names.iter().map(|name| page_opds_zip_json(name)).collect())
 }
 
-/// 页图字节（OpdsZip 变体）：落盘缓存缺席时重取 feed 找 acquisition 链接自愈
+/// Page-image bytes (OpdsZip variant): when the on-disk cache is missing, re-fetches the feed to find the acquisition link, self-healing
 pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow, entry_name: &str) -> ApiResult<(Vec<u8>, String)> {
 	let path = cbz_path(state, chapter.id);
 	if tokio::fs::metadata(&path).await.is_err() {
@@ -703,7 +703,7 @@ pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &Ch
 	Ok((bytes, crate::local::image_mime(entry_name).to_string()))
 }
 
-/// acquisition 压缩包的落盘路径：按 chapter_id 命名，页行重写时由调用方删旧文件
+/// On-disk path of an acquisition archive: named by chapter_id; the caller deletes the old file when page rows are rewritten
 pub fn cbz_path(state: &AppState, chapter_id: i64) -> PathBuf {
 	state.config.opds_cbz_dir().join(chapter_id.to_string())
 }
@@ -752,7 +752,7 @@ fn page_url_json(url: String) -> Value {
 	})
 }
 
-/// 页内容 JSON 的 OpdsZip 变体：值是压缩包内的页条目名，包路径按 chapter_id 派生
+/// The OpdsZip variant of page-content JSON: the value is the page entry name inside the archive, whose path derives from chapter_id
 fn page_opds_zip_json(entry: &str) -> Value {
 	serde_json::json!({
 		"content": { "OpdsZip": entry },
@@ -762,7 +762,7 @@ fn page_opds_zip_json(entry: &str) -> Value {
 	})
 }
 
-/// name 派生实例 slug：小写字母数字段以 - 相连；一个合法字符都没有没法生成 key
+/// Derives an instance slug from name: lowercase alphanumeric runs joined with -; no usable character at all means no key can be built
 fn slugify(name: &str) -> Option<String> {
 	let mut slug = String::new();
 	let mut dash = false;
@@ -780,8 +780,8 @@ fn slugify(name: &str) -> Option<String> {
 	(!slug.is_empty()).then_some(slug)
 }
 
-/// 实例注册：key 取 opds.<slug>，撞名追加 -2/-3 计数（Aidoku 同名源并存的先例）；
-/// basic 凭据随 source_setting 落库（admin 面管理），空用户名 = 公共目录不种凭据
+/// Instance registration: key takes opds.<slug>, collisions append a -2/-3 counter (Aidoku precedent for same-named sources coexisting);
+/// basic credentials land in source_setting (managed on the admin surface); an empty username = public catalog, no credentials seeded
 pub async fn register_instance(
 	state: &Arc<AppState>,
 	name: &str,

@@ -22,13 +22,13 @@ const ATOM_FEED: &str = "application/atom+xml;profile=opds-catalog;type=feed";
 const COVER_MAX_AGE: u64 = 86400;
 const PAGE_MAX_AGE: u64 = 3600;
 
-/// 在库 manga 投影（同 library.rs 的 LIBRARY_SELECT，私有无法复用故重抄）；
-/// user_id 走绑定参数，调用方先绑 AuthUser.id
+/// In-library manga projection (same as library.rs's LIBRARY_SELECT, re-copied because that one is private);
+/// user_id goes through a bind parameter, the caller binds AuthUser.id first
 pub(crate) const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1";
 
-/// 章节 + 进度 + 下载产物路径 + 漫画名（series/updates 两条 feed 共用）
+/// Chapter + progress + download artifact path + manga title (shared by the series/updates feeds)
 pub(crate) const CHAPTER_SELECT: &str = "SELECT c.*, cu.last_page_read, cu.last_read_at,
 	 d.path AS download_path, m.title AS manga_title
 	 FROM chapter c
@@ -73,7 +73,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.with_state(state)
 }
 
-/// OPDS 恒 Basic（§9）：认证开启时全链路校验真实用户名+密码；关闭时一切请求当内置 admin
+/// OPDS is always Basic (§9): with auth enabled, every request verifies a real username+password; with auth disabled, every request is the built-in admin
 pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
 		req.extensions_mut().insert(crate::auth::AuthUser::admin());
@@ -94,7 +94,7 @@ pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, mut req: Requ
 	}
 }
 
-/// 仓库没引 base64 crate，Basic 凭证只用标准字母表，手写解码
+/// The repo pulls in no base64 crate, and Basic credentials only use the standard alphabet, so decode by hand
 pub(crate) fn base64_decode(input: &str) -> Option<Vec<u8>> {
 	fn val(c: u8) -> Option<u32> {
 		match c {
@@ -121,7 +121,7 @@ pub(crate) fn base64_decode(input: &str) -> Option<Vec<u8>> {
 	Some(out)
 }
 
-/// 拼绝对 URL：Host 头 + X-Forwarded-Proto（反代后才是 https），缺省 http://localhost
+/// Builds the absolute URL: Host header + X-Forwarded-Proto (https only behind a reverse proxy), default http://localhost
 pub(crate) fn base_url(headers: &HeaderMap) -> String {
 	let host = headers
 		.get(header::HOST)
@@ -157,7 +157,7 @@ pub(crate) fn rfc3339(secs: i64) -> String {
 		.unwrap_or_default()
 }
 
-/// q 要拼进 URL query，保留字符与非 ASCII 一律 percent-encode
+/// q goes into a URL query, so reserved characters and non-ASCII are all percent-encoded
 pub(crate) fn url_query_escape(s: &str) -> String {
 	let mut out = String::new();
 	for b in s.bytes() {
@@ -249,7 +249,7 @@ fn manga_entry(xml: &mut String, base: &str, row: &MangaRow, updated: i64) {
 	xml.push_str("</entry>\n");
 }
 
-/// 多抓一行判 has_next，与 API 分页同一手法
+/// Fetches one extra row to decide has_next, same trick as the API pagination
 fn manga_feed(
 	base: &str,
 	feed_id: &str,
@@ -327,7 +327,7 @@ fn chapter_entry(xml: &mut String, base: &str, row: &OpdsChapterRow) {
 		esc(&title),
 		rfc3339(updated),
 	);
-	// 章节自身没有简介字段，content 给漫画名 + 扫图组做摘要
+	// A chapter has no summary field of its own, so content gets the manga title + scanlators as the abstract
 	let mut summary = row.manga_title.clone();
 	if !c.scanlators.0.is_empty() {
 		let _ = write!(summary, " ({})", c.scanlators.0.join(", "));
@@ -349,7 +349,7 @@ fn chapter_entry(xml: &mut String, base: &str, row: &OpdsChapterRow) {
 		esc(&format!("{base}/opds/v1.2/stream/{}/{{pageNumber}}", c.id)),
 		c.page_count,
 	);
-	// PSE lastRead 从 1 计，last_page_read 是 0 基索引；无进度整条不出
+	// PSE lastRead counts from 1 while last_page_read is a 0-based index; without progress the whole attribute is omitted
 	if let Some(last_page_read) = row.last_page_read {
 		let _ = write!(xml, " pse:lastRead=\"{}\"", last_page_read + 1);
 		if let Some(last_read_at) = row.last_read_at {
@@ -405,7 +405,7 @@ async fn open_search_description(headers: HeaderMap) -> Response {
 			"<Url type=\"application/atom+xml;profile=opds-catalog;type=feed\" template=\"{}\"/>\n",
 			"</OpenSearchDescription>",
 		),
-		// {searchTerms} 是 OpenSearch 模板占位符，原样输出
+		// {searchTerms} is the OpenSearch template placeholder, output verbatim
 		esc(&format!("{base}/opds/v1.2/search?q={{searchTerms}}")),
 	);
 	Response::builder()
@@ -620,7 +620,7 @@ async fn updates_feed(
 	Ok(chapter_feed(&base, "urn:sumidoku:updates", "Updates", &self_href, &next_href, rows))
 }
 
-/// LIKE 通配符按字面匹配
+/// LIKE wildcards are matched literally
 pub(crate) fn like_pattern(q: &str) -> String {
 	let mut pattern = String::with_capacity(q.len() + 2);
 	pattern.push('%');
@@ -761,7 +761,7 @@ async fn stream_page(
 	};
 	let stored: Value = serde_json::from_str(content)?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
-	// 文本页给不了图流；ApiError 没有 415 构造，这里直接拼响应
+	// A text page cannot be streamed as an image; ApiError has no 415 constructor, so the response is assembled here directly
 	if content.get("Text").is_some() {
 		return Ok((
 			StatusCode::UNSUPPORTED_MEDIA_TYPE,

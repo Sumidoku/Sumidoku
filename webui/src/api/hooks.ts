@@ -57,7 +57,7 @@ export const queryClient = new QueryClient({
 	}
 });
 
-// query key 统一出口，跨页失效（如入库后刷新书库）按前缀对账
+// Single source of query keys; cross-page invalidation (e.g. refreshing the library after adding a manga) reconciles by prefix
 export const qk = {
 	sources: ['sources'] as const,
 	sourceRepos: ['source-repos'] as const,
@@ -77,7 +77,7 @@ export const qk = {
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
 	last.hasNextPage ? all.length + 1 : undefined;
 
-/** 动态能力（filters/listings）不支持时服务端按约定 404，视为空列表而不是错误 */
+/** When dynamic capabilities (filters/listings) are unsupported the server 404s by convention; treat as an empty list, not an error */
 async function emptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
 	try {
 		return await p;
@@ -87,7 +87,7 @@ async function emptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
 	}
 }
 
-/** 主页能力不支持时按 null 处理，页面据此显示「该源没有主页」而不是报错 */
+/** When the home capability is unsupported, treat as null so pages show "this source has no home" instead of an error */
 async function nullOn404<T>(p: Promise<T>): Promise<T | null> {
 	try {
 		return await p;
@@ -97,15 +97,15 @@ async function nullOn404<T>(p: Promise<T>): Promise<T | null> {
 	}
 }
 
-// ---- 查询 ----
+// ---- Queries ----
 
 export function useSources() {
 	return useQuery({ queryKey: qk.sources, queryFn: () => api<Source[]>('/sources') });
 }
 
-// ---- 认证身份与用户管理 ----
+// ---- Auth identity and user management ----
 
-/** 登录页/设置页之外的常态身份来源；silent：未登录的 401 交给全局跳转，不弹 toast */
+/** The usual identity source outside the login/settings pages; silent: a logged-out 401 goes to the global redirect without a toast */
 export function useWhoami() {
 	return useQuery({
 		queryKey: qk.whoami,
@@ -114,8 +114,9 @@ export function useWhoami() {
 }
 
 /**
- * 管理入口的展示开关（真门禁在服务端 403）。免认证部署一切按内置 admin；
- * 身份未取到时按非 admin 渲染——管理入口晚一拍出现，胜过给 reader 闪一下再消失
+ * Display gate for admin entries (the real gate is the server's 403). Auth-less deployments count as the
+ * built-in admin; before the identity arrives, render as non-admin — an admin entry appearing a beat late
+ * beats flashing it to a reader and then hiding it
  */
 export function useIsAdmin(): boolean {
 	const whoami = useWhoami();
@@ -136,7 +137,7 @@ export function useCreateUser() {
 	});
 }
 
-/** 改自己（角色/用户名）会影响账号显示，whoami 一并失效 */
+/** Editing yourself (role/username) changes the account display, so whoami is invalidated too */
 export function useUpdateUser() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -158,7 +159,7 @@ export function useDeleteUser() {
 }
 
 
-/** 从源列表里取单个源；没有独立的 GET /sources/{id} 端点 */
+/** Pick a single source out of the source list; there is no standalone GET /sources/{id} endpoint */
 export function useSource(id: number) {
 	return useQuery({
 		queryKey: qk.sources,
@@ -170,17 +171,17 @@ export function useSource(id: number) {
 export interface LibraryBrowse {
 	search?: string;
 	sort?: LibrarySort;
-	/** 布尔筛选三态（unread/downloaded/bookmarked 键）：1 包含 / -1 排除 */
+	/** Boolean filter tri-state (unread/downloaded/bookmarked keys): 1 include / -1 exclude */
 	filters?: TriStateSelection;
-	/** 迁移批量流程按源筛条目 */
+	/** The migration batch flow filters entries by source */
 	sourceId?: number;
-	/** 内容分级三态（manga 级 1..=3 → 1 包含 / -1 排除） */
+	/** Content rating tri-state (manga-level 1..=3 → 1 include / -1 exclude) */
 	ratings?: TriStateSelection;
-	/** 源三态（源 id → 1 包含 / -1 排除） */
+	/** Source tri-state (source id → 1 include / -1 exclude) */
 	sources?: TriStateSelection;
 }
 
-/** 三态拆成 API 的包含/排除两个逗号串；空集缺席 */
+/** Split a tri-state into the API's two comma-separated include/exclude strings; an empty set is omitted */
 function triParams(sel: TriStateSelection | undefined): [string?, string?] {
 	if (!sel) return [undefined, undefined];
 	const inc = Object.entries(sel)
@@ -222,7 +223,7 @@ export function useCategories() {
 	return useQuery({ queryKey: qk.categories, queryFn: () => api<Category[]>('/categories') });
 }
 
-/** 书库各源条目数；queryKey 挂在 qk.library 下，入库/移出自动失效重取 */
+/** Per-source entry counts in the library; the queryKey hangs under qk.library so add/remove invalidates and refetches it automatically */
 export function useLibrarySourceCounts(enabled = true) {
 	return useQuery({
 		queryKey: [...qk.library, 'source-counts'],
@@ -257,7 +258,7 @@ export function useSourceHome(sourceId: number, enabled = true) {
 					silent: true,
 					signal,
 					onEvent: (ev) => {
-						// partial 到达即写缓存，页面边到边渲染；终态由 queryFn 返回后覆盖
+						// partials are written to the cache as they arrive so the page renders edge-to-edge; the terminal state overwrites once queryFn returns
 						qc.setQueryData<HomeLayout | null>(qk.sourceHome(sourceId), (cur) => {
 							if (ev.type === 'layout') return ev.layout;
 							if (ev.type === 'component') {
@@ -291,7 +292,7 @@ export function useSourceSearch(sourceId: number, req: SourceSearchRequest, enab
 				signal,
 				onEvent: (ev) => {
 					if (ev.type !== 'manga') return;
-					// partial 逐条追加到对应页；终态由 queryFn 返回后覆盖整页
+					// partials append one by one to their page; the terminal state overwrites the whole page once queryFn returns
 					qc.setQueryData<InfiniteData<MangaPage, number>>(queryKey, (cur) => {
 						const idx = pageParam - 1;
 						if (!cur) {
@@ -312,8 +313,8 @@ export function useSourceSearch(sourceId: number, req: SourceSearchRequest, enab
 	});
 }
 
-/** 跨源聚合搜索：流式到达的每源结果按 sourceId 写进聚合缓存（完成一个上一个），
- * 终态返回后整体覆盖；页面按自己的源顺序取各源结果渲染 */
+/** Cross-source aggregate search: each source's streamed result is written into the aggregate cache by sourceId (rendered as soon as one completes),
+ * and the terminal state overwrites everything once returned; the page renders each source's result in its own source order */
 export function useGlobalSearch(sourceIds: number[], query: string, enabled = true) {
 	const qc = useQueryClient();
 	const queryKey = ['global-search', query, sourceIds] as const;
@@ -352,7 +353,7 @@ export function useListing(sourceId: number, listingId: string, enabled = true) 
 	});
 }
 
-// ---- 变更 ----
+// ---- Mutations ----
 
 export function useRegisterManga() {
 	return useMutation({
@@ -360,7 +361,7 @@ export function useRegisterManga() {
 			apiStream<{ id: number }, MangaUpdateStreamEvent>('/manga', {
 				method: 'POST',
 				body,
-				// 登记完成才拿得到内部 id，partial 没有可挂载的页面状态，忽略
+				// the internal id only exists once registration completes; partials have no page state to attach to, so ignore them
 				onEvent: () => {}
 			})
 	});
@@ -429,7 +430,7 @@ export function usePatchCategory() {
 	});
 }
 
-// chapters 缓存按 mangaId 分键，而 PATCH 响应里只有 chapterId，调用方要自己带上 mangaId 才会失效章节列表
+// the chapters cache is keyed by mangaId while the PATCH response only carries chapterId, so callers must pass mangaId themselves to invalidate the chapter list
 export function useUpdateChapter() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -489,7 +490,7 @@ export function usePinSource() {
 	});
 }
 
-/** ids 是 source key 的有序数组，服务端要求与当前置顶集合一一对应，顺序没变别调 */
+/** ids is an ordered array of source keys; the server requires a one-to-one match with the current pinned set, so don't call it when the order hasn't changed */
 export function useReorderPinned() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -499,13 +500,13 @@ export function useReorderPinned() {
 	});
 }
 
-// ---- 源仓库 ----
+// ---- Source repos ----
 
 export interface RepoBrowseFilter {
-	/** 语言码多选，逗号拼接；空数组不过滤 */
+	/** Multi-select language codes, comma-joined; an empty array means no filtering */
 	langs?: string[];
 	query?: string;
-	/** 内容分级多选，逗号拼接；undefined 不过滤，空串表示全不选 */
+	/** Multi-select content ratings, comma-joined; undefined means no filtering, an empty string means none selected */
 	contentRating?: string;
 }
 
@@ -523,7 +524,7 @@ export function useRepoSources(filter: RepoBrowseFilter, enabled = true) {
 			const qs = new URLSearchParams();
 			if (filter.langs?.length) qs.set('lang', filter.langs.join(','));
 			if (filter.query) qs.set('query', filter.query);
-			// 显式区分：undefined 不过滤；空串表示一个分级都不选（服务端匹配空集）
+			// explicit distinction: undefined means no filtering; an empty string means no rating is selected (the server matches the empty set)
 			if (filter.contentRating !== undefined) qs.set('contentRating', filter.contentRating);
 			const suffix = qs.size > 0 ? `?${qs}` : '';
 			return api<RepoSourceEntry[]>(`/source-repos/sources${suffix}`);
@@ -532,7 +533,7 @@ export function useRepoSources(filter: RepoBrowseFilter, enabled = true) {
 	});
 }
 
-/** 安装/更新后已装列表与各过滤结果里的 installedVersion/updateVersion 都要重算 */
+/** After install/update, installedVersion/updateVersion must be recomputed both in the installed list and in every filtered result */
 function invalidateSourceViews(qc: QueryClient) {
 	void qc.invalidateQueries({ queryKey: qk.sources });
 	void qc.invalidateQueries({ queryKey: qk.repoSources });
@@ -599,11 +600,11 @@ export function useUpdateAllSources() {
 	});
 }
 
-// ---- manga 详情/章节查询 ----
+// ---- manga detail/chapter queries ----
 
 export interface MangaQueryOpts {
 	enabled?: boolean;
-	/** 阅读器只把详情/章节当导航信息，拉不到不该弹全局错误提示 */
+	/** The reader treats detail/chapters as navigation info only; failing to fetch them should not pop a global error toast */
 	silent?: boolean;
 }
 
@@ -623,7 +624,7 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 	});
 }
 
-/** 整章页面在会话内不变，不重复回源 */
+/** A chapter's pages don't change within a session, so never refetch */
 export function useChapterPages(chapterId: number) {
 	return useQuery({
 		queryKey: ['chapter', chapterId, 'pages'],
@@ -632,7 +633,7 @@ export function useChapterPages(chapterId: number) {
 	});
 }
 
-// ?refresh 回源拉取耗时不可控，走 mutation 拿 pending 态，成功直接写缓存省一次重拉
+// ?refresh pulls from the source with unbounded latency, so it goes through a mutation for the pending state; on success the cache is written directly, saving a refetch
 export function useRefreshManga() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -640,7 +641,7 @@ export function useRefreshManga() {
 			apiStream<MangaDetail, MangaUpdateStreamEvent>(`/manga/${id}?refresh`, {
 				onEvent: (ev) => {
 					if (ev.type !== 'manga') return;
-					// 详情快照渐进上屏；chapters 不进详情缓存，终态返回后整体覆盖
+					// detail snapshots render progressively; chapters don't go into the detail cache — the terminal state overwrites everything on return
 					const { chapters, ...detail } = ev.manga;
 					qc.setQueryData<MangaDetail>(qk.manga(id), (cur) => (cur ? { ...cur, ...detail } : cur));
 				}
@@ -649,7 +650,7 @@ export function useRefreshManga() {
 	});
 }
 
-/** 备选封面：501 是源没导出的正常分支，silent 交给页面按「没有备选」显示 */
+/** Alternate covers: 501 is the normal branch for a source that doesn't export them; silent lets the page show "no alternates" instead of an error */
 export function useAlternateCovers(mangaId: number) {
 	return useQuery({
 		queryKey: ['manga', mangaId, 'alternate-covers'],
@@ -657,7 +658,7 @@ export function useAlternateCovers(mangaId: number) {
 	});
 }
 
-// 响应直接写回详情缓存：cover 字段一变，coverUrl 的版本参数跟着变，浏览器才会重取图
+// the response is written straight back into the detail cache: once the cover field changes, coverUrl's version param changes with it and the browser refetches the image
 export function useSelectCover() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -679,8 +680,8 @@ export function useRefreshChapters() {
 			apiStream<Chapter[], MangaUpdateStreamEvent>(`/manga/${mangaId}/chapters?refresh`, {
 				onEvent: (ev) => {
 					if (ev.type !== 'manga' || !ev.manga.chapters) return;
-					// 章节快照渐进上屏：源侧章节还没有库内 id/进度，负 id 占位，
-					// 页面据此挡掉点读/选择/下载，终态返回后整体覆盖
+					// chapter snapshots render progressively: source-side chapters have no library id/progress yet, so negative ids are placeholders,
+					// and the page uses them to block read/select/download until the terminal state overwrites everything on return
 					const partial: Chapter[] = ev.manga.chapters.map((c, i) => ({
 						...c,
 						id: -(i + 1),
@@ -698,7 +699,7 @@ export function useRefreshChapters() {
 	});
 }
 
-// ---- history / updates 分页 ----
+// ---- history / updates pagination ----
 import type { HistoryPage as HistoryPageData, SourceSettings, UpdateRecentPage } from './types';
 
 export function useHistory() {
@@ -719,7 +720,7 @@ export function useUpdateRecent() {
 	});
 }
 
-// 下载列表状态由 /downloads/ws 驱动、页面自持，这里只放操作类 hooks
+// Download list state is driven by /downloads/ws and owned by the page; only operation hooks live here
 export function useDownloadsStart() {
 	return useMutation({
 		mutationFn: () => api<{ running: boolean }>('/downloads/start', { method: 'POST' })
@@ -744,7 +745,7 @@ export function useDeleteDownload() {
 	});
 }
 
-// 409 busy 由页面转成提示，silent 避免客户端再弹一条错误
+// 409 busy is turned into a hint by the page; silent keeps the client from popping another error
 export function useFetchUpdate() {
 	return useMutation({
 		mutationFn: (categoryId?: number) =>
@@ -774,7 +775,7 @@ export function useSaveServerSettings() {
 	});
 }
 
-/** 恢复备份：任意 section 都可能变，全量失效 */
+/** Restoring a backup: any section may change, so invalidate everything */
 export function useRestoreBackup() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -794,7 +795,7 @@ export function useBackupFiles() {
 	});
 }
 
-/** 从服务器备份目录里的既有文件恢复：与上传恢复同一条导入路径，同样全量失效 */
+/** Restore from an existing file in the server backup directory: same import path as upload restore, same full invalidation */
 export function useRestoreNamedBackup() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -804,7 +805,7 @@ export function useRestoreNamedBackup() {
 	});
 }
 
-/** 导入 Aidoku .aib：dryRun 只预览不写库，真导入才全量失效 */
+/** Import an Aidoku .aib: dryRun only previews without writing; a real import invalidates everything */
 export function useImportAidoku() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -816,7 +817,7 @@ export function useImportAidoku() {
 	});
 }
 
-/** 导入 Suwayomi/Mihon 备份：mapping 只对 unmatched 组起作用，键是字符串形态的 Mihon 源 id */
+/** Import a Suwayomi/Mihon backup: mapping only applies to unmatched groups, keyed by the Mihon source id in string form */
 export function useImportSuwayomi() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -853,7 +854,7 @@ export function useSaveSourceSettings(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ edits, notify }: { edits: Record<string, unknown>; notify?: string[] }) => {
-			// 被改设置声明的 notification 逐个发给源（重复参数，服务端按序送达）
+			// the notification declared by each changed setting is sent to the source one by one (repeated params, delivered in order by the server)
 			const qs = (notify ?? []).map((n) => `notify=${encodeURIComponent(n)}`).join('&');
 			return api<{ values: Record<string, unknown> }>(
 				`/sources/${sourceId}/settings${qs ? `?${qs}` : ''}`,
@@ -868,7 +869,7 @@ export function useSaveSourceSettings(sourceId: number) {
 	});
 }
 
-/** Button 设置的按下：把它的 notification 串发给源（不重启实例），无动作串时源侧不响应 */
+/** Pressing a Button setting: sends its notification string to the source (without restarting the instance); the source does not respond when no action string is declared */
 export function useNotifySource(sourceId: number) {
 	return useMutation({
 		mutationFn: (notification: string) =>
@@ -876,7 +877,7 @@ export function useNotifySource(sourceId: number) {
 	});
 }
 
-/** 设置变更声明的 refreshes 映射成查询失效，对齐 Aidoku app 的 refresh-* 通知 */
+/** Map the refreshes declared by a settings change to query invalidations, mirroring the Aidoku app's refresh-* notifications */
 export function invalidateForRefreshes(qc: QueryClient, sourceId: number, refreshes: string[]) {
 	for (const target of new Set(refreshes)) {
 		if (target === 'settings') void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] });
@@ -886,7 +887,7 @@ export function invalidateForRefreshes(qc: QueryClient, sourceId: number, refres
 	}
 }
 
-/** 清空覆盖值并按包内静态 schema 重新播种默认值 */
+/** Clear override values and reseed defaults from the package's static schema */
 export function useResetSourceSettings(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
@@ -902,14 +903,14 @@ export function useResetSourceSettings(sourceId: number) {
 	});
 }
 
-/** 清该源登录 cookie 并重启实例（不动封面缓存与下载） */
+/** Clear the source's login cookies and restart the instance (cover cache and downloads are untouched) */
 export function useClearSourceCache(sourceId: number) {
 	return useMutation({
 		mutationFn: () => api<{ ok: boolean }>(`/sources/${sourceId}/cache/clear`, { method: 'POST' })
 	});
 }
 
-/** 基本登录：成功后会写回 username/password 与 marker，刷新设置值 */
+/** Basic login: on success the server writes back username/password and the marker; refresh the settings values */
 export function useBasicLogin(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
@@ -922,7 +923,7 @@ export function useBasicLogin(sourceId: number) {
 	});
 }
 
-/** 网页登录：粘贴登录 host 的 cookie 换取登录态，服务端重启实例后刷新设置值 */
+/** Web login: paste the login host's cookies in exchange for a logged-in state; refresh settings values after the server restarts the instance */
 export function useWebLogin(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
@@ -943,7 +944,7 @@ export function useWebLogin(sourceId: number) {
 	});
 }
 
-/** OAuth 登录：构建授权 URL（pkce 时服务端生成 verifier 落库并追加 challenge），新标签打开 */
+/** OAuth login: build the authorization URL (with pkce the server generates and stores the verifier, then appends the challenge); open in a new tab */
 export function useOAuthLoginStart(sourceId: number) {
 	return useMutation({
 		mutationFn: (key: string) =>
@@ -954,7 +955,7 @@ export function useOAuthLoginStart(sourceId: number) {
 	});
 }
 
-/** OAuth 登录：解析粘贴的回调 URL，换令牌或存回调串，服务端重启实例后刷新设置值 */
+/** OAuth login: parse the pasted callback URL to exchange for tokens or store the callback string; refresh settings values after the server restarts the instance */
 export function useOAuthLoginComplete(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
@@ -967,7 +968,7 @@ export function useOAuthLoginComplete(sourceId: number) {
 	});
 }
 
-/** 源级登出：清 <key> 及其子键；clearCookies 为真时连登录 cookie 一起清 */
+/** Source-level logout: clears <key> and its subkeys; when clearCookies is true the login cookies are cleared too */
 export function useLoginLogout(sourceId: number) {
 	const qc = useQueryClient();
 	return useMutation({
@@ -980,7 +981,7 @@ export function useLoginLogout(sourceId: number) {
 	});
 }
 
-// 重名 409 要转成中文提示，silent 交给调用方统一弹错
+// a duplicate-name 409 needs to be turned into a Chinese message, so silent leaves the toast to the caller
 export function useCreateCategory() {
 	const qc = useQueryClient();
 	return useMutation({
@@ -1016,7 +1017,7 @@ export function useReorderCategories() {
 	});
 }
 
-// ---- 跨源迁移 ----
+// ---- Cross-source migration ----
 
 export function useMigrateSources() {
 	return useQuery({
@@ -1025,7 +1026,7 @@ export function useMigrateSources() {
 	});
 }
 
-/** 单条目对一个目标源的标题搜索：命令式调用，批量匹配的并发由页面自持 */
+/** Title search of a single entry against one target source: imperative call; batch-match concurrency is owned by the page */
 export function migrateLookup(mangaId: number, targetSourceId: number, query?: string) {
 	const qs = new URLSearchParams({ mangaId: String(mangaId), targetSourceId: String(targetSourceId) });
 	if (query) qs.set('query', query);
@@ -1036,7 +1037,7 @@ export function useMigrate() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: MigrateRequest) => api<MigrateResponse>('/migrate', { method: 'POST', body }),
-		// 库/进度/历史/分类都可能变，与备份恢复同级全量失效
+		// library/progress/history/categories may all change — full invalidation, same as backup restore
 		onSuccess: () => qc.invalidateQueries()
 	});
 }

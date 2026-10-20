@@ -36,7 +36,7 @@ impl ApiError {
 		Self::new(StatusCode::NOT_FOUND, "not_found", message)
 	}
 
-	/// 无凭证、坏 token、错密码对外同一形状，不区分原因
+	/// No credential, bad token, and wrong password share one outward shape, with no reason given
 	pub fn unauthorized() -> Self {
 		Self::new(
 			StatusCode::UNAUTHORIZED,
@@ -49,7 +49,7 @@ impl ApiError {
 		Self::new(StatusCode::FORBIDDEN, "forbidden", message)
 	}
 
-	/// 源不支持某动态能力时按端点约定返回 404，但 code 仍是 unsupported
+	/// When a source lacks a dynamic capability, the endpoint convention returns 404, but the code stays unsupported
 	pub fn unsupported_404(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::NOT_FOUND, "unsupported", message)
 	}

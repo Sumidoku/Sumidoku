@@ -1,9 +1,10 @@
-//! 图像处理器的端到端回归（issue #116）：密文（不可解码）逐字节进处理器解密出图，
-//! 可解码图以像素进处理器过画布分支，五条入口链路输出一致的正常 PNG。
-//! fixture 源在 crates/wasm/tests/fixtures/rawimg-src（no_std cdylib），
-//! 重建方式：`cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
-//! 复制为 crates/wasm/tests/fixtures/rawimg/main.wasm。
+//! End-to-end regression for the image processor (issue #116): ciphertext (undecodable) bytes go into
+//! the processor verbatim and come out decrypted as an image; decodable images go in as pixels through
+//! the canvas branch; all five entry paths output the same proper PNG.
+//! The fixture source lives in crates/wasm/tests/fixtures/rawimg-src (no_std cdylib);
+//! rebuild with `cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
+//! to crates/wasm/tests/fixtures/rawimg/main.wasm.
 mod common;
 
 use axum::Router;
@@ -18,7 +19,7 @@ use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use tower::ServiceExt;
 
-/// 与 rawimg-src/src/lib.rs 对账的同一密钥与明文（2x2 RGBA 红绿/蓝白）
+/// The same key and plaintext as reconciled with rawimg-src/src/lib.rs (2x2 RGBA red-green/blue-white)
 const KEY: u8 = 0x5A;
 const PLAIN_PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0,
@@ -31,12 +32,12 @@ fn cipher() -> Vec<u8> {
 	PLAIN_PNG.iter().map(|b| b ^ KEY).collect()
 }
 
-/// 处理器输出的 PNG 必须就是 plain.png 的 2x2 像素
+/// The processor's output PNG must be exactly plain.png's 2x2 pixels
 fn assert_plain_pixels(png: &[u8], label: &str) {
 	assert_pixels(png, label, [[255, 0, 0, 255], [0, 255, 0, 255]], [[0, 0, 255, 255], [255, 255, 255, 255]]);
 }
 
-/// 可解码入参经画布两行互换后的像素（rawimg fixture 的可解码分支）
+/// The pixels of a decodable input after the canvas swaps the two rows (the rawimg fixture's decodable branch)
 fn assert_swapped_pixels(png: &[u8], label: &str) {
 	assert_pixels(png, label, [[0, 0, 255, 255], [255, 255, 255, 255]], [[255, 0, 0, 255], [0, 255, 0, 255]]);
 }
@@ -55,7 +56,7 @@ fn assert_pixels(png: &[u8], label: &str, row0: [[u8; 4]; 2], row1: [[u8; 4]; 2]
 	}
 }
 
-/// 微型图床：/cipher 回密文（octet-stream，无图像 magic），/plain 回明文 PNG
+/// Minimal image host: /cipher returns ciphertext (octet-stream, no image magic), /plain returns the plaintext PNG
 async fn serve_images() -> (u16, tokio::task::JoinHandle<()>) {
 	let router = Router::new()
 		.route(
@@ -129,7 +130,7 @@ async fn rawimg_source_id(app: &Router) -> i64 {
 		.expect("rawimg source id")
 }
 
-/// 占位 Url 页改写成 mock 图床地址（页内容形状 mirrors canvas_pipeline 的改写）
+/// Rewrites the placeholder Url page to the mock image host address (the page content shape mirrors canvas_pipeline's rewrite)
 async fn rewrite_page_url(t: &TestApp, chapter_id: i64, url: String) {
 	let pool = connect_db(&t.db_path).await;
 	let stored = json!({
@@ -162,7 +163,7 @@ async fn chapter_id_of(app: &Router, manga_id: i64) -> i64 {
 	body[0]["id"].as_i64().expect("chapter id")
 }
 
-/// browse/home 封面代理同样过处理器：密文解密出原图，可解码图过画布分支（#102 入口的关联缺口）
+/// The browse/home cover proxy also goes through the processor: ciphertext decrypts to the original, decodable images take the canvas branch (the related gap at the #102 entry)
 #[tokio::test]
 async fn proxy_image_processes_opaque_and_plain_bytes() {
 	let t = rawimg_app().await;
@@ -188,7 +189,7 @@ async fn proxy_image_processes_opaque_and_plain_bytes() {
 	}
 }
 
-/// 详情页封面：加密字节过 cover 处理器出 PNG（修复前是 502 source_error）
+/// Detail page cover: encrypted bytes go through the cover processor into a PNG (was 502 source_error before the fix)
 #[tokio::test]
 async fn manga_cover_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -204,7 +205,7 @@ async fn manga_cover_processes_opaque_bytes() {
 	assert_plain_pixels(&bytes, "manga cover");
 }
 
-/// reader 页图：加密字节过 page 处理器出 PNG
+/// Reader page image: encrypted bytes go through the page processor into a PNG
 #[tokio::test]
 async fn reader_page_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -223,7 +224,7 @@ async fn reader_page_processes_opaque_bytes() {
 	assert_plain_pixels(&bytes, "reader page");
 }
 
-/// 下载与 reader 同一条 fetch_page_image：cbz 里是解密后的 PNG
+/// Download shares the reader's fetch_page_image: the cbz holds the decrypted PNG
 #[tokio::test]
 async fn download_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -275,7 +276,7 @@ async fn download_processes_opaque_bytes() {
 	assert_plain_pixels(&data, "download page");
 }
 
-/// OPDS 封面与详情页封面同一条 fetch_cover_image：输出一致
+/// OPDS cover and detail page cover share fetch_cover_image: identical output
 #[tokio::test]
 async fn opds_cover_processes_opaque_bytes() {
 	let t = rawimg_app().await;

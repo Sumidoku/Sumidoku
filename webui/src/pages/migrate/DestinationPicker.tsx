@@ -19,16 +19,16 @@ function RowIcon({ source }: { source: Source }) {
 }
 
 export interface DestinationPickerProps {
-	/** 已选目标源 id，顺序即优先级 */
+	/** Selected target source ids; the order is the priority */
 	selected: number[];
 	onChange: (ids: number[]) => void;
-	/** 源条目所在的源，目标组合要排除 */
+	/** The source of the entry being migrated; excluded from the destination set */
 	excludeId?: number;
 }
 
 /**
- * 迁移目标组合选择器：SELECTED 有序（拖拽换序、可移除），AVAILABLE 点击追加，
- * 「全选置顶源」按 pin 顺序批量补入。单条目与批量两个入口共用。
+ * Migration destination-set picker: SELECTED is ordered (drag to reorder, removable), AVAILABLE appends
+ * on click, and "select all pinned" batch-adds in pin order. Shared by the single-entry and batch entries.
  */
 export function DestinationPicker({ selected, onChange, excludeId }: DestinationPickerProps) {
 	const sources = useSources();
@@ -39,7 +39,7 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 	const byId = new Map(all.map((s) => [s.id, s]));
 	const chosen = selected.map((id) => byId.get(id)).filter((s): s is Source => s !== undefined);
 	const chosenIds = new Set(chosen.map((s) => s.id));
-	// 可选源按名字字母序；置顶仍按 pinOrder 段在前
+	// Available sources sort alphabetically by name; pinned ones still lead by pinOrder
 	const available = all
 		.filter((s) => !chosenIds.has(s.id))
 		.sort(compareSourceName);

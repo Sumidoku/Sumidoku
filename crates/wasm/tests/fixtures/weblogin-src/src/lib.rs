@@ -1,11 +1,13 @@
 #![no_std]
-//! WebLoginHandler 导出的端到端验证源：
-//! 三个 login 设置分别覆盖 host 解析的三种路径（显式 url / url_key 指向 defaults /
-//! 无 url 走 base_url 兜底），clear_cookies_on_log_out 两态俱备；
-//! handle_web_login 只有同时拿到 cookies 参数且从 defaults 读到预置的
-//! `<key>.keys`（Aidoku 的顺序：先存后调，源靠 defaults_get_map 取 cookie）
-//! 且含 session 项才判成功，观测结果写进 defaults 供宿主侧断言。
-//! 断言方在 crates/wasm/tests/weblogin_host.rs 与 crates/server/tests/source_login.rs。
+//! End-to-end verification source for the WebLoginHandler export:
+//! the three login settings cover the three paths the host resolves (explicit url /
+//! url_key pointing into defaults / no url falling back to base_url), with both states of
+//! clear_cookies_on_log_out present; handle_web_login judges success only when it both
+//! receives the cookies parameter and reads the preset `<key>.keys` from defaults
+//! (Aidoku's order: store first, then call — the source reads cookies via
+//! defaults_get_map) containing a session entry; observations are written into defaults
+//! for the host side to assert.
+//! The asserting sides are crates/wasm/tests/weblogin_host.rs and crates/server/tests/source_login.rs.
 use aidoku::{
 	Chapter, FilterValue, HashMap, LoginMethod, LoginSetting, Manga, MangaPageResult, Page, Result,
 	Setting, Source, TextSetting, WebLoginHandler,
@@ -39,7 +41,7 @@ impl Source for WebLoginFixtureSource {
 		Self
 	}
 
-	/// 把 login marker 与 keys 编进标题：重启后的实例读到的 defaults 与库一致才算存活
+	/// Weave the login marker and keys into the title: a restarted instance only counts as surviving if the defaults it reads match the store
 	fn get_search_manga_list(
 		&self,
 		_query: Option<String>,
@@ -111,7 +113,7 @@ impl aidoku::DynamicSettings for WebLoginFixtureSource {
 impl WebLoginHandler for WebLoginFixtureSource {
 	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
 		observed(&key, &cookies);
-		// 空 cookies 是登出语义：源确认即可，不需要任何凭据
+		// Empty cookies are the log-out semantic: the source just acknowledges them, no credentials needed
 		if cookies.is_empty() {
 			return Ok(true);
 		}

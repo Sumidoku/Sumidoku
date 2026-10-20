@@ -35,12 +35,12 @@ const FILTER_OPTIONS: { value: LibraryFilter; label: string }[] = [
 const ALL = 'all';
 const UNCATEGORIZED = '0';
 
-/** 三态循环的下一态：未选 → 包含 → 排除 → 未选 */
+/** Next state of the tri-state cycle: unselected → include → exclude → unselected */
 function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
 }
 
-/** 与漫画详情页章节筛选同款的三态 chip 提示 */
+/** Same tri-state chip tooltip as the manga detail page's chapter filter */
 function triTitle(label: string, t: 1 | -1 | 0): string {
 	if (t === 1) return `当前只显示有${label}的漫画，点击改为排除`;
 	if (t === -1) return `当前排除有${label}的漫画，点击关闭筛选`;
@@ -85,13 +85,13 @@ export default function LibraryPage() {
 		for (const c of countsQuery.data ?? []) map.set(c.sourceId, c.count);
 		return map;
 	}, [countsQuery.data]);
-	// 停用源仍可能拥有库内条目，候选不去除
+	// A disabled source may still own library entries, so candidates are not removed
 	const sourceOptions = useMemo(
 		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
 		[sourcesQuery.data]
 	);
-	// 图源下拉的候选：计数到达后自动隐藏库内为 0 的源（正被三态选中的不藏，避免悬空筛选）；
-	// 计数未到时先按全量名单渲染，避免闪烁
+	// Candidates of the source dropdown: once counts arrive, sources with 0 library entries hide automatically
+	// (ones currently tri-state-selected stay, to avoid a dangling filter); before counts arrive the full list renders to avoid flicker
 	const counted = countsQuery.data !== undefined;
 	const triOptions = sourceOptions
 		.filter((s) => !counted || (counts.get(s.id) ?? 0) > 0 || sourceTri[String(s.id)])
@@ -157,7 +157,7 @@ export default function LibraryPage() {
 			/>
 
 			<div className="library__filters">
-				{/* 与漫画详情页章节筛选同款的三态 chips：未选 → 包含 → 排除 */}
+				{/* Same tri-state chips as the manga detail page's chapter filter: unselected → include → exclude */}
 				{FILTER_OPTIONS.map((o) => {
 					const st = filterTri[o.value] ?? 0;
 					return (
@@ -176,7 +176,7 @@ export default function LibraryPage() {
 			</div>
 
 			<div className="library__filters" role="group" aria-label="内容分级与图源">
-				{/* 与跨源搜索页同款的三态下拉；图源含停用源——库内条目可能属于它们 */}
+				{/* Same tri-state dropdown as the cross-source search page; sources include disabled ones — library entries may belong to them */}
 				<TriStateDropdown
 					label="分级"
 					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}

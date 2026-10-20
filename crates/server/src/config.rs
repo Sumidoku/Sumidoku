@@ -11,10 +11,10 @@ pub struct NetConfig {
 	pub trawl_ca: Option<PathBuf>,
 	pub proxy: Option<String>,
 	pub allow_direct_fallback: bool,
-	/// 直连请求补浏览器头套件（BROWSER_HEADERS）：sec-fetch-* 的导航语义对
-	/// API/XHR 是轻度失真，关掉换语义诚实；被动盾核对套件存在性，关了更容易 403
+	/// Adds the browser header suite (BROWSER_HEADERS) to direct requests: sec-fetch-* navigation semantics
+	/// are mildly inaccurate for API/XHR, so disabling buys semantic honesty; passive bot checks verify the suite's presence, so disabling makes 403 more likely
 	pub browser_headers: bool,
-	/// trawl session API 地址（http://…），未配置时 webview 浏览器函数显式不支持
+	/// trawl session API address (http://…); when unset, webview browser functions are explicitly unsupported
 	pub browser_trawl: Option<String>,
 }
 
@@ -35,9 +35,9 @@ impl Default for NetConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
-	/// 全站密码（web UI 登录、/api/v1、OPDS 共用）；None = 认证关闭
+	/// Site-wide password (shared by web UI login, /api/v1, and OPDS); None = auth disabled
 	pub password: Option<String>,
-	/// 长期 API key，Bearer 直用；配置面明文、不落库
+	/// Long-lived API keys, used directly as Bearer tokens; plaintext in config, never stored in the DB
 	pub api_keys: Vec<String>,
 }
 
@@ -55,34 +55,34 @@ pub struct Config {
 	pub downloads_dir: PathBuf,
 	pub download_concurrency: usize,
 	pub download_format: String,
-	/// setting 表 download.move_path 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
+	/// env override (for headless) of the download.move_path setting; Some overrides the setting value
 	pub download_move_path: Option<String>,
 	pub update_interval_hours: u64,
-	/// 源仓库 index 定时刷新周期（小时）；0 = 关闭，只靠手动刷新
+	/// Scheduled refresh interval (hours) for source repo indexes; 0 = off, manual refresh only
 	pub repo_refresh_interval_hours: u64,
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
 	pub opds_lazy_download: bool,
-	/// 源实例空闲逐出阈值（分钟）；<= 0 关闭清扫任务
+	/// Idle-eviction threshold (minutes) for source instances; <= 0 disables the sweeper
 	pub source_idle_evict_minutes: i64,
-	/// 进程 RSS 阈值（MiB）：超过即按最闲优先逐出源实例；0 = 关闭监控
+	/// Process RSS threshold (MiB): above it, source instances are evicted idlest-first; 0 = monitoring off
 	pub rss_threshold_mb: u64,
 	pub wasm_memory_max_mb: u64,
 	pub wasm_fuel: u64,
 	pub wasm_call_timeout_secs: u64,
-	/// 源端点响应体上限（MiB）：wasm net host 与服务端代取（封面/页图）共用；0 = 不设限
+	/// Response body cap (MiB) for source endpoints: shared by the wasm net host and server-side fetches (covers/pages); 0 = unlimited
 	pub net_body_max_mb: u64,
-	/// zip 页整章压缩包的响应体上限（MiB）：一章 N 页打成一个 body，得给页图帽的数倍
+	/// Response body cap (MiB) for whole-chapter zip archives: a chapter packs N pages into one body, so it needs several times the per-image cap
 	pub net_zip_body_max_mb: u64,
-	/// 以下四项是 setting 表 backup.* 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
+	/// The following four are env overrides (for headless) of the backup.* settings; Some overrides the setting values
 	pub backup_enabled: Option<bool>,
 	pub backup_interval_hours: Option<u64>,
 	pub backup_retention_count: Option<u32>,
-	/// 备份落点，允许在 config_dir 外
+	/// Backup destination, allowed outside config_dir
 	pub backup_dir: Option<PathBuf>,
-	/// 本地漫画根目录（内置本地源的扫描目标）；None = <config_dir>/local
+	/// Local manga root (scan target of the built-in local source); None = <config_dir>/local
 	pub local_dir: Option<PathBuf>,
-	/// legacy：auth.password 的兼容别名，只在 auth.password 缺席时生效
+	/// legacy: compatibility alias for auth.password, effective only when auth.password is absent
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
 	pub net: NetConfig,
@@ -142,45 +142,45 @@ struct NetConfigFile {
 }
 
 impl Config {
-	/// db、covers、sources 全部钉在 config_dir 下派生，数据根只有这一个配置项
+	/// db, covers and sources all derive from config_dir, the single data-root knob
 	fn derive_paths(&mut self) {
 		self.database_url = format!("sqlite://{}/sumidoku.db?mode=rwc", self.config_dir.display());
 		self.covers_dir = self.config_dir.join("covers");
 	}
 
-	/// auth.password 优先；缺席时 legacy basic_password 顶上（OPDS 时代的旧配置继续生效）
+	/// auth.password wins; when absent, legacy basic_password fills in (old configs from the OPDS era keep working)
 	pub fn effective_password(&self) -> Option<&str> {
 		self.auth.password.as_deref().or(self.basic_password.as_deref())
 	}
 
-	/// 源包目录钉死在 config_dir 下，不开放配置
+	/// The source package directory is pinned under config_dir, not configurable
 	pub fn sources_dir(&self) -> PathBuf {
 		self.config_dir.join("sources")
 	}
 
-	/// PageContent::Image 物化出的页图 blob 目录（<chapter_id>/<idx>.png），同样钉死
+	/// Blob directory for page images materialized from PageContent::Image (<chapter_id>/<idx>.png), likewise pinned
 	pub fn page_blobs_dir(&self) -> PathBuf {
 		self.config_dir.join("page-blobs")
 	}
 
-	/// OPDS 源 acquisition 压缩包的落盘缓存（<chapter_id> 命名），页行重写时失效重拉
+	/// On-disk cache of OPDS source acquisition archives (named <chapter_id>); invalidated and re-fetched when page rows are rewritten
 	pub fn opds_cbz_dir(&self) -> PathBuf {
 		self.config_dir.join("opds-cbz")
 	}
 
-	/// 定时备份的默认落点；backup_dir（env）或 setting 表 backup.dir 都可改
+	/// Default destination for scheduled backups; backup_dir (env) or the backup.dir setting can change it
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")
 	}
 
-	/// 本地漫画根目录：显式配置优先（可在 config_dir 外），缺省钉在 config_dir 下
+	/// Local manga root: explicit config wins (may be outside config_dir), otherwise pinned under config_dir
 	pub fn local_dir(&self) -> PathBuf {
 		self.local_dir
 			.clone()
 			.unwrap_or_else(|| self.config_dir.join("local"))
 	}
 
-	/// 组装透传给 wasm 运行时的实例上限；sleep/net/js/browser 各档不开放配置
+	/// Assembles the instance limits passed to the wasm runtime; the sleep/net/js/browser tiers are not configurable
 	pub fn wasm_limits(&self) -> aidoku_wasm::Limits {
 		aidoku_wasm::Limits {
 			memory_max: self.wasm_memory_max_mb * 1024 * 1024,
@@ -236,7 +236,7 @@ struct ConfigFile {
 }
 
 impl Config {
-	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUMIDOKU_ 前缀）
+	/// Defaults ← ./config.toml (optional) ← environment variables (SUMIDOKU_ prefix)
 	pub fn load() -> Self {
 		let mut config = Self::default();
 		if let Ok(raw) = std::fs::read_to_string("./config.toml") {

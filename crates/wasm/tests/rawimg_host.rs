@@ -1,12 +1,14 @@
-//! 图像处理器入参的契约测试（issue #116），对齐 AidokuRunner `store(value:)` 语义：
-//! 宿主解不出的密文逐字节原样进处理器；可解码的响应以像素进处理器
-//! （data() 是 PNG 重编，width/height/canvas 可用，jmcomic 解密依赖这条路）。
-//! fixture 源在 tests/fixtures/rawimg-src/（no_std cdylib），重建方式：
+//! Contract tests for the image-processor input (issue #116), aligned with AidokuRunner's
+//! `store(value:)` semantics: ciphertext the host cannot decode enters the processor
+//! byte-for-byte as-is; a decodable response enters the processor as pixels (data() is a
+//! PNG re-encode, width/height/canvas usable — jmcomic's decryption depends on this path).
+//! The fixture source lives in tests/fixtures/rawimg-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
-//! 复制为 tests/fixtures/rawimg/main.wasm。
-//! 内嵌 plain.png（2x2 RGBA 红绿/蓝白）是手写 PNG 块生成的：
-//! IHDR(2,2,bitdepth 8,color 6) + IDAT(zlib(每行 filter 0 + 像素))。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
+//! over tests/fixtures/rawimg/main.wasm.
+//! The embedded plain.png (2x2 RGBA, red-green / blue-white) was generated from
+//! hand-written PNG chunks:
+//! IHDR(2,2,bitdepth 8,color 6) + IDAT(zlib(each row: filter 0 + pixels)).
 use aidoku_wasm::{
 	DirectPolicy, NoopCookieSink, NoopDefaultsSink, ProcessImageInput, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -18,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// 与 rawimg-src/src/lib.rs 对账的同一密钥与明文
+/// The same key and plaintext as in rawimg-src/src/lib.rs, kept in agreement
 const KEY: u8 = 0x5A;
 const PLAIN_PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0,
@@ -60,7 +62,7 @@ fn input(bytes: Vec<u8>) -> ProcessImageInput {
 	}
 }
 
-/// 密文分支的输出：解密建图 → plain.png 的 2x2 像素（解密→建图→重编全链路对账）
+/// Output of the ciphertext branch: decrypt and build the image → plain.png's 2x2 pixels (the full decrypt → build → re-encode chain is reconciled)
 fn assert_plain_pixels(png: &[u8], label: &str) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
@@ -80,7 +82,7 @@ fn assert_plain_pixels(png: &[u8], label: &str) {
 	}
 }
 
-/// 可解码入参的输出：2x2 上下两行经画布互换（红绿/蓝白 → 蓝白/红绿）
+/// Output for a decodable input: the 2x2's two rows swapped via the canvas (red-green/blue-white → blue-white/red-green)
 fn assert_swapped_pixels(png: &[u8], label: &str) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
@@ -100,7 +102,7 @@ fn assert_swapped_pixels(png: &[u8], label: &str) {
 	}
 }
 
-/// 密文（宿主解不出）也必须进处理器：解密建图后输出正常 PNG
+/// Ciphertext (undecodable by the host) must also enter the processor: after decrypting and building the image, the output is a normal PNG
 #[tokio::test]
 async fn processors_receive_undecodable_bytes_raw() {
 	let (handle, features) = spawn_fixture().await;
@@ -120,8 +122,9 @@ async fn processors_receive_undecodable_bytes_raw() {
 	assert_plain_pixels(&cover_png, "cover cipher");
 }
 
-/// 可解码入参宿主给的是像素：fixture 校验尺寸 import 并经画布把两行互换
-/// （jmcomic 条带重组的迷你版），输出必须是互换后的像素
+/// For a decodable input the host gives pixels: the fixture checks the size imports and
+/// swaps the two rows via the canvas (a miniature of jmcomic's strip reassembly); the
+/// output must be the swapped pixels
 #[tokio::test]
 async fn processors_receive_decodable_bytes_as_pixels() {
 	let (handle, _) = spawn_fixture().await;
@@ -139,8 +142,9 @@ async fn processors_receive_decodable_bytes_as_pixels() {
 	assert_swapped_pixels(&cover_png, "cover plain");
 }
 
-/// 源原样透传输入图（jmcomic 旧章节/gif 分支同款）：可解码的出像素 PNG，
-/// 不可解码的原样交还原始字节（与 Aidoku 回退到原始 data 一致）
+/// The source passes the input image through unchanged (same as jmcomic's old-chapter/gif
+/// branch): a decodable one yields a pixel PNG, an undecodable one is handed back as the
+/// original bytes (consistent with Aidoku's fallback to the raw data)
 #[tokio::test]
 async fn processor_passthrough_returns_input_unchanged() {
 	let (handle, _) = spawn_fixture().await;

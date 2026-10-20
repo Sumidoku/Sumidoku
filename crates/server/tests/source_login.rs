@@ -1,7 +1,7 @@
-//! 网页登录（method: "web"）与源级登出的端点测试。
-//! fixture 源：weblogin（导出 handle_web_login，cookies 或预置 defaults 缺
-//! session 即否决，空 cookies 视为确认登出）与 weblogin-plain（同款设置无导出）。
-//! 三个 login 设置覆盖 host 解析的 url / url_key / base_url 兜底三条路径。
+//! Endpoint tests for web login (method: "web") and source-level logout.
+//! Fixture sources: weblogin (exports handle_web_login, vetoes when the cookies or preset defaults
+//! lack session, treats empty cookies as confirmed logout) and weblogin-plain (same settings, no export).
+//! The three login settings cover the url / url_key / base_url fallback paths of host resolution.
 mod common;
 
 use axum::http::StatusCode;
@@ -9,7 +9,7 @@ use axum::Router;
 use common::{TestApp, request, test_app};
 use serde_json::{Value, json};
 
-/// 带 base url 的源登记：login_fallback 设置的 host 兜底靠它
+/// Registers a source with a base url: the login_fallback setting's host fallback relies on it
 fn install_login_source(tmp: &tempfile::TempDir, key: &str, wasm: &std::path::Path) {
 	let dir = tmp.path().join("sources").join(key);
 	std::fs::create_dir_all(&dir).expect("mkdir fixture source");
@@ -91,7 +91,7 @@ async fn web_login_stores_cookies_and_marks_logged_in() {
 
 	let values = settings_values(&app.app, id).await;
 	assert_eq!(values["login"], "logged_in");
-	// keys/values 按 cookie 名排序落库，与 Aidoku 的 <key>.keys/<key>.values 同构
+	// keys/values are persisted sorted by cookie name, mirroring Aidoku's <key>.keys/<key>.values
 	assert_eq!(values["login.keys"], json!(["other", "session"]));
 	assert_eq!(values["login.values"], json!(["o1", "s1"]));
 	assert_eq!(values["login.ls.token"], "t1");
@@ -104,7 +104,7 @@ async fn web_login_stores_cookies_and_marks_logged_in() {
 		]
 	);
 
-	// 登录触发实例重启：新实例从库回填 defaults，源运行时读到的应与库一致
+	// login triggers an instance restart: the new instance backfills defaults from the DB, so what the source runtime reads must match the DB
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -124,14 +124,14 @@ async fn web_login_handler_veto_blocks_marker_and_cookies() {
 	let (app, id) = app_with_login_source(&common::weblogin_wasm_path()).await;
 	let login_path = format!("/api/v1/sources/{id}/login/web");
 
-	// fixture 只认 session cookie：缺它 handle_web_login 返回 false
+	// the fixture only accepts the session cookie: without it handle_web_login returns false
 	let (status, body) = request(&app.app, "POST", &login_path, Some(web_login_body("login", &[("other", "o1")]))).await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
 	assert_eq!(body["error"]["code"], "bad_gateway");
 
 	let values = settings_values(&app.app, id).await;
 	assert!(values.get("login").is_none(), "否决后不得有 marker: {values}");
-	// Aidoku 顺序是先存 keys/values 再调导出，否决不回滚已存部分
+	// Aidoku's order is storing keys/values before calling the export; a veto doesn't roll back the stored part
 	assert_eq!(values["login.keys"], json!(["other"]));
 	assert!(cookie_rows(&app.db_path, id).await.is_empty());
 }
@@ -163,7 +163,7 @@ async fn web_login_resolves_host_from_url_key_and_base_url() {
 	let (app, id) = app_with_login_source(&common::weblogin_wasm_path()).await;
 	let login_path = format!("/api/v1/sources/{id}/login/web");
 
-	// login_keep 没有显式 url：url_key 指向 auth_url 设置的默认值
+	// login_keep has no explicit url: url_key points at the auth_url setting's default value
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -172,7 +172,7 @@ async fn web_login_resolves_host_from_url_key_and_base_url() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	// login_fallback 既无 url 也无 url_key：退到 source.json 的 info.url
+	// login_fallback has neither url nor url_key: falls back to source.json's info.url
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -234,7 +234,7 @@ async fn logout_clears_state_and_cookies_when_flagged() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// login 设置声明了 clear_cookies_on_log_out
+	// the login setting declares clear_cookies_on_log_out
 	let (status, body) = request(&app.app, "POST", &logout_path, Some(json!({"key": "login"}))).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -251,7 +251,7 @@ async fn logout_keeps_cookies_without_flag_clears_on_confirm() {
 	let login_path = format!("/api/v1/sources/{id}/login/web");
 	let logout_path = format!("/api/v1/sources/{id}/login/logout");
 
-	// login_keep 设置未声明 clear_cookies_on_log_out：设置态清掉、cookie 保留
+	// the login_keep setting doesn't declare clear_cookies_on_log_out: the setting state is cleared, the cookie kept
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -269,7 +269,7 @@ async fn logout_keeps_cookies_without_flag_clears_on_confirm() {
 		vec![("auth.example.org".into(), "session".into(), "s2".into())]
 	);
 
-	// 显式 confirm（clearCookies: true）覆盖设置：cookie 一并清除
+	// an explicit confirm (clearCookies: true) overrides the setting: cookies are cleared too
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -304,12 +304,12 @@ async fn logout_scopes_deletion_to_the_key_prefix() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 未声明的 key：幂等 200，且 "login" 的状态不被 "login_" 系误伤
+	// undeclared key: idempotent 200, and "login"'s state is not collateral damage of the "login_" family
 	let (status, _) = request(&app.app, "POST", &logout_path, Some(json!({"key": "login_keep_extra"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(settings_values(&app.app, id).await["login"], "logged_in");
 
-	// 同理 "login" 的前缀删除不得带走 "login_keep"
+	// likewise, prefix deletion for "login" must not take "login_keep" with it
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -330,11 +330,11 @@ async fn web_login_rejects_bad_requests() {
 	let (app, id) = app_with_login_source(&common::weblogin_wasm_path()).await;
 	let login_path = format!("/api/v1/sources/{id}/login/web");
 
-	// 空 key
+	// empty key
 	let (status, body) = request(&app.app, "POST", &login_path, Some(web_login_body("", &[("session", "s1")]))).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
-	// 未安装源
+	// uninstalled source
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -344,14 +344,14 @@ async fn web_login_rejects_bad_requests() {
 	.await;
 	assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
 
-	// key 没有对应的 login 设置（text 设置与未知键同口径）
+	// key without a matching login setting (a text setting is treated the same as an unknown key)
 	for key in ["auth_url", "nope"] {
 		let (status, body) = request(&app.app, "POST", &login_path, Some(web_login_body(key, &[("session", "s1")]))).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{key}: {body}");
 		assert_eq!(body["error"]["code"], "bad_request");
 	}
 
-	// cookie 名/值带注入字符
+	// cookie name/value carrying injection characters
 	for cookies in [
 		json!({"a;b": "v"}),
 		json!({"": "v"}),
@@ -361,7 +361,7 @@ async fn web_login_rejects_bad_requests() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{cookies}: {body}");
 	}
 
-	// 全坏请求之后状态保持干净
+	// the state stays clean after all the bad requests
 	let values = settings_values(&app.app, id).await;
 	assert!(values.get("login").is_none(), "{values}");
 	assert!(cookie_rows(&app.db_path, id).await.is_empty());

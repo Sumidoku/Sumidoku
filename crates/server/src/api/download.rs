@@ -58,7 +58,7 @@ async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: 
 	.await?;
 	let mut entries = Vec::with_capacity(rows.len());
 	for row in rows {
-		// 进行中的 downloaded/total 只在 manager 内存里，其余状态给 null
+		// downloaded/total of an in-flight download lives only in manager memory; other states get null
 		let (downloaded, total) = if row.status == "downloading" {
 			match manager.progress_of(row.chapter_id).await {
 				Some((done, total)) => (json!(done), json!(total)),
@@ -104,8 +104,8 @@ pub async fn stop_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Jso
 	Ok(Json(json!({ "running": false })))
 }
 
-/// 产物可能是 cbz 文件也可能是 folder 目录；路径解析走统一约定（绝对原样/相对并 downloads_dir）。
-/// 已缺失的产物（挂载掉线、手动清过、共享目标已被另一行删掉）按已删处理
+/// The artifact may be a cbz file or a folder directory; path resolution follows the single convention (absolute as-is / relative joined under downloads_dir).
+/// An already-missing artifact (mount dropped, manually cleaned, shared target deleted by another row) is treated as deleted
 async fn remove_product(downloads_dir: &std::path::Path, path: &str) {
 	let target = crate::download::product_path(downloads_dir, path);
 	if target.is_dir() {
@@ -115,7 +115,7 @@ async fn remove_product(downloads_dir: &std::path::Path, path: &str) {
 	}
 }
 
-/// 另一用户还引用同一产物路径时文件留着（产物共享，删行不删别人的货）
+/// When another user still references the same artifact path, the file is kept (artifacts are shared; deleting one row must not delete another's goods)
 async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str, user_id: i64) -> ApiResult<bool> {
 	let referenced: Option<(i64,)> =
 		sqlx::query_as("SELECT 1 FROM download WHERE path = ? AND user_id != ? LIMIT 1")
@@ -126,7 +126,7 @@ async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str, user_id: i64) -> 
 	Ok(referenced.is_none())
 }
 
-/// 同一章还有别家的在途行时，tmp 目录归那个任务管，不能清
+/// When another user's in-flight row exists for the same chapter, the tmp dir belongs to that task and must not be cleaned
 async fn chapter_in_flight(pool: &sqlx::SqlitePool, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
 	let active: Option<(i64,)> = sqlx::query_as(
 		"SELECT 1 FROM download WHERE chapter_id = ? AND user_id != ? AND status IN ('queued', 'downloading') LIMIT 1",
@@ -191,7 +191,7 @@ pub async fn delete_download(
 	let Some((status, path)) = row else {
 		return Err(ApiError::not_found("download not found"));
 	};
-	// 在跑的先标记取消，worker 在下一页前看到就停
+	// A running one is marked for cancel first; the worker stops when it sees the mark before the next page
 	if status == "downloading" {
 		manager.mark_cancel(chapter_id).await;
 	}
@@ -282,7 +282,7 @@ pub async fn downloads_ws(
 				event = rx.recv() => {
 					match event {
 						Ok(event) => {
-							// 行事件只发行属用户；running 是全局管理器状态，全员广播
+							// Row events go only to their owning user; running is global manager state, broadcast to all
 							if event.user_id.is_some_and(|owner| owner != user.id) {
 								continue;
 							}

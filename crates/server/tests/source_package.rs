@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use common::*;
 use serde_json::{Value, json};
 
-// 真实 .aix 布局（aidoku-cli 打包约定）：Payload/source.json 清单 + Payload/main.wasm 载荷
+// Real .aix layout (aidoku-cli packaging convention): Payload/source.json manifest + Payload/main.wasm payload
 fn write_aix(path: &std::path::Path, entries: &[(&str, &[u8])]) {
 	let file = std::fs::File::create(path).expect("create aix");
 	let mut writer = zip::ZipWriter::new(file);
@@ -74,7 +74,7 @@ async fn scan_loads_aix_package() {
 		"{body}"
 	);
 
-	// 注册路径与目录源一致：wasm_path 指 .aix 本体，settings 默认值照样播种
+	// the registration path matches a directory source: wasm_path points at the .aix itself, settings defaults are still seeded
 	let pool = connect_db(&app.db_path).await;
 	let (wasm_path,): (String,) = sqlx::query_as("SELECT wasm_path FROM source WHERE key = 'en.packed-source'")
 		.fetch_one(&pool)
@@ -91,7 +91,7 @@ async fn scan_loads_aix_package() {
 	let seeded: Value = serde_json::from_str(&seeded.expect("seeded default").0).expect("value json");
 	assert_eq!(seeded, json!({"Bool": true}));
 
-	// 实例能从 .aix 拉起：搜索走通即证明 wasm 从包内读出
+	// the instance boots from the .aix: a working search proves the wasm was read from inside the package
 	let id = source_id_by_key(&app.app, "en.packed-source").await;
 	let (status, body) = request(
 		&app.app,
@@ -103,7 +103,7 @@ async fn scan_loads_aix_package() {
 	assert_eq!(status, StatusCode::OK);
 	assert!(!body["entries"].as_array().unwrap().is_empty(), "{body}");
 
-	// .aix 内嵌图标落盘到包旁，图标接口可读
+	// the icon embedded in the .aix lands on disk next to the package, readable through the icon endpoint
 	assert_eq!(
 		std::fs::read(app.tmp.path().join("sources/en.packed-source-v3.png")).expect("icon written"),
 		b"PNG-packed-icon"
@@ -132,8 +132,9 @@ async fn scan_skips_corrupt_aix() {
 	assert!(entry["reason"].as_str().unwrap().contains("archive"), "{entry}");
 }
 
-// 无 get_settings 导出的载荷：静态 settings.json 必须经回退归一成嵌套形状，
-// .aix 包（zip 内 Payload/）与解包目录（同级文件）两条读取路径都要覆盖
+// payload without a get_settings export: static settings.json must go through the fallback and be
+// normalized to the nested shape, covering both read paths — .aix package (Payload/ inside the zip)
+// and unpacked directory (sibling files)
 #[tokio::test]
 async fn static_settings_fall_back_to_nested_shape() {
 	let app = test_app().await;
@@ -284,23 +285,23 @@ async fn scan_seeds_settings_languages_and_base_url() {
 		.map(|(k, v)| (k, serde_json::from_str(&v).expect("value json")))
 		.collect();
 
-	// 多语言无 isDefault 落第一个；url 落 info.url（urls 列表首位）
+	// multi-language without isDefault falls back to the first; url falls back to info.url (first of the urls list)
 	assert_eq!(seeded["languages"], json!({"StringArray": ["en"]}));
 	assert_eq!(seeded["url"], json!({"String": "https://main.example"}));
 	assert_eq!(seeded["dataSaver"], json!({"Bool": false}));
 	assert_eq!(seeded["quality"], json!({"String": "high"}));
-	// select 无显式默认落第一个候选值
+	// a select without an explicit default falls back to the first candidate
 	assert_eq!(seeded["mode"], json!({"String": "a"}));
 	assert_eq!(seeded["ratings"], json!({"StringArray": ["safe"]}));
-	// page 里的 group 也要递归；picker 同 select 落第一个；switch 无默认落 false
+	// groups inside pages are recursed too; picker, like select, falls back to the first; switch without a default falls back to false
 	assert_eq!(seeded["noDefault"], json!({"Bool": false}));
 	assert_eq!(seeded["theme"], json!({"String": "dark"}));
 	assert_eq!(seeded["nested"], json!({"Bool": true}));
-	// segment 没有 values，不应凭空播种
+	// segment has no values, so nothing is seeded out of thin air
 	assert!(!seeded.contains_key("seg"));
 
-	// 源设置端点补出合成的语言/基础地址设置，webui 才能显示切换项
-	// 顺序对齐 AidokuRunner：extraSettings 在前，语言在 base url 之前
+	// the source settings endpoint fills in the synthesized language/base-url settings so the webui can
+	// show the switchers; order matches AidokuRunner: extraSettings first, language before base url
 	let id = source_id_by_key(&app.app, "multi.custom").await;
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/settings"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -331,8 +332,8 @@ async fn get_settings_seeds_dynamic_defaults() {
 	assert_eq!(status, StatusCode::OK);
 	let id = source_id_by_key(&app.app, "en.example-source").await;
 
-	// 该 fixture 没有 settings.json：首次 get_settings 前 source_setting 是空的，
-	// 取完设置后源在代码里声明的默认值（此处是 toggle "setting"）应被补种
+	// this fixture has no settings.json: source_setting is empty before the first get_settings;
+	// after settings are fetched, the defaults the source declares in code (here the toggle "setting") should be seeded
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/settings"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert!(body["values"]["setting"].is_boolean(), "{body}");
@@ -353,7 +354,7 @@ async fn get_settings_seeds_dynamic_defaults() {
 #[tokio::test]
 async fn filters_and_listings_merge_static_and_dynamic() {
 	let app = test_app().await;
-	// example-source 有动态导出（filters: text；listings: listing），静态应排在其前
+	// example-source has dynamic exports (filters: text; listings: listing); static ones must sort ahead of them
 	std::fs::write(
 		app.tmp.path().join("sources/en.example-source/filters.json"),
 		r#"[{"id": "static_text", "type": "text", "title": "Static"}]"#,
@@ -371,7 +372,7 @@ async fn filters_and_listings_merge_static_and_dynamic() {
 		.iter()
 		.filter_map(|f| f["id"].as_str())
 		.collect();
-	// 静态在前，动态导出（text/sort/check/...）追加在后
+	// static first, dynamic exports (text/sort/check/...) appended after
 	assert!(ids.starts_with(&["static_text", "text"]), "{ids:?}");
 
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/listings"), None).await;
@@ -385,9 +386,9 @@ async fn filters_and_listings_merge_static_and_dynamic() {
 	assert_eq!(ids, ["test", "listing"]);
 }
 
-// 静态筛选（filters.json 与 source.json `filters` 数组）归一成动态导出的扁平
-// snake_case 形状：无 id 派生稳定 id（id ?? title ?? type），camelCase 能力键映射，
-// 变体缺失字段补 null；动态导出原样透传
+// static filters (filters.json and the source.json `filters` array) are normalized to the dynamic
+// export's flat snake_case shape: derive a stable id when missing (id ?? title ?? type), map camelCase
+// capability keys, fill missing variant fields with null; dynamic exports pass through verbatim
 #[tokio::test]
 async fn static_filters_normalize_to_runtime_shape() {
 	let app = test_app().await;
@@ -419,7 +420,7 @@ async fn static_filters_normalize_to_runtime_shape() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let list = body.as_array().expect("filters array");
 
-	// 无 id 的静态 select：id 落 title，能力键映射，缺失变体字段补 null
+	// static select without an id: id falls back to title, capability keys mapped, missing variant fields filled with null
 	assert_eq!(list[0]["id"], "Genre", "{body}");
 	assert_eq!(list[0]["is_genre"], true, "{body}");
 	assert_eq!(list[0]["uses_tag_style"], true, "{body}");
@@ -428,7 +429,7 @@ async fn static_filters_normalize_to_runtime_shape() {
 	assert_eq!(list[0]["default"], Value::Null, "{body}");
 	assert_eq!(list[0]["hide_from_header"], Value::Null, "{body}");
 
-	// canExclude / canAscend 不再被丢弃
+	// canExclude / canAscend are no longer dropped
 	assert_eq!(list[1]["can_exclude"], true, "{body}");
 	assert_eq!(list[1]["name"], Value::Null, "{body}");
 	assert_eq!(list[2]["can_ascend"], false, "{body}");
@@ -438,11 +439,11 @@ async fn static_filters_normalize_to_runtime_shape() {
 	assert_eq!(list[3]["default_excluded"], Value::Null, "{body}");
 	assert_eq!(list[3]["hide_from_header"], true, "{body}");
 
-	// 动态导出（example 载荷第一个导出筛选是 text）原样排在静态项之后
+	// dynamic exports (the example payload's first exported filter is text) sit verbatim after the static ones
 	assert_eq!(list[4]["id"], "text", "{body}");
 	assert_eq!(list[4]["type"], "text", "{body}");
 
-	// source.json `filters` 数组走同一个归一化器
+	// the source.json `filters` array goes through the same normalizer
 	let id = source_id_by_key(&app.app, "en.manifest-filters").await;
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/sources/{id}/filters"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -483,6 +484,6 @@ async fn chapter_number_serializes_cleanly() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	// f32 281.1 直出会打成 281.1000061035156
+	// f32 281.1 printed directly comes out as 281.1000061035156
 	assert_eq!(body[0]["chapter_number"], json!(281.1));
 }

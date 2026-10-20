@@ -49,8 +49,9 @@ jobs:
           # cannot leak across runs
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
-      # --locked 把 lock 漂移变成硬失败：版本号 bump 或依赖变更忘同步
-      # Cargo.lock 时在这里拦住（release 流水线不带 --locked 会静默再生）
+      # --locked turns lock drift into a hard failure: a version bump or
+      # dependency change that forgets to sync Cargo.lock is caught here
+      # (the release pipeline without --locked silently regenerates it)
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:

@@ -1,9 +1,9 @@
-//! 源的网页登录（Login setting，method: "web"）与源级登出。
+//! Web login for sources (Login setting, method: "web") and source-level logout.
 //!
-//! 服务端没有 webview，登录态 cookie 由用户从浏览器粘贴（Cookie 头或导出的
-//! JSON）。管线（`run_web_login_pipeline`：keys/values 先存、marker 成功后才打、
-//! 调源的 `handle_web_login` 导出、cookie 持久化进 `source_cookie` 并重启实例）。
-//! 持久化全部走同步 SQL：sink channel 是异步批量写，紧随其后的重启会从库里读到旧值。
+//! The server has no webview, so the login-state cookies are pasted by the user from a browser (a Cookie header or
+//! an exported JSON). The pipeline (`run_web_login_pipeline`: store keys/values first, stamp the marker only after
+//! success, call the source's `handle_web_login` export, persist cookies into `source_cookie`, then restart the instance).
+//! All persistence goes through synchronous SQL: the sink channel is an async batch writer, and the restart right after would read stale values from the DB.
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::{AppState, load_defaults};
@@ -33,21 +33,21 @@ pub struct LogoutRequest {
 	pub clear_cookies: bool,
 }
 
-/// Login setting 里服务端关心的字段（归一化后的嵌套形状，url 三态用于解析登录 host）
+/// The fields of a Login setting the server cares about (normalized nested shape; the url tri-state resolves the login host)
 pub struct LoginSettingInfo {
 	pub method: String,
 	pub url: Option<String>,
 	pub url_key: Option<String>,
 	pub pkce: bool,
 	pub token_url: Option<String>,
-	/// Aidoku app 层用它拦截 web-auth 回调；服务端是手动粘贴流，仅留作设置画像
+	/// The Aidoku app layer uses it to intercept the web-auth callback; the server is a manual-paste flow, so it is kept only as a setting portrait
 	pub callback_scheme: Option<String>,
-	/// 设置级 notification：OAuth 回调串分支存完值后送达（Aidoku 同款）
+	/// Setting-level notification: delivered after the OAuth callback-string branch stores its value (same as Aidoku)
 	pub notification: Option<String>,
 	pub clear_cookies_on_log_out: bool,
 }
 
-/// 递归 group/page 容器找 key 对应的 login 设置；key 撞在非 login 设置上视同不存在
+/// Recurses group/page containers for the login setting matching key; a key colliding with a non-login setting counts as absent
 pub(crate) fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSettingInfo> {
 	for item in items {
 		let Some(value) = item.get("value") else {
@@ -98,7 +98,7 @@ pub(crate) fn find_login_setting(items: &[Value], key: &str) -> Option<LoginSett
 	None
 }
 
-/// 登录 URL 的三级解析：login 设置的 url → url_key 指向的 defaults 值 → 源 base_url
+/// Three-level resolution of the login URL: the login setting's url → the defaults value url_key points to → the source base_url
 pub(crate) async fn resolve_login_url(
 	state: &AppState,
 	id: i64,
@@ -120,7 +120,7 @@ pub(crate) async fn resolve_login_url(
 	url.ok_or_else(|| ApiError::bad_request("login setting has no url to resolve the login host"))
 }
 
-/// 登录 host 取自登录 URL；URL 非法时与 #112 同口径 400
+/// The login host comes from the login URL; an invalid URL gets the same 400 convention as #112
 fn host_of(url: &str) -> ApiResult<String> {
 	url::Url::parse(url)
 		.ok()
@@ -138,7 +138,7 @@ async fn resolve_login_host(
 	host_of(&url)
 }
 
-/// jar 会把 name=value 直接拼进 Cookie 头，分隔符与控制字符必须拦在入口
+/// The jar splices name=value straight into the Cookie header, so separators and control characters must be stopped at the entrance
 fn validate_cookies(cookies: &HashMap<String, String>) -> ApiResult<()> {
 	for (name, value) in cookies {
 		if name.is_empty()
@@ -190,10 +190,11 @@ pub async fn web_login(
 	Ok(Json(json!({ "ok": true })))
 }
 
-/// #112 管线核心：keys/values（按 cookie 名排序，与宿主层预置同序）与
-/// localStorage 先落库，再调导出（Aidoku 顺序，源否决不回滚已存部分；无导出跳过
-/// 校验），然后打 marker + 写 source_cookie（空 cookies 即登出清态），最后重启实例。
-/// 持久化全部走同步 SQL：sink channel 是异步批量写，紧随其后的重启会从库里读到旧值
+/// The #112 pipeline core: keys/values (sorted by cookie name, the same order the host layer pre-fills) and
+/// localStorage land in the DB first, then the export is called (Aidoku order; a source veto does not roll back the
+/// stored part, and no export means skipping validation), then the marker is stamped + source_cookie written (empty
+/// cookies mean logout semantics), and finally the instance restarts.
+/// All persistence goes through synchronous SQL: the sink channel is an async batch writer, and the restart right after would read stale values from the DB
 pub(crate) async fn run_web_login_pipeline(
 	state: &Arc<AppState>,
 	id: i64,
@@ -213,7 +214,7 @@ pub(crate) async fn run_web_login_pipeline(
 		upsert_setting(&state.pool, id, &format!("{key}.ls.{ls_key}"), DefaultValue::String(ls_value.clone())).await?;
 	}
 
-	// 源不导出 handle_web_login 时跳过校验直接存（Aidoku 同款）
+	// When the source does not export handle_web_login, skip validation and store directly (same as Aidoku)
 	if handle.features().web_login
 		&& !handle.handle_web_login(key.to_string(), cookies.clone()).await?
 	{
@@ -221,7 +222,7 @@ pub(crate) async fn run_web_login_pipeline(
 	}
 
 	if cookies.is_empty() {
-		// 空 cookies 即登出语义：marker 与该 host 的 cookie 一起清
+		// Empty cookies mean logout semantics: the marker and that host's cookies are cleared together
 		sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND key = ?")
 			.bind(id)
 			.bind(key)
@@ -260,8 +261,8 @@ pub async fn logout(
 		return Err(ApiError::bad_request("key must not be empty"));
 	}
 	let row = super::source_row(&state, id).await?;
-	// 前缀删除一次覆盖 .keys/.values/.ls.*/.username/.password 等全部子键；
-	// instr 前缀匹配避开 LIKE 通配符转义
+	// One prefix delete covers every child key like .keys/.values/.ls.*/.username/.password;
+	// the instr prefix match avoids LIKE wildcard escaping
 	sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND (key = ? OR instr(key, ? || '.') = 1)")
 		.bind(id)
 		.bind(&body.key)
@@ -269,7 +270,7 @@ pub async fn logout(
 		.execute(&state.pool)
 		.await?;
 
-	// 设置查找尽力而为：实例起不来（如源被禁用）也要能登出，设置态上面已清
+	// The setting lookup is best-effort: logout must work even when the instance cannot start (e.g. the source is disabled); the setting state was already cleared above
 	let setting = match state.get_handle(id).await {
 		Ok(handle) => super::load_settings_items(&state, id, &handle)
 			.await
@@ -283,7 +284,7 @@ pub async fn logout(
 			.map(|s| s.clear_cookies_on_log_out)
 			.unwrap_or(false);
 	if clear {
-		// host 解析不出时清整源 jar（显式 confirm 即用户授意，口径同 cache/clear）
+		// When the host cannot be resolved, clear the whole source jar (an explicit confirm is the user's intent, same convention as cache/clear)
 		let host = match &setting {
 			Some(s) => resolve_login_host(&state, id, s, row.base_url.as_deref()).await.ok(),
 			None => None,

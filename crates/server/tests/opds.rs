@@ -9,14 +9,14 @@ use serde_json::{Value, json};
 use sumidoku_server::build_app;
 use tower::ServiceExt;
 
-// 1x1 透明 PNG
+// 1x1 transparent PNG
 const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
 	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
 	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
 ];
 
-/// OPDS 断言要看绝对 URL，请求固定带 Host + X-Forwarded-Proto
+/// OPDS assertions inspect absolute URLs, so requests always carry Host + X-Forwarded-Proto
 async fn opds_get(app: &Router, path: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
 	opds_get_auth(app, path, None).await
 }
@@ -40,7 +40,7 @@ async fn opds_get_auth(app: &Router, path: &str, auth: Option<&str>) -> (StatusC
 	(status, headers, bytes.to_vec())
 }
 
-/// 起 app 并注册 + 入库一本漫画，downloads_dir 指进 tmp（file 端点要读真实产物）
+/// Boots the app and registers + shelves one manga, with downloads_dir pointing into tmp (the file endpoint reads real artifacts)
 async fn opds_app() -> (TestApp, i64) {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -69,7 +69,7 @@ async fn feeds_files_and_escaping() {
 	let (test_app, manga_id) = opds_app().await;
 	let TestApp { app, tmp, db_path } = &test_app;
 
-	// root：导航 + osd 链接
+	// root: navigation + osd links
 	let (status, headers, body) = opds_get(app, "/opds/v1.2/root").await;
 	assert_eq!(status, StatusCode::OK);
 	let content_type = headers[header::CONTENT_TYPE].to_str().expect("content-type");
@@ -86,14 +86,14 @@ async fn feeds_files_and_escaping() {
 		assert!(body.contains(link), "root feed should link {link}");
 	}
 
-	// osd：OpenSearchDescription 模板
+	// osd: the OpenSearchDescription template
 	let (status, headers, body) = opds_get(app, "/opds/v1.2/osd").await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers[header::CONTENT_TYPE], "application/opensearchdescription+xml");
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("https://opds.test/opds/v1.2/search?q={searchTerms}"));
 
-	// library：标题 + 绝对封面链接
+	// library: title + absolute cover link
 	let (_, manga) = request(app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	let title = manga["title"].as_str().expect("title").to_string();
 	let (status, _, body) = opds_get(app, "/opds/v1.2/library").await;
@@ -103,7 +103,7 @@ async fn feeds_files_and_escaping() {
 	assert!(body.contains(&format!("https://opds.test/opds/v1.2/cover/{manga_id}")));
 	assert!(body.contains(&format!("urn:sumidoku:manga:{manga_id}")));
 
-	// series：先落页缓存拿到 page_count=2，再打进度
+	// series: populate the page cache first to get page_count=2, then record progress
 	let chapters = first_chapters(app, manga_id).await;
 	let chapter_id = chapters[0]["id"].as_i64().expect("chapter id");
 	let other_chapter_id = chapters[1]["id"].as_i64().expect("chapter id");
@@ -118,7 +118,7 @@ async fn feeds_files_and_escaping() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 下载产物不依赖后台任务：手工放 CBZ + finished 行
+	// the download artifact does not depend on background tasks: place the CBZ and a finished row by hand
 	std::fs::create_dir_all(tmp.path().join("downloads")).expect("downloads dir");
 	let cbz = make_zip("page/1.jpg", PNG);
 	std::fs::write(tmp.path().join("downloads/ch1.cbz"), &cbz).expect("write cbz");
@@ -137,21 +137,21 @@ async fn feeds_files_and_escaping() {
 	let body = String::from_utf8(body).expect("utf8");
 	assert!(body.contains("xmlns:pse=\"http://vaemendis.net/opds-pse\""));
 	assert!(body.contains("pse:count=\"2\""), "series feed: {body}");
-	// lastPageRead 是 0 基索引，PSE lastRead 从 1 计
+	// lastPageRead is a 0-based index, PSE lastRead counts from 1
 	assert!(body.contains("pse:lastRead=\"2\""), "series feed: {body}");
 	assert!(body.contains("pse:lastReadDate="), "series feed: {body}");
-	// href 必须含字面量 {pageNumber} 供客户端替换；无进度的章不出 lastRead
+	// href must contain the literal {pageNumber} for the client to substitute; chapters without progress get no lastRead
 	assert!(
 		body.contains(&format!("https://opds.test/opds/v1.2/stream/{chapter_id}/{{pageNumber}}")),
 		"series feed: {body}"
 	);
 	assert_eq!(body.matches("pse:lastRead=").count(), 1, "series feed: {body}");
-	// 只有已下载的一章带 zip acquisition
+	// only the downloaded chapter carries a zip acquisition
 	assert_eq!(body.matches("http://opds-spec.org/acquisition").count(), 1);
 	assert!(body.contains(&format!("https://opds.test/opds/v1.2/file/{chapter_id}")));
 	assert!(!body.contains(&format!("/opds/v1.2/file/{other_chapter_id}")));
 
-	// file：finished 的 200 zip，未下载的 404
+	// file: 200 zip for the finished one, 404 for the not-downloaded one
 	let (status, headers, bytes) = opds_get(app, &format!("/opds/v1.2/file/{chapter_id}")).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers[header::CONTENT_TYPE], "application/zip");
@@ -159,7 +159,7 @@ async fn feeds_files_and_escaping() {
 	let (status, _, _) = opds_get(app, &format!("/opds/v1.2/file/{other_chapter_id}")).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 
-	// 转义：title 里的 &<>" 必须实体化
+	// escaping: &<>" in the title must be entity-escaped
 	sqlx::query("UPDATE manga SET title = ? WHERE id = ?")
 		.bind("A & B <C> \"D\"")
 		.bind(manga_id)
@@ -182,7 +182,7 @@ async fn stream_page_proxy() {
 	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 页内容改指本地图床
+	// point the page content at the local image host
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	update_page_content(
 		&pool,
@@ -205,7 +205,7 @@ async fn basic_auth_guard() {
 	config.basic_password = Some("secret".into());
 	let app = build_app(config).await.expect("build app");
 
-	// 无头 401 + WWW-Authenticate
+	// no credentials: 401 + WWW-Authenticate
 	let (status, headers, _) = opds_get(&app, "/opds/v1.2/root").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
@@ -213,21 +213,21 @@ async fn basic_auth_guard() {
 		"Basic realm=\"Sumidoku OPDS\""
 	);
 
-	// 错误密码 401（admin:wrong）
+	// wrong password: 401 (admin:wrong)
 	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2/root", Some("Basic YWRtaW46d3Jvbmc=")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-	// 真实用户名+密码 200（admin:secret）
+	// real username+password: 200 (admin:secret)
 	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2/root", Some("Basic YWRtaW46c2VjcmV0")).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// API 路由不受 OPDS Basic 影响
+	// API routes are unaffected by OPDS Basic
 	let (status, body) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["status"], "ok");
 }
 
-/// 起个微型静态服务返字节；abort 句柄即关站
+/// Starts a minimal static server returning bytes; aborting the handle shuts it down
 async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
 	let mut router = Router::new();
 	for (path, mime, bytes) in routes {

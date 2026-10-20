@@ -25,16 +25,17 @@ struct Inner {
 	thread_alive: Arc<AtomicBool>,
 }
 
-/// 每源 actor 句柄。所有导出调用经 mpsc 发给独立 OS 线程串行执行，
-/// 源内串行、源间并行；实例长生命周期，restart 即换线程重建。
+/// Per-source actor handle. All export calls go over mpsc to a dedicated OS thread and run
+/// serially — serial within a source, parallel across sources; instances are long-lived and
+/// restart swaps the thread and rebuilds.
 pub struct SourceHandle {
 	key: String,
 	config: Arc<RwLock<SourceConfig>>,
-	// 读写均为短临界区，无跨 await 持锁
+	// Reads and writes are both short critical sections; the lock is never held across an await
 	inner: Arc<RwLock<Inner>>,
 	features: Arc<RwLock<SourceFeatures>>,
 	semaphore: Arc<Semaphore>,
-	/// manifest config.maximumParallelRequests 换算的每源调用准入帽；None 只受全局帽
+	/// Per-source call admission cap derived from the manifest's config.maximumParallelRequests; None means only the global cap applies
 	source_semaphore: Option<Arc<Semaphore>>,
 	call_timeout: Duration,
 }
@@ -75,9 +76,10 @@ impl SourceHandle {
 		let config = config.clone();
 		std::thread::Builder::new()
 			.name(format!("source-{}", config.key))
-			// wasmi 把 guest 调用展开成 native 递归帧：默认 2 MiB 栈在递归上限
-			// （1000 层）内就可能物理溢出直接 abort 全进程（#213）。8 MiB 虚拟
-			// 预留惰性提交，不用不花 RSS。
+			// wasmi expands guest calls into native recursion frames: the default 2 MiB
+			// stack can physically overflow within the recursion limit (1000 frames) and
+			// abort the whole process (#213). 8 MiB is a virtual reservation, lazily
+			// committed — unused memory costs no RSS.
 			.stack_size(8 * 1024 * 1024)
 			.spawn(move || {
 				let mut instance = match SourceInstance::build(&config) {
@@ -94,7 +96,7 @@ impl SourceHandle {
 					match cmd {
 						Cmd::Job(job) => {
 							if catch_unwind(AssertUnwindSafe(|| job(&mut instance))).is_err() {
-								// 宿主 import 恐慌后实例状态不可信，线程退出交给上层重启
+								// After a host import panics, the instance state is untrustworthy; the thread exits and the upper layer restarts
 								break;
 							}
 						}
@@ -114,7 +116,7 @@ impl SourceHandle {
 		&self.key
 	}
 
-	/// 该源的 Accept-Language 默认值（按源语言推导）；服务端直拉封面/页图复用同一值
+	/// This source's default Accept-Language (derived from the source languages); the server's direct cover/page fetches reuse the same value
 	pub fn accept_language(&self) -> String {
 		self.config.read().expect("config lock").accept_language.clone()
 	}
@@ -135,8 +137,9 @@ impl SourceHandle {
 		&self,
 		job: impl FnOnce(&mut SourceInstance) -> Result<T> + Send + 'static,
 	) -> Result<T> {
-		// 先取每源帽再占全局帽：声明了 maximumParallelRequests 的源在入口就被压回，
-		// 不消耗全局许可排队
+		// Take the per-source cap before occupying the global one: a source that declares
+		// maximumParallelRequests is pushed back at the entrance instead of consuming a
+		// global permit while queued
 		let _source_permit = match &self.source_semaphore {
 			Some(sem) => Some(
 				sem.clone()
@@ -163,7 +166,7 @@ impl SourceHandle {
 			Ok(Ok(result)) => result,
 			Ok(Err(_closed)) => Err(Error::Trap("source call panicked".into())),
 			Err(_elapsed) => {
-				// 超时熔断：旧线程可能卡在宿主调用里，换线程重建实例
+				// Timeout circuit breaker: the old thread may be stuck inside a host call, so swap the thread and rebuild the instance
 				let defaults = self.config.read().expect("config lock").defaults.clone();
 				let _ = self.restart(defaults).await;
 				Err(Error::Timeout)
@@ -176,7 +179,7 @@ impl SourceHandle {
 		self.restart_with(defaults, cookies).await
 	}
 
-	/// 换 defaults 与 cookie jar 重建实例；clear-cache / 设置变更走这里
+	/// Rebuild the instance with new defaults and cookie jar; clear-cache / settings changes go through here
 	pub async fn restart_with(
 		&self,
 		defaults: HashMap<String, DefaultValue>,
@@ -190,7 +193,7 @@ impl SourceHandle {
 		};
 		let (inner, init) = Self::spawn_actor(&config).await?;
 		let features = init?;
-		// 旧 tx 随 Inner 替换而断开，旧线程跑完当前 job（受 fuel 约束）即退出
+		// The old tx disconnects as Inner is swapped out; the old thread exits once it finishes its current job (bounded by fuel)
 		*self.inner.write().expect("inner lock") = inner;
 		*self.features.write().expect("features lock") = features.clone();
 		Ok(features)
@@ -233,8 +236,9 @@ impl SourceHandle {
 		self.call(|i| i.get_home()).await
 	}
 
-	/// 流式版 get_home：源在调用中途 send_partial_result 的部分结果按到达顺序
-	/// 推进 partials。接收端掉线（客户端断开）时发送失败静默丢弃，源继续跑完
+	/// Streaming get_home: partial results the source pushes via send_partial_result
+	/// mid-call flow into partials in arrival order. When the receiver is gone (client
+	/// disconnected), send failures are silently dropped and the source runs to completion
 	pub async fn get_home_streaming(
 		&self,
 		partials: mpsc::UnboundedSender<HomePartial>,
@@ -248,7 +252,7 @@ impl SourceHandle {
 						let event = sink_acc.lock().expect("accumulator lock").apply(partial);
 						let _ = partials.send(event);
 					}
-					// 部分结果只是渐进预览，解码失败不值得让整个请求失败
+					// A partial result is only a progressive preview; a decode failure is not worth failing the whole request
 					Err(_) => tracing::warn!("failed to decode home partial result"),
 				}
 			});
@@ -262,7 +266,7 @@ impl SourceHandle {
 		.await
 	}
 
-	/// 流式版 get_search_manga_list：每个 partial 载荷是一条完整 Manga，按到达顺序追加
+	/// Streaming get_search_manga_list: each partial payload is one complete Manga, appended in arrival order
 	pub async fn get_search_manga_list_streaming(
 		&self,
 		query: Option<String>,
@@ -284,9 +288,10 @@ impl SourceHandle {
 		.await
 	}
 
-	/// 流式版 get_manga_update：对齐上游 partialMangaPublisher——每个 partial 是
-	/// 当时的完整 Manga 快照（详情/章节随拉取进度逐渐填充），终态以导出返回为准，
-	/// 不做 home 那样的累积合并
+	/// Streaming get_manga_update: aligned with upstream partialMangaPublisher — each
+	/// partial is a full Manga snapshot of that moment (details/chapters filled in as the
+	/// fetch progresses); the final state follows the export's return, with no home-style
+	/// accumulation merge
 	pub async fn get_manga_update_streaming(
 		&self,
 		manga: Manga,
@@ -372,7 +377,7 @@ impl SourceHandle {
 		self.call(move |i| i.get_image_request(&url, context.as_ref())).await
 	}
 
-	/// 把 PageContent::Image 的源内句柄还原成 PNG 字节并回收 rid
+	/// Resolve the in-source handle of a PageContent::Image back into PNG bytes and reclaim the rid
 	pub async fn take_page_image(&self, rid: i32) -> Result<Vec<u8>> {
 		self.call(move |i| i.take_image_png(rid)).await
 	}

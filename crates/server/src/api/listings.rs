@@ -1,15 +1,15 @@
-//! listings 的形状归一：静态条目解析与 wire 形状。
+//! Shape normalization for listings: static-entry parsing and the wire shape.
 //!
-//! 源包的静态 listing 是 Aidoku 公开 schema（裸字符串或对象，kind 为数值 0/1），
-//! 而动态导出 `get_listings` 的 `Listing` 经 serde 序列化后 kind 是枚举名
-//! （"Default"/"List"）。`/sources/{id}/listings` 把两种来源归一成同一形状
-//! （`{id, name, kind}`，kind 为小写 `default`/`list`），前端才只需处理一种形状。
+//! A source package's static listing is Aidoku's public schema (a bare string or an object, kind numeric 0/1),
+//! while a dynamically exported `get_listings` `Listing` serializes kind as the enum name
+//! ("Default"/"List"). `/sources/{id}/listings` normalizes both sources into one shape
+//! (`{id, name, kind}`, kind lowercase `default`/`list`), so the frontend handles exactly one shape.
 
 use aidoku::{Listing, ListingKind};
 use serde_json::{Value, json};
 
-/// 静态条目按 AidokuRunner 的 SourceInfo 解码语义解析：裸字符串 → id=name=字符串；
-/// 对象缺 name 回填 id，kind 只有数值 1 是 List（Runner 按 UInt8 解码，解析失败落 default）
+/// Static entries parse by AidokuRunner's SourceInfo decoding semantics: a bare string → id=name=the string;
+/// an object with no name backfills id, and only numeric kind 1 is List (Runner decodes as UInt8, failures fall to default)
 pub fn parse_static_listing(value: &Value) -> Option<Listing> {
 	if let Some(s) = value.as_str() {
 		return Some(Listing {
@@ -31,7 +31,7 @@ pub fn parse_static_listing(value: &Value) -> Option<Listing> {
 	Some(Listing { id, name, kind })
 }
 
-/// 端点 wire 形状：kind 归一成小写字符串，前端按 "list" 判行式布局
+/// The endpoint's wire shape: kind normalized to a lowercase string; the frontend keys the row layout on "list"
 pub fn listing_json(listing: &Listing) -> Value {
 	let kind = match listing.kind {
 		ListingKind::Default => "default",
@@ -61,7 +61,7 @@ mod tests {
 	fn kind_only_numeric_one_is_list() {
 		let list = parse_static_listing(&json!({"id": "a", "kind": 1})).expect("object");
 		assert_eq!(list.kind, ListingKind::List);
-		// 0、缺省与非数值都落 default（Runner 按 UInt8 解码）
+		// 0, absent, and non-numeric all fall to default (Runner decodes as UInt8)
 		for raw in [
 			json!({"id": "a", "kind": 0}),
 			json!({"id": "a"}),

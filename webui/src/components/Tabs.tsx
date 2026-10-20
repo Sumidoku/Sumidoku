@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 export interface TabItem {
 	key: string;
 	label: ReactNode;
-	/** 角标计数（如分类下漫画数），null/undefined 不显示 */
+	/** Badge count (e.g. manga count in a category); null/undefined hides it */
 	badge?: number | null;
 }
 
@@ -13,7 +13,7 @@ export interface TabsProps {
 	onChange: (key: string) => void;
 }
 
-/** underline 款页签，横向可滚 */
+/** Underline-style tabs, horizontally scrollable */
 export function Tabs({ tabs, active, onChange }: TabsProps) {
 	return (
 		<div className="tabs" role="tablist">

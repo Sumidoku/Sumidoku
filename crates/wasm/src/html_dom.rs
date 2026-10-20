@@ -110,8 +110,8 @@ impl HtmlNode {
 		node.parent().map(|node| self.child_node(node.id()))
 	}
 
-	/// jsoup siblingNodes()：父节点全部子节点排除自身、按文档序；
-	/// node 层不按元素过滤，文本/注释都在
+	/// jsoup siblingNodes(): all child nodes of the parent excluding self, in document order;
+	/// the node level does not filter to elements — text and comments are included
 	pub fn siblings(&self) -> Option<Vec<HtmlNode>> {
 		let html = self.html.borrow();
 		let node = html.tree.get(self.id)?;
@@ -127,7 +127,7 @@ impl HtmlNode {
 		)
 	}
 
-	/// 紧邻兄弟节点（文本/注释也算）：node 层不做元素过滤，元素级导航在 HtmlElement
+	/// Immediately adjacent sibling (text/comments count too): no element filtering at the node level; element-level navigation lives on HtmlElement
 	pub fn next_sibling(&self) -> Option<HtmlNode> {
 		let html = self.html.borrow();
 		let node = html.tree.get(self.id)?;
@@ -146,8 +146,9 @@ impl HtmlNode {
 		node.value().as_text().map(|text| text.deref().into())
 	}
 
-	/// None = 节点已不在树中。非元素节点报 None：ego-tree 只有元素挂属性，
-	/// 与上游 jsoup 的 Node.attr 差异在此（上游 host 未实现该函数，无 ABI 冲突）
+	/// None = the node is no longer in the tree. Non-element nodes report None too: ego-tree
+	/// only hangs attributes on elements — this is the difference from upstream jsoup's Node.attr
+	/// (the upstream host does not implement that function, so no ABI conflict)
 	pub fn set_attr(&self, key: &str, value: &str) -> Option<()> {
 		self.replace_attrs(|attrs| {
 			if let Some(existing) = attrs.iter_mut().find(|(k, _)| k == key) {
@@ -158,12 +159,12 @@ impl HtmlNode {
 		})
 	}
 
-	/// jsoup removeAttr：属性不存在也是成功
+	/// jsoup removeAttr: succeeds even when the attribute does not exist
 	pub fn remove_attr(&self, key: &str) -> Option<()> {
 		self.replace_attrs(|attrs| attrs.retain(|(k, _)| k != key))
 	}
 
-	/// jsoup Element.text(String)：清空子节点，换成单个文本节点
+	/// jsoup Element.text(String): clears the child nodes and replaces them with a single text node
 	pub fn set_text(&self, text: &str) -> Option<()> {
 		let mut html = self.html.borrow_mut();
 		let mut node = html.tree.get_mut(self.id)?;
@@ -175,7 +176,7 @@ impl HtmlNode {
 		Some(())
 	}
 
-	/// jsoup Element.html(String)：解析 fragment 替换全部子节点
+	/// jsoup Element.html(String): parses the fragment and replaces all child nodes
 	pub fn set_html(&self, fragment: &str) -> Option<()> {
 		self.splice(fragment, Splice::Replace)
 	}
@@ -188,8 +189,9 @@ impl HtmlNode {
 		self.splice(fragment, Splice::Append)
 	}
 
-	/// class 读写都走 class 属性重写：jsoup 语义是「空白切分、去重保序、集合运算后写回」，
-	/// removeClass 清空后保留空 class 属性（jsoup classNames(set) 恒写回）
+	/// Class reads and writes both go through class-attribute rewriting: jsoup semantics are
+	/// "split on whitespace, dedupe keeping order, write back after set operations";
+	/// removeClass keeps the emptied class attribute (jsoup classNames(set) always writes back)
 	pub fn add_class(&self, class: &str) -> Option<()> {
 		self.replace_attrs(|attrs| {
 			let mut classes = normalized_classes(attrs);
@@ -208,9 +210,10 @@ impl HtmlNode {
 		})
 	}
 
-	/// ego-tree detach 只摘父子/兄弟链接，子树完整留在 arena：
-	/// 被 remove 的元素之后仍可读写（对齐 jsoup remove 后元素对象仍可用），
-	/// 只是从文档根不可达
+	/// ego-tree detach only cuts the parent/child/sibling links; the subtree stays whole in
+	/// the arena: a removed element remains readable/writable afterwards (matching jsoup,
+	/// where the element object is still usable after remove), it is just unreachable from
+	/// the document root
 	pub fn detach(&self) -> Option<()> {
 		let mut html = self.html.borrow_mut();
 		html.tree.get_mut(self.id)?.detach();
@@ -220,8 +223,8 @@ impl HtmlNode {
 	fn splice(&self, fragment: &str, mode: Splice) -> Option<()> {
 		let frag = Html::parse_fragment(fragment);
 		let mut html = self.html.borrow_mut();
-		// extend_tree 把 fragment 树并入（orphan 子树）；
-		// html5ever fragment 算法会造一个 <html> 包裹元素，内容节点是它的子节点
+		// extend_tree merges the fragment tree in (as an orphan subtree); the html5ever
+		// fragment algorithm creates an <html> wrapper element whose children are the content nodes
 		let frag_root_id = html.tree.extend_tree(frag.tree).id();
 		let container_id = fragment_container(&html.tree, frag_root_id);
 		let mut node = html.tree.get_mut(self.id)?;
@@ -231,7 +234,7 @@ impl HtmlNode {
 		if mode == Splice::Replace {
 			detach_children(&mut node);
 		}
-		// reparent_from_id_* 整段移动子节点链表，fragment 内相对顺序不变
+		// reparent_from_id_* moves the whole child-node list at once; the relative order inside the fragment is preserved
 		match mode {
 			Splice::Prepend => node.reparent_from_id_prepend(container_id),
 			_ => node.reparent_from_id_append(container_id),
@@ -245,8 +248,9 @@ impl HtmlNode {
 		let Node::Element(element) = node.value() else {
 			return None;
 		};
-		// Element 的 id/classes 是 OnceCell 缓存，直接改 attrs 会让 .class/#id
-		// 选择器读到旧值——必须 Element::new 整体重建让缓存失效
+		// Element's id/classes are OnceCell-cached; mutating attrs directly would leave
+		// .class/#id selectors reading stale values — a full Element::new rebuild is
+		// required to invalidate the cache
 		let mut attrs: Vec<(String, String)> = element
 			.attrs()
 			.map(|(k, v)| (k.to_string(), v.to_string()))
@@ -291,7 +295,7 @@ fn detach_children(node: &mut ego_tree::NodeMut<'_, Node>) {
 	}
 }
 
-/// fragment 树的内容容器：恰好一个 <html> 子元素时剥开它，否则直接用根
+/// Content container of a fragment tree: unwrap it when there is exactly one <html> child element, otherwise use the root directly
 fn fragment_container(tree: &ego_tree::Tree<Node>, root_id: NodeId) -> NodeId {
 	let Some(root) = tree.get(root_id) else {
 		return root_id;
@@ -330,8 +334,9 @@ fn set_class_attr(attrs: &mut Vec<(String, String)>, classes: Vec<String>) {
 	}
 }
 
-/// jsoup/SwiftSoup 的属性查找大小写不敏感；html5ever 只保证解析出的属性名
-/// 小写，set_attr 可写入大写名，故统一在查找侧匹配
+/// jsoup/SwiftSoup attribute lookup is case-insensitive; html5ever only guarantees that
+/// parsed attribute names are lowercase, and set_attr can write uppercase names, so
+/// matching is uniformly done on the lookup side
 fn find_attr<'a>(element: &'a scraper::node::Element, name: &str) -> Option<&'a str> {
 	element
 		.attrs()
@@ -364,7 +369,7 @@ impl HtmlElement {
 			.map(|element| self.child(element.id()))
 	}
 
-	/// 仅后代匹配，不含元素自身（:contains 分段求值里剩余选择器的作用域）
+	/// Descendants only, excluding the element itself (the scope of the remaining selector in :contains split evaluation)
 	pub fn select_descendants(&self, selector: &Selector) -> HtmlElementList {
 		let html = self.0.html.borrow();
 		let Some(node) = html.tree.get(self.0.id) else {
@@ -410,9 +415,10 @@ impl HtmlElement {
 		}
 	}
 
-	/// trimmed=true 对齐 jsoup text()：归一化 + trim；trimmed=false 是 aidoku
-	/// untrimmed_text：文本节点逐字拼接、不 trim，但块级分隔与 script/style
-	/// 排除照旧（vendor 文档「Notices from Element::text apply」）
+	/// trimmed=true matches jsoup text(): normalize + trim; trimmed=false is aidoku
+	/// untrimmed_text: text nodes concatenated verbatim, no trim, but block-level
+	/// separators and the script/style exclusion still apply (vendor doc "Notices from
+	/// Element::text apply")
 	pub fn text(&self, trimmed: bool) -> Option<String> {
 		let html = self.0.html.borrow();
 		let element = ElementRef::wrap(html.tree.get(self.0.id)?)?;
@@ -457,7 +463,7 @@ impl HtmlElement {
 		))
 	}
 
-	/// jsoup siblingElements()：父元素的全部元素子节点排除自身、按文档序
+	/// jsoup siblingElements(): all element children of the parent excluding self, in document order
 	pub fn siblings(&self) -> Option<HtmlElementList> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -475,7 +481,7 @@ impl HtmlElement {
 		))
 	}
 
-	/// jsoup nextElementSibling()：沿兄弟链找第一个元素节点，跳过文本/注释
+	/// jsoup nextElementSibling(): walk the sibling chain to the first element node, skipping text/comments
 	pub fn next_sibling(&self) -> Option<HtmlElement> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -484,7 +490,7 @@ impl HtmlElement {
 		Some(self.child(sibling.id()))
 	}
 
-	/// jsoup previousElementSibling()：反向沿兄弟链找第一个元素节点
+	/// jsoup previousElementSibling(): walk the sibling chain backwards to the first element node
 	pub fn prev_sibling(&self) -> Option<HtmlElement> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -493,8 +499,9 @@ impl HtmlElement {
 		Some(self.child(sibling.id()))
 	}
 
-	/// jsoup ownText()：只拼直系文本节点子节点，与 text() 同一套归一化；
-	/// 直系 <br> 补一个空格；script/style 的内容是 data 不算 own text
+	/// jsoup ownText(): concatenates only direct text-node children, with the same
+	/// normalization as text(); a direct <br> contributes one space; script/style content
+	/// is data and does not count as own text
 	pub fn own_text(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let element = ElementRef::wrap(html.tree.get(self.0.id)?)?;
@@ -516,8 +523,8 @@ impl HtmlElement {
 		Some(jsoup_trim(&accum).to_string())
 	}
 
-	/// jsoup 仅 script/style 内容算 DataNode；html5ever 统一存文本节点，
-	/// 其他元素按 jsoup 语义给空串
+	/// In jsoup only script/style content counts as a DataNode; html5ever stores it
+	/// uniformly as text nodes, and other elements get an empty string per jsoup semantics
 	pub fn data(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -528,7 +535,7 @@ impl HtmlElement {
 		Some(element.text().collect())
 	}
 
-	/// SwiftSoup id() 缺席返回 ""（WasmHtml host 原样存空串，客户端见 Some("")）
+	/// SwiftSoup id() returns "" when absent (the WasmHtml host stores the empty string as-is; the client sees Some(""))
 	pub fn id(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -543,7 +550,7 @@ impl HtmlElement {
 		Some(element.value().name().to_string())
 	}
 
-	/// jsoup/SwiftSoup className() 是 class 属性字面值（trim 首尾），缺席返回 ""
+	/// jsoup/SwiftSoup className() is the literal class attribute value (trimmed at both ends), "" when absent
 	pub fn class_name(&self) -> Option<String> {
 		let html = self.0.html.borrow();
 		let node = html.tree.get(self.0.id)?;
@@ -676,17 +683,19 @@ pub enum QueryRoot<'a> {
 	Document(&'a HtmlDocument),
 	Element(&'a HtmlElement),
 	List(&'a HtmlElementList),
-	/// 组合器（>/+/~）锁定的候选集：元素自身必须命中下一段复合选择器
+	/// Candidate set pinned by a combinator (>/+/~): each element itself must match the next compound segment
 	Scope(Vec<HtmlElement>),
 }
 
-/// 字符串形式的选择器入口，额外支持 SwiftSoup 系非标准伪类：
-/// :contains/:containsOwn/:matches/:matchesOwn/:lt/:gt/:eq/[*]/[^前缀]，
-/// 以及它们的 :not 包裹和含扩展内容的 :has。
-/// 求值按「复合段 + 组合器」推进：组合器开新作用域（> 只取直接子元素，
-/// +/~ 只取兄弟元素），同复合剩余作用于候选元素自身；顶层逗号分支按
-/// jsoup 语义求并集（文档序、去重）。:has/:not 内容不含扩展伪类时整个
-/// 查询交给 Selector::parse（selectors crate 原生支持 CSS4 相对选择器）
+/// String-form selector entry point, with extra support for SwiftSoup-family non-standard
+/// pseudo-classes: :contains/:containsOwn/:matches/:matchesOwn/:lt/:gt/:eq/[*]/[^prefix],
+/// plus their :not-wrapped forms and :has with extension content.
+/// Evaluation advances by "compound segment + combinator": a combinator opens a new scope
+/// (> takes only direct children, +/~ only siblings), and the remainder of the same
+/// compound applies to the candidate element itself; top-level comma branches are unioned
+/// per jsoup semantics (document order, deduped). When :has/:not content contains no
+/// extension pseudo-classes, the whole query is handed to Selector::parse (the selectors
+/// crate natively supports CSS4 relative selectors)
 pub fn select_str(root: QueryRoot, query: &str) -> Result<HtmlElementList, ()> {
 	select_str_impl(root, query, true)
 }
@@ -709,15 +718,16 @@ fn select_str_impl(root: QueryRoot, query: &str, include_root: bool) -> Result<H
 	Ok(HtmlElementList(out))
 }
 
-/// 单分支求值：切出首段复合选择器匹配候选，再按组合器递归推进作用域
+/// Single-branch evaluation: split off the leading compound to match candidates, then advance the scope recursively along combinators
 fn eval(root: &QueryRoot, query: &str, include_root: bool) -> Result<Vec<HtmlElement>, ()> {
 	let (head, continuation) = split_head(query);
 	let candidates = match_compound(root, head, include_root)?;
 	apply_continuation(candidates, continuation)
 }
 
-/// 复合选择器（无顶层组合器）匹配：Scope 下元素自身必须命中；
-/// 其余根按 include_root 决定元素自身是否参与
+/// Match a compound selector (no top-level combinator): under Scope the element itself
+/// must match; for other roots, include_root decides whether the element itself
+/// participates
 fn match_compound(root: &QueryRoot, compound: &str, include_root: bool) -> Result<Vec<HtmlElement>, ()> {
 	let compound = compound.trim();
 	if let QueryRoot::Scope(scope) = root {
@@ -747,7 +757,7 @@ fn match_compound(root: &QueryRoot, compound: &str, include_root: bool) -> Resul
 	select_css(root, compound, include_root)
 }
 
-/// 同复合剩余匹配候选元素自身（扩展伪类逐段消化，纯 CSS 段交给 selectors crate）
+/// Match the remainder of the same compound against the candidate element itself (extension pseudo-classes are consumed segment by segment; pure CSS segments go to the selectors crate)
 fn matches_self(element: &HtmlElement, compound: &str) -> Result<bool, ()> {
 	if let Some(split) = split_extension(compound) {
 		let prefix = split.prefix.trim();
@@ -796,7 +806,7 @@ enum Scope {
 
 fn apply_scope(candidates: Vec<HtmlElement>, scope: Scope, rest: &str) -> Result<Vec<HtmlElement>, ()> {
 	if rest.is_empty() {
-		// 悬空组合器（如 `p:contains(x) +`）按无效查询处理
+		// A dangling combinator (e.g. `p:contains(x) +`) is treated as an invalid query
 		return Err(());
 	}
 	let elements: Vec<HtmlElement> = match scope {
@@ -805,7 +815,7 @@ fn apply_scope(candidates: Vec<HtmlElement>, scope: Scope, rest: &str) -> Result
 		Scope::LaterSiblings => {
 			let mut siblings: Vec<HtmlElement> =
 				candidates.iter().flat_map(following_element_siblings).collect();
-			// 多个候选的后续兄弟集合互相重叠
+			// The following-sibling sets of multiple candidates overlap each other
 			dedup_elements(&mut siblings);
 			siblings
 		}
@@ -881,14 +891,16 @@ enum MarkerKind {
 
 enum MarkerOutcome {
 	Split(ExtensionSplit),
-	/// 不是标记（或 :has 内容无需拦截），从给定位置继续扫描
+	/// Not a marker (or the :has content needs no interception); keep scanning from the given position
 	Skip(usize),
 	Invalid,
 }
 
-/// 切出第一个 scraper 不支持的伪类标记，引号/括号/属性/转义感知（引号内的
-/// `:has(` 之类不算标记）。:has/:not(:has) 内容不含扩展伪类时跳过整组不拦截；
-/// 找到标记但括号不闭合时返回 None，让外层走 Selector::parse 报无效查询
+/// Split out the first pseudo-class marker that scraper does not support, aware of
+/// quotes/parens/attributes/escapes (a `:has(` inside quotes does not count). When
+/// :has/:not(:has) content contains no extension pseudo-classes, skip the whole group
+/// without intercepting; when a marker is found but its parens do not close, return None
+/// so the outer layer falls back to Selector::parse and reports an invalid query
 fn split_extension(query: &str) -> Option<ExtensionSplit> {
 	const MARKERS: &[(&str, MarkerKind)] = &[
 		(":not(:containsOwn(", MarkerKind::Contains { own: true, negate: true }),
@@ -942,7 +954,7 @@ fn split_extension(query: &str) -> Option<ExtensionSplit> {
 		}
 		i += c.len_utf8();
 		if c == '\\' && i < query.len() {
-			// 转义的下一个字符不参与引号/括号/标记判定
+			// The character after an escape does not participate in quote/paren/marker detection
 			i += query[i..].chars().next().map_or(0, char::len_utf8);
 		}
 	}
@@ -959,7 +971,7 @@ fn parse_extension_at(query: &str, index: usize, marker: &str, kind: &MarkerKind
 		let content = query[content_start..close].trim();
 		let after = close + 1;
 		let suffix = if *negate {
-			// :not([^前缀]) 要求右括号收尾，否则 [:not( 里包的是别的东西
+			// :not([^prefix]) must end with a closing paren, otherwise the [:not( wraps something else
 			if query[after..].starts_with(')') {
 				&query[after + 1..]
 			} else {
@@ -1038,8 +1050,8 @@ fn parse_extension_at(query: &str, index: usize, marker: &str, kind: &MarkerKind
 	}
 }
 
-/// 在首个顶层组合器（空白/>/+/~）处切开，引号/括号/属性/转义感知。
-/// 返回（首段复合, 组合器起的剩余）
+/// Split at the first top-level combinator (whitespace/>/+/~), aware of
+/// quotes/parens/attributes/escapes. Returns (leading compound, rest starting at the combinator)
 fn split_head(query: &str) -> (&str, &str) {
 	let mut quote: Option<char> = None;
 	let mut paren = 0u8;
@@ -1069,9 +1081,10 @@ fn split_head(query: &str) -> (&str, &str) {
 	(query, "")
 }
 
-/// 从 start 扫描到配平后的右括号（extra_depth 抵消 :not 多包的一层），引号感知；
-/// 反斜杠转义的字符不参与配平（`:contains(a\))` 的 \) 不算闭合）。
-/// 返回（内容, 剩余后缀）；extra_depth>0 时内容裁到内层闭合处
+/// Scan from start to the balanced closing paren (extra_depth cancels the extra layer
+/// wrapped by :not), quote-aware; backslash-escaped characters do not participate in
+/// balancing (the \) in `:contains(a\))` is not a close). Returns (content, remaining
+/// suffix); when extra_depth>0 the content is cut at the inner close
 fn take_paren_content(query: &str, start: usize, extra_depth: u8) -> Option<(String, String)> {
 	let rest = &query[start..];
 	let mut quote: Option<char> = None;
@@ -1106,7 +1119,7 @@ fn take_paren_content(query: &str, start: usize, extra_depth: u8) -> Option<(Str
 	None
 }
 
-/// 属性选择器 `[^前缀]` 的右括号位置，引号/转义感知
+/// Closing-bracket position of the `[^prefix]` attribute selector, quote/escape aware
 fn find_bracket_close(query: &str, start: usize) -> Option<usize> {
 	let rest = &query[start..];
 	let mut quote: Option<char> = None;
@@ -1173,7 +1186,7 @@ fn unquote(raw: &str) -> String {
 	}
 }
 
-/// jsoup TokenQueue.unescape：反斜杠只转义紧跟的一个字符
+/// jsoup TokenQueue.unescape: a backslash escapes only the single character right after it
 fn unescape_needle(raw: &str) -> String {
 	let mut out = String::with_capacity(raw.len());
 	let mut chars = raw.chars();
@@ -1196,7 +1209,7 @@ fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<
 			contains_text(element, needle, *own) != *negate
 		}
 		ExtensionFilter::Matches { pattern, own, negate } => {
-			// jsoup :matches 针对归一化后的 text()/ownText()、find 语义、默认大小写敏感
+			// jsoup :matches runs against normalized text()/ownText(), find semantics, case-sensitive by default
 			let text = if *own { element.own_text() } else { element.text(true) };
 			text.is_some_and(|text| pattern.is_match(&text)) != *negate
 		}
@@ -1214,7 +1227,7 @@ fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<
 			hit != *negate
 		}
 		ExtensionFilter::Has { selectors, negate } => {
-			// jsoup :has 是后代相对选择器（不含自身），子选择器可再嵌套扩展伪类
+			// jsoup :has is a descendant-relative selector (excludes self); sub-selectors may nest extension pseudo-classes again
 			let mut found = false;
 			for sub in selectors {
 				if !select_str_impl(QueryRoot::Element(element), sub, false)?.0.is_empty() {
@@ -1227,7 +1240,7 @@ fn matches_extension(element: &HtmlElement, filter: &ExtensionFilter) -> Result<
 	})
 }
 
-/// SwiftSoup :contains 是子树归一化文本、大小写不敏感、空白折叠后匹配
+/// SwiftSoup :contains matches against subtree-normalized text, case-insensitively, after whitespace collapsing
 fn contains_text(element: &HtmlElement, needle: &str, own: bool) -> bool {
 	let text = if own {
 		element.own_text()
@@ -1245,8 +1258,8 @@ fn normalize_whitespace(text: &str) -> String {
 		.to_lowercase()
 }
 
-/// SwiftSoup blockTags：text() 的分隔只对块级元素与 <br> 生效，未列出的
-/// 标签（含自定义标签）按行内处理
+/// SwiftSoup blockTags: text() separation only applies to block-level elements and <br>;
+/// unlisted tags (including custom tags) are treated as inline
 const BLOCK_TAGS: &[&str] = &[
 	"html", "head", "body", "frameset", "script", "noscript", "style", "meta", "link", "title",
 	"frame", "noframes", "noembed", "section", "nav", "aside", "hgroup", "header", "footer", "p",
@@ -1257,27 +1270,27 @@ const BLOCK_TAGS: &[&str] = &[
 	"template", "article", "main", "svg", "math",
 ];
 
-/// SwiftSoup preserveWhitespaceTags：子树内文本逐字保留不折叠
+/// SwiftSoup preserveWhitespaceTags: text inside the subtree is preserved verbatim, not collapsed
 const PRESERVE_WHITESPACE_TAGS: &[&str] = &["pre", "plaintext", "title", "textarea"];
 
-/// jsoup StringUtil.isActuallyWhitespace：\xA0 算空白、U+3000 不算，
-/// 比 char::is_whitespace 窄，CJK 文本里的表意空格必须保住
+/// jsoup StringUtil.isActuallyWhitespace: \xA0 counts as whitespace, U+3000 does not —
+/// narrower than char::is_whitespace; the ideographic space in CJK text must be preserved
 fn is_text_whitespace(c: char) -> bool {
 	matches!(c, ' ' | '\t' | '\n' | '\x0C' | '\r' | '\u{A0}')
 }
 
-/// jsoup StringUtil.isInvisibleChar：零宽空格与软连字符不进 text()
+/// jsoup StringUtil.isInvisibleChar: zero-width space and soft hyphen do not enter text()
 fn is_invisible_char(c: char) -> bool {
 	matches!(c, '\u{200B}' | '\u{AD}')
 }
 
-/// java String.trim() 语义：只去 <= U+0020 的字符，不是 Unicode 空白
+/// java String.trim() semantics: strips only chars <= U+0020, not Unicode whitespace
 fn jsoup_trim(text: &str) -> &str {
 	text.trim_matches(|c: char| c <= '\u{20}')
 }
 
-/// jsoup Element.preserveWhitespace：父元素起向上最多 6 层查 pre 系标签
-/// （ego-tree 的 ancestors 从父节点开始，不含自身）
+/// jsoup Element.preserveWhitespace: look up at most 6 levels from the parent element for
+/// pre-family tags (ego-tree's ancestors start at the parent, excluding self)
 fn preserve_whitespace(node: ego_tree::NodeRef<'_, Node>) -> bool {
 	node.ancestors()
 		.take(6)
@@ -1285,8 +1298,9 @@ fn preserve_whitespace(node: ego_tree::NodeRef<'_, Node>) -> bool {
 		.any(|element| PRESERVE_WHITESPACE_TAGS.contains(&element.name()))
 }
 
-/// jsoup Element.appendNormalisedText：preserveWhitespace 子树逐字追加，
-/// 否则折叠连续空白为单空格；accum 为空或末尾已是空格时剥掉前导空白
+/// jsoup Element.appendNormalisedText: a preserveWhitespace subtree is appended verbatim,
+/// otherwise runs of whitespace collapse to a single space; leading whitespace is stripped
+/// when accum is empty or already ends with a space
 fn append_normalised_text(accum: &mut String, node: ego_tree::NodeRef<'_, Node>, text: &str) {
 	if preserve_whitespace(node) {
 		accum.push_str(text);
@@ -1310,10 +1324,12 @@ fn append_normalised_text(accum: &mut String, node: ego_tree::NodeRef<'_, Node>,
 	}
 }
 
-/// SwiftSoup text() 遍历：前序走子树，块级/br 元素头部在末尾非空格时补一个
-/// 空格（SwiftSoup 无 jsoup 的 tail 分隔，<div>a</div>b 得 "ab"）；script/style
-/// 的内容在 jsoup 是 DataNode 不进 text，html5ever 存成文本节点，靠跳过整个
-/// 子树排除；normalize=false 时文本节点逐字追加（aidoku untrimmed_text）
+/// SwiftSoup text() traversal: preorder over the subtree; when a block-level/br element
+/// is reached, one space is appended if accum does not end with one (SwiftSoup has no
+/// jsoup tail separator — <div>a</div>b yields "ab"); script/style content is a DataNode
+/// in jsoup and never enters text, while html5ever stores it as text nodes, so the whole
+/// subtree is skipped; with normalize=false text nodes are appended verbatim (aidoku
+/// untrimmed_text)
 fn collect_text(element: ElementRef<'_>, normalize: bool) -> String {
 	let mut accum = String::new();
 	let mut stack = vec![*element];
@@ -1360,7 +1376,7 @@ fn element_children(element: &HtmlElement) -> Vec<HtmlElement> {
 	element.children().map(|list| list.0).unwrap_or_default()
 }
 
-/// CSS 兄弟组合器只在元素之间成立，文本/注释节点要跳过
+/// CSS sibling combinators only hold between elements; text/comment nodes must be skipped
 fn next_element_sibling(element: &HtmlElement) -> Option<HtmlElement> {
 	let html = element.0.html.borrow();
 	let node = html.tree.get(element.0.id)?;
@@ -1390,7 +1406,7 @@ fn has_attr_prefix(element: &HtmlElement, prefix: &str) -> bool {
 	element_ref.value().attrs().any(|(k, _)| k.starts_with(prefix))
 }
 
-/// jsoup elementSiblingIndex：同级元素中的 0 起下标，非元素节点不计
+/// jsoup elementSiblingIndex: 0-based index among sibling elements; non-element nodes do not count
 fn element_sibling_index(element: &HtmlElement) -> usize {
 	let html = element.0.html.borrow();
 	let Some(node) = html.tree.get(element.0.id) else {
@@ -1406,7 +1422,7 @@ fn dedup_elements(elements: &mut Vec<HtmlElement>) {
 	elements.retain(|element| seen.insert(element.0.id));
 }
 
-/// jsoup 逗号列表语义：并集按文档序、去重
+/// jsoup comma-list semantics: union in document order, deduped
 fn sort_dedup_document_order(elements: &mut Vec<HtmlElement>) {
 	let Some(html) = elements.first().map(|element| element.0.html.clone()) else {
 		return;
@@ -1520,7 +1536,7 @@ mod tests {
 		let list = doc.select(&Selector::parse("p.text").unwrap());
 		assert_eq!(list.0.len(), 2);
 
-		// 无法解析为 URL 的 base 会被丢弃
+		// A base that cannot be parsed as a URL is discarded
 		let doc = HtmlDocument::parse(HTML, Some("not a url"));
 		assert!(doc.base_uri.is_none());
 	}
@@ -1530,7 +1546,7 @@ mod tests {
 		let doc = HtmlDocument::parse(HTML, None);
 		let content = content_element(&doc);
 
-		// select_with_root：元素自身匹配时也计入结果
+		// select_with_root: the element itself is included in the results when it matches
 		let self_match = content.select_first(&Selector::parse("div.main").unwrap()).unwrap();
 		assert_eq!(self_match.id().as_deref(), Some("content"));
 
@@ -1569,7 +1585,7 @@ mod tests {
 		);
 		assert_eq!(link.attr("missing"), None);
 
-		// 已是绝对 URL 的属性原样返回
+		// An attribute that is already an absolute URL is returned as-is
 		let img = content.select_first(&Selector::parse("img").unwrap()).unwrap();
 		assert_eq!(
 			img.attr("abs:src").as_deref(),
@@ -1579,24 +1595,24 @@ mod tests {
 
 	#[test]
 	fn attr_lookup_is_case_insensitive() {
-		// E1（issue #83）：jsoup/SwiftSoup 的 attr/has_attr 查找大小写不敏感
+		// E1 (issue #83): jsoup/SwiftSoup attr/has_attr lookup is case-insensitive
 		let doc = HtmlDocument::parse(
 			r#"<!DOCTYPE html><html><body><img src="s" DATA-K="v"></body></html>"#,
 			Some("https://example.com/dir/"),
 		);
 		let img = first_element(&doc, "img");
 
-		// html5ever 解析时把属性名小写化（DATA-K 存为 data-k）
+		// html5ever lowercases attribute names when parsing (DATA-K is stored as data-k)
 		assert_eq!(img.attr("data-k").as_deref(), Some("v"));
 		assert_eq!(img.attr("SRC").as_deref(), Some("s"));
 		assert_eq!(img.attr("Src").as_deref(), Some("s"));
 		assert!(img.has_attr("SRC"));
 		assert!(img.has_attr("src"));
 		assert!(!img.has_attr("missing"));
-		// abs: 前缀剥离后按同样规则查找
+		// After the abs: prefix is stripped, lookup follows the same rule
 		assert_eq!(img.attr("abs:SRC").as_deref(), Some("https://example.com/dir/s"));
 
-		// set_attr 原样写入的大写名也要能被小写查询命中
+		// An uppercase name written verbatim by set_attr must still be hit by a lowercase query
 		img.0.set_attr("HREF", "/x").unwrap();
 		assert_eq!(img.attr("href").as_deref(), Some("/x"));
 		assert!(img.has_attr("href"));
@@ -1604,30 +1620,30 @@ mod tests {
 
 	#[test]
 	fn class_name_returns_literal_value() {
-		// E2（issue #83）：className() 返回 class 属性字面值，不排序/去重/折叠内部空白
+		// E2 (issue #83): className() returns the literal class attribute value — no sorting, dedup, or collapsing of inner whitespace
 		let doc = HtmlDocument::parse(
 			r#"<!DOCTYPE html><html><body><div id="a" class="b  a a">t</div><div id="b">u</div></body></html>"#,
 			None,
 		);
 		assert_eq!(first_element(&doc, "#a").class_name().as_deref(), Some("b  a a"));
-		// 缺席返回 ""：SwiftSoup className() 非可选，WasmHtml host 原样存空串
+		// "" when absent: SwiftSoup className() is non-optional; the WasmHtml host stores the empty string as-is
 		assert_eq!(first_element(&doc, "#b").class_name().as_deref(), Some(""));
 
-		// SwiftSoup 只 trim 首尾空白
+		// SwiftSoup only trims leading and trailing whitespace
 		let doc = HtmlDocument::parse(r#"<div id="c" class="  b  a  ">t</div>"#, None);
 		assert_eq!(first_element(&doc, "#c").class_name().as_deref(), Some("b  a"));
 	}
 
 	#[test]
 	fn id_absent_returns_empty_string() {
-		// E3（issue #83）：jsoup/SwiftSoup id() 缺席返回 ""，aidoku 客户端见 Some("")
+		// E3 (issue #83): jsoup/SwiftSoup id() returns "" when absent; the aidoku client sees Some("")
 		let doc = HtmlDocument::parse(
 			r#"<!DOCTYPE html><html><body><div id="a">x</div><p>y</p><span ID="C">z</span></body></html>"#,
 			None,
 		);
 		assert_eq!(first_element(&doc, "#a").id().as_deref(), Some("a"));
 		assert_eq!(first_element(&doc, "p").id().as_deref(), Some(""));
-		// ID 解析为小写 id 后照常命中
+		// ID parses to lowercase id and still matches
 		assert_eq!(first_element(&doc, "span").id().as_deref(), Some("C"));
 	}
 
@@ -1676,7 +1692,7 @@ mod tests {
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].text(true).as_deref(), Some("連載中"));
 
-		// 大小写不敏感；引号包裹的 needle 里可以有右括号
+		// Case-insensitive; a quoted needle may contain a closing paren
 		let html = r#"<!DOCTYPE html><html><body><p>Hello)a World</p></body></html>"#;
 		let doc = HtmlDocument::parse(html, None);
 		let list = select_str(QueryRoot::Document(&doc), r#"p:contains("hello)a")"#).unwrap();
@@ -1716,12 +1732,12 @@ mod tests {
 		</body></html>"#;
 		let doc = HtmlDocument::parse(html, None);
 
-		// + 紧邻兄弟（跳过文本节点）
+		// + adjacent sibling (skipping text nodes)
 		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：) + li").unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].text(true).as_deref(), Some("作者： 某人"));
 
-		// ~ 后续全部兄弟
+		// ~ all following siblings
 		let list = select_str(QueryRoot::Document(&doc), "li:contains(狀態：) ~ li").unwrap();
 		assert_eq!(list.0.len(), 2);
 
@@ -1729,14 +1745,14 @@ mod tests {
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].text(true).as_deref(), Some("first"));
 
-		// + 只取紧邻的一个，中间隔了 span 的不再命中
+		// + only takes the immediately adjacent one; one separated by a span no longer matches
 		let list = select_str(QueryRoot::Document(&doc), "p:contains(x) ~ p").unwrap();
 		assert_eq!(list.0.len(), 2);
 	}
 
 	#[test]
 	fn contains_adjacent_sibling_source_shape() {
-		// zh.relamanhua 的真实写法（issue #83 的原始报告）
+		// The real-world pattern from zh.relamanhua (the original report of issue #83)
 		let html = r#"<!DOCTYPE html><html><body>
 		<div class="comicParticulars-synopsis">
 		<span class="comicParticulars-left-txt">作者：</span>
@@ -1784,7 +1800,7 @@ mod tests {
 		</body></html>"#;
 		let doc = HtmlDocument::parse(html, None);
 
-		// :has/:not 内容不含扩展伪类时整个交给 Selector::parse（CSS4 相对选择器）
+		// When :has/:not content has no extension pseudo-classes, hand the whole thing to Selector::parse (CSS4 relative selectors)
 		let list = select_str(QueryRoot::Document(&doc), "div:has(> a)").unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].id().as_deref(), Some("a"));
@@ -1796,7 +1812,7 @@ mod tests {
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].id().as_deref(), Some("d"));
 
-		// 内容含扩展伪类时仍走拦截路径
+		// When the content has extension pseudo-classes, it still goes through the interception path
 		let list = select_str(QueryRoot::Document(&doc), "div:has(p:contains(z))").unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].id().as_deref(), Some("c"));
@@ -1815,7 +1831,7 @@ mod tests {
 		</body></html>"#;
 		let doc = HtmlDocument::parse(html, None);
 
-		// 同复合剩余必须作用于候选元素自身，不是后代
+		// The remainder of the same compound must apply to the candidate element itself, not descendants
 		let list = select_str(QueryRoot::Document(&doc), "li:contains(x).cls").unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].text(true).as_deref(), Some("x one"));
@@ -1844,7 +1860,7 @@ mod tests {
 		</body></html>"#;
 		let doc = HtmlDocument::parse(html, None);
 
-		// > 是直接子元素，不是后代：嵌套的第二个 span.inner 不能命中
+		// > means direct children, not descendants: the nested second span.inner must not match
 		let list = select_str(QueryRoot::Document(&doc), "li:contains(x) > span.inner").unwrap();
 		assert_eq!(list.0.len(), 1);
 		assert_eq!(list.0[0].children().unwrap().0.len(), 1);
@@ -1865,7 +1881,7 @@ mod tests {
 				.collect()
 		};
 
-		// jsoup :lt/:gt/:eq 是同级元素下标（0 起）
+		// jsoup :lt/:gt/:eq are sibling-element indices (0-based)
 		assert_eq!(texts("td:lt(2)"), ["c0", "c1"]);
 		assert_eq!(texts("td:gt(1)"), ["c2", "c3"]);
 		assert_eq!(texts("td:eq(2)"), ["c2"]);
@@ -1891,9 +1907,9 @@ mod tests {
 		};
 
 		assert_eq!(ids(r"p:matches(\d+)"), ["p1", "p3"]);
-		// own 文本：p3 的数字在子元素里
+		// Own text: p3's digits are inside a child element
 		assert_eq!(ids(r"p:matchesOwn(\d+)"), ["p1"]);
-		// 默认大小写敏感，(?i) 显式放开（jsoup 同款）
+		// Case-sensitive by default; (?i) explicitly relaxes it (same as jsoup)
 		assert_eq!(ids(r"p:matches(chapter)"), Vec::<String>::new());
 		assert_eq!(ids(r"p:matches((?i)chapter)"), ["p1"]);
 		assert!(select_str(QueryRoot::Document(&doc), r"p:matches([)").is_err());
@@ -1957,11 +1973,11 @@ mod tests {
 
 		let list = select_str(QueryRoot::Document(&doc), "h1:contains(x), h2:contains(y)").unwrap();
 		assert_eq!(list.0.len(), 2);
-		// 并集按文档序（jsoup 逗号列表语义），不是分支顺序
+		// The union is in document order (jsoup comma-list semantics), not branch order
 		assert_eq!(list.0[0].tag_name().as_deref(), Some("h2"));
 		assert_eq!(list.0[1].tag_name().as_deref(), Some("h1"));
 
-		// 重复命中要去重
+		// Duplicate hits must be deduped
 		let list = select_str(QueryRoot::Document(&doc), "h1:contains(x), h1").unwrap();
 		assert_eq!(list.0.len(), 1);
 	}
@@ -2047,7 +2063,7 @@ mod tests {
 		first_p.0.set_attr("data-k", "v2").unwrap();
 		assert_eq!(first_p.attr("data-k").as_deref(), Some("v2"));
 
-		// id/classes 有 OnceCell 缓存，attr 写入走 Element::new 重建后 #id 选择器必须看到新值
+		// id/classes are OnceCell-cached; after an attr write rebuilds via Element::new, the #id selector must see the new value
 		first_p.0.set_attr("id", "target").unwrap();
 		assert_eq!(doc.select(&Selector::parse("#target").unwrap()).0.len(), 1);
 
@@ -2055,7 +2071,7 @@ mod tests {
 		assert_eq!(first_p.attr("data-k"), None);
 		first_p.0.remove_attr("data-k").unwrap();
 
-		// 文本节点挂不了属性
+		// Text nodes cannot hold attributes
 		let text_node = content
 			.0
 			.child_nodes()
@@ -2092,15 +2108,15 @@ mod tests {
 		assert!(inner.starts_with("<i>h</i>"), "got: {inner}");
 		assert!(inner.ends_with("<em>a</em>x<b>b</b>"), "got: {inner}");
 
-		// 拼进来的节点对同一文档的 select 可见
+		// Spliced-in nodes are visible to select on the same document
 		assert_eq!(doc.select(&Selector::parse("em").unwrap()).0.len(), 1);
 		assert_eq!(doc.select(&Selector::parse("div i").unwrap()).0.len(), 1);
 
-		// set_html 先清空再拼接
+		// set_html clears first, then splices
 		content.0.set_html("<span>only</span>").unwrap();
 		assert_eq!(content.html().as_deref(), Some("<span>only</span>"));
 		assert_eq!(doc.select(&Selector::parse("p.text").unwrap()).0.len(), 0);
-		// 空 fragment 是合法 no-op
+		// An empty fragment is a legal no-op
 		content.0.append_html("").unwrap();
 		assert_eq!(content.html().as_deref(), Some("<span>only</span>"));
 	}
@@ -2114,7 +2130,7 @@ mod tests {
 		let el = doc.select(&Selector::parse("#d").unwrap()).0.into_iter().next().unwrap();
 
 		el.0.add_class("z").unwrap();
-		// 重复空白与重复 class 被归一化（jsoup classNames 集合语义）
+		// Duplicate whitespace and duplicate classes are normalized (jsoup classNames set semantics)
 		assert_eq!(el.class_name().as_deref(), Some("x y z"));
 		el.0.add_class("z").unwrap();
 		assert_eq!(el.class_name().as_deref(), Some("x y z"));
@@ -2124,7 +2140,7 @@ mod tests {
 		assert_eq!(el.class_name().as_deref(), Some("y z"));
 		el.0.remove_class("missing").unwrap();
 		assert_eq!(el.class_name().as_deref(), Some("y z"));
-		// 清空后保留空 class 属性（jsoup 恒写回）
+		// The emptied class attribute is kept (jsoup always writes back)
 		el.0.remove_class("y").unwrap();
 		el.0.remove_class("z").unwrap();
 		assert!(el.has_attr("class"));
@@ -2139,7 +2155,7 @@ mod tests {
 
 		first_p.0.detach().unwrap();
 		assert_eq!(doc.select(&Selector::parse("p.text").unwrap()).0.len(), 1);
-		// ego-tree detach 保留子树：被摘下的元素仍可读写，parent 变 None
+		// ego-tree detach keeps the subtree: the detached element stays readable/writable, parent becomes None
 		assert_eq!(first_p.text(true).as_deref(), Some("Hello & goodbye"));
 		first_p.0.set_text("changed").unwrap();
 		assert_eq!(first_p.text(true).as_deref(), Some("changed"));
@@ -2157,7 +2173,7 @@ mod tests {
 
 	#[test]
 	fn text_block_br_and_whitespace() {
-		// B1（issue #83）：块级边界补一个空格，内部空白折叠
+		// B1 (issue #83): one space added at block boundaries, inner whitespace collapsed
 		let doc = HtmlDocument::parse(r#"<div id="d"><p>a</p><p>b</p></div>"#, None);
 		assert_eq!(first_element(&doc, "#d").text(true).as_deref(), Some("a b"));
 
@@ -2167,24 +2183,24 @@ mod tests {
 		let doc = HtmlDocument::parse("<p>  Hello   there\n now  </p>", None);
 		let p = first_element(&doc, "p");
 		assert_eq!(p.text(true).as_deref(), Some("Hello there now"));
-		// trimmed=false 逐字保留（aidoku untrimmed_text：不归一化不 trim）
+		// trimmed=false preserves verbatim (aidoku untrimmed_text: no normalization, no trim)
 		assert_eq!(p.text(false).as_deref(), Some("  Hello   there\n now  "));
 
-		// aidoku-rs 文档里的 untrimmed_text 示例
+		// The untrimmed_text example from the aidoku-rs docs
 		let doc = HtmlDocument::parse("<p>Hello <b>there</b> now! </p>", None);
 		let p = first_element(&doc, "p");
 		assert_eq!(p.text(false).as_deref(), Some("Hello there now! "));
 		assert_eq!(p.text(true).as_deref(), Some("Hello there now!"));
 
-		// untrimmed 同样补块级分隔、不含尾部 trim
+		// untrimmed also adds block separators and skips the trailing trim
 		let doc = HtmlDocument::parse(r#"<div id="u">a<p>b</p></div>"#, None);
 		assert_eq!(first_element(&doc, "#u").text(false).as_deref(), Some("a b"));
 	}
 
 	#[test]
 	fn text_excludes_script_style_content() {
-		// B2（issue #83）：script/style 内容（jsoup DataNode）不进 text；
-		// 元素自身是块级分隔，jsoup 1.15.3 / SwiftSoup 2.13.7 实测均为 "x y"
+		// B2 (issue #83): script/style content (jsoup DataNode) does not enter text;
+		// the element itself is a block separator — verified "x y" on both jsoup 1.15.3 and SwiftSoup 2.13.7
 		let doc = HtmlDocument::parse(
 			r#"<div id="e">x<script>var s=1;</script>y</div><div id="s">x<style>.a{color:red}</style>y</div>"#,
 			None,
@@ -2194,14 +2210,14 @@ mod tests {
 		assert_eq!(e.text(false).as_deref(), Some("x y"));
 		assert_eq!(first_element(&doc, "#s").text(true).as_deref(), Some("x y"));
 
-		// script 元素自身 text 为空，内容只能走 data()
+		// A script element's own text is empty; its content is only reachable via data()
 		let doc = HtmlDocument::parse("<script>var x = 1;</script>", None);
 		let script = first_element(&doc, "script");
 		assert_eq!(script.text(true).as_deref(), Some(""));
 		assert_eq!(script.own_text().as_deref(), Some(""));
 		assert_eq!(script.data().as_deref(), Some("var x = 1;"));
 
-		// 脚本内容不参与 :contains/:matches 的匹配文本
+		// Script content does not participate in the match text of :contains/:matches
 		let doc = HtmlDocument::parse("<div>x<script>needle</script>y</div>", None);
 		assert!(
 			select_str(QueryRoot::Document(&doc), "div:contains(needle)")
@@ -2219,7 +2235,7 @@ mod tests {
 
 	#[test]
 	fn own_text_direct_text_children() {
-		// C（issue #83）：own_text 拼接直系文本节点并归一化
+		// C (issue #83): own_text concatenates direct text nodes with normalization
 		let doc = HtmlDocument::parse(r#"<div id="d">A<b>B</b>C</div>"#, None);
 		let d = first_element(&doc, "#d");
 		assert_eq!(d.own_text().as_deref(), Some("AC"));
@@ -2228,7 +2244,7 @@ mod tests {
 		let doc = HtmlDocument::parse("<div>A  <b>B</b>  C</div>", None);
 		assert_eq!(first_element(&doc, "div").own_text().as_deref(), Some("A C"));
 
-		// 直系 <br> 也补空格
+		// A direct <br> also contributes a space
 		let doc = HtmlDocument::parse("<p>a<br>b</p>", None);
 		assert_eq!(first_element(&doc, "p").own_text().as_deref(), Some("a b"));
 
@@ -2250,7 +2266,7 @@ mod tests {
 
 	#[test]
 	fn contains_and_matches_use_normalized_text() {
-		// jsoup :contains/:matches 针对归一化后的 text()：块级边界带空格
+		// jsoup :contains/:matches run against normalized text(): block boundaries carry a space
 		let doc = HtmlDocument::parse(r#"<div id="m"><p>hello</p><p>world</p></div>"#, None);
 		assert_eq!(
 			select_str(QueryRoot::Document(&doc), "div:contains(hello world)")
@@ -2282,47 +2298,47 @@ mod tests {
 
 	#[test]
 	fn text_preserve_whitespace_and_special_chars() {
-		// jsoup preserveWhitespace 标签内文本逐字保留
+		// Text inside jsoup preserveWhitespace tags is preserved verbatim
 		let doc = HtmlDocument::parse("<pre id=\"p\">a\n  b</pre>", None);
 		assert_eq!(first_element(&doc, "#p").text(true).as_deref(), Some("a\n  b"));
 		let doc = HtmlDocument::parse(r#"<textarea id="t">a
   b</textarea>"#, None);
 		assert_eq!(first_element(&doc, "#t").text(true).as_deref(), Some("a\n  b"));
 
-		// jsoup 的空白集不含 U+3000（表意空格不折叠），零宽字符直接丢弃
+		// jsoup's whitespace set excludes U+3000 (the ideographic space is not collapsed); zero-width chars are dropped outright
 		let doc = HtmlDocument::parse("<div>a\u{3000}b</div>", None);
 		assert_eq!(first_element(&doc, "div").text(true).as_deref(), Some("a\u{3000}b"));
 		let doc = HtmlDocument::parse("<p>a\u{200B}b</p>", None);
 		assert_eq!(first_element(&doc, "p").text(true).as_deref(), Some("ab"));
 
-		// nbsp 归入普通空格参与折叠
+		// nbsp counts as a regular space and participates in collapsing
 		let doc = HtmlDocument::parse("<p>a&nbsp;&nbsp;b</p>", None);
 		assert_eq!(first_element(&doc, "p").text(true).as_deref(), Some("a b"));
 	}
 
 	#[test]
 	fn text_no_tail_separator() {
-		// SwiftSoup（Aidoku 实际依赖）没有 jsoup 的 tail 分隔：块级元素后紧跟
-		// 文本时 text() 不补空格（SwiftSoup 2.13.7 实测 "ab"，jsoup 1.15.3 是 "a b"）
+		// SwiftSoup (what Aidoku actually depends on) has no jsoup tail separator: when text
+		// immediately follows a block-level element, text() adds no space (verified: SwiftSoup 2.13.7 gives "ab", jsoup 1.15.3 gives "a b")
 		let doc = HtmlDocument::parse(r#"<div id="t">a</div>b"#, None);
 		assert_eq!(first_element(&doc, "body").text(true).as_deref(), Some("ab"));
 	}
 
-	// body 子节点固定为 [div#a, Text(" text "), div#b, Comment, div#c]
+	// body's child nodes are fixed as [div#a, Text(" text "), div#b, Comment, div#c]
 	const SIBLINGS_HTML: &str = r#"<!DOCTYPE html><html><body><div id="a">a</div> text <div id="b">b</div><!--x--><div id="c">c</div></body></html>"#;
 
 	#[test]
 	fn element_next_prev_sibling_skips_non_elements() {
-		// D1（issue #83）：jsoup nextElementSibling/previousElementSibling
-		// 沿兄弟链找第一个元素节点，文本/注释不算
+		// D1 (issue #83): jsoup nextElementSibling/previousElementSibling walk the sibling
+		// chain to the first element node; text/comments do not count
 		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
 		let a = first_element(&doc, "#a");
 		let b = first_element(&doc, "#b");
 		let c = first_element(&doc, "#c");
 
-		// a 的紧邻兄弟是文本节点，next 必须跳到 #b
+		// a's immediate sibling is a text node; next must jump to #b
 		assert_eq!(a.next_sibling().unwrap().id().as_deref(), Some("b"));
-		// b 的紧邻后方是注释，next 必须跳到 #c
+		// b's immediate next is a comment; next must jump to #c
 		assert_eq!(b.next_sibling().unwrap().id().as_deref(), Some("c"));
 		assert!(c.next_sibling().is_none());
 
@@ -2333,8 +2349,8 @@ mod tests {
 
 	#[test]
 	fn element_siblings_both_directions_elements_only() {
-		// D2（issue #83）：jsoup siblingElements() 是父元素的全部元素子节点，
-		// 排除自身、按文档序（双向，文本/注释不计）
+		// D2 (issue #83): jsoup siblingElements() is all element children of the parent,
+		// excluding self, in document order (both directions; text/comments do not count)
 		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
 		let sibling_ids = |selector: &str| -> Vec<String> {
 			first_element(&doc, selector)
@@ -2349,7 +2365,7 @@ mod tests {
 		assert_eq!(sibling_ids("#b"), ["a", "c"]);
 		assert_eq!(sibling_ids("#c"), ["a", "b"]);
 
-		// 摘下的元素没有父节点，兄弟列表为空（jsoup 对无父元素给空列表）
+		// A detached element has no parent, so its sibling list is empty (jsoup gives an empty list for parentless elements)
 		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
 		let b = first_element(&doc, "#b");
 		b.0.detach().unwrap();
@@ -2359,8 +2375,9 @@ mod tests {
 
 	#[test]
 	fn node_siblings_both_directions_all_node_kinds() {
-		// D3（issue #83）：jsoup siblingNodes() 双向全部兄弟节点、排除自身、
-		// 按文档序；node 层不按元素过滤，文本/注释在内
+		// D3 (issue #83): jsoup siblingNodes() is all sibling nodes in both directions,
+		// excluding self, in document order; the node level does not filter to elements —
+		// text and comments are included
 		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
 		let b = first_element(&doc, "#b");
 		let siblings = b.0.siblings().unwrap();
@@ -2372,7 +2389,7 @@ mod tests {
 		let last = HtmlElement::try_from(siblings[3].clone()).ok().unwrap();
 		assert_eq!(last.id().as_deref(), Some("c"));
 
-		// 非元素节点自身的兄弟列表同样双向、含全部节点
+		// A non-element node's own sibling list is likewise bidirectional and includes all nodes
 		let text_node = first_element(&doc, "#a").0.next_sibling().unwrap();
 		assert!(text_node.is_text());
 		assert_eq!(text_node.siblings().unwrap().len(), 4);
@@ -2380,8 +2397,8 @@ mod tests {
 
 	#[test]
 	fn node_next_prev_stay_adjacent_nodes() {
-		// node 层 next/prev 保持紧邻节点导航、不按元素过滤（vendor 文档
-		// "Get the next sibling of the node"，SwiftSoup Node.nextSibling）
+		// Node-level next/prev keep adjacent-node navigation without element filtering (vendor
+		// doc "Get the next sibling of the node", SwiftSoup Node.nextSibling)
 		let doc = HtmlDocument::parse(SIBLINGS_HTML, None);
 
 		let text = first_element(&doc, "#a").0.next_sibling().unwrap();

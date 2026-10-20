@@ -74,7 +74,7 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 	{ value: 'date', label: '上传日期' }
 ];
 
-/** 三态 chip 颜色：含=accent、排除=danger、关=default */
+/** Tri-state chip colors: include=accent, exclude=danger, off=default */
 function triColor(t: Tri): ChipColor {
 	return t === 1 ? 'accent' : t === -1 ? 'danger' : 'default';
 }
@@ -85,8 +85,8 @@ function triTitle(label: string, t: Tri): string {
 	return `当前不筛选${label}，点击改为只显示${label}`;
 }
 
-// 作者/画师搜索能力对齐 Aidoku supportsAuthorSearch：manifest 声明优先，
-// 未声明（undefined）才回落到过滤器列表推导（有同 id 的 text 过滤器即可）
+// Author/artist search capability mirrors Aidoku supportsAuthorSearch: the manifest declaration wins;
+// only when undeclared (undefined) does it fall back to inferring from the filter list (a text filter with the same id suffices)
 function creatorSearchable(
 	filters: Filter[],
 	flag: boolean | undefined,
@@ -99,15 +99,15 @@ function hasTextFilter(filters: Filter[], id: string): boolean {
 	return filters.some((f) => f.type === 'text' && f.id === id);
 }
 
-// tag 点按对齐 Aidoku matchingGenreFilter：只对 isGenre 的多选/单选做 option 名
-// 精确匹配（大小写敏感），提交值取 ids[i] ?? options[i]；不匹配则不可点
+// tag tapping mirrors Aidoku matchingGenreFilter: only multi-select/select filters with isGenre get an exact
+// (case-sensitive) option-name match, and the submitted value is ids[i] ?? options[i]; no match means not tappable
 function genreFilterValue(filters: Filter[], tag: string): FilterValue | null {
 	for (const f of filters) {
 		if ((f.type !== 'multi-select' && f.type !== 'select') || !f.is_genre) continue;
 		const options = f.options ?? [];
 		const i = options.indexOf(tag);
 		if (i < 0) continue;
-		// 提交键与浏览页 optionKey 一致：有 ids 用 ids，否则用 option 名
+		// The submitted key matches the browse page's optionKey: ids when present, otherwise the option name
 		const value = f.ids?.[i] ?? options[i];
 		if (!value) continue;
 		return f.type === 'multi-select'
@@ -127,10 +127,10 @@ export default function MangaDetailPage() {
 	const chaptersQuery = useMangaChapters(mangaId);
 	const manga = mangaQuery.data ?? null;
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
-	// manifest 声明优先（Aidoku config?.supportsX ?? 推导）；过滤器列表是未声明时的兜底。
-	// manga 未到时以 0 占位：source 查不到、filters 404 成空列表，自然都不可点
+	// The manifest declaration wins (Aidoku config?.supportsX ?? inferred); the filter list is the fallback when undeclared.
+	// While manga has not arrived, 0 stands in: the source is not found and filters 404 into an empty list, so nothing is tappable
 	const sourceQuery = useSource(manga?.sourceId ?? 0);
-	// 本地源没有 filters 概念（端点 404），不发起查询
+	// The local source has no filters concept (the endpoint 404s), so the query is not issued
 	const isLocal = sourceQuery.data?.kind === 'local';
 	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0, !isLocal);
 
@@ -142,23 +142,23 @@ export default function MangaDetailPage() {
 	const [search, setSearch] = useState('');
 	const [migrateOpen, setMigrateOpen] = useState(false);
 	const [coverPickerOpen, setCoverPickerOpen] = useState(false);
-	// 排序/筛选设置按漫画持久化；loadedId 防止切漫画瞬间把上一部的设置写到新 key 下
+	// Sort/filter prefs persist per manga; loadedId keeps a manga switch from writing the previous entry's prefs under the new key
 	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
 	const [loadedId, setLoadedId] = useState(mangaId);
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
 
-	// 入队只记本地即时反馈，下载进度在下载页看
+	// Enqueueing only records local instant feedback; download progress lives on the downloads page
 	const [dlQueued, setDlQueued] = useState<Set<number>>(new Set());
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
 
-	// 同路由换 mangaId 时组件不重挂，切漫画要重载该部的设置
+	// Switching mangaId on the same route does not remount the component, so reload the prefs of the new manga
 	useEffect(() => {
 		setPrefs(loadPrefs(mangaId));
 		setLoadedId(mangaId);
 	}, [mangaId]);
 
-	// 只在 prefs 确实属于当前漫画时回写，避免瞬态串写
+	// Only write back when the prefs really belong to the current manga, avoiding transient cross-writes
 	useEffect(() => {
 		if (loadedId === mangaId && Number.isFinite(mangaId)) savePrefs(mangaId, prefs);
 	}, [mangaId, loadedId, prefs]);
@@ -178,7 +178,7 @@ export default function MangaDetailPage() {
 	const continueCh =
 		chapters.length === 0 ? null : (chapters.find((c) => !c.isRead) ?? chapters[chapters.length - 1]);
 
-	// 语言/扫图组只用于渲染筛选项，从全部章节里去重取值
+	// Languages/scanlation groups only feed the filter options, deduplicated across all chapters
 	const languages = useMemo(() => {
 		const set = new Set<string>();
 		for (const c of chapters) if (c.language) set.add(c.language);
@@ -192,7 +192,7 @@ export default function MangaDetailPage() {
 	}, [chapters]);
 
 	const visible = useMemo(() => {
-		// 先应用持久化的排序/筛选，再做标题/序号文本搜索
+		// Apply the persisted sort/filter first, then the title/number text search
 		let list = applyPrefs(chapters, prefs);
 		const q = search.trim().toLowerCase();
 		if (q) {
@@ -209,13 +209,13 @@ export default function MangaDetailPage() {
 	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
 
 	function readTarget(c: Chapter): string {
-		// 已读章节重读从第 1 页开始，未读有进度才续
+		// Re-reading a finished chapter starts from page 1; only an unread chapter with progress resumes
 		const resume = !c.isRead && c.lastPageRead > 0 ? c.lastPageRead : 0;
 		return `/reader/${c.id}?manga=${mangaId}&page=${resume}`;
 	}
 
 	function activate(c: Chapter) {
-		// 章节刷新流中的占位行（负 id）没有库内 id，点读/选择都等终态落地
+		// Placeholder rows (negative ids) in the chapter refresh stream have no library id; reading/selecting waits for the terminal state
 		if (c.id < 0) return;
 		if (selecting) {
 			setSelected((prev) => {
@@ -365,13 +365,13 @@ export default function MangaDetailPage() {
 		);
 	}
 
-	// wire 上 authors/artists/tags 可能是 null（aidoku Option<Vec>），不是空数组
+	// On the wire authors/artists/tags can be null (aidoku Option<Vec>), not empty arrays
 	const authors = manga.authors ?? [];
 	const artists = manga.artists ?? [];
 	const tags = manga.tags ?? [];
 	const filters = filtersQuery.data ?? [];
 	const sourceConfig = sourceQuery.data?.config;
-	// 去重保序；同时在 authors/artists 出现的名字按 author 搜索（Aidoku 搜作者同款）
+	// Deduplicated with order kept; a name appearing in both authors and artists searches as author (same as Aidoku's author search)
 	const creators = [...new Set([...authors, ...artists])].map((name) => ({
 		name,
 		filterId: authors.includes(name) ? 'author' : 'artist'
@@ -379,7 +379,7 @@ export default function MangaDetailPage() {
 	const statusColor = STATUS_COLOR[manga.status.toLowerCase()] ?? 'default';
 	const allCats = categoriesQuery.data ?? [];
 
-	// tag/作者/画师搜索对齐 Aidoku：query 为空、只带过滤器值，复用浏览页的 filters 深链
+	// tag/author/artist search mirrors Aidoku: the query is empty and only filter values are sent, reusing the browse page's filters deep link
 	function searchByFilters(values: FilterValue[]) {
 		if (!manga?.sourceId) return;
 		const q = encodeURIComponent(JSON.stringify(values));
@@ -457,8 +457,8 @@ export default function MangaDetailPage() {
 						{tags.length > 0 && (
 							<div className="manga-hero__tags">
 							{tags.map((t) => {
-								// Aidoku：config.supportsTagSearch 声明优先（发 Select "genre"，值为原始 tag）；
-								// 未声明才按 isGenre 过滤器 option 精确匹配
+								// Aidoku: the config.supportsTagSearch declaration wins (send Select "genre" with the raw tag as value);
+								// only when undeclared does it fall back to an exact option match on isGenre filters
 								const v = sourceConfig?.supportsTagSearch
 									? { Select: { id: 'genre', value: t } }
 									: genreFilterValue(filters, t);
@@ -594,7 +594,7 @@ export default function MangaDetailPage() {
 					<span className="faint">
 						共 {chapters.length} 章 · 未读 {unread}
 					</span>
-					{/* 本地源没有文件系统监视：新增/删除章节只能靠手动重扫，按钮放醒目位置 */}
+					{/* The local source has no filesystem watch: added/deleted chapters only surface via a manual rescan, so the button sits prominently */}
 					{isLocal && (
 						<Button
 							size="sm"

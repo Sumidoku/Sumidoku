@@ -24,8 +24,8 @@ impl ProgressPatch {
 		self.last_page_read.is_none() && self.is_read.is_none() && self.is_bookmarked.is_none()
 	}
 
-	/// lastPageRead 落笔即视为读过：只有它出现时才刷新 last_read_at；
-	/// 隐身（全局或单本任一开启）时不打新戳，旧戳保持不动
+	/// Writing lastPageRead counts as having read: only its presence refreshes last_read_at;
+	/// under incognito (global or per-manga, either on) no new stamp is written and the old stamp stays untouched
 	async fn apply(
 		&self,
 		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -60,8 +60,8 @@ impl ProgressPatch {
 	}
 }
 
-/// 隐身判定：该用户命名空间键 user.<id>.incognito.enabled 或该章节所属漫画的
-/// manga_user.incognito，任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
+/// Incognito check: the user's namespace key user.<id>.incognito.enabled or the manga_user.incognito of the
+/// chapter's manga — either on pauses stamping (aligned with Aidoku's pause history: no new history, old history untouched)
 async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user_id: i64, chapter_id: i64) -> ApiResult<bool> {
 	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
 		.bind(crate::api::user_setting_key(user_id, "incognito.enabled"))

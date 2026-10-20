@@ -44,7 +44,7 @@ async fn home_ndjson_streams_partials_in_order() {
 		"application/x-ndjson"
 	);
 
-	// fixture 序列：Layout 占位 → Component A/B/C（C 为新增）→ 终态
+	// fixture sequence: Layout placeholder → Component A/B/C (C is new) → final
 	assert_eq!(event_types(&events), ["layout", "component", "component", "component", "final"]);
 	assert_eq!(events[0]["layout"]["components"].as_array().expect("layout components").len(), 2);
 	for (event, index) in events[1..4].iter().zip([0, 1, 2]) {
@@ -52,7 +52,7 @@ async fn home_ndjson_streams_partials_in_order() {
 	}
 	assert_eq!(events[3]["component"]["title"], "Partial C");
 
-	// 终态 payload 与非流式响应体是同一个 JSON 值
+	// the final payload and the non-streaming response body are the same JSON value
 	let (status, buffered) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(events[4]["payload"], buffered);
@@ -81,7 +81,7 @@ async fn home_without_accept_keeps_buffered_contract() {
 		headers.get("content-type").expect("content-type"),
 		"application/json"
 	);
-	// 非流式响应不含事件包装，直接是布局对象
+	// the non-streaming response has no event wrapper; it is the layout object directly
 	let body: Value = serde_json::from_slice(&bytes).expect("json body");
 	assert_eq!(body["components"].as_array().expect("components").len(), 3);
 	assert!(body.get("type").is_none());
@@ -113,7 +113,7 @@ async fn search_ndjson_streams_manga_deltas() {
 		.map(|e| e["manga"]["key"].as_str().expect("manga key"))
 		.collect();
 	assert_eq!(keys, ["partial-1", "partial-2", "partial-3"]);
-	// partial 条目与终态条目走同一套 id attach 语义
+	// partial entries and final entries share the same id-attach semantics
 	assert_eq!(events[0]["manga"]["sourceId"], source_id);
 
 	let payload = &events[3]["payload"];
@@ -133,7 +133,7 @@ async fn stream_without_partials_has_only_final() {
 		.map(|(_, id)| *id)
 		.expect("example source id");
 
-	// example fixture 不发 partial：流里只有终态事件
+	// the example fixture emits no partials: the stream has only the final event
 	let (status, _, events) =
 		request_ndjson(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -165,7 +165,7 @@ async fn home_stream_unsupported_source_404() {
 		.map(|(_, id)| *id)
 		.expect("mutation source id");
 
-	// 能力缺失在流开始前返回 404，与非流式同一契约
+	// a missing capability returns 404 before the stream starts, same contract as non-streaming
 	let (status, headers, bytes) = common::request_full(
 		&app,
 		"GET",
@@ -225,7 +225,7 @@ async fn register_ndjson_streams_manga_partials() {
 		"application/x-ndjson"
 	);
 
-	// fixture 序列：详情快照（无章节）→ 详情+两章快照 → 终态
+	// fixture sequence: details snapshot (no chapters) → details+two-chapter snapshot → final
 	assert_eq!(event_types(&events), ["manga", "manga", "final"]);
 	assert_eq!(events[0]["manga"]["key"], "streamed-manga");
 	assert_eq!(events[0]["manga"]["title"], "Partial Title");
@@ -235,7 +235,7 @@ async fn register_ndjson_streams_manga_partials() {
 		2
 	);
 
-	// 终态权威：入库的是三章
+	// the final state is authoritative: three chapters are persisted
 	let manga_id = events[2]["payload"]["id"].as_i64().expect("manga id");
 	let (status, chapters) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -261,7 +261,7 @@ async fn register_without_accept_keeps_buffered_contract() {
 		headers.get("content-type").expect("content-type"),
 		"application/json"
 	);
-	// 非流式响应不含事件包装，直接是 {"id": …}
+	// the non-streaming response has no event wrapper; it is {"id": …} directly
 	let body: Value = serde_json::from_slice(&bytes).expect("json body");
 	assert!(body["id"].is_i64());
 	assert!(body.get("type").is_none());
@@ -273,7 +273,7 @@ async fn register_existing_with_ndjson_falls_back_to_buffered() {
 	let source_id = partial_source_id(&app, &tmp).await;
 	let manga_id = register_buffered(&app, source_id, "already-there").await;
 
-	// 已登记命中没有源调用可流：回普通 JSON，客户端按非流式终态处理
+	// an already-registered hit has no source call to stream: plain JSON is returned, the client treats it as the non-streaming final state
 	let (status, headers, bytes) = common::request_full(
 		&app,
 		"POST",
@@ -300,12 +300,12 @@ async fn manga_refresh_ndjson_streams_partials() {
 		request_ndjson(&app, "GET", &format!("/api/v1/manga/{manga_id}?refresh"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 详情刷新只要 details：一个详情快照 partial，不带章节
+	// details refresh only wants details: one details-snapshot partial, no chapters
 	assert_eq!(event_types(&events), ["manga", "final"]);
 	assert_eq!(events[0]["manga"]["title"], "Partial Title");
 	assert!(events[0]["manga"]["chapters"].is_null());
 
-	// 终态 payload 与非流式响应体是同一个 JSON 值
+	// the final payload and the non-streaming response body are the same JSON value
 	let (status, buffered) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(events[1]["payload"], buffered);
@@ -326,7 +326,7 @@ async fn chapters_refresh_ndjson_streams_partials() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 章节刷新只要 chapters：一个两章快照 partial
+	// chapters refresh only wants chapters: one two-chapter-snapshot partial
 	assert_eq!(event_types(&events), ["manga", "final"]);
 	assert_eq!(
 		events[0]["manga"]["chapters"].as_array().expect("partial chapters").len(),
@@ -335,7 +335,7 @@ async fn chapters_refresh_ndjson_streams_partials() {
 	let payload = events[1]["payload"].as_array().expect("chapters payload");
 	assert_eq!(payload.len(), 3);
 
-	// 终态 payload 与非流式响应体是同一个 JSON 值
+	// the final payload and the non-streaming response body are the same JSON value
 	let (status, buffered) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(events[1]["payload"], buffered);

@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use common::{TestApp, connect_db, fixture_dir, install_fixture_source, request, test_app};
 use serde_json::{Value, json};
 
-/// 装第二个 fixture 源并扫描，返回 (example_id, second_id)
+/// Installs a second fixture source and scans, returning (example_id, second_id)
 async fn two_sources(app: &Router, tmp: &tempfile::TempDir) -> (i64, i64) {
 	install_fixture_source(tmp, "en.second", "Second Source", &fixture_dir().join("main.wasm"));
 	let (status, body) = request(app, "POST", "/api/v1/sources/scan", None).await;
@@ -24,7 +24,7 @@ async fn two_sources(app: &Router, tmp: &tempfile::TempDir) -> (i64, i64) {
 	(example.expect("example source"), second.expect("second source"))
 }
 
-/// 在 example 源上注册「Manga 1」并加入书库，返回 (manga_id, manga_key)
+/// Registers "Manga 1" on the example source and shelves it, returning (manga_id, manga_key)
 async fn library_manga(app: &Router, example_id: i64) -> (i64, String) {
 	let (status, body) = request(
 		app,
@@ -50,7 +50,7 @@ async fn library_manga(app: &Router, example_id: i64) -> (i64, String) {
 	(id, key)
 }
 
-/// 指定章节号的章节 JSON；不存在返回 Null
+/// Chapter JSON for the given chapter number; Null when absent
 async fn chapter_by_number(app: &Router, manga_id: i64, number: f64) -> Value {
 	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -96,7 +96,7 @@ async fn migrate(app: &Router, mode: &str, entries: Value) -> (StatusCode, Value
 	.await
 }
 
-/// 标准源条目：example 在库「Manga 1」+ 分类 + ch8/ch7 进度，返回 (origin_id, key, cat_id)
+/// Standard origin entry: example's shelved "Manga 1" + category + ch8/ch7 progress, returning (origin_id, key, cat_id)
 async fn stocked_origin(app: &Router, example_id: i64) -> (i64, String, i64) {
 	let (origin, key) = library_manga(app, example_id).await;
 	let cat = make_category(app, "迁移测试").await;
@@ -131,7 +131,7 @@ async fn migrate_sources_report_counts() {
 	assert_eq!(second_row["pinned"], false, "{second_row}");
 	assert!(second_row["pinOrder"].is_null(), "{second_row}");
 
-	// 置顶顺序随列表下发：迁移目标组合的默认优先级
+	// pin order comes down with the list: the default priority for composing migration targets
 	let (status, _) = request(&app, "PATCH", &format!("/api/v1/sources/{second}"), Some(json!({"pinned": true}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "GET", "/api/v1/migrate/sources", None).await;
@@ -164,7 +164,7 @@ async fn lookup_searches_target_source() {
 		assert_eq!(c["sourceId"], second, "{c}");
 	}
 
-	// 手动重搜：query 覆盖原标题；匹配不到就是批量流程里的 not found
+	// manual re-search: query overrides the original title; no match is the not found of the batch flow
 	let (status, body) = request(
 		&app,
 		"GET",
@@ -210,7 +210,7 @@ async fn copy_keeps_origin_and_carries_state() {
 	assert_eq!(result["warnings"].as_array().expect("warnings").len(), 0, "{result}");
 	let target = result["toMangaId"].as_i64().expect("toMangaId");
 
-	// COPY 保留源条目：入库态、分类、进度原样
+	// COPY keeps the origin entry: library state, categories, progress all as-is
 	let detail = manga_detail(&app, origin).await;
 	assert_eq!(detail["inLibrary"], true, "{detail}");
 	assert_eq!(detail["categoryIds"], json!([cat]), "{detail}");
@@ -218,7 +218,7 @@ async fn copy_keeps_origin_and_carries_state() {
 	assert_eq!(ch8["lastPageRead"], 7, "{ch8}");
 	assert_eq!(ch8["isRead"], true, "{ch8}");
 
-	// 目标条目：入库（保留源入库时间）、分类搬走、进度按章节号对齐
+	// target entry: shelved (keeping the origin's shelve time), categories moved over, progress aligned by chapter number
 	let detail = manga_detail(&app, target).await;
 	assert_eq!(detail["inLibrary"], true, "{detail}");
 	assert_eq!(detail["sourceId"], second, "{detail}");
@@ -234,7 +234,7 @@ async fn copy_keeps_origin_and_carries_state() {
 	assert_eq!(ch6["lastPageRead"], 0, "{ch6}");
 	assert_eq!(ch6["isRead"], false, "{ch6}");
 
-	// 书库按源过滤：目标源下只有目标条目，inLibraryAt 与源条目一致
+	// library filtered by source: only the target entry under the target source, inLibraryAt matches the origin's
 	let (status, body) = request(&app, "GET", &format!("/api/v1/library?sourceId={second}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let entries = body["entries"].as_array().expect("entries");
@@ -255,7 +255,7 @@ async fn migrate_moves_and_wipes_origin() {
 	assert_eq!(result["ok"], true, "{result}");
 	let target = result["toMangaId"].as_i64().expect("toMangaId");
 
-	// MIGRATE 是替换：源条目撤出书库、分类清空、进度行清掉
+	// MIGRATE is a replacement: the origin entry leaves the library, categories cleared, progress rows wiped
 	let detail = manga_detail(&app, origin).await;
 	assert_eq!(detail["inLibrary"], false, "{detail}");
 	assert_eq!(detail["categoryIds"], json!([]), "{detail}");
@@ -287,7 +287,7 @@ async fn migrate_with_history_keeps_origin_progress() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["results"][0]["ok"], true, "{body}");
 
-	// 撤入库但保留源进度行（历史页仍可回溯源阅读记录）
+	// unshelved but the origin's progress rows are kept (the history page can still trace back the origin's reading records)
 	let detail = manga_detail(&app, origin).await;
 	assert_eq!(detail["inLibrary"], false, "{detail}");
 	assert_eq!(detail["categoryIds"], json!([]), "{detail}");
@@ -301,15 +301,16 @@ async fn migrate_with_history_keeps_origin_progress() {
 	assert_eq!(ch8["isRead"], true, "{ch8}");
 }
 
-/// 同源不同 key 是 breaking-change 无自迁移能力时的 forceMigrate 回退：
-/// 新 key 另起一行，进度按章节号搬；同 key 才是 same_source（见 entry_failures）
+/// Same source with a different key is the forceMigrate fallback when a breaking change has no
+/// self-migration capability: the new key starts a new row, progress moves by chapter number; same
+/// key is same_source (see entry_failures)
 #[tokio::test]
 async fn same_source_different_key_migrates() {
 	let TestApp { app, tmp, .. } = test_app().await;
 	let (example, _second) = two_sources(&app, &tmp).await;
 	let (origin, _key, cat) = stocked_origin(&app, example).await;
 
-	// 同源的另一部条目作为「重 key 后的新家」
+	// another entry on the same source serves as the "new home after the rekey"
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -350,7 +351,7 @@ async fn carry_merges_with_existing_target() {
 	let (example, second) = two_sources(&app, &tmp).await;
 	let (origin, key, _cat) = stocked_origin(&app, example).await;
 
-	// 目标源里同 key 条目已存在且在库，自带一份进度
+	// an entry with the same key already exists in the target source and is shelved, with its own progress
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -371,15 +372,15 @@ async fn carry_merges_with_existing_target() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let result = &body["results"][0];
 	assert_eq!(result["ok"], true, "{result}");
-	// 复用既有行，不新建
+	// reuses the existing row, no new one created
 	assert_eq!(result["toMangaId"].as_i64(), Some(existing), "{result}");
 
-	// 合并取较新值：lastPageRead 取大、isRead 取或、lastReadAt 取新
+	// merge keeps the newer values: lastPageRead takes the max, isRead takes the OR, lastReadAt takes the newer
 	let ch8 = chapter_by_number(&app, existing, 8.0).await;
 	assert_eq!(ch8["lastPageRead"], 7, "{ch8}");
 	assert_eq!(ch8["isRead"], true, "{ch8}");
 	assert_eq!(ch8["lastReadAt"], kept_read_at, "{ch8}");
-	// 源条目 ch7 的进度目标原本没有，照样搬入
+	// the target had no ch7 progress of its own; the origin's is carried in anyway
 	let ch7 = chapter_by_number(&app, existing, 7.0).await;
 	assert_eq!(ch7["lastPageRead"], 3, "{ch7}");
 }
@@ -389,7 +390,7 @@ async fn carry_by_number_and_volume_fallback_with_warnings() {
 	let TestApp { app, tmp, db_path, .. } = test_app().await;
 	let (example, second) = two_sources(&app, &tmp).await;
 	let (origin, key, _cat) = stocked_origin(&app, example).await;
-	// 预注册目标，迁移直接复用，手工改造双方章节行以对齐匹配规则
+	// pre-register the target so the migration reuses it directly; hand-craft both sides' chapter rows to line up with the matching rules
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -400,9 +401,9 @@ async fn carry_by_number_and_volume_fallback_with_warnings() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let target = body["id"].as_i64().expect("target id");
 
-	// 源 ch7 改成目标没有的 99.5：进度对不上要进 warnings
+	// change the origin's ch7 to 99.5, which the target lacks: unmatchable progress goes into warnings
 	let och7 = chapter_by_number(&app, origin, 7.0).await["id"].as_i64().unwrap();
-	// 源 ch6 改成无章节号只有卷号 3；目标 ch6 同样改造：卷号兜底匹配
+	// change the origin's ch6 to have no chapter number, only volume 3; craft the target's ch6 the same way: volume fallback matching
 	let och6 = chapter_by_number(&app, origin, 6.0).await["id"].as_i64().unwrap();
 	let tch6 = chapter_by_number(&app, target, 6.0).await["id"].as_i64().unwrap();
 	set_progress(&app, och6, 4, false).await;
@@ -429,7 +430,7 @@ async fn carry_by_number_and_volume_fallback_with_warnings() {
 	assert_eq!(warnings.len(), 1, "{result}");
 	assert!(warnings[0].as_str().unwrap().contains("99.5"), "{:?}", warnings);
 
-	// 章节号精确匹配照常；卷号兜底落在目标无章节号的章节上
+	// exact chapter-number matching works as usual; the volume fallback lands on the target chapter without a chapter number
 	let ch8 = chapter_by_number(&app, target, 8.0).await;
 	assert_eq!(ch8["isRead"], true, "{ch8}");
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{target}/chapters"), None).await;
@@ -442,7 +443,7 @@ async fn carry_by_number_and_volume_fallback_with_warnings() {
 		.cloned()
 		.expect("crafted chapter");
 	assert_eq!(crafted["lastPageRead"], 4, "{crafted}");
-	// 对不上的 ch7 进度没有落在任何目标章节上
+	// the unmatched ch7 progress didn't land on any target chapter
 	for c in body.as_array().unwrap() {
 		if c["id"] == tch6 || c["chapter_number"] == 8.0 {
 			continue;
@@ -457,7 +458,7 @@ async fn entry_failures_are_reported_per_row() {
 	let (example, second) = two_sources(&app, &tmp).await;
 	let (origin, key, _cat) = stocked_origin(&app, example).await;
 
-	// 另一部同源漫画只注册不入库
+	// another manga on the same source, registered but not shelved
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -498,11 +499,11 @@ async fn entry_failures_are_reported_per_row() {
 	assert_eq!(results[4]["ok"], false, "{:?}", results[4]);
 	assert_eq!(results[4]["reason"], "same_source", "{:?}", results[4]);
 
-	// 批次级部分失败不回滚：第一条的迁移已生效
+	// partial failure at batch level doesn't roll back: the first entry's migration has taken effect
 	let detail = manga_detail(&app, origin).await;
 	assert_eq!(detail["inLibrary"], false, "{detail}");
 
-	// 非法 mode 与空批次是请求级错误
+	// an illegal mode and an empty batch are request-level errors
 	let (status, body) = migrate(&app, "move", json!([{"fromMangaId": origin, "toSourceId": second, "toMangaKey": key}])).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 	let (status, body) = migrate(&app, "copy", json!([])).await;

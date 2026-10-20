@@ -1,7 +1,7 @@
-//! ComicInfo.xml 读取与映射（Suwayomi LocalSource `copyFromComicInfo` 的对应物）：
-//! title←Series，author←Writer，artist←Penciller/Inker/Colorist/Letterer/CoverArtist，
-//! description←Summary，tags←Genre+Tags+Categories，status←PublishingStatusTachiyomi。
-//! Tachiyomi 扩展字段带 `ty:` 命名空间前缀，quick-xml 按原文匹配元素名，两种写法都收。
+//! ComicInfo.xml reading and mapping (the counterpart of Suwayomi LocalSource's `copyFromComicInfo`):
+//! title←Series, author←Writer, artist←Penciller/Inker/Colorist/Letterer/CoverArtist,
+//! description←Summary, tags←Genre+Tags+Categories, status←PublishingStatusTachiyomi.
+//! Tachiyomi extension fields carry a `ty:` namespace prefix, and quick-xml matches element names literally, so both spellings are accepted.
 
 use serde::Deserialize;
 
@@ -40,7 +40,7 @@ pub struct ComicInfo {
 	pub status_ty: Option<String>,
 }
 
-/// 解析失败返回 None（调用方按无元数据继续，目录名当标题）
+/// Parse failure returns None (the caller proceeds with no metadata, using the directory name as title)
 pub fn parse(bytes: &[u8]) -> Option<ComicInfo> {
 	match quick_xml::de::from_reader::<_, ComicInfo>(bytes) {
 		Ok(info) => Some(info),
@@ -51,7 +51,7 @@ pub fn parse(bytes: &[u8]) -> Option<ComicInfo> {
 	}
 }
 
-/// 逗号分隔列表 → 去空去重（保首见序）；None/全空 → None
+/// Comma-separated list → blanks removed and deduped (first-seen order kept); None/all-blank → None
 fn split_list(parts: &[Option<&str>]) -> Option<Vec<String>> {
 	let mut out: Vec<String> = Vec::new();
 	for part in parts.iter().flatten() {
@@ -101,7 +101,7 @@ impl ComicInfo {
 			.map(str::to_string)
 	}
 
-	/// aidoku MangaStatus 数值：Licensed 在 aidoku 无对应状态，归 Unknown
+	/// aidoku MangaStatus number: Licensed has no aidoku counterpart, mapped to Unknown
 	pub fn status(&self) -> i64 {
 		match self.status_ty.as_deref().or(self.status.as_deref()) {
 			Some("Ongoing") => 1,

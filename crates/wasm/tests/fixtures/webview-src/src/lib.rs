@@ -1,8 +1,9 @@
 #![no_std]
-//! js host 模块 webview_* 沙箱语义的端到端验证源：
-//! get_page_description 把 load_html/eval/user script/不支持函数错误码与
-//! rid 生命周期的调用结果拼成确定字符串，由 crates/wasm/tests/webview_host.rs
-//! 断言全文。无效 rid、跨种类 rid 与 destroy 生命周期走裸 FFI 声明验证。
+//! End-to-end verification source for the webview_* sandbox semantics of the js host
+//! module: get_page_description assembles the call results of load_html/eval/user
+//! script/unsupported-function error codes and the rid lifecycle into a deterministic
+//! string, asserted in full by crates/wasm/tests/webview_host.rs. Invalid rids,
+//! cross-kind rids, and the destroy lifecycle are verified through raw FFI declarations.
 use aidoku::{
 	Chapter, FilterValue, Manga, MangaPageResult, Page, PageDescriptionProvider, Result, Source,
 	alloc::{String, Vec},
@@ -104,17 +105,17 @@ impl PageDescriptionProvider for WebViewFixtureSource {
 		push(show(wv.eval("location.href")));
 		push(show(wv.eval("window === globalThis")));
 
-		// 页面脚本抛错不影响加载结果与后续脚本
+		// A throwing page script affects neither the load result nor later scripts
 		push(show_unit(wv.load_html(
 			"<script>throw new Error('x')</script><script>var after = 'ok';</script>",
 			None,
 		)));
 		push(show(wv.eval("after")));
-		// 再次 load_html 替换整个页面状态
+		// A second load_html replaces the whole page state
 		push(show(wv.eval("typeof token")));
 		push(show(wv.eval("location.href")));
 
-		// 外链脚本与非 JS type 的脚本不执行
+		// External scripts and scripts with a non-JS type do not execute
 		push(show_unit(wv.load_html(
 			"<script src=\"https://example.com/a.js\">var srcRan = true;</script>\
 				<script type=\"application/json\">var jsonRan = true;</script>\
@@ -125,7 +126,7 @@ impl PageDescriptionProvider for WebViewFixtureSource {
 		push(show(wv.eval("typeof jsonRan")));
 		push(show(wv.eval("inl")));
 
-		// user script 分别在页面脚本前/后执行
+		// User scripts run before/after the page scripts respectively
 		let _ = wv.add_user_script(WebViewUserScript::new(String::from("var marker = 's';")));
 		let end_script = WebViewUserScript {
 			source: String::from("marker += 'e';"),
@@ -140,7 +141,7 @@ impl PageDescriptionProvider for WebViewFixtureSource {
 		push(show(wv.eval_async("Promise.resolve(6 * 7)")));
 		push(show(wv.eval_async("Promise.reject(new Error('no'))")));
 
-		// 需要真实页面加载/导航/cookie 的函数显式不支持
+		// Functions needing real page load/navigation/cookies are explicitly unsupported
 		push(show_unit(wv.set_rule_list("[]")));
 		let request = Request::get("https://example.com")?;
 		push(show_unit(wv.load(request)));
@@ -149,7 +150,7 @@ impl PageDescriptionProvider for WebViewFixtureSource {
 
 		push(show(wv.eval("(")));
 
-		// 裸 FFI：无效 rid 与跨种类 rid 的错误码
+		// Raw FFI: error codes for invalid rids and cross-kind rids
 		push(String::from(if raw_webview_eval(9999, "1") == -4 { "raw:handler" } else { "raw:bad" }));
 		let ctx = unsafe { context_create() };
 		push(String::from(if raw_webview_eval(ctx, "1") == -4 { "raw:cross" } else { "raw:bad" }));

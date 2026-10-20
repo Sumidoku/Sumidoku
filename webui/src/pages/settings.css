@@ -33,7 +33,7 @@
 	color: var(--text-dim);
 }
 
-/* ============ 分类管理 ============ */
+/* ============ Category management ============ */
 
 .settings-cats {
 	display: flex;
@@ -109,7 +109,7 @@
 	min-width: 0;
 }
 
-/* ============ 源设置（弹窗） ============ */
+/* ============ Source settings (modal) ============ */
 
 .settings-source__body {
 	padding-top: 2px;
@@ -133,7 +133,7 @@
 	margin-top: 8px;
 }
 
-/* ============ 服务器 KV ============ */
+/* ============ Server KV ============ */
 
 .settings-kv {
 	display: flex;
@@ -169,7 +169,7 @@
 	margin-top: 12px;
 }
 
-/* ============ 安全 ============ */
+/* ============ Security ============ */
 
 .settings-security__off {
 	font-size: 14px;
@@ -189,7 +189,7 @@
 	margin-top: 12px;
 }
 
-/* ============ 关于 ============ */
+/* ============ About ============ */
 
 .settings-about {
 	display: flex;

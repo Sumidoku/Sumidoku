@@ -1,10 +1,11 @@
-//! OAuth 登录（method: "oauth"）的端点测试。
-//! fixture 源：oauth（三个 login 设置——login_oauth 走 pkce+token_url 交换分支，
-//! login_oauth_plain 走回调串+notification 分支，login_oauth_key 走 url_key 兜底）。
-//! 令牌交换的上游是本地 mock（axum + 127.0.0.1:0），捕获请求体验证参数不编码。
-//! fixture 重建：`cd crates/wasm/tests/fixtures/oauth-src &&
-//! cargo build --release --target wasm32-unknown-unknown`，产物复制为
-//! crates/wasm/tests/fixtures/oauth/main.wasm。
+//! Endpoint tests for OAuth login (method: "oauth").
+//! Fixture source: oauth (three login settings — login_oauth takes the pkce+token_url exchange
+//! branch, login_oauth_plain the callback-string+notification branch, login_oauth_key the url_key
+//! fallback). The token-exchange upstream is a local mock (axum + 127.0.0.1:0) capturing the request
+//! body to verify parameters are not encoded.
+//! Fixture rebuild: `cd crates/wasm/tests/fixtures/oauth-src &&
+//! cargo build --release --target wasm32-unknown-unknown`, then copy the artifact to
+//! crates/wasm/tests/fixtures/oauth/main.wasm.
 mod common;
 
 use axum::extract::State as AxumState;
@@ -76,7 +77,7 @@ fn echo_title(body: &Value) -> String {
 		.to_string()
 }
 
-// ---- 本地 mock 令牌端点：捕获请求体与 Content-Type，返回原始响应串 ----
+// ---- local mock token endpoint: captures the request body and Content-Type, returns the raw response string ----
 
 #[derive(Clone, Default)]
 struct MockToken {
@@ -172,7 +173,7 @@ async fn oauth_start_builds_pkce_url_and_persists_verifier() {
 			.all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~')),
 		"verifier 只能取 unreserved 集: {verifier}"
 	);
-	// challenge 必须能由落库的 verifier 重算：非填充 base64url(SHA-256(verifier))
+	// the challenge must be recomputable from the persisted verifier: unpadded base64url(SHA-256(verifier))
 	assert_eq!(
 		body["url"].as_str().expect("url"),
 		format!(
@@ -199,7 +200,7 @@ async fn oauth_start_resolves_url_from_url_key_default() {
 	let verifier = values["login_oauth_key.codeVerifier"]
 		.as_str()
 		.expect("verifier persisted");
-	// url_key 指向 oauth_auth_url 设置的默认值，pkce 参数照常追加
+	// url_key points at the oauth_auth_url setting's default value; the pkce parameters are appended as usual
 	assert_eq!(
 		body["url"].as_str().expect("url"),
 		format!(
@@ -241,7 +242,7 @@ async fn oauth_complete_exchanges_code_and_stores_raw_response() {
 	let values = settings_values(&app.app, id).await;
 	let verifier = values["login_oauth.codeVerifier"].as_str().expect("verifier");
 
-	// code 里带 / = +：落进请求体必须原样（Aidoku 的交换参数不做 percent-encode）
+	// the code contains / = +: it must land in the request body verbatim (Aidoku doesn't percent-encode exchange parameters)
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -266,7 +267,7 @@ async fn oauth_complete_exchanges_code_and_stores_raw_response() {
 		"交换参数逐字节对齐 Aidoku：不编码，redirect_uri/client_id 取自授权地址"
 	);
 
-	// 登录触发实例重启：新实例从库回填 defaults，运行时读到的应与库一致
+	// login triggers an instance restart: the new instance backfills defaults from the DB, so what the runtime reads must match the DB
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -292,7 +293,7 @@ async fn oauth_complete_without_token_url_stores_callback_and_notifies() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["values"]["login_oauth_plain"], "myscheme://done?code=zzz");
 
-	// 设置的 notification 送达源：fixture 把送达串编进 echo 标题
+	// the setting's notification is delivered to the source: the fixture weaves the delivered string into the echo title
 	let body = settings_body(&app.app, id).await;
 	assert_eq!(echo_title(&body), "oauth-logged-in");
 }
@@ -336,7 +337,7 @@ async fn oauth_login_persists_across_server_restart() {
 	let server = serve_token().await;
 	let tmp = tempfile::tempdir().expect("tempdir");
 
-	// 第一次启动：走完 start → complete，令牌落库
+	// first boot: run start → complete to the end, token persisted
 	{
 		let app = sumidoku_server::build_app(common::base_config(&tmp))
 			.await
@@ -358,8 +359,8 @@ async fn oauth_login_persists_across_server_restart() {
 		assert_eq!(body["values"]["login_oauth"], TOKEN_BODY);
 	}
 
-	// 第二次启动（同一数据目录，模拟进程重启）：设置值从库读回，
-	// 新实例懒加载时也须从库回填到登录态
+	// second boot (same data directory, simulating a process restart): setting values are read back from
+	// the DB, and the lazily loaded new instance must also backfill the login state from the DB
 	let app = sumidoku_server::build_app(common::base_config(&tmp))
 		.await
 		.expect("build app");
@@ -384,7 +385,7 @@ async fn oauth_rejects_bad_requests() {
 	let (app, id) = app_with_oauth_source().await;
 	put_token_url(&app.app, id, &server.url).await;
 
-	// 空 key / 未安装源 / key 撞在非 login 设置上 / 未知键
+	// empty key / uninstalled source / key colliding with a non-login setting / unknown key
 	for (path, body, want) in [
 		(oauth_start_path(id), json!({"key": ""}), StatusCode::BAD_REQUEST),
 		(oauth_start_path(999), json!({"key": "login_oauth"}), StatusCode::NOT_FOUND),
@@ -395,7 +396,7 @@ async fn oauth_rejects_bad_requests() {
 		assert_eq!(status, want, "{body}");
 	}
 
-	// complete：空 url / 不可解析的回调串
+	// complete: empty url / unparsable callback string
 	for paste in ["", "not a url"] {
 		let (status, body) = request(
 			&app.app,
@@ -407,7 +408,7 @@ async fn oauth_rejects_bad_requests() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{paste}: {body}");
 	}
 
-	// 交换分支没走过 start（库无 verifier）
+	// the exchange branch never went through start (no verifier in the DB)
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -417,7 +418,7 @@ async fn oauth_rejects_bad_requests() {
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
-	// 走过 start 但回调里缺 code
+	// went through start but the callback lacks code
 	let (status, _) = request(&app.app, "POST", &oauth_start_path(id), Some(json!({"key": "login_oauth"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(
@@ -429,7 +430,7 @@ async fn oauth_rejects_bad_requests() {
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 
-	// 全部坏请求之后状态保持干净：无 marker、无令牌交换发生
+	// the state stays clean after all the bad requests: no marker, no token exchange happened
 	let values = settings_values(&app.app, id).await;
 	assert!(values.get("login_oauth").is_none(), "{values}");
 	assert!(server.mock.captured.lock().expect("mock lock").is_empty());

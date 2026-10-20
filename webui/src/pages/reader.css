@@ -1,4 +1,4 @@
-/* ============ 阅读器 ============ */
+/* ============ Reader ============ */
 
 .reader {
 	min-height: 100dvh;
@@ -16,7 +16,7 @@
 	padding: 0;
 }
 
-/* ---------- 翻页模式 ---------- */
+/* ---------- Paged mode ---------- */
 
 .reader__paged {
 	position: relative;
@@ -69,7 +69,7 @@
 	width: 44%;
 }
 
-/* ---------- 滚动 / 条漫模式 ---------- */
+/* ---------- Continuous / webtoon mode ---------- */
 
 .reader__cont {
 	max-width: 780px;
@@ -94,7 +94,7 @@
 	padding: 0 8px;
 }
 
-/* ---------- 文本页 ---------- */
+/* ---------- Text pages ---------- */
 
 .reader-text {
 	background: var(--bg-elev);
@@ -112,8 +112,8 @@
 	max-width: 100%;
 }
 
-/* 翻页模式下的文本页：按视口宽度分栏，横向平移翻栏。
-   阅读器固定黑底，这里去掉卡片换成浅色文字，避免浅色主题下暗字不可见 */
+/* Text pages in paged mode: split into viewport-wide columns, turned by horizontal translation.
+   The reader is fixed on a black background, so drop the card for light text here — dark text would be invisible in the light theme */
 .reader-text--cols {
 	height: 100%;
 	max-width: none;
@@ -151,7 +151,7 @@
 	font-size: 14px;
 }
 
-/* ---------- 工具栏（常挂 DOM，靠透明度显隐做 200ms 淡入淡出） ---------- */
+/* ---------- Toolbar (always mounted in the DOM, shown/hidden via opacity for a 200ms fade) ---------- */
 
 .reader__bar {
 	position: fixed;
@@ -214,7 +214,7 @@
 	color: var(--accent);
 }
 
-/* ---------- 设置弹层 ---------- */
+/* ---------- Settings popover ---------- */
 
 .reader__settings {
 	position: fixed;
@@ -236,7 +236,7 @@
 	pointer-events: none;
 }
 
-/* ---------- 底部页码条 ---------- */
+/* ---------- Bottom page bar ---------- */
 
 .reader__pager {
 	flex: 1;

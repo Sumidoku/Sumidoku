@@ -1,20 +1,20 @@
 import type { Chapter } from '../api/types';
 import { toMillis } from './format';
 
-// 章节列表的排序/筛选设置，按漫画存 localStorage，详情页与阅读器共用同一份
+// Chapter list sort/filter prefs, stored in localStorage per manga; the detail page and the reader share the same entry
 
 export type SortKey = 'source' | 'chapter' | 'date';
-/** 0 = 关（不过滤）、1 = 含（只显示命中）、-1 = 排除（隐藏命中） */
+/** 0 = off (no filtering), 1 = include (show only matches), -1 = exclude (hide matches) */
 export type Tri = 0 | 1 | -1;
 
 export interface ChapterPrefs {
 	sort: SortKey;
-	/** false = 降序（详情页默认，最新章在上） */
+	/** false = descending (detail page default, newest chapters on top) */
 	asc: boolean;
 	filters: { unread: Tri; downloaded: Tri; bookmarked: Tri; locked: Tri };
-	/** null = 全部语言 */
+	/** null = all languages */
 	language: string | null;
-	/** 空数组 = 不按扫图组过滤；非空时任一命中即保留 */
+	/** Empty array = don't filter by scanlation group; otherwise any match keeps the chapter */
 	scanlators: string[];
 }
 
@@ -68,7 +68,7 @@ export function loadPrefs(id: number): ChapterPrefs {
 		if (raw === null) return { ...DEFAULT_PREFS };
 		return normalize(JSON.parse(raw));
 	} catch {
-		// 隐私模式读不到或坏 JSON 都回退默认，静默
+		// Private mode or broken JSON both fall back to defaults, silently
 		return { ...DEFAULT_PREFS };
 	}
 }
@@ -78,11 +78,11 @@ export function savePrefs(id: number, prefs: ChapterPrefs): void {
 	try {
 		localStorage.setItem(storageKey(id), JSON.stringify(prefs));
 	} catch {
-		// 隐私模式写不进存储，静默降级（设置仅本轮生效）
+		// Private mode blocks the write; degrade silently (prefs apply for this session only)
 	}
 }
 
-/** 过滤条件：0 保留全部、1 保留真值、-1 保留假值 */
+/** Filter condition: 0 keeps everything, 1 keeps truthy, -1 keeps falsy */
 function tri(value: unknown, t: Tri): boolean {
 	if (t === 0) return true;
 	return t === 1 ? !!value : !value;
@@ -93,16 +93,16 @@ export function applyPrefs(chapters: Chapter[], prefs: ChapterPrefs): Chapter[] 
 
 	switch (prefs.sort) {
 		case 'source':
-			// 接口按源序升序返回，保持服务端 source_order 顺序
+			// The API returns ascending by source order; keep the server's source_order
 			if (!prefs.asc) list.reverse();
 			break;
 		case 'chapter':
-			// 无章节号按 -1 处理（同 Aidoku），排在最前
+			// Chapters without a number count as -1 (same as Aidoku) and sort first
 			list.sort((a, b) => (a.chapter_number ?? -1) - (b.chapter_number ?? -1));
 			if (!prefs.asc) list.reverse();
 			break;
 		case 'date': {
-			// 无日期按 -Infinity 处理，稳定沉底
+			// Missing dates count as -Infinity, so they sink to the bottom
 			const millis = (c: Chapter) => toMillis(c.date_uploaded) ?? -Infinity;
 			list.sort((a, b) => millis(a) - millis(b));
 			if (!prefs.asc) list.reverse();

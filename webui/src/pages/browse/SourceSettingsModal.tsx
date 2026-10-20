@@ -19,7 +19,7 @@ import { Button, IconButton, Modal, Spinner, pushToast } from '../../components'
 import { SettingItem } from '../settings/SettingItem';
 import '../settings.css';
 
-/** 摊平 group/page 里的嵌套设置，按 key 找配置项用 */
+/** Flatten nested settings inside groups/pages, for looking up config items by key */
 function flattenSettings(list: Setting[]): Setting[] {
 	return list.flatMap((s) => {
 		const v = s.value;
@@ -65,7 +65,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		if (!hasEdits || !data?.settings) return;
 		const keys = Object.keys(edits);
 		const touched = flattenSettings(data.settings).filter((s) => keys.includes(s.key));
-		// 每个被改设置声明的 notification 都发给源（Aidoku：值一变即发）
+		// Every notification declared by a changed setting is sent to the source (Aidoku: fired as soon as the value changes)
 		const notify = touched
 			.map((s) => s.notification)
 			.filter((n): n is string => typeof n === 'string' && n !== '');
@@ -75,7 +75,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		invalidateForRefreshes(qc, sourceId, touched.flatMap((s) => s.refreshes ?? []));
 	}
 
-	/** Button 设置按下即把它的 notification 发给源，再按声明刷新相关数据 */
+	/** Pressing a Button setting sends its notification to the source, then refreshes the declared data */
 	async function onPressButton(setting: Setting) {
 		if (!setting.notification) return;
 		await notifySource.mutateAsync(setting.notification);
@@ -187,7 +187,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	);
 }
 
-/** 已安装源卡片右侧的齿轮：设置放进弹窗，配置项由源包提供 */
+/** The gear at the right of an installed-source card: settings live in a modal, config items come from the source package */
 export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: number; sourceName: string }) {
 	const [open, setOpen] = useState(false);
 

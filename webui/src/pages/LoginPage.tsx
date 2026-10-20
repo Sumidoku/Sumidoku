@@ -20,7 +20,7 @@ export default function LoginPage() {
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState('');
 
-	// 服务端没开认证时登录页无意义，直接回首页
+	// The login page is pointless when the server has auth disabled, so bounce straight home
 	useEffect(() => {
 		api<{ enabled: boolean }>('/auth/status', { silent: true })
 			.then((s) => {
@@ -40,11 +40,11 @@ export default function LoginPage() {
 				silent: true
 			});
 			setToken(res.token);
-			// 登录响应自带身份：直接写缓存，省得进首页后 whoami 先回一拍 null
+			// The login response carries the identity: write it straight into the cache so whoami doesn't answer null for a beat after entering the home page
 			queryClient.setQueryData(qk.whoami, { enabled: true, user: res.user });
 			navigate('/', { replace: true });
 		} catch (e) {
-			// 401 对外形状统一，不区分「用户不存在」与「密码错」
+			// The 401 shape is uniform to the outside, not distinguishing "user does not exist" from "wrong password"
 			setError(e instanceof ApiError && e.status === 401 ? '用户名或密码错误' : '登录失败，请稍后重试');
 		} finally {
 			setPending(false);

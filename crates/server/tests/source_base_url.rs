@@ -1,9 +1,10 @@
-//! 动态 base URL 解析（issue #136）的端点测试：安装/更新时调源的 get_base_url，
-//! 解析值落 source.base_url 并前置进合成 base-url 设置的候选与种子默认。
-//! fixture 源：baseurl（get_base_url 返回 defaults.dynamic_url，缺省
-//! https://dyn-v1.example，值为 "fail" 时 bail 模拟导出失败）。
-//! fixture 重建：`cd tests/fixtures/baseurl-src && cargo build --release --target
-//! wasm32-unknown-unknown`，产物复制为 ../baseurl/main.wasm。
+//! Endpoint tests for dynamic base URL resolution (issue #136): get_base_url is called at
+//! install/update time; the resolved value lands in source.base_url and is prepended to the
+//! candidates and seeded default of the synthesized base-url setting.
+//! Fixture source: baseurl (get_base_url returns defaults.dynamic_url, defaulting to
+//! https://dyn-v1.example; the value "fail" makes it bail to simulate an export failure).
+//! Fixture rebuild: `cd tests/fixtures/baseurl-src && cargo build --release --target
+//! wasm32-unknown-unknown`, then copy the artifact to ../baseurl/main.wasm.
 mod common;
 
 use axum::Router;
@@ -17,7 +18,7 @@ const MIRROR: &str = "https://m1.example";
 const DYN_V1: &str = "https://dyn-v1.example";
 const DYN_V2: &str = "https://dyn-v2.example";
 
-/// 登记 baseurl fixture 源：静态 URL + 一个镜像，allowsBaseUrlSelect 可选
+/// Registers the baseurl fixture source: static URL + one mirror, allowsBaseUrlSelect optional
 fn write_baseurl_source(dir: &std::path::Path, version: i64, allows_select: bool) {
 	std::fs::create_dir_all(dir).expect("mkdir");
 	std::fs::copy(common::baseurl_wasm_path(), dir.join("main.wasm")).expect("main.wasm");
@@ -58,7 +59,7 @@ async fn settings_body(app: &Router, source_id: i64) -> Value {
 	body
 }
 
-/// 摊平 group/page 后按 key 找叶子设置
+/// Finds a leaf setting by key after flattening groups/pages
 fn find_leaf<'a>(items: &'a [Value], key: &str) -> Option<&'a Value> {
 	for item in items {
 		let container = item["value"]["Group"]["items"]
@@ -109,7 +110,7 @@ async fn update_re_resolves_and_untouched_default_follows() {
 	scan(&app.app).await;
 	let id = source_json(&app.app).await["id"].as_i64().expect("id");
 
-	// 源更新后解析值变化（经 defaults 注入模拟），未动过的 url 默认应跟随
+	// the resolved value changes after the source update (simulated via the defaults injection); the untouched url default should follow
 	put_settings(&app.app, id, json!({"dynamic_url": DYN_V2})).await;
 	write_baseurl_source(&dir, 2, true);
 	let outcome = scan(&app.app).await;
@@ -135,7 +136,7 @@ async fn update_preserves_user_picked_url() {
 	scan(&app.app).await;
 	let id = source_json(&app.app).await["id"].as_i64().expect("id");
 
-	// 用户手动选了镜像线路，更新后保留；候选与默认仍跟随新解析值
+	// the user manually picked the mirror line; it is kept after the update, while candidates and the default still follow the newly resolved value
 	put_settings(&app.app, id, json!({"url": MIRROR})).await;
 	put_settings(&app.app, id, json!({"dynamic_url": DYN_V2})).await;
 	write_baseurl_source(&dir, 2, true);
@@ -159,7 +160,7 @@ async fn export_failure_falls_back_to_static() {
 	let id = source_json(&app.app).await["id"].as_i64().expect("id");
 	assert_eq!(source_json(&app.app).await["baseUrl"], DYN_V1);
 
-	// 导出失败不杀死更新：base_url 回退包内静态值，未动过的默认一并跟随
+	// an export failure does not kill the update: base_url falls back to the in-package static value, and the untouched default follows it
 	put_settings(&app.app, id, json!({"dynamic_url": "fail"})).await;
 	write_baseurl_source(&dir, 2, true);
 	let outcome = scan(&app.app).await;
@@ -183,8 +184,8 @@ async fn resolution_applies_without_base_url_select() {
 	write_baseurl_source(&app.tmp.path().join("sources").join(KEY), 1, false);
 	scan(&app.app).await;
 
-	// 不开 allowsBaseUrlSelect 也解析（登录 host 兜底等消费方读 source.base_url），
-	// 但不合成 select、不播种 url
+	// resolution happens even without allowsBaseUrlSelect (consumers like the login-host fallback
+	// read source.base_url), but no select is synthesized and no url is seeded
 	let source = source_json(&app.app).await;
 	assert_eq!(source["baseUrl"], DYN_V1);
 	let id = source["id"].as_i64().expect("id");

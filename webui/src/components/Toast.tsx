@@ -15,7 +15,7 @@ function emit() {
 	listeners.forEach((l) => l());
 }
 
-// 同一消息 2s 内的重复推送直接吞掉：失败重试/轮询类报错会连发，堆一屏相同 toast 没信息量
+// Repeated pushes of the same message within 2s are swallowed: retry/polling errors fire in bursts and a screen full of identical toasts carries no information
 let lastPush = { message: '', at: 0 };
 
 export function pushToast(message: string, kind: 'error' | 'info' = 'error') {
@@ -38,7 +38,7 @@ function subscribe(l: () => void) {
 	};
 }
 
-/** 全局 toast 出口，挂在 main.tsx 一次即可 */
+/** Global toast outlet; mount once in main.tsx */
 export function Toaster() {
 	const toasts = useSyncExternalStore(subscribe, () => items);
 	return createPortal(

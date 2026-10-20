@@ -1,7 +1,7 @@
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-	/** 图标按钮没有可见文字，label 只做无障碍名称 */
+	/** Icon buttons have no visible text; label serves only as the accessible name */
 	label: string;
 	variant?: 'ghost' | 'danger';
 	size?: 'sm' | 'md';

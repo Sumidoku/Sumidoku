@@ -1,9 +1,9 @@
-//! 静态 settings.json 与动态 get_settings 的形状归一。
+//! Shape normalization for static settings.json and dynamic get_settings.
 //!
-//! Aidoku 源包里的 `settings.json` 是扁平的公开 schema（camelCase，如
-//! `requiresFalse`/`minimumValue`），而源导出 `get_settings` 时 aidoku 的
-//! `Setting` 序列化成嵌套的 `{type,key,title,...,value:{Kind:{...}}}`（snake_case）。
-//! `/sources/{id}/settings` 对两种来源都返回后者，前端才只需处理一种形状。
+//! The `settings.json` in an Aidoku source package is a flat public schema (camelCase, e.g.
+//! `requiresFalse`/`minimumValue`), while a source exporting `get_settings` serializes aidoku's
+//! `Setting` into the nested `{type,key,title,...,value:{Kind:{...}}}` (snake_case).
+//! `/sources/{id}/settings` returns the latter for both sources, so the frontend handles exactly one shape.
 
 use std::collections::HashSet;
 
@@ -13,12 +13,12 @@ use crate::source::{
 	candidate_urls, default_language_pick, language_select_single, source_languages,
 };
 
-/// 合成设置：对齐 AidokuRunner `Source.getExtraSettings` 的 base url 分支。
+/// Synthetic setting: mirrors the base-url branch of AidokuRunner's `Source.getExtraSettings`.
 ///
-/// `config.allowsBaseUrlSelect` 为真且候选（动态解析值前置进 `info.url` + `info.urls`）
-/// 至少两个时，App 会在源设置里生成一个选线路的 select（键 `url`，默认第一个），
-/// 源运行时再通过 `defaults.get("url")` 读取。这里补出同款嵌套形状，
-/// 插在静态/动态设置之前（AidokuRunner 把 extraSettings 排在 staticSettings 前）。
+/// When `config.allowsBaseUrlSelect` is true and there are at least two candidates (the dynamically resolved
+/// value prepended to `info.url` + `info.urls`), the app generates a mirror-select select in the source settings
+/// (key `url`, defaulting to the first), which the source reads at runtime via `defaults.get("url")`. Here we build
+/// the same nested shape, inserted before the static/dynamic settings (AidokuRunner ranks extraSettings before staticSettings).
 pub fn base_url_setting(doc: &Value, persisted: Option<&str>) -> Option<Value> {
 	if doc
 		.get("config")
@@ -61,12 +61,12 @@ pub fn base_url_setting(doc: &Value, persisted: Option<&str>) -> Option<Value> {
 	}))
 }
 
-/// 合成设置：对齐 AidokuRunner `Source.getExtraSettings` 的语言分支。
+/// Synthetic setting: mirrors the language branch of AidokuRunner's `Source.getExtraSettings`.
 ///
-/// `info.languages` 超过一种即生成语言设置：languageSelectType == "single"
-/// 时是单选 select（键 language），否则多选 multi-select（键 languages），
-/// 默认值取 isDefault、都没有取第一个（AidokuRunner 按设备语言取交集，
-/// 服务端无设备语言）。插在 base url 之前（Runner 的 extraSettings 顺序）。
+/// More than one `info.languages` entry generates a language setting: a single-choice select (key language) when
+/// languageSelectType == "single", otherwise a multi-select (key languages); the default takes isDefault, or the
+/// first when none (AidokuRunner intersects with the device language, which a server does not have). Inserted before
+/// base url (Runner's extraSettings order).
 pub fn language_setting(doc: &Value) -> Option<Value> {
 	let langs = source_languages(doc);
 	if langs.len() < 2 {
@@ -120,14 +120,14 @@ pub fn language_setting(doc: &Value) -> Option<Value> {
 	}))
 }
 
-/// 源自己声明的叶子设置键（递归 group/page，跳过容器）
+/// Leaf setting keys the source itself declares (recursing into group/page, skipping containers)
 pub fn declared_keys(items: &[Value]) -> HashSet<String> {
 	let mut keys = HashSet::new();
 	collect_leaf_keys(items, &mut keys);
 	keys
 }
 
-/// 合成的语言/线路设置是否与源已声明的键撞车：撞了就不合成，避免出现同键两项
+/// Whether a synthesized language/mirror setting collides with a key the source already declared: on collision skip synthesizing, so no key appears twice
 pub fn clashes(extra: &Value, declared: &HashSet<String>) -> bool {
 	let mut keys = HashSet::new();
 	collect_leaf_keys(std::slice::from_ref(extra), &mut keys);
@@ -151,9 +151,9 @@ fn collect_leaf_keys(items: &[Value], out: &mut HashSet<String>) {
 	}
 }
 
-/// 静态 + 动态设置合并：静态在前、动态追加，对齐 AidokuRunner 的
-/// `staticSettings + getSettings()`。Runner 本身不去重（同键显示两项），这里按
-/// 叶子键去重、同键保留先出现项——与合成设置撞键跳过同规则，列表里同键只出现一次
+/// Merges static + dynamic settings: static first, dynamic appended, aligned with AidokuRunner's
+/// `staticSettings + getSettings()`. Runner itself does not dedupe (a duplicate key shows twice); here we dedupe by
+/// leaf key keeping the first occurrence — the same rule as synthesized settings skipping on collision, so a key appears only once in the list
 pub fn merge_settings(static_items: Vec<Value>, dynamic_items: Vec<Value>) -> Vec<Value> {
 	let mut declared = declared_keys(&static_items);
 	let mut out = static_items;
@@ -167,7 +167,7 @@ pub fn merge_settings(static_items: Vec<Value>, dynamic_items: Vec<Value>) -> Ve
 	out
 }
 
-/// 扁平 settings.json -> 动态源同款嵌套数组；输入非数组时返回空
+/// Flat settings.json -> the dynamic source's own nested array; non-array input yields empty
 pub fn normalize_static_settings(raw: &Value) -> Vec<Value> {
 	raw.as_array()
 		.map(|items| {
@@ -193,15 +193,15 @@ fn normalize_children(items: Option<&Value>) -> Value {
 	)
 }
 
-/// 缺失字段一律落 null，交给前端 `??` 兜底
+/// Missing fields always land on null, left to the frontend's `??` fallback
 fn field(item: &Value, key: &str) -> Value {
 	item.get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn normalize_item(item: &Value, index: usize) -> Value {
 	let ty = item.get("type").and_then(Value::as_str).unwrap_or_default();
-	// 容器类（group/page）在扁平 schema 里没有 key；给个稳定的合成 key，
-	// 避免前端 map 时 React key 重复
+	// Container kinds (group/page) have no key in the flat schema; give them a stable synthetic key
+	// so the frontend's map does not produce duplicate React keys
 	let key = item
 		.get("key")
 		.and_then(Value::as_str)
@@ -296,7 +296,7 @@ fn normalize_value(ty: &str, item: &Value) -> Value {
 			"titles": field(item, "titles"),
 			"default": field(item, "default"),
 		} }),
-		// 未知类型保留原字符串：前端命中 else 分支展示"暂不支持的类型"，不崩
+		// Unknown types keep the raw string: the frontend's else branch shows "unsupported type" without crashing
 		other => Value::String(other.to_string()),
 	}
 }
@@ -379,7 +379,7 @@ mod tests {
 		);
 		assert_eq!(item["value"]["Select"]["default"], "https://dyn.example");
 
-		// 持久值已在包内列表（动态值等于静态值，或未解析时的 info.url）不重复前置
+		// A persisted value already in the package list (dynamic equals static, or info.url when unresolved) is not prepended again
 		let out = base_url_setting(&doc, Some("https://main.example")).expect("base url setting");
 		let item = &out["value"]["Group"]["items"][0];
 		assert_eq!(

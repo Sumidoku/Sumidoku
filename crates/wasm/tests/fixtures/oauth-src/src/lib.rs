@@ -1,12 +1,16 @@
 #![no_std]
-//! OAuth 登录（method: "oauth"）的端到端验证源：
-//! - login_oauth：pkce + token_url 的交换分支，授权地址内嵌 client_id/redirect_uri
-//!   供交换时捕获；token_url 从 defaults 的 oauth_token_url 读——mock 令牌端点的
-//!   端口编译期不可知，动态设置在运行时按当前 defaults 拼
-//! - login_oauth_plain：无 token_url 的回调串分支，notification 送达串编进 echo 标题
-//! - login_oauth_key：url_key 指向 oauth_auth_url 的默认值，兜底解析授权地址
-//! get_search_manga_list 把 login_oauth 的值编进标题，重启存活断言靠它。
-//! 断言方在 crates/server/tests/source_login_oauth.rs。
+//! End-to-end verification source for OAuth login (method: "oauth"):
+//! - login_oauth: the exchange branch with pkce + token_url; the authorization URL embeds
+//!   client_id/redirect_uri for capture during the exchange; token_url is read from
+//!   oauth_token_url in defaults — the mock token endpoint's port is unknowable at
+//!   compile time, so dynamic settings build it at runtime from the current defaults
+//! - login_oauth_plain: the callback-string branch without token_url; the notification
+//!   delivery string is woven into the echo title
+//! - login_oauth_key: url_key pointing at the default value of oauth_auth_url, the
+//!   fallback resolution of the authorization URL
+//! get_search_manga_list weaves the login_oauth value into the title, which the
+//! restart-survival assertion relies on.
+//! The asserting side is crates/server/tests/source_login_oauth.rs.
 use aidoku::{
 	Chapter, FilterValue, LoginMethod, LoginSetting, Manga, MangaPageResult, NotificationHandler, Page, Result,
 	Setting, Source, TextSetting,

@@ -54,7 +54,7 @@ async fn upsert_persists_viewer_and_chapter_thumbnail() {
 	let row = manga_row(&pool, manga_id).await.expect("manga row");
 	assert_eq!(manga_from_row(&row).viewer, Viewer::RightToLeft);
 
-	// 重复 upsert 走 ON CONFLICT 分支，viewer 更新同样要落库
+	// A repeated upsert takes the ON CONFLICT branch; the viewer update must still be persisted
 	let updated = Manga {
 		viewer: Viewer::Webtoon,
 		..manga.clone()
@@ -82,7 +82,7 @@ async fn upsert_persists_viewer_and_chapter_thumbnail() {
 
 #[tokio::test]
 async fn single_language_source_fills_missing_chapter_language() {
-	// example fixture 恰好声明一种语言（["en"]）
+	// the example fixture declares exactly one language (["en"])
 	let app = test_app().await;
 	let source_id = scan_example_source(&app.app).await;
 	let pool = connect_db(&app.db_path).await;

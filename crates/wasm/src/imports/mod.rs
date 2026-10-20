@@ -13,7 +13,7 @@ use crate::runtime::env::WasmiCtx;
 use crate::runtime::store::{Ptr, Rid};
 use wasmi::{Caller, Linker};
 
-/// 注册全部源 ABI import：闭包只做 Caller→Ctx 的引擎接线，函数体全在 Ctx 共享层
+/// Register all source ABI imports: the closures only do the Caller→Ctx engine plumbing; the bodies all live in the shared Ctx layer
 pub fn register_imports(linker: &mut Linker<WasmEnv>) -> Result<(), wasmi::Error> {
 	linker.func_wrap("env", "abort", |mut c: Caller<'_, WasmEnv>| { env::abort(&mut WasmiCtx::new(&mut c)); })?;
 	linker.func_wrap(

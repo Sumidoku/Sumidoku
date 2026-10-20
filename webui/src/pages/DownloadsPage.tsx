@@ -33,7 +33,7 @@ const STATUS_META: Record<DownloadStatus, { label: string; color: ChipColor }> =
 	error: { label: '失败', color: 'danger' }
 };
 
-// progress 帧也可能先于 started 到达，有进度即在下载
+// a progress frame can also arrive before started; any progress means downloading
 const EVENT_STATUS: Record<string, DownloadStatus> = {
 	queued: 'queued',
 	started: 'downloading',
@@ -56,7 +56,7 @@ export default function DownloadsPage() {
 	const del = useDeleteDownload();
 	const enqueue = useEnqueueDownloads();
 
-	// WS 回调在 effect 外闭包不到最新列表，走 ref 同步；所有写入都过 applyItems
+	// WS callbacks outside the effect can't close over the latest list, so sync via a ref; all writes go through applyItems
 	const itemsRef = useRef<DownloadItem[]>([]);
 	function applyItems(next: DownloadItem[] | ((cur: DownloadItem[]) => DownloadItem[])) {
 		const value = typeof next === 'function' ? next(itemsRef.current) : next;
@@ -64,7 +64,7 @@ export default function DownloadsPage() {
 		setItems(value);
 	}
 
-	// 事件只带 chapterId，遇到没见过的任务要整表拉一次补齐标题；并发事件合并成一次
+	// Events carry only chapterId; an unseen task needs a full-list fetch to fill in its title, and concurrent events coalesce into one fetch
 	const refetchingRef = useRef(false);
 	async function refreshMissing() {
 		if (refetchingRef.current) return;
@@ -126,7 +126,7 @@ export default function DownloadsPage() {
 			}
 		})();
 		return unsub;
-		// applyItems/refreshMissing 只碰 ref 与 setState，首渲染闭包即可，挂一次
+		// applyItems/refreshMissing only touch refs and setState, so the first-render closure is fine; subscribe once
 	}, []);
 
 	const sorted = useMemo(
@@ -137,7 +137,7 @@ export default function DownloadsPage() {
 		[items]
 	);
 
-	// 服务端的 clear 连 error 一起删，没有可清项时按钮禁用
+	// The server's clear deletes error entries along with finished ones; the button is disabled when nothing is clearable
 	const hasClearable = items.some((it) => it.status === 'finished' || it.status === 'error');
 
 	async function toggleRunning() {
@@ -153,7 +153,7 @@ export default function DownloadsPage() {
 	async function clearFinished() {
 		setBusy(true);
 		try {
-			// 服务端的 clear 连 error 一起删，本地跟齐
+			// The server's clear deletes error entries along with finished ones; keep the local list in step
 			const res = await clear.mutateAsync();
 			applyItems((cur) => cur.filter((it) => it.status !== 'finished' && it.status !== 'error'));
 			pushToast(`已清空 ${res.cleared} 项`, 'info');

@@ -1,4 +1,4 @@
-/* ============ 封面网格（书库/源浏览共用） ============ */
+/* ============ Cover grid (shared by library and source browsing) ============ */
 
 .cover-grid {
 	display: grid;
@@ -13,7 +13,7 @@
 	}
 }
 
-/* ============ 行式列表（源主页/list kind 列表共用） ============ */
+/* ============ Row list (shared by source home and list-kind listings) ============ */
 
 .home-rows {
 	display: flex;
@@ -95,7 +95,7 @@
 	color: var(--text-faint);
 }
 
-/* ============ 书库 ============ */
+/* ============ Library ============ */
 
 .library__search {
 	flex: 1;
@@ -115,7 +115,7 @@
 	margin-bottom: 16px;
 }
 
-/* ============ 浏览（源列表） ============ */
+/* ============ Browse (source list) ============ */
 
 .source-list {
 	display: flex;
@@ -220,12 +220,12 @@
 	margin-top: 7px;
 }
 
-/* 语言 badge 是信息不是装饰，dim 档太浅 */
+/* The language badge is information, not decoration; the dim shade is too faint */
 .source-card__badges .chip {
 	color: var(--text);
 }
 
-/* 置顶段：标题 / 拖柄 / 拖拽反馈 */
+/* Pinned section: heading / drag handle / drag feedback */
 
 .browse__section {
 	margin: 18px 0 10px;
@@ -251,7 +251,7 @@
 	border-color: var(--accent);
 }
 
-/* ============ 浏览页分段 / 源仓库 ============ */
+/* ============ Browse page sections / source repos ============ */
 
 .browse__tabs {
 	margin-bottom: 16px;
@@ -311,7 +311,7 @@
 	font-size: 14px;
 }
 
-/* ============ 源浏览/搜索 ============ */
+/* ============ Source browsing/search ============ */
 
 .source-page__head {
 	display: flex;
@@ -373,7 +373,7 @@
 	min-width: 0;
 }
 
-/* 面板内非行内布局的控件占满整行 */
+/* Controls not laid out inline fill a whole row inside the panel */
 .filter-panel .input,
 .filter-panel .select {
 	display: flex;
@@ -401,7 +401,7 @@
 	justify-content: flex-end;
 }
 
-/* Aidoku FilterHeaderView 同款横向筛选条：搜索框下方的筛选 chip 行 */
+/* Aidoku FilterHeaderView-style horizontal filter bar: the filter chip row under the search box */
 .filter-header {
 	display: flex;
 	align-items: center;
@@ -419,7 +419,7 @@
 	white-space: nowrap;
 }
 
-/* ============ 源主页 ============ */
+/* ============ Source home ============ */
 
 .home-section {
 	margin-bottom: 24px;
@@ -448,14 +448,14 @@
 	color: var(--text-faint);
 }
 
-/* 横向滑动行：scroller/bigscroller/imagescroller 共用 */
+/* Horizontally scrollable row: shared by scroller/bigscroller/imagescroller */
 .home-hrow {
 	display: flex;
 	gap: 12px;
 	overflow-x: auto;
 	padding-bottom: 6px;
 	scroll-snap-type: x proximity;
-	/* 自动滚动按子项 offsetLeft 定位，参照系必须钉在本行上 */
+	/* Auto-scrolling positions by child offsetLeft, so the reference frame must be pinned to this row */
 	position: relative;
 }
 
@@ -621,8 +621,8 @@
 	white-space: nowrap;
 }
 
-/* page_size 横向分页的卡片列：Aidoku mangaListLayout 同款——列宽约 340px
-   （窄屏占 90%），条目固定 100px 高，列间横滑带下一列窥边，不再全宽 */
+/* Card columns for page_size horizontal pagination, Aidoku mangaListLayout style — a column is ~340px wide
+   (90% on narrow screens), entries fixed at 100px tall, columns swipe sideways with a peek of the next one, no longer full-width */
 .home-page {
 	width: min(340px, 90%);
 	flex: none;
@@ -644,20 +644,20 @@
 	gap: 8px;
 }
 
-/* 查看全部按钮在窄屏别被标题挤出 */
+/* Don't let the "view all" button get squeezed out by the title on narrow screens */
 .home-section__head .btn {
 	flex: none;
 }
 
-/* ============ 跨源搜索 ============ */
+/* ============ Cross-source search ============ */
 
-/* 单源失败只占自己 section 的一行，不弹 toast 也不挡他源结果 */
+/* A single source's failure takes only one row of its own section — no toast, and it doesn't block other sources' results */
 .search-page__error {
 	font-size: 13px;
 	color: var(--danger);
 }
 
-/* ============ 占位页（后续波次替换） ============ */
+/* ============ Placeholder pages (replaced in later waves) ============ */
 
 .stub-reader {
 	min-height: 100dvh;

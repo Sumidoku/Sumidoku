@@ -1,7 +1,8 @@
-//! 内置本地源契约：迁移落库不可删 / 实扫去重与跳过规则 / 打开才落库 /
-//! 页字节与页序（图片章与 CBZ 一致）/ 章节号排序 / ComicInfo 映射 /
-//! 封面回退链 / 刷新重扫 / 失败目录保护 / local_dir 配置覆盖 /
-//! 浏览搜索臂（实扫 + 子串过滤，单源与跨源聚合同形）/ listings 404 unsupported
+//! Built-in local source contract: seeded by migration, undeletable / real-scan dedup and skip rules /
+//! persisted only when opened / page bytes and order (image chapters and CBZ identical) / chapter
+//! number sorting / ComicInfo mapping / cover fallback chain / refresh rescan / failed-directory
+//! protection / local_dir config override / browse search arm (real scan + substring filter, same
+//! shape for single source and cross-source aggregation) / listings 404 unsupported
 mod common;
 
 use axum::Router;
@@ -28,7 +29,7 @@ const COMIC_INFO_DELTA: &str = r#"<?xml version="1.0"?>
   <PublishingStatusTachiyomi>Ongoing</PublishingStatusTachiyomi>
 </ComicInfo>"#;
 
-/// 3000x4000 真图：降采样分支要真解码
+/// Real 3000x4000 image: the downsampling branch needs a real decode
 fn big_png() -> Vec<u8> {
 	let image = image::RgbImage::from_fn(3000, 4000, |x, y| {
 		image::Rgb([(x % 251) as u8, (y % 239) as u8, ((x + y) % 255) as u8])
@@ -57,7 +58,7 @@ fn write_cbz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
 	writer.finish().expect("finish cbz");
 }
 
-/// 造好 local 树并起 app；local_dir 用 <config_dir>/local 缺省派生
+/// Builds the local tree and boots the app; local_dir uses the <config_dir>/local default derivation
 async fn local_app() -> TestApp {
 	local_app_with(|_| {}).await
 }
@@ -72,7 +73,7 @@ async fn local_app_with(configure: impl FnOnce(&mut Config)) -> TestApp {
 	TestApp { app, tmp, db_path }
 }
 
-/// Alpha 的 ch 2 单页大图，降采样断言要用；返回磁盘上的原图字节
+/// Alpha's ch 2 single-page big image, needed by the downsampling assertions; returns the on-disk original bytes
 fn seed_local_tree(root: &std::path::Path) {
 	let alpha = root.join("Alpha");
 	std::fs::create_dir_all(&alpha).expect("mkdir alpha");
@@ -113,7 +114,7 @@ fn seed_local_tree(root: &std::path::Path) {
 
 	std::fs::create_dir_all(root.join("Epsilon")).expect("mkdir epsilon");
 
-	// 跳过规则：点开头目录、@eaDir、根目录散文件都不算漫画
+	// skip rules: dot-leading directories, @eaDir, and loose files in the root don't count as manga
 	std::fs::create_dir_all(root.join(".hidden")).expect("mkdir hidden");
 	std::fs::create_dir_all(root.join("@eaDir")).expect("mkdir eaDir");
 	std::fs::write(root.join("note.txt"), b"not a manga").expect("write note");
@@ -179,12 +180,12 @@ async fn migration_seeds_builtin_local_source() {
 	assert_eq!(source_by_key(&body, "en.example-source")["kind"], "aidoku");
 	let local_id = local["id"].as_i64().expect("local id");
 
-	// 内置源不可删
+	// the built-in source can't be deleted
 	let (status, body) = request(&app, "DELETE", &format!("/api/v1/sources/{local_id}"), None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "bad_request");
 
-	// 没有 wasm 实例：动态能力按端点约定 404 unsupported
+	// no wasm instance: dynamic capabilities 404 unsupported per the endpoint contract
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{local_id}/filters"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "unsupported");
@@ -214,7 +215,7 @@ async fn register_persists_scan_metadata_and_chapter_order() {
 	assert_eq!(body["tags"], json!(["Action", "Adventure"]));
 	assert_eq!(body["status"], "Completed");
 
-	// 章节号降序，未解析出的 extras 沉底
+	// descending chapter numbers, unparsed extras sink to the bottom
 	let chapters = chapters_of(&app, manga_id).await;
 	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
 	assert_eq!(keys, ["ch 10", "ch 4.cbz", "第3话", "ch 2", "ch 1", "extras"]);
@@ -223,7 +224,7 @@ async fn register_persists_scan_metadata_and_chapter_order() {
 		numbers,
 		[Some(10.0), Some(4.0), Some(3.0), Some(2.0), Some(1.0), None]
 	);
-	// 压缩包章展示名去扩展名
+	// archive chapters' display name drops the extension
 	assert_eq!(chapters[1].3, "ch 4");
 }
 
@@ -270,13 +271,13 @@ async fn downsample_reuses_local_original_bytes() {
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 2").await;
 
-	// 无 width：原图字节直通
+	// no width: original bytes pass through
 	let original = std::fs::read(tmp.path().join("local/Alpha/ch 2/big.png")).expect("read big.png");
 	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, original);
 
-	// ?width=512：与在线页同一条降采样管线（宽度 256 量化桶）
+	// ?width=512: the same downsampling pipeline as online pages (width quantized to 256 buckets)
 	let (status, headers, bytes) = request_full(
 		&app,
 		"GET",
@@ -318,7 +319,7 @@ async fn cbz_chapter_pages_and_bytes_match_image_chapter() {
 		assert_eq!(bytes, want);
 	}
 
-	// OPDS-PSE 同一条 Local 分支
+	// OPDS-PSE shares the same Local branch
 	let (status, _, bytes) = request_full(
 		&app,
 		"GET",
@@ -354,20 +355,20 @@ async fn cover_sidecar_wins() {
 #[tokio::test]
 async fn cover_falls_back_to_last_chapter_first_page() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
-	// 章节列表按号降序，末尾 = 最旧一章（ch 1），取其第一页
+	// the chapter list is descending by number, so the tail = the oldest chapter (ch 1); take its first page
 	let gamma_id = register_local(&app, "Gamma").await;
 	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/manga/{gamma_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, b"gamma-1-g1");
 
-	// 压缩包章同样回退：取包内自然序首个图片条目
+	// archive chapters fall back the same way: take the first image entry in the archive's natural order
 	let delta_id = register_local(&app, "Delta").await;
 	let (status, headers, bytes) = request_full(&app, "GET", &format!("/api/v1/manga/{delta_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
 	assert_eq!(bytes, b"delta-1-m");
 
-	// OPDS 封面同一缓存同一分支
+	// the OPDS cover shares the same cache and the same branch
 	let (status, _, bytes) = request_full(
 		&app,
 		"GET",
@@ -422,7 +423,7 @@ async fn unreadable_manga_dir_never_deletes_rows() {
 	let before = chapters_of(&app, manga_id).await;
 	assert_eq!(before.len(), 6);
 
-	// 模拟挂载抖断：漫画目录读不了时刷新报错，已有行绝不当已删除
+	// simulates a mount flapping: when the manga directory is unreadable, refresh errors out and existing rows are never treated as deleted
 	let alpha = tmp.path().join("local/Alpha");
 	let mut perms = std::fs::metadata(&alpha).expect("metadata").permissions();
 	use std::os::unix::fs::PermissionsExt;
@@ -449,7 +450,7 @@ async fn unreadable_chapter_entry_never_deletes_rows() {
 	let sigma = tmp.path().join("local/Sigma");
 	write_page(&sigma.join("ch 1"), "1.png", b"sigma-1-1");
 	write_page(&sigma.join("ch 3"), "1.png", b"sigma-3-1");
-	// ch 2 是指向真实目录的 symlink：注册时 metadata 跟随目标成功，章节正常落库
+	// ch 2 is a symlink to a real directory: at registration metadata follows the target successfully, and the chapter persists normally
 	let target = tmp.path().join("target-ch2");
 	write_page(&target, "1.png", b"sigma-2-1");
 	std::os::unix::fs::symlink(&target, sigma.join("ch 2")).expect("symlink ch 2");
@@ -461,13 +462,13 @@ async fn unreadable_chapter_entry_never_deletes_rows() {
 	let before = chapters_of(&t.app, manga_id).await;
 	assert_eq!(before.len(), 3);
 
-	// 刷新前：ch 3 真删（对照组，照常对账掉）；ch 2 的目标删掉使 symlink 悬垂，
-	// entry.metadata() 跟随 symlink 必失败 → 条目级 failed → protected 对账保护
+	// before refresh: ch 3 is truly deleted (control group, reconciled away as usual); ch 2's target is
+	// removed leaving the symlink dangling, entry.metadata() follows the symlink and must fail → entry-level failed → protected reconciliation
 	std::fs::remove_dir_all(sigma.join("ch 3")).expect("remove ch 3");
 	std::fs::remove_dir_all(&target).expect("remove ch 2 target");
 
-	// 条目级失败是降级不是报错：刷新照常 OK；被保护行不参与本轮重排（保留旧 source_order），
-	// 断言按内容集合不按位置
+	// an entry-level failure degrades instead of erroring: refresh still returns OK; protected rows skip
+	// this round's reordering (keeping their old source_order), so assert on the content set, not positions
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
@@ -546,7 +547,7 @@ async fn shelving_progress_and_library_filters_behave_like_online() {
 		.expect("local count");
 	assert_eq!(entry["count"], 1);
 
-	// 已读过滤三态与在线源同一查询
+	// the read-filter tri-state runs the same query as online sources
 	let (status, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["entries"].as_array().unwrap().len(), 1);
@@ -572,7 +573,7 @@ async fn update_scheduler_rescans_local_library() {
 	write_page(&tmp.path().join("local/Alpha/ch 11"), "1.png", b"alpha-11-1");
 	let (status, _) = request(&app, "POST", "/api/v1/update/fetch", None).await;
 	assert_eq!(status, StatusCode::OK);
-	// fetch 异步跑：直接等行为结果（新章出现），再对账调度器计数
+	// fetch runs asynchronously: wait for the behavioral result (the new chapter appears), then reconcile the scheduler counts
 	let deadline = Instant::now() + Duration::from_secs(10);
 	loop {
 		let keys: Vec<String> = chapters_of(&app, manga_id)
@@ -597,7 +598,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
-	// 空 query（缺省与纯空白）全量：浏览 = 实扫，条目同在线搜索形状（sourceId 附带）
+	// empty query (absent or pure whitespace) returns everything: browse = real scan, entries in the online search shape (sourceId attached)
 	for body in [json!({}), json!({"query": "  "})] {
 		let (status, body) = request(
 			&app,
@@ -618,7 +619,7 @@ async fn browse_search_scans_dirs_and_filters() {
 		}
 	}
 
-	// 子串过滤大小写不敏感
+	// substring filtering is case-insensitive
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -631,7 +632,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0]["title"], "Alpha");
 
-	// 已入库的条目附内部 id，浏览页据此直接进详情页
+	// shelved entries carry the internal id, which the browse page uses to jump straight to the detail page
 	let manga_id = register_local(&app, "Beta").await;
 	let (status, body) = request(
 		&app,
@@ -643,7 +644,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["entries"][0]["id"], manga_id);
 
-	// 扫不到的目录名：空集不是错误
+	// a directory name nothing scans to: an empty set is not an error
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -660,7 +661,7 @@ async fn aggregate_search_includes_local_source() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
-	// 跨源聚合选中本地源时出结果项，不是 unsupported 的 error 项
+	// cross-source aggregation with the local source selected yields a result entry, not an unsupported error entry
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -686,12 +687,12 @@ async fn settings_expose_local_dir_read_only() {
 	let TestApp { app, tmp, db_path } = local_app().await;
 	let effective = tmp.path().join("local").to_string_lossy().into_owned();
 
-	// GET 注入生效中的本地目录（config 分层值，默认 <config_dir>/local）
+	// GET injects the effective local directory (the config-layer value, default <config_dir>/local)
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["localDir"], json!(effective));
 
-	// 同键 PUT 被跳过：读回仍是 config 值，其余键照常落库
+	// a PUT to the same key is skipped: the read-back is still the config value, other keys persist as usual
 	let (status, body) = request(
 		&app,
 		"PUT",
@@ -703,7 +704,7 @@ async fn settings_expose_local_dir_read_only() {
 	assert_eq!(body["localDir"], json!(effective));
 	assert_eq!(body["incognito.enabled"], true);
 
-	// 跳过不是遮蔽：setting 表里没有 localDir 行
+	// skipped is not shadowed: there is no localDir row in the setting table
 	let pool = common::connect_db(&db_path).await;
 	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDir'")
 		.fetch_optional(&pool)
@@ -716,7 +717,7 @@ async fn settings_expose_local_dir_read_only() {
 async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
-	// 本地源没有 listings 概念：与缺该能力的 wasm 源同一契约，404 unsupported
+	// the local source has no listings concept: same contract as a wasm source lacking the capability, 404 unsupported
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "unsupported");

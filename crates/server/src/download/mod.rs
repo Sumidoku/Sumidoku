@@ -12,9 +12,9 @@ use std::sync::{Arc, Weak};
 use tokio::sync::{Mutex, Notify, Semaphore, broadcast};
 use tokio::task::JoinSet;
 
-/// 章级重跑次数上限（不含首次尝试），退避 2/4/8s
+/// Per-chapter retry cap (first attempt not counted), backoff 2/4/8s
 const MAX_CHAPTER_RETRIES: u32 = 3;
-/// 章内页图并行上限
+/// Parallel page-image cap within a chapter
 const PAGE_CONCURRENCY: usize = 5;
 
 #[derive(Debug, Clone, Serialize)]
@@ -25,25 +25,25 @@ pub struct DownloadEvent {
 	pub chapter_id: i64,
 	pub downloaded: i64,
 	pub total: i64,
-	/// 仅 running 事件（kind="running"、chapter_id=0）携带；chapter 事件恒 None 不上 wire
+	/// Carried only by running events (kind="running", chapter_id=0); chapter events always have None, kept off the wire
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub running: Option<bool>,
-	/// 行归属用户，WS 按连接用户过滤；running 事件是全局管理器状态（None，全员广播）
+	/// Owning user of the row; WS filters per connection user. running events are global manager state (None, broadcast to all)
 	#[serde(skip)]
 	pub user_id: Option<i64>,
 }
 
-/// 内存队列条目：无请求上下文，行归属随条目走
+/// In-memory queue entry: no request context, so the row's ownership travels with the entry
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct QueueEntry {
 	chapter_id: i64,
 	user_id: i64,
 }
 
-/// 下载管理器：源内串行、源间并行，全局并发源数受 semaphore 限制。
-/// 状态机落 download 表（queued → downloading → (paused) → finished / error），重启可恢复。
+/// Download manager: serial within a source, parallel across sources, with a global semaphore on concurrent sources.
+/// The state machine lives in the download table (queued → downloading → (paused) → finished / error), recoverable across restarts.
 pub struct DownloadManager {
-	// Weak 防循环引用：AppState 经 OnceCell 持有本管理器
+	// Weak prevents a reference cycle: AppState holds this manager through a OnceCell
 	state: Weak<AppState>,
 	pool: SqlitePool,
 	queue: Mutex<VecDeque<QueueEntry>>,
@@ -118,7 +118,7 @@ impl DownloadManager {
 		});
 	}
 
-	/// 共享产物：另一用户已下好同一章且产物在盘，返回 (path, format) 供直接落 finished
+	/// Shared artifact: when another user has already downloaded the same chapter and the artifact is on disk, returns (path, format) so the row can settle straight to finished
 	async fn shared_artifact(&self, chapter_id: i64, user_id: i64) -> Option<(String, String)> {
 		let row: Option<(String, String)> = sqlx::query_as(
 			"SELECT path, format FROM download
@@ -135,7 +135,7 @@ impl DownloadManager {
 		exists.then_some((path, format))
 	}
 
-	/// 复用共享产物落行：不重复打包，行直接 finished 并打下载标记
+	/// Settles a row reusing a shared artifact: no repackaging, the row goes straight to finished and gets the download flag
 	async fn settle_finished(&self, chapter_id: i64, user_id: i64, path: &str, format: &str) {
 		let now = unix_now();
 		let result = sqlx::query(
@@ -175,7 +175,7 @@ impl DownloadManager {
 		}
 	}
 
-	/// 入队去重后的章节列表；行归属 user_id，已 finished/在队/在跑的跳过，error 行重置重排
+	/// Enqueues the deduped chapter list; rows belong to user_id, already finished/queued/running ones are skipped, error rows are reset and requeued
 	pub async fn enqueue(self: &Arc<Self>, chapter_ids: &[i64], user_id: i64) -> Vec<i64> {
 		let format = match self.format.as_str() {
 			"folder" => "folder",
@@ -226,7 +226,7 @@ impl DownloadManager {
 					}
 				}
 				None => {
-					// 章节不存在时 FK 拒绝，直接跳过
+					// The FK rejects when the chapter does not exist; skip it
 					let result = sqlx::query(
 						"INSERT INTO download (chapter_id, user_id, status, format, created_at, updated_at)
 						 VALUES (?, ?, 'queued', ?, ?, ?)",
@@ -254,7 +254,7 @@ impl DownloadManager {
 		queued
 	}
 
-	/// 启动恢复：上次进程退出的 downloading 行一律按未完成处理，回 queued 重排
+	/// Startup recovery: rows left downloading by the last process exit count as unfinished and go back to queued
 	pub async fn recover(self: &Arc<Self>) {
 		let result = sqlx::query(
 			"UPDATE download SET status = 'queued', updated_at = ? WHERE status = 'downloading'",
@@ -293,7 +293,7 @@ impl DownloadManager {
 		self.notify.notify_one();
 	}
 
-	/// stop 只停调度：在跑章跑完，未开工的 queued 落 paused；start 时 paused 重灌
+	/// stop only stops scheduling: running chapters finish, unstarted queued rows drop to paused; start re-feeds paused rows
 	pub async fn set_running(self: &Arc<Self>, running: bool) {
 		if running {
 			self.running.store(true, Ordering::SeqCst);
@@ -353,7 +353,7 @@ impl DownloadManager {
 	}
 
 	pub async fn run(self: Arc<Self>) {
-		// notify 之外留兜底轮询，防丢唤醒
+		// Keep a fallback poll besides notify, guarding against lost wakeups
 		let mut poll = tokio::time::interval(std::time::Duration::from_secs(2));
 		loop {
 			self.dispatch().await;
@@ -393,7 +393,7 @@ impl DownloadManager {
 					break;
 				}
 			};
-			// 行可能已被 DELETE 掉；非 queued（例如暂停期间的行）不重派
+			// The row may already be DELETEd; anything not queued (e.g. rows paused meanwhile) is not redispatched
 			let Some((status, source_id)) = row else { continue };
 			if status != "queued" {
 				continue;
@@ -410,7 +410,7 @@ impl DownloadManager {
 			let manager = self.clone();
 			tokio::spawn(async move {
 				let worker = manager.clone();
-				// 里层 panic 也要放行清理，否则该源永远占住 active 位
+				// Cleanup must run even if the inner task panics, otherwise the source holds its active slot forever
 				let inner =
 					tokio::spawn(async move { worker.run_chapter(entry.chapter_id, entry.user_id, source_id).await });
 				let _ = inner.await;
@@ -432,7 +432,7 @@ impl DownloadManager {
 			self.cleanup_tmp(chapter_id).await;
 			return;
 		}
-		// 排队期间另一用户可能已下好同一章：产物共享，直接落 finished 不重复打包
+		// While queued, another user may have finished the same chapter: share the artifact, settle straight to finished without repackaging
 		if let Some((path, format)) = self.shared_artifact(chapter_id, user_id).await {
 			self.settle_finished(chapter_id, user_id, &path, &format).await;
 			return;
@@ -501,7 +501,7 @@ impl DownloadManager {
 					.fetch_optional(&self.pool)
 					.await
 					.unwrap_or(None);
-					// 行没了说明下载已被删除，静默退出
+					// A missing row means the download was deleted; exit silently
 					let Some((retries,)) = row else {
 						self.progress.lock().await.remove(&chapter_id);
 						return;
@@ -544,7 +544,7 @@ impl DownloadManager {
 		}
 	}
 
-	/// 单次章下载尝试：页攒进 tmp 目录后打包，错误由调用方计重试
+	/// A single chapter-download attempt: pages accumulate in the tmp dir and get packaged; the caller counts retries on error
 	async fn try_chapter(
 		self: &Arc<Self>,
 		chapter_id: i64,
@@ -589,7 +589,7 @@ impl DownloadManager {
 			self.emit("started", chapter_id, 0, total, user_id);
 		}
 		let tmp_dir = self.downloads_dir.join(".tmp").join(chapter_id.to_string());
-		// 重跑先清上一轮残留
+		// A rerun first clears leftovers from the previous round
 		let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
 		tokio::fs::create_dir_all(&tmp_dir)
 			.await
@@ -659,7 +659,7 @@ impl DownloadManager {
 		let rendered = move_target(&template, &vars, &format, &product_name);
 		let (dest, stored) = match rendered.is_absolute() {
 			true => (rendered.clone(), rendered.to_string_lossy().into_owned()),
-			// 相对模板并到 downloads_dir 下，行里仍存相对路径，读取侧解析约定不变
+			// A relative template joins under downloads_dir; the row still stores the relative path, so the read-side resolution convention is unchanged
 			false => (
 				self.downloads_dir.join(&rendered),
 				rendered.to_string_lossy().into_owned(),
@@ -667,7 +667,7 @@ impl DownloadManager {
 		};
 		match move_product(&self.downloads_dir.join(&rel_path), &dest).await {
 			Ok(()) => Ok((total, stored)),
-			// 移动失败（挂载掉线/权限/盘满）不拖垮下载：产物留原位，行存原相对路径
+			// A failed move (mount dropped/permissions/disk full) must not sink the download: the artifact stays in place and the row keeps the original relative path
 			Err(e) => {
 				tracing::warn!(chapter_id, "download move to {} failed, product kept in place: {e}", dest.display());
 				Ok((total, rel_path))
@@ -676,7 +676,7 @@ impl DownloadManager {
 	}
 }
 
-/// 拉一页内容写进 tmp 目录，返回产物文件名
+/// Fetches one page's content into the tmp dir, returning the artifact file name
 async fn fetch_page(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -804,7 +804,7 @@ fn ext_for_path(path: &str) -> String {
 	}
 }
 
-/// 产物落盘：cbz 先在 tmp 打好再 rename 到目标（原子替换），folder 直接铺文件树
+/// Writes the artifact to disk: cbz is packed in tmp first then renamed into place (atomic replace); folder lays out the file tree directly
 async fn package(
 	downloads_dir: &Path,
 	tmp_dir: &Path,
@@ -820,7 +820,7 @@ async fn package(
 			.map_err(|e| format!("create target dir: {e}"))?;
 	}
 	if format == "folder" {
-		// 重下时整目录重建，清掉上一版残留页
+		// A redownload rebuilds the whole directory, clearing leftover pages from the previous version
 		let _ = tokio::fs::remove_dir_all(&target).await;
 		tokio::fs::create_dir_all(&target)
 			.await
@@ -859,7 +859,7 @@ async fn package(
 	Ok(())
 }
 
-/// 下载行 path 的解析约定：绝对路径原样（已移动产物），相对路径并到 downloads_dir
+/// Resolution convention for a download row's path: absolute paths as-is (moved artifacts), relative paths joined under downloads_dir
 pub fn product_path(downloads_dir: &Path, path: &str) -> PathBuf {
 	let stored = Path::new(path);
 	if stored.is_absolute() {
@@ -869,7 +869,7 @@ pub fn product_path(downloads_dir: &Path, path: &str) -> PathBuf {
 	}
 }
 
-/// 移动模板分层：env（config.download_move_path）> setting 表 download.move_path > 空（不动）
+/// Move-template layering: env (config.download_move_path) > the download.move_path setting > empty (no move)
 async fn move_template(pool: &SqlitePool, config: &crate::config::Config) -> Option<String> {
 	let raw = match &config.download_move_path {
 		Some(v) => Some(v.clone()),
@@ -891,14 +891,14 @@ async fn move_template(pool: &SqlitePool, config: &crate::config::Config) -> Opt
 	raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
-/// 模板变量：每个值先过 sanitize 剥路径分隔符（防元数据注入目录穿越），空/未知变量落 Unknown
+/// Template variables: every value goes through sanitize to strip path separators (guarding against metadata-injected traversal); empty/unknown variables become Unknown
 struct MoveVars<'a> {
 	source: &'a str,
 	title: &'a str,
 	authors: &'a [String],
 	artists: &'a [String],
 	chapter: &'a str,
-	/// 打包产物的默认基名（不含扩展名），同时充当「模板渲染结果是完整文件名」的开关
+	/// Default base name (no extension) of the packaged artifact, doubling as the switch for "the template renders a full file name"
 	filename: &'a str,
 }
 
@@ -946,8 +946,8 @@ fn has_archive_ext(path: &str) -> bool {
 		.unwrap_or(false)
 }
 
-/// 渲染移动目标：模板含 {filename} 时结果是完整文件名（cbz 格式无已知压缩扩展名补 .cbz），
-/// 否则结果是目录、默认产物名追加其下
+/// Renders the move target: when the template contains {filename} the result is a full file name (cbz format gets
+/// .cbz appended when no known archive extension); otherwise the result is a directory and the default artifact name is appended under it
 fn move_target(template: &str, vars: &MoveVars, format: &str, product_name: &str) -> PathBuf {
 	let rendered = render_move_template(template, vars);
 	if !template.contains("{filename}") {
@@ -959,8 +959,9 @@ fn move_target(template: &str, vars: &MoveVars, format: &str, product_name: &str
 	PathBuf::from(rendered)
 }
 
-/// 产物搬家：目标是共享内容区（同人重下/多用户同章渲染同一目标，内容相同覆盖即可），
-/// rename 跨设备（挂载盘常态）回退 copy+remove
+/// Moves the artifact: the target is a shared content area (same-person redownloads / multiple users on the same
+/// chapter render the same target, and identical content may be overwritten), and rename falls back to copy+remove
+/// across devices (the norm for mounted volumes)
 async fn move_product(src: &Path, dest: &Path) -> Result<(), String> {
 	if let Some(parent) = dest.parent() {
 		tokio::fs::create_dir_all(parent)
@@ -991,7 +992,7 @@ async fn move_product(src: &Path, dest: &Path) -> Result<(), String> {
 	Ok(())
 }
 
-/// 清目标位；已缺失（挂载掉线/手动清过）视为已删
+/// Clears the target spot; already missing (mount dropped/manually cleaned) counts as deleted
 async fn remove_path(path: &Path) -> Result<(), String> {
 	let result = if path.is_dir() {
 		tokio::fs::remove_dir_all(path).await
@@ -1046,7 +1047,7 @@ fn write_cbz(
 	comic_info: &str,
 ) -> Result<(), String> {
 	use std::io::Write;
-	// 固定时间戳保证同一章重下字节可复现
+	// A fixed timestamp keeps redownloads of the same chapter byte-reproducible
 	let options = zip::write::SimpleFileOptions::default()
 		.compression_method(zip::CompressionMethod::Deflated)
 		.last_modified_time(
@@ -1101,7 +1102,7 @@ fn comic_info_xml(source_key: &str, manga: &MangaRow, chapter: &ChapterRow, page
 	if let Some(description) = &manga.description {
 		xml.push_str(&format!("<Summary>{}</Summary>", xml_escape(description)));
 	}
-	// Notes 内嵌 JSON 供回读还原绑定（借鉴 Aidoku 的 AIDOKUDATA）
+	// Notes embeds JSON so a read-back can restore the binding (borrowed from Aidoku's AIDOKUDATA)
 	let notes = serde_json::json!({
 		"sourceKey": source_key,
 		"mangaKey": manga.key,
@@ -1128,7 +1129,7 @@ fn chapter_display(chapter: &ChapterRow) -> String {
 	}
 }
 
-/// 文件名清洗：剥离路径非法字符、折叠空白、trim 首尾空格与点
+/// File-name sanitizing: strips path-illegal characters, collapses whitespace, trims leading/trailing spaces and dots
 pub fn sanitize(name: &str) -> String {
 	let mut out = String::with_capacity(name.len());
 	let mut last_whitespace = false;
@@ -1193,7 +1194,7 @@ mod tests {
 
 	#[test]
 	fn template_empty_and_unknown_variables_become_unknown() {
-		// authors/artists 空回退 Unknown；未知名也落 Unknown
+		// Empty authors/artists fall back to Unknown; unknown names also land on Unknown
 		let out = render_move_template("{author}/{artist}/{scanlator}", &vars());
 		assert_eq!(out, "Unknown/Unknown/Unknown");
 	}
@@ -1232,7 +1233,7 @@ mod tests {
 	fn target_with_filename_var_appends_cbz_only_without_archive_ext() {
 		let target = move_target("/lib/{manga}/{filename}.zip", &vars(), "cbz", "第 1 话.cbz");
 		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话.zip"));
-		// folder 格式产物是目录，永不补扩展名
+		// A folder-format artifact is a directory and never gets an extension appended
 		let target = move_target("/lib/{manga}/{filename}", &vars(), "folder", "第 1 话");
 		assert_eq!(target, PathBuf::from("/lib/Example Manga/第 1 话"));
 	}
@@ -1296,7 +1297,7 @@ mod tests {
 		let src = tmp.path().join("in/a.cbz");
 		std::fs::create_dir_all(src.parent().expect("src parent")).expect("mkdir src");
 		std::fs::write(&src, b"data").expect("write src");
-		// 目标父路径被同名文件堵住：建目录必败，产物必须留在原位
+		// The target's parent path is blocked by a same-named file: mkdir must fail and the artifact must stay in place
 		let blocker = tmp.path().join("blocker");
 		std::fs::write(&blocker, b"x").expect("write blocker");
 

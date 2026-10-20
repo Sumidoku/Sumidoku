@@ -41,7 +41,7 @@ const MODE_HINT: Record<MigrateMode, string> = {
 	migrateWithHistory: '目标入库并搬走进度，源条目撤出书库但保留阅读历史'
 };
 
-/** 批量自动匹配：按目标优先级逐源标题搜索，首个有结果的源胜出并取其第一条 */
+/** Batch auto-match: title-search target sources in priority order; the first source with results wins and its first entry is taken */
 async function autoMatch(
 	rows: Row[],
 	destinations: number[],
@@ -57,7 +57,7 @@ async function autoMatch(
 					return;
 				}
 			} catch {
-				// 单个目标源搜索失败按没命中处理，继续下一个目标源
+				// A failed search against one target source counts as no hit; continue with the next target source
 			}
 		}
 		update(row.manga.id, { state: 'notfound' });
@@ -77,7 +77,7 @@ function Reason({ item }: { item: MigrateResultItem }) {
 
 export default function MigratePage() {
 	const [params] = useSearchParams();
-	// breaking-change 引导入口：?source=<id> 预填来源，sameSource=1 允许并预选同源目标
+	// breaking-change guidance entry: ?source=<id> prefills the origin, sameSource=1 allows and preselects a same-source target
 	const prefill = Number(params.get('source')) || null;
 	const sameSource = params.get('sameSource') === '1';
 	const [step, setStep] = useState<Step>(prefill ? 'series' : 'source');
@@ -96,7 +96,7 @@ export default function MigratePage() {
 	const libraryQuery = useLibrary(undefined, { sourceId: sourceId ?? 0 });
 	const migrate = useMigrate();
 
-	// 迁移源清单按名字字母序，与已装源列表一致
+	// The migration source list sorts alphabetically by name, same as the installed-source list
 	const migrateSources = useMemo(
 		() => [...(sourcesQuery.data ?? [])].sort(compareSourceName),
 		[sourcesQuery.data]
@@ -421,7 +421,7 @@ function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () 
 	);
 }
 
-/** 单行手动重搜：对全部目标源 3 并发标题搜索，用户挑候选 */
+/** Manual rematch of a single row: title-search all target sources with 3-way concurrency, user picks the candidate */
 function RematchModal({
 	row,
 	destinations,

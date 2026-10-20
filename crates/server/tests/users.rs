@@ -1,5 +1,7 @@
-//! 用户管理与角色门禁：admin 全流程、reader 在 admin 面 403、免认证拒绝、删号连带。
-//! reader 自有用户态（库/进度/分类/隐身/下载行）不受限，由 user_isolation.rs 整体担保
+//! User management and role gating: the full admin flow, reader 403 on the admin surface,
+//! refusal when auth is disabled, and delete-account cascade.
+//! A reader's own user state (library/progress/categories/incognito/download rows) is unrestricted,
+//! guaranteed wholesale by user_isolation.rs
 
 mod common;
 
@@ -30,7 +32,7 @@ async fn as_user(app: &Router, token: &str, method: &str, path: &str, body: Opti
 	(status, value)
 }
 
-/// 设密实例 + admin token；app 内只有一个内置 admin
+/// Password-enabled instance + admin token; the app has only the built-in admin
 async fn admin_app() -> (Router, tempfile::TempDir, String) {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -46,7 +48,7 @@ async fn admin_app() -> (Router, tempfile::TempDir, String) {
 	(app, tmp, admin)
 }
 
-/// 走管理端点建 reader 账号并登录，返回 (user id, token)
+/// Creates a reader account via the admin endpoint and logs in, returning (user id, token)
 async fn create_reader(app: &Router, admin: &str) -> (i64, String) {
 	let (status, body) = as_user(
 		app,
@@ -77,7 +79,7 @@ async fn example_source_id(app: &Router, admin: &str) -> i64 {
 async fn user_crud_full_flow() {
 	let (app, _tmp, admin) = admin_app().await;
 
-	// 列表不含凭证材料
+	// the list carries no credential material
 	let (status, body) = as_user(&app, &admin, "GET", "/api/v1/users", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let users = body.as_array().expect("users");
@@ -92,7 +94,7 @@ async fn user_crud_full_flow() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body.as_array().expect("users").len(), 2);
 
-	// 改角色：bob 此前 403 的管理面，升 admin 后放行
+	// role change: the admin surface that 403'd bob before lets him through once promoted to admin
 	let (status, _) = as_user(&app, &bob, "GET", "/api/v1/users", None).await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 	let (status, body) = as_user(
@@ -118,7 +120,7 @@ async fn user_crud_full_flow() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["role"], "reader");
 
-	// 改名：旧名登录 401，新名可登录
+	// rename: the old name 401s, the new one logs in
 	let (status, body) = as_user(
 		&app,
 		&admin,
@@ -134,7 +136,7 @@ async fn user_crud_full_flow() {
 	let (status, robert) = login(&app, "robert", BOB_PW).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 重置密码：吊销该用户全部会话，旧密码死、新密码活
+	// password reset: revokes all of the user's sessions; old password dead, new password live
 	let (status, _) = as_user(
 		&app,
 		&admin,
@@ -151,7 +153,7 @@ async fn user_crud_full_flow() {
 	let (status, _) = login(&app, "robert", "new-secret").await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 删号：列表回落，登录 401
+	// delete: the list drops back, login 401s
 	let (status, _) = as_user(&app, &admin, "DELETE", &format!("/api/v1/users/{bob_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	let (status, body) = as_user(&app, &admin, "GET", "/api/v1/users", None).await;
@@ -172,7 +174,7 @@ async fn create_user_validation() {
 		let (status, _) = as_user(&app, &admin, "POST", "/api/v1/users", Some(body)).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 	}
-	// 重名：建号与改名都撞 409
+	// duplicate name: both create and rename hit 409
 	create_reader(&app, &admin).await;
 	let (status, body) = as_user(
 		&app,
@@ -216,7 +218,7 @@ async fn builtin_admin_and_missing_user_guards() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// reader 撞 admin 面一律 403（code forbidden），自有用户态与全员开放面不受影响
+/// reader on the admin surface always gets 403 (code forbidden); own user state and the all-open surface are unaffected
 #[tokio::test]
 async fn reader_forbidden_on_admin_surface() {
 	let (app, _tmp, admin) = admin_app().await;
@@ -255,7 +257,7 @@ async fn reader_forbidden_on_admin_surface() {
 		assert_eq!(status, StatusCode::FORBIDDEN, "{method} {path}");
 		assert_eq!(resp["error"]["code"], "forbidden", "{method} {path}");
 	}
-	// 恢复备份的 settings/sourceSettings 段是全局状态：reader 带了就 403，纯用户态段放行
+	// the settings/sourceSettings sections of a restore are global state: reader gets 403 for including them, pure user-state sections pass
 	let (status, _) = as_user(
 		&app,
 		&bob,
@@ -274,11 +276,11 @@ async fn reader_forbidden_on_admin_surface() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	// 不带 sections 等价全量（含 settings），同样拒
+	// omitting sections means everything (including settings), likewise refused
 	let (status, _) = as_user(&app, &bob, "POST", "/api/v1/backup", Some(json!({"version": 1}))).await;
 	assert_eq!(status, StatusCode::FORBIDDEN);
 
-	// 全员开放面：导出个人备份、手动触发更新、用户态键、自有库与分类
+	// the all-open surface: export own backup, trigger update manually, user-state keys, own library and categories
 	let (status, _) = as_user(&app, &bob, "GET", "/api/v1/backup", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(&app, &bob, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
@@ -289,7 +291,7 @@ async fn reader_forbidden_on_admin_surface() {
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(&app, &bob, "POST", "/api/v1/categories", Some(json!({"name": "mine"}))).await;
 	assert_eq!(status, StatusCode::OK);
-	// 读面（浏览/搜索）reader 照常
+	// the read surface (browse/search) works as usual for reader
 	let (status, _) = as_user(&app, &bob, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(
@@ -303,7 +305,7 @@ async fn reader_forbidden_on_admin_surface() {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 免认证（未设密码）部署：用户管理一律拒绝，其余面照旧开放
+/// Auth-disabled (no password set) deployment: user management is always refused, other surfaces stay open
 #[tokio::test]
 async fn auth_disabled_refuses_user_endpoints() {
 	let app = test_app().await;
@@ -323,14 +325,14 @@ async fn auth_disabled_refuses_user_endpoints() {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 删号连带：用户态行（库/进度/分类/下载/token/用户态设置键）全清，admin 的行原样在
+/// Delete cascade: the user's state rows (library/progress/categories/downloads/tokens/user-state setting keys) are all wiped; admin's rows stay as-is
 #[tokio::test]
 async fn delete_user_cascades_own_state() {
 	let (app, tmp, admin) = admin_app().await;
 	let source_id = example_source_id(&app, &admin).await;
 	let (bob_id, bob) = create_reader(&app, &admin).await;
 
-	// admin 注册漫画，bob 攒用户态：分类 + 入库 + 进度 + 隐身 + 下载行
+	// admin registers the manga, bob accumulates user state: category + shelve + progress + incognito + download row
 	let (status, body) = as_user(
 		&app,
 		&admin,
@@ -387,7 +389,7 @@ async fn delete_user_cascades_own_state() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	// admin 也入同一本，对账「只清 bob 的」
+	// admin shelves the same one too, to reconcile that "only bob's rows are wiped"
 	let (status, _) = as_user(&app, &admin, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 
@@ -416,7 +418,7 @@ async fn delete_user_cascades_own_state() {
 		.await
 		.expect("count namespaced keys");
 	assert_eq!(namespaced, 0);
-	// admin 的用户态原样在
+	// admin's user state stays as-is
 	let admin_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga_user WHERE user_id = 1")
 		.fetch_one(&pool)
 		.await
@@ -424,7 +426,7 @@ async fn delete_user_cascades_own_state() {
 	assert_eq!(admin_rows, 1);
 	pool.close().await;
 
-	// bob 的 token 随删号 401；admin 不受影响
+	// bob's token 401s after the deletion; admin is unaffected
 	let (status, _) = as_user(&app, &bob, "GET", "/api/v1/library", None).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let (status, body) = as_user(&app, &admin, "GET", "/api/v1/library", None).await;
@@ -432,7 +434,7 @@ async fn delete_user_cascades_own_state() {
 	assert_eq!(body["entries"].as_array().expect("entries").len(), 1);
 }
 
-/// /auth/status 顺带回当前凭证身份：SPA 刷新后靠它恢复账号显示
+/// /auth/status also returns the current credential's identity: the SPA uses it to restore the account display after a refresh
 #[tokio::test]
 async fn auth_status_reports_whoami() {
 	let (app, _tmp, admin) = admin_app().await;
@@ -446,7 +448,7 @@ async fn auth_status_reports_whoami() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["user"]["username"], "bob");
 	assert_eq!(body["user"]["role"], "reader");
-	// 无凭证与坏凭证：user 为 null，端点本身永远公开
+	// no credentials and bad credentials: user is null; the endpoint itself is always public
 	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["user"], Value::Null);
@@ -458,15 +460,16 @@ async fn auth_status_reports_whoami() {
 	assert_eq!(body["user"], Value::Null);
 }
 
-/// 决策点 11：reader 导出只拿 self-data——全局 settings 与整个 sourceSettings
-/// （源登录凭据）不进文档；本人库/进度段与本人命名空间键翻译回的裸键在；admin 全量
+/// Decision point 11: a reader export contains only self-data — global settings and all of
+/// sourceSettings (source login credentials) stay out of the document; own library/progress sections
+/// and the bare keys translated back from the own namespace are present; admin gets everything
 #[tokio::test]
 async fn backup_export_scopes_self_data_for_reader() {
 	let (app, _tmp, admin) = admin_app().await;
 	let source_id = example_source_id(&app, &admin).await;
 	let (_bob_id, bob) = create_reader(&app, &admin).await;
 
-	// 全局状态各来一份：配置面键 + 源凭据（走真实写入路径）
+	// one of each piece of global state: a config key + source credentials (via the real write path)
 	let (status, _) = as_user(&app, &admin, "PUT", "/api/v1/settings", Some(json!({"backup.enabled": true}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(
@@ -479,7 +482,7 @@ async fn backup_export_scopes_self_data_for_reader() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// bob 攒自己的用户态：入库 + 进度 + 隐身
+	// bob accumulates his own user state: shelve + progress + incognito
 	let (status, body) = as_user(
 		&app,
 		&admin,
@@ -520,7 +523,7 @@ async fn backup_export_scopes_self_data_for_reader() {
 	let (status, doc) = as_user(&app, &bob, "GET", "/api/v1/backup", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let settings = doc["settings"].as_object().expect("settings object");
-	// 只剩本人命名空间键翻译回的裸键：全局键（backup.enabled 等）与他人键一律不在
+	// only the bare keys translated back from his own namespace remain: global keys (backup.enabled etc.) and others' keys are all absent
 	assert_eq!(settings.len(), 1, "reader export settings: {settings:?}");
 	assert_eq!(settings["incognito.enabled"], true);
 	let source_settings = doc["sourceSettings"].as_object().expect("sourceSettings object");
@@ -528,7 +531,7 @@ async fn backup_export_scopes_self_data_for_reader() {
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["progress"].as_array().expect("progress").len(), 1);
 
-	// admin 导出口径不变：全局键与源凭据都在
+	// admin's export is unchanged: global keys and source credentials are all present
 	let (status, doc) = as_user(&app, &admin, "GET", "/api/v1/backup", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(doc["settings"]["backup.enabled"], true);

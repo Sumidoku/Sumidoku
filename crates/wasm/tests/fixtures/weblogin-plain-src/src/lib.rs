@@ -1,7 +1,8 @@
 #![no_std]
-//! 不导出 handle_web_login 的对照源：声明同款 web 登录设置，
-//! 服务端对这种源只存 cookie 与 marker 不调导出（issue #69 的验收分支）。
-//! 断言方在 crates/server/tests/source_login.rs。
+//! Control source that does not export handle_web_login: it declares the same web-login
+//! setting, and the server only stores cookies and the marker for such sources without
+//! calling the export (the acceptance branch of issue #69).
+//! The asserting side is crates/server/tests/source_login.rs.
 use aidoku::{
 	Chapter, FilterValue, LoginMethod, LoginSetting, Manga, MangaPageResult, Page, Result, Setting,
 	Source, TextSetting,

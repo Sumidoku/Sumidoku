@@ -1,4 +1,4 @@
-/* 桌面 ≥768px：固定左侧栏 232px；移动 <768px：顶部 56px 栏 + 底部 56px tab bar */
+/* Desktop ≥768px: fixed 232px left sidebar; mobile <768px: 56px top bar + 56px bottom tab bar */
 
 .app__sidebar {
 	display: none;

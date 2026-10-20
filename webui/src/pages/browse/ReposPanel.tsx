@@ -87,7 +87,7 @@ function EntryAction({ entry }: { entry: RepoSourceEntry }) {
 				pushToast(`已安装 ${entry.name}`, 'info');
 			}
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -125,7 +125,7 @@ export default function ReposPanel() {
 	);
 	const [langOpen, setLangOpen] = useState(false);
 
-	// 搜索防抖 500ms，与源内搜索一致
+	// 500ms search debounce, same as in-source search
 	const [submitted, setSubmitted] = useState('');
 	useEffect(() => {
 		const t = setTimeout(() => setSubmitted(query.trim()), 500);
@@ -141,13 +141,13 @@ export default function ReposPanel() {
 		{
 			langs,
 			query: submitted || undefined,
-			// 三档全选等价于不过滤；不选任何档时传空串，服务端匹配空集
+			// selecting all three levels equals no filtering; selecting none sends an empty string and the server matches the empty set
 			contentRating:
 				ratings.length === CONTENT_RATING_LEVELS.length ? undefined : ratings.join(',')
 		},
 		hasRepos
 	);
-	// 语言候选从未过滤的全量派生，随过滤结果收缩会把选项自己筛没
+	// Language candidates derive from the unfiltered full list; deriving from filtered results would filter the options themselves away
 	const allEntries = useRepoSources({}, hasRepos);
 	const langOptions = useMemo(() => {
 		const set = new Set<string>();
@@ -157,7 +157,7 @@ export default function ReposPanel() {
 				if (code && !isMultiLanguage(code)) set.add(code);
 			}
 		}
-		// 与 Aidoku 一致：多语言哨兵恒在列表首位
+		// Same as Aidoku: the multi-language sentinel always sits at the top of the list
 		return [MULTI_LANGUAGE, ...[...set].sort(compareLanguageLabel)];
 	}, [allEntries.data]);
 
@@ -182,7 +182,7 @@ export default function ReposPanel() {
 			pushToast(`已添加仓库 ${repoTitle(repo)}`, 'info');
 			setUrl('');
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -191,7 +191,7 @@ export default function ReposPanel() {
 			await refreshRepo.mutateAsync(repo.id);
 			pushToast(`已刷新 ${repoTitle(repo)}`, 'info');
 		} catch {
-			// 失败时 repo 行的 fetchError 已落库，列表重拉后自带 stale 标
+			// On failure the repo row's fetchError is already stored; after the list refetches it carries the stale mark
 		}
 	}
 
@@ -202,7 +202,7 @@ export default function ReposPanel() {
 			pushToast(`已删除仓库 ${repoTitle(pendingDelete)}`, 'info');
 			setPendingDelete(null);
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 

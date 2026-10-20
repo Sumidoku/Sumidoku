@@ -12,7 +12,7 @@ export interface SegmentedControlProps<T extends string | number> {
 	onChange: (v: T) => void;
 }
 
-/** pill 分段控件，滑块位置按选中项实际渲染宽高位移 */
+/** Pill segmented control; the thumb is positioned by the selected item's actual rendered width/offset */
 export function SegmentedControl<T extends string | number>({
 	options,
 	value,

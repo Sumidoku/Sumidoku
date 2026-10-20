@@ -1,48 +1,48 @@
-// 与 sumidoku-server REST 契约对应的类型。
-// Aidoku 结构体字段为 snake_case，Sumidoku 自有字段为 camelCase。
+// Types matching the sumidoku-server REST contract.
+// Aidoku struct fields are snake_case; Sumidoku's own fields are camelCase.
 
 export interface Source {
 	id: number;
 	key: string;
 	name: string;
-	/** 源种类；local/opds 是内置源（无 wasm 实例，filters/listings/home/深链一律 404） */
+	/** Source kind; local/opds are built-in sources (no wasm instance; filters/listings/home/deep-link all 404) */
 	kind: 'aidoku' | 'local' | 'opds';
-	/** 源包版本号，服务端是 i64 */
+	/** Source package version; the server side is i64 */
 	version: number;
 	languages: string[];
-	/** Aidoku content rating，>1 视为 NSFW */
+	/** Aidoku content rating; >1 counts as NSFW */
 	contentRating: number;
 	baseUrl: string | null;
 	enabled: boolean;
 	installedAt: number;
 	updatedAt: number;
-	/** 各源仓库缓存里的更新版本，无仓库或无更新为 null */
+	/** Update version from each repo's cache; null when there is no repo or no update */
 	updateVersion: number | null;
-	/** Aidoku 语义的弃用标识：仓库安装的源已不在任何仓库 index 里，不会再收到更新 */
+	/** Deprecation flag in Aidoku's sense: a repo-installed source no longer appears in any repo index and will not receive updates */
 	missingFromRepos: boolean;
-	/** 源是否导出 get_home（注册时 stamped）；null = 旧行未知，入口保持显示 */
+	/** Whether the source exports get_home (stamped at registration); null = unknown for old rows, entry stays visible */
 	hasHome: boolean | null;
-	/** manifest config.breakingChangeVersion，未声明为 0；跨版本更新会触发 key 迁移 */
+	/** manifest config.breakingChangeVersion, 0 when undeclared; cross-version updates trigger key migration */
 	breakingChangeVersion: number;
-	/** manifest config 节原文（Aidoku SourceInfo.Configuration），未声明为 null */
+	/** Raw manifest config section (Aidoku SourceInfo.Configuration), null when undeclared */
 	config: SourceConfig | null;
-	/** 在置顶列表（browse.pinned_sources）里 */
+	/** In the pinned list (browse.pinned_sources) */
 	pinned: boolean;
-	/** 置顶列表里的下标，即迁移时的默认优先级；未置顶为 null */
+	/** Index in the pinned list, i.e. the default priority on migration; null when not pinned */
 	pinOrder: number | null;
 }
 
-/** Aidoku SourceInfo.Configuration；DTO 原样透传，这里只列消费到的键 */
+/** Aidoku SourceInfo.Configuration; the DTO passes through verbatim, only the consumed keys are listed here */
 export interface SourceConfig {
-	/** 搜索态下隐藏过滤器，且搜索请求不再携带过滤器值（Aidoku Runner 同款语义） */
+	/** Hide filters while searching, and search requests no longer carry filter values (Aidoku Runner semantics) */
 	hidesFiltersWhileSearching?: boolean;
-	/** tag 可点：声明优先，点击发 Select 过滤器 id "genre"、值为原始 tag（Aidoku matchingGenreFilter） */
+	/** tag clickable: declaration wins; clicking sends a Select filter with id "genre" and the raw tag as value (Aidoku matchingGenreFilter) */
 	supportsTagSearch?: boolean;
-	/** artist 可点：声明优先，未声明时回落到过滤器列表推导（存在 text 过滤器 id "artist"） */
+	/** artist clickable: declaration wins; when undeclared, fall back to inferring from the filter list (a text filter with id "artist" exists) */
 	supportsArtistSearch?: boolean;
-	/** author 可点：声明优先，未声明时回落到过滤器列表推导（存在 text 过滤器 id "author"） */
+	/** author clickable: declaration wins; when undeclared, fall back to inferring from the filter list (a text filter with id "author" exists) */
 	supportsAuthorSearch?: boolean;
-	/** 该源并发请求上限，服务端换成 per-source 调用准入帽 */
+	/** Concurrent request cap for this source; the server turns it into a per-source admission cap on calls */
 	maximumParallelRequests?: number;
 }
 
@@ -53,7 +53,7 @@ export interface SourceRepo {
 	sourceCount: number;
 	addedAt: number;
 	fetchedAt: number | null;
-	/** 上次 refresh 失败的归一文案；界面据此标 stale */
+	/** Normalized message of the last refresh failure; the UI marks the repo stale from it */
 	fetchError: string | null;
 }
 
@@ -67,7 +67,7 @@ export interface RepoSourceEntry {
 	baseUrl: string | null;
 	repoId: number;
 	repoName: string | null;
-	/** 已装则有内部 id，供单源更新用 */
+	/** Present when installed, for single-source updates */
 	installedId: number | null;
 	installedVersion: number | null;
 	updateVersion: number | null;
@@ -76,13 +76,13 @@ export interface RepoSourceEntry {
 export interface UpdateAllOutcome {
 	updated: string[];
 	failed: { key: string; reason: string }[];
-	/** 跨 breaking 但源无自迁移能力：需要走迁移页（同源）的源 key */
+	/** Crosses breaking but the source cannot self-migrate: keys of sources that must go through the (same-source) migration page */
 	migrationRequired: string[];
-	/** 原地重键时被跳过的行（映射失败/撞键），按源归组 */
+	/** Rows skipped during in-place rekeying (mapping failed/key collision), grouped by source */
 	migrationWarnings: { key: string; message: string }[];
 }
 
-/** 单源更新响应：源 DTO 之外带本次跨 breaking 的 key 迁移结果 */
+/** Single-source update response: the source DTO plus the key-migration outcome of this breaking-crossing update */
 export interface SourceUpdate extends Source {
 	migrationRequired: boolean;
 	migrationWarnings: string[];
@@ -102,9 +102,9 @@ export interface Manga {
 	viewer: string;
 	update_strategy: string;
 	next_update_time: number | null;
-	/** 搜索/列表端点附加；主页组件内嵌的源侧 Manga 没有这个字段 */
+	/** Attached by search/list endpoints; source-side Manga embedded in home components lacks it */
 	sourceId?: number;
-	/** 已入库才有 */
+	/** Present once in the library */
 	id?: number;
 }
 
@@ -141,7 +141,7 @@ export interface Chapter {
 	isRead: boolean;
 	isBookmarked: boolean;
 	lastReadAt: number | null;
-	/** history/recent 内嵌的章节不带下载态 */
+	/** Chapters embedded in history/recent carry no download state */
 	isDownloaded?: boolean;
 }
 
@@ -169,7 +169,7 @@ export interface LibraryPage {
 	hasNextPage: boolean;
 }
 
-/** GET /library/source-counts：书库内每个源的条目数（含已停用源的条目） */
+/** GET /library/source-counts: entry count per source in the library (including entries of disabled sources) */
 export interface LibrarySourceCount {
 	sourceId: number;
 	count: number;
@@ -194,21 +194,21 @@ export interface Category {
 	sortOrder: number;
 	isDefault: boolean;
 	mangaCount: number;
-	/** 三态：0 跟随全局 / 1 包含 / 2 排除 */
+	/** Tri-state: 0 follow global / 1 include / 2 exclude */
 	includeInUpdate: number;
 	includeInDownload: number;
 }
 
-// ---- 书库列表筛选（GET /library 的 query）----
+// ---- Library list filtering (query of GET /library) ----
 
 export type LibrarySort = 'added' | 'title' | 'lastRead' | 'unread';
 
 export type LibraryFilter = 'unread' | 'downloaded' | 'bookmarked';
 
-/** 三态多选：键为选项 id（字符串形式），1 包含 / -1 排除，未选不入列 */
+/** Tri-state multi-select: keyed by option id (string form), 1 include / -1 exclude, unselected keys are absent */
 export type TriStateSelection = Record<string, 1 | -1>;
 
-// ---- 下载与更新 ----
+// ---- Downloads and updates ----
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'finished' | 'error';
 
@@ -222,7 +222,7 @@ export interface DownloadItem {
 	path: string | null;
 	error: string | null;
 	retries: number;
-	/** 只有下载中才有值，其余状态为 null */
+	/** Only has a value while downloading; null in every other state */
 	downloaded: number | null;
 	total: number | null;
 	createdAt: number;
@@ -231,11 +231,11 @@ export interface DownloadItem {
 
 export type DownloadEventKind = 'queued' | 'started' | 'progress' | 'paused' | 'finished' | 'error';
 
-/** /downloads/ws 的帧：连接先给一帧 snapshot，之后逐条推事件 */
+/** /downloads/ws frames: the connection opens with one snapshot frame, then pushes events one by one */
 export type DownloadWsFrame =
 	| { type: 'snapshot'; running: boolean; downloads: DownloadItem[] }
 	| { type: DownloadEventKind; chapterId: number; downloaded: number; total: number }
-	// 队列开关变化：chapterId/downloaded/total 固定为 0，只有 running 有效
+	// queue on/off change: chapterId/downloaded/total are fixed at 0, only running is meaningful
 	| { type: 'running'; chapterId: 0; downloaded: 0; total: 0; running: boolean };
 
 export interface UpdateSummary {
@@ -258,7 +258,7 @@ export interface UpdateJob {
 	addedChapters: number;
 }
 
-/** /update/ws 的帧：连接先给一帧 summary 快照，之后推 job 事件 */
+/** /update/ws frames: the connection opens with one summary snapshot, then pushes job events */
 export type UpdateWsFrame =
 	| ({ type: 'summary' } & UpdateSummary)
 	| ({ type: 'job' } & UpdateJob);
@@ -266,7 +266,7 @@ export type UpdateWsFrame =
 export interface UpdateRecentEntry {
 	chapter: Chapter;
 	manga: MangaDetail;
-	/** 契约写作 fetched_at，Sumidoku 自有字段惯例是 camelCase，两种都容忍 */
+	/** Written fetched_at in the contract; Sumidoku's own-field convention is camelCase — tolerate both */
 	fetchedAt?: number | null;
 	fetched_at?: number | null;
 }
@@ -276,7 +276,7 @@ export interface UpdateRecentPage {
 	hasNextPage: boolean;
 }
 
-// ---- 源浏览 ----
+// ---- Source browsing ----
 
 export interface Listing {
 	id: string;
@@ -284,8 +284,8 @@ export interface Listing {
 	kind: string;
 }
 
-/** POST /sources/{id}/deep-link 的解析结果：源侧 key 原样回传，
- * mangaId/chapterId 是服务端按 (source, key) 登记/命中后的内部 id */
+/** Result of POST /sources/{id}/deep-link: source-side keys are echoed back verbatim,
+ * while mangaId/chapterId are the server's internal ids after registering/matching by (source, key) */
 export interface DeepLinkResult {
 	mangaKey: string | null;
 	chapterKey: string | null;
@@ -298,7 +298,7 @@ export interface DeepLinkResponse {
 	result: DeepLinkResult | null;
 }
 
-// Filter 的 wire 形态是 aidoku 定制扁平结构：type 标签 + 变体字段平铺
+// A Filter's wire shape is aidoku's custom flat structure: a type tag plus the variant fields laid flat
 export interface Filter {
 	id: string;
 	title: string | null;
@@ -329,7 +329,7 @@ export type FilterValue =
 	| { MultiSelect: { id: string; included: string[]; excluded: string[] } }
 	| { Range: { id: string; from: number | null; to: number | null } };
 
-// ---- 源主页（GET /sources/{id}/home，aidoku HomeLayout 原样透传）----
+// ---- Source home (GET /sources/{id}/home, aidoku HomeLayout passed through verbatim) ----
 
 export interface HomeLayout {
 	components: HomeComponent[];
@@ -384,7 +384,7 @@ export interface MangaWithChapter {
 	chapter: SourceChapter;
 }
 
-/** 主页组件/更新流内嵌的源侧章节（aidoku Chapter 原样序列化），不带服务端附加字段 */
+/** Source-side chapters embedded in home components/update streams (aidoku Chapter serialized verbatim), without server-attached fields */
 export interface SourceChapter {
 	key: string;
 	title: string | null;
@@ -403,15 +403,15 @@ export interface HomeFilterItem {
 	values: FilterValue[] | null;
 }
 
-/** 流式主页的部分事件：layout 全量替换；component 按下标替换（index == 当前长度即追加） */
+/** Partial events of the streaming home: layout replaces everything; component replaces by index (index == current length means append) */
 export type HomeStreamEvent =
 	| { type: 'layout'; layout: HomeLayout }
 	| { type: 'component'; index: number; component: HomeComponent };
 
-/** 流式搜索的部分事件：到达一条追加一条 */
+/** Partial events of a streaming search: appended one by one as they arrive */
 export type SearchStreamEvent = { type: 'manga'; manga: Manga };
 
-/** 聚合搜索里单个源的结果：error 非空即该源失败，entries 为空 */
+/** One source's result in an aggregate search: a non-empty error means that source failed and entries is empty */
 export interface SourceSearchResult {
 	sourceId: number;
 	entries: Manga[];
@@ -423,20 +423,20 @@ export interface GlobalSearchResponse {
 	sources: SourceSearchResult[];
 }
 
-/** 聚合搜索的流式事件：每源完成/失败各一个。失败不叫 error 是有意的——
- * apiStream 把 type:'error' 当终态流错误整请求 reject，会毁掉单源失败隔离 */
+/** Stream events of an aggregate search: one per source completion/failure. The failure type is deliberately not called error —
+ * apiStream treats type:'error' as a terminal stream error and rejects the whole request, which would destroy per-source failure isolation */
 export type GlobalSearchStreamEvent =
 	| { type: 'source'; source: SourceSearchResult }
 	| { type: 'sourceError'; sourceId: number; error: { code: string; message: string } };
 
-/** 流式 manga 更新的部分事件：当时的完整源侧 Manga 快照（对齐上游
- * partialMangaPublisher），详情/章节随拉取进度逐渐填充，终态事件整体覆盖 */
+/** Partial event of a streaming manga update: the complete source-side Manga snapshot at that moment (mirroring upstream's
+ * partialMangaPublisher); details/chapters fill in as the fetch progresses, and the terminal event overwrites everything */
 export type MangaUpdateStreamEvent = {
 	type: 'manga';
 	manga: Manga & { chapters?: SourceChapter[] };
 };
 
-// ---- 源设置 ----
+// ---- Source settings ----
 
 export type PageIcon =
 	| { type: 'system'; name: string; color: string; inset?: number | null }
@@ -486,7 +486,7 @@ export type SettingValue =
 				default?: string | null;
 			};
 	  }
-	// aidoku 的 unit variant 序列化成裸字符串，不带对象外壳
+	// aidoku's unit variant serializes to a bare string without an object wrapper
 	| 'Button'
 	| { Button: Record<string, never> }
 	| { Link: { url: string; external?: boolean | null } }
@@ -532,7 +532,7 @@ export interface SourceSettings {
 	values: Record<string, unknown>;
 }
 
-// ---- 本波新端点 ----
+// ---- Endpoints added in this wave ----
 
 export interface ScanOutcome {
 	installed: string[];
@@ -549,7 +549,7 @@ export interface PatchMangaBody {
 
 export interface PatchCategoryBody {
 	name?: string;
-	/** 三态：0 跟随全局 / 1 包含 / 2 排除 */
+	/** Tri-state: 0 follow global / 1 include / 2 exclude */
 	includeInUpdate?: number;
 	includeInDownload?: number;
 }
@@ -581,9 +581,9 @@ export interface BackupRestoreResult {
 
 export interface BackupFileEntry {
 	name: string;
-	/** 字节数 */
+	/** Byte count */
 	size: number;
-	/** 文件名里的 UTC 时间戳（秒） */
+	/** UTC timestamp (seconds) embedded in the file name */
 	createdAt: number;
 }
 
@@ -607,7 +607,7 @@ export interface AidokuImportResult {
 
 export interface SuwayomiImportSkipped {
 	section: 'library' | 'progress' | string;
-	/** Mihon 源 id 是 int64 哈希可超 2^53，服务端按字符串下发 */
+	/** Mihon source ids are int64 hashes that can exceed 2^53, so the server sends them as strings */
 	mihonSourceId: string;
 	mihonSourceName: string;
 	mangaKey: string;
@@ -618,7 +618,7 @@ export interface SuwayomiSourceGroup {
 	mihonSourceId: string;
 	mihonSourceName: string;
 	mangaCount: number;
-	/** auto=唯一同名自动匹配；mapped=用户显式映射；unmatched=不猜，整组跳过 */
+	/** auto = matched automatically by unique same name; mapped = explicitly mapped by the user; unmatched = no guessing, the whole group is skipped */
 	match: 'auto' | 'mapped' | 'unmatched';
 	aidokuSourceKey?: string;
 	aidokuSourceName?: string;
@@ -637,20 +637,20 @@ export interface SuwayomiImportResult {
 }
 
 export interface BackupListResponse {
-	/** 服务端生效中的备份目录（env > setting > 默认） */
+	/** The backup directory currently in effect on the server (env > setting > default) */
 	dir: string;
 	files: BackupFileEntry[];
 }
 
-// ---- 跨源迁移 ----
+// ---- Cross-source migration ----
 
 export interface MigrateSource extends Source {
-	/** 该源在库的漫画数 */
+	/** Number of manga from this source in the library */
 	mangaCount: number;
 }
 
 export interface MigrateLookupResult {
-	/** 实际生效的搜索词（显式 query 或源条目标题） */
+	/** The search term actually used (explicit query or the source entry's title) */
 	query: string;
 	candidates: Manga[];
 }
@@ -661,7 +661,7 @@ export interface MigrateEntryBody {
 	fromMangaId: number;
 	toSourceId: number;
 	toMangaKey: string;
-	/** 客户端手里的候选条目，服务端以它为 get_manga_update 入参 */
+	/** The candidate entry held by the client; the server passes it as the get_manga_update argument */
 	toManga?: Manga;
 }
 
@@ -683,7 +683,7 @@ export interface MigrateRequest {
 	entries: MigrateEntryBody[];
 }
 
-// ---- 用户与认证 ----
+// ---- Users and auth ----
 
 export interface AccountUser {
 	id: number;
@@ -691,13 +691,13 @@ export interface AccountUser {
 	role: 'admin' | 'reader';
 }
 
-/** GET /auth/status：enabled 为 false 时 user 恒 null（免认证部署一切按内置 admin） */
+/** GET /auth/status: when enabled is false, user is always null (an auth-less deployment treats everything as the built-in admin) */
 export interface AuthStatus {
 	enabled: boolean;
 	user: AccountUser | null;
 }
 
-/** 用户管理列表项；凭证材料永不出服务端，这里没有密码字段 */
+/** User-management list item; credential material never leaves the server, so there is no password field here */
 export interface ManagedUser {
 	id: number;
 	username: string;

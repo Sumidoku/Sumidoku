@@ -3,8 +3,9 @@ use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
 use url::Url;
 
-/// CF 挑战指纹：403/503 + CF 系响应头。cf-ray/server 挂在 CF 每个响应上，
-/// 不区分挑战与硬拦截——误升级的成本只是 trawl 原样回传一次 403
+/// CF challenge fingerprint: 403/503 + CF-family response headers. cf-ray/server ride on
+/// every CF response and do not distinguish a challenge from a hard block — the cost of a
+/// wrong escalation is just trawl relaying the 403 once more
 pub fn is_cf_challenge(status: StatusCode, headers: &HeaderMap) -> bool {
 	if status != StatusCode::FORBIDDEN && status != StatusCode::SERVICE_UNAVAILABLE {
 		return false;
@@ -17,7 +18,7 @@ pub fn is_cf_challenge(status: StatusCode, headers: &HeaderMap) -> bool {
 			.is_some_and(|s| s.to_ascii_lowercase().starts_with("cloudflare"))
 }
 
-/// defaults.set 的持久化回调。在 actor 线程同步调用，实现里不得阻塞。
+/// Persistence callback for defaults.set. Invoked synchronously on the actor thread; implementations must not block.
 pub trait DefaultsSink: Send + Sync {
 	fn set(&self, source_key: &str, key: &str, value: &DefaultValue);
 }
@@ -28,8 +29,8 @@ impl DefaultsSink for NoopDefaultsSink {
 	fn set(&self, _source_key: &str, _key: &str, _value: &DefaultValue) {}
 }
 
-/// cookie jar 变更的持久化回调。在 actor 线程同步调用，实现里不得阻塞。
-/// value 为 None 表示该 cookie 被删除（过期或 max-age<=0）。
+/// Persistence callback for cookie-jar changes. Invoked synchronously on the actor thread;
+/// implementations must not block. A None value means the cookie was deleted (expired or max-age<=0).
 pub trait CookieSink: Send + Sync {
 	fn set(&self, domain: &str, name: &str, value: Option<&str>);
 }
@@ -61,28 +62,32 @@ pub enum NetRoute {
 pub trait NetPolicy: Send + Sync {
 	fn route_for(&self, url: &Url) -> NetRoute;
 	fn user_agent(&self) -> Option<String>;
-	/// 该 url 的请求是否补 BROWSER_HEADERS。默认开：被动盾只核对套件在不在；
-	/// 关掉则对 API/XHR 语义诚实——sec-fetch-* 的 navigate 语义是套件的失真部分
+	/// Whether requests to this url get BROWSER_HEADERS added. Default on: passive shields
+	/// only check the suite is present; turning it off is semantically honest for API/XHR —
+	/// the navigate semantics of sec-fetch-* are the distorted part of the suite
 	fn browser_headers(&self, url: &Url) -> bool {
 		let _ = url;
 		true
 	}
-	/// TRAWL 代理的 MITM CA（PEM），不走代理则返回 None
+	/// MITM CA (PEM) of the TRAWL proxy; None when not going through the proxy
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
 		None
 	}
-	/// 直连遭遇 CF 挑战时改走的路由（通常是 trawl 代理）；
-	/// None 表示不升级——未配 trawl，或该 host 被显式钉死直连
+	/// Route to switch to when a direct connection hits a CF challenge (usually the trawl
+	/// proxy); None means no escalation — trawl is not configured, or this host is
+	/// explicitly pinned to direct
 	fn trawl_escalation(&self, url: &Url) -> Option<NetRoute> {
 		let _ = url;
 		None
 	}
 }
 
-/// 直连请求补的浏览器头套件：被动 Cloudflare 校验的是「协议(h2) + 头套件」与 UA
-/// 的一致性，而非 TLS 指纹——光有 Chrome UA 没有这套头，照样被部分站点 403。
-/// 取值与默认 User-Agent（Chrome 126 / macOS）配套；UA 换掉时这里要跟着换。
-/// 源在请求上自设同名头时一律让位（先判后补，见 net 宿主与 server 的默认头路径）。
+/// Browser header suite added to direct requests: passive Cloudflare validates the
+/// consistency of "protocol (h2) + header suite" with the UA, not the TLS fingerprint —
+/// a Chrome UA alone without these headers still gets 403 from some sites. The values
+/// pair with the default User-Agent (Chrome 126 / macOS); when the UA changes, these must
+/// change with it. A same-named header set by the source on the request always wins
+/// (check first, add after — see the net host and the server's default-header path).
 pub const BROWSER_HEADERS: &[(&str, &str)] = &[
 	("sec-ch-ua", "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\""),
 	("sec-ch-ua-mobile", "?0"),
@@ -95,9 +100,11 @@ pub const BROWSER_HEADERS: &[(&str, &str)] = &[
 	("upgrade-insecure-requests", "1"),
 ];
 
-/// 源语言（ISO 639 主标签）→ 宿主替 URLSession 补的 Accept-Language 默认值。
-/// Aidoku 由 URLSession 按设备 locale 隐式带上该头；缺它时部分源站 WAF 直接 403
-/// （如 zh.bilimanga 的图床）。server 直拉封面/页图与 wasm net 宿主共用这一份映射。
+/// Source language (ISO 639 primary tag) → the default Accept-Language the host adds on
+/// behalf of URLSession. Aidoku has URLSession implicitly attach this header per device
+/// locale; without it, some source sites' WAFs return 403 outright (e.g. zh.bilimanga's
+/// image host). The server's direct cover/page fetches and the wasm net host share this
+/// one mapping.
 pub const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US,en;q=0.9";
 
 pub fn default_accept_language(languages: &[String]) -> String {
@@ -176,19 +183,19 @@ mod tests {
 		assert_eq!(default_accept_language(&["zh".into()]), "zh-CN,zh;q=0.9");
 		assert_eq!(default_accept_language(&["zh-Hant".into()]), "zh-CN,zh;q=0.9");
 		assert_eq!(default_accept_language(&["ja".into()]), "ja-JP,ja;q=0.9");
-		// 未知或缺失语言回落到通用默认
+		// Unknown or missing languages fall back to the generic default
 		assert_eq!(default_accept_language(&[]), DEFAULT_ACCEPT_LANGUAGE);
 		assert_eq!(default_accept_language(&["xx".into()]), DEFAULT_ACCEPT_LANGUAGE);
 	}
 
 	#[test]
 	fn cf_challenge_rejected() {
-		// 无 CF 头的普通 403 是源站自己的拒绝，不该升级
+		// A plain 403 without CF headers is the source site's own rejection and must not escalate
 		assert!(!is_cf_challenge(
 			StatusCode::FORBIDDEN,
 			&headers(&[("server", "nginx")])
 		));
-		// cf-ray 挂在 CF 每个响应上，状态不是 403/503 不算挑战
+		// cf-ray rides on every CF response; a non-403/503 status is not a challenge
 		assert!(!is_cf_challenge(
 			StatusCode::OK,
 			&headers(&[("cf-ray", "9a1b2c-NRT")])

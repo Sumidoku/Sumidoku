@@ -10,7 +10,7 @@ export interface InfiniteListProps {
 	endText?: string;
 }
 
-/** IntersectionObserver 哨兵 + 尾部状态；触发前内部已按 hasNextPage/isFetching 拦重 */
+/** IntersectionObserver sentinel + footer state; re-triggering is guarded internally by hasNextPage/isFetching */
 export function InfiniteList({
 	hasNextPage,
 	isFetching,

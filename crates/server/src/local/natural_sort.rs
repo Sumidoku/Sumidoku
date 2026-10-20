@@ -1,8 +1,8 @@
-//! 大小写不敏感自然序比较器：数字段按数值比，其余按字符小写比。
-//! 移植自 kmrs komga-core natural_sort.rs（grey-panther natural-comparator 的
-//! CaseInsensitiveSimpleNaturalComparator 复刻），页序与章节名排序共用。
-//! 语义要点：两侧都是数字段时按 u64 解析比较（相等则继续比后文，a01b < a1c）；
-//! 一侧数字一侧非数字，数字侧小；同步耗尽才算相等（a1 与 a01 判等，非全序）。
+//! Case-insensitive natural-order comparator: digit runs compare by value, everything else by lowercased character.
+//! Ported from kmrs komga-core natural_sort.rs (a re-implementation of grey-panther natural-comparator's
+//! CaseInsensitiveSimpleNaturalComparator), shared by page order and chapter-name sorting.
+//! Semantics: when both sides have a digit run, parse as u64 and compare (on equality continue with what follows, so a01b < a1c);
+//! a digit run on only one side sorts smaller; only simultaneous exhaustion counts as equal (a1 equals a01 — not a total order).
 
 use std::cmp::Ordering;
 
@@ -54,7 +54,7 @@ fn is_digit(c: u16) -> bool {
 	(b'0' as u16..=b'9' as u16).contains(&c)
 }
 
-/// 贪婪解析数字段，u64 溢出回绕（同 Java long 位模式按无符号比较）
+/// Greedily parses a digit run; u64 overflow wraps (same bit pattern as a Java long, compared unsigned)
 fn parse_digits(s: &[u16], start: usize) -> (u64, usize) {
 	let mut n: u64 = 0;
 	let mut i = start;
@@ -65,7 +65,7 @@ fn parse_digits(s: &[u16], start: usize) -> (u64, usize) {
 	(n, i)
 }
 
-/// Character.toLowerCase 等价：BMP 取首个小写映射，代理项原样保留
+/// Character.toLowerCase equivalent: BMP takes the first lowercase mapping, surrogates kept as-is
 fn lower(c: u16) -> u32 {
 	char::from_u32(c as u32)
 		.and_then(|ch| ch.to_lowercase().next())

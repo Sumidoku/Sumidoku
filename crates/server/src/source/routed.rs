@@ -7,11 +7,12 @@ use std::time::Duration;
 
 const MAX_ATTEMPTS: u32 = 3;
 
-/// NetPolicy 实装：direct > relay(TRAWL) > 已挑战 host(TRAWL) > 全局 proxy > direct。
-/// 直连撞 CF 挑战（403/503 + CF 头）经 trawl_escalation 升级，并把该 host 记为
-/// 「已挑战」——之后一律经 trawl：clearance 与解题浏览器的 UA 绑定，直连回放必被
-/// CF 拒绝，只能让 trawl 自己持有 clearance 与 UA（其 Tier 1 用纯 HTTP 回放，不再起
-/// 浏览器）。引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
+/// NetPolicy implementation: direct > relay(TRAWL) > challenged host(TRAWL) > global proxy > direct.
+/// A direct hit on a CF challenge (403/503 + CF headers) escalates through trawl_escalation and marks the host
+/// "challenged" — from then on it always goes via trawl: clearance is bound to the solving browser's UA, replaying
+/// it over a direct connection is rejected by CF, so trawl itself must hold both clearance and UA (its Tier 1
+/// replays over plain HTTP without launching a browser). The engine (source net imports) and server-side direct
+/// fetches (covers/page images/downloads) share this one routing.
 pub struct SumidokuNetPolicy {
 	user_agent: String,
 	direct_domains: Vec<String>,
@@ -21,7 +22,7 @@ pub struct SumidokuNetPolicy {
 	allow_direct_fallback: bool,
 	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
-	/// 撞过 CF 挑战、此后常走 trawl 的 host（进程内记忆，重启后首个请求重学一次）
+	/// Hosts that hit a CF challenge and now permanently go via trawl (in-process memory; the first request after a restart relearns)
 	challenged: RwLock<HashSet<String>>,
 }
 
@@ -55,13 +56,13 @@ impl SumidokuNetPolicy {
 		list.iter().any(|d| host == d || host.ends_with(&format!(".{d}")))
 	}
 
-	/// 该 host 是否撞过 CF 挑战。精确匹配：镜像/子域各自撞一次就各自记一次，
-	/// 不做后缀扩散，免得把没被盾的同域图床也拖进代理。
+	/// Whether this host has hit a CF challenge. Exact match: each mirror/subdomain that hits a challenge is
+	/// recorded for itself, with no suffix spreading, so unshielded image hosts on the same domain are not dragged into the proxy.
 	fn is_challenged(&self, host: &str) -> bool {
 		self.challenged.read().expect("challenged lock").contains(host)
 	}
 
-	/// 记住撞过挑战的 host；只在真有 trawl 可升级时调用
+	/// Remembers a host that hit a challenge; only called when there really is a trawl to escalate to
 	fn mark_challenged(&self, host: &str) {
 		if host.is_empty() {
 			return;
@@ -112,7 +113,7 @@ impl NetPolicy for SumidokuNetPolicy {
 
 	fn trawl_escalation(&self, url: &Url) -> Option<NetRoute> {
 		let host = url.host_str().unwrap_or_default();
-		// direct_domains 是「永不代理」的显式钉死，CF 升级同样让路
+		// direct_domains is an explicit "never proxy" pin; CF escalation yields to it too
 		if Self::domain_match(&self.direct_domains, host) {
 			return None;
 		}
@@ -137,7 +138,7 @@ impl std::fmt::Display for FetchError {
 	}
 }
 
-/// 服务端 async HTTP：按 policy 路由缓存 client、统一 UA、429/5xx 退避重试。
+/// Server-side async HTTP: policy-routed cached clients, uniform UA, 429/5xx backoff retries.
 pub struct RoutedClients {
 	policy: Arc<SumidokuNetPolicy>,
 	clients: RwLock<HashMap<NetRoute, Client>>,
@@ -183,14 +184,15 @@ impl RoutedClients {
 		Ok(client)
 	}
 
-	/// 直接构造请求（不含源声明头）：UA/Accept-Language 用全局缺省
+	/// Builds a request directly (no source-declared headers): UA/Accept-Language use the global defaults
 	pub fn request(&self, method: reqwest::Method, url: &Url) -> Result<reqwest::RequestBuilder, FetchError> {
 		self.request_with(method, url, &[], None)
 	}
 
-	/// 带源声明 headers 的请求：源的同名头优先，缺省才补全局 UA 与 Accept-Language。
-	/// reqwest 的 header() 是 append，缺省值先塞会与源值并成两个同名头；CF 只认第一个
-	/// （默认值）→ 403，故一律「先判后补」（同 wasm net host）。
+	/// A request carrying source-declared headers: the source's same-named headers win, and only the missing
+	/// ones get the global UA and Accept-Language. reqwest's header() appends, so inserting the default first
+	/// would pair it with the source value as two same-named headers; CF only honors the first (the default)
+	/// → 403, hence always "check first, fill after" (same as the wasm net host).
 	pub fn request_with(
 		&self,
 		method: reqwest::Method,
@@ -208,13 +210,13 @@ impl RoutedClients {
 		))
 	}
 
-	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）、CF 挑战 trawl 升级与可选直连回退的 GET
+	/// GET with 429/5xx backoff (honors Retry-After, capped at 3 attempts), CF-challenge trawl escalation, and optional direct fallback
 	pub async fn get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
 		self.get_with(url, None).await
 	}
 
-	/// 同 get，另为请求补 Accept-Language：宿主替 Aidoku 的 URLSession 补的设备 locale，
-	/// 缺失时部分源站 WAF 直接 403
+	/// Same as get, plus an Accept-Language for the request: the host-side substitute for the device locale
+	/// Aidoku's URLSession would add; some source sites' WAFs answer a flat 403 when it is missing
 	pub async fn get_with(
 		&self,
 		url: &Url,
@@ -239,7 +241,7 @@ impl RoutedClients {
 				}
 			};
 			let status = response.status();
-			// CF 升级先于退避：503 挑战页不该白烧直连的退避次数
+			// CF escalation comes before backoff: a 503 challenge page must not burn the direct path's retry budget
 			if !via_proxy
 				&& aidoku_wasm::is_cf_challenge(status, response.headers())
 				&& let Some(route) = self.policy.trawl_escalation(url)
@@ -270,7 +272,7 @@ impl RoutedClients {
 		}
 	}
 
-	/// 指定路由的单发 GET，供 trawl 升级用：解题本身就是这次请求的重试，循环只会重复解题
+	/// Single-shot GET over a given route, for trawl escalation: the solve itself is this request's retry, so looping would just re-solve
 	async fn get_via(
 		&self,
 		route: &NetRoute,
@@ -319,14 +321,14 @@ impl RoutedClients {
 	}
 }
 
-/// 直连/代理共用的客户端底座：rustls 一处钉死，各路由只叠加自己的 proxy/CA
+/// Client base shared by direct and proxied routes: rustls pinned in one place, each route only adds its own proxy/CA
 fn base_builder() -> reqwest::ClientBuilder {
 	Client::builder().use_rustls_tls()
 }
 
-/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent、浏览器头套件与宿主
-/// Accept-Language。
-/// 关键在「先判后补」——reqwest 的 header() 是 append，缺省值若先塞会与源值并成两个同名头。
+/// Assembles the default headers: the source's same-named headers win, and only the missing ones get the
+/// global User-Agent, the browser header suite, and the host-side Accept-Language.
+/// The key is "check first, fill after" — reqwest's header() appends, so inserting a default first would pair it with the source value as two same-named headers.
 fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
 	source_headers: &[(String, String)],
@@ -382,7 +384,7 @@ mod tests {
 			c.net.proxy = Some("http://global:8080".into());
 		});
 		let route = |u: &str| p.route_for(&Url::parse(u).unwrap());
-		// direct 优先于 relay
+		// direct wins over relay
 		assert_eq!(route("https://direct.example.com/x"), NetRoute::Direct);
 		assert_eq!(route("https://cdn.direct.example.com/x"), NetRoute::Direct);
 		assert_eq!(
@@ -420,7 +422,7 @@ mod tests {
 			p.trawl_escalation(&Url::parse("https://cf.example.com/x").unwrap()),
 			Some(NetRoute::Proxy("http://trawl:8192".into()))
 		);
-		// 钉死直连的 host 连 CF 升级也不走代理
+		// A host pinned direct does not go through the proxy even for CF escalation
 		assert_eq!(
 			p.trawl_escalation(&Url::parse("https://pinned.example.com/x").unwrap()),
 			None
@@ -445,12 +447,12 @@ mod tests {
 			p.trawl_escalation(&url),
 			Some(NetRoute::Proxy("http://trawl:8192".into()))
 		);
-		// 升级过即记住：此后同一 host 一律走 trawl
+		// Once escalated it is remembered: the same host goes via trawl from then on
 		assert_eq!(
 			p.route_for(&url),
 			NetRoute::Proxy("http://trawl:8192".into())
 		);
-		// 精确匹配，不扩散到同域其它子域
+		// Exact match, no spreading to sibling subdomains
 		assert_eq!(
 			p.route_for(&Url::parse("https://www.cf.example.com/x").unwrap()),
 			NetRoute::Direct
@@ -482,8 +484,8 @@ mod tests {
 		heads: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 	}
 
-	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
-	/// handler 收请求头文本、回完整响应。源站与 trawl 代理共用。
+	/// Bare HTTP/1.1 mock: one request per connection (responses carry connection: close);
+	/// the handler receives the request-head text and returns a full response. Shared by the origin site and the trawl proxy.
 	fn mock_server(handler: impl Fn(&str) -> String + Send + 'static) -> MockServer {
 		use std::io::{Read, Write};
 		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
@@ -578,8 +580,8 @@ mod tests {
 		let clients = RoutedClients::new(policy(|_| {}));
 		let url = Url::parse(&format!("http://{}/m1.webp", origin.addr)).unwrap();
 
-		// 源在 get_image_request 里自带的 UA 必须赢过全局值，且只能有一个：
-		// reqwest 的 header() 是 append，CF 只读第一个，重复即 403。
+		// The UA the source itself sends in get_image_request must beat the global value, and there must be exactly one:
+		// reqwest's header() appends, CF only reads the first, and a duplicate means 403.
 		let headers = vec![
 			("User-Agent".to_string(), "NoyAcg/3.0".to_string()),
 			("Referer".to_string(), "https://noymanga.com/".to_string()),
@@ -672,8 +674,8 @@ mod tests {
 		let clients = RoutedClients::new(policy(|_| {}));
 		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
 
-		// 源自带的套件成员（API 请求常见的 Accept / Sec-Fetch-Site）必须赢过套件缺省值，
-		// 且只能有一个：缺省值先塞会并成两个同名头
+		// Suite members the source itself sends (Accept / Sec-Fetch-Site, common on API requests) must beat the
+		// suite defaults, and there must be exactly one: inserting the default first would pair into two same-named headers
 		let headers = vec![
 			("Accept".to_string(), "application/json".to_string()),
 			("Sec-Fetch-Site".to_string(), "same-origin".to_string()),
@@ -695,7 +697,7 @@ mod tests {
 			.collect();
 		assert_eq!(sites.len(), 1, "Sec-Fetch-Site 不得被追加成两个: {head}");
 		assert_eq!(sites[0].trim(), "sec-fetch-site: same-origin", "{head}");
-		// 源没设的套件成员仍要补
+		// Suite members the source did not set must still be filled in
 		assert!(head.contains("sec-ch-ua:"), "{head}");
 		assert!(head.contains("upgrade-insecure-requests: 1"), "{head}");
 	}
@@ -710,13 +712,13 @@ mod tests {
 		let head = origin.heads().join("\n").to_ascii_lowercase();
 		for &(name, _) in aidoku_wasm::BROWSER_HEADERS {
 			if name == "accept" {
-				// reqwest 自己兜底 accept: */*，只能钉套件值不在
+				// reqwest itself falls back to accept: */*, so we can only pin the suite value as absent
 				assert!(!head.contains("accept: text/html"), "{head}");
 				continue;
 			}
 			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
 		}
-		// 旋钮只管套件：全局 UA 照补
+		// The toggle only governs the suite: the global UA is still filled
 		assert!(head.contains("user-agent:"), "{head}");
 	}
 
@@ -807,15 +809,15 @@ mod tests {
 		assert_eq!(origin.hits(), 1, "首个请求直连撞挑战后升级");
 		assert_eq!(trawl.hits(), 1);
 
-		// host 已记住：后续请求直接走 trawl，不再直连源站碰挑战
+		// The host is remembered: later requests go straight via trawl instead of hitting the challenge at the origin
 		let second = clients.get(&url).await.expect("second get");
 		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
 		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
 		assert_eq!(trawl.hits(), 2);
 	}
 
-	/// 实测冒烟：打真实站点，不进固定套件（nextest --run-ignored all 手动跑）。
-	/// 钉三件事：协议回声协商 h2、被动 CF 样本站直连 200 且非挑战页、正常站无回归。
+	/// Live smoke test: hits real sites, not part of the fixed suite (run manually with nextest --run-ignored all).
+	/// Pins three things: the protocol echo negotiates h2, passive CF sample sites answer 200 direct without a challenge page, and a normal site shows no regression.
 	#[tokio::test]
 	#[ignore = "打真实站点，只手动跑"]
 	async fn smoke_direct_path_fingerprint() {
@@ -848,8 +850,8 @@ mod tests {
 		println!("https://mangadex.org/ 200");
 	}
 
-	/// 直连底座（base_builder + 测试 CA）必须能对只讲 h2 的源站协商出 HTTP/2：
-	/// 本地 rustls echo 只放 h2 一个 ALPN——客户端不开 http2 时连 TLS 握手都过不了。
+	/// The direct client base (base_builder + test CA) must negotiate HTTP/2 against an h2-only origin:
+	/// the local rustls echo offers only h2 as ALPN — a client without http2 cannot even complete the TLS handshake.
 	#[tokio::test]
 	async fn direct_client_negotiates_http2() {
 		use tokio::io::AsyncReadExt;
@@ -890,7 +892,7 @@ mod tests {
 			.build()
 			.expect("client");
 		let url = Url::parse(&format!("https://localhost:{port}/")).unwrap();
-		// echo 不答任何请求：h2 preface 一到即关，send 的结果无关紧要
+		// The echo never answers any request: it closes as soon as the h2 preface arrives, so send's outcome is irrelevant
 		let _ = client.get(url).send().await;
 
 		let negotiated = tokio::time::timeout(Duration::from_secs(10), seen_rx)

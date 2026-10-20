@@ -1,7 +1,7 @@
-//! canvas host 模块：tiny-skia 软渲染实装。
-//! 语义对齐 aidoku-rs test-runner 的 raqote 版（transform = 平移·缩放·旋转、
-//! 颜色分量 0-255/alpha 0-1、path/style 为 postcard 载荷），错误码以
-//! vendor/aidoku/src/imports/canvas.rs 的 CanvasError 为准。
+//! canvas host module: a tiny-skia software-rendering implementation.
+//! Semantics align with the raqote version of the aidoku-rs test-runner (transform =
+//! translate·scale·rotate, color components 0-255 / alpha 0-1, path/style as postcard
+//! payloads); error codes follow CanvasError in vendor/aidoku/src/imports/canvas.rs.
 use crate::{
 	fonts,
 	runtime::{
@@ -14,7 +14,7 @@ use tiny_skia::{
 	StrokeDash, Transform,
 };
 
-/// 画布像素总量上限：长条拼接页可能上万高，按 64M 像素（256MB RGBA）封顶
+/// Cap on total canvas pixels: stitched long-strip pages can exceed ten thousand in height, so cap at 64M pixels (256MB RGBA)
 const MAX_CANVAS_PIXELS: u64 = 64 * 1024 * 1024;
 const MAX_CANVAS_DIM: f32 = 32767.0;
 
@@ -69,7 +69,7 @@ fn premultiplied(data: &[u8]) -> Vec<u8> {
 	let mut out = Vec::with_capacity(data.len());
 	for px in data.as_chunks::<4>().0 {
 		let a = px[3] as u32;
-		// 不透明是绝大多数，直出省一轮乘除
+		// Opaque is the vast majority; passing straight through saves a round of multiply/divide
 		if a == 255 {
 			out.extend_from_slice(px);
 		} else {
@@ -103,8 +103,9 @@ fn image_pixmap(image: &ImageData) -> Option<Pixmap> {
 	Pixmap::from_vec(premultiplied(&image.data), size)
 }
 
-/// arc 按圆心/半径/起扫角（弧度，y 轴向下时正扫角为顺时针）逼近成
-/// ≤90° 的 cubic 段；路径已有当前点时先 line 到弧起点，与 raqote 一致
+/// An arc is approximated by ≤90° cubic segments from center/radius/start+sweep angles
+/// (radians; with the y axis pointing down, a positive sweep is clockwise); when the path
+/// already has a current point, line to the arc start first, same as raqote
 fn arc_to(pb: &mut PathBuilder, has_current: bool, cx: f32, cy: f32, radius: f32, start: f32, sweep: f32) {
 	let start_x = cx + radius * start.cos();
 	let start_y = cy + radius * start.sin();
@@ -172,8 +173,9 @@ fn read_postcard<'a, T: serde::Deserialize<'a>>(bytes: &'a [u8]) -> Option<T> {
 	postcard::from_bytes(bytes).ok()
 }
 
-/// pattern 变换是图像空间→用户空间（tiny-skia 内部取逆采样）：
-/// 让 (src_x, src_y) 落到 (dst_x, dst_y)，(src 尺寸) 铺满 (dst 尺寸)
+/// The pattern transform is image-space → user-space (tiny-skia inverts it internally
+/// for sampling): map (src_x, src_y) onto (dst_x, dst_y), with (src size) filling
+/// (dst size)
 #[allow(clippy::too_many_arguments)]
 fn blit(
 	canvas: &mut CanvasState,
@@ -254,16 +256,17 @@ pub fn set_transform(
 	else {
 		return Result::InvalidContext.into();
 	};
-	// ABI 传的是源侧分解好的平移/缩放/旋转，按上游 T·S·R 顺序重组；
-	// rotate_angle 单位是弧度，tiny-skia 按度计
+	// The ABI passes the translate/scale/rotate already decomposed by the source; recombine
+	// them in the upstream T·S·R order. rotate_angle is in radians; tiny-skia counts degrees
 	canvas.transform = Transform::from_translate(translate_x, translate_y)
 		.post_scale(scale_x, scale_y)
 		.post_rotate(rotate_angle.to_degrees());
 	Result::Success.into()
 }
 
-/// take/restore 模式：canvas 与 image 可能同 store，先取出 image（所有权），
-/// 画完放回原 rid；图被反复绘制时避免每次全量克隆像素
+/// take/restore pattern: the canvas and the image may share one store, so take the image
+/// out first (ownership) and put it back at its original rid when done; when an image is
+/// drawn repeatedly, this avoids cloning all its pixels every time
 fn with_image(
 	ctx: &mut impl Ctx,
 	context: Rid,
@@ -300,7 +303,7 @@ pub fn draw_image(
 	})
 }
 
-// 签名由源 ABI 固定，无法归并参数
+// The signature is fixed by the source ABI; parameters cannot be merged
 #[allow(clippy::too_many_arguments)]
 pub fn copy_image(
 	ctx: &mut impl Ctx,
@@ -445,9 +448,11 @@ pub fn draw_text(
 	Result::Success.into()
 }
 
-/// 逐字形取轮廓转 path 填充；(x, y) 是文字顶部（AidokuRunner 语义），
-/// 基线按整行字形包围盒的高度下移，带降部的字符把整行再往下推。
-/// 无 shaping/kerning：canvas 文本基本是水印式短句，简单排版够用
+/// Take each glyph's outline into a path and fill it; (x, y) is the top of the text
+/// (AidokuRunner semantics). The baseline moves down by the height of the whole line's
+/// glyph bounding box, so characters with descenders push the entire line further down.
+/// No shaping/kerning: canvas text is basically watermark-style short phrases, for which
+/// simple layout suffices
 #[allow(clippy::too_many_arguments)]
 fn draw_glyphs(
 	pixmap: &mut Pixmap,
@@ -469,7 +474,7 @@ fn draw_glyphs(
 			max_y = max_y.max(i32::from(bb.y_max));
 		}
 	}
-	// 量不到包围盒（空白串等）时基线就落在 y，与 AidokuRunner 空行一致
+	// When no bounding box can be measured (e.g. an all-whitespace string), the baseline lands on y, same as AidokuRunner's empty line
 	let baseline = if min_y <= max_y { y + (max_y - min_y) as f32 * scale } else { y };
 	let mut pen_x = x;
 	for ch in text.chars() {
@@ -501,7 +506,7 @@ impl GlyphBuilder {
 		self.dx + v * self.scale
 	}
 
-	// 字体坐标 y 向上，屏幕 y 向下
+	// Font coordinates have y pointing up; the screen has y pointing down
 	fn y(&self, v: f32) -> f32 {
 		self.baseline - v * self.scale
 	}
@@ -556,8 +561,8 @@ pub fn new_font(ctx: &mut impl Ctx, name_ptr: Ptr, name_len: u32) -> FFIResult {
 	ctx.host().store.store(StoreItem::Font(id))
 }
 
-// wasmi host 参数没有 u8；try_from 失败的越界值走 vendor FontWeight 的
-// 未知值兜底（映射到 Regular）
+// wasmi host params have no u8; out-of-range values failing try_from take the vendor
+// FontWeight fallback for unknown values (mapped to Regular)
 pub fn system_font(ctx: &mut impl Ctx, weight: i32) -> Rid {
 	let id = fonts::resolve_system(u8::try_from(weight).unwrap_or(u8::MAX));
 	ctx.host().store.store(StoreItem::Font(id))
@@ -570,7 +575,7 @@ pub fn load_font(ctx: &mut impl Ctx, url_ptr: Ptr, url_len: u32) -> FFIResult {
 	let Ok(url) = url::Url::parse(&url_str) else {
 		return Result::FontLoadFailed.into();
 	};
-	// 字体下载与 net 模块同一条出口，代理/限流策略不绕开
+	// Font downloads take the same exit as the net module, so proxy/rate-limit policies are not bypassed
 	let data = ctx.host();
 	let mut request = crate::imports::NetRequest::new(crate::imports::HttpMethod::Get);
 	request.url = Some(url);
@@ -591,8 +596,9 @@ pub fn load_font(ctx: &mut impl Ctx, url_ptr: Ptr, url_len: u32) -> FFIResult {
 	ctx.host().store.store(StoreItem::Font(id))
 }
 
-/// 与 AidokuRunner `store(value:)` 对齐的入参解码：能解出像素给 ImageData
-/// （width/height/draw 可用），解不出（加密图床）才留 ImageBytes 原始字节
+/// Input decoding aligned with AidokuRunner `store(value:)`: decodable input becomes
+/// ImageData (width/height/draw usable); only undecodable input (encrypted image hosts)
+/// is kept as ImageBytes raw bytes
 pub(crate) fn decode_image(data: &[u8]) -> Option<ImageData> {
 	let cursor = std::io::Cursor::new(data);
 	let rgba = image::ImageReader::new(cursor)

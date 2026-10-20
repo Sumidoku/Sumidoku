@@ -87,12 +87,12 @@ function initFilterStates(fs: Filter[]): FilterStates {
 	return s;
 }
 
-// 选中值取 ids（有 ids 时）否则取选项名
+// The selected value takes ids (when present), otherwise the option name
 function optionKey(f: Filter, i: number): string {
 	return f.ids?.[i] ?? f.options?.[i] ?? '';
 }
 
-// 源主页深链（?filters=...）带来的筛选值，解析失败视为没有
+// Filter values arriving via the source-home deep link (?filters=...); a parse failure counts as none
 function parseFiltersParam(raw: string | null): FilterValue[] {
 	if (!raw) return [];
 	try {
@@ -103,7 +103,7 @@ function parseFiltersParam(raw: string | null): FilterValue[] {
 	}
 }
 
-// 深链筛选值回填面板草稿；filter id 对不上（源改版）的值静默丢弃
+// Deep-link filter values refill the panel draft; values whose filter id no longer matches (source revamped) are silently dropped
 function applyFilterValues(s: FilterStates, values: FilterValue[]): FilterStates {
 	const next: FilterStates = {
 		textVals: { ...s.textVals },
@@ -146,13 +146,13 @@ export default function SourceBrowsePage() {
 	const sourceEnabled = source.data?.enabled ?? true;
 	const kind = source.data?.kind;
 	const isLocal = kind === 'local';
-	// 内置源（local/opds）没有 filters/listings/home/深链概念（端点 404 unsupported），不发起这些查询
+	// Built-in sources (local/opds) have no filters/listings/home/deep-link concept (endpoints 404 unsupported), so those queries are not issued
 	const isBuiltin = isLocal || kind === 'opds';
 	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isBuiltin);
 	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isBuiltin);
 
-	// hidesFiltersWhileSearching：搜索态藏起过滤器，且搜索请求不带过滤器值
-	// （AidokuRunner 在 query 非空时直接清空 filters 再调源）
+	// hidesFiltersWhileSearching: filters hide in search mode, and search requests don't carry filter values
+	// (AidokuRunner simply clears filters when the query is non-empty before calling the source)
 	const sourceConfig = source.data?.config;
 
 	const filters = useMemo(() => {
@@ -164,13 +164,13 @@ export default function SourceBrowsePage() {
 		return d && d.length > 0 ? d : null;
 	}, [listingsQuery.data]);
 
-	// 深链参数（源主页的 listing/filters 组件）只在进页时消费一次，之后 URL 跟随 mode 切换；有深链时优先于本机存的筛选值
+	// Deep-link params (from the source home's listing/filters components) are consumed once on entry, then the URL follows mode switches; a deep link beats the locally stored filter values
 	const [searchParams, setSearchParams] = useSearchParams();
 	const [initialFilters] = useState<FilterValue[]>(() => {
 		const deep = parseFiltersParam(searchParams.get('filters'));
 		return deep.length > 0 ? deep : loadFilterPrefs(sourceId);
 	});
-	// ?q= 深链（跨源搜索页的「查看全部」）：预填输入框并直接以该词进搜索态
+	// ?q= deep link ("view all" on the cross-source search page): prefills the input and enters search mode with that term directly
 	const [initialQuery] = useState(() => (searchParams.get('q') ?? '').trim());
 	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
 	const [input, setInput] = useState(initialQuery);
@@ -181,7 +181,7 @@ export default function SourceBrowsePage() {
 		filters: initialFilters
 	});
 
-	// 筛选默认值只在 filters 首次到达时铺一次，之后的修改都留在面板草稿里
+	// Filter defaults are laid down only once when filters first arrive; later edits stay in the panel draft
 	const initedFor = useRef<number | null>(null);
 	useEffect(() => {
 		if (!filters || initedFor.current === sourceId) return;
@@ -233,14 +233,14 @@ export default function SourceBrowsePage() {
 
 	function runSearch(nextStates?: FilterStates) {
 		const query = input.trim();
-		// 草稿值始终持久化；隐藏筛选的源在带关键词搜索时不提交、也不覆盖存储
+		// Draft values are always persisted; for sources with hidden filters, a keyword search neither submits them nor overwrites the stored ones
 		const values = buildFilterValues(nextStates ?? states);
 		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
 		if (!dropFilters) saveFilterPrefs(sourceId, values);
 		setSubmitted({ query, filters: dropFilters ? [] : values });
 	}
 
-	// 输入防抖 500ms 自动触发；筛选草稿不参与防抖，只在回车/应用筛选时一并提交
+	// Input auto-submits after a 500ms debounce; the filter draft does not debounce and is only submitted together on Enter/apply-filters
 	const submittedQueryRef = useRef(submitted.query);
 	submittedQueryRef.current = submitted.query;
 	useEffect(() => {
@@ -263,7 +263,7 @@ export default function SourceBrowsePage() {
 		() => activeQuery.data?.pages.flatMap((p) => p.entries) ?? [],
 		[activeQuery.data]
 	);
-	// 服务端把 kind 归一成 default/list；搜索态与 kind 未知（深链进来的未声明 listing）维持网格
+	// The server normalizes kind to default/list; search mode and unknown kinds (an undeclared listing from a deep link) stay on the grid
 	const listMode = !isSearch && listings?.find((l) => l.id === mode)?.kind === 'list';
 
 	function switchMode(m: string) {
@@ -277,7 +277,7 @@ export default function SourceBrowsePage() {
 		if (!key || !states) return;
 		const rec = { ...(states.multiVals[f.id] ?? {}) };
 		const cur = rec[key] ?? 0;
-		// 可排除时三态循环：未选 → 包含 → 排除 → 未选
+		// When exclusion is allowed the cycle is tri-state: unselected → include → exclude → unselected
 		const next = nextMultiVal(cur, !!f.can_exclude);
 		if (next === 0) delete rec[key];
 		else rec[key] = next;
@@ -287,7 +287,7 @@ export default function SourceBrowsePage() {
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-	// 在线条目封面走源图代理；内置源条目浏览不解析封面（轻量），已入库的用漫画封面缓存
+	// Online entries' covers go through the source image proxy; built-in source entries skip cover resolution while browsing (lightweight), registered ones use the manga cover cache
 	function entryCover(m: Manga): string | null {
 		if (m.cover) return sourceImageUrl(sourceId, m.cover);
 		if (isBuiltin && m.id) return coverUrl(m.id);
@@ -305,7 +305,7 @@ export default function SourceBrowsePage() {
 			const { id } = await register.mutateAsync({ sourceId: m.sourceId ?? sourceId, manga: m });
 			navigate(`/manga/${id}`);
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		} finally {
 			setPendingKey(null);
 		}
@@ -334,7 +334,7 @@ export default function SourceBrowsePage() {
 				switchMode(result.listing.id);
 			}
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -363,7 +363,7 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
-				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示。内置源无此能力 */}
+				{/* hasHome === false (confirmed no get_home at registration) hides the button; null = unknown for old rows, stays visible. Built-in sources lack this capability */}
 				{!isBuiltin && source.data?.hasHome !== false && (
 					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 						<House size={15} />
@@ -415,7 +415,7 @@ export default function SourceBrowsePage() {
 						)}
 					</form>
 
-					{/* Aidoku FilterHeaderView 同款：输入框下方的横向筛选 chip 条；chip 改动即提交 */}
+					{/* Same as Aidoku's FilterHeaderView: a horizontal filter chip bar under the input; chip changes submit immediately */}
 					{filters && !filtersHidden && states && (
 						<FilterHeader
 							filters={filters}
@@ -446,7 +446,7 @@ export default function SourceBrowsePage() {
 				</>
 			)}
 
-			{/* 流式搜索中 partial 已进列表：骨架只留给一条都没有时，之后边到边追加 */}
+			{/* During a streaming search partials already land in the list: skeletons are only for when there is nothing at all, then entries append edge-to-edge */}
 			{activeQuery.isPending && entries.length === 0 ? (
 				listMode ? (
 					<div className="home-rows">
@@ -760,14 +760,14 @@ function FilterItem({
 	return null;
 }
 
-// ---- Aidoku FilterHeaderView 同款：搜索框下方的横向筛选条 ----
+// ---- Same as Aidoku's FilterHeaderView: the horizontal filter bar under the search box ----
 
-/** 三态循环的下一态（多选 chip 与面板共用） */
+/** Next state of the tri-state cycle (shared by multi-select chips and the panel) */
 function nextMultiVal(cur: CheckVal, canExclude: boolean): CheckVal {
 	return cur === 0 ? 1 : cur === 1 ? (canExclude ? -1 : 0) : 0;
 }
 
-/** 草稿里该筛选是否会产生提交值（Aidoku enabledFilters 口径，用于启用排序） */
+/** Whether the filter in the draft would produce a submitted value (Aidoku enabledFilters convention, used to enable sorting) */
 function isFilterEnabled(f: Filter, states: FilterStates): boolean {
 	switch (f.type) {
 		case 'sort':
@@ -787,11 +787,11 @@ interface FilterChipProps {
 	filter: Filter;
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
-	/** chip 改动即提交（Aidoku 改筛选立即生效）；setStates 异步，新草稿随调用传入 */
+	/** Chip changes submit immediately (Aidoku applies filter edits at once); setStates is async, so the new draft is passed along with the call */
 	onApply: (s: FilterStates) => void;
 }
 
-/** chip 下拉菜单；children 拿到 close 以便点选后收起 */
+/** Chip dropdown menu item; children receive close so the menu can be dismissed after a pick */
 function ChipMenuItem({
 	checked,
 	excluded,
@@ -816,7 +816,7 @@ function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipPro
 	const options = f.options ?? [];
 	const cur = states.sortVals[f.id] ?? { index: null, ascending: true };
 	const def = f.default as { index?: number; ascending?: boolean } | null | undefined;
-	// 与默认（未选视为 null/true）不同即启用
+	// Different from the default (unselected counts as null/true) means enabled
 	const active =
 		cur.index !== null && (cur.index !== (def?.index ?? null) || cur.ascending !== (def?.ascending ?? true));
 	const label =
@@ -824,7 +824,7 @@ function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipPro
 			? `${f.title ? `${f.title}: ` : ''}${options[cur.index]}${f.can_ascend ? (cur.ascending ? ' ↑' : ' ↓') : ''}`
 			: (f.title ?? '排序');
 	function pick(index: number, close: () => void) {
-		// Aidoku：点当前项且可升降序时切方向，否则选中并归默认方向
+		// Aidoku: clicking the current item flips direction when ascending is allowed, otherwise selects it and resets to the default direction
 		const next: SortVal =
 			cur.index === index && f.can_ascend ? { index, ascending: !cur.ascending } : { index, ascending: false };
 		const nextStates = { ...states, sortVals: { ...states.sortVals, [f.id]: next } };
@@ -912,7 +912,7 @@ function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: Filter
 		const nextStates = { ...states, multiVals: { ...states.multiVals, [f.id]: rec } };
 		setStates(nextStates);
 		onApply(nextStates);
-		// Aidoku menuActionDismissDisabled：菜单不收起，连续多选
+		// Aidoku menuActionDismissDisabled: the menu stays open for consecutive multi-selecting
 	}
 	return (
 		<ChipDropdown active={count > 0} label={`${f.title ?? ''}${count > 0 ? `（${count}）` : ''}`}>
@@ -932,7 +932,7 @@ function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: Filter
 	);
 }
 
-/** 搜索框下方的横向筛选 chip 条：各筛选 chip，启用在先 */
+/** Horizontal filter chip bar under the search box: one chip per filter, enabled ones first */
 function FilterHeader({
 	filters,
 	states,
@@ -953,7 +953,7 @@ function FilterHeader({
 				if (f.hide_from_header || f.type === 'note' || f.type === 'text' || f.type === 'range') return null;
 				const props = { filter: f, states, setStates, onApply };
 				if (f.type === 'sort') return <SortFilterChip key={f.id} {...props} />;
-				// Aidoku：有默认值的 check 不进头部（重置后不会误显示为启用）
+				// Aidoku: a check filter with a default does not enter the header (after a reset it would not wrongly show as enabled)
 				if (f.type === 'check') {
 					if (f.default != null) return null;
 					return <CheckFilterChip key={f.id} {...props} />;

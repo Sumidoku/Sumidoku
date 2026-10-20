@@ -1,5 +1,6 @@
-//! .aix 包（zip）读取：Aidoku 打包约定固定 `Payload/` 前缀
-//! （aidoku-cli internal/build），清单 source.json、载荷 main.wasm 与目录源同名
+//! Reading .aix packages (zip): the Aidoku packing convention fixes a `Payload/` prefix
+//! (aidoku-cli internal/build); the manifest source.json and the payload main.wasm keep
+//! the same names as a directory source
 
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -7,17 +8,17 @@ use std::path::Path;
 pub const MANIFEST_ENTRY: &str = "Payload/source.json";
 pub const WASM_ENTRY: &str = "Payload/main.wasm";
 pub const SETTINGS_ENTRY: &str = "Payload/settings.json";
-/// Aidoku 包内嵌图标：解析后供已装源列表用（Aidoku 从解包目录读 icon.png）
+/// Icon embedded in the Aidoku package: parsed for the installed-source list (Aidoku reads icon.png from the unpacked directory)
 pub const ICON_ENTRY: &str = "Payload/icon.png";
 
-/// 单个 entry 解压上限：真实包 wasm 不足 1 MiB，64 MiB 已留足余量；防 zip bomb
+/// Decompression cap for a single entry: real package wasms are under 1 MiB, so 64 MiB leaves ample headroom; guards against zip bombs
 pub const WASM_PAYLOAD_MAX: u64 = 64 * 1024 * 1024;
-/// 清单 / settings 这类 json 元数据的上限
+/// Cap for JSON metadata like the manifest / settings
 pub const JSON_ENTRY_MAX: u64 = 1024 * 1024;
-/// 图标上限：真实图标几十 KiB，1 MiB 已留足余量
+/// Icon cap: real icons are tens of KiB, so 1 MiB leaves ample headroom
 pub const ICON_ENTRY_MAX: u64 = 1024 * 1024;
 
-/// 错误用裸 String：调用方（wasm 端 build、服务端扫描）各自包成自己的错误类型
+/// Errors are bare Strings: callers (wasm-side build, server-side scan) each wrap them in their own error type
 pub fn read_zip_entry<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
@@ -30,7 +31,7 @@ pub fn read_zip_entry<R: Read + Seek>(
         return Err(format!("{name} exceeds {max} bytes"));
     }
     let mut out = Vec::new();
-    // central directory 的未压缩大小可能撒谎，take 兜底
+    // The central directory's uncompressed size may lie; take is the backstop
     entry
         .take(max + 1)
         .read_to_end(&mut out)
@@ -41,7 +42,7 @@ pub fn read_zip_entry<R: Read + Seek>(
     Ok(out)
 }
 
-/// 可选 entry：不存在返回 `Ok(None)`，存在则按上限读取
+/// Optional entry: `Ok(None)` when absent, otherwise read subject to the cap
 pub fn read_optional_zip_entry<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
     name: &str,
@@ -53,7 +54,7 @@ pub fn read_optional_zip_entry<R: Read + Seek>(
     read_zip_entry(archive, name, max).map(Some)
 }
 
-/// wasm_path 可能是裸 .wasm 或 .aix（zip）：按 PK 魔数区分，zip 从 Payload/main.wasm 取载荷
+/// wasm_path may be a bare .wasm or an .aix (zip): tell them apart by the PK magic; a zip's payload comes from Payload/main.wasm
 pub fn read_wasm_payload(path: &Path) -> crate::Result<Vec<u8>> {
     use crate::Error;
     let mut file = std::fs::File::open(path)

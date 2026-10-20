@@ -1,6 +1,7 @@
-//! 内置 OPDS 源契约：多实例注册（slug key 撞名计数、basic 凭据进 source_setting、
-//! admin 面）/ OpenSearch 搜索与遍历兜底（degraded 标记）/ 详情章节映射 /
-//! PSE 逐页直链与 CBZ 兜底两种页路径 / 封面缓存 / 401 与凭据通过 / migrate 落库
+//! Built-in OPDS source contract: multi-instance registration (slug key collision counting, basic
+//! credentials into source_setting, the admin surface) / OpenSearch search with traversal fallback
+//! (degraded flag) / detail chapter mapping / both page paths — PSE per-page direct links and the
+//! CBZ fallback / cover caching / 401 and credential pass-through / migrate persistence
 mod common;
 
 use axum::Router;
@@ -152,7 +153,7 @@ fn binary(bytes: &'static [u8], mime: &'static str) -> Response {
 	([(header::CONTENT_TYPE, mime)], bytes).into_response()
 }
 
-/// 裸 basic 校验：凭据恰为 user:pass 才放行，其余 401（WWW-Authenticate 按惯例带上）
+/// Bare basic check: passes only when the credentials are exactly user:pass, otherwise 401 (with WWW-Authenticate as customary)
 async fn basic_gate(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
 	let ok = req
 		.headers()
@@ -166,7 +167,7 @@ async fn basic_gate(req: axum::extract::Request, next: axum::middleware::Next) -
 	}
 }
 
-/// 起 mock OPDS 目录：auth = 要 basic 凭据，opensearch = 根 feed 带 search 链接
+/// Starts a mock OPDS catalog: auth = require basic credentials, opensearch = root feed carries a search link
 async fn mock_catalog(auth: bool, opensearch: bool) -> (u16, tokio::task::JoinHandle<()>) {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let port = listener.local_addr().expect("local addr").port();
@@ -288,7 +289,7 @@ async fn register_two_instances_and_search_and_browse() {
 	assert_eq!(first["key"], "opds.demo-komga");
 	assert_eq!(first["kind"], "opds");
 	assert_eq!(first["baseUrl"], url);
-	// 撞名计数：同名第二个实例落 opds.demo-komga-2，两个实例同时在列表里
+	// collision counting: the second instance with the same name lands on opds.demo-komga-2, both instances in the list
 	let second = register_instance(&t.app, "Demo Komga", &url, None).await;
 	assert_eq!(second["key"], "opds.demo-komga-2");
 	let (status, body) = request(&t.app, "GET", "/api/v1/sources", None).await;
@@ -297,7 +298,7 @@ async fn register_two_instances_and_search_and_browse() {
 	assert_eq!(source_by_key(&body, "opds.demo-komga-2")["kind"], "opds");
 
 	let source_id = first["id"].as_i64().expect("source id");
-	// OpenSearch：mock 只按 search 词过滤，beta 被滤掉
+	// OpenSearch: the mock filters only by the search term, beta is filtered out
 	let (status, body) = request(
 		&t.app,
 		"POST",
@@ -315,7 +316,7 @@ async fn register_two_instances_and_search_and_browse() {
 		entries[0]["url"].as_str().expect("entry url"),
 		format!("http://127.0.0.1:{port}/opds/series/series-alpha")
 	);
-	// 浏览（空 query）= 遍历根目录下钻，两本都出来且不标 degraded
+	// browsing (empty query) = traversing down from the root catalog; both come out without the degraded flag
 	let (status, body) = request(
 		&t.app,
 		"POST",
@@ -334,7 +335,7 @@ async fn register_two_instances_and_search_and_browse() {
 	assert!(keys.contains(&"series-alpha"), "browse keys: {keys:?}");
 	assert!(keys.contains(&"series-beta"), "browse keys: {keys:?}");
 
-	// 注册参数校验：空名 / 坏 URL / 非 http 方案一律 400
+	// registration parameter validation: empty name / bad URL / non-http scheme all 400
 	for body in [
 		json!({"name": "", "url": &url}),
 		json!({"name": "x", "url": "not-a-url"}),
@@ -359,7 +360,7 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 	assert_eq!(chapters[0].1, "Vol. 1");
 	assert_eq!(chapters[1].1, "Vol. 2");
 
-	// PSE 直链：pse:count 展开成逐页 Url，页码 0 基
+	// PSE direct links: pse:count expands into per-page Urls, 0-based page numbers
 	let (status, body) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages", chapters[0].0), None).await;
 	assert_eq!(status, StatusCode::OK, "pse pages: {body}");
 	let pages = body.as_array().expect("pages array");
@@ -376,7 +377,7 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 		assert_eq!(bytes.as_slice(), *want, "page {index} bytes");
 	}
 
-	// CBZ 兜底：无 PSE 链接的卷下载一次压缩包拆页（OpdsZip 变体，根相对 href 按 feed URL 解析）
+	// CBZ fallback: a volume without PSE links downloads the archive once and splits pages (the OpdsZip variant; root-relative href resolved against the feed URL)
 	let (status, body) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages", chapters[1].0), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let pages = body.as_array().expect("pages array");
@@ -389,7 +390,7 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 		assert_eq!(bytes.as_slice(), *want, "cbz page {index} bytes");
 	}
 
-	// 封面 = 首册 image 链接，走磁盘缓存；refresh 重拉仍是同一 URL 的字节
+	// cover = the first book's image link, served via the disk cache; a refresh refetches the bytes of the same URL
 	for suffix in ["", "?refresh=1"] {
 		let (status, headers, bytes) =
 			request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover{suffix}"), None).await;
@@ -405,7 +406,7 @@ async fn basic_auth_credentials_gate_the_catalog() {
 	let (port, _server) = mock_catalog(true, true).await;
 	let url = format!("http://127.0.0.1:{port}/opds/catalog");
 
-	// 不种凭据：目录 401 以 bad_gateway 透出（状态码在 message 里可诊断）
+	// no credentials seeded: the catalog's 401 surfaces as bad_gateway (the status code is diagnosable in the message)
 	let anonymous = register_instance(&t.app, "Anon", &url, None).await;
 	let anon_id = anonymous["id"].as_i64().expect("source id");
 	let (status, body) = request(
@@ -419,7 +420,7 @@ async fn basic_auth_credentials_gate_the_catalog() {
 	assert_eq!(body["error"]["code"], "bad_gateway");
 	assert!(body["error"]["message"].as_str().expect("message").contains("401"));
 
-	// 错密码同样 401
+	// wrong password likewise 401s
 	let wrong = register_instance(&t.app, "Wrong", &url, Some(("user", "nope"))).await;
 	let wrong_id = wrong["id"].as_i64().expect("source id");
 	let (status, _) = request(
@@ -431,7 +432,7 @@ async fn basic_auth_credentials_gate_the_catalog() {
 	.await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY);
 
-	// 正确凭据：搜索、登记、页字节全通（凭据从 source_setting 读）
+	// correct credentials: search, registration, page bytes all pass (credentials read from source_setting)
 	let authed = register_instance(&t.app, "Authed", &url, Some(("user", "pass"))).await;
 	let authed_id = authed["id"].as_i64().expect("source id");
 	let (manga_id, _) = register_alpha_manga(&t.app, authed_id).await;
@@ -456,7 +457,7 @@ async fn missing_opensearch_falls_back_to_degraded_traversal() {
 	let source = register_instance(&t.app, "NoSearch", &url, None).await;
 	let source_id = source["id"].as_i64().expect("source id");
 
-	// 无 OpenSearch 描述：退遍历 + degraded 标记，结果按标题子串过滤
+	// no OpenSearch descriptor: fall back to traversal + degraded flag, results filtered by title substring
 	let (status, body) = request(
 		&t.app,
 		"POST",
@@ -470,7 +471,7 @@ async fn missing_opensearch_falls_back_to_degraded_traversal() {
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0]["key"], "series-alpha");
 
-	// 聚合搜索同形：degraded 随源结果透出
+	// aggregate search has the same shape: degraded surfaces with the source's result
 	let (status, body) = request(
 		&t.app,
 		"POST",
@@ -488,7 +489,7 @@ async fn missing_opensearch_falls_back_to_degraded_traversal() {
 #[tokio::test]
 async fn migrate_from_local_to_opds_registers_and_shelves() {
 	let t = opds_app().await;
-	// 本地源漫画入库：local_dir 默认派生 <config_dir>/local
+	// local source manga shelved: local_dir defaults to <config_dir>/local
 	let manga_dir = t.tmp.path().join("local").join("MangaX").join("ch 1");
 	std::fs::create_dir_all(&manga_dir).expect("mkdir local chapter");
 	std::fs::write(manga_dir.join("p1.png"), common::PNG).expect("write local page");
@@ -512,7 +513,7 @@ async fn migrate_from_local_to_opds_registers_and_shelves() {
 	let source = register_instance(&t.app, "Demo", &url, None).await;
 	let opds_id = source["id"].as_i64().expect("source id");
 
-	// lookup 走目录搜索臂，候选带条目 url（migrate 回源凭据）
+	// lookup goes through the catalog search arm; candidates carry the entry url (migrate's proof of origin)
 	let (status, body) = request(
 		&t.app,
 		"GET",
@@ -543,7 +544,7 @@ async fn migrate_from_local_to_opds_registers_and_shelves() {
 	assert_eq!(body["results"][0]["ok"], true, "migrate result: {body}");
 	let to_manga_id = body["results"][0]["toMangaId"].as_i64().expect("target manga id");
 
-	// 目标已按统一机制落库：章节对账完成、在库、页可读（PSE 路径）
+	// the target is persisted via the unified mechanism: chapters reconciled, shelved, pages readable (PSE path)
 	let chapters = chapter_ids(&t.app, to_manga_id).await;
 	assert_eq!(chapters.len(), 2);
 	let (status, body) = request(&t.app, "GET", "/api/v1/library", None).await;

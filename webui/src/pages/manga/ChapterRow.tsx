@@ -4,18 +4,18 @@ import type { Chapter } from '../../api/types';
 import { chapterLabel, formatDate } from '../../lib/format';
 import { IconButton, Spinner } from '../../components';
 
-/** idle 可点下载；pending 入队请求中；queued 已入队（下载进度去下载页看） */
+/** idle = downloadable; pending = enqueue request in flight; queued = enqueued (watch download progress on the downloads page) */
 export type ChapterDlState = 'idle' | 'pending' | 'queued';
 
 interface ChapterRowProps {
 	chapter: Chapter;
 	selecting: boolean;
 	selected: boolean;
-	/** 普通模式进阅读，选择模式切选中 */
+	/** Normal mode enters reading, select mode toggles selection */
 	onActivate: () => void;
 	dlState: ChapterDlState;
 	onDownload: () => void;
-	/** 本地漫画的文件本来就在盘上，不渲染下载入口 */
+	/** A local manga's files are already on disk, so no download entry is rendered */
 	hideDownload?: boolean;
 	onToggleBookmark: () => void;
 	bookmarkPending: boolean;
@@ -40,7 +40,7 @@ export function ChapterRow({
 		.filter(Boolean)
 		.join(' ');
 	const uploaded = formatDate(c.date_uploaded);
-	// wire 上 scanlators 可能是 null（aidoku Option<Vec>），不是空数组
+	// On the wire scanlators can be null (aidoku Option<Vec>), not an empty array
 	const scanlator = c.scanlators?.[0] ?? '';
 
 	return (

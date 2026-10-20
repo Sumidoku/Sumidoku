@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 aidoku.workspace = true
-# 生产只吃 .wasm 二进制（WAT 测试夹具走 dev-dependencies 的 wat crate），wat feature 纯累赘
+# production only feeds .wasm binaries (WAT test fixtures go through the dev-dependencies wat crate), so the wat feature is pure bloat
 wasmi = { version = "2.0", default-features = false, features = ["stable", "std", "validate", "memory64", "auto-dispatch"] }
 image = "0.25"
 postcard.workspace = true
@@ -18,10 +18,10 @@ tokio.workspace = true
 tracing.workspace = true
 chrono = "0.4"
 chrono-tz = "0.10"
-# chrono::Local 拿不到 IANA 名，而 parse_date 要按 chrono_tz::Tz 落本地时区
+# chrono::Local cannot provide the IANA name, and parse_date must resolve the local timezone as chrono_tz::Tz
 iana-time-zone = "0.1"
 ego-tree = "0.11"
-# scraper 公共签名（Element::new/Attribute/QualName）本身的类型出处，attr 写入要用
+# Origin of the types in scraper's public signatures (Element::new/Attribute/QualName), needed for attr writes
 html5ever = "0.39"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip", "brotli", "deflate", "http2"] }
 encoding_rs = "0.8"
@@ -36,8 +36,8 @@ ttf-parser = "0.25"
 
 [dev-dependencies]
 tracing-subscriber.workspace = true
-# 压缩体测试夹具：与 reqwest 传递引入的同一实现，版本对齐 Cargo.lock
+# Compressed-body test fixtures: same implementation as reqwest's transitive one, version aligned with Cargo.lock
 brotli = "9"
 flate2 = "1"
-# fuel 语义测试现编 WAT guest：wasmi 传递引入，不向依赖树新增 crate
+# fuel-semantics tests compile a WAT guest on the fly: comes in transitively via wasmi, adds no new crate to the dependency tree
 wat = "1"

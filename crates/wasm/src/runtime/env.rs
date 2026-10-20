@@ -7,8 +7,9 @@ use reqwest::blocking::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 在途请求的部分结果消费者：入参是源 encode 的 postcard 载荷。
-/// 挂在 WasmEnv 上随调用设置/清除，actor 串行保证同时只有一个调用持有
+/// Consumer of partial results for an in-flight request: the input is the source-encoded
+/// postcard payload. Hung on WasmEnv, set/cleared per call; actor serialization guarantees
+/// only one call holds it at a time
 pub type PartialSink = Box<dyn Fn(&[u8]) + Send + Sync>;
 
 pub struct WasmEnv {
@@ -30,8 +31,9 @@ impl WasmEnv {
 	}
 }
 
-/// import 函数体与引擎之间的唯一接口：宿主状态 + guest 线性内存读写。
-/// 函数体内的 host()/mem_* 调用不得互相持有（&mut 重入），取到 owned 数据就放下
+/// The only interface between import function bodies and the engine: host state plus guest
+/// linear-memory access. host()/mem_* calls inside a function body must not be held across
+/// each other (&mut re-entry); take owned data and let go
 pub trait Ctx {
 	fn host(&mut self) -> &mut WasmEnv;
 	fn mem_read(&self, ptr: u32, len: u32) -> Option<Vec<u8>>;
@@ -93,8 +95,9 @@ pub trait Ctx {
 	}
 }
 
-/// wasmi 侧的 Ctx 实装：Caller 的内存访问与宿主状态访问分时复用同一 &mut。
-/// memory 句柄在函数体内现取——实例化完成前 WasmEnv.memory 还是 None
+/// The wasmi-side Ctx implementation: the Caller's memory access and host-state access
+/// time-share the same &mut. The memory handle is fetched fresh inside each function
+/// body — WasmEnv.memory is still None before instantiation completes
 pub(crate) struct WasmiCtx<'a, 'b> {
 	caller: &'a mut wasmi::Caller<'b, WasmEnv>,
 	memory: wasmi::Memory,
@@ -165,7 +168,7 @@ pub struct NetState {
 	pub clients: HashMap<NetRoute, Client>,
 	pub jar: crate::imports::CookieJar,
 	pub rate: RateLimiter,
-	/// 源没自带时补的 Accept-Language（按源语言推导，见 default_accept_language）
+	/// Accept-Language added when the source does not send one (derived from the source languages, see default_accept_language)
 	pub accept_language: String,
 	ca: Option<Vec<u8>>,
 }
@@ -234,8 +237,9 @@ pub(crate) mod test_ctx {
 		}
 	}
 
-	/// 无引擎的 Ctx 实装：平坦 Vec 当线性内存，import 单测直接驱动函数体。
-	/// 指针 0 起是合法内存，测试数据从 1024 起 bump 写入避免踩到空指针路径
+	/// Engine-less Ctx implementation: a flat Vec acts as linear memory, so import unit
+	/// tests drive function bodies directly. Pointer 0 is legal memory, so test data is
+	/// bump-written from 1024 to avoid hitting the null-pointer path
 	pub(crate) struct TestCtx {
 		pub env: WasmEnv,
 		memory: Vec<u8>,

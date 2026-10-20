@@ -80,7 +80,7 @@ function UpdateButton({ source }: { source: Source }) {
 				navigate(`/migrate?source=${source.id}&sameSource=1`);
 			}
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -172,7 +172,7 @@ function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => vo
 	);
 }
 
-/** 置顶段卡片开启拖拽排序时传入；普通列表不传 */
+/** Passed when the pinned section's cards enable drag-sorting; the plain list does not pass it */
 interface CardDnd {
 	dragging: boolean;
 	dragOver: boolean;
@@ -218,7 +218,7 @@ function SourceCard({
 			onDrop={dnd?.onDrop}
 		>
 			{dnd && (
-				// 只让手柄可拖：整卡 draggable 会把点按导航也变成拖拽起手
+				// Only the handle is draggable: making the whole card draggable would turn click-to-navigate into a drag start
 				<span
 					className="source-card__grip"
 					draggable
@@ -271,8 +271,8 @@ function SourceCard({
 					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 				</IconButton>
 			)}
-			{/* 内置源（local/opds）没有 wasm 能力（主页/设置 404）；本地源不可卸载（服务端 400），
-				opds 实例可卸载 */}
+			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404); the local source cannot be uninstalled (server 400),
+				opds instances can be uninstalled */}
 			{s.kind !== 'local' && (
 				<>
 					{s.kind !== 'opds' && s.hasHome !== false && (
@@ -320,9 +320,9 @@ export default function BrowsePage() {
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
 
-	// 已装源按名字字母序；置顶段另按 pinOrder 排
+	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder
 	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
-	// Aidoku 同款独立分段：可更新的源聚在一起，置顶段之下、全部列表之上
+	// Aidoku-style separate section: updatable sources grouped together, below the pinned section and above the full list
 	const updateSources = all.filter((s) => s.updateVersion !== null);
 	const updateCount = updateSources.length;
 	const pinnedSources = all
@@ -340,7 +340,7 @@ export default function BrowsePage() {
 				pushToast(`跳过 ${s.dir}：${s.reason}`, 'info');
 			}
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -359,7 +359,7 @@ export default function BrowsePage() {
 				navigate('/migrate');
 			}
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -368,7 +368,7 @@ export default function BrowsePage() {
 			await pin.mutateAsync({ id: s.id, pinned: !s.pinned });
 			pushToast(s.pinned ? `已取消置顶 ${s.name}` : `已置顶 ${s.name}`, 'info');
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -390,7 +390,7 @@ export default function BrowsePage() {
 			pushToast(`已卸载 ${pendingDelete.name}`, 'info');
 			setPendingDelete(null);
 		} catch {
-			// client 已弹错误 toast
+			// client already popped an error toast
 		}
 	}
 
@@ -428,7 +428,7 @@ export default function BrowsePage() {
 				}
 			/>
 
-			{/* 源仓库是管理面（reader 服务端 403），tab 整体只给 admin */}
+			{/* Source repos are an admin surface (readers get a server 403), so the whole tab is admin-only */}
 			{isAdmin && (
 				<div className="browse__tabs">
 					<SegmentedControl
@@ -517,7 +517,7 @@ export default function BrowsePage() {
 						</>
 					)}
 					{(pinnedSources.length > 0 || updateSources.length > 0) && (
-						// 上方出现任何分段时，全列表需要「全部」标题区隔
+						// when any section appears above, the full list needs an "All" heading to set it apart
 						<h2 className="browse__section">全部</h2>
 					)}
 					<div className="source-list">
