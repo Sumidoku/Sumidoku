@@ -501,7 +501,32 @@ Migrations in `crates/server/migrations`.
   row events are filtered per connection user, so one user's queue stays
   invisible to another. The artifact files stay shared at deterministic
   paths — a second user queueing an already-downloaded chapter lands on
-  `finished` directly, no repack.
+  `finished` directly, no repack. A row's stored `path` resolves through
+  `download::product_path` — absolute is used as-is, relative joins
+  `downloads_dir` — and every read/delete site (`api/download.rs`,
+  `opds/mod.rs`) goes through it.
+- Download move (`download/mod.rs:move_product`): when
+  `download.move_path` is set (setting table, env
+  `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
+  to the path its template renders to. Variables `{source}`,
+  `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}` and
+  `{filename}` (the default base name, no extension) each pass through
+  `sanitize()`, with empty or unknown variables rendering as `Unknown`.
+  A template containing `{filename}` renders the full file name (`.cbz`
+  is appended when it lacks a known archive extension); anything else
+  renders a directory the default product name is appended under. The
+  move creates parents and renames, falling back to copy+remove on
+  cross-device targets (a mounted share is normally another filesystem);
+  a failed move (mount down, permission, disk full) logs and keeps the
+  product at its default location without failing the download. Moved
+  rows store the absolute target (a relative template target stays
+  relative under `downloads_dir`), so the move target is a shared
+  content area: two users downloading the same chapter render the same
+  absolute file, the later one overwrites with identical content or
+  settles onto it without repacking, and deletion removes the file only
+  once no row references it (an already-missing file counts as
+  deleted). Metadata edits only steer future downloads — earlier
+  products stay where they were moved.
 - Page blobs (`source/mod.rs:materialize_image_pages`): a
   `PageContent::Image` page holds an actor-local rid, so `load_pages`
   exchanges it for PNG bytes in the same call that fetched the page list

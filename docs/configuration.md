@@ -52,6 +52,7 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_DOWNLOADS_DIR` | `/downloads` in Docker, `./downloads` otherwise | downloads directory |
 | `SUMIDOKU_DOWNLOAD_CONCURRENCY` | `3` | concurrent chapter downloads |
 | `SUMIDOKU_DOWNLOAD_FORMAT` | `cbz` | download container format |
+| `SUMIDOKU_DOWNLOAD_MOVE_PATH` | — | override `download.move_path` (setting default empty = off): move each packaged download to the rendered template path — variables `{source}`, `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}`, `{filename}`; absolute targets like `/mnt/library/{author}/{manga}/{filename}` are the intended use |
 | `SUMIDOKU_OPDS_LAZY_DOWNLOAD` | `false` | let OPDS readers trigger downloads of missing pages |
 
 ## Backup
