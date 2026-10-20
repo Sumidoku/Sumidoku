@@ -374,7 +374,8 @@ Migrations in `crates/server/migrations`.
   see below), which survive the pass unread. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
   source `thumbnail`; a source declaring exactly one language fills missing
-  chapter languages with it on reconcile. A non-zero
+  chapter languages with it on reconcile, and a whitespace-only chapter title
+  folds to NULL, matching the Aidoku host's `""` → nil normalization. A non-zero
   `manga_user.viewer_flags` is the user's viewer override: API responses
   report it as the manga `viewer` while the source value stays stored.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
@@ -719,9 +720,18 @@ configurable cap (`net_body_max_mb`, default 32 MiB, decoded bytes —
 gzip is counted after decompression): a declared content-length over
 the cap fails fast, otherwise streaming reads stop at the cap, and an
 oversized body fails the request with the ABI's generic request error
-while naming the limit in the source log. `html()` decodes the body by BOM, then the
-Content-Type charset, then a `<meta charset>` sniff of the first 1024
-bytes, falling back to UTF-8 with replacement (encoding_rs) — a
+while naming the limit in the source log. `html()` decodes the body by BOM, then
+a declared UTF-16 charset, then strict full-document UTF-8 validation, then the
+Content-Type charset, then a `<meta charset>` sniff of the first 1024 bytes,
+falling back to UTF-8 with replacement (encoding_rs). The UTF-8 validation
+outranks a declared single-byte charset on purpose: servers frequently serve
+UTF-8 pages under a lying label such as `iso-8859-1`, which would otherwise
+decode as windows-1252 mojibake, and the Aidoku host decodes bodies as UTF-8
+outright; genuinely non-UTF-8 pages (GBK/Big5) fail the validation and follow
+the declared or sniffed charset as before. When decoding still leaves U+FFFD
+replacement chars, the document's own charset declaration is recovered from the
+decoded text (ASCII-compatible encodings keep the `<meta>` tag readable) and
+the raw bytes re-decode once — covering declarations past the sniff window; a
 non-UTF-8 page decodes instead of failing the call. gzip, br and deflate
 are negotiated and decoded; a source may still override `Accept-Encoding`
 itself. Stored jar cookies merge in front of a source-set `Cookie` header
@@ -1038,9 +1048,11 @@ classes are known and accepted rather than chased case by case:
   algorithm exactly, while SwiftSoup follows jsoup's, which resolves some
   of these corners differently.
 - Entity tables: the set of named character references each engine decodes
-  does not line up one to one, and the host `escape` / `unescape`
-  functions cover only `&amp;` / `&lt;` / `&gt;` where SwiftSoup's
-  `Entities` covers the full table.
+  does not line up one to one, and the host `escape` covers only `&amp;` /
+  `&lt;` / `&gt;` where SwiftSoup's `Entities` covers the full table. The host
+  `unescape` is aligned: it decodes the full HTML5 named and numeric reference
+  set (via `html-escape`), matching what aidoku sources expect from
+  `SwiftSoup.Entities.unescape`.
 
 These are class-level differences between two engine families, not bugs
 with a bounded fix list: byte parity would mean reimplementing jsoup's

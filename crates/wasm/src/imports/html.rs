@@ -121,31 +121,7 @@ pub(crate) fn escape_str(text: &str) -> String {
 }
 
 pub(crate) fn unescape_str(text: &str) -> String {
-	let mut unescaped = String::with_capacity(text.len());
-	let mut chars = text.chars().peekable();
-
-	while let Some(c) = chars.next() {
-		if c == '&' {
-			let mut entity = String::from("&");
-			while let Some(&next_c) = chars.peek() {
-				entity.push(next_c);
-				if next_c == ';' || entity.len() > 10 {
-					chars.next();
-					break;
-				}
-				chars.next();
-			}
-			match entity.as_str() {
-				"&amp;" => unescaped.push('&'),
-				"&lt;" => unescaped.push('<'),
-				"&gt;" => unescaped.push('>'),
-				_ => unescaped.push_str(&entity),
-			}
-		} else {
-			unescaped.push(c);
-		}
-	}
-	unescaped
+	html_escape::decode_html_entities(text).into_owned()
 }
 
 pub fn kind(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
