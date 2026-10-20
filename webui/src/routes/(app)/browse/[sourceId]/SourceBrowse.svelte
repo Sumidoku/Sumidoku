@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { _ } from 'svelte-i18n';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -53,7 +54,7 @@
 	const sp = page.url.searchParams;
 	const deep = parseFiltersParam(sp.get('filters'));
 	// 有深链时优先于本机存的筛选值
-	const initialFilters: FilterValue[] = deep.length > 0 ? deep : loadFilterPrefs(sourceId);
+	const initialFilters: FilterValue[] = deep.length > 0 ? deep : loadFilterPrefs(untrack(() => sourceId));
 	// ?q= 深链：预填输入框并直接以该词进搜索态
 	const initialQuery = (sp.get('q') ?? '').trim();
 

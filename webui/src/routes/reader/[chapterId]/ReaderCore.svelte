@@ -528,6 +528,8 @@
 				></button>
 			</div>
 		{:else}
+			<!-- 阅读滚动面板：点按分区翻页/切换工具栏，键盘导航由全局 keydown 统一处理 -->
+			<!-- svelte-ignore a11y_no_static_element_interactions -->
 			<div
 				class={mode === 'webtoon' ? 'reader__cont reader__cont--webtoon' : 'reader__cont'}
 				bind:this={contEl}

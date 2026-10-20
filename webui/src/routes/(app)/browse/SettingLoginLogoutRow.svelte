@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { _ } from 'svelte-i18n';
 	import { Button, Chip, Modal, Switch } from '$lib/components';
 
@@ -12,7 +13,7 @@
 
 	let busy = $state(false);
 	let confirmOpen = $state(false);
-	let clearCookies = $state(clearCookiesOnLogOut);
+	let clearCookies = $state(untrack(() => clearCookiesOnLogOut));
 </script>
 
 <div class="setting-row setting-row--col">

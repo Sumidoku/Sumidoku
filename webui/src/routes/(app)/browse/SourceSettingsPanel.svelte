@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { _ } from 'svelte-i18n';
 	import {
 		queryClient,
@@ -26,19 +27,23 @@
 	}
 	let { sourceId }: Props = $props();
 
+	// 面板按源挂载（模态每次为某个源打开），sourceId 在实例生命周期内不变；
+	// 这些变更 hook 工厂只需一次性拿到 id，用 untrack 明确「取初值」意图
+	const sid = untrack(() => sourceId);
+
 	const query = useSourceSettings(() => sourceId);
-	const save = useSaveSourceSettings(sourceId);
-	const reset = useResetSourceSettings(sourceId);
-	const clearCache = useClearSourceCache(sourceId);
-	const login = useBasicLogin(sourceId);
-	const webLogin = useWebLogin(sourceId);
-	const startBrowserLogin = useStartBrowserLogin(sourceId);
-	const completeBrowserLogin = useCompleteBrowserLogin(sourceId);
-	const cancelBrowserLogin = useCancelBrowserLogin(sourceId);
-	const loginLogout = useLoginLogout(sourceId);
-	const oauthStart = useOAuthLoginStart(sourceId);
-	const oauthComplete = useOAuthLoginComplete(sourceId);
-	const notifySource = useNotifySource(sourceId);
+	const save = useSaveSourceSettings(sid);
+	const reset = useResetSourceSettings(sid);
+	const clearCache = useClearSourceCache(sid);
+	const login = useBasicLogin(sid);
+	const webLogin = useWebLogin(sid);
+	const startBrowserLogin = useStartBrowserLogin(sid);
+	const completeBrowserLogin = useCompleteBrowserLogin(sid);
+	const cancelBrowserLogin = useCancelBrowserLogin(sid);
+	const loginLogout = useLoginLogout(sid);
+	const oauthStart = useOAuthLoginStart(sid);
+	const oauthComplete = useOAuthLoginComplete(sid);
+	const notifySource = useNotifySource(sid);
 
 	let edits = $state<Record<string, unknown>>({});
 	let pending = $state<'reset' | 'clear' | null>(null);

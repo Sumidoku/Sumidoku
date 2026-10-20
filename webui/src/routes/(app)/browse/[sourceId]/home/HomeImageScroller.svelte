@@ -36,6 +36,8 @@
 	});
 </script>
 
+<!-- 悬停暂停自动滚动：纯装饰性 hover，不需要键盘可达 -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	class="home-hrow"
 	bind:this={rowEl}

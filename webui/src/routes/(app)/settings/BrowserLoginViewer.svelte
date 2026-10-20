@@ -194,6 +194,8 @@
 			>{$_('settings.browserLoginInstructions')}
 		{/if}
 	</p>
+	<!-- 远程浏览器投屏面板：捕获键鼠转发到服务端 context，role=application 语义正确 -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 	<div
 		class="browser-view"
 		tabindex="0"
@@ -205,6 +207,8 @@
 		onpaste={onViewPaste}
 	>
 		{#if frame}
+			<!-- 投屏画面：鼠标事件按坐标转发给远程浏览器；键盘在外层 wrapper 捕获 -->
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 			<img
 				bind:this={imgEl}
 				class="browser-view__screen"

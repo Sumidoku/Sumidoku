@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { _ } from 'svelte-i18n';
 	import { Button, Chip, Input } from '$lib/components';
 
@@ -13,7 +14,7 @@
 	}
 	let { title, useEmail, savedUsername, loggedIn, onSubmit }: Props = $props();
 
-	let username = $state(savedUsername);
+	let username = $state(untrack(() => savedUsername));
 	let password = $state('');
 	let busy = $state(false);
 </script>

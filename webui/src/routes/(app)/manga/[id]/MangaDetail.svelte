@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { marked } from 'marked';
 	import { _ } from 'svelte-i18n';
@@ -105,7 +106,7 @@
 	let migrateOpen = $state(false);
 	let coverPickerOpen = $state(false);
 	// 排序/筛选设置按漫画持久化；本组件按 id keyed，换漫画整组件重挂，天然隔离
-	let prefs = $state<ChapterPrefs>(loadPrefs(id));
+	let prefs = $state<ChapterPrefs>(loadPrefs(untrack(() => id)));
 	let selecting = $state(false);
 	let selected = $state<Set<number>>(new Set());
 

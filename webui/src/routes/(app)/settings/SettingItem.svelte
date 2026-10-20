@@ -1,4 +1,5 @@
 <script lang="ts">
+	import SettingItem from './SettingItem.svelte';
 	import { _ } from 'svelte-i18n';
 	import ExternalLink from '@lucide/svelte/icons/external-link';
 	import type { BrowserLoginSession, Setting } from '$lib/api/types';
@@ -190,7 +191,7 @@
 		<div class="setting-group">
 			<div class="setting-group__title">{setting.title}</div>
 			{#each v.Group.items as item (item.key)}
-				<svelte:self
+				<SettingItem
 					setting={item}
 					{sourceId}
 					{values}
@@ -221,7 +222,7 @@
 			</div>
 			{#if v.Page.info}<div class="faint setting-group__info">{v.Page.info}</div>{/if}
 			{#each v.Page.items as item (item.key)}
-				<svelte:self
+				<SettingItem
 					setting={item}
 					{sourceId}
 					{values}

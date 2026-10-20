@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Input } from '$lib/components';
 
 	interface Props {
@@ -11,7 +12,7 @@
 	let { value, min, max, step, onCommit }: Props = $props();
 
 	// number 输入允许中间态（清空、负号），失焦才夹回 min/max
-	let text = $state(String(value));
+	let text = $state(untrack(() => String(value)));
 	$effect(() => {
 		text = String(value);
 	});
