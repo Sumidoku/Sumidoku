@@ -388,12 +388,14 @@ Migrations in `crates/server/migrations`.
   (Aidoku's pause-history analogue) pauses the stamp: a progress write still
   saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
   reads never enter history and existing stamps are kept. Marking unread
-  (`isRead: false` on `PATCH /api/v1/chapter/{id}` or the `/chapter/batch`
-  equivalent) is Aidoku's mark-unread, not a plain flag write: it wipes the
+  (a bare `isRead: false` — no `lastPageRead` in the same request — on
+  `PATCH /api/v1/chapter/{id}` or the `/chapter/batch` equivalent) is
+  Aidoku's mark-unread, not a plain flag write: it wipes the
   whole reading trace — `last_page_read`, the resume target and the history
   stamp all go (explicit user intent, so incognito does not protect the
   stamp), while the bookmark survives; the detail page's row menu and batch
-  selection share this semantic. Marking read never touches the stamp by
+  selection share this semantic. A patch carrying `lastPageRead` alongside
+  `isRead: false` is "still reading" and keeps the trace. Marking read never touches the stamp by
   itself, deliberately diverging from Aidoku's date-refresh. `GET`/`PATCH
   /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
   row, so the flag also works for manga not in the library), and the backup
