@@ -527,3 +527,20 @@ same-day slip.
   `git commit` output instead of the full sha in the `gh pr view` result
   fetched seconds earlier; same GraphQL rejection, retried with the
   fetched full sha.
+
+**Contract compatibility claims get verified against the upstream
+implementation, never against a second-hand quote.** A behavior copied
+from one doc line can invert the real contract, and a fixture written
+from the same reading then "confirms" the wrong behavior with a green
+test — the strongest kind of false reassurance, since the pinned test
+punishes the later correct fix. When emulating a host's behavior, read
+the upstream host source; treat any fixture born from a quote as
+evidence of nothing.
+- Evidence: 2026-10-20, zh.jmcomic chapter images failed with
+  `invalid image rid -1`: the processor input had been raw bytes since
+  #119, implemented from a one-line doc quote, while AidokuRunner's
+  `store(value:)` decodes when possible (pixels for canvas
+  descrambling) and only falls back to raw bytes when undecodable; the
+  rawimg fixture had pinned the misreading. Fixed in #223 after
+  reading the upstream Swift host; two sabotage cycles confirmed the
+  realigned tests catch each bug.
