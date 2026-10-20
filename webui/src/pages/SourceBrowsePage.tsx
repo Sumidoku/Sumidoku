@@ -144,10 +144,12 @@ export default function SourceBrowsePage() {
 
 	const source = useSource(sourceId);
 	const sourceEnabled = source.data?.enabled ?? true;
-	const isLocal = source.data?.kind === 'local';
-	// 本地源没有 filters/listings 概念（端点 404 unsupported），不发起这两个查询
-	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isLocal);
-	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isLocal);
+	const kind = source.data?.kind;
+	const isLocal = kind === 'local';
+	// 内置源（local/opds）没有 filters/listings/home/深链概念（端点 404 unsupported），不发起这些查询
+	const isBuiltin = isLocal || kind === 'opds';
+	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isBuiltin);
+	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isBuiltin);
 
 	// hidesFiltersWhileSearching：搜索态藏起过滤器，且搜索请求不带过滤器值
 	// （AidokuRunner 在 query 非空时直接清空 filters 再调源）
@@ -285,10 +287,10 @@ export default function SourceBrowsePage() {
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-	// 在线条目封面走源图代理；本地条目浏览不解析封面（轻量），已入库的用漫画封面缓存
+	// 在线条目封面走源图代理；内置源条目浏览不解析封面（轻量），已入库的用漫画封面缓存
 	function entryCover(m: Manga): string | null {
 		if (m.cover) return sourceImageUrl(sourceId, m.cover);
-		if (isLocal && m.id) return coverUrl(m.id);
+		if (isBuiltin && m.id) return coverUrl(m.id);
 		return m.cover;
 	}
 
@@ -361,14 +363,14 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
-				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示。本地源无此能力 */}
-				{!isLocal && source.data?.hasHome !== false && (
+				{/* hasHome === false（注册时确认无 get_home）才不显示；null=旧行未知保持显示。内置源无此能力 */}
+				{!isBuiltin && source.data?.hasHome !== false && (
 					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 						<House size={15} />
 						主页
 					</Button>
 				)}
-				{!isLocal && (
+				{!isBuiltin && (
 					<Button onClick={() => setShowLink(true)}>
 						<Link2 size={15} />
 						打开链接

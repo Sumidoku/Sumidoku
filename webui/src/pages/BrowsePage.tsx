@@ -8,15 +8,17 @@ import {
 	PackageOpen,
 	Pin,
 	PinOff,
+	Plus,
 	ScanSearch,
 	Trash,
 	TriangleAlert
 } from 'lucide-react';
-import { sourceIconUrl } from '../api/client';
+import { ApiError, sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
 	useIsAdmin,
 	usePinSource,
+	useRegisterOpdsSource,
 	useReorderPinned,
 	useScanSources,
 	useSources,
@@ -30,6 +32,7 @@ import {
 	Chip,
 	EmptyState,
 	IconButton,
+	Input,
 	Modal,
 	PageHeader,
 	SegmentedControl,
@@ -86,6 +89,86 @@ function UpdateButton({ source }: { source: Source }) {
 			<CircleArrowUp size={14} />
 			v{source.updateVersion}
 		</Button>
+	);
+}
+
+function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+	const register = useRegisterOpdsSource();
+	const [name, setName] = useState('');
+	const [url, setUrl] = useState('');
+	const [username, setUsername] = useState('');
+	const [password, setPassword] = useState('');
+
+	function reset() {
+		setName('');
+		setUrl('');
+		setUsername('');
+		setPassword('');
+	}
+
+	async function submit() {
+		try {
+			const trimmedUrl = url.trim();
+			const source = await register.mutateAsync({
+				name: name.trim(),
+				url: trimmedUrl,
+				...(username.trim() ? { username: username.trim(), password } : {})
+			});
+			pushToast(`已添加 OPDS 目录 ${source.name}`, 'info');
+			reset();
+			onClose();
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 400) pushToast(e.message);
+			else pushToast('添加失败');
+		}
+	}
+
+	return (
+		<Modal
+			open={open}
+			title="添加 OPDS 目录"
+			onClose={onClose}
+			footer={
+				<>
+					<Button onClick={onClose}>取消</Button>
+					<Button
+						variant="primary"
+						loading={register.isPending}
+						disabled={!name.trim() || !url.trim()}
+						onClick={() => void submit()}
+					>
+						添加
+					</Button>
+				</>
+			}
+		>
+			<div className="opds-form">
+				<Input
+					placeholder="名称（如 My Komga）"
+					value={name}
+					onChange={(e) => setName(e.currentTarget.value)}
+				/>
+				<Input
+					placeholder="目录 URL（如 https://komga.example/opds/v1.2/catalog）"
+					value={url}
+					onChange={(e) => setUrl(e.currentTarget.value)}
+				/>
+				<Input
+					placeholder="用户名（公共目录可留空）"
+					autoComplete="off"
+					value={username}
+					onChange={(e) => setUsername(e.currentTarget.value)}
+				/>
+				<Input
+					type="password"
+					placeholder="密码"
+					autoComplete="new-password"
+					value={password}
+					onChange={(e) => setPassword(e.currentTarget.value)}
+				/>
+				<p className="muted">Komga / Kavita / Calibre-Web 等自托管站的 OPDS 1.2 目录；凭据只用于读取。</p>
+			</div>
+		</Modal>
 	);
 }
 
@@ -188,10 +271,11 @@ function SourceCard({
 					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 				</IconButton>
 			)}
-			{/* 内置本地源：无 wasm 能力（主页/设置 404），且不可卸载（服务端 400） */}
+			{/* 内置源（local/opds）没有 wasm 能力（主页/设置 404）；本地源不可卸载（服务端 400），
+				opds 实例可卸载 */}
 			{s.kind !== 'local' && (
 				<>
-					{s.hasHome !== false && (
+					{s.kind !== 'opds' && s.hasHome !== false && (
 						<IconButton
 							label={`${s.name} 主页`}
 							onClick={(e) => {
@@ -202,7 +286,7 @@ function SourceCard({
 							<House size={17} />
 						</IconButton>
 					)}
-					{isAdmin && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
+					{isAdmin && s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
 					{isAdmin && (
 						<IconButton
 							label={`卸载 ${s.name}`}
@@ -231,6 +315,7 @@ export default function BrowsePage() {
 	const isAdmin = useIsAdmin();
 	const navigate = useNavigate();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
+	const [registeringOpds, setRegisteringOpds] = useState(false);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -324,6 +409,12 @@ export default function BrowsePage() {
 								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
 									<CircleArrowUp size={15} />
 									全部更新（{updateCount}）
+								</Button>
+							)}
+							{isAdmin && (
+								<Button onClick={() => setRegisteringOpds(true)}>
+									<Plus size={15} />
+									添加 OPDS 目录
 								</Button>
 							)}
 							{isAdmin && (
@@ -458,6 +549,7 @@ export default function BrowsePage() {
 			>
 				<p className="muted">已入库的漫画与下载不受影响。</p>
 			</Modal>
+			<OpdsRegisterModal open={registeringOpds} onClose={() => setRegisteringOpds(false)} />
 		</div>
 	);
 }

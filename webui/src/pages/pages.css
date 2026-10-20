@@ -257,6 +257,12 @@
 	margin-bottom: 16px;
 }
 
+.opds-form {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
 .repos__add {
 	display: flex;
 	gap: 8px;
