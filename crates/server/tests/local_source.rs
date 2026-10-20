@@ -441,6 +441,43 @@ async fn unreadable_manga_dir_never_deletes_rows() {
 	assert_eq!(keys, ["ch 10", "ch 4.cbz", "第3话", "ch 2", "ch 1", "extras"]);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn unreadable_chapter_entry_never_deletes_rows() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let sigma = tmp.path().join("local/Sigma");
+	write_page(&sigma.join("ch 1"), "1.png", b"sigma-1-1");
+	write_page(&sigma.join("ch 3"), "1.png", b"sigma-3-1");
+	// ch 2 是指向真实目录的 symlink：注册时 metadata 跟随目标成功，章节正常落库
+	let target = tmp.path().join("target-ch2");
+	write_page(&target, "1.png", b"sigma-2-1");
+	std::os::unix::fs::symlink(&target, sigma.join("ch 2")).expect("symlink ch 2");
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	let manga_id = register_local(&t.app, "Sigma").await;
+	let before = chapters_of(&t.app, manga_id).await;
+	assert_eq!(before.len(), 3);
+
+	// 刷新前：ch 3 真删（对照组，照常对账掉）；ch 2 的目标删掉使 symlink 悬垂，
+	// entry.metadata() 跟随 symlink 必失败 → 条目级 failed → protected 对账保护
+	std::fs::remove_dir_all(sigma.join("ch 3")).expect("remove ch 3");
+	std::fs::remove_dir_all(&target).expect("remove ch 2 target");
+
+	// 条目级失败是降级不是报错：刷新照常 OK；被保护行不参与本轮重排（保留旧 source_order），
+	// 断言按内容集合不按位置
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
+		.await
+		.into_iter()
+		.map(|(_, k, _, _)| k)
+		.collect();
+	keys.sort();
+	assert_eq!(keys, ["ch 1", "ch 2"], "悬垂 symlink 的章节行必须保留，真删的对账掉: {keys:?}");
+}
+
 #[tokio::test]
 async fn invalid_or_unknown_keys_rejected() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
