@@ -644,7 +644,7 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), vec![a]);
 	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread,downloaded", None).await;
 	assert_eq!(entry_ids(&body), vec![b]);
-	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
+	let (status, _) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 
 	// 排除语义：unread 排除=全部已读；与包含组合取交集（b 已下载但有未读，被排除）

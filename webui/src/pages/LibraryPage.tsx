@@ -176,7 +176,7 @@ export default function LibraryPage() {
 			</div>
 
 			<div className="library__filters" role="group" aria-label="内容分级与图源">
-				{/* 与跨源搜索页同款的分级/图源三态下拉 */}
+				{/* 与跨源搜索页同款的三态下拉；图源含停用源——库内条目可能属于它们 */}
 				<TriStateDropdown
 					label="分级"
 					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
