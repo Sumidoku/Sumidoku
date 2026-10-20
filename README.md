@@ -28,8 +28,10 @@ Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a sin
   sidecar solves a challenged host once, then keeps routing it through trawl.
 - **Real-browser login** — the same trawl sidecar doubles as the webview
   browser backend, cookies landing in the source's session.
-- **Authentication** — one site password guards the web UI, REST API and
-  OPDS (off by default); session tokens and long-lived API keys.
+- **Multi-user and authentication** — off by default; once an admin
+  password is set, username + password login guards the web UI, REST API
+  and OPDS, with per-user libraries, progress, categories and downloads
+  and admin/reader roles; session tokens and long-lived API keys.
 - **Backup and migration** — versioned JSON backup, scheduled backups with
   retention, and imports from Aidoku (`.aib`) and Suwayomi/Mihon
   (`.tachibk`, `.proto.gz`).
@@ -55,7 +57,7 @@ Drop `.aix` source packages (or extracted source directories) into `./config/sou
 
 ## OPDS
 
-The OPDS 1.2 catalog is served at `/opds/v1.2` (OPDS 2.0 at `/opds/v2`). With authentication enabled, the catalogs require Basic auth with the site password; see [docs/authentication.md](docs/authentication.md).
+The OPDS 1.2 catalog is served at `/opds/v1.2` (OPDS 2.0 at `/opds/v2`). With authentication enabled, the catalogs require Basic auth with a user's own username and password; see [docs/authentication.md](docs/authentication.md).
 
 ## Documentation
 

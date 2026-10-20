@@ -72,7 +72,7 @@ See [docs/authentication.md](authentication.md) for the model.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMIDOKU_AUTH_PASSWORD` | — | site password; enables authentication for the web UI, REST API and OPDS |
+| `SUMIDOKU_AUTH_PASSWORD` | — | built-in admin's password, re-seeded on every boot; enables authentication (username + password login) for the web UI, REST API and OPDS |
 | `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
 | `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |
 
