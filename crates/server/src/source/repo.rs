@@ -452,7 +452,7 @@ pub struct SourceUpdate {
 
 /// 单源更新：取所有 repo 缓存里该 key 的最新版，严格大于已装才动手；
 /// 跨过新包 manifest 的 breakingChangeVersion 时做 key 迁移（见 rekey 模块）
-pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<SourceUpdate> {
+pub async fn update_source(state: &Arc<AppState>, source_id: i64, user_id: i64) -> ApiResult<SourceUpdate> {
 	let row: Option<(String, i64)> = sqlx::query_as("SELECT key, version FROM source WHERE id = ?")
 		.bind(source_id)
 		.fetch_optional(&state.pool)
@@ -464,7 +464,7 @@ pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 	match latest.get(&key) {
 		Some(&(new_version, repo_id)) if new_version > version => {
 			let source = install_from_repo(state, repo_id, &key).await?;
-			let migration = crate::source::rekey::migrate_after_update(state, source.id, version).await?;
+			let migration = crate::source::rekey::migrate_after_update(state, source.id, version, user_id).await?;
 			Ok(SourceUpdate { source, migration })
 		}
 		_ => Err(ApiError::no_update(format!("source {key} is up to date"))),
@@ -480,7 +480,7 @@ pub struct UpdateAllOutcome {
 	pub migration_warnings: Vec<(String, String)>,
 }
 
-pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
+pub async fn update_all(state: &Arc<AppState>, user_id: i64) -> ApiResult<UpdateAllOutcome> {
 	let sources: Vec<(String, i64)> = sqlx::query_as("SELECT key, version FROM source")
 		.fetch_all(&state.pool)
 		.await?;
@@ -507,7 +507,7 @@ pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
 			}
 		};
 		outcome.updated.push(key.clone());
-		match crate::source::rekey::migrate_after_update(state, source.id, version).await {
+		match crate::source::rekey::migrate_after_update(state, source.id, version, user_id).await {
 			Ok(report) => {
 				if report.required {
 					outcome.migration_required.push(key.clone());

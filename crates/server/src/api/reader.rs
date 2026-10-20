@@ -3,7 +3,8 @@ use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterProgress, ChapterUserRow, unix_now};
 use crate::source::chapter_row;
 use crate::state::AppState;
-use crate::{PAGE_SIZE, USER_ID};
+use crate::PAGE_SIZE;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::response::Json;
 use serde::Deserialize;
@@ -28,10 +29,11 @@ impl ProgressPatch {
 	async fn apply(
 		&self,
 		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+		user_id: i64,
 		chapter_id: i64,
 	) -> ApiResult<ChapterProgress> {
-		let current = read_progress(&mut **tx, chapter_id).await?;
-		let stamp = self.last_page_read.is_some() && !incognito_on(tx, chapter_id).await?;
+		let current = read_progress(&mut **tx, user_id, chapter_id).await?;
+		let stamp = self.last_page_read.is_some() && !incognito_on(tx, user_id, chapter_id).await?;
 		let merged = ChapterProgress {
 			last_page_read: self.last_page_read.unwrap_or(current.last_page_read),
 			is_read: self.is_read.unwrap_or(current.is_read),
@@ -41,12 +43,13 @@ impl ProgressPatch {
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
 			 last_read_at)
-			 VALUES (?, 1, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 			 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
 			 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at",
 		)
 		.bind(chapter_id)
+		.bind(user_id)
 		.bind(merged.last_page_read)
 		.bind(merged.is_read)
 		.bind(merged.is_bookmarked)
@@ -57,10 +60,11 @@ impl ProgressPatch {
 	}
 }
 
-/// 隐身判定：全局 setting 的 incognito.enabled 或该章节所属漫画的 manga_user.incognito，
-/// 任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
-async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, chapter_id: i64) -> ApiResult<bool> {
-	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'incognito.enabled'")
+/// 隐身判定：该用户命名空间键 user.<id>.incognito.enabled 或该章节所属漫画的
+/// manga_user.incognito，任一开启即暂停打戳（对齐 Aidoku 的 pause history：不记新历史，旧历史不动）
+async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user_id: i64, chapter_id: i64) -> ApiResult<bool> {
+	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
+		.bind(crate::api::user_setting_key(user_id, "incognito.enabled"))
 		.fetch_optional(&mut **tx)
 		.await?;
 	if global
@@ -71,24 +75,26 @@ async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, chapter_id: 
 	}
 	let per_manga: Option<(bool,)> = sqlx::query_as(
 		"SELECT mu.incognito FROM chapter c
-		 JOIN manga_user mu ON mu.manga_id = c.manga_id AND mu.user_id = 1
+		 JOIN manga_user mu ON mu.manga_id = c.manga_id AND mu.user_id = ?
 		 WHERE c.id = ?",
 	)
+	.bind(user_id)
 	.bind(chapter_id)
 	.fetch_optional(&mut **tx)
 	.await?;
 	Ok(per_manga.map(|(on,)| on).unwrap_or(false))
 }
 
-async fn read_progress<'e, E>(executor: E, chapter_id: i64) -> ApiResult<ChapterProgress>
+async fn read_progress<'e, E>(executor: E, user_id: i64, chapter_id: i64) -> ApiResult<ChapterProgress>
 where
 	E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
 {
 	let row: Option<(i64, bool, bool, Option<i64>)> = sqlx::query_as(
 		"SELECT last_page_read, is_read, is_bookmarked, last_read_at FROM chapter_user
-		 WHERE chapter_id = ? AND user_id = 1",
+		 WHERE chapter_id = ? AND user_id = ?",
 	)
 	.bind(chapter_id)
+	.bind(user_id)
 	.fetch_optional(executor)
 	.await?;
 	Ok(match row {
@@ -114,15 +120,16 @@ fn progress_json(chapter_id: i64, progress: &ChapterProgress) -> Value {
 
 pub async fn update_chapter(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(patch): Json<ProgressPatch>,
 ) -> ApiResult<Json<Value>> {
 	chapter_row(&state.pool, id).await?;
 	let progress = if patch.is_empty() {
-		read_progress(&state.pool, id).await?
+		read_progress(&state.pool, user.id, id).await?
 	} else {
 		let mut tx = state.pool.begin().await?;
-		let merged = patch.apply(&mut tx, id).await?;
+		let merged = patch.apply(&mut tx, user.id, id).await?;
 		tx.commit().await?;
 		merged
 	};
@@ -139,6 +146,7 @@ pub struct BatchUpdateRequest {
 
 pub async fn batch_update_chapters(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<BatchUpdateRequest>,
 ) -> ApiResult<Json<Value>> {
 	if body.chapter_ids.is_empty() || body.patch.is_empty() {
@@ -154,7 +162,7 @@ pub async fn batch_update_chapters(
 		if exists.is_none() {
 			continue;
 		}
-		body.patch.apply(&mut tx, *chapter_id).await?;
+		body.patch.apply(&mut tx, user.id, *chapter_id).await?;
 		updated += 1;
 	}
 	tx.commit().await?;
@@ -163,6 +171,7 @@ pub async fn batch_update_chapters(
 
 pub async fn get_history(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<PageQuery>,
 ) -> ApiResult<Json<Value>> {
 	let page = query.page.unwrap_or(1);
@@ -176,7 +185,7 @@ pub async fn get_history(
 		 ORDER BY cu.last_read_at DESC, cu.chapter_id DESC
 		 LIMIT ? OFFSET ?",
 	)
-	.bind(USER_ID)
+	.bind(user.id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page as i64 - 1) * PAGE_SIZE)
 	.fetch_all(&state.pool)
@@ -184,7 +193,7 @@ pub async fn get_history(
 	let has_next_page = rows.len() as i64 > PAGE_SIZE;
 	let page_rows: Vec<&ChapterUserRow> = rows.iter().take(PAGE_SIZE as usize).collect();
 	let manga_ids: Vec<i64> = page_rows.iter().map(|row| row.chapter.manga_id).collect();
-	let manga_values = manga_json_by_ids(&state, &manga_ids).await?;
+	let manga_values = manga_json_by_ids(&state, user.id, &manga_ids).await?;
 	let mut entries = Vec::with_capacity(page_rows.len());
 	for (row, manga_value) in page_rows.into_iter().zip(manga_values) {
 		let progress = progress_of(row).unwrap_or_default();

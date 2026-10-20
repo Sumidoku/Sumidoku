@@ -2,6 +2,7 @@ use crate::error::ApiResult;
 use crate::model::SourceRow;
 use crate::source::repo::{self, BrowseFilter, SourceRepoRow};
 use crate::state::AppState;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
@@ -176,9 +177,10 @@ pub async fn install_source(
 
 pub async fn update_source(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	let update = repo::update_source(&state, id).await?;
+	let update = repo::update_source(&state, id, user.id).await?;
 	let latest = repo::latest_versions(&state.pool).await?;
 	let pinned = super::pins::pinned_map(&state.pool).await?;
 	let mut value = source_json(&update.source, &latest, &pinned);
@@ -189,8 +191,11 @@ pub async fn update_source(
 	Ok(Json(value))
 }
 
-pub async fn update_all(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let outcome = repo::update_all(&state).await?;
+pub async fn update_all(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	let outcome = repo::update_all(&state, user.id).await?;
 	let failed: Vec<Value> = outcome
 		.failed
 		.iter()

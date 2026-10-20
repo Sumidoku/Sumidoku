@@ -16,11 +16,13 @@ pub struct RekeyReport {
 	pub warnings: Vec<String>,
 }
 
-/// install_from_repo 成功后调用；old_version 是更新前已装版本
+/// install_from_repo 成功后调用；old_version 是更新前已装版本。
+/// 迁移引导按触发用户的库判定：只在别人的库里的条目不向当前用户推 flow A
 pub async fn migrate_after_update(
 	state: &Arc<AppState>,
 	source_id: i64,
 	old_version: i64,
+	user_id: i64,
 ) -> ApiResult<RekeyReport> {
 	let row: Option<(i64, i64)> =
 		sqlx::query_as("SELECT version, breaking_change_version FROM source WHERE id = ?")
@@ -48,9 +50,10 @@ pub async fn migrate_after_update(
 		// sourceManga.isEmpty 不弹迁移页）
 		let (in_library,): (i64,) = sqlx::query_as(
 			"SELECT COUNT(*) FROM manga m
-			 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 AND mu.in_library = 1
+			 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ? AND mu.in_library = 1
 			 WHERE m.source_id = ?",
 		)
+		.bind(user_id)
 		.bind(source_id)
 		.fetch_one(&state.pool)
 		.await?;

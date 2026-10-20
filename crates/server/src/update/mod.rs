@@ -97,13 +97,14 @@ impl UpdateScheduler {
 		loop {
 			interval.tick().await;
 			if let Some(guard) = self.try_acquire() {
-				self.fetch(None, guard).await;
+				// 定时拉取暂只覆盖内置 admin 的库；全用户 union 拉取随后台 worker 切片落地
+				self.fetch(crate::USER_ID, None, guard).await;
 			}
 		}
 	}
 
-	pub async fn fetch(self: &Arc<Self>, category_id: Option<i64>, _guard: OwnedMutexGuard<()>) {
-		let rows = match select_manga(&self.pool, category_id).await {
+	pub async fn fetch(self: &Arc<Self>, user_id: i64, category_id: Option<i64>, _guard: OwnedMutexGuard<()>) {
+		let rows = match select_manga(&self.pool, user_id, category_id).await {
 			Ok(rows) => rows,
 			Err(e) => {
 				tracing::warn!("update select failed: {e:?}");
@@ -139,7 +140,7 @@ impl UpdateScheduler {
 			tasks.spawn(async move {
 				let _permit = semaphore.acquire_owned().await.expect("semaphore open");
 				for manga in manga_rows {
-					scheduler.update_one(manga).await;
+					scheduler.update_one(user_id, manga).await;
 				}
 			});
 		}
@@ -153,7 +154,7 @@ impl UpdateScheduler {
 		self.running.store(false, Ordering::SeqCst);
 	}
 
-	async fn update_one(self: &Arc<Self>, manga: MangaRow) {
+	async fn update_one(self: &Arc<Self>, user_id: i64, manga: MangaRow) {
 		self.emit("running", &manga, 0);
 		let source: Option<(bool, String)> =
 			match sqlx::query_as("SELECT enabled, kind FROM source WHERE id = ?")
@@ -214,7 +215,7 @@ impl UpdateScheduler {
 				self.emit("complete", &manga, added);
 				// 本地漫画不进下载管理（文件本来就在本地），跳过新章自动下载
 				if added > 0 && self.auto_download && !is_local {
-					self.enqueue_new_chapters(manga.id, new_ids).await;
+					self.enqueue_new_chapters(user_id, manga.id, new_ids).await;
 				}
 			}
 			Err(e) => {
@@ -237,9 +238,9 @@ impl UpdateScheduler {
 	}
 
 	/// auto_download_new_chapters 联动：每漫画最多取 limit 个最新章入下载队
-	async fn enqueue_new_chapters(self: &Arc<Self>, manga_id: i64, new_ids: Vec<i64>) {
+	async fn enqueue_new_chapters(self: &Arc<Self>, user_id: i64, manga_id: i64, new_ids: Vec<i64>) {
 		let Some(state) = self.state.upgrade() else { return };
-		match download_allowed(&self.pool, manga_id).await {
+		match download_allowed(&self.pool, user_id, manga_id).await {
 			Ok(false) => return,
 			Err(e) => {
 				tracing::warn!(manga_id, "download category check failed: {e:?}");
@@ -258,7 +259,7 @@ impl UpdateScheduler {
 		}
 		match query.bind(self.auto_download_limit).fetch_all(&self.pool).await {
 			Ok(ids) if !ids.is_empty() => {
-				state.downloads().enqueue(&ids).await;
+				state.downloads().enqueue(&ids, user_id).await;
 			}
 			Ok(_) => {}
 			Err(e) => tracing::warn!(manga_id, "auto download select failed: {e}"),
@@ -277,17 +278,18 @@ impl UpdateScheduler {
 	}
 }
 
-/// 更新范围：在库且未标记 never_update；分类 include_in_update 三态
+/// 更新范围：该用户在库且未标记 never_update；分类 include_in_update 三态
 /// （有 INCLUDE 只跑 INCLUDE 分类下的，否则跑不在任何 EXCLUDE 分类的）
-async fn select_manga(pool: &SqlitePool, category_id: Option<i64>) -> ApiResult<Vec<MangaRow>> {
+async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>) -> ApiResult<Vec<MangaRow>> {
 	const BASE: &str = "SELECT m.* FROM manga m
-	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1 AND m.update_strategy != 1";
 	let sql = match category_id {
 		Some(id) => {
 			let tri: Option<(i64,)> =
-				sqlx::query_as("SELECT include_in_update FROM category WHERE id = ? AND user_id = 1")
+				sqlx::query_as("SELECT include_in_update FROM category WHERE id = ? AND user_id = ?")
 					.bind(id)
+					.bind(user_id)
 					.fetch_optional(pool)
 					.await?;
 			let Some((tri,)) = tri else {
@@ -298,54 +300,62 @@ async fn select_manga(pool: &SqlitePool, category_id: Option<i64>) -> ApiResult<
 			}
 			format!(
 				"{BASE} AND EXISTS (SELECT 1 FROM category_manga cm
-				 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND cm.category_id = {id})"
+				 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = {id})"
 			)
 		}
 		None => {
 			let has_include: Option<(i64,)> =
-				sqlx::query_as("SELECT 1 FROM category WHERE user_id = 1 AND include_in_update = 1 LIMIT 1")
+				sqlx::query_as("SELECT 1 FROM category WHERE user_id = ? AND include_in_update = 1 LIMIT 1")
+					.bind(user_id)
 					.fetch_optional(pool)
 					.await?;
 			if has_include.is_some() {
 				format!(
 					"{BASE} AND EXISTS (SELECT 1 FROM category_manga cm
 					 JOIN category c ON c.id = cm.category_id
-					 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND c.include_in_update = 1)"
+					 WHERE cm.manga_id = m.id AND cm.user_id = ? AND c.include_in_update = 1)"
 				)
 			} else {
 				format!(
 					"{BASE} AND NOT EXISTS (SELECT 1 FROM category_manga cm
 					 JOIN category c ON c.id = cm.category_id
-					 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND c.include_in_update = 2)"
+					 WHERE cm.manga_id = m.id AND cm.user_id = ? AND c.include_in_update = 2)"
 				)
 			}
 		}
 	};
-	let rows = sqlx::query_as::<_, MangaRow>(&sql).fetch_all(pool).await?;
+	let rows = sqlx::query_as::<_, MangaRow>(&sql)
+		.bind(user_id)
+		.bind(user_id)
+		.fetch_all(pool)
+		.await?;
 	Ok(rows)
 }
 
 /// include_in_download 三态过滤，规则与更新范围一致
-async fn download_allowed(pool: &SqlitePool, manga_id: i64) -> ApiResult<bool> {
+async fn download_allowed(pool: &SqlitePool, user_id: i64, manga_id: i64) -> ApiResult<bool> {
 	let has_include: Option<(i64,)> =
-		sqlx::query_as("SELECT 1 FROM category WHERE user_id = 1 AND include_in_download = 1 LIMIT 1")
+		sqlx::query_as("SELECT 1 FROM category WHERE user_id = ? AND include_in_download = 1 LIMIT 1")
+			.bind(user_id)
 			.fetch_optional(pool)
 			.await?;
 	if has_include.is_some() {
 		let hit: Option<(i64,)> = sqlx::query_as(
 			"SELECT 1 FROM category_manga cm JOIN category c ON c.id = cm.category_id
-			 WHERE cm.manga_id = ? AND cm.user_id = 1 AND c.include_in_download = 1 LIMIT 1",
+			 WHERE cm.manga_id = ? AND cm.user_id = ? AND c.include_in_download = 1 LIMIT 1",
 		)
 		.bind(manga_id)
+		.bind(user_id)
 		.fetch_optional(pool)
 		.await?;
 		Ok(hit.is_some())
 	} else {
 		let blocked: Option<(i64,)> = sqlx::query_as(
 			"SELECT 1 FROM category_manga cm JOIN category c ON c.id = cm.category_id
-			 WHERE cm.manga_id = ? AND cm.user_id = 1 AND c.include_in_download = 2 LIMIT 1",
+			 WHERE cm.manga_id = ? AND cm.user_id = ? AND c.include_in_download = 2 LIMIT 1",
 		)
 		.bind(manga_id)
+		.bind(user_id)
 		.fetch_optional(pool)
 		.await?;
 		Ok(blocked.is_none())

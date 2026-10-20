@@ -4,6 +4,7 @@ use crate::model::manga_from_row;
 use crate::source::{fetch_cover_image, manga_row};
 use crate::state::AppState;
 use axum::Json;
+use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -101,6 +102,7 @@ pub struct SelectCoverRequest {
 /// 缓存按它判新，不清旧字节的话换完后旧封面继续被 serve，选择永远不生效
 pub async fn select_cover(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(body): Json<SelectCoverRequest>,
 ) -> ApiResult<Json<Value>> {
@@ -116,7 +118,7 @@ pub async fn select_cover(
 		.await?;
 	invalidate_cache(&state.config.covers_dir, id).await;
 	let row = manga_row(&state.pool, id).await?;
-	Ok(Json(crate::api::manga_json(&state, &row).await?))
+	Ok(Json(crate::api::manga_json(&state, user.id, &row).await?))
 }
 
 /// 本体与 sidecar 一起删；还没缓存过时缺文件不算错误
