@@ -107,8 +107,8 @@ impl DownloadManager {
 		});
 	}
 
-	/// 入队去重后的章节列表；已 finished/在队/在跑的跳过，error 行重置重排
-	pub async fn enqueue(self: &Arc<Self>, chapter_ids: &[i64]) -> Vec<i64> {
+	/// 入队去重后的章节列表；行归属 user_id，已 finished/在队/在跑的跳过，error 行重置重排
+	pub async fn enqueue(self: &Arc<Self>, chapter_ids: &[i64], user_id: i64) -> Vec<i64> {
 		let format = match self.format.as_str() {
 			"folder" => "folder",
 			_ => "cbz",
@@ -121,8 +121,9 @@ impl DownloadManager {
 				continue;
 			}
 			let status: Option<(String,)> =
-				match sqlx::query_as("SELECT status FROM download WHERE chapter_id = ?")
+				match sqlx::query_as("SELECT status FROM download WHERE chapter_id = ? AND user_id = ?")
 					.bind(chapter_id)
+					.bind(user_id)
 					.fetch_optional(&self.pool)
 					.await
 				{
@@ -139,11 +140,12 @@ impl DownloadManager {
 				Some(_) => {
 					let result = sqlx::query(
 						"UPDATE download SET status = 'queued', error = NULL, retries = 0,
-						 format = ?, updated_at = ? WHERE chapter_id = ?",
+						 format = ?, updated_at = ? WHERE chapter_id = ? AND user_id = ?",
 					)
 					.bind(format)
 					.bind(now)
 					.bind(chapter_id)
+					.bind(user_id)
 					.execute(&self.pool)
 					.await;
 					if let Err(e) = result {
@@ -158,7 +160,7 @@ impl DownloadManager {
 						 VALUES (?, ?, 'queued', ?, ?, ?)",
 					)
 					.bind(chapter_id)
-					.bind(USER_ID)
+					.bind(user_id)
 					.bind(format)
 					.bind(now)
 					.bind(now)

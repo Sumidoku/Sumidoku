@@ -711,12 +711,14 @@ async fn cover_image(
 
 async fn chapter_file(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(chapter_id): Path<i64>,
 ) -> ApiResult<Response> {
 	chapter_row(&state.pool, chapter_id).await?;
 	let row: Option<(String, Option<String>)> =
-		sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ?")
+		sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
 			.bind(chapter_id)
+			.bind(user.id)
 			.fetch_optional(&state.pool)
 			.await?;
 	if let Some((status, Some(path))) = row
@@ -741,7 +743,7 @@ async fn chapter_file(
 		return Err(ApiError::not_found("chapter not downloaded"));
 	}
 	let manager = state.downloads();
-	manager.enqueue(&[chapter_id]).await;
+	manager.enqueue(&[chapter_id], user.id).await;
 	Ok((
 		StatusCode::ACCEPTED,
 		Json(json!({"queued": true, "chapterId": chapter_id})),

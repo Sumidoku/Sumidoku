@@ -259,7 +259,7 @@ impl UpdateScheduler {
 		}
 		match query.bind(self.auto_download_limit).fetch_all(&self.pool).await {
 			Ok(ids) if !ids.is_empty() => {
-				state.downloads().enqueue(&ids).await;
+				state.downloads().enqueue(&ids, user_id).await;
 			}
 			Ok(_) => {}
 			Err(e) => tracing::warn!(manga_id, "auto download select failed: {e}"),
