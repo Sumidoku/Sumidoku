@@ -45,12 +45,19 @@ export function statusText(s: string | null | undefined): string {
 	return STATUS_TEXT[s.toLowerCase()] ?? s;
 }
 
-export function chapterLabel(c: { chapter_number: number | null; title: string | null }): string {
+export function chapterLabel(c: {
+	volume_number: number | null;
+	chapter_number: number | null;
+	title: string | null;
+}): string {
+	const vol =
+		c.volume_number !== null && c.volume_number !== undefined ? `第 ${c.volume_number} 卷` : '';
 	const num =
 		c.chapter_number !== null && c.chapter_number !== undefined
 			? `第 ${c.chapter_number} 话`
 			: '';
 	const title = c.title?.trim() ?? '';
-	if (num && title) return `${num} · ${title}`;
-	return num || title || '未命名章节';
+	const parts = [vol, num].filter(Boolean);
+	if (parts.length > 0 && title) return `${parts.join(' · ')} · ${title}`;
+	return parts.join(' · ') || title || '未命名章节';
 }

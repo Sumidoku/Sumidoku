@@ -1676,6 +1676,18 @@ mod tests {
 	}
 
 	#[test]
+	fn unescape_decodes_full_entity_set() {
+		// named, decimal and hex references — the set the aidoku sources assume; the old
+		// hand-rolled matcher only knew &amp; &lt; &gt; and passed the rest through
+		assert_eq!(unescape_str("&quot;&#39;&#x27;&apos;&nbsp;"), "\"'''\u{a0}");
+		assert_eq!(
+			unescape_str("Tom &amp; Jerry&#39;s &quot;Chapter 5: &lt;Home&gt;&quot;"),
+			"Tom & Jerry's \"Chapter 5: <Home>\""
+		);
+		assert_eq!(unescape_str("no entities here"), "no entities here");
+	}
+
+	#[test]
 	fn contains_basic_and_scoped_suffix() {
 		let html = r#"<!DOCTYPE html><html><body>
 		<ul>

@@ -587,13 +587,34 @@ pub fn html(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
 	ctx.host().store.store(StoreItem::HtmlDocument(document))
 }
 
-/// Decode by the response body's charset: BOM → Content-Type → `<meta charset>` → UTF-8
-/// fallback. The Aidoku host has URLSession/SwiftSoup handle this step and reqwest does
-/// not; the old implementation ran from_utf8 on the bytes directly, and non-UTF-8 pages
-/// were failed wholesale
+/// Decode by the response body's charset: BOM → declared UTF-16 → strict UTF-8
+/// validation → Content-Type charset → `<meta charset>` sniff → UTF-8 lossy. If decoding
+/// produced replacement characters and the document declares another charset, re-decode
+/// the original bytes once.
+///
+/// The strict UTF-8 check outranks a declared single-byte charset on purpose: servers
+/// frequently serve UTF-8 pages with a lying label such as `iso-8859-1`, and decoding
+/// UTF-8 bytes as windows-1252 produces classic mojibake (e.g. "第1話" -> "ç¬¬1è©±").
+/// A full-document UTF-8 validation is a much stronger signal than the header, and the
+/// Aidoku host decodes bodies as UTF-8 outright (WasmNet.swift). Genuinely non-UTF-8
+/// pages (GBK/Big5) fail the validation and follow the declared/sniffed charset as
+/// before.
 fn decode_body(headers: &HeaderMap, data: &[u8]) -> String {
-	let (text, _, _) = detect_encoding(headers, data).decode(data);
-	text.into_owned()
+	let encoding = detect_encoding(headers, data);
+	let (text, _, _) = encoding.decode(data);
+	let text = text.into_owned();
+	if !text.contains('\u{FFFD}') {
+		return text;
+	}
+	// Decoding replaced bytes: the document may declare its real charset past the sniff
+	// window. ASCII-compatible encodings keep the <meta> tag itself readable, so the
+	// declaration can be recovered from the decoded text; re-decode the raw bytes once.
+	let head = &text[..text.len().min(8192)];
+	if let Some(enc) = charset_label_in(head).filter(|enc| *enc != encoding) {
+		let (retry, _, _) = enc.decode(data);
+		return retry.into_owned();
+	}
+	text
 }
 
 fn detect_encoding(headers: &HeaderMap, data: &[u8]) -> &'static encoding_rs::Encoding {
@@ -606,12 +627,27 @@ fn detect_encoding(headers: &HeaderMap, data: &[u8]) -> &'static encoding_rs::En
 	if data.starts_with(&[0xFE, 0xFF]) {
 		return encoding_rs::UTF_16BE;
 	}
-	if let Some(enc) = headers
+
+	let declared = headers
 		.get(CONTENT_TYPE)
 		.and_then(|v| v.to_str().ok())
 		.and_then(charset_from_content_type)
-		.and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+		.and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()));
+
+	// A declared UTF-16 encoding is authoritative even without a BOM: its bytes can
+	// otherwise pass the UTF-8 validation below (pure-ASCII UTF-16LE is full of NULs,
+	// which are legal UTF-8).
+	if let Some(enc) = declared
+		&& (enc == encoding_rs::UTF_16LE || enc == encoding_rs::UTF_16BE)
 	{
+		return enc;
+	}
+
+	if std::str::from_utf8(data).is_ok() {
+		return encoding_rs::UTF_8;
+	}
+
+	if let Some(enc) = declared {
 		return enc;
 	}
 	meta_charset(data).unwrap_or(encoding_rs::UTF_8)
@@ -635,6 +671,11 @@ fn charset_from_content_type(value: &str) -> Option<&str> {
 /// Sniff `<meta charset>` / `<meta http-equiv=content-type>` from the document's first 1024 bytes
 fn meta_charset(data: &[u8]) -> Option<&'static encoding_rs::Encoding> {
 	let head: String = data[..data.len().min(1024)].iter().map(|&b| char::from(b)).collect();
+	charset_label_in(&head)
+}
+
+/// Find a `charset` label in an ASCII-compatible text head
+fn charset_label_in(head: &str) -> Option<&'static encoding_rs::Encoding> {
 	let idx = head.to_ascii_lowercase().find("charset")?;
 	let after = head[idx + "charset".len()..].trim_start();
 	let after = after.strip_prefix('=')?.trim_start();
@@ -1074,6 +1115,39 @@ mod tests {
 	#[test]
 	fn decode_body_defaults_to_utf8() {
 		assert_eq!(decode_body(&HeaderMap::new(), "中文".as_bytes()), "中文");
+	}
+
+	#[test]
+	fn decode_body_ignores_lying_single_byte_charset() {
+		// UTF-8 content served with a wrong single-byte label: strict UTF-8 validation
+		// wins, otherwise "第1話" comes out as "ç¬¬1è©±"
+		let mut headers = HeaderMap::new();
+		headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=iso-8859-1"));
+		assert_eq!(decode_body(&headers, "第1話".as_bytes()), "第1話");
+	}
+
+	#[test]
+	fn decode_body_redetects_charset_past_sniff_window() {
+		// The meta declaration sits beyond the 1024-byte sniff window and no Content-Type
+		// charset is present: the lossy first pass leaves replacement chars, and the retry
+		// recovers the declaration from the decoded text
+		let mut body = b"<html><head>".to_vec();
+		body.extend_from_slice(&[b'x'; 1500]);
+		body.extend_from_slice(b"<meta charset=\"gbk\"></head><body>");
+		body.extend_from_slice(&encoding_rs::GBK.encode("中文章节").0);
+		let text = decode_body(&HeaderMap::new(), &body);
+		assert!(text.ends_with("中文章节"), "text: {text}");
+		assert!(!text.contains('\u{FFFD}'), "text: {text}");
+	}
+
+	#[test]
+	fn decode_body_honors_declared_utf16_without_bom() {
+		// Pure-ASCII UTF-16LE bytes are valid UTF-8 (NULs are legal), so the declared
+		// UTF-16 charset must win over the strict UTF-8 validation
+		let mut headers = HeaderMap::new();
+		headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-16"));
+		let utf16: Vec<u8> = "ab中".encode_utf16().flat_map(u16::to_le_bytes).collect();
+		assert_eq!(decode_body(&headers, &utf16), "ab中");
 	}
 
 	/// Minimal GBK-encoded page: optional meta declaration + one p.t paragraph

@@ -834,6 +834,13 @@ pub async fn reconcile_chapters(
 			new_keys.push(chapter.key.clone());
 		}
 		let scanlators = serde_json::to_string(&chapter.scanlators.clone().unwrap_or_default())?;
+		// whitespace-only titles fold to NULL, matching the Aidoku host's "" -> nil
+		// normalization; the webui treats both as "no title" either way
+		let title = chapter
+			.title
+			.as_ref()
+			.filter(|t| !t.trim().is_empty())
+			.cloned();
 		let language = chapter
 			.language
 			.as_ref()
@@ -853,7 +860,7 @@ pub async fn reconcile_chapters(
 		)
 		.bind(manga_id)
 		.bind(&chapter.key)
-		.bind(&chapter.title)
+		.bind(title)
 		.bind(chapter.chapter_number.map(|n| n as f64))
 		.bind(chapter.volume_number.map(|n| n as f64))
 		.bind(scanlators)
