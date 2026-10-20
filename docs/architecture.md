@@ -81,7 +81,9 @@ Migrations in `crates/server/migrations`.
   call semaphore (`state.rs`) still gating source calls globally. Results
   come back in request order as `{"sources": [{sourceId, entries,
   hasNextPage, error?}]}`, entries tagged exactly like the single-source
-  search (owning `sourceId`, plus the internal `id` when registered). A
+  search (owning `sourceId`, plus the internal `id` when registered). The
+  built-in local source answers from the same directory-scan arm as the
+  single-source endpoint (see the local-source bullet). A
   failing source — unknown id, disabled, or a failed source call — only
   marks its own entry (`entries: []`, `hasNextPage: false`,
   `error: {code, message}`) and never fails the request. With
@@ -169,6 +171,48 @@ Migrations in `crates/server/migrations`.
   target key differs from the origin's (identical `(source, key)` still
   reports `same_source`); the new-key row is fetched or reused and progress
   carries by chapter number as usual.
+- Built-in local source (`local/mod.rs`, migration `0011_source_kind.sql`):
+  `source.kind` is `aidoku` for every installed package and `local` for the
+  built-in `local.local` row the migration seeds; the row cannot be deleted
+  (400), is excluded from repo management and metadata backfill, and every
+  wasm-capability endpoint (filters, listings, home, deep link, settings,
+  login) answers 404 `unsupported` for it. There is no index table:
+  browsing scans `local_dir` (`SUMIDOKU_LOCAL_DIR`, default
+  `<config_dir>/local`) in real time — `POST /sources/{id}/search`
+  (`api/mod.rs:search_source`) branches for `kind = local` to
+  `scan_manga_dirs` with a case-insensitive substring filter on the
+  directory name (Suwayomi's `contains(query, ignoreCase = true)`),
+  answering key/title = directory name with the internal id attached when
+  the manga is registered and `hasNextPage` always false; the response is
+  always buffered (there is no source call to stream), and the aggregate
+  search reuses the same arm so a selected Local yields a section instead
+  of an error entry. A manga persists only when opened or shelved
+  (Suwayomi semantics): `find_or_register_manga` scans the directory, maps
+  `ComicInfo.xml` (top level, else extracted in-memory from the first
+  chapter archive carrying one) and feeds the same `upsert_manga` +
+  `reconcile_chapters` as an online fetch; the scan skips dot entries,
+  `@eaDir` and unreadable items and dedupes by directory name. Chapters
+  are subdirectories (image chapters) or single `.cbz`/`.zip` files,
+  ordered by the number parsed from the name (`第?N话` / `ch.?\s*N` /
+  `vol.?\s*N`) descending with a natural-order tiebreak, unnumbered ones
+  last; pages sort case-insensitive naturally. `load_pages`
+  (`source/mod.rs`) lists the chapter from the filesystem for local manga
+  and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
+  OPDS-PSE read image files directly and extract single CBZ entries
+  (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
+  with the downsample pipeline untouched. Covers reuse the disk cache with
+  the byte source switched to the fallback chain (`local::resolve_cover`):
+  `cover.*` sidecar in the manga directory → first page of the chapter
+  list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
+  one) → 404 placeholder. `?refresh=1` on the chapters endpoint re-scans;
+  the library update scheduler treats the local scan as the source call.
+  Auto-download skips local manga (files are already local), and the web
+  UI hides the download buttons for `kind = local`, shows a manual refresh
+  button on the chapter list, and reports the effective local directory
+  read-only in Settings: `GET /api/v1/settings` injects it as `localDir`
+  (camelCase, distinct from the `setting` table's dotted keys) and `PUT`
+  skips the key. RAR/CBR, PDF and 7z are out of scope (no mature pure-Rust
+  readers, or an external runtime library).
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the
@@ -252,7 +296,9 @@ Migrations in `crates/server/migrations`.
   (`{sourceId, count}`) for the web UI's source filter dropdown — counts
   include disabled sources' rows and only in-library manga. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
-  listing when it has download rows, and deletes it otherwise. Manga rows
+  listing when it has download rows, and deletes it otherwise — except keys
+  in the `protected` set (the local source's failed-directory protection,
+  see below), which survive the pass unread. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
   source `thumbnail`; a source declaring exactly one language fills missing
   chapter languages with it on reconcile. A non-zero
