@@ -1,11 +1,11 @@
 //! context_* 与 webview_* 的纯脚本子集由 Boa 实装（页面建模见 crate::webview）。
-//! 配置了真浏览器后端（net.browser_ws 的 CDP sidecar 或 net.browser_trawl 的
-//! trawl session API）时，webview_load/webview_get_cookies 走浏览器背衬
-//! （crate::browser）；webview_eval/webview_eval_async 在后端支持时（trawl）
-//! 同样走浏览器，CDP 后端与未配置时维持 Boa 页面模型。webview_delete_cookie
-//! 仅 CDP 支持，trawl 无对应端点。未配置时这几个函数与 webview_set_rule_list
-//! 一样显式不支持：返回 ABI 的 -1 家族错误码（JsError 没有 unsupported 专用码，
-//! 上游 aidoku-rs 对这些函数也一律 -1），并在源日志点名函数与原因。
+//! 配置了 trawl 浏览器后端（net.browser_trawl 的 session API）时，
+//! webview_load/webview_get_cookies 走浏览器背衬（crate::browser），
+//! webview_eval/webview_eval_async 同样路由进浏览器页面；未配置时 eval 族维持
+//! Boa 页面模型，load/get_cookies 与 webview_set_rule_list 一样显式不支持：
+//! 返回 ABI 的 -1 家族错误码（JsError 没有 unsupported 专用码，上游 aidoku-rs
+//! 对这些函数也一律 -1），并在源日志点名函数与原因。webview_delete_cookie
+//! 恒显式不支持（trawl 无 cookie 编辑端点）。
 use crate::{
 	browser::{BrowserCookie, BrowserError},
 	imports::CookieJar,
@@ -131,8 +131,8 @@ pub fn webview_load(ctx: &mut impl Ctx, webview: Rid, request: Rid) -> FFIResult
 	let Some(url) = req.url.clone() else {
 		return Result::InvalidRequest.into();
 	};
-	// CDP 的 Page.navigate 只有 GET；iOS 能整包 URLRequest（含 POST body）导航，
-	// 服务器背衬诚实报失败，不静默退化成 GET
+	// 浏览器背衬的导航只有 GET（trawl scrape 定死 GET）；iOS 能整包 URLRequest
+	// （含 POST body）导航，服务器背衬诚实报失败，不静默退化成 GET
 	if req.method != crate::imports::HttpMethod::Get {
 		ctx.host().log("webview_load: only GET navigation is supported by the browser backend");
 		return Result::MissingResult.into();
@@ -320,7 +320,7 @@ pub fn webview_delete_cookie(
 		Err(e) => return browser_fail(ctx, "webview_delete_cookie", &e),
 	};
 	// iOS 语义：按 name（可选 value/domain 收窄）取首个匹配删除，无匹配 -8。
-	// value 只作选择器，CDP 删除按 name+domain+path 定位
+	// value 只作选择器，浏览器删除按 name+domain+path 定位
 	let found = cookies.iter().find(|c| {
 		c.name == name
 			&& value.as_deref().is_none_or(|v| c.value == *v)
@@ -403,7 +403,7 @@ mod tests {
 
 	impl Harness {
 		fn new(limits: Limits) -> Self {
-			Self::with_browser(limits, crate::browser::BrowserState::new(None, Duration::from_secs(1)))
+			Self::with_browser(limits, crate::browser::BrowserState::unconfigured(Duration::from_secs(1)))
 		}
 
 		fn with_browser(limits: Limits, browser: crate::browser::BrowserState) -> Self {
@@ -1039,7 +1039,7 @@ mod tests {
 		assert!(mock.deleted.is_empty() && mock.cleared.is_empty(), "不触达浏览器");
 	}
 
-	// ---------- e2e：真 CDP，SUMIDOKU_TEST_BROWSER_WS 指向才跑 ----------
+	// ---------- e2e 共享夹具：mock 站点与站点地址 ----------
 
 	type SeenRequests = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
 
@@ -1137,110 +1137,6 @@ mod tests {
 		"host.docker.internal".to_string()
 	}
 
-	fn e2e_harness() -> Option<Harness> {
-		let ws = std::env::var("SUMIDOKU_TEST_BROWSER_WS").ok().filter(|v| !v.is_empty())?;
-		Some(Harness::with_browser(
-			Limits::default(),
-			crate::browser::BrowserState::new(Some(ws), Duration::from_secs(30)),
-		))
-	}
-
-	#[test]
-	fn e2e_webview_login_flow_cookies_reach_jar_and_requests() {
-		let Some(mut h) = e2e_harness() else {
-			eprintln!("SUMIDOKU_TEST_BROWSER_WS 未设置，跳过");
-			return;
-		};
-		let site = mock_site();
-		let base = site.base();
-		let host = e2e_site_host();
-		let wv = h.wv_create();
-		let req = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login")));
-		assert_eq!(h.wv_load(wv, req), 0, "webview_load 真导航");
-		// 导航后 cookie 已回流 jar
-		assert_eq!(
-			h.jar_header(&format!("{base}/api")),
-			Some("sess=alpha-secret".to_string()),
-			"登录 cookie 回流进 jar"
-		);
-		// get_cookies 读回 ABI 形状
-		let rid = h.wv_get_cookies(wv);
-		assert!(rid > 0, "get_cookies: {rid}");
-		let cookies = decoded_cookies(&h, rid);
-		assert!(
-			cookies.iter().any(|c| c.name == "sess" && c.value == "alpha-secret" && c.domain == host),
-			"cookie 形状: {cookies:?}"
-		);
-		// 源 API 请求自动带会话 cookie（net 栈从 jar 取）
-		let api = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/api")));
-		assert_eq!(crate::imports::net::send(&mut h.ctx, api), 0);
-		assert_eq!(
-			site.cookie_for("/api"),
-			Some("sess=alpha-secret".to_string()),
-			"API 请求带会话 cookie"
-		);
-	}
-
-	#[test]
-	fn e2e_webview_contexts_are_isolated() {
-		let Some(mut h) = e2e_harness() else {
-			eprintln!("SUMIDOKU_TEST_BROWSER_WS 未设置，跳过");
-			return;
-		};
-		let site = mock_site();
-		let base = site.base();
-		let wv_a = h.wv_create();
-		let wv_b = h.wv_create();
-		let req_a = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login?who=alpha")));
-		let req_b = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login?who=beta")));
-		assert_eq!(h.wv_load(wv_a, req_a), 0);
-		assert_eq!(h.wv_load(wv_b, req_b), 0);
-		let rid_a = h.wv_get_cookies(wv_a);
-		let rid_b = h.wv_get_cookies(wv_b);
-		assert!(rid_a > 0 && rid_b > 0);
-		let cookies_a = decoded_cookies(&h, rid_a);
-		let cookies_b = decoded_cookies(&h, rid_b);
-		assert!(
-			cookies_a.iter().any(|c| c.name == "sess" && c.value == "alpha-secret")
-				&& !cookies_a.iter().any(|c| c.value == "beta-secret"),
-			"wv_a 只见自己的会话: {cookies_a:?}"
-		);
-		assert!(
-			cookies_b.iter().any(|c| c.name == "sess" && c.value == "beta-secret")
-				&& !cookies_b.iter().any(|c| c.value == "alpha-secret"),
-			"wv_b 只见自己的会话: {cookies_b:?}"
-		);
-	}
-
-	#[test]
-	fn e2e_webview_delete_and_clear_cookies() {
-		let Some(mut h) = e2e_harness() else {
-			eprintln!("SUMIDOKU_TEST_BROWSER_WS 未设置，跳过");
-			return;
-		};
-		let site = mock_site();
-		let base = site.base();
-		let wv = h.wv_create();
-		let req = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login")));
-		assert_eq!(h.wv_load(wv, req), 0);
-
-		assert_eq!(h.wv_delete_cookie(wv, Some("sess"), None, None, None), 0, "按 name 删除");
-		let rid = h.wv_get_cookies(wv);
-		assert!(rid > 0);
-		assert!(
-			!decoded_cookies(&h, rid).iter().any(|c| c.name == "sess"),
-			"sess 已删: {:?}",
-			decoded_cookies(&h, rid)
-		);
-		assert_eq!(h.wv_delete_cookie(wv, Some("sess"), None, None, None), -8, "已删再删无匹配");
-
-		let req = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/login")));
-		assert_eq!(h.wv_load(wv, req), 0);
-		assert_eq!(h.wv_delete_cookie(wv, None, Some(u32::MAX), None, None), 0, "清空全 store");
-		let rid = h.wv_get_cookies(wv);
-		assert!(rid > 0);
-		assert!(decoded_cookies(&h, rid).is_empty(), "清空后为空: {:?}", decoded_cookies(&h, rid));
-	}
 
 	// ---------- e2e：trawl session 后端，SUMIDOKU_TEST_TRAWL_URL 指向才跑 ----------
 

@@ -29,8 +29,6 @@ regex = "1"
 url = "2.5"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 boa_engine = "0.21"
-chromiumoxide = { version = "0.9", default-features = false }
-futures = "0.3"
 tiny-skia = "0.12"
 fontdb = "0.24"
 ttf-parser = "0.25"
