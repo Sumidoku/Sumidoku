@@ -93,7 +93,7 @@ export default function MigratePage() {
 	const [executed, setExecuted] = useState(false);
 
 	const sourcesQuery = useMigrateSources();
-	const libraryQuery = useLibrary(undefined, { sourceId: sourceId ?? 0 });
+	const libraryQuery = useLibrary({ sourceId: sourceId ?? 0 });
 	const migrate = useMigrate();
 
 	// The migration source list sorts alphabetically by name, same as the installed-source list

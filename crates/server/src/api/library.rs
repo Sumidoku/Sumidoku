@@ -36,6 +36,9 @@ pub struct LibraryQuery {
 	/// Comma-separated source ids, inclusion set
 	pub source: Option<String>,
 	pub source_exclude: Option<String>,
+	/// Comma-separated category ids, inclusion set; 0 means uncategorized (no category rows of the user's own)
+	pub category: Option<String>,
+	pub category_exclude: Option<String>,
 }
 
 /// LIKE's %/_ are wildcards, so literal occurrences and the escape character itself in the user's search term must be escaped upfront
@@ -112,8 +115,8 @@ pub async fn list_library(
 	}
 	let (order_by, order_user_bind) = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
-	// bind order follows the SQL clauses: user → search → categoryId → rating include → rating exclude →
-	// source include → source exclude → sourceId → one user per filter clause → user for the ORDER BY clause
+	// bind order follows the SQL clauses: user → search → categoryId → category include → category exclude →
+	// rating include → rating exclude → source include → source exclude → sourceId → one user per filter clause → user for the ORDER BY clause
 	let rating_in = match &query.content_rating {
 		Some(raw) => parse_int_list(raw, "contentRating", |v| (1..=3).contains(&v))?,
 		None => Vec::new(),
@@ -130,6 +133,18 @@ pub async fn list_library(
 		Some(raw) => parse_int_list(raw, "sourceExclude", |_| true)?,
 		None => Vec::new(),
 	};
+	let cat_in = match &query.category {
+		Some(raw) => parse_int_list(raw, "category", |v| v >= 0)?,
+		None => Vec::new(),
+	};
+	let cat_ex = match &query.category_exclude {
+		Some(raw) => parse_int_list(raw, "categoryExclude", |v| v >= 0)?,
+		None => Vec::new(),
+	};
+	// category sets split into real ids (IN / NOT IN over the user's category rows) and the 0 arm
+	// (uncategorized): include-0 is NOT EXISTS, exclude-0 is EXISTS
+	let cat_in_links: Vec<i64> = cat_in.iter().copied().filter(|&id| id != 0).collect();
+	let cat_ex_links: Vec<i64> = cat_ex.iter().copied().filter(|&id| id != 0).collect();
 	let mut sql = LIBRARY_SELECT.to_string();
 	if search.is_some() {
 		sql.push_str(" AND m.title LIKE '%'||?||'%' ESCAPE '\\'");
@@ -148,6 +163,44 @@ pub async fn list_library(
 				 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = ?)",
 			);
 		}
+	}
+	// OR within the include set: real ids and the 0 arm (uncategorized) are alternatives,
+	// so mixed sets must be one parenthesized OR group, not separate ANDed clauses
+	let mut cat_in_arms: Vec<String> = Vec::new();
+	if !cat_in_links.is_empty() {
+		cat_in_arms.push(format!(
+			"EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id IN ({}))",
+			in_placeholders(cat_in_links.len())
+		));
+	}
+	if cat_in.contains(&0) {
+		cat_in_arms.push(
+			"NOT EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ?)"
+				.into(),
+		);
+	}
+	if cat_in_arms.len() == 1 {
+		sql.push_str(" AND ");
+		sql.push_str(&cat_in_arms[0]);
+	} else if !cat_in_arms.is_empty() {
+		sql.push_str(" AND (");
+		sql.push_str(&cat_in_arms.join(" OR "));
+		sql.push(')');
+	}
+	if !cat_ex_links.is_empty() {
+		sql.push_str(&format!(
+			" AND NOT EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id IN ({}))",
+			in_placeholders(cat_ex_links.len())
+		));
+	}
+	if cat_ex.contains(&0) {
+		sql.push_str(
+			" AND EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ?)",
+		);
 	}
 	if !rating_in.is_empty() {
 		sql.push_str(&format!(" AND m.content_rating IN ({})", in_placeholders(rating_in.len())));
@@ -193,6 +246,24 @@ pub async fn list_library(
 		None => {}
 		Some(0) => q = q.bind(user.id),
 		Some(category_id) => q = q.bind(user.id).bind(category_id),
+	}
+	if !cat_in_links.is_empty() {
+		q = q.bind(user.id);
+		for v in &cat_in_links {
+			q = q.bind(v);
+		}
+	}
+	if cat_in.contains(&0) {
+		q = q.bind(user.id);
+	}
+	if !cat_ex_links.is_empty() {
+		q = q.bind(user.id);
+		for v in &cat_ex_links {
+			q = q.bind(v);
+		}
+	}
+	if cat_ex.contains(&0) {
+		q = q.bind(user.id);
 	}
 	for v in rating_in {
 		q = q.bind(v);

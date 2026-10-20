@@ -15,7 +15,6 @@ import {
 	PageHeader,
 	Select,
 	Skeleton,
-	Tabs,
 	TriStateDropdown
 } from '../components';
 
@@ -32,9 +31,8 @@ const FILTER_OPTIONS: { value: LibraryFilter; label: string }[] = [
 	{ value: 'bookmarked', label: '书签' }
 ];
 
-const ALL = 'all';
+/** Tri-state key of the built-in "uncategorized" arm (mirrors the API's category=0) */
 const UNCATEGORIZED = '0';
-
 /** Next state of the tri-state cycle: unselected → include → exclude → unselected */
 function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
@@ -56,26 +54,26 @@ function cycled(sel: TriStateSelection, key: string): TriStateSelection {
 }
 
 export default function LibraryPage() {
-	const [tab, setTab] = useState(ALL);
 	const [searchInput, setSearchInput] = useState('');
 	const [search, setSearch] = useState('');
 	const [sort, setSort] = useState<LibrarySort>('added');
 	const [filterTri, setFilterTri] = useState<TriStateSelection>({});
 	const [ratings, setRatings] = useState<TriStateSelection>({});
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>({});
+	const [categoryTri, setCategoryTri] = useState<TriStateSelection>({});
 
 	useEffect(() => {
 		const t = setTimeout(() => setSearch(searchInput.trim()), 300);
 		return () => clearTimeout(t);
 	}, [searchInput]);
 
-	const categoryId = tab === ALL ? undefined : Number(tab);
-	const query = useLibrary(categoryId, {
+	const query = useLibrary({
 		search: search || undefined,
 		sort,
 		filters: filterTri,
 		ratings,
-		sources: sourceTri
+		sources: sourceTri,
+		categories: categoryTri
 	});
 	const categories = useCategories();
 	const sourcesQuery = useSources();
@@ -104,10 +102,12 @@ export default function LibraryPage() {
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
 		[query.data]
 	);
-	const ratingCount = Object.keys(ratings).length;
-	const sourceCount = Object.keys(sourceTri).length;
 	const filtering =
-		search !== '' || Object.keys(filterTri).length > 0 || ratingCount > 0 || sourceCount > 0;
+		search !== '' ||
+		Object.keys(filterTri).length > 0 ||
+		Object.keys(ratings).length > 0 ||
+		Object.keys(sourceTri).length > 0 ||
+		Object.keys(categoryTri).length > 0;
 
 	function clearFilters() {
 		setSearchInput('');
@@ -115,48 +115,80 @@ export default function LibraryPage() {
 		setFilterTri({});
 		setRatings({});
 		setSourceTri({});
+		setCategoryTri({});
 	}
-
-	const tabs = [
-		{ key: ALL, label: '全部' },
-		{ key: UNCATEGORIZED, label: '未分类' },
-		...(categories.data ?? []).map((c) => ({
-			key: String(c.id),
-			label: c.name,
-			badge: c.mangaCount
-		}))
-	];
 
 	return (
 		<div className="page container">
 			<PageHeader
 				title="书库"
 				actions={
-					<>
-						<Input
-							className="library__search"
-							icon={<Search size={15} />}
-							type="search"
-							placeholder="搜索书库…"
-							value={searchInput}
-							onChange={(e) => setSearchInput(e.currentTarget.value)}
-						/>
-						<Select
-							aria-label="排序"
-							value={sort}
-							onChange={(e) => setSort(e.currentTarget.value as LibrarySort)}
-						>
-							{SORT_OPTIONS.map((o) => (
-								<option key={o.value} value={o.value}>
-									{o.label}
-								</option>
-							))}
-						</Select>
-					</>
+					<Input
+						className="library__search"
+						icon={<Search size={15} />}
+						type="search"
+						placeholder="搜索书库…"
+						value={searchInput}
+						onChange={(e) => setSearchInput(e.currentTarget.value)}
+					/>
 				}
 			/>
 
 			<div className="library__filters">
+				{/* Category tri-state chips replace the old category tabs: no chip selected = 全部; 未分类 is the API's category=0 arm */}
+				<Chip
+					color={
+						categoryTri[UNCATEGORIZED] === 1
+							? 'accent'
+							: categoryTri[UNCATEGORIZED] === -1
+								? 'danger'
+								: 'default'
+					}
+					className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
+					title={triTitle('未分类', categoryTri[UNCATEGORIZED] ?? 0)}
+					onClick={() => setCategoryTri((cur) => cycled(cur, UNCATEGORIZED))}
+				>
+					{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}未分类
+				</Chip>
+				{(categories.data ?? []).map((c) => {
+					const st = categoryTri[String(c.id)] ?? 0;
+					return (
+						<Chip
+							key={c.id}
+							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
+							className={st === -1 ? 'chip--exclude' : undefined}
+							title={triTitle(c.name, st)}
+							onClick={() => setCategoryTri((cur) => cycled(cur, String(c.id)))}
+						>
+							{st === -1 ? '− ' : ''}
+							{c.name}（{c.mangaCount}）
+						</Chip>
+					);
+				})}
+				{/* Same tri-state dropdown as the cross-source search page; sources include disabled ones — library entries may belong to them */}
+				<TriStateDropdown
+					label="分级"
+					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
+					states={ratings}
+					onCycle={(k) => setRatings((cur) => cycled(cur, k))}
+				/>
+				<TriStateDropdown
+					label="图源"
+					options={triOptions}
+					states={sourceTri}
+					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
+				/>
+				<Select
+					aria-label="排序"
+					value={sort}
+					onChange={(e) => setSort(e.currentTarget.value as LibrarySort)}
+				>
+					{SORT_OPTIONS.map((o) => (
+						<option key={o.value} value={o.value}>
+							{o.label}
+						</option>
+					))}
+				</Select>
 				{/* Same tri-state chips as the manga detail page's chapter filter: unselected → include → exclude */}
 				{FILTER_OPTIONS.map((o) => {
 					const st = filterTri[o.value] ?? 0;
@@ -173,26 +205,6 @@ export default function LibraryPage() {
 						</Chip>
 					);
 				})}
-			</div>
-
-			<div className="library__filters" role="group" aria-label="内容分级与图源">
-				{/* Same tri-state dropdown as the cross-source search page; sources include disabled ones — library entries may belong to them */}
-				<TriStateDropdown
-					label="分级"
-					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
-					states={ratings}
-					onCycle={(k) => setRatings((cur) => cycled(cur, k))}
-				/>
-				<TriStateDropdown
-					label="图源"
-					options={triOptions}
-					states={sourceTri}
-					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
-				/>
-			</div>
-
-			<div className="library__tabs">
-				<Tabs tabs={tabs} active={tab} onChange={setTab} />
 			</div>
 
 			{query.isPending ? (

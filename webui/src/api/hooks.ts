@@ -179,6 +179,8 @@ export interface LibraryBrowse {
 	ratings?: TriStateSelection;
 	/** Source tri-state (source id → 1 include / -1 exclude) */
 	sources?: TriStateSelection;
+	/** Category tri-state (category id, "0" = uncategorized → 1 include / -1 exclude) */
+	categories?: TriStateSelection;
 }
 
 /** Split a tri-state into the API's two comma-separated include/exclude strings; an empty set is omitted */
@@ -193,16 +195,16 @@ function triParams(sel: TriStateSelection | undefined): [string?, string?] {
 	return [inc.length > 0 ? inc.join(',') : undefined, exc.length > 0 ? exc.join(',') : undefined];
 }
 
-export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse = {}) {
-	const { search, sort, filters, sourceId, ratings, sources } = browse;
+export function useLibrary(browse: LibraryBrowse = {}) {
+	const { search, sort, filters, sourceId, ratings, sources, categories } = browse;
 	const [filterInc, filterExc] = triParams(filters);
 	const [ratingInc, ratingExc] = triParams(ratings);
 	const [sourceInc, sourceExc] = triParams(sources);
+	const [categoryInc, categoryExc] = triParams(categories);
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { categoryId: categoryId ?? null, search, sort, filters, sourceId, ratings, sources }],
+		queryKey: [...qk.library, { search, sort, filters, sourceId, ratings, sources, categories }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
-			if (categoryId !== undefined) qs.set('categoryId', String(categoryId));
 			if (sourceId !== undefined) qs.set('sourceId', String(sourceId));
 			if (search) qs.set('search', search);
 			if (sort) qs.set('sort', sort);
@@ -212,6 +214,8 @@ export function useLibrary(categoryId: number | undefined, browse: LibraryBrowse
 			if (ratingExc) qs.set('contentRatingExclude', ratingExc);
 			if (sourceInc) qs.set('source', sourceInc);
 			if (sourceExc) qs.set('sourceExclude', sourceExc);
+			if (categoryInc) qs.set('category', categoryInc);
+			if (categoryExc) qs.set('categoryExclude', categoryExc);
 			return api<LibraryPage>(`/library?${qs}`);
 		},
 		initialPageParam: 1,
