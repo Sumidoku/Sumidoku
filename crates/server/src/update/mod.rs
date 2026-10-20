@@ -26,6 +26,9 @@ pub struct UpdateEvent {
 	pub source_id: i64,
 	#[serde(rename = "addedChapters")]
 	pub added_chapters: i64,
+	/// 事件归属用户（该漫画在谁的书库里），WS 按连接用户过滤
+	#[serde(skip)]
+	pub user_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -38,6 +41,9 @@ pub struct UpdateSummary {
 	pub skipped: i64,
 	pub pending: i64,
 	pub last_run_at: Option<i64>,
+	/// 本次 fetch 的归属：None = 定时 union（全局进度全员可见），Some = 该用户手动触发
+	#[serde(skip)]
+	pub user_id: Option<i64>,
 }
 
 /// 库更新检测：定时或手动触发全量 fetch，分类 include_in_update 三态过滤。
@@ -97,13 +103,12 @@ impl UpdateScheduler {
 		loop {
 			interval.tick().await;
 			if let Some(guard) = self.try_acquire() {
-				// 定时拉取暂只覆盖内置 admin 的库；全用户 union 拉取随后台 worker 切片落地
-				self.fetch(crate::USER_ID, None, guard).await;
+				self.fetch_union(guard).await;
 			}
 		}
 	}
 
-	pub async fn fetch(self: &Arc<Self>, user_id: i64, category_id: Option<i64>, _guard: OwnedMutexGuard<()>) {
+	pub async fn fetch(self: &Arc<Self>, user_id: i64, category_id: Option<i64>, guard: OwnedMutexGuard<()>) {
 		let rows = match select_manga(&self.pool, user_id, category_id).await {
 			Ok(rows) => rows,
 			Err(e) => {
@@ -111,6 +116,56 @@ impl UpdateScheduler {
 				return;
 			}
 		};
+		let owners = rows.iter().map(|row| (row.id, vec![user_id])).collect();
+		self.run_fetch(rows, owners, Some(user_id), guard).await;
+	}
+
+	/// 定时全量：所有用户书库的并集，同一漫画只回源拉一次；自动下载按各用户自己的过滤
+	pub async fn fetch_union(self: &Arc<Self>, guard: OwnedMutexGuard<()>) {
+		let user_ids: Vec<i64> = match sqlx::query_scalar(
+			"SELECT DISTINCT user_id FROM manga_user WHERE in_library = 1 ORDER BY user_id",
+		)
+		.fetch_all(&self.pool)
+		.await
+		{
+			Ok(ids) => ids,
+			Err(e) => {
+				tracing::warn!("update union user select failed: {e:?}");
+				return;
+			}
+		};
+		let mut rows: Vec<MangaRow> = Vec::new();
+		let mut owners: HashMap<i64, Vec<i64>> = HashMap::new();
+		for user_id in user_ids {
+			// 逐用户复用同一套三态过滤，规则不与手动触发漂移
+			let user_rows = match select_manga(&self.pool, user_id, None).await {
+				Ok(rows) => rows,
+				Err(e) => {
+					tracing::warn!("update union select failed: {e:?}");
+					continue;
+				}
+			};
+			for row in user_rows {
+				match owners.entry(row.id) {
+					std::collections::hash_map::Entry::Vacant(v) => {
+						v.insert(vec![user_id]);
+						rows.push(row);
+					}
+					std::collections::hash_map::Entry::Occupied(mut o) => o.get_mut().push(user_id),
+				}
+			}
+		}
+		self.run_fetch(rows, owners, None, guard).await;
+	}
+
+	async fn run_fetch(
+		self: &Arc<Self>,
+		rows: Vec<MangaRow>,
+		owners: HashMap<i64, Vec<i64>>,
+		scope: Option<i64>,
+		_guard: OwnedMutexGuard<()>,
+	) {
+		let owners = Arc::new(owners);
 		let total = rows.len() as i64;
 		{
 			let mut summary = self.summary.write().await;
@@ -122,11 +177,12 @@ impl UpdateScheduler {
 				skipped: 0,
 				pending: total,
 				last_run_at: Some(unix_now()),
+				user_id: scope,
 			};
 		}
 		self.running.store(true, Ordering::SeqCst);
 		for row in &rows {
-			self.emit("pending", row, 0);
+			self.emit_for(owners.get(&row.id).map(Vec::as_slice).unwrap_or(&[]), "pending", row, 0);
 		}
 		let mut by_source: HashMap<i64, Vec<MangaRow>> = HashMap::new();
 		for row in rows {
@@ -137,10 +193,11 @@ impl UpdateScheduler {
 		for manga_rows in by_source.into_values() {
 			let scheduler = self.clone();
 			let semaphore = semaphore.clone();
+			let owners = owners.clone();
 			tasks.spawn(async move {
 				let _permit = semaphore.acquire_owned().await.expect("semaphore open");
 				for manga in manga_rows {
-					scheduler.update_one(user_id, manga).await;
+					scheduler.update_one(manga, &owners).await;
 				}
 			});
 		}
@@ -154,8 +211,9 @@ impl UpdateScheduler {
 		self.running.store(false, Ordering::SeqCst);
 	}
 
-	async fn update_one(self: &Arc<Self>, user_id: i64, manga: MangaRow) {
-		self.emit("running", &manga, 0);
+	async fn update_one(self: &Arc<Self>, manga: MangaRow, owners: &HashMap<i64, Vec<i64>>) {
+		let interested = owners.get(&manga.id).map(Vec::as_slice).unwrap_or(&[]);
+		self.emit_for(interested, "running", &manga, 0);
 		let source: Option<(bool, String)> =
 			match sqlx::query_as("SELECT enabled, kind FROM source WHERE id = ?")
 				.bind(manga.source_id)
@@ -166,18 +224,18 @@ impl UpdateScheduler {
 				Err(e) => {
 					tracing::warn!(manga_id = manga.id, "update source query failed: {e}");
 					self.account("failed").await;
-					self.emit("failed", &manga, 0);
+					self.emit_for(interested, "failed", &manga, 0);
 					return;
 				}
 			};
 		let Some((enabled, kind)) = source else {
 			self.account("skipped").await;
-			self.emit("skipped", &manga, 0);
+			self.emit_for(interested, "skipped", &manga, 0);
 			return;
 		};
 		if !enabled {
 			self.account("skipped").await;
-			self.emit("skipped", &manga, 0);
+			self.emit_for(interested, "skipped", &manga, 0);
 			return;
 		}
 		let is_local = kind == crate::model::SOURCE_KIND_LOCAL;
@@ -212,16 +270,18 @@ impl UpdateScheduler {
 			Ok(new_ids) => {
 				let added = new_ids.len() as i64;
 				self.account("complete").await;
-				self.emit("complete", &manga, added);
+				self.emit_for(interested, "complete", &manga, added);
 				// 本地漫画不进下载管理（文件本来就在本地），跳过新章自动下载
 				if added > 0 && self.auto_download && !is_local {
-					self.enqueue_new_chapters(user_id, manga.id, new_ids).await;
+					for &user_id in interested {
+						self.enqueue_new_chapters(user_id, manga.id, new_ids.clone()).await;
+					}
 				}
 			}
 			Err(e) => {
 				tracing::warn!(manga_id = manga.id, "update failed: {e:?}");
 				self.account("failed").await;
-				self.emit("failed", &manga, 0);
+				self.emit_for(interested, "failed", &manga, 0);
 			}
 		}
 	}
@@ -266,15 +326,18 @@ impl UpdateScheduler {
 		}
 	}
 
-	fn emit(&self, status: &'static str, manga: &MangaRow, added_chapters: i64) {
-		let _ = self.events.send(UpdateEvent {
-			kind: "job",
-			status,
-			manga_id: manga.id,
-			manga_title: manga.title.clone(),
-			source_id: manga.source_id,
-			added_chapters,
-		});
+	fn emit_for(&self, user_ids: &[i64], status: &'static str, manga: &MangaRow, added_chapters: i64) {
+		for &user_id in user_ids {
+			let _ = self.events.send(UpdateEvent {
+				kind: "job",
+				status,
+				manga_id: manga.id,
+				manga_title: manga.title.clone(),
+				source_id: manga.source_id,
+				added_chapters,
+				user_id: Some(user_id),
+			});
+		}
 	}
 }
 

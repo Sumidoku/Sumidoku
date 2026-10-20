@@ -14,8 +14,7 @@ pub mod state;
 pub mod update;
 pub mod webui_assets;
 
-/// 内置 admin（user 1）：定时更新、下载 worker、定时备份这些后台路径暂以它为归属用户；
-/// 后台 worker 按用户改造落地后应没有剩余引用
+/// 内置 admin（user 1）：定时备份路径暂以它为归属用户，多用户定时备份语义属后续切片
 pub(crate) const USER_ID: i64 = 1;
 pub(crate) const PAGE_SIZE: i64 = 50;
 
