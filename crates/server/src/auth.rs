@@ -95,6 +95,15 @@ impl AuthState {
 	pub async fn enabled(&self) -> bool {
 		self.admin_password_hash.read().await.is_some()
 	}
+
+	/// 用户记录变更（删号/重置密码/换角色）后，OPDS 缓存的身份一并作废
+	pub(crate) async fn invalidate_basic_cache(&self) {
+		*self.basic_cache.write().await = None;
+	}
+
+	pub(crate) async fn set_admin_password_hash(&self, hash: String) {
+		*self.admin_password_hash.write().await = Some(hash);
+	}
 }
 
 /// 启动时落实 admin 密码：config/env 配置面优先（覆盖库内哈希），否则沿用库内已存哈希；
@@ -217,8 +226,17 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
-	Json(json!({ "enabled": state.auth.enabled().await }))
+/// 认证开关 + 当前凭证身份：SPA 刷新后只剩 token，靠它恢复账号显示；认证关闭时 user 恒 null
+pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
+	let enabled = state.auth.enabled().await;
+	let user = match enabled {
+		true => bearer_user(&state, presented_token(&req)).await?,
+		false => None,
+	};
+	Ok(Json(json!({
+		"enabled": enabled,
+		"user": user.map(|u| json!({ "id": u.id, "username": u.username, "role": u.role })),
+	})))
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> ApiResult<Json<Value>> {
@@ -303,9 +321,9 @@ pub async fn change_password(
 		.execute(&state.pool)
 		.await?;
 	if user.id == 1 {
-		*state.auth.admin_password_hash.write().await = Some(new_hash);
+		state.auth.set_admin_password_hash(new_hash).await;
 	}
-	*state.auth.basic_cache.write().await = None;
+	state.auth.invalidate_basic_cache().await;
 	Ok(StatusCode::NO_CONTENT)
 }
 

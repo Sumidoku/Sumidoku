@@ -17,6 +17,7 @@ pub mod search;
 pub mod settings;
 pub mod suwayomi_backup;
 pub mod update;
+pub mod users;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
