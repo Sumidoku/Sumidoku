@@ -424,3 +424,137 @@ async fn download_allowed(pool: &SqlitePool, user_id: i64, manga_id: i64) -> Api
 		Ok(blocked.is_none())
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::config::Config;
+	use tokio::sync::mpsc;
+
+	fn fixture_wasm() -> String {
+		std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("../wasm/tests/fixtures/example/main.wasm")
+			.display()
+			.to_string()
+	}
+
+	async fn union_state(config: Config) -> (Arc<AppState>, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('en.example-source', 'Example', ?) RETURNING id",
+		)
+		.bind(fixture_wasm())
+		.fetch_one(&pool)
+		.await
+		.expect("insert source");
+		let (defaults_tx, _defaults_rx) = mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = mpsc::unbounded_channel();
+		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
+		assert!(state.downloads.set(crate::download::DownloadManager::new(&state)).is_ok());
+		(state, source_id, tmp)
+	}
+
+	async fn add_manga(state: &AppState, source_id: i64, key: &str) -> i64 {
+		sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, ?, ?) RETURNING id")
+			.bind(source_id)
+			.bind(key)
+			.bind(format!("Manga {key}"))
+			.fetch_one(&state.pool)
+			.await
+			.expect("insert manga")
+	}
+
+	async fn add_to_library(state: &AppState, manga_id: i64, user_id: i64) {
+		sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 1)")
+			.bind(manga_id)
+			.bind(user_id)
+			.execute(&state.pool)
+			.await
+			.expect("add to library");
+	}
+
+	async fn insert_bob(state: &AppState) {
+		sqlx::query("INSERT INTO user (username, password_hash, role) VALUES ('bob', '', 'reader')")
+			.execute(&state.pool)
+			.await
+			.expect("insert bob");
+	}
+
+	#[tokio::test]
+	async fn union_fetch_pulls_shared_manga_once() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		insert_bob(&state).await;
+		let m1 = add_manga(&state, source_id, "1").await;
+		let m2 = add_manga(&state, source_id, "2").await;
+		let m3 = add_manga(&state, source_id, "3").await;
+		add_to_library(&state, m1, 1).await;
+		add_to_library(&state, m2, 2).await;
+		add_to_library(&state, m3, 1).await;
+		add_to_library(&state, m3, 2).await;
+
+		let scheduler = UpdateScheduler::new(&state);
+		let guard = scheduler.try_acquire().expect("fetch guard");
+		scheduler.fetch_union(guard).await;
+
+		// 并集覆盖两人的库，m3 在两人书库里也只回源拉一次
+		let summary = scheduler.summary().await;
+		assert_eq!(summary.total, 3);
+		assert_eq!(summary.complete, 3);
+		assert_eq!(summary.user_id, None);
+		for manga_id in [m1, m2, m3] {
+			let stamped: Option<i64> =
+				sqlx::query_scalar("SELECT chapters_last_fetched_at FROM manga WHERE id = ?")
+					.bind(manga_id)
+					.fetch_one(&state.pool)
+					.await
+					.expect("manga row");
+			assert!(stamped.is_some(), "manga {manga_id} not fetched");
+			let chapters: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE manga_id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("chapter count");
+			assert_eq!(chapters, 8);
+		}
+	}
+
+	#[tokio::test]
+	async fn union_fetch_auto_download_filters_per_user() {
+		let config = Config {
+			auto_download_new_chapters: true,
+			..Config::default()
+		};
+		let (state, source_id, _tmp) = union_state(config).await;
+		insert_bob(&state).await;
+		let manga_id = add_manga(&state, source_id, "1").await;
+		add_to_library(&state, manga_id, 1).await;
+		add_to_library(&state, manga_id, 2).await;
+		// bob 的分类把同一本漫画标记为不自动下载
+		let category_id: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name, include_in_download) VALUES (2, 'blocked', 2) RETURNING id",
+		)
+		.fetch_one(&state.pool)
+		.await
+		.expect("insert category");
+		sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 2)")
+			.bind(category_id)
+			.bind(manga_id)
+			.execute(&state.pool)
+			.await
+			.expect("link category");
+
+		let scheduler = UpdateScheduler::new(&state);
+		let guard = scheduler.try_acquire().expect("fetch guard");
+		scheduler.fetch_union(guard).await;
+		assert_eq!(scheduler.summary().await.complete, 1);
+
+		let owners: Vec<i64> = sqlx::query_scalar("SELECT user_id FROM download GROUP BY user_id")
+			.fetch_all(&state.pool)
+			.await
+			.expect("download owners");
+		assert_eq!(owners, vec![1], "auto download must only enqueue for the allowing user");
+	}
+}

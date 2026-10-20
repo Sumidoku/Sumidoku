@@ -2,38 +2,15 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use axum::routing::get;
-use common::{TestApp, base_config, connect_db, fixture_dir, register_example_manga, request, request_full};
+use common::{
+	TestApp, base_config, connect_db, connect_ws, fixture_dir, point_page_at_local, read_ws_frame,
+	register_example_manga, request, request_full, serve_app, serve_bytes,
+};
+use common::PNG;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
-
-// 1x1 透明 PNG
-const PNG: &[u8] = &[
-	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
-	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-];
-
-/// 起个微型静态服务返字节（abort 即关站）
-async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
-	let mut router = Router::new();
-	for (path, mime, bytes) in routes {
-		let handler = move || {
-			let mime = mime.to_string();
-			let bytes = bytes.clone();
-			async move { ([(axum::http::header::CONTENT_TYPE, mime)], bytes) }
-		};
-		router = router.route(path, get(handler));
-	}
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-	let port = listener.local_addr().expect("local addr").port();
-	let handle = tokio::spawn(async move {
-		axum::serve(listener, router).await.expect("serve");
-	});
-	(port, handle)
-}
 
 /// 下载测试需要 downloads_dir 落在 tmp（base_config 不管它，默认 ./downloads 会污染仓库）
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
@@ -55,22 +32,6 @@ async fn first_chapter_id(app: &Router, manga_id: i64) -> i64 {
 	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	body[0]["id"].as_i64().expect("chapter id")
-}
-
-/// 页落缓存后把第 0 页改指本地图床，worker 走缓存即全离线
-async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port: u16) {
-	let stored = json!({
-		"content": {"Url": [format!("http://127.0.0.1:{port}/img.png"), null]},
-		"thumbnail": null,
-		"hasDescription": false,
-		"description": null,
-	});
-	sqlx::query("UPDATE page SET content = ? WHERE chapter_id = ? AND idx = 0")
-		.bind(stored.to_string())
-		.bind(chapter_id)
-		.execute(pool)
-		.await
-		.expect("rewrite page 0");
 }
 
 async fn wait_download_status(app: &Router, chapter_id: i64, want: &str) -> Value {
@@ -339,65 +300,11 @@ async fn update_auto_download_enqueues_new_chapters() {
 	}
 }
 
-/// 最小 WS 客户端：读一帧文本帧（服务端帧不掩码）
-async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
-	use tokio::io::AsyncReadExt;
-	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
-		let mut tmp = [0u8; 4096];
-		while buf.len() < want {
-			let n = stream.read(&mut tmp).await.expect("read frame");
-			assert!(n > 0, "connection closed mid-frame");
-			buf.extend_from_slice(&tmp[..n]);
-		}
-	}
-	fill(stream, buf, 2).await;
-	let (offset, len) = match buf[1] & 0x7f {
-		126 => {
-			fill(stream, buf, 4).await;
-			(4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
-		}
-		127 => {
-			fill(stream, buf, 10).await;
-			(10, u64::from_be_bytes(buf[2..10].try_into().expect("len")) as usize)
-		}
-		n => (2, n as usize),
-	};
-	fill(stream, buf, offset + len).await;
-	let payload = buf[offset..offset + len].to_vec();
-	buf.drain(..offset + len);
-	payload
-}
-
 #[tokio::test]
 async fn downloads_ws_pushes_snapshot() {
 	let t = downloads_app(|_| {}).await;
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-	let addr = listener.local_addr().expect("local addr");
-	let app = t.app.clone();
-	tokio::spawn(async move {
-		axum::serve(listener, app.into_make_service()).await.expect("serve");
-	});
-
-	use tokio::io::{AsyncReadExt, AsyncWriteExt};
-	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-	let handshake = "GET /api/v1/downloads/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-	stream.write_all(handshake.as_bytes()).await.expect("write handshake");
-	let mut received = Vec::new();
-	let mut tmp = [0u8; 4096];
-	loop {
-		let n = stream.read(&mut tmp).await.expect("read handshake");
-		received.extend_from_slice(&tmp[..n]);
-		if received.windows(4).any(|w| w == b"\r\n\r\n") {
-			break;
-		}
-	}
-	let head_end = received
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.expect("header end");
-	let head = String::from_utf8_lossy(&received[..head_end]);
-	assert!(head.contains("101"), "{head}");
-	let mut rest = received[head_end + 4..].to_vec();
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/downloads/ws", None).await;
 	let payload = read_ws_frame(&mut stream, &mut rest).await;
 	let value: Value = serde_json::from_slice(&payload).expect("snapshot json");
 	assert!(value["type"].is_string(), "{value}");

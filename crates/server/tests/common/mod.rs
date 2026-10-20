@@ -334,3 +334,133 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	pool.close().await;
 	out
 }
+
+// 1x1 透明 PNG
+pub const PNG: &[u8] = &[
+	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
+	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
+
+/// 起个微型静态服务返字节（abort 即关站）
+pub async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
+	let mut router = Router::new();
+	for (path, mime, bytes) in routes {
+		let handler = move || {
+			let mime = mime.to_string();
+			let bytes = bytes.clone();
+			async move { ([(axum::http::header::CONTENT_TYPE, mime)], bytes) }
+		};
+		router = router.route(path, axum::routing::get(handler));
+	}
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let port = listener.local_addr().expect("local addr").port();
+	let handle = tokio::spawn(async move {
+		axum::serve(listener, router).await.expect("serve");
+	});
+	(port, handle)
+}
+
+/// 页落缓存后把第 0 页改指本地图床，worker 走缓存即全离线
+pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port: u16) {
+	let stored = json!({
+		"content": {"Url": [format!("http://127.0.0.1:{port}/img.png"), null]},
+		"thumbnail": null,
+		"hasDescription": false,
+		"description": null,
+	});
+	sqlx::query("UPDATE page SET content = ? WHERE chapter_id = ? AND idx = 0")
+		.bind(stored.to_string())
+		.bind(chapter_id)
+		.execute(pool)
+		.await
+		.expect("rewrite page 0");
+}
+
+/// 把 app 挂上随机端口真服务（WS 握手要走真实 TCP）
+pub async fn serve_app(app: Router) -> std::net::SocketAddr {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let addr = listener.local_addr().expect("local addr");
+	tokio::spawn(async move {
+		axum::serve(listener, app.into_make_service()).await.expect("serve");
+	});
+	addr
+}
+
+/// 最小 WS 客户端：完成握手，返回流与头部之后的剩余缓冲（token 带 Authorization 头）
+pub async fn connect_ws(
+	addr: std::net::SocketAddr,
+	path: &str,
+	token: Option<&str>,
+) -> (tokio::net::TcpStream, Vec<u8>) {
+	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+	let auth = token.map(|t| format!("Authorization: {t}\r\n")).unwrap_or_default();
+	let handshake = format!(
+		"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{auth}\r\n"
+	);
+	stream.write_all(handshake.as_bytes()).await.expect("write handshake");
+	let mut received = Vec::new();
+	let mut tmp = [0u8; 4096];
+	loop {
+		let n = stream.read(&mut tmp).await.expect("read handshake");
+		assert!(n > 0, "connection closed during handshake");
+		received.extend_from_slice(&tmp[..n]);
+		if received.windows(4).any(|w| w == b"\r\n\r\n") {
+			break;
+		}
+	}
+	let head_end = received
+		.windows(4)
+		.position(|w| w == b"\r\n\r\n")
+		.expect("header end");
+	let head = String::from_utf8_lossy(&received[..head_end]);
+	assert!(head.contains("101"), "{head}");
+	let rest = received[head_end + 4..].to_vec();
+	(stream, rest)
+}
+
+/// 读一帧文本帧（服务端帧不掩码）
+pub async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
+	use tokio::io::AsyncReadExt;
+	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
+		let mut tmp = [0u8; 4096];
+		while buf.len() < want {
+			let n = stream.read(&mut tmp).await.expect("read frame");
+			assert!(n > 0, "connection closed mid-frame");
+			buf.extend_from_slice(&tmp[..n]);
+		}
+	}
+	fill(stream, buf, 2).await;
+	let (offset, len) = match buf[1] & 0x7f {
+		126 => {
+			fill(stream, buf, 4).await;
+			(4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
+		}
+		127 => {
+			fill(stream, buf, 10).await;
+			(10, u64::from_be_bytes(buf[2..10].try_into().expect("len")) as usize)
+		}
+		n => (2, n as usize),
+	};
+	fill(stream, buf, offset + len).await;
+	let payload = buf[offset..offset + len].to_vec();
+	buf.drain(..offset + len);
+	payload
+}
+
+/// 读到指定 type 的事件帧为止（中间帧丢弃），10s 兜底
+pub async fn read_ws_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event in time");
+		let frame = tokio::time::timeout(remaining, read_ws_frame(stream, buf))
+			.await
+			.expect("ws read timeout");
+		let value: Value = serde_json::from_slice(&frame).expect("event json");
+		if value["type"] == kind {
+			return value;
+		}
+	}
+}
