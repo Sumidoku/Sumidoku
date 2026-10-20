@@ -682,8 +682,38 @@ async fn aggregate_search_includes_local_source() {
 }
 
 #[tokio::test]
-async fn local_listings_answer_unsupported() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+async fn settings_expose_local_dir_read_only() {
+	let TestApp { app, tmp, db_path } = local_app().await;
+	let effective = tmp.path().join("local").to_string_lossy().into_owned();
+
+	// GET 注入生效中的本地目录（config 分层值，默认 <config_dir>/local）
+	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localDir"], json!(effective));
+
+	// 同键 PUT 被跳过：读回仍是 config 值，其余键照常落库
+	let (status, body) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"localDir": "/elsewhere", "incognito.enabled": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localDir"], json!(effective));
+	assert_eq!(body["incognito.enabled"], true);
+
+	// 跳过不是遮蔽：setting 表里没有 localDir 行
+	let pool = common::connect_db(&db_path).await;
+	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDir'")
+		.fetch_optional(&pool)
+		.await
+		.expect("query setting");
+	assert!(row.is_none(), "localDir 不应落 setting 表");
+}
+
+#[tokio::test]
+async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
 	// 本地源没有 listings 概念：与缺该能力的 wasm 源同一契约，404 unsupported

@@ -1331,6 +1331,12 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 	for (key, raw) in rows {
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
+	// 生效中的本地目录来自 config 分层（文件/env），不是 setting 表的可写键：
+	// 只读注入响应（camelCase 与表内点分键区分）
+	map.insert(
+		"localDir".into(),
+		json!(state.config.local_dir().to_string_lossy()),
+	);
 	Ok(Json(Value::Object(map)))
 }
 
@@ -1340,6 +1346,10 @@ async fn put_settings(
 ) -> ApiResult<Json<Value>> {
 	let mut tx = state.pool.begin().await?;
 	for (key, value) in &body {
+		// 只读注入键：落库只会被 GET 的注入值遮蔽，不如不存
+		if key == "localDir" {
+			continue;
+		}
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
