@@ -305,7 +305,7 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	const TABLES: &[&str] = &[
 		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
 		"category", "category_manga", "download", "setting", "source_repo", "source_cookie",
-		"auth_credential", "auth_token",
+		"auth_token",
 	];
 	let pool = connect_db(db_path).await;
 	let mut out = String::new();

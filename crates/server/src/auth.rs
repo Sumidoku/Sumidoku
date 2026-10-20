@@ -6,7 +6,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::http::StatusCode;
-use axum::Json;
+use axum::{Extension, Json};
 use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -53,65 +53,66 @@ pub fn sha256_hex(raw: &str) -> String {
 	out
 }
 
+/// 一次请求解析出的登录身份；require_auth / OPDS basic_auth 注入 request extensions
+#[derive(Debug, Clone)]
+pub struct AuthUser {
+	pub id: i64,
+	pub username: String,
+	pub role: String,
+}
+
+impl AuthUser {
+	/// 内置 admin（user 1 的种子值）：免密码部署与配置面 api_keys 都按 admin 身份行事，
+	/// 此刻用户名只用于展示，免查库
+	pub(crate) fn admin() -> Self {
+		Self {
+			id: 1,
+			username: "admin".into(),
+			role: "admin".into(),
+		}
+	}
+}
+
 pub struct AuthState {
-	/// argon2 PHC 串；None = 认证关闭（未配置密码，0.2.0 行为）
-	password_hash: RwLock<Option<String>>,
+	/// user 1 的 argon2 PHC 串内存副本（认证开关只看它：多用户以 admin 先设密码为前提）；
+	/// None = 认证关闭（未配置密码，0.2.0 行为）
+	admin_password_hash: RwLock<Option<String>>,
 	/// 配置面 API key 的 sha256 指纹，内存常驻
 	api_key_hashes: HashSet<String>,
-	/// OPDS 每页图一次请求，逐次 argon2 太贵；缓存上一次验证通过的密码指纹
-	basic_cache: RwLock<Option<String>>,
+	/// OPDS 每页图一次请求，逐次 argon2 太贵；缓存上一次验证通过的 (用户名, 密码指纹, 身份)
+	basic_cache: RwLock<Option<(String, String, AuthUser)>>,
 }
 
 impl AuthState {
 	pub fn new(api_keys: &[String]) -> Self {
 		Self {
-			password_hash: RwLock::new(None),
+			admin_password_hash: RwLock::new(None),
 			api_key_hashes: api_keys.iter().map(|k| sha256_hex(k)).collect(),
 			basic_cache: RwLock::new(None),
 		}
 	}
 
 	pub async fn enabled(&self) -> bool {
-		self.password_hash.read().await.is_some()
-	}
-
-	pub async fn verify_basic(&self, password: &str) -> bool {
-		let fingerprint = sha256_hex(password);
-		if self.basic_cache.read().await.as_deref() == Some(fingerprint.as_str()) {
-			return true;
-		}
-		let guard = self.password_hash.read().await;
-		let Some(hash) = guard.as_deref() else {
-			return false;
-		};
-		if !verify_password(hash, password) {
-			return false;
-		}
-		drop(guard);
-		*self.basic_cache.write().await = Some(fingerprint);
-		true
+		self.admin_password_hash.read().await.is_some()
 	}
 }
 
-/// 启动时落实密码：config/env 配置面优先（覆盖库内哈希），否则沿用库内已存哈希；
-/// 库内也没有 = 认证关闭。改密码端点只写库，重启遇配置面密码仍以配置面为准
+/// 启动时落实 admin 密码：config/env 配置面优先（覆盖库内哈希），否则沿用库内已存哈希；
+/// 库内为空串 = 认证关闭。改密码端点只写库，重启遇配置面密码仍以配置面为准
 pub async fn init(state: &AppState) -> Result<(), Error> {
 	if let Some(password) = state.config.effective_password() {
 		let hash = hash_password(password)?;
-		sqlx::query(
-			"INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)
-			 ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash",
-		)
-		.bind(&hash)
-		.execute(&state.pool)
-		.await?;
-		*state.auth.password_hash.write().await = Some(hash);
+		sqlx::query("UPDATE user SET password_hash = ? WHERE id = 1")
+			.bind(&hash)
+			.execute(&state.pool)
+			.await?;
+		*state.auth.admin_password_hash.write().await = Some(hash);
 		return Ok(());
 	}
-	let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM auth_credential WHERE id = 1")
+	let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM user WHERE id = 1")
 		.fetch_optional(&state.pool)
 		.await?;
-	*state.auth.password_hash.write().await = row.map(|(hash,)| hash);
+	*state.auth.admin_password_hash.write().await = row.map(|(hash,)| hash).filter(|hash| !hash.is_empty());
 	Ok(())
 }
 
@@ -134,18 +135,41 @@ fn presented_token(req: &Request) -> Option<String> {
 	None
 }
 
-/// 会话 token：sha256 指纹查库，顺带滚动续期
-async fn valid_session_token(state: &AppState, fingerprint: &str) -> ApiResult<bool> {
+/// 用户名+密码核验：用户不存在与密码错误走同一路径，对外只有 401 同形状
+async fn verify_user_credentials(
+	pool: &sqlx::SqlitePool,
+	username: &str,
+	password: &str,
+) -> ApiResult<Option<AuthUser>> {
+	let row: Option<(i64, String, String, String)> =
+		sqlx::query_as("SELECT id, username, role, password_hash FROM user WHERE username = ?")
+			.bind(username)
+			.fetch_optional(pool)
+			.await?;
+	let Some((id, username, role, hash)) = row else {
+		return Ok(None);
+	};
+	if hash.is_empty() || !verify_password(&hash, password) {
+		return Ok(None);
+	}
+	Ok(Some(AuthUser { id, username, role }))
+}
+
+/// 会话 token：sha256 指纹查库，JOIN user 顺带核验归属用户还在；未过期则滚动续期
+async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
 	let now = crate::model::unix_now();
-	let row: Option<(i64,)> = sqlx::query_as("SELECT expires_at FROM auth_token WHERE token_hash = ?")
-		.bind(fingerprint)
-		.fetch_optional(&state.pool)
-		.await?;
-	let Some((expires_at,)) = row else {
-		return Ok(false);
+	let row: Option<(i64, i64, String, String)> = sqlx::query_as(
+		"SELECT t.expires_at, u.id, u.username, u.role FROM auth_token t
+		 JOIN user u ON u.id = t.user_id WHERE t.token_hash = ?",
+	)
+	.bind(fingerprint)
+	.fetch_optional(&state.pool)
+	.await?;
+	let Some((expires_at, id, username, role)) = row else {
+		return Ok(None);
 	};
 	if expires_at <= now {
-		return Ok(false);
+		return Ok(None);
 	}
 	if expires_at - now < TOKEN_RENEW_BELOW_SECS {
 		sqlx::query("UPDATE auth_token SET expires_at = ? WHERE token_hash = ?")
@@ -154,30 +178,34 @@ async fn valid_session_token(state: &AppState, fingerprint: &str) -> ApiResult<b
 			.execute(&state.pool)
 			.await?;
 	}
-	Ok(true)
+	Ok(Some(AuthUser { id, username, role }))
 }
 
-async fn bearer_granted(state: &AppState, token: Option<String>) -> ApiResult<bool> {
+async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Option<AuthUser>> {
 	let Some(token) = token else {
-		return Ok(false);
+		return Ok(None);
 	};
 	let fingerprint = sha256_hex(&token);
 	if state.auth.api_key_hashes.contains(&fingerprint) {
-		return Ok(true);
+		return Ok(Some(AuthUser::admin()));
 	}
-	valid_session_token(state, &fingerprint).await
+	session_user(state, &fingerprint).await
 }
 
-/// /api/v1 统一认证：认证关闭时放行；凭证无效/缺席一律 401 同形状
-pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+/// /api/v1 统一认证：认证关闭时一切请求当内置 admin；凭证无效/缺席一律 401 同形状
+pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
+		req.extensions_mut().insert(AuthUser::admin());
 		return next.run(req).await;
 	}
 	// axum Body 是 UnsyncBoxBody（不 Sync），&Request 不能跨 await 持有，先取走凭证
 	let token = presented_token(&req);
-	match bearer_granted(&state, token).await {
-		Ok(true) => next.run(req).await,
-		Ok(false) => ApiError::unauthorized().into_response(),
+	match bearer_user(&state, token).await {
+		Ok(Some(user)) => {
+			req.extensions_mut().insert(user);
+			next.run(req).await
+		}
+		Ok(None) => ApiError::unauthorized().into_response(),
 		Err(e) => e.into_response(),
 	}
 }
@@ -185,6 +213,7 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
+	pub username: String,
 	pub password: String,
 }
 
@@ -193,20 +222,20 @@ pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> ApiResult<Json<Value>> {
-	let hash = state.auth.password_hash.read().await.clone();
-	let Some(hash) = hash else {
+	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
-	};
-	if !verify_password(&hash, &body.password) {
-		return Err(ApiError::unauthorized());
 	}
+	let Some(user) = verify_user_credentials(&state.pool, &body.username, &body.password).await? else {
+		return Err(ApiError::unauthorized());
+	};
 	let mut raw = [0u8; 32];
 	OsRng.fill_bytes(&mut raw);
 	let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
 	let now = crate::model::unix_now();
 	let expires_at = now + TOKEN_TTL_SECS;
-	sqlx::query("INSERT INTO auth_token (token_hash, created_at, expires_at) VALUES (?, ?, ?)")
+	sqlx::query("INSERT INTO auth_token (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
 		.bind(sha256_hex(&token))
+		.bind(user.id)
 		.bind(now)
 		.bind(expires_at)
 		.execute(&state.pool)
@@ -216,7 +245,11 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 		.bind(now)
 		.execute(&state.pool)
 		.await?;
-	Ok(Json(json!({ "token": token, "expiresAt": expires_at })))
+	Ok(Json(json!({
+		"token": token,
+		"expiresAt": expires_at,
+		"user": { "id": user.id, "username": user.username, "role": user.role },
+	})))
 }
 
 /// 吊销呈上来的 bearer；无凭证/未知 token 也 204，不泄露 token 有效性
@@ -237,40 +270,47 @@ pub struct PasswordChangeRequest {
 	pub new_password: String,
 }
 
-/// 改密码：验旧换新，同时吊销全部会话 token（改密即全端下线）
+/// 改密码：只能改自己的；验旧换新后吊销自己全部会话 token（改密即全端下线）
 pub async fn change_password(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<AuthUser>,
 	Json(body): Json<PasswordChangeRequest>,
 ) -> ApiResult<StatusCode> {
 	if body.new_password.is_empty() {
 		return Err(ApiError::bad_request("newPassword must not be empty"));
 	}
-	let hash = state.auth.password_hash.read().await.clone();
-	let Some(hash) = hash else {
+	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
+	}
+	let hash: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM user WHERE id = ?")
+		.bind(user.id)
+		.fetch_optional(&state.pool)
+		.await?;
+	let Some((hash,)) = hash else {
+		return Err(ApiError::unauthorized());
 	};
-	if !verify_password(&hash, &body.current_password) {
+	if hash.is_empty() || !verify_password(&hash, &body.current_password) {
 		return Err(ApiError::unauthorized());
 	}
-	let new_hash = hash_password(&body.new_password)
-		.map_err(|e| ApiError::internal(e.to_string()))?;
-	sqlx::query(
-		"INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)
-		 ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash",
-	)
-	.bind(&new_hash)
-	.execute(&state.pool)
-	.await?;
-	sqlx::query("DELETE FROM auth_token")
+	let new_hash = hash_password(&body.new_password).map_err(|e| ApiError::internal(e.to_string()))?;
+	sqlx::query("UPDATE user SET password_hash = ? WHERE id = ?")
+		.bind(&new_hash)
+		.bind(user.id)
 		.execute(&state.pool)
 		.await?;
-	*state.auth.password_hash.write().await = Some(new_hash);
+	sqlx::query("DELETE FROM auth_token WHERE user_id = ?")
+		.bind(user.id)
+		.execute(&state.pool)
+		.await?;
+	if user.id == 1 {
+		*state.auth.admin_password_hash.write().await = Some(new_hash);
+	}
 	*state.auth.basic_cache.write().await = None;
 	Ok(StatusCode::NO_CONTENT)
 }
 
-/// OPDS Basic 统一验同一密码；用户名任意非空、密码匹配即过（§9 恒 Basic 语义不变）
-pub(crate) async fn basic_granted(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
+/// OPDS Basic 核验真实用户名+密码（§9 恒 Basic 语义不变）；命中缓存免逐次 argon2
+pub(crate) async fn basic_user(state: &AppState, headers: &axum::http::HeaderMap) -> ApiResult<Option<AuthUser>> {
 	let cred = headers
 		.get(axum::http::header::AUTHORIZATION)
 		.and_then(|v| v.to_str().ok())
@@ -278,10 +318,24 @@ pub(crate) async fn basic_granted(state: &AppState, headers: &axum::http::Header
 		.and_then(crate::opds::base64_decode)
 		.and_then(|raw| String::from_utf8(raw).ok());
 	let Some(cred) = cred else {
-		return false;
+		return Ok(None);
 	};
-	match cred.split_once(':') {
-		Some((user, password)) => !user.is_empty() && state.auth.verify_basic(password).await,
-		None => false,
+	let Some((username, password)) = cred.split_once(':') else {
+		return Ok(None);
+	};
+	let fingerprint = sha256_hex(password);
+	{
+		let cache = state.auth.basic_cache.read().await;
+		if let Some((cached_username, cached_fingerprint, user)) = cache.as_ref()
+			&& cached_username == username
+			&& cached_fingerprint == &fingerprint
+		{
+			return Ok(Some(user.clone()));
+		}
 	}
+	let Some(user) = verify_user_credentials(&state.pool, username, password).await? else {
+		return Ok(None);
+	};
+	*state.auth.basic_cache.write().await = Some((username.to_string(), fingerprint, user.clone()));
+	Ok(Some(user))
 }
