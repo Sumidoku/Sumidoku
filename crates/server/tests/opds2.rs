@@ -326,12 +326,12 @@ async fn basic_auth_guard() {
 		"Basic realm=\"Sumidoku OPDS\""
 	);
 
-	// 错误密码 401（user:wrong）
-	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic dXNlcjp3cm9uZw==")).await;
+	// 错误密码 401（admin:wrong）
+	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46d3Jvbmc=")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-	// 正确密码 200，用户名任意非空（user:secret）
-	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic dXNlcjpzZWNyZXQ=")).await;
+	// 真实用户名+密码 200（admin:secret）
+	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46c2VjcmV0")).await;
 	assert_eq!(status, StatusCode::OK);
 
 	// API 路由不受 OPDS Basic 影响
