@@ -260,7 +260,8 @@ function SourceCard({
 				)}
 			</div>
 			{s.updateVersion !== null && isAdmin && <UpdateButton source={s} />}
-			{isAdmin && (
+			{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
+			{isAdmin && s.kind !== 'local' && (
 				<IconButton
 					label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
 					onClick={(e) => {
@@ -271,8 +272,8 @@ function SourceCard({
 					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 				</IconButton>
 			)}
-			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404); the local source cannot be uninstalled (server 400),
-				opds instances can be uninstalled */}
+			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
+				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
 			{s.kind !== 'local' && (
 				<>
 					{s.kind !== 'opds' && s.hasHome !== false && (
@@ -320,14 +321,19 @@ export default function BrowsePage() {
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
 
-	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder
+	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder.
+	// The built-in local source has no pin state of its own: it is always shown pinned at the top
 	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
 	// Aidoku-style separate section: updatable sources grouped together, below the pinned section and above the full list
 	const updateSources = all.filter((s) => s.updateVersion !== null);
 	const updateCount = updateSources.length;
 	const pinnedSources = all
-		.filter((s) => s.pinned)
-		.sort((a, b) => (a.pinOrder ?? 0) - (b.pinOrder ?? 0));
+		.filter((s) => s.pinned || s.kind === 'local')
+		.sort((a, b) => {
+			if (a.kind === 'local') return -1;
+			if (b.kind === 'local') return 1;
+			return (a.pinOrder ?? 0) - (b.pinOrder ?? 0);
+		});
 
 	async function onScan() {
 		try {
@@ -377,9 +383,11 @@ export default function BrowsePage() {
 		setDragIndex(null);
 		setOverIndex(null);
 		if (from === null || from === target) return;
-		const keys = pinnedSources.map((s) => s.key);
-		const [moved] = keys.splice(from, 1);
-		keys.splice(target, 0, moved);
+		// The local source occupies index 0 of the rendered section but is not part of the
+		// server-side pinned set, so drag indices shift by one and its key stays out of the payload
+		const keys = pinnedSources.filter((s) => s.kind !== 'local').map((s) => s.key);
+		const [moved] = keys.splice(from - 1, 1);
+		keys.splice(target - 1, 0, moved);
 		reorderPinned.mutate(keys);
 	}
 
@@ -471,8 +479,9 @@ export default function BrowsePage() {
 										key={s.id}
 										source={s}
 										isAdmin={isAdmin}
+										// The local source is a fixed header of the section: no grip, no drag reordering
 										dnd={
-											isAdmin
+											isAdmin && s.kind !== 'local'
 												? {
 														dragging: dragIndex === i,
 														dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
