@@ -275,7 +275,7 @@ pub async fn add_to_library(
 			category_row(&state.pool, user.id, *category_id).await?;
 		}
 	}
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	// 已在库的保留首次入库时间
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
@@ -314,7 +314,7 @@ pub async fn remove_from_library(
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
 	manga_row(&state.pool, manga_id).await?;
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
@@ -557,7 +557,7 @@ pub async fn reorder_categories(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<ReorderRequest>,
 ) -> ApiResult<Json<Value>> {
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (index, id) in body.ids.iter().enumerate() {
 		sqlx::query("UPDATE category SET sort_order = ? WHERE id = ? AND user_id = ?")
 			.bind(index as i64)
@@ -595,7 +595,7 @@ pub async fn set_manga_categories(
 	for category_id in &body.category_ids {
 		category_row(&state.pool, user.id, *category_id).await?;
 	}
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 		.bind(id)
 		.bind(user.id)

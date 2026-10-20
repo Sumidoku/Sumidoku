@@ -236,7 +236,7 @@ async fn run_entry(
 	}
 
 	let mut warnings = Vec::new();
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let to_manga_id = match (to_manga_id, &fetched) {
 		(Some(id), _) => id,
 		(None, Some(updated)) => {

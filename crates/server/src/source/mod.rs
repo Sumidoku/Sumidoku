@@ -1004,7 +1004,7 @@ pub async fn load_pages(
 
 /// 整章页行重写：删除重插并回写 page_count；变体缓存按目录生命周期随之失效
 async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value]) -> ApiResult<()> {
-	let mut tx = pool.begin().await?;
+	let mut tx = crate::db::begin_write(pool).await?;
 	sqlx::query("DELETE FROM page WHERE chapter_id = ?")
 		.bind(chapter_id)
 		.execute(&mut *tx)

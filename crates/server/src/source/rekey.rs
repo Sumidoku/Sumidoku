@@ -120,7 +120,7 @@ async fn rekey_in_place(
 		tracing::warn!(source_id, "endMigration notification failed: {e}");
 	}
 
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	apply_rekeys(&mut tx, "manga", manga_map, &mut warnings).await?;
 	apply_rekeys(&mut tx, "chapter", chapter_map, &mut warnings).await?;
 	tx.commit().await?;
