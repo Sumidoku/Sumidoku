@@ -457,3 +457,83 @@ async fn auth_status_reports_whoami() {
 	assert_eq!(body["enabled"], false);
 	assert_eq!(body["user"], Value::Null);
 }
+
+/// 决策点 11：reader 导出只拿 self-data——全局 settings 与整个 sourceSettings
+/// （源登录凭据）不进文档；本人库/进度段与本人命名空间键翻译回的裸键在；admin 全量
+#[tokio::test]
+async fn backup_export_scopes_self_data_for_reader() {
+	let (app, _tmp, admin) = admin_app().await;
+	let source_id = example_source_id(&app, &admin).await;
+	let (_bob_id, bob) = create_reader(&app, &admin).await;
+
+	// 全局状态各来一份：配置面键 + 源凭据（走真实写入路径）
+	let (status, _) = as_user(&app, &admin, "PUT", "/api/v1/settings", Some(json!({"backup.enabled": true}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, _) = as_user(
+		&app,
+		&admin,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"password": "site-credential"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// bob 攒自己的用户态：入库 + 进度 + 隐身
+	let (status, body) = as_user(
+		&app,
+		&admin,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let manga_key = body["entries"][0]["key"].as_str().expect("manga key").to_string();
+	let (status, body) = as_user(
+		&app,
+		&admin,
+		"POST",
+		"/api/v1/manga",
+		Some(json!({"sourceId": source_id, "mangaKey": manga_key})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let manga_id = body["id"].as_i64().expect("manga id");
+	let (status, body) = as_user(&app, &bob, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let chapter_id = body[0]["id"].as_i64().expect("chapter id");
+	let (status, _) = as_user(&app, &bob, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, _) = as_user(
+		&app,
+		&bob,
+		"PATCH",
+		&format!("/api/v1/chapter/{chapter_id}"),
+		Some(json!({"lastPageRead": 4})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, _) = as_user(&app, &bob, "PUT", "/api/v1/settings", Some(json!({"incognito.enabled": true}))).await;
+	assert_eq!(status, StatusCode::OK);
+
+	let (status, doc) = as_user(&app, &bob, "GET", "/api/v1/backup", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let settings = doc["settings"].as_object().expect("settings object");
+	// 只剩本人命名空间键翻译回的裸键：全局键（backup.enabled 等）与他人键一律不在
+	assert_eq!(settings.len(), 1, "reader export settings: {settings:?}");
+	assert_eq!(settings["incognito.enabled"], true);
+	let source_settings = doc["sourceSettings"].as_object().expect("sourceSettings object");
+	assert!(source_settings.is_empty(), "reader export sourceSettings: {source_settings:?}");
+	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
+	assert_eq!(doc["progress"].as_array().expect("progress").len(), 1);
+
+	// admin 导出口径不变：全局键与源凭据都在
+	let (status, doc) = as_user(&app, &admin, "GET", "/api/v1/backup", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(doc["settings"]["backup.enabled"], true);
+	assert_eq!(
+		doc["sourceSettings"]["en.example-source"]["password"],
+		json!("site-credential")
+	);
+}
