@@ -55,8 +55,13 @@ pub async fn fetch_updates(
 	Json(json!({ "started": true })).into_response()
 }
 
-pub async fn get_summary(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	Ok(Json(serde_json::to_value(state.updater().summary().await)?))
+pub async fn get_summary(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	Ok(Json(serde_json::to_value(
+		state.updater().summary().await.visible_to(user.id),
+	)?))
 }
 
 pub async fn get_recent(
@@ -106,13 +111,8 @@ pub async fn updates_ws(
 ) -> Response {
 	let scheduler = state.updater();
 	ws.on_upgrade(move |mut socket: WebSocket| async move {
-		// 别人手动触发的 fetch 与本连接无关，快照按闲置呈现；union（无归属）全员可见
-		let summary = scheduler.summary().await;
-		let visible = match summary.user_id {
-			Some(owner) if owner != user.id => crate::update::UpdateSummary::default(),
-			_ => summary,
-		};
-		let mut snapshot = serde_json::to_value(visible).unwrap_or_default();
+		let snapshot_summary = scheduler.summary().await.visible_to(user.id);
+		let mut snapshot = serde_json::to_value(snapshot_summary).unwrap_or_default();
 		if let Some(object) = snapshot.as_object_mut() {
 			object.insert("type".into(), json!("summary"));
 		}

@@ -537,3 +537,38 @@ async fn updates_ws_events_filtered_per_user() {
 	assert_eq!(snapshot["total"], 1);
 	assert_eq!(snapshot["complete"], 1);
 }
+
+#[tokio::test]
+async fn update_summary_rest_scoped_per_user() {
+	let users = two_user_app().await;
+	let manga_id = register_manga_as(&users.app, &users.admin).await;
+	let (status, _) = as_user(
+		&users.app,
+		&users.admin,
+		"POST",
+		"/api/v1/library",
+		Some(json!({"mangaId": manga_id})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// admin 手动触发 fetch 并等它收尾：归属 admin 的计数对 bob 不可见。
+	// fetch 是 spawn 出去的，running 翻真之前轮询会读到上一次的快照，直接等到计数落地
+	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let deadline = Instant::now() + Duration::from_secs(10);
+	let summary = loop {
+		let (_, body) = as_user(&users.app, &users.admin, "GET", "/api/v1/update/summary", None).await;
+		if body["running"] == false && body["total"] == 1 {
+			break body;
+		}
+		assert!(Instant::now() < deadline, "update did not finish: {body}");
+		tokio::time::sleep(Duration::from_millis(100)).await;
+	};
+	assert_eq!(summary["complete"], 1);
+
+	let (_, body) = as_user(&users.app, &users.bob, "GET", "/api/v1/update/summary", None).await;
+	assert_eq!(body["running"], false);
+	assert_eq!(body["total"], 0);
+	assert_eq!(body["lastRunAt"], Value::Null);
+}
