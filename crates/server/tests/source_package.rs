@@ -232,7 +232,7 @@ async fn scan_skips_aix_missing_entries() {
 		.iter()
 		.filter_map(|s| s["key"].as_str())
 		.collect();
-	assert_eq!(keys, ["en.example-source"]);
+	assert_eq!(keys, ["local.local", "en.example-source"]);
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use common::{
 	TestApp, base_config, connect_db, fixture_dir, install_fixture_source, register_example_manga,
-	request, request_full, test_app,
+	request, request_full, source_by_key, test_app,
 };
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
@@ -377,10 +377,12 @@ async fn static_webui() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, b"console.log(1)");
 
-	// API 不被 SPA 吞掉
+	// API 不被 SPA 吞掉；内置本地源随迁移落库，空库也有一条
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body, json!([]));
+	assert_eq!(body.as_array().expect("sources array").len(), 1);
+	assert_eq!(body[0]["key"], "local.local");
+	assert_eq!(body[0]["kind"], "local");
 	let (status, body) = request(&app, "GET", "/api/v1/nope", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
@@ -466,7 +468,9 @@ async fn register_three_manga(app: &Router) -> Vec<(i64, String)> {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, body) = request(app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let (_, body) = request(
 		app,
 		"POST",
@@ -684,7 +688,9 @@ async fn library_source_counts() {
 
 	let ids = register_three_manga(&app).await;
 	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	for (id, _) in ids.iter().take(2) {
 		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
 		assert_eq!(status, StatusCode::OK);

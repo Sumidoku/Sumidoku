@@ -3,7 +3,7 @@ mod common;
 use aidoku::{Chapter, Manga, MangaStatus, Viewer};
 use axum::Router;
 use axum::http::StatusCode;
-use common::{connect_db, register_example_manga, request, test_app};
+use common::{connect_db, register_example_manga, request, source_by_key, test_app};
 use sumidoku_server::model::{chapter_from_row, manga_from_row};
 use sumidoku_server::source::{chapter_row, manga_row, reconcile_chapters, upsert_manga};
 
@@ -12,7 +12,9 @@ async fn scan_example_source(app: &Router) -> i64 {
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	body[0]["id"].as_i64().expect("source id")
+	source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id")
 }
 
 #[tokio::test]

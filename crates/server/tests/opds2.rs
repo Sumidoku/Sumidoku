@@ -166,9 +166,14 @@ async fn catalog_feeds() {
 			.expect("source row");
 	let sources = feed(app, "/opds/v2/sources").await;
 	let nav = sources["navigation"].as_array().expect("navigation");
-	assert_eq!(nav.len(), 1, "sources: {sources}");
-	assert_eq!(nav[0]["title"], source_name);
-	assert_eq!(nav[0]["href"], format!("https://opds.test/opds/v2/sources/{source_id}"));
+	// 内置本地源随迁移落库，无漫画也出现在源目录（与空 aidoku 源同一契约）
+	assert_eq!(nav.len(), 2, "sources: {sources}");
+	assert_eq!(nav[0]["title"], "Local");
+	let entry = nav
+		.iter()
+		.find(|n| n["title"] == source_name)
+		.expect("source nav entry");
+	assert_eq!(entry["href"], format!("https://opds.test/opds/v2/sources/{source_id}"));
 	let source = feed(app, &format!("/opds/v2/sources/{source_id}")).await;
 	assert_eq!(source["publications"].as_array().expect("publications").len(), 1);
 

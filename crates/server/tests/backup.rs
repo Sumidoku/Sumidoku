@@ -2,7 +2,7 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, test_app};
+use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, source_by_key, test_app};
 use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
@@ -11,8 +11,8 @@ const SOURCE_KEY: &str = "en.example-source";
 async fn seed_full(app: &Router) {
 	let manga_id = register_example_manga(app).await;
 	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
-	let source_id = sources[0]["id"].as_i64().expect("source id");
-	assert_eq!(sources[0]["key"], SOURCE_KEY);
+	let example = source_by_key(&sources, SOURCE_KEY);
+	let source_id = example["id"].as_i64().expect("source id");
 
 	let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": "Evening"}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -138,9 +138,9 @@ async fn export_import_round_trip() {
 
 	assert_eq!(doc["version"], 1);
 	assert!(doc["createdAt"].is_i64());
-	assert_eq!(doc["sources"][0]["key"], SOURCE_KEY);
-	assert_eq!(doc["sources"][0]["name"], "Example Source");
-	assert!(doc["sources"][0]["repoUrl"].is_null());
+	let doc_source = source_by_key(&doc["sources"], SOURCE_KEY);
+	assert_eq!(doc_source["name"], "Example Source");
+	assert!(doc_source["repoUrl"].is_null());
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["library"][0]["sourceKey"], SOURCE_KEY);
 	assert!(doc["library"][0]["inLibraryAt"].is_i64());
@@ -229,7 +229,9 @@ async fn export_import_round_trip() {
 	assert_eq!(settings["backup.test"], "on");
 	assert_eq!(settings["backup.num"], 42);
 	let (_, sources) = request(&b.app, "GET", "/api/v1/sources", None).await;
-	let b_source_id = sources[0]["id"].as_i64().expect("source id");
+	let b_source_id = source_by_key(&sources, SOURCE_KEY)["id"]
+		.as_i64()
+		.expect("source id");
 	let (_, body) = request(
 		&b.app,
 		"GET",
