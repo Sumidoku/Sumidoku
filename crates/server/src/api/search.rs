@@ -110,24 +110,37 @@ pub(crate) async fn run_global_search(
 /// 单源搜索的执行与落形：handle 解析、源调用、id 附加任何一步失败都归成该源的
 /// error 项；成功形状与非流式单源搜索响应一致，外加 sourceId
 async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>, page: i32) -> Value {
-	let outcome: ApiResult<(Vec<Value>, bool)> = async {
+	let outcome: ApiResult<(Vec<Value>, bool, bool)> = async {
 		// 本地源没有 wasm 实例，与单源端点同一臂实扫目录；跨源聚合不因它落 error 项
 		if crate::source::source_is_local(&state.pool, source_id).await? {
 			let entries = super::local_search(state, source_id, query.as_deref()).await?;
-			return Ok((entries, false));
+			return Ok((entries, false, false));
+		}
+		// opds 源同本地臂；degraded 标记目录缺 OpenSearch、结果只是遍历过滤
+		if crate::source::source_is_opds(&state.pool, source_id).await? {
+			let outcome = crate::opds_source::search(state, source_id, query.as_deref()).await?;
+			let entries = super::attach_internal_ids(state, source_id, outcome.entries).await?;
+			return Ok((entries, false, outcome.degraded));
 		}
 		let handle = state.get_handle(source_id).await?;
 		let result = handle.get_search_manga_list(query, page, Vec::new()).await?;
 		let entries = super::attach_internal_ids(state, source_id, result.entries).await?;
-		Ok((entries, result.has_next_page))
+		Ok((entries, result.has_next_page, false))
 	}
 	.await;
 	match outcome {
-		Ok((entries, has_next_page)) => json!({
-			"sourceId": source_id,
-			"entries": entries,
-			"hasNextPage": has_next_page,
-		}),
+		Ok((entries, has_next_page, degraded)) => {
+			let mut value = json!({
+				"sourceId": source_id,
+				"entries": entries,
+				"hasNextPage": has_next_page,
+			});
+			// degraded 只在 opds 遍历兜底时出现，不给 wasm/本地臂的结果添新字段
+			if degraded {
+				value["degraded"] = json!(true);
+			}
+			value
+		}
 		Err(e) => error_entry(source_id, e.code(), e.message()),
 	}
 }

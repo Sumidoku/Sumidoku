@@ -415,6 +415,17 @@ async fn search_source(
 		}))
 		.into_response());
 	}
+	// opds 源同样没有源调用可流；degraded 标记目录缺 OpenSearch、结果只是遍历过滤
+	if crate::source::source_is_opds(&state.pool, id).await? {
+		let outcome = crate::opds_source::search(&state, id, body.query.as_deref()).await?;
+		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
+		return Ok(Json(json!({
+			"entries": entries,
+			"hasNextPage": false,
+			"degraded": outcome.degraded,
+		}))
+		.into_response());
+	}
 	let handle = state.get_handle(id).await?;
 	if !partial::wants_ndjson(&headers) {
 		let result = handle
@@ -822,6 +833,11 @@ async fn register_manga(
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
 	}
+	// opds 源同本地臂：回源是目录 feed 拉取，没有 partial 流
+	if crate::source::source_is_opds(&state.pool, body.source_id).await? {
+		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+		return Ok(Json(json!({ "id": manga_id })).into_response());
+	}
 	if !partial::wants_ndjson(&headers) {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
@@ -879,6 +895,19 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			manga_id,
 			&update.manga.chapters.clone().unwrap_or_default(),
 			&update.protected,
+		)
+		.await?;
+		return Ok(manga_id);
+	}
+	if crate::source::source_is_opds(&state.pool, source_id).await? {
+		let updated = crate::opds_source::manga_update(state, source_id, initial).await?;
+		let mut conn = state.pool.acquire().await?;
+		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
+		reconcile_chapters(
+			&mut conn,
+			manga_id,
+			&updated.chapters.clone().unwrap_or_default(),
+			&[],
 		)
 		.await?;
 		return Ok(manga_id);
@@ -1162,6 +1191,15 @@ async fn get_manga(
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
+		// opds 源刷新 = 重拉条目 feed，同本地臂无流可发
+		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
+			let mut updated = crate::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
+			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
+			let mut conn = state.pool.acquire().await?;
+			upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
+			row = manga_row(&state.pool, id).await?;
+			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
+		}
 		let handle = state.get_handle(row.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
@@ -1252,6 +1290,18 @@ async fn get_chapters(
 				&update.protected,
 			)
 			.await?;
+			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+				.bind(crate::model::unix_now())
+				.bind(id)
+				.execute(&mut *conn)
+				.await?;
+			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
+		}
+		// opds 源刷新 = 重拉条目 feed；远端消失的章节按统一对账规则处理
+		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
+			let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+			let mut conn = state.pool.acquire().await?;
+			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
