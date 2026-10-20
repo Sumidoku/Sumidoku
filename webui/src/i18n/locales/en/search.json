@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "Search all sources…",
+    "rating": "Rating",
+    "language": "Language",
+    "source": "Source",
+    "emptyTitle": "Cross-source search",
+    "emptyHint": "Enter a keyword to search every source matching the filters",
+    "noSourcesTitle": "No sources match the filters",
+    "noSourcesHint": "Adjust the rating / language / source filters",
+    "loadFailedTitle": "Failed to load",
+    "retry": "Retry",
+    "noResultsTitle": "No results",
+    "noResultsHint": "Try a different keyword or adjust the filters",
+    "viewAll": "View all"
+  }
+}

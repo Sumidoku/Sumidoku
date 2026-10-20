@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { Trans, useTranslation } from 'react-i18next';
 import { ArrowLeft, ArrowRight, Ellipsis, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useLibrary, useMigrate, useMigrateSources } from '../../api/hooks';
@@ -29,18 +30,6 @@ interface Row {
 	result?: MigrateResultItem;
 }
 
-const MODE_LABEL: Record<MigrateMode, string> = {
-	copy: '复制',
-	migrate: '迁移',
-	migrateWithHistory: '迁移（保留历史）'
-};
-
-const MODE_HINT: Record<MigrateMode, string> = {
-	copy: '目标入库并搬走进度，源条目原样保留',
-	migrate: '目标入库并搬走进度，源条目撤出书库并清掉阅读进度',
-	migrateWithHistory: '目标入库并搬走进度，源条目撤出书库但保留阅读历史'
-};
-
 /** Batch auto-match: title-search target sources in priority order; the first source with results wins and its first entry is taken */
 async function autoMatch(
 	rows: Row[],
@@ -65,17 +54,21 @@ async function autoMatch(
 }
 
 function Reason({ item }: { item: MigrateResultItem }) {
+	const { t } = useTranslation();
 	const text: Record<string, string> = {
-		not_found: '源条目不存在',
-		not_in_library: '源条目不在书库',
-		source_not_found: '目标源不存在',
-		same_source: '目标与来源是同一条目',
-		fetch_failed: item.message ? `目标详情拉取失败：${item.message}` : '目标详情拉取失败'
+		not_found: t('migrate.reason.not_found'),
+		not_in_library: t('migrate.reason.not_in_library'),
+		source_not_found: t('migrate.reason.source_not_found'),
+		same_source: t('migrate.reason.same_source'),
+		fetch_failed: item.message
+			? t('migrate.reason.fetch_failed_with_message', { message: item.message })
+			: t('migrate.reason.fetch_failed')
 	};
 	return <span className="migrate-row__reason">{text[item.reason ?? ''] ?? item.reason}</span>;
 }
 
 export default function MigratePage() {
+	const { t } = useTranslation();
 	const [params] = useSearchParams();
 	// breaking-change guidance entry: ?source=<id> prefills the origin, sameSource=1 allows and preselects a same-source target
 	const prefill = Number(params.get('source')) || null;
@@ -108,6 +101,17 @@ export default function MigratePage() {
 	);
 	const sourceName = (sourcesQuery.data ?? []).find((s) => s.id === sourceId)?.name ?? '';
 	const destName = (id: number) => (sourcesQuery.data ?? []).find((s) => s.id === id)?.name ?? `#${id}`;
+
+	const MODE_LABEL: Record<MigrateMode, string> = {
+		copy: t('migrate.mode.copy'),
+		migrate: t('migrate.mode.migrate'),
+		migrateWithHistory: t('migrate.mode.migrateWithHistory')
+	};
+	const MODE_HINT: Record<MigrateMode, string> = {
+		copy: t('migrate.modeHint.copy'),
+		migrate: t('migrate.modeHint.migrate'),
+		migrateWithHistory: t('migrate.modeHint.migrateWithHistory')
+	};
 
 	function patchRow(id: number, patch: Partial<Row>) {
 		setRows((prev) => prev.map((r) => (r.manga.id === id ? { ...r, ...patch } : r)));
@@ -154,8 +158,8 @@ export default function MigratePage() {
 					const failed = res.results.filter((r) => !r.ok).length;
 					pushToast(
 						failed === 0
-							? `已迁移 ${res.results.length} 部`
-							: `完成 ${res.results.length - failed} 部，失败 ${failed} 部`,
+							? t('migrate.toastDone', { count: res.results.length })
+							: t('migrate.toastPartial', { done: res.results.length - failed, failed }),
 						'info'
 					);
 					for (const item of res.results) {
@@ -169,7 +173,7 @@ export default function MigratePage() {
 	return (
 		<div className="page container">
 			<PageHeader
-				title="迁移"
+				title={t('migrate.title')}
 				actions={
 					step !== 'source' ? (
 						<Button
@@ -177,7 +181,7 @@ export default function MigratePage() {
 							onClick={() => setStep(step === 'series' ? 'source' : step === 'destinations' ? 'series' : 'destinations')}
 						>
 							<ArrowLeft size={14} />
-							上一步
+							{t('migrate.back')}
 						</Button>
 					) : undefined
 				}
@@ -192,7 +196,7 @@ export default function MigratePage() {
 					</div>
 				) : (
 					<>
-						<p className="muted">先选要迁出的源（只列在库有条目的源）：</p>
+						<p className="muted">{t('migrate.pickSourceHint')}</p>
 						<div className="migrate-source-list">
 							{migrateSources
 								.filter((s) => s.mangaCount > 0)
@@ -204,13 +208,13 @@ export default function MigratePage() {
 										onClick={() => pickSource(s.id)}
 									>
 										<span className="migrate-source__name">{s.name}</span>
-										<span className="migrate-source__count">在库 {s.mangaCount} 部</span>
+										<span className="migrate-source__count">{t('migrate.inLibrary', { count: s.mangaCount })}</span>
 										<ArrowRight size={16} />
 									</button>
 								))}
 						</div>
 						{migrateSources.every((s) => s.mangaCount === 0) && (
-							<EmptyState icon={TriangleAlert} title="书库还是空的" hint="先把漫画加入书库再来迁移" />
+							<EmptyState icon={TriangleAlert} title={t('migrate.libraryEmpty')} hint={t('migrate.libraryEmptyHint')} />
 						)}
 					</>
 				))}
@@ -219,7 +223,11 @@ export default function MigratePage() {
 				<>
 					<div className="migrate-toolbar">
 						<span>
-							来源：<b>{sourceName}</b> · 已选 {selected.size} / {series.length} 部
+							<Trans
+								i18nKey="migrate.selectedCount"
+								values={{ source: sourceName, selected: selected.size, total: series.length }}
+								components={{ b: <b /> }}
+							/>
 						</span>
 						<Button
 							size="sm"
@@ -227,10 +235,10 @@ export default function MigratePage() {
 								setSelected(selected.size === series.length ? new Set() : new Set(series.map((m) => m.id)))
 							}
 						>
-							{selected.size === series.length ? '清空' : '全选'}
+							{selected.size === series.length ? t('migrate.clearAll') : t('migrate.selectAll')}
 						</Button>
 						<Button size="sm" variant="primary" disabled={selected.size === 0} onClick={() => setStep('destinations')}>
-							选目标源
+							{t('migrate.pickDestinations')}
 							<ArrowRight size={14} />
 						</Button>
 					</div>
@@ -258,7 +266,7 @@ export default function MigratePage() {
 					</div>
 					{libraryQuery.hasNextPage && (
 						<Button size="sm" loading={libraryQuery.isFetchingNextPage} onClick={() => void libraryQuery.fetchNextPage()}>
-							加载更多
+							{t('migrate.loadMore')}
 						</Button>
 					)}
 				</>
@@ -273,7 +281,7 @@ export default function MigratePage() {
 					/>
 					<div className="migrate-toolbar">
 						<Button variant="primary" disabled={destinations.length === 0} onClick={startMatch}>
-							开始匹配（{selected.size} 部）
+							{t('migrate.startMatch', { count: selected.size })}
 							<ArrowRight size={14} />
 						</Button>
 					</div>
@@ -284,15 +292,19 @@ export default function MigratePage() {
 				<>
 					<div className="migrate-toolbar">
 						<span>
-							目标：{destinations.map(destName).join(' → ')} · 命中 {matchedRows.length} / {rows.length}
-							{matching && ' · 匹配中…'}
-							{executed && ` · 已迁移 ${doneCount}`}
+							{t('migrate.status', {
+								dests: destinations.map(destName).join(' → '),
+								matched: matchedRows.length,
+								total: rows.length,
+								matching: matching ? t('migrate.statusMatching') : '',
+								executed: executed ? t('migrate.statusExecuted', { done: doneCount }) : ''
+							})}
 						</span>
 						{matching && <Spinner size={16} />}
 						{!matching && !executed && (
 							<>
 								<Button size="sm" onClick={() => void autoMatch(rows.filter((r) => r.state === 'notfound'), destinations, patchRow)}>
-									重试未命中
+									{t('migrate.retryUnmatched')}
 								</Button>
 								{(['copy', 'migrate', 'migrateWithHistory'] as MigrateMode[]).map((mode) => (
 									<Button
@@ -328,12 +340,12 @@ export default function MigratePage() {
 											<div className="migrate-row__meta">{destName(row.target.sourceId!)}</div>
 										</>
 									) : (
-										<div className="migrate-row__notfound">未找到</div>
+										<div className="migrate-row__notfound">{t('migrate.notFound')}</div>
 									)}
 									{row.result &&
 										(row.result.ok ? (
 											<Link className="migrate-row__goto" to={`/manga/${row.result.toMangaId}`}>
-												已迁移，查看目标 →
+												{t('migrate.gotoTarget')}
 											</Link>
 										) : (
 											<Reason item={row.result} />
@@ -353,23 +365,23 @@ export default function MigratePage() {
 
 			<Modal
 				open={confirmMode !== null}
-				title={confirmMode ? `${MODE_LABEL[confirmMode]} ${matchedRows.length} 部？` : ''}
+				title={confirmMode ? t('migrate.confirmTitle', { mode: MODE_LABEL[confirmMode], count: matchedRows.length }) : ''}
 				onClose={() => setConfirmMode(null)}
 				footer={
 					<>
-						<Button onClick={() => setConfirmMode(null)}>取消</Button>
+						<Button onClick={() => setConfirmMode(null)}>{t('common.cancel')}</Button>
 						<Button
 							variant="primary"
 							loading={migrate.isPending}
 							onClick={() => confirmMode && execute(confirmMode)}
 						>
-							确认{confirmMode ? MODE_LABEL[confirmMode] : ''}
+							{t('migrate.confirmAction', { mode: confirmMode ? MODE_LABEL[confirmMode] : '' })}
 						</Button>
 					</>
 				}
 			>
 				<p className="muted">{confirmMode ? MODE_HINT[confirmMode] : ''}</p>
-				<p className="muted">未命中的 {rows.length - matchedRows.length} 部不会动。</p>
+				<p className="muted">{t('migrate.unmatchedUntouched', { count: rows.length - matchedRows.length })}</p>
 			</Modal>
 
 			{rematchRow && (
@@ -389,10 +401,11 @@ export default function MigratePage() {
 }
 
 function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () => void }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	return (
 		<span className="migrate-row__menu">
-			<button type="button" className="migrate-row__menu-btn" title="更多操作" onClick={() => setOpen((v) => !v)}>
+			<button type="button" className="migrate-row__menu-btn" title={t('migrate.moreActions')} onClick={() => setOpen((v) => !v)}>
 				<Ellipsis size={16} />
 			</button>
 			{open && (
@@ -404,7 +417,7 @@ function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () 
 							onRematch();
 						}}
 					>
-						重新搜索
+						{t('migrate.rematch')}
 					</button>
 					<button
 						type="button"
@@ -413,7 +426,7 @@ function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () 
 							onRemove();
 						}}
 					>
-						不迁移这部
+						{t('migrate.skipEntry')}
 					</button>
 				</span>
 			)}
@@ -435,6 +448,7 @@ function RematchModal({
 	onPick: (candidate: Manga) => void;
 	onClose: () => void;
 }) {
+	const { t } = useTranslation();
 	const [query, setQuery] = useState(row.manga.title);
 	const [searching, setSearching] = useState(false);
 	const [results, setResults] = useState<Manga[] | null>(null);
@@ -454,7 +468,7 @@ function RematchModal({
 	}
 
 	return (
-		<Modal open title={`重新搜索《${row.manga.title}》`} onClose={onClose} panelClassName="migrate-rematch">
+		<Modal open title={t('migrate.rematchTitle', { title: row.manga.title })} onClose={onClose} panelClassName="migrate-rematch">
 			<div className="migrate-rematch__bar">
 				<Input
 					icon={<Search size={15} />}
@@ -463,15 +477,15 @@ function RematchModal({
 					onKeyDown={(e) => e.key === 'Enter' && void search()}
 				/>
 				<Button size="sm" variant="primary" loading={searching} disabled={!query.trim()} onClick={() => void search()}>
-					搜索
+					{t('common.search')}
 				</Button>
 			</div>
 			{searching ? (
 				<Spinner />
 			) : results === null ? (
-				<p className="muted">对全部目标源搜索，点一个候选作为匹配结果。</p>
+				<p className="muted">{t('migrate.rematchHint')}</p>
 			) : results.length === 0 ? (
-				<p className="muted">没有命中，换个关键词试试。</p>
+				<p className="muted">{t('migrate.rematchNoHits')}</p>
 			) : (
 				<div className="migrate-rematch__list">
 					{results.map((c) => (

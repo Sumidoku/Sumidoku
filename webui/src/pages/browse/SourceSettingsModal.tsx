@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import { Settings } from 'lucide-react';
 import {
 	invalidateForRefreshes,
@@ -32,6 +33,7 @@ function flattenSettings(list: Setting[]): Setting[] {
 type PendingAction = 'reset' | 'clear' | null;
 
 function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
+	const { t } = useTranslation();
 	const qc = useQueryClient();
 	const query = useSourceSettings(sourceId);
 	const save = useSaveSourceSettings(sourceId);
@@ -49,14 +51,14 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	if (query.isPending) {
 		return (
 			<div className="settings-source__loading">
-				<Spinner /> 加载中…
+				<Spinner /> {t('common.loading')}
 			</div>
 		);
 	}
 	const data = query.data;
-	if (!data) return <p className="faint settings-source__empty">设置加载失败</p>;
+	if (!data) return <p className="faint settings-source__empty">{t('sourceSettings.loadFailed')}</p>;
 	if (!data.settings || data.settings.length === 0) {
-		return <p className="faint settings-source__empty">该源没有可配置项</p>;
+		return <p className="faint settings-source__empty">{t('sourceSettings.noSettings')}</p>;
 	}
 
 	const hasEdits = Object.keys(edits).length > 0;
@@ -71,7 +73,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 			.filter((n): n is string => typeof n === 'string' && n !== '');
 		await save.mutateAsync({ edits, notify });
 		setEdits({});
-		pushToast('已保存', 'info');
+		pushToast(t('sourceSettings.saved'), 'info');
 		invalidateForRefreshes(qc, sourceId, touched.flatMap((s) => s.refreshes ?? []));
 	}
 
@@ -86,37 +88,37 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 		await reset.mutateAsync();
 		setEdits({});
 		setPending(null);
-		pushToast('已重置为默认设置', 'info');
+		pushToast(t('sourceSettings.resetDone'), 'info');
 	}
 
 	async function onClearCache() {
 		await clearCache.mutateAsync();
 		setPending(null);
-		pushToast('已清除登录缓存', 'info');
+		pushToast(t('sourceSettings.cacheCleared'), 'info');
 	}
 
 	async function onSubmitLogin(key: string, username: string, password: string) {
 		await login.mutateAsync({ key, username, password });
 		setEdits({});
-		pushToast('登录成功', 'info');
+		pushToast(t('sourceSettings.loginSuccess'), 'info');
 	}
 
 	async function onSubmitWebLogin(key: string, cookies: Record<string, string>, localStorage: Record<string, string>) {
 		await webLogin.mutateAsync({ key, cookies, localStorage });
 		setEdits({});
-		pushToast('登录成功', 'info');
+		pushToast(t('sourceSettings.loginSuccess'), 'info');
 	}
 
 	async function onLogoutLogin(key: string, clearCookies: boolean) {
 		await loginLogout.mutateAsync({ key, clearCookies });
 		setEdits({});
-		pushToast('已登出', 'info');
+		pushToast(t('sourceSettings.loggedOut'), 'info');
 	}
 
 	async function onCompleteOAuth(key: string, url: string) {
 		await oauthComplete.mutateAsync({ key, url });
 		setEdits({});
-		pushToast('登录成功', 'info');
+		pushToast(t('sourceSettings.loginSuccess'), 'info');
 	}
 
 	return (
@@ -138,10 +140,10 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 			))}
 			<div className="settings-source__save">
 				<Button variant="ghost" size="sm" onClick={() => setPending('reset')}>
-					重置设置
+					{t('sourceSettings.resetSettings')}
 				</Button>
 				<Button variant="ghost" size="sm" onClick={() => setPending('clear')}>
-					清除登录缓存
+					{t('sourceSettings.clearLoginCache')}
 				</Button>
 				<Button
 					variant="primary"
@@ -150,38 +152,38 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 					disabled={!hasEdits}
 					onClick={() => void onSave()}
 				>
-					保存
+					{t('common.save')}
 				</Button>
 			</div>
 			<Modal
 				open={pending === 'reset'}
-				title="重置设置"
+				title={t('sourceSettings.resetSettings')}
 				onClose={() => setPending(null)}
 				footer={
 					<>
-						<Button onClick={() => setPending(null)}>取消</Button>
+						<Button onClick={() => setPending(null)}>{t('common.cancel')}</Button>
 						<Button variant="primary" loading={reset.isPending} onClick={() => void onReset()}>
-							重置
+							{t('sourceSettings.reset')}
 						</Button>
 					</>
 				}
 			>
-				<p>重置该图源的全部设置为默认值？未保存的修改会丢弃，登录信息也会一并清除。</p>
+				<p>{t('sourceSettings.resetConfirm')}</p>
 			</Modal>
 			<Modal
 				open={pending === 'clear'}
-				title="清除登录缓存"
+				title={t('sourceSettings.clearLoginCache')}
 				onClose={() => setPending(null)}
 				footer={
 					<>
-						<Button onClick={() => setPending(null)}>取消</Button>
+						<Button onClick={() => setPending(null)}>{t('common.cancel')}</Button>
 						<Button variant="primary" loading={clearCache.isPending} onClick={() => void onClearCache()}>
-							清除
+							{t('sourceSettings.clear')}
 						</Button>
 					</>
 				}
 			>
-				<p>清除该图源的登录 cookie 并重启实例？需要重新登录。</p>
+				<p>{t('sourceSettings.clearConfirm')}</p>
 			</Modal>
 		</div>
 	);
@@ -189,12 +191,13 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 
 /** The gear at the right of an installed-source card: settings live in a modal, config items come from the source package */
 export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: number; sourceName: string }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 
 	return (
 		<>
 			<IconButton
-				label={`${sourceName} 设置`}
+				label={t('sourceSettings.title', { name: sourceName })}
 				onClick={(e) => {
 					e.stopPropagation();
 					setOpen(true);
@@ -204,7 +207,7 @@ export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: numbe
 			</IconButton>
 			<Modal
 				open={open}
-				title={`${sourceName} 设置`}
+				title={t('sourceSettings.title', { name: sourceName })}
 				onClose={() => setOpen(false)}
 				panelClassName="modal__panel--wide"
 			>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 import { ExternalLink } from 'lucide-react';
 import type { Setting } from '../../api/types';
 import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch, pushToast } from '../../components';
@@ -88,6 +89,7 @@ function LoginSetting({
 	loggedIn: boolean;
 	onSubmit: (username: string, password: string) => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const [username, setUsername] = useState(savedUsername);
 	const [password, setPassword] = useState('');
 	const [busy, setBusy] = useState(false);
@@ -95,17 +97,17 @@ function LoginSetting({
 		<div className="setting-row setting-row--col">
 			<div className="setting-login__head">
 				<span className="setting-row__title">{title}</span>
-				{loggedIn && <Chip color="success">已登录</Chip>}
+				{loggedIn && <Chip color="success">{t('settingItem.loggedIn')}</Chip>}
 			</div>
 			<Input
-				placeholder={useEmail ? '邮箱' : '用户名'}
+				placeholder={useEmail ? t('settingItem.email') : t('settingItem.username')}
 				autoComplete={useEmail ? 'email' : 'username'}
 				value={username}
 				onChange={(e) => setUsername(e.currentTarget.value)}
 			/>
 			<Input
 				type="password"
-				placeholder="密码"
+				placeholder={t('settingItem.password')}
 				autoComplete="current-password"
 				value={password}
 				onChange={(e) => setPassword(e.currentTarget.value)}
@@ -119,7 +121,7 @@ function LoginSetting({
 					void onSubmit(username, password).finally(() => setBusy(false));
 				}}
 			>
-				{loggedIn ? '重新登录' : '登录'}
+				{loggedIn ? t('settingItem.relogin') : t('settingItem.login')}
 			</Button>
 		</div>
 	);
@@ -174,6 +176,7 @@ function LoginLogoutRow({
 	clearCookiesOnLogOut: boolean;
 	onLogout: (clearCookies: boolean) => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const [busy, setBusy] = useState(false);
 	const [confirmOpen, setConfirmOpen] = useState(false);
 	const [clearCookies, setClearCookies] = useState(clearCookiesOnLogOut);
@@ -181,7 +184,7 @@ function LoginLogoutRow({
 		<div className="setting-row setting-row--col">
 			<div className="setting-login__head">
 				<span className="setting-row__title">{title}</span>
-				<Chip color="success">已登录</Chip>
+				<Chip color="success">{t('settingItem.loggedIn')}</Chip>
 			</div>
 			<Button
 				size="sm"
@@ -190,15 +193,15 @@ function LoginLogoutRow({
 					setConfirmOpen(true);
 				}}
 			>
-				{logoutTitle ?? '登出'}
+				{logoutTitle ?? t('settingItem.logout')}
 			</Button>
 			<Modal
 				open={confirmOpen}
-				title={logoutTitle ?? '登出'}
+				title={logoutTitle ?? t('settingItem.logout')}
 				onClose={() => setConfirmOpen(false)}
 				footer={
 					<>
-						<Button onClick={() => setConfirmOpen(false)}>取消</Button>
+						<Button onClick={() => setConfirmOpen(false)}>{t('common.cancel')}</Button>
 						<Button
 							variant="primary"
 							loading={busy}
@@ -209,15 +212,15 @@ function LoginLogoutRow({
 									.finally(() => setBusy(false));
 							}}
 						>
-							{logoutTitle ?? '登出'}
+							{logoutTitle ?? t('settingItem.logout')}
 						</Button>
 					</>
 				}
 			>
-				<p>退出该源的登录？登录态与已保存的 cookie 键值会被清除。</p>
+				<p>{t('settingItem.logoutConfirm')}</p>
 				<label className="setting-row">
-					<span className="setting-row__title">同时清除登录 cookie</span>
-					<Switch checked={clearCookies} onChange={setClearCookies} label="同时清除登录 cookie" />
+					<span className="setting-row__title">{t('settingItem.clearCookies')}</span>
+					<Switch checked={clearCookies} onChange={setClearCookies} label={t('settingItem.clearCookies')} />
 				</label>
 			</Modal>
 		</div>
@@ -245,6 +248,7 @@ function WebLoginSetting({
 	onSubmit: (cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
 	onLogout: (clearCookies: boolean) => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const [text, setText] = useState('');
 	const [lsValues, setLsValues] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState(false);
@@ -267,28 +271,26 @@ function WebLoginSetting({
 			</div>
 			<span className="faint">
 				{url ? (
-					<>
-						先在浏览器登录{' '}
-						<a href={url} target="_blank" rel="noreferrer">
-							{url}
-						</a>
-						，再粘贴该站的 Cookie 请求头或 JSON 导出
-					</>
+					<Trans
+						i18nKey="settingItem.webLoginHintWithUrl"
+						values={{ url }}
+						components={{ 1: <a href={url} target="_blank" rel="noreferrer" /> }}
+					/>
 				) : (
-					'先在浏览器登录该源，再粘贴登录站的 Cookie 请求头或 JSON 导出'
+					t('settingItem.webLoginHint')
 				)}
 			</span>
 			<textarea
 				className="setting-textarea"
 				rows={3}
-				placeholder={'name=value; name2=value2\n或 {"name": "value"}'}
+				placeholder={t('settingItem.cookiePlaceholder')}
 				value={text}
 				onChange={(e) => setText(e.currentTarget.value)}
 			/>
 			{localStorageKeys.map((lsKey) => (
 				<Input
 					key={lsKey}
-					placeholder={`localStorage：${lsKey}`}
+					placeholder={t('settingItem.localStoragePlaceholder', { key: lsKey })}
 					value={lsValues[lsKey] ?? ''}
 					onChange={(e) => {
 						// currentTarget is already null by the time the deferred updater runs, so take the value first
@@ -304,14 +306,14 @@ function WebLoginSetting({
 				onClick={() => {
 					const cookies = parseCookies(text);
 					if (!cookies) {
-						pushToast('无法解析 Cookie，支持请求头或 JSON 格式', 'error');
+						pushToast(t('settingItem.cookieParseError'), 'error');
 						return;
 					}
 					setBusy(true);
 					void onSubmit(cookies, lsValues).finally(() => setBusy(false));
 				}}
 			>
-				登录
+				{t('settingItem.login')}
 			</Button>
 		</div>
 	);
@@ -340,6 +342,7 @@ function OAuthSetting({
 	onComplete: (url: string) => Promise<void>;
 	onLogout: (clearCookies: boolean) => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const [text, setText] = useState('');
 	const [busy, setBusy] = useState(false);
 	const [startBusy, setStartBusy] = useState(false);
@@ -360,7 +363,7 @@ function OAuthSetting({
 			<div className="setting-login__head">
 				<span className="setting-row__title">{title}</span>
 			</div>
-			<span className="faint">点「登录」在新标签页打开授权页；授权完成后，把地址栏里的重定向 URL 粘贴到下面</span>
+			<span className="faint">{t('settingItem.oauthHint')}</span>
 			<Button
 				size="sm"
 				loading={startBusy}
@@ -381,12 +384,12 @@ function OAuthSetting({
 						.finally(() => setStartBusy(false));
 				}}
 			>
-				登录
+				{t('settingItem.login')}
 			</Button>
 			<textarea
 				className="setting-textarea"
 				rows={2}
-				placeholder={'粘贴重定向 URL，例如 myscheme://callback?code=…'}
+				placeholder={t('settingItem.oauthPlaceholder')}
 				value={text}
 				onChange={(e) => setText(e.currentTarget.value)}
 			/>
@@ -399,7 +402,7 @@ function OAuthSetting({
 					void onComplete(text.trim()).finally(() => setBusy(false));
 				}}
 			>
-				完成
+				{t('settingItem.done')}
 			</Button>
 		</div>
 	);
@@ -415,6 +418,7 @@ function ButtonRow({
 	hasAction: boolean;
 	onPress: () => Promise<void>;
 }) {
+	const { t } = useTranslation();
 	const [busy, setBusy] = useState(false);
 	return (
 		<div className="setting-row">
@@ -429,7 +433,7 @@ function ButtonRow({
 			>
 				{title}
 			</Button>
-			{!hasAction && <span className="faint">该按钮未声明动作</span>}
+			{!hasAction && <span className="faint">{t('settingItem.buttonNoAction')}</span>}
 		</div>
 	);
 }
@@ -446,6 +450,7 @@ export function SettingItem({
 	onStartOAuth,
 	onCompleteOAuth
 }: SettingItemProps) {
+	const { t } = useTranslation();
 	const [msOpen, setMsOpen] = useState(false);
 
 	// The current value prefers unsaved edits, then the server-stored value
@@ -541,7 +546,7 @@ export function SettingItem({
 			body = (
 				<div className="setting-row setting-row--disabled">
 					<span className="setting-row__title">{setting.title}</span>
-					<span className="faint">{method === 'basic' ? '该操作需要在客户端完成' : '暂不支持 OAuth 登录'}</span>
+					<span className="faint">{method === 'basic' ? t('settingItem.basicClientOnly') : t('settingItem.oauthUnsupported')}</span>
 				</div>
 			);
 		}
@@ -636,7 +641,7 @@ export function SettingItem({
 			<div className="setting-row">
 				<span className="setting-row__title">{setting.title}</span>
 				<Button size="sm" onClick={() => setMsOpen(true)}>
-					已选 {selected.length} 项
+					{t('settingItem.selectedCount', { count: selected.length })}
 				</Button>
 				<Modal open={msOpen} title={setting.title} onClose={() => setMsOpen(false)}>
 					<div className="setting-ms">
@@ -715,7 +720,7 @@ export function SettingItem({
 		);
 	} else {
 		const kind = typeof v === 'string' ? v : v && typeof v === 'object' ? Object.keys(v)[0] : String(v);
-		body = <div className="setting-row faint">{setting.title}（暂不支持的类型：{kind}）</div>;
+		body = <div className="setting-row faint">{t('settingItem.unsupportedType', { title: setting.title, kind })}</div>;
 	}
 
 	return (

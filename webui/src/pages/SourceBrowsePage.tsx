@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
 	ArrowLeft,
 	Check,
@@ -138,6 +139,7 @@ function applyFilterValues(s: FilterStates, values: FilterValue[]): FilterStates
 }
 
 export default function SourceBrowsePage() {
+	const { t } = useTranslation();
 	const { sourceId: rawId } = useParams();
 	const sourceId = Number(rawId);
 	const navigate = useNavigate();
@@ -321,7 +323,7 @@ export default function SourceBrowsePage() {
 		try {
 			const { result } = await deepLink.mutateAsync({ sourceId, url });
 			if (!result) {
-				pushToast('源未识别该链接', 'info');
+				pushToast(t('sourceBrowse.linkNotRecognized'), 'info');
 				return;
 			}
 			setShowLink(false);
@@ -342,15 +344,15 @@ export default function SourceBrowsePage() {
 		return (
 			<div className="page container">
 				<div className="source-page__head">
-					<IconButton label="返回浏览" onClick={() => navigate('/browse')}>
+					<IconButton label={t('sourceBrowse.backToBrowse')} onClick={() => navigate('/browse')}>
 						<ArrowLeft size={18} />
 					</IconButton>
 					<h1 className="source-page__title">{source.data.name}</h1>
 				</div>
 				<EmptyState
 					icon={TriangleAlert}
-					title="该源已停用"
-					hint="重新安装或启用后才能浏览"
+					title={t('sourceBrowse.sourceDisabled')}
+					hint={t('sourceBrowse.sourceDisabledHint')}
 				/>
 			</div>
 		);
@@ -359,21 +361,21 @@ export default function SourceBrowsePage() {
 	return (
 		<div className="page container">
 			<div className="source-page__head">
-				<IconButton label="返回浏览" onClick={() => navigate('/browse')}>
+				<IconButton label={t('sourceBrowse.backToBrowse')} onClick={() => navigate('/browse')}>
 					<ArrowLeft size={18} />
 				</IconButton>
-				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
+				<h1 className="source-page__title">{source.data?.name ?? t('sourceBrowse.sourceFallback')}</h1>
 				{/* hasHome === false (confirmed no get_home at registration) hides the button; null = unknown for old rows, stays visible. Built-in sources lack this capability */}
 				{!isBuiltin && source.data?.hasHome !== false && (
 					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 						<House size={15} />
-						主页
+						{t('sourceBrowse.home')}
 					</Button>
 				)}
 				{!isBuiltin && (
 					<Button onClick={() => setShowLink(true)}>
 						<Link2 size={15} />
-						打开链接
+						{t('sourceBrowse.openLink')}
 					</Button>
 				)}
 			</div>
@@ -382,7 +384,7 @@ export default function SourceBrowsePage() {
 				<div className="source-page__modes">
 					<SegmentedControl
 						options={[
-							{ value: 'search', label: '搜索' },
+							{ value: 'search', label: t('common.search') },
 							...listings.map((l) => ({ value: l.id, label: l.name }))
 						]}
 						value={mode}
@@ -403,14 +405,14 @@ export default function SourceBrowsePage() {
 						<Input
 							icon={<Search size={15} />}
 							type="search"
-							placeholder={isLocal ? '搜索本地目录…' : '搜索漫画标题…'}
+							placeholder={isLocal ? t('sourceBrowse.searchLocalPlaceholder') : t('sourceBrowse.searchPlaceholder')}
 							value={input}
 							onChange={(e) => setInput(e.currentTarget.value)}
 						/>
 						{filters && !filtersHidden && (
 							<Button onClick={() => setShowFilters((v) => !v)}>
 								<ListFilter size={15} />
-								筛选{showFilters ? ' ▴' : ' ▾'}
+								{t('sourceBrowse.filters')}{showFilters ? ' ▴' : ' ▾'}
 							</Button>
 						)}
 					</form>
@@ -438,7 +440,7 @@ export default function SourceBrowsePage() {
 							))}
 							<div className="filter-panel__footer">
 								<Button variant="primary" onClick={() => runSearch()}>
-									应用筛选
+									{t('sourceBrowse.applyFilters')}
 								</Button>
 							</div>
 						</div>
@@ -473,16 +475,16 @@ export default function SourceBrowsePage() {
 			) : activeQuery.isError ? (
 				<EmptyState
 					icon={TriangleAlert}
-					title="加载失败"
+					title={t('sourceBrowse.loadFailed')}
 					hint={activeQuery.error?.message}
 					action={
 						<Button variant="primary" onClick={() => void activeQuery.refetch()}>
-							重试
+							{t('sourceBrowse.retry')}
 						</Button>
 					}
 				/>
 			) : entries.length === 0 ? (
-				<EmptyState icon={SearchX} title="没有结果" hint="换个关键词或调整筛选条件试试" />
+				<EmptyState icon={SearchX} title={t('sourceBrowse.noResults')} hint={t('sourceBrowse.noResultsHint')} />
 			) : (
 				<InfiniteList
 					hasNextPage={activeQuery.hasNextPage}
@@ -529,11 +531,11 @@ export default function SourceBrowsePage() {
 
 			<Modal
 				open={showLink}
-				title="打开源链接"
+				title={t('sourceBrowse.openLinkTitle')}
 				onClose={() => setShowLink(false)}
 				footer={
 					<Button variant="primary" loading={deepLink.isPending} onClick={() => void openLink()}>
-						打开
+						{t('sourceBrowse.open')}
 					</Button>
 				}
 			>
@@ -546,7 +548,7 @@ export default function SourceBrowsePage() {
 					<Input
 						type="url"
 						icon={<Link2 size={15} />}
-						placeholder={`粘贴 ${source.data?.name ?? '源'} 的漫画或章节链接…`}
+						placeholder={t('sourceBrowse.linkPlaceholder', { name: source.data?.name ?? t('sourceBrowse.sourceFallback') })}
 						value={linkInput}
 						onChange={(e) => setLinkInput(e.currentTarget.value)}
 					/>
@@ -567,6 +569,7 @@ function FilterItem({
 	setStates: (s: FilterStates) => void;
 	onCycleMulti: (f: Filter, i: number) => void;
 }) {
+	const { t } = useTranslation();
 	if (f.type === 'note') {
 		return (
 			<div>
@@ -611,7 +614,7 @@ function FilterItem({
 							});
 						}}
 					>
-						<option value="">默认</option>
+						<option value="">{t('sourceBrowse.defaultOption')}</option>
 						{(f.options ?? []).map((opt, i) => (
 							<option key={i} value={i}>
 								{opt}
@@ -630,7 +633,7 @@ function FilterItem({
 								})
 							}
 						>
-							{cur.ascending ? '升序' : '降序'}
+							{cur.ascending ? t('sourceBrowse.ascending') : t('sourceBrowse.descending')}
 						</Button>
 					)}
 				</div>
@@ -649,9 +652,9 @@ function FilterItem({
 					</span>
 					<SegmentedControl
 						options={[
-							{ value: 0, label: '不选' },
-							{ value: 1, label: '包含' },
-							{ value: -1, label: '排除' }
+							{ value: 0, label: t('sourceBrowse.triOff') },
+							{ value: 1, label: t('sourceBrowse.triInclude') },
+							{ value: -1, label: t('sourceBrowse.triExclude') }
 						]}
 						value={cur}
 						onChange={(v) => setStates({ ...states, checkVals: { ...states.checkVals, [f.id]: v } })}
@@ -686,7 +689,7 @@ function FilterItem({
 						setStates({ ...states, selectVals: { ...states.selectVals, [f.id]: e.currentTarget.value } })
 					}
 				>
-					<option value="">未选</option>
+					<option value="">{t('sourceBrowse.unselected')}</option>
 					{(f.options ?? []).map((opt, i) => (
 						<option key={i} value={optionKey(f, i)}>
 							{opt}
@@ -708,7 +711,7 @@ function FilterItem({
 							<Chip
 								key={i}
 								color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
-								title={f.can_exclude ? '点击切换：包含 / 排除 / 不选' : '点击切换选中'}
+								title={f.can_exclude ? t('sourceBrowse.cycleTriHint') : t('sourceBrowse.cycleHint')}
 								onClick={() => onCycleMulti(f, i)}
 							>
 								{st === -1 ? '− ' : ''}
@@ -729,7 +732,7 @@ function FilterItem({
 				<div className="filter-item__row">
 					<Input
 						type="number"
-						placeholder={f.min != null ? String(f.min) : '最小'}
+						placeholder={f.min != null ? String(f.min) : t('sourceBrowse.min')}
 						step={f.decimal ? 'any' : '1'}
 						value={r.from}
 						onChange={(e) =>
@@ -742,7 +745,7 @@ function FilterItem({
 					<span className="faint">—</span>
 					<Input
 						type="number"
-						placeholder={f.max != null ? String(f.max) : '最大'}
+						placeholder={f.max != null ? String(f.max) : t('sourceBrowse.max')}
 						step={f.decimal ? 'any' : '1'}
 						value={r.to}
 						onChange={(e) =>
@@ -813,6 +816,7 @@ function ChipMenuItem({
 }
 
 function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const { t } = useTranslation();
 	const options = f.options ?? [];
 	const cur = states.sortVals[f.id] ?? { index: null, ascending: true };
 	const def = f.default as { index?: number; ascending?: boolean } | null | undefined;
@@ -822,7 +826,7 @@ function SortFilterChip({ filter: f, states, setStates, onApply }: FilterChipPro
 	const label =
 		cur.index !== null && cur.index < options.length
 			? `${f.title ? `${f.title}: ` : ''}${options[cur.index]}${f.can_ascend ? (cur.ascending ? ' ↑' : ' ↓') : ''}`
-			: (f.title ?? '排序');
+			: (f.title ?? t('sourceBrowse.sortFallback'));
 	function pick(index: number, close: () => void) {
 		// Aidoku: clicking the current item flips direction when ascending is allowed, otherwise selects it and resets to the default direction
 		const next: SortVal =
@@ -868,6 +872,7 @@ function CheckFilterChip({ filter: f, states, setStates, onApply }: FilterChipPr
 }
 
 function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const { t } = useTranslation();
 	const cur = states.selectVals[f.id] ?? '';
 	const defVal = typeof f.default === 'string' ? f.default : '';
 	const active = cur !== '' && cur !== defVal;
@@ -881,12 +886,12 @@ function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipP
 		<ChipDropdown active={active} label={f.title ?? ''}>
 			{(close) => (
 				<>
-				{cur !== '' && (
-					// the reset entry is an action, not a state: no checkmark
-					<ChipMenuItem onClick={() => pick('', close)}>
-						重置
-					</ChipMenuItem>
-				)}
+					{cur !== '' && (
+						// the reset entry is an action, not a state: no checkmark
+						<ChipMenuItem onClick={() => pick('', close)}>
+							{t('sourceBrowse.reset')}
+						</ChipMenuItem>
+					)}
 					{(f.options ?? []).map((opt, i) => {
 						const key = optionKey(f, i);
 						return (
@@ -902,6 +907,7 @@ function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipP
 }
 
 function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipProps) {
+	const { t } = useTranslation();
 	const rec = { ...(states.multiVals[f.id] ?? {}) };
 	const count = Object.keys(rec).length;
 	function toggle(i: number) {
@@ -916,7 +922,10 @@ function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: Filter
 		// Aidoku menuActionDismissDisabled: the menu stays open for consecutive multi-selecting
 	}
 	return (
-		<ChipDropdown active={count > 0} label={`${f.title ?? ''}${count > 0 ? `（${count}）` : ''}`}>
+		<ChipDropdown
+			active={count > 0}
+			label={count > 0 ? t('sourceBrowse.titleWithCount', { title: f.title ?? '', count }) : (f.title ?? '')}
+		>
 			{() =>
 				(f.options ?? []).map((opt, i) => {
 					const key = optionKey(f, i);

@@ -1,0 +1,26 @@
+{
+  "settingItem": {
+    "loggedIn": "已登录",
+    "email": "邮箱",
+    "username": "用户名",
+    "password": "密码",
+    "login": "登录",
+    "relogin": "重新登录",
+    "logout": "登出",
+    "logoutConfirm": "退出该源的登录？登录态与已保存的 cookie 键值会被清除。",
+    "clearCookies": "同时清除登录 cookie",
+    "webLoginHint": "先在浏览器登录该源，再粘贴登录站的 Cookie 请求头或 JSON 导出",
+    "webLoginHintWithUrl": "先在浏览器登录 <1>{{url}}</1>，再粘贴该站的 Cookie 请求头或 JSON 导出",
+    "cookiePlaceholder": "name=value; name2=value2\n或 {\"name\": \"value\"}",
+    "cookieParseError": "无法解析 Cookie，支持请求头或 JSON 格式",
+    "oauthHint": "点「登录」在新标签页打开授权页；授权完成后，把地址栏里的重定向 URL 粘贴到下面",
+    "oauthPlaceholder": "粘贴重定向 URL，例如 myscheme://callback?code=…",
+    "done": "完成",
+    "buttonNoAction": "该按钮未声明动作",
+    "basicClientOnly": "该操作需要在客户端完成",
+    "oauthUnsupported": "暂不支持 OAuth 登录",
+    "selectedCount_other": "已选 {{count}} 项",
+    "unsupportedType": "{{title}}（暂不支持的类型：{{kind}}）",
+    "localStoragePlaceholder": "localStorage：{{key}}"
+  }
+}

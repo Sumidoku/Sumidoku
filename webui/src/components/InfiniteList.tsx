@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Spinner } from './Spinner';
 
 export interface InfiniteListProps {
@@ -16,8 +17,10 @@ export function InfiniteList({
 	isFetching,
 	onLoadMore,
 	children,
-	endText = '没有更多了'
+	endText
 }: InfiniteListProps) {
+	const { t } = useTranslation();
+	const end = endText ?? t('infiniteList.end');
 	const sentinelRef = useRef<HTMLDivElement>(null);
 	const stateRef = useRef({ hasNextPage, isFetching, onLoadMore });
 	stateRef.current = { hasNextPage, isFetching, onLoadMore };
@@ -41,7 +44,7 @@ export function InfiniteList({
 				{isFetching ? (
 					<Spinner />
 				) : !hasNextPage ? (
-					<span className="infinite-list__end">{endText}</span>
+					<span className="infinite-list__end">{end}</span>
 				) : null}
 			</div>
 		</>

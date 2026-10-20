@@ -1,0 +1,18 @@
+{
+  "chapterRow": {
+    "locked": "Locked",
+    "bookmarked": "Bookmarked",
+    "downloaded": "Downloaded",
+    "downloadCbz": "Download CBZ file",
+    "downloadChapter": "Download chapter",
+    "enqueueing": "Adding to download queue",
+    "enqueued": "In download queue",
+    "addBookmark": "Add bookmark",
+    "removeBookmark": "Remove bookmark",
+    "chapterActions": "Chapter actions",
+    "markRead": "Mark as read",
+    "markUnread": "Mark as unread",
+    "markPreviousRead": "Mark previous as read",
+    "markPreviousUnread": "Mark previous as unread"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "settingItem": {
+    "loggedIn": "Logged in",
+    "email": "Email",
+    "username": "Username",
+    "password": "Password",
+    "login": "Log in",
+    "relogin": "Log in again",
+    "logout": "Log out",
+    "logoutConfirm": "Log out of this source? The login state and saved cookie entries will be cleared.",
+    "clearCookies": "Also clear login cookies",
+    "webLoginHint": "Log in to the source in your browser first, then paste the site's Cookie header or a JSON export",
+    "webLoginHintWithUrl": "Log in at <1>{{url}}</1> in your browser first, then paste the site's Cookie header or a JSON export",
+    "cookiePlaceholder": "name=value; name2=value2\nor {\"name\": \"value\"}",
+    "cookieParseError": "Could not parse cookies; a request header or JSON format is supported",
+    "oauthHint": "Tap \"Log in\" to open the authorization page in a new tab; once authorized, paste the redirect URL from the address bar below",
+    "oauthPlaceholder": "Paste the redirect URL, e.g. myscheme://callback?code=…",
+    "done": "Done",
+    "buttonNoAction": "This button declares no action",
+    "basicClientOnly": "This must be done in a client app",
+    "oauthUnsupported": "OAuth login is not supported yet",
+    "selectedCount_one": "{{count}} selected",
+    "selectedCount_other": "{{count}} selected",
+    "unsupportedType": "{{title}} (unsupported type: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

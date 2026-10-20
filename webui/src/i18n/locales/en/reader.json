@@ -1,0 +1,30 @@
+{
+  "reader": {
+    "mode": {
+      "paged": "Paged",
+      "continuous": "Scroll",
+      "webtoon": "Webtoon"
+    },
+    "invalidChapter": "Invalid chapter address",
+    "documentTitle": "{{title}} · Reading - Sumidoku",
+    "documentTitleEmpty": "Reading - Sumidoku",
+    "loadFailed": "Failed to load chapter",
+    "retry": "Retry",
+    "noPages": "This chapter has no pages",
+    "back": "Back",
+    "unsupportedPage": "This page type is not supported yet",
+    "pageAlt": "Page {{page}}",
+    "prevPage": "Previous page",
+    "nextPage": "Next page",
+    "toggleToolbar": "Show or hide toolbar",
+    "reading": "Reading",
+    "settings": "Reading settings",
+    "direction": "Reading direction",
+    "directionPagedOnly": "Reading direction (paged mode only)",
+    "ltr": "Left to right",
+    "rtl": "Right to left",
+    "prevChapter": "Previous chapter",
+    "nextChapter": "Next chapter",
+    "jumpToPage": "Jump to page"
+  }
+}

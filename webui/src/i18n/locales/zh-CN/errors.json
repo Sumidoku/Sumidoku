@@ -1,0 +1,21 @@
+{
+  "errors": {
+    "bad_request": "请求参数有误",
+    "unauthorized": "未登录或登录已过期",
+    "forbidden": "没有权限执行此操作",
+    "not_found": "请求的资源不存在",
+    "duplicate": "已存在同名内容",
+    "unsupported": "该功能不受支持",
+    "no_update": "已是最新，无需更新",
+    "not_in_library": "漫画不在书库中",
+    "source_disabled": "该源已被禁用",
+    "source_error": "源请求失败",
+    "timeout": "源请求超时",
+    "bad_gateway": "上游服务请求失败",
+    "internal": "服务器内部错误",
+    "network": "网络请求失败",
+    "http": "请求失败（HTTP {{status}}）",
+    "stream_parse": "流式响应包含无法解析的事件",
+    "stream_terminal": "流式响应缺少终态事件"
+  }
+}

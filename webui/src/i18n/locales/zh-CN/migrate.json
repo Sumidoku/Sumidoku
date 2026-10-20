@@ -1,0 +1,51 @@
+{
+  "migrate": {
+    "title": "迁移",
+    "back": "上一步",
+    "pickSourceHint": "先选要迁出的源（只列在库有条目的源）：",
+    "inLibrary_other": "在库 {{count}} 部",
+    "libraryEmpty": "书库还是空的",
+    "libraryEmptyHint": "先把漫画加入书库再来迁移",
+    "selectedCount": "来源：<b>{{source}}</b> · 已选 {{selected}} / {{total}} 部",
+    "clearAll": "清空",
+    "selectAll": "全选",
+    "pickDestinations": "选目标源",
+    "loadMore": "加载更多",
+    "startMatch_other": "开始匹配（{{count}} 部）",
+    "status": "目标：{{dests}} · 命中 {{matched}} / {{total}}{{matching}}{{executed}}",
+    "statusMatching": " · 匹配中…",
+    "statusExecuted": " · 已迁移 {{done}}",
+    "retryUnmatched": "重试未命中",
+    "notFound": "未找到",
+    "gotoTarget": "已迁移，查看目标 →",
+    "confirmTitle_other": "{{mode}} {{count}} 部？",
+    "confirmAction": "确认{{mode}}",
+    "unmatchedUntouched_other": "未命中的 {{count}} 部不会动。",
+    "toastDone_other": "已迁移 {{count}} 部",
+    "toastPartial": "完成 {{done}} 部，失败 {{failed}} 部",
+    "moreActions": "更多操作",
+    "rematch": "重新搜索",
+    "skipEntry": "不迁移这部",
+    "rematchTitle": "重新搜索《{{title}}》",
+    "rematchHint": "对全部目标源搜索，点一个候选作为匹配结果。",
+    "rematchNoHits": "没有命中，换个关键词试试。",
+    "mode": {
+      "copy": "复制",
+      "migrate": "迁移",
+      "migrateWithHistory": "迁移（保留历史）"
+    },
+    "modeHint": {
+      "copy": "目标入库并搬走进度，源条目原样保留",
+      "migrate": "目标入库并搬走进度，源条目撤出书库并清掉阅读进度",
+      "migrateWithHistory": "目标入库并搬走进度，源条目撤出书库但保留阅读历史"
+    },
+    "reason": {
+      "not_found": "源条目不存在",
+      "not_in_library": "源条目不在书库",
+      "source_not_found": "目标源不存在",
+      "same_source": "目标与来源是同一条目",
+      "fetch_failed": "目标详情拉取失败",
+      "fetch_failed_with_message": "目标详情拉取失败：{{message}}"
+    }
+  }
+}

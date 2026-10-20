@@ -1,0 +1,29 @@
+{
+  "updates": {
+    "jobPending": "等待",
+    "jobRunning": "更新中",
+    "complete": "完成",
+    "failed": "失败",
+    "skipped": "跳过",
+    "started": "已开始更新",
+    "alreadyRunning": "已有更新任务在进行",
+    "updateFailed": "更新失败",
+    "summaryUnavailable": "更新摘要不可用",
+    "statusRunning": "正在更新",
+    "lastRun": "上次更新 {{time}}",
+    "idle": "空闲",
+    "total": "总数",
+    "pending": "待处理",
+    "wsOk": "实时连接正常",
+    "wsDown": "连接已断开，3 秒后重试",
+    "runNow": "立即更新",
+    "selectCategory": "选择分类",
+    "allCategories": "全部",
+    "runByCategory": "按分类更新",
+    "liveFeed": "实时动态",
+    "addedChapters_other": "+{{count}} 章",
+    "recentHeading": "最近更新",
+    "recentEmpty": "最近没有新章节",
+    "newChapter": "新章"
+  }
+}

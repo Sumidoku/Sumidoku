@@ -1,0 +1,19 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "loading": "Loading…",
+    "search": "Search",
+    "nav": {
+      "library": "Library",
+      "browse": "Browse",
+      "search": "Search",
+      "history": "History",
+      "downloads": "Downloads",
+      "updates": "Updates",
+      "settings": "Settings"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { pushToast } from '../components/Toast';
+import { translateApiError } from '../i18n';
 
 const BASE = '/api/v1';
 const TOKEN_KEY = 'sumidoku.auth.token';
@@ -85,11 +86,11 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 		});
 	} catch {
 		const err = new ApiError(0, 'network', '网络请求失败');
-		if (!silent) pushToast(err.message);
+		if (!silent) pushToast(translateApiError(err.code, err.message));
 		throw err;
 	}
 	if (!res.ok) {
-		let code = 'unknown';
+		let code = 'http';
 		let message = `请求失败（HTTP ${res.status}）`;
 		try {
 			const data = await res.json();
@@ -100,7 +101,7 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 		}
 		const err = new ApiError(res.status, code, message);
 		if (res.status === 401) handleUnauthorized(path);
-		if (!silent) pushToast(message);
+		if (!silent) pushToast(translateApiError(code, message, { status: res.status }));
 		throw err;
 	}
 	if (res.status === 204) return undefined as T;
@@ -155,11 +156,11 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 	} catch (e) {
 		if (e instanceof DOMException && e.name === 'AbortError') throw e;
 		const err = new ApiError(0, 'network', '网络请求失败');
-		if (!silent) pushToast(err.message);
+		if (!silent) pushToast(translateApiError(err.code, err.message));
 		throw err;
 	}
 	if (!res.ok) {
-		let code = 'unknown';
+		let code = 'http';
 		let message = `请求失败（HTTP ${res.status}）`;
 		try {
 			const data = await res.json();
@@ -170,7 +171,7 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 		}
 		const err = new ApiError(res.status, code, message);
 		if (res.status === 401) handleUnauthorized(path);
-		if (!silent) pushToast(message);
+		if (!silent) pushToast(translateApiError(code, message, { status: res.status }));
 		throw err;
 	}
 	const contentType = res.headers.get('content-type') ?? '';
@@ -197,7 +198,7 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 			try {
 				event = JSON.parse(line) as TPartial | StreamTerminal<TFinal>;
 			} catch {
-				throw new ApiError(res.status, 'stream', '流式响应包含无法解析的事件');
+				throw new ApiError(res.status, 'stream_parse', '流式响应包含无法解析的事件');
 			}
 			if (event.type === 'final') {
 				finalPayload = (event as { payload: TFinal }).payload;
@@ -210,12 +211,12 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 	}
 	if (streamError) {
 		const err = new ApiError(res.status, streamError.code, streamError.message);
-		if (!silent) pushToast(err.message);
+		if (!silent) pushToast(translateApiError(err.code, err.message));
 		throw err;
 	}
 	if (finalPayload === undefined) {
-		const err = new ApiError(res.status, 'stream', '流式响应缺少终态事件');
-		if (!silent) pushToast(err.message);
+		const err = new ApiError(res.status, 'stream_terminal', '流式响应缺少终态事件');
+		if (!silent) pushToast(translateApiError(err.code, err.message));
 		throw err;
 	}
 	return finalPayload;

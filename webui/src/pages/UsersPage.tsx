@@ -1,21 +1,29 @@
 import { useState } from 'react';
 import { Navigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { KeyRound, Trash2, UserPlus } from 'lucide-react';
 import { ApiError } from '../api/client';
 import { useCreateUser, useDeleteUser, useIsAdmin, useUpdateUser, useUsers, useWhoami } from '../api/hooks';
 import type { ManagedUser } from '../api/types';
+import { translateApiError } from '../i18n';
 import { Badge, Button, IconButton, Input, Modal, PageHeader, Select, Skeleton, pushToast } from '../components';
 import './users.css';
 
-const ROLE_LABEL: Record<string, string> = { admin: '管理员', reader: '读者' };
+function roleLabel(t: TFunction, role: string): string {
+	if (role === 'admin') return t('users.roleAdmin');
+	if (role === 'reader') return t('users.roleReader');
+	return role;
+}
 
-function toastError(e: unknown) {
-	if (e instanceof ApiError && e.status === 409) pushToast('用户名已存在');
-	else if (e instanceof ApiError && e.status === 400) pushToast(e.message);
-	else pushToast('操作失败');
+function toastError(t: TFunction, e: unknown) {
+	if (e instanceof ApiError && e.status === 409) pushToast(t('users.usernameTaken'));
+	else if (e instanceof ApiError && e.status === 400) pushToast(translateApiError(e.code, e.message));
+	else pushToast(t('users.operationFailed'));
 }
 
 function CreateUserModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+	const { t } = useTranslation();
 	const create = useCreateUser();
 	const [username, setUsername] = useState('');
 	const [password, setPassword] = useState('');
@@ -30,49 +38,49 @@ function CreateUserModal({ open, onClose }: { open: boolean; onClose: () => void
 	async function submit() {
 		try {
 			await create.mutateAsync({ username: username.trim(), password, role });
-			pushToast(`已创建用户 ${username.trim()}`, 'info');
+			pushToast(t('users.created', { username: username.trim() }), 'info');
 			reset();
 			onClose();
 		} catch (e) {
-			toastError(e);
+			toastError(t, e);
 		}
 	}
 
 	return (
 		<Modal
 			open={open}
-			title="新建用户"
+			title={t('users.createTitle')}
 			onClose={onClose}
 			footer={
 				<>
-					<Button onClick={onClose}>取消</Button>
+					<Button onClick={onClose}>{t('common.cancel')}</Button>
 					<Button
 						variant="primary"
 						loading={create.isPending}
 						disabled={!username.trim() || !password}
 						onClick={() => void submit()}
 					>
-						创建
+						{t('users.create')}
 					</Button>
 				</>
 			}
 		>
 			<div className="users-form">
 				<Input
-					placeholder="用户名"
+					placeholder={t('users.username')}
 					value={username}
 					onChange={(e) => setUsername(e.currentTarget.value)}
 				/>
 				<Input
 					type="password"
-					placeholder="初始密码"
+					placeholder={t('users.initialPassword')}
 					autoComplete="new-password"
 					value={password}
 					onChange={(e) => setPassword(e.currentTarget.value)}
 				/>
 				<Select value={role} onChange={(e) => setRole(e.currentTarget.value)}>
-					<option value="reader">读者：只有自己的书库、进度与分类</option>
-					<option value="admin">管理员：可管理用户、源与服务器设置</option>
+					<option value="reader">{t('users.roleReaderDesc')}</option>
+					<option value="admin">{t('users.roleAdminDesc')}</option>
 				</Select>
 			</div>
 		</Modal>
@@ -80,6 +88,7 @@ function CreateUserModal({ open, onClose }: { open: boolean; onClose: () => void
 }
 
 function ResetPasswordModal({ user, onClose }: { user: ManagedUser | null; onClose: () => void }) {
+	const { t } = useTranslation();
 	const update = useUpdateUser();
 	const [password, setPassword] = useState('');
 
@@ -87,29 +96,29 @@ function ResetPasswordModal({ user, onClose }: { user: ManagedUser | null; onClo
 		if (!user) return;
 		try {
 			await update.mutateAsync({ id: user.id, password });
-			pushToast(`已重置 ${user.username} 的密码，其全部会话已下线`, 'info');
+			pushToast(t('users.passwordReset', { username: user.username }), 'info');
 			setPassword('');
 			onClose();
 		} catch (e) {
-			toastError(e);
+			toastError(t, e);
 		}
 	}
 
 	return (
 		<Modal
 			open={user !== null}
-			title={`重置密码：${user?.username ?? ''}`}
+			title={t('users.resetPasswordTitle', { username: user?.username ?? '' })}
 			onClose={onClose}
 			footer={
 				<>
-					<Button onClick={onClose}>取消</Button>
+					<Button onClick={onClose}>{t('common.cancel')}</Button>
 					<Button
 						variant="primary"
 						loading={update.isPending}
 						disabled={!password}
 						onClick={() => void submit()}
 					>
-						重置
+						{t('users.reset')}
 					</Button>
 				</>
 			}
@@ -117,18 +126,19 @@ function ResetPasswordModal({ user, onClose }: { user: ManagedUser | null; onClo
 			<div className="users-form">
 				<Input
 					type="password"
-					placeholder="新密码"
+					placeholder={t('users.newPassword')}
 					autoComplete="new-password"
 					value={password}
 					onChange={(e) => setPassword(e.currentTarget.value)}
 				/>
-				<p className="faint">重置后该用户的所有登录会话立即失效。</p>
+				<p className="faint">{t('users.resetPasswordHint')}</p>
 			</div>
 		</Modal>
 	);
 }
 
 function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?: number; onResetPassword: () => void }) {
+	const { t } = useTranslation();
 	const update = useUpdateUser();
 	const del = useDeleteUser();
 	const [confirming, setConfirming] = useState(false);
@@ -138,9 +148,9 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 	async function changeRole(role: string) {
 		try {
 			await update.mutateAsync({ id: user.id, role });
-			pushToast(`已把 ${user.username} 改为${ROLE_LABEL[role] ?? role}`, 'info');
+			pushToast(t('users.roleChanged', { username: user.username, role: roleLabel(t, role) }), 'info');
 		} catch (e) {
-			toastError(e);
+			toastError(t, e);
 		}
 	}
 
@@ -149,10 +159,10 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 			<div className="users-row__main">
 				<span className="users-row__name">
 					{user.username}
-					{user.id === selfId && <Badge>当前账号</Badge>}
+					{user.id === selfId && <Badge>{t('users.currentAccount')}</Badge>}
 				</span>
 				<span className="faint">
-					{ROLE_LABEL[user.role] ?? user.role} · 创建于 {new Date(user.createdAt * 1000).toLocaleString()}
+					{t('users.rowMeta', { role: roleLabel(t, user.role), date: new Date(user.createdAt * 1000).toLocaleString() })}
 				</span>
 			</div>
 			<div className="users-row__ops">
@@ -161,14 +171,14 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 					disabled={update.isPending}
 					onChange={(e) => void changeRole(e.currentTarget.value)}
 				>
-					<option value="admin">管理员</option>
-					<option value="reader">读者</option>
+					<option value="admin">{t('users.roleAdmin')}</option>
+					<option value="reader">{t('users.roleReader')}</option>
 				</Select>
-				<IconButton label={`重置 ${user.username} 的密码`} onClick={onResetPassword}>
+				<IconButton label={t('users.resetPasswordLabel', { username: user.username })} onClick={onResetPassword}>
 					<KeyRound size={16} />
 				</IconButton>
 				{!builtin && (
-					<IconButton label={`删除 ${user.username}`} variant="danger" onClick={() => setConfirming(true)}>
+					<IconButton label={t('users.deleteUserLabel', { username: user.username })} variant="danger" onClick={() => setConfirming(true)}>
 						<Trash2 size={16} />
 					</IconButton>
 				)}
@@ -176,11 +186,11 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 
 			<Modal
 				open={confirming}
-				title={`删除用户 ${user.username}？`}
+				title={t('users.deleteUserTitle', { username: user.username })}
 				onClose={() => setConfirming(false)}
 				footer={
 					<>
-						<Button onClick={() => setConfirming(false)}>取消</Button>
+						<Button onClick={() => setConfirming(false)}>{t('common.cancel')}</Button>
 						<Button
 							variant="danger"
 							loading={del.isPending}
@@ -188,18 +198,18 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 								del.mutate(user.id, {
 									onSuccess: () => {
 										setConfirming(false);
-										pushToast('已删除', 'info');
+										pushToast(t('users.deleted'), 'info');
 									}
 								});
 							}}
 						>
-							删除
+							{t('common.delete')}
 						</Button>
 					</>
 				}
 			>
 				<p className="settings-modal-text">
-					删除后 {user.username} 的书库、阅读进度、历史、分类与下载记录一并清除，此操作不可撤销。
+					{t('users.deleteUserConfirm', { username: user.username })}
 				</p>
 			</Modal>
 		</div>
@@ -207,6 +217,7 @@ function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?
 }
 
 export default function UsersPage() {
+	const { t } = useTranslation();
 	const whoami = useWhoami();
 	const isAdmin = useIsAdmin();
 	// No requests before the identity is known: a reader arriving directly is spared a list fetch doomed to 403
@@ -222,11 +233,11 @@ export default function UsersPage() {
 	return (
 		<div className="page container settings-page">
 			<PageHeader
-				title="用户管理"
+				title={t('users.pageTitle')}
 				actions={
 					<Button variant="primary" onClick={() => setCreating(true)}>
 						<UserPlus size={15} />
-						新建用户
+						{t('users.createTitle')}
 					</Button>
 				}
 			/>

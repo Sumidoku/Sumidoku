@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Check, Images, TriangleAlert } from 'lucide-react';
 import { ApiError, sourceImageUrl } from '../../api/client';
 import { useAlternateCovers, useSelectCover } from '../../api/hooks';
@@ -11,6 +12,7 @@ interface CoverPickerModalProps {
 }
 
 export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
+	const { t } = useTranslation();
 	const coversQuery = useAlternateCovers(manga.id);
 	const selectCover = useSelectCover();
 	const [pendingUrl, setPendingUrl] = useState<string | null>(null);
@@ -22,7 +24,7 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 			{ id: manga.id, url },
 			{
 				onSuccess: () => {
-					pushToast('封面已更换', 'info');
+					pushToast(t('coverPicker.changed'), 'info');
 					onClose();
 				},
 				onSettled: () => setPendingUrl(null)
@@ -35,26 +37,26 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 	const covers = coversQuery.data ?? [];
 
 	return (
-		<Modal open title="更换封面" onClose={onClose} panelClassName="cover-picker">
+		<Modal open title={t('coverPicker.title')} onClose={onClose} panelClassName="cover-picker">
 			{coversQuery.isPending ? (
 				<div className="cover-picker__loading">
 					<Spinner size={20} />
 				</div>
 			) : unsupported ? (
-				<EmptyState icon={Images} title="该源不提供备选封面" />
+				<EmptyState icon={Images} title={t('coverPicker.unsupported')} />
 			) : coversQuery.isError ? (
 				<EmptyState
 					icon={TriangleAlert}
-					title="备选封面加载失败"
+					title={t('coverPicker.loadFailed')}
 					hint={coversQuery.error.message}
 					action={
 						<Button variant="primary" onClick={() => void coversQuery.refetch()}>
-							重试
+							{t('coverPicker.retry')}
 						</Button>
 					}
 				/>
 			) : covers.length === 0 ? (
-				<EmptyState icon={Images} title="源没有返回备选封面" />
+				<EmptyState icon={Images} title={t('coverPicker.empty')} />
 			) : (
 				<div className="cover-picker__grid">
 					{covers.map((url) => {
@@ -67,7 +69,7 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 									current ? 'cover-picker__cell cover-picker__cell--current' : 'cover-picker__cell'
 								}
 								disabled={selectCover.isPending}
-								title={current ? '当前封面' : '设为封面'}
+								title={current ? t('coverPicker.currentTitle') : t('coverPicker.setAsCover')}
 								onClick={() => pick(url)}
 							>
 								{/* Images of anti-hotlink sources always 403 on direct hits, so they all go through the server proxy */}
@@ -75,7 +77,7 @@ export function CoverPickerModal({ manga, onClose }: CoverPickerModalProps) {
 								{current && (
 									<span className="cover-picker__badge">
 										<Check size={13} />
-										当前
+										{t('coverPicker.currentBadge')}
 									</span>
 								)}
 								{pendingUrl === url && (

@@ -1,0 +1,26 @@
+{
+  "downloads": {
+    "statusQueued": "Queued",
+    "statusDownloading": "Downloading",
+    "statusPaused": "Paused",
+    "statusFinished": "Finished",
+    "statusError": "Failed",
+    "cleared_one": "Cleared {{count}} item",
+    "cleared_other": "Cleared {{count}} items",
+    "wsOk": "Live connection OK",
+    "wsDown": "Connection lost; retrying in 3 seconds",
+    "pause": "Pause",
+    "start": "Start",
+    "clearFinished": "Clear finished",
+    "emptyTitle": "No download tasks",
+    "emptyHint": "Download chapters from a manga's page and the tasks will show up here",
+    "unnamedChapter": "Unnamed chapter",
+    "downloadFailed": "Download failed",
+    "retried_one": " (retried {{count}} time)",
+    "retried_other": " (retried {{count}} times)",
+    "retry": "Retry",
+    "downloadCbz": "Download CBZ file",
+    "deleteTask": "Delete task",
+    "deleted": "Deleted"
+  }
+}

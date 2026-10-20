@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowRight, Search } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useMigrate, useRegisterManga, useSources } from '../../api/hooks';
@@ -9,23 +10,12 @@ import { Button, Cover, Modal, Spinner, pushToast } from '../../components';
 import { DestinationPicker } from '../migrate/DestinationPicker';
 import '../migrate/migrate.css';
 
-const MODE_LABEL: Record<MigrateMode, string> = {
-	copy: '复制',
-	migrate: '迁移',
-	migrateWithHistory: '迁移（保留历史）'
-};
-
-const MODE_HINT: Record<MigrateMode, string> = {
-	copy: '目标入库并搬走进度，当前条目原样保留',
-	migrate: '目标入库并搬走进度，当前条目撤出书库并清掉阅读进度',
-	migrateWithHistory: '目标入库并搬走进度，当前条目撤出书库但保留阅读历史'
-};
-
 /**
  * Switch a single entry to another source: pick the destination set → title-search all target sources
  * with 3-way concurrency → user picks the match → execute with the chosen mode (or just view the entry) → jump to the target page
  */
 export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: () => void }) {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const [destinations, setDestinations] = useState<number[]>([]);
 	const [searching, setSearching] = useState(false);
@@ -38,6 +28,17 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 	const sourceName = (id: number) =>
 		(sources.data ?? []).find((s) => s.id === id)?.name ?? '';
 
+	const MODE_LABEL: Record<MigrateMode, string> = {
+		copy: t('migrateModal.mode.copy'),
+		migrate: t('migrateModal.mode.migrate'),
+		migrateWithHistory: t('migrateModal.mode.migrateWithHistory')
+	};
+	const MODE_HINT: Record<MigrateMode, string> = {
+		copy: t('migrateModal.modeHint.copy'),
+		migrate: t('migrateModal.modeHint.migrate'),
+		migrateWithHistory: t('migrateModal.modeHint.migrateWithHistory')
+	};
+
 	async function search() {
 		setSearching(true);
 		setResults(null);
@@ -47,7 +48,7 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 			try {
 				return await migrateLookup(manga.id, destId);
 			} catch (e) {
-				setError(e instanceof Error ? e.message : '搜索失败');
+				setError(e instanceof Error ? e.message : t('migrateModal.searchFailed'));
 				return null;
 			}
 		});
@@ -73,11 +74,11 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 				onSuccess: (res) => {
 					const item = res.results[0];
 					if (!item?.ok) {
-						setError(item?.message || item?.reason || '迁移失败');
+						setError(item?.message || item?.reason || t('migrateModal.migrateFailed'));
 						return;
 					}
 					for (const w of item.warnings ?? []) pushToast(w, 'info');
-					pushToast(`${MODE_LABEL[mode]}完成`, 'info');
+					pushToast(t('migrateModal.done', { mode: MODE_LABEL[mode] }), 'info');
 					onClose();
 					navigate(`/manga/${item.toMangaId}`);
 				}
@@ -102,7 +103,7 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 	const busy = migrate.isPending || register.isPending;
 
 	return (
-		<Modal open title={`切换图源：《${manga.title}》`} onClose={onClose} panelClassName="migrate-single">
+		<Modal open title={t('migrateModal.title', { title: manga.title })} onClose={onClose} panelClassName="migrate-single">
 			{picked ? (
 				<div className="migrate-single__confirm">
 					<div className="migrate-single__pair">
@@ -123,10 +124,10 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 							</Button>
 						))}
 						<Button size="sm" disabled={busy} onClick={showEntry}>
-							仅查看条目
+							{t('migrateModal.viewOnly')}
 						</Button>
 						<Button size="sm" disabled={busy} onClick={() => setPicked(null)}>
-							返回候选
+							{t('migrateModal.backToCandidates')}
 						</Button>
 					</div>
 					<p className="muted">{MODE_HINT.migrate}</p>
@@ -143,16 +144,16 @@ export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: 
 							onClick={() => void search()}
 						>
 							<Search size={14} />
-							搜索候选
+							{t('migrateModal.searchCandidates')}
 						</Button>
 						{error && <span className="migrate-single__error">{error}</span>}
 					</div>
 					{searching ? (
 						<Spinner />
 					) : results === null ? (
-						<p className="muted">会对全部目标源按标题并发搜索（3 并发）。</p>
+						<p className="muted">{t('migrateModal.searchHint')}</p>
 					) : results.length === 0 ? (
-						<p className="muted">没有命中，可以调整目标组合再搜。</p>
+						<p className="muted">{t('migrateModal.noHits')}</p>
 					) : (
 						<div className="migrate-rematch__list">
 							{results.map((c) => (

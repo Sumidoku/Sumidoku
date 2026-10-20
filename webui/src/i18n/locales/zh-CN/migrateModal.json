@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "切换图源：《{{title}}》",
+    "mode": {
+      "copy": "复制",
+      "migrate": "迁移",
+      "migrateWithHistory": "迁移（保留历史）"
+    },
+    "modeHint": {
+      "copy": "目标入库并搬走进度，当前条目原样保留",
+      "migrate": "目标入库并搬走进度，当前条目撤出书库并清掉阅读进度",
+      "migrateWithHistory": "目标入库并搬走进度，当前条目撤出书库但保留阅读历史"
+    },
+    "searchFailed": "搜索失败",
+    "migrateFailed": "迁移失败",
+    "done": "{{mode}}完成",
+    "viewOnly": "仅查看条目",
+    "backToCandidates": "返回候选",
+    "searchCandidates": "搜索候选",
+    "searchHint": "会对全部目标源按标题并发搜索（3 并发）。",
+    "noHits": "没有命中，可以调整目标组合再搜。"
+  }
+}

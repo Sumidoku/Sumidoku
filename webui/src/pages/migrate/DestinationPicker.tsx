@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { GripVertical, ListPlus, Plus, X } from 'lucide-react';
 import { sourceIconUrl } from '../../api/client';
 import { useSources } from '../../api/hooks';
@@ -31,6 +32,7 @@ export interface DestinationPickerProps {
  * on click, and "select all pinned" batch-adds in pin order. Shared by the single-entry and batch entries.
  */
 export function DestinationPicker({ selected, onChange, excludeId }: DestinationPickerProps) {
+	const { t } = useTranslation();
 	const sources = useSources();
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -65,16 +67,16 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 	return (
 		<div className="dest-picker">
 			<div className="dest-picker__head">
-				<h4>已选（顺序即优先级）</h4>
+				<h4>{t('destinationPicker.selectedHeading')}</h4>
 				{pinnedRest.length > 0 && (
-					<Button size="sm" onClick={addAllPinned} title="按置顶顺序补入全部置顶源">
+					<Button size="sm" onClick={addAllPinned} title={t('destinationPicker.addAllPinnedTitle')}>
 						<ListPlus size={14} />
-						全选置顶源（{pinnedRest.length}）
+						{t('destinationPicker.addAllPinned', { count: pinnedRest.length })}
 					</Button>
 				)}
 			</div>
 			{chosen.length === 0 ? (
-				<p className="muted">还没选目标源，从下面点选；顺序决定自动匹配的优先级。</p>
+				<p className="muted">{t('destinationPicker.emptyHint')}</p>
 			) : (
 				<div className="dest-picker__list">
 					{chosen.map((s, i) => (
@@ -116,7 +118,7 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 							<button
 								type="button"
 								className="dest-picker__remove"
-								title={`移出 ${s.name}`}
+								title={t('destinationPicker.remove', { name: s.name })}
 								onClick={() => onChange(selected.filter((id) => id !== s.id))}
 							>
 								<X size={15} />
@@ -126,9 +128,9 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 				</div>
 			)}
 
-			<h4>可选</h4>
+			<h4>{t('destinationPicker.availableHeading')}</h4>
 			{available.length === 0 ? (
-				<p className="muted">没有其他可加的源了。</p>
+				<p className="muted">{t('destinationPicker.noMore')}</p>
 			) : (
 				<div className="dest-picker__list">
 					{available.map((s) => (
@@ -136,12 +138,12 @@ export function DestinationPicker({ selected, onChange, excludeId }: Destination
 							key={s.id}
 							type="button"
 							className="dest-picker__row dest-picker__row--add"
-							title={`加入 ${s.name}`}
+							title={t('destinationPicker.add', { name: s.name })}
 							onClick={() => onChange([...selected, s.id])}
 						>
 							<RowIcon source={s} />
 							<span className="dest-picker__name">{s.name}</span>
-							{s.pinned && <span className="dest-picker__pin">置顶</span>}
+							{s.pinned && <span className="dest-picker__pin">{t('destinationPicker.pinned')}</span>}
 							<Plus size={15} />
 						</button>
 					))}

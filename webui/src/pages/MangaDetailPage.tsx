@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
@@ -61,28 +62,22 @@ const STATUS_COLOR: Record<string, ChipColor> = {
 
 type ChapFilterKey = 'unread' | 'downloaded' | 'bookmarked' | 'locked';
 
-const CHAP_FILTERS: { value: ChapFilterKey; label: string }[] = [
-	{ value: 'unread', label: '未读' },
-	{ value: 'downloaded', label: '已下载' },
-	{ value: 'bookmarked', label: '书签' },
-	{ value: 'locked', label: '锁定' }
+const CHAP_FILTERS: { value: ChapFilterKey; labelKey: string }[] = [
+	{ value: 'unread', labelKey: 'mangaDetail.filterUnread' },
+	{ value: 'downloaded', labelKey: 'mangaDetail.filterDownloaded' },
+	{ value: 'bookmarked', labelKey: 'mangaDetail.filterBookmarked' },
+	{ value: 'locked', labelKey: 'mangaDetail.filterLocked' }
 ];
 
-const SORT_OPTIONS: { value: SortKey; label: string }[] = [
-	{ value: 'source', label: '源序' },
-	{ value: 'chapter', label: '章节号' },
-	{ value: 'date', label: '上传日期' }
+const SORT_OPTIONS: { value: SortKey; labelKey: string }[] = [
+	{ value: 'source', labelKey: 'mangaDetail.sortSource' },
+	{ value: 'chapter', labelKey: 'mangaDetail.sortChapter' },
+	{ value: 'date', labelKey: 'mangaDetail.sortDate' }
 ];
 
 /** Tri-state chip colors: include=accent, exclude=danger, off=default */
 function triColor(t: Tri): ChipColor {
 	return t === 1 ? 'accent' : t === -1 ? 'danger' : 'default';
-}
-
-function triTitle(label: string, t: Tri): string {
-	if (t === 1) return `当前只显示${label}章节，点击改为排除`;
-	if (t === -1) return `当前排除${label}章节，点击关闭筛选`;
-	return `当前不筛选${label}，点击改为只显示${label}`;
 }
 
 // Author/artist search capability mirrors Aidoku supportsAuthorSearch: the manifest declaration wins;
@@ -118,6 +113,7 @@ function genreFilterValue(filters: Filter[], tag: string): FilterValue | null {
 }
 
 export default function MangaDetailPage() {
+	const { t } = useTranslation();
 	const { id: rawId } = useParams();
 	const mangaId = Number(rawId);
 	const navigate = useNavigate();
@@ -219,6 +215,12 @@ export default function MangaDetailPage() {
 	const allSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
 	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
 
+	function triTitle(label: string, tri: Tri): string {
+		if (tri === 1) return t('mangaDetail.triOnly', { label });
+		if (tri === -1) return t('mangaDetail.triExclude', { label });
+		return t('mangaDetail.triOff', { label });
+	}
+
 	function readTarget(c: Chapter): string {
 		// Re-reading a finished chapter starts from page 1; only an unread chapter with progress resumes
 		const resume = !c.isRead && c.lastPageRead > 0 ? c.lastPageRead : 0;
@@ -268,7 +270,7 @@ export default function MangaDetailPage() {
 			{ mangaId, categoryIds: [...catSel] },
 			{
 				onSuccess: () => {
-					pushToast('分类已保存', 'info');
+					pushToast(t('mangaDetail.catsSaved'), 'info');
 					setCatOpen(false);
 				}
 			}
@@ -278,7 +280,7 @@ export default function MangaDetailPage() {
 	function confirmRemove() {
 		removeFromLibrary.mutate(mangaId, {
 			onSuccess: () => {
-				pushToast('已移出书库', 'info');
+				pushToast(t('mangaDetail.removedFromLibrary'), 'info');
 				setRemoveOpen(false);
 			}
 		});
@@ -296,7 +298,7 @@ export default function MangaDetailPage() {
 		enqueueDownloads.mutate([c.id], {
 			onSuccess: () => {
 				setDlQueued((prev) => new Set(prev).add(c.id));
-				pushToast('已加入下载队列', 'info');
+				pushToast(t('mangaDetail.downloadQueued'), 'info');
 			},
 			onSettled: () =>
 				setDlPending((prev) => {
@@ -331,7 +333,7 @@ export default function MangaDetailPage() {
 				})
 			: ids;
 		if (targets.length === 0) {
-			pushToast('锁定章节需先下载才能标为已读', 'info');
+			pushToast(t('mangaDetail.lockedNeedDownload'), 'info');
 			return;
 		}
 		batchChapters.mutate(
@@ -348,12 +350,12 @@ export default function MangaDetailPage() {
 
 	function markRead(c: Chapter) {
 		if (c.id < 0) return;
-		applyRead([c.id], true, () => '已标记为已读');
+		applyRead([c.id], true, (n) => t('mangaDetail.markedRead', { count: n }));
 	}
 
 	function markUnread(c: Chapter) {
 		if (c.id < 0) return;
-		applyRead([c.id], false, () => '已标记为未读');
+		applyRead([c.id], false, (n) => t('mangaDetail.markedUnread', { count: n }));
 	}
 
 	// Aidoku's MARK_PREVIOUS: everything displayed below the tapped row (display-relative, so with the
@@ -366,14 +368,18 @@ export default function MangaDetailPage() {
 			.filter((x) => x.id > 0)
 			.map((x) => x.id);
 		if (ids.length === 0) return;
-		applyRead(ids, isRead, (n) => `已把下方 ${n} 章标为${isRead ? '已读' : '未读'}`);
+		applyRead(ids, isRead, (n) =>
+			isRead
+				? t('mangaDetail.markedPreviousRead', { count: n })
+				: t('mangaDetail.markedPreviousUnread', { count: n })
+		);
 	}
 
 	function downloadSelected() {
 		const ids = [...selected];
 		enqueueDownloads.mutate(ids, {
 			onSuccess: (res) => {
-				pushToast(`已把 ${res.queued} 章加入下载队列`, 'info');
+				pushToast(t('mangaDetail.queuedChapters', { count: res.queued }), 'info');
 				setDlQueued((prev) => new Set([...prev, ...ids]));
 				exitSelect();
 			}
@@ -406,8 +412,8 @@ export default function MangaDetailPage() {
 			<div className="page container">
 				<EmptyState
 					icon={TriangleAlert}
-					title="漫画加载失败"
-					hint={mangaQuery.error?.message || '这部漫画不存在或已被移除'}
+					title={t('mangaDetail.loadFailed')}
+					hint={mangaQuery.error?.message || t('mangaDetail.loadFailedHint')}
 					action={
 						<Button
 							variant="primary"
@@ -416,7 +422,7 @@ export default function MangaDetailPage() {
 								void chaptersQuery.refetch();
 							}}
 						>
-							重试
+							{t('mangaDetail.retry')}
 						</Button>
 					}
 				/>
@@ -460,7 +466,7 @@ export default function MangaDetailPage() {
 					style={{ backgroundImage: `url("${coverUrl(mangaId, manga.cover)}")` }}
 				/>
 				<div className="manga-hero__scrim" />
-				<IconButton className="manga-hero__back" label="返回上一级" onClick={goBack}>
+				<IconButton className="manga-hero__back" label={t('mangaDetail.back')} onClick={goBack}>
 					<ArrowLeft size={18} />
 				</IconButton>
 				<div className="manga-hero__body">
@@ -473,7 +479,7 @@ export default function MangaDetailPage() {
 							onClick={() => setCoverPickerOpen(true)}
 						>
 							<Images size={13} />
-							更换封面
+							{t('mangaDetail.changeCover')}
 						</button>
 					</div>
 					<div className="manga-hero__info">
@@ -493,7 +499,10 @@ export default function MangaDetailPage() {
 												<button
 													type="button"
 													className="manga-hero__creator"
-													title={`搜索${c.filterId === 'author' ? '作者' : '画师'}：${c.name}`}
+													title={t('mangaDetail.searchCreator', {
+														kind: c.filterId === 'author' ? t('mangaDetail.author') : t('mangaDetail.artist'),
+														name: c.name
+													})}
 													onClick={() =>
 														searchByFilters([{ Text: { id: c.filterId, value: c.name } }])
 													}
@@ -516,28 +525,28 @@ export default function MangaDetailPage() {
 									href={manga.url}
 									target="_blank"
 									rel="noreferrer"
-									title="打开来源页面"
+									title={t('mangaDetail.openSourcePage')}
 								>
 									<ExternalLink size={13} />
-									来源
+									{t('mangaDetail.source')}
 								</a>
 							)}
 						</div>
 						{tags.length > 0 && (
 							<div className="manga-hero__tags">
-							{tags.map((t) => {
+							{tags.map((tag) => {
 								// Aidoku: the config.supportsTagSearch declaration wins (send Select "genre" with the raw tag as value);
 								// only when undeclared does it fall back to an exact option match on isGenre filters
 								const v = sourceConfig?.supportsTagSearch
-									? { Select: { id: 'genre', value: t } }
-									: genreFilterValue(filters, t);
+									? { Select: { id: 'genre', value: tag } }
+									: genreFilterValue(filters, tag);
 								return (
 										<Chip
-											key={t}
-											title={v ? `搜索标签：${t}` : undefined}
+											key={tag}
+											title={v ? t('mangaDetail.searchTag', { tag }) : undefined}
 											onClick={v ? () => searchByFilters([v]) : undefined}
 										>
-											{t}
+											{tag}
 										</Chip>
 									);
 								})}
@@ -553,7 +562,7 @@ export default function MangaDetailPage() {
 									className="manga-hero__desc-toggle"
 									onClick={() => setDescOpen((v) => !v)}
 								>
-									{descOpen ? '收起' : '展开'}
+									{descOpen ? t('mangaDetail.collapse') : t('mangaDetail.expand')}
 								</button>
 							</>
 						)}
@@ -564,14 +573,14 @@ export default function MangaDetailPage() {
 								onClick={() => continueCh && navigate(readTarget(continueCh))}
 							>
 								<BookOpen size={16} />
-								继续阅读
+								{t('mangaDetail.continueReading')}
 							</Button>
 							{manga.inLibrary ? (
 								<>
 									<Button variant="danger" onClick={() => setRemoveOpen(true)}>
-										移出书库
+										{t('mangaDetail.removeFromLibrary')}
 									</Button>
-									<Button onClick={openCats}>分类</Button>
+									<Button onClick={openCats}>{t('mangaDetail.categories')}</Button>
 								</>
 							) : (
 								<Button
@@ -579,15 +588,15 @@ export default function MangaDetailPage() {
 									loading={addToLibrary.isPending}
 									onClick={() =>
 										addToLibrary.mutate(mangaId, {
-											onSuccess: () => pushToast('已加入书库', 'info')
+											onSuccess: () => pushToast(t('mangaDetail.addedToLibrary'), 'info')
 										})
 									}
 								>
-									加入书库
+									{t('mangaDetail.addToLibrary')}
 								</Button>
 							)}
 							<IconButton
-								label="刷新详情"
+								label={t('mangaDetail.refreshDetails')}
 								disabled={refreshManga.isPending}
 								onClick={() => refreshManga.mutate(mangaId)}
 							>
@@ -596,8 +605,8 @@ export default function MangaDetailPage() {
 							<IconButton
 								label={
 									manga.incognito
-										? '隐身阅读中：这部漫画的阅读不写入历史，点击关闭'
-										: '隐身阅读：开启后这部漫画的阅读不写入历史'
+										? t('mangaDetail.incognitoOn')
+										: t('mangaDetail.incognitoOff')
 								}
 								className={manga.incognito ? 'icon-btn--active' : undefined}
 								disabled={patchManga.isPending}
@@ -609,17 +618,17 @@ export default function MangaDetailPage() {
 								{(closeMenu) => (
 									<>
 										<label className="manga-menu__row">
-											<span>自动更新章节</span>
+											<span>{t('mangaDetail.autoUpdate')}</span>
 											<Switch
 												checked={manga.update_strategy === 'Always'}
 												disabled={patchManga.isPending}
 												onChange={(on) =>
 													patchManga.mutate({ id: mangaId, updateStrategy: on ? 'Always' : 'Never' })
 												}
-												label="自动更新章节"
+												label={t('mangaDetail.autoUpdate')}
 											/>
 										</label>
-										<div className="manga-menu__hint">关闭后全局更新会跳过这部漫画</div>
+										<div className="manga-menu__hint">{t('mangaDetail.autoUpdateHint')}</div>
 										<button
 											type="button"
 											className="manga-menu__row"
@@ -627,13 +636,13 @@ export default function MangaDetailPage() {
 											onClick={() =>
 												refreshChapters.mutate(mangaId, {
 													onSuccess: () => {
-														pushToast('章节列表已刷新', 'info');
+														pushToast(t('mangaDetail.chaptersRefreshed'), 'info');
 														closeMenu();
 													}
 												})
 											}
 										>
-											<span>刷新章节列表</span>
+											<span>{t('mangaDetail.refreshChapters')}</span>
 											{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
 										</button>
 										{manga.inLibrary && (
@@ -645,7 +654,7 @@ export default function MangaDetailPage() {
 													setMigrateOpen(true);
 												}}
 											>
-												<span>切换图源</span>
+												<span>{t('mangaDetail.migrate')}</span>
 												<ArrowLeftRight size={14} />
 											</button>
 										)}
@@ -659,9 +668,9 @@ export default function MangaDetailPage() {
 
 			<div className="manga-chaps">
 				<div className="manga-chaps__head">
-					<h2>章节</h2>
+					<h2>{t('mangaDetail.chapters')}</h2>
 					<span className="faint">
-						共 {chapters.length} 章 · 未读 {unread}
+						{t('mangaDetail.chapterStats', { total: chapters.length, unread, count: chapters.length })}
 					</span>
 					{/* The local source has no filesystem watch: added/deleted chapters only surface via a manual rescan, so the button sits prominently */}
 					{isLocal && (
@@ -670,12 +679,12 @@ export default function MangaDetailPage() {
 							disabled={refreshChapters.isPending}
 							onClick={() =>
 								refreshChapters.mutate(mangaId, {
-									onSuccess: () => pushToast('章节列表已刷新', 'info')
+									onSuccess: () => pushToast(t('mangaDetail.chaptersRefreshed'), 'info')
 								})
 							}
 						>
 							{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
-							刷新
+							{t('mangaDetail.refresh')}
 						</Button>
 					)}
 				</div>
@@ -683,11 +692,11 @@ export default function MangaDetailPage() {
 				{selecting ? (
 					<div className="manga-chaps__select-tools">
 						<Button size="sm" onClick={toggleAll}>
-							{allSelected ? '取消全选' : '全选'}
+							{allSelected ? t('mangaDetail.deselectAll') : t('mangaDetail.selectAll')}
 						</Button>
-						<span className="manga-chaps__selected">已选 {selected.size} 章</span>
+						<span className="manga-chaps__selected">{t('mangaDetail.selectedCount', { count: selected.size })}</span>
 						<Button size="sm" onClick={exitSelect}>
-							完成
+							{t('mangaDetail.done')}
 						</Button>
 					</div>
 				) : (
@@ -695,14 +704,14 @@ export default function MangaDetailPage() {
 						<Input
 							icon={<Search size={15} />}
 							type="search"
-							placeholder="搜索章节标题或序号…"
+							placeholder={t('mangaDetail.searchPlaceholder')}
 							value={search}
 							onChange={(e) => setSearch(e.currentTarget.value)}
 						/>
 						<Select
 							value={prefs.sort}
-							title="排序方式"
-							aria-label="排序方式"
+							title={t('mangaDetail.sortBy')}
+							aria-label={t('mangaDetail.sortBy')}
 							onChange={(e) => {
 								const v = e.currentTarget.value as SortKey;
 								setPrefs((p) => ({ ...p, sort: v }));
@@ -710,17 +719,17 @@ export default function MangaDetailPage() {
 						>
 							{SORT_OPTIONS.map((o) => (
 								<option key={o.value} value={o.value}>
-									{o.label}
+									{t(o.labelKey)}
 								</option>
 							))}
 						</Select>
 						<Button
 							size="sm"
-							title={prefs.asc ? '当前升序（旧章在前），点击切换' : '当前降序（最新章在前），点击切换'}
+							title={prefs.asc ? t('mangaDetail.ascHint') : t('mangaDetail.descHint')}
 							onClick={() => setPrefs((p) => ({ ...p, asc: !p.asc }))}
 						>
 							<ArrowDownUp size={14} />
-							{prefs.asc ? '升序' : '降序'}
+							{prefs.asc ? t('mangaDetail.ascending') : t('mangaDetail.descending')}
 						</Button>
 						<div className="manga-chaps__filters">
 							{CHAP_FILTERS.map((f) => (
@@ -728,7 +737,7 @@ export default function MangaDetailPage() {
 									key={f.value}
 									color={triColor(prefs.filters[f.value])}
 									className={prefs.filters[f.value] === -1 ? 'chip--exclude' : undefined}
-									title={triTitle(f.label, prefs.filters[f.value])}
+									title={triTitle(t(f.labelKey), prefs.filters[f.value])}
 									onClick={() =>
 										setPrefs((p) => ({
 											...p,
@@ -736,21 +745,21 @@ export default function MangaDetailPage() {
 										}))
 									}
 								>
-									{f.label}
+									{t(f.labelKey)}
 								</Chip>
 							))}
 						</div>
 						{languages.length > 1 && (
 							<Select
 								value={prefs.language ?? ''}
-								title="语言"
-								aria-label="语言"
+								title={t('mangaDetail.language')}
+								aria-label={t('mangaDetail.language')}
 								onChange={(e) => {
 									const v = e.currentTarget.value;
 									setPrefs((p) => ({ ...p, language: v || null }));
 								}}
 							>
-								<option value="">全部语言</option>
+								<option value="">{t('mangaDetail.allLanguages')}</option>
 								{languages.map((l) => (
 									<option key={l} value={l}>
 										{l}
@@ -761,14 +770,14 @@ export default function MangaDetailPage() {
 						{scanlators.length > 1 && (
 							<Select
 								value={prefs.scanlators[0] ?? ''}
-								title="汉化组"
-								aria-label="汉化组"
+								title={t('mangaDetail.scanlator')}
+								aria-label={t('mangaDetail.scanlator')}
 								onChange={(e) => {
 									const v = e.currentTarget.value;
 									setPrefs((p) => ({ ...p, scanlators: v ? [v] : [] }));
 								}}
 							>
-								<option value="">全部汉化组</option>
+								<option value="">{t('mangaDetail.allScanlators')}</option>
 								{scanlators.map((s) => (
 									<option key={s} value={s}>
 										{s}
@@ -778,7 +787,7 @@ export default function MangaDetailPage() {
 						)}
 						{chapters.length > 0 && (
 							<Button size="sm" onClick={() => setSelecting(true)}>
-								选择
+								{t('mangaDetail.select')}
 							</Button>
 						)}
 					</div>
@@ -793,18 +802,18 @@ export default function MangaDetailPage() {
 				) : chaptersQuery.isError ? (
 					<EmptyState
 						icon={TriangleAlert}
-						title="章节列表加载失败"
+						title={t('mangaDetail.chaptersLoadFailed')}
 						hint={chaptersQuery.error?.message}
 						action={
 							<Button variant="primary" onClick={() => void chaptersQuery.refetch()}>
-								重试
+								{t('mangaDetail.retry')}
 							</Button>
 						}
 					/>
 				) : chapters.length === 0 ? (
-					<EmptyState icon={BookOpen} title="暂无章节" hint="可以在右上角菜单里刷新章节列表" />
+					<EmptyState icon={BookOpen} title={t('mangaDetail.noChapters')} hint={t('mangaDetail.noChaptersHint')} />
 				) : visible.length === 0 ? (
-					<EmptyState icon={Search} title="没有符合条件的章节" hint="换个关键词或清掉筛选试试" />
+					<EmptyState icon={Search} title={t('mangaDetail.noMatch')} hint={t('mangaDetail.noMatchHint')} />
 				) : (
 					<div className={selecting ? 'manga-chaps__list--selecting' : undefined}>
 					{visible.map((c, i) => (
@@ -837,34 +846,34 @@ export default function MangaDetailPage() {
 
 			{selecting && (
 				<div className="manga-batch">
-					<span className="manga-batch__count">已选 {selected.size}</span>
+					<span className="manga-batch__count">{t('mangaDetail.selectedShort', { count: selected.size })}</span>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
-						onClick={() => batch({ isRead: true }, (n) => `已把 ${n} 章标为已读`)}
+						onClick={() => batch({ isRead: true }, (n) => t('mangaDetail.markedRead', { count: n }))}
 					>
-						标已读
+						{t('mangaDetail.markRead')}
 					</Button>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
-						onClick={() => batch({ isRead: false }, (n) => `已把 ${n} 章标为未读`)}
+						onClick={() => batch({ isRead: false }, (n) => t('mangaDetail.markedUnread', { count: n }))}
 					>
-						标未读
+						{t('mangaDetail.markUnread')}
 					</Button>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
-						onClick={() => batch({ isBookmarked: true }, (n) => `已为 ${n} 章加书签`)}
+						onClick={() => batch({ isBookmarked: true }, (n) => t('mangaDetail.bookmarked', { count: n }))}
 					>
-						加书签
+						{t('mangaDetail.addBookmark')}
 					</Button>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
-						onClick={() => batch({ isBookmarked: false }, (n) => `已取消 ${n} 章的书签`)}
+						onClick={() => batch({ isBookmarked: false }, (n) => t('mangaDetail.unbookmarked', { count: n }))}
 					>
-						取消书签
+						{t('mangaDetail.removeBookmark')}
 					</Button>
 					{!isLocal && (
 						<Button
@@ -873,7 +882,7 @@ export default function MangaDetailPage() {
 							disabled={selected.size === 0 || batchBusy}
 							onClick={downloadSelected}
 						>
-							下载
+							{t('mangaDetail.download')}
 						</Button>
 					)}
 				</div>
@@ -885,33 +894,33 @@ export default function MangaDetailPage() {
 
 			<Modal
 				open={removeOpen}
-				title="移出书库"				onClose={() => setRemoveOpen(false)}
+				title={t('mangaDetail.removeFromLibrary')}				onClose={() => setRemoveOpen(false)}
 				footer={
 					<>
-						<Button onClick={() => setRemoveOpen(false)}>取消</Button>
+						<Button onClick={() => setRemoveOpen(false)}>{t('common.cancel')}</Button>
 						<Button variant="danger" loading={removeFromLibrary.isPending} onClick={confirmRemove}>
-							移出
+							{t('mangaDetail.remove')}
 						</Button>
 					</>
 				}
 			>
-				<p>确定把《{manga.title}》移出书库吗？</p>
+				<p>{t('mangaDetail.removeConfirm', { title: manga.title })}</p>
 			</Modal>
 
 			<Modal
 				open={catOpen}
-				title="设置分类"
+				title={t('mangaDetail.setCategories')}
 				onClose={() => setCatOpen(false)}
 				footer={
 					allCats.length > 0 ? (
 						<Button variant="primary" loading={setMangaCategories.isPending} onClick={saveCats}>
-							保存
+							{t('common.save')}
 						</Button>
 					) : undefined
 				}
 			>
 				{allCats.length === 0 ? (
-					<p className="muted">还没有分类，可先在设置页创建。</p>
+					<p className="muted">{t('mangaDetail.noCategories')}</p>
 				) : (
 					<div className="manga-cats">
 						{allCats.map((c) => (

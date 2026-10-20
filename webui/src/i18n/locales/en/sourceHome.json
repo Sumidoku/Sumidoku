@@ -1,0 +1,17 @@
+{
+  "sourceHome": {
+    "backToBrowse": "Back to browse",
+    "backToSource": "Back to {{name}}",
+    "sourceFallback": "Source",
+    "sourceDisabled": "This source is disabled",
+    "sourceDisabledHint": "Reinstall or enable it before browsing",
+    "loadFailed": "Failed to load",
+    "retry": "Retry",
+    "noHome": "This source has no home page",
+    "noHomeHint": "The source provides no home content; you can search directly or browse by listing",
+    "goSearch": "Go to search",
+    "emptyHome": "Home page is empty",
+    "emptyHomeHint": "The source returned an empty home layout",
+    "viewAll": "View all"
+  }
+}

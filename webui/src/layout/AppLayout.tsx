@@ -1,4 +1,5 @@
 import { NavLink, Outlet, ScrollRestoration } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
 	Clock,
 	Compass,
@@ -14,22 +15,23 @@ import { IconButton } from '../components';
 import { useResolvedTheme, useTheme } from '../lib/theme';
 
 const NAV = [
-	{ to: '/library', label: '书库', icon: Library },
-	{ to: '/browse', label: '浏览', icon: Compass },
-	{ to: '/search', label: '搜索', icon: Search },
-	{ to: '/history', label: '历史', icon: Clock },
-	{ to: '/downloads', label: '下载', icon: Download },
-	{ to: '/updates', label: '更新', icon: RefreshCw },
-	{ to: '/settings', label: '设置', icon: Settings }
+	{ to: '/library', labelKey: 'common.nav.library', icon: Library },
+	{ to: '/browse', labelKey: 'common.nav.browse', icon: Compass },
+	{ to: '/search', labelKey: 'common.nav.search', icon: Search },
+	{ to: '/history', labelKey: 'common.nav.history', icon: Clock },
+	{ to: '/downloads', labelKey: 'common.nav.downloads', icon: Download },
+	{ to: '/updates', labelKey: 'common.nav.updates', icon: RefreshCw },
+	{ to: '/settings', labelKey: 'common.nav.settings', icon: Settings }
 ] as const;
 
 function ThemeToggle() {
+	const { t } = useTranslation();
 	const [, setTheme] = useTheme();
 	const resolved = useResolvedTheme();
 	const next = resolved === 'dark' ? 'light' : 'dark';
 	return (
 		<IconButton
-			label={next === 'light' ? '切到浅色' : '切到深色'}
+			label={next === 'light' ? t('layout.toLight') : t('layout.toDark')}
 			onClick={() => setTheme(next)}
 		>
 			{resolved === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
@@ -39,6 +41,7 @@ function ThemeToggle() {
 
 /** The full-screen reader does not come through here (its route hangs outside AppLayout) */
 export function AppLayout() {
+	const { t } = useTranslation();
 	return (
 		<div className="app">
 			<aside className="app__sidebar">
@@ -56,7 +59,7 @@ export function AppLayout() {
 							}
 						>
 							<item.icon size={18} />
-							<span>{item.label}</span>
+							<span>{t(item.labelKey)}</span>
 						</NavLink>
 					))}
 				</nav>
@@ -89,7 +92,7 @@ export function AppLayout() {
 						}
 					>
 						<item.icon size={20} />
-						<span className="tabbar__label">{item.label}</span>
+						<span className="tabbar__label">{t(item.labelKey)}</span>
 					</NavLink>
 				))}
 			</nav>

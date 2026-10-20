@@ -1,0 +1,18 @@
+{
+  "chapterRow": {
+    "locked": "锁定",
+    "bookmarked": "书签",
+    "downloaded": "已下载",
+    "downloadCbz": "下载 CBZ 文件",
+    "downloadChapter": "下载本章",
+    "enqueueing": "正在加入下载队列",
+    "enqueued": "已在下载队列中",
+    "addBookmark": "加书签",
+    "removeBookmark": "取消书签",
+    "chapterActions": "章节操作",
+    "markRead": "标记已读",
+    "markUnread": "标记未读",
+    "markPreviousRead": "标记上一章为已读",
+    "markPreviousUnread": "标记上一章为未读"
+  }
+}

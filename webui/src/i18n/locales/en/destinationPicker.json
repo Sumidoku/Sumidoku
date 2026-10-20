@@ -1,0 +1,14 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "Selected (order = priority)",
+    "addAllPinnedTitle": "Add all pinned sources in pin order",
+    "addAllPinned_one": "Select all pinned ({{count}})",
+    "addAllPinned_other": "Select all pinned ({{count}})",
+    "emptyHint": "No target sources yet — click below to add; the order decides auto-match priority.",
+    "remove": "Remove {{name}}",
+    "availableHeading": "Available",
+    "noMore": "No more sources to add.",
+    "add": "Add {{name}}",
+    "pinned": "Pinned"
+  }
+}
