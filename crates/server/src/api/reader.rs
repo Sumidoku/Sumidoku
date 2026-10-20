@@ -25,7 +25,12 @@ impl ProgressPatch {
 	}
 
 	/// Writing lastPageRead counts as having read: only its presence refreshes last_read_at;
-	/// under incognito (global or per-manga, either on) no new stamp is written and the old stamp stays untouched
+	/// under incognito (global or per-manga, either on) no new stamp is written and the old stamp stays untouched.
+	/// Marking unread (a bare isRead: false, with no lastPageRead in the same patch) instead wipes the
+	/// whole reading trace - Aidoku's mark-unread removes the history entry - so progress, the resume
+	/// target and the history stamp all go; the bookmark is untouched. The wipe is explicit user intent
+	/// and applies even under incognito. A patch carrying both lastPageRead and isRead:false is a plain
+	/// progress write and keeps the merge semantics.
 	async fn apply(
 		&self,
 		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -34,11 +39,24 @@ impl ProgressPatch {
 	) -> ApiResult<ChapterProgress> {
 		let current = read_progress(&mut **tx, user_id, chapter_id).await?;
 		let stamp = self.last_page_read.is_some() && !incognito_on(tx, user_id, chapter_id).await?;
+		// A patch that also carries lastPageRead is a progress write (the reader reports pages with
+		// isRead:false mid-chapter), not a mark-unread; only a bare isRead:false means "mark unread".
+		let marking_unread = self.is_read == Some(false) && self.last_page_read.is_none();
 		let merged = ChapterProgress {
-			last_page_read: self.last_page_read.unwrap_or(current.last_page_read),
+			last_page_read: if marking_unread {
+				0
+			} else {
+				self.last_page_read.unwrap_or(current.last_page_read)
+			},
 			is_read: self.is_read.unwrap_or(current.is_read),
 			is_bookmarked: self.is_bookmarked.unwrap_or(current.is_bookmarked),
-			last_read_at: if stamp { Some(unix_now()) } else { current.last_read_at },
+			last_read_at: if marking_unread {
+				None
+			} else if stamp {
+				Some(unix_now())
+			} else {
+				current.last_read_at
+			},
 		};
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
