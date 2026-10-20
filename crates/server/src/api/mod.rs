@@ -220,7 +220,43 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 		.execute(&state.pool)
 		.await?;
 	pins::prune_pinned(&state.pool, &row.key).await?;
+	// Uninstall also drops the on-disk package, otherwise the next directory scan would
+	// re-register the source. OPDS instances live entirely in the database (no package).
+	if !row.is_opds() {
+		remove_source_package(&state.config.sources_dir(), std::path::Path::new(&row.wasm_path)).await;
+	}
 	Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes the package a source row was registered from: the containing directory for directory
+/// packages (`wasm_path` is `<dir>/main.wasm`), the `.aix` file itself plus its written-out icon
+/// sidecar otherwise. Only paths inside `sources_dir` are touched; a missing or undeletable
+/// package only warns — the database row is already gone.
+async fn remove_source_package(sources_dir: &std::path::Path, wasm_path: &std::path::Path) {
+	if !wasm_path.starts_with(sources_dir) {
+		tracing::warn!(?wasm_path, "source package outside sources_dir left in place");
+		return;
+	}
+	let (package, is_dir) = match wasm_path.extension().map(|e| e.to_ascii_lowercase()) {
+		Some(ext) if ext == "aix" => (wasm_path.to_path_buf(), false),
+		_ => match wasm_path.parent() {
+			Some(parent) if parent != wasm_path => (parent.to_path_buf(), true),
+			_ => return,
+		},
+	};
+	let result = if is_dir {
+		tokio::fs::remove_dir_all(&package).await
+	} else {
+		tokio::fs::remove_file(&package).await
+	};
+	if let Err(e) = result {
+		tracing::warn!(?package, "failed to remove source package: {e}");
+		return;
+	}
+	if !is_dir {
+		// the `.aix` icon sidecar (`<name>.png`, written at registration) dies with the package
+		let _ = tokio::fs::remove_file(wasm_path.with_extension("png")).await;
+	}
 }
 
 async fn get_source_icon(

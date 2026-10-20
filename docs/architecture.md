@@ -829,6 +829,11 @@ source directories alike; both register the same way, with `wasm_path`
 pointing at the `.aix` or the directory's `main.wasm`. An `.aix` icon is
 written next to the package as `<name>.png` so installed sources serve
 `/sources/{id}/icon` the same way the directory scan's `icon.png` does.
+Uninstall (`DELETE /api/v1/sources/{id}`) removes the on-disk package
+with the database row — the source directory, or the `.aix` plus its
+`<name>.png` sidecar, only ever paths inside `sources/` — so a later
+directory scan cannot re-register a deleted source; OPDS instances have
+no package and only lose the row.
 Registration also resolves the source's dynamic base URL, mirroring the
 `try? await runner.getBaseUrl()` in AidokuRunner's `Source.init`: when the
 payload exports `get_base_url` a throwaway instance answers it (carrying

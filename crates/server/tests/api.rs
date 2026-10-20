@@ -2,7 +2,7 @@ mod common;
 
 use axum::http::StatusCode;
 use common::{TestApp, register_example_manga, request, request_full, source_by_key, test_app};
-use serde_json::json;
+use serde_json::{Value, json};
 
 // 1x1 transparent PNG
 const PNG: &[u8] = &[
@@ -13,7 +13,7 @@ const PNG: &[u8] = &[
 
 #[tokio::test]
 async fn full_flow() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, tmp, .. } = test_app().await;
 
 	// health
 	let (status, body) = request(&app, "GET", "/health", None).await;
@@ -37,7 +37,19 @@ async fn full_flow() {
 	assert_eq!(body["updated"], json!([]));
 	assert_eq!(body["skipped"], json!([]));
 
-	// second scan is idempotent: the existing source goes to updated
+	// second scan of the unchanged package reports nothing: same version is a silent refresh, not an update
+	let (status, body) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["installed"], json!([]));
+	assert_eq!(body["updated"], json!([]));
+	assert_eq!(body["skipped"], json!([]));
+
+	// a version bump makes the next scan report the source as updated
+	let manifest_path = tmp.path().join("sources/en.example-source/source.json");
+	let mut manifest: Value =
+		serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest")).expect("manifest json");
+	manifest["info"]["version"] = json!(2);
+	std::fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("manifest bytes")).expect("write manifest");
 	let (status, body) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["installed"], json!([]));

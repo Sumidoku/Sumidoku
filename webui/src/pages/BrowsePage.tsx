@@ -556,7 +556,7 @@ export default function BrowsePage() {
 					</>
 				}
 			>
-				<p className="muted">已入库的漫画与下载不受影响。</p>
+				<p className="muted">会同时删除服务器上的图源包，之后扫描源目录不会重新安装；已入库的漫画与下载不受影响。</p>
 			</Modal>
 			<OpdsRegisterModal open={registeringOpds} onClose={() => setRegisteringOpds(false)} />
 		</div>

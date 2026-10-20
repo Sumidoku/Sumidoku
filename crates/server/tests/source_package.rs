@@ -119,6 +119,64 @@ async fn scan_loads_aix_package() {
 }
 
 #[tokio::test]
+async fn uninstall_removes_source_package() {
+	let app = test_app().await;
+	// directory package: the pre-seeded fixture source installs via scan
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let id = source_id_by_key(&app.app, "en.example-source").await;
+	let (status, _) = request(&app.app, "DELETE", &format!("/api/v1/sources/{id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(
+		!app.tmp.path().join("sources/en.example-source").exists(),
+		"package directory removed"
+	);
+	// a fresh scan does not re-register the uninstalled source
+	let (status, body) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(
+		!body["installed"]
+			.as_array()
+			.expect("installed")
+			.contains(&json!("en.example-source")),
+		"{body}"
+	);
+	assert_eq!(source_count(&app.app).await, 1, "only the local source remains");
+}
+
+#[tokio::test]
+async fn uninstall_removes_aix_package_and_icon_sidecar() {
+	let app = test_app().await;
+	write_aix(
+		&app.tmp.path().join("sources/en.packed-source.aix"),
+		&[
+			(
+				"Payload/source.json",
+				br#"{"info": {"id": "en.packed-source", "name": "Packed", "version": 1, "languages": ["en"]}}"#,
+			),
+			("Payload/main.wasm", &fixture_wasm()),
+			("Payload/icon.png", b"PNG-packed-icon"),
+		],
+	);
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let id = source_id_by_key(&app.app, "en.packed-source").await;
+	let (status, _) = request(&app.app, "DELETE", &format!("/api/v1/sources/{id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!app.tmp.path().join("sources/en.packed-source.aix").exists(), "aix removed");
+	assert!(
+		!app.tmp.path().join("sources/en.packed-source.png").exists(),
+		"icon sidecar removed"
+	);
+}
+
+async fn source_count(app: &axum::Router) -> usize {
+	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
+	assert_eq!(status, StatusCode::OK);
+	body.as_array().expect("sources array").len()
+}
+
+#[tokio::test]
 async fn scan_skips_corrupt_aix() {
 	let app = test_app().await;
 	std::fs::write(app.tmp.path().join("sources/broken.aix"), b"not a zip at all").expect("write");
