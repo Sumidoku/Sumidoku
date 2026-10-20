@@ -361,6 +361,28 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
+/// 本地源的浏览/搜索：实扫 local 根目录，query 非空按目录名子串过滤（大小写不敏感，
+/// 同 Suwayomi LocalSource 的 contains(query, ignoreCase = true)）。浏览保持轻量——
+/// key/title 就是目录名，ComicInfo 与封面都留给打开时 find_or_register_manga 解析；
+/// 单页全量返回，hasNextPage 恒 false
+pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
+	let dirs = crate::local::scan_manga_dirs(&state.config.local_dir()).await?;
+	let needle = query
+		.map(str::trim)
+		.filter(|q| !q.is_empty())
+		.map(str::to_lowercase);
+	let entries: Vec<Manga> = dirs
+		.into_iter()
+		.filter(|name| needle.as_ref().is_none_or(|n| name.to_lowercase().contains(n)))
+		.map(|name| Manga {
+			key: name.clone(),
+			title: name,
+			..Manga::default()
+		})
+		.collect();
+	attach_internal_ids(state, source_id, entries).await
+}
+
 async fn search_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -370,6 +392,15 @@ async fn search_source(
 	let page = body.page.unwrap_or(1);
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
+	}
+	// 本地源没有源调用可流：一律缓冲路径（ndjson 客户端按非流式终态处理，同 register 本地臂）
+	if crate::source::source_is_local(&state.pool, id).await? {
+		let entries = local_search(&state, id, body.query.as_deref()).await?;
+		return Ok(Json(json!({
+			"entries": entries,
+			"hasNextPage": false,
+		}))
+		.into_response());
 	}
 	let handle = state.get_handle(id).await?;
 	if !partial::wants_ndjson(&headers) {
