@@ -25,6 +25,15 @@ pub struct ScanOutcome {
 	pub skipped: Vec<SkippedSource>,
 }
 
+/// What a registration did to the registry: a brand-new source, a version change on an existing
+/// row, or a refresh of an unchanged package (metadata re-stamped; the scan reports nothing for it)
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegisterOutcome {
+	Installed,
+	Updated,
+	Refreshed,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SkippedSource {
 	pub dir: String,
@@ -41,14 +50,14 @@ pub(crate) fn valid_source_key(key: &str) -> bool {
 
 /// Directory-mount scan: first-level subdirectories (source.json + main.wasm) and .aix packages (zip, Payload/ layout) both count as source packages
 pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOutcome> {
-	let mut outcome = ScanOutcome {
+	let mut outcome_report = ScanOutcome {
 		installed: Vec::new(),
 		updated: Vec::new(),
 		skipped: Vec::new(),
 	};
 	let mut read_dir = match tokio::fs::read_dir(dir).await {
 		Ok(read_dir) => read_dir,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome_report),
 		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
 	};
 	let mut candidates = Vec::new();
@@ -78,20 +87,19 @@ pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOut
 			register_aix(state, &path).await
 		};
 		match result {
-			Ok((key, is_update)) => {
-				if is_update {
-					outcome.updated.push(key);
-				} else {
-					outcome.installed.push(key);
-				}
-			}
-			Err(reason) => outcome.skipped.push(SkippedSource {
+			Ok((key, outcome)) => match outcome {
+				RegisterOutcome::Installed => outcome_report.installed.push(key),
+				RegisterOutcome::Updated => outcome_report.updated.push(key),
+				// unchanged package re-registered: nothing worth reporting
+				RegisterOutcome::Refreshed => {}
+			},
+			Err(reason) => outcome_report.skipped.push(SkippedSource {
 				dir: dir_name,
 				reason,
 			}),
 		}
 	}
-	Ok(outcome)
+	Ok(outcome_report)
 }
 
 /// The manifest parse result and the payload location; directory sources and .aix share one registration path
@@ -102,7 +110,7 @@ struct SourcePackage {
 	settings: Option<serde_json::Value>,
 }
 
-async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), String> {
+async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, RegisterOutcome), String> {
 	let json_path = path.join("source.json");
 	let wasm_path = path.join("main.wasm");
 	if !json_path.is_file() || !wasm_path.is_file() {
@@ -130,8 +138,8 @@ async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), S
 	.await
 }
 
-/// The single entry for .aix registration: shared by directory scan and repo install; on success returns (key, whether an existing source was updated)
-pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, bool), String> {
+/// The single entry for .aix registration: shared by directory scan and repo install; on success returns (key, the registration outcome)
+pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, RegisterOutcome), String> {
 	let path_buf = path.to_path_buf();
 	// Zip parsing is synchronous IO, offloaded to the blocking pool; package contents stay in memory, never extracted to disk
 	let (doc, settings, icon) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
@@ -205,8 +213,12 @@ async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
 	}
 }
 
-/// On success returns (key, whether an existing source was updated)
-async fn register_source(state: &AppState, package: SourcePackage) -> Result<(String, bool), String> {
+/// On success returns (key, the registration outcome); an existing row only counts as Updated
+/// when the package version changed — a same-version rescan merely refreshes metadata in place
+async fn register_source(
+	state: &AppState,
+	package: SourcePackage,
+) -> Result<(String, RegisterOutcome), String> {
 	let pool = &state.pool;
 	let doc = &package.doc;
 	let info = doc.get("info").ok_or("missing info")?;
@@ -258,17 +270,17 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	let wasm = package.wasm_path;
 	let now = unix_now();
 
-	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
+	let existing: Option<(i64, i64)> = sqlx::query_as("SELECT id, version FROM source WHERE key = ?")
 		.bind(&key)
 		.fetch_optional(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
 	// The dynamic value is the source of truth for base_url: once stored, the synthesized setting's candidates and seed and the login host fallback all come from the row
-	let (dynamic, features) = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc)
+	let (dynamic, features) = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id, _)| id), doc)
 		.await
 		.unwrap_or_else(|| (String::new(), "{}".to_string()));
 	let base_url = if dynamic.is_empty() { base_url } else { Some(dynamic) };
-	let (id, updated) = if let Some((id,)) = existing {
+	let (id, outcome) = if let Some((id, old_version)) = existing {
 		// An existing source keeps enabled and source_setting; only the metadata is refreshed
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
@@ -289,7 +301,7 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		(id, true)
+		(id, if old_version == version { RegisterOutcome::Refreshed } else { RegisterOutcome::Updated })
 	} else {
 		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
@@ -312,10 +324,10 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		(result.last_insert_rowid(), false)
+		(result.last_insert_rowid(), RegisterOutcome::Installed)
 	};
 	seed_source_defaults(pool, id, package.settings.as_ref(), doc).await?;
-	Ok((key, updated))
+	Ok((key, outcome))
 }
 
 /// Old rows installed before #147/0010 may miss manifest-derived metadata: config (installed before the config
