@@ -243,6 +243,10 @@ async fn public_surface_stays_open() {
 	let (app, _tmp) = password_app().await;
 	let (status, _) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
+	// 版本串不敏感，与 /health 一样免鉴权
+	let (status, body) = request(&app, "GET", "/api/v1/version", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
 	// 静态资源永远公开，SPA 要能加载出登录页
 	let (status, _) = request(&app, "GET", "/", None).await;
 	assert_eq!(status, StatusCode::OK);
