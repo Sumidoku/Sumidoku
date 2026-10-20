@@ -66,7 +66,8 @@ impl BackupScheduler {
 	}
 
 	async fn write_backup(&self, settings: &BackupSettings) -> ApiResult<PathBuf> {
-		// 定时备份暂只覆盖内置 admin 的用户态；多用户语义随文档/备份语义切片定夺
+		// 定时备份是服务端全量导出：固定内置 admin 身份构造，按请求者角色裁剪
+		// （reader 只有 self-data）只管 GET /api/v1/backup，管不到这里
 		let doc = build_backup_doc(&self.pool, crate::USER_ID, true).await?;
 		let body = serde_json::to_vec(&doc)?;
 		tokio::fs::create_dir_all(&settings.dir)

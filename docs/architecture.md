@@ -226,7 +226,8 @@ Migrations in `crates/server/migrations`.
   `delete_source` prunes the key. The Browse page shows the pinned sources
   in an ordered section above the full list, with drag-to-reorder
   (`webui/src/pages/BrowsePage.tsx`).
-- Cross-source migration (`api/migrate.rs`): moves library entries between
+- Cross-source migration (`api/migrate.rs`): moves the requesting user's
+  library entries between
   sources, Aidoku-style. `GET /api/v1/migrate/sources` lists installed
   sources with their in-library `mangaCount` (plus pin data from
   `source_json`); `GET /api/v1/migrate/lookup?mangaId=&targetSourceId=[&query=]`
@@ -257,31 +258,63 @@ Migrations in `crates/server/migrations`.
   source-first wizard at `/migrate` (`webui/src/pages/migrate/`) and the
   single-manga flow in the detail page's more-menu
   (`webui/src/pages/manga/MigrateModal.tsx`).
-- Authentication (`auth.rs`): off until a password exists — either seeded
-  from the config (`auth.password`, or the legacy `basic_password` alias)
-  on every boot, or stored in the `auth_credential` table by a previous
-  boot/password change. With a password, `require_auth` guards all of
-  `/api/v1` except `/health`, `auth/status` and `auth/login`: the bearer
+- Authentication (`auth.rs`): the `user` table is the only credential
+  carrier. Login is username + password (`POST /api/v1/auth/login`),
+  answered with a per-user session token (`auth_token.user_id`, SHA-256
+  at rest, 30-day rolling expiry) and the `{id, username, role}`
+  identity. Auth is off until the built-in admin — user 1, seeded as
+  `admin` — has a password: seeded from the config (`auth.password`, or
+  the legacy `basic_password` alias) on every boot, or stored on the user
+  row by a previous boot or password change. With auth off every request
+  acts as the built-in admin, so a no-password deployment behaves exactly
+  like a single-user one. With a password, `require_auth` guards all of
+  `/api/v1` except `/health` and the `auth/*` endpoints: the bearer
   credential (header, or `access_token` query for `<img>`/WebSocket
-  clients) is checked against the configured `auth.api_keys` (SHA-256
-  fingerprints in memory) and session tokens in `auth_token` (SHA-256 at
-  rest, 30-day rolling expiry). Login/logout/password-change live under
-  `/api/v1/auth/`; changing the password revokes every session token.
-  Failures share one `401 {"error":{"code":"unauthorized"}}` shape. The
-  password is argon2-hashed; the config-set password always re-seeds the
-  stored hash at boot, so it wins over UI-changed passwords after a
-  restart.
+  clients) resolves against the configured `auth.api_keys` (SHA-256
+  fingerprints in memory, acting as the built-in admin) or a session
+  token, and the resolved `AuthUser` rides request extensions so every
+  handler scopes reads and writes by `auth_user.id`. Failures share one
+  `401 {"error":{"code":"unauthorized"}}` shape. Passwords are
+  argon2-hashed; `PUT /api/v1/auth/password` changes the caller's own
+  (current password required) and revokes all of that user's session
+  tokens, and the config-set password always re-seeds user 1's stored
+  hash at boot, so it wins over UI-changed passwords after a restart.
+- User management (`api/users.rs`): admin-only `GET`/`POST /api/v1/users`
+  and `PATCH`/`DELETE /api/v1/users/{id}`, part of the `require_admin`
+  route group (`api/mod.rs`) that also covers sources and repos, source
+  settings and login, and server-side backup restore — `require_admin`
+  reads the role `require_auth` injected and answers 403 for a reader.
+  Roles are `admin` (everything) and `reader` (own user-state only);
+  `PUT /api/v1/settings` additionally gates per key, so a reader can only
+  write the user-scoped keys (`USER_SCOPED_SETTING_KEYS`). Create takes
+  `{username, password, role}`; PATCH applies the present fields, and a
+  password reset revokes that user's session tokens (same semantics as
+  self-service change). The list never carries `password_hash`. Delete
+  cascades the user's state rows (library, progress, categories,
+  downloads, tokens) through foreign keys and removes the `user.<id>.*`
+  settings namespace by hand; downloaded chapter files stay — they are
+  shared artifacts at deterministic paths. User 1 cannot be deleted
+  (400). All four endpoints answer 400 while authentication is disabled:
+  multi-user requires a password first.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
   and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
-  when authentication is enabled, checking the same site password (any
-  non-empty username) — repeated verifications hit a one-entry cache so
+  when authentication is enabled and verifies real usernames and passwords
+  (before v0.16.1 any non-empty username passed with the site password);
+  the resolved `AuthUser` scopes every feed to that user's own library,
+  progress and downloads. Repeated verifications hit a one-entry cache so
   per-page image requests don't pay argon2 each time.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
-- Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
-  `source_order` is the source's own chapter index. `GET /api/v1/library`
+- Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows
+  hold shared content; user-state is per-user — `manga_user` (library
+  membership, viewer override, incognito, sort key) and `chapter_user`
+  (progress, read/bookmark/download flags, history stamp) keyed
+  `(row id, user id)` — and every REST query and write binds the
+  request's `AuthUser.id`, so one user's library, progress and history
+  stay invisible to another. `source_order` is the source's own chapter
+  index. `GET /api/v1/library`
   filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
   boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
   chapter flags) and the tri-state pairs
@@ -306,24 +339,30 @@ Migrations in `crates/server/migrations`.
   report it as the manga `viewer` while the source value stays stored.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
   stamped whenever `lastPageRead` is written; the history page and both OPDS
-  history feeds select rows where it is non-null. The global
-  `incognito.enabled` setting or a per-manga `manga_user.incognito` flag
+  history feeds select rows where it is non-null. A per-user
+  `incognito.enabled` setting — stored as the namespaced key
+  `user.<id>.incognito.enabled`, with `GET`/`PUT /api/v1/settings`
+  translating between the bare key and the caller's namespace — or a
+  per-manga `manga_user.incognito` flag
   (Aidoku's pause-history analogue) pauses the stamp: a progress write still
   saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
   reads never enter history and existing stamps are kept. `GET`/`PATCH
   /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
   row, so the flag also works for manga not in the library), and the backup
   document round-trips it, defaulting to off for backups predating the field.
-  The web UI exposes the global toggle in Settings (`SettingsPage.tsx`) and
+  The web UI exposes the per-user toggle in Settings (`SettingsPage.tsx`) and
   the per-manga toggle as an icon button in the detail header
   (`MangaDetailPage.tsx`).
 - Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
-  JSON document (a `Content-Disposition` attachment) with the single user's
-  library rows and metadata, categories with membership, reading progress,
-  app settings and source settings, plus source identity (key, name, version
-  and a best-effort repo URL). `POST /api/v1/backup` restores it, optionally
-  limited by `?sections=` to some of `library`, `categories`, `progress`,
-  `settings`, `sourceSettings`. Restore upserts by natural key — source
+  JSON document (a `Content-Disposition` attachment) scoped to the
+  requesting user: their library rows and metadata, categories with
+  membership and reading progress, plus source identity (key, name, version
+  and a best-effort repo URL). An admin's document also carries app
+  settings and source settings; a reader's is trimmed to self-data — only
+  their user-scoped settings keys, no source settings. `POST /api/v1/backup`
+  restores it into the requesting user's own state, optionally limited by
+  `?sections=` to some of `library`, `categories`, `progress`, `settings`,
+  `sourceSettings` (the last two require the admin role). Restore upserts by natural key — source
   key + manga key, chapter key, category name — inside one SQLite
   transaction; an unknown `version` or an invalid row answers 400 with the
   database untouched. Entries naming a source that is not installed are
@@ -337,11 +376,12 @@ Migrations in `crates/server/migrations`.
   The construction (`build_backup_doc`) and the restore execution
   (`import_backup_doc`) are shared with the scheduler and the
   restore-from-list endpoint below, so a scheduled file is the same
-  document the GET handler serves.
+  document an admin's GET handler serves.
 - Aidoku backup import (`api/aidoku_backup.rs`):
   `POST /api/v1/import/aidoku` accepts a `.aib` upload — a binary plist of
   Aidoku's Codable `Backup` struct, decoded with the `plist` crate into
-  tolerant structs that only name the consumed fields. It imports library
+  tolerant structs that only name the consumed fields. It imports into the
+  requesting user's own state: library
   membership (`library` + `manga` metadata), reading progress (`history` +
   `chapters` metadata, creating manga/chapter rows as needed, not in
   library for manga the backup does not list), and categories with
@@ -372,7 +412,8 @@ Migrations in `crates/server/migrations`.
   against the wire schema (Suwayomi's `backup/proto/models`, Mihon's
   `data/backup/models`), declaring only consumed fields so tracking,
   memos, preferences and Suwayomi's `meta` maps are skipped on decode.
-  The merge reuses the same additive primitives as the Aidoku import
+  The merge lands in the requesting user's own state and reuses the same
+  additive primitives as the Aidoku import
   (`api/import_merge.rs`), with two format-specific twists: a manga is
   in the library only when `favorite` is set (kotlinx ProtoBuf omits
   default-valued scalars, so the wire never carries `favorite=true` —
@@ -403,8 +444,11 @@ Migrations in `crates/server/migrations`.
   set and the run is overdue — no `backup.last_run` yet, or more than
   `backup.interval_hours` since it — writes
   `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) to the backup dir through
-  a tmp+rename swap, stamps `backup.last_run`, and prunes. The first tick
-  doubles as the startup overdue check. Pruning keeps the newest
+  a tmp+rename swap, stamps `backup.last_run`, and prunes. The scheduled
+  document is always built as the built-in admin: a server-side full
+  export (global settings and source settings included), unaffected by
+  the per-role trimming `GET /api/v1/backup` applies to a reader. The
+  first tick doubles as the startup overdue check. Pruning keeps the newest
   `max(backup.retention_count, 1)` files by name order — the newest file
   is never deleted, even at retention 0 — and ignores files not matching
   the name pattern. Each setting resolves env (`SUMIDOKU_BACKUP_ENABLED` /
@@ -417,7 +461,13 @@ Migrations in `crates/server/migrations`.
   backup pattern (everything else, `..` included, is a 400; a
   well-shaped but missing file is a 404).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
-  sources, with a page-level fetch cap inside a chapter.
+  sources, with a page-level fetch cap inside a chapter. Download rows are
+  per-user (`download` primary key `(chapter_id, user_id)`): enqueue,
+  pause, cancel and the list all bind the requesting user, and WebSocket
+  row events are filtered per connection user, so one user's queue stays
+  invisible to another. The artifact files stay shared at deterministic
+  paths — a second user queueing an already-downloaded chapter lands on
+  `finished` directly, no repack.
 - Page blobs (`source/mod.rs:materialize_image_pages`): a
   `PageContent::Image` page holds an actor-local rid, so `load_pages`
   exchanges it for PNG bytes in the same call that fetched the page list
@@ -489,6 +539,13 @@ Migrations in `crates/server/migrations`.
 - Library updates (`update/mod.rs`): same scheduling shape as downloads —
   serial per source, at most 3 sources at once — broadcasting progress as
   `UpdateEvent`s. Category `include_in_update` is a three-state filter.
+  A manual `POST /api/v1/update/fetch` is owned by the triggering user;
+  the scheduled run fetches the union of all users' libraries with one
+  source call per manga, filtering auto-download per user. Events and the
+  summary carry the fetch's owner, and both the WebSocket stream and
+  `GET /api/v1/update/summary` present them scoped to the requesting user
+  (`UpdateSummary::visible_to`): someone else's manual fetch reads as
+  idle, the union run is visible to everyone.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.
@@ -854,9 +911,12 @@ Vite 7 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `@tanstack/react-query` for server state. `npm run check` is
 `tsc --noEmit`; there is no test suite. The build lands in `webui/build`
 and the server embeds it (see above). When authentication is on, the
-client (`api/client.ts`) sends the stored session token as a bearer
-header, media/websocket URLs carry it as an `access_token` query
-(`withToken`), and any `401` clears the token and lands on `/login`.
+login page takes username + password, the client (`api/client.ts`) sends
+the stored session token as a bearer header, media/websocket URLs carry
+it as an `access_token` query (`withToken`), and any `401` clears the
+token and lands on `/login`. The settings page shows the current
+account, and admins manage users on the Users page
+(`webui/src/pages/UsersPage.tsx`).
 
 ## Known gaps
 
