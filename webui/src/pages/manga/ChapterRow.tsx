@@ -1,8 +1,8 @@
-import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock } from 'lucide-react';
+import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock, MinusCircle } from 'lucide-react';
 import { chapterFileUrl } from '../../api/client';
 import type { Chapter } from '../../api/types';
 import { chapterLabel, formatDate } from '../../lib/format';
-import { IconButton, Spinner } from '../../components';
+import { IconButton, MenuButton, Spinner } from '../../components';
 
 /** idle = downloadable; pending = enqueue request in flight; queued = enqueued (watch download progress on the downloads page) */
 export type ChapterDlState = 'idle' | 'pending' | 'queued';
@@ -19,6 +19,13 @@ interface ChapterRowProps {
 	hideDownload?: boolean;
 	onToggleBookmark: () => void;
 	bookmarkPending: boolean;
+	// Aidoku's per-chapter read marking (MangaView context menu); entries hide by their own conditions
+	onMarkRead?: () => void;
+	onMarkUnread?: () => void;
+	/** Mark-previous targets the rows below this one in the visible list, so it hides on the last row (Aidoku: !last) */
+	onMarkPreviousRead?: () => void;
+	onMarkPreviousUnread?: () => void;
+	markPending?: boolean;
 }
 
 export function ChapterRow({
@@ -30,7 +37,12 @@ export function ChapterRow({
 	onDownload,
 	hideDownload,
 	onToggleBookmark,
-	bookmarkPending
+	bookmarkPending,
+	onMarkRead,
+	onMarkUnread,
+	onMarkPreviousRead,
+	onMarkPreviousUnread,
+	markPending
 }: ChapterRowProps) {
 	const cls = [
 		'chapter-row',
@@ -120,16 +132,83 @@ export function ChapterRow({
 							<Spinner size={15} />
 						</IconButton>
 					))}
-					<IconButton
-						label={c.isBookmarked ? '取消书签' : '加书签'}
-						disabled={bookmarkPending}
-						onClick={(e) => {
-							e.stopPropagation();
-							onToggleBookmark();
-						}}
-					>
-						<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
-					</IconButton>
+				<IconButton
+					label={c.isBookmarked ? '取消书签' : '加书签'}
+					disabled={bookmarkPending}
+					onClick={(e) => {
+						e.stopPropagation();
+						onToggleBookmark();
+					}}
+				>
+					<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
+				</IconButton>
+				{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
+					<MenuButton label="章节操作">
+						{(close) => (
+							<>
+								{/* Aidoku MARK_READ: offered while the chapter is not completed */}
+								{onMarkRead && !c.isRead && (
+									<button
+										type="button"
+										className="menu-row"
+										disabled={markPending}
+										onClick={() => {
+											close();
+											onMarkRead();
+										}}
+									>
+										<span>标记已读</span>
+										<CheckCircle2 size={14} />
+									</button>
+								)}
+								{/* Aidoku MARK_UNREAD: offered while the chapter carries any reading trace */}
+								{onMarkUnread && (c.isRead || c.lastPageRead > 0 || (c.lastReadAt ?? 0) > 0) && (
+									<button
+										type="button"
+										className="menu-row"
+										disabled={markPending}
+										onClick={() => {
+											close();
+											onMarkUnread();
+										}}
+									>
+										<span>标记未读</span>
+										<MinusCircle size={14} />
+									</button>
+								)}
+								{/* Aidoku MARK_PREVIOUS: the parent withholds these on the last visible row */}
+								{onMarkPreviousRead && (
+									<button
+										type="button"
+										className="menu-row"
+										disabled={markPending}
+										onClick={() => {
+											close();
+											onMarkPreviousRead();
+										}}
+									>
+										<span>标记上一章为已读</span>
+										<CheckCircle2 size={14} />
+									</button>
+								)}
+								{onMarkPreviousUnread && (
+									<button
+										type="button"
+										className="menu-row"
+										disabled={markPending}
+										onClick={() => {
+											close();
+											onMarkPreviousUnread();
+										}}
+									>
+										<span>标记上一章为未读</span>
+										<MinusCircle size={14} />
+									</button>
+								)}
+							</>
+						)}
+					</MenuButton>
+				)}
 				</span>
 			)}
 		</div>

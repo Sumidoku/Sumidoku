@@ -321,6 +321,54 @@ export default function MangaDetailPage() {
 		);
 	}
 
+	// Shared by the row menu and mark-previous: marking read follows Aidoku and only touches readable chapters
+	// (unlocked or downloaded); marking unread wipes the reading trace server-side, progress included
+	function applyRead(ids: number[], isRead: boolean, done: (updated: number) => string) {
+		const targets = isRead
+			? ids.filter((id) => {
+					const c = chapters.find((x) => x.id === id);
+					return c !== undefined && (!c.locked || !!c.isDownloaded);
+				})
+			: ids;
+		if (targets.length === 0) {
+			pushToast('锁定章节需先下载才能标为已读', 'info');
+			return;
+		}
+		batchChapters.mutate(
+			{ chapterIds: targets, isRead },
+			{
+				onSuccess: (res) => {
+					pushToast(done(res.updated), 'info');
+					void qc.invalidateQueries({ queryKey: qk.chapters(mangaId) });
+					void qc.invalidateQueries({ queryKey: qk.library });
+				}
+			}
+		);
+	}
+
+	function markRead(c: Chapter) {
+		if (c.id < 0) return;
+		applyRead([c.id], true, () => '已标记为已读');
+	}
+
+	function markUnread(c: Chapter) {
+		if (c.id < 0) return;
+		applyRead([c.id], false, () => '已标记为未读');
+	}
+
+	// Aidoku's MARK_PREVIOUS: everything displayed below the tapped row (display-relative, so with the
+	// default descending sort that is every older chapter); placeholder refresh rows (negative ids) skip
+	function markPrevious(c: Chapter, isRead: boolean) {
+		const idx = visible.findIndex((x) => x.id === c.id);
+		if (idx < 0) return;
+		const ids = visible
+			.slice(idx + 1)
+			.filter((x) => x.id > 0)
+			.map((x) => x.id);
+		if (ids.length === 0) return;
+		applyRead(ids, isRead, (n) => `已把下方 ${n} 章标为${isRead ? '已读' : '未读'}`);
+	}
+
 	function downloadSelected() {
 		const ids = [...selected];
 		enqueueDownloads.mutate(ids, {
@@ -759,25 +807,30 @@ export default function MangaDetailPage() {
 					<EmptyState icon={Search} title="没有符合条件的章节" hint="换个关键词或清掉筛选试试" />
 				) : (
 					<div className={selecting ? 'manga-chaps__list--selecting' : undefined}>
-						{visible.map((c) => (
-							<ChapterRow
-								key={c.id}
-								chapter={c}
-								selecting={selecting}
-								selected={selected.has(c.id)}
-								onActivate={() => activate(c)}
-								dlState={dlStateOf(c)}
-								onDownload={() => downloadChapter(c)}
-								hideDownload={isLocal}
-								onToggleBookmark={() => {
-									if (c.id < 0) return;
-									updateChapter.mutate({ id: c.id, mangaId, isBookmarked: !c.isBookmarked });
-								}}
-								bookmarkPending={
-									updateChapter.isPending && updateChapter.variables?.id === c.id
-								}
-							/>
-						))}
+					{visible.map((c, i) => (
+						<ChapterRow
+							key={c.id}
+							chapter={c}
+							selecting={selecting}
+							selected={selected.has(c.id)}
+							onActivate={() => activate(c)}
+							dlState={dlStateOf(c)}
+							onDownload={() => downloadChapter(c)}
+							hideDownload={isLocal}
+							onToggleBookmark={() => {
+								if (c.id < 0) return;
+								updateChapter.mutate({ id: c.id, mangaId, isBookmarked: !c.isBookmarked });
+							}}
+							bookmarkPending={
+								updateChapter.isPending && updateChapter.variables?.id === c.id
+							}
+							onMarkRead={() => markRead(c)}
+							onMarkUnread={() => markUnread(c)}
+							onMarkPreviousRead={i < visible.length - 1 ? () => markPrevious(c, true) : undefined}
+							onMarkPreviousUnread={i < visible.length - 1 ? () => markPrevious(c, false) : undefined}
+							markPending={batchChapters.isPending}
+						/>
+					))}
 					</div>
 				)}
 			</div>

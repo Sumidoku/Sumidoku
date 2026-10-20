@@ -200,6 +200,76 @@ async fn library_category_progress_history() {
 	assert_eq!(count, 0);
 }
 
+/// Marking unread (isRead: false) is Aidoku's mark-unread: the whole reading trace goes -
+/// progress, resume stamp, history entry - while the bookmark survives; the batch endpoint
+/// runs the same wipe, and marking read still never touches the stamp by itself.
+#[tokio::test]
+async fn mark_unread_wipes_the_reading_trace() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		..
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let chapter_id = body[0]["id"].as_i64().expect("chapter id");
+
+	// finish the chapter at page 3 and bookmark it
+	let (status, _) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/chapter/{chapter_id}"),
+		Some(json!({"lastPageRead": 3, "isRead": true, "isBookmarked": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", "/api/v1/history", None).await;
+	assert_eq!(body["entries"].as_array().expect("history entries").len(), 1);
+
+	// single mark-unread: progress, stamp and history entry wiped, bookmark kept, no new stamp
+	let (status, body) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/chapter/{chapter_id}"),
+		Some(json!({"isRead": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["lastPageRead"], 0);
+	assert_eq!(body["isRead"], false);
+	assert_eq!(body["isBookmarked"], true);
+	assert!(body["lastReadAt"].is_null());
+	let (_, body) = request(&app, "GET", "/api/v1/history", None).await;
+	assert_eq!(body["entries"].as_array().expect("history entries").len(), 0);
+
+	// the batch endpoint applies the same wipe; the chapters read-back shows the wiped defaults
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [chapter_id], "isRead": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 1);
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [chapter_id], "isRead": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 1);
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let chapter = &body[0];
+	assert_eq!(chapter["lastPageRead"], 0);
+	assert_eq!(chapter["isRead"], false);
+	assert_eq!(chapter["isBookmarked"], true);
+	assert!(chapter["lastReadAt"].is_null());
+}
+
 /// Starts a minimal static server returning bytes; returns the port and handle (aborting shuts it down, simulating the upstream disappearing)
 async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
 	let mut router = Router::new();
