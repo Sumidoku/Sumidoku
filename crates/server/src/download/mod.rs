@@ -1,7 +1,6 @@
 use crate::model::{ChapterRow, MangaRow, unix_now};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
 use crate::state::AppState;
-use crate::USER_ID;
 use aidoku::PageContext;
 use serde::Serialize;
 use serde_json::Value;
@@ -29,6 +28,16 @@ pub struct DownloadEvent {
 	/// 仅 running 事件（kind="running"、chapter_id=0）携带；chapter 事件恒 None 不上 wire
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub running: Option<bool>,
+	/// 行归属用户，WS 按连接用户过滤；running 事件是全局管理器状态（None，全员广播）
+	#[serde(skip)]
+	pub user_id: Option<i64>,
+}
+
+/// 内存队列条目：无请求上下文，行归属随条目走
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QueueEntry {
+	chapter_id: i64,
+	user_id: i64,
 }
 
 /// 下载管理器：源内串行、源间并行，全局并发源数受 semaphore 限制。
@@ -37,7 +46,7 @@ pub struct DownloadManager {
 	// Weak 防循环引用：AppState 经 OnceCell 持有本管理器
 	state: Weak<AppState>,
 	pool: SqlitePool,
-	queue: Mutex<VecDeque<i64>>,
+	queue: Mutex<VecDeque<QueueEntry>>,
 	notify: Notify,
 	events: broadcast::Sender<DownloadEvent>,
 	running: AtomicBool,
@@ -87,13 +96,14 @@ impl DownloadManager {
 		self.progress.lock().await.get(&chapter_id).copied()
 	}
 
-	fn emit(&self, kind: &'static str, chapter_id: i64, downloaded: i64, total: i64) {
+	fn emit(&self, kind: &'static str, chapter_id: i64, downloaded: i64, total: i64, user_id: i64) {
 		let _ = self.events.send(DownloadEvent {
 			kind,
 			chapter_id,
 			downloaded,
 			total,
 			running: None,
+			user_id: Some(user_id),
 		});
 	}
 
@@ -104,7 +114,65 @@ impl DownloadManager {
 			downloaded: 0,
 			total: 0,
 			running: Some(running),
+			user_id: None,
 		});
+	}
+
+	/// 共享产物：另一用户已下好同一章且产物在盘，返回 (path, format) 供直接落 finished
+	async fn shared_artifact(&self, chapter_id: i64, user_id: i64) -> Option<(String, String)> {
+		let row: Option<(String, String)> = sqlx::query_as(
+			"SELECT path, format FROM download
+			 WHERE chapter_id = ? AND user_id != ? AND status = 'finished' AND path IS NOT NULL
+			 ORDER BY updated_at DESC LIMIT 1",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.fetch_optional(&self.pool)
+		.await
+		.ok()?;
+		let (path, format) = row?;
+		let exists = tokio::fs::try_exists(self.downloads_dir.join(&path)).await.ok()?;
+		exists.then_some((path, format))
+	}
+
+	/// 复用共享产物落行：不重复打包，行直接 finished 并打下载标记
+	async fn settle_finished(&self, chapter_id: i64, user_id: i64, path: &str, format: &str) {
+		let now = unix_now();
+		let result = sqlx::query(
+			"INSERT INTO download (chapter_id, user_id, status, format, path, created_at, updated_at)
+			 VALUES (?, ?, 'finished', ?, ?, ?, ?)
+			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
+			 status = 'finished', format = excluded.format, path = excluded.path,
+			 error = NULL, retries = 0, updated_at = excluded.updated_at",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.bind(format)
+		.bind(path)
+		.bind(now)
+		.bind(now)
+		.execute(&self.pool)
+		.await;
+		if let Err(e) = result {
+			tracing::warn!(chapter_id, "download shared-artifact settle failed: {e}");
+			return;
+		}
+		self.flag_downloaded(chapter_id, user_id).await;
+		self.emit("finished", chapter_id, 0, 0, user_id);
+	}
+
+	async fn flag_downloaded(&self, chapter_id: i64, user_id: i64) {
+		let flag = sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
+			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.execute(&self.pool)
+		.await;
+		if let Err(e) = flag {
+			tracing::warn!(chapter_id, "download flag update failed: {e}");
+		}
 	}
 
 	/// 入队去重后的章节列表；行归属 user_id，已 finished/在队/在跑的跳过，error 行重置重排
@@ -118,6 +186,10 @@ impl DownloadManager {
 		let mut queued = Vec::new();
 		for &chapter_id in chapter_ids {
 			if !seen.insert(chapter_id) {
+				continue;
+			}
+			if let Some((path, shared_format)) = self.shared_artifact(chapter_id, user_id).await {
+				self.settle_finished(chapter_id, user_id, &path, &shared_format).await;
 				continue;
 			}
 			let status: Option<(String,)> =
@@ -172,9 +244,9 @@ impl DownloadManager {
 					}
 				}
 			}
-			self.queue.lock().await.push_back(chapter_id);
+			self.queue.lock().await.push_back(QueueEntry { chapter_id, user_id });
 			queued.push(chapter_id);
-			self.emit("queued", chapter_id, 0, 0);
+			self.emit("queued", chapter_id, 0, 0, user_id);
 		}
 		if !queued.is_empty() {
 			self.notify.notify_one();
@@ -197,14 +269,17 @@ impl DownloadManager {
 	}
 
 	async fn reload_queue(self: &Arc<Self>) {
-		let ids: Vec<i64> = match sqlx::query_scalar(
-			"SELECT chapter_id FROM download WHERE status = 'queued'
-			 ORDER BY created_at ASC, chapter_id ASC",
+		let entries: Vec<QueueEntry> = match sqlx::query_as(
+			"SELECT chapter_id, user_id FROM download WHERE status = 'queued'
+			 ORDER BY created_at ASC, chapter_id ASC, user_id ASC",
 		)
 		.fetch_all(&self.pool)
 		.await
 		{
-			Ok(ids) => ids,
+			Ok(rows) => rows
+				.into_iter()
+				.map(|(chapter_id, user_id)| QueueEntry { chapter_id, user_id })
+				.collect(),
 			Err(e) => {
 				tracing::warn!("download queue reload failed: {e}");
 				return;
@@ -213,7 +288,7 @@ impl DownloadManager {
 		{
 			let mut queue = self.queue.lock().await;
 			queue.clear();
-			queue.extend(ids);
+			queue.extend(entries);
 		}
 		self.notify.notify_one();
 	}
@@ -236,8 +311,8 @@ impl DownloadManager {
 		} else {
 			self.running.store(false, Ordering::SeqCst);
 			self.emit_running(false);
-			let rows: Vec<i64> =
-				sqlx::query_scalar("SELECT chapter_id FROM download WHERE status = 'queued'")
+			let rows: Vec<(i64, i64)> =
+				sqlx::query_as("SELECT chapter_id, user_id FROM download WHERE status = 'queued'")
 					.fetch_all(&self.pool)
 					.await
 					.unwrap_or_default();
@@ -254,8 +329,8 @@ impl DownloadManager {
 				tracing::warn!("download pause failed: {e}");
 			}
 			self.queue.lock().await.clear();
-			for chapter_id in rows {
-				self.emit("paused", chapter_id, 0, 0);
+			for (chapter_id, user_id) in rows {
+				self.emit("paused", chapter_id, 0, 0, user_id);
 			}
 		}
 	}
@@ -264,8 +339,11 @@ impl DownloadManager {
 		self.cancel.lock().await.insert(chapter_id);
 	}
 
-	pub async fn remove_from_queue(&self, chapter_id: i64) {
-		self.queue.lock().await.retain(|&id| id != chapter_id);
+	pub async fn remove_from_queue(&self, chapter_id: i64, user_id: i64) {
+		self.queue
+			.lock()
+			.await
+			.retain(|e| e.chapter_id != chapter_id || e.user_id != user_id);
 	}
 
 	pub(crate) async fn cleanup_tmp(&self, chapter_id: i64) {
@@ -293,24 +371,25 @@ impl DownloadManager {
 		let mut deferred = Vec::new();
 		loop {
 			let next = self.queue.lock().await.pop_front();
-			let Some(chapter_id) = next else { break };
+			let Some(entry) = next else { break };
 			if !self.running.load(Ordering::SeqCst) {
-				deferred.push(chapter_id);
+				deferred.push(entry);
 				continue;
 			}
 			let row: Option<(String, i64)> = match sqlx::query_as(
 				"SELECT d.status, m.source_id FROM download d
 				 JOIN chapter c ON c.id = d.chapter_id JOIN manga m ON m.id = c.manga_id
-				 WHERE d.chapter_id = ?",
+				 WHERE d.chapter_id = ? AND d.user_id = ?",
 			)
-			.bind(chapter_id)
+			.bind(entry.chapter_id)
+			.bind(entry.user_id)
 			.fetch_optional(&self.pool)
 			.await
 			{
 				Ok(row) => row,
 				Err(e) => {
-					tracing::warn!(chapter_id, "download dispatch query failed: {e}");
-					deferred.push(chapter_id);
+					tracing::warn!(chapter_id = entry.chapter_id, "download dispatch query failed: {e}");
+					deferred.push(entry);
 					break;
 				}
 			};
@@ -320,11 +399,11 @@ impl DownloadManager {
 				continue;
 			}
 			if self.active_sources.lock().await.contains(&source_id) {
-				deferred.push(chapter_id);
+				deferred.push(entry);
 				continue;
 			}
 			let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
-				deferred.push(chapter_id);
+				deferred.push(entry);
 				continue;
 			};
 			self.active_sources.lock().await.insert(source_id);
@@ -332,7 +411,8 @@ impl DownloadManager {
 			tokio::spawn(async move {
 				let worker = manager.clone();
 				// 里层 panic 也要放行清理，否则该源永远占住 active 位
-				let inner = tokio::spawn(async move { worker.run_chapter(chapter_id, source_id).await });
+				let inner =
+					tokio::spawn(async move { worker.run_chapter(entry.chapter_id, entry.user_id, source_id).await });
 				let _ = inner.await;
 				drop(permit);
 				manager.active_sources.lock().await.remove(&source_id);
@@ -341,22 +421,28 @@ impl DownloadManager {
 		}
 		if !deferred.is_empty() {
 			let mut queue = self.queue.lock().await;
-			for id in deferred {
-				queue.push_back(id);
+			for entry in deferred {
+				queue.push_back(entry);
 			}
 		}
 	}
 
-	async fn run_chapter(self: &Arc<Self>, chapter_id: i64, source_id: i64) {
+	async fn run_chapter(self: &Arc<Self>, chapter_id: i64, user_id: i64, source_id: i64) {
 		if self.cancel.lock().await.remove(&chapter_id) {
 			self.cleanup_tmp(chapter_id).await;
 			return;
 		}
+		// 排队期间另一用户可能已下好同一章：产物共享，直接落 finished 不重复打包
+		if let Some((path, format)) = self.shared_artifact(chapter_id, user_id).await {
+			self.settle_finished(chapter_id, user_id, &path, &format).await;
+			return;
+		}
 		let marked = sqlx::query(
-			"UPDATE download SET status = 'downloading', updated_at = ? WHERE chapter_id = ?",
+			"UPDATE download SET status = 'downloading', updated_at = ? WHERE chapter_id = ? AND user_id = ?",
 		)
 		.bind(unix_now())
 		.bind(chapter_id)
+		.bind(user_id)
 		.execute(&self.pool)
 		.await;
 		match marked {
@@ -375,7 +461,7 @@ impl DownloadManager {
 				return;
 			}
 			attempt += 1;
-			match self.try_chapter(chapter_id, source_id, attempt == 1).await {
+			match self.try_chapter(chapter_id, user_id, source_id, attempt == 1).await {
 				Ok((total, path)) => {
 					if self.cancel.lock().await.remove(&chapter_id) {
 						self.progress.lock().await.remove(&chapter_id);
@@ -384,29 +470,20 @@ impl DownloadManager {
 					}
 					let finished = sqlx::query(
 						"UPDATE download SET status = 'finished', path = ?, error = NULL, updated_at = ?
-						 WHERE chapter_id = ?",
+						 WHERE chapter_id = ? AND user_id = ?",
 					)
 					.bind(&path)
 					.bind(unix_now())
 					.bind(chapter_id)
+					.bind(user_id)
 					.execute(&self.pool)
 					.await;
 					if let Err(e) = finished {
 						tracing::warn!(chapter_id, "download finish update failed: {e}");
 					}
-					let flag = sqlx::query(
-						"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
-						 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
-					)
-					.bind(chapter_id)
-					.bind(USER_ID)
-					.execute(&self.pool)
-					.await;
-					if let Err(e) = flag {
-						tracing::warn!(chapter_id, "download flag update failed: {e}");
-					}
+					self.flag_downloaded(chapter_id, user_id).await;
 					self.progress.lock().await.remove(&chapter_id);
-					self.emit("finished", chapter_id, total, total);
+					self.emit("finished", chapter_id, total, total, user_id);
 					self.cleanup_tmp(chapter_id).await;
 					return;
 				}
@@ -417,9 +494,10 @@ impl DownloadManager {
 						return;
 					}
 					let row: Option<(i64,)> = sqlx::query_as(
-						"SELECT retries FROM download WHERE chapter_id = ?",
+						"SELECT retries FROM download WHERE chapter_id = ? AND user_id = ?",
 					)
 					.bind(chapter_id)
+					.bind(user_id)
 					.fetch_optional(&self.pool)
 					.await
 					.unwrap_or(None);
@@ -433,26 +511,28 @@ impl DownloadManager {
 							self.progress.lock().await.remove(&chapter_id).unwrap_or((0, 0));
 						let result = sqlx::query(
 							"UPDATE download SET status = 'error', error = ?, updated_at = ?
-							 WHERE chapter_id = ?",
+							 WHERE chapter_id = ? AND user_id = ?",
 						)
 						.bind(&message)
 						.bind(unix_now())
 						.bind(chapter_id)
+						.bind(user_id)
 						.execute(&self.pool)
 						.await;
 						if let Err(e) = result {
 							tracing::warn!(chapter_id, "download error update failed: {e}");
 						}
-						self.emit("error", chapter_id, downloaded, total);
+						self.emit("error", chapter_id, downloaded, total, user_id);
 						return;
 					}
 					let result = sqlx::query(
 						"UPDATE download SET retries = retries + 1, error = ?, updated_at = ?
-						 WHERE chapter_id = ?",
+						 WHERE chapter_id = ? AND user_id = ?",
 					)
 					.bind(&message)
 					.bind(unix_now())
 					.bind(chapter_id)
+					.bind(user_id)
 					.execute(&self.pool)
 					.await;
 					if let Err(e) = result {
@@ -468,6 +548,7 @@ impl DownloadManager {
 	async fn try_chapter(
 		self: &Arc<Self>,
 		chapter_id: i64,
+		user_id: i64,
 		source_id: i64,
 		first_attempt: bool,
 	) -> Result<(i64, String), String> {
@@ -491,8 +572,9 @@ impl DownloadManager {
 			return Err("source not found".into());
 		};
 		let format: Option<(String,)> =
-			sqlx::query_as("SELECT format FROM download WHERE chapter_id = ?")
+			sqlx::query_as("SELECT format FROM download WHERE chapter_id = ? AND user_id = ?")
 				.bind(chapter_id)
+				.bind(user_id)
 				.fetch_optional(&self.pool)
 				.await
 				.map_err(|e| format!("load download format: {e:?}"))?;
@@ -504,7 +586,7 @@ impl DownloadManager {
 		let total = pages.len() as i64;
 		self.progress.lock().await.insert(chapter_id, (0, total));
 		if first_attempt {
-			self.emit("started", chapter_id, 0, total);
+			self.emit("started", chapter_id, 0, total, user_id);
 		}
 		let tmp_dir = self.downloads_dir.join(".tmp").join(chapter_id.to_string());
 		// 重跑先清上一轮残留
@@ -534,7 +616,7 @@ impl DownloadManager {
 					files[position] = Some(name);
 					done += 1;
 					self.progress.lock().await.insert(chapter_id, (done, total));
-					self.emit("progress", chapter_id, done, total);
+					self.emit("progress", chapter_id, done, total, user_id);
 				}
 				Some(Ok(Err(e))) => {
 					tasks.abort_all();

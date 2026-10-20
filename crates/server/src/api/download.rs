@@ -114,6 +114,29 @@ async fn remove_product(downloads_dir: &std::path::Path, rel_path: &str) {
 	}
 }
 
+/// 另一用户还引用同一产物路径时文件留着（产物共享，删行不删别人的货）
+async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str, user_id: i64) -> ApiResult<bool> {
+	let referenced: Option<(i64,)> =
+		sqlx::query_as("SELECT 1 FROM download WHERE path = ? AND user_id != ? LIMIT 1")
+			.bind(path)
+			.bind(user_id)
+			.fetch_optional(pool)
+			.await?;
+	Ok(referenced.is_none())
+}
+
+/// 同一章还有别家的在途行时，tmp 目录归那个任务管，不能清
+async fn chapter_in_flight(pool: &sqlx::SqlitePool, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
+	let active: Option<(i64,)> = sqlx::query_as(
+		"SELECT 1 FROM download WHERE chapter_id = ? AND user_id != ? AND status IN ('queued', 'downloading') LIMIT 1",
+	)
+	.bind(chapter_id)
+	.bind(user_id)
+	.fetch_optional(pool)
+	.await?;
+	Ok(active.is_some())
+}
+
 pub async fn clear_downloads(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -126,10 +149,14 @@ pub async fn clear_downloads(
 			.await?;
 	let mut cleared = 0i64;
 	for (chapter_id, path) in rows {
-		if let Some(path) = path {
+		if let Some(path) = path
+			&& product_orphaned(&state.pool, &path, user.id).await?
+		{
 			remove_product(manager.downloads_dir(), &path).await;
 		}
-		manager.cleanup_tmp(chapter_id).await;
+		if !chapter_in_flight(&state.pool, chapter_id, user.id).await? {
+			manager.cleanup_tmp(chapter_id).await;
+		}
 		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
 			.bind(chapter_id)
 			.bind(user.id)
@@ -167,11 +194,15 @@ pub async fn delete_download(
 	if status == "downloading" {
 		manager.mark_cancel(chapter_id).await;
 	}
-	manager.remove_from_queue(chapter_id).await;
-	if let Some(path) = path {
+	manager.remove_from_queue(chapter_id, user.id).await;
+	if let Some(path) = path
+		&& product_orphaned(&state.pool, &path, user.id).await?
+	{
 		remove_product(manager.downloads_dir(), &path).await;
 	}
-	manager.cleanup_tmp(chapter_id).await;
+	if !chapter_in_flight(&state.pool, chapter_id, user.id).await? {
+		manager.cleanup_tmp(chapter_id).await;
+	}
 	sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
 		.bind(chapter_id)
 		.bind(user.id)
@@ -250,6 +281,10 @@ pub async fn downloads_ws(
 				event = rx.recv() => {
 					match event {
 						Ok(event) => {
+							// 行事件只发行属用户；running 是全局管理器状态，全员广播
+							if event.user_id.is_some_and(|owner| owner != user.id) {
+								continue;
+							}
 							let text = serde_json::to_string(&event).unwrap_or_default();
 							if socket.send(Message::Text(text.into())).await.is_err() {
 								return;
