@@ -456,7 +456,7 @@ Migrations in `crates/server/migrations`.
   down outside the lock via the same `Arc::try_unwrap` courtesy as
   `evict_source`: an in-flight call keeps its instance until the last
   reference drops, while a new lookup respawns immediately. The sweep
-  exists because wasmer linear memory only grows — eviction is the one
+  exists because WASM linear memory only grows — eviction is the one
   path that returns an idle instance's memory to the OS, at the price of
   a seconds-long recompile on the next access. Aggregate pressure has
   its own watcher (`run_rss_monitor`, same 60s cadence, spawned only
@@ -524,17 +524,17 @@ Migrations in `crates/server/migrations`.
 
 ## WASM sources (`crates/wasm`)
 
-Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
+Aidoku source packages (`.aix`, zip) run in wasmi. One actor per source
 (`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
 limiting (`runtime/rate_limit.rs`), and the host functions sources import
 (`imports/`), including the HTML DOM helper (`html_dom.rs`) and the Boa
 JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
 isolated context per ABI descriptor, time- and loop-limited, with no host
 access beyond what the ABI exposes. Each instance runs under the `Limits`
-from its `SourceConfig` (`runtime/limits.rs`): a metering fuel budget per
+from its `SourceConfig` (`runtime/limits.rs`): a fuel budget per
 export call, a per-call timeout that fuses and restarts the instance, and
-a linear-memory cap enforced through custom wasmer tunables
-(`LimitedTunables`) — the server sets these from its own config when it
+a linear-memory cap enforced through wasmi `StoreLimits` — the server
+sets these from its own config when it
 spawns an instance, defaulting the memory cap to 128 MiB.
 The net host (`imports/net.rs`) aligns request behavior with the
 Aidoku/URLSession host. Response bodies are buffered under a

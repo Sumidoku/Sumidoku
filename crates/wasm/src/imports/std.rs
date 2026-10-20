@@ -1,8 +1,7 @@
-use crate::{
-	WasmEnv,
-	runtime::store::{FFIResult, Ptr, Rid},
+use crate::runtime::{
+	env::Ctx,
+	store::{FFIResult, Ptr, Rid},
 };
-use wasmer::FunctionEnvMut;
 
 enum Result {
 	Success,
@@ -24,48 +23,48 @@ impl From<Result> for i32 {
 	}
 }
 
-pub fn destroy(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) {
-	env.data_mut().store.remove(rid);
+pub fn destroy(ctx: &mut impl Ctx, rid: Rid) {
+	ctx.host().store.remove(rid);
 	// webview rid 可能挂着浏览器 context，随 destroy 一并回收
-	if let Some(line) = env.data_mut().browser.destroy(rid) {
-		env.data().log(&line);
+	if let Some(line) = ctx.host().browser.destroy(rid) {
+		ctx.host().log(&line);
 	}
 }
 
-pub fn buffer_len(env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let Some(data) = env.data().store.get(rid).and_then(|item| item.as_encoded()) else {
+pub fn buffer_len(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let Some(data) = ctx.host().store.get(rid).and_then(|item| item.as_encoded()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	data.len() as FFIResult
 }
 
-pub fn read_buffer(env: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, size: u32) -> FFIResult {
-	let Some(data) = env.data().store.get(rid).and_then(|item| item.as_encoded()) else {
+pub fn read_buffer(ctx: &mut impl Ctx, rid: Rid, ptr: Ptr, size: u32) -> FFIResult {
+	let Some(data) = ctx.host().store.get(rid).and_then(|item| item.as_encoded()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	if size as usize > data.len() {
 		return Result::FailedMemoryWrite.into();
 	}
 	let data = data.iter().take(size as usize).copied().collect::<Vec<_>>();
-	if env.data().write_buffer(&env, ptr, &data).is_err() {
+	if ctx.write_buffer(ptr, &data).is_err() {
 		Result::FailedMemoryWrite.into()
 	} else {
 		Result::Success.into()
 	}
 }
 
-pub fn current_date(_env: FunctionEnvMut<WasmEnv>) -> f64 {
+pub fn current_date(_ctx: &mut impl Ctx) -> f64 {
 	chrono::Utc::now().timestamp() as f64
 }
 
-pub fn utc_offset(_env: FunctionEnvMut<WasmEnv>) -> i64 {
+pub fn utc_offset(_ctx: &mut impl Ctx) -> i64 {
 	chrono::Local::now().offset().utc_minus_local() as i64
 }
 
 // 签名由源 ABI 固定，无法归并参数
 #[allow(clippy::too_many_arguments)]
 pub fn parse_date(
-	env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	date_str: Ptr,
 	date_len: u32,
 	format_str: Ptr,
@@ -76,19 +75,19 @@ pub fn parse_date(
 	timezone_len: u32,
 ) -> f64 {
 	let invalid = || Into::<i32>::into(Result::InvalidDateString) as f64;
-	let Ok(string) = env.data().read_string(&env, date_str, date_len) else {
+	let Ok(string) = ctx.read_string(date_str, date_len) else {
 		return Into::<i32>::into(Result::InvalidString) as f64;
 	};
-	let Ok(format) = env.data().read_string(&env, format_str, format_len) else {
+	let Ok(format) = ctx.read_string(format_str, format_len) else {
 		return Into::<i32>::into(Result::InvalidString) as f64;
 	};
 	let timezone_string = if timezone_len > 0 {
-		env.data().read_string(&env, timezone_str, timezone_len).ok()
+		ctx.read_string(timezone_str, timezone_len).ok()
 	} else {
 		None
 	};
 	let locale_string = if locale_len > 0 {
-		env.data().read_string(&env, locale_str, locale_len).ok()
+		ctx.read_string(locale_str, locale_len).ok()
 	} else {
 		None
 	};

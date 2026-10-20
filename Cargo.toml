@@ -7,7 +7,6 @@ version = "0.15.0"
 
 [workspace.dependencies]
 aidoku = { path = "vendor/aidoku", default-features = false, features = ["imports"] }
-wasmer = "7.5"
 postcard = { version = "1.1", features = ["alloc"] }
 plist = "1"
 serde = { version = "1.0", features = ["derive"] }
@@ -23,7 +22,7 @@ lto = true
 strip = true
 
 # macOS 的 unpacked 默认值让每个测试二进制链接后都跑一遍 dsymutil，其内存随二进制
-# 大小走（本仓测试二进制多且静态链 wasmer/boa，单个 dsymutil ~2GB，并行数个即十几 GB）；
+# 大小走（本仓测试二进制多且静态链 boa 等大 crate，单个 dsymutil 可达 GB 级，并行数个即十几 GB）；
 # 关掉后调试符号留在二进制内，lldb 照常，release（debug=0）不受影响
 [profile.dev]
 split-debuginfo = "off"

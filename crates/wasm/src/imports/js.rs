@@ -7,14 +7,15 @@
 //! 一样显式不支持：返回 ABI 的 -1 家族错误码（JsError 没有 unsupported 专用码，
 //! 上游 aidoku-rs 对这些函数也一律 -1），并在源日志点名函数与原因。
 use crate::{
-	WasmEnv,
 	browser::{BrowserCookie, BrowserError},
 	imports::CookieJar,
 	js_engine::JsEngine,
-	runtime::store::{FFIResult, Ptr, Rid, StoreItem},
+	runtime::{
+		env::Ctx,
+		store::{FFIResult, Ptr, Rid, StoreItem},
+	},
 	webview::WebView,
 };
-use wasmer::FunctionEnvMut;
 
 // 变体名与 ABI 的 JsError 对齐，命名不由本仓决定
 #[allow(clippy::enum_variant_names)]
@@ -44,87 +45,87 @@ impl From<Result> for i32 {
 	}
 }
 
-pub fn context_create(mut env: FunctionEnvMut<WasmEnv>) -> Rid {
-	let limits = &env.data().limits;
+pub fn context_create(ctx: &mut impl Ctx) -> Rid {
+	let limits = &ctx.host().limits;
 	let engine = JsEngine::new(limits.js_timeout, limits.js_loop_max);
-	env.data_mut().store.store(StoreItem::JsContext(Box::new(engine)))
+	ctx.host().store.store(StoreItem::JsContext(Box::new(engine)))
 }
 
-pub fn context_eval(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
+pub fn context_eval(ctx: &mut impl Ctx, rid: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(source) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(engine) = env.data_mut().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
+	let Some(engine) = ctx.host().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
 		return Result::InvalidContext.into();
 	};
 	match engine.eval(&source) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(msg) => fail(&mut env, msg),
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(msg) => fail(ctx, msg),
 	}
 }
 
 pub fn context_eval_async(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	rid: Rid,
 	string_ptr: Ptr,
 	len: u32,
 ) -> FFIResult {
-	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
+	let Ok(source) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(engine) = env.data_mut().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
+	let Some(engine) = ctx.host().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
 		return Result::InvalidContext.into();
 	};
 	match engine.eval_async(&source) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(msg) => fail(&mut env, msg),
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(msg) => fail(ctx, msg),
 	}
 }
 
-pub fn context_get(mut env: FunctionEnvMut<WasmEnv>, rid: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(name) = env.data().read_string(&env, string_ptr, len) else {
+pub fn context_get(ctx: &mut impl Ctx, rid: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(name) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(engine) = env.data_mut().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
+	let Some(engine) = ctx.host().store.get_mut(rid).and_then(StoreItem::as_js_context) else {
 		return Result::InvalidContext.into();
 	};
 	match engine.get(&name) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(msg) => fail(&mut env, msg),
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(msg) => fail(ctx, msg),
 	}
 }
 
 // ABI 没有区分失败原因的错误码，统一 -1；细节进源日志（与 AidokuRunner 的
 // exceptionHandler 打印对齐），截断防止源用超长 rejection 值灌爆日志
-fn fail(env: &mut FunctionEnvMut<WasmEnv>, msg: String) -> FFIResult {
+fn fail(ctx: &mut impl Ctx, msg: String) -> FFIResult {
 	let truncated: String = msg.chars().take(200).collect();
-	env.data().log(&format!("js failed: {truncated}"));
+	ctx.host().log(&format!("js failed: {truncated}"));
 	Result::MissingResult.into()
 }
 
-pub fn webview_create(mut env: FunctionEnvMut<WasmEnv>) -> Rid {
-	let limits = &env.data().limits;
+pub fn webview_create(ctx: &mut impl Ctx) -> Rid {
+	let limits = &ctx.host().limits;
 	let view = WebView::new(limits.js_timeout, limits.js_loop_max);
-	env.data_mut().store.store(StoreItem::WebView(Box::new(view)))
+	ctx.host().store.store(StoreItem::WebView(Box::new(view)))
 }
 
 pub fn webview_set_rule_list(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	webview: Rid,
 	_string_ptr: Ptr,
 	_len: u32,
 ) -> FFIResult {
-	unsupported(&mut env, webview, "webview_set_rule_list", "content blocking only applies to real page loads")
+	unsupported(ctx, webview, "webview_set_rule_list", "content blocking only applies to real page loads")
 }
 
-pub fn webview_load(mut env: FunctionEnvMut<WasmEnv>, webview: Rid, request: Rid) -> FFIResult {
-	if !env.data().browser.configured() {
-		return unsupported(&mut env, webview, "webview_load", "no real page navigation on a server");
+pub fn webview_load(ctx: &mut impl Ctx, webview: Rid, request: Rid) -> FFIResult {
+	if !ctx.host().browser.configured() {
+		return unsupported(ctx, webview, "webview_load", "no real page navigation on a server");
 	}
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
-	let Some(req) = env.data_mut().store.get_mut(request).and_then(StoreItem::as_request) else {
+	let Some(req) = ctx.host().store.get_mut(request).and_then(StoreItem::as_request) else {
 		return Result::InvalidRequest.into();
 	};
 	let Some(url) = req.url.clone() else {
@@ -133,7 +134,7 @@ pub fn webview_load(mut env: FunctionEnvMut<WasmEnv>, webview: Rid, request: Rid
 	// CDP 的 Page.navigate 只有 GET；iOS 能整包 URLRequest（含 POST body）导航，
 	// 服务器背衬诚实报失败，不静默退化成 GET
 	if req.method != crate::imports::HttpMethod::Get {
-		env.data().log("webview_load: only GET navigation is supported by the browser backend");
+		ctx.host().log("webview_load: only GET navigation is supported by the browser backend");
 		return Result::MissingResult.into();
 	}
 	let headers: Vec<(String, String)> = req
@@ -141,142 +142,147 @@ pub fn webview_load(mut env: FunctionEnvMut<WasmEnv>, webview: Rid, request: Rid
 		.iter()
 		.filter_map(|(k, v)| v.to_str().ok().map(|v| (k.to_string(), v.to_string())))
 		.collect();
-	match env.data_mut().browser.load(webview, url.as_str(), &headers) {
+	match ctx.host().browser.load(webview, url.as_str(), &headers) {
 		Ok(cookies) => {
-			reflux(&mut env.data_mut().net.jar, &cookies);
+			reflux(&mut ctx.host().net.jar, &cookies);
 			Result::Success.into()
 		}
-		Err(e) => browser_fail(&mut env, "webview_load", &e),
+		Err(e) => browser_fail(ctx, "webview_load", &e),
 	}
 }
 
 pub fn webview_load_html(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	webview: Rid,
 	string_ptr: Ptr,
 	len: u32,
 	url_ptr: Ptr,
 	url_len: u32,
 ) -> FFIResult {
-	let Ok(html) = env.data().read_string(&env, string_ptr, len) else {
+	let Ok(html) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
 	let base_url = if url_len > 0 {
-		let Ok(url) = env.data().read_string(&env, url_ptr, url_len) else {
+		let Ok(url) = ctx.read_string(url_ptr, url_len) else {
 			return Result::InvalidString.into();
 		};
 		Some(url)
 	} else {
 		None
 	};
-	let Some(view) = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview) else {
+	let Some(view) = ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview) else {
 		return Result::InvalidHandler.into();
 	};
 	let logs = view.load_html(&html, base_url.as_deref());
 	for line in logs {
-		env.data().log(&line);
+		ctx.host().log(&line);
 	}
 	Result::Success.into()
 }
 
-pub fn webview_wait_for_load(mut env: FunctionEnvMut<WasmEnv>, webview: Rid) -> FFIResult {
+pub fn webview_wait_for_load(ctx: &mut impl Ctx, webview: Rid) -> FFIResult {
 	// 沙箱里 load_html 同步完成，没有异步加载要等
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
 	Result::Success.into()
 }
 
-pub fn webview_eval(mut env: FunctionEnvMut<WasmEnv>, webview: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
+pub fn webview_eval(ctx: &mut impl Ctx, webview: Rid, string_ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(source) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	};
-	if env.data().browser.supports_eval() {
-		return browser_eval(&mut env, webview, &source, "webview_eval");
+	if ctx.host().browser.supports_eval() {
+		return browser_eval(ctx, webview, &source, "webview_eval");
 	}
-	let view = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
+	let view = ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
 	match view.eval(&source) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(msg) => fail(&mut env, msg),
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(msg) => fail(ctx, msg),
 	}
 }
 
 pub fn webview_eval_async(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	webview: Rid,
 	string_ptr: Ptr,
 	len: u32,
 ) -> FFIResult {
-	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
+	let Ok(source) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	};
 	// 浏览器后端的 eval 由服务端 await promise，eval 与 eval_async 天然同一路径
-	if env.data().browser.supports_eval() {
-		return browser_eval(&mut env, webview, &source, "webview_eval_async");
+	if ctx.host().browser.supports_eval() {
+		return browser_eval(ctx, webview, &source, "webview_eval_async");
 	}
-	let view = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
+	let view = ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).expect("rid 刚校验过");
 	match view.eval_async(&source) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(msg) => fail(&mut env, msg),
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(msg) => fail(ctx, msg),
 	}
 }
 
 // 浏览器后端的 eval 路径（trawl）：值回传契约见 browser/trawl.rs
-fn browser_eval(env: &mut FunctionEnvMut<WasmEnv>, webview: Rid, source: &str, name: &str) -> FFIResult {
-	match env.data_mut().browser.eval(webview, source) {
-		Ok(value) => env.data_mut().store.store(StoreItem::String(value)),
-		Err(e) => browser_fail(env, name, &e),
+fn browser_eval(ctx: &mut impl Ctx, webview: Rid, source: &str, name: &str) -> FFIResult {
+	match ctx.host().browser.eval(webview, source) {
+		Ok(value) => ctx.host().store.store(StoreItem::String(value)),
+		Err(e) => browser_fail(ctx, name, &e),
 	}
 }
 
 pub fn webview_add_user_script(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	webview: Rid,
 	string_ptr: Ptr,
 	len: u32,
 	at_document_end: i32,
 	_for_main_frame_only: i32,
 ) -> FFIResult {
-	let Ok(source) = env.data().read_string(&env, string_ptr, len) else {
+	let Ok(source) = ctx.read_string(string_ptr, len) else {
 		return Result::InvalidString.into();
 	};
-	let Some(view) = env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview) else {
+	let Some(view) = ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview) else {
 		return Result::InvalidHandler.into();
 	};
 	view.add_user_script(source, at_document_end != 0);
 	Result::Success.into()
 }
 
-pub fn webview_get_cookies(mut env: FunctionEnvMut<WasmEnv>, webview: Rid) -> FFIResult {
-	if !env.data().browser.configured() {
-		return unsupported(&mut env, webview, "webview_get_cookies", "the sandbox has no cookie store");
+pub fn webview_get_cookies(ctx: &mut impl Ctx, webview: Rid) -> FFIResult {
+	if !ctx.host().browser.configured() {
+		return unsupported(ctx, webview, "webview_get_cookies", "the sandbox has no cookie store");
 	}
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
-	match env.data_mut().browser.cookies(webview) {
+	match ctx.host().browser.cookies(webview) {
 		Ok(cookies) => {
-			reflux(&mut env.data_mut().net.jar, &cookies);
+			reflux(&mut ctx.host().net.jar, &cookies);
 			let abi: Vec<AbiCookie> = cookies.into_iter().map(AbiCookie::from).collect();
-			match env.data_mut().store.store_encoded(&abi) {
+			match ctx.host().store.store_encoded(&abi) {
 				Ok(rid) => rid,
 				Err(_) => Result::FailedEncoding.into(),
 			}
 		}
-		Err(e) => browser_fail(&mut env, "webview_get_cookies", &e),
+		Err(e) => browser_fail(ctx, "webview_get_cookies", &e),
 	}
+}
+
+// 可选串参数：len == 0 缺席，否则按 UTF-8 读（读失败等同缺席）
+fn read_opt(ctx: &mut impl Ctx, ptr: Ptr, len: u32) -> Option<String> {
+	if len == 0 { None } else { ctx.read_string(ptr, len).ok() }
 }
 
 // 签名由源 ABI 固定，无法归并参数
 #[allow(clippy::too_many_arguments)]
 pub fn webview_delete_cookie(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	webview: Rid,
 	name_ptr: Ptr,
 	name_len: u32,
@@ -285,36 +291,33 @@ pub fn webview_delete_cookie(
 	domain_ptr: Ptr,
 	domain_len: u32,
 ) -> FFIResult {
-	if !env.data().browser.configured() {
-		return unsupported(&mut env, webview, "webview_delete_cookie", "the sandbox has no cookie store");
+	if !ctx.host().browser.configured() {
+		return unsupported(ctx, webview, "webview_delete_cookie", "the sandbox has no cookie store");
 	}
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
 	// trawl 后端没有 cookie 编辑端点：与 webview_set_rule_list 同款的显式不支持
-	if !env.data().browser.supports_cookie_edit() {
-		env.data().log("webview_delete_cookie is not supported by the browser backend: trawl has no cookie-edit endpoint");
+	if !ctx.host().browser.supports_cookie_edit() {
+		ctx.host().log("webview_delete_cookie is not supported by the browser backend: trawl has no cookie-edit endpoint");
 		return Result::MissingResult.into();
 	}
 	// ABI 约定 name_len == -1 为清空全 store（上游 delete_all_cookies 的入参）
 	if name_len == u32::MAX {
-		return match env.data_mut().browser.clear_cookies(webview) {
+		return match ctx.host().browser.clear_cookies(webview) {
 			Ok(()) => Result::Success.into(),
-			Err(e) => browser_fail(&mut env, "webview_delete_cookie", &e),
+			Err(e) => browser_fail(ctx, "webview_delete_cookie", &e),
 		};
 	}
-	let read_opt = |env: &FunctionEnvMut<WasmEnv>, ptr: Ptr, len: u32| {
-		if len == 0 { None } else { env.data().read_string(env, ptr, len).ok() }
-	};
-	let Some(name) = read_opt(&env, name_ptr, name_len) else {
+	let Some(name) = read_opt(ctx, name_ptr, name_len) else {
 		// 与 iOS 对齐：name 缺失且不是 -1 清空语义 → MissingCookie
 		return Result::MissingCookie.into();
 	};
-	let value = read_opt(&env, value_ptr, value_len);
-	let domain = read_opt(&env, domain_ptr, domain_len);
-	let cookies = match env.data_mut().browser.cookies(webview) {
+	let value = read_opt(ctx, value_ptr, value_len);
+	let domain = read_opt(ctx, domain_ptr, domain_len);
+	let cookies = match ctx.host().browser.cookies(webview) {
 		Ok(cookies) => cookies,
-		Err(e) => return browser_fail(&mut env, "webview_delete_cookie", &e),
+		Err(e) => return browser_fail(ctx, "webview_delete_cookie", &e),
 	};
 	// iOS 语义：按 name（可选 value/domain 收窄）取首个匹配删除，无匹配 -8。
 	// value 只作选择器，CDP 删除按 name+domain+path 定位
@@ -326,9 +329,9 @@ pub fn webview_delete_cookie(
 	match found {
 		Some(c) => {
 			let (name, domain, path) = (c.name.clone(), c.domain.clone(), c.path.clone());
-			match env.data_mut().browser.delete_cookie(webview, &name, Some(&domain), Some(&path)) {
+			match ctx.host().browser.delete_cookie(webview, &name, Some(&domain), Some(&path)) {
 				Ok(()) => Result::Success.into(),
-				Err(e) => browser_fail(&mut env, "webview_delete_cookie", &e),
+				Err(e) => browser_fail(ctx, "webview_delete_cookie", &e),
 			}
 		}
 		None => Result::MissingCookie.into(),
@@ -337,11 +340,11 @@ pub fn webview_delete_cookie(
 
 // 不支持的函数仍先校验 webview rid（对齐 iOS 的 InvalidHandler 优先级），
 // 其余参数不校验：操作本身不支持，参数没有消费方
-fn unsupported(env: &mut FunctionEnvMut<WasmEnv>, webview: Rid, name: &str, why: &str) -> FFIResult {
-	if env.data_mut().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
+fn unsupported(ctx: &mut impl Ctx, webview: Rid, name: &str, why: &str) -> FFIResult {
+	if ctx.host().store.get_mut(webview).and_then(StoreItem::as_webview).is_none() {
 		return Result::InvalidHandler.into();
 	}
-	env.data().log(&format!("{name} is not supported by the sandbox: {why}"));
+	ctx.host().log(&format!("{name} is not supported by the sandbox: {why}"));
 	Result::MissingResult.into()
 }
 
@@ -381,31 +384,21 @@ fn reflux(jar: &mut CookieJar, cookies: &[BrowserCookie]) {
 }
 
 /// ABI 没有区分失败原因的错误码，浏览器失败统一 -1；细节进源日志
-fn browser_fail(env: &mut FunctionEnvMut<WasmEnv>, name: &str, e: &BrowserError) -> FFIResult {
+fn browser_fail(ctx: &mut impl Ctx, name: &str, e: &BrowserError) -> FFIResult {
 	let truncated: String = e.message.chars().take(200).collect();
-	env.data().log(&format!("{name} failed: {truncated}"));
+	ctx.host().log(&format!("{name} failed: {truncated}"));
 	Result::MissingResult.into()
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::{
-		runtime::{
-			env::{Defaults, NetState},
-			limits::Limits,
-			store::GlobalStore,
-		},
-		traits::{DirectPolicy, NoopDefaultsSink, StdoutLogger},
-	};
-	use std::{collections::HashMap, sync::Arc, time::Duration};
-	use wasmer::{FunctionEnv, Memory, MemoryType, Pages, Store};
+	use crate::WasmEnv;
+	use crate::runtime::{env::test_ctx::TestCtx, limits::Limits};
+	use std::time::Duration;
 
 	struct Harness {
-		store: Store,
-		env: FunctionEnv<WasmEnv>,
-		memory: Memory,
-		bump: u32,
+		ctx: TestCtx,
 	}
 
 	impl Harness {
@@ -414,56 +407,36 @@ mod tests {
 		}
 
 		fn with_browser(limits: Limits, browser: crate::browser::BrowserState) -> Self {
-			let mut store = Store::default();
-			let memory = Memory::new(&mut store, MemoryType::new(Pages(4), None, false)).unwrap();
-			let env = FunctionEnv::new(
-				&mut store,
-				WasmEnv {
-					memory: Some(memory.clone()),
-					store: GlobalStore::new(),
-					defaults: Defaults::new(HashMap::new(), Arc::new(NoopDefaultsSink), "test".into()),
-					net: NetState::new(
-						Arc::new(DirectPolicy { user_agent: None }),
-						crate::imports::CookieJar::default(),
-					),
-					browser,
-					limits,
-					source_key: "test".into(),
-					logger: Arc::new(StdoutLogger),
-					partial_sink: None,
-				},
-			);
-			Self { store, env, memory, bump: 1024 }
+			Self {
+				ctx: TestCtx::new(WasmEnv::for_test(limits, browser)),
+			}
 		}
 
 		fn write_str(&mut self, s: &str) -> (u32, u32) {
-			let ptr = self.bump;
-			self.bump += s.len() as u32 + 64;
-			self.memory.view(&self.store).write(ptr as u64, s.as_bytes()).unwrap();
-			(ptr, s.len() as u32)
+			self.ctx.write_str(s)
 		}
 
 		fn create(&mut self) -> Rid {
-			context_create(self.env.clone().into_mut(&mut self.store))
+			context_create(&mut self.ctx)
 		}
 
 		fn eval(&mut self, rid: Rid, source: &str) -> FFIResult {
 			let (p, l) = self.write_str(source);
-			context_eval(self.env.clone().into_mut(&mut self.store), rid, p, l)
+			context_eval(&mut self.ctx, rid, p, l)
 		}
 
 		fn eval_async(&mut self, rid: Rid, source: &str) -> FFIResult {
 			let (p, l) = self.write_str(source);
-			context_eval_async(self.env.clone().into_mut(&mut self.store), rid, p, l)
+			context_eval_async(&mut self.ctx, rid, p, l)
 		}
 
 		fn get(&mut self, rid: Rid, name: &str) -> FFIResult {
 			let (p, l) = self.write_str(name);
-			context_get(self.env.clone().into_mut(&mut self.store), rid, p, l)
+			context_get(&mut self.ctx, rid, p, l)
 		}
 
 		fn destroy(&mut self, rid: Rid) {
-			crate::imports::std::destroy(self.env.clone().into_mut(&mut self.store), rid);
+			crate::imports::std::destroy(&mut self.ctx, rid);
 		}
 
 		fn eval_to_string(&mut self, rid: Rid, source: &str) -> String {
@@ -473,14 +446,14 @@ mod tests {
 		}
 
 		fn stored_string(&self, rid: Rid) -> String {
-			let Some(StoreItem::String(s)) = self.env.as_ref(&self.store).store.get(rid) else {
+			let Some(StoreItem::String(s)) = self.ctx.env.store.get(rid) else {
 				panic!("rid {rid} 不是 StoreItem::String");
 			};
 			s.clone()
 		}
 
 		fn wv_create(&mut self) -> Rid {
-			webview_create(self.env.clone().into_mut(&mut self.store))
+			webview_create(&mut self.ctx)
 		}
 
 		fn wv_load_html(&mut self, rid: Rid, html: &str, url: Option<&str>) -> FFIResult {
@@ -489,12 +462,12 @@ mod tests {
 				Some(u) => self.write_str(u),
 				None => (0, 0),
 			};
-			webview_load_html(self.env.clone().into_mut(&mut self.store), rid, p, l, up, ul)
+			webview_load_html(&mut self.ctx, rid, p, l, up, ul)
 		}
 
 		fn wv_eval(&mut self, rid: Rid, source: &str) -> FFIResult {
 			let (p, l) = self.write_str(source);
-			webview_eval(self.env.clone().into_mut(&mut self.store), rid, p, l)
+			webview_eval(&mut self.ctx, rid, p, l)
 		}
 
 		fn wv_eval_to_string(&mut self, rid: Rid, source: &str) -> String {
@@ -505,13 +478,13 @@ mod tests {
 
 		fn wv_eval_async(&mut self, rid: Rid, source: &str) -> FFIResult {
 			let (p, l) = self.write_str(source);
-			webview_eval_async(self.env.clone().into_mut(&mut self.store), rid, p, l)
+			webview_eval_async(&mut self.ctx, rid, p, l)
 		}
 
 		fn wv_add_user_script(&mut self, rid: Rid, source: &str, at_document_end: bool) -> FFIResult {
 			let (p, l) = self.write_str(source);
 			webview_add_user_script(
-				self.env.clone().into_mut(&mut self.store),
+				&mut self.ctx,
 				rid,
 				p,
 				l,
@@ -521,24 +494,21 @@ mod tests {
 		}
 
 		fn wv_wait_for_load(&mut self, rid: Rid) -> FFIResult {
-			webview_wait_for_load(self.env.clone().into_mut(&mut self.store), rid)
+			webview_wait_for_load(&mut self.ctx, rid)
 		}
 
 		fn new_request(&mut self, method: crate::imports::HttpMethod, url: Option<&str>) -> Rid {
 			let mut req = crate::imports::NetRequest::new(method);
 			req.url = url.map(|u| url::Url::parse(u).unwrap());
-			self.env
-				.as_mut(&mut self.store)
-				.store
-				.store(StoreItem::Request(Box::new(req)))
+			self.ctx.env.store.store(StoreItem::Request(Box::new(req)))
 		}
 
 		fn wv_load(&mut self, rid: Rid, request: Rid) -> FFIResult {
-			webview_load(self.env.clone().into_mut(&mut self.store), rid, request)
+			webview_load(&mut self.ctx, rid, request)
 		}
 
 		fn wv_get_cookies(&mut self, rid: Rid) -> FFIResult {
-			webview_get_cookies(self.env.clone().into_mut(&mut self.store), rid)
+			webview_get_cookies(&mut self.ctx, rid)
 		}
 
 		fn wv_delete_cookie(
@@ -562,7 +532,7 @@ mod tests {
 				None => (0, 0),
 			};
 			webview_delete_cookie(
-				self.env.clone().into_mut(&mut self.store),
+				&mut self.ctx,
 				rid,
 				np,
 				name_len.unwrap_or(nl),
@@ -574,8 +544,8 @@ mod tests {
 		}
 
 		fn jar_header(&self, url: &str) -> Option<String> {
-			self.env
-				.as_ref(&self.store)
+			self.ctx
+				.env
 				.net
 				.jar
 				.header_for(&url::Url::parse(url).unwrap())
@@ -657,11 +627,11 @@ mod tests {
 	fn invalid_context_and_string_map_to_codes() {
 		let mut h = Harness::new(Limits::default());
 		let (p, l) = h.write_str("1 + 1");
-		assert_eq!(context_eval(h.env.clone().into_mut(&mut h.store), 9999, p, l), -2);
-		assert_eq!(context_eval_async(h.env.clone().into_mut(&mut h.store), 9999, p, l), -2);
-		assert_eq!(context_get(h.env.clone().into_mut(&mut h.store), 9999, p, l), -2);
+		assert_eq!(context_eval(&mut h.ctx, 9999, p, l), -2);
+		assert_eq!(context_eval_async(&mut h.ctx, 9999, p, l), -2);
+		assert_eq!(context_get(&mut h.ctx, 9999, p, l), -2);
 		let ctx = h.create();
-		assert_eq!(context_eval(h.env.clone().into_mut(&mut h.store), ctx, 0x7fff_fff0, 32), -3);
+		assert_eq!(context_eval(&mut h.ctx, ctx, 0x7fff_fff0, 32), -3);
 	}
 
 	#[test]
@@ -779,12 +749,12 @@ mod tests {
 		let mut h = Harness::new(Limits::default());
 		let wv = h.wv_create();
 		let (p, l) = h.write_str("[]");
-		assert_eq!(webview_set_rule_list(h.env.clone().into_mut(&mut h.store), wv, p, l), -1);
-		assert_eq!(webview_load(h.env.clone().into_mut(&mut h.store), wv, 9999), -1);
-		assert_eq!(webview_get_cookies(h.env.clone().into_mut(&mut h.store), wv), -1);
+		assert_eq!(webview_set_rule_list(&mut h.ctx, wv, p, l), -1);
+		assert_eq!(webview_load(&mut h.ctx, wv, 9999), -1);
+		assert_eq!(webview_get_cookies(&mut h.ctx, wv), -1);
 		let (np, nl) = h.write_str("sid");
 		assert_eq!(
-			webview_delete_cookie(h.env.clone().into_mut(&mut h.store), wv, np, nl, 0, 0, 0, 0),
+			webview_delete_cookie(&mut h.ctx, wv, np, nl, 0, 0, 0, 0),
 			-1
 		);
 	}
@@ -793,21 +763,21 @@ mod tests {
 	fn webview_invalid_rid_maps_to_invalid_handler() {
 		let mut h = Harness::new(Limits::default());
 		let (p, l) = h.write_str("1 + 1");
-		assert_eq!(webview_eval(h.env.clone().into_mut(&mut h.store), 9999, p, l), -4);
-		assert_eq!(webview_eval_async(h.env.clone().into_mut(&mut h.store), 9999, p, l), -4);
-		assert_eq!(webview_load_html(h.env.clone().into_mut(&mut h.store), 9999, p, l, 0, 0), -4);
-		assert_eq!(webview_wait_for_load(h.env.clone().into_mut(&mut h.store), 9999), -4);
-		assert_eq!(webview_add_user_script(h.env.clone().into_mut(&mut h.store), 9999, p, l, 0, 0), -4);
-		assert_eq!(webview_set_rule_list(h.env.clone().into_mut(&mut h.store), 9999, p, l), -4);
-		assert_eq!(webview_load(h.env.clone().into_mut(&mut h.store), 9999, 9999), -4);
-		assert_eq!(webview_get_cookies(h.env.clone().into_mut(&mut h.store), 9999), -4);
-		assert_eq!(webview_delete_cookie(h.env.clone().into_mut(&mut h.store), 9999, p, l, 0, 0, 0, 0), -4);
+		assert_eq!(webview_eval(&mut h.ctx, 9999, p, l), -4);
+		assert_eq!(webview_eval_async(&mut h.ctx, 9999, p, l), -4);
+		assert_eq!(webview_load_html(&mut h.ctx, 9999, p, l, 0, 0), -4);
+		assert_eq!(webview_wait_for_load(&mut h.ctx, 9999), -4);
+		assert_eq!(webview_add_user_script(&mut h.ctx, 9999, p, l, 0, 0), -4);
+		assert_eq!(webview_set_rule_list(&mut h.ctx, 9999, p, l), -4);
+		assert_eq!(webview_load(&mut h.ctx, 9999, 9999), -4);
+		assert_eq!(webview_get_cookies(&mut h.ctx, 9999), -4);
+		assert_eq!(webview_delete_cookie(&mut h.ctx, 9999, p, l, 0, 0, 0, 0), -4);
 		// js context 与 webview 的 rid 不通用，跨种类使用各报各的错（对齐 iOS：
 		// webview 侧 -4 InvalidHandler，context 侧 -2 InvalidContext）
 		let ctx = h.create();
-		assert_eq!(webview_eval(h.env.clone().into_mut(&mut h.store), ctx, p, l), -4);
+		assert_eq!(webview_eval(&mut h.ctx, ctx, p, l), -4);
 		let wv = h.wv_create();
-		assert_eq!(context_eval(h.env.clone().into_mut(&mut h.store), wv, p, l), -2);
+		assert_eq!(context_eval(&mut h.ctx, wv, p, l), -2);
 	}
 
 	#[test]
@@ -824,11 +794,11 @@ mod tests {
 		let mut h = Harness::new(Limits::default());
 		let wv = h.wv_create();
 		assert_eq!(
-			webview_load_html(h.env.clone().into_mut(&mut h.store), wv, 0x7fff_fff0, 32, 0, 0),
+			webview_load_html(&mut h.ctx, wv, 0x7fff_fff0, 32, 0, 0),
 			-3
 		);
 		assert_eq!(
-			webview_eval(h.env.clone().into_mut(&mut h.store), wv, 0x7fff_fff0, 32),
+			webview_eval(&mut h.ctx, wv, 0x7fff_fff0, 32),
 			-3
 		);
 	}
@@ -854,7 +824,7 @@ mod tests {
 	}
 
 	fn decoded_cookies(h: &Harness, rid: Rid) -> Vec<WireCookie> {
-		let Some(StoreItem::Encoded(bytes)) = h.env.as_ref(&h.store).store.get(rid) else {
+		let Some(StoreItem::Encoded(bytes)) = h.ctx.env.store.get(rid) else {
 			panic!("rid {rid} 不是 StoreItem::Encoded");
 		};
 		postcard::from_bytes(bytes).expect("cookie 列表 postcard 解码")
@@ -1203,7 +1173,7 @@ mod tests {
 		);
 		// 源 API 请求自动带会话 cookie（net 栈从 jar 取）
 		let api = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/api")));
-		assert_eq!(crate::imports::net::send(h.env.clone().into_mut(&mut h.store), api), 0);
+		assert_eq!(crate::imports::net::send(&mut h.ctx, api), 0);
 		assert_eq!(
 			site.cookie_for("/api"),
 			Some("sess=alpha-secret".to_string()),
@@ -1311,7 +1281,7 @@ mod tests {
 		assert_eq!(h.stored_string(rid), format!("{base}/login"));
 		// 源 API 请求自动带会话 cookie（net 栈从 jar 取）
 		let api = h.new_request(crate::imports::HttpMethod::Get, Some(&format!("{base}/api")));
-		assert_eq!(crate::imports::net::send(h.env.clone().into_mut(&mut h.store), api), 0);
+		assert_eq!(crate::imports::net::send(&mut h.ctx, api), 0);
 		assert_eq!(
 			site.cookie_for("/api"),
 			Some("sess=alpha-secret".to_string()),

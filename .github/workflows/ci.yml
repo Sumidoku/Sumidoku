@@ -72,12 +72,12 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    # compile-only gate on the platforms the release workflow ships;
-    # tests stay on ubuntu
+    # compile-only gate on the platforms the release workflow ships, plus
+    # windows for local dev builds; tests stay on ubuntu
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       RUSTC_WRAPPER: sccache
@@ -91,6 +91,12 @@ jobs:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
       - run: cargo build --workspace --all-targets
+        if: matrix.os != 'windows-latest'
+      # windows is check-only: the vendored aidoku crate declares its
+      # source-side imports as bare externs that only resolve on wasm32,
+      # so host executables do not link on MSVC (rlibs compile fine)
+      - run: cargo check --workspace --all-targets
+        if: matrix.os == 'windows-latest'
 
   web:
     needs: changes
