@@ -210,7 +210,7 @@ pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_
 	let mut skipped: Vec<Skipped> = Vec::new();
 	let mut seen_categories: HashSet<String> = HashSet::new();
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
 		import_library(&mut tx, user_id, &doc, &manga_meta, &mut imported, &mut skipped, &mut seen_categories)
 			.await?;

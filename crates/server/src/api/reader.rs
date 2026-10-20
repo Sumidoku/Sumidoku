@@ -128,7 +128,7 @@ pub async fn update_chapter(
 	let progress = if patch.is_empty() {
 		read_progress(&state.pool, user.id, id).await?
 	} else {
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		let merged = patch.apply(&mut tx, user.id, id).await?;
 		tx.commit().await?;
 		merged
@@ -152,7 +152,7 @@ pub async fn batch_update_chapters(
 	if body.chapter_ids.is_empty() || body.patch.is_empty() {
 		return Ok(Json(json!({ "updated": 0 })));
 	}
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let mut updated = 0;
 	for chapter_id in &body.chapter_ids {
 		let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM chapter WHERE id = ?")

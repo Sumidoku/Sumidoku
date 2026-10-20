@@ -25,3 +25,12 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 	sqlx::migrate!("./migrations").run(&pool).await?;
 	Ok(pool)
 }
+
+/// 写事务入口：deferred 事务先读后写时，升级写锁撞上并发提交会吃
+/// SQLITE_BUSY_SNAPSHOT（快照已旧，busy_timeout 不覆盖）；IMMEDIATE 在
+/// BEGIN 即排队写锁，事务内的读快照必然可写
+pub async fn begin_write(
+	pool: &SqlitePool,
+) -> Result<sqlx::Transaction<'static, sqlx::Sqlite>, sqlx::Error> {
+	pool.begin_with("BEGIN IMMEDIATE").await
+}

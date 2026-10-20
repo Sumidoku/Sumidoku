@@ -547,7 +547,7 @@ pub async fn import_backup_doc(
 	let mut warnings: Vec<String> = Vec::new();
 	let mut touched_sources: HashSet<i64> = HashSet::new();
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		if sections.contains(&Section::Library) {
 			restore_library(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}

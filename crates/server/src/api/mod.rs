@@ -639,7 +639,7 @@ async fn put_source_settings(
 ) -> ApiResult<Json<Value>> {
 	source_row(&state, id).await?;
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		for (key, value) in &body {
 			let encoded = serde_json::to_string(&json_to_default_value(value))?;
 			sqlx::query(
@@ -1392,7 +1392,7 @@ async fn put_settings(
 	{
 		return Err(ApiError::forbidden(format!("setting {key} requires the admin role")));
 	}
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
 		// 只读注入键：落库只会被 GET 的注入值遮蔽，不如不存
 		if key == "localDir" {

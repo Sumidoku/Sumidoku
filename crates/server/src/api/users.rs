@@ -183,7 +183,7 @@ pub async fn delete_user(State(state): State<Arc<AppState>>, Path(id): Path<i64>
 	if exists.is_none() {
 		return Err(ApiError::not_found("user not found"));
 	}
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	// user.<id>.* 命名空间键在 setting 表里没有外键，级联够不着
 	sqlx::query("DELETE FROM setting WHERE key LIKE ?")
 		.bind(format!("user.{id}.%"))

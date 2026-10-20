@@ -418,7 +418,7 @@ pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiv
 			}
 		}
 		let result: Result<(), sqlx::Error> = async {
-			let mut tx = pool.begin().await?;
+			let mut tx = crate::db::begin_write(&pool).await?;
 			for write in batch {
 				let source_id: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
 					.bind(&write.source_key)
@@ -489,7 +489,7 @@ pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver
 			}
 		}
 		let result: Result<(), sqlx::Error> = async {
-			let mut tx = pool.begin().await?;
+			let mut tx = crate::db::begin_write(&pool).await?;
 			for write in batch {
 				let source_id: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
 					.bind(&write.source_key)

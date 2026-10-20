@@ -372,7 +372,7 @@ pub async fn import_suwayomi_doc(
 	let mut skipped: Vec<Value> = Vec::new();
 	let mut seen_categories: HashSet<String> = HashSet::new();
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
 		for ((mihon_id, mangas), resolution) in groups.iter().zip(&resolutions) {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
