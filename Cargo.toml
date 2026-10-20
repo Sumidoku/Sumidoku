@@ -16,8 +16,12 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# opt=3 + CU=1 + fat LTO：解释器（wasmi）的执行速度直接挂在宿主优化上
+# （JIT 不受影响），编译密集源负载实测 2.6x（600 次正则编译 1505→575ms，
+# wasmi-labs/wasmi#2059 的对照矩阵），代价是 release 编译变慢
 [profile.release]
-opt-level = "s"
+opt-level = 3
+codegen-units = 1
 lto = true
 strip = true
 
