@@ -53,7 +53,11 @@ import type {
 
 export const queryClient = new QueryClient({
 	defaultOptions: {
-		queries: { staleTime: 30_000, retry: 1 }
+		// gcTime bounds how long an unobserved cache entry lingers; the default 5 minutes meant that
+		// returning from a long reader/detail session remounted the previous list with a full refetch
+		// (and lost its scroll position). A day covers any realistic session. The heaviest payload —
+		// chapter lists with a per-row thumbnail string — stays at this bound rather than Infinity
+		queries: { staleTime: 30_000, gcTime: 24 * 60 * 60_000, retry: 1 }
 	}
 });
 
@@ -616,7 +620,11 @@ export function useManga(id: number, opts: MangaQueryOpts = {}) {
 	return useQuery({
 		queryKey: qk.manga(id),
 		queryFn: () => api<MangaDetail>(`/manga/${id}`, { silent: opts.silent }),
-		enabled: opts.enabled ?? true
+		enabled: opts.enabled ?? true,
+		// The detail page gates its whole render on this query and unmounts while the reader is open;
+		// the default 5-minute gc would drop the cache mid-session and returning would flash a full
+		// skeleton until the refetch lands. Never evict; updates still arrive via invalidation.
+		gcTime: Infinity
 	});
 }
 
@@ -625,6 +633,8 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 		queryKey: qk.chapters(mangaId),
 		queryFn: () => api<Chapter[]>(`/manga/${mangaId}/chapters`, { silent: opts.silent }),
 		enabled: opts.enabled ?? true
+		// gcTime: the global 24h bound (see queryClient) — never Infinity here, chapter rows carry a
+		// per-row thumbnail string and a pathological source can embed base64 data URIs in it
 	});
 }
 
