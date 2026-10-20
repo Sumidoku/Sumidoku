@@ -6,6 +6,29 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**The raw chapter API returns newest-first (source_order ASC of a
+newest-first source list); never index the raw array as if chapter 1 came
+first, and take selection/navigation semantics from Aidoku's source, not
+from the array's head or tail.** `GET /manga/{id}/chapters` orders by
+`source_order ASC`, and sources (Aidoku wasm and OPDS feeds alike) list
+newest chapters first, so the first element is the latest chapter and
+the last element is chapter 1. The manga detail read button used
+`chapters.find(c => !c.isRead)`, which always returned the newest
+unreadable-adjacent chapter: a fresh manga opened its last chapter, and
+each re-entry after reading it walked one chapter down from the newest
+end. The fix mirrors Aidoku's `MangaManager.getNextChapter` on the
+prefs-sorted+filtered list (resume the most recent unfinished chapter,
+else scan from the reading-order end, which stays the sort-key minimum
+under either display direction), and the 'source' sort branch's
+asc/desc semantics were themselves inverted relative to Aidoku — the
+"newest on top" comment described the opposite of the code. When a
+feature is declared to match Aidoku, open Aidoku's source and transcribe
+the algorithm; do not infer it from local array order.
+- Evidence: 2026-10-21, continue-reading fix (d9395e8): the button's
+  target was wrong for every read state except "exactly one chapter
+  unread" and "all read"; the inverted 'source' asc/desc branch had the
+  detail page defaulting to oldest-first against its own comment.
+
 **Reimplementing an Aidoku host import means matching the reference behavior
 on the exact inputs sources produce, not just the common path — entity
 coverage and charset detection both bite.** Sumidoku's `html.unescape`

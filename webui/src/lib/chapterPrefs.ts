@@ -9,7 +9,7 @@ export type Tri = 0 | 1 | -1;
 
 export interface ChapterPrefs {
 	sort: SortKey;
-	/** false = descending (detail page default, newest chapters on top) */
+	/** false = descending (default: newest chapters on top) */
 	asc: boolean;
 	filters: { unread: Tri; downloaded: Tri; bookmarked: Tri; locked: Tri };
 	/** null = all languages */
@@ -93,8 +93,9 @@ export function applyPrefs(chapters: Chapter[], prefs: ChapterPrefs): Chapter[] 
 
 	switch (prefs.sort) {
 		case 'source':
-			// The API returns ascending by source order; keep the server's source_order
-			if (!prefs.asc) list.reverse();
+			// The API returns source_order ASC, which sources list newest-first;
+			// descending (the default) shows that order as-is, ascending flips it to oldest-first
+			if (prefs.asc) list.reverse();
 			break;
 		case 'chapter':
 			// Chapters without a number count as -1 (same as Aidoku) and sort first
