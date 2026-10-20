@@ -22,6 +22,22 @@
 	background: linear-gradient(180deg, rgba(12, 14, 18, 0.42), rgba(12, 14, 18, 0.78));
 }
 
+/* Floating back affordance: the detail page is the deepest the deep-links go and has no other in-page way back */
+.manga-hero__back {
+	position: absolute;
+	top: 10px;
+	left: 10px;
+	z-index: 1;
+	background: rgba(12, 14, 18, 0.55);
+	backdrop-filter: blur(6px);
+	border-color: transparent;
+	color: #eef0f5;
+}
+
+.manga-hero__back:hover:not(:disabled) {
+	background: rgba(12, 14, 18, 0.75);
+}
+
 /* The dark-theme hero sits on a darkened cover, so the foreground stays in the light palette */
 .manga-hero__body {
 	position: relative;
