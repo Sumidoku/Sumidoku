@@ -507,12 +507,16 @@ Migrations in `crates/server/migrations`.
   (`source/mod.rs`) pass the fetched response through the actor
   (`SourceHandle::process_page_image`) and replace the bytes with the
   returned PNG — for the reader, OPDS, downloads and the cover endpoint
-  alike. Per the Aidoku contract the actor hands the processor the raw
-  response body without decoding it first (`ImageRef.data()` returns those
-  raw bytes), so sources with encrypted-at-rest images can decrypt them;
-  width/height imports on that raw image report invalid-image, as Aidoku
-  has no pixels either. Cover caching is unchanged: the processed bytes
-  are what the on-disk cache stores.
+  alike. The processor input follows AidokuRunner's `store(value:)`
+  semantics: bytes the host can decode arrive as pixels, so width/height
+  and canvas composition work (jmcomic-style descrambling depends on it)
+  and `ImageRef.data()` returns a PNG re-encode; bytes the host cannot
+  decode arrive raw (`ImageRef.data()` returns them byte-for-byte), so
+  sources with encrypted-at-rest images can decrypt them. A source may
+  also return the input image unchanged (jmcomic's unscrambled chapters
+  and GIF pages do); the actor then yields the input pixels, or the raw
+  bytes when they were never decodable. Cover caching is unchanged: the
+  processed bytes are what the on-disk cache stores.
 - Browse/home covers are proxied through
   `GET /api/v1/sources/{id}/image?url=…` (`source/cover.rs:get_source_image`):
   only http/https URLs are accepted and the response goes through

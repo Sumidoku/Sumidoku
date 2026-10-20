@@ -1,5 +1,5 @@
-//! 加密（不可解码）封面/页图走图像处理器的端到端回归（issue #116）：
-//! 声明处理器的源拿到原始响应字节，密文不再 502，五条入口链路输出一致的正常 PNG。
+//! 图像处理器的端到端回归（issue #116）：密文（不可解码）逐字节进处理器解密出图，
+//! 可解码图以像素进处理器过画布分支，五条入口链路输出一致的正常 PNG。
 //! fixture 源在 crates/wasm/tests/fixtures/rawimg-src（no_std cdylib），
 //! 重建方式：`cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`，
 //! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
@@ -33,6 +33,15 @@ fn cipher() -> Vec<u8> {
 
 /// 处理器输出的 PNG 必须就是 plain.png 的 2x2 像素
 fn assert_plain_pixels(png: &[u8], label: &str) {
+	assert_pixels(png, label, [[255, 0, 0, 255], [0, 255, 0, 255]], [[0, 0, 255, 255], [255, 255, 255, 255]]);
+}
+
+/// 可解码入参经画布两行互换后的像素（rawimg fixture 的可解码分支）
+fn assert_swapped_pixels(png: &[u8], label: &str) {
+	assert_pixels(png, label, [[0, 0, 255, 255], [255, 255, 255, 255]], [[255, 0, 0, 255], [0, 255, 0, 255]]);
+}
+
+fn assert_pixels(png: &[u8], label: &str, row0: [[u8; 4]; 2], row1: [[u8; 4]; 2]) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
 		.expect("png format")
@@ -41,12 +50,7 @@ fn assert_plain_pixels(png: &[u8], label: &str) {
 		.to_rgba8();
 	assert_eq!(image.dimensions(), (2, 2), "{label} dimensions");
 	for (x, y, px) in image.enumerate_pixels() {
-		let expected = match (x, y) {
-			(0, 0) => [255, 0, 0, 255],
-			(1, 0) => [0, 255, 0, 255],
-			(0, 1) => [0, 0, 255, 255],
-			_ => [255, 255, 255, 255],
-		};
+		let expected = if y == 0 { row0[x as usize] } else { row1[x as usize] };
 		assert_eq!(px.0, expected, "{label} pixel ({x},{y})");
 	}
 }
@@ -158,7 +162,7 @@ async fn chapter_id_of(app: &Router, manga_id: i64) -> i64 {
 	body[0]["id"].as_i64().expect("chapter id")
 }
 
-/// browse/home 封面代理同样过处理器：密文不再原样透传（#102 入口的关联缺口）
+/// browse/home 封面代理同样过处理器：密文解密出原图，可解码图过画布分支（#102 入口的关联缺口）
 #[tokio::test]
 async fn proxy_image_processes_opaque_and_plain_bytes() {
 	let t = rawimg_app().await;
@@ -176,7 +180,11 @@ async fn proxy_image_processes_opaque_and_plain_bytes() {
 		.await;
 		assert_eq!(status, StatusCode::OK, "proxy {path}");
 		assert_eq!(headers["content-type"], "image/png", "proxy {path}");
-		assert_plain_pixels(&bytes, "proxy {path}");
+		if path == "cipher" {
+			assert_plain_pixels(&bytes, "proxy cipher");
+		} else {
+			assert_swapped_pixels(&bytes, "proxy plain");
+		}
 	}
 }
 

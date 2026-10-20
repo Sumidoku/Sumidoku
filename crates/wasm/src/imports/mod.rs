@@ -1,4 +1,4 @@
-mod canvas;
+pub(crate) mod canvas;
 mod defaults;
 mod env;
 pub(crate) mod html;

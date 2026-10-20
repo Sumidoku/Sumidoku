@@ -1,15 +1,16 @@
 #![no_std]
-//! 图像处理器契约（issue #116）的 fixture 源：
-//! 声明 Page/CoverImageProcessor 时宿主必须交给处理器原始响应字节——
-//! 处理器逐字节比对 data() 与期望字节，不符即报错；
-//! 密文（PLAIN_PNG 逐字节异或 KEY，不可解码）异或"解密"后建图返回，
-//! 明文 PNG 对照组直接建图返回（契约不因可解码而改变）。
+//! 图像处理器契约（issue #116）的 fixture 源，对齐 AidokuRunner `store(value:)` 语义：
+//! - 宿主解不出的密文（PLAIN_PNG 逐字节异或 KEY）必须逐字节原样到达处理器，
+//!   异或"解密"后建图返回；
+//! - 可解码入参宿主已给像素：data() 是 PNG 重编（不再逐字节等于原响应），
+//!   width/height 与 canvas 条带重组（jmcomic 解密同款模式）必须可用。
 //! 断言数值与 crates/wasm/tests/rawimg_host.rs 共享。
 use aidoku::{
 	CoverImageProcessor, FilterValue, ImageResponse, Manga, MangaPageResult, PageContext,
 	PageImageProcessor, Result, Source,
 	alloc::{String, Vec},
-	imports::canvas::ImageRef,
+	canvas::Rect,
+	imports::canvas::{Canvas, ImageRef},
 	prelude::*,
 };
 
@@ -60,22 +61,43 @@ impl Source for RawimgFixtureSource {
 	}
 }
 
-/// data() 必须是响应原始字节：密文原样给（宿主跳过自己解不了的码），明文也原样给
 fn process(response: ImageResponse) -> Result<ImageRef> {
 	let data = response.image.data();
-	if data == PLAIN_PNG {
-		return Ok(ImageRef::new(&data));
-	}
 	let cipher: Vec<u8> = PLAIN_PNG.iter().map(|b| b ^ KEY).collect();
 	if data == cipher {
+		// 密文分支：data() 必须逐字节是响应原始字节，解密后建图
 		let plain: Vec<u8> = data.iter().map(|b| b ^ KEY).collect();
 		return Ok(ImageRef::new(&plain));
 	}
-	bail!("processor data() is not the raw response body ({} bytes)", data.len())
+	// 可解码分支：入参是像素。2x2 上下两行经画布互换（jmcomic 逆序拼条带的迷你版），
+	// width/height 拿不到像素时这里直接判负
+	if response.image.width() != 2.0 || response.image.height() != 2.0 {
+		bail!("decodable input must expose 2x2 pixels");
+	}
+	let mut canvas = Canvas::new(2.0, 2.0);
+	canvas.copy_image(
+		&response.image,
+		Rect::new(0.0, 1.0, 2.0, 1.0),
+		Rect::new(0.0, 0.0, 2.0, 1.0),
+	);
+	canvas.copy_image(
+		&response.image,
+		Rect::new(0.0, 0.0, 2.0, 1.0),
+		Rect::new(0.0, 1.0, 2.0, 1.0),
+	);
+	Ok(canvas.get_image())
 }
 
 impl PageImageProcessor for RawimgFixtureSource {
-	fn process_page_image(&self, response: ImageResponse, _context: Option<PageContext>) -> Result<ImageRef> {
+	fn process_page_image(&self, response: ImageResponse, context: Option<PageContext>) -> Result<ImageRef> {
+		// 透传模式：jmcomic 旧章节/gif 分支同款，输入图原样返回
+		if context
+			.as_ref()
+			.and_then(|c| c.get("mode"))
+			.is_some_and(|m| m == "passthrough")
+		{
+			return Ok(response.image);
+		}
 		process(response)
 	}
 }

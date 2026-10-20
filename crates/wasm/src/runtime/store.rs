@@ -55,9 +55,9 @@ pub enum StoreItem {
 	HtmlNodeList(Vec<HtmlNode>),
 	HtmlElementList(HtmlElementList),
 	Encoded(Vec<u8>),
-	/// 图像处理器入参的原始响应字节：Aidoku 契约里源声明了处理器宿主就跳过解码，
-	/// 加密图床的字节只有源解得开。没解码就没有像素——draw/copy 不认它，
-	/// width/height 落 InvalidImagePointer，只有 get_image_data 把字节原样交还源侧
+	/// 处理器入参里宿主解不出的原始响应字节（加密图床，见 process_image 的
+	/// 解码回退）：没解码就没有像素——draw/copy 不认它，width/height 落
+	/// InvalidImagePointer，get_image_data 与透传取图把字节原样交还
 	ImageBytes(Vec<u8>),
 	ImageData(ImageData),
 	Canvas(Box<CanvasState>),

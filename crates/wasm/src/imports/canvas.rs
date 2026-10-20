@@ -591,21 +591,27 @@ pub fn load_font(ctx: &mut impl Ctx, url_ptr: Ptr, url_len: u32) -> FFIResult {
 	ctx.host().store.store(StoreItem::Font(id))
 }
 
+/// 与 AidokuRunner `store(value:)` 对齐的入参解码：能解出像素给 ImageData
+/// （width/height/draw 可用），解不出（加密图床）才留 ImageBytes 原始字节
+pub(crate) fn decode_image(data: &[u8]) -> Option<ImageData> {
+	let cursor = std::io::Cursor::new(data);
+	let rgba = image::ImageReader::new(cursor)
+		.with_guessed_format()
+		.ok()?
+		.decode()
+		.ok()?
+		.to_rgba8();
+	let (width, height) = rgba.dimensions();
+	Some(ImageData::from_rgba8(rgba.into_raw(), width, height))
+}
+
 pub fn new_image(ctx: &mut impl Ctx, data_ptr: Ptr, data_len: u32) -> FFIResult {
 	let Ok(data) = ctx.read_bytes(data_ptr, data_len) else {
 		return Result::InvalidImage.into();
 	};
-	let cursor = std::io::Cursor::new(data);
-	let Some(rgba) = image::ImageReader::new(cursor)
-		.with_guessed_format()
-		.ok()
-		.and_then(|r| r.decode().ok())
-		.map(|img| img.to_rgba8())
-	else {
+	let Some(image) = decode_image(&data) else {
 		return Result::InvalidImage.into();
 	};
-	let (width, height) = rgba.dimensions();
-	let image = ImageData::from_rgba8(rgba.into_raw(), width, height);
 	ctx.host().store.store(StoreItem::ImageData(image))
 }
 
