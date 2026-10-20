@@ -238,7 +238,9 @@ Migrations in `crates/server/migrations`.
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
   `source_order` is the source's own chapter index. `GET /api/v1/library`
-  filters by `search`, `categoryId`, `filter` and the tri-state pairs
+  filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
+  boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
+  chapter flags) and the tri-state pairs
   `contentRating`/`contentRatingExclude` (comma-separated manga-level
   ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`) and
   `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on

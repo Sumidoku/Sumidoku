@@ -27,6 +27,8 @@ pub struct LibraryQuery {
 	pub search: Option<String>,
 	pub sort: Option<String>,
 	pub filter: Option<String>,
+	/// 逗号分隔的布尔筛选排除集（与 filter 同词表）：unread 排除=全部已读，以此类推
+	pub filter_exclude: Option<String>,
 	/// 逗号分隔的 manga 级分级值（1..=3），包含集
 	pub content_rating: Option<String>,
 	pub content_rating_exclude: Option<String>,
@@ -64,8 +66,11 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<&'static str> {
 	}
 }
 
-fn library_filter_clause(filter: &str) -> ApiResult<String> {
+fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = m.id AND ";
+	const NOT_EXISTS: &str = " AND NOT EXISTS (SELECT 1 FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
 		 WHERE c.manga_id = m.id AND ";
 	let column = match filter {
@@ -74,7 +79,8 @@ fn library_filter_clause(filter: &str) -> ApiResult<String> {
 		"bookmarked" => "cu.is_bookmarked = 1",
 		other => return Err(ApiError::bad_request(format!("invalid filter: {other}"))),
 	};
-	Ok(format!("{EXISTS}{column})"))
+	let head = if exclude { NOT_EXISTS } else { EXISTS };
+	Ok(format!("{head}{column})"))
 }
 
 /// 逗号分隔的整数列表：整段空白或空段视为缺席，非空段非法即 400（同 sort/filter 风格）
@@ -164,7 +170,12 @@ pub async fn list_library(
 	}
 	if let Some(raw) = &query.filter {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-			sql.push_str(&library_filter_clause(token)?);
+			sql.push_str(&library_filter_clause(token, false)?);
+		}
+	}
+	if let Some(raw) = &query.filter_exclude {
+		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
+			sql.push_str(&library_filter_clause(token, true)?);
 		}
 	}
 	sql.push_str(order_by);
