@@ -121,6 +121,7 @@ function ReaderCore({
 	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
 	const chapters = useMemo(() => applyPrefs(rawChapters, prefs), [rawChapters, prefs]);
+	const navChapters = useMemo(() => (prefs.asc ? [...chapters].reverse() : chapters), [chapters, prefs.asc]);
 
 	const [mode, setModeState] = useState<Mode>(readMode);
 	const [dir, setDirState] = useState<Dir>(readDir);
@@ -152,9 +153,9 @@ function ReaderCore({
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
 	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
-	const pos = chapters.findIndex((c) => c.id === chapterId);
-	const prevCh = pos > 0 ? chapters[pos - 1] : null;
-	const nextCh = pos >= 0 && pos < chapters.length - 1 ? chapters[pos + 1] : null;
+	const pos = navChapters.findIndex((c) => c.id === chapterId);
+	const prevCh = pos >= 0 && pos < navChapters.length - 1 ? navChapters[pos + 1] : null;
+	const nextCh = pos > 0 ? navChapters[pos - 1] : null;
 	const shown = mode === 'paged' ? idx : cur;
 	// The pagination unit of a text-only chapter is the column; everything else's is the page
 	const navTotal = textOnly ? textLayout.cols : total;

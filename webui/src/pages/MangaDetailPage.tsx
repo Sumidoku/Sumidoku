@@ -175,8 +175,6 @@ export default function MangaDetailPage() {
 	const categoriesQuery = useCategories();
 
 	const unread = useMemo(() => chapters.filter((c) => !c.isRead).length, [chapters]);
-	const continueCh =
-		chapters.length === 0 ? null : (chapters.find((c) => !c.isRead) ?? chapters[chapters.length - 1]);
 
 	// Languages/scanlation groups only feed the filter options, deduplicated across all chapters
 	const languages = useMemo(() => {
@@ -204,6 +202,19 @@ export default function MangaDetailPage() {
 		}
 		return list;
 	}, [chapters, prefs, search]);
+
+	const continueCh = useMemo(() => {
+		const readable = (c: Chapter) => !c.locked || !!c.isDownloaded;
+		const resume = visible
+			.filter((c) => readable(c) && !c.isRead && (c.lastReadAt ?? 0) > 0)
+			.reduce<Chapter | null>(
+				(best, c) => ((c.lastReadAt ?? 0) > (best?.lastReadAt ?? 0) ? c : best),
+				null
+			);
+		if (resume) return resume;
+		const order = prefs.asc ? visible : [...visible].reverse();
+		return order.find((c) => readable(c) && !c.isRead) ?? order[0] ?? null;
+	}, [visible, prefs.asc]);
 
 	const allSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
 	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
