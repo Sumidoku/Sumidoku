@@ -824,7 +824,8 @@ async fn library_rating_source_filter() {
 		assert_eq!(body["error"]["code"], "bad_request", "{qs}");
 	}
 
-	// bind position reconciliation: search + categoryId + the four new parameters fired together; any swap breaks it
+	// bind position reconciliation: search + categoryId + the category/rating/source tri-state parameters
+	// fired together; any swap breaks it
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Fav"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
@@ -837,10 +838,110 @@ async fn library_rating_source_filter() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	let qs = format!(
-		"search={}&categoryId={cat}&contentRating=2&contentRatingExclude=3&source={one},{two}&sourceExclude={two}",
+		"search={}&categoryId={cat}&category={cat}&contentRating=2&contentRatingExclude=3&source={one},{two}&sourceExclude={two}",
 		urlencoding(&tb)
 	);
 	assert_eq!(library_ids(&app, &qs).await, vec![b]);
+}
+
+/// Category tri-state (`category`/`categoryExclude`, 0 = uncategorized): OR within a set, NOT-OR for the exclude set, AND across
+#[tokio::test]
+async fn library_category_tri_state_filter() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	// the fixture source directory exists but is only registered by an explicit scan
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	// four shelved manga: a → cat1, b → cat1+cat2, c → cat2, d → uncategorized
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
+	let (_, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	let entries = body["entries"].as_array().expect("entries").clone();
+	assert!(entries.len() >= 4, "fixture yields at least 4 manga");
+	let mut registered = Vec::new();
+	for entry in entries.iter().take(4) {
+		let (status, body) = request(
+			&app,
+			"POST",
+			"/api/v1/manga",
+			Some(json!({"sourceId": source_id, "manga": entry})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let id = body["id"].as_i64().expect("manga id");
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+		registered.push(id);
+	}
+	let (a, b, c, d) = (registered[0], registered[1], registered[2], registered[3]);
+	let cat = |name: &str| {
+		let name = name.to_string();
+		let app = &app;
+		async move {
+			let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": name}))).await;
+			assert_eq!(status, StatusCode::OK);
+			body["id"].as_i64().expect("category id")
+		}
+	};
+	let cat1 = cat("Cat One").await;
+	let cat2 = cat("Cat Two").await;
+	let shelve = |manga: i64, cats: Vec<i64>| {
+		let app = &app;
+		async move {
+			let (status, _) = request(
+				app,
+				"PUT",
+				&format!("/api/v1/manga/{manga}/categories"),
+				Some(json!({"categoryIds": cats})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+		}
+	};
+	shelve(a, vec![cat1]).await;
+	shelve(b, vec![cat1, cat2]).await;
+	shelve(c, vec![cat2]).await;
+
+	// include: OR within the set, 0 is the uncategorized arm
+	assert_eq!(library_ids(&app, &format!("category={cat1}")).await, vec![a, b]);
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},{cat2}")).await,
+		vec![a, b, c]
+	);
+	assert_eq!(library_ids(&app, "category=0").await, vec![d]);
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},0")).await,
+		vec![a, b, d]
+	);
+	// exclude: NOT-OR, exclude-0 keeps only categorized manga
+	assert_eq!(
+		library_ids(&app, &format!("categoryExclude={cat1}")).await,
+		vec![c, d]
+	);
+	assert_eq!(library_ids(&app, "categoryExclude=0").await, vec![a, b, c]);
+	// AND across the two sets: b matches the include but lives in an excluded category
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},{cat2}&categoryExclude={cat2}")).await,
+		vec![a]
+	);
+	// empty / pure whitespace counts as absent
+	let mut all = vec![a, b, c, d];
+	all.sort_unstable();
+	assert_eq!(library_ids(&app, "category=").await, all);
+	assert_eq!(library_ids(&app, "categoryExclude=%20").await, all);
+	// illegal tokens 400: negative and non-integer ids
+	for qs in ["category=-1", "category=x", "categoryExclude=1.5"] {
+		let (status, body) = request(&app, "GET", &format!("/api/v1/library?{qs}"), None).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{qs}");
+		assert_eq!(body["error"]["code"], "bad_request", "{qs}");
+	}
 }
 
 /// Percent-encodes reserved characters in the query value (test titles are ASCII, byte-wise handling suffices)

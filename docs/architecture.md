@@ -350,14 +350,18 @@ Migrations in `crates/server/migrations`.
   `(row id, user id)` — and every REST query and write binds the
   request's `AuthUser.id`, so one user's library, progress and history
   stay invisible to another. `source_order` is the source's own chapter
-  index. `GET /api/v1/library`
+  index.   `GET /api/v1/library`
   filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
   boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
   chapter flags) and the tri-state pairs
   `contentRating`/`contentRatingExclude` (comma-separated manga-level
-  ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`) and
+  ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`),
   `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on
-  `manga.source_id`): within one dimension the include set is an OR and the
+  `manga.source_id`) and
+  `category`/`categoryExclude` (comma-separated category ids, EXISTS / NOT
+  EXISTS over the user's `category_manga` rows; id `0` is the
+  uncategorized arm — include means no category rows, exclude means at
+  least one): within one dimension the include set is an OR and the
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
   treated as absent; invalid tokens answer 400.
