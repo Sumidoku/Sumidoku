@@ -70,19 +70,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
 		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
 		.route("/api/v1/sources/{id}/login/web", post(login::web_login))
-		.route("/api/v1/sources/{id}/login/web/browser", post(login::browser_login_start))
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/complete",
-			post(login::browser_login_complete),
-		)
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/cancel",
-			post(login::browser_login_cancel),
-		)
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/{session}/stream",
-			get(login::browser_login_stream),
-		)
 		.route("/api/v1/sources/{id}/login/oauth/start", post(oauth::oauth_start))
 		.route("/api/v1/sources/{id}/login/oauth/complete", post(oauth::oauth_complete))
 		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
@@ -588,10 +575,6 @@ async fn get_source_settings(
 	Ok(Json(json!({
 		"settings": items,
 		"values": values,
-		// webui 据此决定 web 登录项显示「在浏览器中打开登录页」还是只有粘贴区
-		"capabilities": {
-			"browserLogin": state.browser_logins.get().map(|m| m.configured()).unwrap_or(false),
-		},
 	})))
 }
 

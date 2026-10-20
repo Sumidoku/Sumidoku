@@ -11,7 +11,6 @@ import type {
 	AidokuImportResult,
 	BackupListResponse,
 	BackupRestoreResult,
-	BrowserLoginSession,
 	Category,
 	Chapter,
 	ChapterPatchBody,
@@ -876,17 +875,6 @@ export function useWebLogin(sourceId: number) {
 	});
 }
 
-/** sidecar 交互登录：开会话，服务端开浏览器 context 加载登录页 */
-export function useStartBrowserLogin(sourceId: number) {
-	return useMutation({
-		mutationFn: (key: string) =>
-			api<BrowserLoginSession>(`/sources/${sourceId}/login/web/browser`, {
-				method: 'POST',
-				body: { key }
-			})
-	});
-}
-
 /** OAuth 登录：构建授权 URL（pkce 时服务端生成 verifier 落库并追加 challenge），新标签打开 */
 export function useOAuthLoginStart(sourceId: number) {
 	return useMutation({
@@ -908,31 +896,6 @@ export function useOAuthLoginComplete(sourceId: number) {
 				body: { key, url }
 			}),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
-	});
-}
-
-/** 完成交互登录：服务端收割 context 的 cookie 走 #112 管线，成功后刷新设置值 */
-export function useCompleteBrowserLogin(sourceId: number) {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: ({ key, session }: { key: string; session: string }) =>
-			api<{ ok: boolean }>(`/sources/${sourceId}/login/web/browser/complete`, {
-				method: 'POST',
-				body: { key, session }
-			}),
-		onSuccess: () => void qc.invalidateQueries({ queryKey: ['source-settings', sourceId] })
-	});
-}
-
-/** 取消交互登录：清理服务端浏览器 context；幂等，silent 交给调用方按需弹错 */
-export function useCancelBrowserLogin(sourceId: number) {
-	return useMutation({
-		mutationFn: ({ key, session }: { key: string; session: string }) =>
-			api<{ ok: boolean }>(`/sources/${sourceId}/login/web/browser/cancel`, {
-				method: 'POST',
-				body: { key, session },
-				silent: true
-			})
 	});
 }
 

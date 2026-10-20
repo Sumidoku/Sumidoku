@@ -11,7 +11,7 @@
 //! eval 值契约（与 Boa 路径的 JS ToString 对齐到可对齐的部分）：string 原样、
 //! number/bool 字面、null（trawl 把 undefined 也映成 null）→ "null"；对象/数组
 //! 给紧凑 JSON——源 eval 是为提标量令牌，JSON 比 "[object Object]" 有用且可再 parse
-use super::{BrowserCookie, BrowserError, CdpClient, CdpConnector};
+use super::{BrowserClient, BrowserConnector, BrowserCookie, BrowserError};
 use std::time::Duration;
 
 /// trawl 建 session 服务端最多等 30s 浏览器容量，客户端留出余量
@@ -36,8 +36,8 @@ impl TrawlConnector {
 	}
 }
 
-impl CdpConnector for TrawlConnector {
-	fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
+impl BrowserConnector for TrawlConnector {
+	fn connect(&self) -> Result<Box<dyn BrowserClient>, BrowserError> {
 		let client = reqwest::blocking::Client::builder()
 			.use_rustls_tls()
 			.build()
@@ -255,7 +255,7 @@ impl TrawlClient {
 	}
 }
 
-impl CdpClient for TrawlClient {
+impl BrowserClient for TrawlClient {
 	fn create_context(&mut self, label: &str) -> Result<String, BrowserError> {
 		let id = session_id(&self.id_prefix, label);
 		self.create_session(&id)?;

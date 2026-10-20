@@ -1110,7 +1110,7 @@ mod tests {
 		fn new() -> Self {
 			let env = WasmEnv::for_test(
 				Limits::default(),
-				crate::browser::BrowserState::new(None, Duration::from_secs(1)),
+				crate::browser::BrowserState::unconfigured(Duration::from_secs(1)),
 			);
 			Self { ctx: TestCtx::new(env) }
 		}

@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
-import type { BrowserLoginSession, Setting } from '../../api/types';
+import type { Setting } from '../../api/types';
 import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch, pushToast } from '../../components';
-import { BrowserLoginViewer } from './BrowserLoginViewer';
 
 export interface SettingItemProps {
 	setting: Setting;
-	/** 所属源 id：sidecar 交互登录的 WS 中继路径要用 */
-	sourceId: number;
 	/** 服务端已保存的值 */
 	values: Record<string, unknown>;
 	/** 本地未保存的改动，优先于 values 显示 */
@@ -22,13 +19,6 @@ export interface SettingItemProps {
 	onSubmitWebLogin?: (key: string, cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
 	/** 源级登出：clearCookies 为真时连登录 cookie 一起清 */
 	onLogoutLogin?: (key: string, clearCookies: boolean) => Promise<void>;
-	/** 服务端配了 sidecar（capabilities.browserLogin）时 web 登录项显示交互登录入口 */
-	browserLogin?: boolean;
-	/** sidecar 交互登录：开会话返回句柄与登录页地址 */
-	onStartBrowserLogin?: (key: string) => Promise<BrowserLoginSession>;
-	/** sidecar 交互登录：完成（收割 cookie）与取消（清理 context） */
-	onCompleteBrowserLogin?: (key: string, session: string) => Promise<void>;
-	onCancelBrowserLogin?: (key: string, session: string) => Promise<void>;
 	/** OAuth 登录：拿授权 URL（新标签打开）与粘贴回调串完成 */
 	onStartOAuth?: (key: string) => Promise<{ url: string }>;
 	onCompleteOAuth?: (key: string, url: string) => Promise<void>;
@@ -234,8 +224,7 @@ function LoginLogoutRow({
 	);
 }
 
-/** 网页登录：服务端没有 webview，用户登录后粘贴该 host 的 cookie 换取登录态；
- *  服务端配了 sidecar 时也可以开交互会话，在实时视图里完成登录 */
+/** 网页登录：服务端没有 webview，用户登录后粘贴该 host 的 cookie 换取登录态 */
 function WebLoginSetting({
 	title,
 	url,
@@ -243,13 +232,8 @@ function WebLoginSetting({
 	localStorageKeys,
 	clearCookiesOnLogOut,
 	loggedIn,
-	sourceId,
 	onSubmit,
-	onLogout,
-	browserLogin,
-	onStartBrowserLogin,
-	onCompleteBrowserLogin,
-	onCancelBrowserLogin
+	onLogout
 }: {
 	title: string;
 	/** 登录页地址（设置声明的 url），提示用户去哪里登录 */
@@ -258,29 +242,12 @@ function WebLoginSetting({
 	localStorageKeys: string[];
 	clearCookiesOnLogOut: boolean;
 	loggedIn: boolean;
-	sourceId: number;
 	onSubmit: (cookies: Record<string, string>, localStorage: Record<string, string>) => Promise<void>;
 	onLogout: (clearCookies: boolean) => Promise<void>;
-	browserLogin?: boolean;
-	onStartBrowserLogin?: () => Promise<BrowserLoginSession>;
-	onCompleteBrowserLogin?: (session: string) => Promise<void>;
-	onCancelBrowserLogin?: (session: string) => Promise<void>;
 }) {
 	const [text, setText] = useState('');
 	const [lsValues, setLsValues] = useState<Record<string, string>>({});
 	const [busy, setBusy] = useState(false);
-	const [browserSession, setBrowserSession] = useState<BrowserLoginSession | null>(null);
-	const [browserBusy, setBrowserBusy] = useState(false);
-
-	const canBrowserLogin = browserLogin && onStartBrowserLogin && onCompleteBrowserLogin && onCancelBrowserLogin;
-
-	async function closeBrowserSession(cancel: boolean) {
-		const session = browserSession;
-		setBrowserSession(null);
-		if (session && cancel && onCancelBrowserLogin) {
-			await onCancelBrowserLogin(session.session).catch(() => {});
-		}
-	}
 
 	if (loggedIn) {
 		return (
@@ -298,23 +265,6 @@ function WebLoginSetting({
 			<div className="setting-login__head">
 				<span className="setting-row__title">{title}</span>
 			</div>
-			{canBrowserLogin && (
-				<>
-					<span className="faint">在服务端的浏览器里打开登录页，登录完成后 cookie 自动回收</span>
-					<Button
-						size="sm"
-						loading={browserBusy}
-						onClick={() => {
-							setBrowserBusy(true);
-							void onStartBrowserLogin()
-								.then(setBrowserSession)
-								.finally(() => setBrowserBusy(false));
-						}}
-					>
-						在浏览器中打开登录页
-					</Button>
-				</>
-			)}
 			<span className="faint">
 				{url ? (
 					<>
@@ -363,18 +313,6 @@ function WebLoginSetting({
 			>
 				登录
 			</Button>
-			{browserSession && onCompleteBrowserLogin && (
-				<BrowserLoginViewer
-					sourceId={sourceId}
-					session={browserSession.session}
-					loginUrl={browserSession.loginUrl}
-					onComplete={async () => {
-						await onCompleteBrowserLogin(browserSession.session);
-						await closeBrowserSession(false);
-					}}
-					onCancel={() => void closeBrowserSession(true)}
-				/>
-			)}
 		</div>
 	);
 }
@@ -497,7 +435,6 @@ function ButtonRow({
 
 export function SettingItem({
 	setting,
-	sourceId,
 	values,
 	edits,
 	onEdit,
@@ -505,10 +442,6 @@ export function SettingItem({
 	onSubmitLogin,
 	onSubmitWebLogin,
 	onLogoutLogin,
-	browserLogin,
-	onStartBrowserLogin,
-	onCompleteBrowserLogin,
-	onCancelBrowserLogin,
 	onStartOAuth,
 	onCompleteOAuth
 }: SettingItemProps) {
@@ -586,17 +519,8 @@ export function SettingItem({
 					localStorageKeys={v.Login.local_storage_keys ?? []}
 					clearCookiesOnLogOut={v.Login.clear_cookies_on_log_out === true}
 					loggedIn={typeof marker === 'string' && marker !== ''}
-					sourceId={sourceId}
 					onSubmit={(cookies, ls) => onSubmitWebLogin(setting.key, cookies, ls)}
 					onLogout={(clearCookies) => onLogoutLogin(setting.key, clearCookies)}
-					browserLogin={browserLogin}
-					onStartBrowserLogin={onStartBrowserLogin ? () => onStartBrowserLogin(setting.key) : undefined}
-					onCompleteBrowserLogin={
-						onCompleteBrowserLogin ? (session) => onCompleteBrowserLogin(setting.key, session) : undefined
-					}
-					onCancelBrowserLogin={
-						onCancelBrowserLogin ? (session) => onCancelBrowserLogin(setting.key, session) : undefined
-					}
 				/>
 			);
 		} else if (onStartOAuth && onCompleteOAuth && onLogoutLogin && method === 'oauth') {
@@ -636,7 +560,6 @@ export function SettingItem({
 					<SettingItem
 						key={item.key}
 						setting={item}
-						sourceId={sourceId}
 						values={values}
 						edits={edits}
 						onEdit={onEdit}
@@ -644,10 +567,6 @@ export function SettingItem({
 						onSubmitLogin={onSubmitLogin}
 						onSubmitWebLogin={onSubmitWebLogin}
 						onLogoutLogin={onLogoutLogin}
-						browserLogin={browserLogin}
-						onStartBrowserLogin={onStartBrowserLogin}
-						onCompleteBrowserLogin={onCompleteBrowserLogin}
-						onCancelBrowserLogin={onCancelBrowserLogin}
 						onStartOAuth={onStartOAuth}
 						onCompleteOAuth={onCompleteOAuth}
 					/>
@@ -667,7 +586,6 @@ export function SettingItem({
 					<SettingItem
 						key={item.key}
 						setting={item}
-						sourceId={sourceId}
 						values={values}
 						edits={edits}
 						onEdit={onEdit}
@@ -675,10 +593,6 @@ export function SettingItem({
 						onSubmitLogin={onSubmitLogin}
 						onSubmitWebLogin={onSubmitWebLogin}
 						onLogoutLogin={onLogoutLogin}
-						browserLogin={browserLogin}
-						onStartBrowserLogin={onStartBrowserLogin}
-						onCompleteBrowserLogin={onCompleteBrowserLogin}
-						onCancelBrowserLogin={onCancelBrowserLogin}
 						onStartOAuth={onStartOAuth}
 						onCompleteOAuth={onCompleteOAuth}
 					/>

@@ -59,7 +59,6 @@ pub struct AppState {
 	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
-	pub browser_logins: tokio::sync::OnceCell<crate::browser_login::BrowserLoginManager>,
 }
 
 pub struct DefaultsWrite {
@@ -183,7 +182,6 @@ impl AppState {
 			local_zip: Arc::new(crate::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
-			browser_logins: tokio::sync::OnceCell::new(),
 		})
 	}
 
@@ -310,8 +308,7 @@ impl AppState {
 		config.cookies = cookies;
 		config.policy = self.policy.clone();
 		config.accept_language = accept_language;
-		config.browser_ws = self.config.net.browser_ws.clone();
-	config.browser_trawl = self.config.net.browser_trawl.clone();
+		config.browser_trawl = self.config.net.browser_trawl.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
 		});

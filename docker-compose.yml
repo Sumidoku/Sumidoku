@@ -13,9 +13,7 @@ services:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
-      # 源登录用的真浏览器背衬；配合下方 chromium 服务（--profile browser）
-      # - SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium
-      # 或复用本 compose 的 trawl（≥ v1.9.1）作 webview 后端；与 BROWSER_WS 互斥
+      # 复用本 compose 的 trawl（≥ v1.9.1）作 webview 浏览器后端
       # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
       # 全站认证（web 界面/REST/OPDS 同一密码）
       # - SUMIDOKU_AUTH_PASSWORD=
@@ -37,17 +35,6 @@ services:
       - trawl-ca:/data/proxy-ca
       - trawl-data:/data
     # 不暴露端口，仅 compose 内网可达
-
-  # 可选：webview 真浏览器背衬（源登录流程）。默认不拉起，
-  # docker compose --profile browser up -d 才启动
-  chromium:
-    image: ghcr.io/browserless/chromium:latest
-    profiles: ["browser"]
-    shm_size: 1gb
-    # 交互登录会话最长 10 分钟（server 侧 TTL），默认 30s 的 CONNECTION_TIMEOUT 会中途杀会话
-    environment:
-      - CONNECTION_TIMEOUT=600000
-    # 不暴露端口，仅 compose 内网可达；CDP ws 端点 ws://chromium:3000/chromium
 
 volumes:
   trawl-ca:

@@ -568,29 +568,21 @@ is logged without failing the load or the scripts after it.
 `webview_eval_async` behave like their `context_*` counterparts under the
 same time and loop limits.
 The navigation and cookie functions — `webview_load`,
-`webview_get_cookies`, `webview_delete_cookie` — have two real-browser
-backends (`browser.rs`, `browser/cdp.rs`, `browser/trawl.rs`), mutually
-exclusive (configuring both fails startup). With neither configured they
+`webview_get_cookies`, `webview_delete_cookie` — run on a trawl browser
+backend (`browser.rs`, `browser/trawl.rs`; trawl is an external HTTP
+sidecar, Sumidoku ships no browser). With `net.browser_trawl` unset they
 return `-1` (`JsError::MissingResult`; the ABI has no "unsupported" code)
 and log the function name and reason, so a source relying on them sees the
 calling operation fail with a diagnosable line in the source log. With
-`net.browser_ws` pointing at a user-supplied Chromium CDP endpoint (e.g. a
-browserless container; Sumidoku ships no browser) they drive that browser:
-`webview_load` navigates a page and waits for the page load event — the
-same completion signal as WKWebView's `didFinish` on iOS — and the cookie
-functions read and edit the cookie store. Every webview rid maps to one
-isolated browser context, created on first use and disposed when the rid
-is destroyed, so sessions never bleed across webviews; a dead connection
-is retried on the next call and the browser-side contexts it orphaned are
-disposed after the reconnect. `webview_eval` keeps the Boa page model on
-this backend.
-With `net.browser_trawl` pointing at a trawl API URL instead, every webview
+`net.browser_trawl` pointing at a trawl API URL, every webview
 rid maps to one keepPage session named `sumidoku-<source>-<rid>`, created
 lazily on first use and deleted (`DELETE /sessions/:id`) eagerly on destroy
 — trawl caps concurrent sessions per instance (`BROWSER_SESSION_MAX_ENTRIES`,
 default 4), so sessions are never pooled. `webview_load` navigates via
-`POST /scrape` (GET only, same as the CDP backend), `webview_get_cookies`
-reads `GET /sessions/:id/cookies` (HttpOnly included), and `webview_eval` /
+`POST /scrape` (GET only) and waits for the page load event — the
+same completion signal as WKWebView's `didFinish` on iOS — and
+`webview_get_cookies` reads `GET /sessions/:id/cookies` (HttpOnly included).
+`webview_eval` /
 `webview_eval_async` both run through `POST /sessions/:id/eval`, which
 evaluates in the kept page's main JS context and awaits returned promises —
 scalar results come back in their JS string form, objects/arrays as compact
@@ -600,18 +592,18 @@ the session under the same id and retries the operation once; a duplicate
 id on create is adopted (a restarted Sumidoku reuses rid numbers while
 trawl may still hold the old session); 409 busy, 429 (registry full) and
 503 are single-operation failures like a navigation timeout.
-`webview_delete_cookie` has no trawl endpoint and is explicitly unsupported
-on this backend.
+`webview_delete_cookie` has no trawl endpoint and is explicitly
+unsupported.
 Cookies from the browser session flow into
 the source's session jar after every load and on every `get_cookies`,
 keyed by each cookie's own `Domain` attribute — that is what makes
 webview login work: the source loads the login page, the login completes
 in the browser, and the source's plain API requests then carry the
-session cookie. `webview_load` only navigates GET requests (CDP has no
-POST navigation; iOS would load the full URLRequest) and a non-GET
+session cookie. `webview_load` only navigates GET requests (trawl's
+scrape API is GET-only; iOS would load the full URLRequest) and a non-GET
 request fails with `-1` and a log line rather than silently degrading.
-`webview_set_rule_list` (content blocking) stays explicitly unsupported
-in both backends. An invalid
+`webview_set_rule_list` (content blocking) stays explicitly unsupported.
+An invalid
 webview rid maps to `-4` (`InvalidHandler`), and webview and js-context
 rids are not interchangeable.
 `send_partial_result` payloads are decoded per in-flight call and pushed
@@ -784,43 +776,6 @@ tables: `source_setting` (defaults and login credentials) and
 instance's cookie jar reports changes through a `CookieSink` to a batch
 writer, so a login session survives the restart that follows a settings
 change.
-
-With `net.browser_ws` configured, `method: "web"` logins also have an
-interactive path that needs no devtools (`api/login.rs` browser endpoints +
-`browser_login.rs`). `GET .../settings` reports it as
-`capabilities.browserLogin`, and the web UI then shows "open the login page
-in the browser" next to the paste box. `POST .../login/web/browser`
-validates the setting and host exactly like the paste path, then opens an
-isolated browser context on the sidecar (one CDP connection per session),
-sets a fixed 1280×800 viewport and navigates to the resolved login URL; the
-response is a random session handle plus the URL and expiry. The user
-watches and drives the page inside the web UI itself:
-`GET .../login/web/browser/{session}/stream` relays CDP screencast frames
-(jpeg, latest-wins over a watch channel) out and mouse/keyboard/text input
-back in over one authenticated WebSocket — the sidecar therefore needs no
-UI of its own and stays on the private network; any CDP-capable Chromium
-works (the browserless OSS `/debugger/` is a code workbench whose session
-links open plain DevTools, and its LiveURL is a premium feature, so neither
-is used). Sessions live in memory only, pinned to the resolved host and the
-setting key, and are reaped after 10 minutes (the sidecar's own connection
-timeout must be at least that); a server restart orphans the browser-side
-contexts, which the sidecar reclaims. `POST .../login/web/browser/complete`
-harvests the context's cookies for the login host (sub- and parent-domain
-matches included; cross-domain SSO cookies stay out and keep needing the
-paste path) plus the setting's declared `local_storage_keys` from the live
-page (best-effort), then runs the exact paste pipeline
-(`run_web_login_pipeline`: `<key>.keys/.values` → `handle_web_login` →
-marker → `source_cookie` → restart) and disposes the context; completing
-with no cookie for the host answers 400 instead of marking anything.
-`POST .../login/web/browser/cancel` disposes and is idempotent. Without
-`net.browser_ws` all three POST endpoints answer 501 `unsupported` and the
-capability flag is false — `net.browser_trawl` does not count as a browser
-here: the session API has no screencast or input surface, so interactive
-login stays CDP-only. The interactive machinery (viewport, screencast,
-input dispatch, page localStorage read) extends the same `CdpClient` trait
-the webview backend uses (`crates/wasm/src/browser.rs`), so tests drive it
-with the same kind of mock connector, injected via
-`build_app_with(config, connector)`.
 
 `method: "oauth"` logins (`api/oauth.rs`) reproduce Aidoku's app-layer flow
 with a manual callback step — a browser SPA cannot intercept the
