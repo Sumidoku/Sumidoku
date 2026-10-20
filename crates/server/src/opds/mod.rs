@@ -5,14 +5,14 @@ use crate::model::{ChapterRow, LibraryEntryRow, MangaRow, unix_now};
 use crate::source::cover::bytes_response;
 use crate::source::{chapter_row, manga_row};
 use crate::state::AppState;
-use crate::{PAGE_SIZE, USER_ID, source};
+use crate::{PAGE_SIZE, source};
 use axum::body::Body;
 use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
-use axum::Router;
+use axum::{Extension, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
@@ -22,9 +22,10 @@ const ATOM_FEED: &str = "application/atom+xml;profile=opds-catalog;type=feed";
 const COVER_MAX_AGE: u64 = 86400;
 const PAGE_MAX_AGE: u64 = 3600;
 
-/// 在库 manga 投影（同 library.rs 的 LIBRARY_SELECT，私有无法复用故重抄）
+/// 在库 manga 投影（同 library.rs 的 LIBRARY_SELECT，私有无法复用故重抄）；
+/// user_id 走绑定参数，调用方先绑 AuthUser.id
 pub(crate) const LIBRARY_SELECT: &str = "SELECT m.*, mu.in_library_at FROM manga m
-	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1";
 
 /// 章节 + 进度 + 下载产物路径 + 漫画名（series/updates 两条 feed 共用）
@@ -32,7 +33,7 @@ pub(crate) const CHAPTER_SELECT: &str = "SELECT c.*, cu.last_page_read, cu.last_
 	 d.path AS download_path, m.title AS manga_title
 	 FROM chapter c
 	 JOIN manga m ON m.id = c.manga_id
-	 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+	 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 	 LEFT JOIN download d ON d.chapter_id = c.id AND d.status = 'finished'";
 
 #[derive(Debug, sqlx::FromRow)]
@@ -72,20 +73,25 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.with_state(state)
 }
 
-/// OPDS 恒 Basic（§9）：认证开启时全链路校验，用户名任意非空、密码匹配统一密码即可
-pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+/// OPDS 恒 Basic（§9）：认证开启时全链路校验真实用户名+密码；关闭时一切请求当内置 admin
+pub(crate) async fn basic_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
+		req.extensions_mut().insert(crate::auth::AuthUser::admin());
 		return next.run(req).await;
 	}
-	if crate::auth::basic_granted(&state, req.headers()).await {
-		return next.run(req).await;
+	match crate::auth::basic_user(&state, req.headers()).await {
+		Ok(Some(user)) => {
+			req.extensions_mut().insert(user);
+			next.run(req).await
+		}
+		Ok(None) => (
+			StatusCode::UNAUTHORIZED,
+			[(header::WWW_AUTHENTICATE, "Basic realm=\"Sumidoku OPDS\"")],
+			Json(json!({"error": {"code": "unauthorized", "message": "authentication required"}})),
+		)
+			.into_response(),
+		Err(e) => e.into_response(),
 	}
-	(
-		StatusCode::UNAUTHORIZED,
-		[(header::WWW_AUTHENTICATE, "Basic realm=\"Sumidoku OPDS\"")],
-		Json(json!({"error": {"code": "unauthorized", "message": "authentication required"}})),
-	)
-		.into_response()
 }
 
 /// 仓库没引 base64 crate，Basic 凭证只用标准字母表，手写解码
@@ -411,6 +417,7 @@ async fn open_search_description(headers: HeaderMap) -> Response {
 
 async fn library_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
@@ -419,6 +426,7 @@ async fn library_feed(
 	let rows: Vec<LibraryEntryRow> = sqlx::query_as(&format!(
 		"{LIBRARY_SELECT} ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
 	.fetch_all(&state.pool)
@@ -430,12 +438,13 @@ async fn library_feed(
 
 async fn categories_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
 	let base = base_url(&headers);
 	let rows: Vec<(i64, String)> =
 		sqlx::query_as("SELECT id, name FROM category WHERE user_id = ? ORDER BY sort_order ASC, id ASC")
-			.bind(USER_ID)
+			.bind(user.id)
 			.fetch_all(&state.pool)
 			.await?;
 	let mut xml = feed_head(
@@ -453,6 +462,7 @@ async fn categories_feed(
 
 async fn category_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
@@ -461,7 +471,7 @@ async fn category_feed(
 	let category: Option<(String,)> =
 		sqlx::query_as("SELECT name FROM category WHERE id = ? AND user_id = ?")
 			.bind(id)
-			.bind(USER_ID)
+			.bind(user.id)
 			.fetch_optional(&state.pool)
 			.await?;
 	let Some((name,)) = category else {
@@ -470,9 +480,11 @@ async fn category_feed(
 	let base = base_url(&headers);
 	let rows: Vec<LibraryEntryRow> = sqlx::query_as(&format!(
 		"{LIBRARY_SELECT} AND EXISTS (SELECT 1 FROM category_manga cm
-		 WHERE cm.manga_id = m.id AND cm.user_id = 1 AND cm.category_id = ?)
+		 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = ?)
 		 ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
+	.bind(user.id)
 	.bind(id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
@@ -513,6 +525,7 @@ async fn sources_feed(
 
 async fn source_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
@@ -529,6 +542,7 @@ async fn source_feed(
 	let rows: Vec<LibraryEntryRow> = sqlx::query_as(&format!(
 		"{LIBRARY_SELECT} AND m.source_id = ? ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
 	.bind(id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
@@ -548,6 +562,7 @@ async fn source_feed(
 
 async fn history_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
@@ -563,7 +578,7 @@ async fn history_feed(
 		 ORDER BY last_read_at DESC, m.id DESC
 		 LIMIT ? OFFSET ?",
 	)
-	.bind(USER_ID)
+	.bind(user.id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
 	.fetch_all(&state.pool)
@@ -583,6 +598,7 @@ async fn history_feed(
 
 async fn updates_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
@@ -590,9 +606,11 @@ async fn updates_feed(
 	let base = base_url(&headers);
 	let rows: Vec<OpdsChapterRow> = sqlx::query_as(&format!(
 		"{CHAPTER_SELECT}
-		 JOIN manga_user mu ON mu.manga_id = c.manga_id AND mu.user_id = 1 AND mu.in_library = 1
+		 JOIN manga_user mu ON mu.manga_id = c.manga_id AND mu.user_id = ? AND mu.in_library = 1
 		 ORDER BY c.fetched_at DESC, c.id DESC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
+	.bind(user.id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
 	.fetch_all(&state.pool)
@@ -618,6 +636,7 @@ pub(crate) fn like_pattern(q: &str) -> String {
 
 async fn search_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
@@ -627,6 +646,7 @@ async fn search_feed(
 	let rows: Vec<LibraryEntryRow> = sqlx::query_as(&format!(
 		"{LIBRARY_SELECT} AND m.title LIKE ? ESCAPE '\\' ORDER BY mu.in_library_at DESC, m.id ASC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
 	.bind(like_pattern(&q))
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
@@ -647,6 +667,7 @@ async fn search_feed(
 
 async fn series_feed(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(manga_id): Path<i64>,
 	Query(query): Query<FeedQuery>,
 	headers: HeaderMap,
@@ -658,6 +679,7 @@ async fn series_feed(
 		"{CHAPTER_SELECT}
 		 WHERE c.manga_id = ? ORDER BY c.source_order DESC, c.id DESC LIMIT ? OFFSET ?"
 	))
+	.bind(user.id)
 	.bind(manga_id)
 	.bind(PAGE_SIZE + 1)
 	.bind((page - 1) * PAGE_SIZE)
