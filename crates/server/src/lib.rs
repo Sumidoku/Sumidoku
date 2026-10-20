@@ -8,6 +8,7 @@ pub mod error;
 pub mod local;
 pub mod model;
 pub mod opds;
+pub mod opds_source;
 pub mod rss;
 pub mod source;
 pub mod state;

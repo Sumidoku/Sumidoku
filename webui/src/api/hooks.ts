@@ -463,6 +463,15 @@ export function useScanSources() {
 	});
 }
 
+export function useRegisterOpdsSource() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (req: { name: string; url: string; username?: string; password?: string }) =>
+			api<Source>('/sources/opds', { method: 'POST', body: req }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
 export function useDeleteSource() {
 	const qc = useQueryClient();
 	return useMutation({

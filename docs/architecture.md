@@ -213,6 +213,40 @@ Migrations in `crates/server/migrations`.
   (camelCase, distinct from the `setting` table's dotted keys) and `PUT`
   skips the key. RAR/CBR, PDF and 7z are out of scope (no mature pure-Rust
   readers, or an external runtime library).
+- Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
+  `api/opds_source.rs`): `source.kind = opds` turns an OPDS 1.2 (Atom)
+  catalog — Komga, Kavita, Calibre-Web — into a first-class source,
+  multi-instance from day one. `POST /api/v1/sources/opds` (admin) takes
+  name + catalog URL + optional basic credentials; keys are `opds.<slug>`
+  with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
+  land in `source_setting` (`username`/`password`), instances are
+  deletable (cascade) and excluded from repo management and metadata
+  backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint
+  answers 404 `unsupported` exactly like the local source. Capability
+  mapping: search = the catalog's OpenSearch descriptor (`rel="search"`
+  link on the root feed → `{searchTerms}` template), falling back to a
+  bounded BFS traversal (depth 2, 12 feeds) when the descriptor is absent
+  and flagging the response `degraded`; manga = a drill-down entry (Atom
+  `<id>` is the key, its feed link is `manga.url` — the only re-fetch
+  handle); chapters = the series feed's acquisition entries, paginated
+  feeds followed to completion (cap 20); pages = the entry's OPDS-PSE
+  stream link expanded into `Url` pages (`pse:count`, 0-based page
+  numbers — Komga's `books/{id}/pages/{n}` needs no archive download),
+  else the acquisition archive is downloaded once to
+  `config_dir/opds-cbz/<chapter_id>` and image entries are served through
+  the shared `ZipCache` LRU as an `OpdsZip` page-content variant
+  (invalidated on page-row rewrite, self-healing after cache loss);
+  covers = the first book entry's `image`/`thumbnail` link through the
+  existing disk cover cache. All catalog traffic goes out with the
+  instance's basic credentials through `http_get`/`fetch_page_image`/
+  `fetch_cover_image` opds arms; a 401 surfaces as `bad_gateway` with the
+  status in the message. Search, register, refresh, the background
+  updater, aggregate search and migrate all branch to the catalog client
+  the same way they branch for `kind = local`, so migrate between an
+  OPDS instance and any other source works unchanged. The Browse page
+  gets an admin-only registration dialog (`BrowsePage.tsx`
+  `OpdsRegisterModal`) and hides the home/settings buttons on opds cards.
+  OPDS 2.0 (JSON) is out of scope for now.
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the

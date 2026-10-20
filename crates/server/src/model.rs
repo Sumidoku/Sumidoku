@@ -2,8 +2,11 @@ use aidoku::{Chapter, ContentRating, Manga, MangaStatus, UpdateStrategy, Viewer}
 use aidoku_wasm::DefaultValue;
 use serde_json::Value;
 
-/// source.kind：内置本地源；其余一律 aidoku（迁移默认值）
+/// source.kind：内置本地源；OPDS 目录实例见 SOURCE_KIND_OPDS；其余一律 aidoku（迁移默认值）
 pub const SOURCE_KIND_LOCAL: &str = "local";
+
+/// source.kind：内置 OPDS 目录实例（多实例同 kind，注册信息全在库内，无 wasm 载荷）
+pub const SOURCE_KIND_OPDS: &str = "opds";
 
 /// 内置本地源的保留 key：不允许任何 wasm 包注册占用
 pub const LOCAL_SOURCE_KEY: &str = "local.local";
@@ -35,6 +38,10 @@ pub struct SourceRow {
 impl SourceRow {
 	pub fn is_local(&self) -> bool {
 		self.kind == SOURCE_KIND_LOCAL
+	}
+
+	pub fn is_opds(&self) -> bool {
+		self.kind == SOURCE_KIND_OPDS
 	}
 }
 

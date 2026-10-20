@@ -249,6 +249,7 @@ impl UpdateScheduler {
 			return;
 		}
 		let is_local = kind == crate::model::SOURCE_KIND_LOCAL;
+		let is_opds = kind == crate::model::SOURCE_KIND_OPDS;
 		let outcome: ApiResult<Vec<i64>> = async {
 			let state = self
 				.state
@@ -257,6 +258,9 @@ impl UpdateScheduler {
 			let (updated, protected) = if is_local {
 				let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
 				(update.manga, update.protected)
+			} else if is_opds {
+				let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+				(updated, Vec::new())
 			} else {
 				let handle = state.get_handle(manga.source_id).await?;
 				let updated = handle
