@@ -7,7 +7,8 @@ publish = false
 
 [dependencies]
 aidoku.workspace = true
-wasmi = "2.0"
+# 生产只吃 .wasm 二进制（WAT 测试夹具走 dev-dependencies 的 wat crate），wat feature 纯累赘
+wasmi = { version = "2.0", default-features = false, features = ["stable", "std", "validate", "memory64", "auto-dispatch"] }
 image = "0.25"
 postcard.workspace = true
 serde.workspace = true
