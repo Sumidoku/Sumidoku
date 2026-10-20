@@ -23,8 +23,8 @@ Self-hosted manga server: Aidoku WASM sources, REST + OPDS API, shipped as a sin
   catalogs for KOReader and other readers.
 - **Cloudflare bypass** — an optional [trawl](https://github.com/germondai/trawl)
   sidecar solves a challenged host once, then keeps routing it through trawl.
-- **Real-browser login** — an optional Chromium sidecar (driven over CDP)
-  backs webview login flows, cookies landing in the source's session.
+- **Real-browser login** — the same trawl sidecar doubles as the webview
+  browser backend, cookies landing in the source's session.
 - **Authentication** — one site password guards the web UI, REST API and
   OPDS (off by default); session tokens and long-lived API keys.
 - **Backup and migration** — versioned JSON backup, scheduled backups with
@@ -58,7 +58,7 @@ The OPDS 1.2 catalog is served at `/opds/v1.2` (OPDS 2.0 at `/opds/v2`). With au
 
 - [docs/configuration.md](docs/configuration.md) — environment variables, `config.toml`, precedence
 - [docs/authentication.md](docs/authentication.md) — the auth model, credentials, OPDS and token details
-- [docs/sidecars.md](docs/sidecars.md) — trawl (Cloudflare bypass) and Chromium (webview login) setup
+- [docs/sidecars.md](docs/sidecars.md) — trawl (Cloudflare bypass and webview login) setup
 - [docs/backup.md](docs/backup.md) — backup format, scheduled backups, and the Aidoku/Suwayomi import paths
 - [docs/architecture.md](docs/architecture.md) — the technical contract: API surface, WASM runtime, data flow
 
