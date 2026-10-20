@@ -302,7 +302,9 @@ Migrations in `crates/server/migrations`.
   row by a previous boot or password change. With auth off every request
   acts as the built-in admin, so a no-password deployment behaves exactly
   like a single-user one. With a password, `require_auth` guards all of
-  `/api/v1` except `/health` and the `auth/*` endpoints: the bearer
+  `/api/v1` except `/health`, `GET /api/v1/version` (the workspace
+  `Cargo.toml` version, for the web UI's About section) and the `auth/*`
+  endpoints: the bearer
   credential (header, or `access_token` query for `<img>`/WebSocket
   clients) resolves against the configured `auth.api_keys` (SHA-256
   fingerprints in memory, acting as the built-in admin) or a session

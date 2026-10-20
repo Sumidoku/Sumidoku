@@ -20,6 +20,11 @@ async fn full_flow() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["status"], "ok");
 
+	// version
+	let (status, body) = request(&app, "GET", "/api/v1/version", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+
 	// 未安装时 404
 	let (status, body) = request(&app, "GET", "/api/v1/manga/999", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
