@@ -297,9 +297,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
 - Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
-  `api/opds_source.rs`): `source.kind = opds` turns an OPDS 1.2 (Atom)
-  catalog — Komga, Kavita, Calibre-Web — into a first-class source,
-  multi-instance from day one. `POST /api/v1/sources/opds` (admin) takes
+  `api/opds_source.rs`): `source.kind = opds` turns an OPDS catalog —
+  Komga, Kavita, Calibre-Web — into a first-class source, multi-instance
+  from day one. Both wire formats are accepted, detected per response by
+  Content-Type with a JSON body sniff for mislabeled servers: 1.2 (Atom)
+  through `parse_feed`, 2.0 (JSON) through `parse_feed_json`, both filling
+  the same `Feed` model. `POST /api/v1/sources/opds` (admin) takes
   name + catalog URL + optional basic credentials; keys are `opds.<slug>`
   with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
   land in `source_setting` (`username`/`password`), instances are
@@ -307,14 +310,19 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint
   answers 404 `unsupported` exactly like the local source. Capability
   mapping: search = the catalog's OpenSearch descriptor (`rel="search"`
-  link on the root feed → `{searchTerms}` template), falling back to a
+  link on the root feed → `{searchTerms}` template) or, on 2.0 catalogs,
+  the templated `rel="search"` link itself (`{?query}` expanded directly,
+  no descriptor), falling back to a
   bounded BFS traversal (depth 2, 12 feeds) when the descriptor is absent
   and flagging the response `degraded`; manga = a drill-down entry (Atom
   `<id>` is the key, its feed link is `manga.url` — the only re-fetch
   handle); chapters = the series feed's acquisition entries, paginated
   feeds followed to completion (cap 20); pages = the entry's OPDS-PSE
   stream link expanded into `Url` pages (`pse:count`, 0-based page
-  numbers — Komga's `books/{id}/pages/{n}` needs no archive download),
+  numbers — Komga's `books/{id}/pages/{n}` needs no archive download)
+  or, on 2.0, the publication manifest's `readingOrder` enumerated into
+  the same per-page `Url` rows (the book entry's `self` link carries the
+  manifest, and it wins over the acquisition archive when both exist),
   else the acquisition archive is downloaded once to
   `config_dir/opds-cbz/<chapter_id>` and image entries are served through
   the shared `ZipCache` LRU as an `OpdsZip` page-content variant
@@ -329,7 +337,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   OPDS instance and any other source works unchanged. The Browse page
   gets an admin-only registration dialog (`BrowsePage.tsx`
   `OpdsRegisterModal`) and hides the home/settings buttons on opds cards.
-  OPDS 2.0 (JSON) is out of scope for now.
+  The 2.0 mapping (`parse_feed_json`): navigation items become drill
+  entries (href doubles as the key), publications become entries
+  (`metadata.identifier/title/author/modified/description` onto the 1.2
+  fields; a feed-typed `self` link is the series drill-down, any other
+  JSON `self` link the book's manifest; `images[0]` is the cover, the
+  rest thumbnails), and groups are flattened — their navigation and
+  publications join the same entry list — so series feeds and search
+  results look identical to 1.2 downstream.
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the
