@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A status and the flags that make it visible are one public transition:
+commit them together and fault-inject the later write.** Separate queries
+let readers observe the status before its dependent flag, and a test that
+waits only for the status becomes flaky. A transaction fixes the production
+race; forcing the flag write to fail proves that no partial status commits,
+without relying on timing or adding retries to the original test.
+- Evidence: 2026-10-21, #281's CI failure read `finished` followed by
+  `isDownloaded = false`. Trigger-injected flag failures left a finished row
+  before the fix; afterwards the update path stayed `downloading` and the
+  shared-artifact upsert left no row.
+
 **An echoed value is not a new value: every upsert path must preserve its
 provenance when the value is unchanged.** A derived timestamp and a
 source-owned timestamp can have identical values but different scheduling
