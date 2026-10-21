@@ -6,18 +6,24 @@ import { useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 import {
 	AlignJustify,
+	ArrowDownUp,
 	ArrowLeft,
 	BookOpen,
+	Bookmark,
+	CheckCircle2,
+	List,
+	Lock,
 	Settings,
 	StretchVertical,
-	TriangleAlert
+	TriangleAlert,
+	X
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { Chapter, PageData } from '../api/types';
-import { chapterLabel } from '../lib/format';
-import { applyPrefs, DEFAULT_PREFS, loadPrefs } from '../lib/chapterPrefs';
+import { chapterLabel, formatDate } from '../lib/format';
+import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import './reader.css';
 
@@ -74,6 +80,60 @@ function md(text: string): string {
 	return marked.parse(text, { async: false }) as string;
 }
 
+function ReaderChapterItem({
+	chapter: c,
+	current,
+	onClick
+}: {
+	chapter: Chapter;
+	current: boolean;
+	onClick: () => void;
+}) {
+	const { t } = useTranslation();
+	const uploaded = formatDate(c.date_uploaded);
+	const scanlator = c.scanlators?.[0] ?? '';
+	return (
+		<div className={current ? 'reader__drawer-row--current' : undefined}>
+			<button
+				type="button"
+				className={['chapter-row', c.isRead ? 'chapter-row--read' : ''].filter(Boolean).join(' ')}
+				onClick={onClick}
+			>
+				<span className="chapter-row__num">{c.chapter_number ?? '—'}</span>
+				<span className="chapter-row__main">
+					<span className="chapter-row__title">{chapterLabel(c)}</span>
+					{(uploaded || scanlator) && (
+						<span className="chapter-row__meta">
+							{uploaded && <span>{uploaded}</span>}
+							{scanlator && <span>{scanlator}</span>}
+						</span>
+					)}
+				</span>
+				<span className="chapter-row__status">
+					{c.locked && (
+						<span className="chapter-row__lock" title={t('chapterRow.locked')}>
+							<Lock size={14} />
+						</span>
+					)}
+					{c.isBookmarked && (
+						<span className="chapter-row__bm" title={t('chapterRow.bookmarked')}>
+							<Bookmark size={14} fill="currentColor" />
+						</span>
+					)}
+					{c.isDownloaded && (
+						<span className="chapter-row__dl-ok" title={t('chapterRow.downloaded')}>
+							<CheckCircle2 size={14} />
+						</span>
+					)}
+					{!c.isRead && c.lastPageRead > 0 && (
+						<span className="chapter-row__prog">P.{c.lastPageRead + 1}</span>
+					)}
+				</span>
+			</button>
+		</div>
+	);
+}
+
 // Page-image downsampling target width = display container CSS width × DPR, bucketed up to 256 by the server; webtoon/paged fill the screen width, continuous caps at 780
 function readImgWidth(mode: Mode): number {
 	const css = mode === 'continuous' ? Math.min(window.innerWidth, 780) : window.innerWidth;
@@ -123,13 +183,16 @@ function ReaderCore({
 	// The raw list is kept for chapter titles/resume progress; the sorted/filtered list only drives prev/next-chapter navigation
 	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
-	const chapters = useMemo(() => applyPrefs(rawChapters, prefs), [rawChapters, prefs]);
-	const navChapters = useMemo(() => (prefs.asc ? [...chapters].reverse() : chapters), [chapters, prefs.asc]);
+	const [asc, setAsc] = useState(() => prefs.asc);
+	const chapters = useMemo(() => applyPrefs(rawChapters, { ...prefs, asc }), [rawChapters, prefs, asc]);
+	const navChapters = useMemo(() => (asc ? [...chapters].reverse() : chapters), [chapters, asc]);
 
 	const [mode, setModeState] = useState<Mode>(readMode);
 	const [dir, setDirState] = useState<Dir>(readDir);
 	const [overlay, setOverlay] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [chaptersOpen, setChaptersOpen] = useState(false);
+	const drawerBodyRef = useRef<HTMLDivElement>(null);
 	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
 
 	const idxRef = useRef(0);
@@ -313,9 +376,18 @@ function ReaderCore({
 	const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
 	keyRef.current = (e) => {
 		if (e.key === 'Escape') {
+			if (chaptersOpen) {
+				setChaptersOpen(false);
+				return;
+			}
+			if (settingsOpen) {
+				setSettingsOpen(false);
+				return;
+			}
 			goBack();
 			return;
 		}
+		if (chaptersOpen) return;
 		if (mode !== 'paged') return;
 		if (e.key === 'ArrowLeft') onZone('left');
 		else if (e.key === 'ArrowRight') onZone('right');
@@ -325,6 +397,15 @@ function ReaderCore({
 		window.addEventListener('keydown', h);
 		return () => window.removeEventListener('keydown', h);
 	}, []);
+
+	useEffect(() => {
+		if (!chaptersOpen) return;
+		const current = drawerBodyRef.current?.querySelector('.reader__drawer-row--current');
+		if (current) {
+			const id = requestAnimationFrame(() => current.scrollIntoView({ block: 'center', behavior: 'instant' }));
+			return () => cancelAnimationFrame(id);
+		}
+	}, [chaptersOpen, asc]);
 
 	useEffect(() => {
 		document.title = mangaTitle ? t('reader.documentTitle', { title: mangaTitle }) : t('reader.documentTitleEmpty');
@@ -350,6 +431,12 @@ function ReaderCore({
 		} catch {
 			// Same as above
 		}
+	}
+
+	function toggleAsc() {
+		const next = !asc;
+		setAsc(next);
+		if (mangaId !== null) savePrefs(mangaId, { ...prefs, asc: next });
 	}
 
 	function scrollToPage(i: number) {
@@ -626,6 +713,16 @@ function ReaderCore({
 					value={mode}
 					onChange={setMode}
 				/>
+				{navEnabled && (
+					<IconButton
+						label={t('reader.chapters')}
+						className={chaptersOpen ? 'reader__icon--on' : undefined}
+						onClick={() => setChaptersOpen((v) => !v)}
+						disabled={!chaptersQuery.isFetched || navChapters.length === 0}
+					>
+						<List size={17} />
+					</IconButton>
+				)}
 				<IconButton
 					label={t('reader.settings')}
 					className={settingsOpen ? 'reader__icon--on' : undefined}
@@ -651,6 +748,57 @@ function ReaderCore({
 						/>
 					</div>
 				</div>
+			)}
+
+			{chaptersOpen && (
+				<>
+					<div
+						className="reader__drawer-mask"
+						onClick={() => setChaptersOpen(false)}
+						aria-hidden="true"
+					/>
+					<div className="reader__drawer">
+					<div className="reader__drawer-head">
+						<span className="reader__drawer-title">{t('reader.chapters')}</span>
+						<div className="reader__drawer-actions">
+							<IconButton
+								label={asc ? t('reader.ascending') : t('reader.descending')}
+								onClick={toggleAsc}
+							>
+								<ArrowDownUp size={17} />
+							</IconButton>
+							<IconButton label={t('common.cancel')} onClick={() => setChaptersOpen(false)}>
+								<X size={17} />
+							</IconButton>
+						</div>
+					</div>
+						<div className="reader__drawer-body" ref={drawerBodyRef}>
+							{chaptersQuery.isPending ? (
+								<div className="reader__drawer-msg">
+									<Spinner />
+								</div>
+							) : chaptersQuery.isError ? (
+								<div className="reader__drawer-msg">{chaptersQuery.error?.message}</div>
+							) : navChapters.length === 0 ? (
+								<div className="reader__drawer-msg">{t('reader.noChapters')}</div>
+							) : (
+								navChapters.map((c) => (
+									<ReaderChapterItem
+										key={c.id}
+										chapter={c}
+										current={c.id === chapterId}
+										onClick={() => {
+											setChaptersOpen(false);
+											if (c.id !== chapterId) {
+												navigate(`/reader/${c.id}?manga=${mangaId}`);
+											}
+										}}
+									/>
+								))
+							)}
+						</div>
+					</div>
+				</>
 			)}
 
 			<div className={barCls('reader__bar reader__bar--bottom')}>

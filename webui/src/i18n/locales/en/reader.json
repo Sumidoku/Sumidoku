@@ -25,6 +25,10 @@
     "rtl": "Right to left",
     "prevChapter": "Previous chapter",
     "nextChapter": "Next chapter",
-    "jumpToPage": "Jump to page"
+    "jumpToPage": "Jump to page",
+    "chapters": "Chapters",
+    "noChapters": "No chapters",
+    "ascending": "Ascending",
+    "descending": "Descending"
   }
 }
