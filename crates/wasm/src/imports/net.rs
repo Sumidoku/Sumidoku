@@ -215,8 +215,9 @@ pub(crate) enum SendFailure {
 }
 
 /// Send a request routed per policy: back off and retry on 429/5xx, escalate once via
-/// trawl when a direct connection hits a CF challenge, and put response Set-Cookie into
-/// the jar.
+/// trawl when a direct connection hits a CF challenge, resend once without the injected
+/// browser header suite when DRF answers its browsable-API page, and put response
+/// Set-Cookie into the jar.
 /// Any HTTP response (including non-2xx) is written back to request.response; only
 /// network-layer failures are errors.
 pub(crate) fn perform(
@@ -252,12 +253,16 @@ pub(crate) fn perform(
 	{
 		request.headers.insert(ACCEPT_LANGUAGE, value);
 	}
+	// The injected subset is remembered by name so a DRF browsable-API answer can be retried
+	// without exactly these — a same-named header the source declared was never inserted
+	// here and must survive the strip
+	let mut injected_suite: Vec<HeaderName> = Vec::new();
 	if net.policy.browser_headers(&url) {
 		for &(name, value) in crate::traits::BROWSER_HEADERS {
 			if !request.headers.contains_key(name) {
-				request
-					.headers
-					.insert(HeaderName::from_static(name), HeaderValue::from_static(value));
+				let name = HeaderName::from_static(name);
+				request.headers.insert(name.clone(), HeaderValue::from_static(value));
+				injected_suite.push(name);
 			}
 		}
 	}
@@ -274,6 +279,7 @@ pub(crate) fn perform(
 
 	let mut attempt = 0;
 	let mut escalated = false;
+	let mut suite_stripped = false;
 	loop {
 		attempt += 1;
 		let client = net.clients.get(&route).expect("client built above");
@@ -326,6 +332,21 @@ pub(crate) fn perform(
 
 		for value in headers.get_all(SET_COOKIE).iter().filter_map(|v| v.to_str().ok()) {
 			net.jar.store(&url, value);
+		}
+		// DRF negotiates on Accept and answers the suite's document-class Accept with its
+		// browsable-API HTML shell; AidokuRunner injects nothing and gets JSON. Resend once
+		// without the injected headers — a second DRF page is returned as is
+		if !suite_stripped
+			&& route == NetRoute::Direct
+			&& !injected_suite.is_empty()
+			&& crate::traits::is_drf_browsable_page(status, &headers, &bytes)
+		{
+			for name in &injected_suite {
+				request.headers.remove(name);
+			}
+			suite_stripped = true;
+			attempt = 0;
+			continue;
 		}
 		request.response = Some(NetResponse {
 			url,
@@ -918,20 +939,21 @@ mod tests {
 		}
 	}
 
+	struct NoSuitePolicy;
+	impl NetPolicy for NoSuitePolicy {
+		fn route_for(&self, _url: &Url) -> NetRoute {
+			NetRoute::Direct
+		}
+		fn user_agent(&self) -> Option<String> {
+			None
+		}
+		fn browser_headers(&self, _url: &Url) -> bool {
+			false
+		}
+	}
+
 	#[test]
 	fn browser_headers_disabled_omits_suite() {
-		struct NoSuitePolicy;
-		impl NetPolicy for NoSuitePolicy {
-			fn route_for(&self, _url: &Url) -> NetRoute {
-				NetRoute::Direct
-			}
-			fn user_agent(&self) -> Option<String> {
-				None
-			}
-			fn browser_headers(&self, _url: &Url) -> bool {
-				false
-			}
-		}
 		let origin = mock_server(|_head| respond("200 OK", &[], "ok"));
 		let mut net = NetState::new(Arc::new(NoSuitePolicy), CookieJar::default());
 		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
@@ -948,6 +970,102 @@ mod tests {
 		}
 		// The knob only governs the suite: the UA fallback is still added
 		assert!(head.contains("user-agent:"), "{head}");
+	}
+
+	const DRF_PAGE: &str =
+		"<!DOCTYPE html><html><head><title>Api Root – Django REST framework</title></head><body>Django REST framework</body></html>";
+
+	/// Every suite header must be absent from the retried request; reqwest fills accept on
+	/// its own, so for accept only the suite value can be pinned
+	fn assert_suite_absent(head: &str) {
+		for &(name, _) in crate::traits::BROWSER_HEADERS {
+			if name == "accept" {
+				assert!(!head.contains("accept: text/html"), "{head}");
+				continue;
+			}
+			assert!(!head.contains(&format!("{name}:")), "suite header {name} survived the strip: {head}");
+		}
+	}
+
+	#[test]
+	fn drf_page_strips_injected_suite_and_retries_once() {
+		let origin = mock_server(|head| {
+			if head.to_ascii_lowercase().contains("sec-fetch-mode:") {
+				respond("200 OK", &["content-type: text/html; charset=utf-8"], DRF_PAGE)
+			} else {
+				respond("200 OK", &["content-type: application/json"], "{\"code\":200,\"results\":\"ok\"}")
+			}
+		});
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/api/chapters", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(response.data, b"{\"code\":200,\"results\":\"ok\"}");
+		assert_eq!(origin.hits(), 2, "the DRF page must trigger exactly one retry");
+		let heads = origin.heads();
+		assert!(heads[0].to_ascii_lowercase().contains("sec-fetch-mode:"), "first request carries the suite");
+		assert_suite_absent(&heads[1].to_ascii_lowercase());
+	}
+
+	#[test]
+	fn plain_html_page_does_not_trigger_drf_retry() {
+		let origin = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "<html><body>chapter list</body></html>"));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.data, b"<html><body>chapter list</body></html>");
+		assert_eq!(origin.hits(), 1, "a legitimate page fetch must not be retried");
+	}
+
+	#[test]
+	fn drf_page_without_injected_suite_does_not_retry() {
+		let origin = mock_server(|_head| respond("200 OK", &["content-type: text/html"], DRF_PAGE));
+		let mut net = NetState::new(Arc::new(NoSuitePolicy), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/api/chapters", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.data, DRF_PAGE.as_bytes());
+		assert_eq!(origin.hits(), 1, "nothing was injected, so there is nothing to strip");
+	}
+
+	#[test]
+	fn drf_page_retries_only_once() {
+		let origin = mock_server(|_head| respond("200 OK", &["content-type: text/html"], DRF_PAGE));
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/api/chapters", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.data, DRF_PAGE.as_bytes());
+		assert_eq!(origin.hits(), 2, "the fallback is bounded: the second DRF page is returned as is");
+	}
+
+	#[test]
+	fn drf_retry_keeps_source_accept_header() {
+		let origin = mock_server(|head| {
+			if head.to_ascii_lowercase().contains("sec-fetch-mode:") {
+				respond("200 OK", &["content-type: text/html"], DRF_PAGE)
+			} else {
+				respond("200 OK", &["content-type: application/json"], "{\"ok\":true}")
+			}
+		});
+		let mut net = NetState::new(Arc::new(DirectPolicy { user_agent: None }), CookieJar::default());
+		let url = Url::parse(&format!("http://{}/api/chapters", origin.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Get);
+		request.url = Some(url);
+		request
+			.headers
+			.insert(reqwest::header::ACCEPT, HeaderValue::from_static("application/json"));
+		perform(&mut net, &mut request, Duration::from_secs(10), TEST_BODY_MAX).expect("perform");
+
+		assert_eq!(request.response.expect("response stored").data, b"{\"ok\":true}");
+		assert_eq!(origin.hits(), 2);
+		let heads = origin.heads();
+		let second = heads[1].to_ascii_lowercase();
+		let accepts: Vec<&str> = second.lines().filter(|l| l.starts_with("accept:")).collect();
+		assert_eq!(accepts, ["accept: application/json"], "the source's own Accept is not part of the injected set: {second}");
+		assert_suite_absent(&second);
 	}
 
 	/// Live smoke (wasm blocking net host): hits real sites, run manually only.

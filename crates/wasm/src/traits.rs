@@ -18,6 +18,27 @@ pub fn is_cf_challenge(status: StatusCode, headers: &HeaderMap) -> bool {
 			.is_some_and(|s| s.to_ascii_lowercase().starts_with("cloudflare"))
 }
 
+/// DRF browsable-API fingerprint: 2xx + text/html + the Django REST framework marker.
+/// DRF negotiates on Accept, so the injected browser suite's navigate-style Accept turns
+/// an API call into the HTML shell and the source's JSON parse blows up. The marker is
+/// matched on raw bytes because nothing else a manga endpoint serves carries it — a plain
+/// "is HTML" check would double-fetch every legitimate page fetch
+pub fn is_drf_browsable_page(status: StatusCode, headers: &HeaderMap, body: &[u8]) -> bool {
+	if !status.is_success() {
+		return false;
+	}
+	let is_html = headers
+		.get(reqwest::header::CONTENT_TYPE)
+		.and_then(|v| v.to_str().ok())
+		.and_then(|s| s.split(';').next())
+		.is_some_and(|main| main.trim().eq_ignore_ascii_case("text/html"));
+	if !is_html {
+		return false;
+	}
+	const MARKER: &[u8] = b"Django REST framework";
+	body.windows(MARKER.len()).any(|w| w == MARKER)
+}
+
 /// Persistence callback for defaults.set. Invoked synchronously on the actor thread; implementations must not block.
 pub trait DefaultsSink: Send + Sync {
 	fn set(&self, source_key: &str, key: &str, value: &DefaultValue);
@@ -175,6 +196,45 @@ mod tests {
 		assert!(is_cf_challenge(
 			StatusCode::FORBIDDEN,
 			&headers(&[("cf-mitigated", "challenge")])
+		));
+	}
+
+	#[test]
+	fn drf_browsable_page_detected() {
+		let page = b"<!DOCTYPE html><html><head><title>Api Root</title></head><body><div id=\"header\">Django REST framework</div></body></html>";
+		assert!(is_drf_browsable_page(
+			StatusCode::OK,
+			&headers(&[("content-type", "text/html; charset=utf-8")]),
+			page
+		));
+		// The marker is matched on raw bytes: a body that is not valid UTF-8 still hits
+		let invalid = b"<html>\xFF\xFE Django REST framework \x80</html>";
+		assert!(is_drf_browsable_page(
+			StatusCode::OK,
+			&headers(&[("content-type", "text/html")]),
+			invalid
+		));
+	}
+
+	#[test]
+	fn drf_browsable_page_rejected() {
+		// A plain HTML page without the marker is a legitimate page fetch and must not retry
+		assert!(!is_drf_browsable_page(
+			StatusCode::OK,
+			&headers(&[("content-type", "text/html")]),
+			b"<html><body>chapter list</body></html>"
+		));
+		// JSON carrying the marker by coincidence is not an HTML shell
+		assert!(!is_drf_browsable_page(
+			StatusCode::OK,
+			&headers(&[("content-type", "application/json")]),
+			b"{\"powered_by\": \"Django REST framework\"}"
+		));
+		// A non-2xx DRF page is an error surface, not a content-negotiation miss
+		assert!(!is_drf_browsable_page(
+			StatusCode::FORBIDDEN,
+			&headers(&[("content-type", "text/html")]),
+			b"Django REST framework"
 		));
 	}
 
