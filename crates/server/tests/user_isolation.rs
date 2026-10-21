@@ -641,3 +641,49 @@ async fn update_summary_rest_scoped_per_user() {
 	assert_eq!(body["total"], 0);
 	assert_eq!(body["lastRunAt"], Value::Null);
 }
+
+#[tokio::test]
+async fn excluded_update_category_settings_are_user_isolated() {
+	let users = two_user_app().await;
+	let (status, body) = as_user(
+		&users.app,
+		&users.admin,
+		"POST",
+		"/api/v1/categories",
+		Some(json!({"name": "Admin excluded"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let admin_category = body["id"].as_i64().expect("admin category id");
+	let (status, body) = as_user(
+		&users.app,
+		&users.bob,
+		"POST",
+		"/api/v1/categories",
+		Some(json!({"name": "Bob excluded"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let bob_category = body["id"].as_i64().expect("bob category id");
+	assert_ne!(admin_category, bob_category);
+
+	for (token, category_id) in [(&users.admin, admin_category), (&users.bob, bob_category)] {
+		let (status, body) = as_user(
+			&users.app,
+			token,
+			"PUT",
+			"/api/v1/settings",
+			Some(json!({"library.excluded_update_categories": [category_id]})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+	}
+
+	let (_, admin_settings) = as_user(&users.app, &users.admin, "GET", "/api/v1/settings", None).await;
+	assert_eq!(
+		admin_settings["library.excluded_update_categories"],
+		json!([admin_category])
+	);
+	let (_, bob_settings) = as_user(&users.app, &users.bob, "GET", "/api/v1/settings", None).await;
+	assert_eq!(bob_settings["library.excluded_update_categories"], json!([bob_category]));
+}

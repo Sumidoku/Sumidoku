@@ -579,8 +579,15 @@ pub async fn update_category(
 	let row = category_row(&state.pool, user.id, id).await?;
 	let patch = match body {
 		None => UpdateCategoryRequest::default(),
-		Some(Json(value)) => serde_json::from_value(value)
-			.map_err(|e| ApiError::bad_request(format!("invalid category patch: {e}")))?,
+		Some(Json(value)) => {
+			if value.get("includeInUpdate").is_some() {
+				return Err(ApiError::bad_request(
+					"includeInUpdate is no longer supported; use the library.excluded_update_categories setting",
+				));
+			}
+			serde_json::from_value(value)
+				.map_err(|e| ApiError::bad_request(format!("invalid category patch: {e}")))?
+		}
 	};
 	let include_in_download = patch
 		.include_in_download

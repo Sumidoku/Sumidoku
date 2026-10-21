@@ -554,8 +554,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   transaction; an unknown `version` or an invalid row answers 400 with the
   database untouched. Entries naming a source that is not installed are
   skipped and listed in the response `warnings`; the `restored` map counts
-  applied rows per section. Progress entries carry a chapter metadata
-  snapshot so a fresh instance can recreate chapter rows ahead of the
+  applied rows per section. Category update exclusions use the backup-only
+  `includeInUpdate` field (`2` for excluded categories, `0` for all others).
+  The raw `library.excluded_update_categories` setting is omitted from exports
+  and ignored during settings restore; category restoration maps names to
+  target-local ids before writing that setting. Progress entries carry a
+  chapter metadata snapshot so a fresh instance can recreate chapter rows ahead of the
   source's first fetch. The document's `version` field (currently `1`) is
   the format contract, and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
@@ -790,11 +794,16 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   ids stored per-user as `user.{id}.library.excluded_update_categories`. `GET
   /api/v1/settings` returns the effective values for the requesting user; readers
   can write their own user-scoped exclusion list, admins can write all library
-  settings. Selection keeps `update_strategy = Never` and the per-user
-  `library.excluded_update_categories` list: a title whose categories overlap
-  the excluded list is skipped. The per-category `include_in_update` tri-state
-  has been removed from the category API and is no longer consulted; use the
-  per-user excluded categories setting instead. A manual `POST /api/v1/update/fetch`
+  settings. Migration `0016_excluded_update_categories.sql` converts each user's
+  legacy `category.include_in_update = 2` ids into that namespace and leaves an
+  existing per-user setting untouched. Selection keeps `update_strategy = Never`
+  and the per-user `library.excluded_update_categories` list: a title whose
+  categories overlap the excluded list is skipped. The category API does not
+  expose or consult `include_in_update`; `PATCH /api/v1/categories/{id}` with any
+  `includeInUpdate` field answers 400 and names the per-user setting instead.
+  The web UI renders Library updating for every role, but interval, skip rules
+  and metadata refresh stay admin-only; readers can open and save their own
+  exclusion modal. A manual `POST /api/v1/update/fetch`
   with a `categoryId` ignores that category in the global exclusion list,
   matching Aidoku's behavior when pulling a specific category. The skip
   predicates are evaluated against each

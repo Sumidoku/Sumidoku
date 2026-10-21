@@ -421,3 +421,56 @@ async fn import_migrates_legacy_include_in_update_exclude() {
 	let normal_cat = cats.as_array().unwrap().iter().find(|c| c["name"] == "Normal").unwrap();
 	assert!(!normal_cat.as_object().unwrap().contains_key("includeInUpdate"));
 }
+
+#[tokio::test]
+async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
+	let a = test_app().await;
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Excluded"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let source_excluded_id = body["id"].as_i64().expect("source category id");
+	let (status, _) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Normal"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(
+		&a.app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.excluded_update_categories": [source_excluded_id]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let mut doc = export_doc(&a.app).await;
+	let categories = doc["categories"].as_array().expect("backup categories");
+	let excluded = categories.iter().find(|c| c["name"] == "Excluded").expect("excluded category");
+	assert_eq!(excluded["includeInUpdate"], 2);
+	let normal = categories.iter().find(|c| c["name"] == "Normal").expect("normal category");
+	assert_eq!(normal["includeInUpdate"], 0);
+	assert!(doc["settings"].get("library.excluded_update_categories").is_none());
+
+	let b = test_app().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/categories", Some(json!({"name": "Placeholder"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let placeholder_id = body["id"].as_i64().expect("placeholder category id");
+	assert_eq!(placeholder_id, source_excluded_id);
+
+	// Older documents may still carry the raw list; it must not replace the mapped target ids.
+	doc["settings"]
+		.as_object_mut()
+		.expect("settings object")
+		.insert("library.excluded_update_categories".into(), json!([source_excluded_id]));
+	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let (_, categories) = request(&b.app, "GET", "/api/v1/categories", None).await;
+	let target_excluded_id = categories
+		.as_array()
+		.expect("target categories")
+		.iter()
+		.find(|c| c["name"] == "Excluded")
+		.expect("restored excluded category")["id"]
+		.as_i64()
+		.expect("target category id");
+	assert_ne!(target_excluded_id, source_excluded_id);
+	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(settings["library.excluded_update_categories"], json!([target_excluded_id]));
+}
