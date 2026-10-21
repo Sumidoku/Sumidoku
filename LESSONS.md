@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Moving work to the background changes the consumer contract, not just the
+runtime cost.** If the API and UI neither await the result nor subscribe for
+it, the first response can stay empty or stale forever. Eventual persistence
+in the database does not repair that first render, and polling the database in
+tests proves nothing about the API-to-reader path. Background work also needs a
+generation guard for refreshes; otherwise keep the producer synchronous.
+- Evidence: 2026-10-22, #293's background measurement returned no dimensions
+  on the first pages response while the reader had no refetch, and an old task
+  could write into refreshed rows. Restoring synchronous measurement and API
+  assertions made the contract and retry test deterministic again.
+
 **Tenant-isolation claims start with the schema's key scope, not with an
 assumed per-user id.** A row can belong to a user while its id is globally
 unique, making the same id impossible to collide across users. Check the
