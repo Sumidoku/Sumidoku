@@ -32,7 +32,8 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |
 | `SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES` | `30` | evict source instances idle longer than this; `0` or negative disables the sweep |
 | `SUMIDOKU_RSS_THRESHOLD_MB` | `1024` | process RSS threshold; above it the monitor evicts source instances most-idle first (in-flight calls are never touched). `0` disables the monitor |
-| `SUMIDOKU_LOCAL_DIR` | `<config>/local` | local manga root scanned by the built-in Local source: one directory per manga, chapters as subdirectories (image folders) or `.cbz`/`.zip` files; may live outside the config dir |
+| `SUMIDOKU_LOCAL_DIRS` | `[<config>/local]` | local manga roots scanned by the built-in Local source, semicolon-separated (empty segments ignored); the roots merge into one shelf, a relative path present in several roots lists the first root's copy, and keys from root N ≥ 1 carry the `N:` prefix. Overridable at runtime by the `local.dirs` setting from the Settings page |
+| `SUMIDOKU_LOCAL_DIR` | — | one-item fallback for `SUMIDOKU_LOCAL_DIRS`, used only when that is unset |
 
 ## WASM runtime
 
