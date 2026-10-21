@@ -627,3 +627,18 @@ level off with its continuations at the old depth is the signature.
   while their continuation lines kept the old depth; the `web` job was
   green and only eyeballing the diff caught it — fixed on the branch
   (f0870fd) before merge.
+
+**A migration file is a shipped artifact, not source text — editing one,
+comments included, breaks every existing deployment at boot.** sqlx
+embeds each migration's SHA-384 at compile time and validates it against
+`_sqlx_migrations` at startup, so a comment translation has the same
+blast radius as a schema change (a `VersionMismatch` panic). Restyling or
+"tidying" an applied migration is a breaking change; schema work lands
+as a new numbered file. The guard lives in
+`db.rs:shipped_migrations_are_immutable`, which pins the embedded
+checksums.
+- Evidence: 2026-10-21, the comment-translation sweep (#236) touched 10
+  applied migrations and 0.19.0 refused to boot on upgraded databases
+  (`Migrate(VersionMismatch(1))`); the restore was verified by matching
+  the restored file's SHA-384 against a pre-sweep database's recorded
+  checksum.
