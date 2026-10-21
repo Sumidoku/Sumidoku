@@ -25,6 +25,10 @@
     "rtl": "从右到左",
     "prevChapter": "上一章",
     "nextChapter": "下一章",
-    "jumpToPage": "跳转到指定页"
+    "jumpToPage": "跳转到指定页",
+    "chapters": "章节列表",
+    "noChapters": "暂无章节",
+    "ascending": "升序",
+    "descending": "降序"
   }
 }
