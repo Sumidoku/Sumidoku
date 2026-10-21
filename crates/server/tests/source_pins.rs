@@ -120,6 +120,47 @@ async fn pin_unpin_cycle() {
 }
 
 #[tokio::test]
+async fn disable_enable_cycle_enforces_source_state() {
+	let TestApp { app, tmp, .. } = test_app().await;
+	let sources = install_three(&app, &tmp).await;
+	let source = by_key(&sources, "en.example-source");
+	let id = id_of(&source);
+	let path = format!("/api/v1/sources/{id}");
+
+	let (status, body) = patch_pin(&app, id, true).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["pinned"], true, "{body}");
+	assert_eq!(body["pinOrder"], 0, "{body}");
+
+	let filters_path = format!("{path}/filters");
+	let (status, body) = request(&app, "GET", &filters_path, None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let (status, body) = request(&app, "PATCH", &path, Some(json!({"enabled": false}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["enabled"], false, "{body}");
+	assert_eq!(body["pinned"], true, "{body}");
+	assert_eq!(body["pinOrder"], 0, "{body}");
+
+	let (status, body) = request(&app, "GET", &filters_path, None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "disabled source returned filters: {body}");
+	assert_eq!(body["error"]["code"], "source_disabled", "{body}");
+
+	let (status, body) = request(&app, "PATCH", &path, Some(json!({"enabled": "yes"}))).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	assert_eq!(body["error"]["code"], "bad_request", "{body}");
+
+	let (status, body) = request(&app, "PATCH", &path, Some(json!({"enabled": true}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["enabled"], true, "{body}");
+	assert_eq!(body["pinned"], true, "{body}");
+	assert_eq!(body["pinOrder"], 0, "{body}");
+
+	let (status, body) = request(&app, "GET", &filters_path, None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
 async fn reorder_pinned_validates_set() {
 	let TestApp { app, tmp, .. } = test_app().await;
 	let sources = install_three(&app, &tmp).await;
