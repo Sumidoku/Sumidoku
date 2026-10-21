@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Bundling a UI library does not make it offline or license-complete.** Check
+runtime defaults for outbound requests and every upstream notice, not only the
+package's top-level license. Disable remote validation, pin the assets, serve
+the notices with the page, and assert those paths in tests.
+- Evidence: 2026-10-22, #301's review found that Swagger UI's default validator
+  would send the spec URL to validator.swagger.io, and two JavaScript notices
+  were missing. `validatorUrl: null` and both notices were added after the new
+  assertions failed with a missing setting and a 404; the release browser then
+  rendered using local assets only.
+
 **Rekeying an entity is a versioned merge, not a row move.** Aliases locate an
 entity but do not decide which state wins. When a stub or target merge changes a
 composite key, compare live and tombstone versions on both sides before applying
