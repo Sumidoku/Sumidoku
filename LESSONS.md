@@ -6,6 +6,23 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**`DefaultBodyLimit` does not reject an over-limit multipart body at the
+extractor — the limit error bubbles up inside the handler's field reads,
+and a blanket `bad_request` mapping silently turns the 413 into a 400.**
+axum 0.8's `Multipart` calls `req.with_limited_body()`, so the route's
+`DefaultBodyLimit::max` wraps the body stream; the `LengthLimitError`
+only surfaces as a `multer::Error::StreamReadFailed` when the handler
+drives `next_field()`/`field.bytes()`, and axum maps it to
+`StatusCode::PAYLOAD_TOO_LARGE` on the `MultipartError`. A handler that
+converts every multipart error with `ApiError::bad_request(...)` answers
+400 to an oversized upload. Map by `e.status()` (413 keeps 413, the rest
+become 400) on any upload route, and pin it with an over-limit test.
+- Evidence: 2026-10-21, #250's `.aix` import (the first multipart
+  surface): verified in axum-0.8.9's `extract/multipart.rs`
+  (`status_code_from_multer_error`); sabotaging `multipart_err` to always
+  `bad_request` turned `import_body_over_limit_is_413` red with
+  left=400/right=413.
+
 **The raw chapter API returns newest-first (source_order ASC of a
 newest-first source list); never index the raw array as if chapter 1 came
 first, and take selection/navigation semantics from Aidoku's source, not
