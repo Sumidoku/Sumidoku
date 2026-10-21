@@ -198,7 +198,7 @@ async fn migration_seeds_builtin_local_source() {
 async fn scan_lists_only_real_manga_dirs() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_local_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")])
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
@@ -765,7 +765,7 @@ async fn nested_app() -> TestApp {
 async fn nested_scan_discovers_series_under_containers() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_nested_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")])
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
 		.await
 		.expect("scan");
 	// the publisher grouping directory itself is never a manga
@@ -875,7 +875,7 @@ async fn manga_absorbs_nested_archives() {
 	let t = TestApp { app, tmp, db_path };
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")])
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None)
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Absorbed"]);
@@ -1280,4 +1280,34 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 		let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
 		assert_eq!(keys, ["Normal", "oneshots"], "cleared = back to the plain classification");
 	}
+}
+
+#[tokio::test]
+async fn oneshots_dir_from_config_and_setting_override() {
+	// the config layer (SUMIDOKU_LOCAL_ONESHOTS_DIR / local_oneshots_dir) turns the rule on with no setting stored
+	let tmp = tempfile::tempdir().expect("tempdir");
+	seed_oneshots_tree(&tmp.path().join("local"));
+	let mut config = base_config(&tmp);
+	config.local_oneshots_dir = Some("oneshots".into());
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let (status, body) = request(&t.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localOneshotsDir"], "oneshots", "{body}");
+	let entries = browse_local(&t.app).await;
+	assert!(
+		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
+		"config alone enables the rule: {entries:?}"
+	);
+
+	// a runtime setting wins over the config name: matching nothing, the directory is pass1-claimed again
+	let (status, body) = put_oneshots_dir(&t.app, json!("singles")).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["localOneshotsDir"], "singles", "{body}");
+	let mut entries = browse_local(&t.app).await;
+	entries.sort();
+	let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+	assert_eq!(keys, ["Normal", "oneshots"], "{keys:?}");
 }

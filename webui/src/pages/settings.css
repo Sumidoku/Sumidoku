@@ -169,6 +169,12 @@
 	margin-top: 12px;
 }
 
+.settings-local__hint {
+	margin: 4px 0 0;
+	font-size: 12px;
+	color: var(--text-faint);
+}
+
 /* ============ Security ============ */
 
 .settings-security__off {

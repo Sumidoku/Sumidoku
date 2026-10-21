@@ -215,6 +215,22 @@ impl AppState {
 		Ok(self.config.local_dirs())
 	}
 
+	/// Effective oneshots-directory marker: a non-empty local.oneshots_dir setting overrides the config
+	/// layer at runtime, same as local.dirs; a blank or wrong-shaped stored value counts as unset
+	pub async fn local_oneshots_dir(&self) -> ApiResult<Option<String>> {
+		let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.oneshots_dir'")
+			.fetch_optional(&self.pool)
+			.await?;
+		if let Some(name) = row
+			.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+			.map(|name| name.trim().to_string())
+			&& !name.is_empty()
+		{
+			return Ok(Some(name));
+		}
+		Ok(self.config.local_oneshots_dir().map(str::to_string))
+	}
+
 	/// Kicks the instance out of the registry after unload/repackage; while an in-flight call holds an Arc, it exits naturally when the refcount drops to zero
 	pub async fn evict_source(&self, source_id: i64) {
 		let entry = self.sources.write().await.remove(&source_id);

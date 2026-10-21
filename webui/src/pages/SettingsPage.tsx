@@ -537,14 +537,17 @@ function LocalSourceSection() {
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
 	const [dirs, setDirs] = useState<string[] | null>(null);
+	const [oneshots, setOneshots] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (!settings.data || dirs !== null) return;
 		const injected = settings.data['localDirs'];
 		setDirs(Array.isArray(injected) ? injected.map(String) : []);
+		const name = settings.data['localOneshotsDir'];
+		setOneshots(typeof name === 'string' ? name : '');
 	}, [settings.data, dirs]);
 
-	if (dirs === null) {
+	if (dirs === null || oneshots === null) {
 		return (
 			<Section
 				title={t('settings.localSourceTitle')}
@@ -555,20 +558,29 @@ function LocalSourceSection() {
 		);
 	}
 
-	// localDirs is the server's read-only injection of the effective list; edits are saved as the
-	// local.dirs override, and an empty list clears it (the config layer takes over again)
+	// localDirs/localOneshotsDir are the server's read-only injections of the effective values; edits are
+	// saved as the local.dirs / local.oneshots_dir overrides, and an empty value clears it (the config
+	// layer takes over again)
 	const effective = Array.isArray(settings.data?.['localDirs'])
 		? (settings.data?.['localDirs'] as unknown[]).map(String)
 		: [];
+	const injectedOneshots = settings.data?.['localOneshotsDir'];
+	const effectiveOneshots = typeof injectedOneshots === 'string' ? injectedOneshots : '';
 	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
-	const dirty = cleaned.join('\n') !== effective.join('\n');
+	const oneshotsName = oneshots.trim();
+	const dirty = cleaned.join('\n') !== effective.join('\n') || oneshotsName !== effectiveOneshots;
 
 	async function onSave() {
 		try {
-			const saved = await save.mutateAsync({ 'local.dirs': cleaned });
+			const saved = await save.mutateAsync({
+				'local.dirs': cleaned,
+				'local.oneshots_dir': oneshotsName,
+			});
 			const injected = saved['localDirs'];
 			setDirs(Array.isArray(injected) ? injected.map(String) : []);
-			pushToast(t('settings.localDirsSaved'), 'info');
+			const name = saved['localOneshotsDir'];
+			setOneshots(typeof name === 'string' ? name : '');
+			pushToast(t('settings.localSourceSaved'), 'info');
 		} catch (e) {
 			if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
 		}
@@ -608,6 +620,18 @@ function LocalSourceSection() {
 					{t('settings.addLocalDir')}
 				</Button>
 			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.localOneshotsDirLabel')}</span>
+				<Input
+					placeholder={t('settings.localOneshotsDirPlaceholder')}
+					value={oneshots}
+					onChange={(e) => {
+						const v = e.currentTarget.value;
+						setOneshots(v);
+					}}
+				/>
+			</div>
+			<p className="settings-local__hint">{t('settings.localOneshotsDirDesc')}</p>
 			<div className="settings-kv__save">
 				<Button
 					variant="primary"

@@ -197,7 +197,21 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   rule (nested levels included), anything else is a pure container and
   discovery descends; a claimed manga absorbs its subtree, so nested
   series never appear as manga of their own and a flat single-level
-  library scans byte-identically to the pre-nesting behavior. Keys are
+  library scans byte-identically to the pre-nesting behavior. A
+  configured oneshots name (config `local_oneshots_dir` /
+  `SUMIDOKU_LOCAL_ONESHOTS_DIR`, overridable at runtime by the
+  `local.oneshots_dir` setting, blank = off) outranks both passes: a
+  directory whose relative path contains it (case-insensitive
+  substring, kmrs's `ScanOptions::oneshots_dir`) is never claimed —
+  each archive directly inside becomes its own one-chapter manga keyed
+  by the archive path (`oneshots/Foo.cbz`) and titled by the file
+  stem, nothing below the directory is picked up, and the ComicInfo.xml
+  / `cover.*` next to an archive are ignored as series sidecars. Such
+  a key names a file, not a directory: chapter listing, page reads and
+  the cover chain treat it as the degenerate form whose only chapter
+  is the archive itself (chapter key = the leaf name, the same shape
+  as a top-level archive chapter), so the cover resolves to that
+  chapter's first page. Keys are
   paths relative to their root (validated: no `..`, empty segments,
   absolute or drive-prefixed forms) carrying the root index: a bare
   path addresses root 0 (the pre-multi-dir form, so rows persisted
@@ -245,7 +259,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (camelCase, distinct from the `setting` table's dotted keys), `PUT`
   skips that injected key, and `PUT` on `local.dirs` stores the override
   (a string array of non-empty paths, otherwise 400) which takes effect
-  without a restart. RAR/CBR, PDF and 7z are out of scope (no mature pure-Rust
+  without a restart. The oneshots name follows the same pattern:
+  `GET` injects the effective value as `localOneshotsDir` (null when
+  neither layer names one) and `PUT` on `local.oneshots_dir` validates
+  a string (an empty one clears the override). RAR/CBR, PDF and 7z are
+  out of scope (no mature pure-Rust
   readers, or an external runtime library).
 - Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
   `api/opds_source.rs`): `source.kind = opds` turns an OPDS 1.2 (Atom)
