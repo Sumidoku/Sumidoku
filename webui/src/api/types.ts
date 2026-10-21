@@ -157,6 +157,8 @@ export interface PageData {
 	thumbnail: string | null;
 	hasDescription: boolean;
 	description: string | null;
+	width?: number;
+	height?: number;
 }
 
 export interface MangaPage {

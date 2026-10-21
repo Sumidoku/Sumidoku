@@ -1,12 +1,13 @@
 pub mod cover;
 pub mod downsample;
+pub mod page_dimensions;
 pub mod rekey;
 pub mod repo;
 pub mod routed;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-	ChapterRow, MangaRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
+	ChapterRow, MangaRow, PageRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
 };
 use crate::state::{AppState, load_cookies, load_defaults};
 use aidoku::{Chapter, Manga, PageContext};
@@ -1001,15 +1002,16 @@ pub async fn load_pages(
 	state: &Arc<AppState>,
 	chapter_id: i64,
 	refresh: bool,
-) -> ApiResult<Vec<(i64, String)>> {
+) -> ApiResult<Vec<PageRow>> {
 	if !refresh {
-		let cached: Vec<(i64, String)> =
-			sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
-				.bind(chapter_id)
-				.fetch_all(&state.pool)
-				.await?;
+		let cached: Vec<PageRow> = sqlx::query_as(
+			"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
+		)
+		.bind(chapter_id)
+		.fetch_all(&state.pool)
+		.await?;
 		if !cached.is_empty() {
-			return Ok(cached);
+			return page_dimensions::backfill_local(state, chapter_id, cached).await;
 		}
 	}
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
@@ -1058,12 +1060,13 @@ pub async fn load_pages(
 			.collect();
 		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	}
-	let stored: Vec<(i64, String)> =
-		sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
-			.bind(chapter_id)
-			.fetch_all(&state.pool)
-			.await?;
-	Ok(stored)
+	let stored: Vec<PageRow> = sqlx::query_as(
+		"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
+	)
+	.bind(chapter_id)
+	.fetch_all(&state.pool)
+	.await?;
+	page_dimensions::backfill_local(state, chapter_id, stored).await
 }
 
 /// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count; the variant cache expires with the directory lifecycle
@@ -1074,12 +1077,15 @@ async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json:
 		.execute(&mut *tx)
 		.await?;
 	for (index, stored) in rows.iter().enumerate() {
-		sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
-			.bind(chapter_id)
-			.bind(index as i64)
-			.bind(serde_json::to_string(stored)?)
-			.execute(&mut *tx)
-			.await?;
+		sqlx::query(
+			"INSERT INTO page (chapter_id, idx, content, width, height, dimensions_checked)
+			 VALUES (?, ?, ?, NULL, NULL, 0)",
+		)
+		.bind(chapter_id)
+		.bind(index as i64)
+		.bind(serde_json::to_string(stored)?)
+		.execute(&mut *tx)
+		.await?;
 	}
 	sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
 		.bind(rows.len() as i64)
@@ -1481,10 +1487,10 @@ fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
 pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let pages = load_pages(state, chapter_id, false).await?;
-	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
+	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
-	let stored: serde_json::Value = serde_json::from_str(content)?;
+	let stored: serde_json::Value = serde_json::from_str(&page.content)?;
 	let content = stored.get("content").cloned().unwrap_or(serde_json::Value::Null);
 	if content.get("Text").is_some() {
 		return Err(ApiError::bad_request("text page content cannot be streamed as image"));

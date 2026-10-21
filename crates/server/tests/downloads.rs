@@ -174,6 +174,59 @@ async fn download_full_flow() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn download_backfills_online_page_dimensions() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let pages_path = format!("/api/v1/chapter/{chapter_id}/pages");
+	let (status, _) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body[0].get("width").is_none());
+	assert!(body[0].get("height").is_none());
+	assert!(body[1]["content"]["Text"].is_string());
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
+	assert!(body[1].get("width").is_none());
+	assert!(body[1].get("height").is_none());
+	let rows: Vec<(bool, Option<i64>, Option<i64>)> = sqlx::query_as(
+		"SELECT dimensions_checked, width, height FROM page WHERE chapter_id = ? ORDER BY idx",
+	)
+	.bind(chapter_id)
+	.fetch_all(&pool)
+	.await
+	.expect("dimension rows");
+	assert_eq!(rows, [(true, Some(1), Some(1)), (false, None, None)]);
+
+	sqlx::query("UPDATE page SET width = 99, height = 99, dimensions_checked = 1 WHERE chapter_id = ? AND idx = 0")
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("seed stale dimensions");
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
+}
+
 /// Metadata mirror for rendering expected paths (chapter_display and the author empty fallback follow the server's rules)
 struct ChapterMeta {
 	source: String,
@@ -378,6 +431,10 @@ async fn download_move_failure_keeps_product_in_place() {
 	assert_eq!(stored, default_rel_path(&meta));
 	let product = t.tmp.path().join("downloads").join(&stored);
 	assert!(product.is_file(), "product kept at {}", product.display());
+	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
 }
 
 #[tokio::test]

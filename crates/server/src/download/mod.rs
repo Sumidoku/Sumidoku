@@ -1,4 +1,5 @@
-use crate::model::{ChapterRow, MangaRow, unix_now};
+use crate::model::{ChapterRow, MangaRow, PageRow, unix_now};
+use crate::source::page_dimensions::{PageDimensionUpdate, image_dimensions, persist_downloaded as persist_page_dimensions};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
 use crate::state::AppState;
 use aidoku::PageContext;
@@ -614,25 +615,30 @@ impl DownloadManager {
 			.await
 			.map_err(|e| format!("create tmp dir: {e}"))?;
 
+		type PageTaskResult = Result<(usize, String, Option<PageDimensionUpdate>), String>;
 		let mut files: Vec<Option<String>> = vec![None; pages.len()];
-		let mut tasks: JoinSet<Result<(usize, String), String>> = JoinSet::new();
+		let mut dimension_updates = Vec::new();
+		let mut tasks: JoinSet<PageTaskResult> = JoinSet::new();
 		let mut next = 0usize;
 		let mut done = 0i64;
 		while done < total {
 			while tasks.len() < PAGE_CONCURRENCY && next < pages.len() {
 				let position = next;
-				let (idx, content) = pages[next].clone();
+				let page = pages[next].clone();
 				next += 1;
 				let state = state.clone();
 				let tmp_dir = tmp_dir.clone();
 				tasks.spawn(async move {
-					let name = fetch_page(&state, source_id, chapter_id, &tmp_dir, idx, &content).await?;
-					Ok((position, name))
+					let (name, update) = fetch_page(&state, source_id, chapter_id, &tmp_dir, &page).await?;
+					Ok((position, name, update))
 				});
 			}
 			match tasks.join_next().await {
-				Some(Ok(Ok((position, name)))) => {
+				Some(Ok(Ok((position, name, update)))) => {
 					files[position] = Some(name);
+					if let Some(update) = update {
+						dimension_updates.push(update);
+					}
 					done += 1;
 					self.progress.lock().await.insert(chapter_id, (done, total));
 					self.emit("progress", chapter_id, done, total, user_id);
@@ -664,6 +670,9 @@ impl DownloadManager {
 		};
 		let rel_path = format!("{rel_dir}/{product_name}");
 		package(&self.downloads_dir, &tmp_dir, &rel_path, &format, &files, &comic_info).await?;
+		persist_page_dimensions(&self.pool, chapter_id, &dimension_updates)
+			.await
+			.map_err(|e| format!("store page dimensions: {e:?}"))?;
 		let Some(template) = move_template(&self.pool, &state.config).await else {
 			return Ok((total, rel_path));
 		};
@@ -695,18 +704,19 @@ impl DownloadManager {
 	}
 }
 
-/// Fetches one page's content into the tmp dir, returning the artifact file name
+/// Fetches one page into the tmp dir; dimension updates stay in memory until the artifact is packaged
 async fn fetch_page(
 	state: &Arc<AppState>,
 	source_id: i64,
 	chapter_id: i64,
 	tmp_dir: &Path,
-	idx: i64,
-	stored: &str,
-) -> Result<String, String> {
+	page: &PageRow,
+) -> Result<(String, Option<PageDimensionUpdate>), String> {
+	let idx = page.idx;
 	let stored: Value =
-		serde_json::from_str(stored).map_err(|e| format!("parse page {idx}: {e}"))?;
+		serde_json::from_str(&page.content).map_err(|e| format!("parse page {idx}: {e}"))?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
+	let is_text = content.get("Text").is_some();
 	let (bytes, ext) = page_bytes(state, source_id, chapter_id, &content)
 		.await
 		.map_err(|e| format!("page {idx}: {e}"))?;
@@ -714,7 +724,8 @@ async fn fetch_page(
 	tokio::fs::write(tmp_dir.join(&name), &bytes)
 		.await
 		.map_err(|e| format!("write page {idx}: {e}"))?;
-	Ok(name)
+	let update = (!is_text).then(|| PageDimensionUpdate::new(page, image_dimensions(&bytes)));
+	Ok((name, update))
 }
 
 async fn page_bytes(

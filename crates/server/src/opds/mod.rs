@@ -756,10 +756,10 @@ async fn stream_page(
 	Path((chapter_id, index)): Path<(i64, i64)>,
 ) -> ApiResult<Response> {
 	let pages = source::load_pages(&state, chapter_id, false).await?;
-	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
+	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
-	let stored: Value = serde_json::from_str(content)?;
+	let stored: Value = serde_json::from_str(&page.content)?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
 	// A text page cannot be streamed as an image; ApiError has no 415 constructor, so the response is assembled here directly
 	if content.get("Text").is_some() {
