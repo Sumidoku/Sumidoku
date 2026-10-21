@@ -17,6 +17,7 @@ pub mod reader;
 pub mod repo;
 pub mod search;
 pub mod settings;
+pub mod source_import;
 pub mod suwayomi_backup;
 pub mod update;
 pub mod users;
@@ -62,6 +63,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 			patch(users::update_user).delete(users::delete_user),
 		)
 		.route("/api/v1/sources/scan", post(scan_sources))
+		.route(
+			"/api/v1/sources/import",
+			post(source_import::import_source)
+				.route_layer(axum::extract::DefaultBodyLimit::max(source_import::IMPORT_BODY_MAX)),
+		)
 		.route("/api/v1/sources/opds", post(opds_source::register_opds_source))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))

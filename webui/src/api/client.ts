@@ -66,12 +66,14 @@ export class ApiError extends Error {
 export interface ApiOptions {
 	method?: string;
 	body?: unknown;
+	/** multipart/form-data upload; the browser sets the Content-Type (with boundary) itself */
+	formData?: FormData;
 	/** Probing requests (e.g. a 404 meaning listings are unsupported) don't pop an error toast */
 	silent?: boolean;
 }
 
 export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
-	const { method = 'GET', body, silent = false } = opts;
+	const { method = 'GET', body, formData, silent = false } = opts;
 	// Binary uploads (.aib) skip JSON encoding
 	const raw = body instanceof Blob || body instanceof ArrayBuffer;
 	let res: Response;
@@ -79,10 +81,12 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 		res = await fetch(BASE + path, {
 			method,
 			headers:
-				body !== undefined
-					? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json', ...authHeaders() }
-					: authHeaders(),
-			body: body !== undefined ? (raw ? (body as BodyInit) : JSON.stringify(body)) : undefined
+				formData !== undefined
+					? authHeaders()
+					: body !== undefined
+						? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json', ...authHeaders() }
+						: authHeaders(),
+			body: formData ?? (body !== undefined ? (raw ? (body as BodyInit) : JSON.stringify(body)) : undefined)
 		});
 	} catch {
 		const err = new ApiError(0, 'network', '网络请求失败');

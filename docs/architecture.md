@@ -119,6 +119,21 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   NULL), and `repo::source_json` reports `missingFromRepos` when a
   repo-installed source's key is absent from every cached index — Aidoku's
   "missing source list" warning, the deprecation signal for external sources.
+- Local `.aix` import (`api/source_import.rs`): `POST /api/v1/sources/import`
+  (admin, multipart with a single file field) is the third install path, for
+  sideloading a package file through the web UI. The route's body cap derives
+  from the package entry caps in `crates/wasm/src/package.rs` (wasm payload +
+  JSON metadata + icon, plus framing slack); an over-limit upload is a 413.
+  The upload's manifest is read in memory first — its key names the landed
+  file — then the bytes land atomically in `sources/` (temp name + rename,
+  the repo-install pattern) and register through the same `register_aix`
+  pipeline, so manifest parsing, settings seeding, feature stamping and icon
+  extraction behave identically to the other two paths; a registration
+  failure cleans up the landed file and the icon sidecar. A same-key import
+  replaces the installed source with repo-update semantics: the response is
+  `source_json` plus `migrationRequired`/`migrationWarnings` like
+  `update_source`, and `source.repo_id` is left untouched (NULL on a fresh
+  import, same as a directory sideload).
 - Breaking-change key migration (`source/rekey.rs`): registration stores the
   manifest's `config.breakingChangeVersion` (Aidoku's
   `SourceInfo.Configuration`) in `source.breaking_change_version`, and

@@ -48,6 +48,23 @@ pub(crate) fn valid_source_key(key: &str) -> bool {
 			.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
+/// The key a manifest declares; the import endpoint validates it before the key names a file on disk
+pub(crate) fn manifest_key(doc: &serde_json::Value) -> Result<String, String> {
+	let info = doc.get("info").ok_or("missing info")?;
+	let key = info
+		.get("id")
+		.and_then(|v| v.as_str())
+		.ok_or("missing info.id")?
+		.to_string();
+	if !valid_source_key(&key) {
+		return Err(format!("invalid source key {key:?}"));
+	}
+	if key == crate::model::LOCAL_SOURCE_KEY {
+		return Err(format!("source key {key:?} is reserved for the built-in local source"));
+	}
+	Ok(key)
+}
+
 /// Directory-mount scan: first-level subdirectories (source.json + main.wasm) and .aix packages (zip, Payload/ layout) both count as source packages
 pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOutcome> {
 	let mut outcome_report = ScanOutcome {
@@ -174,6 +191,16 @@ async fn write_aix_icon(aix_path: &Path, icon: Option<Vec<u8>>) -> Option<String
 	Some(icon_path.display().to_string())
 }
 
+/// Reads only the manifest from an in-memory package: the import endpoint learns the key (and so the
+/// landed file's name) before the upload touches disk; register_aix re-validates the whole package afterwards
+pub(crate) fn read_aix_manifest(bytes: &[u8]) -> Result<serde_json::Value, String> {
+	use aidoku_wasm::package::{JSON_ENTRY_MAX, MANIFEST_ENTRY, read_zip_entry};
+	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+		.map_err(|e| format!("invalid archive: {e}"))?;
+	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX)?;
+	serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))
+}
+
 type AixPackage = (serde_json::Value, Option<serde_json::Value>, Option<Vec<u8>>);
 
 fn read_aix_package(path: &Path) -> Result<AixPackage, String> {
@@ -221,18 +248,8 @@ async fn register_source(
 ) -> Result<(String, RegisterOutcome), String> {
 	let pool = &state.pool;
 	let doc = &package.doc;
+	let key = manifest_key(doc)?;
 	let info = doc.get("info").ok_or("missing info")?;
-	let key = info
-		.get("id")
-		.and_then(|v| v.as_str())
-		.ok_or("missing info.id")?
-		.to_string();
-	if !valid_source_key(&key) {
-		return Err(format!("invalid source key {key:?}"));
-	}
-	if key == crate::model::LOCAL_SOURCE_KEY {
-		return Err(format!("source key {key:?} is reserved for the built-in local source"));
-	}
 	let name = info
 		.get("name")
 		.and_then(|v| v.as_str())

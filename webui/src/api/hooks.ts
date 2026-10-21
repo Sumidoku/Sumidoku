@@ -472,6 +472,18 @@ export function useScanSources() {
 	});
 }
 
+export function useImportSource() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (file: File) => {
+			const form = new FormData();
+			form.append('file', file);
+			return api<SourceUpdate>('/sources/import', { method: 'POST', formData: form });
+		},
+		onSuccess: () => invalidateSourceViews(qc)
+	});
+}
+
 export function useRegisterOpdsSource() {
 	const qc = useQueryClient();
 	return useMutation({

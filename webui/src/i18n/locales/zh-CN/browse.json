@@ -30,6 +30,8 @@
     "scanSkipped": "跳过 {{dir}}：{{reason}}",
     "updateAllDone": "更新完成：{{updated}} 个已更新、{{failed}} 个失败",
     "updateFailed": "更新 {{key}} 失败：{{reason}}",
+    "importAix": "导入 .aix",
+    "imported": "已导入 {{name}} v{{version}}",
     "migrate": "迁移",
     "updateAll_other": "全部更新（{{count}}）",
     "scan": "扫描源目录",

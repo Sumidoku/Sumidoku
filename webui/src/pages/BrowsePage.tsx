@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
 	ArrowLeftRight,
@@ -11,12 +11,14 @@ import {
 	Plus,
 	ScanSearch,
 	Trash,
-	TriangleAlert
+	TriangleAlert,
+	Upload
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { ApiError, sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
+	useImportSource,
 	useIsAdmin,
 	usePinSource,
 	useRegisterOpdsSource,
@@ -92,6 +94,41 @@ function UpdateButton({ source }: { source: Source }) {
 			<CircleArrowUp size={14} />
 			v{source.updateVersion}
 		</Button>
+	);
+}
+
+function ImportAixButton() {
+	const { t } = useTranslation();
+	const importSource = useImportSource();
+	const navigate = useNavigate();
+	const inputRef = useRef<HTMLInputElement>(null);
+
+	async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+		const file = e.currentTarget.files?.[0];
+		// reset eagerly: re-picking the same file must fire change again, and currentTarget dies with the dispatch
+		e.currentTarget.value = '';
+		if (!file) return;
+		try {
+			const r = await importSource.mutateAsync(file);
+			pushToast(t('browse.imported', { name: r.name, version: r.version }), 'info');
+			for (const w of r.migrationWarnings.slice(0, 3)) pushToast(w, 'info');
+			if (r.migrationRequired) {
+				pushToast(t('browse.migrationRequired', { name: r.name }), 'info');
+				navigate(`/migrate?source=${r.id}&sameSource=1`);
+			}
+		} catch {
+			// client already popped an error toast
+		}
+	}
+
+	return (
+		<>
+			<input ref={inputRef} type="file" accept=".aix" hidden onChange={(e) => void onFile(e)} />
+			<Button loading={importSource.isPending} onClick={() => inputRef.current?.click()}>
+				<Upload size={15} />
+				{t('browse.importAix')}
+			</Button>
+		</>
 	);
 }
 
@@ -446,6 +483,7 @@ export default function BrowsePage() {
 									{t('browse.addOpds')}
 								</Button>
 							)}
+							{isAdmin && <ImportAixButton />}
 							{isAdmin && (
 								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
 									<ScanSearch size={15} />
