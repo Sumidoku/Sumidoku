@@ -2,7 +2,9 @@
 //! persisted only when opened / page bytes and order (image chapters and CBZ identical) / chapter
 //! number sorting / ComicInfo mapping / cover fallback chain / refresh rescan / failed-directory
 //! protection / local_dir config override / browse search arm (real scan + substring filter, same
-//! shape for single source and cross-source aggregation) / listings 404 unsupported
+//! shape for single source and cross-source aggregation) / listings 404 unsupported /
+//! nested recognition (container-vs-series classification, relative-path keys, subtree absorption,
+//! nested failed-entry protection with the container prefix rule)
 mod common;
 
 use axum::Router;

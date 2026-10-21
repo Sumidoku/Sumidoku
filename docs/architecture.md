@@ -181,25 +181,39 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (400), is excluded from repo management and metadata backfill, and every
   wasm-capability endpoint (filters, listings, home, deep link, settings,
   login) answers 404 `unsupported` for it. There is no index table:
-  browsing scans `local_dir` (`SUMIDOKU_LOCAL_DIR`, default
-  `<config_dir>/local`) in real time — `POST /sources/{id}/search`
-  (`api/mod.rs:search_source`) branches for `kind = local` to
-  `scan_manga_dirs` with a case-insensitive substring filter on the
-  directory name (Suwayomi's `contains(query, ignoreCase = true)`),
-  answering key/title = directory name with the internal id attached when
-  the manga is registered and `hasNextPage` always false; the response is
-  always buffered (there is no source call to stream), and the aggregate
-  search reuses the same arm so a selected Local yields a section instead
-  of an error entry. A manga persists only when opened or shelved
-  (Suwayomi semantics): `find_or_register_manga` scans the directory, maps
-  `ComicInfo.xml` (top level, else extracted in-memory from the first
-  chapter archive carrying one) and feeds the same `upsert_manga` +
-  `reconcile_chapters` as an online fetch; the scan skips dot entries,
-  `@eaDir` and unreadable items and dedupes by directory name. Chapters
-  are subdirectories (image chapters) or single `.cbz`/`.zip` files,
-  ordered by the number parsed from the name (`第?N话` / `ch.?\s*N` /
-  `vol.?\s*N`) descending with a natural-order tiebreak, unnumbered ones
-  last; pages sort case-insensitive naturally. `load_pages`
+  browsing walks `local_dir` (`SUMIDOKU_LOCAL_DIR`, default
+  `<config_dir>/local`) recursively in real time — `POST
+  /sources/{id}/search` (`api/mod.rs:search_source`) branches for
+  `kind = local` to `scan_manga_dirs`, which discovers manga top-down
+  with nearest-qualifying-ancestor absorption: a directory directly
+  holding chapter archives qualifies (the Komga trigger), one with no
+  archive anywhere below qualifies by the backward-compatible relaxed
+  rule (nested levels included), anything else is a pure container and
+  discovery descends; a claimed manga absorbs its subtree, so nested
+  series never appear as manga of their own and a flat single-level
+  library scans byte-identically to the pre-nesting behavior. Keys are
+  paths relative to `local_dir` (validated: no `..`, empty segments,
+  absolute or drive-prefixed forms) and titles their leaf segment; the
+  case-insensitive substring filter matches the title (Suwayomi's
+  `contains(query, ignoreCase = true)`), the internal id is attached
+  when the manga is registered, and `hasNextPage` is always false; the
+  response is always buffered (there is no source call to stream), and
+  the aggregate search reuses the same arm so a selected Local yields a
+  section instead of an error entry. A manga persists only when opened
+  or shelved (Suwayomi semantics): `find_or_register_manga` scans the
+  directory, maps `ComicInfo.xml` (top level, else extracted in-memory
+  from the first chapter archive carrying one) and feeds the same
+  `upsert_manga` + `reconcile_chapters` as an online fetch; the scan
+  skips dot entries, `@eaDir` and unreadable items at every level
+  (failed items land in the reconcile protection set by full relative
+  path, a failed container prefix-protecting its unwalked subtree) and
+  dedupes by key. Chapters are `.cbz`/`.zip` archives and image-leaf
+  directories (direct image files) at any depth under the manga, keyed
+  by their path relative to the manga directory, ordered by the number
+  parsed from the name (`第?N话` / `ch.?\s*N` / `vol.?\s*N`) descending
+  with a natural-order tiebreak, unnumbered ones last; pages are a
+  chapter's own direct image files, sorted case-insensitive naturally.
+  `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
   OPDS-PSE read image files directly and extract single CBZ entries
