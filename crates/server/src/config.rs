@@ -82,6 +82,8 @@ pub struct Config {
 	pub backup_dir: Option<PathBuf>,
 	/// Local manga roots (scan targets of the built-in local source); None = [<config_dir>/local]
 	pub local_dirs: Option<Vec<PathBuf>>,
+	/// Name marking a oneshots directory for the local source; None/blank = the rule is off
+	pub local_oneshots_dir: Option<String>,
 	/// legacy: compatibility alias for auth.password, effective only when auth.password is absent
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
@@ -121,6 +123,7 @@ impl Default for Config {
 			backup_retention_count: None,
 			backup_dir: None,
 			local_dirs: None,
+			local_oneshots_dir: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -180,6 +183,15 @@ impl Config {
 			.unwrap_or_else(|| vec![self.config_dir.join("local")])
 	}
 
+	/// The oneshots-directory marker for the local source (a directory whose relative path contains it is
+	/// never a manga; its direct archives are); a blank value counts as unset, so the feature stays off
+	pub fn local_oneshots_dir(&self) -> Option<&str> {
+		self.local_oneshots_dir
+			.as_deref()
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+	}
+
 	/// Assembles the instance limits passed to the wasm runtime; the sleep/net/js/browser tiers are not configurable
 	pub fn wasm_limits(&self) -> aidoku_wasm::Limits {
 		aidoku_wasm::Limits {
@@ -232,6 +244,7 @@ struct ConfigFile {
 	local_dirs: Option<Vec<PathBuf>>,
 	/// legacy: one-item spelling of local_dirs, effective only when local_dirs is absent
 	local_dir: Option<PathBuf>,
+	local_oneshots_dir: Option<String>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
@@ -338,6 +351,9 @@ impl Config {
 			self.local_dirs = file.local_dirs;
 		} else if let Some(v) = file.local_dir {
 			self.local_dirs = Some(vec![v]);
+		}
+		if let Some(v) = file.local_oneshots_dir {
+			self.local_oneshots_dir = Some(v);
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
@@ -512,6 +528,9 @@ impl Config {
 			self.local_dirs = Some(dirs);
 		} else if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_DIR") {
 			self.local_dirs = Some(vec![PathBuf::from(v)]);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_ONESHOTS_DIR") {
+			self.local_oneshots_dir = Some(v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
@@ -759,6 +778,27 @@ mod tests {
 			..Config::default()
 		};
 		assert_eq!(config.local_dirs(), vec![PathBuf::from("/data/local")]);
+	}
+
+	#[test]
+	fn local_oneshots_dir_from_file_and_env() {
+		assert_eq!(Config::default().local_oneshots_dir(), None);
+		let file: ConfigFile = toml::from_str("local_oneshots_dir = \"oneshots\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_oneshots_dir(), Some("oneshots"));
+
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_ONESHOTS_DIR", "OneShot") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_ONESHOTS_DIR") };
+		assert_eq!(config.local_oneshots_dir(), Some("OneShot"));
+
+		// a blank value counts as unset: the feature is opt-in only
+		let file: ConfigFile = toml::from_str("local_oneshots_dir = \"  \"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_oneshots_dir(), None);
 	}
 
 	#[test]

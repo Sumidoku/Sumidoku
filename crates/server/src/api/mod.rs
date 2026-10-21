@@ -418,11 +418,12 @@ pub(crate) async fn attach_internal_ids(
 
 /// Browse/search for the local source: actually scans the local roots; a non-empty query filters by title substring
 /// (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
-/// lightweight — keys are relative paths (numbered roots carry the `N:` prefix) and titles their leaf segment;
-/// ComicInfo and the cover are left for find_or_register_manga to resolve on open; everything returns in one
-/// page, hasNextPage is always false
+/// lightweight — keys are relative paths (numbered roots carry the `N:` prefix) and titles their leaf segment
+/// (a oneshot drops the archive extension); ComicInfo and the cover are left for find_or_register_manga to
+/// resolve on open; everything returns in one page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
-	let dirs = crate::local::scan_manga_dirs(&state.local_dirs().await?).await?;
+	let oneshots = state.local_oneshots_dir().await?;
+	let dirs = crate::local::scan_manga_dirs(&state.local_dirs().await?, oneshots.as_deref()).await?;
 	let needle = query
 		.map(str::trim)
 		.filter(|q| !q.is_empty())
@@ -430,8 +431,7 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 	let entries: Vec<Manga> = dirs
 		.into_iter()
 		.map(|key| {
-			let rel = crate::local::rel_of(&key);
-			let title = rel.rsplit('/').next().unwrap_or(rel).to_string();
+			let title = crate::local::title_of(&key);
 			Manga {
 				key,
 				title,
@@ -1482,6 +1482,8 @@ async fn get_settings(
 			.map(|dir| dir.to_string_lossy())
 			.collect::<Vec<_>>()),
 	);
+	// same read-only injection for the oneshots marker (null when neither layer names one)
+	map.insert("localOneshotsDir".into(), json!(state.local_oneshots_dir().await?));
 	Ok(Json(Value::Object(map)))
 }
 
@@ -1498,8 +1500,8 @@ async fn put_settings(
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
-		// Read-only injected key: storing it would only be shadowed by GET's injected value, so don't store it
-		if key == "localDirs" {
+		// Read-only injected keys: storing them would only be shadowed by GET's injected values, so don't store
+		if key == "localDirs" || key == "localOneshotsDir" {
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
@@ -1510,6 +1512,10 @@ async fn put_settings(
 				.is_some_and(|dirs| dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty())))
 		{
 			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
+		}
+		// local.oneshots_dir marks oneshots directories (state.local_oneshots_dir); a string, empty clears the override
+		if key == "local.oneshots_dir" && !value.is_string() {
+			return Err(ApiError::bad_request("local.oneshots_dir must be a string"));
 		}
 		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
 		if key.starts_with("user.") {
