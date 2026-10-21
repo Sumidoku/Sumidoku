@@ -6,8 +6,10 @@ import {
 	GripVertical,
 	House,
 	PackageOpen,
+	Pause,
 	Pin,
 	PinOff,
+	Play,
 	Plus,
 	ScanSearch,
 	Trash,
@@ -24,6 +26,7 @@ import {
 	useRegisterOpdsSource,
 	useReorderPinned,
 	useScanSources,
+	useSetSourceEnabled,
 	useSources,
 	useUpdateAllSources,
 	useUpdateSource
@@ -228,12 +231,14 @@ function SourceCard({
 	isAdmin,
 	dnd,
 	onTogglePin,
+	onToggleEnabled,
 	onDelete
 }: {
 	source: Source;
 	isAdmin: boolean;
 	dnd?: CardDnd;
 	onTogglePin: (s: Source) => void;
+	onToggleEnabled: (s: Source) => void;
 	onDelete: (s: Source) => void;
 }) {
 	const { t } = useTranslation();
@@ -314,6 +319,17 @@ function SourceCard({
 					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 				</IconButton>
 			)}
+			{isAdmin && s.kind !== 'local' && (
+				<IconButton
+					label={s.enabled ? t('browse.disable', { name: s.name }) : t('browse.enable', { name: s.name })}
+					onClick={(e) => {
+						e.stopPropagation();
+						onToggleEnabled(s);
+					}}
+				>
+					{s.enabled ? <Pause size={17} /> : <Play size={17} />}
+				</IconButton>
+			)}
 			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
 				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
 			{s.kind !== 'local' && (
@@ -355,6 +371,7 @@ export default function BrowsePage() {
 	const del = useDeleteSource();
 	const updateAll = useUpdateAllSources();
 	const pin = usePinSource();
+	const setEnabled = useSetSourceEnabled();
 	const reorderPinned = useReorderPinned();
 	const isAdmin = useIsAdmin();
 	const navigate = useNavigate();
@@ -429,6 +446,18 @@ export default function BrowsePage() {
 			await pin.mutateAsync({ id: s.id, pinned: !s.pinned });
 			pushToast(
 				s.pinned ? t('browse.unpinned', { name: s.name }) : t('browse.pinned', { name: s.name }),
+				'info'
+			);
+		} catch {
+			// client already popped an error toast
+		}
+	}
+
+	async function toggleEnabled(s: Source) {
+		try {
+			await setEnabled.mutateAsync({ id: s.id, enabled: !s.enabled });
+			pushToast(
+				s.enabled ? t('browse.disabledToast', { name: s.name }) : t('browse.enabledToast', { name: s.name }),
 				'info'
 			);
 		} catch {
@@ -557,14 +586,15 @@ export default function BrowsePage() {
 													}
 												: undefined
 										}
-										onTogglePin={(s) => void togglePin(s)}
-										onDelete={setPendingDelete}
-									/>
-								))}
-							</div>
-						</>
-					)}
-					{updateSources.length > 0 && (
+									onTogglePin={(s) => void togglePin(s)}
+									onToggleEnabled={(s) => void toggleEnabled(s)}
+									onDelete={setPendingDelete}
+								/>
+							))}
+						</div>
+					</>
+				)}
+				{updateSources.length > 0 && (
 						<>
 							<h2 className="browse__section">
 								{t('browse.sectionUpdates', { count: updateSources.length })}
@@ -575,14 +605,15 @@ export default function BrowsePage() {
 										key={s.id}
 										source={s}
 										isAdmin={isAdmin}
-										onTogglePin={(s) => void togglePin(s)}
-										onDelete={setPendingDelete}
-									/>
-								))}
-							</div>
-						</>
-					)}
-					{(pinnedSources.length > 0 || updateSources.length > 0) && (
+									onTogglePin={(s) => void togglePin(s)}
+									onToggleEnabled={(s) => void toggleEnabled(s)}
+									onDelete={setPendingDelete}
+								/>
+							))}
+						</div>
+					</>
+				)}
+				{(pinnedSources.length > 0 || updateSources.length > 0) && (
 						// when any section appears above, the full list needs an "All" heading to set it apart
 						<h2 className="browse__section">{t('browse.sectionAll')}</h2>
 					)}
@@ -593,6 +624,7 @@ export default function BrowsePage() {
 								source={s}
 								isAdmin={isAdmin}
 								onTogglePin={(s) => void togglePin(s)}
+								onToggleEnabled={(s) => void toggleEnabled(s)}
 								onDelete={setPendingDelete}
 							/>
 						))}

@@ -516,6 +516,15 @@ export function usePinSource() {
 	});
 }
 
+export function useSetSourceEnabled() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+			api<Source>(`/sources/${id}`, { method: 'PATCH', body: { enabled } }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
 /** ids is an ordered array of source keys; the server requires a one-to-one match with the current pinned set, so don't call it when the order hasn't changed */
 export function useReorderPinned() {
 	const qc = useQueryClient();
