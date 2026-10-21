@@ -28,6 +28,21 @@ pub fn register_imports(linker: &mut Linker<WasmEnv>) -> Result<(), wasmi::Error
 		"env", "send_partial_result",
 		|mut c: Caller<'_, WasmEnv>, value: i32| { env::send_partial_result(&mut WasmiCtx::new(&mut c), value); },
 	)?;
+	// Newer Aidoku sources import these from the "std" module instead of "env";
+	// register both so legacy and current sources instantiate without missing imports.
+	linker.func_wrap("std", "abort", |mut c: Caller<'_, WasmEnv>| { env::abort(&mut WasmiCtx::new(&mut c)); })?;
+	linker.func_wrap(
+		"std", "print",
+		|mut c: Caller<'_, WasmEnv>, ptr: Ptr, len: u32| { env::print(&mut WasmiCtx::new(&mut c), ptr, len); },
+	)?;
+	linker.func_wrap(
+		"std", "sleep",
+		|mut c: Caller<'_, WasmEnv>, seconds: i32| { env::sleep(&mut WasmiCtx::new(&mut c), seconds); },
+	)?;
+	linker.func_wrap(
+		"std", "send_partial_result",
+		|mut c: Caller<'_, WasmEnv>, value: i32| { env::send_partial_result(&mut WasmiCtx::new(&mut c), value); },
+	)?;
 	linker.func_wrap(
 		"std", "destroy",
 		|mut c: Caller<'_, WasmEnv>, rid: Rid| { std::destroy(&mut WasmiCtx::new(&mut c), rid); },

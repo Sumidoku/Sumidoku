@@ -371,22 +371,25 @@ async fn get_filters(
 	{
 		out.extend(filters::normalize_static_filters(&filters));
 	}
-	match handle.get_filters().await {
-		Ok(filters) => {
-			if let Value::Array(items) = serde_json::to_value(filters)? {
-				out.extend(items);
+	if handle.features().dynamic_filters {
+		match handle.get_filters().await {
+			Ok(filters) => {
+				if let Value::Array(items) = serde_json::to_value(filters)? {
+					out.extend(items);
+				}
 			}
-			Ok(Json(Value::Array(out)))
-		}
-		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
-			if out.is_empty() {
-				Err(dynamic_capability_error(e))
-			} else {
-				Ok(Json(Value::Array(out)))
+			Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+				if out.is_empty() {
+					return Err(dynamic_capability_error(e));
+				}
 			}
+			Err(e) => return Err(ApiError::from(e)),
 		}
-		Err(e) => Err(ApiError::from(e)),
 	}
+	if out.is_empty() {
+		return Err(dynamic_capability_error(SourceError::Unsupported("get_filters")));
+	}
+	Ok(Json(Value::Array(out)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,20 +537,21 @@ async fn get_listings(
 				.map(|l| listings::listing_json(&l)),
 		);
 	}
-	match handle.get_listings().await {
-		Ok(listings) => {
-			out.extend(listings.iter().map(listings::listing_json));
-			Ok(Json(Value::Array(out)))
-		}
-		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
-			if out.is_empty() {
-				Err(dynamic_capability_error(e))
-			} else {
-				Ok(Json(Value::Array(out)))
+	if handle.features().dynamic_listings {
+		match handle.get_listings().await {
+			Ok(listings) => out.extend(listings.iter().map(listings::listing_json)),
+			Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+				if out.is_empty() {
+					return Err(dynamic_capability_error(e));
+				}
 			}
+			Err(e) => return Err(ApiError::from(e)),
 		}
-		Err(e) => Err(ApiError::from(e)),
 	}
+	if out.is_empty() {
+		return Err(dynamic_capability_error(SourceError::Unsupported("get_listings")));
+	}
+	Ok(Json(Value::Array(out)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -568,10 +572,12 @@ async fn combined_listings(
 	{
 		out.extend(items.iter().filter_map(listings::parse_static_listing));
 	}
-	match handle.get_listings().await {
-		Ok(listings) => out.extend(listings),
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {}
-		Err(e) => tracing::warn!(source_id = id, "dynamic listings fetch failed, static only: {e}"),
+	if handle.features().dynamic_listings {
+		match handle.get_listings().await {
+			Ok(listings) => out.extend(listings),
+			Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {}
+			Err(e) => tracing::warn!(source_id = id, "dynamic listings fetch failed, static only: {e}"),
+		}
 	}
 	Ok(out)
 }
@@ -649,6 +655,9 @@ pub(crate) async fn load_settings_items(
 		.await?
 		.map(|raw| settings::normalize_static_settings(&raw))
 		.unwrap_or_default();
+	if !handle.features().dynamic_settings {
+		return Ok(static_items);
+	}
 	match handle.get_settings().await {
 		Ok(settings) => {
 			let dynamic_items = serde_json::to_value(settings)?
