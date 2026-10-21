@@ -17,7 +17,7 @@ use sumidoku_server::build_app;
 const PSE_PAGE_0: &[u8] = b"pse-page-0";
 const PSE_PAGE_1: &[u8] = b"pse-page-1";
 const ALPHA_COVER: &[u8] = b"alpha-cover";
-const CBZ_PAGE_1: &[u8] = b"cbz-first";
+const CBZ_PAGE_1: &[u8] = common::PNG;
 const CBZ_PAGE_2: &[u8] = b"cbz-second";
 const AUTH_HEADER: &str = "Basic dXNlcjpwYXNz"; // user:pass
 
@@ -365,6 +365,7 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 	assert_eq!(status, StatusCode::OK, "pse pages: {body}");
 	let pages = body.as_array().expect("pages array");
 	assert_eq!(pages.len(), 2);
+	assert!(pages.iter().all(|page| page.get("width").is_none() && page.get("height").is_none()));
 	assert_eq!(
 		pages[0]["content"]["Url"][0].as_str().expect("page url"),
 		format!("http://127.0.0.1:{port}/opds/books/book-1/pages/0")
@@ -383,6 +384,10 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 	let pages = body.as_array().expect("pages array");
 	assert_eq!(pages.len(), 2);
 	assert_eq!(pages[0]["content"]["OpdsZip"].as_str(), Some("p1.png"));
+	assert_eq!(pages[0]["width"], 1);
+	assert_eq!(pages[0]["height"], 1);
+	assert!(pages[1].get("width").is_none());
+	assert!(pages[1].get("height").is_none());
 	for (index, want) in [CBZ_PAGE_1, CBZ_PAGE_2].iter().enumerate() {
 		let (status, _, bytes) =
 			request_full(&t.app, "GET", &format!("/api/v1/chapter/{}/page/{index}", chapters[1].0), None).await;

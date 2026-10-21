@@ -86,6 +86,15 @@ pub struct ChapterRow {
 	pub fetched_at: i64,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PageRow {
+	pub idx: i64,
+	pub content: String,
+	pub width: Option<i64>,
+	pub height: Option<i64>,
+	pub dimensions_checked: bool,
+}
+
 /// Projection of chapter LEFT JOIN chapter_user (user 1); the four user columns are all NULL when no row matches
 #[derive(Debug, sqlx::FromRow)]
 pub struct ChapterUserRow {

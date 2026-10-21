@@ -1460,12 +1460,16 @@ async fn get_pages(
 	chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, wants_refresh(&query)).await?;
 	let mut out = Vec::with_capacity(pages.len());
-	for (index, content) in pages {
-		let mut value = serde_json::from_str::<Value>(&content)?;
+	for page in pages {
+		let mut value = serde_json::from_str::<Value>(&page.content)?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
-		object.insert("index".into(), json!(index));
+		object.insert("index".into(), json!(page.idx));
+		if let (Some(width), Some(height)) = (page.width, page.height) {
+			object.insert("width".into(), json!(width));
+			object.insert("height".into(), json!(height));
+		}
 		out.push(value);
 	}
 	Ok(Json(json!(out)))

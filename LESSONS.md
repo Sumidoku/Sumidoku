@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A checked marker belongs to the bytes that were checked, not to the logical
+page.** A fresh download is a new artifact version and must refresh derived
+metadata even when the page row was previously checked. Lazy backfill can stay
+unchecked-only, but the download write path must overwrite stale values;
+otherwise same-URL image replacements keep the old dimensions forever.
+- Evidence: 2026-10-21, #20's review seeded a checked 99x99 value before
+  re-download. The unchecked-only path kept it and the regression test failed
+  with left=99/right=1; the download-specific overwrite path then restored the
+  actual 1x1 dimensions.
+
 **A status and the flags that make it visible are one public transition:
 commit them together and fault-inject the later write.** Separate queries
 let readers observe the status before its dependent flag, and a test that

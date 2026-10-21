@@ -27,10 +27,10 @@ pub async fn get_page(
 ) -> ApiResult<Response> {
 	let chapter = chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, false).await?;
-	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
+	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
-	let stored: Value = serde_json::from_str(content)?;
+	let stored: Value = serde_json::from_str(&page.content)?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());

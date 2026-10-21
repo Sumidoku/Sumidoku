@@ -277,7 +277,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
   OPDS-PSE read image files directly and extract single archive entries
   (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
-  with the downsample pipeline untouched. Covers reuse the disk cache with
+  with the downsample pipeline untouched. Unchecked `Local` rows join the lazy
+  dimension measurement below: `local::read_page_bytes` reads only the entry
+  bytes, so EPUB measurement does not reparse OPF media metadata for every
+  page, while actual responses keep `read_page`'s declared MIME behavior.
+  Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
   `cover.*` sidecar in the manga directory → first page of the chapter
   list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
@@ -662,7 +666,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   settlement commit the finished `download` row and the user's
   `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
   either write failing rolls both back, and the `finished` event is emitted
-  only after commit. A row's stored `path` resolves through
+  only after commit. Non-text pages are measured from newly fetched bytes on
+  every download, but their page-row updates commit only after packaging
+  succeeds: a failed attempt writes no partial metadata, and the move-failure fallback
+  still commits the measurements with the valid artifact. A row's stored
+  `path` resolves through
   `download::product_path` — absolute is used as-is, relative joins
   `downloads_dir` — and every read/delete site (`api/download.rs`,
   `opds/mod.rs`) goes through it.
@@ -696,6 +704,18 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
   page_bytes`) all read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Page image dimensions (`source/page_dimensions.rs`, migration
+  `0015_page_dimensions.sql`): the stored `PageRow` projection carries
+  nullable `width`/`height` and an internal `dimensions_checked` marker. After
+  a cache read or wholesale rewrite, `load_pages` measures unchecked
+  materialized `Image`, `Local` and `OpdsZip` bytes through image 0.25's
+  `ImageReader::into_dimensions` (decoder metadata, not full pixel decoding);
+  `Url`/`Zip` content is never fetched just for metadata. A byte-read failure
+  stays unchecked for a later retry, while invalid image bytes become checked
+  with null dimensions. Page-row rewrites reset all three fields so changed
+  images cannot inherit stale dimensions. `GET /api/v1/chapter/{id}/pages`
+  keeps the existing content/index shape and adds top-level `width`/`height`
+  only when both are known; text and unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
@@ -1216,7 +1236,11 @@ the stored session token as a bearer header, media/websocket URLs carry
 it as an `access_token` query (`withToken`), and any `401` clears the
 token and lands on `/login`. The settings page shows the current
 account, and admins manage users on the Users page
-(`webui/src/pages/UsersPage.tsx`).
+(`webui/src/pages/UsersPage.tsx`). The reader uses positive known page
+dimensions as image intrinsic dimensions and continuous/webtoon container
+aspect ratios, reserving space before lazy loads; text, unsupported and
+unknown-dimension pages get no forced ratio, and paged mode keeps its fixed
+viewport.
 
 ## Known gaps
 

@@ -87,7 +87,9 @@
 }
 
 .reader__pg img {
+	display: block;
 	width: 100%;
+	height: auto;
 }
 
 .reader__cont:not(.reader__cont--webtoon) .reader__pg {

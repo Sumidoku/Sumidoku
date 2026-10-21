@@ -768,6 +768,18 @@ pub(crate) fn is_image_entry(name: &str) -> bool {
 		&& has_ext(name, IMAGE_EXTS)
 }
 
+/// Dimension measurement reads bytes without resolving EPUB media metadata; actual page responses keep the OPF lookup in read_page
+pub async fn read_page_bytes(
+	local_dirs: &[PathBuf],
+	zip: &Arc<ZipCache>,
+	manga_key: &str,
+	chapter_key: &str,
+	entry: &str,
+) -> ApiResult<Vec<u8>> {
+	let (bytes, _) = read_page_impl(local_dirs, zip, manga_key, chapter_key, entry, false).await?;
+	Ok(bytes)
+}
+
 /// Reads one page's bytes and mime: image chapters read a single file, archive chapters extract by entry name
 /// (handles come from the LRU). The mime is the extension mapping, except that a divina EPUB page takes the
 /// media type its OPF manifest declares
@@ -778,6 +790,18 @@ pub async fn read_page(
 	chapter_key: &str,
 	entry: &str,
 ) -> ApiResult<(Vec<u8>, String)> {
+	let (bytes, declared) = read_page_impl(local_dirs, zip, manga_key, chapter_key, entry, true).await?;
+	Ok((bytes, declared.unwrap_or_else(|| image_mime(entry).to_string())))
+}
+
+async fn read_page_impl(
+	local_dirs: &[PathBuf],
+	zip: &Arc<ZipCache>,
+	manga_key: &str,
+	chapter_key: &str,
+	entry: &str,
+	read_declared: bool,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
 	let chapter_path = chapter_fs_path(dir, rel, chapter_key).await?;
@@ -789,10 +813,10 @@ pub async fn read_page(
 		let bytes = tokio::fs::read(chapter_path.join(entry))
 			.await
 			.map_err(|_| ApiError::not_found("page not found"))?;
-		return Ok((bytes, image_mime(entry).to_string()));
+		return Ok((bytes, None));
 	}
 	let entry_name = entry.to_string();
-	let is_epub = has_ext(chapter_key, &["epub"]);
+	let is_epub = read_declared && has_ext(chapter_key, &["epub"]);
 	let (bytes, declared) = {
 		let chapter_path = chapter_path.clone();
 		let zip = zip.clone();
@@ -817,7 +841,7 @@ pub async fn read_page(
 			}
 		})?
 	};
-	Ok((bytes, declared.unwrap_or_else(|| image_mime(entry).to_string())))
+	Ok((bytes, declared))
 }
 
 /// Cover fallback chain (Suwayomi semantics): a cover.* sidecar in the manga directory → the first page of the last

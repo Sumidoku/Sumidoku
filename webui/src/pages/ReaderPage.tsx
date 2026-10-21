@@ -67,6 +67,12 @@ function isUnsupported(p: PageData): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
 }
 
+function pageDimensions(p: PageData | undefined | null): { width: number; height: number } | null {
+	if (!p || typeof p.width !== 'number' || typeof p.height !== 'number') return null;
+	if (!Number.isFinite(p.width) || !Number.isFinite(p.height) || p.width <= 0 || p.height <= 0) return null;
+	return { width: p.width, height: p.height };
+}
+
 // A hasDescription page displays its description (already fetched by the server); other text pages use content.Text
 function pageText(p: PageData | undefined | null): string | null {
 	if (!p) return null;
@@ -626,6 +632,8 @@ function ReaderCore({
 		);
 	}
 
+	const curDimensions = pageDimensions(curPage);
+
 	return (
 		<div className="reader">
 			{mode === 'paged' ? (
@@ -650,6 +658,8 @@ function ReaderCore({
 								className="reader__img"
 								src={pageUrl(chapterId, curPage.index, imgWidth)}
 								alt={t('reader.pageAlt', { page: idx + 1 })}
+								width={curDimensions?.width}
+								height={curDimensions?.height}
 							/>
 						))}
 					<button
@@ -680,14 +690,27 @@ function ReaderCore({
 				>
 					{pages.map((p) => {
 						const text = pageText(p);
+						const unsupported = isUnsupported(p);
+						const dimensions = text === null && !unsupported ? pageDimensions(p) : null;
 						return (
-							<div className="reader__pg" data-page={p.index} key={p.index}>
+							<div
+								className="reader__pg"
+								data-page={p.index}
+								key={p.index}
+								style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}
+							>
 								{text !== null ? (
 									<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
-								) : isUnsupported(p) ? (
+								) : unsupported ? (
 									<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 								) : (
-									<img src={pageUrl(chapterId, p.index, imgWidth)} alt={t('reader.pageAlt', { page: p.index + 1 })} loading="lazy" />
+									<img
+										src={pageUrl(chapterId, p.index, imgWidth)}
+										alt={t('reader.pageAlt', { page: p.index + 1 })}
+										width={dimensions?.width}
+										height={dimensions?.height}
+										loading="lazy"
+									/>
 								)}
 							</div>
 						);
