@@ -18,6 +18,15 @@ const DATE_READ_CH7: i64 = 1706868000; // 2024-02-02 10:00:00 UTC
 const DATE_READ_MANGA2: i64 = 1706954400; // 2024-02-03 10:00:00 UTC
 const DATE_READ_HISTORY_ONLY: i64 = 1707127200; // 2024-02-05 10:00:00 UTC
 
+/// Same generator as the example fixtures: a backup from Suwayomi's copymanga extension, whose
+/// path-shaped keys must land as the Aidoku zh.copymanga source's bare segments
+const COPYMANGA_TACHIBK: &[u8] = include_bytes!("fixtures/copymanga.tachibk");
+const CM_UUID1: &str = "d32acc22-aaaa-4000-8000-000000000001";
+const CM_UUID2: &str = "d32acc22-aaaa-4000-8000-000000000002";
+const CM_UUID3: &str = "d32acc22-aaaa-4000-8000-000000000003";
+const DATE_READ_CM_CH1: i64 = 1709373600; // 2024-03-02 10:00:00 UTC
+const DATE_READ_CM_HISTORY_ONLY: i64 = 1709460000; // 2024-03-03 10:00:00 UTC
+
 async fn post_backup(app: &Router, query: &str, bytes: &[u8]) -> (StatusCode, Value) {
 	let (status, _, resp) = request_bytes(
 		app,
@@ -425,4 +434,95 @@ async fn import_suwayomi_rejects_invalid_input() {
 	}
 
 	assert_eq!(db_dump(&app.db_path).await, before);
+}
+
+/// Suwayomi's copymanga extension stores site paths as keys while Aidoku's zh.copymanga stores the
+/// bare segments; the import must re-align manga, chapter and history keys to the target source's
+/// native format, keep progress attached, and report the rewrite counts
+#[tokio::test]
+async fn import_suwayomi_realigns_copymanga_keys() {
+	let app = test_app().await;
+	install_fixture_source(&app.tmp, "zh.copymanga", "Copymanga", &fixture_dir().join("main.wasm"));
+	scan(&app.app).await;
+
+	let query = mapping_query(&json!({"333": "zh.copymanga"}));
+	let (status, body) = post_backup(&app.app, &query, COPYMANGA_TACHIBK).await;
+	assert_eq!(status, StatusCode::OK, "import failed: {body}");
+	assert_eq!(body["imported"]["library"], 1);
+	assert_eq!(body["imported"]["progress"], 3);
+
+	let pool = connect_db(&app.db_path).await;
+	let (manga_key, manga_id): (String, i64) = sqlx::query_as(
+		"SELECT m.key, m.id FROM manga m JOIN source s ON s.id = m.source_id WHERE s.key = 'zh.copymanga'",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("copymanga manga row");
+	assert_eq!(manga_key, "pure001mm");
+	let rows: Vec<(String,)> = sqlx::query_as("SELECT key FROM chapter WHERE manga_id = ? ORDER BY key")
+		.bind(manga_id)
+		.fetch_all(&pool)
+		.await
+		.expect("chapter rows");
+	let chapter_keys: Vec<String> = rows.into_iter().map(|(k,)| k).collect();
+	assert_eq!(chapter_keys, [CM_UUID1, CM_UUID2, CM_UUID3]);
+
+	// progress rides along on the realigned rows, the history-only chapter included
+	let (page, read_at): (i64, i64) = sqlx::query_as(
+		"SELECT cu.last_page_read, cu.last_read_at FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = ? AND c.key = ?",
+	)
+	.bind(manga_id)
+	.bind(CM_UUID1)
+	.fetch_one(&pool)
+	.await
+	.expect("chapter 1 progress");
+	assert_eq!(page, 3);
+	assert_eq!(read_at, DATE_READ_CM_CH1);
+	let (hist_page, hist_read, hist_at): (i64, i64, i64) = sqlx::query_as(
+		"SELECT cu.last_page_read, cu.is_read, cu.last_read_at FROM chapter c
+		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
+		 WHERE c.manga_id = ? AND c.key = ?",
+	)
+	.bind(manga_id)
+	.bind(CM_UUID3)
+	.fetch_one(&pool)
+	.await
+	.expect("history-only chapter progress");
+	assert_eq!(hist_page, 0);
+	assert_eq!(hist_read, 0);
+	assert_eq!(hist_at, DATE_READ_CM_HISTORY_ONLY);
+	pool.close().await;
+
+	let group = source_group(&body, "333");
+	assert_eq!(group["match"], "mapped");
+	assert_eq!(group["aidokuSourceKey"], "zh.copymanga");
+	assert_eq!(group["realignedKeys"], json!({"manga": 1, "chapter": 3}));
+
+	// a second import of the same backup merges onto the same rows: nothing duplicates, keys stay bare
+	let (status, rerun) = post_backup(&app.app, &query, COPYMANGA_TACHIBK).await;
+	assert_eq!(status, StatusCode::OK, "re-import failed: {rerun}");
+	assert_eq!(source_group(&rerun, "333")["realignedKeys"], json!({"manga": 1, "chapter": 3}));
+	let pool = connect_db(&app.db_path).await;
+	let (manga_count, chapter_count, progress_count): (i64, i64, i64) = sqlx::query_as(
+		"SELECT
+		 (SELECT COUNT(*) FROM manga WHERE id = ?),
+		 (SELECT COUNT(*) FROM chapter WHERE manga_id = ?),
+		 (SELECT COUNT(*) FROM chapter_user cu JOIN chapter c ON c.id = cu.chapter_id WHERE c.manga_id = ?)",
+	)
+	.bind(manga_id)
+	.bind(manga_id)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("row counts");
+	assert_eq!((manga_count, chapter_count, progress_count), (1, 3, 3));
+	let (key_after,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("manga key after re-import");
+	assert_eq!(key_after, "pure001mm");
+	pool.close().await;
 }
