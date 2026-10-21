@@ -235,16 +235,24 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   skips dot entries, `@eaDir` and unreadable items at every level
   (failed items land in the reconcile protection set by full relative
   path, a failed container prefix-protecting its unwalked subtree) and
-  dedupes by key. Chapters are `.cbz`/`.zip` archives and image-leaf
+  dedupes by key. Chapters are `.cbz`/`.zip`/`.epub` archives and
+  image-leaf
   directories (direct image files) at any depth under the manga, keyed
   by their path relative to the manga directory, ordered by the number
   parsed from the name (`第?N话` / `ch.?\s*N` / `vol.?\s*N`) descending
   with a natural-order tiebreak, unnumbered ones last; pages are a
   chapter's own direct image files, sorted case-insensitive naturally.
+  A divina-profile EPUB (image-based books; reflowable text is out of
+  scope) instead takes its page list from the OPF spine restricted to
+  image manifest items (`local/epub.rs`: the package document is
+  located through `META-INF/container.xml`, hrefs resolve against the
+  OPF location), falling back to the natural-sorted archive images when
+  the OPF is missing or unparseable, and a page's mime is the
+  OPF-declared media type with the extension mapping as fallback.
   `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
-  OPDS-PSE read image files directly and extract single CBZ entries
+  OPDS-PSE read image files directly and extract single archive entries
   (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
   with the downsample pipeline untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):

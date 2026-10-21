@@ -4,7 +4,9 @@
 //! protection / local_dir config override / browse search arm (real scan + substring filter, same
 //! shape for single source and cross-source aggregation) / listings 404 unsupported /
 //! nested recognition (container-vs-series classification, relative-path keys, subtree absorption,
-//! nested failed-entry protection with the container prefix rule)
+//! nested failed-entry protection with the container prefix rule) / oneshots directory rule /
+//! EPUB chapters (divina profile: OPF spine-ordered pages, declared media types, natural-image
+//! fallback on a missing or unparseable OPF, nested and oneshot shapes)
 mod common;
 
 use axum::Router;
@@ -1310,4 +1312,265 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	entries.sort();
 	let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
 	assert_eq!(keys, ["Normal", "oneshots"], "{keys:?}");
+}
+
+// ----- EPUB chapters (divina profile) -----
+
+/// Minimal OCF container: `opf` is the rootfile's (full-path, raw bytes); None writes no
+/// container.xml/OPF at all. The fixture is built in-test so no binary EPUB lands in the repo.
+fn write_epub(path: &std::path::Path, opf: Option<(&str, &[u8])>, entries: &[(&str, &[u8])]) {
+	std::fs::create_dir_all(path.parent().expect("epub parent")).expect("mkdir epub parent");
+	let file = std::fs::File::create(path).expect("create epub");
+	let mut writer = zip::ZipWriter::new(file);
+	if let Some((opf_path, opf_bytes)) = opf {
+		let container = format!(
+			r#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="{opf_path}" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#
+		);
+		writer
+			.start_file("META-INF/container.xml", zip::write::SimpleFileOptions::default())
+			.expect("start container entry");
+		std::io::Write::write_all(&mut writer, container.as_bytes()).expect("write container entry");
+		writer
+			.start_file(opf_path, zip::write::SimpleFileOptions::default())
+			.expect("start opf entry");
+		std::io::Write::write_all(&mut writer, opf_bytes).expect("write opf entry");
+	}
+	for (name, bytes) in entries {
+		writer
+			.start_file(*name, zip::write::SimpleFileOptions::default())
+			.expect("start entry");
+		std::io::Write::write_all(&mut writer, bytes).expect("write entry");
+	}
+	writer.finish().expect("finish epub");
+}
+
+/// Divina-profile OPF: manifest of (id, href, media-type), spine of idrefs in reading order
+fn divina_opf(manifest: &[(&str, &str, &str)], spine: &[&str]) -> Vec<u8> {
+	let items: String = manifest
+		.iter()
+		.map(|(id, href, media_type)| format!(r#"<item id="{id}" href="{href}" media-type="{media_type}"/>"#))
+		.collect();
+	let itemrefs: String = spine
+		.iter()
+		.map(|idref| format!(r#"<itemref idref="{idref}"/>"#))
+		.collect();
+	format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">sumidoku-test</dc:identifier>
+    <dc:title>fixture</dc:title>
+  </metadata>
+  <manifest>{items}</manifest>
+  <spine>{itemrefs}</spine>
+</package>"#
+	)
+	.into_bytes()
+}
+
+async fn epub_page_entries(app: &Router, chapter_id: i64) -> Vec<String> {
+	let (status, body) = request(app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	body.as_array()
+		.expect("pages array")
+		.iter()
+		.map(|p| {
+			p["content"]["Local"]
+				.as_str()
+				.expect("local entry")
+				.to_string()
+		})
+		.collect()
+}
+
+#[tokio::test]
+async fn epub_chapter_pages_follow_spine_order() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	// the spine order c, a, d, b is neither alphabetical nor archive entry order; the extensionless
+	// page d is a page only through its declared media type; the xhtml nav item is filtered out, and
+	// the unreferenced z.png must not leak into the page list
+	let opf = divina_opf(
+		&[
+			("pa", "images/a.png", "image/png"),
+			("pb", "images/b.png", "image/png"),
+			("pc", "images/c.png", "image/png"),
+			("pd", "images/d", "image/webp"),
+			("nav", "text/nav.xhtml", "application/xhtml+xml"),
+		],
+		&["nav", "pc", "pa", "pd", "pb"],
+	);
+	write_epub(
+		&tmp.path().join("local/Spine/ch 1.epub"),
+		Some(("OEBPS/content.opf", &opf)),
+		&[
+			("OEBPS/images/a.png", b"spine-1-a"),
+			("OEBPS/images/b.png", b"spine-1-b"),
+			("OEBPS/images/c.png", b"spine-1-c"),
+			("OEBPS/images/d", b"spine-1-d"),
+			("OEBPS/images/z.png", b"spine-1-z-unreferenced"),
+			("OEBPS/text/nav.xhtml", b"<html/>"),
+		],
+	);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	let manga_id = register_local(&t.app, "Spine").await;
+	let chapter_id = chapter_id_of(&t.app, manga_id, "ch 1.epub").await;
+
+	let entries = epub_page_entries(&t.app, chapter_id).await;
+	assert_eq!(
+		entries,
+		["OEBPS/images/c.png", "OEBPS/images/a.png", "OEBPS/images/d", "OEBPS/images/b.png"],
+		"pages follow the OPF spine, not the natural archive order"
+	);
+
+	for (index, want_mime, want_bytes) in [
+		(0, "image/png", b"spine-1-c" as &[u8]),
+		(1, "image/png", b"spine-1-a"),
+		(2, "image/webp", b"spine-1-d"),
+		(3, "image/png", b"spine-1-b"),
+	] {
+		let (status, headers, bytes) =
+			request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}"), None).await;
+		assert_eq!(status, StatusCode::OK, "page {index}");
+		assert_eq!(headers["content-type"], want_mime, "page {index}: the OPF-declared media type wins");
+		assert_eq!(bytes, want_bytes, "page {index}");
+	}
+
+	// single-chapter manga: the cover chain lands on the first spine page
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"spine-1-c");
+}
+
+#[tokio::test]
+async fn epub_broken_opf_falls_back_to_natural_images() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	// a corrupt OPF and a missing container both degrade to the CBZ rule instead of erroring the chapter
+	write_epub(
+		&tmp.path().join("local/Broken/ch 1.epub"),
+		Some(("OEBPS/content.opf", b"not xml at all <")),
+		&[("OEBPS/images/z.png", b"broken-1-z"), ("OEBPS/images/m.png", b"broken-1-m")],
+	);
+	write_epub(
+		&tmp.path().join("local/Broken/ch 2.epub"),
+		None,
+		&[("images/b.png", b"broken-2-b"), ("images/a.png", b"broken-2-a")],
+	);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	let manga_id = register_local(&t.app, "Broken").await;
+
+	let chapters = chapters_of(&t.app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
+	assert_eq!(keys, ["ch 2.epub", "ch 1.epub"], "both epub chapters list despite the broken OPF");
+
+	let chapter_id = chapter_id_of(&t.app, manga_id, "ch 1.epub").await;
+	let entries = epub_page_entries(&t.app, chapter_id).await;
+	assert_eq!(entries, ["OEBPS/images/m.png", "OEBPS/images/z.png"]);
+	let (status, headers, bytes) =
+		request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/png");
+	assert_eq!(bytes, b"broken-1-m");
+
+	let chapter_id = chapter_id_of(&t.app, manga_id, "ch 2.epub").await;
+	let entries = epub_page_entries(&t.app, chapter_id).await;
+	assert_eq!(entries, ["images/a.png", "images/b.png"]);
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"broken-2-b");
+}
+
+#[tokio::test]
+async fn nested_epub_chapter_reads_in_spine_order() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let opf = divina_opf(
+		&[
+			("p1", "p/1.png", "image/png"),
+			("p2", "p/2.png", "image/png"),
+			("p3", "p/3.png", "image/png"),
+		],
+		&["p3", "p1", "p2"],
+	);
+	write_epub(
+		&tmp.path().join("local/Nest/vol1/x.epub"),
+		Some(("OEBPS/content.opf", &opf)),
+		&[
+			("OEBPS/p/1.png", b"nest-x-1"),
+			("OEBPS/p/2.png", b"nest-x-2"),
+			("OEBPS/p/3.png", b"nest-x-3"),
+		],
+	);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	let manga_id = register_local(&t.app, "Nest").await;
+
+	let chapters = chapters_of(&t.app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
+	assert_eq!(keys, ["vol1/x.epub"]);
+	assert_eq!(chapters[0].3, "vol1/x", "the archive display name drops the extension, keeps the path");
+
+	let chapter_id = chapter_id_of(&t.app, manga_id, "vol1/x.epub").await;
+	let entries = epub_page_entries(&t.app, chapter_id).await;
+	assert_eq!(entries, ["OEBPS/p/3.png", "OEBPS/p/1.png", "OEBPS/p/2.png"]);
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"nest-x-3");
+}
+
+#[tokio::test]
+async fn oneshot_epub_opens_as_single_chapter() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let opf = divina_opf(
+		&[("p1", "1.png", "image/png"), ("p2", "2.png", "image/png")],
+		&["p2", "p1"],
+	);
+	write_epub(
+		&tmp.path().join("local/oneshots/Single.epub"),
+		Some(("OEBPS/content.opf", &opf)),
+		&[("OEBPS/1.png", b"single-1"), ("OEBPS/2.png", b"single-2")],
+	);
+	write_page(&tmp.path().join("local/Normal/ch 1"), "1.png", b"normal-1-1");
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	enable_oneshots(&t.app).await;
+
+	let entries = browse_local(&t.app).await;
+	assert!(
+		entries.iter().any(|(k, title)| k == "oneshots/Single.epub" && title == "Single"),
+		"the epub oneshot lists as its own manga titled by the file stem: {entries:?}"
+	);
+
+	let manga_id = register_local(&t.app, "oneshots/Single.epub").await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["title"], "Single");
+	let chapters = chapters_of(&t.app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
+	assert_eq!(keys, ["Single.epub"], "an oneshot has exactly one chapter: the archive itself");
+
+	let chapter_id = chapter_id_of(&t.app, manga_id, "Single.epub").await;
+	let entries = epub_page_entries(&t.app, chapter_id).await;
+	assert_eq!(entries, ["OEBPS/2.png", "OEBPS/1.png"]);
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"single-2");
+
+	// the cover is the single chapter's first spine page
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"single-2");
 }

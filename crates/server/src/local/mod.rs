@@ -18,6 +18,10 @@
 //! image-leaf directories (direct image files) at any depth become chapters keyed by their path relative to the
 //! manga, never manga of their own — so a flat single-level library scans byte-identically to before.
 //!
+//! Archive chapters are CBZ/ZIP and divina-profile EPUB (image-based books; reflowable text is out of scope):
+//! an EPUB takes its page list from the OPF spine restricted to image manifest items, falling back to the CBZ
+//! rule (natural-sorted image entries) when the OPF is missing or unparseable (`local/epub.rs`).
+//!
 //! With a oneshots name configured (config local_oneshots_dir, overridable by the local.oneshots_dir setting),
 //! the oneshots rule outranks both passes: a directory whose relative path contains the name (case-insensitive
 //! substring, kmrs's ScanOptions::oneshots_dir) is never claimed — every archive directly inside becomes its
@@ -34,6 +38,7 @@
 
 pub mod chapter_number;
 pub mod comic_info;
+pub mod epub;
 pub mod natural_sort;
 pub mod zip_cache;
 
@@ -47,7 +52,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"];
-const ARCHIVE_EXTS: &[&str] = &["cbz", "zip"];
+const ARCHIVE_EXTS: &[&str] = &["cbz", "zip", "epub"];
 
 /// The walk follows directory symlinks (flat-layout symlink chapters predate nesting), so a symlink cycle would
 /// never terminate without a component budget; real libraries nest a handful of levels
@@ -612,7 +617,9 @@ async fn chapter_fs_path(local_dir: &Path, manga_key: &str, chapter_key: &str) -
 	Ok(manga_path.join(chapter_key))
 }
 
-/// Chapter page listing: image chapters list image files, archive chapters list image entries; both in case-insensitive natural order
+/// Chapter page listing: image chapters list image files, archive chapters list image entries; both in
+/// case-insensitive natural order — except a divina EPUB, whose pages come from the OPF spine (a missing
+/// or unparseable OPF falls back to the natural-order rule)
 pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
@@ -649,6 +656,18 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 		return Ok(pages);
 	}
 	if metadata.is_file() && has_ext(chapter_key, ARCHIVE_EXTS) {
+		if has_ext(chapter_key, &["epub"]) {
+			let pages = {
+				let path = path.clone();
+				let zip = zip.clone();
+				tokio::task::spawn_blocking(move || epub::read_package(&zip, &path).map(|package| package.pages()))
+					.await
+					.map_err(|e| ApiError::internal(format!("read epub package failed: {e}")))?
+			};
+			if let Some(pages) = pages {
+				return Ok(pages.into_iter().map(|page| page.entry).collect());
+			}
+		}
 		let names = {
 			let path = path.clone();
 			let zip = zip.clone();
@@ -671,14 +690,16 @@ pub(crate) fn is_image_entry(name: &str) -> bool {
 		&& has_ext(name, IMAGE_EXTS)
 }
 
-/// Reads one page's bytes: image chapters read a single file, archive chapters extract by entry name (handles come from the LRU)
+/// Reads one page's bytes and mime: image chapters read a single file, archive chapters extract by entry name
+/// (handles come from the LRU). The mime is the extension mapping, except that a divina EPUB page takes the
+/// media type its OPF manifest declares
 pub async fn read_page(
 	local_dirs: &[PathBuf],
 	zip: &Arc<ZipCache>,
 	manga_key: &str,
 	chapter_key: &str,
 	entry: &str,
-) -> ApiResult<Vec<u8>> {
+) -> ApiResult<(Vec<u8>, String)> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
 	let chapter_path = chapter_fs_path(dir, rel, chapter_key).await?;
@@ -687,13 +708,27 @@ pub async fn read_page(
 		.map_err(|_| ApiError::not_found("local chapter not found"))?;
 	if metadata.is_dir() {
 		require_component(entry)?;
-		return tokio::fs::read(chapter_path.join(entry))
+		let bytes = tokio::fs::read(chapter_path.join(entry))
 			.await
-			.map_err(|_| ApiError::not_found("page not found"));
+			.map_err(|_| ApiError::not_found("page not found"))?;
+		return Ok((bytes, image_mime(entry).to_string()));
 	}
-	let entry = entry.to_string();
-	let zip = zip.clone();
-	tokio::task::spawn_blocking(move || zip.read_entry(&chapter_path, &entry))
+	let entry_name = entry.to_string();
+	let is_epub = has_ext(chapter_key, &["epub"]);
+	let (bytes, declared) = {
+		let chapter_path = chapter_path.clone();
+		let zip = zip.clone();
+		tokio::task::spawn_blocking(move || {
+			let bytes = zip.read_entry(&chapter_path, &entry_name)?;
+			let declared = if is_epub {
+				epub::read_package(&zip, &chapter_path)
+					.and_then(|package| package.pages().into_iter().find(|page| page.entry == entry_name))
+					.map(|page| page.media_type)
+			} else {
+				None
+			};
+			Ok::<_, std::io::Error>((bytes, declared))
+		})
 		.await
 		.map_err(|e| ApiError::internal(format!("read zip entry failed: {e}")))?
 		.map_err(|e| {
@@ -702,7 +737,9 @@ pub async fn read_page(
 			} else {
 				ApiError::internal(format!("read local archive failed: {e}"))
 			}
-		})
+		})?
+	};
+	Ok((bytes, declared.unwrap_or_else(|| image_mime(entry).to_string())))
 }
 
 /// Cover fallback chain (Suwayomi semantics): a cover.* sidecar in the manga directory → the first page of the last
@@ -754,8 +791,8 @@ pub async fn resolve_cover(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 	let Some(first) = pages.first() else {
 		return Ok(None);
 	};
-	let bytes = read_page(local_dirs, zip, manga_key, &last.key, first).await?;
-	Ok(Some((bytes, image_mime(first).to_string())))
+	let (bytes, mime) = read_page(local_dirs, zip, manga_key, &last.key, first).await?;
+	Ok(Some((bytes, mime)))
 }
 
 /// The Local variant of page-content JSON: the value is the page entry name within the chapter (image chapter's file name / archive entry path)
