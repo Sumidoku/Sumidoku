@@ -421,6 +421,8 @@ async fn update_scheduler_rescans_numbered_directory() {
 	assert_eq!(status, StatusCode::OK);
 
 	write_page(&t.dir_b.path().join("Beta/ch 3"), "1.png", b"beta-3-1");
+	let (status, _) = request(&t.app.app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(&t.app.app, "POST", "/api/v1/update/fetch", None).await;
 	assert_eq!(status, StatusCode::OK);
 	// the fetch runs asynchronously: wait for the behavioral result (ch 3 appears), then check the summary

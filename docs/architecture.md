@@ -752,16 +752,56 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
-- Library updates (`update/mod.rs`): same scheduling shape as downloads —
-  serial per source, at most 3 sources at once — broadcasting progress as
-  `UpdateEvent`s. Category `include_in_update` is a three-state filter.
-  A manual `POST /api/v1/update/fetch` is owned by the triggering user;
-  the scheduled run fetches the union of all users' libraries with one
-  source call per manga, filtering auto-download per user. Events and the
-  summary carry the fetch's owner, and both the WebSocket stream and
+- Library updates (`update/mod.rs`): serial per source, at most 3 sources at
+  once, broadcasting progress as `UpdateEvent`s. The global
+  `library.skip_titles` setting defaults to `hasUnread`, `completed` and
+  `notStarted`; `library.refresh_metadata` defaults to false, and
+  `library.update_interval_hours` falls back to config
+  `update_interval_hours` (default 0 = never). The setting takes precedence
+  when present. `GET /api/v1/settings` returns these effective values, and
+  only admins can write them. Selection keeps `update_strategy = Never` and
+  the category `include_in_update` tri-state (with any INCLUDE, only titles
+  under INCLUDE categories run; otherwise everything not in an EXCLUDE
+  category runs), Sumidoku's counterpart of Aidoku's
+  `excludedUpdateCategories`. The skip predicates are evaluated against each
+  user's own `chapter_user` rows: `hasUnread` skips when any chapter has no
+  read row for that user (a missing row is unread), `notStarted` skips when
+  the user has no read chapter (including a title with no chapters), and
+  `completed` skips status 2. A source schedule
+  (`next_update_is_fallback = 0`) skips while its stored `next_update_time`
+  is in the future. A fallback schedule (`= 1`) instead tests
+  `chapters_last_fetched_at + the current effective interval`, so shortening,
+  lengthening or disabling the interval takes effect without rewriting old
+  manga rows; interval 0 is immediately due. The stored next update time is
+  still advanced after success for the next source round trip. A manual
+  `POST /api/v1/update/fetch` is owned by the triggering user; the scheduled
+  run fetches the union of all users' libraries with one source call per
+  manga, filtering auto-download per user.
+  The scheduler checks due every 60s and reloads the interval instead of
+  capturing it at construction, so setting changes need no restart. Its
+  memory-only `last_scheduled_run_at` is stamped only by a scheduled union at
+  start and finish; due uses that timestamp, or scheduler construction time
+  when no scheduled batch has run. Manual batches still stamp the summary's
+  `last_run_at` for reporting, but never the scheduled-only clock, so they
+  cannot postpone the union. A restart waits a full configured interval.
+  Each manga fetch also reloads refresh/interval. WASM receives the refresh
+  flag as `needs_details`; details returned by WASM, local or OPDS are
+  upserted only when it is true. Before that upsert, the write transaction
+  re-reads the current update strategy, so a Never set during a slow fetch is
+  not overwritten by the pre-fetch snapshot. On success, only a returned
+  `Some(at)` different from the pre-fetch value is a new source schedule: it
+  is stored with `next_update_is_fallback = 0`. None or an exact echo of the
+  old value means no new source schedule: a positive interval stores success
+  time + interval hours with the flag 1, while interval 0 stores NULL with
+  the flag 0. Other detail-upsert paths preserve provenance when the
+  timestamp is unchanged and reset it to 0 when the timestamp changes; the
+  update transaction's final write stores the resolved provenance. The same
+  transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
+  failed fetch or persistence pass does not advance either timestamp. Events
+  and the summary carry the fetch's owner, and both the WebSocket stream and
   `GET /api/v1/update/summary` present them scoped to the requesting user
-  (`UpdateSummary::visible_to`): someone else's manual fetch reads as
-  idle, the union run is visible to everyone.
+  (`UpdateSummary::visible_to`): someone else's manual fetch reads as idle,
+  the union run is visible to everyone.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.

@@ -1509,6 +1509,13 @@ async fn get_settings(
 	);
 	// same read-only injection for the oneshots marker (null when neither layer names one)
 	map.insert("localOneshotsDir".into(), json!(state.local_oneshots_dir().await?));
+	let library = crate::update::LibraryUpdateSettings::load(&state.pool, state.config.update_interval_hours).await?;
+	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
+	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
+	map.insert(
+		crate::update::LIBRARY_UPDATE_INTERVAL_HOURS.into(),
+		json!(library.update_interval_hours),
+	);
 	Ok(Json(Value::Object(map)))
 }
 
@@ -1525,6 +1532,9 @@ async fn put_settings(
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
+		if let Some(result) = crate::update::validate_library_setting(key, value) {
+			result?;
+		}
 		// Read-only injected keys: storing them would only be shadowed by GET's injected values, so don't store
 		if key == "localDirs" || key == "localOneshotsDir" {
 			continue;

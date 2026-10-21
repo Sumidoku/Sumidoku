@@ -578,6 +578,8 @@ async fn update_scheduler_rescans_local_library() {
 	assert_eq!(status, StatusCode::OK);
 
 	write_page(&tmp.path().join("local/Alpha/ch 11"), "1.png", b"alpha-11-1");
+	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(&app, "POST", "/api/v1/update/fetch", None).await;
 	assert_eq!(status, StatusCode::OK);
 	// fetch runs asynchronously: wait for the behavioral result (the new chapter appears), then reconcile the scheduler counts

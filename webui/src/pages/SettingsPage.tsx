@@ -574,6 +574,90 @@ function LibraryDisplaySection() {
 	);
 }
 
+const LIBRARY_UPDATE_INTERVALS = [
+	{ hours: 0, labelKey: 'settings.libraryUpdateNever' },
+	{ hours: 12, labelKey: 'settings.libraryUpdate12Hours' },
+	{ hours: 24, labelKey: 'settings.libraryUpdateDaily' },
+	{ hours: 48, labelKey: 'settings.libraryUpdate2Days' },
+	{ hours: 168, labelKey: 'settings.libraryUpdateWeekly' }
+];
+const LIBRARY_SKIP_RULES = [
+	{ key: 'hasUnread', labelKey: 'settings.librarySkipHasUnread' },
+	{ key: 'completed', labelKey: 'settings.librarySkipCompleted' },
+	{ key: 'notStarted', labelKey: 'settings.librarySkipNotStarted' }
+];
+
+function LibraryUpdateSection() {
+	const { t } = useTranslation();
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const intervalHours = Number(settings.data?.['library.update_interval_hours'] ?? 0);
+	const storedSkip = settings.data?.['library.skip_titles'];
+	const skipTitles = Array.isArray(storedSkip)
+		? storedSkip.filter((value): value is string => typeof value === 'string')
+		: [];
+	const refreshMetadata = settings.data?.['library.refresh_metadata'] === true;
+
+	function saveSkip(rule: string, on: boolean) {
+		const changed = on ? [...skipTitles, rule] : skipTitles.filter((value) => value !== rule);
+		const ordered = LIBRARY_SKIP_RULES.map(({ key }) => key).filter((key) => changed.includes(key));
+		save.mutate({ 'library.skip_titles': ordered });
+	}
+
+	return (
+		<Section title={t('settings.libraryUpdateTitle')} desc={t('settings.libraryUpdateDesc')}>
+			{settings.isPending ? (
+				<Skeleton height={180} />
+			) : (
+				<>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.libraryUpdateInterval')}</span>
+						<Select
+							value={String(intervalHours)}
+							disabled={save.isPending}
+							onChange={(e) => {
+								const value = e.currentTarget.value;
+								save.mutate({ 'library.update_interval_hours': Number(value) });
+							}}
+						>
+							{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
+								<option key={hours} value={hours}>
+									{t(labelKey)}
+								</option>
+							))}
+							{!LIBRARY_UPDATE_INTERVALS.some(({ hours }) => hours === intervalHours) && (
+								<option value={intervalHours}>
+									{t('settings.libraryUpdateCustom', { hours: intervalHours })}
+								</option>
+							)}
+						</Select>
+					</div>
+					{LIBRARY_SKIP_RULES.map(({ key, labelKey }) => (
+						<label key={key} className="settings-backup__section">
+							<Switch
+								checked={skipTitles.includes(key)}
+								disabled={save.isPending}
+								onChange={(on) => saveSkip(key, on)}
+								label={t(labelKey)}
+							/>
+							{t(labelKey)}
+						</label>
+					))}
+					<label className="settings-backup__section">
+						<Switch
+							checked={refreshMetadata}
+							disabled={save.isPending}
+							onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
+							label={t('settings.libraryRefreshMetadata')}
+						/>
+						{t('settings.libraryRefreshMetadata')}
+					</label>
+				</>
+			)}
+		</Section>
+	);
+}
+
 type FlagRuleType = 'downloaded' | 'has_unread' | 'started' | 'completed';
 const FLAG_RULE_TYPES: { type: FlagRuleType; labelKey: string }[] = [
 	{ type: 'downloaded', labelKey: 'settings.ruleDownloaded' },
@@ -1986,6 +2070,7 @@ export default function SettingsPage() {
 			<CategoriesSection />
 			<FilterGroupsSection />
 			<LibraryDisplaySection />
+			{isAdmin && <LibraryUpdateSection />}
 			{isAdmin && <LocalSourceSection />}
 			{isAdmin && <ServerSettingsSection />}
 			<BackupSection isAdmin={isAdmin} />
