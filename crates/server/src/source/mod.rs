@@ -17,6 +17,7 @@ use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
+use tokio::io::AsyncReadExt;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1162,6 +1163,31 @@ pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str)
 	tokio::fs::read(&path)
 		.await
 		.map_err(|_| ApiError::not_found("page blob not found"))
+}
+
+/// Reads at most `head_bytes` from a materialized Image page for dimension measurement.
+pub async fn page_image_blob_head(
+	state: &Arc<AppState>,
+	chapter_id: i64,
+	name: &str,
+	head_bytes: usize,
+) -> ApiResult<Vec<u8>> {
+	if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
+		return Err(ApiError::bad_request("invalid page blob name"));
+	}
+	let path = state
+		.config
+		.page_blobs_dir()
+		.join(chapter_id.to_string())
+		.join(name);
+	let file = tokio::fs::File::open(&path)
+		.await
+		.map_err(|_| ApiError::not_found("page blob not found"))?;
+	let mut buf = Vec::with_capacity(head_bytes);
+	tokio::io::AsyncReadExt::read_to_end(&mut file.take(head_bytes as u64), &mut buf)
+		.await
+		.map_err(|e| ApiError::internal(format!("read page blob head failed: {e}")))?;
+	Ok(buf)
 }
 
 /// Startup sweep: blob directories whose chapter row is gone are removed whole (after chapter reconciliation deletes rows, this is the only place left that can reclaim them)

@@ -8,6 +8,10 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// How many leading bytes to read when measuring image dimensions. Most image headers (IHDR, SOF, etc.)
+/// fit comfortably inside this window; only pathological headers (e.g. very large JPEG EXIF) fall back to a full read.
+const DIMENSION_HEAD_BYTES: usize = 64 * 1024;
+
 pub struct PageDimensionUpdate {
 	idx: i64,
 	content: String,
@@ -37,6 +41,31 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
 		.into_dimensions()
 		.ok()?;
 	Some((i64::from(width), i64::from(height)))
+}
+
+/// Measures dimensions from a head read, falling back to a full read only when the head is inconclusive
+/// and was truncated at the head-bytes limit. A failed head read still attempts the full read so transient
+/// errors stay retryable while valid-but-short files avoid the second IO.
+async fn measure_with_fallback<Fut>(
+	head: ApiResult<Vec<u8>>,
+	full: impl FnOnce() -> Fut,
+) -> Option<(i64, i64)>
+where
+	Fut: std::future::Future<Output = ApiResult<Vec<u8>>>,
+{
+	match head {
+		Ok(head) => {
+			if let Some(dims) = image_dimensions(&head) {
+				return Some(dims);
+			}
+			if head.len() >= DIMENSION_HEAD_BYTES {
+				full().await.ok().and_then(|full| image_dimensions(&full))
+			} else {
+				None
+			}
+		}
+		Err(_) => full().await.ok().and_then(|full| image_dimensions(&full)),
+	}
 }
 
 pub async fn persist(pool: &SqlitePool, chapter_id: i64, updates: &[PageDimensionUpdate]) -> ApiResult<()> {
@@ -100,27 +129,48 @@ pub async fn backfill_local(
 			let local_dirs = state.local_dirs().await?;
 			context = Some((chapter, manga, local_dirs));
 		}
-		let bytes = if let Some(name) = content.get("Image").and_then(Value::as_str) {
-			match super::page_image_blob(state, chapter_id, name).await {
-				Ok(bytes) => bytes,
-				Err(_) => continue,
-			}
+		let dimensions = if let Some(name) = content.get("Image").and_then(Value::as_str) {
+			let head = super::page_image_blob_head(state, chapter_id, name, DIMENSION_HEAD_BYTES).await;
+			measure_with_fallback(head, || super::page_image_blob(state, chapter_id, name)).await
 		} else if let Some(entry) = content.get("Local").and_then(Value::as_str) {
 			let (chapter, manga, local_dirs) = context.as_ref().expect("local context initialized");
-			match crate::local::read_page_bytes(local_dirs, &state.local_zip, &manga.key, &chapter.key, entry).await {
-				Ok(bytes) => bytes,
-				Err(_) => continue,
-			}
+			let head = crate::local::read_page_head(
+				local_dirs,
+				&state.local_zip,
+				&manga.key,
+				&chapter.key,
+				entry,
+				DIMENSION_HEAD_BYTES,
+			)
+			.await;
+			let local_zip = state.local_zip.clone();
+			measure_with_fallback(head, || {
+				let local_dirs = local_dirs.clone();
+				let manga_key = manga.key.clone();
+				let chapter_key = chapter.key.clone();
+				let entry = entry.to_string();
+				async move {
+					crate::local::read_page_bytes(&local_dirs, &local_zip, &manga_key, &chapter_key, &entry).await
+				}
+			})
+			.await
 		} else if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
 			let (chapter, manga, _) = context.as_ref().expect("opds context initialized");
-			match crate::opds_source::read_cbz_page(state, manga, chapter, entry).await {
-				Ok((bytes, _)) => bytes,
-				Err(_) => continue,
-			}
+			let head = crate::opds_source::read_cbz_page_head(state, manga, chapter, entry, DIMENSION_HEAD_BYTES).await;
+			let state = state.clone();
+			let manga = manga;
+			let chapter = chapter;
+			let entry = entry.to_string();
+			measure_with_fallback(head, || async {
+				crate::opds_source::read_cbz_page(&state, manga, chapter, &entry)
+					.await
+					.map(|(bytes, _)| bytes)
+			})
+			.await
 		} else {
 			continue;
 		};
-		let update = PageDimensionUpdate::new(row, image_dimensions(&bytes));
+		let update = PageDimensionUpdate::new(row, dimensions);
 		row.width = update.width;
 		row.height = update.height;
 		row.dimensions_checked = true;
@@ -133,6 +183,7 @@ pub async fn backfill_local(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::error::ApiError;
 
 	fn png(width: u32, height: u32) -> Vec<u8> {
 		let image = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
@@ -152,5 +203,34 @@ mod tests {
 	#[test]
 	fn invalid_image_bytes_have_no_dimensions() {
 		assert_eq!(image_dimensions(b"not an image"), None);
+	}
+
+	#[tokio::test]
+	async fn measures_from_head_when_possible() {
+		let bytes = png(37, 61);
+		let head = Ok(bytes.clone());
+		let full = || async { panic!("full read should not be needed") };
+		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
+	}
+
+	#[tokio::test]
+	async fn falls_back_to_full_when_head_is_truncated_and_invalid() {
+		let head = Ok(vec![0u8; DIMENSION_HEAD_BYTES]);
+		let full = || async { Ok(png(37, 61)) };
+		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
+	}
+
+	#[tokio::test]
+	async fn short_invalid_head_skips_full_read() {
+		let head = Ok(b"not an image".to_vec());
+		let full = || async { panic!("full read should not be needed for short invalid head") };
+		assert_eq!(measure_with_fallback(head, full).await, None);
+	}
+
+	#[tokio::test]
+	async fn failed_head_falls_back_to_full() {
+		let head = Err(ApiError::internal("boom"));
+		let full = || async { Ok(png(37, 61)) };
+		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
 	}
 }

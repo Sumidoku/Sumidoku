@@ -714,12 +714,15 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   a cache read or wholesale rewrite, `load_pages` measures unchecked
   materialized `Image`, `Local` and `OpdsZip` bytes through image 0.25's
   `ImageReader::into_dimensions` (decoder metadata, not full pixel decoding);
-  `Url`/`Zip` content is never fetched just for metadata. A byte-read failure
-  stays unchecked for a later retry, while invalid image bytes become checked
-  with null dimensions. Page-row rewrites reset all three fields so changed
-  images cannot inherit stale dimensions. `GET /api/v1/chapter/{id}/pages`
-  keeps the existing content/index shape and adds top-level `width`/`height`
-  only when both are known; text and unknown pages omit the pair.
+  `Url`/`Zip` content is never fetched just for metadata. Measurement reads
+  only the first 64 KiB of a local file or zip entry first; only when those
+  bytes are inconclusive and the entry is larger than the window does it fall
+  back to a full read. A byte-read failure stays unchecked for a later retry,
+  while invalid image bytes become checked with null dimensions. Page-row
+  rewrites reset all three fields so changed images cannot inherit stale
+  dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing
+  content/index shape and adds top-level `width`/`height` only when both are
+  known; text and unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
