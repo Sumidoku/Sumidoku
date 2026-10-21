@@ -116,6 +116,11 @@
 	margin-bottom: 8px;
 }
 
+/* The status chips (unread / downloaded / bookmarked) sit right under the main filter row */
+.library__filters--status {
+	margin-top: -6px;
+}
+
 /* ============ Browse (source list) ============ */
 
 .source-list {
