@@ -474,14 +474,13 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `unreadCount` and the `sort=unread` ordering count with default-unread
   semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
   `filter=unread` keeps its own flagged-rows-only shape).
-- Sync change foundation (`sync.rs`, migration `0017_sync_change_tracking.sql`):
-  `manga`, `manga_user`, `category` and `category_manga` have an internal
+- Sync change foundation (`sync.rs`, migrations `0017_sync_change_tracking.sql`
+  and `0018_sync_protocol.sql`): tracked rows have an internal
   `last_modified_at` integer Unix-millisecond timestamp, default `0` for
   pre-tracking history. Only sync-relevant value changes stamp it and append a
   `sync_change` event: identical upserts, ignored inserts and timestamp-only
-  updates stay quiet, as do the fetch/scheduler bookkeeping columns
-  `last_fetched_at`, `chapters_last_fetched_at`, `next_update_time` and
-  `next_update_is_fallback`. Every non-delete event has
+  updates stay quiet, as do the manga fetch/scheduler bookkeeping columns and
+  chapter `fetched_at`. Every non-delete event has
   `modified_at == snapshot.lastModifiedAt`; a delete event instead carries the
   deletion time while its snapshot retains the deleted row's previous version.
   Ordinary updates and deletes use `max(now, old + 1)`; a key- or
@@ -495,29 +494,106 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   and follows the ordinary increment rule. The journal has no foreign keys to
   tracked entities and belongs to users through `user_id ON DELETE CASCADE`;
   deleting a user removes only that user's events. Its `AUTOINCREMENT`
-  sequence, not a wall-clock time, is the delta cursor. Migration seeds an
+  sequence, not a wall-clock time, is the delta cursor. Migration 0017 seeds an
   ordered baseline of parent manga, user state, categories and memberships at
   modification time `0`; manga without user state have no per-user baseline.
-  Shared manga changes fan out only to users with a `manga_user` row. A new
-  user row journals its parent manga first, and user-state or membership
+  A new user row journals its parent manga first, and user-state or membership
   changes also journal a parent-manga signal for that user. These signals only
-  allocate a fresh sequence for a composite refresh and keep the shared manga
-  version; child entities carry their own versions. Tombstones keep the final
-  snapshot and durable identity (local ids plus source/manga natural keys as
-  applicable). Source deletion captures that identity before cascading,
-  without a second manga tombstone from the cascade. The stable sync identity
-  is `(origin, entity_kind, entity_key)`: natural keys are for initial matching,
-  and a rekey keeps the same entity key and updates the already-mapped remote
-  row rather than emitting an old-delete/new-insert pair. `changes_since` reads
-  one SQLite snapshot, uses `limit + 1`, and returns the last returned sequence
+  allocate a fresh sequence for a composite refresh and keep the shared parent
+  version; child entities carry their own versions.
+  Migration 0018 adds `origin`, `origin_user_id`, `origin_entity_key` and
+  `origin_sequence`. Existing rows are backfilled from the local instance,
+  user, mapped entity key and sequence. `setting.sync.instance_id` is seeded
+  once with 16 random bytes encoded as hex, and the journal insert trigger
+  fills local origin metadata only when `origin_sequence = 0`. `entity_key`
+  remains the local mapped key; the origin fields retain the original event
+  identity. `sync_alias` stores remote-to-local entity mappings separately from
+  event versions, so stale events and compaction cannot change the current
+  version's origin. `sync_origin_state` records the greatest applied origin
+  sequence per origin/origin user/local user/kind/original key, while the
+  singleton `sync_checkpoint` starts at base sequence zero. `changes_since` reads one
+  SQLite snapshot, uses `limit + 1`, and returns the last returned sequence
   while more of the user's events exist, otherwise the global sequence
   high-water mark, including other users' sequences; a cursor ahead of that
-  mark is rejected. This stage exposes no sync route, pull/push/merge protocol
-  or journal retention, and leaves REST and backup-v1 shapes unchanged. Safe
-  cleanup needs the later protocol. `chapter_user.last_read_at` remains a
-  reading-history timestamp, not a general modification time; tracking for
-  progress, bookmarks, chapters and downloads belongs to the later protocol
-  stage.
+  mark is rejected.
+  Chapter and progress baselines are zero-version and ordered parent first.
+  Their audience is the union of users with `manga_user` and `chapter_user`;
+  history-only users receive parent manga/chapter events without gaining
+  library membership. Chapter changes emit a parent-manga signal, and progress
+  changes emit parent manga then parent chapter signals before their own event.
+  `sync_chapter_state` keeps the chapter's local ids, source/manga/chapter
+  natural keys and content snapshot. Chapter snapshots exclude `fetched_at`;
+  progress tracks only page/read/bookmark/history values, not `is_downloaded`,
+  download queue rows, files or page blobs. `chapter_user.last_read_at` remains
+  a reading-history timestamp in seconds, not the millisecond modification
+  version. Rekeying keeps the local entity key and refreshes natural identity.
+  Source, manga and chapter deletion capture chapter/progress snapshots before
+  the parent rows disappear, so their tombstones retain natural identity and
+  the cascades do not duplicate them. REST and backup-v1 shapes are unchanged.
+- Direct instance sync (`api/sync.rs`, `sync/apply.rs`, `sync/compact.rs`):
+  `GET /api/v1/sync/changes?origin=<peer>&since=<cursor>&limit=<1..500>` is
+  authenticated; the peer origin is required, `since` defaults to zero, and
+  the default limit of 100 is capped at 500. One SQLite snapshot returns only
+  the authenticated user's rows after the local cursor whose original origin
+  is not the peer. The response is `{origin, userId, nextCursor, hasMore,
+  changes}` with the local instance id in `origin`. Every change has `origin`,
+  `originUserId`, `originSequence`, `entityKind`, `entityKey`, `deleted`,
+  `modifiedAt`, `identity` and `snapshot`; wire `entityKey` is
+  `origin_entity_key`, never the local mapped id. Local sequences are only
+  delta cursors, while origin and origin sequence identify the original event.
+  `POST /api/v1/sync/changes` accepts `{origin, changes}` in the same shape.
+  The envelope sender must not be the local instance; individual events may
+  retain a third-party origin. The whole batch is validated before writing,
+  then each event gets its own `BEGIN IMMEDIATE` transaction and an
+  `{originSequence, status}` result of `applied`, `duplicate`, `stale` or
+  `skipped` (`reason = source_unavailable`). Exact repeats and older origin
+  sequences are rejected by `sync_origin_state`; applied events, legitimate
+  no-ops and stale events advance it, but an unavailable source rolls the event
+  back without advancing so installing the source and resending works. A stale
+  event leaves the row unchanged but records its origin mapping so a later
+  rekey still updates the same local entity. `sync_alias` owns these
+  remote-to-local mappings independently of event versions; local events also
+  register their own origin so a relay can sync back to the source instance.
+  First matches use source/manga/chapter natural keys and category names; a
+  numeric category id alone never proves a match. Category membership identities
+  carry `categoryOrigin`, `categoryOriginUserId` and `categoryOriginEntityKey`
+  from their current parent event, allowing parent resolution across relay
+  origins in either arrival order. Missing parents become zero-version stubs
+  without fake events or library membership; a later authoritative parent fills
+  them. Ordinary
+  entities compare `(modified_at, origin, origin_sequence)`: newer tombstones
+  delete, newer updates recreate, and deleting an absent entity only advances
+  dedupe. Category membership versions consider the current local key and every
+  historical key linked by `sync_alias`, so a tombstone left by stub merging
+  still orders later relayed updates. Stub coalescing applies each relation's
+  winning live/deleted state; if the winning physical row has a higher version
+  than its latest event, a local event records that version explicitly. Progress
+  comparisons include the actual row's `last_modified_at` even when its current
+  journal event is absent.
+  Progress merges `is_read` with OR, page and history with
+  NULL-safe max, and bookmark by the deterministic version winner. A result
+  equal to current state only advances dedupe; an exact incoming result keeps
+  the incoming origin, while a new merged result gets a local-origin event.
+  Apply captures the starting local sequence, removes only its automatic
+  journal entries, writes the final row version explicitly, then journals the
+  authoritative remote event and locally derived parent/cascade events with
+  their proper origins. Shared manga/chapter fanout is rebuilt for every
+  affected local user, while user-owned state stays with the authenticated
+  user. `sync_chapter_state` is retained except for real deletion.
+  Admin-only `POST /api/v1/sync/compact` compacts in one immediate transaction.
+  It writes current rows and every latest tombstone in manga, manga_user,
+  category, chapter, chapter_user, category_manga order. Baseline rows receive
+  new local cursor sequences and preserve each current entity event's origin;
+  `sync_alias` retains the other remote-to-local mappings. A current stub
+  recreated after a tombstone instead gets a local origin; tombstones keep
+  their own origins. The response `{baseCursor, removed}` records the first new
+  baseline sequence; `sync_alias` and `sync_origin_state` are untouched. A
+  nonzero cursor below
+  that sequence gets 409 `resync_required` and must restart at zero, which
+  returns the complete baseline rather than an empty pseudo-page. Replaying a
+  baseline is idempotent through the same dedupe and merge rules, and later
+  deltas continue from the new high-water mark. Compaction is operator-invoked,
+  never scheduled, and tombstones and origin state survive it.
 - Filter groups (`api/filter_groups.rs`, migration `0013_filter_group.sql`):
   Aidoku-style saved rule sets. A `filter_group` row is per-user
   (`unique (user_id, name)`, `sort_order`), its `filter_group_rule` rows

@@ -495,3 +495,39 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(settings["library.excluded_update_categories"], json!([target_excluded_id]));
 }
+
+#[tokio::test]
+async fn sync_instance_id_stays_out_of_public_settings_and_backups() {
+	let a = test_app().await;
+	let mut doc = export_doc(&a.app).await;
+	assert!(doc["settings"].get("sync.instance_id").is_none());
+	doc["settings"]
+		.as_object_mut()
+		.expect("settings object")
+		.insert("sync.instance_id".into(), json!("peer-instance"));
+
+	let b = fresh_target().await;
+	let pool = connect_db(&b.db_path).await;
+	let before: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		.fetch_one(&pool)
+		.await
+		.expect("target instance id");
+	let (status, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(settings.get("sync.instance_id").is_none());
+	let (status, _) = request(
+		&b.app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"sync.instance_id": "public-overwrite"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let after: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		.fetch_one(&pool)
+		.await
+		.expect("restored instance id");
+	assert_eq!(after, before);
+}

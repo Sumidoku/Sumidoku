@@ -717,8 +717,13 @@ async fn source_uninstall_and_user_delete_preserve_the_other_users_stream() {
 	for user_id in [1, 2] {
 		let events = since(&pool, user_id, cursor).await;
 		assert_time_contract(&events);
-		assert_eq!(kinds(&events), [("manga", true), ("manga_user", true)]);
-		assert_eq!(events.iter().filter(|event| event.entity_kind == "manga").count(), 1);
+		let stage_one: Vec<_> = events
+			.iter()
+			.filter(|event| matches!(event.entity_kind.as_str(), "manga" | "manga_user"))
+			.cloned()
+			.collect();
+		assert_eq!(kinds(&stage_one), [("manga", true), ("manga_user", true)]);
+		assert_eq!(stage_one.iter().filter(|event| event.entity_kind == "manga").count(), 1);
 		assert!(events.iter().all(|event| event.identity["sourceKey"] == "en.example-source"));
 	}
 
@@ -1131,7 +1136,12 @@ async fn sync_change_history_indexes_exist() {
 		.fetch_all(&pool)
 		.await
 		.expect("index names");
-	for expected in ["sync_change_user_sequence", "sync_change_user_entity_sequence", "sync_change_entity_key"] {
+	for expected in [
+		"sync_change_user_sequence",
+		"sync_change_user_entity_sequence",
+		"sync_change_entity_key",
+		"sync_change_origin_entity_sequence",
+	] {
 		assert!(names.iter().any(|name| name == expected), "missing {expected}: {names:?}");
 	}
 	let user_columns: Vec<String> = sqlx::query_scalar(
@@ -1148,6 +1158,13 @@ async fn sync_change_history_indexes_exist() {
 	.await
 	.expect("entity index columns");
 	assert_eq!(entity_columns, ["entity_kind", "entity_key"]);
+	let origin_columns: Vec<String> = sqlx::query_scalar(
+		"SELECT name FROM pragma_index_info('sync_change_origin_entity_sequence') ORDER BY seqno",
+	)
+	.fetch_all(&pool)
+	.await
+	.expect("origin index columns");
+	assert_eq!(origin_columns, ["origin", "origin_user_id", "entity_kind", "origin_entity_key", "origin_sequence"]);
 }
 
 #[tokio::test]

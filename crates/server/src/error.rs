@@ -78,6 +78,10 @@ impl ApiError {
 		Self::new(StatusCode::CONFLICT, "no_update", message)
 	}
 
+	pub fn resync_required(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, "resync_required", message)
+	}
+
 	pub fn message(&self) -> &str {
 		&self.message
 	}

@@ -369,7 +369,7 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		} else {
 			continue;
 		};
-		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES {
+		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES || key == "sync.instance_id" {
 			continue;
 		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
@@ -888,8 +888,11 @@ async fn restore_settings(
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
 		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
-		// Raw exclusion ids belong to the exporting instance, so only category restoration may write them.
-		if key.starts_with("user.") || key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES {
+		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
+		if key.starts_with("user.")
+			|| key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
+			|| key == "sync.instance_id"
+		{
 			continue;
 		}
 		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {

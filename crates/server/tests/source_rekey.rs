@@ -318,6 +318,10 @@ async fn breaking_update_rekeys_in_place() {
 		vec![
 			(manga1.to_string(), "new/manga-1".to_string()),
 			(manga2.to_string(), "new/manga-2".to_string()),
+			(manga1.to_string(), "new/manga-1".to_string()),
+			(manga1.to_string(), "new/manga-1".to_string()),
+			(manga2.to_string(), "new/manga-2".to_string()),
+			(manga2.to_string(), "new/manga-2".to_string()),
 		]
 	);
 
@@ -461,7 +465,16 @@ async fn rekey_target_collision_warns_and_keeps_old_key() {
 	.fetch_all(&pool)
 	.await
 	.expect("rekey events");
-	assert_eq!(events, vec![(manga2.to_string(), "new/manga-2".to_string())]);
+	assert_eq!(
+		events,
+		vec![
+			(manga2.to_string(), "new/manga-2".to_string()),
+			(manga1.to_string(), "old/manga-1".to_string()),
+			(manga1.to_string(), "old/manga-1".to_string()),
+			(manga2.to_string(), "new/manga-2".to_string()),
+			(manga2.to_string(), "new/manga-2".to_string()),
+		]
+	);
 
 	repo.serve.abort();
 }

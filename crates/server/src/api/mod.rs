@@ -20,6 +20,7 @@ pub mod search;
 pub mod settings;
 pub mod source_import;
 pub mod suwayomi_backup;
+pub mod sync;
 pub mod update;
 pub mod users;
 
@@ -93,6 +94,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/source-repos/update-all", post(repo::update_all))
 		.route("/api/v1/backups", get(backup::list_backups))
 		.route("/api/v1/backups/restore", post(backup::restore_backup))
+		.route("/api/v1/sync/compact", post(sync::compact))
 		.route_layer(axum::middleware::from_fn(crate::auth::require_admin));
 	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
@@ -164,6 +166,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
 		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
+		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))
 		.route(
 			"/api/v1/backup",
 			get(backup::export_backup)
@@ -1500,6 +1503,9 @@ async fn get_settings(
 	let mut map = serde_json::Map::new();
 	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
+		if key == "sync.instance_id" {
+			continue;
+		}
 		if key.starts_with("user.") {
 			if let Some(scoped) = key.strip_prefix(&own_prefix)
 				&& USER_SCOPED_SETTING_KEYS.contains(&scoped)
@@ -1553,8 +1559,8 @@ async fn put_settings(
 		if let Some(result) = crate::update::validate_library_setting(key, value) {
 			result?;
 		}
-		// Read-only injected keys: storing them would only be shadowed by GET's injected values, so don't store
-		if key == "localDirs" || key == "localOneshotsDir" {
+		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
+		if key == "localDirs" || key == "localOneshotsDir" || key == "sync.instance_id" {
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
