@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Sumidoku API</title>
+		<link rel="stylesheet" href="/api/docs/swagger-ui.css">
+	</head>
+	<body>
+		<div id="swagger-ui"></div>
+		<script src="/api/docs/swagger-ui-bundle.js"></script>
+		<script src="/api/docs/swagger-ui-standalone-preset.js"></script>
+		<script>
+			window.onload = () => {
+				SwaggerUIBundle({
+					url: "/api/openapi.json",
+					dom_id: "#swagger-ui",
+					deepLinking: true,
+					validatorUrl: null,
+					presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+					plugins: [SwaggerUIBundle.plugins.DownloadUrl],
+					layout: "StandaloneLayout"
+				});
+			};
+		</script>
+	</body>
+</html>

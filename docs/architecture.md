@@ -54,6 +54,15 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   lookup-failure behavior to mirror, and the source decides how to answer. A
   failed dynamic-listings fetch degrades to the static list rather than
   failing the request.
+- API documentation (`api/docs.rs`, `assets/api-docs/`): `/api/openapi.json`
+  publishes a hand-maintained OpenAPI 3.0.3 document covering every `/api/v1`
+  route; OPDS is excluded. `/api/docs` and `/api/docs/` serve Swagger UI
+  5.34.0 with its JavaScript, CSS, Apache-2.0 license and bundled dependency
+  notices embedded in the binary. `validatorUrl: null` disables external spec
+  validation, so the page needs no external assets. The route drift test reads
+  `api/mod.rs` and compares the complete path/method set with the JSON; update
+  the document in the same PR as route or payload changes. Both Docker smoke
+  tests require the spec and the docs page.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
