@@ -20,6 +20,7 @@
     "clearFilters": "Clear filters",
     "emptyTitle": "Your library is empty",
     "emptyHint": "Pick a few manga in Browse to add to your library",
-    "goBrowse": "Go to Browse"
+    "goBrowse": "Go to Browse",
+    "groupHint": "Filter by the \"{{name}}\" group's rules; click again to clear"
   }
 }

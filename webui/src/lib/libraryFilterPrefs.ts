@@ -15,11 +15,22 @@ export interface LibraryFilterPrefs {
 	sources: Record<string, TriState>;
 	/** Category id, "0" = uncategorized (string) → state */
 	categories: Record<string, TriState>;
+	/** The active filter group id; null = no group selected */
+	group: number | null;
 }
 
 const KEY = 'sumidoku.library.filters';
 
-const EMPTY: LibraryFilterPrefs = { filters: {}, ratings: {}, sources: {}, categories: {} };
+const EMPTY: LibraryFilterPrefs = { filters: {}, ratings: {}, sources: {}, categories: {}, group: null };
+
+/** False on the first visit ever: the server-side library.default_category only seeds that first visit — afterwards the stored selection always wins */
+export function hasLibraryFilterPrefs(): boolean {
+	try {
+		return localStorage.getItem(KEY) !== null;
+	} catch {
+		return false;
+	}
+}
 
 export function loadLibraryFilters(): LibraryFilterPrefs {
 	try {
@@ -28,7 +39,13 @@ export function loadLibraryFilters(): LibraryFilterPrefs {
 		const v: unknown = JSON.parse(raw);
 		if (!v || typeof v !== 'object') return EMPTY;
 		const p = v as Partial<LibraryFilterPrefs>;
-		return { filters: clean(p.filters), ratings: clean(p.ratings), sources: clean(p.sources), categories: clean(p.categories) };
+		return {
+			filters: clean(p.filters),
+			ratings: clean(p.ratings),
+			sources: clean(p.sources),
+			categories: clean(p.categories),
+			group: typeof p.group === 'number' ? p.group : null
+		};
 	} catch {
 		// Private mode or broken JSON both count as absent, silently
 		return EMPTY;

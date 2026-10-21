@@ -111,6 +111,11 @@
 	margin-bottom: 14px;
 }
 
+/* The group strip sits tighter to the category row so the two read as related strips */
+.library__groups {
+	margin-bottom: 8px;
+}
+
 /* ============ Browse (source list) ============ */
 
 .source-list {

@@ -212,6 +212,12 @@
 	width: 100%;
 }
 
+.settings-group-editor {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
 /* ============ SettingItem ============ */
 
 .setting-row {
