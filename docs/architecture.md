@@ -767,26 +767,37 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   user's own `chapter_user` rows: `hasUnread` skips when any chapter has no
   read row for that user (a missing row is unread), `notStarted` skips when
   the user has no read chapter (including a title with no chapters), and
-  `completed` skips status 2. A future `m.next_update_time` always skips,
-  independently of the configured skip rules. A manual
+  `completed` skips status 2. A source schedule
+  (`next_update_is_fallback = 0`) skips while its stored `next_update_time`
+  is in the future. A fallback schedule (`= 1`) instead tests
+  `chapters_last_fetched_at + the current effective interval`, so shortening,
+  lengthening or disabling the interval takes effect without rewriting old
+  manga rows; interval 0 is immediately due. The stored next update time is
+  still advanced after success for the next source round trip. A manual
   `POST /api/v1/update/fetch` is owned by the triggering user; the scheduled
   run fetches the union of all users' libraries with one source call per
   manga, filtering auto-download per user.
   The scheduler checks due every 60s and reloads the interval instead of
   capturing it at construction, so setting changes need no restart. Its
-  memory-only `last_run_at` is shared by manual and scheduled batches and is
-  stamped at batch start and finish; due uses that timestamp, or scheduler
-  construction time when no batch has run. A manual batch therefore defers
-  the next scheduled batch, and a restart waits a full configured interval.
+  memory-only `last_scheduled_run_at` is stamped only by a scheduled union at
+  start and finish; due uses that timestamp, or scheduler construction time
+  when no scheduled batch has run. Manual batches still stamp the summary's
+  `last_run_at` for reporting, but never the scheduled-only clock, so they
+  cannot postpone the union. A restart waits a full configured interval.
   Each manga fetch also reloads refresh/interval. WASM receives the refresh
   flag as `needs_details`; details returned by WASM, local or OPDS are
-  upserted only when it is true, restoring the row's current update strategy
-  so a user's Never survives. On success, a source-provided next update time
-  wins; otherwise a positive interval derives success time + interval hours,
-  while interval 0 stores NULL. The same committed transaction reconciles
-  chapters and stamps `chapters_last_fetched_at`; a failed fetch or
-  persistence pass does not advance either timestamp. Events and the summary
-  carry the fetch's owner, and both the WebSocket stream and
+  upserted only when it is true. Before that upsert, the write transaction
+  re-reads the current update strategy, so a Never set during a slow fetch is
+  not overwritten by the pre-fetch snapshot. On success, only a returned
+  `Some(at)` different from the pre-fetch value is a new source schedule: it
+  is stored with `next_update_is_fallback = 0`. None or an exact echo of the
+  old value means no new source schedule: a positive interval stores success
+  time + interval hours with the flag 1, while interval 0 stores NULL with
+  the flag 0. Other detail-upsert paths reset the flag to 0; the update
+  transaction's final write stores the resolved provenance. The same
+  transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
+  failed fetch or persistence pass does not advance either timestamp. Events
+  and the summary carry the fetch's owner, and both the WebSocket stream and
   `GET /api/v1/update/summary` present them scoped to the requesting user
   (`UpdateSummary::visible_to`): someone else's manual fetch reads as idle,
   the union run is visible to everyone.

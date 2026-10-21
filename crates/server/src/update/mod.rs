@@ -75,15 +75,6 @@ fn parse_skip_titles(value: Option<&Value>) -> Vec<String> {
 		.unwrap_or_else(default_skip_titles)
 }
 
-async fn load_skip_titles(pool: &SqlitePool) -> ApiResult<Vec<String>> {
-	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-		.bind(LIBRARY_SKIP_TITLES)
-		.fetch_optional(pool)
-		.await?;
-	let value = row.and_then(|(raw,)| serde_json::from_str(&raw).ok());
-	Ok(parse_skip_titles(value.as_ref()))
-}
-
 pub(crate) fn validate_library_setting(key: &str, value: &Value) -> Option<ApiResult<()>> {
 	let result = match key {
 		LIBRARY_SKIP_TITLES if !valid_skip_titles(value) => Err(ApiError::bad_request(
@@ -108,11 +99,16 @@ fn interval_seconds(interval_hours: u64) -> i64 {
 		.unwrap_or(i64::MAX)
 }
 
-fn resolved_next_update_time(source_value: Option<i64>, fetched_at: i64, interval_hours: u64) -> Option<i64> {
-	match (source_value, interval_hours) {
-		(Some(at), _) => Some(at),
-		(None, 0) => None,
-		(None, _) => Some(fetched_at.saturating_add(interval_seconds(interval_hours))),
+fn resolved_next_update(
+	source_value: Option<i64>,
+	previous_value: Option<i64>,
+	fetched_at: i64,
+	interval_hours: u64,
+) -> (Option<i64>, bool) {
+	match source_value {
+		Some(at) if Some(at) != previous_value => (Some(at), false),
+		_ if interval_hours > 0 => (Some(fetched_at.saturating_add(interval_seconds(interval_hours))), true),
+		_ => (None, false),
 	}
 }
 
@@ -172,10 +168,12 @@ pub struct UpdateScheduler {
 	pool: SqlitePool,
 	events: broadcast::Sender<UpdateEvent>,
 	summary: RwLock<UpdateSummary>,
+	last_scheduled_run_at: RwLock<Option<i64>>,
 	running: AtomicBool,
 	fetch_lock: Arc<Mutex<()>>,
 	auto_download: bool,
 	auto_download_limit: i64,
+	config_interval_hours: u64,
 	started_at: i64,
 }
 
@@ -186,10 +184,12 @@ impl UpdateScheduler {
 			pool: state.pool.clone(),
 			events: broadcast::channel(256).0,
 			summary: RwLock::new(UpdateSummary::default()),
+			last_scheduled_run_at: RwLock::new(None),
 			running: AtomicBool::new(false),
 			fetch_lock: Arc::new(Mutex::new(())),
 			auto_download: state.config.auto_download_new_chapters,
 			auto_download_limit: state.config.auto_download_limit as i64,
+			config_interval_hours: state.config.update_interval_hours,
 			started_at: unix_now(),
 		})
 	}
@@ -222,12 +222,8 @@ impl UpdateScheduler {
 	}
 
 	async fn scheduled_due(&self, now: i64) -> ApiResult<bool> {
-		let state = self
-			.state
-			.upgrade()
-			.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
-		let settings = LibraryUpdateSettings::load(&self.pool, state.config.update_interval_hours).await?;
-		let last_run_at = self.summary.read().await.last_run_at;
+		let settings = LibraryUpdateSettings::load(&self.pool, self.config_interval_hours).await?;
+		let last_run_at = *self.last_scheduled_run_at.read().await;
 		Ok(is_due(self.started_at, last_run_at, now, settings.update_interval_hours))
 	}
 
@@ -243,7 +239,7 @@ impl UpdateScheduler {
 	}
 
 	pub async fn fetch(self: &Arc<Self>, user_id: i64, category_id: Option<i64>, guard: OwnedMutexGuard<()>) {
-		let rows = match select_manga(&self.pool, user_id, category_id).await {
+		let rows = match select_manga(&self.pool, user_id, category_id, self.config_interval_hours).await {
 			Ok(rows) => rows,
 			Err(e) => {
 				tracing::warn!("update select failed: {e:?}");
@@ -256,6 +252,7 @@ impl UpdateScheduler {
 
 	/// Scheduled full sweep: the union of every user's library, with each manga fetched from its source only once; auto-download follows each user's own filtering
 	pub async fn fetch_union(self: &Arc<Self>, guard: OwnedMutexGuard<()>) {
+		*self.last_scheduled_run_at.write().await = Some(unix_now());
 		let user_ids: Vec<i64> = match sqlx::query_scalar(
 			"SELECT DISTINCT user_id FROM manga_user WHERE in_library = 1 ORDER BY user_id",
 		)
@@ -272,7 +269,7 @@ impl UpdateScheduler {
 		let mut owners: HashMap<i64, Vec<i64>> = HashMap::new();
 		for user_id in user_ids {
 			// Each user reuses the same scope filtering, so the rules never drift from a manual trigger
-			let user_rows = match select_manga(&self.pool, user_id, None).await {
+			let user_rows = match select_manga(&self.pool, user_id, None, self.config_interval_hours).await {
 				Ok(rows) => rows,
 				Err(e) => {
 					tracing::warn!("update union select failed: {e:?}");
@@ -290,6 +287,7 @@ impl UpdateScheduler {
 			}
 		}
 		self.run_fetch(rows, owners, None, guard).await;
+		*self.last_scheduled_run_at.write().await = Some(unix_now());
 	}
 
 	async fn run_fetch(
@@ -483,13 +481,19 @@ async fn persist_success(
 	fetched_at: i64,
 ) -> ApiResult<Vec<i64>> {
 	let mut updated = updated.clone();
-	updated.next_update_time = resolved_next_update_time(
+	let (next_update_time, next_update_is_fallback) = resolved_next_update(
 		updated.next_update_time,
+		manga.next_update_time,
 		fetched_at,
 		settings.update_interval_hours,
 	);
+	updated.next_update_time = next_update_time;
 	if settings.refresh_metadata {
-		updated.update_strategy = update_strategy_from_int(manga.update_strategy);
+		let update_strategy: i64 = sqlx::query_scalar("SELECT update_strategy FROM manga WHERE id = ?")
+			.bind(manga.id)
+			.fetch_one(&mut *conn)
+			.await?;
+		updated.update_strategy = update_strategy_from_int(update_strategy);
 		upsert_manga(conn, manga.source_id, &updated, true, true, false).await?;
 	}
 	let new_ids = reconcile_chapters(
@@ -499,21 +503,30 @@ async fn persist_success(
 		protected,
 	)
 	.await?;
-	sqlx::query("UPDATE manga SET next_update_time = ?, chapters_last_fetched_at = ? WHERE id = ?")
-		.bind(updated.next_update_time)
-		.bind(fetched_at)
-		.bind(manga.id)
-		.execute(&mut *conn)
-		.await?;
+	sqlx::query(
+		"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
+	)
+	.bind(next_update_time)
+	.bind(next_update_is_fallback)
+	.bind(fetched_at)
+	.bind(manga.id)
+	.execute(&mut *conn)
+	.await?;
 	Ok(new_ids)
 }
 
 /// Update scope combines the caller's library, category tri-state, global skip settings and per-manga schedule.
-async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>) -> ApiResult<Vec<MangaRow>> {
+async fn select_manga(
+	pool: &SqlitePool,
+	user_id: i64,
+	category_id: Option<i64>,
+	config_interval_hours: u64,
+) -> ApiResult<Vec<MangaRow>> {
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1 AND m.update_strategy != 1";
-	let skip_titles = load_skip_titles(pool).await?;
+	let settings = LibraryUpdateSettings::load(pool, config_interval_hours).await?;
+	let seconds = interval_seconds(settings.update_interval_hours);
 	let mut sql = match category_id {
 		Some(id) => {
 			let tri: Option<(i64,)> =
@@ -554,7 +567,7 @@ async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>)
 			}
 		}
 	};
-	for rule in skip_titles {
+	for rule in settings.skip_titles {
 		let clause = match rule.as_str() {
 			"hasUnread" => {
 				" AND NOT EXISTS (SELECT 1 FROM chapter c WHERE c.manga_id = m.id
@@ -571,10 +584,18 @@ async fn select_manga(pool: &SqlitePool, user_id: i64, category_id: Option<i64>)
 		};
 		sql.push_str(clause);
 	}
-	sql.push_str(" AND (m.next_update_time IS NULL OR m.next_update_time <= unixepoch())");
+	sql.push_str(
+		" AND ((m.next_update_is_fallback = 0
+		 AND (m.next_update_time IS NULL OR m.next_update_time <= unixepoch()))
+		 OR (m.next_update_is_fallback = 1
+		 AND (? = 0 OR m.chapters_last_fetched_at IS NULL
+		 OR m.chapters_last_fetched_at <= unixepoch() - ?)))",
+	);
 	let rows = sqlx::query_as::<_, MangaRow>(&sql)
 		.bind(user_id)
 		.bind(user_id)
+		.bind(seconds)
+		.bind(seconds)
 		.fetch_all(pool)
 		.await?;
 	Ok(rows)
@@ -716,7 +737,7 @@ mod tests {
 	}
 
 	async fn selected_ids(state: &AppState, user_id: i64, category_id: Option<i64>) -> Vec<i64> {
-		let mut ids: Vec<i64> = select_manga(&state.pool, user_id, category_id)
+		let mut ids: Vec<i64> = select_manga(&state.pool, user_id, category_id, state.config.update_interval_hours)
 			.await
 			.expect("select manga")
 			.into_iter()
@@ -1116,7 +1137,7 @@ mod tests {
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
 		assert!(!scheduler.scheduled_due(started_at + 3599).await.expect("early due"));
 		assert!(scheduler.scheduled_due(started_at + 3600).await.expect("interval due"));
-		scheduler.summary.write().await.last_run_at = Some(started_at + 1800);
+		*scheduler.last_scheduled_run_at.write().await = Some(started_at + 1800);
 		assert!(!scheduler.scheduled_due(started_at + 3600).await.expect("last run early"));
 		assert!(scheduler.scheduled_due(started_at + 5400).await.expect("last run due"));
 
@@ -1135,13 +1156,14 @@ mod tests {
 
 		persist_at(&state, manga_id, updated, 24, 1000).await;
 
-		let times: (Option<i64>, Option<i64>) =
-			sqlx::query_as("SELECT next_update_time, chapters_last_fetched_at FROM manga WHERE id = ?")
-				.bind(manga_id)
-				.fetch_one(&state.pool)
-				.await
-				.expect("fetch times");
-		assert_eq!(times, (Some(123_456), Some(1000)));
+		let times: (Option<i64>, Option<i64>, i64) = sqlx::query_as(
+			"SELECT next_update_time, chapters_last_fetched_at, next_update_is_fallback FROM manga WHERE id = ?",
+		)
+		.bind(manga_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("fetch times");
+		assert_eq!(times, (Some(123_456), Some(1000), 0));
 	}
 
 	#[tokio::test]
@@ -1152,25 +1174,27 @@ mod tests {
 		let mut updated = manga_from_row(&row);
 		updated.chapters = Some(Vec::new());
 		persist_at(&state, manga_id, updated, 2, 1000).await;
-		let next: Option<i64> = sqlx::query_scalar("SELECT next_update_time FROM manga WHERE id = ?")
-			.bind(manga_id)
-			.fetch_one(&state.pool)
-			.await
-			.expect("derived next update");
-		assert_eq!(next, Some(8200));
+		let derived: (Option<i64>, i64) =
+			sqlx::query_as("SELECT next_update_time, next_update_is_fallback FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("derived next update");
+		assert_eq!(derived, (Some(8200), 1));
 
 		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("updated manga row");
 		let mut updated = manga_from_row(&row);
 		updated.next_update_time = None;
 		updated.chapters = Some(Vec::new());
 		persist_at(&state, manga_id, updated, 0, 2000).await;
-		let times: (Option<i64>, Option<i64>) =
-			sqlx::query_as("SELECT next_update_time, chapters_last_fetched_at FROM manga WHERE id = ?")
-				.bind(manga_id)
-				.fetch_one(&state.pool)
-				.await
-				.expect("cleared fetch times");
-		assert_eq!(times, (None, Some(2000)));
+		let times: (Option<i64>, Option<i64>, i64) = sqlx::query_as(
+			"SELECT next_update_time, chapters_last_fetched_at, next_update_is_fallback FROM manga WHERE id = ?",
+		)
+		.bind(manga_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("cleared fetch times");
+		assert_eq!(times, (None, Some(2000), 0));
 	}
 
 	#[tokio::test]
@@ -1183,12 +1207,133 @@ mod tests {
 
 		persist_at(&state, manga_id, updated, u64::MAX, i64::MAX).await;
 
-		let next: Option<i64> = sqlx::query_scalar("SELECT next_update_time FROM manga WHERE id = ?")
+		let next: (Option<i64>, i64) =
+			sqlx::query_as("SELECT next_update_time, next_update_is_fallback FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("saturated next update");
+		assert_eq!(next, (Some(i64::MAX), 1));
+	}
+
+	#[tokio::test]
+	async fn manual_summary_time_does_not_defer_scheduled_due() {
+		let (state, _, _tmp) = union_state(Config::default()).await;
+		let scheduler = UpdateScheduler::new(&state);
+		let started_at = scheduler.started_at;
+		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
+		let guard = scheduler.try_acquire().expect("manual fetch guard");
+		scheduler.fetch(1, None, guard).await;
+		assert!(scheduler.summary().await.last_run_at.is_some());
+		scheduler.summary.write().await.last_run_at = Some(started_at + 100_000);
+
+		assert!(scheduler.scheduled_due(started_at + 3600).await.expect("manual time must not defer"));
+	}
+
+	#[tokio::test]
+	async fn fallback_schedule_uses_current_interval() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
+		let manga_id = add_manga(&state, source_id, "current-interval").await;
+		add_to_library(&state, manga_id, 1).await;
+		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
+		let mut updated = manga_from_row(&row);
+		updated.chapters = Some(Vec::new());
+		persist_at(&state, manga_id, updated, 24, unix_now() - 7200).await;
+
+		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
+		assert_eq!(selected_ids(&state, 1, None).await, vec![manga_id]);
+		set_setting(&state, "library.update_interval_hours", serde_json::json!(24)).await;
+		assert_eq!(selected_ids(&state, 1, None).await, Vec::<i64>::new());
+		set_setting(&state, "library.update_interval_hours", serde_json::json!(0)).await;
+		assert_eq!(selected_ids(&state, 1, None).await, vec![manga_id]);
+	}
+
+	#[tokio::test]
+	async fn echoed_source_time_derives_fallback_schedule() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		let manga_id = add_manga(&state, source_id, "echoed-time").await;
+		sqlx::query("UPDATE manga SET next_update_time = 111 WHERE id = ?")
 			.bind(manga_id)
-			.fetch_one(&state.pool)
+			.execute(&state.pool)
 			.await
-			.expect("saturated next update");
-		assert_eq!(next, Some(i64::MAX));
+			.expect("set old source time");
+		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
+		let mut updated = manga_from_row(&row);
+		updated.chapters = Some(Vec::new());
+
+		persist_at(&state, manga_id, updated, 2, 1000).await;
+
+		let times: (Option<i64>, Option<i64>, i64) = sqlx::query_as(
+			"SELECT next_update_time, chapters_last_fetched_at, next_update_is_fallback FROM manga WHERE id = ?",
+		)
+		.bind(manga_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("echoed fetch times");
+		assert_eq!(times, (Some(8200), Some(1000), 1));
+	}
+
+	#[tokio::test]
+	async fn upsert_source_details_reset_fallback_provenance() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		let manga_id = add_manga(&state, source_id, "upsert-provenance").await;
+		sqlx::query("UPDATE manga SET next_update_time = 111, next_update_is_fallback = 1 WHERE id = ?")
+			.bind(manga_id)
+			.execute(&state.pool)
+			.await
+			.expect("set fallback provenance");
+		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
+		let mut updated = manga_from_row(&row);
+		updated.next_update_time = Some(999);
+
+		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
+		upsert_manga(&mut tx, source_id, &updated, true, true, false)
+			.await
+			.expect("upsert source details");
+		tx.commit().await.expect("commit source details");
+
+		let schedule: (Option<i64>, i64) =
+			sqlx::query_as("SELECT next_update_time, next_update_is_fallback FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("source schedule");
+		assert_eq!(schedule, (Some(999), 0));
+	}
+
+	#[tokio::test]
+	async fn persist_refresh_uses_current_update_strategy() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		let manga_id = add_manga(&state, source_id, "current-strategy").await;
+		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("pre-fetch row");
+		sqlx::query("UPDATE manga SET update_strategy = 1 WHERE id = ?")
+			.bind(manga_id)
+			.execute(&state.pool)
+			.await
+			.expect("mark never during fetch");
+		let mut updated = manga_from_row(&row);
+		updated.description = Some("fresh".into());
+		updated.chapters = Some(Vec::new());
+
+		let settings = LibraryUpdateSettings {
+			skip_titles: Vec::new(),
+			refresh_metadata: true,
+			update_interval_hours: 0,
+		};
+		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
+		persist_success(&mut tx, &row, &updated, &[], &settings, 1000)
+			.await
+			.expect("persist successful fetch");
+		tx.commit().await.expect("commit successful fetch");
+
+		let details: (i64, Option<String>) =
+			sqlx::query_as("SELECT update_strategy, description FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("current strategy");
+		assert_eq!(details, (1, Some("fresh".into())));
 	}
 
 	async fn persist_at(
@@ -1198,10 +1343,21 @@ mod tests {
 		interval_hours: u64,
 		fetched_at: i64,
 	) {
+		persist_at_with_refresh(state, manga_id, updated, interval_hours, fetched_at, false).await;
+	}
+
+	async fn persist_at_with_refresh(
+		state: &AppState,
+		manga_id: i64,
+		updated: aidoku::Manga,
+		interval_hours: u64,
+		fetched_at: i64,
+		refresh_metadata: bool,
+	) {
 		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
 		let settings = LibraryUpdateSettings {
 			skip_titles: Vec::new(),
-			refresh_metadata: false,
+			refresh_metadata,
 			update_interval_hours: interval_hours,
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
