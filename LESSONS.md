@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An echoed value is not a new value: every upsert path must preserve its
+provenance when the value is unchanged.** A derived timestamp and a
+source-owned timestamp can have identical values but different scheduling
+semantics. Resetting the provenance on every detail upsert lets an ordinary
+echo turn a derived deadline into a source deadline, and later interval
+changes stop affecting it. Preserve the flag on an exact (including NULL)
+echo and reset it only when the value changes; cover both the scheduler's
+write path and ordinary detail refreshes.
+- Evidence: 2026-10-21, #45's review caught the ordinary-refresh path after
+  the scheduler path was fixed. `upsert_echoed_details_preserve_fallback_provenance`
+  failed with `(Some(111), 0)` instead of `(Some(111), 1)` before the shared
+  upsert preserved the flag.
+
 **`DefaultBodyLimit` does not reject an over-limit multipart body at the
 extractor — the limit error bubbles up inside the handler's field reads,
 and a blanket `bad_request` mapping silently turns the 413 into a 400.**
