@@ -106,6 +106,8 @@ pub struct BackupCategory {
 	pub sort_order: i64,
 	#[serde(default)]
 	pub is_default: bool,
+	/// Deprecated: no longer exported, but kept for deserializing legacy backups.
+	/// On restore, `2` (exclude) is migrated into `library.excluded_update_categories`.
 	#[serde(default)]
 	pub include_in_update: i64,
 	#[serde(default)]
@@ -265,8 +267,8 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		})
 		.collect();
 
-	let category_rows: Vec<(i64, String, i64, bool, i64, i64)> = sqlx::query_as(
-		"SELECT id, name, sort_order, is_default, include_in_update, include_in_download
+	let category_rows: Vec<(i64, String, i64, bool, i64)> = sqlx::query_as(
+		"SELECT id, name, sort_order, is_default, include_in_download
 		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
 	)
 	.bind(user_id)
@@ -290,12 +292,12 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 	}
 	let categories = category_rows
 		.into_iter()
-		.map(|(id, name, sort_order, is_default, include_in_update, include_in_download)| {
+		.map(|(id, name, sort_order, is_default, include_in_download)| {
 			BackupCategory {
 				name,
 				sort_order,
 				is_default,
-				include_in_update,
+				include_in_update: 0,
 				include_in_download,
 				manga: members.remove(&id).unwrap_or_default(),
 			}
@@ -684,10 +686,13 @@ async fn restore_categories(
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
 ) -> ApiResult<()> {
+	// Legacy include_in_update = 2 categories are migrated to the per-user excluded_update_categories setting.
+	let mut migrated_excluded: Vec<i64> = Vec::new();
 	for category in &doc.categories {
 		if category.name.trim().is_empty() {
 			return Err(ApiError::bad_request("backup category name must not be empty"));
 		}
+		// include_in_update is deprecated but still accepted from legacy backups for migration.
 		check_include_in(&category.name, "includeInUpdate", category.include_in_update)?;
 		check_include_in(&category.name, "includeInDownload", category.include_in_download)?;
 		let existing: Option<(i64,)> =
@@ -699,12 +704,11 @@ async fn restore_categories(
 		let category_id = match existing {
 			Some((id,)) => {
 				sqlx::query(
-					"UPDATE category SET sort_order = ?, is_default = ?, include_in_update = ?,
-					 include_in_download = ? WHERE id = ?",
+					"UPDATE category SET sort_order = ?, is_default = ?, include_in_download = ?
+					 WHERE id = ?",
 				)
 				.bind(category.sort_order)
 				.bind(category.is_default)
-				.bind(category.include_in_update)
 				.bind(category.include_in_download)
 				.bind(id)
 				.execute(&mut **tx)
@@ -713,20 +717,22 @@ async fn restore_categories(
 			}
 			None => {
 				let result = sqlx::query(
-					"INSERT INTO category (user_id, name, sort_order, is_default, include_in_update,
-					 include_in_download) VALUES (?, ?, ?, ?, ?, ?)",
+					"INSERT INTO category (user_id, name, sort_order, is_default, include_in_download)
+					 VALUES (?, ?, ?, ?, ?)",
 				)
 				.bind(user_id)
 				.bind(&category.name)
 				.bind(category.sort_order)
 				.bind(category.is_default)
-				.bind(category.include_in_update)
 				.bind(category.include_in_download)
 				.execute(&mut **tx)
 				.await?;
 				result.last_insert_rowid()
 			}
 		};
+		if category.include_in_update == 2 {
+			migrated_excluded.push(category_id);
+		}
 		for member in &category.manga {
 			let Some(source_id) = source_id_by_key(tx, &member.source_key).await? else {
 				warnings.push(format!(
@@ -759,6 +765,31 @@ async fn restore_categories(
 			.await?;
 		}
 		restored.categories += 1;
+	}
+	// Migrate legacy include_in_update = 2 (exclude) into the per-user excluded_update_categories setting.
+	if !migrated_excluded.is_empty() {
+		let key = format!("user.{user_id}.library.excluded_update_categories");
+		let current: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM setting WHERE key = ?")
+				.bind(&key)
+				.fetch_optional(&mut **tx)
+				.await?;
+		let mut existing: Vec<i64> = current
+			.and_then(|(raw,)| serde_json::from_str(&raw).ok())
+			.unwrap_or_default();
+		for id in migrated_excluded {
+			if !existing.contains(&id) {
+				existing.push(id);
+			}
+		}
+		sqlx::query(
+			"INSERT INTO setting (key, value) VALUES (?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+		)
+		.bind(&key)
+		.bind(serde_json::to_string(&existing)?)
+		.execute(&mut **tx)
+		.await?;
 	}
 	Ok(())
 }

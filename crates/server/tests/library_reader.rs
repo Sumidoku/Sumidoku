@@ -468,15 +468,9 @@ async fn category_include_flags_patch() {
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
-	assert_eq!(body["includeInUpdate"], 0);
+	assert!(!body.as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(body["includeInDownload"], 0);
 	let cat_path = format!("/api/v1/categories/{cat}");
-
-	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({"includeInUpdate": 1}))).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
-	assert_eq!(body["includeInDownload"], 0);
-	assert_eq!(body["name"], "Flags");
 
 	let (status, body) = request(
 		&app,
@@ -486,7 +480,7 @@ async fn category_include_flags_patch() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
+	assert!(!body.as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(body["includeInDownload"], 2);
 	assert_eq!(body["name"], "Flags2");
 
@@ -497,23 +491,19 @@ async fn category_include_flags_patch() {
 		.iter()
 		.find(|c| c["id"].as_i64() == Some(cat))
 		.expect("category");
-	assert_eq!(row["includeInUpdate"], 1);
+	assert!(!row.as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(row["includeInDownload"], 2);
 
 	// {} and an empty body are both no-ops
 	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
+	assert_eq!(body["includeInDownload"], 2);
 	let (status, body) = request(&app, "PATCH", &cat_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["includeInDownload"], 2);
 
 	// invalid values 400 and are not persisted
-	for bad in [
-		json!({"includeInUpdate": 3}),
-		json!({"includeInDownload": -1}),
-		json!({"includeInUpdate": "x"}),
-	] {
+	for bad in [json!({"includeInDownload": -1}), json!({"includeInDownload": "x"})] {
 		let (status, body) = request(&app, "PATCH", &cat_path, Some(bad.clone())).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
 		assert_eq!(body["error"]["code"], "bad_request");
@@ -526,10 +516,10 @@ async fn category_include_flags_patch() {
 		.find(|c| c["id"].as_i64() == Some(cat))
 		.expect("category")
 		.clone();
-	assert_eq!(row["includeInUpdate"], 1);
+	assert!(!row.as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(row["includeInDownload"], 2);
 
-	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInUpdate": 1}))).await;
+	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInDownload": 1}))).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 

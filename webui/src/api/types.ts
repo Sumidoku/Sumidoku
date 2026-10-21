@@ -196,8 +196,6 @@ export interface Category {
 	sortOrder: number;
 	isDefault: boolean;
 	mangaCount: number;
-	/** Tri-state: 0 follow global / 1 include / 2 exclude */
-	includeInUpdate: number;
 	includeInDownload: number;
 }
 
@@ -576,8 +574,6 @@ export interface PatchMangaBody {
 
 export interface PatchCategoryBody {
 	name?: string;
-	/** Tri-state: 0 follow global / 1 include / 2 exclude */
-	includeInUpdate?: number;
 	includeInDownload?: number;
 }
 

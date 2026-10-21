@@ -19,6 +19,7 @@ const SCHEDULE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 pub const LIBRARY_SKIP_TITLES: &str = "library.skip_titles";
 pub const LIBRARY_REFRESH_METADATA: &str = "library.refresh_metadata";
 pub const LIBRARY_UPDATE_INTERVAL_HOURS: &str = "library.update_interval_hours";
+pub const LIBRARY_EXCLUDED_UPDATE_CATEGORIES: &str = "library.excluded_update_categories";
 pub const SKIP_TITLE_RULES: [&str; 3] = ["hasUnread", "completed", "notStarted"];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,16 +27,19 @@ pub struct LibraryUpdateSettings {
 	pub skip_titles: Vec<String>,
 	pub refresh_metadata: bool,
 	pub update_interval_hours: u64,
+	pub excluded_update_categories: Vec<i64>,
 }
 
 impl LibraryUpdateSettings {
-	pub async fn load(pool: &SqlitePool, config_interval_hours: u64) -> ApiResult<Self> {
+	pub async fn load(pool: &SqlitePool, user_id: i64, config_interval_hours: u64) -> ApiResult<Self> {
+		let excluded_key = format!("user.{user_id}.{LIBRARY_EXCLUDED_UPDATE_CATEGORIES}");
 		let rows: Vec<(String, String)> = sqlx::query_as(
-			"SELECT key, value FROM setting WHERE key IN (?, ?, ?)",
+			"SELECT key, value FROM setting WHERE key IN (?, ?, ?, ?)",
 		)
 		.bind(LIBRARY_SKIP_TITLES)
 		.bind(LIBRARY_REFRESH_METADATA)
 		.bind(LIBRARY_UPDATE_INTERVAL_HOURS)
+		.bind(&excluded_key)
 		.fetch_all(pool)
 		.await?;
 		let values: HashMap<String, Value> = rows
@@ -52,6 +56,7 @@ impl LibraryUpdateSettings {
 				.get(LIBRARY_UPDATE_INTERVAL_HOURS)
 				.and_then(Value::as_u64)
 				.unwrap_or(config_interval_hours),
+			excluded_update_categories: parse_excluded_categories(values.get(&excluded_key)),
 		})
 	}
 }
@@ -75,6 +80,17 @@ fn parse_skip_titles(value: Option<&Value>) -> Vec<String> {
 		.unwrap_or_else(default_skip_titles)
 }
 
+fn valid_excluded_categories(value: &Value) -> bool {
+	value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
+}
+
+fn parse_excluded_categories(value: Option<&Value>) -> Vec<i64> {
+	value
+		.filter(|value| valid_excluded_categories(value))
+		.and_then(|value| serde_json::from_value::<Vec<i64>>(value.clone()).ok())
+		.unwrap_or_default()
+}
+
 pub(crate) fn validate_library_setting(key: &str, value: &Value) -> Option<ApiResult<()>> {
 	let result = match key {
 		LIBRARY_SKIP_TITLES if !valid_skip_titles(value) => Err(ApiError::bad_request(
@@ -86,7 +102,10 @@ pub(crate) fn validate_library_setting(key: &str, value: &Value) -> Option<ApiRe
 		LIBRARY_UPDATE_INTERVAL_HOURS if value.as_u64().is_none() => Err(ApiError::bad_request(
 			"library.update_interval_hours must be a non-negative integer",
 		)),
-		LIBRARY_SKIP_TITLES | LIBRARY_REFRESH_METADATA | LIBRARY_UPDATE_INTERVAL_HOURS => Ok(()),
+		LIBRARY_EXCLUDED_UPDATE_CATEGORIES if !valid_excluded_categories(value) => Err(ApiError::bad_request(
+			"library.excluded_update_categories must be an array of category ids",
+		)),
+		LIBRARY_SKIP_TITLES | LIBRARY_REFRESH_METADATA | LIBRARY_UPDATE_INTERVAL_HOURS | LIBRARY_EXCLUDED_UPDATE_CATEGORIES => Ok(()),
 		_ => return None,
 	};
 	Some(result)
@@ -222,7 +241,8 @@ impl UpdateScheduler {
 	}
 
 	async fn scheduled_due(&self, now: i64) -> ApiResult<bool> {
-		let settings = LibraryUpdateSettings::load(&self.pool, self.config_interval_hours).await?;
+		// update_interval_hours is global; any user id works for loading it.
+		let settings = LibraryUpdateSettings::load(&self.pool, 1, self.config_interval_hours).await?;
 		let last_run_at = *self.last_scheduled_run_at.read().await;
 		Ok(is_due(self.started_at, last_run_at, now, settings.update_interval_hours))
 	}
@@ -377,7 +397,8 @@ impl UpdateScheduler {
 				.state
 				.upgrade()
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
-			let settings = LibraryUpdateSettings::load(&self.pool, state.config.update_interval_hours).await?;
+			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
+			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
 			let (updated, protected) = if is_local {
 				let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &manga.key).await?;
 				(update.manga, update.protected)
@@ -515,7 +536,8 @@ async fn persist_success(
 	Ok(new_ids)
 }
 
-/// Update scope combines the caller's library, category tri-state, global skip settings and per-manga schedule.
+/// Update scope combines the caller's library, global excluded categories, skip settings and per-manga schedule.
+/// The deprecated per-category include_in_update tri-state is no longer consulted.
 async fn select_manga(
 	pool: &SqlitePool,
 	user_id: i64,
@@ -525,48 +547,41 @@ async fn select_manga(
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1 AND m.update_strategy != 1";
-	let settings = LibraryUpdateSettings::load(pool, config_interval_hours).await?;
+	let settings = LibraryUpdateSettings::load(pool, user_id, config_interval_hours).await?;
 	let seconds = interval_seconds(settings.update_interval_hours);
-	let mut sql = match category_id {
-		Some(id) => {
-			let tri: Option<(i64,)> =
-				sqlx::query_as("SELECT include_in_update FROM category WHERE id = ? AND user_id = ?")
-					.bind(id)
-					.bind(user_id)
-					.fetch_optional(pool)
-					.await?;
-			let Some((tri,)) = tri else {
-				return Err(ApiError::not_found("category not found"));
-			};
-			if tri == 2 {
-				return Ok(Vec::new());
-			}
-			format!(
-				"{BASE} AND EXISTS (SELECT 1 FROM category_manga cm
-				 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = {id})"
-			)
+	// When updating from a specific category, Aidoku ignores that category in the global exclusion list
+	// (pulling that category explicitly should still update its titles).
+	let excluded_categories: Vec<i64> = category_id
+		.map(|id| settings.excluded_update_categories.iter().copied().filter(|c| *c != id).collect())
+		.unwrap_or_else(|| settings.excluded_update_categories.clone());
+	let mut sql = if let Some(id) = category_id {
+		let exists: Option<(i64,)> =
+			sqlx::query_as("SELECT 1 FROM category WHERE id = ? AND user_id = ?")
+				.bind(id)
+				.bind(user_id)
+				.fetch_optional(pool)
+				.await?;
+		if exists.is_none() {
+			return Err(ApiError::not_found("category not found"));
 		}
-		None => {
-			let has_include: Option<(i64,)> =
-				sqlx::query_as("SELECT 1 FROM category WHERE user_id = ? AND include_in_update = 1 LIMIT 1")
-					.bind(user_id)
-					.fetch_optional(pool)
-					.await?;
-			if has_include.is_some() {
-				format!(
-					"{BASE} AND EXISTS (SELECT 1 FROM category_manga cm
-					 JOIN category c ON c.id = cm.category_id
-					 WHERE cm.manga_id = m.id AND cm.user_id = ? AND c.include_in_update = 1)"
-				)
-			} else {
-				format!(
-					"{BASE} AND NOT EXISTS (SELECT 1 FROM category_manga cm
-					 JOIN category c ON c.id = cm.category_id
-					 WHERE cm.manga_id = m.id AND cm.user_id = ? AND c.include_in_update = 2)"
-				)
-			}
-		}
+		format!(
+			"{BASE} AND EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id = {id})"
+		)
+	} else {
+		BASE.to_string()
 	};
+	if !excluded_categories.is_empty() {
+		let ids = excluded_categories
+			.iter()
+			.map(|id| id.to_string())
+			.collect::<Vec<_>>()
+			.join(",");
+		sql.push_str(&format!(
+			" AND NOT EXISTS (SELECT 1 FROM category_manga cm
+			 WHERE cm.manga_id = m.id AND cm.user_id = ? AND cm.category_id IN ({ids}))"
+		));
+	}
 	for rule in settings.skip_titles {
 		let clause = match rule.as_str() {
 			"hasUnread" => {
@@ -591,13 +606,14 @@ async fn select_manga(
 		 AND (? = 0 OR m.chapters_last_fetched_at IS NULL
 		 OR m.chapters_last_fetched_at <= unixepoch() - ?)))",
 	);
-	let rows = sqlx::query_as::<_, MangaRow>(&sql)
-		.bind(user_id)
-		.bind(user_id)
-		.bind(seconds)
-		.bind(seconds)
-		.fetch_all(pool)
-		.await?;
+	let mut query = sqlx::query_as::<_, MangaRow>(&sql).bind(user_id);
+	if category_id.is_some() {
+		query = query.bind(user_id);
+	}
+	if !excluded_categories.is_empty() {
+		query = query.bind(user_id);
+	}
+	let rows = query.bind(seconds).bind(seconds).fetch_all(pool).await?;
 	Ok(rows)
 }
 
@@ -937,26 +953,28 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn category_tri_state_is_preserved() {
+	async fn excluded_update_categories_filter() {
 		let (state, source_id, _tmp) = union_state(Config::default()).await;
 		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
-		let excluded = add_manga(&state, source_id, "excluded").await;
-		let ordinary = add_manga(&state, source_id, "ordinary").await;
-		add_to_library(&state, excluded, 1).await;
-		add_to_library(&state, ordinary, 1).await;
+		let in_excluded = add_manga(&state, source_id, "in-excluded").await;
+		let in_both = add_manga(&state, source_id, "in-both").await;
+		let untouched = add_manga(&state, source_id, "untouched").await;
+		for manga_id in [in_excluded, in_both, untouched] {
+			add_to_library(&state, manga_id, 1).await;
+		}
 		let excluded_category: i64 = sqlx::query_scalar(
-			"INSERT INTO category (user_id, name, include_in_update) VALUES (1, 'excluded', 2) RETURNING id",
+			"INSERT INTO category (user_id, name) VALUES (1, 'excluded') RETURNING id",
 		)
 		.fetch_one(&state.pool)
 		.await
 		.expect("insert excluded category");
-		let ordinary_category: i64 = sqlx::query_scalar(
-			"INSERT INTO category (user_id, name, include_in_update) VALUES (1, 'ordinary', 0) RETURNING id",
+		let other_category: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name) VALUES (1, 'other') RETURNING id",
 		)
 		.fetch_one(&state.pool)
 		.await
-		.expect("insert ordinary category");
-		for (category_id, manga_id) in [(excluded_category, excluded), (ordinary_category, ordinary)] {
+		.expect("insert other category");
+		for (category_id, manga_id) in [(excluded_category, in_excluded), (excluded_category, in_both), (other_category, in_both)] {
 			sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
 				.bind(category_id)
 				.bind(manga_id)
@@ -965,22 +983,31 @@ mod tests {
 				.expect("link category");
 		}
 
-		assert_eq!(selected_ids(&state, 1, None).await, vec![ordinary]);
+		// No exclusion yet: all three are selected.
+		assert_eq!(selected_ids(&state, 1, None).await, vec![in_excluded, in_both, untouched]);
 
-		sqlx::query("UPDATE category SET include_in_update = 1 WHERE id = ?")
-			.bind(excluded_category)
-			.execute(&state.pool)
-			.await
-			.expect("include category");
-		assert_eq!(selected_ids(&state, 1, None).await, vec![excluded]);
-		assert_eq!(selected_ids(&state, 1, Some(ordinary_category)).await, vec![ordinary]);
+		// Exclude the category: titles linked to it are skipped, even if they also belong to another category.
+		// The setting is user-scoped; user 1 is the only user in this test.
+		set_setting(
+			&state,
+			"user.1.library.excluded_update_categories",
+			serde_json::json!([excluded_category]),
+		)
+		.await;
+		assert_eq!(selected_ids(&state, 1, None).await, vec![untouched]);
 
-		sqlx::query("UPDATE category SET include_in_update = 2 WHERE id = ?")
-			.bind(excluded_category)
-			.execute(&state.pool)
-			.await
-			.expect("exclude category");
-		assert_eq!(selected_ids(&state, 1, Some(excluded_category)).await, Vec::<i64>::new());
+		// Pulling the excluded category explicitly ignores the exclusion for that category.
+		assert_eq!(selected_ids(&state, 1, Some(excluded_category)).await, vec![in_excluded, in_both]);
+
+		// Add another category to the exclusion list and pull the first excluded category again.
+		// The pulled category is ignored in the exclusion, but the other excluded category still filters.
+		set_setting(
+			&state,
+			"user.1.library.excluded_update_categories",
+			serde_json::json!([excluded_category, other_category]),
+		)
+		.await;
+		assert_eq!(selected_ids(&state, 1, Some(excluded_category)).await, vec![in_excluded]);
 	}
 
 	#[tokio::test]
@@ -1103,26 +1130,28 @@ mod tests {
 			..Config::default()
 		};
 		let (state, _, _tmp) = union_state(config).await;
-		let settings = LibraryUpdateSettings::load(&state.pool, 36).await.expect("default settings");
+		let settings = LibraryUpdateSettings::load(&state.pool, 1, 36).await.expect("default settings");
 		assert_eq!(
 			settings,
 			LibraryUpdateSettings {
 				skip_titles: vec!["hasUnread".into(), "completed".into(), "notStarted".into()],
 				refresh_metadata: false,
 				update_interval_hours: 36,
+				excluded_update_categories: Vec::new(),
 			}
 		);
 
 		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
 		set_setting(&state, "library.refresh_metadata", serde_json::json!(true)).await;
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(12)).await;
-		let settings = LibraryUpdateSettings::load(&state.pool, 36).await.expect("runtime settings");
+		let settings = LibraryUpdateSettings::load(&state.pool, 1, 36).await.expect("runtime settings");
 		assert_eq!(
 			settings,
 			LibraryUpdateSettings {
 				skip_titles: Vec::new(),
 				refresh_metadata: true,
 				update_interval_hours: 12,
+				excluded_update_categories: Vec::new(),
 			}
 		);
 	}
@@ -1347,6 +1376,7 @@ mod tests {
 			skip_titles: Vec::new(),
 			refresh_metadata: true,
 			update_interval_hours: 0,
+			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
 		persist_success(&mut tx, &row, &updated, &[], &settings, 1000)
@@ -1386,6 +1416,7 @@ mod tests {
 			skip_titles: Vec::new(),
 			refresh_metadata,
 			update_interval_hours: interval_hours,
+			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
 		persist_success(&mut tx, &row, &updated, &[], &settings, fetched_at)

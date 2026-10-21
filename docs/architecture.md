@@ -783,15 +783,21 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Library updates (`update/mod.rs`): serial per source, at most 3 sources at
   once, broadcasting progress as `UpdateEvent`s. The global
   `library.skip_titles` setting defaults to `hasUnread`, `completed` and
-  `notStarted`; `library.refresh_metadata` defaults to false, and
+  `notStarted`; `library.refresh_metadata` defaults to false;
   `library.update_interval_hours` falls back to config
-  `update_interval_hours` (default 0 = never). The setting takes precedence
-  when present. `GET /api/v1/settings` returns these effective values, and
-  only admins can write them. Selection keeps `update_strategy = Never` and
-  the category `include_in_update` tri-state (with any INCLUDE, only titles
-  under INCLUDE categories run; otherwise everything not in an EXCLUDE
-  category runs), Sumidoku's counterpart of Aidoku's
-  `excludedUpdateCategories`. The skip predicates are evaluated against each
+  `update_interval_hours` (default 0 = never); and
+  `library.excluded_update_categories` defaults to an empty array of category
+  ids stored per-user as `user.{id}.library.excluded_update_categories`. `GET
+  /api/v1/settings` returns the effective values for the requesting user; readers
+  can write their own user-scoped exclusion list, admins can write all library
+  settings. Selection keeps `update_strategy = Never` and the per-user
+  `library.excluded_update_categories` list: a title whose categories overlap
+  the excluded list is skipped. The per-category `include_in_update` tri-state
+  has been removed from the category API and is no longer consulted; use the
+  per-user excluded categories setting instead. A manual `POST /api/v1/update/fetch`
+  with a `categoryId` ignores that category in the global exclusion list,
+  matching Aidoku's behavior when pulling a specific category. The skip
+  predicates are evaluated against each
   user's own `chapter_user` rows: `hasUnread` skips when any chapter has no
   read row for that user (a missing row is unread), `notStarted` skips when
   the user has no read chapter (including a title with no chapters), and

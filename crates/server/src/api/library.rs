@@ -426,13 +426,12 @@ struct CategoryRow {
 	name: String,
 	sort_order: i64,
 	is_default: bool,
-	include_in_update: i64,
 	include_in_download: i64,
 	manga_count: i64,
 }
 
 const CATEGORY_SELECT: &str = "SELECT c.id, c.name, c.sort_order, c.is_default,
-	 c.include_in_update, c.include_in_download,
+	 c.include_in_download,
 	 (SELECT COUNT(*) FROM category_manga cm
 	  WHERE cm.category_id = c.id AND cm.user_id = ?) AS manga_count
 	 FROM category c WHERE c.user_id = ?";
@@ -443,7 +442,6 @@ fn category_json(row: &CategoryRow) -> Value {
 		"name": row.name,
 		"sortOrder": row.sort_order,
 		"isDefault": row.is_default,
-		"includeInUpdate": row.include_in_update,
 		"includeInDownload": row.include_in_download,
 		"mangaCount": row.manga_count,
 	})
@@ -561,7 +559,6 @@ pub async fn create_category(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCategoryRequest {
 	pub name: Option<String>,
-	pub include_in_update: Option<i64>,
 	pub include_in_download: Option<i64>,
 }
 
@@ -585,10 +582,6 @@ pub async fn update_category(
 		Some(Json(value)) => serde_json::from_value(value)
 			.map_err(|e| ApiError::bad_request(format!("invalid category patch: {e}")))?,
 	};
-	let include_in_update = patch
-		.include_in_update
-		.map(|v| check_include_in("includeInUpdate", v))
-		.transpose()?;
 	let include_in_download = patch
 		.include_in_download
 		.map(|v| check_include_in("includeInDownload", v))
@@ -604,15 +597,14 @@ pub async fn update_category(
 		}
 		None => None,
 	};
-	if name.is_none() && include_in_update.is_none() && include_in_download.is_none() {
+	if name.is_none() && include_in_download.is_none() {
 		return Ok(Json(category_json(&row)));
 	}
 	sqlx::query(
-		"UPDATE category SET name = ?, include_in_update = ?, include_in_download = ?
+		"UPDATE category SET name = ?, include_in_download = ?
 		 WHERE id = ? AND user_id = ?",
 	)
 	.bind(name.as_deref().unwrap_or(&row.name))
-	.bind(include_in_update.unwrap_or(row.include_in_update))
 	.bind(include_in_download.unwrap_or(row.include_in_download))
 	.bind(id)
 	.bind(user.id)

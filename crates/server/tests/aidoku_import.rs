@@ -57,15 +57,6 @@ async fn import_aidoku_merges_with_existing_state() {
 	let evening_id = body["id"].as_i64().expect("category id");
 	let (status, _) = request(
 		&app.app,
-		"PATCH",
-		&format!("/api/v1/categories/{evening_id}"),
-		Some(json!({"includeInUpdate": 1})),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-
-	let (status, _) = request(
-		&app.app,
 		"POST",
 		"/api/v1/library",
 		Some(json!({"mangaId": manga_id, "categoryIds": [evening_id]})),
@@ -163,7 +154,7 @@ async fn import_aidoku_merges_with_existing_state() {
 	let (_, cats) = request(&app.app, "GET", "/api/v1/categories", None).await;
 	let cats = cats.as_array().expect("categories");
 	let evening = cats.iter().find(|c| c["name"] == "Evening").expect("Evening");
-	assert_eq!(evening["includeInUpdate"], 1);
+	assert!(!evening.as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(evening["mangaCount"], 1);
 	let reading = cats.iter().find(|c| c["name"] == "Reading").expect("Reading");
 	assert_eq!(reading["mangaCount"], 2);
