@@ -286,7 +286,10 @@ export default function LibraryPage() {
 						</option>
 					))}
 				</Select>
-				{/* Same tri-state chips as the manga detail page's chapter filter: unselected → include → exclude */}
+			</div>
+
+			{/* Same tri-state chips as the manga detail page's chapter filter: unselected → include → exclude */}
+			<div className="library__filters library__filters--status">
 				{FILTER_OPTIONS.map((o) => {
 					const st = filterTri[o.value] ?? 0;
 					return (
