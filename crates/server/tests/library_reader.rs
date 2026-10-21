@@ -650,6 +650,11 @@ async fn library_search_sort_filter() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(entry_ids(&body), vec![c, b, a]);
 	assert_eq!(body["hasNextPage"], false);
+	let mut totals = std::collections::HashMap::new();
+	for id in [a, b, c] {
+		let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{id}/chapters"), None).await;
+		totals.insert(id, body.as_array().expect("chapters").len() as i64);
+	}
 	let counts: std::collections::HashMap<i64, i64> = body["entries"]
 		.as_array()
 		.expect("entries")
@@ -661,7 +666,11 @@ async fn library_search_sort_filter() {
 			)
 		})
 		.collect();
-	assert_eq!(counts, std::collections::HashMap::from([(a, 2), (b, 1), (c, 0)]));
+	// chapters with an is_read=1 row: C has one, A and B none — every other chapter counts as unread
+	assert_eq!(
+		counts,
+		std::collections::HashMap::from([(a, totals[&a]), (b, totals[&b]), (c, totals[&c] - 1)])
+	);
 
 	// search: B's full title hits only B
 	let (status, body) = request(
@@ -704,8 +713,12 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), title_order);
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=lastRead", None).await;
 	assert_eq!(entry_ids(&body), vec![b, a, c]);
+	// the badge's default-unread count desc, ties broken by id asc
+	let mut by_unread = [(a, totals[&a]), (b, totals[&b]), (c, totals[&c] - 1)];
+	by_unread.sort_by_key(|&(id, count)| (-count, id));
+	let unread_order: Vec<i64> = by_unread.iter().map(|&(id, _)| id).collect();
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=unread", None).await;
-	assert_eq!(entry_ids(&body), vec![a, b, c]);
+	assert_eq!(entry_ids(&body), unread_order);
 	let (status, _) = request(&app, "GET", "/api/v1/library?sort=bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 

@@ -208,6 +208,31 @@ export type LibraryFilter = 'unread' | 'downloaded' | 'bookmarked';
 /** Tri-state multi-select: keyed by option id (string form), 1 include / -1 exclude, unselected keys are absent */
 export type TriStateSelection = Record<string, 1 | -1>;
 
+// ---- Filter groups (Aidoku-style persisted rule sets) ----
+
+/** Value-less flag types carry value: null; valued types carry their id/rating as a number */
+export type FilterGroupRuleType =
+	| 'downloaded'
+	| 'has_unread'
+	| 'started'
+	| 'completed'
+	| 'source'
+	| 'content_rating'
+	| 'category';
+
+export interface FilterGroupRule {
+	type: FilterGroupRuleType;
+	value: number | null;
+	exclude: boolean;
+}
+
+export interface FilterGroup {
+	id: number;
+	name: string;
+	sortOrder: number;
+	rules: FilterGroupRule[];
+}
+
 // ---- Downloads and updates ----
 
 export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'finished' | 'error';

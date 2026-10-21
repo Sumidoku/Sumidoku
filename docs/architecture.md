@@ -447,7 +447,38 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   least one): within one dimension the include set is an OR and the
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
-  treated as absent; invalid tokens answer 400.
+  treated as absent; invalid tokens answer 400. The entry payload's
+  `unreadCount` and the `sort=unread` ordering count with default-unread
+  semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
+  `filter=unread` keeps its own flagged-rows-only shape).
+- Filter groups (`api/filter_groups.rs`, migration `0013_filter_group.sql`):
+  Aidoku-style saved rule sets. A `filter_group` row is per-user
+  (`unique (user_id, name)`, `sort_order`), its `filter_group_rule` rows
+  cascade with it (`unique (group_id, type, value)`; flag rules carry a
+  NULL value, so the write path — not the index — dedupes them, SQLite
+  treating NULLs as distinct). `GET`/`POST /api/v1/filter-groups`,
+  `PATCH`/`DELETE /api/v1/filter-groups/{id}` (PATCH renames and/or
+  replaces the rule set wholesale) and `PATCH .../reorder` follow the
+  category handlers' shape. Rule types: `downloaded` (EXISTS
+  `chapter_user.is_downloaded`), `started` (EXISTS
+  `chapter_user.last_read_at`), `completed` (`m.status = 2`),
+  `has_unread` (default-unread: EXISTS a chapter with no read
+  `chapter_user` row — never the ad-hoc `filter=unread` shape, which
+  would drop never-opened and partially-read manga), and the valued
+  `source` / `content_rating` / `category` (one id per row). Evaluation
+  matches Aidoku's filter loop (`compile_group`): includes OR within one
+  valued dimension, excludes apply per value, dimensions and flag rules
+  AND — "all rules ANDed" holds only across dimensions.
+  `GET /api/v1/library?groupId=` compiles one group into the same WHERE
+  clause, ANDed with the ad-hoc parameters; another user's group 404s
+  like another user's category. The web UI manages groups in Settings →
+  Filter groups and renders them as a single-select chip strip above the
+  category chips; two display settings (user-scoped `library.*` keys,
+  next to `incognito.enabled`) steer the page: `library.default_category`
+  (`all` / `uncategorized` / a category id) seeds the initial chip only
+  on the first visit — a stored chip selection (#243's localStorage
+  prefs) always wins afterwards — and `library.show_uncategorized`
+  hides the uncategorized chip.
   `GET /api/v1/library/source-counts` returns per-source in-library totals
   (`{sourceId, count}`) for the web UI's source filter dropdown — counts
   include disabled sources' rows and only in-library manga. Chapter reconcile

@@ -1,6 +1,7 @@
 pub mod aidoku_backup;
 pub mod backup;
 pub mod download;
+pub mod filter_groups;
 pub mod filters;
 pub mod import_merge;
 pub mod key_realign;
@@ -132,6 +133,18 @@ pub fn router(state: Arc<AppState>) -> Router {
 			patch(library::update_category).delete(library::delete_category),
 		)
 		.route("/api/v1/categories/reorder", patch(library::reorder_categories))
+		.route(
+			"/api/v1/filter-groups",
+			get(filter_groups::list_groups).post(filter_groups::create_group),
+		)
+		.route(
+			"/api/v1/filter-groups/{id}",
+			patch(filter_groups::update_group).delete(filter_groups::delete_group),
+		)
+		.route(
+			"/api/v1/filter-groups/reorder",
+			patch(filter_groups::reorder_groups),
+		)
 		.route("/api/v1/history", get(reader::get_history))
 		.route(
 			"/api/v1/downloads",
@@ -1450,8 +1463,14 @@ async fn get_pages(
 }
 
 /// User-scoped setting keys: stored in the DB under the user.<id>.<key> namespace, the API only ever sees bare keys;
-/// other users' namespace keys are neither visible nor writable. Only the incognito toggle for now; new keys are added on both the read and write sides together
-pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &["incognito.enabled"];
+/// other users' namespace keys are neither visible nor writable. These are per-user library/display preferences —
+/// a reader must be able to write its own, and the library.* keys reference the user's own category ids; new keys
+/// are added on both the read and write sides together
+pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
+	"incognito.enabled",
+	"library.default_category",
+	"library.show_uncategorized",
+];
 
 pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
 	format!("user.{user_id}.{key}")
@@ -1498,7 +1517,7 @@ async fn put_settings(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
-	// Global keys are the config surface: a reader may only write user-scoped keys in its own namespace (the incognito toggle)
+	// Global keys are the config surface: a reader may only write user-scoped keys in its own namespace
 	if user.role != "admin"
 		&& let Some(key) = body.keys().find(|key| !USER_SCOPED_SETTING_KEYS.contains(&key.as_str()))
 	{
@@ -1522,6 +1541,20 @@ async fn put_settings(
 		// local.oneshots_dir marks oneshots directories (state.local_oneshots_dir); a string, empty clears the override
 		if key == "local.oneshots_dir" && !value.is_string() {
 			return Err(ApiError::bad_request("local.oneshots_dir must be a string"));
+		}
+		// library.default_category names the library page's initial chip: "all" / "uncategorized" / a category id
+		// in string form; a since-deleted id is pruned client-side, so any positive id stores
+		if key == "library.default_category"
+			&& !value.as_str().is_some_and(|v| {
+				v == "all" || v == "uncategorized" || v.parse::<i64>().is_ok_and(|id| id > 0)
+			})
+		{
+			return Err(ApiError::bad_request(
+				"library.default_category must be \"all\", \"uncategorized\" or a category id",
+			));
+		}
+		if key == "library.show_uncategorized" && !value.is_boolean() {
+			return Err(ApiError::bad_request("library.show_uncategorized must be a boolean"));
 		}
 		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
 		if key.starts_with("user.") {

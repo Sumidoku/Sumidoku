@@ -18,6 +18,8 @@ import type {
 	ChapterProgress,
 	DeepLinkResponse,
 	Filter,
+	FilterGroup,
+	FilterGroupRule,
 	FilterValue,
 	GlobalSearchResponse,
 	GlobalSearchStreamEvent,
@@ -67,6 +69,7 @@ export const qk = {
 	sourceRepos: ['source-repos'] as const,
 	repoSources: ['source-repos', 'sources'] as const,
 	categories: ['categories'] as const,
+	filterGroups: ['filter-groups'] as const,
 	library: ['library'] as const,
 	manga: (id: number) => ['manga', id] as const,
 	chapters: (mangaId: number) => ['manga', mangaId, 'chapters'] as const,
@@ -185,6 +188,8 @@ export interface LibraryBrowse {
 	sources?: TriStateSelection;
 	/** Category tri-state (category id, "0" = uncategorized → 1 include / -1 exclude) */
 	categories?: TriStateSelection;
+	/** The active filter group; its rules compile server-side and AND with the ad-hoc filters */
+	groupId?: number;
 }
 
 /** Split a tri-state into the API's two comma-separated include/exclude strings; an empty set is omitted */
@@ -200,13 +205,13 @@ function triParams(sel: TriStateSelection | undefined): [string?, string?] {
 }
 
 export function useLibrary(browse: LibraryBrowse = {}) {
-	const { search, sort, filters, sourceId, ratings, sources, categories } = browse;
+	const { search, sort, filters, sourceId, ratings, sources, categories, groupId } = browse;
 	const [filterInc, filterExc] = triParams(filters);
 	const [ratingInc, ratingExc] = triParams(ratings);
 	const [sourceInc, sourceExc] = triParams(sources);
 	const [categoryInc, categoryExc] = triParams(categories);
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { search, sort, filters, sourceId, ratings, sources, categories }],
+		queryKey: [...qk.library, { search, sort, filters, sourceId, ratings, sources, categories, groupId }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
 			if (sourceId !== undefined) qs.set('sourceId', String(sourceId));
@@ -220,6 +225,7 @@ export function useLibrary(browse: LibraryBrowse = {}) {
 			if (sourceExc) qs.set('sourceExclude', sourceExc);
 			if (categoryInc) qs.set('category', categoryInc);
 			if (categoryExc) qs.set('categoryExclude', categoryExc);
+			if (groupId !== undefined) qs.set('groupId', String(groupId));
 			return api<LibraryPage>(`/library?${qs}`);
 		},
 		initialPageParam: 1,
@@ -1040,6 +1046,54 @@ export function useReorderCategories() {
 		mutationFn: (ids: number[]) =>
 			api<Category[]>('/categories/reorder', { method: 'PATCH', body: { ids } }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.categories })
+	});
+}
+
+// ---- Filter groups ----
+
+export function useFilterGroups() {
+	return useQuery({ queryKey: qk.filterGroups, queryFn: () => api<FilterGroup[]>('/filter-groups') });
+}
+
+/** A group's rules feed the library query, so every mutation invalidates both the group list and the library */
+function invalidateGroups(qc: QueryClient) {
+	void qc.invalidateQueries({ queryKey: qk.filterGroups });
+	void qc.invalidateQueries({ queryKey: qk.library });
+}
+
+// silent: a duplicate-name 409 is turned into a toast by the caller
+export function useCreateFilterGroup() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (body: { name: string; rules: FilterGroupRule[] }) =>
+			api<FilterGroup>('/filter-groups', { method: 'POST', body, silent: true }),
+		onSuccess: () => invalidateGroups(qc)
+	});
+}
+
+export function useUpdateFilterGroup() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: ({ id, ...body }: { id: number; name?: string; rules?: FilterGroupRule[] }) =>
+			api<FilterGroup>(`/filter-groups/${id}`, { method: 'PATCH', body, silent: true }),
+		onSuccess: () => invalidateGroups(qc)
+	});
+}
+
+export function useDeleteFilterGroup() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (id: number) => api(`/filter-groups/${id}`, { method: 'DELETE' }),
+		onSuccess: () => invalidateGroups(qc)
+	});
+}
+
+export function useReorderFilterGroups() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (ids: number[]) =>
+			api<FilterGroup[]>('/filter-groups/reorder', { method: 'PATCH', body: { ids } }),
+		onSuccess: () => invalidateGroups(qc)
 	});
 }
 

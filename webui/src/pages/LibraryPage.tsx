@@ -4,10 +4,10 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { BookOpen, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
-import { useCategories, useLibrary, useLibrarySourceCounts, useSources } from '../api/hooks';
+import { useCategories, useFilterGroups, useLibrary, useLibrarySourceCounts, useServerSettings, useSources } from '../api/hooks';
 import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
 import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
-import { loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
+import { hasLibraryFilterPrefs, loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
 import {
 	Button,
 	Chip,
@@ -83,6 +83,11 @@ export default function LibraryPage() {
 	const [ratings, setRatings] = useState<TriStateSelection>(initialPrefs.ratings);
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>(initialPrefs.sources);
 	const [categoryTri, setCategoryTri] = useState<TriStateSelection>(initialPrefs.categories);
+	const [groupId, setGroupId] = useState<number | null>(initialPrefs.group);
+	// library.default_category only seeds the very first visit: once any chip state exists in
+	// localStorage the user's own selection always wins (#243), and a manual chip change before the
+	// settings arrive suppresses the seed too
+	const [defaultSeed] = useState(() => ({ stored: hasLibraryFilterPrefs(), applied: false, touched: false }));
 
 	useEffect(() => {
 		const timer = setTimeout(() => setSearch(searchInput.trim()), 300);
@@ -95,16 +100,30 @@ export default function LibraryPage() {
 		filters: filterTri,
 		ratings,
 		sources: sourceTri,
-		categories: categoryTri
+		categories: categoryTri,
+		groupId: groupId ?? undefined
 	});
 	const categories = useCategories();
+	const filterGroups = useFilterGroups();
 	const sourcesQuery = useSources();
 	const countsQuery = useLibrarySourceCounts();
+	const serverSettings = useServerSettings();
+	const showUncategorized = serverSettings.data?.['library.show_uncategorized'] !== false;
+
+	// First-visit seed of the initial category chip from the server setting; runs at most once, and
+	// never over a stored selection or a chip the user already touched
+	useEffect(() => {
+		const raw = serverSettings.data?.['library.default_category'];
+		if (defaultSeed.stored || defaultSeed.applied || defaultSeed.touched || raw === undefined) return;
+		defaultSeed.applied = true;
+		if (raw === 'uncategorized') setCategoryTri({ [UNCATEGORIZED]: 1 });
+		else if (raw !== 'all' && /^\d+$/.test(String(raw))) setCategoryTri({ [String(raw)]: 1 });
+	}, [serverSettings.data, defaultSeed]);
 
 	// Persist the chip states across sessions (the clear-filters button and chip clicks flow through the same setters)
 	useEffect(() => {
-		saveLibraryFilters({ filters: filterTri, ratings, sources: sourceTri, categories: categoryTri });
-	}, [filterTri, ratings, sourceTri, categoryTri]);
+		saveLibraryFilters({ filters: filterTri, ratings, sources: sourceTri, categories: categoryTri, group: groupId });
+	}, [filterTri, ratings, sourceTri, categoryTri, groupId]);
 
 	// Restored ids may belong to since-deleted categories or uninstalled sources: a stale include id
 	// would filter the library down to nothing with no chip showing why, so drop unknown ids once
@@ -112,10 +131,20 @@ export default function LibraryPage() {
 	useEffect(() => {
 		if (!categories.data || !sourcesQuery.data) return;
 		setCategoryTri((cur) =>
-			pruneSelection(cur, new Set((categories.data ?? []).map((c) => String(c.id))), UNCATEGORIZED)
+			pruneSelection(
+				cur,
+				new Set((categories.data ?? []).map((c) => String(c.id))),
+				...(showUncategorized ? [UNCATEGORIZED] : [])
+			)
 		);
 		setSourceTri((cur) => pruneSelection(cur, new Set(sourcesQuery.data?.map((s) => String(s.id)))));
-	}, [categories.data, sourcesQuery.data]);
+	}, [categories.data, sourcesQuery.data, showUncategorized]);
+	// A selected group that was since deleted must not keep filtering invisibly
+	useEffect(() => {
+		if (filterGroups.data && groupId !== null && !filterGroups.data.some((g) => g.id === groupId)) {
+			setGroupId(null);
+		}
+	}, [filterGroups.data, groupId]);
 	const counts = useMemo(() => {
 		const map = new Map<number, number>();
 		for (const c of countsQuery.data ?? []) map.set(c.sourceId, c.count);
@@ -142,6 +171,7 @@ export default function LibraryPage() {
 	);
 	const filtering =
 		search !== '' ||
+		groupId !== null ||
 		Object.keys(filterTri).length > 0 ||
 		Object.keys(ratings).length > 0 ||
 		Object.keys(sourceTri).length > 0 ||
@@ -154,6 +184,13 @@ export default function LibraryPage() {
 		setRatings({});
 		setSourceTri({});
 		setCategoryTri({});
+		setGroupId(null);
+	}
+
+	/** Cycling a category chip by hand counts as a user choice, so the first-visit default must not override it later */
+	function cycleCategory(key: string) {
+		defaultSeed.touched = true;
+		setCategoryTri((cur) => cycled(cur, key));
 	}
 
 	return (
@@ -172,23 +209,42 @@ export default function LibraryPage() {
 				}
 			/>
 
+			{/* Filter groups are their own strip above the category chips: one active group at a time,
+			    tapping the active chip clears it; the selection persists like the other chip states */}
+			{(filterGroups.data ?? []).length > 0 && (
+				<div className="library__filters library__groups">
+					{(filterGroups.data ?? []).map((g) => (
+						<Chip
+							key={g.id}
+							color={groupId === g.id ? 'accent' : 'default'}
+							title={t('library.groupHint', { name: g.name })}
+							onClick={() => setGroupId((cur) => (cur === g.id ? null : g.id))}
+						>
+							{g.name}
+						</Chip>
+					))}
+				</div>
+			)}
+
 			<div className="library__filters">
 				{/* Category tri-state chips replace the old category tabs: no chip selected = 全部; 未分类 is the API's category=0 arm */}
-				<Chip
-					color={
-						categoryTri[UNCATEGORIZED] === 1
-							? 'accent'
-							: categoryTri[UNCATEGORIZED] === -1
-								? 'danger'
-								: 'default'
-					}
-					className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
-					title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
-					onClick={() => setCategoryTri((cur) => cycled(cur, UNCATEGORIZED))}
-				>
-					{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}
-					{t('library.uncategorized')}
-				</Chip>
+				{showUncategorized && (
+					<Chip
+						color={
+							categoryTri[UNCATEGORIZED] === 1
+								? 'accent'
+								: categoryTri[UNCATEGORIZED] === -1
+									? 'danger'
+									: 'default'
+						}
+						className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
+						title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
+						onClick={() => cycleCategory(UNCATEGORIZED)}
+					>
+						{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}
+						{t('library.uncategorized')}
+					</Chip>
+				)}
 				{(categories.data ?? []).map((c) => {
 					const st = categoryTri[String(c.id)] ?? 0;
 					return (
@@ -197,7 +253,7 @@ export default function LibraryPage() {
 							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
 							className={st === -1 ? 'chip--exclude' : undefined}
 							title={triTitle(t, c.name, st)}
-							onClick={() => setCategoryTri((cur) => cycled(cur, String(c.id)))}
+							onClick={() => cycleCategory(String(c.id))}
 						>
 							{st === -1 ? '− ' : ''}
 							{c.name}（{c.mangaCount}）

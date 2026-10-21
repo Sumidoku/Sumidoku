@@ -20,6 +20,7 @@
     "clearFilters": "清空筛选",
     "emptyTitle": "书架还是空的",
     "emptyHint": "去「浏览」里挑几本漫画加入书库吧",
-    "goBrowse": "去浏览"
+    "goBrowse": "去浏览",
+    "groupHint": "按「{{name}}」分组的规则筛选，再点一次取消"
   }
 }
