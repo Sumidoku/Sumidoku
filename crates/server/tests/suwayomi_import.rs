@@ -182,6 +182,18 @@ async fn import_suwayomi_merges_with_existing_state() {
 
 	// manga 3 with favorite=false: the row is created but not shelved; chapter 5, which only appears in history, also gets progress
 	let pool = connect_db(&app.db_path).await;
+	let tracking: (i64, i64) = sqlx::query_as(
+		"SELECT last_modified_at,
+		 (SELECT COUNT(*) FROM sync_change WHERE entity_kind = 'manga_user' AND entity_key = ?)
+		 FROM manga_user WHERE manga_id = ? AND user_id = 1",
+	)
+	.bind(format!("{manga2_id}:1"))
+	.bind(manga2_id)
+	.fetch_one(&pool)
+	.await
+	.expect("imported tracking");
+	assert!(tracking.0 >= 1_000_000_000_000);
+	assert_eq!(tracking.1, 1);
 	let row: Option<(i64, i64)> = sqlx::query_as(
 		"SELECT m.id, COALESCE(mu.in_library, 0) FROM manga m
 		 LEFT JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 WHERE m.key = '3'",
@@ -218,6 +230,11 @@ async fn import_suwayomi_merges_with_existing_state() {
 		.find(|c| c["name"] == "Favorites")
 		.expect("Favorites");
 	assert_eq!(favorites["mangaCount"], 1);
+
+	let before = db_dump(&app.db_path).await;
+	let (status, body) = post_backup(&app.app, "", TACHIBK).await;
+	assert_eq!(status, StatusCode::OK, "identical import failed: {body}");
+	assert_eq!(db_dump(&app.db_path).await, before);
 }
 
 /// Pinpoint assertions for the three directions max / OR / newer: changing the override semantics turns this red

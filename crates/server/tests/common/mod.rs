@@ -300,12 +300,22 @@ pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {
 		.expect("connect db")
 }
 
+pub async fn sync_change_count(db_path: &std::path::Path) -> i64 {
+	let pool = connect_db(db_path).await;
+	let count = sqlx::query_scalar("SELECT COUNT(*) FROM sync_change")
+		.fetch_one(&pool)
+		.await
+		.expect("sync change count");
+	pool.close().await;
+	count
+}
+
 /// Full-table logical dump: in WAL mode the file bytes don't represent logical state, so reconcile per table by rowid using quote() text
 pub async fn db_dump(db_path: &std::path::Path) -> String {
 	const TABLES: &[&str] = &[
 		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
 		"category", "category_manga", "download", "setting", "source_repo", "source_cookie",
-		"auth_token",
+		"auth_token", "sync_change",
 	];
 	let pool = connect_db(db_path).await;
 	let mut out = String::new();

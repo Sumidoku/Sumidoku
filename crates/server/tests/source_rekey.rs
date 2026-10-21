@@ -238,6 +238,12 @@ async fn breaking_update_rekeys_in_place() {
 		.execute(&pool)
 		.await
 		.expect("mark downloaded");
+	let sync_cursor: i64 = sqlx::query_scalar(
+		"SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_change'), 0)",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("sync cursor");
 
 	// the repo publishes v2: same wasm with handler, manifest crosses breakingChangeVersion=2
 	stage(&repo, KEY, 2, &rekey_wasm, Some(2));
@@ -299,6 +305,21 @@ async fn breaking_update_rekeys_in_place() {
 		.expect("source row")
 		.clone();
 	assert_eq!(row["breakingChangeVersion"], 2, "{row}");
+	let events: Vec<(String, String)> = sqlx::query_as(
+		"SELECT entity_key, json_extract(identity, '$.mangaKey') FROM sync_change
+		 WHERE sequence > ? AND entity_kind = 'manga' ORDER BY sequence",
+	)
+	.bind(sync_cursor)
+	.fetch_all(&pool)
+	.await
+	.expect("rekey events");
+	assert_eq!(
+		events,
+		vec![
+			(manga1.to_string(), "new/manga-1".to_string()),
+			(manga2.to_string(), "new/manga-2".to_string()),
+		]
+	);
 
 	repo.serve.abort();
 }
@@ -353,6 +374,7 @@ async fn non_breaking_update_is_plain_update() {
 	let repo_id = add_repo(&app.app, &repo.url).await;
 	let source_id = install(&app.app, repo_id, KEY).await;
 	let (manga1, _) = register_library_manga(&app.app, source_id, "Rekey One").await;
+	let sync_before = sync_change_count(&app.db_path).await;
 
 	// v2 without breakingChangeVersion: a normal update doesn't trigger migration
 	stage(&repo, KEY, 2, &rekey_wasm, None);
@@ -386,6 +408,7 @@ async fn non_breaking_update_is_plain_update() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["version"], 2, "{body}");
 	assert_eq!(body["migrationRequired"], false, "{body}");
+	assert_eq!(sync_change_count(&app.db_path).await, sync_before);
 
 	repo.serve.abort();
 }
@@ -409,6 +432,12 @@ async fn rekey_target_collision_warns_and_keeps_old_key() {
 		.execute(&pool)
 		.await
 		.expect("insert squatter");
+	let sync_cursor: i64 = sqlx::query_scalar(
+		"SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_change'), 0)",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("sync cursor");
 
 	stage(&repo, KEY, 2, &rekey_wasm, Some(2));
 	refresh(&app.app, repo_id).await;
@@ -424,6 +453,15 @@ async fn rekey_target_collision_warns_and_keeps_old_key() {
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/manga/{manga2}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["key"], "new/manga-2", "{body}");
+	let events: Vec<(String, String)> = sqlx::query_as(
+		"SELECT entity_key, json_extract(identity, '$.mangaKey') FROM sync_change
+		 WHERE sequence > ? AND entity_kind = 'manga' ORDER BY sequence",
+	)
+	.bind(sync_cursor)
+	.fetch_all(&pool)
+	.await
+	.expect("rekey events");
+	assert_eq!(events, vec![(manga2.to_string(), "new/manga-2".to_string())]);
 
 	repo.serve.abort();
 }

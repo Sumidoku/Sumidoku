@@ -209,6 +209,20 @@ async fn copy_keeps_origin_and_carries_state() {
 	assert_eq!(result["ok"], true, "{result}");
 	assert_eq!(result["warnings"].as_array().expect("warnings").len(), 0, "{result}");
 	let target = result["toMangaId"].as_i64().expect("toMangaId");
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	let tracking: (i64, i64) = sqlx::query_as(
+		"SELECT last_modified_at,
+		 (SELECT COUNT(*) FROM sync_change WHERE entity_kind = 'manga_user' AND entity_key = ?)
+		 FROM manga_user WHERE manga_id = ? AND user_id = 1",
+	)
+	.bind(format!("{target}:1"))
+	.bind(target)
+	.fetch_one(&pool)
+	.await
+	.expect("migrated tracking");
+	assert!(tracking.0 >= 1_000_000_000_000);
+	assert_eq!(tracking.1, 1);
+	pool.close().await;
 
 	// COPY keeps the origin entry: library state, categories, progress all as-is
 	let detail = manga_detail(&app, origin).await;
@@ -241,6 +255,11 @@ async fn copy_keeps_origin_and_carries_state() {
 	assert_eq!(entries.len(), 1, "{body}");
 	assert_eq!(entries[0]["id"], target, "{body}");
 	assert_eq!(entries[0]["inLibraryAt"].as_i64(), Some(origin_added_at), "{body}");
+
+	let before = common::db_dump(&tmp.path().join("test.db")).await;
+	let (status, body) = migrate(&app, "copy", json!([{"fromMangaId": origin, "toSourceId": second, "toMangaKey": key}])).await;
+	assert_eq!(status, StatusCode::OK, "identical copy failed: {body}");
+	assert_eq!(common::db_dump(&tmp.path().join("test.db")).await, before);
 }
 
 #[tokio::test]

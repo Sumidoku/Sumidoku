@@ -143,6 +143,8 @@ async fn export_import_round_trip() {
 	assert!(doc_source["repoUrl"].is_null());
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["library"][0]["sourceKey"], SOURCE_KEY);
+	assert!(doc.get("syncChanges").is_none());
+	assert!(doc["library"][0].get("lastModifiedAt").is_none());
 	assert!(doc["library"][0]["inLibraryAt"].is_i64());
 	assert_eq!(doc["library"][0]["viewer"], 2);
 	assert_eq!(doc["categories"].as_array().expect("categories").len(), 2);
@@ -174,6 +176,20 @@ async fn export_import_round_trip() {
 	assert_eq!(entries[0]["tags"], a_manga["tags"]);
 	assert_eq!(entries[0]["viewer"], "RightToLeft");
 	assert_eq!(entries[0]["inLibraryAt"], doc["library"][0]["inLibraryAt"]);
+	let b_pool = connect_db(&b.db_path).await;
+	let tracking: (i64, i64) = sqlx::query_as(
+		"SELECT last_modified_at,
+		 (SELECT COUNT(*) FROM sync_change WHERE entity_kind = 'manga_user' AND entity_key = ?)
+		 FROM manga_user WHERE manga_id = ? AND user_id = 1",
+	)
+	.bind(format!("{b_manga_id}:1"))
+	.bind(b_manga_id)
+	.fetch_one(&b_pool)
+	.await
+	.expect("restored tracking");
+	assert!(tracking.0 >= 1_000_000_000_000);
+	assert_eq!(tracking.1, 1);
+	b_pool.close().await;
 
 	// categories: order, tri-state flags, membership
 	let (_, body) = request(&b.app, "GET", "/api/v1/categories", None).await;
@@ -241,6 +257,11 @@ async fn export_import_round_trip() {
 	.await;
 	assert_eq!(body["values"]["username"], "agent");
 	assert_eq!(body["values"]["password"], "s3cret");
+
+	let before = db_dump(&b.db_path).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
+	assert_eq!(status, StatusCode::OK, "identical restore failed: {body}");
+	assert_eq!(db_dump(&b.db_path).await, before);
 }
 
 #[tokio::test]

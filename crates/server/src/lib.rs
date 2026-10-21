@@ -12,6 +12,7 @@ pub mod opds_source;
 pub mod rss;
 pub mod source;
 pub mod state;
+pub mod sync;
 pub mod update;
 pub mod webui_assets;
 
