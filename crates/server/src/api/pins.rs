@@ -56,20 +56,26 @@ pub(crate) async fn prune_pinned(pool: &SqlitePool, source_key: &str) -> ApiResu
 	Ok(())
 }
 
-/// pin appends to the list end, unpin removes; an absent pinned is a no-op (invalid values get the endpoint-convention 400, not 422)
+/// pin appends to the list end, unpin removes; an absent pinned is a no-op.
+/// enabled toggles whether the source can be instantiated; disabling evicts any running instance
+/// so the next capability call observes the new state. Invalid values get the endpoint-convention 400, not 422.
 pub async fn patch_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
-	let row = super::source_row(&state, id).await?;
-	let pinned = match body {
-		None => None,
-		Some(Json(value)) => value
-			.get("pinned")
-			.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("pinned must be a boolean")))
-			.transpose()?,
-	};
+	let mut row = super::source_row(&state, id).await?;
+	let value = body.map(|Json(v)| v);
+	let pinned = value
+		.as_ref()
+		.and_then(|v| v.get("pinned"))
+		.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("pinned must be a boolean")))
+		.transpose()?;
+	let enabled = value
+		.as_ref()
+		.and_then(|v| v.get("enabled"))
+		.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("enabled must be a boolean")))
+		.transpose()?;
 	if let Some(pinned) = pinned {
 		let mut keys = pinned_keys(&state.pool).await?;
 		let at = keys.iter().position(|key| key == &row.key);
@@ -83,6 +89,19 @@ pub async fn patch_source(
 				write_pinned(&state.pool, &keys).await?;
 			}
 			_ => {}
+		}
+	}
+	if let Some(enabled) = enabled && enabled != row.enabled {
+		sqlx::query("UPDATE source SET enabled = ? WHERE id = ?")
+			.bind(enabled)
+			.bind(id)
+			.execute(&state.pool)
+			.await?;
+		row.enabled = enabled;
+		if !enabled {
+			// Evict the running instance so the disabled state is enforced immediately;
+			// a later enable respawns from the updated row on next access.
+			state.evict_source(id).await;
 		}
 	}
 	let latest = repo::latest_versions(&state.pool).await?;

@@ -351,8 +351,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   pin order and seeds the destination priority of cross-source migration.
   `GET /api/v1/sources` items carry `pinned` and `pinOrder` (index in that
   list, null when unpinned) via `repo::source_json`.
-  `PATCH /api/v1/sources/{id}` `{pinned: bool}` pins (appended to the tail)
-  or unpins (removed); `POST /api/v1/sources/reorder-pinned` `{ids: [...]}`
+  `PATCH /api/v1/sources/{id}` takes `{pinned?: bool, enabled?: bool}`;
+  pinned pins (appended to the tail) or unpins (removed), and enabled
+  toggles whether the source can be instantiated. Disabling a source updates
+  the row and evicts any running instance so the next capability call observes
+  the new state; enabling leaves the row as enabled and lets the next access
+  respawn the instance. `POST /api/v1/sources/reorder-pinned` `{ids: [...]}`
   replaces the order wholesale and answers 400 unless ids are exactly the
   current pinned set, so a reorder never silently drops a pin.
   `delete_source` prunes the key. The Browse page shows the pinned sources
