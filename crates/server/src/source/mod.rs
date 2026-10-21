@@ -773,7 +773,9 @@ pub async fn upsert_manga(
 		 url = excluded.url, initialized = excluded.initialized,
 		 update_strategy = excluded.update_strategy,
 		 next_update_time = excluded.next_update_time,
-		 next_update_is_fallback = 0",
+		 next_update_is_fallback = CASE
+		 WHEN manga.next_update_time IS excluded.next_update_time THEN manga.next_update_is_fallback
+		 ELSE 0 END",
 	)
 	.bind(source_id)
 	.bind(&manga.key)

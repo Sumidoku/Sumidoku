@@ -793,8 +793,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   is stored with `next_update_is_fallback = 0`. None or an exact echo of the
   old value means no new source schedule: a positive interval stores success
   time + interval hours with the flag 1, while interval 0 stores NULL with
-  the flag 0. Other detail-upsert paths reset the flag to 0; the update
-  transaction's final write stores the resolved provenance. The same
+  the flag 0. Other detail-upsert paths preserve provenance when the
+  timestamp is unchanged and reset it to 0 when the timestamp changes; the
+  update transaction's final write stores the resolved provenance. The same
   transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
   failed fetch or persistence pass does not advance either timestamp. Events
   and the summary carry the fetch's owner, and both the WebSocket stream and

@@ -1303,6 +1303,33 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn upsert_echoed_details_preserve_fallback_provenance() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		let manga_id = add_manga(&state, source_id, "upsert-echoed-provenance").await;
+		sqlx::query("UPDATE manga SET next_update_time = 111, next_update_is_fallback = 1 WHERE id = ?")
+			.bind(manga_id)
+			.execute(&state.pool)
+			.await
+			.expect("set fallback provenance");
+		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
+		let updated = manga_from_row(&row);
+
+		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
+		upsert_manga(&mut tx, source_id, &updated, true, true, false)
+			.await
+			.expect("upsert echoed details");
+		tx.commit().await.expect("commit echoed details");
+
+		let schedule: (Option<i64>, i64) =
+			sqlx::query_as("SELECT next_update_time, next_update_is_fallback FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("echoed source schedule");
+		assert_eq!(schedule, (Some(111), 1));
+	}
+
+	#[tokio::test]
 	async fn persist_refresh_uses_current_update_strategy() {
 		let (state, source_id, _tmp) = union_state(Config::default()).await;
 		let manga_id = add_manga(&state, source_id, "current-strategy").await;
