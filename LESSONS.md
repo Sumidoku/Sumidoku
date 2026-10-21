@@ -668,6 +668,9 @@ level off with its continuations at the old depth is the signature.
   while their continuation lines kept the old depth; the `web` job was
   green and only eyeballing the diff caught it — fixed on the branch
   (f0870fd) before merge.
+- Seen again: 2026-10-21, #285 left misindented SourceCard JSX and adjacent
+  conditional blocks at `webui/src/pages/BrowsePage.tsx:562-631` with green
+  web gates.
 
 **A migration file is a shipped artifact, not source text — editing one,
 comments included, breaks every existing deployment at boot.** sqlx

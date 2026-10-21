@@ -586,15 +586,15 @@ export default function BrowsePage() {
 													}
 												: undefined
 										}
-									onTogglePin={(s) => void togglePin(s)}
-									onToggleEnabled={(s) => void toggleEnabled(s)}
-									onDelete={setPendingDelete}
-								/>
-							))}
-						</div>
-					</>
-				)}
-				{updateSources.length > 0 && (
+										onTogglePin={(s) => void togglePin(s)}
+										onToggleEnabled={(s) => void toggleEnabled(s)}
+										onDelete={setPendingDelete}
+									/>
+								))}
+							</div>
+						</>
+					)}
+					{updateSources.length > 0 && (
 						<>
 							<h2 className="browse__section">
 								{t('browse.sectionUpdates', { count: updateSources.length })}
@@ -605,15 +605,15 @@ export default function BrowsePage() {
 										key={s.id}
 										source={s}
 										isAdmin={isAdmin}
-									onTogglePin={(s) => void togglePin(s)}
-									onToggleEnabled={(s) => void toggleEnabled(s)}
-									onDelete={setPendingDelete}
-								/>
-							))}
-						</div>
-					</>
-				)}
-				{(pinnedSources.length > 0 || updateSources.length > 0) && (
+										onTogglePin={(s) => void togglePin(s)}
+										onToggleEnabled={(s) => void toggleEnabled(s)}
+										onDelete={setPendingDelete}
+									/>
+								))}
+							</div>
+						</>
+					)}
+					{(pinnedSources.length > 0 || updateSources.length > 0) && (
 						// when any section appears above, the full list needs an "All" heading to set it apart
 						<h2 className="browse__section">{t('browse.sectionAll')}</h2>
 					)}
