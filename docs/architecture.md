@@ -919,6 +919,9 @@ one structured line per outcome — `source`/`op`/`dur_ms`, plus the entry
 count on success at info or a sanitized error at warn; guest and reqwest
 error text can embed full URLs, so payloads are scrubbed down to the host
 and capped before they reach the log.
+The `abort`, `print`, `sleep` and `send_partial_result` host functions are
+registered under both the legacy `env` module and the newer `std` module
+(`imports/mod.rs`).
 The net host (`imports/net.rs`) aligns request behavior with the
 Aidoku/URLSession host. Response bodies are buffered under a
 configurable cap (`net_body_max_mb`, default 32 MiB, decoded bytes —
@@ -1076,7 +1079,10 @@ normalized at registration — every consumer (the source DTO,
 from the manifest text by the synthesis/seeding path.
 Static package files (`source.json`, `settings.json`, `filters.json`) are
 read by the same helper: directory sources from next to `main.wasm`, `.aix`
-sources from `Payload/` inside the zip without extracting. Source settings
+sources from `Payload/` inside the zip without extracting. Only declared
+dynamic exports are called: when `get_settings`, `get_filters` or
+`get_listings` is absent, the corresponding merge uses static package data
+without a source call. Source settings
 (`GET/PUT /api/v1/sources/{id}/settings`) merge the static `settings.json`
 with the dynamic `get_settings` export — static first, dynamic appended,
 matching AidokuRunner's `staticSettings + getSettings()` — deduplicated by
