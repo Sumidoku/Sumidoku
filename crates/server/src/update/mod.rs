@@ -536,7 +536,7 @@ async fn persist_success(
 	Ok(new_ids)
 }
 
-/// Update scope combines the caller's library, global excluded categories, skip settings and per-manga schedule.
+/// Update scope combines the caller's library, per-user excluded categories, skip settings and per-manga schedule.
 /// The deprecated per-category include_in_update tri-state is no longer consulted.
 async fn select_manga(
 	pool: &SqlitePool,

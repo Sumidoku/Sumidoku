@@ -523,6 +523,38 @@ async fn category_include_flags_patch() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+#[tokio::test]
+async fn category_include_in_update_patch_is_rejected() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let cat = body["id"].as_i64().expect("category id");
+	let cat_path = format!("/api/v1/categories/{cat}");
+
+	for patch in [
+		json!({"includeInUpdate": 0}),
+		json!({"includeInUpdate": 1}),
+		json!({"includeInUpdate": 2}),
+		json!({"includeInUpdate": null}),
+		json!({"name": "Changed", "includeInUpdate": 2}),
+	] {
+		let (status, body) = request(&app, "PATCH", &cat_path, Some(patch.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{patch}: {body}");
+		assert_eq!(body["error"]["code"], "bad_request");
+		assert!(
+			body["error"]["message"]
+				.as_str()
+				.expect("error message")
+				.contains("library.excluded_update_categories"),
+			"{body}"
+		);
+	}
+
+	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
+	assert_eq!(body[0]["name"], "Flags");
+	assert_eq!(body[0]["includeInDownload"], 0);
+}
+
 /// Registers the first three search results (full entries, titles persisted at registration), returning (id, title)
 async fn register_three_manga(app: &Router) -> Vec<(i64, String)> {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;

@@ -571,7 +571,7 @@ const LIBRARY_SKIP_RULES = [
 	{ key: 'notStarted', labelKey: 'settings.librarySkipNotStarted' }
 ];
 
-function LibraryUpdateSection() {
+function LibraryUpdateSection({ isAdmin }: { isAdmin: boolean }) {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
@@ -607,48 +607,52 @@ function LibraryUpdateSection() {
 				<Skeleton height={180} />
 			) : (
 				<>
-					<div className="settings-row">
-						<span className="settings-row__label">{t('settings.libraryUpdateInterval')}</span>
-						<Select
-							value={String(intervalHours)}
-							disabled={save.isPending}
-							onChange={(e) => {
-								const value = e.currentTarget.value;
-								save.mutate({ 'library.update_interval_hours': Number(value) });
-							}}
-						>
-							{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
-								<option key={hours} value={hours}>
+					{isAdmin && (
+						<>
+							<div className="settings-row">
+								<span className="settings-row__label">{t('settings.libraryUpdateInterval')}</span>
+								<Select
+									value={String(intervalHours)}
+									disabled={save.isPending}
+									onChange={(e) => {
+										const value = e.currentTarget.value;
+										save.mutate({ 'library.update_interval_hours': Number(value) });
+									}}
+								>
+									{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
+										<option key={hours} value={hours}>
+											{t(labelKey)}
+										</option>
+									))}
+									{!LIBRARY_UPDATE_INTERVALS.some(({ hours }) => hours === intervalHours) && (
+										<option value={intervalHours}>
+											{t('settings.libraryUpdateCustom', { hours: intervalHours })}
+										</option>
+									)}
+								</Select>
+							</div>
+							{LIBRARY_SKIP_RULES.map(({ key, labelKey }) => (
+								<label key={key} className="settings-backup__section">
+									<Switch
+										checked={skipTitles.includes(key)}
+										disabled={save.isPending}
+										onChange={(on) => saveSkip(key, on)}
+										label={t(labelKey)}
+									/>
 									{t(labelKey)}
-								</option>
+								</label>
 							))}
-							{!LIBRARY_UPDATE_INTERVALS.some(({ hours }) => hours === intervalHours) && (
-								<option value={intervalHours}>
-									{t('settings.libraryUpdateCustom', { hours: intervalHours })}
-								</option>
-							)}
-						</Select>
-					</div>
-					{LIBRARY_SKIP_RULES.map(({ key, labelKey }) => (
-						<label key={key} className="settings-backup__section">
-							<Switch
-								checked={skipTitles.includes(key)}
-								disabled={save.isPending}
-								onChange={(on) => saveSkip(key, on)}
-								label={t(labelKey)}
-							/>
-							{t(labelKey)}
-						</label>
-					))}
-					<label className="settings-backup__section">
-						<Switch
-							checked={refreshMetadata}
-							disabled={save.isPending}
-							onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
-							label={t('settings.libraryRefreshMetadata')}
-						/>
-						{t('settings.libraryRefreshMetadata')}
-					</label>
+							<label className="settings-backup__section">
+								<Switch
+									checked={refreshMetadata}
+									disabled={save.isPending}
+									onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
+									label={t('settings.libraryRefreshMetadata')}
+								/>
+								{t('settings.libraryRefreshMetadata')}
+							</label>
+						</>
+					)}
 					<div className="settings-row settings-row--top">
 						<div className="settings-row__stack">
 							<span className="settings-row__label">{t('settings.libraryExcludedUpdateCategories')}</span>
@@ -686,7 +690,7 @@ function LibraryUpdateSection() {
 				onClose={() => setChoosingExcluded(false)}
 				footer={
 					<Button onClick={() => setChoosingExcluded(false)}>
-						{t('common.close')}
+						{t('modal.close')}
 					</Button>
 				}
 			>
@@ -2124,7 +2128,7 @@ export default function SettingsPage() {
 			<CategoriesSection />
 			<FilterGroupsSection />
 			<LibraryDisplaySection />
-			{isAdmin && <LibraryUpdateSection />}
+			<LibraryUpdateSection isAdmin={isAdmin} />
 			{isAdmin && <LocalSourceSection />}
 			{isAdmin && <ServerSettingsSection />}
 			<BackupSection isAdmin={isAdmin} />

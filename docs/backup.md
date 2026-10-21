@@ -18,9 +18,13 @@ settings sections require the admin role). Import
 upserts by natural key (source key + manga key, chapter key, category
 name) inside a single transaction, so a failed or invalid backup leaves
 the database untouched; entries whose source is not installed are skipped
-and reported in the response `warnings`. The settings page of the web UI
-has download and restore buttons. The file contains source settings, which
-may include site passwords — store it accordingly.
+and reported in the response `warnings`. Category update exclusions use the
+backup-only `includeInUpdate` field (`2` for excluded categories, `0` for all
+others). The raw `library.excluded_update_categories` setting is omitted from
+exports and ignored on import; category restoration maps names to target-local
+category ids before writing that setting. The settings page of the web UI has
+download and restore buttons. The file contains source settings, which may
+include site passwords — store it accordingly.
 
 ## Scheduled backups
 

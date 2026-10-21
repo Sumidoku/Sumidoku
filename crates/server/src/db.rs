@@ -60,6 +60,7 @@ mod tests {
 		(13, "AF887712FE6A23301CA3699D25BAB83041C55C15FE2AE1CEE7F8DE8B4EA67BE512884251BD5D8920AD1DF95E61F36370"),
 			(14, "DDAEC2A8EF7367BF09182F1458A33773A9C1124595E71D3DDB8A9867A5C9D14B6D4FCBE176432E802DEF0218AAB99CF3"),
 			(15, "D9FEC20F2FABD842778568556A897C88B343E29055DAD28D5787ECA10C698DB4BDB2F3448C79A4D7610AD8EC56B89A83"),
+			(16, "979AD5AC41A4DB74145E953C5DEEEEC8A1A2E58B5DD04176DC09A649C155BD1B91393C48AD38823593203B9018DFD2C4"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -75,5 +76,70 @@ mod tests {
 				"migration {version} changed after it shipped; existing deployments refuse to boot"
 			);
 		}
+	}
+
+	#[tokio::test]
+	async fn migration_16_converts_legacy_exclusions_and_preserves_existing_settings() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+		let pool = super::create_pool(&url).await.expect("initial pool");
+		sqlx::query("INSERT INTO user (username, password_hash, role) VALUES ('bob', '', 'reader')")
+			.execute(&pool)
+			.await
+			.expect("insert bob");
+		let first: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name, include_in_update) VALUES (1, 'first', 2) RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("insert first legacy category");
+		let second: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name, include_in_update) VALUES (1, 'second', 2) RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("insert second legacy category");
+		let _bob_legacy: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name, include_in_update) VALUES (2, 'bob legacy', 2) RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("insert bob legacy category");
+		let bob_existing: i64 = sqlx::query_scalar(
+			"INSERT INTO category (user_id, name) VALUES (2, 'bob existing') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("insert bob existing category");
+
+		sqlx::query("DELETE FROM setting WHERE key LIKE 'user.%.library.excluded_update_categories'")
+			.execute(&pool)
+			.await
+			.expect("remove generated settings");
+		sqlx::query("INSERT INTO setting (key, value) VALUES ('user.2.library.excluded_update_categories', ?)")
+			.bind(format!("[{bob_existing}]"))
+			.execute(&pool)
+			.await
+			.expect("seed existing setting");
+		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 16")
+			.execute(&pool)
+			.await
+			.expect("remove migration 16 bookkeeping");
+		assert_eq!(deleted.rows_affected(), 1);
+		pool.close().await;
+
+		let pool = super::create_pool(&url).await.expect("rerun migrations");
+		let mut admin = crate::update::LibraryUpdateSettings::load(&pool, 1, 0)
+			.await
+			.expect("load admin settings")
+			.excluded_update_categories;
+		admin.sort_unstable();
+		assert_eq!(admin, vec![first, second]);
+		let bob = crate::update::LibraryUpdateSettings::load(&pool, 2, 0)
+			.await
+			.expect("load bob settings")
+			.excluded_update_categories;
+		assert_eq!(bob, vec![bob_existing]);
+		pool.close().await;
 	}
 }

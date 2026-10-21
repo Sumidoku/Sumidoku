@@ -106,8 +106,8 @@ pub struct BackupCategory {
 	pub sort_order: i64,
 	#[serde(default)]
 	pub is_default: bool,
-	/// Deprecated: no longer exported, but kept for deserializing legacy backups.
-	/// On restore, `2` (exclude) is migrated into `library.excluded_update_categories`.
+	/// Instance-local category ids are not portable, so `2` carries the exclusion on this named category
+	/// and restore translates it to the target's category id.
 	#[serde(default)]
 	pub include_in_update: i64,
 	#[serde(default)]
@@ -267,6 +267,11 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		})
 		.collect();
 
+	let excluded_update_categories: HashSet<i64> = crate::update::LibraryUpdateSettings::load(pool, user_id, 0)
+		.await?
+		.excluded_update_categories
+		.into_iter()
+		.collect();
 	let category_rows: Vec<(i64, String, i64, bool, i64)> = sqlx::query_as(
 		"SELECT id, name, sort_order, is_default, include_in_download
 		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
@@ -297,7 +302,7 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 				name,
 				sort_order,
 				is_default,
-				include_in_update: 0,
+				include_in_update: if excluded_update_categories.contains(&id) { 2 } else { 0 },
 				include_in_download,
 				manga: members.remove(&id).unwrap_or_default(),
 			}
@@ -364,6 +369,9 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		} else {
 			continue;
 		};
+		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES {
+			continue;
+		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
 		let value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
 		settings.insert(key, value);
@@ -686,13 +694,11 @@ async fn restore_categories(
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
 ) -> ApiResult<()> {
-	// Legacy include_in_update = 2 categories are migrated to the per-user excluded_update_categories setting.
 	let mut migrated_excluded: Vec<i64> = Vec::new();
 	for category in &doc.categories {
 		if category.name.trim().is_empty() {
 			return Err(ApiError::bad_request("backup category name must not be empty"));
 		}
-		// include_in_update is deprecated but still accepted from legacy backups for migration.
 		check_include_in(&category.name, "includeInUpdate", category.include_in_update)?;
 		check_include_in(&category.name, "includeInDownload", category.include_in_download)?;
 		let existing: Option<(i64,)> =
@@ -766,7 +772,7 @@ async fn restore_categories(
 		}
 		restored.categories += 1;
 	}
-	// Migrate legacy include_in_update = 2 (exclude) into the per-user excluded_update_categories setting.
+	// Category names can resolve to different ids on this instance, so only the mapped ids may enter the setting.
 	if !migrated_excluded.is_empty() {
 		let key = format!("user.{user_id}.library.excluded_update_categories");
 		let current: Option<(String,)> =
@@ -882,7 +888,8 @@ async fn restore_settings(
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
 		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
-		if key.starts_with("user.") {
+		// Raw exclusion ids belong to the exporting instance, so only category restoration may write them.
+		if key.starts_with("user.") || key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES {
 			continue;
 		}
 		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
