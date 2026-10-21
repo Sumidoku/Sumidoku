@@ -441,3 +441,68 @@ async fn update_scheduler_rescans_numbered_directory() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["failed"], 0, "{body}");
 }
+
+#[tokio::test]
+async fn oneshots_archives_under_numbered_root_resolve() {
+	let t = two_dir_app().await;
+	write_cbz(
+		&t.dir_b.path().join("oneshots/x.cbz"),
+		&[("p2.png", b"os-x-p2"), ("p1.png", b"os-x-p1")],
+	);
+	let (status, body) = request(
+		&t.app.app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({
+			"local.dirs": [
+				t.dir_a.path().to_string_lossy(),
+				t.dir_b.path().to_string_lossy(),
+			],
+			"local.oneshots_dir": "oneshots",
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let source_id = local_source_id(&t.app.app).await;
+	let entries = browse_keys(&t.app.app, source_id).await;
+	assert!(
+		entries.iter().any(|e| e["key"] == "1:oneshots/x.cbz"),
+		"the archive is its own manga under the numbered root: {entries:?}"
+	);
+	assert!(
+		!entries.iter().any(|e| e["key"] == "1:oneshots"),
+		"the oneshots directory itself is never claimed: {entries:?}"
+	);
+
+	let manga_id = register_local(&t.app.app, "1:oneshots/x.cbz").await;
+	let chapters = chapter_keys(&t.app.app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k)| k.as_str()).collect();
+	assert_eq!(keys, ["x.cbz"], "an oneshot has exactly one chapter: the archive itself");
+
+	let (chapter_id, _) = chapters[0];
+	let (status, body) = request(
+		&t.app.app,
+		"GET",
+		&format!("/api/v1/chapter/{chapter_id}/pages"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let entries: Vec<&str> = body
+		.as_array()
+		.expect("pages array")
+		.iter()
+		.map(|p| p["content"]["Local"].as_str().expect("local entry"))
+		.collect();
+	assert_eq!(entries, ["p1.png", "p2.png"]);
+	let (status, _, bytes) = request_full(
+		&t.app.app,
+		"GET",
+		&format!("/api/v1/chapter/{chapter_id}/page/0"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"os-x-p1");
+}

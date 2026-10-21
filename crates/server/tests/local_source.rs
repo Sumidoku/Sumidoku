@@ -1091,3 +1091,193 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 		.collect();
 	assert_eq!(keys, ["vol1/ch 2", "vol1/ch 1"], "ch 9 stays deleted, the subtree scans again: {keys:?}");
 }
+
+// ----- oneshots directory (SUMIDOKU_LOCAL_ONESHOTS_DIR / the local.oneshots_dir setting) -----
+
+/// Oneshots fixture: archives directly in the oneshots directory become one-chapter manga; the
+/// neighboring ComicInfo.xml/cover.jpg are series sidecars and must be ignored, and the nested
+/// subdirectory is never entered
+fn seed_oneshots_tree(root: &std::path::Path) {
+	write_cbz(&root.join("oneshots/Foo.cbz"), &[("p2.png", b"foo-p2"), ("p1.png", b"foo-p1")]);
+	write_cbz(&root.join("oneshots/Bar.cbz"), &[("1.png", b"bar-1")]);
+	write_cbz(&root.join("oneshots/nested/Baz.cbz"), &[("1.png", b"baz-1")]);
+	std::fs::write(root.join("oneshots/ComicInfo.xml"), COMIC_INFO_DELTA).expect("write sidecar comicinfo");
+	std::fs::write(root.join("oneshots/cover.jpg"), b"oneshots-sidecar-cover").expect("write sidecar cover");
+	write_page(&root.join("Normal/ch 1"), "1.png", b"normal-1-1");
+}
+
+async fn oneshots_app() -> TestApp {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	seed_oneshots_tree(&tmp.path().join("local"));
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	TestApp { app, tmp, db_path }
+}
+
+async fn put_oneshots_dir(app: &Router, value: serde_json::Value) -> (StatusCode, serde_json::Value) {
+	request(app, "PUT", "/api/v1/settings", Some(json!({"local.oneshots_dir": value}))).await
+}
+
+async fn enable_oneshots(app: &Router) {
+	let (status, body) = put_oneshots_dir(app, json!("oneshots")).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// (key, title) pairs of one local browse, in response order
+async fn browse_local(app: &Router) -> Vec<(String, String)> {
+	let source_id = local_source_id(app).await;
+	let (status, body) = request(
+		app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	body["entries"]
+		.as_array()
+		.expect("entries array")
+		.iter()
+		.map(|e| {
+			(
+				e["key"].as_str().expect("key").to_string(),
+				e["title"].as_str().expect("title").to_string(),
+			)
+		})
+		.collect()
+}
+
+#[tokio::test]
+async fn oneshots_dir_lists_archives_as_one_shot_manga() {
+	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	enable_oneshots(&app).await;
+
+	let mut entries = browse_local(&app).await;
+	entries.sort();
+	let pairs: Vec<(&str, &str)> = entries
+		.iter()
+		.map(|(k, t)| (k.as_str(), t.as_str()))
+		.collect();
+	// the oneshots directory itself is never claimed (the archive trigger would take it), its nested
+	// subdirectory is not entered, and the sibling normal directory keeps the usual behavior
+	assert_eq!(
+		pairs,
+		[
+			("Normal", "Normal"),
+			("oneshots/Bar.cbz", "Bar"),
+			("oneshots/Foo.cbz", "Foo"),
+		]
+	);
+}
+
+#[tokio::test]
+async fn oneshots_dir_default_off_claims_directory() {
+	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	// control group: with nothing configured the oneshots directory is claimed by the plain archive
+	// trigger, so the rule never misfires on an unconfigured library
+	let mut entries = browse_local(&app).await;
+	entries.sort();
+	let pairs: Vec<(&str, &str)> = entries
+		.iter()
+		.map(|(k, t)| (k.as_str(), t.as_str()))
+		.collect();
+	assert_eq!(pairs, [("Normal", "Normal"), ("oneshots", "oneshots")]);
+}
+
+#[tokio::test]
+async fn oneshot_manga_opens_as_single_chapter() {
+	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	enable_oneshots(&app).await;
+	let manga_id = register_local(&app, "oneshots/Foo.cbz").await;
+
+	// the stem is the title: the ComicInfo.xml sidecar sitting next to the archive is ignored
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["title"], "Foo");
+
+	let chapters = chapters_of(&app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
+	assert_eq!(keys, ["Foo.cbz"], "an oneshot has exactly one chapter: the archive itself");
+	assert_eq!(chapters[0].3, "Foo", "the archive chapter's display name drops the extension");
+
+	let chapter_id = chapter_id_of(&app, manga_id, "Foo.cbz").await;
+	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let entries: Vec<&str> = body
+		.as_array()
+		.expect("pages array")
+		.iter()
+		.map(|p| p["content"]["Local"].as_str().expect("local entry"))
+		.collect();
+	assert_eq!(entries, ["p1.png", "p2.png"]);
+	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"foo-p2");
+
+	// the cover.* sidecar next to the archive is ignored: the cover is the single chapter's first page
+	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"foo-p1");
+}
+
+#[tokio::test]
+async fn oneshots_rule_matches_at_any_depth_case_insensitive() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	write_cbz(&tmp.path().join("local/pub/oneshots/x.cbz"), &[("p1.png", b"x-p1")]);
+	// the match is a case-insensitive substring of the relative path, same as kmrs's contains_ignore_case
+	write_cbz(&tmp.path().join("local/pub/my-oneshots/y.cbz"), &[("1.png", b"y-1")]);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	let (status, body) = put_oneshots_dir(&t.app, json!("ONESHOTS")).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let mut entries = browse_local(&t.app).await;
+	entries.sort();
+	let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+	assert_eq!(keys, ["pub/my-oneshots/y.cbz", "pub/oneshots/x.cbz"]);
+
+	let manga_id = register_local(&t.app, "pub/oneshots/x.cbz").await;
+	let chapters = chapters_of(&t.app, manga_id).await;
+	let keys: Vec<&str> = chapters.iter().map(|(_, k, _, _)| k.as_str()).collect();
+	assert_eq!(keys, ["x.cbz"]);
+}
+
+#[tokio::test]
+async fn oneshots_dir_setting_validation_clear_and_injection() {
+	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+
+	// unconfigured: the injected effective value is null
+	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localOneshotsDir"], serde_json::Value::Null, "{body}");
+
+	// only a string is accepted
+	for value in [json!(123), json!(true), json!(["oneshots"])] {
+		let (status, body) = put_oneshots_dir(&app, value.clone()).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{value}: {body}");
+	}
+
+	enable_oneshots(&app).await;
+	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["localOneshotsDir"], "oneshots", "{body}");
+	let entries = browse_local(&app).await;
+	assert!(
+		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
+		"the override takes effect without a restart: {entries:?}"
+	);
+
+	// an empty or blank string clears the override; with nothing in the config layer the feature is off
+	for value in [json!(""), json!("   ")] {
+		let (status, body) = put_oneshots_dir(&app, value).await;
+		assert_eq!(status, StatusCode::OK, "{body}");
+		assert_eq!(body["localOneshotsDir"], serde_json::Value::Null, "{body}");
+		let mut entries = browse_local(&app).await;
+		entries.sort();
+		let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+		assert_eq!(keys, ["Normal", "oneshots"], "cleared = back to the plain classification");
+	}
+}
