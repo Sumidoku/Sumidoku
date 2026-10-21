@@ -369,8 +369,11 @@ function ReaderCore({
 	}
 
 	function goBack() {
-		if (mangaId !== null) navigate(`/manga/${mangaId}`);
-		else navigate(-1);
+		// If there is history to go back to, pop it (e.g. back to manga detail).
+		// Otherwise this is a deep link; fall back to the manga detail page or library.
+		if (window.history.state?.idx > 0) navigate(-1);
+		else if (mangaId !== null) navigate(`/manga/${mangaId}`);
+		else navigate('/library');
 	}
 
 	const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
