@@ -416,10 +416,10 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
-/// Browse/search for the local source: actually scans the local root; a non-empty query filters by directory-name
-/// substring (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
-/// lightweight — key/title are just the directory name; ComicInfo and the cover are left for find_or_register_manga
-/// to resolve on open; everything returns in one page, hasNextPage is always false
+/// Browse/search for the local source: actually scans the local root; a non-empty query filters by title substring
+/// (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
+/// lightweight — keys are relative paths and titles their leaf segment; ComicInfo and the cover are left for
+/// find_or_register_manga to resolve on open; everything returns in one page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
 	let dirs = crate::local::scan_manga_dirs(&state.config.local_dir()).await?;
 	let needle = query
@@ -428,12 +428,15 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 		.map(str::to_lowercase);
 	let entries: Vec<Manga> = dirs
 		.into_iter()
-		.filter(|name| needle.as_ref().is_none_or(|n| name.to_lowercase().contains(n)))
-		.map(|name| Manga {
-			key: name.clone(),
-			title: name,
-			..Manga::default()
+		.map(|key| {
+			let title = key.rsplit('/').next().unwrap_or(&key).to_string();
+			Manga {
+				key,
+				title,
+				..Manga::default()
+			}
 		})
+		.filter(|manga| needle.as_ref().is_none_or(|n| manga.title.to_lowercase().contains(n)))
 		.collect();
 	attach_internal_ids(state, source_id, entries).await
 }

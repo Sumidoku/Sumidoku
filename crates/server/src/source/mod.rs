@@ -801,7 +801,9 @@ pub async fn upsert_manga(
 
 /// Chapter reconciliation: source_order takes the index in the source's response; a vanished chapter with a
 /// download row is locked and kept, otherwise deleted. Chapter keys in protected are never treated as vanished
-/// (entries the local source's scan failed to read — kmrs's failed-directory protection).
+/// (entries the local source's scan failed to read — kmrs's failed-directory protection); a protected entry also
+/// covers the keys below it, since a container that failed to read was never walked and its chapters cannot enter
+/// the set one by one.
 /// Returns the chapter ids inserted by this reconciliation (update detection uses them to spot new chapters)
 pub async fn reconcile_chapters(
 	conn: &mut sqlx::SqliteConnection,
@@ -875,7 +877,10 @@ pub async fn reconcile_chapters(
 		.await?;
 	}
 	for (chapter_id, key) in existing {
-		if seen.contains(&key) || protected.contains(&key) {
+		let is_protected = protected
+			.iter()
+			.any(|entry| key == *entry || key.starts_with(&format!("{entry}/")));
+		if seen.contains(&key) || is_protected {
 			continue;
 		}
 		let has_download: Option<(i64,)> =
