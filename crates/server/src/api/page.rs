@@ -83,7 +83,7 @@ async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: 
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(entry) = content.get("Local").and_then(Value::as_str) {
 		let bytes = crate::local::read_page(
-			&state.config.local_dir(),
+			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,

@@ -1,8 +1,17 @@
-//! Filesystem side of the built-in local source: walks local_dir live (no index table; rows land in the DB only on open/shelve).
+//! Filesystem side of the built-in local source: walks the local roots live (no index table; rows land in the DB only on open/shelve).
 //!
-//! Manga and chapter keys are validated relative paths (`valid_key`): nested layouts address their target from
-//! local_dir / the manga directory (`publisher/series`, `vol1/ch01`), while `..`, absolute and drive-prefixed forms
-//! stay rejected so API input can never escape local_dir. Discovery is top-down with nearest-qualifying-ancestor
+//! The source has one or more root directories (config local_dirs, overridable at runtime by the local.dirs
+//! setting — see state.rs). Manga and chapter keys are validated relative paths (`valid_key`): nested layouts
+//! address their target from the owning root / the manga directory (`publisher/series`, `vol1/ch01`), while `..`,
+//! absolute and drive-prefixed forms stay rejected so API input can never escape the roots. Across roots the key
+//! carries the root index: a bare path addresses root 0 (the pre-multi-dir form, so rows persisted before
+//! multiple roots keep resolving), and `N:<path>` addresses root N >= 1 (`0:` is rejected so a root-0 manga has
+//! exactly one key form). Browsing unions the roots; the same relative path present in several roots is listed
+//! once, from the lowest-indexed root (first directory wins — mirrors of the same content), while the shadowed
+//! copies stay addressable by their numbered keys. One collision is inherent: a root-0 directory named like the
+//! prefix form (`1:Foo`) resolves as root 1's `Foo` — don't name directories that way.
+//!
+//! Discovery is top-down with nearest-qualifying-ancestor
 //! absorption: a directory directly holding chapter archives qualifies (pass 1, the Komga trigger), one with no
 //! archive anywhere below qualifies by the backward-compatible relaxed rule (pass 2, nested levels included),
 //! anything else is a pure container and discovery descends. A claimed manga absorbs its subtree: archives and
@@ -25,7 +34,7 @@ use crate::error::{ApiError, ApiResult};
 use aidoku::{Chapter, Manga, MangaStatus};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"];
@@ -52,9 +61,31 @@ pub struct LocalUpdate {
 	pub protected: Vec<String>,
 }
 
+/// Parses the directory-index prefix on a key: `N:<path>` with N a canonical decimal (>= 1, no leading
+/// zeros) and a non-empty path returns (N, path). `0:` never parses — a root-0 manga has exactly one key
+/// form (the bare path), so no second spelling may become legal. A first segment whose colon head is not
+/// all digits (`Note: 1`) is a plain root-0 name, not a prefix.
+fn dir_prefix(key: &str) -> Option<(usize, &str)> {
+	let (num, _) = key.split('/').next()?.split_once(':')?;
+	if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+		return None;
+	}
+	let index: usize = num.parse().ok()?;
+	if index == 0 || num != index.to_string() {
+		return None;
+	}
+	let rel = &key[num.len() + 1..];
+	if rel.is_empty() {
+		return None;
+	}
+	Some((index, rel))
+}
+
 /// Manga/chapter keys are relative paths: API input can be anything, and without this guard it would escape
-/// local_dir. Every '/'-separated segment must be a real component (non-empty, not . or ..); backslash, a leading /
-/// (empty first segment) and the drive-letter form (C:) are rejected so the key can never re-anchor the path.
+/// the local roots. Every '/'-separated segment must be a real component (non-empty, not . or ..); backslash,
+/// a leading / (empty first segment) and the drive-letter form (C:) are rejected so the key can never
+/// re-anchor the path. The first segment may carry the directory-index prefix (`N:<path>`, canonical form
+/// only), with the path after it held to the same rules.
 fn valid_key(key: &str) -> bool {
 	if key.is_empty() || key.contains('\\') {
 		return false;
@@ -63,9 +94,17 @@ fn valid_key(key: &str) -> bool {
 		if segment.is_empty() || segment == "." || segment == ".." {
 			return false;
 		}
-		let bytes = segment.as_bytes();
-		if index == 0 && bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-			return false;
+		if index == 0
+			&& let Some((num, _)) = segment.split_once(':')
+		{
+			if !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()) {
+				// the digits-colon slot is reserved for the directory prefix: only the canonical form passes
+				return dir_prefix(key).is_some_and(|(_, rel)| valid_key(rel));
+			}
+			let bytes = segment.as_bytes();
+			if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+				return false;
+			}
 		}
 	}
 	true
@@ -77,6 +116,23 @@ fn require_key(key: &str) -> ApiResult<()> {
 	} else {
 		Err(ApiError::bad_request("invalid local path"))
 	}
+}
+
+/// Resolves an API-facing manga key to its root directory and the path relative to it: a bare key addresses
+/// root 0, `N:<path>` root N; an out-of-range index is a not found, not a bad request
+pub fn resolve_key<'a>(local_dirs: &'a [PathBuf], key: &'a str) -> ApiResult<(&'a Path, &'a str)> {
+	require_key(key)?;
+	let (index, rel) = dir_prefix(key).unwrap_or((0, key));
+	let dir = local_dirs
+		.get(index)
+		.ok_or_else(|| ApiError::not_found("local manga not found"))?;
+	Ok((dir, rel))
+}
+
+/// The path part of a manga key (its directory prefix stripped): titles and ComicInfo display names come
+/// from the relative path, never from the `N:` slot
+pub(crate) fn rel_of(key: &str) -> &str {
+	dir_prefix(key).map_or(key, |(_, rel)| rel)
 }
 
 /// Page entries of an image chapter join onto the chapter directory, so unlike keys they must stay one component
@@ -187,9 +243,31 @@ async fn read_items(read_dir: &mut tokio::fs::ReadDir, rel: &str, failed: &mut V
 	Ok(out)
 }
 
-/// Browse entry point: discovers manga under the local root by the module-doc classification contract; a missing
-/// local root is an empty listing, not an error. PR-2's browse/refresh buttons call this layer directly
-pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
+/// Browse entry point: discovers manga under every local root by the module-doc classification contract and
+/// unions them into one listing. A relative path found in several roots lists once, from the lowest-indexed
+/// root (first directory wins); keys from root N >= 1 carry the `N:` prefix, root 0 keeps the bare form.
+/// A missing root is an empty contribution, not an error. PR-2's browse/refresh buttons call this layer directly
+pub async fn scan_manga_dirs(local_dirs: &[PathBuf]) -> ApiResult<Vec<String>> {
+	let mut seen = HashSet::new();
+	let mut out = Vec::new();
+	for (index, dir) in local_dirs.iter().enumerate() {
+		for rel in scan_one_dir(dir).await? {
+			if !seen.insert(rel.clone()) {
+				continue;
+			}
+			out.push(match index {
+				0 => rel,
+				_ => format!("{index}:{rel}"),
+			});
+		}
+	}
+	out.sort_by(|a, b| natural_sort::compare(a, b));
+	Ok(out)
+}
+
+/// Single-root scan: discovers manga under one root by the module-doc classification contract; a missing
+/// root is an empty listing, not an error
+async fn scan_one_dir(local_dir: &Path) -> ApiResult<Vec<String>> {
 	let mut read_dir = match tokio::fs::read_dir(local_dir).await {
 		Ok(read_dir) => read_dir,
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -204,7 +282,6 @@ pub async fn scan_manga_dirs(local_dir: &Path) -> ApiResult<Vec<String>> {
 			discover(local_dir, item.name.clone(), items, &mut out).await?;
 		}
 	}
-	out.sort_by(|a, b| natural_sort::compare(a, b));
 	Ok(out)
 }
 
@@ -281,7 +358,7 @@ fn discover<'a>(local_dir: &'a Path, rel: String, items: Vec<DirItem>, out: &'a 
 /// holding only subdirectories are containers, not chapters. Returns the sorted chapter list plus the failed entries
 /// by full relative path. Sort order matches Suwayomi LocalSource: chapter number descending (unparsed counts as -1
 /// and sinks to the bottom), ties broken by display name in descending natural order
-pub async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<LocalChapter>, Vec<String>)> {
+async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<LocalChapter>, Vec<String>)> {
 	require_key(manga_key)?;
 	let mut chapters = Vec::new();
 	let mut failed = Vec::new();
@@ -374,15 +451,16 @@ fn to_aidoku_chapter(chapter: &LocalChapter) -> Chapter {
 
 /// The local counterpart of "fetch details + chapters from the source": scans the manga directory and produces a
 /// Manga snapshot (including chapters) of the same shape as get_manga_update, for upsert_manga + reconcile_chapters to reuse
-pub async fn manga_update(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<LocalUpdate> {
-	let (chapters, failed) = scan_chapters(local_dir, manga_key).await?;
+pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<LocalUpdate> {
+	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
+	let (chapters, failed) = scan_chapters(dir, rel).await?;
 	// the title is the leaf name: the full key would repeat the container path on every nested row; ComicInfo still overrides it below
 	let mut manga = Manga {
 		key: manga_key.to_string(),
-		title: manga_key.rsplit('/').next().unwrap_or(manga_key).to_string(),
+		title: rel.rsplit('/').next().unwrap_or(rel).to_string(),
 		..Manga::default()
 	};
-	if let Some(info) = read_comic_info(local_dir, zip, manga_key, &chapters).await {
+	if let Some(info) = read_comic_info(dir, zip, rel, &chapters).await {
 		if let Some(title) = info.title() {
 			manga.title = title.to_string();
 		}
@@ -441,10 +519,10 @@ async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str,
 }
 
 /// Chapter page listing: image chapters list image files, archive chapters list image entries; both in case-insensitive natural order
-pub async fn chapter_pages(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
-	require_key(manga_key)?;
+pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
+	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
-	let path = local_dir.join(manga_key).join(chapter_key);
+	let path = dir.join(rel).join(chapter_key);
 	let metadata = tokio::fs::metadata(&path).await.map_err(|e| {
 		if e.kind() == std::io::ErrorKind::NotFound {
 			ApiError::not_found("local chapter not found")
@@ -501,15 +579,15 @@ pub(crate) fn is_image_entry(name: &str) -> bool {
 
 /// Reads one page's bytes: image chapters read a single file, archive chapters extract by entry name (handles come from the LRU)
 pub async fn read_page(
-	local_dir: &Path,
+	local_dirs: &[PathBuf],
 	zip: &Arc<ZipCache>,
 	manga_key: &str,
 	chapter_key: &str,
 	entry: &str,
 ) -> ApiResult<Vec<u8>> {
-	require_key(manga_key)?;
+	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
-	let chapter_path = local_dir.join(manga_key).join(chapter_key);
+	let chapter_path = dir.join(rel).join(chapter_key);
 	let metadata = tokio::fs::metadata(&chapter_path)
 		.await
 		.map_err(|_| ApiError::not_found("local chapter not found"))?;
@@ -535,9 +613,9 @@ pub async fn read_page(
 
 /// Cover fallback chain (Suwayomi semantics): a cover.* sidecar in the manga directory → the first page of the last
 /// chapter in the list (descending by number, so the last is the oldest chapter) → None (the caller answers 404 and the UI shows a placeholder)
-pub async fn resolve_cover(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<Option<(Vec<u8>, String)>> {
-	require_key(manga_key)?;
-	let dir = local_dir.join(manga_key);
+pub async fn resolve_cover(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<Option<(Vec<u8>, String)>> {
+	let (root, rel) = resolve_key(local_dirs, manga_key)?;
+	let dir = root.join(rel);
 	let mut read_dir = match tokio::fs::read_dir(&dir).await {
 		Ok(read_dir) => read_dir,
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -570,15 +648,15 @@ pub async fn resolve_cover(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 			.map_err(|e| ApiError::internal(format!("read local cover failed: {e}")))?;
 		return Ok(Some((bytes, image_mime(&name).to_string())));
 	}
-	let (chapters, _) = scan_chapters(local_dir, manga_key).await?;
+	let (chapters, _) = scan_chapters(root, rel).await?;
 	let Some(last) = chapters.last() else {
 		return Ok(None);
 	};
-	let pages = chapter_pages(local_dir, zip, manga_key, &last.key).await?;
+	let pages = chapter_pages(local_dirs, zip, manga_key, &last.key).await?;
 	let Some(first) = pages.first() else {
 		return Ok(None);
 	};
-	let bytes = read_page(local_dir, zip, manga_key, &last.key, first).await?;
+	let bytes = read_page(local_dirs, zip, manga_key, &last.key, first).await?;
 	Ok(Some((bytes, image_mime(first).to_string())))
 }
 

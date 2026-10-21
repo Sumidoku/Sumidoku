@@ -535,22 +535,89 @@ function parseVal(text: string): unknown {
 function LocalSourceSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
-	// localDir is a read-only field injected by the server (a config-layer value), not a settings-table key
-	const dir = settings.data?.['localDir'];
+	const save = useSaveServerSettings();
+	const [dirs, setDirs] = useState<string[] | null>(null);
+
+	useEffect(() => {
+		if (!settings.data || dirs !== null) return;
+		const injected = settings.data['localDirs'];
+		setDirs(Array.isArray(injected) ? injected.map(String) : []);
+	}, [settings.data, dirs]);
+
+	if (dirs === null) {
+		return (
+			<Section
+				title={t('settings.localSourceTitle')}
+				desc={t('settings.localSourceDesc')}
+			>
+				<Skeleton height={48} />
+			</Section>
+		);
+	}
+
+	// localDirs is the server's read-only injection of the effective list; edits are saved as the
+	// local.dirs override, and an empty list clears it (the config layer takes over again)
+	const effective = Array.isArray(settings.data?.['localDirs'])
+		? (settings.data?.['localDirs'] as unknown[]).map(String)
+		: [];
+	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
+	const dirty = cleaned.join('\n') !== effective.join('\n');
+
+	async function onSave() {
+		try {
+			const saved = await save.mutateAsync({ 'local.dirs': cleaned });
+			const injected = saved['localDirs'];
+			setDirs(Array.isArray(injected) ? injected.map(String) : []);
+			pushToast(t('settings.localDirsSaved'), 'info');
+		} catch (e) {
+			if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
+		}
+	}
 
 	return (
 		<Section
 			title={t('settings.localSourceTitle')}
 			desc={t('settings.localSourceDesc')}
 		>
-			{settings.isPending ? (
-				<Skeleton height={24} />
-			) : (
-				<div className="settings-row">
-					<span className="settings-row__label">{t('settings.localDir')}</span>
-					<code>{typeof dir === 'string' ? dir : t('settings.unknown')}</code>
+			{dirs.length > 0 && (
+				<div className="settings-kv">
+					{dirs.map((dir, i) => (
+						<div key={i} className="settings-kv__row">
+							<Input
+								placeholder={t('settings.localDirPlaceholder')}
+								value={dir}
+								onChange={(e) => {
+									// currentTarget is already null by the time the deferred updater runs, so take the value first
+									const v = e.currentTarget.value;
+									setDirs((cur) => (cur ?? []).map((d, j) => (j === i ? v : d)));
+								}}
+							/>
+							<IconButton
+								label={t('common.delete')}
+								variant="danger"
+								onClick={() => setDirs((cur) => (cur ?? []).filter((_, j) => j !== i))}
+							>
+								<Trash2 size={16} />
+							</IconButton>
+						</div>
+					))}
 				</div>
 			)}
+			<div className="settings-kv__add">
+				<Button onClick={() => setDirs((cur) => [...(cur ?? []), ''])}>
+					{t('settings.addLocalDir')}
+				</Button>
+			</div>
+			<div className="settings-kv__save">
+				<Button
+					variant="primary"
+					disabled={!dirty}
+					loading={save.isPending}
+					onClick={() => void onSave()}
+				>
+					{t('common.save')}
+				</Button>
+			</div>
 		</Section>
 	);
 }
@@ -566,9 +633,9 @@ function ServerSettingsSection() {
 	useEffect(() => {
 		if (query.data && rows === null) {
 			setRows(
-				// localDir is a read-only injected field and does not enter key-value editing (see the "Local source" section)
+				// localDirs is a read-only injected field and does not enter key-value editing (see the "Local source" section)
 				Object.entries(query.data)
-					.filter(([key]) => key !== 'localDir')
+					.filter(([key]) => key !== 'localDirs')
 					.map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' }))
 			);
 		}

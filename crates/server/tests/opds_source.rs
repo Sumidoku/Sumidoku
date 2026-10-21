@@ -489,7 +489,7 @@ async fn missing_opensearch_falls_back_to_degraded_traversal() {
 #[tokio::test]
 async fn migrate_from_local_to_opds_registers_and_shelves() {
 	let t = opds_app().await;
-	// local source manga shelved: local_dir defaults to <config_dir>/local
+	// local source manga shelved: local_dirs defaults to <config_dir>/local
 	let manga_dir = t.tmp.path().join("local").join("MangaX").join("ch 1");
 	std::fs::create_dir_all(&manga_dir).expect("mkdir local chapter");
 	std::fs::write(manga_dir.join("p1.png"), common::PNG).expect("write local page");

@@ -181,8 +181,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (400), is excluded from repo management and metadata backfill, and every
   wasm-capability endpoint (filters, listings, home, deep link, settings,
   login) answers 404 `unsupported` for it. There is no index table:
-  browsing walks `local_dir` (`SUMIDOKU_LOCAL_DIR`, default
-  `<config_dir>/local`) recursively in real time — `POST
+  browsing walks the local roots recursively in real time — config
+  `local_dirs` (`SUMIDOKU_LOCAL_DIRS`, semicolon-separated with empty
+  segments ignored; the single `SUMIDOKU_LOCAL_DIR` / `local_dir`
+  spelling is a one-item fallback, default `[<config_dir>/local]`),
+  overridden at runtime by a non-empty `local.dirs` setting (a JSON
+  string array written from the Settings page, no restart needed;
+  `state.rs:local_dirs` resolves the two layers, and a wrong-shaped
+  stored value counts as unset) — `POST
   /sources/{id}/search` (`api/mod.rs:search_source`) branches for
   `kind = local` to `scan_manga_dirs`, which discovers manga top-down
   with nearest-qualifying-ancestor absorption: a directory directly
@@ -192,8 +198,16 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   discovery descends; a claimed manga absorbs its subtree, so nested
   series never appear as manga of their own and a flat single-level
   library scans byte-identically to the pre-nesting behavior. Keys are
-  paths relative to `local_dir` (validated: no `..`, empty segments,
-  absolute or drive-prefixed forms) and titles their leaf segment; the
+  paths relative to their root (validated: no `..`, empty segments,
+  absolute or drive-prefixed forms) carrying the root index: a bare
+  path addresses root 0 (the pre-multi-dir form, so rows persisted
+  before multiple roots keep resolving) and `N:<path>` addresses root
+  N ≥ 1; `0:` is rejected so a root-0 manga has exactly one key form,
+  and an out-of-range index answers not found. Browsing unions the
+  roots and deduplicates by relative path: the same path present in
+  several roots lists once, from the lowest-indexed root (first
+  directory wins), while shadowed copies stay addressable by their
+  numbered keys. Titles are the leaf segment of the relative path; the
   case-insensitive substring filter matches the title (Suwayomi's
   `contains(query, ignoreCase = true)`), the internal id is attached
   when the manga is registered, and `hasNextPage` is always false; the
@@ -226,10 +240,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   the library update scheduler treats the local scan as the source call.
   Auto-download skips local manga (files are already local), and the web
   UI hides the download buttons for `kind = local`, shows a manual refresh
-  button on the chapter list, and reports the effective local directory
-  read-only in Settings: `GET /api/v1/settings` injects it as `localDir`
-  (camelCase, distinct from the `setting` table's dotted keys) and `PUT`
-  skips the key. RAR/CBR, PDF and 7z are out of scope (no mature pure-Rust
+  button on the chapter list, and edits the directory list in Settings:
+  `GET /api/v1/settings` injects the resolved list as `localDirs`
+  (camelCase, distinct from the `setting` table's dotted keys), `PUT`
+  skips that injected key, and `PUT` on `local.dirs` stores the override
+  (a string array of non-empty paths, otherwise 400) which takes effect
+  without a restart. RAR/CBR, PDF and 7z are out of scope (no mature pure-Rust
   readers, or an external runtime library).
 - Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
   `api/opds_source.rs`): `source.kind = opds` turns an OPDS 1.2 (Atom)

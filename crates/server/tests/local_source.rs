@@ -198,7 +198,7 @@ async fn migration_seeds_builtin_local_source() {
 async fn scan_lists_only_real_manga_dirs() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_local_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&tmp.path().join("local"))
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
@@ -506,7 +506,7 @@ async fn local_dir_config_override() {
 	seed_local_tree(&outside.path().join("manga"));
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
-	config.local_dir = Some(outside.path().join("manga"));
+	config.local_dirs = Some(vec![outside.path().join("manga")]);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	let t = TestApp { app, tmp, db_path };
@@ -687,34 +687,34 @@ async fn aggregate_search_includes_local_source() {
 }
 
 #[tokio::test]
-async fn settings_expose_local_dir_read_only() {
+async fn settings_injected_local_dirs_not_stored() {
 	let TestApp { app, tmp, db_path } = local_app().await;
 	let effective = tmp.path().join("local").to_string_lossy().into_owned();
 
-	// GET injects the effective local directory (the config-layer value, default <config_dir>/local)
+	// GET injects the effective local directories (the config-layer value, default <config_dir>/local)
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDir"], json!(effective));
+	assert_eq!(body["localDirs"], json!([effective]));
 
-	// a PUT to the same key is skipped: the read-back is still the config value, other keys persist as usual
+	// a PUT to the injected key is skipped: the read-back is still the resolved value, other keys persist as usual
 	let (status, body) = request(
 		&app,
 		"PUT",
 		"/api/v1/settings",
-		Some(json!({"localDir": "/elsewhere", "incognito.enabled": true})),
+		Some(json!({"localDirs": ["/elsewhere"], "incognito.enabled": true})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDir"], json!(effective));
+	assert_eq!(body["localDirs"], json!([effective]));
 	assert_eq!(body["incognito.enabled"], true);
 
-	// skipped is not shadowed: there is no localDir row in the setting table
+	// skipped is not shadowed: there is no localDirs row in the setting table
 	let pool = common::connect_db(&db_path).await;
-	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDir'")
+	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDirs'")
 		.fetch_optional(&pool)
 		.await
 		.expect("query setting");
-	assert!(row.is_none(), "localDir 不应落 setting 表");
+	assert!(row.is_none(), "localDirs 不应落 setting 表");
 }
 
 #[tokio::test]
@@ -765,7 +765,7 @@ async fn nested_app() -> TestApp {
 async fn nested_scan_discovers_series_under_containers() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_nested_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&tmp.path().join("local"))
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")])
 		.await
 		.expect("scan");
 	// the publisher grouping directory itself is never a manga
@@ -875,7 +875,7 @@ async fn manga_absorbs_nested_archives() {
 	let t = TestApp { app, tmp, db_path };
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
-	let dirs = sumidoku_server::local::scan_manga_dirs(&t.tmp.path().join("local"))
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Absorbed"]);

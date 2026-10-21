@@ -193,6 +193,28 @@ impl AppState {
 			.clone()
 	}
 
+	/// Effective local roots: a non-empty local.dirs setting (a JSON string array, written from the settings
+	/// page) overrides the config layer at runtime, no restart needed. A wrong-shaped stored value can only
+	/// arrive through a backup restore and counts as unset, same rule as the backup.* settings
+	pub async fn local_dirs(&self) -> ApiResult<Vec<std::path::PathBuf>> {
+		let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.dirs'")
+			.fetch_optional(&self.pool)
+			.await?;
+		if let Some(dirs) = row
+			.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
+			.map(|dirs| {
+				dirs.into_iter()
+					.filter(|dir| !dir.trim().is_empty())
+					.map(std::path::PathBuf::from)
+					.collect::<Vec<_>>()
+			})
+			&& !dirs.is_empty()
+		{
+			return Ok(dirs);
+		}
+		Ok(self.config.local_dirs())
+	}
+
 	/// Kicks the instance out of the registry after unload/repackage; while an in-flight call holds an Arc, it exits naturally when the refcount drops to zero
 	pub async fn evict_source(&self, source_id: i64) {
 		let entry = self.sources.write().await.remove(&source_id);
