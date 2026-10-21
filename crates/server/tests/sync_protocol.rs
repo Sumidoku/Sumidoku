@@ -187,6 +187,368 @@ async fn child_first_category_stub_does_not_duplicate_existing_name() {
 }
 
 #[tokio::test]
+async fn deleted_category_membership_stays_deleted_when_parent_arrives() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	seed_initial(&b, 900, 500, 900, "local", false).await;
+	let b_pool = connect_db(&b.db_path).await;
+	sqlx::query("UPDATE category SET name = 'Category remote' WHERE id = 500")
+		.execute(&b_pool)
+		.await
+		.expect("same-named local category");
+	b_pool.close().await;
+	let (_, initial) = pull(&a, &b, 0).await;
+	let membership = event_of(&initial, "category_manga");
+	let mut category = event_of(&initial, "category");
+	let category_sequence = category["originSequence"].as_i64().expect("category sequence");
+	set_version(&mut category, category_sequence + 100, 9_000_000_000_000_000);
+	let mut deletion = membership.clone();
+	let sequence = membership["originSequence"].as_i64().expect("membership sequence");
+	set_version(&mut deletion, sequence + 1, 1_000);
+	deletion["deleted"] = json!(true);
+	deletion["snapshot"]["lastModifiedAt"] = membership["modifiedAt"].clone();
+
+	let (status, applied) = push(&b, &a, json!([membership.clone(), deletion])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert!(applied["results"].as_array().expect("results").iter().all(|result| result["status"] == "applied"));
+	let pool = connect_db(&b.db_path).await;
+	let remote_manga = id_for_key(&pool, "manga", "manga-remote").await;
+	let before_parent: Vec<(i64, i64)> = sqlx::query_as("SELECT category_id, manga_id FROM category_manga WHERE user_id = 1 ORDER BY category_id, manga_id")
+		.fetch_all(&pool)
+		.await
+		.expect("membership deleted before parent");
+	assert_eq!(before_parent, [(500, 900)], "{applied}");
+
+	let relay = peer().await;
+	let mut target_update = membership.clone();
+	target_update["origin"] = json!(relay.origin);
+	target_update["entityKey"] = json!("target-live");
+	target_update["identity"]["categoryId"] = json!(500);
+	target_update["identity"]["categoryOrigin"] = json!(b.origin);
+	target_update["identity"]["categoryOriginUserId"] = json!(1);
+	target_update["identity"]["categoryOriginEntityKey"] = json!("500");
+	target_update["snapshot"]["categoryId"] = json!(500);
+	set_version(&mut target_update, 1, 600);
+	let (status, applied) = push(&b, &relay, json!([target_update.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let target_live: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+	)
+	.bind(remote_manga)
+	.fetch_one(&pool)
+	.await
+	.expect("target live membership before merge");
+	assert_eq!(target_live, 1);
+
+	let (status, applied) = push(&b, &a, json!([category])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let stored_category: i64 = sqlx::query_scalar("SELECT id FROM category WHERE user_id = 1 AND name = 'Category remote'")
+		.fetch_one(&pool)
+		.await
+		.expect("merged named category");
+	assert_eq!(stored_category, 500);
+	let remote_memberships: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = 1",
+	)
+	.bind(stored_category)
+	.bind(remote_manga)
+	.fetch_one(&pool)
+	.await
+	.expect("deleted remote membership");
+	assert_eq!(remote_memberships, 0);
+	let local_memberships: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = 500 AND manga_id = 900 AND user_id = 1",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("unrelated local membership");
+	assert_eq!(local_memberships, 1);
+	let tombstone_key: String = sqlx::query_scalar(
+		"SELECT entity_key FROM sync_change
+		 WHERE origin = ? AND entity_kind = 'category_manga' AND origin_entity_key = ?
+		 ORDER BY sequence DESC LIMIT 1",
+	)
+	.bind(&a.origin)
+	.bind(membership["entityKey"].as_str().expect("origin membership key"))
+	.fetch_one(&pool)
+	.await
+	.expect("membership tombstone");
+	assert_eq!(tombstone_key, format!("700:{remote_manga}:1"));
+
+	let mut older_update = membership.clone();
+	older_update["origin"] = json!(relay.origin);
+	older_update["entityKey"] = json!("relay-membership");
+	set_version(&mut older_update, 1, 600);
+	let (status, applied) = push(&b, &relay, json!([older_update.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	let guarded: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+	)
+	.bind(remote_manga)
+	.fetch_one(&pool)
+	.await
+	.expect("old stub tombstone still guards merged membership");
+	assert_eq!(guarded, 0, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "stale");
+
+	let mut newer_update = older_update;
+	set_version(&mut newer_update, 2, 1_001);
+	let (status, applied) = push(&b, &relay, json!([newer_update])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let recreated: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+	)
+	.bind(remote_manga)
+	.fetch_one(&pool)
+	.await
+	.expect("newer update recreates membership");
+	assert_eq!(recreated, 1);
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn category_stub_merge_respects_target_tombstone() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	seed_initial(&b, 900, 500, 900, "local", false).await;
+	let b_pool = connect_db(&b.db_path).await;
+	sqlx::query("UPDATE category SET name = 'Category remote' WHERE id = 500")
+		.execute(&b_pool)
+		.await
+		.expect("same-named local category");
+	let (_, initial) = pull(&a, &b, 0).await;
+	let mut stub_membership = event_of(&initial, "category_manga");
+	let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
+	set_version(&mut stub_membership, stub_sequence, 600);
+	let (status, applied) = push(&b, &a, json!([stub_membership.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let remote_manga = id_for_key(&b_pool, "manga", "manga-remote").await;
+
+	let relay = peer().await;
+	let mut target_update = stub_membership.clone();
+	target_update["origin"] = json!(relay.origin);
+	target_update["entityKey"] = json!("target-membership");
+	target_update["identity"]["categoryId"] = json!(500);
+	target_update["identity"]["categoryOrigin"] = json!(b.origin);
+	target_update["identity"]["categoryOriginUserId"] = json!(1);
+	target_update["identity"]["categoryOriginEntityKey"] = json!("500");
+	target_update["snapshot"]["categoryId"] = json!(500);
+	set_version(&mut target_update, 1, 900);
+	let (status, applied) = push(&b, &relay, json!([target_update.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let mut target_tombstone = target_update;
+	set_version(&mut target_tombstone, 2, 1_000);
+	target_tombstone["deleted"] = json!(true);
+	target_tombstone["snapshot"]["lastModifiedAt"] = json!(900);
+	let (status, applied) = push(&b, &relay, json!([target_tombstone])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+
+	let mut category = event_of(&initial, "category");
+	let category_sequence = category["originSequence"].as_i64().expect("category sequence");
+	set_version(&mut category, category_sequence + 100, 9_000_000_000_000_000);
+	let (status, applied) = push(&b, &a, json!([category])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let memberships: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+	)
+	.bind(remote_manga)
+	.fetch_one(&b_pool)
+	.await
+	.expect("target tombstone survives stub merge");
+	assert_eq!(memberships, 0, "{applied}");
+	b_pool.close().await;
+}
+
+#[tokio::test]
+async fn category_stub_merge_journals_row_only_version() {
+	for stub_has_row_only_version in [true, false] {
+		let a = peer().await;
+		let b = peer().await;
+		seed_initial(&a, 100, 700, 700, "remote", false).await;
+		seed_initial(&b, 900, 500, 900, "local", false).await;
+		let b_pool = connect_db(&b.db_path).await;
+		sqlx::query("UPDATE category SET name = 'Category remote' WHERE id = 500")
+			.execute(&b_pool)
+			.await
+			.expect("same-named local category");
+		let (_, initial) = pull(&a, &b, 0).await;
+		let mut stub_membership = event_of(&initial, "category_manga");
+		let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
+		set_version(&mut stub_membership, stub_sequence, 600);
+		let (status, applied) = push(&b, &a, json!([stub_membership.clone()])).await;
+		assert_eq!(status, StatusCode::OK, "{applied}");
+		assert_eq!(applied["results"][0]["status"], "applied");
+		let remote_manga = id_for_key(&b_pool, "manga", "manga-remote").await;
+
+		let relay = peer().await;
+		let mut target_update = stub_membership.clone();
+		target_update["origin"] = json!(relay.origin);
+		target_update["entityKey"] = json!("target-membership");
+		target_update["identity"]["categoryId"] = json!(500);
+		target_update["identity"]["categoryOrigin"] = json!(b.origin);
+		target_update["identity"]["categoryOriginUserId"] = json!(1);
+		target_update["identity"]["categoryOriginEntityKey"] = json!("500");
+		target_update["snapshot"]["categoryId"] = json!(500);
+		set_version(&mut target_update, 1, 600);
+		let (status, applied) = push(&b, &relay, json!([target_update.clone()])).await;
+		assert_eq!(status, StatusCode::OK, "{applied}");
+		assert_eq!(applied["results"][0]["status"], "applied");
+		let mut target_tombstone = target_update;
+		let mut later_sequence = 2;
+		let mut prior_version = 600;
+		if stub_has_row_only_version {
+			set_version(&mut target_tombstone, 2, 700);
+			target_tombstone["deleted"] = json!(true);
+			target_tombstone["snapshot"]["lastModifiedAt"] = json!(600);
+			let (status, applied) = push(&b, &relay, json!([target_tombstone.clone()])).await;
+			assert_eq!(status, StatusCode::OK, "{applied}");
+			assert_eq!(applied["results"][0]["status"], "applied");
+			later_sequence = 3;
+			prior_version = 700;
+		}
+		let row_only_category = if stub_has_row_only_version { 700 } else { 500 };
+		sqlx::query(
+			"UPDATE category_manga SET last_modified_at = 1000 WHERE category_id = ? AND manga_id = ? AND user_id = 1",
+		)
+		.bind(row_only_category)
+		.bind(remote_manga)
+		.execute(&b_pool)
+		.await
+		.expect("row-only version without a new event");
+
+		let mut category = event_of(&initial, "category");
+		let category_sequence = category["originSequence"].as_i64().expect("category sequence");
+		set_version(&mut category, category_sequence + 100, 9_000_000_000_000_000);
+		let (status, applied) = push(&b, &a, json!([category])).await;
+		assert_eq!(status, StatusCode::OK, "{applied}");
+		assert_eq!(applied["results"][0]["status"], "applied");
+		let merged_version: i64 = sqlx::query_scalar(
+			"SELECT last_modified_at FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+		)
+		.bind(remote_manga)
+		.fetch_one(&b_pool)
+		.await
+		.expect("row-only version wins merge");
+		assert_eq!(merged_version, 1_000);
+
+		set_version(&mut target_tombstone, later_sequence, 800);
+		target_tombstone["deleted"] = json!(true);
+		target_tombstone["snapshot"]["lastModifiedAt"] = json!(prior_version);
+		let (status, applied) = push(&b, &relay, json!([target_tombstone])).await;
+		assert_eq!(status, StatusCode::OK, "{applied}");
+		let remaining: Option<i64> = sqlx::query_scalar(
+			"SELECT last_modified_at FROM category_manga WHERE category_id = 500 AND manga_id = ? AND user_id = 1",
+		)
+		.bind(remote_manga)
+		.fetch_optional(&b_pool)
+		.await
+		.expect("row-only version remains journaled");
+		assert_eq!(remaining, Some(1_000), "stub_has_row_only_version={stub_has_row_only_version}: {applied}");
+		assert_eq!(applied["results"][0]["status"], "stale");
+		b_pool.close().await;
+	}
+}
+
+#[tokio::test]
+async fn relayed_category_membership_resolves_parent_across_origins() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	seed_initial(&b, 900, 700, 900, "local", false).await;
+	exchange(&a, &b).await;
+	let b_pool = connect_db(&b.db_path).await;
+	let remote_category: i64 = sqlx::query_scalar("SELECT id FROM category WHERE user_id = 1 AND name = 'Category remote'")
+		.fetch_one(&b_pool)
+		.await
+		.expect("relayed category");
+	assert_ne!(remote_category, 700);
+	let remote_manga = id_for_key(&b_pool, "manga", "manga-remote").await;
+	sqlx::query("DELETE FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = 1")
+		.bind(remote_category)
+		.bind(remote_manga)
+		.execute(&b_pool)
+		.await
+		.expect("delete relayed membership locally");
+	sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
+		.bind(remote_category)
+		.bind(remote_manga)
+		.execute(&b_pool)
+		.await
+		.expect("recreate relayed membership locally");
+	let destination = peer().await;
+	let (_, relayed) = pull(&b, &destination, 0).await;
+	let changes = relayed["changes"].as_array().expect("relayed changes");
+	let category = changes
+		.iter()
+		.find(|change| {
+			change["entityKind"] == "category" && change["origin"] == a.origin
+				&& change["snapshot"]["name"] == "Category remote"
+		})
+		.expect("original category event")
+		.clone();
+	let membership = changes
+		.iter()
+		.find(|change| {
+			change["entityKind"] == "category_manga" && change["origin"] == b.origin
+				&& change["deleted"] == false && change["identity"]["mangaKey"] == "manga-remote"
+		})
+		.expect("locally recreated membership event")
+		.clone();
+	assert_eq!(category["identity"]["categoryId"], 700);
+	assert_eq!(membership["identity"]["categoryId"], remote_category);
+
+	for child_first in [true, false] {
+		let c = peer().await;
+		let events = if child_first {
+			json!([membership.clone(), category.clone()])
+		} else {
+			json!([category.clone(), membership.clone()])
+		};
+		let (status, applied) = push(&c, &b, events).await;
+		assert_eq!(status, StatusCode::OK, "{applied}");
+		let pool = connect_db(&c.db_path).await;
+		let categories: Vec<(i64, String)> = sqlx::query_as("SELECT id, name FROM category WHERE user_id = 1")
+			.fetch_all(&pool)
+			.await
+			.expect("relayed categories");
+		assert_eq!(categories.len(), 1, "child_first={child_first}: {categories:?}");
+		assert_eq!(categories[0].1, "Category remote");
+		let membership_category: i64 = sqlx::query_scalar("SELECT category_id FROM category_manga WHERE user_id = 1")
+			.fetch_one(&pool)
+			.await
+			.expect("relayed membership");
+		assert_eq!(membership_category, categories[0].0, "child_first={child_first}");
+		pool.close().await;
+	}
+
+	let (status, applied) = push(&a, &b, json!([membership])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let a_pool = connect_db(&a.db_path).await;
+	let source_categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM category WHERE user_id = 1 AND name = 'Category remote'")
+		.fetch_one(&a_pool)
+		.await
+		.expect("source instance categories");
+	assert_eq!(source_categories, 1);
+	let source_membership: i64 = sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = 100 AND user_id = 1")
+		.fetch_one(&a_pool)
+		.await
+		.expect("source instance membership");
+	assert_eq!(source_membership, 700);
+	a_pool.close().await;
+	b_pool.close().await;
+}
+
+#[tokio::test]
 async fn category_id_collision_does_not_merge_unrelated_categories() {
 	let a = peer().await;
 	let b = peer().await;
@@ -566,6 +928,14 @@ async fn stale_event_preserves_mapping_for_later_rekey() {
 	let (status, applied) = push(&b, &a, json!([stale])).await;
 	assert_eq!(status, StatusCode::OK, "{applied}");
 	assert_eq!(applied["results"][0]["status"], "stale");
+	let current_origin: String = sqlx::query_scalar(
+		"SELECT origin FROM sync_change WHERE entity_kind = 'manga' AND entity_key = '900'
+		 ORDER BY sequence DESC LIMIT 1",
+	)
+	.fetch_one(&b_pool)
+	.await
+	.expect("current event keeps its origin");
+	assert_eq!(current_origin, b.origin);
 
 	let mut rekey = event_of(&initial, "manga");
 	rekey["identity"]["mangaKey"] = json!("rekeyed");
@@ -623,6 +993,15 @@ async fn progress_merge_keeps_actual_version_when_event_is_missing() {
 	.await
 	.expect("merged progress");
 	assert_eq!(merged, (100, 5, true, false, 20));
+	let event_version: i64 = sqlx::query_scalar(
+		"SELECT CAST(json_extract(snapshot, '$.lastModifiedAt') AS INTEGER) FROM sync_change
+		 WHERE entity_kind = 'chapter_user' AND entity_key = ? ORDER BY sequence DESC LIMIT 1",
+	)
+	.bind(format!("{chapter_id}:1"))
+	.fetch_one(&b_pool)
+	.await
+	.expect("merged event version");
+	assert_eq!(event_version, 100);
 
 	let mut bookmark = event_of(&initial, "chapter_user");
 	bookmark["snapshot"]["isBookmarked"] = json!(true);
@@ -652,6 +1031,27 @@ async fn progress_merge_keeps_actual_version_when_event_is_missing() {
 	.await
 	.expect("progress survives older tombstone");
 	assert_eq!(remaining, (false, 100));
+
+	sqlx::query("DELETE FROM sync_change WHERE entity_kind = 'chapter_user' AND entity_key = ?")
+		.bind(format!("{chapter_id}:1"))
+		.execute(&b_pool)
+		.await
+		.expect("remove current event before direct tombstone");
+	let mut direct_tombstone = event_of(&initial, "chapter_user");
+	set_version(&mut direct_tombstone, 53, 75);
+	direct_tombstone["deleted"] = json!(true);
+	direct_tombstone["snapshot"]["lastModifiedAt"] = json!(74);
+	let (status, applied) = push(&b, &a, json!([direct_tombstone])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	let remaining: Option<i64> = sqlx::query_scalar(
+		"SELECT last_modified_at FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
+	)
+	.bind(chapter_id)
+	.fetch_optional(&b_pool)
+	.await
+	.expect("progress survives direct older tombstone");
+	assert_eq!(remaining, Some(100), "{applied}");
+	assert_eq!(applied["results"][0]["status"], "stale");
 	b_pool.close().await;
 }
 

@@ -17,6 +17,26 @@ SET origin = (SELECT value FROM setting WHERE key = 'sync.instance_id'),
 CREATE INDEX sync_change_origin_entity_sequence ON sync_change
     (origin, origin_user_id, entity_kind, origin_entity_key, origin_sequence);
 
+CREATE TABLE sync_alias (
+    origin TEXT NOT NULL,
+    origin_user_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES user (id) ON DELETE CASCADE,
+    entity_kind TEXT NOT NULL,
+    origin_entity_key TEXT NOT NULL,
+    entity_key TEXT NOT NULL,
+    PRIMARY KEY (origin, origin_user_id, user_id, entity_kind, origin_entity_key)
+);
+INSERT INTO sync_alias (origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key)
+SELECT origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key
+FROM (
+    SELECT origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key,
+        ROW_NUMBER() OVER (
+            PARTITION BY origin, origin_user_id, user_id, entity_kind, origin_entity_key
+            ORDER BY sequence DESC
+        ) AS rn
+    FROM sync_change
+) WHERE rn = 1;
+
 CREATE TRIGGER sync_change_origin_insert AFTER INSERT ON sync_change
 WHEN NEW.origin_sequence = 0
 BEGIN
@@ -26,6 +46,11 @@ BEGIN
         origin_entity_key = NEW.entity_key,
         origin_sequence = NEW.sequence
     WHERE sequence = NEW.sequence;
+    INSERT INTO sync_alias (origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key)
+    SELECT origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key
+    FROM sync_change WHERE sequence = NEW.sequence
+    ON CONFLICT (origin, origin_user_id, user_id, entity_kind, origin_entity_key)
+    DO UPDATE SET entity_key = excluded.entity_key;
 END;
 
 CREATE TABLE sync_origin_state (

@@ -165,6 +165,23 @@ async fn changes_since_filtered(
 	.bind(fetch_limit)
 	.fetch_all(&mut *tx)
 	.await?;
+	let category_origins = if rows.iter().any(|row| row.entity_kind == "category_manga") {
+		sqlx::query_as::<_, (String, String, i64, String)>(
+			"SELECT entity_key, origin, origin_user_id, origin_entity_key FROM (
+			 SELECT entity_key, origin, origin_user_id, origin_entity_key,
+			  ROW_NUMBER() OVER (PARTITION BY entity_key ORDER BY sequence DESC) AS rn
+			 FROM sync_change WHERE user_id = ? AND entity_kind = 'category'
+			) WHERE rn = 1",
+		)
+		.bind(authenticated_user_id)
+		.fetch_all(&mut *tx)
+		.await?
+		.into_iter()
+		.map(|(key, origin, user_id, entity_key)| (key, (origin, user_id, entity_key)))
+		.collect::<std::collections::HashMap<_, _>>()
+	} else {
+		std::collections::HashMap::new()
+	};
 	tx.commit().await?;
 
 	let has_more = rows.len() > limit_usize;
@@ -176,7 +193,16 @@ async fn changes_since_filtered(
 	};
 	let mut changes = Vec::with_capacity(rows.len());
 	for row in rows {
-		changes.push(into_change(row)?);
+		let mut change = into_change(row)?;
+		if change.entity_kind == "category_manga"
+			&& let Some(category_id) = change.entity_key.split(':').next()
+			&& let Some((origin, origin_user_id, origin_entity_key)) = category_origins.get(category_id)
+		{
+			change.identity["categoryOrigin"] = serde_json::json!(origin);
+			change.identity["categoryOriginUserId"] = serde_json::json!(origin_user_id);
+			change.identity["categoryOriginEntityKey"] = serde_json::json!(origin_entity_key);
+		}
+		changes.push(change);
 	}
 	Ok(SyncChangePage {
 		changes,

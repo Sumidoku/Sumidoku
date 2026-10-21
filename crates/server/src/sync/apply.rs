@@ -60,8 +60,6 @@ impl Version {
 struct CurrentEvent {
 	version: Version,
 	deleted: bool,
-	identity: Value,
-	snapshot: Value,
 }
 
 struct Finish {
@@ -141,6 +139,7 @@ fn validate_change(change: &WireChange) -> ApiResult<()> {
 		"category_manga" => {
 			validate_manga_identity(&change.identity)?;
 			identity_id(&change.identity, "categoryId")?;
+			category_parent_origin(&change.identity)?;
 			validate_identity_user(change)?;
 		}
 		"chapter" => {
@@ -411,40 +410,40 @@ fn is_stale(change: &WireChange, current: &Option<CurrentEvent>) -> bool {
 		.is_some_and(|current| incoming_version(change).cmp(&current.version) != Ordering::Greater)
 }
 
+async fn upsert_alias(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	user_id: i64,
+	change: &WireChange,
+	local_key: &str,
+) -> ApiResult<()> {
+	sqlx::query(
+		"INSERT INTO sync_alias (origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (origin, origin_user_id, user_id, entity_kind, origin_entity_key)
+		 DO UPDATE SET entity_key = excluded.entity_key",
+	)
+	.bind(&change.origin)
+	.bind(change.origin_user_id)
+	.bind(user_id)
+	.bind(&change.entity_kind)
+	.bind(&change.entity_key)
+	.bind(local_key)
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 async fn record_mapping(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	user_id: i64,
 	change: &WireChange,
 	already_mapped: bool,
 	local_key: Option<&str>,
-	current: &Option<CurrentEvent>,
 ) -> ApiResult<()> {
-	let (false, Some(local_key), Some(current)) = (already_mapped, local_key, current.as_ref()) else {
+	let (false, Some(local_key)) = (already_mapped, local_key) else {
 		return Ok(());
 	};
-	let mut identity = current.identity.clone();
-	if !matches!(change.entity_kind.as_str(), "manga" | "chapter") {
-		identity["userId"] = json!(change.origin_user_id);
-	}
-	insert_change(
-		tx,
-		&SyncChange {
-			sequence: 0,
-			user_id,
-			entity_kind: change.entity_kind.clone(),
-			entity_key: local_key.to_string(),
-			origin: change.origin.clone(),
-			origin_user_id: change.origin_user_id,
-			origin_entity_key: change.entity_key.clone(),
-			origin_sequence: change.origin_sequence,
-			deleted: current.deleted,
-			modified_at: current.version.modified_at,
-			identity,
-			snapshot: current.snapshot.clone(),
-		},
-	)
-	.await?;
-	Ok(())
+	upsert_alias(tx, user_id, change, local_key).await
 }
 
 async fn mapped_key(
@@ -456,13 +455,11 @@ async fn mapped_key(
 	shared: bool,
 ) -> ApiResult<Option<String>> {
 	let sql = if shared {
-		"SELECT entity_key FROM sync_change
-		 WHERE origin = ? AND origin_user_id = ? AND entity_kind = ? AND origin_entity_key = ?
-		 ORDER BY sequence DESC LIMIT 1"
+		"SELECT entity_key FROM sync_alias
+		 WHERE origin = ? AND origin_user_id = ? AND entity_kind = ? AND origin_entity_key = ? LIMIT 1"
 	} else {
-		"SELECT entity_key FROM sync_change
-		 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = ? AND origin_entity_key = ?
-		 ORDER BY sequence DESC LIMIT 1"
+		"SELECT entity_key FROM sync_alias
+		 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = ? AND origin_entity_key = ? LIMIT 1"
 	};
 	let mut query = sqlx::query_scalar(sql)
 		.bind(&change.origin)
@@ -484,35 +481,40 @@ async fn current_event(
 	entity_key: &str,
 	shared: bool,
 ) -> ApiResult<Option<CurrentEvent>> {
-	let sql = if shared {
-		"SELECT modified_at, origin, origin_sequence, deleted, identity, snapshot FROM sync_change
+	let alias_aware = kind == "category_manga" && !shared;
+	let sql = if alias_aware {
+		"SELECT modified_at, origin, origin_sequence, deleted FROM sync_change sc
+		 WHERE sc.user_id = ? AND sc.entity_kind = ?
+		  AND (sc.entity_key = ? OR EXISTS (
+		   SELECT 1 FROM sync_alias sa
+		   WHERE sa.origin = sc.origin AND sa.origin_user_id = sc.origin_user_id AND sa.user_id = sc.user_id
+		    AND sa.entity_kind = sc.entity_kind AND sa.origin_entity_key = sc.origin_entity_key AND sa.entity_key = ?
+		  ))
+		 ORDER BY modified_at DESC, origin DESC, origin_sequence DESC, sequence DESC LIMIT 1"
+	} else if shared {
+		"SELECT modified_at, origin, origin_sequence, deleted FROM sync_change
 		 WHERE entity_kind = ? AND entity_key = ? ORDER BY sequence DESC LIMIT 1"
 	} else {
-		"SELECT modified_at, origin, origin_sequence, deleted, identity, snapshot FROM sync_change
+		"SELECT modified_at, origin, origin_sequence, deleted FROM sync_change
 		 WHERE user_id = ? AND entity_kind = ? AND entity_key = ? ORDER BY sequence DESC LIMIT 1"
 	};
 	let mut query = sqlx::query(sql);
 	if !shared {
 		query = query.bind(user_id);
 	}
-	let row = query
-		.bind(kind)
-		.bind(entity_key)
-		.fetch_optional(&mut **tx)
-		.await?;
-	Ok(match row {
-		Some(row) => Some(CurrentEvent {
-			version: Version {
-				modified_at: row.get(0),
-				origin: row.get(1),
-				origin_sequence: row.get(2),
-			},
-			deleted: row.get(3),
-			identity: serde_json::from_str(row.get(4))?,
-			snapshot: serde_json::from_str(row.get(5))?,
-		}),
-		None => None,
-	})
+	query = query.bind(kind).bind(entity_key);
+	if alias_aware {
+		query = query.bind(entity_key);
+	}
+	let row = query.fetch_optional(&mut **tx).await?;
+	Ok(row.map(|row| CurrentEvent {
+		version: Version {
+			modified_at: row.get(0),
+			origin: row.get(1),
+			origin_sequence: row.get(2),
+		},
+		deleted: row.get(3),
+	}))
 }
 
 async fn finish(
@@ -582,6 +584,7 @@ async fn finish(
 			identity: finish.identity.clone(),
 			snapshot: finish.snapshot.clone(),
 		};
+		upsert_alias(tx, event_user, change, local_key).await?;
 		insert_change(tx, &event).await?;
 	}
 	Ok(())
@@ -947,24 +950,59 @@ async fn parent_chapter_id(
 		.await?)
 }
 
+fn category_parent_origin(identity: &Value) -> ApiResult<Option<(String, i64, String)>> {
+	if identity.get("categoryOrigin").is_none() {
+		return Ok(None);
+	}
+	Ok(Some((
+		identity_string(identity, "categoryOrigin")?,
+		identity_id(identity, "categoryOriginUserId")?,
+		identity_string(identity, "categoryOriginEntityKey")?,
+	)))
+}
+
 async fn category_from_membership(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	change: &WireChange,
 	user_id: i64,
 ) -> ApiResult<Option<i64>> {
 	let category_id = identity_id(&change.identity, "categoryId")?;
-	let key: Option<String> = sqlx::query_scalar(
-		"SELECT entity_key FROM sync_change
-		 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = 'category_manga'
-		  AND json_extract(identity, '$.categoryId') = ?
-		 ORDER BY sequence DESC LIMIT 1",
-	)
-	.bind(&change.origin)
-	.bind(change.origin_user_id)
-	.bind(user_id)
-	.bind(category_id)
-	.fetch_optional(&mut **tx)
-	.await?;
+	let parent_origin = if change.entity_kind == "category" {
+		Some((change.origin.clone(), change.origin_user_id, change.entity_key.clone()))
+	} else {
+		category_parent_origin(&change.identity)?
+	};
+	let mut key: Option<String> = None;
+	if let Some((origin, origin_user_id, origin_entity_key)) = parent_origin {
+		key = sqlx::query_scalar(
+			"SELECT entity_key FROM sync_change
+			 WHERE user_id = ? AND entity_kind = 'category_manga'
+			  AND json_extract(identity, '$.categoryOrigin') = ?
+			  AND json_extract(identity, '$.categoryOriginUserId') = ?
+			  AND json_extract(identity, '$.categoryOriginEntityKey') = ?
+			 ORDER BY sequence DESC LIMIT 1",
+		)
+		.bind(user_id)
+		.bind(origin)
+		.bind(origin_user_id)
+		.bind(origin_entity_key)
+		.fetch_optional(&mut **tx)
+		.await?;
+	}
+	if key.is_none() {
+		key = sqlx::query_scalar(
+			"SELECT entity_key FROM sync_change
+			 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = 'category_manga'
+			  AND json_extract(identity, '$.categoryId') = ?
+			 ORDER BY sequence DESC LIMIT 1",
+		)
+		.bind(&change.origin)
+		.bind(change.origin_user_id)
+		.bind(user_id)
+		.bind(category_id)
+		.fetch_optional(&mut **tx)
+		.await?;
+	}
 	key
 		.as_deref()
 		.and_then(|key| key.split(':').next())
@@ -984,6 +1022,24 @@ async fn parent_category_id(
 			.parse::<i64>()
 			.map(Some)
 			.map_err(|_| ApiError::bad_request("invalid mapped category key"));
+	}
+	if let Some((origin, origin_user_id, origin_entity_key)) = category_parent_origin(&change.identity)? {
+		let key: Option<String> = sqlx::query_scalar(
+			"SELECT entity_key FROM sync_alias
+			 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = 'category' AND origin_entity_key = ?",
+		)
+		.bind(origin)
+		.bind(origin_user_id)
+		.bind(user_id)
+		.bind(origin_entity_key)
+		.fetch_optional(&mut **tx)
+		.await?;
+		if let Some(key) = key {
+			return key
+				.parse::<i64>()
+				.map(Some)
+				.map_err(|_| ApiError::bad_request("invalid mapped category key"));
+		}
 	}
 	if let Some(id) = category_from_membership(tx, change, user_id).await? {
 		return Ok(Some(id));
@@ -1026,7 +1082,7 @@ async fn apply_manga(
 		None => None,
 	};
 	if is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref(), &current)
+		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref())
 			.await?;
 		return Ok(Disposition::Stale);
 	}
@@ -1142,7 +1198,7 @@ async fn apply_chapter(
 		None => None,
 	};
 	if is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref(), &current)
+		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref())
 			.await?;
 		return Ok(Disposition::Stale);
 	}
@@ -1218,8 +1274,44 @@ async fn apply_chapter(
 	Ok(Disposition::Applied)
 }
 
+async fn derived_membership_event(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	category_id: i64,
+	manga_id: i64,
+	user_id: i64,
+	modified_at: i64,
+) -> ApiResult<SyncChange> {
+	let identity: String = sqlx::query_scalar("SELECT identity FROM sync_manga_state WHERE manga_id = ?")
+		.bind(manga_id)
+		.fetch_one(&mut **tx)
+		.await?;
+	let mut identity: Value = serde_json::from_str(&identity)?;
+	identity["categoryId"] = json!(category_id);
+	identity["userId"] = json!(user_id);
+	Ok(SyncChange {
+		sequence: 0,
+		user_id,
+		entity_kind: "category_manga".into(),
+		entity_key: format!("{category_id}:{manga_id}:{user_id}"),
+		origin: String::new(),
+		origin_user_id: 0,
+		origin_entity_key: String::new(),
+		origin_sequence: 0,
+		deleted: false,
+		modified_at,
+		identity,
+		snapshot: json!({
+			"categoryId": category_id,
+			"mangaId": manga_id,
+			"userId": user_id,
+			"lastModifiedAt": modified_at,
+		}),
+	})
+}
+
 async fn merge_category_stub(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	start_sequence: i64,
 	stub_id: i64,
 	target_id: i64,
 ) -> ApiResult<bool> {
@@ -1231,24 +1323,123 @@ async fn merge_category_stub(
 	if !is_stub {
 		return Ok(false);
 	}
-	sqlx::query(
-		"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-		 SELECT ?, manga_id, user_id FROM category_manga WHERE category_id = ?",
+	let state = |event: Option<CurrentEvent>, row_version: Option<i64>| {
+		let mut state = event.unwrap_or(CurrentEvent {
+			version: Version {
+				modified_at: 0,
+				origin: String::new(),
+				origin_sequence: 0,
+			},
+			deleted: false,
+		});
+		if let Some(row_version) = row_version
+			&& row_version > state.version.modified_at
+		{
+			state.version = Version {
+				modified_at: row_version,
+				origin: String::new(),
+				origin_sequence: 0,
+			};
+			state.deleted = false;
+		}
+		state
+	};
+	let stub_prefix = format!("{stub_id}:");
+	let stub_keys: Vec<String> = sqlx::query_scalar(
+		"SELECT entity_key FROM sync_change WHERE entity_kind = 'category_manga' AND entity_key LIKE ?
+		 UNION SELECT category_id || ':' || manga_id || ':' || user_id FROM category_manga WHERE category_id = ?
+		 ORDER BY 1",
 	)
-	.bind(target_id)
+	.bind(format!("{stub_id}:%"))
 	.bind(stub_id)
-	.execute(&mut **tx)
+	.fetch_all(&mut **tx)
 	.await?;
+	let mut derived_events = Vec::new();
+	for stub_key in stub_keys {
+		let ids = key_ids(&stub_key)?;
+		let target_key = format!("{target_id}:{}:{}", ids[1], ids[2]);
+		let stub_row_version: Option<i64> = sqlx::query_scalar(
+			"SELECT last_modified_at FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = ?",
+		)
+		.bind(stub_id)
+		.bind(ids[1])
+		.bind(ids[2])
+		.fetch_optional(&mut **tx)
+		.await?;
+		let target_row_version: Option<i64> = sqlx::query_scalar(
+			"SELECT last_modified_at FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = ?",
+		)
+		.bind(target_id)
+		.bind(ids[1])
+		.bind(ids[2])
+		.fetch_optional(&mut **tx)
+		.await?;
+		let stub_event = current_event(tx, ids[2], "category_manga", &stub_key, false).await?;
+		let target_event = current_event(tx, ids[2], "category_manga", &target_key, false).await?;
+		let stub_derived_version = stub_row_version.filter(|row_version| {
+			stub_event.as_ref().is_none_or(|event| *row_version > event.version.modified_at)
+		});
+		let target_derived_version = target_row_version.filter(|row_version| {
+			target_event.as_ref().is_none_or(|event| *row_version > event.version.modified_at)
+		});
+		let stub_state = state(stub_event, stub_row_version);
+		let target_state = state(target_event, target_row_version);
+		if stub_state.version.cmp(&target_state.version) != Ordering::Greater {
+			if let Some(modified_at) = target_derived_version {
+				derived_events.push(derived_membership_event(tx, target_id, ids[1], ids[2], modified_at).await?);
+			}
+			continue;
+		}
+		if stub_state.deleted {
+			sqlx::query("DELETE FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = ?")
+				.bind(target_id)
+				.bind(ids[1])
+				.bind(ids[2])
+				.execute(&mut **tx)
+				.await?;
+		} else {
+			sqlx::query(
+				"INSERT INTO category_manga (category_id, manga_id, user_id, last_modified_at) VALUES (?, ?, ?, ?)
+				 ON CONFLICT (category_id, manga_id, user_id) DO UPDATE SET last_modified_at = excluded.last_modified_at",
+			)
+			.bind(target_id)
+			.bind(ids[1])
+			.bind(ids[2])
+			.bind(stub_state.version.modified_at)
+			.execute(&mut **tx)
+			.await?;
+			if let Some(modified_at) = stub_derived_version {
+				derived_events.push(derived_membership_event(tx, target_id, ids[1], ids[2], modified_at).await?);
+			}
+		}
+	}
 	sqlx::query("DELETE FROM category_manga WHERE category_id = ?")
 		.bind(stub_id)
 		.execute(&mut **tx)
 		.await?;
+	// Rekeying keeps the original events; trigger-generated membership copies would replace their provenance.
+	sqlx::query("DELETE FROM sync_change WHERE sequence > ? AND entity_kind = 'category_manga'")
+		.bind(start_sequence)
+		.execute(&mut **tx)
+		.await?;
+	for event in derived_events {
+		insert_change(tx, &event).await?;
+	}
 	sqlx::query(
 		"UPDATE sync_change SET entity_key = ? || substr(entity_key, length(?) + 1)
+		 WHERE entity_kind = 'category_manga' AND deleted = 0 AND entity_key LIKE ?",
+	)
+	.bind(format!("{target_id}:"))
+	.bind(&stub_prefix)
+	.bind(format!("{stub_id}:%"))
+	.execute(&mut **tx)
+	.await?;
+	sqlx::query(
+		"UPDATE sync_alias SET entity_key = ? || substr(entity_key, length(?) + 1)
 		 WHERE entity_kind = 'category_manga' AND entity_key LIKE ?",
 	)
 	.bind(format!("{target_id}:"))
-	.bind(format!("{stub_id}:"))
+	.bind(&stub_prefix)
 	.bind(format!("{stub_id}:%"))
 	.execute(&mut **tx)
 	.await?;
@@ -1280,7 +1471,7 @@ async fn apply_category(
 	let mut id = mapped_id.or(child_mapped).or(natural_id);
 	if let (Some(stub_id), Some(target_id)) = (id, natural_id)
 		&& stub_id != target_id
-		&& merge_category_stub(tx, stub_id, target_id).await?
+		&& merge_category_stub(tx, start_sequence, stub_id, target_id).await?
 	{
 		id = Some(target_id);
 	}
@@ -1293,7 +1484,7 @@ async fn apply_category(
 		None => None,
 	};
 	if is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref(), &current)
+		record_mapping(tx, user_id, change, mapped_id.is_some(), id.map(|id| id.to_string()).as_deref())
 			.await?;
 		return Ok(Disposition::Stale);
 	}
@@ -1421,7 +1612,7 @@ async fn apply_manga_user(
 		None => None,
 	};
 	if is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref(), &current).await?;
+		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref()).await?;
 		return Ok(Disposition::Stale);
 	}
 	let source_available = source_id(tx, &identity_string(&change.identity, "sourceKey")?)
@@ -1528,7 +1719,7 @@ async fn apply_category_manga(
 		None => None,
 	};
 	if is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref(), &current).await?;
+		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref()).await?;
 		return Ok(Disposition::Stale);
 	}
 	let source_available = source_id(tx, &identity_string(&change.identity, "sourceKey")?)
@@ -1651,9 +1842,47 @@ async fn apply_progress(
 		Some(key) => current_event(tx, user_id, "chapter_user", key, false).await?,
 		None => None,
 	};
+	let (local, local_version) = if exists {
+		let row: (i64, bool, bool, Option<i64>, i64) = sqlx::query_as(
+			"SELECT last_page_read, is_read, is_bookmarked, last_read_at, last_modified_at FROM chapter_user
+			 WHERE chapter_id = ? AND user_id = ?",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.fetch_one(&mut **tx)
+		.await?;
+		(
+			ProgressValues {
+				last_page_read: row.0,
+				is_read: row.1,
+				is_bookmarked: row.2,
+				last_read_at: row.3,
+			},
+			row.4,
+		)
+	} else {
+		(
+			ProgressValues {
+				last_page_read: 0,
+				is_read: false,
+				is_bookmarked: false,
+				last_read_at: None,
+			},
+			0,
+		)
+	};
+	let mut current_version = current
+		.as_ref()
+		.map(|current| current.version.clone())
+		.unwrap_or_else(|| Version {
+			modified_at: local_version,
+			origin: String::new(),
+			origin_sequence: 0,
+		});
+	current_version.modified_at = current_version.modified_at.max(local_version);
 	if change.deleted {
-		if is_stale(change, &current) {
-			record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref(), &current).await?;
+		if incoming_version(change).cmp(&current_version) != Ordering::Greater {
+			record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref()).await?;
 			return Ok(Disposition::Stale);
 		}
 		let source_available = source_id(tx, &identity_string(&change.identity, "sourceKey")?)
@@ -1692,7 +1921,7 @@ async fn apply_progress(
 		return Ok(Disposition::Applied);
 	}
 	if !exists && current.as_ref().is_some_and(|current| current.deleted) && is_stale(change, &current) {
-		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref(), &current).await?;
+		record_mapping(tx, user_id, change, mapped.is_some(), local_key.as_deref()).await?;
 		return Ok(Disposition::Stale);
 	}
 	let mut stubs = HashSet::new();
@@ -1701,45 +1930,7 @@ async fn apply_progress(
 		return Ok(Disposition::Skipped);
 	};
 	let local_key = format!("{chapter_id}:{user_id}");
-	let (local, local_version) = if exists {
-		let row: (i64, bool, bool, Option<i64>, i64) = sqlx::query_as(
-			"SELECT last_page_read, is_read, is_bookmarked, last_read_at, last_modified_at FROM chapter_user
-			 WHERE chapter_id = ? AND user_id = ?",
-		)
-		.bind(chapter_id)
-		.bind(user_id)
-		.fetch_one(&mut **tx)
-		.await?;
-		(
-			ProgressValues {
-				last_page_read: row.0,
-				is_read: row.1,
-				is_bookmarked: row.2,
-				last_read_at: row.3,
-			},
-			row.4,
-		)
-	} else {
-		(
-			ProgressValues {
-				last_page_read: 0,
-				is_read: false,
-				is_bookmarked: false,
-				last_read_at: None,
-			},
-			0,
-		)
-	};
 	let incoming = incoming_progress(change)?;
-	let mut current_version = current
-		.as_ref()
-		.map(|current| current.version.clone())
-		.unwrap_or_else(|| Version {
-			modified_at: local_version,
-			origin: String::new(),
-			origin_sequence: 0,
-		});
-	current_version.modified_at = current_version.modified_at.max(local_version);
 	let incoming_wins = incoming_version(change).cmp(&current_version) == Ordering::Greater;
 	let merged = ProgressValues {
 		last_page_read: local.last_page_read.max(incoming.last_page_read),

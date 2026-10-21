@@ -35,10 +35,7 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		"CREATE TEMP TABLE sync_compaction_latest AS
 		 SELECT user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key, origin_sequence,
 		  deleted, modified_at, identity, snapshot,
-		  ROW_NUMBER() OVER (
-		   PARTITION BY user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key
-		   ORDER BY sequence DESC
-		  ) AS rn
+		  ROW_NUMBER() OVER (PARTITION BY user_id, entity_kind, entity_key ORDER BY sequence DESC) AS rn
 		 FROM sync_change",
 	)
 	.execute(&mut *tx)

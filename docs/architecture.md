@@ -507,9 +507,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   once with 16 random bytes encoded as hex, and the journal insert trigger
   fills local origin metadata only when `origin_sequence = 0`. `entity_key`
   remains the local mapped key; the origin fields retain the original event
-  identity. `sync_origin_state` records the greatest applied origin sequence
-  per origin/origin user/local user/kind/original key, while the singleton
-  `sync_checkpoint` starts at base sequence zero. `changes_since` reads one
+  identity. `sync_alias` stores remote-to-local entity mappings separately from
+  event versions, so stale events and compaction cannot change the current
+  version's origin. `sync_origin_state` records the greatest applied origin
+  sequence per origin/origin user/local user/kind/original key, while the
+  singleton `sync_checkpoint` starts at base sequence zero. `changes_since` reads one
   SQLite snapshot, uses `limit + 1`, and returns the last returned sequence
   while more of the user's events exist, otherwise the global sequence
   high-water mark, including other users' sequences; a cursor ahead of that
@@ -549,15 +551,26 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   no-ops and stale events advance it, but an unavailable source rolls the event
   back without advancing so installing the source and resending works. A stale
   event leaves the row unchanged but records its origin mapping so a later
-  rekey still updates the same local entity. Existing origin metadata in
-  `sync_change` supplies the remote-to-local
-  mapping. First matches use source/manga/chapter natural keys and category
-  names; a numeric category id alone never proves a match. Missing parents
-  become zero-version stubs without fake events or library membership; a
-  later authoritative parent fills them. Ordinary
+  rekey still updates the same local entity. `sync_alias` owns these
+  remote-to-local mappings independently of event versions; local events also
+  register their own origin so a relay can sync back to the source instance.
+  First matches use source/manga/chapter natural keys and category names; a
+  numeric category id alone never proves a match. Category membership identities
+  carry `categoryOrigin`, `categoryOriginUserId` and `categoryOriginEntityKey`
+  from their current parent event, allowing parent resolution across relay
+  origins in either arrival order. Missing parents become zero-version stubs
+  without fake events or library membership; a later authoritative parent fills
+  them. Ordinary
   entities compare `(modified_at, origin, origin_sequence)`: newer tombstones
   delete, newer updates recreate, and deleting an absent entity only advances
-  dedupe. Progress instead merges `is_read` with OR, page and history with
+  dedupe. Category membership versions consider the current local key and every
+  historical key linked by `sync_alias`, so a tombstone left by stub merging
+  still orders later relayed updates. Stub coalescing applies each relation's
+  winning live/deleted state; if the winning physical row has a higher version
+  than its latest event, a local event records that version explicitly. Progress
+  comparisons include the actual row's `last_modified_at` even when its current
+  journal event is absent.
+  Progress merges `is_read` with OR, page and history with
   NULL-safe max, and bookmark by the deterministic version winner. A result
   equal to current state only advances dedupe; an exact incoming result keeps
   the incoming origin, while a new merged result gets a local-origin event.
@@ -570,12 +583,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   Admin-only `POST /api/v1/sync/compact` compacts in one immediate transaction.
   It writes current rows and every latest tombstone in manga, manga_user,
   category, chapter, chapter_user, category_manga order. Baseline rows receive
-  new local cursor sequences but preserve every origin mapping, not only the
-  newest event's origin, so rekey and replay dedupe still find older mappings.
-  A current stub recreated after a tombstone instead gets a local origin;
-  tombstones keep their own origins. The response
-  `{baseCursor, removed}` records the first new
-  baseline sequence; `sync_origin_state` is untouched. A nonzero cursor below
+  new local cursor sequences and preserve each current entity event's origin;
+  `sync_alias` retains the other remote-to-local mappings. A current stub
+  recreated after a tombstone instead gets a local origin; tombstones keep
+  their own origins. The response `{baseCursor, removed}` records the first new
+  baseline sequence; `sync_alias` and `sync_origin_state` are untouched. A
+  nonzero cursor below
   that sequence gets 409 `resync_required` and must restart at zero, which
   returns the complete baseline rather than an empty pseudo-page. Replaying a
   baseline is idempotent through the same dedupe and merge rules, and later
