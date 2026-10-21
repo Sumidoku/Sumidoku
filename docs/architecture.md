@@ -654,7 +654,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   row events are filtered per connection user, so one user's queue stays
   invisible to another. The artifact files stay shared at deterministic
   paths — a second user queueing an already-downloaded chapter lands on
-  `finished` directly, no repack. A row's stored `path` resolves through
+  `finished` directly, no repack. Both normal completion and shared-artifact
+  settlement commit the finished `download` row and the user's
+  `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
+  either write failing rolls both back, and the `finished` event is emitted
+  only after commit. A row's stored `path` resolves through
   `download::product_path` — absolute is used as-is, relative joins
   `downloads_dir` — and every read/delete site (`api/download.rs`,
   `opds/mod.rs`) goes through it.

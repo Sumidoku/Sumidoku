@@ -58,6 +58,63 @@ pub struct DownloadManager {
 	format: String,
 }
 
+enum FinishMode {
+	Update,
+	Upsert,
+}
+
+async fn persist_finished(
+	pool: &SqlitePool,
+	chapter_id: i64,
+	user_id: i64,
+	path: &str,
+	format: &str,
+	mode: FinishMode,
+) -> Result<(), sqlx::Error> {
+	let now = unix_now();
+	let mut tx = crate::db::begin_write(pool).await?;
+	match mode {
+		FinishMode::Update => {
+			sqlx::query(
+				"UPDATE download SET status = 'finished', path = ?, error = NULL, updated_at = ?
+				 WHERE chapter_id = ? AND user_id = ?",
+			)
+			.bind(path)
+			.bind(now)
+			.bind(chapter_id)
+			.bind(user_id)
+			.execute(&mut *tx)
+			.await?;
+		}
+		FinishMode::Upsert => {
+			sqlx::query(
+				"INSERT INTO download (chapter_id, user_id, status, format, path, created_at, updated_at)
+				 VALUES (?, ?, 'finished', ?, ?, ?, ?)
+				 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
+				 status = 'finished', format = excluded.format, path = excluded.path,
+				 error = NULL, retries = 0, updated_at = excluded.updated_at",
+			)
+			.bind(chapter_id)
+			.bind(user_id)
+			.bind(format)
+			.bind(path)
+			.bind(now)
+			.bind(now)
+			.execute(&mut *tx)
+			.await?;
+		}
+	}
+	sqlx::query(
+		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
+		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
+	)
+	.bind(chapter_id)
+	.bind(user_id)
+	.execute(&mut *tx)
+	.await?;
+	tx.commit().await
+}
+
 impl DownloadManager {
 	pub fn new(state: &Arc<AppState>) -> Arc<Self> {
 		Arc::new(Self {
@@ -137,42 +194,12 @@ impl DownloadManager {
 
 	/// Settles a row reusing a shared artifact: no repackaging, the row goes straight to finished and gets the download flag
 	async fn settle_finished(&self, chapter_id: i64, user_id: i64, path: &str, format: &str) {
-		let now = unix_now();
-		let result = sqlx::query(
-			"INSERT INTO download (chapter_id, user_id, status, format, path, created_at, updated_at)
-			 VALUES (?, ?, 'finished', ?, ?, ?, ?)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
-			 status = 'finished', format = excluded.format, path = excluded.path,
-			 error = NULL, retries = 0, updated_at = excluded.updated_at",
-		)
-		.bind(chapter_id)
-		.bind(user_id)
-		.bind(format)
-		.bind(path)
-		.bind(now)
-		.bind(now)
-		.execute(&self.pool)
-		.await;
+		let result = persist_finished(&self.pool, chapter_id, user_id, path, format, FinishMode::Upsert).await;
 		if let Err(e) = result {
 			tracing::warn!(chapter_id, "download shared-artifact settle failed: {e}");
 			return;
 		}
-		self.flag_downloaded(chapter_id, user_id).await;
 		self.emit("finished", chapter_id, 0, 0, user_id);
-	}
-
-	async fn flag_downloaded(&self, chapter_id: i64, user_id: i64) {
-		let flag = sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
-		)
-		.bind(chapter_id)
-		.bind(user_id)
-		.execute(&self.pool)
-		.await;
-		if let Err(e) = flag {
-			tracing::warn!(chapter_id, "download flag update failed: {e}");
-		}
 	}
 
 	/// Enqueues the deduped chapter list; rows belong to user_id, already finished/queued/running ones are skipped, error rows are reset and requeued
@@ -468,22 +495,14 @@ impl DownloadManager {
 						self.cleanup_tmp(chapter_id).await;
 						return;
 					}
-					let finished = sqlx::query(
-						"UPDATE download SET status = 'finished', path = ?, error = NULL, updated_at = ?
-						 WHERE chapter_id = ? AND user_id = ?",
-					)
-					.bind(&path)
-					.bind(unix_now())
-					.bind(chapter_id)
-					.bind(user_id)
-					.execute(&self.pool)
-					.await;
+					let finished =
+						persist_finished(&self.pool, chapter_id, user_id, &path, &self.format, FinishMode::Update).await;
+					self.progress.lock().await.remove(&chapter_id);
 					if let Err(e) = finished {
 						tracing::warn!(chapter_id, "download finish update failed: {e}");
+					} else {
+						self.emit("finished", chapter_id, total, total, user_id);
 					}
-					self.flag_downloaded(chapter_id, user_id).await;
-					self.progress.lock().await.remove(&chapter_id);
-					self.emit("finished", chapter_id, total, total, user_id);
 					self.cleanup_tmp(chapter_id).await;
 					return;
 				}
@@ -1258,6 +1277,110 @@ mod tests {
 			product_path(downloads_dir, "Source/Manga/a.cbz"),
 			PathBuf::from("/downloads/Source/Manga/a.cbz")
 		);
+	}
+
+	async fn finish_db() -> (SqlitePool, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('finish-source', 'Source', '') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+		let manga_id: i64 =
+			sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'manga') RETURNING id")
+				.bind(source_id)
+				.fetch_one(&pool)
+				.await
+				.expect("manga row");
+		let chapter_id: i64 =
+			sqlx::query_scalar("INSERT INTO chapter (manga_id, key) VALUES (?, 'chapter') RETURNING id")
+				.bind(manga_id)
+				.fetch_one(&pool)
+				.await
+				.expect("chapter row");
+		(pool, chapter_id, tmp)
+	}
+
+	async fn insert_downloading(pool: &SqlitePool, chapter_id: i64) {
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status) VALUES (?, 1, 'downloading')")
+			.bind(chapter_id)
+			.execute(pool)
+			.await
+			.expect("downloading row");
+	}
+
+	async fn reject_finish_flag(pool: &SqlitePool) {
+		sqlx::query(
+			"CREATE TRIGGER reject_finish_flag BEFORE INSERT ON chapter_user
+			 BEGIN SELECT RAISE(ABORT, 'flag rejected'); END",
+		)
+		.execute(pool)
+		.await
+		.expect("flag rejection trigger");
+	}
+
+	async fn finish_state(pool: &SqlitePool, chapter_id: i64) -> (Option<String>, Option<i64>) {
+		let status = sqlx::query_scalar::<_, String>("SELECT status FROM download WHERE chapter_id = ? AND user_id = 1")
+			.bind(chapter_id)
+			.fetch_optional(pool)
+			.await
+			.expect("download status");
+		let downloaded = sqlx::query_scalar::<_, i64>(
+			"SELECT is_downloaded FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
+		)
+		.bind(chapter_id)
+		.fetch_optional(pool)
+		.await
+		.expect("download flag");
+		(status, downloaded)
+	}
+
+	#[tokio::test]
+	async fn persist_finished_update_rolls_back_when_flag_fails() {
+		let (pool, chapter_id, _tmp) = finish_db().await;
+		insert_downloading(&pool, chapter_id).await;
+		reject_finish_flag(&pool).await;
+
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update)
+			.await
+			.expect_err("flag write must fail");
+		assert_eq!(finish_state(&pool, chapter_id).await, (Some("downloading".into()), None));
+	}
+
+	#[tokio::test]
+	async fn persist_finished_upsert_rolls_back_when_flag_fails() {
+		let (pool, chapter_id, _tmp) = finish_db().await;
+		reject_finish_flag(&pool).await;
+
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Upsert)
+			.await
+			.expect_err("flag write must fail");
+		assert_eq!(finish_state(&pool, chapter_id).await, (None, None));
+	}
+
+	#[tokio::test]
+	async fn persist_finished_update_commits_row_and_flag() {
+		let (pool, chapter_id, _tmp) = finish_db().await;
+		insert_downloading(&pool, chapter_id).await;
+
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update)
+			.await
+			.expect("finish update");
+		assert_eq!(finish_state(&pool, chapter_id).await, (Some("finished".into()), Some(1)));
+	}
+
+	#[tokio::test]
+	async fn persist_finished_upsert_commits_row_and_flag() {
+		let (pool, chapter_id, _tmp) = finish_db().await;
+
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Upsert)
+			.await
+			.expect("finish upsert");
+		assert_eq!(finish_state(&pool, chapter_id).await, (Some("finished".into()), Some(1)));
 	}
 
 	#[tokio::test]
