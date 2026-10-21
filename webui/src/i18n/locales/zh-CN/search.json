@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "搜索所有源…",
+    "rating": "分级",
+    "language": "语言",
+    "source": "图源",
+    "emptyTitle": "跨源搜索",
+    "emptyHint": "输入关键词，同时搜索所有符合筛选的源",
+    "noSourcesTitle": "没有符合筛选的源",
+    "noSourcesHint": "调整分级 / 语言 / 图源筛选条件",
+    "loadFailedTitle": "加载失败",
+    "retry": "重试",
+    "noResultsTitle": "没有结果",
+    "noResultsHint": "换个关键词或调整筛选条件试试",
+    "viewAll": "查看全部"
+  }
+}

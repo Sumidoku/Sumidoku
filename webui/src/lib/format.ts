@@ -1,3 +1,7 @@
+// Import the bare i18next singleton rather than ../i18n: that module wires catalogs via
+// Vite's import.meta.glob and reads navigator, neither of which exists under node --test
+import i18n from 'i18next';
+
 // date_uploaded comes from the source; both timestamps (seconds/milliseconds) and date strings occur, so normalize everything to milliseconds
 export function toMillis(v: number | string | null | undefined): number | null {
 	if (v === null || v === undefined) return null;
@@ -23,26 +27,27 @@ export function relativeTime(v: number | string | null | undefined): string {
 	if (ms === null) return '';
 	const diff = Date.now() - ms;
 	const min = Math.floor(diff / 60000);
-	if (min < 1) return '刚刚';
-	if (min < 60) return `${min} 分钟前`;
+	if (min < 1) return i18n.t('format.justNow');
+	if (min < 60) return i18n.t('format.minutesAgo', { count: min });
 	const hour = Math.floor(min / 60);
-	if (hour < 24) return `${hour} 小时前`;
+	if (hour < 24) return i18n.t('format.hoursAgo', { count: hour });
 	const day = Math.floor(hour / 24);
-	if (day < 30) return `${day} 天前`;
+	if (day < 30) return i18n.t('format.daysAgo', { count: day });
 	return formatDate(ms);
 }
 
-const STATUS_TEXT: Record<string, string> = {
-	ongoing: '连载中',
-	completed: '已完结',
-	hiatus: '休刊中',
-	cancelled: '已中止',
-	unknown: '未知'
+const STATUS_KEYS: Record<string, string> = {
+	ongoing: 'format.status.ongoing',
+	completed: 'format.status.completed',
+	hiatus: 'format.status.hiatus',
+	cancelled: 'format.status.cancelled',
+	unknown: 'format.status.unknown'
 };
 
 export function statusText(s: string | null | undefined): string {
-	if (!s) return '未知';
-	return STATUS_TEXT[s.toLowerCase()] ?? s;
+	if (!s) return i18n.t('format.status.unknown');
+	const key = STATUS_KEYS[s.toLowerCase()];
+	return key ? i18n.t(key) : s;
 }
 
 export function chapterLabel(c: {
@@ -51,13 +56,15 @@ export function chapterLabel(c: {
 	title: string | null;
 }): string {
 	const vol =
-		c.volume_number !== null && c.volume_number !== undefined ? `第 ${c.volume_number} 卷` : '';
+		c.volume_number !== null && c.volume_number !== undefined
+			? i18n.t('format.volumeNumber', { number: c.volume_number })
+			: '';
 	const num =
 		c.chapter_number !== null && c.chapter_number !== undefined
-			? `第 ${c.chapter_number} 话`
+			? i18n.t('format.chapterNumber', { number: c.chapter_number })
 			: '';
 	const title = c.title?.trim() ?? '';
 	const parts = [vol, num].filter(Boolean);
 	if (parts.length > 0 && title) return `${parts.join(' · ')} · ${title}`;
-	return parts.join(' · ') || title || '未命名章节';
+	return parts.join(' · ') || title || i18n.t('format.unnamedChapter');
 }

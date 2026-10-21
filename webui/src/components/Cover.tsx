@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 export interface CoverProps {
 	src?: string | null;
@@ -8,6 +9,7 @@ export interface CoverProps {
 
 /** Uniform 2:3 cover: shimmer while loading, title placeholder on failure (container query switches to a large first character at narrow sizes) */
 export function Cover({ src, title, alt }: CoverProps) {
+	const { t } = useTranslation();
 	const [failed, setFailed] = useState(false);
 	const [loaded, setLoaded] = useState(false);
 	// Failure is tracked per src: when the src is swapped in place (e.g. changing a cover), the old image's failure must not lock out the new one
@@ -30,9 +32,9 @@ export function Cover({ src, title, alt }: CoverProps) {
 				/>
 			) : (
 				<div className="cover__placeholder">
-					<span className="cover__ph-text">{title ? title.slice(0, 6) : '无封面'}</span>
+					<span className="cover__ph-text">{title ? title.slice(0, 6) : t('cover.noCover')}</span>
 					<span className="cover__ph-char" aria-hidden="true">
-						{title ? title.slice(0, 1) : '无'}
+						{title ? title.slice(0, 1) : t('cover.noCoverChar')}
 					</span>
 				</div>
 			)}

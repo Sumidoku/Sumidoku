@@ -1,0 +1,9 @@
+{
+  "history": {
+    "emptyTitle": "No reading history yet",
+    "emptyHint": "Chapters you read will show up here, ready to continue anytime",
+    "goLibrary": "Go to library",
+    "finished": "Finished",
+    "progress": "Page {{page}}"
+  }
+}

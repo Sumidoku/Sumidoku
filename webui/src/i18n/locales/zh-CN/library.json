@@ -1,0 +1,25 @@
+{
+  "library": {
+    "sortAdded": "最近入库",
+    "sortTitle": "标题",
+    "sortLastRead": "最近阅读",
+    "sortUnread": "未读最多",
+    "filterUnread": "未读",
+    "filterDownloaded": "已下载",
+    "filterBookmarked": "书签",
+    "triInclude": "当前只显示有{{label}}的漫画，点击改为排除",
+    "triExclude": "当前排除有{{label}}的漫画，点击关闭筛选",
+    "triNone": "当前不筛选{{label}}，点击改为只显示",
+    "searchPlaceholder": "搜索书库…",
+    "uncategorized": "未分类",
+    "rating": "分级",
+    "source": "图源",
+    "sort": "排序",
+    "emptyFilteredTitle": "没有符合条件的漫画",
+    "emptyFilteredHint": "换个关键词，或者清空筛选条件再看看",
+    "clearFilters": "清空筛选",
+    "emptyTitle": "书架还是空的",
+    "emptyHint": "去「浏览」里挑几本漫画加入书库吧",
+    "goBrowse": "去浏览"
+  }
+}

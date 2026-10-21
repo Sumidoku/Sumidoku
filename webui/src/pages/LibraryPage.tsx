@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { BookOpen, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import { useCategories, useLibrary, useLibrarySourceCounts, useSources } from '../api/hooks';
@@ -19,17 +21,17 @@ import {
 	TriStateDropdown
 } from '../components';
 
-const SORT_OPTIONS: { value: LibrarySort; label: string }[] = [
-	{ value: 'added', label: '最近入库' },
-	{ value: 'title', label: '标题' },
-	{ value: 'lastRead', label: '最近阅读' },
-	{ value: 'unread', label: '未读最多' }
+const SORT_OPTIONS: { value: LibrarySort; labelKey: string }[] = [
+	{ value: 'added', labelKey: 'library.sortAdded' },
+	{ value: 'title', labelKey: 'library.sortTitle' },
+	{ value: 'lastRead', labelKey: 'library.sortLastRead' },
+	{ value: 'unread', labelKey: 'library.sortUnread' }
 ];
 
-const FILTER_OPTIONS: { value: LibraryFilter; label: string }[] = [
-	{ value: 'unread', label: '未读' },
-	{ value: 'downloaded', label: '已下载' },
-	{ value: 'bookmarked', label: '书签' }
+const FILTER_OPTIONS: { value: LibraryFilter; labelKey: string }[] = [
+	{ value: 'unread', labelKey: 'library.filterUnread' },
+	{ value: 'downloaded', labelKey: 'library.filterDownloaded' },
+	{ value: 'bookmarked', labelKey: 'library.filterBookmarked' }
 ];
 
 /** Tri-state key of the built-in "uncategorized" arm (mirrors the API's category=0) */
@@ -40,10 +42,10 @@ function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 }
 
 /** Same tri-state chip tooltip as the manga detail page's chapter filter */
-function triTitle(label: string, t: 1 | -1 | 0): string {
-	if (t === 1) return `当前只显示有${label}的漫画，点击改为排除`;
-	if (t === -1) return `当前排除有${label}的漫画，点击关闭筛选`;
-	return `当前不筛选${label}，点击改为只显示`;
+function triTitle(t: TFunction, label: string, state: 1 | -1 | 0): string {
+	if (state === 1) return t('library.triInclude', { label });
+	if (state === -1) return t('library.triExclude', { label });
+	return t('library.triNone', { label });
 }
 
 function cycled(sel: TriStateSelection, key: string): TriStateSelection {
@@ -70,6 +72,7 @@ function pruneSelection(
 }
 
 export default function LibraryPage() {
+	const { t } = useTranslation();
 	const [searchInput, setSearchInput] = useState('');
 	const [search, setSearch] = useState('');
 	const [sort, setSort] = useState<LibrarySort>('added');
@@ -82,8 +85,8 @@ export default function LibraryPage() {
 	const [categoryTri, setCategoryTri] = useState<TriStateSelection>(initialPrefs.categories);
 
 	useEffect(() => {
-		const t = setTimeout(() => setSearch(searchInput.trim()), 300);
-		return () => clearTimeout(t);
+		const timer = setTimeout(() => setSearch(searchInput.trim()), 300);
+		return () => clearTimeout(timer);
 	}, [searchInput]);
 
 	const query = useLibrary({
@@ -156,13 +159,13 @@ export default function LibraryPage() {
 	return (
 		<div className="page container">
 			<PageHeader
-				title="书库"
+				title={t('common.nav.library')}
 				actions={
 					<Input
 						className="library__search"
 						icon={<Search size={15} />}
 						type="search"
-						placeholder="搜索书库…"
+						placeholder={t('library.searchPlaceholder')}
 						value={searchInput}
 						onChange={(e) => setSearchInput(e.currentTarget.value)}
 					/>
@@ -180,10 +183,11 @@ export default function LibraryPage() {
 								: 'default'
 					}
 					className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
-					title={triTitle('未分类', categoryTri[UNCATEGORIZED] ?? 0)}
+					title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
 					onClick={() => setCategoryTri((cur) => cycled(cur, UNCATEGORIZED))}
 				>
-					{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}未分类
+					{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}
+					{t('library.uncategorized')}
 				</Chip>
 				{(categories.data ?? []).map((c) => {
 					const st = categoryTri[String(c.id)] ?? 0;
@@ -192,7 +196,7 @@ export default function LibraryPage() {
 							key={c.id}
 							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
 							className={st === -1 ? 'chip--exclude' : undefined}
-							title={triTitle(c.name, st)}
+							title={triTitle(t, c.name, st)}
 							onClick={() => setCategoryTri((cur) => cycled(cur, String(c.id)))}
 						>
 							{st === -1 ? '− ' : ''}
@@ -202,25 +206,25 @@ export default function LibraryPage() {
 				})}
 				{/* Same tri-state dropdown as the cross-source search page; sources include disabled ones — library entries may belong to them */}
 				<TriStateDropdown
-					label="分级"
+					label={t('library.rating')}
 					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
 					states={ratings}
 					onCycle={(k) => setRatings((cur) => cycled(cur, k))}
 				/>
 				<TriStateDropdown
-					label="图源"
+					label={t('library.source')}
 					options={triOptions}
 					states={sourceTri}
 					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
 				/>
 				<Select
-					aria-label="排序"
+					aria-label={t('library.sort')}
 					value={sort}
 					onChange={(e) => setSort(e.currentTarget.value as LibrarySort)}
 				>
 					{SORT_OPTIONS.map((o) => (
 						<option key={o.value} value={o.value}>
-							{o.label}
+							{t(o.labelKey)}
 						</option>
 					))}
 				</Select>
@@ -232,11 +236,11 @@ export default function LibraryPage() {
 							key={o.value}
 							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
 							className={st === -1 ? 'chip--exclude' : undefined}
-							title={triTitle(o.label, st)}
+							title={triTitle(t, t(o.labelKey), st)}
 							onClick={() => setFilterTri((cur) => cycled(cur, o.value))}
 						>
 							{st === -1 ? '− ' : ''}
-							{o.label}
+							{t(o.labelKey)}
 						</Chip>
 					);
 				})}
@@ -255,18 +259,18 @@ export default function LibraryPage() {
 				filtering ? (
 					<EmptyState
 						icon={SearchX}
-						title="没有符合条件的漫画"
-						hint="换个关键词，或者清空筛选条件再看看"
-						action={<Button onClick={clearFilters}>清空筛选</Button>}
+						title={t('library.emptyFilteredTitle')}
+						hint={t('library.emptyFilteredHint')}
+						action={<Button onClick={clearFilters}>{t('library.clearFilters')}</Button>}
 					/>
 				) : (
 					<EmptyState
 						icon={BookOpen}
-						title="书架还是空的"
-						hint="去「浏览」里挑几本漫画加入书库吧"
+						title={t('library.emptyTitle')}
+						hint={t('library.emptyHint')}
 						action={
 							<Link to="/browse">
-								<Button variant="primary">去浏览</Button>
+								<Button variant="primary">{t('library.goBrowse')}</Button>
 							</Link>
 						}
 					/>

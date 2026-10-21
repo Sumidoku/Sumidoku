@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 import {
@@ -24,10 +25,10 @@ import './reader.css';
 type Mode = 'paged' | 'continuous' | 'webtoon';
 type Dir = 'ltr' | 'rtl';
 
-const MODES: { key: Mode; label: string; icon: LucideIcon }[] = [
-	{ key: 'paged', label: '翻页', icon: BookOpen },
-	{ key: 'continuous', label: '滚动', icon: AlignJustify },
-	{ key: 'webtoon', label: '条漫', icon: StretchVertical }
+const MODES: { key: Mode; icon: LucideIcon }[] = [
+	{ key: 'paged', icon: BookOpen },
+	{ key: 'continuous', icon: AlignJustify },
+	{ key: 'webtoon', icon: StretchVertical }
 ];
 
 function readMode(): Mode {
@@ -80,6 +81,7 @@ function readImgWidth(mode: Mode): number {
 }
 
 export default function ReaderPage() {
+	const { t } = useTranslation();
 	const { chapterId: raw } = useParams();
 	const [sp] = useSearchParams();
 	const chapterId = Number(raw);
@@ -91,7 +93,7 @@ export default function ReaderPage() {
 	if (!Number.isFinite(chapterId)) {
 		return (
 			<div className="reader reader--msg">
-				<EmptyState icon={TriangleAlert} title="章节地址无效" />
+				<EmptyState icon={TriangleAlert} title={t('reader.invalidChapter')} />
 			</div>
 		);
 	}
@@ -110,6 +112,7 @@ function ReaderCore({
 }) {
 	const navigate = useNavigate();
 	const qc = useQueryClient();
+	const { t } = useTranslation();
 
 	const pagesQuery = useChapterPages(chapterId);
 	const pages = useMemo(() => pagesQuery.data ?? null, [pagesQuery.data]);
@@ -161,6 +164,12 @@ function ReaderCore({
 	const navTotal = textOnly ? textLayout.cols : total;
 	const navPos = textOnly ? col : shown;
 	const mangaTitle = mangaQuery.data?.title ?? '';
+
+	const MODE_LABEL: Record<Mode, string> = {
+		paged: t('reader.mode.paged'),
+		continuous: t('reader.mode.continuous'),
+		webtoon: t('reader.mode.webtoon')
+	};
 
 	function setIdx(i: number) {
 		idxRef.current = i;
@@ -318,11 +327,11 @@ function ReaderCore({
 	}, []);
 
 	useEffect(() => {
-		document.title = mangaTitle ? `${mangaTitle} · 阅读 - Sumidoku` : '阅读 - Sumidoku';
+		document.title = mangaTitle ? t('reader.documentTitle', { title: mangaTitle }) : t('reader.documentTitleEmpty');
 		return () => {
 			document.title = 'Sumidoku';
 		};
-	}, [mangaTitle]);
+	}, [mangaTitle, t]);
 
 	function setMode(m: Mode) {
 		if (m === mode) return;
@@ -504,11 +513,11 @@ function ReaderCore({
 			<div className="reader reader--msg">
 				<EmptyState
 					icon={TriangleAlert}
-					title="章节加载失败"
+					title={t('reader.loadFailed')}
 					hint={pagesQuery.error?.message}
 					action={
 						<Button variant="primary" onClick={() => void pagesQuery.refetch()}>
-							重试
+							{t('reader.retry')}
 						</Button>
 					}
 				/>
@@ -520,8 +529,8 @@ function ReaderCore({
 			<div className="reader reader--msg">
 				<EmptyState
 					icon={BookOpen}
-					title="本章没有页面"
-					action={<Button onClick={goBack}>返回</Button>}
+					title={t('reader.noPages')}
+					action={<Button onClick={goBack}>{t('reader.back')}</Button>}
 				/>
 			</div>
 		);
@@ -545,30 +554,30 @@ function ReaderCore({
 								/>
 							</div>
 						) : isUnsupported(curPage) ? (
-							<div className="reader__unsupported">该页类型暂不支持</div>
+							<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 						) : (
 							<img
 								className="reader__img"
 								src={pageUrl(chapterId, curPage.index, imgWidth)}
-								alt={`第 ${idx + 1} 页`}
+								alt={t('reader.pageAlt', { page: idx + 1 })}
 							/>
 						))}
 					<button
 						type="button"
 						className="reader__zone reader__zone--left"
-						aria-label="上一页"
+						aria-label={t('reader.prevPage')}
 						onClick={() => onZone('left')}
 					/>
 					<button
 						type="button"
 						className="reader__zone reader__zone--right"
-						aria-label="下一页"
+						aria-label={t('reader.nextPage')}
 						onClick={() => onZone('right')}
 					/>
 					<button
 						type="button"
 						className="reader__zone reader__zone--mid"
-						aria-label="显示或隐藏工具栏"
+						aria-label={t('reader.toggleToolbar')}
 						onClick={() => setOverlay((v) => !v)}
 					/>
 				</div>
@@ -586,9 +595,9 @@ function ReaderCore({
 								{text !== null ? (
 									<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
 								) : isUnsupported(p) ? (
-									<div className="reader__unsupported">该页类型暂不支持</div>
+									<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 								) : (
-									<img src={pageUrl(chapterId, p.index, imgWidth)} alt={`第 ${p.index + 1} 页`} loading="lazy" />
+									<img src={pageUrl(chapterId, p.index, imgWidth)} alt={t('reader.pageAlt', { page: p.index + 1 })} loading="lazy" />
 								)}
 							</div>
 						);
@@ -597,20 +606,20 @@ function ReaderCore({
 			)}
 
 			<div className={barCls('reader__bar reader__bar--top')}>
-				<IconButton label="返回" onClick={goBack}>
+				<IconButton label={t('reader.back')} onClick={goBack}>
 					<ArrowLeft size={18} />
 				</IconButton>
 				<div className="reader__titles">
-					<div className="reader__title">{mangaTitle || '阅读'}</div>
+					<div className="reader__title">{mangaTitle || t('reader.reading')}</div>
 					{curChapter && <div className="reader__subtitle">{chapterLabel(curChapter)}</div>}
 				</div>
 				<SegmentedControl
 					options={MODES.map((m) => ({
 						value: m.key,
 						label: (
-							<span className="reader__mode" title={m.label}>
+							<span className="reader__mode" title={MODE_LABEL[m.key]}>
 								<m.icon size={15} />
-								<span className="reader__mode-label">{m.label}</span>
+								<span className="reader__mode-label">{MODE_LABEL[m.key]}</span>
 							</span>
 						)
 					}))}
@@ -618,7 +627,7 @@ function ReaderCore({
 					onChange={setMode}
 				/>
 				<IconButton
-					label="阅读设置"
+					label={t('reader.settings')}
 					className={settingsOpen ? 'reader__icon--on' : undefined}
 					onClick={() => setSettingsOpen((v) => !v)}
 				>
@@ -629,13 +638,13 @@ function ReaderCore({
 			{overlay && settingsOpen && (
 				<div className="reader__settings card">
 					<div className="reader__settings-title">
-						阅读方向{mode !== 'paged' ? '（仅翻页模式）' : ''}
+						{mode !== 'paged' ? t('reader.directionPagedOnly') : t('reader.direction')}
 					</div>
 					<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
 						<SegmentedControl
 							options={[
-								{ value: 'ltr', label: '从左到右' },
-								{ value: 'rtl', label: '从右到左' }
+								{ value: 'ltr', label: t('reader.ltr') },
+								{ value: 'rtl', label: t('reader.rtl') }
 							]}
 							value={dir}
 							onChange={setDir}
@@ -646,7 +655,7 @@ function ReaderCore({
 
 			<div className={barCls('reader__bar reader__bar--bottom')}>
 				<Button size="sm" disabled={!prevCh} onClick={() => navCh(prevCh)}>
-					上一章
+					{t('reader.prevChapter')}
 				</Button>
 				<div className="reader__pager">
 					<input
@@ -655,14 +664,14 @@ function ReaderCore({
 						max={navTotal}
 						value={Math.min(navPos + 1, navTotal)}
 						onChange={onSlider}
-						aria-label="跳转到指定页"
+						aria-label={t('reader.jumpToPage')}
 					/>
 					<span className="reader__page-num">
 						{Math.min(navPos + 1, navTotal)}/{navTotal}
 					</span>
 				</div>
 				<Button size="sm" disabled={!nextCh} onClick={() => navCh(nextCh)}>
-					下一章
+					{t('reader.nextChapter')}
 				</Button>
 			</div>
 		</div>

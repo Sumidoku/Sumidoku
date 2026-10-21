@@ -1,0 +1,18 @@
+{
+  "sourceSettings": {
+    "title": "{{name}} settings",
+    "loadFailed": "Failed to load settings",
+    "noSettings": "This source has no configurable options",
+    "saved": "Saved",
+    "resetDone": "Reset to default settings",
+    "cacheCleared": "Login cache cleared",
+    "loginSuccess": "Logged in",
+    "loggedOut": "Logged out",
+    "resetSettings": "Reset settings",
+    "clearLoginCache": "Clear login cache",
+    "reset": "Reset",
+    "clear": "Clear",
+    "resetConfirm": "Reset all settings of this source to their defaults? Unsaved changes are discarded and login information is cleared as well.",
+    "clearConfirm": "Clear this source's login cookies and restart its instance? You will need to log in again."
+  }
+}

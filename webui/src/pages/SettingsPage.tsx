@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
 	ArrowDown,
 	ArrowUp,
@@ -46,6 +48,8 @@ import type {
 } from '../api/types';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
+import { setLanguage, translateApiError } from '../i18n';
+import type { Language } from '../i18n';
 import { compareVersions } from '../lib/version';
 import {
 	Badge,
@@ -92,6 +96,7 @@ function stored(key: string, fallback: string): string {
 }
 
 function AppearanceSection() {
+	const { t, i18n } = useTranslation();
 	const [theme, setTheme] = useTheme();
 	// The old settings page stored "scroll" as vertical, while the reader only knows continuous; normalize on read
 	const [mode, setMode] = useState(() => {
@@ -110,35 +115,45 @@ function AppearanceSection() {
 	}
 
 	return (
-		<Section title="外观" desc="主题和默认阅读方式，仅保存在当前浏览器">
+		<Section title={t('settings.appearanceTitle')} desc={t('settings.appearanceDesc')}>
 			<div className="settings-row">
-				<span className="settings-row__label">主题</span>
+				<span className="settings-row__label">{t('settings.language')}</span>
+				<Select
+					value={i18n.language}
+					onChange={(e) => setLanguage(e.currentTarget.value as Language)}
+				>
+					<option value="zh-CN">中文（简体）</option>
+					<option value="en">English</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.theme')}</span>
 				<SegmentedControl<Theme>
 					options={[
-						{ value: 'system', label: '跟随系统' },
-						{ value: 'dark', label: '暗色' },
-						{ value: 'light', label: '亮色' }
+						{ value: 'system', label: t('settings.themeSystem') },
+						{ value: 'dark', label: t('settings.themeDark') },
+						{ value: 'light', label: t('settings.themeLight') }
 					]}
 					value={theme}
 					onChange={setTheme}
 				/>
 			</div>
 			<div className="settings-row">
-				<span className="settings-row__label">默认阅读模式</span>
+				<span className="settings-row__label">{t('settings.readerMode')}</span>
 				<Select
 					value={mode}
 					onChange={(e) => persist(READER_MODE_KEY, e.currentTarget.value, setMode)}
 				>
-					<option value="paged">翻页</option>
-					<option value="continuous">滚动</option>
-					<option value="webtoon">条漫</option>
+					<option value="paged">{t('settings.modePaged')}</option>
+					<option value="continuous">{t('settings.modeContinuous')}</option>
+					<option value="webtoon">{t('settings.modeWebtoon')}</option>
 				</Select>
 			</div>
 			<div className="settings-row">
-				<span className="settings-row__label">默认阅读方向</span>
+				<span className="settings-row__label">{t('settings.readerDirection')}</span>
 				<Select value={dir} onChange={(e) => persist(READER_DIR_KEY, e.currentTarget.value, setDir)}>
-					<option value="ltr">从左到右</option>
-					<option value="rtl">从右到左</option>
+					<option value="ltr">{t('settings.dirLtr')}</option>
+					<option value="rtl">{t('settings.dirRtl')}</option>
 				</Select>
 			</div>
 		</Section>
@@ -146,14 +161,15 @@ function AppearanceSection() {
 }
 
 function IncognitoSection() {
+	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
 	const enabled = settings.data?.['incognito.enabled'] === true;
 
 	return (
 		<Section
-			title="隐身阅读"
-			desc="开启后阅读进度照常保存，但不写入阅读历史（历史页与 OPDS 目录）；漫画详情页可对单部开启"
+			title={t('settings.incognitoTitle')}
+			desc={t('settings.incognitoDesc')}
 		>
 			{settings.isPending ? (
 				<Skeleton height={48} />
@@ -163,9 +179,9 @@ function IncognitoSection() {
 						checked={enabled}
 						disabled={save.isPending}
 						onChange={(on) => save.mutate({ 'incognito.enabled': on })}
-						label="全局隐身阅读"
+						label={t('settings.incognitoGlobal')}
 					/>
-					全局隐身阅读
+					{t('settings.incognitoGlobal')}
 				</label>
 			)}
 		</Section>
@@ -173,6 +189,7 @@ function IncognitoSection() {
 }
 
 function SecuritySection() {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const whoami = useWhoami();
 	const [current, setCurrent] = useState('');
@@ -189,11 +206,11 @@ function SecuritySection() {
 				body: { currentPassword: current, newPassword: next },
 				silent: true
 			});
-			pushToast('密码已修改，请重新登录', 'info');
+			pushToast(t('settings.passwordChanged'), 'info');
 			clearToken();
 			navigate('/login');
 		} catch (e) {
-			pushToast(e instanceof ApiError && e.status === 401 ? '当前密码错误' : '修改失败');
+			pushToast(e instanceof ApiError && e.status === 401 ? t('settings.wrongPassword') : t('settings.changeFailed'));
 		} finally {
 			setPending(false);
 		}
@@ -212,26 +229,26 @@ function SecuritySection() {
 	const user = whoami.data?.user ?? null;
 
 	return (
-		<Section title="安全" desc="web 界面、REST API 与 OPDS 共用同一套用户名密码；API key 走服务端配置">
+		<Section title={t('settings.securityTitle')} desc={t('settings.securityDesc')}>
 			{enabled === null ? (
 				<Skeleton height={48} />
 			) : !enabled ? (
 				<p className="faint settings-security__off">
-					未启用认证，配置 SUMIDOKU_AUTH_PASSWORD 后重启生效
+					{t('settings.authDisabled')}
 				</p>
 			) : (
 				<>
 					{user && (
 						<div className="settings-row">
-							<span className="settings-row__label">当前账号</span>
+							<span className="settings-row__label">{t('settings.currentAccount')}</span>
 							<span className="settings-security__account">
 								{user.username}
-								<Badge>{user.role === 'admin' ? '管理员' : '读者'}</Badge>
+								<Badge>{user.role === 'admin' ? t('settings.roleAdmin') : t('settings.roleReader')}</Badge>
 							</span>
 						</div>
 					)}
 					<div className="settings-row">
-						<span className="settings-row__label">当前密码</span>
+						<span className="settings-row__label">{t('settings.currentPassword')}</span>
 						<Input
 							type="password"
 							value={current}
@@ -239,7 +256,7 @@ function SecuritySection() {
 						/>
 					</div>
 					<div className="settings-row">
-						<span className="settings-row__label">新密码</span>
+						<span className="settings-row__label">{t('settings.newPassword')}</span>
 						<Input
 							type="password"
 							value={next}
@@ -253,9 +270,9 @@ function SecuritySection() {
 							disabled={!current || !next}
 							onClick={() => void submit()}
 						>
-							修改密码
+							{t('settings.changePassword')}
 						</Button>
-						<Button onClick={() => void logout()}>退出登录</Button>
+						<Button onClick={() => void logout()}>{t('settings.logout')}</Button>
 					</div>
 				</>
 			)}
@@ -263,12 +280,13 @@ function SecuritySection() {
 	);
 }
 
-const TRI_STATE = [	{ value: 0, label: '跟随默认' },
-	{ value: 1, label: '仅此类' },
-	{ value: 2, label: '排除' }
+const TRI_STATE = [	{ value: 0, labelKey: 'settings.triDefault' },
+	{ value: 1, labelKey: 'settings.triOnly' },
+	{ value: 2, labelKey: 'settings.triExclude' }
 ];
 
 function CategoriesSection() {
+	const { t } = useTranslation();
 	const categories = useCategories();
 	const patch = usePatchCategory();
 	const create = useCreateCategory();
@@ -284,8 +302,9 @@ function CategoriesSection() {
 	const cats = categories.data ?? [];
 
 	function toastError(e: unknown) {
-		if (e instanceof ApiError && e.status === 409) pushToast('分类名已存在');
-		else pushToast(e instanceof Error ? e.message : '操作失败');
+		if (e instanceof ApiError && e.status === 409) pushToast(t('settings.categoryExists'));
+		else if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
+		else pushToast(e instanceof Error ? e.message : t('settings.operationFailed'));
 	}
 
 	async function submitCreate() {
@@ -294,7 +313,7 @@ function CategoriesSection() {
 		try {
 			await create.mutateAsync(name);
 			setNewName('');
-			pushToast('已新建分类', 'info');
+			pushToast(t('settings.categoryCreated'), 'info');
 		} catch (e) {
 			toastError(e);
 		}
@@ -307,7 +326,7 @@ function CategoriesSection() {
 		try {
 			await rename.mutateAsync({ id: renaming.id, name });
 			setRenaming(null);
-			pushToast('已改名', 'info');
+			pushToast(t('settings.renamed'), 'info');
 		} catch (e) {
 			toastError(e);
 		}
@@ -322,7 +341,7 @@ function CategoriesSection() {
 	}
 
 	return (
-		<Section title="分类管理" desc="分类用来给书库分组">
+		<Section title={t('settings.categoriesTitle')} desc={t('settings.categoriesDesc')}>
 			{categories.isPending ? (
 				<div className="settings-cats">
 					{Array.from({ length: 2 }, (_, i) => (
@@ -340,7 +359,7 @@ function CategoriesSection() {
 								</span>
 								<span className="settings-cat__ops">
 									<IconButton
-										label="改名"
+										label={t('settings.rename')}
 										size="sm"
 										onClick={() => {
 											setRenaming(c);
@@ -350,7 +369,7 @@ function CategoriesSection() {
 										<Pencil size={15} />
 									</IconButton>
 									<IconButton
-										label="上移"
+										label={t('settings.moveUp')}
 										size="sm"
 										disabled={i === 0 || reorder.isPending}
 										onClick={() => move(i, -1)}
@@ -358,7 +377,7 @@ function CategoriesSection() {
 										<ArrowUp size={15} />
 									</IconButton>
 									<IconButton
-										label="下移"
+										label={t('settings.moveDown')}
 										size="sm"
 										disabled={i === cats.length - 1 || reorder.isPending}
 										onClick={() => move(i, 1)}
@@ -367,7 +386,7 @@ function CategoriesSection() {
 									</IconButton>
 									{!c.isDefault && (
 										<IconButton
-											label="删除分类"
+											label={t('settings.deleteCategory')}
 											size="sm"
 											variant="danger"
 											onClick={() => setDeleting(c)}
@@ -379,7 +398,7 @@ function CategoriesSection() {
 							</div>
 							<div className="settings-cat__fields">
 								<div className="settings-cat__field">
-									<span className="settings-cat__label">更新</span>
+									<span className="settings-cat__label">{t('settings.update')}</span>
 									<Select
 										value={String(c.includeInUpdate)}
 										onChange={(e) =>
@@ -388,14 +407,14 @@ function CategoriesSection() {
 									>
 										{TRI_STATE.map((o) => (
 											<option key={o.value} value={o.value}>
-												{o.label}
+												{t(o.labelKey)}
 											</option>
 										))}
 									</Select>
-									<span className="settings-cat__hint">全库更新时哪些分类参与</span>
+									<span className="settings-cat__hint">{t('settings.updateHint')}</span>
 								</div>
 								<div className="settings-cat__field">
-									<span className="settings-cat__label">下载</span>
+									<span className="settings-cat__label">{t('settings.download')}</span>
 									<Select
 										value={String(c.includeInDownload)}
 										onChange={(e) =>
@@ -404,11 +423,11 @@ function CategoriesSection() {
 									>
 										{TRI_STATE.map((o) => (
 											<option key={o.value} value={o.value}>
-												{o.label}
+												{t(o.labelKey)}
 											</option>
 										))}
 									</Select>
-									<span className="settings-cat__hint">新章节自动下载范围</span>
+									<span className="settings-cat__hint">{t('settings.downloadHint')}</span>
 								</div>
 							</div>
 						</div>
@@ -418,7 +437,7 @@ function CategoriesSection() {
 
 			<div className="settings-cat__create">
 				<Input
-					placeholder="新分类名"
+					placeholder={t('settings.newCategoryPlaceholder')}
 					value={newName}
 					onChange={(e) => setNewName(e.currentTarget.value)}
 					onKeyDown={(e) => {
@@ -431,31 +450,31 @@ function CategoriesSection() {
 					disabled={!newName.trim()}
 					onClick={() => void submitCreate()}
 				>
-					新建分类
+					{t('settings.createCategory')}
 				</Button>
 			</div>
 
 			<Modal
 				open={renaming !== null}
-				title="分类改名"
+				title={t('settings.renameCategoryTitle')}
 				onClose={() => setRenaming(null)}
 				footer={
 					<>
-						<Button onClick={() => setRenaming(null)}>取消</Button>
+						<Button onClick={() => setRenaming(null)}>{t('common.cancel')}</Button>
 						<Button
 							variant="primary"
 							loading={rename.isPending}
 							disabled={!renameText.trim()}
 							onClick={() => void submitRename()}
 						>
-							保存
+							{t('common.save')}
 						</Button>
 					</>
 				}
 			>
 				<Input
 					className="settings-modal-input"
-					placeholder="分类名"
+					placeholder={t('settings.categoryNamePlaceholder')}
 					value={renameText}
 					onChange={(e) => setRenameText(e.currentTarget.value)}
 					onKeyDown={(e) => {
@@ -466,11 +485,11 @@ function CategoriesSection() {
 
 			<Modal
 				open={deleting !== null}
-				title="删除分类"
+				title={t('settings.deleteCategory')}
 				onClose={() => setDeleting(null)}
 				footer={
 					<>
-						<Button onClick={() => setDeleting(null)}>取消</Button>
+						<Button onClick={() => setDeleting(null)}>{t('common.cancel')}</Button>
 						<Button
 							variant="danger"
 							loading={del.isPending}
@@ -479,18 +498,18 @@ function CategoriesSection() {
 								del.mutate(deleting.id, {
 									onSuccess: () => {
 										setDeleting(null);
-										pushToast('已删除', 'info');
+										pushToast(t('settings.deleted'), 'info');
 									}
 								});
 							}}
 						>
-							删除
+							{t('common.delete')}
 						</Button>
 					</>
 				}
 			>
 				<p className="settings-modal-text">
-					删除分类「{deleting?.name}」？其中的漫画保留在书库。
+					{t('settings.deleteCategoryConfirm', { name: deleting?.name })}
 				</p>
 			</Modal>
 		</Section>
@@ -514,21 +533,22 @@ function parseVal(text: string): unknown {
 }
 
 function LocalSourceSection() {
+	const { t } = useTranslation();
 	const settings = useServerSettings();
 	// localDir is a read-only field injected by the server (a config-layer value), not a settings-table key
 	const dir = settings.data?.['localDir'];
 
 	return (
 		<Section
-			title="本地源"
-			desc="直接阅读服务器本地目录里的漫画（浏览页的 Local 源）；目录只读展示，由配置文件 local_dir 或 SUMIDOKU_LOCAL_DIR 设置，改动重启后生效"
+			title={t('settings.localSourceTitle')}
+			desc={t('settings.localSourceDesc')}
 		>
 			{settings.isPending ? (
 				<Skeleton height={24} />
 			) : (
 				<div className="settings-row">
-					<span className="settings-row__label">本地目录</span>
-					<code>{typeof dir === 'string' ? dir : '未知'}</code>
+					<span className="settings-row__label">{t('settings.localDir')}</span>
+					<code>{typeof dir === 'string' ? dir : t('settings.unknown')}</code>
 				</div>
 			)}
 		</Section>
@@ -536,6 +556,7 @@ function LocalSourceSection() {
 }
 
 function ServerSettingsSection() {
+	const { t } = useTranslation();
 	const query = useServerSettings();
 	const save = useSaveServerSettings();
 	const [rows, setRows] = useState<KvRow[] | null>(null);
@@ -562,7 +583,7 @@ function ServerSettingsSection() {
 		}
 		const saved = await save.mutateAsync(body);
 		setRows(Object.entries(saved).map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' })));
-		pushToast('服务器设置已保存', 'info');
+		pushToast(t('settings.serverSettingsSaved'), 'info');
 	}
 
 	function addRow() {
@@ -574,20 +595,20 @@ function ServerSettingsSection() {
 	}
 
 	return (
-		<Section title="服务器设置" desc="通用键值存储；backup.* 键由「自动备份」区读写，请在那里修改">
+		<Section title={t('settings.serverSettingsTitle')} desc={t('settings.serverSettingsDesc')}>
 			{rows === null ? (
 				<Skeleton height={48} />
 			) : (
 				<>
 					{rows.length === 0 ? (
-						<p className="faint settings-kv__empty">暂无配置项</p>
+						<p className="faint settings-kv__empty">{t('settings.noConfig')}</p>
 					) : (
 						<div className="settings-kv">
 							{rows.map((row, i) => (
 								<div key={i} className="settings-kv__row">
 									<Input
 										className={row.isNew ? '' : 'settings-kv__key'}
-										placeholder="键"
+										placeholder={t('settings.keyPlaceholder')}
 										value={row.key}
 										readOnly={!row.isNew}
 										onChange={(e) => {
@@ -597,7 +618,7 @@ function ServerSettingsSection() {
 										}}
 									/>
 									<Input
-										placeholder="值（JSON，字符串可裸写）"
+										placeholder={t('settings.valuePlaceholder')}
 										value={row.text}
 										onChange={(e) => {
 											const v = e.currentTarget.value;
@@ -605,7 +626,7 @@ function ServerSettingsSection() {
 										}}
 									/>
 									<IconButton
-										label="删除"
+										label={t('common.delete')}
 										variant="danger"
 										onClick={() => setRows((cur) => (cur ?? []).filter((_, j) => j !== i))}
 									>
@@ -616,19 +637,19 @@ function ServerSettingsSection() {
 						</div>
 					)}
 					<div className="settings-kv__add">
-						<Input placeholder="键" value={newKey} onChange={(e) => setNewKey(e.currentTarget.value)} />
+						<Input placeholder={t('settings.keyPlaceholder')} value={newKey} onChange={(e) => setNewKey(e.currentTarget.value)} />
 						<Input
-							placeholder="值（JSON，字符串可裸写）"
+							placeholder={t('settings.valuePlaceholder')}
 							value={newVal}
 							onChange={(e) => setNewVal(e.currentTarget.value)}
 						/>
 						<Button disabled={!newKey.trim()} onClick={addRow}>
-							添加
+							{t('settings.add')}
 						</Button>
 					</div>
 					<div className="settings-kv__save">
 						<Button variant="primary" loading={save.isPending} onClick={() => void onSave()}>
-							保存
+							{t('common.save')}
 						</Button>
 					</div>
 				</>
@@ -638,11 +659,11 @@ function ServerSettingsSection() {
 }
 
 const BACKUP_SECTIONS = [
-	{ key: 'library', label: '书库' },
-	{ key: 'categories', label: '分类' },
-	{ key: 'progress', label: '阅读进度' },
-	{ key: 'settings', label: '服务器设置' },
-	{ key: 'sourceSettings', label: '源设置' }
+	{ key: 'library', labelKey: 'settings.backupLibrary' },
+	{ key: 'categories', labelKey: 'settings.backupCategories' },
+	{ key: 'progress', labelKey: 'settings.backupProgress' },
+	{ key: 'settings', labelKey: 'settings.backupSettings' },
+	{ key: 'sourceSettings', labelKey: 'settings.backupSourceSettings' }
 ] as const;
 
 interface BackupPreview {
@@ -676,18 +697,23 @@ function previewCounts(doc: Record<string, unknown>): Record<string, number> {
 }
 
 function BackupResultView({ result }: { result: BackupRestoreResult }) {
+	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
 			<p className="settings-modal-text">
-				已恢复：书库 {result.restored.library} · 分类 {result.restored.categories} · 进度{' '}
-				{result.restored.progress} · 设置 {result.restored.settings} · 源设置{' '}
-				{result.restored.sourceSettings}
+				{t('settings.restored', {
+					library: result.restored.library,
+					categories: result.restored.categories,
+					progress: result.restored.progress,
+					settings: result.restored.settings,
+					sourceSettings: result.restored.sourceSettings
+				})}
 			</p>
 			{result.warnings.length === 0 ? (
-				<p className="faint">全部条目均已恢复，无跳过项</p>
+				<p className="faint">{t('settings.restoredAll')}</p>
 			) : (
 				<>
-					<p className="settings-modal-text">以下条目被跳过：</p>
+					<p className="settings-modal-text">{t('settings.skippedItems')}</p>
 					<ul className="settings-backup__warnings">
 						{result.warnings.map((w, i) => (
 							<li key={i}>{w}</li>
@@ -699,27 +725,31 @@ function BackupResultView({ result }: { result: BackupRestoreResult }) {
 	);
 }
 
-function aidokuSkippedLabel(s: AidokuImportSkipped): string {
-	const what = s.section === 'library' ? '书库条目' : '阅读进度';
-	const chapter = s.chapterKey ? ` / 章节 ${s.chapterKey}` : '';
+function aidokuSkippedLabel(t: TFunction, s: AidokuImportSkipped): string {
+	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
+	const chapter = s.chapterKey ? t('settings.chapterSuffix', { key: s.chapterKey }) : '';
 	return `${what} ${s.sourceKey}/${s.mangaKey}${chapter}`;
 }
 
 function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
+	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
 			<p className="settings-modal-text">
-				已导入：书库 {result.imported.library} · 分类 {result.imported.categories} · 进度{' '}
-				{result.imported.progress}
+				{t('settings.imported', {
+					library: result.imported.library,
+					categories: result.imported.categories,
+					progress: result.imported.progress
+				})}
 			</p>
 			{result.skipped.length === 0 ? (
-				<p className="faint">全部条目均已导入，无跳过项</p>
+				<p className="faint">{t('settings.importedAll')}</p>
 			) : (
 				<>
-					<p className="settings-modal-text">以下条目被跳过（未安装对应源）：</p>
+					<p className="settings-modal-text">{t('settings.skippedNoSource')}</p>
 					<ul className="settings-backup__warnings">
 						{result.skipped.map((s, i) => (
-							<li key={i}>{aidokuSkippedLabel(s)}</li>
+							<li key={i}>{aidokuSkippedLabel(t, s)}</li>
 						))}
 					</ul>
 				</>
@@ -728,14 +758,14 @@ function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
 	);
 }
 
-function suwayomiSkippedLabel(s: SuwayomiImportSkipped): string {
-	const what = s.section === 'library' ? '书库条目' : '阅读进度';
-	const name = s.mihonSourceName || `源 ${s.mihonSourceId}`;
+function suwayomiSkippedLabel(t: TFunction, s: SuwayomiImportSkipped): string {
+	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
+	const name = s.mihonSourceName || t('settings.sourceId', { id: s.mihonSourceId });
 	return `${what} ${name}/${s.mangaKey}`;
 }
 
-function suwayomiGroupName(g: SuwayomiSourceGroup): string {
-	return g.mihonSourceName || `未知源 ${g.mihonSourceId}`;
+function suwayomiGroupName(t: TFunction, g: SuwayomiSourceGroup): string {
+	return g.mihonSourceName || t('settings.unknownSource', { id: g.mihonSourceId });
 }
 
 /** Mapping dropdown for an unmatched group: same-name candidates first, then the other installed sources; left empty the whole group is skipped */
@@ -748,20 +778,21 @@ function SuwayomiMappingSelect({
 	value: string;
 	onChange: (key: string) => void;
 }) {
+	const { t } = useTranslation();
 	const sources = useSources();
 	const candidateKeys = new Set(group.candidates.map((c) => c.key));
 	const rest = (sources.data ?? []).filter((s) => !candidateKeys.has(s.key));
 	return (
 		<Select value={value} onChange={(e) => onChange(e.currentTarget.value)}>
-			<option value="">跳过该源</option>
+			<option value="">{t('settings.skipSource')}</option>
 			{group.candidates.map((c) => (
 				<option key={c.key} value={c.key}>
-					{c.name}（{c.key}）
+					{t('settings.sourceOption', { name: c.name, key: c.key })}
 				</option>
 			))}
 			{rest.map((s) => (
 				<option key={s.key} value={s.key}>
-					{s.name}（{s.key}）
+					{t('settings.sourceOption', { name: s.name, key: s.key })}
 				</option>
 			))}
 		</Select>
@@ -769,28 +800,37 @@ function SuwayomiMappingSelect({
 }
 
 function SuwayomiImportResultView({ result }: { result: SuwayomiImportResult }) {
+	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
 			<p className="settings-modal-text">
-				已导入：书库 {result.imported.library} · 分类 {result.imported.categories} · 进度{' '}
-				{result.imported.progress}
+				{t('settings.imported', {
+					library: result.imported.library,
+					categories: result.imported.categories,
+					progress: result.imported.progress
+				})}
 			</p>
 			<p className="settings-modal-text">
 				{result.sources
 					.map((g) => {
-						const label = suwayomiGroupName(g);
-						if (g.match === 'unmatched') return `${label}（${g.mangaCount} 部，未映射已跳过）`;
-						const how = g.match === 'auto' ? '自动匹配' : '手动映射';
-						return `${label}（${g.mangaCount} 部，${how}到 ${g.aidokuSourceName ?? g.aidokuSourceKey}）`;
+						const label = suwayomiGroupName(t, g);
+						if (g.match === 'unmatched') return t('settings.groupUnmapped', { name: label, count: g.mangaCount });
+						const how = g.match === 'auto' ? t('settings.matchAuto') : t('settings.matchManual');
+						return t('settings.groupMapped', {
+							name: label,
+							count: g.mangaCount,
+							how,
+							target: g.aidokuSourceName ?? g.aidokuSourceKey
+						});
 					})
-					.join('；')}
+					.join(t('settings.listSeparator'))}
 			</p>
 			{result.skipped.length > 0 && (
 				<>
-					<p className="settings-modal-text">以下条目被跳过：</p>
+					<p className="settings-modal-text">{t('settings.skippedItems')}</p>
 					<ul className="settings-backup__warnings">
 						{result.skipped.map((s, i) => (
-							<li key={i}>{suwayomiSkippedLabel(s)}</li>
+							<li key={i}>{suwayomiSkippedLabel(t, s)}</li>
 						))}
 					</ul>
 				</>
@@ -800,6 +840,7 @@ function SuwayomiImportResultView({ result }: { result: SuwayomiImportResult }) 
 }
 
 function BackupSection({ isAdmin }: { isAdmin: boolean }) {
+	const { t } = useTranslation();
 	const restore = useRestoreBackup();
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [preview, setPreview] = useState<BackupPreview | null>(null);
@@ -895,12 +936,12 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 		try {
 			doc = JSON.parse(await file.text());
 		} catch {
-			pushToast('备份文件不是合法 JSON');
+			pushToast(t('settings.invalidBackupJson'));
 			return;
 		}
 		const version = (doc as { version?: unknown } | null)?.version;
 		if (version !== 1) {
-			pushToast(`备份版本不受支持：${typeof version === 'number' ? version : '缺失'}`);
+			pushToast(t('settings.unsupportedBackupVersion', { version: typeof version === 'number' ? version : t('settings.versionMissing') }));
 			return;
 		}
 		const createdAt = (doc as { createdAt?: unknown }).createdAt;
@@ -934,17 +975,17 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 
 	return (
 		<Section
-			title="备份"
-			desc="导出书库、分类、进度与设置用于迁移；备份文件含源设置（可能有源站账号密码），请妥善保管；也可导入 Aidoku App 的 .aib 或 Suwayomi/Mihon 的 .tachibk 备份（书库、分类、阅读进度，增量合并不覆盖现状）"
+			title={t('settings.backupTitle')}
+			desc={t('settings.backupDesc')}
 		>
 			<div className="settings-backup__ops">
 				<a className="btn settings-backup__download" href={backupUrl()} download>
 					<Download size={15} />
-					下载备份
+					{t('settings.downloadBackup')}
 				</a>
 				<Button onClick={() => fileRef.current?.click()}>
 					<Upload size={15} />
-					上传备份恢复
+					{t('settings.uploadBackup')}
 				</Button>
 				<input
 					ref={fileRef}
@@ -955,7 +996,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 				/>
 				<Button loading={importAidoku.isPending && !aib} onClick={() => aibFileRef.current?.click()}>
 					<FileUp size={15} />
-					从 Aidoku 导入
+					{t('settings.importAidoku')}
 				</Button>
 				<input
 					ref={aibFileRef}
@@ -966,7 +1007,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 				/>
 				<Button loading={importSuwayomi.isPending && !sw} onClick={() => swFileRef.current?.click()}>
 					<FileUp size={15} />
-					从 Suwayomi 导入
+					{t('settings.importSuwayomi')}
 				</Button>
 				<input
 					ref={swFileRef}
@@ -979,18 +1020,18 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 
 			<Modal
 				open={sw !== null}
-				title="从 Suwayomi 导入"
+				title="{t('settings.importSuwayomi')}"
 				onClose={closeSwModal}
 				footer={
 					swResult ? (
 						<Button variant="primary" onClick={closeSwModal}>
-							完成
+							{t('settings.done')}
 						</Button>
 					) : (
 						<>
-							<Button onClick={closeSwModal}>取消</Button>
+							<Button onClick={closeSwModal}>{t('common.cancel')}</Button>
 							<Button variant="primary" loading={importSuwayomi.isPending} onClick={() => void confirmSwImport()}>
-								确认导入
+								{t('settings.confirmImport')}
 							</Button>
 						</>
 					)
@@ -1002,15 +1043,18 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 					sw && (
 						<>
 							<p className="settings-modal-text">
-								将导入：书库 {sw.preview.imported.library} · 分类 {sw.preview.imported.categories} ·
-								进度 {sw.preview.imported.progress}
+								{t('settings.willImport', {
+									library: sw.preview.imported.library,
+									categories: sw.preview.imported.categories,
+									progress: sw.preview.imported.progress
+								})}
 							</p>
-							<p className="settings-modal-text">备份里的源与已装源的对应关系：</p>
+							<p className="settings-modal-text">{t('settings.sourceMapping')}</p>
 							<ul className="settings-backup__mapping">
 								{sw.preview.sources.map((g) => (
 									<li key={g.mihonSourceId} className="settings-backup__mapping-row">
 										<span className="settings-backup__mapping-name">
-											{suwayomiGroupName(g)}（{g.mangaCount} 部）
+											{t('settings.groupWithCount', { name: suwayomiGroupName(t, g), count: g.mangaCount })}
 										</span>
 										{g.match === 'unmatched' ? (
 											<SuwayomiMappingSelect
@@ -1019,18 +1063,18 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 												onChange={(key) => setSwSource(g.mihonSourceId, key)}
 											/>
 										) : (
-											<span className="faint">自动匹配：{g.aidokuSourceName ?? g.aidokuSourceKey}</span>
+											<span className="faint">{t('settings.autoMatched', { name: g.aidokuSourceName ?? g.aidokuSourceKey })}</span>
 										)}
 									</li>
 								))}
 							</ul>
 							{sw.preview.skipped.length > 0 && (
 								<p className="settings-modal-text">
-									未选择映射的源将整组跳过（{sw.preview.skipped.length} 个条目）。
+									{t('settings.unmappedSkipped', { count: sw.preview.skipped.length })}
 								</p>
 							)}
 							<p className="settings-backup__warn">
-								导入是增量合并：已存在的书库条目与分类保持现状，阅读进度取较大值；此操作不可撤销。只有唯一同名的源才会自动匹配，其余需手动指定。
+								{t('settings.importMergeWarnSuwayomi')}
 							</p>
 						</>
 					)
@@ -1039,18 +1083,18 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 
 			<Modal
 				open={aib !== null}
-				title="从 Aidoku 导入"
+				title="{t('settings.importAidoku')}"
 				onClose={closeAibModal}
 				footer={
 					aibResult ? (
 						<Button variant="primary" onClick={closeAibModal}>
-							完成
+							{t('settings.done')}
 						</Button>
 					) : (
 						<>
-							<Button onClick={closeAibModal}>取消</Button>
+							<Button onClick={closeAibModal}>{t('common.cancel')}</Button>
 							<Button variant="primary" loading={importAidoku.isPending} onClick={() => void confirmAibImport()}>
-								确认导入
+								{t('settings.confirmImport')}
 							</Button>
 						</>
 					)
@@ -1062,21 +1106,24 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 					aib && (
 						<>
 							<p className="settings-modal-text">
-								将导入：书库 {aib.preview.imported.library} · 分类 {aib.preview.imported.categories} ·
-								进度 {aib.preview.imported.progress}
+								{t('settings.willImport', {
+									library: aib.preview.imported.library,
+									categories: aib.preview.imported.categories,
+									progress: aib.preview.imported.progress
+								})}
 							</p>
 							{aib.preview.skipped.length > 0 && (
 								<>
-									<p className="settings-modal-text">以下条目因未安装对应源将被跳过：</p>
+									<p className="settings-modal-text">{t('settings.willSkipNoSource')}</p>
 									<ul className="settings-backup__warnings">
 										{aib.preview.skipped.map((s, i) => (
-											<li key={i}>{aidokuSkippedLabel(s)}</li>
+											<li key={i}>{aidokuSkippedLabel(t, s)}</li>
 										))}
 									</ul>
 								</>
 							)}
 							<p className="settings-backup__warn">
-								导入是增量合并：已存在的书库条目与分类保持现状，阅读进度取较大值；此操作不可撤销。
+								{t('settings.importMergeWarn')}
 							</p>
 						</>
 					)
@@ -1085,23 +1132,23 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 
 			<Modal
 				open={preview !== null}
-				title="恢复备份"
+				title={t('settings.restoreBackup')}
 				onClose={closeModal}
 				footer={
 					result ? (
 						<Button variant="primary" onClick={closeModal}>
-							完成
+							{t('settings.done')}
 						</Button>
 					) : (
 						<>
-							<Button onClick={closeModal}>取消</Button>
+							<Button onClick={closeModal}>{t('common.cancel')}</Button>
 							<Button
 								variant="danger"
 								loading={restore.isPending}
 								disabled={picked.length === 0}
 								onClick={() => void confirmRestore()}
 							>
-								导入
+								{t('settings.import')}
 							</Button>
 						</>
 					)
@@ -1114,8 +1161,8 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 						<>
 							<p className="settings-modal-text">
 								{preview.createdAt
-									? `备份创建于 ${new Date(preview.createdAt * 1000).toLocaleString()}，选择要恢复的内容：`
-									: '选择要恢复的内容：'}
+									? t('settings.restorePickWithDate', { date: new Date(preview.createdAt * 1000).toLocaleString() })
+									: t('settings.restorePick')}
 							</p>
 							<div className="settings-backup__sections">
 								{sections.map((s) => (
@@ -1125,12 +1172,12 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 											checked={picked.includes(s.key)}
 											onChange={(e) => toggle(s.key, e.currentTarget.checked)}
 										/>
-										{s.label}（{preview.counts[s.key] ?? 0}）
+										{t('settings.sectionWithCount', { name: t(s.labelKey), count: preview.counts[s.key] ?? 0 })}
 									</label>
 								))}
 							</div>
 							<p className="settings-backup__warn">
-								导入会按所选内容覆盖当前实例的对应状态，此操作不可撤销；备份可能包含源站账号密码，请确认文件来源可信。
+								{t('settings.restoreWarn')}
 							</p>
 						</>
 					)
@@ -1147,6 +1194,7 @@ function formatSize(bytes: number): string {
 }
 
 function DownloadMoveSection() {
+	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
 	const [text, setText] = useState<string | null>(null);
@@ -1160,8 +1208,8 @@ function DownloadMoveSection() {
 	if (!data || text === null) {
 		return (
 			<Section
-				title="下载后移动"
-				desc="打包完成后把产物移动到模板渲染出的路径（如挂载的漫画库目录），留空不移动"
+				title={t('settings.downloadMoveTitle')}
+				desc={t('settings.downloadMoveDescShort')}
 			>
 				<Skeleton height={48} />
 			</Section>
@@ -1178,11 +1226,11 @@ function DownloadMoveSection() {
 
 	return (
 		<Section
-			title="下载后移动"
-			desc="打包完成后把产物移动到模板渲染出的路径（如挂载的漫画库目录），留空不移动；移动失败时产物保留在下载目录，下载不受影响"
+			title={t('settings.downloadMoveTitle')}
+			desc={t('settings.downloadMoveDesc')}
 		>
 			<div className="settings-row">
-				<span className="settings-row__label">移动目标模板</span>
+				<span className="settings-row__label">{t('settings.moveTemplate')}</span>
 				<Input
 					placeholder="/mnt/library/{author}/{manga}/{filename}"
 					value={text}
@@ -1195,13 +1243,14 @@ function DownloadMoveSection() {
 				/>
 			</div>
 			<p className="faint settings-backup__hint">
-				{'变量：{source} 源名 · {title}/{manga} 漫画标题 · {author} 作者 · {artist} 画师 · {chapter} 章节名 · {filename} 默认文件名（不含扩展名）；模板含 {filename} 时渲染结果是完整文件名，否则当作目录并追加默认产物名。headless 部署可用 SUMIDOKU_DOWNLOAD_MOVE_PATH 覆盖'}
+				{t('settings.moveTemplateHint')}
 			</p>
 		</Section>
 	);
 }
 
 function ScheduledBackupSection() {
+	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
 	const backups = useBackupFiles();
@@ -1223,8 +1272,8 @@ function ScheduledBackupSection() {
 	if (!data || intervalText === null || retentionText === null) {
 		return (
 			<Section
-				title="自动备份"
-				desc="按周期把全量备份写入服务器目录；超出保留份数的最老备份自动清理，最新一份始终保留"
+				title={t('settings.autoBackupTitle')}
+				desc={t('settings.autoBackupDesc')}
 			>
 				<Skeleton height={48} />
 			</Section>
@@ -1244,7 +1293,7 @@ function ScheduledBackupSection() {
 	) {
 		const n = Number(text);
 		if (!Number.isInteger(n) || n < min) {
-			pushToast(`请输入不小于 ${min} 的整数`);
+			pushToast(t('settings.minInteger', { min }));
 			reset(String(fallback));
 			return;
 		}
@@ -1272,8 +1321,8 @@ function ScheduledBackupSection() {
 
 	return (
 		<Section
-			title="自动备份"
-			desc="按周期把全量备份写入服务器目录；超出保留份数的最老备份自动清理，最新一份始终保留"
+			title={t('settings.autoBackupTitle')}
+			desc={t('settings.autoBackupDesc')}
 		>
 			<label className="settings-backup__section">
 				<input
@@ -1281,10 +1330,10 @@ function ScheduledBackupSection() {
 					checked={enabled}
 					onChange={(e) => save.mutate({ 'backup.enabled': e.currentTarget.checked })}
 				/>
-				启用自动备份
+				{t('settings.enableAutoBackup')}
 			</label>
 			<div className="settings-row">
-				<span className="settings-row__label">备份间隔（小时）</span>
+				<span className="settings-row__label">{t('settings.backupInterval')}</span>
 				<Input
 					className="settings-backup__num"
 					type="number"
@@ -1301,7 +1350,7 @@ function ScheduledBackupSection() {
 				/>
 			</div>
 			<div className="settings-row">
-				<span className="settings-row__label">保留份数</span>
+				<span className="settings-row__label">{t('settings.retentionCount')}</span>
 				<Input
 					className="settings-backup__num"
 					type="number"
@@ -1324,22 +1373,23 @@ function ScheduledBackupSection() {
 				/>
 			</div>
 			<div className="settings-row">
-				<span className="settings-row__label">备份目录</span>
+				<span className="settings-row__label">{t('settings.backupDir')}</span>
 				<span className="settings-backup__dir">{backups.data?.dir ?? '…'}</span>
 			</div>
 			<p className="faint settings-backup__hint">
-				目录可用 SUMIDOKU_BACKUP_DIR 或设置项 backup.dir 修改；上次备份：
-				{typeof lastRun === 'number' ? new Date(lastRun * 1000).toLocaleString() : '从未'}
+				{t('settings.backupDirHint', {
+					lastRun: typeof lastRun === 'number' ? new Date(lastRun * 1000).toLocaleString() : t('settings.never')
+				})}
 			</p>
 
 			<div className="settings-backup__files-head">
-				<span className="settings-row__label">已有备份</span>
-				<IconButton label="刷新" size="sm" onClick={() => void backups.refetch()}>
+				<span className="settings-row__label">{t('settings.existingBackups')}</span>
+				<IconButton label={t('settings.refresh')} size="sm" onClick={() => void backups.refetch()}>
 					<RotateCw size={14} />
 				</IconButton>
 			</div>
 			{files.length === 0 ? (
-				<p className="faint">暂无备份</p>
+				<p className="faint">{t('settings.noBackups')}</p>
 			) : (
 				<div className="settings-backup__files">
 					{files.map((f) => (
@@ -1349,7 +1399,7 @@ function ScheduledBackupSection() {
 								<span className="faint">{formatSize(f.size)}</span>
 							</div>
 							<Button size="sm" onClick={() => setConfirming(f)}>
-								恢复
+								{t('settings.restore')}
 							</Button>
 						</div>
 					))}
@@ -1358,18 +1408,18 @@ function ScheduledBackupSection() {
 
 			<Modal
 				open={confirming !== null || result !== null}
-				title="恢复备份"
+				title={t('settings.restoreBackup')}
 				onClose={closeModal}
 				footer={
 					result ? (
 						<Button variant="primary" onClick={closeModal}>
-							完成
+							{t('settings.done')}
 						</Button>
 					) : (
 						<>
-							<Button onClick={closeModal}>取消</Button>
+							<Button onClick={closeModal}>{t('common.cancel')}</Button>
 							<Button variant="danger" loading={restore.isPending} onClick={() => void confirmRestore()}>
-								恢复
+								{t('settings.restore')}
 							</Button>
 						</>
 					)
@@ -1381,11 +1431,10 @@ function ScheduledBackupSection() {
 					confirming && (
 						<>
 							<p className="settings-modal-text">
-								将从 {new Date(confirming.createdAt * 1000).toLocaleString()}{' '}
-								创建的备份恢复，覆盖当前实例的书库、分类、进度与全部设置，此操作不可撤销。
+								{t('settings.restoreNamedConfirm', { date: new Date(confirming.createdAt * 1000).toLocaleString() })}
 							</p>
 							<p className="settings-backup__warn">
-								备份可能包含源站账号密码，请确认文件来源可信。
+								{t('settings.backupTrustWarn')}
 							</p>
 						</>
 					)
@@ -1396,18 +1445,20 @@ function ScheduledBackupSection() {
 }
 
 function UsersSection() {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	return (
-		<Section title="用户" desc="多用户账号与角色：管理员管理全部账号与全局状态，读者只有自己的书库、进度与分类">
+		<Section title={t('settings.usersTitle')} desc={t('settings.usersDesc')}>
 			<div className="settings-row">
-				<span className="settings-row__label">账号与角色</span>
-				<Button onClick={() => navigate('/users')}>管理用户</Button>
+				<span className="settings-row__label">{t('settings.accountsRoles')}</span>
+				<Button onClick={() => navigate('/users')}>{t('settings.manageUsers')}</Button>
 			</div>
 		</Section>
 	);
 }
 
 function AboutSection() {
+	const { t } = useTranslation();
 	const [version, setVersion] = useState<string | null>(null);
 	const [latest, setLatest] = useState<{ tag: string; url: string } | null>(null);
 	useEffect(() => {
@@ -1440,29 +1491,29 @@ function AboutSection() {
 	const update = newer !== null && newer > 0 ? latest : null;
 	const upToDate = newer !== null && newer <= 0;
 	return (
-		<Section title="关于" desc="接口入口与项目地址">
+		<Section title={t('settings.aboutTitle')} desc={t('settings.aboutDesc')}>
 			<div className="settings-about">
 				<p>
-					<strong>Sumidoku</strong> · 自建漫画服务器
+					<strong>Sumidoku</strong> · {t('settings.tagline')}
 				</p>
-				<p className="muted">REST API：/api/v1 · OPDS：/opds/v1.2</p>
+				<p className="muted">{t('settings.endpoints')}</p>
 				{version && (
 					<p className="muted">
-						当前版本 v{version}
+						{t('settings.currentVersion', { version })}
 						{update && (
 							<>
 								{' · '}
 								<a className="setting-link" href={update.url} target="_blank" rel="noreferrer">
-									有新版本 {update.tag}
+									{t('settings.newVersion', { tag: update.tag })}
 									<ExternalLink size={13} />
 								</a>
 							</>
 						)}
-						{upToDate && ' · 已是最新'}
+						{upToDate && ` · ${t('settings.upToDate')}`}
 					</p>
 				)}
 				<p className="faint">
-					OPDS 客户端用 Basic 认证，密码与 web 界面相同（配置 SUMIDOKU_AUTH_PASSWORD 启用）
+					{t('settings.opdsHint')}
 				</p>
 				<a
 					className="setting-link"
@@ -1479,11 +1530,12 @@ function AboutSection() {
 }
 
 export default function SettingsPage() {
+	const { t } = useTranslation();
 	// The server's 403 is the real gate; here we just keep readers from seeing entries that are doomed to fail
 	const isAdmin = useIsAdmin();
 	return (
 		<div className="page container settings-page">
-			<PageHeader title="设置" />
+			<PageHeader title={t('common.nav.settings')} />
 			<AppearanceSection />
 			<IncognitoSection />
 			<SecuritySection />

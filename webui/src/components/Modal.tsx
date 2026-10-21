@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { X } from 'lucide-react';
 import { IconButton } from './IconButton';
 
@@ -17,6 +18,7 @@ export interface ModalProps {
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 export function Modal({ open, title, onClose, children, footer, panelClassName }: ModalProps) {
+	const { t } = useTranslation();
 	const panelRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -61,7 +63,7 @@ export function Modal({ open, title, onClose, children, footer, panelClassName }
 			>
 				<div className="modal__head">
 					<h3>{title}</h3>
-					<IconButton label="关闭" size="sm" onClick={onClose}>
+					<IconButton label={t('modal.close')} size="sm" onClick={onClose}>
 						<X size={16} />
 					</IconButton>
 				</div>

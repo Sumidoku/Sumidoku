@@ -13,6 +13,7 @@ import {
 	Trash,
 	TriangleAlert
 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { ApiError, sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
@@ -26,6 +27,7 @@ import {
 	useUpdateSource
 } from '../api/hooks';
 import type { Source } from '../api/types';
+import { translateApiError } from '../i18n';
 import { compareSourceName, contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
 import {
 	Button,
@@ -66,6 +68,7 @@ function SourceIcon({ source }: { source: Source }) {
 }
 
 function UpdateButton({ source }: { source: Source }) {
+	const { t } = useTranslation();
 	const update = useUpdateSource();
 	const navigate = useNavigate();
 
@@ -73,10 +76,10 @@ function UpdateButton({ source }: { source: Source }) {
 		e.stopPropagation();
 		try {
 			const r = await update.mutateAsync(source.id);
-			pushToast(`已更新 ${source.name} 到 v${r.version}`, 'info');
+			pushToast(t('browse.updated', { name: source.name, version: r.version }), 'info');
 			for (const w of r.migrationWarnings.slice(0, 3)) pushToast(w, 'info');
 			if (r.migrationRequired) {
-				pushToast(`${source.name} 换了条目地址，库内条目需要迁移`, 'info');
+				pushToast(t('browse.migrationRequired', { name: source.name }), 'info');
 				navigate(`/migrate?source=${source.id}&sameSource=1`);
 			}
 		} catch {
@@ -93,6 +96,7 @@ function UpdateButton({ source }: { source: Source }) {
 }
 
 function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+	const { t } = useTranslation();
 	const register = useRegisterOpdsSource();
 	const [name, setName] = useState('');
 	const [url, setUrl] = useState('');
@@ -114,59 +118,59 @@ function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => vo
 				url: trimmedUrl,
 				...(username.trim() ? { username: username.trim(), password } : {})
 			});
-			pushToast(`已添加 OPDS 目录 ${source.name}`, 'info');
+			pushToast(t('browse.opdsAdded', { name: source.name }), 'info');
 			reset();
 			onClose();
 		} catch (e) {
-			if (e instanceof ApiError && e.status === 400) pushToast(e.message);
-			else pushToast('添加失败');
+			if (e instanceof ApiError && e.status === 400) pushToast(translateApiError(e.code, e.message));
+			else pushToast(t('browse.addFailed'));
 		}
 	}
 
 	return (
 		<Modal
 			open={open}
-			title="添加 OPDS 目录"
+			title={t('browse.addOpds')}
 			onClose={onClose}
 			footer={
 				<>
-					<Button onClick={onClose}>取消</Button>
+					<Button onClick={onClose}>{t('common.cancel')}</Button>
 					<Button
 						variant="primary"
 						loading={register.isPending}
 						disabled={!name.trim() || !url.trim()}
 						onClick={() => void submit()}
 					>
-						添加
+						{t('browse.add')}
 					</Button>
 				</>
 			}
 		>
 			<div className="opds-form">
 				<Input
-					placeholder="名称（如 My Komga）"
+					placeholder={t('browse.opdsNamePlaceholder')}
 					value={name}
 					onChange={(e) => setName(e.currentTarget.value)}
 				/>
 				<Input
-					placeholder="目录 URL（如 https://komga.example/opds/v1.2/catalog）"
+					placeholder={t('browse.opdsUrlPlaceholder')}
 					value={url}
 					onChange={(e) => setUrl(e.currentTarget.value)}
 				/>
 				<Input
-					placeholder="用户名（公共目录可留空）"
+					placeholder={t('browse.opdsUsernamePlaceholder')}
 					autoComplete="off"
 					value={username}
 					onChange={(e) => setUsername(e.currentTarget.value)}
 				/>
 				<Input
 					type="password"
-					placeholder="密码"
+					placeholder={t('browse.opdsPasswordPlaceholder')}
 					autoComplete="new-password"
 					value={password}
 					onChange={(e) => setPassword(e.currentTarget.value)}
 				/>
-				<p className="muted">Komga / Kavita / Calibre-Web 等自托管站的 OPDS 1.2 目录；凭据只用于读取。</p>
+				<p className="muted">{t('browse.opdsHint')}</p>
 			</div>
 		</Modal>
 	);
@@ -195,6 +199,7 @@ function SourceCard({
 	onTogglePin: (s: Source) => void;
 	onDelete: (s: Source) => void;
 }) {
+	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const cls = ['source-card'];
 	if (s.enabled) cls.push('source-card--link');
@@ -240,11 +245,11 @@ function SourceCard({
 				</div>
 				<div className="source-card__meta">
 					{s.key} · v{s.version}
-					{!s.enabled ? ' · 已停用' : ''}
+					{!s.enabled ? t('browse.disabled') : ''}
 					{s.missingFromRepos && (
 						<span
 							className="source-card__missing"
-							title="该源已不在任何已配置的源仓库中，不会再收到更新，未来可能无法使用"
+							title={t('browse.missingFromRepos')}
 						>
 							<TriangleAlert size={13} />
 						</span>
@@ -263,7 +268,7 @@ function SourceCard({
 			{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
 			{isAdmin && s.kind !== 'local' && (
 				<IconButton
-					label={s.pinned ? `取消置顶 ${s.name}` : `置顶 ${s.name}`}
+					label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
 					onClick={(e) => {
 						e.stopPropagation();
 						onTogglePin(s);
@@ -278,7 +283,7 @@ function SourceCard({
 				<>
 					{s.kind !== 'opds' && s.hasHome !== false && (
 						<IconButton
-							label={`${s.name} 主页`}
+							label={t('browse.home', { name: s.name })}
 							onClick={(e) => {
 								e.stopPropagation();
 								navigate(`/browse/${s.id}/home`);
@@ -290,7 +295,7 @@ function SourceCard({
 					{isAdmin && s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
 					{isAdmin && (
 						<IconButton
-							label={`卸载 ${s.name}`}
+							label={t('browse.uninstall', { name: s.name })}
 							variant="danger"
 							onClick={(e) => {
 								e.stopPropagation();
@@ -307,6 +312,7 @@ function SourceCard({
 }
 
 export default function BrowsePage() {
+	const { t } = useTranslation();
 	const sources = useSources();
 	const scan = useScanSources();
 	const del = useDeleteSource();
@@ -339,11 +345,15 @@ export default function BrowsePage() {
 		try {
 			const r = await scan.mutateAsync();
 			pushToast(
-				`扫描完成：安装 ${r.installed.length}、更新 ${r.updated.length}、跳过 ${r.skipped.length}`,
+				t('browse.scanDone', {
+					installed: r.installed.length,
+					updated: r.updated.length,
+					skipped: r.skipped.length
+				}),
 				'info'
 			);
 			for (const s of r.skipped.slice(0, 3)) {
-				pushToast(`跳过 ${s.dir}：${s.reason}`, 'info');
+				pushToast(t('browse.scanSkipped', { dir: s.dir, reason: s.reason }), 'info');
 			}
 		} catch {
 			// client already popped an error toast
@@ -353,15 +363,23 @@ export default function BrowsePage() {
 	async function onUpdateAll() {
 		try {
 			const r = await updateAll.mutateAsync();
-			pushToast(`更新完成：${r.updated.length} 个已更新、${r.failed.length} 个失败`, 'info');
+			pushToast(
+				t('browse.updateAllDone', { updated: r.updated.length, failed: r.failed.length }),
+				'info'
+			);
 			for (const f of r.failed.slice(0, 3)) {
-				pushToast(`更新 ${f.key} 失败：${f.reason}`, 'info');
+				pushToast(t('browse.updateFailed', { key: f.key, reason: f.reason }), 'info');
 			}
 			for (const w of r.migrationWarnings.slice(0, 3)) {
-				pushToast(`${w.key}：${w.message}`, 'info');
+				pushToast(t('browse.migrationWarning', { key: w.key, message: w.message }), 'info');
 			}
 			if (r.migrationRequired.length > 0) {
-				pushToast(`${r.migrationRequired.join('、')} 换了条目地址，库内条目需要迁移`, 'info');
+				pushToast(
+					t('browse.migrationRequiredMany', {
+						names: r.migrationRequired.join(t('browse.listSeparator'))
+					}),
+					'info'
+				);
 				navigate('/migrate');
 			}
 		} catch {
@@ -372,7 +390,10 @@ export default function BrowsePage() {
 	async function togglePin(s: Source) {
 		try {
 			await pin.mutateAsync({ id: s.id, pinned: !s.pinned });
-			pushToast(s.pinned ? `已取消置顶 ${s.name}` : `已置顶 ${s.name}`, 'info');
+			pushToast(
+				s.pinned ? t('browse.unpinned', { name: s.name }) : t('browse.pinned', { name: s.name }),
+				'info'
+			);
 		} catch {
 			// client already popped an error toast
 		}
@@ -395,7 +416,7 @@ export default function BrowsePage() {
 		if (!pendingDelete) return;
 		try {
 			await del.mutateAsync(pendingDelete.id);
-			pushToast(`已卸载 ${pendingDelete.name}`, 'info');
+			pushToast(t('browse.uninstalled', { name: pendingDelete.name }), 'info');
 			setPendingDelete(null);
 		} catch {
 			// client already popped an error toast
@@ -405,30 +426,30 @@ export default function BrowsePage() {
 	return (
 		<div className="page container">
 			<PageHeader
-				title="浏览"
+				title={t('common.nav.browse')}
 				actions={
 					tab === 'installed' ? (
 						<>
 							<Button onClick={() => navigate('/migrate')}>
 								<ArrowLeftRight size={15} />
-								迁移
+								{t('browse.migrate')}
 							</Button>
 							{isAdmin && updateCount > 0 && (
 								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
 									<CircleArrowUp size={15} />
-									全部更新（{updateCount}）
+									{t('browse.updateAll', { count: updateCount })}
 								</Button>
 							)}
 							{isAdmin && (
 								<Button onClick={() => setRegisteringOpds(true)}>
 									<Plus size={15} />
-									添加 OPDS 目录
+									{t('browse.addOpds')}
 								</Button>
 							)}
 							{isAdmin && (
 								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
 									<ScanSearch size={15} />
-									扫描源目录
+									{t('browse.scan')}
 								</Button>
 							)}
 						</>
@@ -441,8 +462,8 @@ export default function BrowsePage() {
 				<div className="browse__tabs">
 					<SegmentedControl
 						options={[
-							{ value: 'installed', label: '已安装' },
-							{ value: 'repos', label: '源仓库' }
+							{ value: 'installed', label: t('browse.tabInstalled') },
+							{ value: 'repos', label: t('browse.tabRepos') }
 						]}
 						value={tab}
 						onChange={setTab}
@@ -461,18 +482,14 @@ export default function BrowsePage() {
 			) : all.length === 0 ? (
 				<EmptyState
 					icon={PackageOpen}
-					title="还没有安装源"
-					hint={
-						isAdmin
-							? '把源包放进服务器的 sources 目录然后点「扫描源目录」，或到「源仓库」一键安装'
-							: '还没有可用源，请联系管理员安装'
-					}
+					title={t('browse.emptyTitle')}
+					hint={isAdmin ? t('browse.emptyHintAdmin') : t('browse.emptyHint')}
 				/>
 			) : (
 				<>
 					{pinnedSources.length > 0 && (
 						<>
-							<h2 className="browse__section">置顶</h2>
+							<h2 className="browse__section">{t('browse.sectionPinned')}</h2>
 							<div className="source-list">
 								{pinnedSources.map((s, i) => (
 									<SourceCard
@@ -511,7 +528,9 @@ export default function BrowsePage() {
 					)}
 					{updateSources.length > 0 && (
 						<>
-							<h2 className="browse__section">更新（{updateSources.length}）</h2>
+							<h2 className="browse__section">
+								{t('browse.sectionUpdates', { count: updateSources.length })}
+							</h2>
 							<div className="source-list">
 								{updateSources.map((s) => (
 									<SourceCard
@@ -527,7 +546,7 @@ export default function BrowsePage() {
 					)}
 					{(pinnedSources.length > 0 || updateSources.length > 0) && (
 						// when any section appears above, the full list needs an "All" heading to set it apart
-						<h2 className="browse__section">全部</h2>
+						<h2 className="browse__section">{t('browse.sectionAll')}</h2>
 					)}
 					<div className="source-list">
 						{all.map((s) => (
@@ -545,18 +564,18 @@ export default function BrowsePage() {
 
 			<Modal
 				open={pendingDelete !== null}
-				title={`卸载源 ${pendingDelete?.name ?? ''}？`}
+				title={t('browse.uninstallTitle', { name: pendingDelete?.name ?? '' })}
 				onClose={() => setPendingDelete(null)}
 				footer={
 					<>
-						<Button onClick={() => setPendingDelete(null)}>取消</Button>
+						<Button onClick={() => setPendingDelete(null)}>{t('common.cancel')}</Button>
 						<Button variant="danger" loading={del.isPending} onClick={() => void confirmDelete()}>
-							卸载
+							{t('browse.uninstallConfirm')}
 						</Button>
 					</>
 				}
 			>
-				<p className="muted">会同时删除服务器上的图源包，之后扫描源目录不会重新安装；已入库的漫画与下载不受影响。</p>
+				<p className="muted">{t('browse.deleteHint')}</p>
 			</Modal>
 			<OpdsRegisterModal open={registeringOpds} onClose={() => setRegisteringOpds(false)} />
 		</div>

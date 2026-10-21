@@ -1,0 +1,56 @@
+{
+  "migrate": {
+    "title": "Migrate",
+    "back": "Back",
+    "pickSourceHint": "Pick the source to migrate from (only sources with library entries are listed):",
+    "inLibrary_one": "{{count}} title in library",
+    "inLibrary_other": "{{count}} titles in library",
+    "libraryEmpty": "Your library is empty",
+    "libraryEmptyHint": "Add manga to the library first, then migrate",
+    "selectedCount": "Source: <b>{{source}}</b> · {{selected}} / {{total}} selected",
+    "clearAll": "Clear",
+    "selectAll": "Select all",
+    "pickDestinations": "Choose targets",
+    "loadMore": "Load more",
+    "startMatch_one": "Start matching ({{count}} title)",
+    "startMatch_other": "Start matching ({{count}} titles)",
+    "status": "Targets: {{dests}} · {{matched}} / {{total}} matched{{matching}}{{executed}}",
+    "statusMatching": " · matching…",
+    "statusExecuted": " · {{done}} migrated",
+    "retryUnmatched": "Retry unmatched",
+    "notFound": "Not found",
+    "gotoTarget": "Migrated — view target →",
+    "confirmTitle_one": "{{mode}} {{count}} title?",
+    "confirmTitle_other": "{{mode}} {{count}} titles?",
+    "confirmAction": "Confirm {{mode}}",
+    "unmatchedUntouched_one": "The {{count}} unmatched title will be left untouched.",
+    "unmatchedUntouched_other": "The {{count}} unmatched titles will be left untouched.",
+    "toastDone_one": "Migrated {{count}} title",
+    "toastDone_other": "Migrated {{count}} titles",
+    "toastPartial": "Finished {{done}} titles, {{failed}} failed",
+    "moreActions": "More actions",
+    "rematch": "Search again",
+    "skipEntry": "Skip this entry",
+    "rematchTitle": "Search again: {{title}}",
+    "rematchHint": "All target sources are searched; click a candidate to use it as the match.",
+    "rematchNoHits": "No matches. Try a different keyword.",
+    "mode": {
+      "copy": "Copy",
+      "migrate": "Migrate",
+      "migrateWithHistory": "Migrate (keep history)"
+    },
+    "modeHint": {
+      "copy": "Adds the target to the library and moves progress over; the source entry stays untouched",
+      "migrate": "Adds the target to the library and moves progress over; the source entry leaves the library and its reading progress is cleared",
+      "migrateWithHistory": "Adds the target to the library and moves progress over; the source entry leaves the library but keeps its reading history"
+    },
+    "reason": {
+      "not_found": "Source entry does not exist",
+      "not_in_library": "Source entry is not in the library",
+      "source_not_found": "Target source does not exist",
+      "same_source": "Target and source are the same entry",
+      "fetch_failed": "Failed to fetch target details",
+      "fetch_failed_with_message": "Failed to fetch target details: {{message}}"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Download, Pause, Play, RotateCw, Trash2 } from 'lucide-react';
 import { api, chapterFileUrl } from '../api/client';
 import {
@@ -25,12 +26,12 @@ import './downloads.css';
 
 const ORDER: DownloadStatus[] = ['queued', 'downloading', 'paused', 'error', 'finished'];
 
-const STATUS_META: Record<DownloadStatus, { label: string; color: ChipColor }> = {
-	queued: { label: '排队中', color: 'default' },
-	downloading: { label: '下载中', color: 'accent' },
-	paused: { label: '已暂停', color: 'warning' },
-	finished: { label: '已完成', color: 'success' },
-	error: { label: '失败', color: 'danger' }
+const STATUS_META: Record<DownloadStatus, { labelKey: string; color: ChipColor }> = {
+	queued: { labelKey: 'downloads.statusQueued', color: 'default' },
+	downloading: { labelKey: 'downloads.statusDownloading', color: 'accent' },
+	paused: { labelKey: 'downloads.statusPaused', color: 'warning' },
+	finished: { labelKey: 'downloads.statusFinished', color: 'success' },
+	error: { labelKey: 'downloads.statusError', color: 'danger' }
 };
 
 // a progress frame can also arrive before started; any progress means downloading
@@ -44,6 +45,7 @@ const EVENT_STATUS: Record<string, DownloadStatus> = {
 };
 
 export default function DownloadsPage() {
+	const { t } = useTranslation();
 	const [items, setItems] = useState<DownloadItem[]>([]);
 	const [running, setRunning] = useState(false);
 	const [online, setOnline] = useState(false);
@@ -156,7 +158,7 @@ export default function DownloadsPage() {
 			// The server's clear deletes error entries along with finished ones; keep the local list in step
 			const res = await clear.mutateAsync();
 			applyItems((cur) => cur.filter((it) => it.status !== 'finished' && it.status !== 'error'));
-			pushToast(`已清空 ${res.cleared} 项`, 'info');
+			pushToast(t('downloads.cleared', { count: res.cleared }), 'info');
 		} finally {
 			setBusy(false);
 		}
@@ -165,12 +167,12 @@ export default function DownloadsPage() {
 	return (
 		<div className="page container">
 			<PageHeader
-				title="下载"
+				title={t('common.nav.downloads')}
 				actions={
 					<>
 						<span
 							className={online ? 'ws-dot ws-dot--on' : 'ws-dot'}
-							title={online ? '实时连接正常' : '连接已断开，3 秒后重试'}
+							title={online ? t('downloads.wsOk') : t('downloads.wsDown')}
 						/>
 						<Button
 							variant={running ? 'ghost' : 'primary'}
@@ -178,10 +180,10 @@ export default function DownloadsPage() {
 							onClick={() => void toggleRunning()}
 						>
 							{running ? <Pause size={14} /> : <Play size={14} />}
-							{running ? '暂停' : '开始'}
+							{running ? t('downloads.pause') : t('downloads.start')}
 						</Button>
 						<Button disabled={busy || !hasClearable} onClick={() => void clearFinished()}>
-							清空已完成
+							{t('downloads.clearFinished')}
 						</Button>
 					</>
 				}
@@ -196,14 +198,14 @@ export default function DownloadsPage() {
 			) : sorted.length === 0 ? (
 				<EmptyState
 					icon={Download}
-					title="没有下载任务"
-					hint="在漫画详情页下载章节后，任务会出现在这里"
+					title={t('downloads.emptyTitle')}
+					hint={t('downloads.emptyHint')}
 				/>
 			) : (
 				<div className="downloads-list">
 					{sorted.map((it) => {
 						const meta = STATUS_META[it.status];
-						const chapterName = it.chapterTitle?.trim() || '未命名章节';
+						const chapterName = it.chapterTitle?.trim() || t('downloads.unnamedChapter');
 						const total = it.total ?? 0;
 						const downloaded = it.downloaded ?? 0;
 						return (
@@ -211,7 +213,7 @@ export default function DownloadsPage() {
 								<div className="downloads-item__main">
 									<div className="downloads-item__row">
 										<span className="downloads-item__manga">{it.mangaTitle}</span>
-										<Chip color={meta.color}>{meta.label}</Chip>
+										<Chip color={meta.color}>{t(meta.labelKey)}</Chip>
 									</div>
 									<div className="muted downloads-item__chapter">{chapterName}</div>
 									{it.status === 'downloading' && (
@@ -224,15 +226,15 @@ export default function DownloadsPage() {
 									)}
 									{it.status === 'error' && (
 										<div className="downloads-item__error">
-											{it.error || '下载失败'}
-											{it.retries > 0 && `（已重试 ${it.retries} 次）`}
+											{it.error || t('downloads.downloadFailed')}
+											{it.retries > 0 && t('downloads.retried', { count: it.retries })}
 										</div>
 									)}
 								</div>
 								<div className="downloads-item__acts">
 									{it.status === 'error' && (
 										<IconButton
-											label="重试"
+											label={t('downloads.retry')}
 											disabled={enqueue.isPending}
 											onClick={() =>
 												enqueue.mutate([it.chapterId], {
@@ -255,21 +257,21 @@ export default function DownloadsPage() {
 											className="downloads-item__cbz"
 											href={chapterFileUrl(it.chapterId)}
 											download
-											title="下载 CBZ 文件"
+											title={t('downloads.downloadCbz')}
 										>
 											<Download size={14} /> CBZ
 										</a>
 									)}
 									{it.status !== 'error' && (
 										<IconButton
-											label="删除任务"
+											label={t('downloads.deleteTask')}
 											variant="danger"
 											disabled={del.isPending}
 											onClick={() =>
 												del.mutate(it.chapterId, {
 													onSuccess: () => {
 														applyItems((cur) => cur.filter((x) => x.chapterId !== it.chapterId));
-														pushToast('已删除', 'info');
+														pushToast(t('downloads.deleted'), 'info');
 													}
 												})
 											}

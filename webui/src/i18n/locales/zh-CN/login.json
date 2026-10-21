@@ -1,0 +1,10 @@
+{
+  "login": {
+    "hint": "此服务器已启用认证，请输入用户名和密码",
+    "username": "用户名",
+    "password": "密码",
+    "submit": "登录",
+    "error_invalid": "用户名或密码错误",
+    "error_generic": "登录失败，请稍后重试"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "sourceHome": {
+    "backToBrowse": "返回浏览",
+    "backToSource": "返回 {{name}}",
+    "sourceFallback": "源",
+    "sourceDisabled": "该源已停用",
+    "sourceDisabledHint": "重新安装或启用后才能浏览",
+    "loadFailed": "加载失败",
+    "retry": "重试",
+    "noHome": "该源没有主页",
+    "noHomeHint": "这个源没有提供主页内容，可以直接搜索或按列表浏览",
+    "goSearch": "去搜索",
+    "emptyHome": "主页没有内容",
+    "emptyHomeHint": "源返回了一个空的主页布局",
+    "viewAll": "查看全部"
+  }
+}

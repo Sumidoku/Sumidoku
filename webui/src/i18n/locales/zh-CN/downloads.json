@@ -1,0 +1,24 @@
+{
+  "downloads": {
+    "statusQueued": "排队中",
+    "statusDownloading": "下载中",
+    "statusPaused": "已暂停",
+    "statusFinished": "已完成",
+    "statusError": "失败",
+    "cleared_other": "已清空 {{count}} 项",
+    "wsOk": "实时连接正常",
+    "wsDown": "连接已断开，3 秒后重试",
+    "pause": "暂停",
+    "start": "开始",
+    "clearFinished": "清空已完成",
+    "emptyTitle": "没有下载任务",
+    "emptyHint": "在漫画详情页下载章节后，任务会出现在这里",
+    "unnamedChapter": "未命名章节",
+    "downloadFailed": "下载失败",
+    "retried_other": "（已重试 {{count}} 次）",
+    "retry": "重试",
+    "downloadCbz": "下载 CBZ 文件",
+    "deleteTask": "删除任务",
+    "deleted": "已删除"
+  }
+}

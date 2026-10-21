@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { useTranslation } from 'react-i18next';
 import { MoreVertical } from 'lucide-react';
 import { IconButton } from '../../components';
 
 // The popover goes through a portal: the hero container is overflow:hidden, so absolute positioning would be clipped
 export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
+	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 	const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 	const btnRef = useRef<HTMLDivElement>(null);
@@ -39,7 +41,7 @@ export function MoreMenu({ children }: { children: (close: () => void) => ReactN
 
 	return (
 		<div className="manga-menu" ref={btnRef}>
-			<IconButton label="更多操作" onClick={toggle}>
+			<IconButton label={t('moreMenu.label')} onClick={toggle}>
 				<MoreVertical size={17} />
 			</IconButton>
 			{open &&

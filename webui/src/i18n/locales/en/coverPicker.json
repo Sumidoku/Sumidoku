@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "Change cover",
+    "changed": "Cover changed",
+    "unsupported": "This source offers no alternate covers",
+    "loadFailed": "Failed to load alternate covers",
+    "retry": "Retry",
+    "empty": "The source returned no alternate covers",
+    "currentTitle": "Current cover",
+    "setAsCover": "Set as cover",
+    "currentBadge": "Current"
+  }
+}

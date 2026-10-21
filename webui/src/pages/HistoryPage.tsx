@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Clock } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import { useHistory } from '../api/hooks';
@@ -8,6 +9,7 @@ import { Button, Cover, EmptyState, InfiniteList, PageHeader, Skeleton } from '.
 import './history.css';
 
 export default function HistoryPage() {
+	const { t } = useTranslation();
 	const query = useHistory();
 	const entries = useMemo(
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
@@ -16,7 +18,7 @@ export default function HistoryPage() {
 
 	return (
 		<div className="page container">
-			<PageHeader title="历史" />
+			<PageHeader title={t('common.nav.history')} />
 
 			{query.isPending ? (
 				<div className="history-list">
@@ -27,11 +29,11 @@ export default function HistoryPage() {
 			) : entries.length === 0 ? (
 				<EmptyState
 					icon={Clock}
-					title="还没有阅读记录"
-					hint="看过的章节会出现在这里，方便随时续读"
+					title={t('history.emptyTitle')}
+					hint={t('history.emptyHint')}
 					action={
 						<Link to="/library">
-							<Button variant="primary">去书库</Button>
+							<Button variant="primary">{t('history.goLibrary')}</Button>
 						</Link>
 					}
 				/>
@@ -58,9 +60,11 @@ export default function HistoryPage() {
 								<div className="history-item__right">
 									<span className="faint">{relativeTime(h.lastReadAt)}</span>
 									{h.isRead ? (
-										<span className="faint">已读完</span>
+										<span className="faint">{t('history.finished')}</span>
 									) : (
-										<span className="history-item__progress">读到 P.{h.lastPageRead + 1}</span>
+										<span className="history-item__progress">
+											{t('history.progress', { page: h.lastPageRead + 1 })}
+										</span>
 									)}
 								</div>
 							</Link>

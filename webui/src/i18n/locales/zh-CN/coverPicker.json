@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "更换封面",
+    "changed": "封面已更换",
+    "unsupported": "该源不提供备选封面",
+    "loadFailed": "备选封面加载失败",
+    "retry": "重试",
+    "empty": "源没有返回备选封面",
+    "currentTitle": "当前封面",
+    "setAsCover": "设为封面",
+    "currentBadge": "当前"
+  }
+}

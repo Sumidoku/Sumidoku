@@ -1,4 +1,5 @@
 import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock, MinusCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { chapterFileUrl } from '../../api/client';
 import type { Chapter } from '../../api/types';
 import { chapterLabel, formatDate } from '../../lib/format';
@@ -44,6 +45,7 @@ export function ChapterRow({
 	onMarkPreviousUnread,
 	markPending
 }: ChapterRowProps) {
+	const { t } = useTranslation();
 	const cls = [
 		'chapter-row',
 		c.isRead ? 'chapter-row--read' : '',
@@ -85,17 +87,17 @@ export function ChapterRow({
 			</span>
 			<span className="chapter-row__status">
 				{c.locked && (
-					<span className="chapter-row__lock" title="锁定">
+					<span className="chapter-row__lock" title={t('chapterRow.locked')}>
 						<Lock size={14} />
 					</span>
 				)}
 				{c.isBookmarked && (
-					<span className="chapter-row__bm" title="书签">
+					<span className="chapter-row__bm" title={t('chapterRow.bookmarked')}>
 						<Bookmark size={14} fill="currentColor" />
 					</span>
 				)}
 				{c.isDownloaded && (
-					<span className="chapter-row__dl-ok" title="已下载">
+					<span className="chapter-row__dl-ok" title={t('chapterRow.downloaded')}>
 						<CheckCircle2 size={14} />
 					</span>
 				)}
@@ -111,15 +113,15 @@ export function ChapterRow({
 							className="chapter-row__cbz"
 							href={chapterFileUrl(c.id)}
 							download
-							title="下载 CBZ 文件"
-							aria-label="下载 CBZ 文件"
+							title={t('chapterRow.downloadCbz')}
+							aria-label={t('chapterRow.downloadCbz')}
 							onClick={(e) => e.stopPropagation()}
 						>
 							<FileDown size={16} />
 						</a>
 					) : dlState === 'idle' ? (
 						<IconButton
-							label="下载本章"
+							label={t('chapterRow.downloadChapter')}
 							onClick={(e) => {
 								e.stopPropagation();
 								onDownload();
@@ -128,12 +130,12 @@ export function ChapterRow({
 							<Download size={16} />
 						</IconButton>
 					) : (
-						<IconButton label={dlState === 'pending' ? '正在加入下载队列' : '已在下载队列中'} disabled>
+						<IconButton label={dlState === 'pending' ? t('chapterRow.enqueueing') : t('chapterRow.enqueued')} disabled>
 							<Spinner size={15} />
 						</IconButton>
 					))}
 				<IconButton
-					label={c.isBookmarked ? '取消书签' : '加书签'}
+					label={c.isBookmarked ? t('chapterRow.removeBookmark') : t('chapterRow.addBookmark')}
 					disabled={bookmarkPending}
 					onClick={(e) => {
 						e.stopPropagation();
@@ -143,7 +145,7 @@ export function ChapterRow({
 					<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
 				</IconButton>
 				{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
-					<MenuButton label="章节操作">
+					<MenuButton label={t('chapterRow.chapterActions')}>
 						{(close) => (
 							<>
 								{/* Aidoku MARK_READ: offered while the chapter is not completed */}
@@ -157,7 +159,7 @@ export function ChapterRow({
 											onMarkRead();
 										}}
 									>
-										<span>标记已读</span>
+										<span>{t('chapterRow.markRead')}</span>
 										<CheckCircle2 size={14} />
 									</button>
 								)}
@@ -172,7 +174,7 @@ export function ChapterRow({
 											onMarkUnread();
 										}}
 									>
-										<span>标记未读</span>
+										<span>{t('chapterRow.markUnread')}</span>
 										<MinusCircle size={14} />
 									</button>
 								)}
@@ -187,7 +189,7 @@ export function ChapterRow({
 											onMarkPreviousRead();
 										}}
 									>
-										<span>标记上一章为已读</span>
+										<span>{t('chapterRow.markPreviousRead')}</span>
 										<CheckCircle2 size={14} />
 									</button>
 								)}
@@ -201,7 +203,7 @@ export function ChapterRow({
 											onMarkPreviousUnread();
 										}}
 									>
-										<span>标记上一章为未读</span>
+										<span>{t('chapterRow.markPreviousUnread')}</span>
 										<MinusCircle size={14} />
 									</button>
 								)}

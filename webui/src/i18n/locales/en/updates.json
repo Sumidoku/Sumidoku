@@ -1,0 +1,30 @@
+{
+  "updates": {
+    "jobPending": "Queued",
+    "jobRunning": "Updating",
+    "complete": "Complete",
+    "failed": "Failed",
+    "skipped": "Skipped",
+    "started": "Update started",
+    "alreadyRunning": "An update is already running",
+    "updateFailed": "Update failed",
+    "summaryUnavailable": "Update summary unavailable",
+    "statusRunning": "Updating",
+    "lastRun": "Last updated {{time}}",
+    "idle": "Idle",
+    "total": "Total",
+    "pending": "Pending",
+    "wsOk": "Live connection OK",
+    "wsDown": "Connection lost; retrying in 3 seconds",
+    "runNow": "Update now",
+    "selectCategory": "Select category",
+    "allCategories": "All",
+    "runByCategory": "Update by category",
+    "liveFeed": "Live activity",
+    "addedChapters_one": "+{{count}} chapter",
+    "addedChapters_other": "+{{count}} chapters",
+    "recentHeading": "Recent updates",
+    "recentEmpty": "No new chapters lately",
+    "newChapter": "New"
+  }
+}

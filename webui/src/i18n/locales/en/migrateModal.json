@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "Switch source: {{title}}",
+    "mode": {
+      "copy": "Copy",
+      "migrate": "Migrate",
+      "migrateWithHistory": "Migrate (keep history)"
+    },
+    "modeHint": {
+      "copy": "Adds the target to the library and moves progress over; the current entry stays untouched",
+      "migrate": "Adds the target to the library and moves progress over; the current entry leaves the library and its reading progress is cleared",
+      "migrateWithHistory": "Adds the target to the library and moves progress over; the current entry leaves the library but keeps its reading history"
+    },
+    "searchFailed": "Search failed",
+    "migrateFailed": "Migration failed",
+    "done": "{{mode}} completed",
+    "viewOnly": "View entry only",
+    "backToCandidates": "Back to candidates",
+    "searchCandidates": "Search candidates",
+    "searchHint": "All target sources are searched by title concurrently (3 at a time).",
+    "noHits": "No matches. Adjust the destination set and search again."
+  }
+}

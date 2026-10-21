@@ -1,0 +1,25 @@
+{
+  "library": {
+    "sortAdded": "Recently added",
+    "sortTitle": "Title",
+    "sortLastRead": "Recently read",
+    "sortUnread": "Most unread",
+    "filterUnread": "Unread",
+    "filterDownloaded": "Downloaded",
+    "filterBookmarked": "Bookmarked",
+    "triInclude": "Showing only manga with {{label}}; click to exclude them",
+    "triExclude": "Excluding manga with {{label}}; click to clear the filter",
+    "triNone": "Not filtering by {{label}}; click to show only those",
+    "searchPlaceholder": "Search library…",
+    "uncategorized": "Uncategorized",
+    "rating": "Rating",
+    "source": "Source",
+    "sort": "Sort",
+    "emptyFilteredTitle": "No manga match",
+    "emptyFilteredHint": "Try a different keyword, or clear the filters and look again",
+    "clearFilters": "Clear filters",
+    "emptyTitle": "Your library is empty",
+    "emptyHint": "Pick a few manga in Browse to add to your library",
+    "goBrowse": "Go to Browse"
+  }
+}

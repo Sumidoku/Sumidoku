@@ -1,0 +1,13 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "已选（顺序即优先级）",
+    "addAllPinnedTitle": "按置顶顺序补入全部置顶源",
+    "addAllPinned_other": "全选置顶源（{{count}}）",
+    "emptyHint": "还没选目标源，从下面点选；顺序决定自动匹配的优先级。",
+    "remove": "移出 {{name}}",
+    "availableHeading": "可选",
+    "noMore": "没有其他可加的源了。",
+    "add": "加入 {{name}}",
+    "pinned": "置顶"
+  }
+}

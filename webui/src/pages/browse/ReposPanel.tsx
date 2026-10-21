@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CircleArrowUp, Download, Globe, Plus, RefreshCw, Search, Trash } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
 	useAddSourceRepo,
 	useDeleteSourceRepo,
@@ -67,6 +68,7 @@ function EntryIcon({ entry }: { entry: RepoSourceEntry }) {
 }
 
 function EntryAction({ entry }: { entry: RepoSourceEntry }) {
+	const { t } = useTranslation();
 	const install = useInstallRepoSource();
 	const update = useUpdateSource();
 	const navigate = useNavigate();
@@ -76,15 +78,15 @@ function EntryAction({ entry }: { entry: RepoSourceEntry }) {
 		try {
 			if (entry.installedId !== null && entry.updateVersion !== null) {
 				const r = await update.mutateAsync(entry.installedId);
-				pushToast(`已更新 ${entry.name} 到 v${r.version}`, 'info');
+				pushToast(t('reposPanel.updated', { name: entry.name, version: r.version }), 'info');
 				for (const w of r.migrationWarnings.slice(0, 3)) pushToast(w, 'info');
 				if (r.migrationRequired) {
-					pushToast(`${entry.name} 换了条目地址，库内条目需要迁移`, 'info');
+					pushToast(t('reposPanel.migrationRequired', { name: entry.name }), 'info');
 					navigate(`/migrate?source=${entry.installedId}&sameSource=1`);
 				}
 			} else if (entry.installedId === null) {
 				await install.mutateAsync({ repoId: entry.repoId, sourceKey: entry.key });
-				pushToast(`已安装 ${entry.name}`, 'info');
+				pushToast(t('reposPanel.installed', { name: entry.name }), 'info');
 			}
 		} catch {
 			// client already popped an error toast
@@ -95,22 +97,23 @@ function EntryAction({ entry }: { entry: RepoSourceEntry }) {
 		return (
 			<Button variant="primary" loading={busy} onClick={() => void onClick()}>
 				<CircleArrowUp size={15} />
-				更新 v{entry.updateVersion}
+				{t('reposPanel.update', { version: entry.updateVersion })}
 			</Button>
 		);
 	}
 	if (entry.installedId !== null) {
-		return <Button disabled>已装 v{entry.installedVersion}</Button>;
+		return <Button disabled>{t('reposPanel.installedVersion', { version: entry.installedVersion })}</Button>;
 	}
 	return (
 		<Button variant="primary" loading={busy} onClick={() => void onClick()}>
 			<Download size={15} />
-			安装
+			{t('reposPanel.install')}
 		</Button>
 	);
 }
 
 export default function ReposPanel() {
+	const { t } = useTranslation();
 	const repos = useSourceRepos();
 	const addRepo = useAddSourceRepo();
 	const delRepo = useDeleteSourceRepo();
@@ -179,7 +182,7 @@ export default function ReposPanel() {
 		if (!trimmed) return;
 		try {
 			const repo = await addRepo.mutateAsync(trimmed);
-			pushToast(`已添加仓库 ${repoTitle(repo)}`, 'info');
+			pushToast(t('reposPanel.repoAdded', { name: repoTitle(repo) }), 'info');
 			setUrl('');
 		} catch {
 			// client already popped an error toast
@@ -189,7 +192,7 @@ export default function ReposPanel() {
 	async function onRefresh(repo: SourceRepo) {
 		try {
 			await refreshRepo.mutateAsync(repo.id);
-			pushToast(`已刷新 ${repoTitle(repo)}`, 'info');
+			pushToast(t('reposPanel.repoRefreshed', { name: repoTitle(repo) }), 'info');
 		} catch {
 			// On failure the repo row's fetchError is already stored; after the list refetches it carries the stale mark
 		}
@@ -199,7 +202,7 @@ export default function ReposPanel() {
 		if (!pendingDelete) return;
 		try {
 			await delRepo.mutateAsync(pendingDelete.id);
-			pushToast(`已删除仓库 ${repoTitle(pendingDelete)}`, 'info');
+			pushToast(t('reposPanel.repoDeleted', { name: repoTitle(pendingDelete) }), 'info');
 			setPendingDelete(null);
 		} catch {
 			// client already popped an error toast
@@ -211,13 +214,13 @@ export default function ReposPanel() {
 			<form className="repos__add" onSubmit={(e) => void onAdd(e)}>
 				<Input
 					type="url"
-					placeholder="源仓库地址，如 https://…/index.json"
+					placeholder={t('reposPanel.repoUrlPlaceholder')}
 					value={url}
 					onChange={(e) => setUrl(e.currentTarget.value)}
 				/>
 				<Button variant="primary" type="submit" loading={addRepo.isPending}>
 					<Plus size={15} />
-					添加仓库
+					{t('reposPanel.addRepo')}
 				</Button>
 			</form>
 
@@ -230,8 +233,8 @@ export default function ReposPanel() {
 			) : !hasRepos ? (
 				<EmptyState
 					icon={Plus}
-					title="还没有源仓库"
-					hint="添加 Aidoku 兼容的源仓库地址后，就能浏览并一键安装里面的源"
+					title={t('reposPanel.noRepos')}
+					hint={t('reposPanel.noReposHint')}
 				/>
 			) : (
 				<>
@@ -241,22 +244,22 @@ export default function ReposPanel() {
 								<div className="source-card__main">
 									<div className="source-card__name">
 										<span className="source-card__name-text">{repoTitle(r)}</span>
-										{r.fetchError && <Chip color="danger">同步失败</Chip>}
+										{r.fetchError && <Chip color="danger">{t('reposPanel.syncFailed')}</Chip>}
 									</div>
 									<div className="source-card__meta">
-										{r.url} · {r.sourceCount} 个源
-										{r.fetchedAt ? ` · 更新于 ${relativeTime(r.fetchedAt)}` : ''}
+										{r.url} · {t('reposPanel.sourceCount', { count: r.sourceCount })}
+										{r.fetchedAt ? t('reposPanel.fetchedAt', { time: relativeTime(r.fetchedAt) }) : ''}
 									</div>
 								</div>
 								<IconButton
-									label={`刷新 ${repoTitle(r)}`}
+									label={t('reposPanel.refresh', { name: repoTitle(r) })}
 									onClick={() => void onRefresh(r)}
 									disabled={refreshRepo.isPending}
 								>
 									<RefreshCw size={16} />
 								</IconButton>
 								<IconButton
-									label={`删除 ${repoTitle(r)}`}
+									label={t('reposPanel.delete', { name: repoTitle(r) })}
 									variant="danger"
 									onClick={() => setPendingDelete(r)}
 								>
@@ -270,15 +273,17 @@ export default function ReposPanel() {
 						<Input
 							icon={<Search size={15} />}
 							type="search"
-							placeholder="搜索源名字…"
+							placeholder={t('reposPanel.searchPlaceholder')}
 							value={query}
 							onChange={(e) => setQuery(e.currentTarget.value)}
 						/>
 						<Button onClick={() => setLangOpen(true)}>
 							<Globe size={15} />
-							语言{langs.length > 0 ? `（${langs.length}）` : ''}
+							{langs.length > 0
+								? t('reposPanel.languagesWithCount', { count: langs.length })
+								: t('reposPanel.languages')}
 						</Button>
-						<div className="repos__ratings" role="group" aria-label="内容分级">
+						<div className="repos__ratings" role="group" aria-label={t('reposPanel.contentRating')}>
 							{CONTENT_RATING_LEVELS.map((level) => {
 								const on = ratings.includes(level.value);
 								return (
@@ -286,7 +291,9 @@ export default function ReposPanel() {
 										key={level.value}
 										color={on ? level.color : 'default'}
 										onClick={() => toggleRating(level.value)}
-										title={on ? `隐藏${level.label}` : `显示${level.label}`}
+										title={on
+											? t('reposPanel.hideRating', { label: level.label })
+											: t('reposPanel.showRating', { label: level.label })}
 									>
 										{level.label}
 									</Chip>
@@ -302,7 +309,7 @@ export default function ReposPanel() {
 							))}
 						</div>
 					) : (entries.data ?? []).length === 0 ? (
-						<EmptyState icon={Search} title="没有匹配的源" hint="换个关键词或调整过滤条件试试" />
+						<EmptyState icon={Search} title={t('reposPanel.noMatch')} hint={t('reposPanel.noMatchHint')} />
 					) : (
 						<div className="source-list">
 							{(entries.data ?? []).map((entry) => (
@@ -340,11 +347,11 @@ export default function ReposPanel() {
 
 			<Modal
 				open={langOpen}
-				title="选择语言"
+				title={t('reposPanel.selectLanguages')}
 				onClose={() => setLangOpen(false)}
 				footer={
 					<Button variant="primary" onClick={() => setLangOpen(false)}>
-						完成
+						{t('reposPanel.done')}
 					</Button>
 				}
 			>
@@ -364,18 +371,18 @@ export default function ReposPanel() {
 
 			<Modal
 				open={pendingDelete !== null}
-				title={`删除仓库 ${pendingDelete ? repoTitle(pendingDelete) : ''}？`}
+				title={t('reposPanel.deleteRepoTitle', { name: pendingDelete ? repoTitle(pendingDelete) : '' })}
 				onClose={() => setPendingDelete(null)}
 				footer={
 					<>
-						<Button onClick={() => setPendingDelete(null)}>取消</Button>
+						<Button onClick={() => setPendingDelete(null)}>{t('common.cancel')}</Button>
 						<Button variant="danger" loading={delRepo.isPending} onClick={() => void confirmDelete()}>
-							删除
+							{t('common.delete')}
 						</Button>
 					</>
 				}
 			>
-				<p className="muted">已安装的源不受影响。</p>
+				<p className="muted">{t('reposPanel.deleteHint')}</p>
 			</Modal>
 		</div>
 	);

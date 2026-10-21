@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight, House, Search, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useRegisterManga, useSource, useSourceHome } from '../api/hooks';
@@ -17,6 +18,7 @@ import { chapterLabel, relativeTime } from '../lib/format';
 import { Button, Chip, Cover, CoverCard, EmptyState, IconButton, Skeleton } from '../components';
 
 export default function SourceHomePage() {
+	const { t } = useTranslation();
 	const { sourceId: rawId } = useParams();
 	const sourceId = Number(rawId);
 	const navigate = useNavigate();
@@ -81,12 +83,12 @@ export default function SourceHomePage() {
 		return (
 			<div className="page container">
 				<div className="source-page__head">
-					<IconButton label="返回浏览" onClick={() => navigate('/browse')}>
+					<IconButton label={t('sourceHome.backToBrowse')} onClick={() => navigate('/browse')}>
 						<ArrowLeft size={18} />
 					</IconButton>
 					<h1 className="source-page__title">{source.data.name}</h1>
 				</div>
-				<EmptyState icon={TriangleAlert} title="该源已停用" hint="重新安装或启用后才能浏览" />
+				<EmptyState icon={TriangleAlert} title={t('sourceHome.sourceDisabled')} hint={t('sourceHome.sourceDisabledHint')} />
 			</div>
 		);
 	}
@@ -101,13 +103,16 @@ export default function SourceHomePage() {
 	return (
 		<div className="page container">
 			<div className="source-page__head">
-				<IconButton label={`返回 ${source.data?.name ?? '源'}`} onClick={() => navigate(`/browse/${sourceId}`)}>
+				<IconButton
+					label={t('sourceHome.backToSource', { name: source.data?.name ?? t('sourceHome.sourceFallback') })}
+					onClick={() => navigate(`/browse/${sourceId}`)}
+				>
 					<ArrowLeft size={18} />
 				</IconButton>
-				<h1 className="source-page__title">{source.data?.name ?? '源'}</h1>
+				<h1 className="source-page__title">{source.data?.name ?? t('sourceHome.sourceFallback')}</h1>
 				<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}`)}>
 					<Search size={15} />
-					搜索
+					{t('common.search')}
 				</Button>
 			</div>
 
@@ -127,27 +132,27 @@ export default function SourceHomePage() {
 			) : homeQuery.isError ? (
 				<EmptyState
 					icon={TriangleAlert}
-					title="加载失败"
+					title={t('sourceHome.loadFailed')}
 					hint={homeQuery.error?.message}
 					action={
 						<Button variant="primary" onClick={() => void homeQuery.refetch()}>
-							重试
+							{t('sourceHome.retry')}
 						</Button>
 					}
 				/>
 			) : home === null || home === undefined ? (
 				<EmptyState
 					icon={House}
-					title="该源没有主页"
-					hint="这个源没有提供主页内容，可以直接搜索或按列表浏览"
+					title={t('sourceHome.noHome')}
+					hint={t('sourceHome.noHomeHint')}
 					action={
 						<Button variant="primary" onClick={() => navigate(`/browse/${sourceId}`)}>
-							去搜索
+							{t('sourceHome.goSearch')}
 						</Button>
 					}
 				/>
 			) : home.components.length === 0 ? (
-				<EmptyState icon={House} title="主页没有内容" hint="源返回了一个空的主页布局" />
+				<EmptyState icon={House} title={t('sourceHome.emptyHome')} hint={t('sourceHome.emptyHomeHint')} />
 			) : (
 				home.components.map((c, i) => (
 					<HomeSection
@@ -391,6 +396,7 @@ function HomeSection({
 	onOpenListing: (listing: Listing) => void;
 	renderBody: () => ReactNode;
 }) {
+	const { t } = useTranslation();
 	const v = component.value;
 	const listing =
 		('Scroller' in v && v.Scroller.listing) ||
@@ -407,7 +413,7 @@ function HomeSection({
 					</div>
 					{listing && (
 						<Button size="sm" onClick={() => onOpenListing(listing)}>
-							查看全部
+							{t('sourceHome.viewAll')}
 						</Button>
 					)}
 				</header>

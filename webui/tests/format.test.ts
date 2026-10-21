@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import i18n from 'i18next';
+import formatZh from '../src/i18n/locales/zh-CN/format.json' with { type: 'json' };
 import { chapterLabel } from '../src/lib/format.ts';
+
+// The app registers every catalog through Vite's glob in src/i18n; under node the test
+// pins just the zh-CN format catalog chapterLabel renders through
+await i18n.init({
+	resources: { 'zh-CN': { translation: formatZh } },
+	lng: 'zh-CN',
+	interpolation: { escapeValue: false }
+});
 
 const base = { volume_number: null, chapter_number: null, title: null };
 

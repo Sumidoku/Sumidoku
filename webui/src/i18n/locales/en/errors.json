@@ -1,0 +1,21 @@
+{
+  "errors": {
+    "bad_request": "Invalid request",
+    "unauthorized": "Not signed in or session expired",
+    "forbidden": "Permission denied",
+    "not_found": "The requested resource was not found",
+    "duplicate": "An entry with the same name already exists",
+    "unsupported": "This feature is not supported",
+    "no_update": "Already up to date",
+    "not_in_library": "The manga is not in the library",
+    "source_disabled": "This source is disabled",
+    "source_error": "The source request failed",
+    "timeout": "The source request timed out",
+    "bad_gateway": "The upstream request failed",
+    "internal": "Internal server error",
+    "network": "Network request failed",
+    "http": "Request failed (HTTP {{status}})",
+    "stream_parse": "The stream contained an event that could not be parsed",
+    "stream_terminal": "The stream ended without a terminal event"
+  }
+}

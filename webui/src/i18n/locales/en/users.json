@@ -1,0 +1,29 @@
+{
+  "users": {
+    "roleAdmin": "Admin",
+    "roleReader": "Reader",
+    "usernameTaken": "Username already taken",
+    "operationFailed": "Operation failed",
+    "created": "User {{username}} created",
+    "createTitle": "New user",
+    "create": "Create",
+    "username": "Username",
+    "initialPassword": "Initial password",
+    "roleReaderDesc": "Reader: only their own library, progress and categories",
+    "roleAdminDesc": "Admin: can manage users, sources and server settings",
+    "passwordReset": "Password for {{username}} reset; all their sessions have been signed out",
+    "resetPasswordTitle": "Reset password: {{username}}",
+    "reset": "Reset",
+    "newPassword": "New password",
+    "resetPasswordHint": "All login sessions of this user expire immediately after the reset.",
+    "roleChanged": "Changed {{username}} to {{role}}",
+    "currentAccount": "Current account",
+    "rowMeta": "{{role}} · Created {{date}}",
+    "resetPasswordLabel": "Reset password for {{username}}",
+    "deleteUserLabel": "Delete {{username}}",
+    "deleteUserTitle": "Delete user {{username}}?",
+    "deleted": "Deleted",
+    "deleteUserConfirm": "Deleting removes {{username}}'s library, reading progress, history, categories and download records. This cannot be undone.",
+    "pageTitle": "User management"
+  }
+}

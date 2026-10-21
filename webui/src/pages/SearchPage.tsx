@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Search, SearchX, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
@@ -56,6 +57,7 @@ function sourceMatches(s: Source, f: GlobalSearchFilterPrefs): boolean {
 
 export default function SearchPage() {
 	const navigate = useNavigate();
+	const { t } = useTranslation();
 	const sourcesQuery = useSources();
 	const [filters, setFilters] = useState<GlobalSearchFilterPrefs>(loadGlobalSearchFilters);
 	useEffect(() => saveGlobalSearchFilters(filters), [filters]);
@@ -64,8 +66,8 @@ export default function SearchPage() {
 	const [input, setInput] = useState('');
 	const [query, setQuery] = useState('');
 	useEffect(() => {
-		const t = setTimeout(() => setQuery(input.trim()), 500);
-		return () => clearTimeout(t);
+		const timer = setTimeout(() => setQuery(input.trim()), 500);
+		return () => clearTimeout(timer);
 	}, [input]);
 
 	// Disabled sources neither participate nor appear as filter candidates; display and candidate order follow source name (same convention as the browse page)
@@ -151,7 +153,7 @@ export default function SearchPage() {
 				<Input
 					icon={<Search size={15} />}
 					type="search"
-					placeholder="搜索所有源…"
+					placeholder={t('search.placeholder')}
 					value={input}
 					onChange={(e) => setInput(e.currentTarget.value)}
 				/>
@@ -159,19 +161,19 @@ export default function SearchPage() {
 
 			<div className="filter-header">
 				<TriStateDropdown
-					label="分级"
+					label={t('search.rating')}
 					options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
 					states={filters.ratings}
 					onCycle={(k) => cycle('ratings', k)}
 				/>
 				<TriStateDropdown
-					label="语言"
+					label={t('search.language')}
 					options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
 					states={filters.langs}
 					onCycle={(k) => cycle('langs', k)}
 				/>
 				<TriStateDropdown
-					label="图源"
+					label={t('search.source')}
 					options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
 					states={filters.sources}
 					onCycle={(k) => cycle('sources', k)}
@@ -179,22 +181,30 @@ export default function SearchPage() {
 			</div>
 
 			{query === '' ? (
-				<EmptyState icon={Search} title="跨源搜索" hint="输入关键词，同时搜索所有符合筛选的源" />
+				<EmptyState icon={Search} title={t('search.emptyTitle')} hint={t('search.emptyHint')} />
 			) : selected.length === 0 ? (
-				<EmptyState icon={SearchX} title="没有符合筛选的源" hint="调整分级 / 语言 / 图源筛选条件" />
+				<EmptyState
+					icon={SearchX}
+					title={t('search.noSourcesTitle')}
+					hint={t('search.noSourcesHint')}
+				/>
 			) : search.isError ? (
 				<EmptyState
 					icon={TriangleAlert}
-					title="加载失败"
+					title={t('search.loadFailedTitle')}
 					hint={search.error?.message}
 					action={
 						<Button variant="primary" onClick={() => void search.refetch()}>
-							重试
+							{t('search.retry')}
 						</Button>
 					}
 				/>
 			) : visible.length === 0 && !search.isFetching ? (
-				<EmptyState icon={SearchX} title="没有结果" hint="换个关键词或调整筛选条件试试" />
+				<EmptyState
+					icon={SearchX}
+					title={t('search.noResultsTitle')}
+					hint={t('search.noResultsHint')}
+				/>
 			) : (
 				visible.map((s) => (
 					<SourceSection
@@ -227,6 +237,7 @@ function SourceSection({
 	onOpen: (m: Manga) => void;
 	onViewAll: () => void;
 }) {
+	const { t } = useTranslation();
 	return (
 		<section className="home-section">
 			<header className="home-section__head">
@@ -234,7 +245,7 @@ function SourceSection({
 					<h2 className="home-section__title">{source.name}</h2>
 				</div>
 				<Button size="sm" onClick={onViewAll}>
-					查看全部
+					{t('search.viewAll')}
 				</Button>
 			</header>
 			{!result ? (
