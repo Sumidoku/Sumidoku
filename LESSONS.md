@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Rekeying an entity is a versioned merge, not a row move.** Aliases locate an
+entity but do not decide which state wins. When a stub or target merge changes a
+composite key, compare live and tombstone versions on both sides before applying
+the winning state. If the winning physical row is newer than its latest event,
+write a local event at that same version; otherwise a later intermediate
+tombstone can delete the row while the log says it is older. Keep tombstones at
+their original keys and include them in alias-linked comparisons. Tests must
+continue beyond the rekey with updates on both sides and row-only versions.
+- Evidence: 2026-10-22, #298's review found a v600 stub row resurrected over a
+  v1000 target tombstone, and a v1000 row with only a v600 event later deleted
+  by a v800 tombstone. The regressions failed with `1 != 0` and
+  `None != Some(1000)` before per-relation version merging and derived events;
+  both passed afterward.
+
 **Moving work to the background changes the consumer contract, not just the
 runtime cost.** If the API and UI neither await the result nor subscribe for
 it, the first response can stay empty or stale forever. Eventual persistence
