@@ -4,9 +4,10 @@ use crate::state::AppState;
 use image::ImageReader;
 use serde_json::Value;
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// How many leading bytes to read when measuring image dimensions. Most image headers (IHDR, SOF, etc.)
 /// fit comfortably inside this window; only pathological headers (e.g. very large JPEG EXIF) fall back to a full read.
@@ -46,25 +47,36 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
 /// Measures dimensions from a head read, falling back to a full read only when the head is inconclusive
 /// and was truncated at the head-bytes limit. A failed head read still attempts the full read so transient
 /// errors stay retryable while valid-but-short files avoid the second IO.
+///
+/// Returns:
+/// - `Some(Some(dims))`: bytes were read and dimensions parsed.
+/// - `Some(None)`: bytes were read but are not a valid image; the row should be marked checked with nulls.
+/// - `None`: no bytes could be read; the caller should skip the row so it stays retryable.
 async fn measure_with_fallback<Fut>(
 	head: ApiResult<Vec<u8>>,
 	full: impl FnOnce() -> Fut,
-) -> Option<(i64, i64)>
+) -> Option<Option<(i64, i64)>>
 where
 	Fut: std::future::Future<Output = ApiResult<Vec<u8>>>,
 {
 	match head {
 		Ok(head) => {
 			if let Some(dims) = image_dimensions(&head) {
-				return Some(dims);
+				return Some(Some(dims));
 			}
 			if head.len() >= DIMENSION_HEAD_BYTES {
-				full().await.ok().and_then(|full| image_dimensions(&full))
+				match full().await {
+					Ok(full) => Some(image_dimensions(&full)),
+					Err(_) => None,
+				}
 			} else {
-				None
+				Some(None)
 			}
 		}
-		Err(_) => full().await.ok().and_then(|full| image_dimensions(&full)),
+		Err(_) => match full().await {
+			Ok(full) => Some(image_dimensions(&full)),
+			Err(_) => None,
+		},
 	}
 }
 
@@ -106,6 +118,39 @@ async fn persist_with_guard(
 	}
 	tx.commit().await?;
 	Ok(())
+}
+
+/// Tracks chapters whose dimensions are being measured in the background so concurrent page-list
+/// requests do not start duplicate work.
+static IN_FLIGHT: std::sync::LazyLock<Mutex<HashSet<i64>>> =
+	std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
+
+struct InFlightGuard(i64);
+
+impl Drop for InFlightGuard {
+	fn drop(&mut self) {
+		let mut guard = IN_FLIGHT.lock().expect("dimension in-flight lock");
+		guard.remove(&self.0);
+	}
+}
+
+/// Starts a background task that measures unchecked page dimensions and persists them. The caller
+/// returns immediately; a subsequent page-list load will pick up the stored values. Duplicate tasks
+/// for the same chapter are suppressed while one is already running.
+pub fn spawn_backfill_local(state: &Arc<AppState>, chapter_id: i64, pages: Vec<PageRow>) {
+	{
+		let mut guard = IN_FLIGHT.lock().expect("dimension in-flight lock");
+		if !guard.insert(chapter_id) {
+			return;
+		}
+	}
+	let state = state.clone();
+	tokio::spawn(async move {
+		let _guard = InFlightGuard(chapter_id);
+		if let Err(e) = backfill_local(&state, chapter_id, pages).await {
+			tracing::warn!(chapter_id, "background page dimension backfill failed: {e:?}");
+		}
+	});
 }
 
 pub async fn backfill_local(
@@ -158,8 +203,6 @@ pub async fn backfill_local(
 			let (chapter, manga, _) = context.as_ref().expect("opds context initialized");
 			let head = crate::opds_source::read_cbz_page_head(state, manga, chapter, entry, DIMENSION_HEAD_BYTES).await;
 			let state = state.clone();
-			let manga = manga;
-			let chapter = chapter;
 			let entry = entry.to_string();
 			measure_with_fallback(head, || async {
 				crate::opds_source::read_cbz_page(&state, manga, chapter, &entry)
@@ -168,6 +211,9 @@ pub async fn backfill_local(
 			})
 			.await
 		} else {
+			continue;
+		};
+		let Some(dimensions) = dimensions else {
 			continue;
 		};
 		let update = PageDimensionUpdate::new(row, dimensions);
@@ -210,27 +256,34 @@ mod tests {
 		let bytes = png(37, 61);
 		let head = Ok(bytes.clone());
 		let full = || async { panic!("full read should not be needed") };
-		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
+		assert_eq!(measure_with_fallback(head, full).await, Some(Some((37, 61))));
 	}
 
 	#[tokio::test]
 	async fn falls_back_to_full_when_head_is_truncated_and_invalid() {
 		let head = Ok(vec![0u8; DIMENSION_HEAD_BYTES]);
 		let full = || async { Ok(png(37, 61)) };
-		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
+		assert_eq!(measure_with_fallback(head, full).await, Some(Some((37, 61))));
 	}
 
 	#[tokio::test]
-	async fn short_invalid_head_skips_full_read() {
+	async fn short_invalid_head_is_checked_with_nulls() {
 		let head = Ok(b"not an image".to_vec());
 		let full = || async { panic!("full read should not be needed for short invalid head") };
-		assert_eq!(measure_with_fallback(head, full).await, None);
+		assert_eq!(measure_with_fallback(head, full).await, Some(None));
 	}
 
 	#[tokio::test]
 	async fn failed_head_falls_back_to_full() {
 		let head = Err(ApiError::internal("boom"));
 		let full = || async { Ok(png(37, 61)) };
-		assert_eq!(measure_with_fallback(head, full).await, Some((37, 61)));
+		assert_eq!(measure_with_fallback(head, full).await, Some(Some((37, 61))));
+	}
+
+	#[tokio::test]
+	async fn failed_head_and_full_stay_retryable() {
+		let head = Err(ApiError::internal("boom"));
+		let full = || async { Err(ApiError::internal("also boom")) };
+		assert_eq!(measure_with_fallback(head, full).await, None);
 	}
 }

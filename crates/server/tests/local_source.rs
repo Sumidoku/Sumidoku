@@ -343,13 +343,13 @@ async fn local_directory_dimensions_backfill_retry_and_refresh() {
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 2").await;
 	let path = format!("/api/v1/chapter/{chapter_id}/pages");
-
-	let (status, body) = request(&app, "GET", &path, None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body[0]["width"], 3000);
-	assert_eq!(body[0]["height"], 4000);
-
 	let pool = common::connect_db(&db_path).await;
+
+	let (status, _) = request(&app, "GET", &path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, width, height) = common::wait_for_page_dimension(&pool, chapter_id, 0, std::time::Duration::from_secs(5)).await;
+	assert_eq!((width, height), (Some(3000), Some(4000)));
+
 	sqlx::query("UPDATE page SET width = NULL, height = NULL, dimensions_checked = 0 WHERE chapter_id = ? AND idx = 0")
 		.bind(chapter_id)
 		.execute(&pool)
@@ -370,22 +370,16 @@ async fn local_directory_dimensions_backfill_retry_and_refresh() {
 	assert!(!checked, "a read failure stays retryable");
 
 	std::fs::rename(&missing, &image).expect("restore page");
-	let (status, body) = request(&app, "GET", &path, None).await;
+	let (status, _) = request(&app, "GET", &path, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body[0]["width"], 3000);
-	assert_eq!(body[0]["height"], 4000);
-	let checked: bool = sqlx::query_scalar("SELECT dimensions_checked FROM page WHERE chapter_id = ? AND idx = 0")
-		.bind(chapter_id)
-		.fetch_one(&pool)
-		.await
-		.expect("checked marker");
-	assert!(checked);
+	let (_, width, height) = common::wait_for_page_dimension(&pool, chapter_id, 0, std::time::Duration::from_secs(5)).await;
+	assert_eq!((width, height), (Some(3000), Some(4000)));
 
 	std::fs::write(&image, common::PNG).expect("replace page");
-	let (status, body) = request(&app, "GET", &format!("{path}?refresh=1"), None).await;
+	let (status, _) = request(&app, "GET", &format!("{path}?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body[0]["width"], 1);
-	assert_eq!(body[0]["height"], 1);
+	let (_, width, height) = common::wait_for_page_dimension(&pool, chapter_id, 0, std::time::Duration::from_secs(5)).await;
+	assert_eq!((width, height), (Some(1), Some(1)));
 }
 
 #[tokio::test]
@@ -397,23 +391,36 @@ async fn local_archive_dimensions_and_invalid_marker() {
 	);
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 4.cbz").await;
-
-	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body[0]["width"], 1);
-	assert_eq!(body[0]["height"], 1);
-	assert!(body[1].get("width").is_none());
-	assert!(body[1].get("height").is_none());
-
 	let pool = common::connect_db(&db_path).await;
-	let rows: Vec<(bool, Option<i64>, Option<i64>)> = sqlx::query_as(
-		"SELECT dimensions_checked, width, height FROM page WHERE chapter_id = ? ORDER BY idx",
-	)
-	.bind(chapter_id)
-	.fetch_all(&pool)
-	.await
-	.expect("dimension rows");
+
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let rows = wait_for_dimension_rows(&pool, chapter_id, std::time::Duration::from_secs(5)).await;
 	assert_eq!(rows, [(true, Some(1), Some(1)), (true, None, None)]);
+}
+
+async fn wait_for_dimension_rows(
+	pool: &sqlx::SqlitePool,
+	chapter_id: i64,
+	timeout: std::time::Duration,
+) -> Vec<(bool, Option<i64>, Option<i64>)> {
+	let deadline = std::time::Instant::now() + timeout;
+	loop {
+		let rows: Vec<(bool, Option<i64>, Option<i64>)> = sqlx::query_as(
+			"SELECT dimensions_checked, width, height FROM page WHERE chapter_id = ? ORDER BY idx",
+		)
+		.bind(chapter_id)
+		.fetch_all(pool)
+		.await
+		.expect("dimension rows");
+		if rows.iter().all(|r| r.0) {
+			return rows;
+		}
+		if std::time::Instant::now() >= deadline {
+			panic!("timed out waiting for dimensions chapter={chapter_id}");
+		}
+		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+	}
 }
 
 #[tokio::test]

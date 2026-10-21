@@ -1012,7 +1012,10 @@ pub async fn load_pages(
 		.fetch_all(&state.pool)
 		.await?;
 		if !cached.is_empty() {
-			return page_dimensions::backfill_local(state, chapter_id, cached).await;
+			if cached.iter().any(|page| !page.dimensions_checked) {
+				page_dimensions::spawn_backfill_local(state, chapter_id, cached.clone());
+			}
+			return Ok(cached);
 		}
 	}
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
@@ -1067,7 +1070,10 @@ pub async fn load_pages(
 	.bind(chapter_id)
 	.fetch_all(&state.pool)
 	.await?;
-	page_dimensions::backfill_local(state, chapter_id, stored).await
+	if stored.iter().any(|page| !page.dimensions_checked) {
+		page_dimensions::spawn_backfill_local(state, chapter_id, stored.clone());
+	}
+	Ok(stored)
 }
 
 /// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count; the variant cache expires with the directory lifecycle
