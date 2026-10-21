@@ -1178,10 +1178,18 @@ mod tests {
 	async fn successful_fetch_saves_source_next_update_time() {
 		let (state, source_id, _tmp) = union_state(Config::default()).await;
 		let manga_id = add_manga(&state, source_id, "source-time").await;
+		add_to_library(&state, manga_id, 1).await;
 		let row = crate::source::manga_row(&state.pool, manga_id).await.expect("manga row");
 		let mut updated = manga_from_row(&row);
 		updated.next_update_time = Some(123_456);
 		updated.chapters = Some(Vec::new());
+		let before: (i64, i64) = sqlx::query_as(
+			"SELECT last_modified_at, (SELECT COUNT(*) FROM sync_change) FROM manga WHERE id = ?",
+		)
+		.bind(manga_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("change state before fetch");
 
 		persist_at(&state, manga_id, updated, 24, 1000).await;
 
@@ -1193,6 +1201,14 @@ mod tests {
 		.await
 		.expect("fetch times");
 		assert_eq!(times, (Some(123_456), Some(1000), 0));
+		let after: (i64, i64) = sqlx::query_as(
+			"SELECT last_modified_at, (SELECT COUNT(*) FROM sync_change) FROM manga WHERE id = ?",
+		)
+		.bind(manga_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("change state after fetch");
+		assert_eq!(after, before);
 	}
 
 	#[tokio::test]

@@ -474,6 +474,50 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `unreadCount` and the `sort=unread` ordering count with default-unread
   semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
   `filter=unread` keeps its own flagged-rows-only shape).
+- Sync change foundation (`sync.rs`, migration `0017_sync_change_tracking.sql`):
+  `manga`, `manga_user`, `category` and `category_manga` have an internal
+  `last_modified_at` integer Unix-millisecond timestamp, default `0` for
+  pre-tracking history. Only sync-relevant value changes stamp it and append a
+  `sync_change` event: identical upserts, ignored inserts and timestamp-only
+  updates stay quiet, as do the fetch/scheduler bookkeeping columns
+  `last_fetched_at`, `chapters_last_fetched_at`, `next_update_time` and
+  `next_update_is_fallback`. Every non-delete event has
+  `modified_at == snapshot.lastModifiedAt`; a delete event instead carries the
+  deletion time while its snapshot retains the deleted row's previous version.
+  Ordinary updates and deletes use `max(now, old + 1)`; a key- or
+  owner-changing UPDATE also includes the NEW key's historical maximum + 1 in
+  the NEW user's namespace. An ordinary insert with timestamp zero uses
+  `max(now, the entity key's historical maximum + 1)`, so recreating a deleted
+  key cannot move its version backwards. Explicit nonzero
+  insert timestamps and changed nonzero update timestamps are preserved for
+  sync apply. Only a changed nonzero UPDATE value is treated as explicit: a
+  value equal to OLD is indistinguishable from leaving the column untouched
+  and follows the ordinary increment rule. The journal has no foreign keys to
+  tracked entities and belongs to users through `user_id ON DELETE CASCADE`;
+  deleting a user removes only that user's events. Its `AUTOINCREMENT`
+  sequence, not a wall-clock time, is the delta cursor. Migration seeds an
+  ordered baseline of parent manga, user state, categories and memberships at
+  modification time `0`; manga without user state have no per-user baseline.
+  Shared manga changes fan out only to users with a `manga_user` row. A new
+  user row journals its parent manga first, and user-state or membership
+  changes also journal a parent-manga signal for that user. These signals only
+  allocate a fresh sequence for a composite refresh and keep the shared manga
+  version; child entities carry their own versions. Tombstones keep the final
+  snapshot and durable identity (local ids plus source/manga natural keys as
+  applicable). Source deletion captures that identity before cascading,
+  without a second manga tombstone from the cascade. The stable sync identity
+  is `(origin, entity_kind, entity_key)`: natural keys are for initial matching,
+  and a rekey keeps the same entity key and updates the already-mapped remote
+  row rather than emitting an old-delete/new-insert pair. `changes_since` reads
+  one SQLite snapshot, uses `limit + 1`, and returns the last returned sequence
+  while more of the user's events exist, otherwise the global sequence
+  high-water mark, including other users' sequences; a cursor ahead of that
+  mark is rejected. This stage exposes no sync route, pull/push/merge protocol
+  or journal retention, and leaves REST and backup-v1 shapes unchanged. Safe
+  cleanup needs the later protocol. `chapter_user.last_read_at` remains a
+  reading-history timestamp, not a general modification time; tracking for
+  progress, bookmarks, chapters and downloads belongs to the later protocol
+  stage.
 - Filter groups (`api/filter_groups.rs`, migration `0013_filter_group.sql`):
   Aidoku-style saved rule sets. A `filter_group` row is per-user
   (`unique (user_id, name)`, `sort_order`), its `filter_group_rule` rows
