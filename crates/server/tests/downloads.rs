@@ -475,6 +475,8 @@ async fn update_fetch_reconciles_and_recent() {
 		.rows_affected();
 	assert_eq!(deleted, 1);
 
+	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);
@@ -519,6 +521,8 @@ async fn update_auto_download_enqueues_new_chapters() {
 		.rows_affected();
 	assert_eq!(deleted, 1);
 
+	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);

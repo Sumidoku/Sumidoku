@@ -752,16 +752,44 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
-- Library updates (`update/mod.rs`): same scheduling shape as downloads —
-  serial per source, at most 3 sources at once — broadcasting progress as
-  `UpdateEvent`s. Category `include_in_update` is a three-state filter.
-  A manual `POST /api/v1/update/fetch` is owned by the triggering user;
-  the scheduled run fetches the union of all users' libraries with one
-  source call per manga, filtering auto-download per user. Events and the
-  summary carry the fetch's owner, and both the WebSocket stream and
+- Library updates (`update/mod.rs`): serial per source, at most 3 sources at
+  once, broadcasting progress as `UpdateEvent`s. The global
+  `library.skip_titles` setting defaults to `hasUnread`, `completed` and
+  `notStarted`; `library.refresh_metadata` defaults to false, and
+  `library.update_interval_hours` falls back to config
+  `update_interval_hours` (default 0 = never). The setting takes precedence
+  when present. `GET /api/v1/settings` returns these effective values, and
+  only admins can write them. Selection keeps `update_strategy = Never` and
+  the category `include_in_update` tri-state (with any INCLUDE, only titles
+  under INCLUDE categories run; otherwise everything not in an EXCLUDE
+  category runs), Sumidoku's counterpart of Aidoku's
+  `excludedUpdateCategories`. The skip predicates are evaluated against each
+  user's own `chapter_user` rows: `hasUnread` skips when any chapter has no
+  read row for that user (a missing row is unread), `notStarted` skips when
+  the user has no read chapter (including a title with no chapters), and
+  `completed` skips status 2. A future `m.next_update_time` always skips,
+  independently of the configured skip rules. A manual
+  `POST /api/v1/update/fetch` is owned by the triggering user; the scheduled
+  run fetches the union of all users' libraries with one source call per
+  manga, filtering auto-download per user.
+  The scheduler checks due every 60s and reloads the interval instead of
+  capturing it at construction, so setting changes need no restart. Its
+  memory-only `last_run_at` is shared by manual and scheduled batches and is
+  stamped at batch start and finish; due uses that timestamp, or scheduler
+  construction time when no batch has run. A manual batch therefore defers
+  the next scheduled batch, and a restart waits a full configured interval.
+  Each manga fetch also reloads refresh/interval. WASM receives the refresh
+  flag as `needs_details`; details returned by WASM, local or OPDS are
+  upserted only when it is true, restoring the row's current update strategy
+  so a user's Never survives. On success, a source-provided next update time
+  wins; otherwise a positive interval derives success time + interval hours,
+  while interval 0 stores NULL. The same committed transaction reconciles
+  chapters and stamps `chapters_last_fetched_at`; a failed fetch or
+  persistence pass does not advance either timestamp. Events and the summary
+  carry the fetch's owner, and both the WebSocket stream and
   `GET /api/v1/update/summary` present them scoped to the requesting user
-  (`UpdateSummary::visible_to`): someone else's manual fetch reads as
-  idle, the union run is visible to everyone.
+  (`UpdateSummary::visible_to`): someone else's manual fetch reads as idle,
+  the union run is visible to everyone.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.

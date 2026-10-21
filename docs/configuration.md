@@ -48,7 +48,7 @@ pinned — drop packages there and scan, no path setting exists.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMIDOKU_UPDATE_INTERVAL_HOURS` | `0` (off) | scheduled library update interval |
+| `SUMIDOKU_UPDATE_INTERVAL_HOURS` | `0` (off) | fallback scheduled library update interval when `library.update_interval_hours` is unset |
 | `SUMIDOKU_AUTO_DOWNLOAD_NEW_CHAPTERS` | `false` | download chapters found by library updates |
 | `SUMIDOKU_AUTO_DOWNLOAD_LIMIT` | `5` | per-manga cap for auto downloads |
 | `SUMIDOKU_DOWNLOADS_DIR` | `/downloads` in Docker, `./downloads` otherwise | downloads directory |

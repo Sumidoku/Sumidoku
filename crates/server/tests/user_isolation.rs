@@ -560,6 +560,15 @@ async fn updates_ws_events_filtered_per_user() {
 	assert_eq!(snapshot["type"], "summary");
 
 	// admin triggers fetch manually: job events go only into admin's connection
+	let (status, _) = as_user(
+		&users.app,
+		&users.admin,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.skip_titles": []})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let event = read_ws_kind(&mut admin_ws, &mut admin_buf, "job").await;
@@ -605,6 +614,15 @@ async fn update_summary_rest_scoped_per_user() {
 
 	// admin triggers fetch manually and waits for it to settle: the counts belonging to admin are invisible to bob.
 	// the fetch is spawned, so polling before running flips true reads the previous snapshot; just wait until the counts land
+	let (status, _) = as_user(
+		&users.app,
+		&users.admin,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.skip_titles": []})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, _) = as_user(&users.app, &users.admin, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let deadline = Instant::now() + Duration::from_secs(10);
