@@ -926,30 +926,10 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 
 /// Page-image bytes (OpdsZip variant): when the on-disk cache is missing, re-fetches the feed to find the acquisition link, self-healing
 pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow, entry_name: &str) -> ApiResult<(Vec<u8>, String)> {
-	let path = cbz_path(state, chapter.id);
-	if tokio::fs::metadata(&path).await.is_err() {
-		let catalog = Catalog::load(state, manga.source_id).await?;
-		let feed_url = manga
-			.url
-			.clone()
-			.filter(|u| !u.is_empty())
-			.ok_or_else(|| ApiError::bad_request("opds manga requires a catalog url"))?;
-		let feed = fetch_feed_pages(&catalog, state, &feed_url, FEED_MAX_PAGES).await?;
-		let entry = feed
-			.entries
-			.iter()
-			.find(|e| e.id == chapter.key)
-			.ok_or_else(|| ApiError::not_found("opds chapter not found in catalog feed"))?;
-		let acquisition = entry
-			.acquisition()
-			.ok_or_else(|| ApiError::bad_request("opds entry has no acquisition link"))?;
-		let href = Catalog::resolve(&feed_url, &acquisition.href)?;
-		ensure_cbz(state, &catalog, chapter.id, &href).await?;
-	}
+	let path = ensure_cbz_path(state, manga, chapter).await?;
 	let zip = state.local_zip.clone();
-	let read_path = path.clone();
 	let entry = entry_name.to_string();
-	let bytes = tokio::task::spawn_blocking(move || zip.read_entry(&read_path, &entry))
+	let bytes = tokio::task::spawn_blocking(move || zip.read_entry(&path, &entry))
 		.await
 		.map_err(|e| ApiError::internal(format!("read zip entry failed: {e}")))?
 		.map_err(|e| {
@@ -960,6 +940,54 @@ pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &Ch
 			}
 		})?;
 	Ok((bytes, crate::local::image_mime(entry_name).to_string()))
+}
+
+/// Leading bytes of an OPDS CBZ page for dimension measurement: avoids decompressing the whole image.
+pub async fn read_cbz_page_head(
+	state: &Arc<AppState>,
+	manga: &MangaRow,
+	chapter: &ChapterRow,
+	entry_name: &str,
+	head_bytes: usize,
+) -> ApiResult<Vec<u8>> {
+	let path = ensure_cbz_path(state, manga, chapter).await?;
+	let zip = state.local_zip.clone();
+	let entry = entry_name.to_string();
+	tokio::task::spawn_blocking(move || zip.read_entry_head(&path, &entry, head_bytes))
+		.await
+		.map_err(|e| ApiError::internal(format!("read zip entry head failed: {e}")))?
+		.map_err(|e| {
+			if e.kind() == std::io::ErrorKind::NotFound {
+				ApiError::not_found("page not found")
+			} else {
+				ApiError::bad_gateway(format!("read opds archive failed: {e}"))
+			}
+		})
+}
+
+async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow) -> ApiResult<PathBuf> {
+	let path = cbz_path(state, chapter.id);
+	if tokio::fs::metadata(&path).await.is_ok() {
+		return Ok(path);
+	}
+	let catalog = Catalog::load(state, manga.source_id).await?;
+	let feed_url = manga
+		.url
+		.clone()
+		.filter(|u| !u.is_empty())
+		.ok_or_else(|| ApiError::bad_request("opds manga requires a catalog url"))?;
+	let feed = fetch_feed_pages(&catalog, state, &feed_url, FEED_MAX_PAGES).await?;
+	let entry = feed
+		.entries
+		.iter()
+		.find(|e| e.id == chapter.key)
+		.ok_or_else(|| ApiError::not_found("opds chapter not found in catalog feed"))?;
+	let acquisition = entry
+		.acquisition()
+		.ok_or_else(|| ApiError::bad_request("opds entry has no acquisition link"))?;
+	let href = Catalog::resolve(&feed_url, &acquisition.href)?;
+	ensure_cbz(state, &catalog, chapter.id, &href).await?;
+	Ok(path)
 }
 
 /// On-disk path of an acquisition archive: named by chapter_id; the caller deletes the old file when page rows are rewritten

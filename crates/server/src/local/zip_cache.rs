@@ -55,6 +55,25 @@ impl ZipCache {
 		})
 	}
 
+	/// Reads at most `limit` bytes from a single zip entry, decompressing only enough to satisfy the limit.
+	pub fn read_entry_head(&self, path: &Path, name: &str, limit: usize) -> std::io::Result<Vec<u8>> {
+		self.with_archive(path, |archive| {
+			let mut entry = archive
+				.by_name(name)
+				.map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "zip entry not found"))?;
+			let mut buf = vec![0u8; limit];
+			let mut total = 0;
+			while total < limit {
+				match std::io::Read::read(&mut entry, &mut buf[total..])? {
+					0 => break,
+					n => total += n,
+				}
+			}
+			buf.truncate(total);
+			Ok(buf)
+		})
+	}
+
 	fn with_archive<T>(
 		&self,
 		path: &Path,
@@ -114,6 +133,20 @@ mod tests {
 		assert_eq!(cache.read_entry(&path, "a.png").expect("read"), b"aa");
 		assert_eq!(cache.entry_names(&path).expect("names"), vec!["b.png", "a.png"]);
 		assert!(cache.read_entry(&path, "missing.png").is_err());
+	}
+
+	#[test]
+	fn reads_entry_head_only() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let path = tmp.path().join("a.cbz");
+		let payload = vec![b'x'; 256 * 1024];
+		make_zip(&path, &[("big.bin", &payload)]);
+		let cache = ZipCache::new();
+		let head = cache.read_entry_head(&path, "big.bin", 64 * 1024).expect("read head");
+		assert_eq!(head.len(), 64 * 1024);
+		assert!(head.iter().all(|&b| b == b'x'));
+		let small = cache.read_entry_head(&path, "big.bin", 1024).expect("read small head");
+		assert_eq!(small.len(), 1024);
 	}
 
 	#[test]
