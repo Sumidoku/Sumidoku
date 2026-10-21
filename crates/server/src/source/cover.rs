@@ -54,7 +54,7 @@ pub async fn get_cover(
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
 	let (bytes, mime) = if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-		crate::local::resolve_cover(&state.config.local_dir(), &state.local_zip, &manga.key)
+		crate::local::resolve_cover(&state.local_dirs().await?, &state.local_zip, &manga.key)
 			.await?
 			.ok_or_else(|| ApiError::not_found("cover not available"))?
 	} else {

@@ -80,8 +80,8 @@ pub struct Config {
 	pub backup_retention_count: Option<u32>,
 	/// Backup destination, allowed outside config_dir
 	pub backup_dir: Option<PathBuf>,
-	/// Local manga root (scan target of the built-in local source); None = <config_dir>/local
-	pub local_dir: Option<PathBuf>,
+	/// Local manga roots (scan targets of the built-in local source); None = [<config_dir>/local]
+	pub local_dirs: Option<Vec<PathBuf>>,
 	/// legacy: compatibility alias for auth.password, effective only when auth.password is absent
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
@@ -120,7 +120,7 @@ impl Default for Config {
 			backup_interval_hours: None,
 			backup_retention_count: None,
 			backup_dir: None,
-			local_dir: None,
+			local_dirs: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -173,11 +173,11 @@ impl Config {
 		self.config_dir.join("backups")
 	}
 
-	/// Local manga root: explicit config wins (may be outside config_dir), otherwise pinned under config_dir
-	pub fn local_dir(&self) -> PathBuf {
-		self.local_dir
+	/// Local manga roots: explicit config wins (may live outside config_dir), otherwise pinned under config_dir
+	pub fn local_dirs(&self) -> Vec<PathBuf> {
+		self.local_dirs
 			.clone()
-			.unwrap_or_else(|| self.config_dir.join("local"))
+			.unwrap_or_else(|| vec![self.config_dir.join("local")])
 	}
 
 	/// Assembles the instance limits passed to the wasm runtime; the sleep/net/js/browser tiers are not configurable
@@ -229,6 +229,8 @@ struct ConfigFile {
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
 	backup_dir: Option<PathBuf>,
+	local_dirs: Option<Vec<PathBuf>>,
+	/// legacy: one-item spelling of local_dirs, effective only when local_dirs is absent
 	local_dir: Option<PathBuf>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
@@ -332,8 +334,10 @@ impl Config {
 		if file.backup_dir.is_some() {
 			self.backup_dir = file.backup_dir;
 		}
-		if file.local_dir.is_some() {
-			self.local_dir = file.local_dir;
+		if file.local_dirs.is_some() {
+			self.local_dirs = file.local_dirs;
+		} else if let Some(v) = file.local_dir {
+			self.local_dirs = Some(vec![v]);
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
@@ -492,8 +496,22 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_DIR") {
 			self.backup_dir = Some(PathBuf::from(v));
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_DIR") {
-			self.local_dir = Some(PathBuf::from(v));
+		// ';' is the list separator (paths may contain ','); empty segments are ignored, and a value
+		// parsing to zero paths counts as unset so the single-item fallback still applies
+		let local_dirs = std::env::var("SUMIDOKU_LOCAL_DIRS")
+			.ok()
+			.map(|v| {
+				v.split(';')
+					.map(|s| s.trim())
+					.filter(|s| !s.is_empty())
+					.map(PathBuf::from)
+					.collect::<Vec<_>>()
+			})
+			.filter(|dirs| !dirs.is_empty());
+		if let Some(dirs) = local_dirs {
+			self.local_dirs = Some(dirs);
+		} else if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_DIR") {
+			self.local_dirs = Some(vec![PathBuf::from(v)]);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
@@ -670,27 +688,77 @@ mod tests {
 	}
 
 	#[test]
-	fn local_dir_from_file_and_env() {
-		assert_eq!(Config::default().local_dir, None);
+	fn local_dirs_from_file() {
+		assert_eq!(Config::default().local_dirs, None);
+		let file: ConfigFile = toml::from_str("local_dirs = [\"/manga/a\", \"/manga/b\"]\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+
+		// the legacy single-dir key maps to a one-item list when local_dirs is absent
 		let file: ConfigFile = toml::from_str("local_dir = \"/manga/local\"\n").expect("toml");
 		let mut config = Config::default();
 		config.apply_file(file);
-		assert_eq!(config.local_dir(), PathBuf::from("/manga/local"));
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/local")]);
 
+		// local_dirs wins when both spellings are present
+		let file: ConfigFile =
+			toml::from_str("local_dirs = [\"/manga/a\"]\nlocal_dir = \"/manga/local\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/a")]);
+	}
+
+	#[test]
+	fn local_dirs_from_env() {
+		// semicolon-separated, segments trimmed and empty ones ignored
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIRS", "/manga/a; ;/manga/b;") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_DIRS") };
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+
+		// the single-dir variable is the one-item fallback
 		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIR", "/manga/env-local") };
 		let mut config = Config::default();
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_DIR") };
-		assert_eq!(config.local_dir(), PathBuf::from("/manga/env-local"));
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/env-local")]);
+
+		// DIRS wins over DIR, and a DIRS value with no real segment counts as unset
+		unsafe {
+			std::env::set_var("SUMIDOKU_LOCAL_DIRS", "/manga/a;/manga/b");
+			std::env::set_var("SUMIDOKU_LOCAL_DIR", "/manga/env-local");
+		}
+		let mut config = Config::default();
+		config.apply_env();
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIRS", ";;") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe {
+			std::env::remove_var("SUMIDOKU_LOCAL_DIRS");
+			std::env::remove_var("SUMIDOKU_LOCAL_DIR");
+		}
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/env-local")]);
 	}
 
 	#[test]
-	fn local_dir_defaults_under_config_dir() {
+	fn local_dirs_default_under_config_dir() {
 		let config = Config {
 			config_dir: PathBuf::from("/data"),
 			..Config::default()
 		};
-		assert_eq!(config.local_dir(), PathBuf::from("/data/local"));
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/data/local")]);
 	}
 
 	#[test]

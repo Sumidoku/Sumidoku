@@ -996,7 +996,7 @@ pub async fn load_pages(
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if source_is_local(&state.pool, manga.source_id).await? {
 		let entries = crate::local::chapter_pages(
-			&state.config.local_dir(),
+			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,
@@ -1367,7 +1367,7 @@ pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec
 		return Ok((bytes, Some(mime)));
 	}
 	let (bytes, mime) = if source_is_local(&state.pool, manga.source_id).await? {
-		crate::local::resolve_cover(&state.config.local_dir(), &state.local_zip, &manga.key)
+		crate::local::resolve_cover(&state.local_dirs().await?, &state.local_zip, &manga.key)
 			.await?
 			.ok_or_else(|| ApiError::not_found("cover not available"))?
 	} else {
@@ -1476,7 +1476,7 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(entry) = content.get("Local").and_then(serde_json::Value::as_str) {
 		let bytes = crate::local::read_page(
-			&state.config.local_dir(),
+			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,

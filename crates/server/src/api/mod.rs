@@ -416,12 +416,13 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
-/// Browse/search for the local source: actually scans the local root; a non-empty query filters by title substring
+/// Browse/search for the local source: actually scans the local roots; a non-empty query filters by title substring
 /// (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
-/// lightweight — keys are relative paths and titles their leaf segment; ComicInfo and the cover are left for
-/// find_or_register_manga to resolve on open; everything returns in one page, hasNextPage is always false
+/// lightweight — keys are relative paths (numbered roots carry the `N:` prefix) and titles their leaf segment;
+/// ComicInfo and the cover are left for find_or_register_manga to resolve on open; everything returns in one
+/// page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
-	let dirs = crate::local::scan_manga_dirs(&state.config.local_dir()).await?;
+	let dirs = crate::local::scan_manga_dirs(&state.local_dirs().await?).await?;
 	let needle = query
 		.map(str::trim)
 		.filter(|q| !q.is_empty())
@@ -429,7 +430,8 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 	let entries: Vec<Manga> = dirs
 		.into_iter()
 		.map(|key| {
-			let title = key.rsplit('/').next().unwrap_or(&key).to_string();
+			let rel = crate::local::rel_of(&key);
+			let title = rel.rsplit('/').next().unwrap_or(rel).to_string();
 			Manga {
 				key,
 				title,
@@ -932,7 +934,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		return Ok(id);
 	}
 	if crate::source::source_is_local(&state.pool, source_id).await? {
-		let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &initial.key).await?;
+		let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &initial.key).await?;
 		let mut conn = state.pool.acquire().await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &update.manga, true, true, true).await?;
 		reconcile_chapters(
@@ -1229,7 +1231,7 @@ async fn get_manga(
 	if wants_refresh(&query) {
 		// Local-source refresh = rescan the directory; no source call to stream, ndjson gets the buffered response too
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
-			let mut update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &row.key).await?;
+			let mut update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &row.key).await?;
 			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
 			let mut conn = state.pool.acquire().await?;
 			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
@@ -1326,7 +1328,7 @@ async fn get_chapters(
 	if wants_refresh(&query) {
 		// Local-source refresh = rescan the directory; chapter entries that fail to read go into the reconcile protection set, not treated as vanished-and-deleted
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-			let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
+			let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &manga.key).await?;
 			let mut conn = state.pool.acquire().await?;
 			reconcile_chapters(
 				&mut conn,
@@ -1469,11 +1471,16 @@ async fn get_settings(
 		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
-	// The effective local directory comes from config layering (file/env), not a writable setting-table key:
-	// inject it read-only into the response (camelCase, distinct from the dotted keys in the table)
+	// The effective local directories resolve from the local.dirs setting over the config layer (file/env):
+	// inject the resolved list read-only into the response (camelCase, distinct from the dotted keys in the table)
 	map.insert(
-		"localDir".into(),
-		json!(state.config.local_dir().to_string_lossy()),
+		"localDirs".into(),
+		json!(state
+			.local_dirs()
+			.await?
+			.iter()
+			.map(|dir| dir.to_string_lossy())
+			.collect::<Vec<_>>()),
 	);
 	Ok(Json(Value::Object(map)))
 }
@@ -1492,8 +1499,17 @@ async fn put_settings(
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
 		// Read-only injected key: storing it would only be shadowed by GET's injected value, so don't store it
-		if key == "localDir" {
+		if key == "localDirs" {
 			continue;
+		}
+		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
+		// rather than stored raw like the other keys; an empty array clears the override
+		if key == "local.dirs"
+			&& !value
+				.as_array()
+				.is_some_and(|dirs| dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty())))
+		{
+			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
 		}
 		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
 		if key.starts_with("user.") {

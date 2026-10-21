@@ -61,7 +61,7 @@ async fn two_dir_app() -> TwoDirApp {
 	seed_dir_b(dir_b.path());
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
-	config.local_dir = Some(dir_a.path().to_path_buf());
+	config.local_dirs = Some(vec![dir_a.path().to_path_buf()]);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	TwoDirApp {

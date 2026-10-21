@@ -257,7 +257,7 @@ impl UpdateScheduler {
 				.upgrade()
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
 			let (updated, protected) = if is_local {
-				let update = crate::local::manga_update(&state.config.local_dir(), &state.local_zip, &manga.key).await?;
+				let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &manga.key).await?;
 				(update.manga, update.protected)
 			} else if is_opds {
 				let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
