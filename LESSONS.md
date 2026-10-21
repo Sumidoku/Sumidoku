@@ -642,3 +642,14 @@ checksums.
   (`Migrate(VersionMismatch(1))`); the restore was verified by matching
   the restored file's SHA-384 against a pre-sweep database's recorded
   checksum.
+
+**quick-xml's serde matches elements by local name — the namespace prefix is
+stripped, so `dc:title` must be renamed to the bare `title`, and only
+attributes take the `@` prefix.** A `rename = "dc:title"` never matches
+anything, silently yielding `None`/empty vecs with no error. When parsing
+namespaced XML (OPF, RSS, Atom), rename to the local name and verify with a
+fixture that actually carries the prefix.
+- Evidence: 2026-10-21, #272's OPF metadata parsing: `rename = "dc:title"`
+  would never hit; quick-xml 0.42's `de/key.rs` matches on the local name.
+  The same wrong mental model sits in `comic_info.rs`'s "matches literally"
+  comment (masked by its merge logic).
