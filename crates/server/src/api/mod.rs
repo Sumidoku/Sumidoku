@@ -1479,6 +1479,7 @@ pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
 	"incognito.enabled",
 	"library.default_category",
 	"library.show_uncategorized",
+	"library.excluded_update_categories",
 ];
 
 pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
@@ -1518,7 +1519,7 @@ async fn get_settings(
 	);
 	// same read-only injection for the oneshots marker (null when neither layer names one)
 	map.insert("localOneshotsDir".into(), json!(state.local_oneshots_dir().await?));
-	let library = crate::update::LibraryUpdateSettings::load(&state.pool, state.config.update_interval_hours).await?;
+	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
 	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
 	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
 	map.insert(
