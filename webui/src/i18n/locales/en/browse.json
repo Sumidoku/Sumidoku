@@ -30,6 +30,8 @@
     "scanSkipped": "Skipped {{dir}}: {{reason}}",
     "updateAllDone": "Update complete: {{updated}} updated, {{failed}} failed",
     "updateFailed": "Failed to update {{key}}: {{reason}}",
+    "importAix": "Import .aix",
+    "imported": "Imported {{name}} v{{version}}",
     "migrate": "Migrate",
     "updateAll_one": "Update all ({{count}})",
     "updateAll_other": "Update all ({{count}})",
