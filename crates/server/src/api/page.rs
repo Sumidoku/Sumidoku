@@ -82,15 +82,14 @@ async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: 
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(entry) = content.get("Local").and_then(Value::as_str) {
-		let bytes = crate::local::read_page(
+		return crate::local::read_page(
 			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,
 			entry,
 		)
-		.await?;
-		return Ok((bytes, crate::local::image_mime(entry).to_string()));
+		.await;
 	}
 	if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
 		return crate::opds_source::read_cbz_page(state, &manga, chapter, entry).await;

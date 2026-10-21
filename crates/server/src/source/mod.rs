@@ -1475,7 +1475,7 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if let Some(entry) = content.get("Local").and_then(serde_json::Value::as_str) {
-		let bytes = crate::local::read_page(
+		let (bytes, mime) = crate::local::read_page(
 			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
@@ -1483,7 +1483,7 @@ pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) ->
 			entry,
 		)
 		.await?;
-		return Ok((bytes, Some(crate::local::image_mime(entry).to_string())));
+		return Ok((bytes, Some(mime)));
 	}
 	if let Some(entry) = content.get("OpdsZip").and_then(serde_json::Value::as_str) {
 		let (bytes, mime) = crate::opds_source::read_cbz_page(state, &manga, &chapter, entry).await?;
