@@ -70,21 +70,33 @@ async fn feeds_files_and_escaping() {
 	let TestApp { app, tmp, db_path } = &test_app;
 
 	// root: navigation + osd links
-	let (status, headers, body) = opds_get(app, "/opds/v1.2/root").await;
-	assert_eq!(status, StatusCode::OK);
-	let content_type = headers[header::CONTENT_TYPE].to_str().expect("content-type");
-	assert!(content_type.starts_with("application/atom+xml;profile=opds-catalog"));
-	let body = String::from_utf8(body).expect("utf8");
-	for link in [
-		"/opds/v1.2/library",
-		"/opds/v1.2/categories",
-		"/opds/v1.2/sources",
-		"/opds/v1.2/history",
-		"/opds/v1.2/updates",
-		"/opds/v1.2/osd",
-	] {
-		assert!(body.contains(link), "root feed should link {link}");
+	for path in ["/opds/v1.2", "/opds/v1.2/catalog"] {
+		let (status, headers, body) = opds_get(app, path).await;
+		assert_eq!(status, StatusCode::OK, "GET {path}");
+		assert_eq!(
+			headers[header::CONTENT_TYPE],
+			"application/atom+xml;profile=opds-catalog;type=feed",
+			"GET {path}"
+		);
+		let body = String::from_utf8(body).expect("utf8");
+		assert!(body.contains("<id>urn:sumidoku:root</id>"), "GET {path}: {body}");
+		for rel in ["start", "self"] {
+			let expected = format!("rel=\"{rel}\" type=\"application/atom+xml;profile=opds-catalog;type=feed\" href=\"https://opds.test/opds/v1.2\"");
+			assert!(body.contains(&expected), "GET {path} missing {rel} link: {body}");
+		}
+		for link in [
+			"/opds/v1.2/library",
+			"/opds/v1.2/categories",
+			"/opds/v1.2/sources",
+			"/opds/v1.2/history",
+			"/opds/v1.2/updates",
+			"/opds/v1.2/osd",
+		] {
+			assert!(body.contains(link), "GET {path} root feed should link {link}: {body}");
+		}
 	}
+	let (status, _, _) = opds_get(app, "/opds/v1.2/root").await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
 
 	// osd: the OpenSearchDescription template
 	let (status, headers, body) = opds_get(app, "/opds/v1.2/osd").await;
@@ -206,7 +218,7 @@ async fn basic_auth_guard() {
 	let app = build_app(config).await.expect("build app");
 
 	// no credentials: 401 + WWW-Authenticate
-	let (status, headers, _) = opds_get(&app, "/opds/v1.2/root").await;
+	let (status, headers, _) = opds_get(&app, "/opds/v1.2").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
 		headers[header::WWW_AUTHENTICATE],
@@ -214,11 +226,11 @@ async fn basic_auth_guard() {
 	);
 
 	// wrong password: 401 (admin:wrong)
-	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2/root", Some("Basic YWRtaW46d3Jvbmc=")).await;
+	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2", Some("Basic YWRtaW46d3Jvbmc=")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
 	// real username+password: 200 (admin:secret)
-	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2/root", Some("Basic YWRtaW46c2VjcmV0")).await;
+	let (status, _, _) = opds_get_auth(&app, "/opds/v1.2", Some("Basic YWRtaW46c2VjcmV0")).await;
 	assert_eq!(status, StatusCode::OK);
 
 	// API routes are unaffected by OPDS Basic

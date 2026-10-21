@@ -20,7 +20,8 @@ const FEED: &str = "application/opds+json";
 
 pub fn router(state: Arc<AppState>) -> Router {
 	Router::new()
-		.route("/root", get(root_feed))
+		.route("/", get(root_feed))
+		.route("/catalog", get(root_feed))
 		.route("/library", get(library_feed))
 		.route("/categories", get(categories_feed))
 		.route("/categories/{id}", get(category_feed))
@@ -46,7 +47,7 @@ fn feed_response(feed: &Value) -> Response {
 fn feed_links(base: &str, self_href: &str, next_href: Option<&str>) -> Vec<Value> {
 	let mut links = vec![
 		json!({"rel": "self", "href": self_href, "type": FEED}),
-		json!({"rel": "start", "href": format!("{base}/opds/v2/root"), "type": FEED}),
+		json!({"rel": "start", "href": format!("{base}/opds/v2"), "type": FEED}),
 		json!({"rel": "search", "href": format!("{base}/opds/v2/search{{?query}}"), "type": FEED, "templated": true}),
 	];
 	if let Some(next) = next_href {
@@ -152,7 +153,7 @@ async fn root_feed(headers: HeaderMap) -> Response {
 	.into_iter()
 	.map(|(title, path)| nav_link(&base, title, path))
 	.collect();
-	let self_href = format!("{base}/opds/v2/root");
+	let self_href = format!("{base}/opds/v2");
 	navigation_feed(&base, "Sumidoku", &self_href, navigation)
 }
 

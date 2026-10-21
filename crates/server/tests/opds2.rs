@@ -78,24 +78,28 @@ async fn catalog_feeds() {
 	let title = manga["title"].as_str().expect("title").to_string();
 
 	// root: metadata + self/start/search links + five navigation entries
-	let root = feed(app, "/opds/v2/root").await;
-	assert_eq!(root["metadata"]["title"], "Sumidoku");
-	let links = root["links"].as_array().expect("links");
-	let self_link = link(links, "self").expect("self link");
-	assert_eq!(self_link["href"], "https://opds.test/opds/v2/root");
-	assert_eq!(self_link["type"], "application/opds+json");
-	assert_eq!(link(links, "start").expect("start link")["href"], "https://opds.test/opds/v2/root");
-	let search_link = link(links, "search").expect("search link");
-	assert_eq!(search_link["href"], "https://opds.test/opds/v2/search{?query}");
-	assert_eq!(search_link["type"], "application/opds+json");
-	assert_eq!(search_link["templated"], true);
-	let nav = root["navigation"].as_array().expect("navigation");
-	let titles: Vec<&str> = nav.iter().map(|l| l["title"].as_str().expect("nav title")).collect();
-	assert_eq!(titles, ["Library", "Categories", "Sources", "History", "Updates"]);
-	for (entry, path) in nav.iter().zip(["library", "categories", "sources", "history", "updates"]) {
-		assert_eq!(entry["href"], format!("https://opds.test/opds/v2/{path}"));
-		assert_eq!(entry["type"], "application/opds+json");
+	for path in ["/opds/v2", "/opds/v2/catalog"] {
+		let root = feed(app, path).await;
+		assert_eq!(root["metadata"]["title"], "Sumidoku");
+		let links = root["links"].as_array().expect("links");
+		let self_link = link(links, "self").expect("self link");
+		assert_eq!(self_link["href"], "https://opds.test/opds/v2");
+		assert_eq!(self_link["type"], "application/opds+json");
+		assert_eq!(link(links, "start").expect("start link")["href"], "https://opds.test/opds/v2");
+		let search_link = link(links, "search").expect("search link");
+		assert_eq!(search_link["href"], "https://opds.test/opds/v2/search{?query}");
+		assert_eq!(search_link["type"], "application/opds+json");
+		assert_eq!(search_link["templated"], true);
+		let nav = root["navigation"].as_array().expect("navigation");
+		let titles: Vec<&str> = nav.iter().map(|l| l["title"].as_str().expect("nav title")).collect();
+		assert_eq!(titles, ["Library", "Categories", "Sources", "History", "Updates"]);
+		for (entry, path) in nav.iter().zip(["library", "categories", "sources", "history", "updates"]) {
+			assert_eq!(entry["href"], format!("https://opds.test/opds/v2/{path}"));
+			assert_eq!(entry["type"], "application/opds+json");
+		}
 	}
+	let (status, _, _) = opds_get(app, "/opds/v2/root").await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
 
 	// library: publication shape for a single manga + absolute URLs
 	let library = feed(app, "/opds/v2/library").await;
@@ -319,7 +323,7 @@ async fn basic_auth_guard() {
 	let app = build_app(config).await.expect("build app");
 
 	// no credentials: 401 + WWW-Authenticate
-	let (status, headers, _) = opds_get(&app, "/opds/v2/root").await;
+	let (status, headers, _) = opds_get(&app, "/opds/v2").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
 		headers[header::WWW_AUTHENTICATE],
@@ -327,11 +331,11 @@ async fn basic_auth_guard() {
 	);
 
 	// wrong password: 401 (admin:wrong)
-	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46d3Jvbmc=")).await;
+	let (status, _, _) = opds_get_auth(&app, "/opds/v2", Some("Basic YWRtaW46d3Jvbmc=")).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
 	// real username+password: 200 (admin:secret)
-	let (status, _, _) = opds_get_auth(&app, "/opds/v2/root", Some("Basic YWRtaW46c2VjcmV0")).await;
+	let (status, _, _) = opds_get_auth(&app, "/opds/v2", Some("Basic YWRtaW46c2VjcmV0")).await;
 	assert_eq!(status, StatusCode::OK);
 
 	// API routes are unaffected by OPDS Basic

@@ -55,7 +55,8 @@ pub(crate) struct HistoryRow {
 
 pub fn router(state: Arc<AppState>) -> Router {
 	Router::new()
-		.route("/root", get(root_feed))
+		.route("/", get(root_feed))
+		.route("/catalog", get(root_feed))
 		.route("/osd", get(open_search_description))
 		.route("/library", get(library_feed))
 		.route("/categories", get(categories_feed))
@@ -191,7 +192,7 @@ fn feed_head(id: &str, title: &str, self_href: &str, base: &str) -> String {
 		esc(id),
 		esc(title),
 		rfc3339(unix_now()),
-		esc(&format!("{base}/opds/v1.2/root")),
+		esc(&format!("{base}/opds/v1.2")),
 		esc(self_href),
 	)
 }
@@ -375,7 +376,7 @@ pub(crate) fn page_of(query: &FeedQuery) -> ApiResult<i64> {
 
 async fn root_feed(headers: HeaderMap) -> Response {
 	let base = base_url(&headers);
-	let mut xml = feed_head("urn:sumidoku:root", "Sumidoku", &format!("{base}/opds/v1.2/root"), &base);
+	let mut xml = feed_head("urn:sumidoku:root", "Sumidoku", &format!("{base}/opds/v1.2"), &base);
 	let _ = writeln!(
 		xml,
 		"<link rel=\"search\" type=\"application/opensearchdescription+xml\" href=\"{}\"/>",

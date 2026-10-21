@@ -205,7 +205,7 @@ async fn change_password() {
 #[tokio::test]
 async fn opds_uses_real_credentials() {
 	let (app, _tmp) = password_app().await;
-	let (status, headers, _) = request_with_headers(&app, "GET", "/opds/v1.2/root", None, &[]).await;
+	let (status, headers, _) = request_with_headers(&app, "GET", "/opds/v1.2", None, &[]).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(
 		headers[header::WWW_AUTHENTICATE],
@@ -215,7 +215,7 @@ async fn opds_uses_real_credentials() {
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",
-		"/opds/v1.2/root",
+		"/opds/v1.2",
 		None,
 		&[("authorization", "Basic YWRtaW46d3Jvbmc=")],
 	)
@@ -225,14 +225,14 @@ async fn opds_uses_real_credentials() {
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",
-		"/opds/v1.2/root",
+		"/opds/v1.2",
 		None,
 		&[("authorization", "Basic dXNlcjpzZWNyZXQ=")],
 	)
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// real username+password passes on both v1.2 and v2
-	for path in ["/opds/v1.2/root", "/opds/v2/root"] {
+	// real username+password passes on every v1.2 and v2 entry point
+	for path in ["/opds/v1.2", "/opds/v1.2/catalog", "/opds/v2", "/opds/v2/catalog"] {
 		let (status, _, _) = request_with_headers(&app, "GET", path, None, &[("authorization", ADMIN_BASIC)]).await;
 		assert_eq!(status, StatusCode::OK, "{path}");
 	}
