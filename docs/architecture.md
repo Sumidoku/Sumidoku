@@ -7,7 +7,11 @@ here. Link to symbols rather than copying details that drift.
 ## Server (`crates/server`)
 
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
-Migrations in `crates/server/migrations`.
+Migrations in `crates/server/migrations`. Applied migrations are immutable:
+sqlx embeds each file's SHA-384 at compile time and validates it against
+`_sqlx_migrations` at startup, aborting the boot on any byte change, so a
+schema change is always a new numbered file — never an edit, comments
+included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`,

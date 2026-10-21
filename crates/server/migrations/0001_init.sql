@@ -1,4 +1,4 @@
--- M1 initial schema; all timestamps are INTEGER unix seconds, all JSON columns are TEXT
+-- M1 初始 schema；时间戳一律 INTEGER unix 秒，JSON 列一律 TEXT
 CREATE TABLE user (
     id INTEGER PRIMARY KEY,
     username TEXT NOT NULL UNIQUE,
