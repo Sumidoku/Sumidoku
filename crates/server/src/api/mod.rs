@@ -1,5 +1,6 @@
 pub mod aidoku_backup;
 pub mod backup;
+pub mod docs;
 pub mod download;
 pub mod filter_groups;
 pub mod filters;
@@ -52,6 +53,10 @@ pub fn router(state: Arc<AppState>) -> Router {
 	// Public surface: health check + auth itself (if login can't be reached, everything deadlocks)
 	let public = Router::new()
 		.route("/health", get(health))
+		.route("/api/openapi.json", get(docs::openapi))
+		.route("/api/docs", get(docs::index))
+		.route("/api/docs/", get(docs::index))
+		.route("/api/docs/{file}", get(docs::file))
 		.route("/api/v1/version", get(version))
 		.route("/api/v1/auth/status", get(crate::auth::status))
 		.route("/api/v1/auth/login", post(crate::auth::login))

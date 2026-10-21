@@ -167,6 +167,8 @@ jobs:
           curl -sf http://localhost:3000/ | grep -q "<title>Sumidoku</title>"
           # the API is up and the database answers
           curl -sf http://localhost:3000/api/v1/settings
+          curl -sf http://localhost:3000/api/openapi.json | jq -e '.openapi and (.paths["/api/v1/sync/changes"] != null)' > /dev/null
+          curl -sf http://localhost:3000/api/docs | grep -q "SwaggerUIBundle"
 
   ci:
     # the single check branch protection pins: a matrix leg skipped by the
