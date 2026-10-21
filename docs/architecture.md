@@ -484,10 +484,18 @@ Migrations in `crates/server/migrations`.
   the `skipped` list. `?dryRun=true` rolls back the same transaction.
   The web UI walks upload → grouped dry-run preview → per-source
   mapping dropdowns → confirm → result. Tracking, extension settings,
-  saved searches and server preferences are out of scope; the manga
-  `url` is the Mihon source's internal key, which may not line up with
-  the corresponding Aidoku source's manga key — such entries import
-  but a later refresh can miss them.
+  saved searches and server preferences are out of scope. The manga
+  `url` is the Mihon source's internal key, whose shape can differ
+  from the corresponding Aidoku source's (Suwayomi's copymanga
+  extension stores site paths — `/comic/<slug>`,
+  `<slug>/chapter/<uuid>` — where Aidoku's `zh.copymanga` uses the
+  bare `<slug>`/`<uuid>`); a per-source registry (`api/key_realign.rs`)
+  rewrites the known shapes to the target source's native format
+  before any row lands — manga, chapter and history keys alike,
+  idempotently — and the group report counts the rewrites under
+  `realignedKeys`. Keys of sources without a registry entry import
+  as-is, which may not line up with the Aidoku source's — such
+  entries import but a later refresh can miss them.
 - Scheduled backups (`backup/mod.rs`): a `BackupScheduler` task (wired in
   `build_app` like the update scheduler) wakes every 60s, re-reads the
   `backup.*` keys from the `setting` table and, when `backup.enabled` is

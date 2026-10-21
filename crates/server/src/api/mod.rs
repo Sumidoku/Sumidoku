@@ -3,6 +3,7 @@ pub mod backup;
 pub mod download;
 pub mod filters;
 pub mod import_merge;
+pub mod key_realign;
 pub mod library;
 pub mod listings;
 pub mod login;

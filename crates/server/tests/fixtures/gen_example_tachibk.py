@@ -217,6 +217,37 @@ def build_backup():
     return out
 
 
+# Suwayomi's copymanga extension keys are site paths; Aidoku's zh.copymanga keys are
+# the bare segments — the importer must re-align them or the source builds broken URLs
+SOURCE_COPYMANGA = 333  # mapped to zh.copymanga explicitly in the test
+CM_SLUG = "pure001mm"
+CM_UUID1 = "d32acc22-aaaa-4000-8000-000000000001"
+CM_UUID2 = "d32acc22-aaaa-4000-8000-000000000002"
+CM_UUID3 = "d32acc22-aaaa-4000-8000-000000000003"
+
+COPYMANGA = manga(
+    SOURCE_COPYMANGA, f"/comic/{CM_SLUG}", "Pure Manga",
+    date_added=ms("2024-03-01 12:00:00"),  # unix 1709294400
+    chapters=[
+        # short path shape <slug>/chapter/<uuid>
+        chapter(f"{CM_SLUG}/chapter/{CM_UUID1}", "Ch 1", number=1.0,
+                last_page=3, source_order=1),
+        # full path shape /comic/<slug>/chapter/<uuid>
+        chapter(f"/comic/{CM_SLUG}/chapter/{CM_UUID2}", "Ch 2", number=2.0,
+                read=True, source_order=2),
+    ],
+    histories=[
+        history(f"{CM_SLUG}/chapter/{CM_UUID1}", ms("2024-03-02 10:00:00")),  # unix 1709373600
+        # only in history, not in chapters: still lands, re-aligned the same way
+        history(f"{CM_SLUG}/chapter/{CM_UUID3}", ms("2024-03-03 10:00:00")),  # unix 1709460000
+    ],
+)
+
+
+def build_copymanga_backup():
+    return f_msg(1, COPYMANGA) + f_msg(101, source("Copymanga", SOURCE_COPYMANGA))
+
+
 def main():
     here = pathlib.Path(__file__).parent
     proto = build_backup()
@@ -232,7 +263,10 @@ def main():
         # entry holds gzipped proto: proves the importer re-sniffs after unzip
         zf.writestr("backup.proto", gzip.compress(proto, mtime=0))
 
-    for f in (tachibk, raw, zipped):
+    copymanga = here / "copymanga.tachibk"
+    copymanga.write_bytes(gzip.compress(build_copymanga_backup(), mtime=0))
+
+    for f in (tachibk, raw, zipped, copymanga):
         print(f"wrote {f} ({f.stat().st_size} bytes)")
 
 

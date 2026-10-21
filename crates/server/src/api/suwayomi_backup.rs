@@ -24,6 +24,7 @@ use super::import_merge::{
 	ChapterMeta, ImportCounts, MangaMeta, ensure_category, ensure_chapter_row, ensure_manga_row,
 	mark_in_library, merge_chapter_progress,
 };
+use super::key_realign::{RealignCounts, realign_chapter_key, realign_manga_key};
 
 /// Cap on the decompressed/unpacked proto: same tier as the upload body cap, guarding against zip/gzip bombs
 const PROTO_MAX: u64 = BODY_MAX as u64;
@@ -371,12 +372,14 @@ pub async fn import_suwayomi_doc(
 	let mut imported = ImportCounts::default();
 	let mut skipped: Vec<Value> = Vec::new();
 	let mut seen_categories: HashSet<String> = HashSet::new();
+	let mut realigned: Vec<RealignCounts> = Vec::with_capacity(groups.len());
 	{
 		let mut tx = crate::db::begin_write(&state.pool).await?;
 		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
 		for ((mihon_id, mangas), resolution) in groups.iter().zip(&resolutions) {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let Some(source_key) = resolution.key() else {
+				realigned.push(RealignCounts::default());
 				for manga in mangas {
 					skipped.push(json!({
 						"section": if manga.favorite.unwrap_or(true) { "library" } else { "progress" },
@@ -389,8 +392,21 @@ pub async fn import_suwayomi_doc(
 				continue;
 			};
 			let source_id = installed_id_by_key[source_key];
-			import_group(&mut tx, user_id, &doc, source_id, mangas, &mut imported, &mut seen_categories)
-				.await?;
+			let source = installed
+				.iter()
+				.find(|s| s.id == source_id)
+				.expect("resolved key is installed");
+			let counts = import_group(
+				&mut tx,
+				user_id,
+				&doc,
+				source,
+				mangas,
+				&mut imported,
+				&mut seen_categories,
+			)
+			.await?;
+			realigned.push(counts);
 		}
 		imported.categories = seen_categories.len() as i64;
 		if dry_run {
@@ -403,7 +419,8 @@ pub async fn import_suwayomi_doc(
 	let sources_json: Vec<Value> = groups
 		.iter()
 		.zip(&resolutions)
-		.map(|((mihon_id, mangas), resolution)| {
+		.zip(&realigned)
+		.map(|(((mihon_id, mangas), resolution), counts)| {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let (state_label, key) = match resolution {
 				Resolution::Mapped { key } => ("mapped", Some(key.as_str())),
@@ -429,6 +446,9 @@ pub async fn import_suwayomi_doc(
 				if let Some(s) = installed.iter().find(|s| s.key == key) {
 					value["aidokuSourceName"] = json!(s.name);
 				}
+			}
+			if !counts.is_zero() {
+				value["realignedKeys"] = json!({"manga": counts.manga, "chapter": counts.chapter});
 			}
 			value
 		})
@@ -468,17 +488,18 @@ async fn import_group(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
 	doc: &TachiBackup,
-	source_id: i64,
+	source: &InstalledSource,
 	mangas: &[&TachiManga],
 	imported: &mut ImportCounts,
 	seen_categories: &mut HashSet<String>,
-) -> ApiResult<()> {
+) -> ApiResult<RealignCounts> {
 	// Category membership is an order-value lookup (Mihon MangaRestorer semantics), not an array position
 	let category_by_order: HashMap<i64, &str> = doc
 		.categories
 		.iter()
 		.map(|c| (c.order, c.name.as_str()))
 		.collect();
+	let mut realigned = RealignCounts::default();
 	for manga in mangas {
 		let meta = MangaMeta {
 			title: manga.title.as_str(),
@@ -492,7 +513,9 @@ async fn import_group(
 			// The url column is a browsable source-site page; manga.url is the in-source key, so it is not carried over
 			url: None,
 		};
-		let manga_id = ensure_manga_row(tx, source_id, &manga.url, Some(&meta)).await?;
+		let (manga_key, manga_changed) = realign_manga_key(source.key.as_str(), &manga.url);
+		realigned.manga += manga_changed as i64;
+		let manga_id = ensure_manga_row(tx, source.id, &manga_key, Some(&meta)).await?;
 		if manga.favorite.unwrap_or(true) {
 			let in_library_at = ms_to_unix(manga.date_added).unwrap_or_else(unix_now);
 			mark_in_library(tx, user_id, manga_id, in_library_at).await?;
@@ -519,14 +542,17 @@ async fn import_group(
 			imported.library += 1;
 		}
 
-		let history: HashMap<&str, i64> = manga
+		// Chapter and history keys realign identically, so the two still pair up after the rewrite
+		let history: HashMap<String, i64> = manga
 			.history
 			.iter()
-			.map(|h| (h.url.as_str(), h.last_read))
+			.map(|h| (realign_chapter_key(source.key.as_str(), &h.url).0, h.last_read))
 			.collect();
-		let mut seen_chapters: HashSet<&str> = HashSet::new();
+		let mut seen_chapters: HashSet<String> = HashSet::new();
 		for chapter in &manga.chapters {
-			seen_chapters.insert(chapter.url.as_str());
+			let (chapter_key, changed) = realign_chapter_key(source.key.as_str(), &chapter.url);
+			realigned.chapter += changed as i64;
+			seen_chapters.insert(chapter_key.clone());
 			let meta = ChapterMeta {
 				title: (!chapter.name.is_empty()).then_some(chapter.name.as_str()),
 				number: (chapter.chapter_number != 0.0).then_some(chapter.chapter_number as f64),
@@ -537,9 +563,9 @@ async fn import_group(
 				date_uploaded: ms_to_unix(chapter.date_upload),
 				source_order: chapter.source_order,
 			};
-			let chapter_id = ensure_chapter_row(tx, manga_id, &chapter.url, Some(&meta)).await?;
+			let chapter_id = ensure_chapter_row(tx, manga_id, &chapter_key, Some(&meta)).await?;
 			let last_read_at = history
-				.get(chapter.url.as_str())
+				.get(chapter_key.as_str())
 				.and_then(|ts| ms_to_unix(*ts));
 			merge_chapter_progress(
 				tx,
@@ -554,13 +580,15 @@ async fn import_group(
 		}
 		// Chapters appearing only in history (the backup ticked history but not chapters): create bare-key rows carrying just the timestamp
 		for entry in &manga.history {
-			if seen_chapters.contains(entry.url.as_str()) {
+			let (entry_key, changed) = realign_chapter_key(source.key.as_str(), &entry.url);
+			if seen_chapters.contains(entry_key.as_str()) {
 				continue;
 			}
-			let chapter_id = ensure_chapter_row(tx, manga_id, &entry.url, None).await?;
+			realigned.chapter += changed as i64;
+			let chapter_id = ensure_chapter_row(tx, manga_id, &entry_key, None).await?;
 			merge_chapter_progress(tx, user_id, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
 			imported.progress += 1;
 		}
 	}
-	Ok(())
+	Ok(realigned)
 }
