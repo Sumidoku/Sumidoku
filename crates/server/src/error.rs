@@ -58,6 +58,10 @@ impl ApiError {
 		Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
 	}
 
+	pub fn payload_too_large(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
+	}
+
 	pub fn source_disabled(key: &str) -> Self {
 		Self::new(
 			StatusCode::CONFLICT,
