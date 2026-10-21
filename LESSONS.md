@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Tenant-isolation claims start with the schema's key scope, not with an
+assumed per-user id.** A row can belong to a user while its id is globally
+unique, making the same id impossible to collide across users. Check the
+primary key before constructing a failure case, then test the actual isolation
+boundary instead of an impossible collision.
+- Evidence: 2026-10-22, #287's earlier review used a shared category id across
+  two users as the collision example. `category.id INTEGER PRIMARY KEY` rules
+  that case out; the corrected coverage verifies independent per-user settings.
+
 **Replacing a persisted flag needs live-database and portable-backup migration
 in the same change.** A new setting can work on fresh installs and still drop
 existing users' state. Convert old flags in an append-only migration, keep
