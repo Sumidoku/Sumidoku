@@ -188,6 +188,18 @@
 	background: var(--bg-hover);
 }
 
+.chip-dropdown__item--reset {
+	color: var(--text-dim);
+	border-bottom: 1px solid var(--border);
+	border-radius: 0;
+	margin-bottom: 2px;
+}
+
+.chip-dropdown__item--reset:hover {
+	color: var(--danger);
+	background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
 .chip--accent {
 	background: var(--accent-soft);
 	border-color: color-mix(in srgb, var(--accent) 45%, transparent);

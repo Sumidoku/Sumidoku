@@ -134,6 +134,10 @@ export default function SearchPage() {
 		});
 	}
 
+	function resetGroup(group: FilterGroup) {
+		setFilters((cur) => ({ ...cur, [group]: {} }));
+	}
+
 	// A source with no results takes no section (other sources are still streaming in, so empty shells would flood the screen);
 	// only when everything has finished without a single result does the global empty state show
 	const visible = selected.filter((s) => {
@@ -165,18 +169,21 @@ export default function SearchPage() {
 					options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
 					states={filters.ratings}
 					onCycle={(k) => cycle('ratings', k)}
+					onReset={() => resetGroup('ratings')}
 				/>
 				<TriStateDropdown
 					label={t('search.language')}
 					options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
 					states={filters.langs}
 					onCycle={(k) => cycle('langs', k)}
+					onReset={() => resetGroup('langs')}
 				/>
 				<TriStateDropdown
 					label={t('search.source')}
 					options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
 					states={filters.sources}
 					onCycle={(k) => cycle('sources', k)}
+					onReset={() => resetGroup('sources')}
 				/>
 			</div>
 

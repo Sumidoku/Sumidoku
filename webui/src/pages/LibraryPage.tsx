@@ -210,12 +210,14 @@ export default function LibraryPage() {
 					options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
 					states={ratings}
 					onCycle={(k) => setRatings((cur) => cycled(cur, k))}
+					onReset={() => setRatings({})}
 				/>
 				<TriStateDropdown
 					label={t('library.source')}
 					options={triOptions}
 					states={sourceTri}
 					onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
+					onReset={() => setSourceTri({})}
 				/>
 				<Select
 					aria-label={t('library.sort')}
