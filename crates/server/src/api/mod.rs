@@ -1525,6 +1525,10 @@ async fn get_settings(
 		crate::update::LIBRARY_UPDATE_INTERVAL_HOURS.into(),
 		json!(library.update_interval_hours),
 	);
+	map.insert(
+		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
+		json!(library.excluded_update_categories),
+	);
 	Ok(Json(Value::Object(map)))
 }
 

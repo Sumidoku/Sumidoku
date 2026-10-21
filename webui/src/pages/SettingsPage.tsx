@@ -409,22 +409,6 @@ function CategoriesSection() {
 							</div>
 							<div className="settings-cat__fields">
 								<div className="settings-cat__field">
-									<span className="settings-cat__label">{t('settings.update')}</span>
-									<Select
-										value={String(c.includeInUpdate)}
-										onChange={(e) =>
-											patch.mutate({ id: c.id, includeInUpdate: Number(e.currentTarget.value) })
-										}
-									>
-										{TRI_STATE.map((o) => (
-											<option key={o.value} value={o.value}>
-												{t(o.labelKey)}
-											</option>
-										))}
-									</Select>
-									<span className="settings-cat__hint">{t('settings.updateHint')}</span>
-								</div>
-								<div className="settings-cat__field">
 									<span className="settings-cat__label">{t('settings.download')}</span>
 									<Select
 										value={String(c.includeInDownload)}
@@ -591,10 +575,16 @@ function LibraryUpdateSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
+	const categories = useCategories();
+	const [choosingExcluded, setChoosingExcluded] = useState(false);
 	const intervalHours = Number(settings.data?.['library.update_interval_hours'] ?? 0);
 	const storedSkip = settings.data?.['library.skip_titles'];
 	const skipTitles = Array.isArray(storedSkip)
 		? storedSkip.filter((value): value is string => typeof value === 'string')
+		: [];
+	const storedExcluded = settings.data?.['library.excluded_update_categories'];
+	const excludedCategories = Array.isArray(storedExcluded)
+		? storedExcluded.filter((value): value is number => typeof value === 'number')
 		: [];
 	const refreshMetadata = settings.data?.['library.refresh_metadata'] === true;
 
@@ -602,6 +592,13 @@ function LibraryUpdateSection() {
 		const changed = on ? [...skipTitles, rule] : skipTitles.filter((value) => value !== rule);
 		const ordered = LIBRARY_SKIP_RULES.map(({ key }) => key).filter((key) => changed.includes(key));
 		save.mutate({ 'library.skip_titles': ordered });
+	}
+
+	function toggleExcludedCategory(id: number, on: boolean) {
+		const changed = on
+			? [...excludedCategories, id]
+			: excludedCategories.filter((value) => value !== id);
+		save.mutate({ 'library.excluded_update_categories': changed });
 	}
 
 	return (
@@ -652,8 +649,65 @@ function LibraryUpdateSection() {
 						/>
 						{t('settings.libraryRefreshMetadata')}
 					</label>
+					<div className="settings-row settings-row--top">
+						<div className="settings-row__stack">
+							<span className="settings-row__label">{t('settings.libraryExcludedUpdateCategories')}</span>
+							<p className="settings-cat__hint">{t('settings.libraryExcludedUpdateCategoriesDesc')}</p>
+						</div>
+						<div className="settings-excluded-cats">
+							{categories.isPending ? (
+								<Skeleton height={40} width={120} />
+							) : (categories.data ?? []).length === 0 ? (
+								<p className="faint">{t('settings.noCategories')}</p>
+							) : (
+								<>
+									<span className="settings-excluded-cats__summary">
+										{excludedCategories.length === 0
+											? t('settings.noExcludedCategories')
+											: t('settings.excludedCategoriesCount', { count: excludedCategories.length })}
+									</span>
+									<Button
+										size="sm"
+										disabled={save.isPending}
+										onClick={() => setChoosingExcluded(true)}
+									>
+										{t('settings.chooseExcludedCategories')}
+									</Button>
+								</>
+							)}
+						</div>
+					</div>
 				</>
 			)}
+
+			<Modal
+				open={choosingExcluded}
+				title={t('settings.libraryExcludedUpdateCategories')}
+				onClose={() => setChoosingExcluded(false)}
+				footer={
+					<Button onClick={() => setChoosingExcluded(false)}>
+						{t('common.close')}
+					</Button>
+				}
+			>
+				<div className="settings-excluded-cats__modal">
+					{(categories.data ?? []).length === 0 ? (
+						<p className="faint">{t('settings.noCategories')}</p>
+					) : (
+						(categories.data ?? []).map((c) => (
+							<label key={c.id} className="settings-cat-check">
+								<Switch
+									checked={excludedCategories.includes(c.id)}
+									disabled={save.isPending}
+									onChange={(on) => toggleExcludedCategory(c.id, on)}
+									label={c.name}
+								/>
+								<span className="settings-cat-check__name">{c.name}</span>
+							</label>
+						))
+					)}
+				</div>
+			</Modal>
 		</Section>
 	);
 }

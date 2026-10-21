@@ -28,9 +28,26 @@
 	padding: 8px 0;
 }
 
+.settings-row--top {
+	align-items: flex-start;
+}
+
 .settings-row__label {
 	font-size: 14px;
 	color: var(--text-dim);
+	flex: none;
+}
+
+.settings-row__stack {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	flex: 1;
+	min-width: 0;
+}
+
+.settings-row__stack .settings-row__label {
+	color: var(--text);
 }
 
 /* ============ Category management ============ */
@@ -107,6 +124,51 @@
 .settings-cat__create .input {
 	flex: 1;
 	min-width: 0;
+}
+
+.settings-cat-checks {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	flex: 1;
+	min-width: 0;
+}
+
+.settings-cat-check {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 14px;
+}
+
+.settings-cat-check__name {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.settings-excluded-cats {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	flex: 1;
+	min-width: 0;
+}
+
+.settings-excluded-cats__summary {
+	font-size: 13px;
+	color: var(--text-dim);
+	white-space: nowrap;
+}
+
+.settings-excluded-cats__modal {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	max-height: 360px;
+	overflow-y: auto;
 }
 
 /* ============ Source settings (modal) ============ */
