@@ -339,8 +339,8 @@ async fn batch_manga_json_matches_single_item_output() {
 	let mut expected_a = singles[&a].clone();
 	expected_a["inLibrary"] = json!(true);
 	expected_a["inLibraryAt"] = json!(111);
-	// A's first chapter has a chapter_user row with is_read=0 → unread 1
-	expected_a["unreadCount"] = json!(1);
+	// A's three chapters are all unread by the default-unread count (one flagged row, two never touched)
+	expected_a["unreadCount"] = json!(3);
 	assert_eq!(entries[0], expected_a);
 	let mut expected_b = singles[&b].clone();
 	expected_b["inLibrary"] = json!(true);

@@ -39,6 +39,8 @@ pub struct LibraryQuery {
 	/// Comma-separated category ids, inclusion set; 0 means uncategorized (no category rows of the user's own)
 	pub category: Option<String>,
 	pub category_exclude: Option<String>,
+	/// A persisted filter group whose rules compile into the same WHERE clause, ANDed with the ad-hoc filters
+	pub group_id: Option<i64>,
 }
 
 /// LIKE's %/_ are wildcards, so literal occurrences and the escape character itself in the user's search term must be escaped upfront
@@ -58,9 +60,10 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	const LAST_READ: &str = " ORDER BY (SELECT MAX(cu.last_read_at) FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id) DESC, m.id ASC";
+	// Default-unread: a chapter with no chapter_user row counts as unread, same as the unreadCount badge
 	const UNREAD: &str = " ORDER BY (SELECT COUNT(*) FROM chapter c
-		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
-		 WHERE c.manga_id = m.id AND cu.is_read = 0) DESC, m.id ASC";
+		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
+		 WHERE c.manga_id = m.id AND cu.chapter_id IS NULL) DESC, m.id ASC";
 	match sort {
 		None | Some("added") => Ok((" ORDER BY mu.in_library_at DESC, m.id ASC", false)),
 		Some("title") => Ok((" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC", false)),
@@ -116,7 +119,13 @@ pub async fn list_library(
 	let (order_by, order_user_bind) = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
 	// bind order follows the SQL clauses: user → search → categoryId → category include → category exclude →
-	// rating include → rating exclude → source include → source exclude → sourceId → one user per filter clause → user for the ORDER BY clause
+	// rating include → rating exclude → source include → source exclude → sourceId → one user per filter clause →
+	// the group's binds in compiled order → user for the ORDER BY clause
+	let group_rules = match query.group_id {
+		None => Vec::new(),
+		Some(group_id) => crate::api::filter_groups::rules_for_library(&state.pool, user.id, group_id).await?,
+	};
+	let (group_sql, group_binds) = crate::api::filter_groups::compile_group(&group_rules)?;
 	let rating_in = match &query.content_rating {
 		Some(raw) => parse_int_list(raw, "contentRating", |v| (1..=3).contains(&v))?,
 		None => Vec::new(),
@@ -236,6 +245,7 @@ pub async fn list_library(
 			filter_user_binds += 1;
 		}
 	}
+	sql.push_str(&group_sql);
 	sql.push_str(order_by);
 	sql.push_str(" LIMIT ? OFFSET ?");
 	let mut q = sqlx::query_as::<_, LibraryEntryRow>(&sql).bind(user.id);
@@ -283,6 +293,12 @@ pub async fn list_library(
 	for _ in 0..filter_user_binds {
 		q = q.bind(user.id);
 	}
+	for bind in &group_binds {
+		q = match bind {
+			crate::api::filter_groups::GroupBind::User => q.bind(user.id),
+			crate::api::filter_groups::GroupBind::Id(v) => q.bind(*v),
+		};
+	}
 	if order_user_bind {
 		q = q.bind(user.id);
 	}
@@ -296,10 +312,11 @@ pub async fn list_library(
 	let mut unread: HashMap<i64, i64> = HashMap::new();
 	if !page_rows.is_empty() {
 		let placeholders = page_rows.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+		// Default-unread, same as the manga detail page: a chapter with no chapter_user row counts as unread
 		let unread_sql = format!(
 			"SELECT c.manga_id, COUNT(*) FROM chapter c
-			 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 0
-			 WHERE c.manga_id IN ({placeholders}) GROUP BY c.manga_id"
+			 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
+			 WHERE c.manga_id IN ({placeholders}) AND cu.chapter_id IS NULL GROUP BY c.manga_id"
 		);
 		let mut q = sqlx::query_as::<_, (i64, i64)>(&unread_sql).bind(user.id);
 		for row in &page_rows {
