@@ -1,8 +1,11 @@
-//! The built-in OPDS source (kind = opds, multi-instance): OPDS 1.2 (Atom) catalogs as first-class sources, no wasm payload.
-//! manga = a catalog entry (<id> as key, the entry's feed link as url, which refreshes use to fetch upstream); chapters =
-//! acquisition entries in the entry feed; pages = OPDS-PSE per-page streaming links when present, otherwise the
+//! The built-in OPDS source (kind = opds, multi-instance): OPDS catalogs as first-class sources, no wasm payload.
+//! Both wire formats are accepted, detected per response: OPDS 1.2 (Atom) and OPDS 2.0 (JSON) — the Content-Type
+//! decides, with a JSON body sniff as fallback for mislabeled servers; both parse into the same Feed model.
+//! manga = a drill-down entry (1.2 subsection entry, 2.0 navigation item or feed-linked publication; its feed link
+//! as url, which refreshes use to fetch upstream); chapters = book entries in the series feed; pages = OPDS-PSE
+//! per-page streaming (1.2) or the publication manifest's readingOrder (2.0) when present, otherwise the
 //! acquisition archive is downloaded to disk and split into pages with local's ZipCache. basic credentials live in
-//! source_setting; register/delete go through the admin surface. OPDS 2.0 (JSON) is not covered — a follow-up.
+//! source_setting; register/delete go through the admin surface.
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, MangaRow, SOURCE_KIND_OPDS, SourceRow, unix_now};
@@ -17,6 +20,8 @@ use std::sync::Arc;
 const PSE_STREAM_REL: &str = "http://vaemendis.net/opds-pse/stream";
 const IMAGE_REL: &str = "http://opds-spec.org/image";
 const THUMBNAIL_REL: &str = "http://opds-spec.org/image/thumbnail";
+/// OPDS 2.0 feed media type: doubles as the drill marker on navigation items and series publications
+const FEED_TYPE_V2: &str = "application/opds+json";
 /// rel is prefix-matched: acquisition/open-access, buy, etc. are all file-retrieval links
 const ACQUISITION_PREFIX: &str = "http://opds-spec.org/acquisition";
 /// Runaway insurance for the degraded traversal: dual caps on BFS depth and total feed count (a Gutenberg-scale catalog must not be crawled whole)
@@ -93,9 +98,25 @@ impl Catalog {
 
 	async fn get_feed(&self, state: &AppState, url: &str) -> ApiResult<Feed> {
 		let max = state.config.net_body_max_mb * 1024 * 1024;
-		let (bytes, _) = self.get_bytes(state, url, max).await?;
+		let (bytes, mime) = self.get_bytes(state, url, max).await?;
+		if is_json_feed(mime.as_deref(), &bytes) {
+			return parse_feed_json(&bytes).map_err(|e| ApiError::bad_gateway(format!("invalid catalog feed: {e}")));
+		}
 		parse_feed(&bytes).map_err(|e| ApiError::bad_gateway(format!("invalid catalog feed: {e}")))
 	}
+}
+
+/// Per-response wire format detection: any +json Content-Type picks the OPDS 2.0 parser; a mislabeled body still
+/// parses as JSON when it opens with an object — an Atom body always opens with markup
+fn is_json_feed(mime: Option<&str>, bytes: &[u8]) -> bool {
+	if let Some(mime) = mime {
+		let base = mime.split(';').next().unwrap_or_default().trim();
+		if base == "application/json" || base.ends_with("+json") {
+			return true;
+		}
+	}
+	let body = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+	body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
 }
 
 fn string_default(defaults: &std::collections::HashMap<String, DefaultValue>, key: &str) -> Option<String> {
@@ -129,9 +150,10 @@ impl FeedEntry {
 		self.links.iter().filter(move |l| l.rel == rel)
 	}
 
-	/// A book (acquisition entry): has an acquisition or PSE stream link; otherwise it is a drillable series/navigation entry
+	/// A book (acquisition entry): has an acquisition or PSE stream link, or (OPDS 2.0) a publication manifest;
+	/// otherwise it is a drillable series/navigation entry
 	pub fn is_book(&self) -> bool {
-		self.acquisition().is_some() || self.pse().is_some()
+		self.acquisition().is_some() || self.pse().is_some() || self.manifest().is_some()
 	}
 
 	pub fn acquisition(&self) -> Option<&EntryLink> {
@@ -142,9 +164,20 @@ impl FeedEntry {
 		self.links_by_rel(PSE_STREAM_REL).next()
 	}
 
-	/// Drill-down link: points at another feed (the atom type is the feed marker, rel is usually subsection)
+	/// Drill-down link: points at another feed (atom type for 1.2, opds+json for 2.0; rel is usually subsection or self)
 	pub fn feed_link(&self) -> Option<&EntryLink> {
-		self.links.iter().find(|l| l.type_.starts_with("application/atom+xml"))
+		self.links
+			.iter()
+			.find(|l| l.type_.starts_with("application/atom+xml") || l.type_.starts_with(FEED_TYPE_V2))
+	}
+
+	/// The publication document of a book entry (OPDS 2.0): the self link carries the manifest with readingOrder
+	/// (Komga types it divina/webpub+json, the spec opds-publication+json). Feed-typed self links are series
+	/// drill-downs, not manifests — those stay with feed_link()
+	pub fn manifest(&self) -> Option<&EntryLink> {
+		self.links
+			.iter()
+			.find(|l| l.rel == "self" && l.type_.ends_with("+json") && !l.type_.starts_with(FEED_TYPE_V2))
 	}
 
 	pub fn thumbnail(&self) -> Option<&EntryLink> {
@@ -336,6 +369,195 @@ fn parse_rfc3339(text: &str) -> Option<i64> {
 		.ok()
 }
 
+/// OPDS 2.0 (JSON) feed → the same Feed model the 1.2 parser fills: navigation items become drill entries and
+/// publications become entries, so every downstream consumer (search, manga_update, load_pages) works unchanged.
+/// Groups are flattened: their navigation and publications join the same entry list, no group drill level
+pub fn parse_feed_json(bytes: &[u8]) -> Result<Feed, String> {
+	let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+	let mut feed = Feed::default();
+	if let Some(title) = value.get("metadata").and_then(|m| m.get("title")) {
+		feed.title = json_text(title);
+	}
+	if let Some(links) = value.get("links").and_then(Value::as_array) {
+		for link in links {
+			push_json_link(&mut feed.links, link);
+		}
+	}
+	push_section_entries(&mut feed, &value);
+	if let Some(groups) = value.get("groups").and_then(Value::as_array) {
+		for group in groups {
+			push_section_entries(&mut feed, group);
+		}
+	}
+	Ok(feed)
+}
+
+/// The navigation + publications pair one feed section (top level or a group) contributes
+fn push_section_entries(feed: &mut Feed, owner: &Value) {
+	if let Some(navigation) = owner.get("navigation").and_then(Value::as_array) {
+		for item in navigation {
+			feed.entries.push(navigation_entry(item));
+		}
+	}
+	if let Some(publications) = owner.get("publications").and_then(Value::as_array) {
+		for publication in publications {
+			feed.entries.push(publication_entry(publication));
+		}
+	}
+}
+
+/// RWPM text fields accept a plain string or a language map; a map contributes its first value
+fn json_text(value: &Value) -> String {
+	match value {
+		Value::String(text) => text.clone(),
+		Value::Object(map) => map.values().find_map(Value::as_str).unwrap_or_default().to_string(),
+		_ => String::new(),
+	}
+}
+
+/// Contributor fields (author, artist, …) accept a name string, a {name} object, or an array of either
+fn json_contributors(value: Option<&Value>) -> Vec<String> {
+	fn one(value: &Value) -> Option<String> {
+		match value {
+			Value::String(name) => Some(name.clone()),
+			Value::Object(map) => map.get("name").map(json_text).filter(|name| !name.is_empty()),
+			_ => None,
+		}
+	}
+	match value {
+		Some(Value::Array(items)) => items.iter().filter_map(one).collect(),
+		Some(single) => one(single).into_iter().collect(),
+		None => Vec::new(),
+	}
+}
+
+/// rel may be a string or an array (RWPM); one EntryLink per rel keeps rel lookups working
+fn push_json_link(links: &mut Vec<EntryLink>, value: &Value) {
+	let Some(href) = value.get("href").and_then(Value::as_str) else {
+		return;
+	};
+	let type_ = value.get("type").and_then(Value::as_str).unwrap_or_default().to_string();
+	match value.get("rel") {
+		Some(Value::Array(rels)) => {
+			for rel in rels.iter().filter_map(Value::as_str) {
+				links.push(EntryLink {
+					rel: rel.to_string(),
+					type_: type_.clone(),
+					href: href.to_string(),
+					pse_count: None,
+				});
+			}
+		}
+		Some(Value::String(rel)) => links.push(EntryLink {
+			rel: rel.clone(),
+			type_,
+			href: href.to_string(),
+			pse_count: None,
+		}),
+		_ => links.push(EntryLink {
+			rel: String::new(),
+			type_,
+			href: href.to_string(),
+			pse_count: None,
+		}),
+	}
+}
+
+/// A navigation item is a drill entry: href is the only identity it carries, so it doubles as the key; an untyped
+/// item still drills (navigation only ever points at feeds)
+fn navigation_entry(item: &Value) -> FeedEntry {
+	let href = item.get("href").and_then(Value::as_str).unwrap_or_default().to_string();
+	let type_ = item.get("type").and_then(Value::as_str).unwrap_or(FEED_TYPE_V2).to_string();
+	FeedEntry {
+		id: href.clone(),
+		title: item.get("title").map(json_text).unwrap_or_default(),
+		content: String::new(),
+		updated: None,
+		authors: Vec::new(),
+		links: vec![EntryLink {
+			rel: "subsection".to_string(),
+			type_,
+			href,
+			pse_count: None,
+		}],
+	}
+}
+
+/// A publication becomes one entry: metadata.identifier/title/author/modified/description onto the 1.2 fields,
+/// acquisition rels and self links stay links (a feed-typed self link is the series drill-down, any other json
+/// self link the book's manifest), images[0] is the cover and the rest thumbnails
+fn publication_entry(publication: &Value) -> FeedEntry {
+	let metadata = publication.get("metadata");
+	let mut entry = FeedEntry {
+		id: metadata.and_then(|m| m.get("identifier")).map(json_text).unwrap_or_default(),
+		title: metadata.and_then(|m| m.get("title")).map(json_text).unwrap_or_default(),
+		content: metadata.and_then(|m| m.get("description")).map(json_text).unwrap_or_default(),
+		updated: metadata
+			.and_then(|m| m.get("modified"))
+			.and_then(Value::as_str)
+			.and_then(parse_rfc3339),
+		authors: json_contributors(metadata.and_then(|m| m.get("author"))),
+		links: Vec::new(),
+	};
+	if let Some(links) = publication.get("links").and_then(Value::as_array) {
+		for link in links {
+			push_json_link(&mut entry.links, link);
+		}
+	}
+	// identifier is only RECOMMENDED; the self link is the next stable handle
+	if entry.id.is_empty()
+		&& let Some(self_link) = entry.links.iter().find(|l| l.rel == "self")
+	{
+		entry.id = self_link.href.clone();
+	}
+	if let Some(images) = publication.get("images").and_then(Value::as_array) {
+		for (index, image) in images.iter().enumerate() {
+			let Some(href) = image.get("href").and_then(Value::as_str) else {
+				continue;
+			};
+			let rel = if index == 0 { IMAGE_REL } else { THUMBNAIL_REL };
+			entry.links.push(EntryLink {
+				rel: rel.to_string(),
+				type_: image.get("type").and_then(Value::as_str).unwrap_or_default().to_string(),
+				href: href.to_string(),
+				pse_count: None,
+			});
+		}
+	}
+	entry
+}
+
+/// The page list of a publication document: readingOrder's hrefs in order (resolved against the manifest URL by
+/// the caller); the rest of the manifest is ignored — pages are all load_pages needs from it
+fn parse_reading_order(bytes: &[u8]) -> Result<Vec<String>, String> {
+	let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+	let order = value
+		.get("readingOrder")
+		.and_then(Value::as_array)
+		.ok_or("publication has no readingOrder")?;
+	Ok(order
+		.iter()
+		.filter_map(|item| item.get("href").and_then(Value::as_str).map(str::to_string))
+		.collect())
+}
+
+/// v2 search template expansion: {?query} (RFC 6570 form-style) becomes ?query=<encoded>; {searchTerms} is honored
+/// too for servers reusing the OpenSearch variable; any other expression drops as server-side defaulted
+fn search_template_url(template: &str, query: &str) -> String {
+	let encoded: String = url::form_urlencoded::byte_serialize(query.as_bytes())
+		.collect::<String>()
+		.replace('+', "%20");
+	let mut out = template
+		.replace("{?query}", &format!("?query={encoded}"))
+		.replace("{searchTerms?}", &encoded)
+		.replace("{searchTerms}", &encoded);
+	while let Some(start) = out.find('{') {
+		let Some(end) = out[start..].find('}') else { break };
+		out.replace_range(start..start + end + 1, "");
+	}
+	out
+}
+
 /// The result URL template in an OpenSearch description document (the first Url element's template attribute)
 pub fn parse_opensearch_template(bytes: &[u8]) -> Option<String> {
 	let mut reader = quick_xml::Reader::from_reader(bytes);
@@ -414,6 +636,20 @@ pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) 
 					degraded: false,
 				});
 			}
+		}
+		// OPDS 2.0: a templated search link (…search{?query}) replaces the OpenSearch descriptor — expand and fetch directly
+		let v2_search = root
+			.links
+			.iter()
+			.find(|l| l.rel == "search" && l.type_.starts_with(FEED_TYPE_V2) && l.href.contains('{'));
+		if let Some(link) = v2_search {
+			let search_url = Catalog::resolve(&root_url, &search_template_url(&link.href, query))?;
+			let feed = catalog.get_feed(state, &search_url).await?;
+			let entries = feed_entries_to_manga(&feed, &search_url);
+			return Ok(SearchOutcome {
+				entries,
+				degraded: false,
+			});
 		}
 		let entries = traverse(&catalog, state, &root, &root_url, Some(query)).await?;
 		return Ok(SearchOutcome {
@@ -655,6 +891,29 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 			)?));
 		}
 		return Ok(urls);
+	}
+	// OPDS 2.0 has no PSE: the book's publication document (self link) enumerates pages through readingOrder,
+	// per-page streaming like PSE — preferred over downloading the whole acquisition archive
+	if let Some(manifest) = entry.manifest() {
+		let manifest_url = Catalog::resolve(&feed_url, &manifest.href)?;
+		let max = state.config.net_body_max_mb * 1024 * 1024;
+		let reading_order = match catalog.get_bytes(state, &manifest_url, max).await {
+			Ok((bytes, _)) => parse_reading_order(&bytes).ok(),
+			Err(e) => {
+				tracing::warn!(manifest_url, "opds manifest fetch failed, falling back to acquisition: {}", e.message());
+				None
+			}
+		};
+		match reading_order {
+			Some(hrefs) if !hrefs.is_empty() => {
+				let mut urls = Vec::with_capacity(hrefs.len());
+				for href in hrefs {
+					urls.push(page_url_json(Catalog::resolve(&manifest_url, &href)?));
+				}
+				return Ok(urls);
+			}
+			_ => tracing::warn!(manifest_url, "opds manifest has no usable readingOrder, falling back to acquisition"),
+		}
 	}
 	let acquisition = entry
 		.acquisition()
@@ -945,5 +1204,166 @@ mod tests {
 		assert_eq!(slugify("  spaces  inside  "), Some("spaces-inside".to_string()));
 		assert_eq!(slugify("demo2"), Some("demo2".to_string()));
 		assert_eq!(slugify("!!!"), None);
+	}
+
+	const V2_FEED: &str = r#"{
+  "metadata": {"title": "Demo v2 catalog"},
+  "links": [
+    {"rel": "self", "href": "/opds/v2/root", "type": "application/opds+json"},
+    {"rel": "start", "href": "/opds/v2/root", "type": "application/opds+json"},
+    {"rel": "search", "href": "/opds/v2/search{?query}", "type": "application/opds+json", "templated": true},
+    {"rel": "next", "href": "/opds/v2/root?page=2", "type": "application/opds+json"}
+  ],
+  "navigation": [
+    {"title": "All series", "href": "/opds/v2/series"},
+    {"title": "Help", "href": "https://example.com/help", "type": "text/html"}
+  ],
+  "publications": [
+    {
+      "metadata": {
+        "@type": "http://schema.org/Book",
+        "identifier": "urn:sumidoku:manga:1",
+        "title": "Alpha Series",
+        "author": [{"name": "Author One"}, "Author Two"],
+        "modified": "2024-03-01T10:00:00Z",
+        "description": "alpha description"
+      },
+      "links": [{"rel": "self", "href": "/opds/v2/series/1", "type": "application/opds+json"}],
+      "images": [{"href": "/opds/v2/cover/1", "type": "image/jpeg"}]
+    },
+    {
+      "metadata": {"identifier": "book-1", "title": "Vol. 1", "author": "Author One", "modified": "2024-03-02T10:00:00Z"},
+      "links": [
+        {"rel": "self", "href": "/opds/v2/books/book-1/manifest", "type": "application/opds-publication+json"},
+        {"rel": ["http://opds-spec.org/acquisition", "http://opds-spec.org/acquisition/open-access"], "type": "application/zip", "href": "/opds/v2/books/book-1/file.cbz"}
+      ],
+      "images": [
+        {"href": "/opds/v2/books/book-1/cover", "type": "image/jpeg"},
+        {"href": "/opds/v2/books/book-1/thumb", "type": "image/jpeg"}
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "metadata": {"title": "Latest series"},
+      "navigation": [{"title": "Beta Series", "href": "/opds/v2/series/2", "type": "application/opds+json"}]
+    },
+    {
+      "metadata": {"title": "Latest books"},
+      "publications": [
+        {
+          "metadata": {"identifier": "book-2", "title": "Vol. 2"},
+          "links": [{"rel": "http://opds-spec.org/acquisition", "type": "application/zip", "href": "/opds/v2/books/book-2/file.cbz"}]
+        }
+      ]
+    }
+  ]
+}"#;
+
+	#[test]
+	fn parse_feed_json_maps_navigation_publications_and_groups() {
+		let feed = parse_feed_json(V2_FEED.as_bytes()).expect("parse");
+		assert_eq!(feed.title, "Demo v2 catalog");
+		assert_eq!(feed.next_link().map(|l| l.href.as_str()), Some("/opds/v2/root?page=2"));
+		let search = feed.links.iter().find(|l| l.rel == "search").expect("search link");
+		assert_eq!(search.href, "/opds/v2/search{?query}");
+
+		// 2 navigation + 2 publications + group navigation + group publications, groups flattened in order
+		assert_eq!(feed.entries.len(), 6);
+		let nav = &feed.entries[0];
+		assert_eq!(nav.id, "/opds/v2/series");
+		assert_eq!(nav.title, "All series");
+		assert!(!nav.is_book());
+		// an untyped navigation item still drills; a non-feed type does not
+		assert_eq!(nav.feed_link().map(|l| l.href.as_str()), Some("/opds/v2/series"));
+		assert!(feed.entries[1].feed_link().is_none());
+
+		let series = &feed.entries[2];
+		assert_eq!(series.id, "urn:sumidoku:manga:1");
+		assert_eq!(series.title, "Alpha Series");
+		assert_eq!(series.content, "alpha description");
+		assert_eq!(series.updated, Some(1709287200));
+		assert_eq!(series.authors, vec!["Author One".to_string(), "Author Two".to_string()]);
+		assert!(!series.is_book());
+		assert_eq!(series.feed_link().map(|l| l.href.as_str()), Some("/opds/v2/series/1"));
+		assert_eq!(series.image().map(|l| l.href.as_str()), Some("/opds/v2/cover/1"));
+		assert!(series.thumbnail().is_none());
+
+		let book = &feed.entries[3];
+		assert_eq!(book.id, "book-1");
+		assert_eq!(book.updated, Some(1709373600));
+		assert!(book.is_book());
+		assert_eq!(
+			book.acquisition().map(|l| l.href.as_str()),
+			Some("/opds/v2/books/book-1/file.cbz")
+		);
+		assert_eq!(
+			book.manifest().map(|l| l.href.as_str()),
+			Some("/opds/v2/books/book-1/manifest")
+		);
+		assert_eq!(book.image().map(|l| l.href.as_str()), Some("/opds/v2/books/book-1/cover"));
+		assert_eq!(book.thumbnail().map(|l| l.href.as_str()), Some("/opds/v2/books/book-1/thumb"));
+
+		let group_nav = &feed.entries[4];
+		assert_eq!(group_nav.id, "/opds/v2/series/2");
+		assert_eq!(group_nav.title, "Beta Series");
+		let group_book = &feed.entries[5];
+		assert_eq!(group_book.id, "book-2");
+		assert!(group_book.is_book());
+	}
+
+	#[test]
+	fn parse_feed_json_series_stay_manga_candidates_books_do_not() {
+		let feed = parse_feed_json(V2_FEED.as_bytes()).expect("parse");
+		let manga = feed_entries_to_manga(&feed, "http://host/opds/v2/root");
+		let keys: Vec<&str> = manga.iter().map(|m| m.key.as_str()).collect();
+		assert_eq!(keys, vec!["/opds/v2/series", "urn:sumidoku:manga:1", "/opds/v2/series/2"]);
+		assert_eq!(manga[0].url.as_deref(), Some("http://host/opds/v2/series"));
+		assert_eq!(manga[1].url.as_deref(), Some("http://host/opds/v2/series/1"));
+		assert_eq!(manga[1].cover.as_deref(), Some("http://host/opds/v2/cover/1"));
+		assert_eq!(manga[1].description.as_deref(), Some("alpha description"));
+	}
+
+	#[test]
+	fn is_json_feed_detects_type_and_sniffs_body() {
+		let json = br#"{"metadata": {"title": "x"}}"#;
+		let atom = br#"<?xml version="1.0"?><feed/>"#;
+		assert!(is_json_feed(Some("application/opds+json"), atom));
+		assert!(is_json_feed(Some("application/opds-publication+json"), atom));
+		assert!(is_json_feed(Some("application/json"), atom));
+		assert!(is_json_feed(Some("application/atom+xml;profile=opds-catalog"), json));
+		assert!(!is_json_feed(Some("application/atom+xml"), atom));
+		assert!(is_json_feed(None, b"  {\"metadata\": {}}"));
+		assert!(is_json_feed(None, b"\xef\xbb\xbf{\"metadata\": {}}"));
+		assert!(!is_json_feed(None, atom));
+	}
+
+	#[test]
+	fn search_template_url_expands_query_forms() {
+		assert_eq!(
+			search_template_url("http://h/opds/v2/search{?query}", "attack on titan"),
+			"http://h/opds/v2/search?query=attack%20on%20titan"
+		);
+		assert_eq!(
+			search_template_url("http://h/s?q={searchTerms}&count={count?}", "a b"),
+			"http://h/s?q=a%20b&count="
+		);
+		assert_eq!(search_template_url("http://h/s{?query}{&page}", "x"), "http://h/s?query=x");
+	}
+
+	#[test]
+	fn parse_reading_order_lists_page_hrefs() {
+		let manifest = r#"{
+  "metadata": {"identifier": "book-1", "title": "Vol. 1"},
+  "links": [{"rel": "self", "href": "/manifest", "type": "application/opds-publication+json"}],
+  "readingOrder": [
+    {"href": "pages/0", "type": "image/png"},
+    {"href": "pages/1"},
+    {"type": "image/png"}
+  ]
+}"#;
+		let hrefs = parse_reading_order(manifest.as_bytes()).expect("readingOrder");
+		assert_eq!(hrefs, vec!["pages/0".to_string(), "pages/1".to_string()]);
+		assert!(parse_reading_order(br#"{"metadata": {}}"#).is_err());
 	}
 }
