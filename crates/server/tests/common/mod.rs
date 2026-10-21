@@ -335,35 +335,6 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	out
 }
 
-/// Polls the page table until the requested row has been measured or the timeout passes.
-/// Returns the checked flag and the stored dimensions. A measured-but-invalid image returns
-/// `(true, None, None)`; a row that never gets measured (e.g. a transient read failure) times out.
-pub async fn wait_for_page_dimension(
-	pool: &sqlx::SqlitePool,
-	chapter_id: i64,
-	idx: i64,
-	timeout: std::time::Duration,
-) -> (bool, Option<i64>, Option<i64>) {
-	let deadline = std::time::Instant::now() + timeout;
-	loop {
-		let row: (bool, Option<i64>, Option<i64>) = sqlx::query_as(
-			"SELECT dimensions_checked, width, height FROM page WHERE chapter_id = ? AND idx = ?",
-		)
-		.bind(chapter_id)
-		.bind(idx)
-		.fetch_one(pool)
-		.await
-		.expect("dimension row");
-		if row.0 {
-			return row;
-		}
-		if std::time::Instant::now() >= deadline {
-			panic!("timed out waiting for dimensions chapter={chapter_id} idx={idx}");
-		}
-		tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-	}
-}
-
 // 1x1 transparent PNG
 pub const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,

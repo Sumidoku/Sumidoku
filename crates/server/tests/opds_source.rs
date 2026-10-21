@@ -381,16 +381,13 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 	// CBZ fallback: a volume without PSE links downloads the archive once and splits pages (the OpdsZip variant; root-relative href resolved against the feed URL)
 	let (status, body) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages", chapters[1].0), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let pool = common::connect_db(&t.db_path).await;
-	let (_, width0, height0) =
-		common::wait_for_page_dimension(&pool, chapters[1].0, 0, std::time::Duration::from_secs(5)).await;
-	let (_, width1, height1) =
-		common::wait_for_page_dimension(&pool, chapters[1].0, 1, std::time::Duration::from_secs(5)).await;
 	let pages = body.as_array().expect("pages array");
 	assert_eq!(pages.len(), 2);
 	assert_eq!(pages[0]["content"]["OpdsZip"].as_str(), Some("p1.png"));
-	assert_eq!((width0, height0), (Some(1), Some(1)));
-	assert_eq!((width1, height1), (None, None));
+	assert_eq!(pages[0]["width"], 1);
+	assert_eq!(pages[0]["height"], 1);
+	assert!(pages[1].get("width").is_none());
+	assert!(pages[1].get("height").is_none());
 	for (index, want) in [CBZ_PAGE_1, CBZ_PAGE_2].iter().enumerate() {
 		let (status, _, bytes) =
 			request_full(&t.app, "GET", &format!("/api/v1/chapter/{}/page/{index}", chapters[1].0), None).await;

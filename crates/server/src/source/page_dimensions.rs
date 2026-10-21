@@ -4,10 +4,9 @@ use crate::state::AppState;
 use image::ImageReader;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use std::collections::HashSet;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 /// How many leading bytes to read when measuring image dimensions. Most image headers (IHDR, SOF, etc.)
 /// fit comfortably inside this window; only pathological headers (e.g. very large JPEG EXIF) fall back to a full read.
@@ -118,39 +117,6 @@ async fn persist_with_guard(
 	}
 	tx.commit().await?;
 	Ok(())
-}
-
-/// Tracks chapters whose dimensions are being measured in the background so concurrent page-list
-/// requests do not start duplicate work.
-static IN_FLIGHT: std::sync::LazyLock<Mutex<HashSet<i64>>> =
-	std::sync::LazyLock::new(|| Mutex::new(HashSet::new()));
-
-struct InFlightGuard(i64);
-
-impl Drop for InFlightGuard {
-	fn drop(&mut self) {
-		let mut guard = IN_FLIGHT.lock().expect("dimension in-flight lock");
-		guard.remove(&self.0);
-	}
-}
-
-/// Starts a background task that measures unchecked page dimensions and persists them. The caller
-/// returns immediately; a subsequent page-list load will pick up the stored values. Duplicate tasks
-/// for the same chapter are suppressed while one is already running.
-pub fn spawn_backfill_local(state: &Arc<AppState>, chapter_id: i64, pages: Vec<PageRow>) {
-	{
-		let mut guard = IN_FLIGHT.lock().expect("dimension in-flight lock");
-		if !guard.insert(chapter_id) {
-			return;
-		}
-	}
-	let state = state.clone();
-	tokio::spawn(async move {
-		let _guard = InFlightGuard(chapter_id);
-		if let Err(e) = backfill_local(&state, chapter_id, pages).await {
-			tracing::warn!(chapter_id, "background page dimension backfill failed: {e:?}");
-		}
-	});
 }
 
 pub async fn backfill_local(

@@ -711,8 +711,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. After
-  a cache read or wholesale rewrite, `load_pages` spawns a background task
-  that measures unchecked materialized `Image`, `Local` and `OpdsZip` bytes
+  a cache read or wholesale rewrite, `load_pages` synchronously measures
+  unchecked materialized `Image`, `Local` and `OpdsZip` bytes
   through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
   full pixel decoding); `Url`/`Zip` content is never fetched just for
   metadata. Measurement reads only the first 64 KiB of a local file or zip
