@@ -767,13 +767,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `library.update_interval_hours` falls back to config
   `update_interval_hours` (default 0 = never); and
   `library.excluded_update_categories` defaults to an empty array of category
-  ids. `GET /api/v1/settings` returns these effective values, and only admins
-  can write them. Selection keeps `update_strategy = Never` and the global
+  ids stored per-user as `user.{id}.library.excluded_update_categories`. `GET
+  /api/v1/settings` returns the effective values for the requesting user; readers
+  can write their own user-scoped exclusion list, admins can write all library
+  settings. Selection keeps `update_strategy = Never` and the per-user
   `library.excluded_update_categories` list: a title whose categories overlap
-  the excluded list is skipped. The deprecated per-category `include_in_update`
-  tri-state is no longer consulted and will be removed from the API surface in
-  a future release; use the global excluded categories setting instead. A manual
-  `POST /api/v1/update/fetch`
+  the excluded list is skipped. The per-category `include_in_update` tri-state
+  has been removed from the category API and is no longer consulted; use the
+  per-user excluded categories setting instead. A manual `POST /api/v1/update/fetch`
   with a `categoryId` ignores that category in the global exclusion list,
   matching Aidoku's behavior when pulling a specific category. The skip
   predicates are evaluated against each

@@ -29,8 +29,8 @@ pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, nam
 			.fetch_one(&mut **tx)
 			.await?;
 	let result = sqlx::query(
-		"INSERT INTO category (user_id, name, sort_order, is_default, include_in_update, include_in_download)
-		 VALUES (?, ?, ?, 0, 0, 0)",
+		"INSERT INTO category (user_id, name, sort_order, is_default, include_in_download)
+		 VALUES (?, ?, ?, 0, 0)",
 	)
 	.bind(user_id)
 	.bind(name)

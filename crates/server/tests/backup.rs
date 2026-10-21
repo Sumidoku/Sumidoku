@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
 
-/// Fills every section with data on instance A: shelve + categories (with tri-state flags and ordering), two progress entries, settings, source settings
+/// Fills every section with data on instance A: shelve + categories (with include-in-download flag and ordering), two progress entries, settings, source settings
 async fn seed_full(app: &Router) {
 	let manga_id = register_example_manga(app).await;
 	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
@@ -24,7 +24,7 @@ async fn seed_full(app: &Router) {
 		app,
 		"PATCH",
 		&format!("/api/v1/categories/{cat_evening}"),
-		Some(json!({"includeInUpdate": 1, "includeInDownload": 2})),
+		Some(json!({"includeInDownload": 2})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
@@ -183,7 +183,7 @@ async fn export_import_round_trip() {
 	assert_eq!(cats[0]["sortOrder"], 0);
 	assert_eq!(cats[0]["mangaCount"], 1);
 	assert_eq!(cats[1]["name"], "Evening");
-	assert_eq!(cats[1]["includeInUpdate"], 1);
+	assert!(!cats[1].as_object().unwrap().contains_key("includeInUpdate"));
 	assert_eq!(cats[1]["includeInDownload"], 2);
 	assert_eq!(cats[1]["mangaCount"], 0);
 
@@ -251,13 +251,12 @@ async fn import_rolls_back_on_invalid_row() {
 	let b = fresh_target().await;
 	let before = db_dump(&b.db_path).await;
 
-	// the last category's tri-state value is out of range: it only trips mid-write, verifying the whole import rolls back
+	// the last category's include-in-download value is out of range: it only trips mid-write, verifying the whole import rolls back
 	doc["categories"].as_array_mut().expect("categories").push(json!({
 		"name": "Broken",
 		"sortOrder": 9,
 		"isDefault": false,
-		"includeInUpdate": 7,
-		"includeInDownload": 0,
+		"includeInDownload": 7,
 		"manga": []
 	}));
 	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
@@ -348,4 +347,77 @@ async fn import_honors_section_selection() {
 
 	let (status, _) = request(&b.app, "POST", "/api/v1/backup?sections=bogus", Some(doc)).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_migrates_legacy_include_in_update_exclude() {
+	let a = test_app().await;
+	let _manga_id = register_example_manga(&a.app).await;
+
+	// Create categories and simulate the legacy include_in_update = 2 flag directly in the DB,
+	// since the API no longer exposes it.
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Excluded"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let excluded_id = body["id"].as_i64().expect("category id");
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Normal"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let _normal_id = body["id"].as_i64().expect("category id");
+
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query("UPDATE category SET include_in_update = 2 WHERE id = ?")
+		.bind(excluded_id)
+		.execute(&pool)
+		.await
+		.expect("set legacy exclude flag");
+
+	// Build a legacy backup document that still carries includeInUpdate.
+	let doc = json!({
+		"version": 1,
+		"createdAt": 1700000000,
+		"sources": [],
+		"library": [],
+		"categories": [
+			{
+				"name": "Excluded",
+				"sortOrder": 0,
+				"isDefault": false,
+				"includeInUpdate": 2,
+				"includeInDownload": 0,
+				"manga": []
+			},
+			{
+				"name": "Normal",
+				"sortOrder": 1,
+				"isDefault": false,
+				"includeInUpdate": 0,
+				"includeInDownload": 0,
+				"manga": []
+			}
+		],
+		"progress": [],
+		"settings": {},
+		"sourceSettings": {}
+	});
+
+	let b = fresh_target().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "import failed: {body}");
+	assert_eq!(body["restored"]["categories"], 2);
+
+	// The Excluded category should be migrated into the per-user excluded_update_categories setting.
+	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	let excluded: Vec<i64> = settings["library.excluded_update_categories"]
+		.as_array()
+		.expect("excluded categories array")
+		.iter()
+		.map(|v| v.as_i64().expect("category id"))
+		.collect();
+	assert_eq!(excluded, vec![excluded_id]);
+
+	// The restored categories should not expose the deprecated field.
+	let (_, cats) = request(&b.app, "GET", "/api/v1/categories", None).await;
+	let excluded_cat = cats.as_array().unwrap().iter().find(|c| c["name"] == "Excluded").unwrap();
+	assert!(!excluded_cat.as_object().unwrap().contains_key("includeInUpdate"));
+	let normal_cat = cats.as_array().unwrap().iter().find(|c| c["name"] == "Normal").unwrap();
+	assert!(!normal_cat.as_object().unwrap().contains_key("includeInUpdate"));
 }
