@@ -670,3 +670,16 @@ fixture that actually carries the prefix.
   would never hit; quick-xml 0.42's `de/key.rs` matches on the local name.
   The same wrong mental model sits in `comic_info.rs`'s "matches literally"
   comment (masked by its merge logic).
+
+**When an issue cites a reference implementation, the reference's code is
+the spec — the issue text is only its summary.** "照 X 配" means reading
+X's actual files before designing, not just the paragraphs that mention
+X; edge semantics (field mappings, profile detection, fallback rules)
+live in the reference's source and almost never survive into the issue
+text. The recon checklist for such an issue names the exact files in the
+reference and what each one pins down.
+- Evidence: 2026-10-21, three local-source PRs built from issue scopes
+  (#269 multi-dir, #272 EPUB, #274 metadata) were all reopened the same
+  day with "refer to kmrs for re-improvement" — the kmrs clone sat in
+  `~/src` unread while the implementations guessed at field mappings and
+  profile detection that kmrs already pins down.
