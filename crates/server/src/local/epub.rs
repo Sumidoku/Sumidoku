@@ -7,6 +7,7 @@ use quick_xml::de::from_reader;
 use serde::Deserialize;
 use std::path::Path;
 
+use super::comic_info::ComicInfo;
 use super::zip_cache::ZipCache;
 
 /// The image media types a divina page may declare; anything else in the spine (nav documents, stylesheets) is not a page
@@ -43,6 +44,20 @@ pub struct PackageMetadata {
 	pub description: Option<String>,
 	#[serde(rename = "subject")]
 	pub subjects: Vec<String>,
+}
+
+impl PackageMetadata {
+	/// The metadata chain's shared shape: dc:title→series, dc:creator→writer, dc:description→summary,
+	/// dc:subject→genre. EPUB has no artist or status counterpart, so those stay unset.
+	pub fn into_comic_info(self) -> ComicInfo {
+		ComicInfo {
+			series: self.title,
+			writer: (!self.creators.is_empty()).then(|| self.creators.join(", ")),
+			summary: self.description,
+			genre: (!self.subjects.is_empty()).then(|| self.subjects.join(", ")),
+			..ComicInfo::default()
+		}
+	}
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -278,6 +293,23 @@ mod tests {
 		assert_eq!(metadata.creators, ["Author One", "Author Two"]);
 		assert_eq!(metadata.description.as_deref(), Some("desc"));
 		assert_eq!(metadata.subjects, ["manga", "action"]);
+	}
+
+	#[test]
+	fn metadata_maps_into_comic_info() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let path = tmp.path().join("x.epub");
+		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(OPF), &[]);
+		let info = read_package(&ZipCache::new(), &path)
+			.expect("package")
+			.metadata
+			.into_comic_info();
+		assert_eq!(info.title(), Some("Spine Book"));
+		assert_eq!(info.authors().expect("authors"), vec!["Author One", "Author Two"]);
+		assert_eq!(info.description().as_deref(), Some("desc"));
+		assert_eq!(info.tags().expect("tags"), vec!["manga", "action"]);
+		assert_eq!(info.artists(), None);
+		assert_eq!(info.status(), 0);
 	}
 
 	#[test]

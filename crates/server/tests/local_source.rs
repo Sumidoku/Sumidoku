@@ -6,7 +6,8 @@
 //! nested recognition (container-vs-series classification, relative-path keys, subtree absorption,
 //! nested failed-entry protection with the container prefix rule) / oneshots directory rule /
 //! EPUB chapters (divina profile: OPF spine-ordered pages, declared media types, natural-image
-//! fallback on a missing or unparseable OPF, nested and oneshot shapes)
+//! fallback on a missing or unparseable OPF, nested and oneshot shapes) / manga metadata sources
+//! (first hit wins: top-level ComicInfo.xml > archive ComicInfo.xml > series.json > EPUB OPF)
 mod common;
 
 use axum::Router;
@@ -1351,6 +1352,13 @@ fn write_epub(path: &std::path::Path, opf: Option<(&str, &[u8])>, entries: &[(&s
 
 /// Divina-profile OPF: manifest of (id, href, media-type), spine of idrefs in reading order
 fn divina_opf(manifest: &[(&str, &str, &str)], spine: &[&str]) -> Vec<u8> {
+	divina_opf_with_metadata("", manifest, spine)
+}
+
+/// `metadata_xml` lands verbatim inside <metadata> next to the identifier. The shared fixture
+/// carries no dc:title on purpose: these EPUBs predate the metadata chain, and a parseable OPF
+/// must leave their leaf-name manga titles alone
+fn divina_opf_with_metadata(metadata_xml: &str, manifest: &[(&str, &str, &str)], spine: &[&str]) -> Vec<u8> {
 	let items: String = manifest
 		.iter()
 		.map(|(id, href, media_type)| format!(r#"<item id="{id}" href="{href}" media-type="{media_type}"/>"#))
@@ -1364,7 +1372,7 @@ fn divina_opf(manifest: &[(&str, &str, &str)], spine: &[&str]) -> Vec<u8> {
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="uid">sumidoku-test</dc:identifier>
-    <dc:title>fixture</dc:title>
+    {metadata_xml}
   </metadata>
   <manifest>{items}</manifest>
   <spine>{itemrefs}</spine>
@@ -1573,4 +1581,216 @@ async fn oneshot_epub_opens_as_single_chapter() {
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, b"single-2");
+}
+
+// ----- series.json and EPUB OPF metadata sources -----
+
+const OPF_METADATA: &str = r#"<dc:title>Book Title</dc:title>
+    <dc:creator>Writer One</dc:creator>
+    <dc:creator>Writer Two</dc:creator>
+    <dc:description>book desc</dc:description>
+    <dc:subject>manga</dc:subject>
+    <dc:subject>action</dc:subject>"#;
+
+/// One-page EPUB chapter whose OPF carries the shared OPF_METADATA fragment
+fn write_metadata_epub(path: &std::path::Path) {
+	let opf = divina_opf_with_metadata(OPF_METADATA, &[("p1", "images/1.png", "image/png")], &["p1"]);
+	write_epub(path, Some(("OEBPS/content.opf", &opf)), &[("OEBPS/images/1.png", b"epub-page-1")]);
+}
+
+async fn manga_json(app: &Router, manga_id: i64) -> serde_json::Value {
+	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	body
+}
+
+#[tokio::test]
+async fn series_json_maps_into_manga() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	// plural spellings, plus an unknown field that must be ignored
+	let theta = root.join("Theta");
+	std::fs::create_dir_all(&theta).expect("mkdir theta");
+	std::fs::write(
+		theta.join("series.json"),
+		r#"{
+  "title": "Theta Series",
+  "authors": ["Author One", "Author Two"],
+  "artists": ["Artist One"],
+  "description": "theta desc",
+  "genres": ["Action", "Drama"],
+  "status": "COMPLETED",
+  "publisher": "unknown fields are ignored"
+}"#,
+	)
+	.expect("write series.json");
+	write_page(&theta.join("ch 1"), "1.png", b"theta-1-1");
+	// singular spellings in scalar shape, and a lowercase status
+	let iota = root.join("Iota");
+	std::fs::create_dir_all(&iota).expect("mkdir iota");
+	std::fs::write(
+		iota.join("series.json"),
+		r#"{"title": "Iota Series", "author": "Solo Author", "artist": "Solo Artist", "status": "hiatus"}"#,
+	)
+	.expect("write series.json");
+	write_page(&iota.join("ch 1"), "1.png", b"iota-1-1");
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let theta_id = register_local(&t.app, "Theta").await;
+	let body = manga_json(&t.app, theta_id).await;
+	assert_eq!(body["title"], "Theta Series");
+	assert_eq!(body["authors"], json!(["Author One", "Author Two"]));
+	assert_eq!(body["artists"], json!(["Artist One"]));
+	assert_eq!(body["description"], "theta desc");
+	assert_eq!(body["tags"], json!(["Action", "Drama"]));
+	assert_eq!(body["status"], "Completed");
+
+	let iota_id = register_local(&t.app, "Iota").await;
+	let body = manga_json(&t.app, iota_id).await;
+	assert_eq!(body["title"], "Iota Series");
+	assert_eq!(body["authors"], json!(["Solo Author"]));
+	assert_eq!(body["artists"], json!(["Solo Artist"]));
+	assert_eq!(body["status"], "Hiatus");
+}
+
+#[tokio::test]
+async fn series_json_unknown_status_is_unset() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let kappa = tmp.path().join("local/Kappa");
+	std::fs::create_dir_all(&kappa).expect("mkdir kappa");
+	std::fs::write(kappa.join("series.json"), r#"{"title": "Kappa Series", "status": "DROPPED"}"#)
+		.expect("write series.json");
+	write_page(&kappa.join("ch 1"), "1.png", b"kappa-1-1");
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let manga_id = register_local(&t.app, "Kappa").await;
+	let body = manga_json(&t.app, manga_id).await;
+	assert_eq!(body["title"], "Kappa Series");
+	assert_eq!(body["status"], "Unknown", "an unrecognized status string counts as unset: {body}");
+}
+
+#[tokio::test]
+async fn epub_opf_maps_into_manga() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	write_metadata_epub(&tmp.path().join("local/Lambda/ch 1.epub"));
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let manga_id = register_local(&t.app, "Lambda").await;
+	let body = manga_json(&t.app, manga_id).await;
+	assert_eq!(body["title"], "Book Title");
+	assert_eq!(body["authors"], json!(["Writer One", "Writer Two"]));
+	assert!(body["artists"].is_null(), "EPUB metadata has no artist counterpart: {body}");
+	assert_eq!(body["description"], "book desc");
+	assert_eq!(body["tags"], json!(["manga", "action"]));
+	assert_eq!(body["status"], "Unknown");
+}
+
+#[tokio::test]
+async fn comic_info_outranks_series_json() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	// top-level ComicInfo.xml vs series.json
+	let mu = root.join("Mu");
+	std::fs::create_dir_all(&mu).expect("mkdir mu");
+	std::fs::write(mu.join("ComicInfo.xml"), COMIC_INFO_ALPHA).expect("write comicinfo");
+	std::fs::write(mu.join("series.json"), r#"{"title": "Json Title", "status": "HIATUS"}"#)
+		.expect("write series.json");
+	write_page(&mu.join("ch 1"), "1.png", b"mu-1-1");
+	// archive-carried ComicInfo.xml vs series.json
+	let omicron = root.join("Omicron");
+	std::fs::create_dir_all(&omicron).expect("mkdir omicron");
+	std::fs::write(omicron.join("series.json"), r#"{"title": "Json Title", "status": "HIATUS"}"#)
+		.expect("write series.json");
+	write_cbz(
+		&omicron.join("ch 1.cbz"),
+		&[("1.png", b"omicron-1-1"), ("ComicInfo.xml", COMIC_INFO_DELTA.as_bytes())],
+	);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let mu_id = register_local(&t.app, "Mu").await;
+	let body = manga_json(&t.app, mu_id).await;
+	assert_eq!(body["title"], "Alpha Series", "top-level ComicInfo.xml wins: {body}");
+	assert_eq!(body["status"], "Completed");
+
+	let omicron_id = register_local(&t.app, "Omicron").await;
+	let body = manga_json(&t.app, omicron_id).await;
+	assert_eq!(body["title"], "Delta Series", "archive ComicInfo.xml wins: {body}");
+	assert_eq!(body["status"], "Ongoing");
+}
+
+#[tokio::test]
+async fn series_json_outranks_epub_opf() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let nu = tmp.path().join("local/Nu");
+	std::fs::create_dir_all(&nu).expect("mkdir nu");
+	std::fs::write(
+		nu.join("series.json"),
+		r#"{"title": "Json Title", "authors": ["Json Author"], "status": "ONGOING"}"#,
+	)
+	.expect("write series.json");
+	write_metadata_epub(&nu.join("ch 1.epub"));
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let manga_id = register_local(&t.app, "Nu").await;
+	let body = manga_json(&t.app, manga_id).await;
+	assert_eq!(body["title"], "Json Title", "series.json wins over the OPF: {body}");
+	assert_eq!(body["authors"], json!(["Json Author"]));
+	assert_eq!(body["status"], "Ongoing");
+}
+
+#[tokio::test]
+async fn broken_series_json_falls_through_to_epub_opf() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let xi = tmp.path().join("local/Xi");
+	std::fs::create_dir_all(&xi).expect("mkdir xi");
+	std::fs::write(xi.join("series.json"), b"{ not json").expect("write series.json");
+	write_metadata_epub(&xi.join("ch 1.epub"));
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	// a broken sidecar warns and is skipped: shelving succeeds and the chain lands on the OPF
+	let manga_id = register_local(&t.app, "Xi").await;
+	let body = manga_json(&t.app, manga_id).await;
+	assert_eq!(body["title"], "Book Title", "{body}");
+	assert_eq!(body["authors"], json!(["Writer One", "Writer Two"]));
+}
+
+#[tokio::test]
+async fn oneshot_epub_reads_opf_not_sidecar_series_json() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	write_metadata_epub(&tmp.path().join("local/oneshots/Solo.epub"));
+	// the series.json next to the archive is a series sidecar, which the oneshots rule ignores —
+	// if it were read it would outrank the OPF
+	std::fs::write(
+		tmp.path().join("local/oneshots/series.json"),
+		r#"{"title": "Sidecar Json"}"#,
+	)
+	.expect("write series.json");
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+	enable_oneshots(&t.app).await;
+
+	let manga_id = register_local(&t.app, "oneshots/Solo.epub").await;
+	let body = manga_json(&t.app, manga_id).await;
+	assert_eq!(body["title"], "Book Title", "{body}");
+	assert_eq!(body["authors"], json!(["Writer One", "Writer Two"]));
 }

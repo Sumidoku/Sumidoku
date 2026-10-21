@@ -206,7 +206,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   each archive directly inside becomes its own one-chapter manga keyed
   by the archive path (`oneshots/Foo.cbz`) and titled by the file
   stem, nothing below the directory is picked up, and the ComicInfo.xml
-  / `cover.*` next to an archive are ignored as series sidecars. Such
+  / `series.json` / `cover.*` next to an archive are ignored as series
+  sidecars (archive-internal ComicInfo/OPF metadata still applies, so
+  the file stem is only the fallback title). Such
   a key names a file, not a directory: chapter listing, page reads and
   the cover chain treat it as the degenerate form whose only chapter
   is the archive itself (chapter key = the leaf name, the same shape
@@ -229,8 +231,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   the aggregate search reuses the same arm so a selected Local yields a
   section instead of an error entry. A manga persists only when opened
   or shelved (Suwayomi semantics): `find_or_register_manga` scans the
-  directory, maps `ComicInfo.xml` (top level, else extracted in-memory
-  from the first chapter archive carrying one) and feeds the same
+  directory, resolves metadata by a first-hit-wins chain (no per-field
+  merge) — top-level `ComicInfo.xml` (authoritative when present, even
+  unparsable) → the first chapter archive carrying one, in chapter
+  order (extracted in-memory) → a `series.json` sidecar (flat schema:
+  title, author/authors, artist/artists, description, genres, status
+  enum; a broken file warns and falls through) → the first EPUB chapter
+  whose OPF parses (`dc:title`/`dc:creator`/`dc:description`/`dc:subject`;
+  no artist/status counterpart) — and feeds the same
   `upsert_manga` + `reconcile_chapters` as an online fetch; the scan
   skips dot entries, `@eaDir` and unreadable items at every level
   (failed items land in the reconcile protection set by full relative

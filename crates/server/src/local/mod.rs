@@ -22,14 +22,19 @@
 //! an EPUB takes its page list from the OPF spine restricted to image manifest items, falling back to the CBZ
 //! rule (natural-sorted image entries) when the OPF is missing or unparseable (`local/epub.rs`).
 //!
+//! Manga metadata resolves by a first-hit-wins chain, no per-field merge (`read_manga_metadata`): the manga
+//! directory's top-level ComicInfo.xml (authoritative when present, even unparsable) → the first chapter
+//! archive carrying one, in chapter order → a series.json sidecar (flat schema; a broken file warns and
+//! falls through) → the first EPUB chapter whose OPF parses, in chapter order.
+//!
 //! With a oneshots name configured (config local_oneshots_dir, overridable by the local.oneshots_dir setting),
 //! the oneshots rule outranks both passes: a directory whose relative path contains the name (case-insensitive
 //! substring, kmrs's ScanOptions::oneshots_dir) is never claimed — every archive directly inside becomes its
 //! own one-chapter manga keyed by the archive path (`oneshots/Foo.cbz`) and titled by the file stem, and
 //! nothing below the directory is picked up. Such a manga key names a file, not a directory: chapter listing,
 //! pages and the cover treat it as the degenerate form whose only chapter is the archive itself (chapter key =
-//! the leaf name), and series sidecars next to the archive (ComicInfo.xml, cover.*) are ignored, so the cover
-//! is the single chapter's first page.
+//! the leaf name), and series sidecars next to the archive (ComicInfo.xml, series.json, cover.*) are ignored,
+//! so the cover is the single chapter's first page.
 //!
 //! Failed-entry protection (borrowed from kmrs): entries that fail to read are recorded in `failed` by full relative
 //! path and the caller carries them into the reconcile protection set, where a failed container prefix-protects the
@@ -40,6 +45,7 @@ pub mod chapter_number;
 pub mod comic_info;
 pub mod epub;
 pub mod natural_sort;
+pub mod series_json;
 pub mod zip_cache;
 
 pub use zip_cache::ZipCache;
@@ -535,7 +541,7 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 		title: title_of(manga_key),
 		..Manga::default()
 	};
-	if let Some(info) = read_comic_info(dir, zip, rel, &chapters).await {
+	if let Some(info) = read_manga_metadata(dir, zip, rel, &chapters).await {
 		if let Some(title) = info.title() {
 			manga.title = title.to_string();
 		}
@@ -558,38 +564,65 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 	})
 }
 
-/// ComicInfo read order, same as Suwayomi: the manga directory's top level wins; if the top-level file exists it is
-/// authoritative (even when parsing fails) and archives are not consulted;
-/// otherwise extract from the first archive with a ComicInfo.xml in chapter order (parsed in memory only, never written back to the user's directory)
-async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter]) -> Option<comic_info::ComicInfo> {
-	// for a oneshot the "directory level" is the oneshots directory: its ComicInfo.xml is a series
-	// sidecar, which the oneshots rule ignores — only the archive's own ComicInfo counts
+/// Manga metadata resolution, first hit wins — there is no per-field merge. The chain:
+/// 1. the manga directory's top-level ComicInfo.xml: authoritative when present, so a present-but-unparsable
+///    file yields no metadata and nothing below is consulted;
+/// 2. the first chapter archive carrying a ComicInfo.xml, in chapter order (parsed in memory only, never
+///    written back to the user's directory);
+/// 3. a series.json sidecar in the manga directory: a broken or unreadable file warns and falls through
+///    instead of ending the chain;
+/// 4. the first EPUB chapter whose package document parses, in chapter order — a broken EPUB counts as no
+///    source and the next one is tried.
+///
+/// For a oneshot the "directory level" is the oneshots directory, whose ComicInfo.xml/series.json are series
+/// sidecars the oneshots rule ignores: only archive-internal metadata (links 2 and 4) applies.
+async fn read_manga_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter]) -> Option<comic_info::ComicInfo> {
 	let oneshot = tokio::fs::metadata(local_dir.join(manga_key))
 		.await
 		.is_ok_and(|metadata| metadata.is_file());
-	if !oneshot {
-		let top_level = local_dir.join(manga_key).join(comic_info::COMIC_INFO_FILE);
-		match tokio::fs::read(&top_level).await {
-			Ok(bytes) => return comic_info::parse(&bytes),
-			Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-			Err(e) => {
-				tracing::warn!(path = %top_level.display(), "read ComicInfo.xml failed: {e}");
-				return None;
-			}
+	if !oneshot
+		&& let Some(info) = top_level_comic_info(local_dir, manga_key).await
+	{
+		return info;
+	}
+	if let Some(info) = archive_comic_info(local_dir, zip, manga_key, chapters, oneshot).await {
+		return info;
+	}
+	if !oneshot
+		&& let Some(info) = series_json_metadata(local_dir, manga_key).await
+	{
+		return Some(info);
+	}
+	epub_opf_metadata(local_dir, zip, manga_key, chapters, oneshot).await
+}
+
+/// Chain link 1: the manga directory's top-level ComicInfo.xml. Outer Some = the file is present and
+/// therefore authoritative, even when its parse yielded nothing (inner None) — the whole chain then ends
+/// with no metadata, the same behavior as before the chain grew more links.
+async fn top_level_comic_info(local_dir: &Path, manga_key: &str) -> Option<Option<comic_info::ComicInfo>> {
+	let top_level = local_dir.join(manga_key).join(comic_info::COMIC_INFO_FILE);
+	match tokio::fs::read(&top_level).await {
+		Ok(bytes) => Some(comic_info::parse(&bytes)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+		Err(e) => {
+			tracing::warn!(path = %top_level.display(), "read ComicInfo.xml failed: {e}");
+			Some(None)
 		}
 	}
+}
+
+/// Chain link 2: the first archive in chapter order carrying a ComicInfo.xml. Same tri-state as link 1:
+/// the first carrier is authoritative even when its file does not parse; archives without the file (or
+/// with an unreadable one) are skipped.
+async fn archive_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter], oneshot: bool) -> Option<Option<comic_info::ComicInfo>> {
 	for chapter in chapters.iter().filter(|c| c.is_archive) {
-		let path = if oneshot {
-			local_dir.join(manga_key)
-		} else {
-			local_dir.join(manga_key).join(&chapter.key)
-		};
+		let path = chapter_archive_path(local_dir, manga_key, &chapter.key, oneshot);
 		let read = {
 			let zip = zip.clone();
 			tokio::task::spawn_blocking(move || zip.read_entry(&path, comic_info::COMIC_INFO_FILE)).await
 		};
 		match read {
-			Ok(Ok(bytes)) => return comic_info::parse(&bytes),
+			Ok(Ok(bytes)) => return Some(comic_info::parse(&bytes)),
 			Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => continue,
 			Ok(Err(e)) => {
 				tracing::warn!(chapter = %chapter.key, "read archive ComicInfo.xml failed: {e}");
@@ -602,6 +635,51 @@ async fn read_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str,
 		}
 	}
 	None
+}
+
+/// Chain link 3: the series.json sidecar in the manga directory. Unlike the ComicInfo links it is not
+/// authoritative: a broken or unreadable file warns and the chain falls through, never failing the scan.
+async fn series_json_metadata(local_dir: &Path, manga_key: &str) -> Option<comic_info::ComicInfo> {
+	let path = local_dir.join(manga_key).join(series_json::SERIES_JSON_FILE);
+	match tokio::fs::read(&path).await {
+		Ok(bytes) => series_json::parse(&bytes),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+		Err(e) => {
+			tracing::warn!(path = %path.display(), "read series.json failed: {e}");
+			None
+		}
+	}
+}
+
+/// Chain link 4: the first EPUB chapter in chapter order whose package document parses. An EPUB that does
+/// not parse counts as no source (read_package already warned) and the next EPUB is tried.
+async fn epub_opf_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter], oneshot: bool) -> Option<comic_info::ComicInfo> {
+	for chapter in chapters.iter().filter(|c| c.is_archive && has_ext(&c.key, &["epub"])) {
+		let path = chapter_archive_path(local_dir, manga_key, &chapter.key, oneshot);
+		let package = {
+			let zip = zip.clone();
+			tokio::task::spawn_blocking(move || epub::read_package(&zip, &path)).await
+		};
+		match package {
+			Ok(Some(package)) => return Some(package.metadata.into_comic_info()),
+			Ok(None) => continue,
+			Err(e) => {
+				tracing::warn!(chapter = %chapter.key, "epub metadata task failed: {e}");
+				continue;
+			}
+		}
+	}
+	None
+}
+
+/// Archive chapter path on disk: for a oneshot the manga key names the archive itself, otherwise the
+/// chapter key joins onto the manga directory
+fn chapter_archive_path(local_dir: &Path, manga_key: &str, chapter_key: &str, oneshot: bool) -> PathBuf {
+	if oneshot {
+		local_dir.join(manga_key)
+	} else {
+		local_dir.join(manga_key).join(chapter_key)
+	}
 }
 
 /// Chapter path on disk: `<manga dir>/<chapter key>` — except that a oneshot manga key names the archive
