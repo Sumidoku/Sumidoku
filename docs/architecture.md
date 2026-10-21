@@ -707,7 +707,18 @@ Migrations in `crates/server/migrations`.
   per-policy knob (`NetPolicy::browser_headers`, config
   `net.browser_headers`, default on): `sec-fetch-*`'s navigate semantics
   are a mild lie for API/XHR requests, so the knob keeps the honest
-  option. Their response bodies are capped as well: covers and
+  option. The lie also has one hard failure mode, repaired in the source
+  net imports (`crates/wasm/src/imports/net.rs:perform`): Django REST
+  framework negotiates on `Accept`, and the suite's document-class
+  `Accept` turns an API call into DRF's browsable-API HTML page, which
+  breaks the source's JSON parse. When a direct 2xx `text/html` response
+  carries the `Django REST framework` marker
+  (`traits.rs:is_drf_browsable_page` — the marker, never "is HTML", so
+  legitimate page fetches are not double-fetched), the request is resent
+  once with exactly the headers the host injected stripped from it — a
+  source-declared `Accept` stays — which reproduces what AidokuRunner
+  sends, since it injects no headers at all. Their response bodies are
+  capped as well: covers and
   page images share the net host's `net_body_max_mb`, while zip pages —
   a whole chapter packed into one archive — fall under the higher
   `net_zip_body_max_mb` (default 128 MiB).
