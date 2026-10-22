@@ -1,28 +1,12 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, ScrollRestoration } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import {
-	Clock,
-	Compass,
-	Download,
-	Library,
-	Moon,
-	RefreshCw,
-	Search,
-	Settings,
-	Sun
-} from 'lucide-react';
+import { Moon, Sun } from 'lucide-react';
 import { IconButton } from '../components';
+import { readSidebarCollapsed, writeSidebarCollapsed } from '../lib/sidebarPrefs';
 import { useResolvedTheme, useTheme } from '../lib/theme';
-
-const NAV = [
-	{ to: '/library', labelKey: 'common.nav.library', icon: Library },
-	{ to: '/browse', labelKey: 'common.nav.browse', icon: Compass },
-	{ to: '/search', labelKey: 'common.nav.search', icon: Search },
-	{ to: '/history', labelKey: 'common.nav.history', icon: Clock },
-	{ to: '/downloads', labelKey: 'common.nav.downloads', icon: Download },
-	{ to: '/updates', labelKey: 'common.nav.updates', icon: RefreshCw },
-	{ to: '/settings', labelKey: 'common.nav.settings', icon: Settings }
-] as const;
+import { DesktopSidebar } from './DesktopSidebar';
+import { NAV } from './navigation';
 
 function ThemeToggle() {
 	const { t } = useTranslation();
@@ -42,31 +26,15 @@ function ThemeToggle() {
 /** The full-screen reader does not come through here (its route hangs outside AppLayout) */
 export function AppLayout() {
 	const { t } = useTranslation();
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+	useEffect(() => {
+		writeSidebarCollapsed(sidebarCollapsed);
+	}, [sidebarCollapsed]);
 	return (
-		<div className="app">
-			<aside className="app__sidebar">
-				<NavLink to="/library" className="app__logo">
-					<img className="app__logo-mark" src="/icon.svg" alt="" />
-					<span className="app__logo-text">Sumidoku</span>
-				</NavLink>
-				<nav className="side-nav">
-					{NAV.map((item) => (
-						<NavLink
-							key={item.to}
-							to={item.to}
-							className={({ isActive }) =>
-								isActive ? 'side-nav__item side-nav__item--active' : 'side-nav__item'
-							}
-						>
-							<item.icon size={18} />
-							<span>{t(item.labelKey)}</span>
-						</NavLink>
-					))}
-				</nav>
-				<div className="app__sidebar-foot">
-					<ThemeToggle />
-				</div>
-			</aside>
+		<div className={sidebarCollapsed ? 'app app--sidebar-collapsed' : 'app'}>
+			<DesktopSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)}>
+				<ThemeToggle />
+			</DesktopSidebar>
 
 			<header className="app__topbar">
 				<NavLink to="/library" className="app__logo app__logo--sm">
@@ -76,11 +44,11 @@ export function AppLayout() {
 				<ThemeToggle />
 			</header>
 
-		<main className="app__content">
-			<Outlet />
-		</main>
-		{/* New navigation scrolls to top, forward/back restores each page's own position; the reader lives outside the layout with its own scroll management, unaffected */}
-		<ScrollRestoration />
+			<main className="app__content">
+				<Outlet />
+			</main>
+			{/* New navigation scrolls to top, forward/back restores each page's own position; the reader lives outside the layout with its own scroll management, unaffected */}
+			<ScrollRestoration />
 
 			<nav className="app__tabbar">
 				{NAV.map((item) => (
