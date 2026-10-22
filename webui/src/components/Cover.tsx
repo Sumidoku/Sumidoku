@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface CoverProps {
@@ -10,13 +10,10 @@ export interface CoverProps {
 /** Uniform 2:3 cover: shimmer while loading, title placeholder on failure (container query switches to a large first character at narrow sizes) */
 export function Cover({ src, title, alt }: CoverProps) {
 	const { t } = useTranslation();
-	const [failed, setFailed] = useState(false);
-	const [loaded, setLoaded] = useState(false);
-	// Failure is tracked per src: when the src is swapped in place (e.g. changing a cover), the old image's failure must not lock out the new one
-	useEffect(() => {
-		setFailed(false);
-		setLoaded(false);
-	}, [src]);
+	const [failedSrc, setFailedSrc] = useState<string | null>(null);
+	const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+	const failed = src != null && failedSrc === src;
+	const loaded = src != null && loadedSrc === src;
 	const showImg = !!src && !failed;
 	return (
 		<div className={showImg && !loaded ? 'cover cover--shimmer' : 'cover'}>
@@ -27,8 +24,17 @@ export function Cover({ src, title, alt }: CoverProps) {
 					alt={alt || title}
 					loading="lazy"
 					referrerPolicy="no-referrer"
-					onLoad={() => setLoaded(true)}
-					onError={() => setFailed(true)}
+					ref={(image) => {
+						// A cached image can already be complete before React delivers a load event
+						if (!image?.complete) return;
+						if (image.naturalWidth > 0) {
+							setLoadedSrc(src ?? null);
+						} else {
+							setFailedSrc(src ?? null);
+						}
+					}}
+					onLoad={() => setLoadedSrc(src ?? null)}
+					onError={() => setFailedSrc(src ?? null)}
 				/>
 			) : (
 				<div className="cover__placeholder">
