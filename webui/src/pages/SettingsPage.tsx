@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
@@ -75,6 +75,7 @@ import {
 	pushToast
 } from '../components';
 import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
+import { SettingsLayout, SETTINGS_GROUPS } from './settings/SettingsLayout';
 import { SkippedItems } from './settings/SkippedItems';
 import './settings.css';
 
@@ -2026,22 +2027,51 @@ function AboutSection() {
 
 export default function SettingsPage() {
 	const { t } = useTranslation();
+	const [searchParams, setSearchParams] = useSearchParams();
+	const requested = searchParams.get('section');
+	const current = SETTINGS_GROUPS.find(([key]) => key === requested)?.[0] ?? 'general';
 	return (
 		<div className="page container settings-page">
 			<PageHeader title={t('common.nav.settings')} />
-			<AppearanceSection />
-			<IncognitoSection />
-			<SecuritySection />
-			<CategoriesSection />
-			<FilterGroupsSection />
-			<LibraryDisplaySection />
-			<LibraryUpdateSection />
-			<DownloadSection />
-			<LocalSourceSection />
-			<BackupSection />
-			<DownloadMoveSection />
-			<ScheduledBackupSection />
-			<AboutSection />
+			<SettingsLayout
+				current={current}
+				onSelect={(key) => setSearchParams({ section: key })}
+				panels={{
+					general: (
+						<>
+							<AppearanceSection />
+							<IncognitoSection />
+						</>
+					),
+					library: (
+						<>
+							<CategoriesSection />
+							<FilterGroupsSection />
+							<LibraryDisplaySection />
+							<LibraryUpdateSection />
+							<LocalSourceSection />
+						</>
+					),
+					downloads: (
+						<>
+							<DownloadSection />
+							<DownloadMoveSection />
+						</>
+					),
+					backups: (
+						<>
+							<BackupSection />
+							<ScheduledBackupSection />
+						</>
+					),
+					system: (
+						<>
+							<SecuritySection />
+							<AboutSection />
+						</>
+					)
+				}}
+			/>
 		</div>
 	);
 }
