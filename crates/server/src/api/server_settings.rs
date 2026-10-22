@@ -8,6 +8,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
+pub(crate) const ROOT_GROUPS: [&str; 7] = [
+	"incognito",
+	"library",
+	"local",
+	"download",
+	"backup",
+	"browse",
+	"readOnly",
+];
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServerSettings {
@@ -46,12 +56,14 @@ pub struct LibrarySettings {
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
 	pub dirs: Vec<String>,
+	#[serde(deserialize_with = "required_option")]
 	pub oneshots_dir: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadSettings {
+	#[serde(deserialize_with = "required_option")]
 	pub move_path: Option<String>,
 }
 
@@ -61,7 +73,9 @@ pub struct BackupSettings {
 	pub enabled: bool,
 	pub interval_hours: u64,
 	pub retention_count: u64,
+	#[serde(deserialize_with = "required_option")]
 	pub last_run: Option<u64>,
+	#[serde(deserialize_with = "required_option")]
 	pub dir: Option<String>,
 }
 
@@ -75,7 +89,16 @@ pub struct BrowseSettings {
 #[serde(rename_all = "camelCase")]
 pub struct ReadOnlySettings {
 	pub local_dirs: Vec<String>,
+	#[serde(deserialize_with = "required_option")]
 	pub local_oneshots_dir: Option<String>,
+}
+
+fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+	D: serde::Deserializer<'de>,
+	T: Deserialize<'de>,
+{
+	Option::<T>::deserialize(deserializer)
 }
 
 impl Default for LibrarySettings {
@@ -155,7 +178,9 @@ impl ServerSettings {
 		.collect();
 		let extra = map
 			.iter()
-			.filter(|(k, _)| !known.contains(k.as_str()) && !k.starts_with("user."))
+			.filter(|(k, _)| {
+				!known.contains(k.as_str()) && !ROOT_GROUPS.contains(&k.as_str()) && !k.starts_with("user.")
+			})
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();
 
@@ -176,19 +201,13 @@ impl ServerSettings {
 		map.insert("library.refresh_metadata".into(), json!(self.library.refresh_metadata));
 		map.insert("library.update_interval_hours".into(), json!(self.library.update_interval_hours));
 		map.insert("local.dirs".into(), json!(self.local.dirs));
-		if let Some(oneshots_dir) = self.local.oneshots_dir {
-			map.insert("local.oneshots_dir".into(), json!(oneshots_dir));
-		}
+		map.insert("local.oneshots_dir".into(), json!(self.local.oneshots_dir));
 		map.insert("download.move_path".into(), json!(self.download.move_path));
 		map.insert("backup.enabled".into(), json!(self.backup.enabled));
 		map.insert("backup.interval_hours".into(), json!(self.backup.interval_hours));
 		map.insert("backup.retention_count".into(), json!(self.backup.retention_count));
-		if let Some(last_run) = self.backup.last_run {
-			map.insert("backup.last_run".into(), json!(last_run));
-		}
-		if let Some(dir) = self.backup.dir {
-			map.insert("backup.dir".into(), json!(dir));
-		}
+		// The backup schedule owns last_run; a full settings write must not replay a stale timestamp.
+		map.insert("backup.dir".into(), json!(self.backup.dir));
 		map.insert("browse.pinned_sources".into(), json!(self.browse.pinned_sources));
 		map.extend(self.extra);
 		map
@@ -217,4 +236,22 @@ fn get_i64_array(map: &serde_json::Map<String, Value>, key: &str) -> Option<Vec<
 	map.get(key)
 		.and_then(Value::as_array)
 		.and_then(|arr| arr.iter().map(|v| v.as_i64()).collect::<Option<Vec<_>>>())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn root_groups_do_not_leak_into_extra_settings() {
+		let map = serde_json::Map::from_iter([
+			("library".into(), json!({"updateIntervalHours": 12})),
+			("readOnly".into(), json!({"localDirs": ["ignored"]})),
+			("custom.option".into(), json!({"keep": true})),
+		]);
+		let settings = ServerSettings::from_flat(&map).expect("structured settings");
+		assert!(!settings.extra.contains_key("library"));
+		assert!(!settings.extra.contains_key("readOnly"));
+		assert_eq!(settings.extra.get("custom.option"), Some(&json!({"keep": true})));
+	}
 }

@@ -19,7 +19,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `GET /api/v1/sources/{id}/home` (`api/mod.rs:get_home`) returns the Aidoku
   `HomeLayout` as-is — an ordered `components` array; the array index is the
   stable key a `send_partial_result` stream patches against. A source
-  without `get_home` answers 404 `unsupported`, same as dynamic filters and
+  without `get_home` answers 501 `unsupported`, same as dynamic filters and
   listings.
   `POST /api/v1/sources/{id}/deep-link` (`api/mod.rs:deep_link`) hands a URL
   to the source's `handle_deep_link`. `Manga`/`Chapter` results are resolved
@@ -30,7 +30,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   page) — so the web UI navigates to `/manga/:id` or `/reader/:chapterId`
   with no second lookup; `Listing` passes through and the source browse page
   switches to that listing, and an unmatched URL answers `{"result": null}`.
-  A source without the export answers 404 `unsupported`, same as `get_home`.
+  A source without the export answers 501 `unsupported`, same as `get_home`.
   `GET /api/v1/sources/{id}/listings` merges the source's declared listings —
   static `source.json` entries first, then the dynamic `get_listings` export —
   into one shape (`api::listings`). Static entries parse with AidokuRunner's
@@ -217,7 +217,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   built-in `local.local` row the migration seeds; the row cannot be deleted
   (400), is excluded from repo management and metadata backfill, and every
   wasm-capability endpoint (filters, listings, home, deep link, settings,
-  login) answers 404 `unsupported` for it. There is no index table:
+  login) answers 501 `unsupported` for it. There is no index table:
   browsing walks the local roots recursively in real time — config
   `local_dirs` (`SUMIDOKU_LOCAL_DIRS`, semicolon-separated with empty
   segments ignored; the single `SUMIDOKU_LOCAL_DIR` / `local_dir`
@@ -308,14 +308,15 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   Auto-download skips local manga (files are already local), and the web
   UI hides the download buttons for `kind = local`, shows a manual refresh
   button on the chapter list, and edits the directory list in Settings:
-  `GET /api/v1/settings` injects the resolved list as `localDirs`
-  (camelCase, distinct from the `setting` table's dotted keys), `PUT`
-  skips that injected key, and `PUT` on `local.dirs` stores the override
-  (a string array of non-empty paths, otherwise 400) which takes effect
-  without a restart. The oneshots name follows the same pattern:
-  `GET` injects the effective value as `localOneshotsDir` (null when
-  neither layer names one) and `PUT` on `local.oneshots_dir` validates
-  a string (an empty one clears the override). RAR/CBR, PDF and 7z are
+  `GET /api/v1/settings` exposes the resolved list as `readOnly.localDirs`,
+  distinct from the structured `local.dirs` override and the legacy flat
+  keys in the `setting` table. The read-only keys are ignored on writes.
+  Both structured and legacy flat PUT accept the dotted storage keys for
+  backward compatibility; the override requires a string array of non-empty
+  paths and takes effect without a restart. The oneshots name follows the
+  same pattern: `readOnly.localOneshotsDir` is null when neither layer names
+  one, structured `local.oneshotsDir: null` clears the override, and the
+  legacy flat form accepts a string (an empty one also clears it). RAR/CBR, PDF and 7z are
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
 - Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
@@ -330,7 +331,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   land in `source_setting` (`username`/`password`), instances are
   deletable (cascade) and excluded from repo management and metadata
   backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint
-  answers 404 `unsupported` exactly like the local source. Capability
+  answers 501 `unsupported` exactly like the local source. Capability
   mapping: search = the catalog's OpenSearch descriptor (`rel="search"`
   link on the root feed → `{searchTerms}` template) or, on 2.0 catalogs,
   the templated `rel="search"` link itself (`{?query}` expanded directly,

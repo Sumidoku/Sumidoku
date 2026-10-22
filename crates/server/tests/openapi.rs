@@ -112,7 +112,20 @@ fn document_describes_shared_contracts() {
 	assert!(document["paths"]["/api/v1/sync/changes"]["post"].is_object());
 	assert!(document["paths"]["/api/v1/sync/compact"]["post"].is_object());
 	assert!(document["paths"]["/api/v1/auth/logout"]["post"]["security"].as_array().expect("logout security").is_empty());
-	assert!(document["paths"]["/api/v1/sources/{id}/filters"]["get"]["responses"]["404"].is_object());
+	for path in [
+		"/api/v1/sources/{id}/filters",
+		"/api/v1/sources/{id}/listings",
+		"/api/v1/sources/{id}/home",
+	] {
+		assert!(document["paths"][path]["get"]["responses"]["501"].is_object(), "missing 501 for {path}");
+	}
+	assert!(document["paths"]["/api/v1/sources/{id}/deep-link"]["post"]["responses"]["501"].is_object());
+	assert_eq!(document["components"]["parameters"]["DownloadChapterId"]["name"], "id");
+	let parameters = document["paths"]["/api/v1/backups/import/suwayomi"]["post"]["parameters"]
+		.as_array()
+		.expect("Suwayomi import parameters");
+	let names: Vec<&str> = parameters.iter().filter_map(|parameter| parameter["name"].as_str()).collect();
+	assert_eq!(names, ["dryRun", "sourceMapping"]);
 	for path in ["/api/v1/downloads/ws", "/api/v1/update/ws"] {
 		let operation = &document["paths"][path]["get"];
 		assert!(operation["responses"]["101"].is_object(), "missing WebSocket upgrade for {path}");
@@ -128,8 +141,17 @@ fn representative_response_shapes_match_handlers() {
 	if page["hasDescription"]["type"] != "boolean" || page.get("has_description").is_some() {
 		errors.push("Page must expose hasDescription in camelCase");
 	}
-	if document["components"]["schemas"]["Settings"]["properties"]["library.skip_titles"]["type"] != "array" {
-		errors.push("library.skip_titles must be an array");
+	if document["components"]["schemas"]["LibrarySettings"]["properties"]["skipTitles"]["type"] != "array" {
+		errors.push("LibrarySettings.skipTitles must be an array");
+	}
+	if !document["components"]["schemas"]["ServerSettings"]["properties"]["readOnly"].is_object() {
+		errors.push("ServerSettings must expose its readOnly group");
+	}
+	if !document["components"]["schemas"]["LocalSettings"]["required"]
+		.as_array()
+		.is_some_and(|fields| fields.iter().any(|field| field == "oneshotsDir"))
+	{
+		errors.push("LocalSettings.oneshotsDir must be required and nullable");
 	}
 	if document["components"]["schemas"]["SourceRepo"]["properties"]["name"]["nullable"] != true {
 		errors.push("SourceRepo.name must be nullable");

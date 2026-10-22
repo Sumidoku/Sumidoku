@@ -624,7 +624,7 @@ async fn get_home(
 		let home = handle.get_home().await.map_err(dynamic_capability_error)?;
 		return Ok(Json(serde_json::to_value(home)?).into_response());
 	}
-	// A missing capability must return 404 before the stream starts, keeping the same status-code contract as non-streaming
+	// A missing capability must return 501 before the stream starts, keeping the same status-code contract as non-streaming
 	if !handle.features().home {
 		return Err(dynamic_capability_error(SourceError::Unsupported("get_home")));
 	}
@@ -1548,6 +1548,13 @@ pub(crate) async fn apply_settings(
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in body {
+		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
+			sqlx::query("DELETE FROM setting WHERE key = ?")
+				.bind(key)
+				.execute(&mut *tx)
+				.await?;
+			continue;
+		}
 		if let Some(result) = crate::update::validate_library_setting(key, value) {
 			result?;
 		}
@@ -1610,6 +1617,13 @@ async fn put_settings(
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
 	let flat = match serde_json::from_value::<server_settings::ServerSettings>(body.clone()) {
 		Ok(settings) => settings.into_flat(),
+		Err(e)
+			if body.as_object().is_some_and(|map| {
+				server_settings::ROOT_GROUPS.iter().any(|key| map.contains_key(*key))
+			}) =>
+		{
+			return Err(ApiError::bad_request(format!("invalid settings body: {e}")));
+		}
 		Err(_) => {
 			// Fallback: accept the legacy flat dotted-key map for backward compatibility.
 			let map: HashMap<String, Value> = serde_json::from_value(body)

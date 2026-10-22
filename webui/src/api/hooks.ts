@@ -783,6 +783,7 @@ export function mergeServerSettings(
 	patch: DeepPartial<ServerSettings>
 ): ServerSettings {
 	return {
+		...current,
 		incognito: { ...current?.incognito, ...patch.incognito },
 		library: { ...current?.library, ...patch.library },
 		local: { ...current?.local, ...patch.local },
