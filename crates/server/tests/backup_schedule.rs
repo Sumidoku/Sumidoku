@@ -76,6 +76,7 @@ async fn scheduled_backup_runs_and_respects_due() {
 		BackupScheduler::with_tick_interval(pool.clone(), config.clone(), Duration::from_millis(50));
 	let task = tokio::spawn(scheduler.run());
 	let names = wait_for_backups(&dir, 1, Duration::from_secs(5)).await;
+	let at = wait_for_last_run(&pool, Duration::from_secs(5)).await;
 	task.abort();
 
 	let bytes = std::fs::read(dir.join(&names[0])).expect("read backup");
@@ -92,7 +93,7 @@ async fn scheduled_backup_runs_and_respects_due() {
 	] {
 		assert!(doc.get(key).is_some(), "missing section {key}");
 	}
-	assert!(last_run(&pool).await.expect("last_run recorded") > 0);
+	assert!(at > 0);
 
 	// a new scheduler instance on the same DB (restart semantics): last_run was just written, so it doesn't run again before the interval
 	let restarted = BackupScheduler::new(pool.clone(), config.clone());
