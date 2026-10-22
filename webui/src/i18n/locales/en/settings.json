@@ -1,5 +1,11 @@
 {
   "settings": {
+    "groupNav": "Settings sections",
+    "groupGeneral": "General",
+    "groupLibrary": "Library",
+    "groupDownloads": "Downloads",
+    "groupBackups": "Backups & imports",
+    "groupSystem": "System",
     "language": "Language",
     "appearanceTitle": "Appearance",
     "appearanceDesc": "Theme and default reading mode, stored only in this browser",

@@ -1,5 +1,11 @@
 {
   "settings": {
+    "groupNav": "设置分组",
+    "groupGeneral": "通用",
+    "groupLibrary": "书库",
+    "groupDownloads": "下载",
+    "groupBackups": "备份与导入",
+    "groupSystem": "系统",
     "language": "语言",
     "appearanceTitle": "外观",
     "appearanceDesc": "主题和默认阅读方式，仅保存在当前浏览器",
@@ -39,7 +45,7 @@
     "moveDown": "下移",
     "deleteCategory": "删除分类",
     "download": "下载",
-    "downloadDesc": "自动下载、读后清理和阅读时提前下载；修改后无需重启",
+    "downloadDesc": "自动下载、读后清理和提前下载；修改后无需重启",
     "downloadFormat": "下载格式",
     "downloadFormatCbz": "CBZ 压缩包",
     "downloadFormatFolder": "图片目录",
