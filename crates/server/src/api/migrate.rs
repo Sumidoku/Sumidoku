@@ -75,6 +75,16 @@ pub async fn migrate_lookup(
 	if title.trim().is_empty() {
 		return Err(ApiError::bad_request("lookup query is empty"));
 	}
+	// An opds target has no wasm instance: take the catalog search arm (OpenSearch/traversal fallback), the degraded flag passed through
+	if crate::source::source_is_opds(&state.pool, query.target_source_id).await? {
+		let outcome = crate::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
+		let candidates = attach_internal_ids(&state, query.target_source_id, outcome.entries).await?;
+		return Ok(Json(json!({
+			"query": title,
+			"candidates": candidates,
+			"degraded": outcome.degraded,
+		})));
+	}
 	let handle = state.get_handle(query.target_source_id).await?;
 	let result = handle
 		.get_search_manga_list(Some(title.clone()), 1, Vec::new())
@@ -228,10 +238,18 @@ async fn run_entry(
 	if to_manga_id.is_none() {
 		let mut initial = entry.to_manga.clone().unwrap_or_default();
 		initial.key = entry.to_manga_key.clone();
-		let handle = state.get_handle(entry.to_source_id).await?;
-		match handle.get_manga_update(initial, true, true).await {
-			Ok(updated) => fetched = Some(updated),
-			Err(e) => return Ok(failed_with("fetch_failed", e.to_string())),
+		// An opds target has no wasm instance: fetching upstream is a catalog feed pull (the url comes with the candidate entry)
+		if crate::source::source_is_opds(&state.pool, entry.to_source_id).await? {
+			match crate::opds_source::manga_update(state, entry.to_source_id, initial).await {
+				Ok(updated) => fetched = Some(updated),
+				Err(e) => return Ok(failed_with("fetch_failed", e.message().to_string())),
+			}
+		} else {
+			let handle = state.get_handle(entry.to_source_id).await?;
+			match handle.get_manga_update(initial, true, true).await {
+				Ok(updated) => fetched = Some(updated),
+				Err(e) => return Ok(failed_with("fetch_failed", e.to_string())),
+			}
 		}
 	}
 

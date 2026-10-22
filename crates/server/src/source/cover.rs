@@ -117,67 +117,16 @@ pub async fn select_cover(
 		.bind(id)
 		.execute(&state.pool)
 		.await?;
-	let _ = invalidate_cache(&state.config.covers_dir, id).await;
+	invalidate_cache(&state.config.covers_dir, id).await;
 	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(crate::api::manga_json(&state, user.id, &row).await?))
 }
 
-/// Missing files are ignored; other deletion failures stay visible to migration cleanup
-async fn invalidate_cache(covers_dir: &FsPath, id: i64) -> Result<(), std::io::Error> {
+/// Deletes the body and its sidecar together; missing files are not an error when nothing was cached yet
+async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let cache_path = covers_dir.join(id.to_string());
-	for path in [sidecar_path(&cache_path), cache_path] {
-		match tokio::fs::remove_file(path).await {
-			Ok(()) => {}
-			Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-			Err(e) => return Err(e),
-		}
-	}
-	Ok(())
-}
-
-/// Migration-marked ids are cleared even when reused; other numeric entries require a missing manga row
-pub async fn sweep_cache(pool: &sqlx::SqlitePool, covers_dir: &FsPath) -> Result<(), crate::error::Error> {
-	const MIGRATION_COVER_PREFIX: &str = "migration.remove_opds_cover.";
-	let marked: Vec<String> = sqlx::query_scalar("SELECT key FROM setting WHERE key LIKE ?")
-		.bind(format!("{MIGRATION_COVER_PREFIX}%"))
-		.fetch_all(pool)
-		.await?;
-	for key in marked {
-		let Some(id) = key.strip_prefix(MIGRATION_COVER_PREFIX).and_then(|id| id.parse::<i64>().ok()) else {
-			continue;
-		};
-		invalidate_cache(covers_dir, id).await?;
-		sqlx::query("DELETE FROM setting WHERE key = ?").bind(key).execute(pool).await?;
-	}
-
-	let mut read_dir = match tokio::fs::read_dir(covers_dir).await {
-		Ok(read_dir) => read_dir,
-		Err(_) => return Ok(()),
-	};
-	let mut checked = Vec::new();
-	while let Ok(Some(entry)) = read_dir.next_entry().await {
-		let Some(id) = entry.file_name().to_str().and_then(|name| {
-			let bare = name.strip_suffix(".content-type").unwrap_or(name);
-			bare.parse::<i64>().ok()
-		}) else {
-			continue;
-		};
-		if checked.contains(&id) {
-			continue;
-		}
-		checked.push(id);
-		let exists = sqlx::query_as::<_, (i64,)>("SELECT 1 FROM manga WHERE id = ? LIMIT 1")
-			.bind(id)
-			.fetch_optional(pool)
-			.await?;
-		if exists.is_some() {
-			continue;
-		}
-		let cache_path = covers_dir.join(id.to_string());
-		let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
-		let _ = tokio::fs::remove_file(cache_path).await;
-	}
-	Ok(())
+	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
+	let _ = tokio::fs::remove_file(cache_path).await;
 }
 
 fn sidecar_path(cache_path: &FsPath) -> PathBuf {

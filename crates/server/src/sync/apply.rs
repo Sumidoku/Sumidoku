@@ -77,22 +77,8 @@ pub async fn push(
 ) -> ApiResult<Vec<ApplyResult>> {
 	let local_origin = instance_id(pool).await?;
 	validate_envelope(&local_origin, envelope_origin, &changes)?;
-	let retired_sources: HashSet<String> = match sqlx::query_scalar::<_, String>("SELECT value FROM setting WHERE key = 'sync.retired_sources'")
-		.fetch_optional(pool)
-		.await?
-	{
-		Some(raw) => serde_json::from_str(&raw)?,
-		None => HashSet::new(),
-	};
 	let mut results = Vec::with_capacity(changes.len());
 	for change in changes {
-		if change.entity_kind != "category" {
-			let source_key = identity_string(&change.identity, "sourceKey")?;
-			if retired_sources.contains(&source_key) {
-				results.push(ApplyResult::skipped(change.origin_sequence));
-				continue;
-			}
-		}
 		results.push(apply_one(pool, authenticated_user_id, change).await?);
 	}
 	Ok(results)

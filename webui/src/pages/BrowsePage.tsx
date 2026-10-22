@@ -10,17 +10,19 @@ import {
 	Pin,
 	PinOff,
 	Play,
+	Plus,
 	ScanSearch,
 	Trash,
 	TriangleAlert,
 	Upload
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { sourceIconUrl } from '../api/client';
+import { ApiError, sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
 	useImportSource,
 	usePinSource,
+	useRegisterOpdsSource,
 	useReorderPinned,
 	useScanSources,
 	useSetSourceEnabled,
@@ -29,12 +31,14 @@ import {
 	useUpdateSource
 } from '../api/hooks';
 import type { Source } from '../api/types';
+import { translateApiError } from '../i18n';
 import { compareSourceName, contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
 import {
 	Button,
 	Chip,
 	EmptyState,
 	IconButton,
+	Input,
 	Modal,
 	PageHeader,
 	SegmentedControl,
@@ -127,6 +131,87 @@ function ImportAixButton() {
 				{t('browse.importAix')}
 			</Button>
 		</>
+	);
+}
+
+function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+	const { t } = useTranslation();
+	const register = useRegisterOpdsSource();
+	const [name, setName] = useState('');
+	const [url, setUrl] = useState('');
+	const [username, setUsername] = useState('');
+	const [password, setPassword] = useState('');
+
+	function reset() {
+		setName('');
+		setUrl('');
+		setUsername('');
+		setPassword('');
+	}
+
+	async function submit() {
+		try {
+			const trimmedUrl = url.trim();
+			const source = await register.mutateAsync({
+				name: name.trim(),
+				url: trimmedUrl,
+				...(username.trim() ? { username: username.trim(), password } : {})
+			});
+			pushToast(t('browse.opdsAdded', { name: source.name }), 'info');
+			reset();
+			onClose();
+		} catch (e) {
+			if (e instanceof ApiError && e.status === 400) pushToast(translateApiError(e.code, e.message));
+			else pushToast(t('browse.addFailed'));
+		}
+	}
+
+	return (
+		<Modal
+			open={open}
+			title={t('browse.addOpds')}
+			onClose={onClose}
+			footer={
+				<>
+					<Button onClick={onClose}>{t('common.cancel')}</Button>
+					<Button
+						variant="primary"
+						loading={register.isPending}
+						disabled={!name.trim() || !url.trim()}
+						onClick={() => void submit()}
+					>
+						{t('browse.add')}
+					</Button>
+				</>
+			}
+		>
+			<div className="opds-form">
+				<Input
+					placeholder={t('browse.opdsNamePlaceholder')}
+					value={name}
+					onChange={(e) => setName(e.currentTarget.value)}
+				/>
+				<Input
+					placeholder={t('browse.opdsUrlPlaceholder')}
+					value={url}
+					onChange={(e) => setUrl(e.currentTarget.value)}
+				/>
+				<Input
+					placeholder={t('browse.opdsUsernamePlaceholder')}
+					autoComplete="off"
+					value={username}
+					onChange={(e) => setUsername(e.currentTarget.value)}
+				/>
+				<Input
+					type="password"
+					placeholder={t('browse.opdsPasswordPlaceholder')}
+					autoComplete="new-password"
+					value={password}
+					onChange={(e) => setPassword(e.currentTarget.value)}
+				/>
+				<p className="muted">{t('browse.opdsHint')}</p>
+			</div>
+		</Modal>
 	);
 }
 
@@ -242,10 +327,11 @@ function SourceCard({
 					{s.enabled ? <Pause size={17} /> : <Play size={17} />}
 				</IconButton>
 			)}
-			{/* The local source has no home/settings and cannot be uninstalled (server 400) */}
+			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
+				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
 			{s.kind !== 'local' && (
 				<>
-					{s.hasHome !== false && (
+					{s.kind !== 'opds' && s.hasHome !== false && (
 						<IconButton
 							label={t('browse.home', { name: s.name })}
 							onClick={(e) => {
@@ -256,7 +342,7 @@ function SourceCard({
 							<House size={17} />
 						</IconButton>
 					)}
-					<SourceSettingsButton sourceId={s.id} sourceName={s.name} />
+					{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
 					<IconButton
 						label={t('browse.uninstall', { name: s.name })}
 						variant="danger"
@@ -284,6 +370,7 @@ export default function BrowsePage() {
 	const reorderPinned = useReorderPinned();
 	const navigate = useNavigate();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
+	const [registeringOpds, setRegisteringOpds] = useState(false);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -413,6 +500,10 @@ export default function BrowsePage() {
 									{t('browse.updateAll', { count: updateCount })}
 								</Button>
 							)}
+							<Button onClick={() => setRegisteringOpds(true)}>
+								<Plus size={15} />
+								{t('browse.addOpds')}
+							</Button>
 							<ImportAixButton />
 							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
 								<ScanSearch size={15} />
@@ -540,6 +631,7 @@ export default function BrowsePage() {
 			>
 				<p className="muted">{t('browse.deleteHint')}</p>
 			</Modal>
+			<OpdsRegisterModal open={registeringOpds} onClose={() => setRegisteringOpds(false)} />
 		</div>
 	);
 }

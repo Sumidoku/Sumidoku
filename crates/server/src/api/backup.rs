@@ -363,7 +363,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		} else {
 			key
 		};
-		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES || key == "sync.instance_id" || key == "sync.retired_sources" {
+		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES || key == "sync.instance_id" {
 			continue;
 		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
@@ -868,7 +868,7 @@ async fn restore_settings(
 		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
 		if key.starts_with("user.")
 			|| key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
-			|| key == "sync.instance_id" || key == "sync.retired_sources"
+			|| key == "sync.instance_id"
 		{
 			continue;
 		}

@@ -5,7 +5,7 @@
 [![docker pulls](https://img.shields.io/docker/pulls/sumidoku/sumidoku)](https://hub.docker.com/r/sumidoku/sumidoku)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Self-hosted manga server: Aidoku WASM sources, REST API, shipped as a single binary or a Docker image.
+Self-hosted manga server: Aidoku WASM and OPDS sources, REST API, shipped as a single binary or a Docker image.
 
 ![Library](docs/images/library.png)
 ![Source repositories](docs/images/source-repos.png)
@@ -21,6 +21,8 @@ Self-hosted manga server: Aidoku WASM sources, REST API, shipped as a single bin
 - **Local source** — a built-in source reads manga straight from a local
   directory (`<manga>/<chapter>` image folders or CBZ files), with
   `ComicInfo.xml` metadata and cover fallback.
+- **OPDS sources** — add Komga, Kavita, Calibre-Web and other OPDS 1.2 or
+  2.0 catalogs as sources, with optional per-catalog credentials.
 - **Library and reading** — categories and Aidoku-style filter groups
   (saved rule sets over reading state, source, content rating and
   category), reading progress, history, chapter downloads, and scheduled
@@ -54,6 +56,10 @@ Everything runs with defaults; the full configuration reference (environment var
 ## Installing sources
 
 Drop `.aix` source packages (or extracted source directories) into `./config/sources`, then press the scan button on the web UI's browse page (or `POST /api/v1/sources/scan`). You can also add an Aidoku-compatible source repository from the browse page and install sources from it directly.
+
+## OPDS sources
+
+Use the browse page to add Komga, Kavita, Calibre-Web or other OPDS 1.2/2.0 catalogs as sources. Multiple catalogs can be added, with optional per-catalog credentials. Sumidoku consumes these catalogs but does not expose an OPDS API.
 
 ## Documentation
 

@@ -164,6 +164,11 @@ impl Config {
 		self.config_dir.join("page-blobs")
 	}
 
+	/// On-disk cache of OPDS source acquisition archives (named <chapter_id>); invalidated on page-row rewrite, self-healing after cache loss
+	pub fn opds_cbz_dir(&self) -> PathBuf {
+		self.config_dir.join("opds-cbz")
+	}
+
 	/// Default destination for scheduled backups; backup_dir (env) or the backup.dir setting can change it
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")

@@ -984,6 +984,11 @@ pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiRes
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
+/// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
+pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
+	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
+}
+
 async fn source_kind(pool: &SqlitePool, source_id: i64) -> ApiResult<String> {
 	let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM source WHERE id = ?")
 		.bind(source_id)
@@ -1026,6 +1031,12 @@ pub async fn load_pages(
 			.iter()
 			.map(|entry| crate::local::page_content_json(entry))
 			.collect();
+		store_page_rows(&state.pool, chapter_id, &rows).await?;
+	} else if source_is_opds(&state.pool, manga.source_id).await? {
+		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
+		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
 		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
@@ -1216,6 +1227,10 @@ pub async fn http_get(
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let max = state.config.net_zip_body_max_mb * 1024 * 1024;
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, max).await;
+	}
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
 	let handle = state.get_handle(source_id).await?;
 	let accept_language = handle.accept_language();
@@ -1313,13 +1328,18 @@ pub async fn fetch_remote(
 /// Processor output is uniformly encoded as PNG (lossless, and the source-side decode chain already exists)
 const PROCESSED_MIME: &str = "image/png";
 
-/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present
+/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present;
+/// an opds source has neither processor nor instance, so page images take a bare GET with basic credentials
 pub async fn fetch_page_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 	context: Option<PageContext>,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().page_image_processor {
 		let image = fetch_remote(state, source_id, url, context).await?;
@@ -1332,12 +1352,16 @@ pub async fn fetch_page_image(
 	Ok((bytes, Some(PROCESSED_MIME.into())))
 }
 
-/// Cover fetch: same as above, through cover_image_processor
+/// Cover fetch: same as above, through cover_image_processor; opds sources take the page-image arm
 pub async fn fetch_cover_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().cover_image_processor {
 		let image = fetch_remote(state, source_id, url, None).await?;
@@ -1357,6 +1381,7 @@ fn process_input(image: RemoteImage, url: &str) -> aidoku_wasm::ProcessImageInpu
 		request_headers: image.request_headers,
 	}
 }
+
 
 #[cfg(test)]
 mod tests {
