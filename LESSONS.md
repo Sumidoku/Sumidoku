@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Removing a tenant filter changes reference semantics; it is not a mechanical
+cleanup.** When a query distinguishes the current row from other rows, replace
+tenant exclusion with the actual entity exclusion needed by the operation.
+Deleting a user predicate can make the row being deleted count as its own
+reference, or hide references that still need protection. Exercise the actual
+delete path, not only the shared-artifact happy path.
+- Evidence: 2026-10-22, #306's download cleanup counted the current download
+  row as a reference after its user filter was removed, leaving artifacts on
+  disk. Four download tests failed until the orphan check excluded the current
+  chapter while preserving references from other chapters.
+
 **Bundling a UI library does not make it offline or license-complete.** Check
 runtime defaults for outbound requests and every upstream notice, not only the
 package's top-level license. Disable remote validation, pin the assets, serve
