@@ -1,5 +1,5 @@
 //! Scheduled automatic backups: writes on the backup.* setting cadence, prunes by retention count, catches up overdue runs at startup.
-//! The document is built with api::backup::build_backup_doc, the same shape as the GET /api/v1/backup download.
+//! The document is built with api::backup::build_backup_doc, the same shape as the GET /api/v1/backups/document export.
 
 use crate::api::backup::build_backup_doc;
 use crate::config::Config;

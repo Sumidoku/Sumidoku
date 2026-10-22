@@ -221,7 +221,7 @@ async fn backup_round_trips_incognito() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	let (status, _, bytes) = request_full(&a.app, "GET", "/api/v1/backup", None).await;
+	let (status, _, bytes) = request_full(&a.app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let doc: Value = serde_json::from_slice(&bytes).expect("backup json");
 	assert_eq!(doc["library"][0]["incognito"], true, "导出应带单本隐身标志");
@@ -230,7 +230,7 @@ async fn backup_round_trips_incognito() {
 	let b = test_app().await;
 	let (status, _) = request(&b.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	let (_, library) = request(&b.app, "GET", "/api/v1/library", None).await;
 	let b_manga_id = library["entries"][0]["id"].as_i64().expect("b manga id");
@@ -246,7 +246,7 @@ async fn backup_round_trips_incognito() {
 	let c = test_app().await;
 	let (status, _) = request(&c.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let (status, body) = request(&c.app, "POST", "/api/v1/backup", Some(old_doc)).await;
+	let (status, body) = request(&c.app, "POST", "/api/v1/backups/document", Some(old_doc)).await;
 	assert_eq!(status, StatusCode::OK, "legacy import failed: {body}");
 	let (_, library) = request(&c.app, "GET", "/api/v1/library", None).await;
 	let c_manga_id = library["entries"][0]["id"].as_i64().expect("c manga id");

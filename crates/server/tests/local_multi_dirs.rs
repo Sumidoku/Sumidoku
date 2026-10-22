@@ -84,7 +84,7 @@ async fn enable_both_dirs(t: &TwoDirApp) {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["localDirs"], json!([
+	assert_eq!(body["readOnly"]["localDirs"], json!([
 		t.dir_a.path().to_string_lossy(),
 		t.dir_b.path().to_string_lossy(),
 	]));
@@ -356,7 +356,7 @@ async fn settings_local_dirs_put_validation_and_config_fallback() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(
-		body["localDirs"],
+		body["readOnly"]["localDirs"],
 		json!([t.dir_a.path().to_string_lossy()]),
 		"the cleared override exposes the config layer again"
 	);
@@ -374,13 +374,13 @@ async fn settings_get_exposes_local_dirs_array() {
 	// no override stored: the injected value is the config layer, and the retired localDir key is gone
 	let (status, body) = request(&t.app.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDirs"], json!([t.dir_a.path().to_string_lossy()]));
+	assert_eq!(body["readOnly"]["localDirs"], json!([t.dir_a.path().to_string_lossy()]));
 	assert!(body.get("localDir").is_none(), "localDir is replaced by localDirs: {body}");
 
 	enable_both_dirs(&t).await;
 	let (status, body) = request(&t.app.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDirs"], json!([
+	assert_eq!(body["readOnly"]["localDirs"], json!([
 		t.dir_a.path().to_string_lossy(),
 		t.dir_b.path().to_string_lossy(),
 	]));

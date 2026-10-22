@@ -127,7 +127,7 @@ async fn scheduled_backup_matches_export_and_lists() {
 	assert_eq!(status, StatusCode::OK);
 
 	// take the HTTP export first: once run_once lands, the setting table gains backup.last_run and the snapshots are no longer identical
-	let (status, _, body) = request_full(&app.app, "GET", "/api/v1/backup", None).await;
+	let (status, _, body) = request_full(&app.app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let mut from_http: Value = serde_json::from_slice(&body).expect("http json");
 
@@ -143,7 +143,7 @@ async fn scheduled_backup_matches_export_and_lists() {
 	assert_eq!(from_file, from_http);
 	assert_eq!(from_file["library"].as_array().expect("library").len(), 1);
 
-	let (status, body) = request(&app.app, "GET", "/api/v1/backups", None).await;
+	let (status, body) = request(&app.app, "GET", "/api/v1/backups/files", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(
 		body["dir"],
@@ -246,14 +246,14 @@ async fn restore_from_listed_backup() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	let (status, body) = request(&app.app, "GET", "/api/v1/backups", None).await;
+	let (status, body) = request(&app.app, "GET", "/api/v1/backups/files", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["files"][0]["name"], json!(name));
 
 	let (status, body) = request(
 		&app.app,
 		"POST",
-		"/api/v1/backups/restore",
+		"/api/v1/backups/files/restore",
 		Some(json!({"name": name})),
 	)
 	.await;
@@ -276,7 +276,7 @@ async fn restore_from_listed_backup() {
 		let (status, body) = request(
 			&app.app,
 			"POST",
-			"/api/v1/backups/restore",
+			"/api/v1/backups/files/restore",
 			Some(json!({"name": bad})),
 		)
 		.await;
@@ -287,7 +287,7 @@ async fn restore_from_listed_backup() {
 	let (status, _) = request(
 		&app.app,
 		"POST",
-		"/api/v1/backups/restore",
+		"/api/v1/backups/files/restore",
 		Some(json!({"name": "sumidoku-backup-19990101-000000.json"})),
 	)
 	.await;
@@ -320,7 +320,7 @@ async fn startup_runs_overdue_backup_and_survives_restart() {
 	tokio::time::sleep(Duration::from_secs(1)).await;
 	let files = list_backup_files(&dir).await.expect("list");
 	assert_eq!(files.len(), 1, "restart produced an extra backup");
-	let (status, body) = request(&app, "GET", "/api/v1/backups", None).await;
+	let (status, body) = request(&app, "GET", "/api/v1/backups/files", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["files"].as_array().expect("files").len(), 1);
 }

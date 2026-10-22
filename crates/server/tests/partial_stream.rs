@@ -155,7 +155,7 @@ async fn stream_without_partials_has_only_final() {
 }
 
 #[tokio::test]
-async fn home_stream_unsupported_source_404() {
+async fn home_stream_unsupported_source_501() {
 	let TestApp { app, tmp, .. } = test_app().await;
 	install_fixture_source(&tmp, "en.mutation", "Mutation Source", &common::mutation_wasm_path());
 	let ids = scan_sources(&app).await;
@@ -165,7 +165,7 @@ async fn home_stream_unsupported_source_404() {
 		.map(|(_, id)| *id)
 		.expect("mutation source id");
 
-	// a missing capability returns 404 before the stream starts, same contract as non-streaming
+	// a missing capability returns 501 unsupported before the stream starts, same contract as non-streaming
 	let (status, headers, bytes) = common::request_full(
 		&app,
 		"GET",
@@ -173,7 +173,7 @@ async fn home_stream_unsupported_source_404() {
 		None,
 	)
 	.await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(
 		headers.get("content-type").expect("content-type"),
 		"application/json"
@@ -183,7 +183,7 @@ async fn home_stream_unsupported_source_404() {
 
 	let (status, _, _) =
 		request_ndjson(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 }
 
 async fn partial_source_id(app: &axum::Router, tmp: &tempfile::TempDir) -> i64 {

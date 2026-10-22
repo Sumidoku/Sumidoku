@@ -345,7 +345,7 @@ async fn download_move_via_setting_and_overwrites_target() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["download.move_path"], json!(template));
+	assert_eq!(body["download"]["movePath"], json!(template));
 
 	let manga_id = register_example_manga(&app).await;
 	let chapter_id = first_chapter_id(&app, manga_id).await;

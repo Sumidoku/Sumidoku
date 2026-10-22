@@ -412,20 +412,20 @@ pub async fn add_to_library(
 pub async fn remove_from_library(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-	Path(manga_id): Path<i64>,
+	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	manga_row(&state.pool, manga_id).await?;
+	manga_row(&state.pool, id).await?;
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
 	)
-	.bind(manga_id)
+	.bind(id)
 	.bind(user.id)
 	.execute(&mut *tx)
 	.await?;
 	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
-		.bind(manga_id)
+		.bind(id)
 		.bind(user.id)
 		.execute(&mut *tx)
 		.await?;

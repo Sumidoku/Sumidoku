@@ -88,7 +88,7 @@ async fn seed_full(app: &Router) {
 
 /// Exports and validates the response header contract, returning the parsed backup document
 async fn export_doc(app: &Router) -> Value {
-	let (status, headers, bytes) = request_full(app, "GET", "/api/v1/backup", None).await;
+	let (status, headers, bytes) = request_full(app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let content_type = headers
 		.get("content-type")
@@ -156,7 +156,7 @@ async fn export_import_round_trip() {
 	);
 
 	let b = fresh_target().await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	assert_eq!(body["warnings"], json!([]));
 	let restored = &body["restored"];
@@ -259,7 +259,7 @@ async fn export_import_round_trip() {
 	assert_eq!(body["values"]["password"], "s3cret");
 
 	let before = db_dump(&b.db_path).await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK, "identical restore failed: {body}");
 	assert_eq!(db_dump(&b.db_path).await, before);
 }
@@ -280,7 +280,7 @@ async fn import_rolls_back_on_invalid_row() {
 		"includeInDownload": 7,
 		"manga": []
 	}));
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "bad_request");
 	assert_eq!(db_dump(&b.db_path).await, before);
@@ -291,7 +291,7 @@ async fn import_rejects_unknown_version() {
 	let b = fresh_target().await;
 	let before = db_dump(&b.db_path).await;
 	for doc in [json!({"version": 2, "library": []}), json!({"library": []})] {
-		let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+		let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 		assert_eq!(body["error"]["code"], "bad_request");
 	}
@@ -328,7 +328,7 @@ async fn import_skips_missing_sources_with_warnings() {
 		.insert("en.ghost-source".into(), json!({"password": "x"}));
 
 	let b = fresh_target().await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	let warnings: Vec<&str> = body["warnings"]
 		.as_array()
@@ -354,7 +354,7 @@ async fn import_honors_section_selection() {
 	let doc = export_doc(&a.app).await;
 	let b = fresh_target().await;
 
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup?sections=settings", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document?sections=settings", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body["restored"]["settings"].as_i64().expect("settings count") >= 2);
 	assert_eq!(body["restored"]["library"], 0);
@@ -366,7 +366,7 @@ async fn import_honors_section_selection() {
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(settings["backup.test"], "on");
 
-	let (status, _) = request(&b.app, "POST", "/api/v1/backup?sections=bogus", Some(doc)).await;
+	let (status, _) = request(&b.app, "POST", "/api/v1/backups/document?sections=bogus", Some(doc)).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
@@ -421,13 +421,13 @@ async fn import_migrates_legacy_include_in_update_exclude() {
 	});
 
 	let b = fresh_target().await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	assert_eq!(body["restored"]["categories"], 2);
 
 	// The Excluded category should be migrated into the per-user excluded_update_categories setting.
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
-	let excluded: Vec<i64> = settings["library.excluded_update_categories"]
+	let excluded: Vec<i64> = settings["library"]["excludedUpdateCategories"]
 		.as_array()
 		.expect("excluded categories array")
 		.iter()
@@ -479,7 +479,7 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 		.as_object_mut()
 		.expect("settings object")
 		.insert("library.excluded_update_categories".into(), json!([source_excluded_id]));
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
 	let (_, categories) = request(&b.app, "GET", "/api/v1/categories", None).await;
@@ -493,7 +493,7 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 		.expect("target category id");
 	assert_ne!(target_excluded_id, source_excluded_id);
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(settings["library.excluded_update_categories"], json!([target_excluded_id]));
+	assert_eq!(settings["library"]["excludedUpdateCategories"], json!([target_excluded_id]));
 }
 
 #[tokio::test]
@@ -523,7 +523,7 @@ async fn sync_instance_id_stays_out_of_public_settings_and_backups() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let after: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)

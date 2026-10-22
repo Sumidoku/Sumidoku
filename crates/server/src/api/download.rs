@@ -165,12 +165,12 @@ pub async fn clear_downloads(
 pub async fn delete_download(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-	Path(chapter_id): Path<i64>,
+	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
 	let manager = state.downloads();
 	let row: Option<(String, Option<String>)> =
 		sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
-			.bind(chapter_id)
+			.bind(id)
 			.bind(user.id)
 			.fetch_optional(&state.pool)
 			.await?;
@@ -179,17 +179,17 @@ pub async fn delete_download(
 	};
 	// A running one is marked for cancel first; the worker stops when it sees the mark before the next page
 	if status == "downloading" {
-		manager.mark_cancel(chapter_id).await;
+		manager.mark_cancel(id).await;
 	}
-	manager.remove_from_queue(chapter_id, user.id).await;
+	manager.remove_from_queue(id, user.id).await;
 	if let Some(path) = path
-		&& product_orphaned(&state.pool, &path, chapter_id).await?
+		&& product_orphaned(&state.pool, &path, id).await?
 	{
 		remove_product(manager.downloads_dir(), &path).await;
 	}
-	manager.cleanup_tmp(chapter_id).await;
+	manager.cleanup_tmp(id).await;
 	sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
-		.bind(chapter_id)
+		.bind(id)
 		.bind(user.id)
 		.execute(&state.pool)
 		.await?;
@@ -197,7 +197,7 @@ pub async fn delete_download(
 		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
 		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
 	)
-	.bind(chapter_id)
+	.bind(id)
 	.bind(user.id)
 	.execute(&state.pool)
 	.await?;

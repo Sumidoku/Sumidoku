@@ -19,7 +19,7 @@ async fn post_aib(app: &Router, query: &str) -> (StatusCode, Value) {
 	let (status, _, bytes) = request_bytes(
 		app,
 		"POST",
-		&format!("/api/v1/import/aidoku{query}"),
+		&format!("/api/v1/backups/import/aidoku{query}"),
 		AIB.to_vec(),
 		"application/octet-stream",
 	)
@@ -260,7 +260,7 @@ async fn import_aidoku_rejects_invalid_input() {
 			let (status, _, bytes) = request_bytes(
 				&app.app,
 				"POST",
-				"/api/v1/import/aidoku",
+				"/api/v1/backups/import/aidoku",
 				body,
 				"application/octet-stream",
 			)
@@ -279,7 +279,7 @@ async fn import_aidoku_rejects_invalid_input() {
 	let (status, _, bytes) = request_bytes(
 		&app.app,
 		"POST",
-		"/api/v1/import/aidoku",
+		"/api/v1/backups/import/aidoku",
 		buf,
 		"application/octet-stream",
 	)

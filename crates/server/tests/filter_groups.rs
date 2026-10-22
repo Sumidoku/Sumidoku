@@ -498,11 +498,11 @@ async fn library_display_settings() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["library.default_category"], "uncategorized");
-	assert_eq!(body["library.show_uncategorized"], false);
+	assert_eq!(body["library"]["defaultCategory"], "uncategorized");
+	assert_eq!(body["library"]["showUncategorized"], false);
 	let (_, body) = request(&app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(body["library.default_category"], "uncategorized");
-	assert_eq!(body["library.show_uncategorized"], false);
+	assert_eq!(body["library"]["defaultCategory"], "uncategorized");
+	assert_eq!(body["library"]["showUncategorized"], false);
 
 	// a category id in string form stores; "all" is the neutral default
 	let cat = create_category(&app, "X").await;
@@ -514,7 +514,7 @@ async fn library_display_settings() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["library.default_category"], cat.to_string());
+	assert_eq!(body["library"]["defaultCategory"], cat.to_string());
 
 	// shape validation: anything but "all"/"uncategorized"/a positive id 400s, as do non-booleans
 	for value in [json!("bogus"), json!("0"), json!("-1"), json!(1), json!(null)] {

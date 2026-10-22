@@ -141,6 +141,14 @@ export type BackupRestoreResponse = {
 	warnings: Array<string>;
 };
 
+export type BackupSettings = {
+	enabled: boolean;
+	intervalHours: number;
+	retentionCount: number;
+	lastRun: number | null;
+	dir: string | null;
+};
+
 export type BackupSource = {
 	key: string;
 	name: string;
@@ -156,6 +164,10 @@ export type BasicLoginRequest = {
 
 export type BatchProgressRequest = ProgressPatch & {
 	chapterIds: Array<number>;
+};
+
+export type BrowseSettings = {
+	pinnedSources: Array<string>;
 };
 
 export type Category = {
@@ -246,6 +258,10 @@ export type Download = {
 	total: number | null;
 	createdAt: number;
 	updatedAt: number;
+};
+
+export type DownloadSettings = {
+	movePath: string | null;
 };
 
 export type DownloadStatus = "queued" | "downloading" | "paused" | "finished" | "error";
@@ -410,6 +426,10 @@ export type ImportCounts = {
 	progress: number;
 };
 
+export type IncognitoSettings = {
+	enabled: boolean;
+};
+
 export type InstallSourceRequest = {
 	repoId: number;
 	sourceKey: string;
@@ -427,6 +447,15 @@ export type LibraryFilter = "unread" | "downloaded" | "bookmarked";
 export type LibraryPage = {
 	entries: Array<LibraryEntry>;
 	hasNextPage: boolean;
+};
+
+export type LibrarySettings = {
+	defaultCategory: string;
+	showUncategorized: boolean;
+	excludedUpdateCategories: Array<number>;
+	skipTitles: Array<string>;
+	refreshMetadata: boolean;
+	updateIntervalHours: number;
 };
 
 export type LibrarySort = "added" | "title" | "lastRead" | "unread";
@@ -450,6 +479,11 @@ export type Listing = {
 	id: string;
 	name: string;
 	kind: "default" | "list";
+};
+
+export type LocalSettings = {
+	dirs: Array<string>;
+	oneshotsDir?: string | null;
 };
 
 export type LoginRequest = {
@@ -608,6 +642,11 @@ export type QueuedResponse = {
 	queued: Array<number>;
 };
 
+export type ReadOnlySettings = {
+	localDirs: Array<string>;
+	localOneshotsDir: string | null;
+};
+
 export type RecentEntry = {
 	chapter: Chapter;
 	manga: Manga;
@@ -682,6 +721,17 @@ export type SearchRequest = {
 
 export type SelectCoverRequest = {
 	url: string;
+};
+
+export type ServerSettings = {
+	incognito: IncognitoSettings;
+	library: LibrarySettings;
+	local: LocalSettings;
+	download: DownloadSettings;
+	backup: BackupSettings;
+	browse: BrowseSettings;
+	readOnly: ReadOnlySettings;
+	[key: string]: JsonValue;
 };
 
 export type SetCategoriesRequest = {
@@ -774,21 +824,6 @@ export type SettingValue = string | {
 		titles: Array<string> | null;
 		default: string | null;
 	};
-};
-
-export type Settings = {
-	localDirs?: Array<string>;
-	localOneshotsDir?: string | null;
-	"incognito.enabled"?: boolean;
-	"library.default_category"?: string;
-	"library.show_uncategorized"?: boolean;
-	"library.excluded_update_categories"?: Array<number>;
-	"library.skip_titles"?: Array<"hasUnread" | "completed" | "notStarted">;
-	"library.refresh_metadata"?: boolean;
-	"library.update_interval_hours"?: number;
-	"local.dirs"?: Array<string>;
-	"local.oneshots_dir"?: string;
-	[key: string]: JsonValue;
 };
 
 export type SettingsValues = {

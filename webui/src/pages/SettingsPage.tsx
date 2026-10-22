@@ -35,6 +35,7 @@ import {
 	useRestoreNamedBackup,
 	useSaveServerSettings,
 	useServerSettings,
+	mergeServerSettings,
 	useSources,
 	useUpdateFilterGroup,
 	useWhoami
@@ -175,7 +176,7 @@ function IncognitoSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
-	const enabled = settings.data?.['incognito.enabled'] === true;
+	const enabled = settings.data?.incognito.enabled === true;
 
 	return (
 		<Section
@@ -189,7 +190,9 @@ function IncognitoSection() {
 					<Switch
 						checked={enabled}
 						disabled={save.isPending}
-						onChange={(on) => save.mutate({ 'incognito.enabled': on })}
+						onChange={(on) =>
+							save.mutate(mergeServerSettings(settings.data, { incognito: { enabled: on } }))
+						}
 						label={t('settings.incognitoGlobal')}
 					/>
 					{t('settings.incognitoGlobal')}
@@ -516,8 +519,8 @@ function LibraryDisplaySection() {
 	const save = useSaveServerSettings();
 	const categories = useCategories();
 
-	const defaultCategory = String(settings.data?.['library.default_category'] ?? 'all');
-	const showUncategorized = settings.data?.['library.show_uncategorized'] !== false;
+	const defaultCategory = String(settings.data?.library.defaultCategory ?? 'all');
+	const showUncategorized = settings.data?.library.showUncategorized !== false;
 
 	return (
 		<Section title={t('settings.libraryTitle')} desc={t('settings.libraryDesc')}>
@@ -530,7 +533,11 @@ function LibraryDisplaySection() {
 						<Select
 							value={defaultCategory}
 							disabled={save.isPending}
-							onChange={(e) => save.mutate({ 'library.default_category': e.currentTarget.value })}
+							onChange={(e) =>
+								save.mutate(
+									mergeServerSettings(settings.data, { library: { defaultCategory: e.currentTarget.value } })
+								)
+							}
 						>
 							<option value="all">{t('settings.defaultCategoryAll')}</option>
 							<option value="uncategorized">{t('settings.defaultCategoryUncategorized')}</option>
@@ -546,7 +553,9 @@ function LibraryDisplaySection() {
 						<Switch
 							checked={showUncategorized}
 							disabled={save.isPending}
-							onChange={(on) => save.mutate({ 'library.show_uncategorized': on })}
+							onChange={(on) =>
+								save.mutate(mergeServerSettings(settings.data, { library: { showUncategorized: on } }))
+							}
 							label={t('settings.showUncategorized')}
 						/>
 						{t('settings.showUncategorized')}
@@ -576,28 +585,22 @@ function LibraryUpdateSection() {
 	const save = useSaveServerSettings();
 	const categories = useCategories();
 	const [choosingExcluded, setChoosingExcluded] = useState(false);
-	const intervalHours = Number(settings.data?.['library.update_interval_hours'] ?? 0);
-	const storedSkip = settings.data?.['library.skip_titles'];
-	const skipTitles = Array.isArray(storedSkip)
-		? storedSkip.filter((value): value is string => typeof value === 'string')
-		: [];
-	const storedExcluded = settings.data?.['library.excluded_update_categories'];
-	const excludedCategories = Array.isArray(storedExcluded)
-		? storedExcluded.filter((value): value is number => typeof value === 'number')
-		: [];
-	const refreshMetadata = settings.data?.['library.refresh_metadata'] === true;
+	const intervalHours = Number(settings.data?.library.updateIntervalHours ?? 0);
+	const skipTitles = settings.data?.library.skipTitles ?? [];
+	const excludedCategories = settings.data?.library.excludedUpdateCategories ?? [];
+	const refreshMetadata = settings.data?.library.refreshMetadata === true;
 
 	function saveSkip(rule: string, on: boolean) {
 		const changed = on ? [...skipTitles, rule] : skipTitles.filter((value) => value !== rule);
 		const ordered = LIBRARY_SKIP_RULES.map(({ key }) => key).filter((key) => changed.includes(key));
-		save.mutate({ 'library.skip_titles': ordered });
+		save.mutate(mergeServerSettings(settings.data, { library: { skipTitles: ordered } }));
 	}
 
 	function toggleExcludedCategory(id: number, on: boolean) {
 		const changed = on
 			? [...excludedCategories, id]
 			: excludedCategories.filter((value) => value !== id);
-		save.mutate({ 'library.excluded_update_categories': changed });
+		save.mutate(mergeServerSettings(settings.data, { library: { excludedUpdateCategories: changed } }));
 	}
 
 	return (
@@ -613,7 +616,9 @@ function LibraryUpdateSection() {
 							disabled={save.isPending}
 							onChange={(e) => {
 								const value = e.currentTarget.value;
-								save.mutate({ 'library.update_interval_hours': Number(value) });
+								save.mutate(
+									mergeServerSettings(settings.data, { library: { updateIntervalHours: Number(value) } })
+								);
 							}}
 						>
 							{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
@@ -643,7 +648,9 @@ function LibraryUpdateSection() {
 						<Switch
 							checked={refreshMetadata}
 							disabled={save.isPending}
-							onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
+							onChange={(on) =>
+								save.mutate(mergeServerSettings(settings.data, { library: { refreshMetadata: on } }))
+							}
 							label={t('settings.libraryRefreshMetadata')}
 						/>
 						{t('settings.libraryRefreshMetadata')}
@@ -1005,22 +1012,6 @@ function FilterGroupsSection() {
 	);
 }
 
-interface KvRow {
-	key: string;
-	/** JSON text, parsed at save time */
-	text: string;
-	isNew?: boolean;
-}
-
-function parseVal(text: string): unknown {
-	try {
-		return JSON.parse(text);
-	} catch {
-		// Store as a string when it is not valid JSON
-		return text;
-	}
-}
-
 function LocalSourceSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
@@ -1030,13 +1021,11 @@ function LocalSourceSection() {
 
 	useEffect(() => {
 		if (!settings.data || dirs !== null) return;
-		const injected = settings.data['localDirs'];
-		setDirs(Array.isArray(injected) ? injected.map(String) : []);
-		const name = settings.data['localOneshotsDir'];
-		setOneshots(typeof name === 'string' ? name : '');
+		setDirs(settings.data.readOnly.localDirs);
+		setOneshots(settings.data.readOnly.localOneshotsDir ?? '');
 	}, [settings.data, dirs]);
 
-	if (dirs === null || oneshots === null) {
+	if (dirs === null || oneshots === null || !settings.data) {
 		return (
 			<Section
 				title={t('settings.localSourceTitle')}
@@ -1047,28 +1036,24 @@ function LocalSourceSection() {
 		);
 	}
 
-	// localDirs/localOneshotsDir are the server's read-only injections of the effective values; edits are
-	// saved as the local.dirs / local.oneshots_dir overrides, and an empty value clears it (the config
+	// readOnly.localDirs/localOneshotsDir are the server's read-only injections of the effective values; edits are
+	// saved as the local.dirs / local.oneshotsDir overrides, and an empty value clears it (the config
 	// layer takes over again)
-	const effective = Array.isArray(settings.data?.['localDirs'])
-		? (settings.data?.['localDirs'] as unknown[]).map(String)
-		: [];
-	const injectedOneshots = settings.data?.['localOneshotsDir'];
-	const effectiveOneshots = typeof injectedOneshots === 'string' ? injectedOneshots : '';
+	const effective = settings.data.readOnly.localDirs;
+	const effectiveOneshots = settings.data.readOnly.localOneshotsDir ?? '';
 	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
 	const oneshotsName = oneshots.trim();
 	const dirty = cleaned.join('\n') !== effective.join('\n') || oneshotsName !== effectiveOneshots;
 
 	async function onSave() {
 		try {
-			const saved = await save.mutateAsync({
-				'local.dirs': cleaned,
-				'local.oneshots_dir': oneshotsName,
-			});
-			const injected = saved['localDirs'];
-			setDirs(Array.isArray(injected) ? injected.map(String) : []);
-			const name = saved['localOneshotsDir'];
-			setOneshots(typeof name === 'string' ? name : '');
+			const saved = await save.mutateAsync(
+				mergeServerSettings(settings.data, {
+					local: { dirs: cleaned, oneshotsDir: oneshotsName || null }
+				})
+			);
+			setDirs(saved.readOnly.localDirs);
+			setOneshots(saved.readOnly.localOneshotsDir ?? '');
 			pushToast(t('settings.localSourceSaved'), 'info');
 		} catch (e) {
 			if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
@@ -1131,109 +1116,6 @@ function LocalSourceSection() {
 					{t('common.save')}
 				</Button>
 			</div>
-		</Section>
-	);
-}
-
-function ServerSettingsSection() {
-	const { t } = useTranslation();
-	const query = useServerSettings();
-	const save = useSaveServerSettings();
-	const [rows, setRows] = useState<KvRow[] | null>(null);
-	const [newKey, setNewKey] = useState('');
-	const [newVal, setNewVal] = useState('');
-
-	useEffect(() => {
-		if (query.data && rows === null) {
-			setRows(
-				// localDirs is a read-only injected field and does not enter key-value editing (see the "Local source" section)
-				Object.entries(query.data)
-					.filter(([key]) => key !== 'localDirs')
-					.map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' }))
-			);
-		}
-	}, [query.data, rows]);
-
-	async function onSave() {
-		if (!rows) return;
-		const body: Record<string, unknown> = {};
-		for (const r of rows) {
-			const k = r.key.trim();
-			if (k) body[k] = parseVal(r.text);
-		}
-		const saved = await save.mutateAsync(body);
-		setRows(Object.entries(saved).map(([key, v]) => ({ key, text: JSON.stringify(v) ?? '' })));
-		pushToast(t('settings.serverSettingsSaved'), 'info');
-	}
-
-	function addRow() {
-		const key = newKey.trim();
-		if (!key) return;
-		setRows((cur) => [...(cur ?? []), { key, text: newVal, isNew: true }]);
-		setNewKey('');
-		setNewVal('');
-	}
-
-	return (
-		<Section title={t('settings.serverSettingsTitle')} desc={t('settings.serverSettingsDesc')}>
-			{rows === null ? (
-				<Skeleton height={48} />
-			) : (
-				<>
-					{rows.length === 0 ? (
-						<p className="faint settings-kv__empty">{t('settings.noConfig')}</p>
-					) : (
-						<div className="settings-kv">
-							{rows.map((row, i) => (
-								<div key={i} className="settings-kv__row">
-									<Input
-										className={row.isNew ? '' : 'settings-kv__key'}
-										placeholder={t('settings.keyPlaceholder')}
-										value={row.key}
-										readOnly={!row.isNew}
-										onChange={(e) => {
-											// currentTarget is already null by the time the deferred updater runs, so take the value first
-											const v = e.currentTarget.value;
-											setRows((cur) => (cur ?? []).map((r, j) => (j === i ? { ...r, key: v } : r)));
-										}}
-									/>
-									<Input
-										placeholder={t('settings.valuePlaceholder')}
-										value={row.text}
-										onChange={(e) => {
-											const v = e.currentTarget.value;
-											setRows((cur) => (cur ?? []).map((r, j) => (j === i ? { ...r, text: v } : r)));
-										}}
-									/>
-									<IconButton
-										label={t('common.delete')}
-										variant="danger"
-										onClick={() => setRows((cur) => (cur ?? []).filter((_, j) => j !== i))}
-									>
-										<Trash2 size={16} />
-									</IconButton>
-								</div>
-							))}
-						</div>
-					)}
-					<div className="settings-kv__add">
-						<Input placeholder={t('settings.keyPlaceholder')} value={newKey} onChange={(e) => setNewKey(e.currentTarget.value)} />
-						<Input
-							placeholder={t('settings.valuePlaceholder')}
-							value={newVal}
-							onChange={(e) => setNewVal(e.currentTarget.value)}
-						/>
-						<Button disabled={!newKey.trim()} onClick={addRow}>
-							{t('settings.add')}
-						</Button>
-					</div>
-					<div className="settings-kv__save">
-						<Button variant="primary" loading={save.isPending} onClick={() => void onSave()}>
-							{t('common.save')}
-						</Button>
-					</div>
-				</>
-			)}
 		</Section>
 	);
 }
@@ -1764,7 +1646,7 @@ function DownloadMoveSection() {
 
 	useEffect(() => {
 		if (!settings.data) return;
-		if (text === null) setText(String(settings.data['download.move_path'] ?? ''));
+		if (text === null) setText(settings.data.download.movePath ?? '');
 	}, [settings.data, text]);
 
 	const data = settings.data;
@@ -1779,12 +1661,12 @@ function DownloadMoveSection() {
 		);
 	}
 
-	const current = String(data['download.move_path'] ?? '');
+	const current = data.download.movePath ?? '';
 
 	function commit() {
 		if (text === null) return;
 		const value = text.trim();
-		if (value !== current) save.mutate({ 'download.move_path': value });
+		if (value !== current) save.mutate(mergeServerSettings(settings.data, { download: { movePath: value } }));
 	}
 
 	return (
@@ -1825,10 +1707,8 @@ function ScheduledBackupSection() {
 
 	useEffect(() => {
 		if (!settings.data) return;
-		if (intervalText === null)
-			setIntervalText(String(Number(settings.data['backup.interval_hours'] ?? 24)));
-		if (retentionText === null)
-			setRetentionText(String(Number(settings.data['backup.retention_count'] ?? 10)));
+		if (intervalText === null) setIntervalText(String(settings.data.backup.intervalHours ?? 24));
+		if (retentionText === null) setRetentionText(String(settings.data.backup.retentionCount ?? 10));
 	}, [settings.data, intervalText, retentionText]);
 
 	const data = settings.data;
@@ -1843,12 +1723,12 @@ function ScheduledBackupSection() {
 		);
 	}
 
-	const enabled = data['backup.enabled'] === true;
-	const lastRun = data['backup.last_run'];
+	const enabled = data.backup.enabled === true;
+	const lastRun = data.backup.lastRun;
 	const files = backups.data?.files ?? [];
 
 	function commitNumber(
-		key: 'backup.interval_hours' | 'backup.retention_count',
+		key: 'intervalHours' | 'retentionCount',
 		text: string,
 		fallback: number,
 		min: number,
@@ -1860,11 +1740,13 @@ function ScheduledBackupSection() {
 			reset(String(fallback));
 			return;
 		}
-		if (n !== fallback) save.mutate({ [key]: n });
+		if (n !== fallback) {
+			save.mutate(mergeServerSettings(settings.data, { backup: { [key]: n } }));
+		}
 	}
 
-	const intervalHours = Number(data['backup.interval_hours'] ?? 24);
-	const retentionCount = Number(data['backup.retention_count'] ?? 10);
+	const intervalHours = data.backup.intervalHours ?? 24;
+	const retentionCount = data.backup.retentionCount ?? 10;
 
 	async function confirmRestore() {
 		if (!confirming) return;
@@ -1891,7 +1773,9 @@ function ScheduledBackupSection() {
 				<input
 					type="checkbox"
 					checked={enabled}
-					onChange={(e) => save.mutate({ 'backup.enabled': e.currentTarget.checked })}
+					onChange={(e) =>
+						save.mutate(mergeServerSettings(settings.data, { backup: { enabled: e.currentTarget.checked } }))
+					}
 				/>
 				{t('settings.enableAutoBackup')}
 			</label>
@@ -1904,11 +1788,11 @@ function ScheduledBackupSection() {
 					value={intervalText}
 					onChange={(e) => setIntervalText(e.currentTarget.value)}
 					onBlur={() =>
-						commitNumber('backup.interval_hours', intervalText, intervalHours, 1, setIntervalText)
+						commitNumber('intervalHours', intervalText, intervalHours, 1, setIntervalText)
 					}
 					onKeyDown={(e) => {
 						if (e.key === 'Enter')
-							commitNumber('backup.interval_hours', intervalText, intervalHours, 1, setIntervalText);
+							commitNumber('intervalHours', intervalText, intervalHours, 1, setIntervalText);
 					}}
 				/>
 			</div>
@@ -1921,12 +1805,12 @@ function ScheduledBackupSection() {
 					value={retentionText}
 					onChange={(e) => setRetentionText(e.currentTarget.value)}
 					onBlur={() =>
-						commitNumber('backup.retention_count', retentionText, retentionCount, 0, setRetentionText)
+						commitNumber('retentionCount', retentionText, retentionCount, 0, setRetentionText)
 					}
 					onKeyDown={(e) => {
 						if (e.key === 'Enter')
 							commitNumber(
-								'backup.retention_count',
+								'retentionCount',
 								retentionText,
 								retentionCount,
 								0,
@@ -2089,7 +1973,6 @@ export default function SettingsPage() {
 			<LibraryDisplaySection />
 			<LibraryUpdateSection />
 			<LocalSourceSection />
-			<ServerSettingsSection />
 			<BackupSection />
 			<DownloadMoveSection />
 			<ScheduledBackupSection />

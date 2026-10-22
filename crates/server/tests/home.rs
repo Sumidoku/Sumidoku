@@ -161,7 +161,7 @@ async fn home_component_fields_pass_through() {
 }
 
 #[tokio::test]
-async fn home_unsupported_source_404() {	let TestApp { app, tmp, .. } = test_app().await;
+async fn home_unsupported_source_501() {	let TestApp { app, tmp, .. } = test_app().await;
 	// mutation fixture only exports Source + get_page_description, no get_home
 	common::install_fixture_source(&tmp, "en.mutation", "Mutation Source", &common::mutation_wasm_path());
 	let ids = scan_and_source_ids(&app).await;
@@ -172,6 +172,6 @@ async fn home_unsupported_source_404() {	let TestApp { app, tmp, .. } = test_app
 		.expect("mutation source id");
 
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(body["error"]["code"], "unsupported");
 }

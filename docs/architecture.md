@@ -658,11 +658,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   The web UI exposes the admin-wide toggle in Settings (`SettingsPage.tsx`) and
   the per-manga toggle as an icon button in the detail header
   (`MangaDetailPage.tsx`).
-- Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
+- Backup export/import (`api/backup.rs`): `GET /api/v1/backups/document` answers one
   JSON document (a `Content-Disposition` attachment) with the admin's complete
   state: library rows and metadata, categories with membership, reading
   progress, app settings and source settings, plus source identity (key, name,
-  version and a best-effort repo URL). `POST /api/v1/backup` restores into the
+  version and a best-effort repo URL). `POST /api/v1/backups/document` restores into the
   same owner state, optionally limited by `?sections=` to some of `library`,
   `categories`, `progress`, `settings`, `sourceSettings`. Restore upserts by natural key — source
   key + manga key, chapter key, category name — inside one SQLite
@@ -684,7 +684,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   restore-from-list endpoint below, so a scheduled file is the same
   document an admin's GET handler serves.
 - Aidoku backup import (`api/aidoku_backup.rs`):
-  `POST /api/v1/import/aidoku` accepts a `.aib` upload — a binary plist of
+  `POST /api/v1/backups/import/aidoku` accepts a `.aib` upload — a binary plist of
   Aidoku's Codable `Backup` struct, decoded with the `plist` crate into
   tolerant structs that only name the consumed fields. It imports into the
   requesting user's own state: library
@@ -709,7 +709,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   file answers 400 with no writes. The web UI settings page has the
   upload → dry-run preview → confirm flow under the backup section.
 - Suwayomi/Mihon backup import (`api/suwayomi_backup.rs`):
-  `POST /api/v1/import/suwayomi` accepts a Suwayomi-Server or
+  `POST /api/v1/backups/import/suwayomi` accepts a Suwayomi-Server or
   Mihon/Tachiyomi backup as a binary body. Both apps write the same
   bytes — gzip around one protobuf `Backup` message — whatever the
   extension (`.tachibk`, `.proto.gz`); the endpoint sniffs magic bytes
@@ -767,9 +767,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   the name pattern. Each setting resolves env (`SUMIDOKU_BACKUP_ENABLED` /
   `_INTERVAL_HOURS` / `_RETENTION_COUNT` / `_DIR`) over the `setting`
   table over the built-in defaults (disabled, 24h, keep 10,
-  `<config_dir>/backups`). `GET /api/v1/backups` lists the dir
+  `<config_dir>/backups`). `GET /api/v1/backups/files` lists the dir
   (name/size/createdAt, newest first, plus the effective `dir`);
-  `POST /api/v1/backups/restore` reads a listed file server-side and runs
+  `POST /api/v1/backups/files/restore` reads a listed file server-side and runs
   it through `import_backup_doc`, accepting only names that match the
   backup pattern (everything else, `..` included, is a 400; a
   well-shaped but missing file is a 404).
