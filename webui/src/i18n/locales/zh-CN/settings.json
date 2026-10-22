@@ -186,6 +186,7 @@
     "aboutDesc": "接口入口与项目地址",
     "tagline": "自建漫画服务器",
     "endpoints": "REST API：/api/v1",
+    "apiDocs": "接口文档（Swagger UI）",
     "currentVersion": "当前版本 v{{version}}",
     "newVersion": "有新版本 {{tag}}",
     "upToDate": "已是最新"

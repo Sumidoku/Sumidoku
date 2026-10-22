@@ -1930,7 +1930,19 @@ function AboutSection() {
 				<p>
 					<strong>Sumidoku</strong> · {t('settings.tagline')}
 				</p>
-				<p className="muted">{t('settings.endpoints')}</p>
+				<p className="muted">
+					{t('settings.endpoints')}
+					{' · '}
+					<a
+						className="setting-link"
+						href="/api/docs"
+						target="_blank"
+						rel="noreferrer"
+					>
+						{t('settings.apiDocs')}
+						<ExternalLink size={13} />
+					</a>
+				</p>
 				{version && (
 					<p className="muted">
 						{t('settings.currentVersion', { version })}
