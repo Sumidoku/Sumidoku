@@ -27,7 +27,6 @@ import {
 	useFilterGroups,
 	useImportAidoku,
 	useImportSuwayomi,
-	useIsAdmin,
 	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
@@ -254,7 +253,6 @@ function SecuritySection() {
 							<span className="settings-row__label">{t('settings.currentAccount')}</span>
 							<span className="settings-security__account">
 								{user.username}
-								<Badge>{user.role === 'admin' ? t('settings.roleAdmin') : t('settings.roleReader')}</Badge>
 							</span>
 						</div>
 					)}
@@ -571,7 +569,7 @@ const LIBRARY_SKIP_RULES = [
 	{ key: 'notStarted', labelKey: 'settings.librarySkipNotStarted' }
 ];
 
-function LibraryUpdateSection({ isAdmin }: { isAdmin: boolean }) {
+function LibraryUpdateSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
@@ -607,52 +605,48 @@ function LibraryUpdateSection({ isAdmin }: { isAdmin: boolean }) {
 				<Skeleton height={180} />
 			) : (
 				<>
-					{isAdmin && (
-						<>
-							<div className="settings-row">
-								<span className="settings-row__label">{t('settings.libraryUpdateInterval')}</span>
-								<Select
-									value={String(intervalHours)}
-									disabled={save.isPending}
-									onChange={(e) => {
-										const value = e.currentTarget.value;
-										save.mutate({ 'library.update_interval_hours': Number(value) });
-									}}
-								>
-									{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
-										<option key={hours} value={hours}>
-											{t(labelKey)}
-										</option>
-									))}
-									{!LIBRARY_UPDATE_INTERVALS.some(({ hours }) => hours === intervalHours) && (
-										<option value={intervalHours}>
-											{t('settings.libraryUpdateCustom', { hours: intervalHours })}
-										</option>
-									)}
-								</Select>
-							</div>
-							{LIBRARY_SKIP_RULES.map(({ key, labelKey }) => (
-								<label key={key} className="settings-backup__section">
-									<Switch
-										checked={skipTitles.includes(key)}
-										disabled={save.isPending}
-										onChange={(on) => saveSkip(key, on)}
-										label={t(labelKey)}
-									/>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.libraryUpdateInterval')}</span>
+						<Select
+							value={String(intervalHours)}
+							disabled={save.isPending}
+							onChange={(e) => {
+								const value = e.currentTarget.value;
+								save.mutate({ 'library.update_interval_hours': Number(value) });
+							}}
+						>
+							{LIBRARY_UPDATE_INTERVALS.map(({ hours, labelKey }) => (
+								<option key={hours} value={hours}>
 									{t(labelKey)}
-								</label>
+								</option>
 							))}
-							<label className="settings-backup__section">
-								<Switch
-									checked={refreshMetadata}
-									disabled={save.isPending}
-									onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
-									label={t('settings.libraryRefreshMetadata')}
-								/>
-								{t('settings.libraryRefreshMetadata')}
-							</label>
-						</>
-					)}
+							{!LIBRARY_UPDATE_INTERVALS.some(({ hours }) => hours === intervalHours) && (
+								<option value={intervalHours}>
+									{t('settings.libraryUpdateCustom', { hours: intervalHours })}
+								</option>
+							)}
+						</Select>
+					</div>
+					{LIBRARY_SKIP_RULES.map(({ key, labelKey }) => (
+						<label key={key} className="settings-backup__section">
+							<Switch
+								checked={skipTitles.includes(key)}
+								disabled={save.isPending}
+								onChange={(on) => saveSkip(key, on)}
+								label={t(labelKey)}
+							/>
+							{t(labelKey)}
+						</label>
+					))}
+					<label className="settings-backup__section">
+						<Switch
+							checked={refreshMetadata}
+							disabled={save.isPending}
+							onChange={(on) => save.mutate({ 'library.refresh_metadata': on })}
+							label={t('settings.libraryRefreshMetadata')}
+						/>
+						{t('settings.libraryRefreshMetadata')}
+					</label>
 					<div className="settings-row settings-row--top">
 						<div className="settings-row__stack">
 							<span className="settings-row__label">{t('settings.libraryExcludedUpdateCategories')}</span>
@@ -1424,7 +1418,7 @@ function SuwayomiImportResultView({ result }: { result: SuwayomiImportResponse }
 	);
 }
 
-function BackupSection({ isAdmin }: { isAdmin: boolean }) {
+function BackupSection() {
 	const { t } = useTranslation();
 	const restore = useRestoreBackup();
 	const fileRef = useRef<HTMLInputElement>(null);
@@ -1440,10 +1434,7 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResponse } | null>(null);
 	const [swMapping, setSwMapping] = useState<Record<string, string>>({});
 	const [swResult, setSwResult] = useState<SuwayomiImportResponse | null>(null);
-	// The settings/sourceSettings sections write global state; the server rejects them for readers (403), so the options are hidden too
-	const sections = isAdmin
-		? BACKUP_SECTIONS
-		: BACKUP_SECTIONS.filter((s) => s.key === 'library' || s.key === 'categories' || s.key === 'progress');
+	const sections = BACKUP_SECTIONS;
 
 	async function onSwFile(e: React.ChangeEvent<HTMLInputElement>) {
 		const file = e.currentTarget.files?.[0];
@@ -2029,19 +2020,6 @@ function ScheduledBackupSection() {
 	);
 }
 
-function UsersSection() {
-	const { t } = useTranslation();
-	const navigate = useNavigate();
-	return (
-		<Section title={t('settings.usersTitle')} desc={t('settings.usersDesc')}>
-			<div className="settings-row">
-				<span className="settings-row__label">{t('settings.accountsRoles')}</span>
-				<Button onClick={() => navigate('/users')}>{t('settings.manageUsers')}</Button>
-			</div>
-		</Section>
-	);
-}
-
 function AboutSection() {
 	const { t } = useTranslation();
 	const [version, setVersion] = useState<string | null>(null);
@@ -2116,24 +2094,21 @@ function AboutSection() {
 
 export default function SettingsPage() {
 	const { t } = useTranslation();
-	// The server's 403 is the real gate; here we just keep readers from seeing entries that are doomed to fail
-	const isAdmin = useIsAdmin();
 	return (
 		<div className="page container settings-page">
 			<PageHeader title={t('common.nav.settings')} />
 			<AppearanceSection />
 			<IncognitoSection />
 			<SecuritySection />
-			{isAdmin && <UsersSection />}
 			<CategoriesSection />
 			<FilterGroupsSection />
 			<LibraryDisplaySection />
-			<LibraryUpdateSection isAdmin={isAdmin} />
-			{isAdmin && <LocalSourceSection />}
-			{isAdmin && <ServerSettingsSection />}
-			<BackupSection isAdmin={isAdmin} />
-			{isAdmin && <DownloadMoveSection />}
-			{isAdmin && <ScheduledBackupSection />}
+			<LibraryUpdateSection />
+			<LocalSourceSection />
+			<ServerSettingsSection />
+			<BackupSection />
+			<DownloadMoveSection />
+			<ScheduledBackupSection />
 			<AboutSection />
 		</div>
 	);

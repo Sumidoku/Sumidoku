@@ -417,63 +417,51 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   single-manga flow in the detail page's more-menu
   (`webui/src/pages/manga/MigrateModal.tsx`).
 - Authentication (`auth.rs`): the `user` table is the only credential
-  carrier. Login is username + password (`POST /api/v1/auth/login`),
-  answered with a per-user session token (`auth_token.user_id`, SHA-256
-  at rest, 30-day rolling expiry) and the `{id, username, role}`
-  identity. Auth is off until the built-in admin — user 1, seeded as
-  `admin` — has a password: seeded from the config (`auth.password`, or
-  the legacy `basic_password` alias) on every boot, or stored on the user
-  row by a previous boot or password change. With auth off every request
-  acts as the built-in admin, so a no-password deployment behaves exactly
-  like a single-user one. With a password, `require_auth` guards all of
-  `/api/v1` except `/health`, `GET /api/v1/version` (the workspace
-  `Cargo.toml` version, for the web UI's About section) and the `auth/*`
-  endpoints: the bearer
-  credential (header, or `access_token` query for `<img>`/WebSocket
-  clients) resolves against the configured `auth.api_keys` (SHA-256
-  fingerprints in memory, acting as the built-in admin) or a session
-  token, and the resolved `AuthUser` rides request extensions so every
-  handler scopes reads and writes by `auth_user.id`. Failures share one
-  `401 {"error":{"code":"unauthorized"}}` shape. Passwords are
-  argon2-hashed; `PUT /api/v1/auth/password` changes the caller's own
-  (current password required) and revokes all of that user's session
-  tokens, and the config-set password always re-seeds user 1's stored
-  hash at boot, so it wins over UI-changed passwords after a restart.
-- User management (`api/users.rs`): admin-only `GET`/`POST /api/v1/users`
-  and `PATCH`/`DELETE /api/v1/users/{id}`, part of the `require_admin`
-  route group (`api/mod.rs`) that also covers sources and repos, source
-  settings and login, and server-side backup restore — `require_admin`
-  reads the role `require_auth` injected and answers 403 for a reader.
-  Roles are `admin` (everything) and `reader` (own user-state only);
-  `PUT /api/v1/settings` additionally gates per key, so a reader can only
-  write the user-scoped keys (`USER_SCOPED_SETTING_KEYS`). Create takes
-  `{username, password, role}`; PATCH applies the present fields, and a
-  password reset revokes that user's session tokens (same semantics as
-  self-service change). The list never carries `password_hash`. Delete
-  cascades the user's state rows (library, progress, categories,
-  downloads, tokens) through foreign keys and removes the `user.<id>.*`
-  settings namespace by hand; downloaded chapter files stay — they are
-  shared artifacts at deterministic paths. User 1 cannot be deleted
-  (400). All four endpoints answer 400 while authentication is disabled:
-  multi-user requires a password first.
+  carrier, and only the built-in admin (`USER_ID = 1`) can authenticate.
+  Login is username + password (`POST /api/v1/auth/login`), answered with an
+  admin session token (`auth_token.user_id`, SHA-256 at rest, 30-day rolling
+  expiry) and the `{id, username}` identity; there is no role field or user
+  management API. Auth is off until the built-in admin has a password, seeded
+  from config on every boot or stored by a previous password change. With
+  auth off every request acts as the same admin. `require_auth` is the only
+  route gate: bearer credentials resolve against configured API keys or an
+  admin session, and handlers continue to bind the legacy `AuthUser.id`
+  storage key (always 1). Password changes revoke every admin session, while
+  the config-set password is re-seeded at boot.
+- Single-owner migration (`0019_single_owner.sql`): non-admin settings and
+  sync origins are deleted explicitly, then non-admin users and their
+  user-owned rows are removed through existing foreign-key cascades. The
+  built-in row is forced back to the admin role, while admin data and sessions
+  remain. Legacy `user_id` columns and `user.1.*` settings keys remain only as
+  storage details; there are no additional accounts, roles or role-dependent
+  product branches. Before those deletions, the migration rehomes each latest
+  admin-owned tombstone that has a non-admin origin and rewrites its identity
+  to the admin. A one-time `sync.single_owner_rebaseline` marker then appends
+  current admin rows and latest tombstones as local events, preserving the
+  existing sequence history. Every appended version is strictly newer than
+  that entity's prior events, so preserved state also wins equal-time conflicts
+  on existing peers. Live row versions and snapshot timestamps move together;
+  the marker is cleared in the same transaction and otherwise retried on the
+  next boot. Ordinary compaction is unchanged. Incoming sync changes with any
+  other `origin_user_id` are rejected so old peers cannot reintroduce reader
+  data.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
   and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
   when authentication is enabled and verifies real usernames and passwords
   (before v0.16.1 any non-empty username passed with the site password);
-  the resolved `AuthUser` scopes every feed to that user's own library,
+  the resolved `AuthUser` scopes every feed to the admin's library,
   progress and downloads. Repeated verifications hit a one-entry cache so
   per-page image requests don't pay argon2 each time.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows
-  hold shared content; user-state is per-user — `manga_user` (library
+  hold shared content; owner state lives in `manga_user` (library
   membership, viewer override, incognito, sort key) and `chapter_user`
-  (progress, read/bookmark/download flags, history stamp) keyed
-  `(row id, user id)` — and every REST query and write binds the
-  request's `AuthUser.id`, so one user's library, progress and history
-  stay invisible to another. `source_order` is the source's own chapter
+  (progress, read/bookmark/download flags, history stamp). Their legacy
+  composite keys include `user_id`, which is always 1, and every REST query
+  and write binds that same admin identity. `source_order` is the source's own chapter
   index.   `GET /api/v1/library`
   filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
   boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
@@ -493,7 +481,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
   `filter=unread` keeps its own flagged-rows-only shape).
 - Sync change foundation (`sync.rs`, migrations `0017_sync_change_tracking.sql`
-  and `0018_sync_protocol.sql`): tracked rows have an internal
+  and `0018_sync_protocol.sql`): local `user_id` and accepted
+  `origin_user_id` values are always 1; user references below are legacy
+  protocol fields for the admin, not additional accounts. Tracked rows have an internal
   `last_modified_at` integer Unix-millisecond timestamp, default `0` for
   pre-tracking history. Only sync-relevant value changes stamp it and append a
   `sync_change` event: identical upserts, ignored inserts and timestamp-only
@@ -613,11 +603,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   deltas continue from the new high-water mark. Compaction is operator-invoked,
   never scheduled, and tombstones and origin state survive it.
 - Filter groups (`api/filter_groups.rs`, migration `0013_filter_group.sql`):
-  Aidoku-style saved rule sets. A `filter_group` row is per-user
-  (`unique (user_id, name)`, `sort_order`), its `filter_group_rule` rows
-  cascade with it (`unique (group_id, type, value)`; flag rules carry a
-  NULL value, so the write path — not the index — dedupes them, SQLite
-  treating NULLs as distinct). `GET`/`POST /api/v1/filter-groups`,
+  Aidoku-style saved rule sets. A `filter_group` row belongs to the admin
+  (`unique (user_id, name)` with `user_id = 1`, `sort_order`), its
+  `filter_group_rule` rows cascade with it (`unique (group_id, type, value)`;
+  flag rules carry a NULL value, so the write path — not the index — dedupes
+  them, SQLite treating NULLs as distinct). `GET`/`POST /api/v1/filter-groups`,
   `PATCH`/`DELETE /api/v1/filter-groups/{id}` (PATCH renames and/or
   replaces the rule set wholesale) and `PATCH .../reorder` follow the
   category handlers' shape. Rule types: `downloaded` (EXISTS
@@ -631,10 +621,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   valued dimension, excludes apply per value, dimensions and flag rules
   AND — "all rules ANDed" holds only across dimensions.
   `GET /api/v1/library?groupId=` compiles one group into the same WHERE
-  clause, ANDed with the ad-hoc parameters; another user's group 404s
-  like another user's category. The web UI manages groups in Settings →
+  clause, ANDed with the ad-hoc parameters; a nonexistent group 404s like a
+  nonexistent category. The web UI manages groups in Settings →
   Filter groups and renders them as a single-select chip strip above the
-  category chips; two display settings (user-scoped `library.*` keys,
+  category chips; two admin display settings (legacy `user.1.*` keys,
   next to `incognito.enabled`) steer the page: `library.default_category`
   (`all` / `uncategorized` / a category id) seeds the initial chip only
   on the first visit — a stored chip selection (#243's localStorage
@@ -651,15 +641,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   source `thumbnail`; a source declaring exactly one language fills missing
   chapter languages with it on reconcile, and a whitespace-only chapter title
   folds to NULL, matching the Aidoku host's `""` → nil normalization. A non-zero
-  `manga_user.viewer_flags` is the user's viewer override: API responses
+  `manga_user.viewer_flags` is the admin's viewer override: API responses
   report it as the manga `viewer` while the source value stays stored.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
   stamped whenever `lastPageRead` is written; the history page and both OPDS
-  history feeds select rows where it is non-null. A per-user
-  `incognito.enabled` setting — stored as the namespaced key
-  `user.<id>.incognito.enabled`, with `GET`/`PUT /api/v1/settings`
-  translating between the bare key and the caller's namespace — or a
-  per-manga `manga_user.incognito` flag
+  history feeds select rows where it is non-null. The admin's
+  `incognito.enabled` setting — stored as the legacy key
+  `user.1.incognito.enabled` and translated to a bare key by
+  `GET`/`PUT /api/v1/settings` — or a per-manga `manga_user.incognito` flag
   (Aidoku's pause-history analogue) pauses the stamp: a progress write still
   saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
   reads never enter history and existing stamps are kept. Marking unread
@@ -675,19 +664,16 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
   row, so the flag also works for manga not in the library), and the backup
   document round-trips it, defaulting to off for backups predating the field.
-  The web UI exposes the per-user toggle in Settings (`SettingsPage.tsx`) and
+  The web UI exposes the admin-wide toggle in Settings (`SettingsPage.tsx`) and
   the per-manga toggle as an icon button in the detail header
   (`MangaDetailPage.tsx`).
 - Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
-  JSON document (a `Content-Disposition` attachment) scoped to the
-  requesting user: their library rows and metadata, categories with
-  membership and reading progress, plus source identity (key, name, version
-  and a best-effort repo URL). An admin's document also carries app
-  settings and source settings; a reader's is trimmed to self-data — only
-  their user-scoped settings keys, no source settings. `POST /api/v1/backup`
-  restores it into the requesting user's own state, optionally limited by
-  `?sections=` to some of `library`, `categories`, `progress`, `settings`,
-  `sourceSettings` (the last two require the admin role). Restore upserts by natural key — source
+  JSON document (a `Content-Disposition` attachment) with the admin's complete
+  state: library rows and metadata, categories with membership, reading
+  progress, app settings and source settings, plus source identity (key, name,
+  version and a best-effort repo URL). `POST /api/v1/backup` restores into the
+  same owner state, optionally limited by `?sections=` to some of `library`,
+  `categories`, `progress`, `settings`, `sourceSettings`. Restore upserts by natural key — source
   key + manga key, chapter key, category name — inside one SQLite
   transaction; an unknown `version` or an invalid row answers 400 with the
   database untouched. Entries naming a source that is not installed are
@@ -783,8 +769,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) to the backup dir through
   a tmp+rename swap, stamps `backup.last_run`, and prunes. The scheduled
   document is always built as the built-in admin: a server-side full
-  export (global settings and source settings included), unaffected by
-  the per-role trimming `GET /api/v1/backup` applies to a reader. The
+  export (global settings and source settings included). The
   first tick doubles as the startup overdue check. Pruning keeps the newest
   `max(backup.retention_count, 1)` files by name order — the newest file
   is never deleted, even at retention 0 — and ignores files not matching
@@ -798,15 +783,13 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   backup pattern (everything else, `..` included, is a 400; a
   well-shaped but missing file is a 404).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
-  sources, with a page-level fetch cap inside a chapter. Download rows are
-  per-user (`download` primary key `(chapter_id, user_id)`): enqueue,
-  pause, cancel and the list all bind the requesting user, and WebSocket
-  row events are filtered per connection user, so one user's queue stays
-  invisible to another. The artifact files stay shared at deterministic
-  paths — a second user queueing an already-downloaded chapter lands on
-  `finished` directly, no repack. Both normal completion and shared-artifact
-  settlement commit the finished `download` row and the user's
-  `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
+  sources, with a page-level fetch cap inside a chapter. Download rows use
+  the legacy `(chapter_id, user_id)` primary key with `user_id = 1`: enqueue,
+  pause, cancel, list and WebSocket events all belong to the admin. Artifact
+  files stay at deterministic paths and are reused when a chapter is already
+  downloaded. Both normal completion and existing-artifact settlement commit
+  the finished `download` row and the admin's `chapter_user.is_downloaded`
+  flag in one `BEGIN IMMEDIATE` transaction;
   either write failing rolls both back, and the `finished` event is emitted
   only after commit. Non-text pages are measured from newly fetched bytes on
   every download, but their page-row updates commit only after packaging
@@ -832,9 +815,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   product at its default location without failing the download. Moved
   rows store the absolute target (a relative template target stays
   relative under `downloads_dir`), so the move target is a shared
-  content area: two users downloading the same chapter render the same
-  absolute file, the later one overwrites with identical content or
-  settles onto it without repacking, and deletion removes the file only
+  content area: downloading the same chapter again renders the same
+  absolute file, overwrites it with identical content or settles onto it
+  without repacking, and deletion removes the file only
   once no row references it (an already-missing file counts as
   deleted). Metadata edits only steer future downloads — earlier
   products stay where they were moved.
@@ -931,35 +914,29 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `library.update_interval_hours` falls back to config
   `update_interval_hours` (default 0 = never); and
   `library.excluded_update_categories` defaults to an empty array of category
-  ids stored per-user as `user.{id}.library.excluded_update_categories`. `GET
-  /api/v1/settings` returns the effective values for the requesting user; readers
-  can write their own user-scoped exclusion list, admins can write all library
-  settings. Migration `0016_excluded_update_categories.sql` converts each user's
-  legacy `category.include_in_update = 2` ids into that namespace and leaves an
-  existing per-user setting untouched. Selection keeps `update_strategy = Never`
-  and the per-user `library.excluded_update_categories` list: a title whose
-  categories overlap the excluded list is skipped. The category API does not
-  expose or consult `include_in_update`; `PATCH /api/v1/categories/{id}` with any
-  `includeInUpdate` field answers 400 and names the per-user setting instead.
-  The web UI renders Library updating for every role, but interval, skip rules
-  and metadata refresh stay admin-only; readers can open and save their own
-  exclusion modal. A manual `POST /api/v1/update/fetch`
+  ids stored in the legacy `user.1.library.excluded_update_categories` key.
+  The admin can read and write all library settings. Migration
+  `0016_excluded_update_categories.sql` originally converted per-user legacy
+  `category.include_in_update = 2` ids; after migration 0019 only the admin's
+  setting remains. Selection keeps `update_strategy = Never` and the admin's
+  exclusion list: a title whose categories overlap that list is skipped. The
+  category API does not expose or consult `include_in_update`;
+  `PATCH /api/v1/categories/{id}` with any `includeInUpdate` field answers 400
+  and names the owner setting instead. The web UI exposes all update controls
+  to the admin. A manual `POST /api/v1/update/fetch`
   with a `categoryId` ignores that category in the global exclusion list,
   matching Aidoku's behavior when pulling a specific category. The skip
-  predicates are evaluated against each
-  user's own `chapter_user` rows: `hasUnread` skips when any chapter has no
-  read row for that user (a missing row is unread), `notStarted` skips when
-  the user has no read chapter (including a title with no chapters), and
-  `completed` skips status 2. A source schedule
+  predicates are evaluated against the admin's `chapter_user` rows:
+  `hasUnread` skips when any chapter has no read row (a missing row is
+  unread), `notStarted` skips when the admin has no read chapter (including a
+  title with no chapters), and `completed` skips status 2. A source schedule
   (`next_update_is_fallback = 0`) skips while its stored `next_update_time`
   is in the future. A fallback schedule (`= 1`) instead tests
   `chapters_last_fetched_at + the current effective interval`, so shortening,
   lengthening or disabling the interval takes effect without rewriting old
   manga rows; interval 0 is immediately due. The stored next update time is
-  still advanced after success for the next source round trip. A manual
-  `POST /api/v1/update/fetch` is owned by the triggering user; the scheduled
-  run fetches the union of all users' libraries with one source call per
-  manga, filtering auto-download per user.
+  still advanced after success for the next source round trip. Manual fetches
+  and the scheduled run both use the admin's library and auto-download rules.
   The scheduler checks due every 60s and reloads the interval instead of
   capturing it at construction, so setting changes need no restart. Its
   memory-only `last_scheduled_run_at` is stamped only by a scheduled union at
@@ -982,9 +959,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
   failed fetch or persistence pass does not advance either timestamp. Events
   and the summary carry the fetch's owner, and both the WebSocket stream and
-  `GET /api/v1/update/summary` present them scoped to the requesting user
-  (`UpdateSummary::visible_to`): someone else's manual fetch reads as idle,
-  the union run is visible to everyone.
+  `GET /api/v1/update/summary` present manual and scheduled updates to the admin.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.
@@ -1381,21 +1356,20 @@ feature. It tracks upstream; local fixes don't belong there.
 
 ## Web UI (`webui`)
 
-Vite 7 + React 19 SPA, TypeScript. `src/pages` are the routes,
+Vite 8 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `src/components` shared pieces, `src/api` the REST client,
 `@tanstack/react-query` for server state. `npm run check` is
-`tsc --noEmit`; there is no test suite. The build lands in `webui/build`
-and the server embeds it (see above). When authentication is on, the
-login page takes username + password, the client (`api/client.ts`) sends
+`tsc --noEmit`, and `npm test` runs the Node test suite. The build lands in
+`webui/build` and the server embeds it (see above). When authentication is on, the
+login page takes the admin username + password, the client (`api/client.ts`) sends
 the stored session token as a bearer header, media/websocket URLs carry
 it as an `access_token` query (`withToken`), and any `401` clears the
-token and lands on `/login`. The settings page shows the current
-account, and admins manage users on the Users page
-(`webui/src/pages/UsersPage.tsx`). The reader uses positive known page
-dimensions (populated during downloads) as image intrinsic dimensions and
-continuous/webtoon container aspect ratios, reserving space before lazy loads;
-text, unsupported and unknown-dimension pages get no forced ratio, and paged
-mode keeps its fixed viewport.
+token and lands on `/login`. The settings page shows the admin account and
+all management controls; there is no Users page or role-dependent UI. The
+reader uses positive known page dimensions (populated during downloads) as
+image intrinsic dimensions and continuous/webtoon container aspect ratios,
+reserving space before lazy loads; text, unsupported and unknown-dimension
+pages get no forced ratio, and paged mode keeps its fixed viewport.
 
 ## Known gaps
 

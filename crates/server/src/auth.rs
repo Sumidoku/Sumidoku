@@ -58,24 +58,18 @@ pub fn sha256_hex(raw: &str) -> String {
 pub struct AuthUser {
 	pub id: i64,
 	pub username: String,
-	pub role: String,
 }
 
 impl AuthUser {
 	/// Built-in admin (seed value of user 1): passwordless deployments and config-side api_keys both act as
 	/// admin; the username here is display-only, no DB lookup
 	pub(crate) fn admin() -> Self {
-		Self {
-			id: 1,
-			username: "admin".into(),
-			role: "admin".into(),
-		}
+		Self { id: 1, username: "admin".into() }
 	}
 }
 
 pub struct AuthState {
-	/// In-memory copy of user 1's argon2 PHC string (the auth switch reads only it: multi-user presupposes
-	/// admin sets a password first); None = auth disabled (no password configured, 0.2.0 behavior)
+	/// In-memory copy of user 1's argon2 PHC string; None = auth disabled (no password configured)
 	admin_password_hash: RwLock<Option<String>>,
 	/// sha256 fingerprints of the config-side API keys, resident in memory
 	api_key_hashes: HashSet<String>,
@@ -96,7 +90,7 @@ impl AuthState {
 		self.admin_password_hash.read().await.is_some()
 	}
 
-	/// After a user record changes (deletion/password reset/role change), the OPDS-cached identity is voided too
+	/// After the admin password changes, the OPDS-cached identity is voided too
 	pub(crate) async fn invalidate_basic_cache(&self) {
 		*self.basic_cache.write().await = None;
 	}
@@ -151,31 +145,31 @@ async fn verify_user_credentials(
 	username: &str,
 	password: &str,
 ) -> ApiResult<Option<AuthUser>> {
-	let row: Option<(i64, String, String, String)> =
-		sqlx::query_as("SELECT id, username, role, password_hash FROM user WHERE username = ?")
+	let row: Option<(i64, String, String)> =
+		sqlx::query_as("SELECT id, username, password_hash FROM user WHERE id = 1 AND username = ?")
 			.bind(username)
 			.fetch_optional(pool)
 			.await?;
-	let Some((id, username, role, hash)) = row else {
+	let Some((id, username, hash)) = row else {
 		return Ok(None);
 	};
 	if hash.is_empty() || !verify_password(&hash, password) {
 		return Ok(None);
 	}
-	Ok(Some(AuthUser { id, username, role }))
+	Ok(Some(AuthUser { id, username }))
 }
 
 /// Session token: look up by sha256 fingerprint, JOIN user to verify the owner still exists; renewed on a rolling basis while unexpired
 async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
 	let now = crate::model::unix_now();
-	let row: Option<(i64, i64, String, String)> = sqlx::query_as(
-		"SELECT t.expires_at, u.id, u.username, u.role FROM auth_token t
-		 JOIN user u ON u.id = t.user_id WHERE t.token_hash = ?",
+	let row: Option<(i64, i64, String)> = sqlx::query_as(
+		"SELECT t.expires_at, u.id, u.username FROM auth_token t
+		 JOIN user u ON u.id = t.user_id WHERE t.token_hash = ? AND u.id = 1",
 	)
 	.bind(fingerprint)
 	.fetch_optional(&state.pool)
 	.await?;
-	let Some((expires_at, id, username, role)) = row else {
+	let Some((expires_at, id, username)) = row else {
 		return Ok(None);
 	};
 	if expires_at <= now {
@@ -188,7 +182,7 @@ async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<A
 			.execute(&state.pool)
 			.await?;
 	}
-	Ok(Some(AuthUser { id, username, role }))
+	Ok(Some(AuthUser { id, username }))
 }
 
 async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Option<AuthUser>> {
@@ -220,15 +214,6 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, 
 	}
 }
 
-/// Uniform gate for admin-only surfaces: runs after require_auth and reads the injected role, readers always get 403;
-/// with auth disabled the injected identity is the built-in admin, so passwordless deployments behave unchanged
-pub async fn require_admin(req: Request, next: Next) -> Response {
-	match req.extensions().get::<AuthUser>() {
-		Some(user) if user.role == "admin" => next.run(req).await,
-		_ => ApiError::forbidden("admin role required").into_response(),
-	}
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
@@ -245,7 +230,7 @@ pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResu
 	};
 	Ok(Json(json!({
 		"enabled": enabled,
-		"user": user.map(|u| json!({ "id": u.id, "username": u.username, "role": u.role })),
+		"user": user.map(|u| json!({ "id": u.id, "username": u.username })),
 	})))
 }
 
@@ -276,7 +261,7 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 	Ok(Json(json!({
 		"token": token,
 		"expiresAt": expires_at,
-		"user": { "id": user.id, "username": user.username, "role": user.role },
+		"user": { "id": user.id, "username": user.username },
 	})))
 }
 
@@ -298,7 +283,7 @@ pub struct PasswordChangeRequest {
 	pub new_password: String,
 }
 
-/// Password change: self only; after verifying the old one and storing the new, revoke all own session tokens (a password change logs out every client)
+/// Password change: after verifying the old one and storing the new, revoke every admin session token
 pub async fn change_password(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<AuthUser>,
@@ -330,9 +315,7 @@ pub async fn change_password(
 		.bind(user.id)
 		.execute(&state.pool)
 		.await?;
-	if user.id == 1 {
-		state.auth.set_admin_password_hash(new_hash).await;
-	}
+	state.auth.set_admin_password_hash(new_hash).await;
 	state.auth.invalidate_basic_cache().await;
 	Ok(StatusCode::NO_CONTENT)
 }

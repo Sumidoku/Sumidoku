@@ -48,8 +48,7 @@ import type {
 	SuwayomiImportResponse,
 	UpdateAllSourcesResponse,
 	UpdateCategoryRequest,
-	UpdateMangaRequest,
-	User
+	UpdateMangaRequest
 } from './types';
 import type {
 	GlobalSearchStreamEvent,
@@ -83,8 +82,7 @@ export const qk = {
 	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
 	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
 	backups: ['backups'] as const,
-	whoami: ['whoami'] as const,
-	users: ['users'] as const
+	whoami: ['whoami'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -116,7 +114,7 @@ export function useSources() {
 	return useQuery({ queryKey: qk.sources, queryFn: () => api<Source[]>('/sources') });
 }
 
-// ---- Auth identity and user management ----
+// ---- Auth identity ----
 
 /** The usual identity source outside the login/settings pages; silent: a logged-out 401 goes to the global redirect without a toast */
 export function useWhoami() {
@@ -125,52 +123,6 @@ export function useWhoami() {
 		queryFn: () => api<AuthStatus>('/auth/status', { silent: true })
 	});
 }
-
-/**
- * Display gate for admin entries (the real gate is the server's 403). Auth-less deployments count as the
- * built-in admin; before the identity arrives, render as non-admin — an admin entry appearing a beat late
- * beats flashing it to a reader and then hiding it
- */
-export function useIsAdmin(): boolean {
-	const whoami = useWhoami();
-	if (!whoami.data) return false;
-	return !whoami.data.enabled || whoami.data.user?.role === 'admin';
-}
-
-export function useUsers(enabled = true) {
-	return useQuery({ queryKey: qk.users, queryFn: () => api<User[]>('/users'), enabled });
-}
-
-export function useCreateUser() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: (body: { username: string; password: string; role: string }) =>
-			api<User>('/users', { method: 'POST', body, silent: true }),
-		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.users })
-	});
-}
-
-/** Editing yourself (role/username) changes the account display, so whoami is invalidated too */
-export function useUpdateUser() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: ({ id, ...body }: { id: number; username?: string; role?: string; password?: string }) =>
-			api<User>(`/users/${id}`, { method: 'PATCH', body, silent: true }),
-		onSuccess: () => {
-			void qc.invalidateQueries({ queryKey: qk.users });
-			void qc.invalidateQueries({ queryKey: qk.whoami });
-		}
-	});
-}
-
-export function useDeleteUser() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: (id: number) => api(`/users/${id}`, { method: 'DELETE' }),
-		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.users })
-	});
-}
-
 
 /** Pick a single source out of the source list; there is no standalone GET /sources/{id} endpoint */
 export function useSource(id: number) {

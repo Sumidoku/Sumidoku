@@ -1,6 +1,7 @@
 use super::{SyncChange, insert_change};
 use crate::error::ApiResult;
 use sqlx::SqlitePool;
+use std::ops::DerefMut;
 
 #[derive(Debug)]
 pub struct CompactResult {
@@ -23,8 +24,18 @@ struct BaselineRow {
 	snapshot: String,
 }
 
-pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
-	let mut tx = crate::db::begin_write(pool).await?;
+async fn baseline_rows(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	prefer_event_snapshots: bool,
+) -> ApiResult<Vec<BaselineRow>> {
+	let tx = tx.deref_mut();
+	sqlx::query("DROP TABLE IF EXISTS temp.sync_compaction_options")
+		.execute(&mut *tx)
+		.await?;
+	sqlx::query("CREATE TEMP TABLE sync_compaction_options AS SELECT ? AS prefer_event_snapshots")
+		.bind(prefer_event_snapshots)
+		.execute(&mut *tx)
+		.await?;
 	sqlx::query("DROP TABLE IF EXISTS temp.sync_compaction_latest")
 		.execute(&mut *tx)
 		.await?;
@@ -80,7 +91,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 ) fans ON fans.manga_id = sm.manga_id
 		 JOIN user u ON u.id = fans.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = fans.user_id
-		  AND l.entity_kind = 'manga' AND l.entity_key = CAST(sm.manga_id AS TEXT)",
+		  AND l.entity_kind = 'manga' AND l.entity_key = CAST(sm.manga_id AS TEXT)
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -106,7 +118,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 JOIN sync_manga_state sm ON sm.manga_id = mu.manga_id
 		 JOIN user u ON u.id = mu.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = mu.user_id
-		  AND l.entity_kind = 'manga_user' AND l.entity_key = mu.manga_id || ':' || mu.user_id",
+		  AND l.entity_kind = 'manga_user' AND l.entity_key = mu.manga_id || ':' || mu.user_id
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -131,7 +144,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 FROM category c
 		 JOIN user u ON u.id = c.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = c.user_id
-		  AND l.entity_kind = 'category' AND l.entity_key = CAST(c.id AS TEXT)",
+		  AND l.entity_kind = 'category' AND l.entity_key = CAST(c.id AS TEXT)
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -159,7 +173,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 ) fans ON fans.chapter_id = scs.chapter_id
 		 JOIN user u ON u.id = fans.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = fans.user_id
-		  AND l.entity_kind = 'chapter' AND l.entity_key = CAST(scs.chapter_id AS TEXT)",
+		  AND l.entity_kind = 'chapter' AND l.entity_key = CAST(scs.chapter_id AS TEXT)
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -185,7 +200,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 JOIN sync_chapter_state scs ON scs.chapter_id = cu.chapter_id
 		 JOIN user u ON u.id = cu.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = cu.user_id
-		  AND l.entity_kind = 'chapter_user' AND l.entity_key = cu.chapter_id || ':' || cu.user_id",
+		  AND l.entity_kind = 'chapter_user' AND l.entity_key = cu.chapter_id || ':' || cu.user_id
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -211,7 +227,8 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		 JOIN user u ON u.id = cm.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = cm.user_id
 		  AND l.entity_kind = 'category_manga'
-		  AND l.entity_key = cm.category_id || ':' || cm.manga_id || ':' || cm.user_id",
+		  AND l.entity_key = cm.category_id || ':' || cm.manga_id || ':' || cm.user_id
+		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
 	)
 	.execute(&mut *tx)
 	.await?;
@@ -243,6 +260,12 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 	)
 	.fetch_all(&mut *tx)
 	.await?;
+	Ok(rows)
+}
+
+pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
+	let mut tx = crate::db::begin_write(pool).await?;
+	let rows = baseline_rows(&mut tx, true).await?;
 	let removed = sqlx::query("DELETE FROM sync_change")
 		.execute(&mut *tx)
 		.await?
@@ -281,4 +304,51 @@ pub async fn compact(pool: &SqlitePool) -> ApiResult<CompactResult> {
 		.await?;
 	tx.commit().await?;
 	Ok(CompactResult { base_cursor, removed })
+}
+
+/// Ownership migration must issue a newer local version for every current row and tombstone.
+pub async fn rebaseline(pool: &SqlitePool) -> ApiResult<()> {
+	let mut tx = crate::db::begin_write(pool).await?;
+	let rows = baseline_rows(&mut tx, false).await?;
+	for mut row in rows {
+		let previous: Option<i64> = sqlx::query_scalar(
+			"SELECT MAX(modified_at) FROM sync_change
+			 WHERE user_id = ? AND entity_kind = ? AND entity_key = ?",
+		)
+		.bind(row.user_id)
+		.bind(&row.entity_kind)
+		.bind(&row.entity_key)
+		.fetch_one(&mut *tx)
+		.await?;
+		row.modified_at = previous
+			.unwrap_or(row.modified_at)
+			.max(row.modified_at)
+			.checked_add(1)
+			.ok_or_else(|| crate::error::ApiError::internal("sync modification time overflow"))?;
+		let mut snapshot: serde_json::Value = serde_json::from_str(&row.snapshot)?;
+		if !row.deleted {
+			super::apply::set_final_version(&mut tx, &row.entity_kind, &row.entity_key, row.modified_at).await?;
+			snapshot["lastModifiedAt"] = row.modified_at.into();
+		}
+		let change = SyncChange {
+			sequence: 0,
+			user_id: row.user_id,
+			entity_kind: row.entity_kind,
+			entity_key: row.entity_key,
+			origin: String::new(),
+			origin_user_id: 0,
+			origin_entity_key: String::new(),
+			origin_sequence: 0,
+			deleted: row.deleted,
+			modified_at: row.modified_at,
+			identity: serde_json::from_str(&row.identity)?,
+			snapshot,
+		};
+		insert_change(&mut tx, &change).await?;
+	}
+	sqlx::query("DELETE FROM setting WHERE key = 'sync.single_owner_rebaseline'")
+		.execute(&mut *tx)
+		.await?;
+	tx.commit().await?;
+	Ok(())
 }

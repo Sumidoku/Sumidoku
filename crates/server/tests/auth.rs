@@ -92,7 +92,7 @@ async fn login_token_flow() {
 	let token = body["token"].as_str().expect("token");
 	assert!(!token.is_empty());
 	assert!(body["expiresAt"].as_i64().expect("expiresAt") > 0);
-	assert_eq!(body["user"], json!({"id": 1, "username": "admin", "role": "admin"}));
+	assert_eq!(body["user"], json!({"id": 1, "username": "admin"}));
 
 	let auth = format!("Bearer {token}");
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;

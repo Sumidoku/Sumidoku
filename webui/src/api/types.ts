@@ -30,7 +30,7 @@ export type AidokuSkipped = {
 };
 
 export type ApiError = {
-	code: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
+	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
 	message: string;
 };
 
@@ -42,7 +42,6 @@ export type AuthStatus = {
 export type AuthUser = {
 	id: number;
 	username: string;
-	role: "admin" | "reader";
 };
 
 export type BackupCategory = {
@@ -215,12 +214,6 @@ export type ContentRating = "Unknown" | "Safe" | "Suggestive" | "NSFW";
 export type CreateFilterGroupRequest = {
 	name: string;
 	rules?: Array<FilterRuleInput>;
-};
-
-export type CreateUserRequest = {
-	username: string;
-	password: string;
-	role: "admin" | "reader";
 };
 
 export type DeepLinkRequest = {
@@ -982,7 +975,7 @@ export type SyncApplyResult = {
 
 export type SyncChange = {
 	origin: string;
-	originUserId: number;
+	originUserId: 1;
 	originSequence: number;
 	entityKind: "manga" | "manga_user" | "category" | "category_manga" | "chapter" | "chapter_user";
 	entityKey: string;
@@ -1068,22 +1061,12 @@ export type UpdateSummary = {
 	lastRunAt: number | null;
 };
 
-export type UpdateUserRequest = {
-	username?: string;
-	role?: "admin" | "reader";
-	password?: string;
-};
-
 export type UpdatedResponse = {
 	updated: number;
 };
 
 export type UrlResponse = {
 	url: string;
-};
-
-export type User = AuthUser & {
-	createdAt: number;
 };
 
 export type ValuesResponse = {

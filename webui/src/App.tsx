@@ -14,7 +14,6 @@ import SettingsPage from './pages/SettingsPage';
 import SourceBrowsePage from './pages/SourceBrowsePage';
 import SourceHomePage from './pages/SourceHomePage';
 import UpdatesPage from './pages/UpdatesPage';
-import UsersPage from './pages/UsersPage';
 
 const router = createBrowserRouter([
 	{
@@ -32,7 +31,6 @@ const router = createBrowserRouter([
 			{ path: '/downloads', element: <DownloadsPage /> },
 			{ path: '/updates', element: <UpdatesPage /> },
 			{ path: '/settings', element: <SettingsPage /> },
-			{ path: '/users', element: <UsersPage /> },
 			{ path: '*', element: <NotFound /> }
 		]
 	},

@@ -41,15 +41,6 @@ fn assert_time_contract(events: &[SyncChange]) {
 	}
 }
 
-async fn add_user(pool: &SqlitePool, id: i64) {
-	sqlx::query("INSERT INTO user (id, username, role) VALUES (?, ?, 'reader')")
-		.bind(id)
-		.bind(format!("user{id}"))
-		.execute(pool)
-		.await
-		.expect("add user");
-}
-
 async fn local_source_id(pool: &SqlitePool) -> i64 {
 	sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
 		.fetch_one(pool)
@@ -111,7 +102,6 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 	}
 	drop(conn);
 
-	add_user(&pool, 2).await;
 	sqlx::query("INSERT INTO source (id, key, name, wasm_path) VALUES (10, 'test.source', 'Test', '')")
 		.execute(&pool)
 		.await
@@ -125,14 +115,14 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 	.expect("add old manga");
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, sort_key, incognito) VALUES
-		 (100, 1, 1, 111, 2, 'first', 1), (100, 2, 0, NULL, 0, '', 0)",
+		 (100, 1, 1, 111, 2, 'first', 1)",
 	)
 	.execute(&pool)
 	.await
 	.expect("add old user state");
 	sqlx::query(
 		"INSERT INTO category (id, user_id, name, sort_order, is_default, include_in_update, include_in_download) VALUES
-		 (200, 1, 'One', 3, 1, 2, 2), (201, 2, 'Two', 4, 0, 0, 0)",
+		 (200, 1, 'One', 3, 1, 2, 2)",
 	)
 	.execute(&pool)
 	.await
@@ -143,7 +133,20 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 		.expect("add old membership");
 	pool.close().await;
 
-	let pool = sumidoku_server::db::create_pool(&url).await.expect("apply 0017");
+	let options = SqliteConnectOptions::from_str(&url)
+		.expect("database url")
+		.create_if_missing(true)
+		.foreign_keys(true);
+	let pool = SqlitePoolOptions::new()
+		.max_connections(1)
+		.connect_with(options)
+		.await
+		.expect("connect migration database");
+	let mut conn = pool.acquire().await.expect("migration connection");
+	for migration in migrator.iter().filter(|migration| (17..=18).contains(&migration.version)) {
+		conn.apply(migration).await.expect("apply 0017/0018 migration");
+	}
+	drop(conn);
 	for table in ["manga", "manga_user", "category", "category_manga"] {
 		let values: Vec<i64> = sqlx::query_scalar(&format!("SELECT last_modified_at FROM {table}"))
 			.fetch_all(&pool)
@@ -157,18 +160,15 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 	.fetch_all(&pool)
 	.await
 	.expect("baseline rows");
-	assert_eq!(rows.len(), 7, "{rows:?}");
+	assert_eq!(rows.len(), 4, "{rows:?}");
 	assert_eq!(
 		rows.iter()
 			.map(|(user, kind, key, deleted, modified)| (*user, kind.as_str(), key.as_str(), *deleted, *modified))
 			.collect::<Vec<_>>(),
 		vec![
 			(1, "manga", "100", false, 0),
-			(2, "manga", "100", false, 0),
 			(1, "manga_user", "100:1", false, 0),
-			(2, "manga_user", "100:2", false, 0),
 			(1, "category", "200", false, 0),
-			(2, "category", "201", false, 0),
 			(1, "category_manga", "200:100:1", false, 0),
 		]
 	);
@@ -187,7 +187,7 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 	assert!(admin[2].snapshot.get("includeInUpdate").is_none());
 	assert_eq!(admin[3].identity["categoryId"], 200);
 	assert_eq!(admin[3].identity["mangaKey"], "shared");
-	assert!(since(&pool, 1, 7).await.is_empty());
+	assert!(since(&pool, 1, high_watermark(&pool).await).await.is_empty());
 	pool.close().await;
 }
 
@@ -195,14 +195,12 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 async fn noop_upserts_and_bookkeeping_stay_quiet_with_recursive_triggers() {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
 	let source_id = local_source_id(&pool).await;
 	let manga_id = add_manga(&pool, source_id, "one", 1_000).await;
 	sqlx::query(
 		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, sort_key, incognito, last_modified_at)
-		 VALUES (?, 1, 1, 111, 2, 'sort', 1, 1001), (?, 2, 1, 222, 0, '', 0, 1002)",
+		 VALUES (?, 1, 1, 111, 2, 'sort', 1, 1001)",
 	)
-	.bind(manga_id)
 	.bind(manga_id)
 	.execute(&pool)
 	.await
@@ -283,7 +281,6 @@ async fn noop_upserts_and_bookkeeping_stay_quiet_with_recursive_triggers() {
 	drop(conn);
 
 	assert!(since(&pool, 1, cursor).await.is_empty());
-	assert!(since(&pool, 2, cursor).await.is_empty());
 	let after: (i64, i64, i64, i64) = sqlx::query_as(
 		"SELECT
 		 (SELECT last_modified_at FROM manga WHERE id = ?),
@@ -309,15 +306,12 @@ async fn noop_upserts_and_bookkeeping_stay_quiet_with_recursive_triggers() {
 }
 
 #[tokio::test]
-async fn actual_changes_preserve_explicit_times_and_isolate_users() {
+async fn actual_changes_preserve_explicit_times() {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
-	add_user(&pool, 3).await;
 	let source_id = local_source_id(&pool).await;
 	let manga_id = add_manga(&pool, source_id, "shared", 0).await;
-	sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 1), (?, 2, 1)")
-		.bind(manga_id)
+	sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 1)")
 		.bind(manga_id)
 		.execute(&pool)
 		.await
@@ -336,12 +330,8 @@ async fn actual_changes_preserve_explicit_times_and_isolate_users() {
 	.await
 	.expect("metadata update");
 	let first = since(&pool, 1, cursor).await;
-	let second = since(&pool, 2, cursor).await;
 	assert_eq!(kinds(&first), [("manga", false)]);
-	assert_eq!(kinds(&second), [("manga", false)]);
-	assert!(since(&pool, 3, cursor).await.is_empty());
 	assert_eq!(first[0].modified_at, 123456);
-	assert_eq!(second[0].modified_at, 123456);
 	assert_eq!(first[0].identity["sourceKey"], "local.local");
 	assert_eq!(first[0].identity["mangaKey"], "renamed");
 	assert_eq!(first[0].snapshot["authors"], json!(["a"]));
@@ -367,8 +357,6 @@ async fn actual_changes_preserve_explicit_times_and_isolate_users() {
 	assert_eq!(first[1].snapshot["viewerFlags"], 3);
 	assert_eq!(first[1].snapshot["sortKey"], "custom");
 	assert_eq!(first[1].snapshot["incognito"], 1);
-	assert!(since(&pool, 2, cursor).await.is_empty());
-	assert!(since(&pool, 3, cursor).await.is_empty());
 	assert_eq!(manga_modified(&pool, manga_id).await, 123456);
 
 	let cursor = high_watermark(&pool).await;
@@ -395,7 +383,6 @@ async fn actual_changes_preserve_explicit_times_and_isolate_users() {
 		.await
 		.expect("timestamp-only update");
 	assert!(since(&pool, 1, cursor).await.is_empty());
-	assert!(since(&pool, 2, cursor).await.is_empty());
 	assert_eq!(manga_modified(&pool, manga_id).await, 999999);
 }
 
@@ -403,7 +390,6 @@ async fn actual_changes_preserve_explicit_times_and_isolate_users() {
 async fn membership_key_updates_emit_removal_and_addition() {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
 	let source_id = local_source_id(&pool).await;
 	let first = add_manga(&pool, source_id, "first", 0).await;
 	let second = add_manga(&pool, source_id, "second", 0).await;
@@ -414,7 +400,7 @@ async fn membership_key_updates_emit_removal_and_addition() {
 		.expect("add user state");
 	assert_eq!(kinds(&since(&pool, 1, 0).await), [("manga", false), ("manga_user", false)]);
 	let old_category = add_category(&pool, 1, "old", 0).await;
-	let new_category = add_category(&pool, 2, "new", 0).await;
+	let new_category = add_category(&pool, 1, "new", 0).await;
 	sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
 		.bind(old_category)
 		.bind(first)
@@ -424,7 +410,7 @@ async fn membership_key_updates_emit_removal_and_addition() {
 
 	let cursor = high_watermark(&pool).await;
 	sqlx::query(
-		"UPDATE category_manga SET category_id = ?, manga_id = ?, user_id = 2, last_modified_at = 456789
+		"UPDATE category_manga SET category_id = ?, manga_id = ?, last_modified_at = 456789
 		 WHERE category_id = ? AND manga_id = ? AND user_id = 1",
 	)
 	.bind(new_category)
@@ -434,20 +420,20 @@ async fn membership_key_updates_emit_removal_and_addition() {
 	.execute(&pool)
 	.await
 	.expect("move membership");
-	let old_events = since(&pool, 1, cursor).await;
-	let new_events = since(&pool, 2, cursor).await;
-	assert_eq!(kinds(&old_events), [("manga", false), ("category_manga", true)]);
-	assert_eq!(kinds(&new_events), [("manga", false), ("category_manga", false)]);
-	assert_eq!(old_events[1].identity["mangaKey"], "first");
-	assert_eq!(old_events[1].identity["categoryId"], old_category);
-	assert_eq!(new_events[1].identity["mangaKey"], "second");
-	assert_eq!(new_events[1].identity["categoryId"], new_category);
-	assert_time_contract(&old_events);
-	assert_time_contract(&new_events);
-	assert_eq!(old_events[0].modified_at, manga_modified(&pool, first).await);
-	assert_eq!(new_events[0].modified_at, manga_modified(&pool, second).await);
-	assert_eq!(old_events[1].modified_at, 456789);
-	assert_eq!(new_events[1].modified_at, 456789);
+	let events = since(&pool, 1, cursor).await;
+	assert_eq!(
+		kinds(&events),
+		[("manga", false), ("category_manga", true), ("manga", false), ("category_manga", false)]
+	);
+	assert_eq!(events[1].identity["mangaKey"], "first");
+	assert_eq!(events[1].identity["categoryId"], old_category);
+	assert_eq!(events[3].identity["mangaKey"], "second");
+	assert_eq!(events[3].identity["categoryId"], new_category);
+	assert_time_contract(&events);
+	assert_eq!(events[0].modified_at, manga_modified(&pool, first).await);
+	assert_eq!(events[2].modified_at, manga_modified(&pool, second).await);
+	assert_eq!(events[1].modified_at, 456789);
+	assert_eq!(events[3].modified_at, 456789);
 
 	let cursor = high_watermark(&pool).await;
 	sqlx::query(
@@ -695,81 +681,17 @@ async fn cascades_leave_durable_tombstones_without_duplicate_parent_events() {
 }
 
 #[tokio::test]
-async fn source_uninstall_and_user_delete_preserve_the_other_users_stream() {
-	let app = test_app().await;
-	let manga_id = register_example_manga(&app.app).await;
-	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
-	sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 1), (?, 2, 1)")
-		.bind(manga_id)
-		.bind(manga_id)
-		.execute(&pool)
-		.await
-		.expect("share library entry");
-	let source_id: i64 = sqlx::query_scalar("SELECT source_id FROM manga WHERE id = ?")
-		.bind(manga_id)
-		.fetch_one(&pool)
-		.await
-		.expect("source id");
-	let cursor = high_watermark(&pool).await;
-	let (status, _) = request(&app.app, "DELETE", &format!("/api/v1/sources/{source_id}"), None).await;
-	assert_eq!(status, StatusCode::NO_CONTENT);
-	for user_id in [1, 2] {
-		let events = since(&pool, user_id, cursor).await;
-		assert_time_contract(&events);
-		let stage_one: Vec<_> = events
-			.iter()
-			.filter(|event| matches!(event.entity_kind.as_str(), "manga" | "manga_user"))
-			.cloned()
-			.collect();
-		assert_eq!(kinds(&stage_one), [("manga", true), ("manga_user", true)]);
-		assert_eq!(stage_one.iter().filter(|event| event.entity_kind == "manga").count(), 1);
-		assert!(events.iter().all(|event| event.identity["sourceKey"] == "en.example-source"));
-	}
-
-	let source_id = local_source_id(&pool).await;
-	let shared = add_manga(&pool, source_id, "survivor", 0).await;
-	sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 1), (?, 2, 1)")
-		.bind(shared)
-		.bind(shared)
-		.execute(&pool)
-		.await
-		.expect("share surviving manga");
-	let admin_before = since(&pool, 1, 0).await;
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM user WHERE id = 2")
-		.execute(&pool)
-		.await
-		.expect("delete second user");
-	assert!(since(&pool, 2, 0).await.is_empty());
-	assert_eq!(since(&pool, 1, 0).await, admin_before);
-	let page = changes_since(&pool, 1, cursor, 100).await.expect("page after user delete");
-	assert!(!page.has_more);
-	assert_eq!(page.next_cursor, cursor);
-	sqlx::query("UPDATE manga SET title = 'still readable' WHERE id = ?")
-		.bind(shared)
-		.execute(&pool)
-		.await
-		.expect("write after user delete");
-	let events = since(&pool, 1, cursor).await;
-	assert_eq!(kinds(&events), [("manga", false)]);
-	assert!(events[0].sequence > cursor);
-}
-
-#[tokio::test]
 async fn pagination_uses_sequences_not_timestamps() {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
 	let source_id = local_source_id(&pool).await;
 	let first = add_manga(&pool, source_id, "first", 42).await;
 	let second = add_manga(&pool, source_id, "second", 42).await;
-	for (manga_id, user_id) in [(first, 1), (first, 2), (second, 1)] {
+	for manga_id in [first, second] {
 		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, in_library, last_modified_at) VALUES (?, ?, 1, 42)",
+			"INSERT INTO manga_user (manga_id, user_id, in_library, last_modified_at) VALUES (?, 1, 1, 42)",
 		)
 		.bind(manga_id)
-		.bind(user_id)
 		.execute(&pool)
 		.await
 		.expect("add paginated state");
@@ -787,8 +709,6 @@ async fn pagination_uses_sequences_not_timestamps() {
 	assert!(first_page.has_more);
 	assert_eq!(first_page.next_cursor, first_page.changes[1].sequence);
 	let late = add_category(&pool, 1, "late", 1).await;
-	let other_late = add_category(&pool, 2, "other late", 1).await;
-	assert!(other_late > late);
 
 	let mut cursor = first_page.next_cursor;
 	let mut sequences: Vec<i64> = first_page.changes.iter().map(|event| event.sequence).collect();
@@ -817,16 +737,6 @@ async fn pagination_uses_sequences_not_timestamps() {
 		.expect("late event");
 	assert_eq!(late_event.modified_at, 1);
 	assert_eq!(cursor, high_watermark(&pool).await);
-	let other_max: i64 = sqlx::query_scalar("SELECT MAX(sequence) FROM sync_change WHERE user_id = 2")
-		.fetch_one(&pool)
-		.await
-		.expect("other user maximum");
-	let own_max: i64 = sqlx::query_scalar("SELECT MAX(sequence) FROM sync_change WHERE user_id = 1")
-		.fetch_one(&pool)
-		.await
-		.expect("own maximum");
-	assert!(other_max > own_max);
-	assert_eq!(cursor, other_max);
 
 	let after_snapshot = add_category(&pool, 1, "after snapshot", 1).await;
 	let page = changes_since(&pool, 1, cursor, 10).await.expect("later commit");
@@ -1213,106 +1123,6 @@ async fn manga_user_manga_key_update_uses_target_history() {
 	assert_eq!(events[1].snapshot["lastModifiedAt"], future + 10);
 	assert_eq!(events[3].modified_at, future + 102);
 	assert_eq!(events[3].snapshot["lastModifiedAt"], future + 102);
-}
-
-#[tokio::test]
-async fn manga_user_owner_update_uses_target_history() {
-	let app = test_app().await;
-	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
-	let source_id = local_source_id(&pool).await;
-	let future = 9_000_000_000_000_000_i64;
-	let manga_id = add_manga(&pool, source_id, "shared", future).await;
-	for (user_id, modified_at) in [(1, future + 10), (2, future + 100)] {
-		sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library, last_modified_at) VALUES (?, ?, 1, ?)")
-			.bind(manga_id)
-			.bind(user_id)
-			.bind(modified_at)
-			.execute(&pool)
-			.await
-			.expect("add source or target user state");
-	}
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM manga_user WHERE manga_id = ? AND user_id = 2")
-		.bind(manga_id)
-		.execute(&pool)
-		.await
-		.expect("delete target owner state");
-	let deleted = since(&pool, 2, cursor).await;
-	let target_tombstone = deleted.iter().find(|event| event.entity_kind == "manga_user").expect("target tombstone");
-	assert_eq!(target_tombstone.modified_at, future + 101);
-	assert_eq!(target_tombstone.snapshot["lastModifiedAt"], future + 100);
-
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("UPDATE manga_user SET user_id = 2 WHERE manga_id = ? AND user_id = 1")
-		.bind(manga_id)
-		.execute(&pool)
-		.await
-		.expect("move user state to deleted owner key");
-	let old_events = since(&pool, 1, cursor).await;
-	let new_events = since(&pool, 2, cursor).await;
-	assert_time_contract(&old_events);
-	assert_time_contract(&new_events);
-	assert_eq!(kinds(&old_events), [("manga", false), ("manga_user", true)]);
-	assert_eq!(kinds(&new_events), [("manga", false), ("manga_user", false)]);
-	assert_eq!(old_events[1].identity["userId"], 1);
-	assert_eq!(new_events[1].identity["userId"], 2);
-	assert_eq!(old_events[1].modified_at, future + 102);
-	assert_eq!(old_events[1].snapshot["lastModifiedAt"], future + 10);
-	assert_eq!(new_events[1].modified_at, future + 102);
-	assert_eq!(new_events[1].snapshot["lastModifiedAt"], future + 102);
-}
-
-#[tokio::test]
-async fn category_owner_update_uses_target_history() {
-	let app = test_app().await;
-	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
-	let future = 9_000_000_000_000_000_i64;
-	let category_id = 92_001_i64;
-	sqlx::query("INSERT INTO category (id, user_id, name, last_modified_at) VALUES (?, 2, 'Target', ?)")
-		.bind(category_id)
-		.bind(future + 100)
-		.execute(&pool)
-		.await
-		.expect("add target category");
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM category WHERE id = ?")
-		.bind(category_id)
-		.execute(&pool)
-		.await
-		.expect("delete target category");
-	let deleted = since(&pool, 2, cursor).await;
-	assert_eq!(deleted.len(), 1);
-	assert_eq!(deleted[0].modified_at, future + 101);
-	assert_eq!(deleted[0].snapshot["lastModifiedAt"], future + 100);
-
-	sqlx::query("INSERT INTO category (id, user_id, name, last_modified_at) VALUES (?, 1, 'Source', ?)")
-		.bind(category_id)
-		.bind(future + 10)
-		.execute(&pool)
-		.await
-		.expect("add source category at reused id");
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("UPDATE category SET user_id = 2 WHERE id = ?")
-		.bind(category_id)
-		.execute(&pool)
-		.await
-		.expect("move category to deleted owner key");
-	let old_events = since(&pool, 1, cursor).await;
-	let new_events = since(&pool, 2, cursor).await;
-	assert_time_contract(&old_events);
-	assert_time_contract(&new_events);
-	assert_eq!(kinds(&old_events), [("category", true)]);
-	assert_eq!(kinds(&new_events), [("category", false)]);
-	assert_eq!(old_events[0].identity["categoryId"], category_id);
-	assert_eq!(new_events[0].identity["categoryId"], category_id);
-	assert_eq!(old_events[0].identity["userId"], 1);
-	assert_eq!(new_events[0].identity["userId"], 2);
-	assert_eq!(old_events[0].modified_at, future + 102);
-	assert_eq!(old_events[0].snapshot["lastModifiedAt"], future + 10);
-	assert_eq!(new_events[0].modified_at, future + 102);
-	assert_eq!(new_events[0].snapshot["lastModifiedAt"], future + 102);
 }
 
 #[tokio::test]

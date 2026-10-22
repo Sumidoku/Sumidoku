@@ -104,6 +104,9 @@ fn validate_change(change: &WireChange) -> ApiResult<()> {
 	if change.origin_user_id <= 0 || change.origin_sequence <= 0 {
 		return Err(ApiError::bad_request("origin user and sequence must be positive"));
 	}
+	if change.origin_user_id != crate::USER_ID {
+		return Err(ApiError::bad_request("non-admin sync is unsupported"));
+	}
 	if change.modified_at < 0 {
 		return Err(ApiError::bad_request("modifiedAt must not be negative"));
 	}
@@ -627,7 +630,7 @@ async fn fanout_users(
 	Ok(users)
 }
 
-async fn set_final_version(
+pub(crate) async fn set_final_version(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	kind: &str,
 	local_key: &str,
