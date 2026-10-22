@@ -1,16 +1,12 @@
 use crate::error::ApiResult;
-use crate::model::{ChapterRow, MangaRow, PageRow};
-use crate::state::AppState;
+use crate::model::PageRow;
 use image::ImageReader;
-use serde_json::Value;
 use sqlx::SqlitePool;
 use std::io::Cursor;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 /// How many leading bytes to read when measuring image dimensions. Most image headers (IHDR, SOF, etc.)
 /// fit comfortably inside this window; only pathological headers (e.g. very large JPEG EXIF) fall back to a full read.
-const DIMENSION_HEAD_BYTES: usize = 64 * 1024;
+pub(crate) const DIMENSION_HEAD_BYTES: usize = 64 * 1024;
 
 pub struct PageDimensionUpdate {
 	idx: i64,
@@ -51,7 +47,7 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(i64, i64)> {
 /// - `Some(Some(dims))`: bytes were read and dimensions parsed.
 /// - `Some(None)`: bytes were read but are not a valid image; the row should be marked checked with nulls.
 /// - `None`: no bytes could be read; the caller should skip the row so it stays retryable.
-async fn measure_with_fallback<Fut>(
+pub async fn measure_with_fallback<Fut>(
 	head: ApiResult<Vec<u8>>,
 	full: impl FnOnce() -> Fut,
 ) -> Option<Option<(i64, i64)>>
@@ -79,117 +75,36 @@ where
 	}
 }
 
-pub async fn persist(pool: &SqlitePool, chapter_id: i64, updates: &[PageDimensionUpdate]) -> ApiResult<()> {
-	persist_with_guard(pool, chapter_id, updates, true).await
-}
-
 pub async fn persist_downloaded(pool: &SqlitePool, chapter_id: i64, updates: &[PageDimensionUpdate]) -> ApiResult<()> {
-	persist_with_guard(pool, chapter_id, updates, false).await
+	persist_with_guard(pool, chapter_id, updates).await
 }
 
 async fn persist_with_guard(
 	pool: &SqlitePool,
 	chapter_id: i64,
 	updates: &[PageDimensionUpdate],
-	unchecked_only: bool,
 ) -> ApiResult<()> {
 	if updates.is_empty() {
 		return Ok(());
 	}
 	let mut tx = crate::db::begin_write(pool).await?;
 	for update in updates {
-		// A refresh can replace a row while its old bytes are being read; the content guard keeps the old measurement off the new page
-		let sql = if unchecked_only {
+		// A refresh can replace a row while its old bytes are being read; the content guard keeps the old measurement off the new page.
+		// The download path overwrites stale checked values, so it does not require dimensions_checked = 0.
+		sqlx::query(
 			"UPDATE page SET width = ?, height = ?, dimensions_checked = 1
-			 WHERE chapter_id = ? AND idx = ? AND dimensions_checked = 0 AND content = ?"
-		} else {
-			"UPDATE page SET width = ?, height = ?, dimensions_checked = 1
-			 WHERE chapter_id = ? AND idx = ? AND content = ?"
-		};
-		sqlx::query(sql)
-			.bind(update.width)
-			.bind(update.height)
-			.bind(chapter_id)
-			.bind(update.idx)
-			.bind(&update.content)
-			.execute(&mut *tx)
-			.await?;
+			 WHERE chapter_id = ? AND idx = ? AND content = ?",
+		)
+		.bind(update.width)
+		.bind(update.height)
+		.bind(chapter_id)
+		.bind(update.idx)
+		.bind(&update.content)
+		.execute(&mut *tx)
+		.await?;
 	}
 	tx.commit().await?;
 	Ok(())
-}
-
-pub async fn backfill_local(
-	state: &Arc<AppState>,
-	chapter_id: i64,
-	mut pages: Vec<PageRow>,
-) -> ApiResult<Vec<PageRow>> {
-	let mut updates = Vec::new();
-	let mut context: Option<(ChapterRow, MangaRow, Vec<PathBuf>)> = None;
-	for row in &mut pages {
-		if row.dimensions_checked {
-			continue;
-		}
-		let Ok(stored) = serde_json::from_str::<Value>(&row.content) else {
-			continue;
-		};
-		let content = stored.get("content").cloned().unwrap_or(Value::Null);
-		if (content.get("Local").is_some() || content.get("OpdsZip").is_some()) && context.is_none() {
-			let chapter = super::chapter_row(&state.pool, chapter_id).await?;
-			let manga = super::manga_row(&state.pool, chapter.manga_id).await?;
-			let local_dirs = state.local_dirs().await?;
-			context = Some((chapter, manga, local_dirs));
-		}
-		let dimensions = if let Some(name) = content.get("Image").and_then(Value::as_str) {
-			let head = super::page_image_blob_head(state, chapter_id, name, DIMENSION_HEAD_BYTES).await;
-			measure_with_fallback(head, || super::page_image_blob(state, chapter_id, name)).await
-		} else if let Some(entry) = content.get("Local").and_then(Value::as_str) {
-			let (chapter, manga, local_dirs) = context.as_ref().expect("local context initialized");
-			let head = crate::local::read_page_head(
-				local_dirs,
-				&state.local_zip,
-				&manga.key,
-				&chapter.key,
-				entry,
-				DIMENSION_HEAD_BYTES,
-			)
-			.await;
-			let local_zip = state.local_zip.clone();
-			measure_with_fallback(head, || {
-				let local_dirs = local_dirs.clone();
-				let manga_key = manga.key.clone();
-				let chapter_key = chapter.key.clone();
-				let entry = entry.to_string();
-				async move {
-					crate::local::read_page_bytes(&local_dirs, &local_zip, &manga_key, &chapter_key, &entry).await
-				}
-			})
-			.await
-		} else if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
-			let (chapter, manga, _) = context.as_ref().expect("opds context initialized");
-			let head = crate::opds_source::read_cbz_page_head(state, manga, chapter, entry, DIMENSION_HEAD_BYTES).await;
-			let state = state.clone();
-			let entry = entry.to_string();
-			measure_with_fallback(head, || async {
-				crate::opds_source::read_cbz_page(&state, manga, chapter, &entry)
-					.await
-					.map(|(bytes, _)| bytes)
-			})
-			.await
-		} else {
-			continue;
-		};
-		let Some(dimensions) = dimensions else {
-			continue;
-		};
-		let update = PageDimensionUpdate::new(row, dimensions);
-		row.width = update.width;
-		row.height = update.height;
-		row.dimensions_checked = true;
-		updates.push(update);
-	}
-	persist(&state.pool, chapter_id, &updates).await?;
-	Ok(pages)
 }
 
 #[cfg(test)]

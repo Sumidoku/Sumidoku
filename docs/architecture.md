@@ -299,11 +299,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
   OPDS-PSE read image files directly and extract single archive entries
   (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
-  with the downsample pipeline untouched. Unchecked `Local` rows join the lazy
-  dimension measurement below: `local::read_page_bytes` reads only the entry
-  bytes, so EPUB measurement does not reparse OPF media metadata for every
-  page, while actual responses keep `read_page`'s declared MIME behavior.
-  Covers reuse the disk cache with
+  with the downsample pipeline untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
   `cover.*` sidecar in the manga directory → first page of the chapter
   list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
@@ -835,19 +831,18 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
-  nullable `width`/`height` and an internal `dimensions_checked` marker. After
-  a cache read or wholesale rewrite, `load_pages` synchronously measures
-  unchecked materialized `Image`, `Local` and `OpdsZip` bytes
-  through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
-  full pixel decoding); `Url`/`Zip` content is never fetched just for
-  metadata. Measurement reads only the first 64 KiB of a local file or zip
-  entry first; only when those bytes are inconclusive and the entry is larger
-  than the window does it fall back to a full read. A byte-read failure stays
-  unchecked for a later retry, while invalid image bytes become checked with
-  null dimensions. Page-row rewrites reset all three fields so changed images
-  cannot inherit stale dimensions. `GET /api/v1/chapter/{id}/pages` keeps the
-  existing content/index shape and adds top-level `width`/`height` only when
-  both are known; text and unknown pages omit the pair.
+  nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
+  are measured only during downloads (`download/mod.rs:fetch_page`): after the
+  page file is written, the downloader reads only the first 64 KiB head and runs
+  it through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
+  full pixel decoding). If the head is inconclusive and the file is larger than
+  the window, it falls back to a full read; a read failure leaves the row
+  retryable and invalid image bytes become checked with nulls. Page-list loads
+  (`load_pages`) do not fetch or measure images just for metadata. Page-row
+  rewrites reset all three fields so changed images cannot inherit stale
+  dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing content/index
+  shape and adds top-level `width`/`height` only when both are known; text and
+  unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
@@ -1370,11 +1365,11 @@ login page takes the admin username + password, the client (`api/client.ts`) sen
 the stored session token as a bearer header, media/websocket URLs carry
 it as an `access_token` query (`withToken`), and any `401` clears the
 token and lands on `/login`. The settings page shows the admin account and
-all management controls; there is no Users page or role-dependent UI. The reader uses positive known page
-dimensions as image intrinsic dimensions and continuous/webtoon container
-aspect ratios, reserving space before lazy loads; text, unsupported and
-unknown-dimension pages get no forced ratio, and paged mode keeps its fixed
-viewport.
+all management controls; there is no Users page or role-dependent UI. The
+reader uses positive known page dimensions (populated during downloads) as
+image intrinsic dimensions and continuous/webtoon container aspect ratios,
+reserving space before lazy loads; text, unsupported and unknown-dimension
+pages get no forced ratio, and paged mode keeps its fixed viewport.
 
 ## Known gaps
 

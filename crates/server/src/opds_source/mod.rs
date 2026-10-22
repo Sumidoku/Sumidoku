@@ -942,29 +942,6 @@ pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &Ch
 	Ok((bytes, crate::local::image_mime(entry_name).to_string()))
 }
 
-/// Leading bytes of an OPDS CBZ page for dimension measurement: avoids decompressing the whole image.
-pub async fn read_cbz_page_head(
-	state: &Arc<AppState>,
-	manga: &MangaRow,
-	chapter: &ChapterRow,
-	entry_name: &str,
-	head_bytes: usize,
-) -> ApiResult<Vec<u8>> {
-	let path = ensure_cbz_path(state, manga, chapter).await?;
-	let zip = state.local_zip.clone();
-	let entry = entry_name.to_string();
-	tokio::task::spawn_blocking(move || zip.read_entry_head(&path, &entry, head_bytes))
-		.await
-		.map_err(|e| ApiError::internal(format!("read zip entry head failed: {e}")))?
-		.map_err(|e| {
-			if e.kind() == std::io::ErrorKind::NotFound {
-				ApiError::not_found("page not found")
-			} else {
-				ApiError::bad_gateway(format!("read opds archive failed: {e}"))
-			}
-		})
-}
-
 async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow) -> ApiResult<PathBuf> {
 	let path = cbz_path(state, chapter.id);
 	if tokio::fs::metadata(&path).await.is_ok() {
