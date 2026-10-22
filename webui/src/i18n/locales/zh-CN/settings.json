@@ -120,6 +120,8 @@
     "restored": "已恢复：书库 {{library}} · 分类 {{categories}} · 进度 {{progress}} · 设置 {{settings}} · 源设置 {{sourceSettings}}",
     "restoredAll": "全部条目均已恢复，无跳过项",
     "skippedItems": "以下条目被跳过：",
+    "skippedItemsCount": "已跳过条目（{{count}}）",
+    "willSkipItemsCount": "将跳过条目（{{count}}）",
     "libraryEntry": "书库条目",
     "progressEntry": "阅读进度",
     "chapterSuffix": " / 章节 {{key}}",

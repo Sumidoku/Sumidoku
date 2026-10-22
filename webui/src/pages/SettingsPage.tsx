@@ -74,6 +74,7 @@ import {
 	TriStateDropdown,
 	pushToast
 } from '../components';
+import { SkippedItems } from './settings/SkippedItems';
 import './settings.css';
 
 function Section({
@@ -1324,14 +1325,11 @@ function AidokuImportResultView({ result }: { result: AidokuImportResponse }) {
 			{result.skipped.length === 0 ? (
 				<p className="faint">{t('settings.importedAll')}</p>
 			) : (
-				<>
-					<p className="settings-modal-text">{t('settings.skippedNoSource')}</p>
-					<ul className="settings-backup__warnings">
-						{result.skipped.map((s, i) => (
-							<li key={i}>{aidokuSkippedLabel(t, s)}</li>
-						))}
-					</ul>
-				</>
+				<SkippedItems
+					label={t('settings.skippedItemsCount', { count: result.skipped.length })}
+					description={t('settings.skippedNoSource')}
+					items={result.skipped.map((s) => aidokuSkippedLabel(t, s))}
+				/>
 			)}
 		</div>
 	);
@@ -1404,16 +1402,10 @@ function SuwayomiImportResultView({ result }: { result: SuwayomiImportResponse }
 					})
 					.join(t('settings.listSeparator'))}
 			</p>
-			{result.skipped.length > 0 && (
-				<>
-					<p className="settings-modal-text">{t('settings.skippedItems')}</p>
-					<ul className="settings-backup__warnings">
-						{result.skipped.map((s, i) => (
-							<li key={i}>{suwayomiSkippedLabel(t, s)}</li>
-						))}
-					</ul>
-				</>
-			)}
+			<SkippedItems
+				label={t('settings.skippedItemsCount', { count: result.skipped.length })}
+				items={result.skipped.map((s) => suwayomiSkippedLabel(t, s))}
+			/>
 		</div>
 	);
 }
@@ -1596,7 +1588,7 @@ function BackupSection() {
 
 			<Modal
 				open={sw !== null}
-				title="{t('settings.importSuwayomi')}"
+				title={t('settings.importSuwayomi')}
 				onClose={closeSwModal}
 				footer={
 					swResult ? (
@@ -1659,7 +1651,7 @@ function BackupSection() {
 
 			<Modal
 				open={aib !== null}
-				title="{t('settings.importAidoku')}"
+				title={t('settings.importAidoku')}
 				onClose={closeAibModal}
 				footer={
 					aibResult ? (
@@ -1688,16 +1680,11 @@ function BackupSection() {
 									progress: aib.preview.imported.progress
 								})}
 							</p>
-							{aib.preview.skipped.length > 0 && (
-								<>
-									<p className="settings-modal-text">{t('settings.willSkipNoSource')}</p>
-									<ul className="settings-backup__warnings">
-										{aib.preview.skipped.map((s, i) => (
-											<li key={i}>{aidokuSkippedLabel(t, s)}</li>
-										))}
-									</ul>
-								</>
-							)}
+							<SkippedItems
+								label={t('settings.willSkipItemsCount', { count: aib.preview.skipped.length })}
+								description={t('settings.willSkipNoSource')}
+								items={aib.preview.skipped.map((s) => aidokuSkippedLabel(t, s))}
+							/>
 							<p className="settings-backup__warn">
 								{t('settings.importMergeWarn')}
 							</p>
