@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowRight, Search } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useMigrate, useRegisterManga, useSources } from '../../api/hooks';
-import type { Manga, MangaDetail, MigrateMode } from '../../api/types';
+import type { Manga, MigrateMode, SearchManga } from '../../api/types';
 import { mapPool } from '../../lib/pool';
 import { Button, Cover, Modal, Spinner, pushToast } from '../../components';
 import { DestinationPicker } from '../migrate/DestinationPicker';
@@ -14,13 +14,13 @@ import '../migrate/migrate.css';
  * Switch a single entry to another source: pick the destination set → title-search all target sources
  * with 3-way concurrency → user picks the match → execute with the chosen mode (or just view the entry) → jump to the target page
  */
-export function MigrateModal({ manga, onClose }: { manga: MangaDetail; onClose: () => void }) {
+export function MigrateModal({ manga, onClose }: { manga: Manga; onClose: () => void }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const [destinations, setDestinations] = useState<number[]>([]);
 	const [searching, setSearching] = useState(false);
-	const [results, setResults] = useState<Manga[] | null>(null);
-	const [picked, setPicked] = useState<Manga | null>(null);
+	const [results, setResults] = useState<SearchManga[] | null>(null);
+	const [picked, setPicked] = useState<SearchManga | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const migrate = useMigrate();
 	const register = useRegisterManga();

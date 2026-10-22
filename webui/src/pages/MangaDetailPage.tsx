@@ -21,7 +21,7 @@ import {
 	useSourceFilters,
 	useUpdateChapter
 } from '../api/hooks';
-import type { Chapter, Filter, FilterValue } from '../api/types';
+import type { ChapterWithDownload, FilterValue, SourceFilter } from '../api/types';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -83,20 +83,20 @@ function triColor(t: Tri): ChipColor {
 // Author/artist search capability mirrors Aidoku supportsAuthorSearch: the manifest declaration wins;
 // only when undeclared (undefined) does it fall back to inferring from the filter list (a text filter with the same id suffices)
 function creatorSearchable(
-	filters: Filter[],
+	filters: SourceFilter[],
 	flag: boolean | undefined,
 	id: string
 ): boolean {
 	return flag ?? hasTextFilter(filters, id);
 }
 
-function hasTextFilter(filters: Filter[], id: string): boolean {
+function hasTextFilter(filters: SourceFilter[], id: string): boolean {
 	return filters.some((f) => f.type === 'text' && f.id === id);
 }
 
 // tag tapping mirrors Aidoku matchingGenreFilter: only multi-select/select filters with isGenre get an exact
 // (case-sensitive) option-name match, and the submitted value is ids[i] ?? options[i]; no match means not tappable
-function genreFilterValue(filters: Filter[], tag: string): FilterValue | null {
+function genreFilterValue(filters: SourceFilter[], tag: string): FilterValue | null {
 	for (const f of filters) {
 		if ((f.type !== 'multi-select' && f.type !== 'select') || !f.is_genre) continue;
 		const options = f.options ?? [];
@@ -200,10 +200,10 @@ export default function MangaDetailPage() {
 	}, [chapters, prefs, search]);
 
 	const continueCh = useMemo(() => {
-		const readable = (c: Chapter) => !c.locked || !!c.isDownloaded;
+		const readable = (c: ChapterWithDownload) => !c.locked || !!c.isDownloaded;
 		const resume = visible
 			.filter((c) => readable(c) && !c.isRead && (c.lastReadAt ?? 0) > 0)
-			.reduce<Chapter | null>(
+			.reduce<ChapterWithDownload | null>(
 				(best, c) => ((c.lastReadAt ?? 0) > (best?.lastReadAt ?? 0) ? c : best),
 				null
 			);
@@ -221,13 +221,13 @@ export default function MangaDetailPage() {
 		return t('mangaDetail.triOff', { label });
 	}
 
-	function readTarget(c: Chapter): string {
+	function readTarget(c: ChapterWithDownload): string {
 		// Re-reading a finished chapter starts from page 1; only an unread chapter with progress resumes
 		const resume = !c.isRead && c.lastPageRead > 0 ? c.lastPageRead : 0;
 		return `/reader/${c.id}?manga=${mangaId}&page=${resume}`;
 	}
 
-	function activate(c: Chapter) {
+	function activate(c: ChapterWithDownload) {
 		// Placeholder rows (negative ids) in the chapter refresh stream have no library id; reading/selecting waits for the terminal state
 		if (c.id < 0) return;
 		if (selecting) {
@@ -286,13 +286,13 @@ export default function MangaDetailPage() {
 		});
 	}
 
-	function dlStateOf(c: Chapter): ChapterDlState {
+	function dlStateOf(c: ChapterWithDownload): ChapterDlState {
 		if (dlPending.has(c.id)) return 'pending';
 		if (dlQueued.has(c.id)) return 'queued';
 		return 'idle';
 	}
 
-	function downloadChapter(c: Chapter) {
+	function downloadChapter(c: ChapterWithDownload) {
 		if (c.id < 0 || dlPending.has(c.id) || dlQueued.has(c.id) || c.isDownloaded) return;
 		setDlPending((prev) => new Set(prev).add(c.id));
 		enqueueDownloads.mutate([c.id], {
@@ -348,19 +348,19 @@ export default function MangaDetailPage() {
 		);
 	}
 
-	function markRead(c: Chapter) {
+	function markRead(c: ChapterWithDownload) {
 		if (c.id < 0) return;
 		applyRead([c.id], true, (n) => t('mangaDetail.markedRead', { count: n }));
 	}
 
-	function markUnread(c: Chapter) {
+	function markUnread(c: ChapterWithDownload) {
 		if (c.id < 0) return;
 		applyRead([c.id], false, (n) => t('mangaDetail.markedUnread', { count: n }));
 	}
 
 	// Aidoku's MARK_PREVIOUS: everything displayed below the tapped row (display-relative, so with the
 	// default descending sort that is every older chapter); placeholder refresh rows (negative ids) skip
-	function markPrevious(c: Chapter, isRead: boolean) {
+	function markPrevious(c: ChapterWithDownload, isRead: boolean) {
 		const idx = visible.findIndex((x) => x.id === c.id);
 		if (idx < 0) return;
 		const ids = visible
@@ -379,7 +379,7 @@ export default function MangaDetailPage() {
 		const ids = [...selected];
 		enqueueDownloads.mutate(ids, {
 			onSuccess: (res) => {
-				pushToast(t('mangaDetail.queuedChapters', { count: res.queued }), 'info');
+				pushToast(t('mangaDetail.queuedChapters', { count: res.queued.length }), 'info');
 				setDlQueued((prev) => new Set([...prev, ...ids]));
 				exitSelect();
 			}

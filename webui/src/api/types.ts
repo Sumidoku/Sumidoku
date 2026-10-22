@@ -1,243 +1,245 @@
-// Types matching the sumidoku-server REST contract.
-// Aidoku struct fields are snake_case; Sumidoku's own fields are camelCase.
+// Generated from crates/server/assets/api-docs/openapi.json; do not edit.
 
-export interface Source {
-	id: number;
-	key: string;
-	name: string;
-	/** Source kind; local/opds are built-in sources (no wasm instance; filters/listings/home/deep-link all 404) */
-	kind: 'aidoku' | 'local' | 'opds';
-	/** Source package version; the server side is i64 */
-	version: number;
-	languages: string[];
-	/** Aidoku content rating; >1 counts as NSFW */
-	contentRating: number;
-	baseUrl: string | null;
-	enabled: boolean;
-	installedAt: number;
-	updatedAt: number;
-	/** Update version from each repo's cache; null when there is no repo or no update */
-	updateVersion: number | null;
-	/** Deprecation flag in Aidoku's sense: a repo-installed source no longer appears in any repo index and will not receive updates */
-	missingFromRepos: boolean;
-	/** Whether the source exports get_home (stamped at registration); null = unknown for old rows, entry stays visible */
-	hasHome: boolean | null;
-	/** manifest config.breakingChangeVersion, 0 when undeclared; cross-version updates trigger key migration */
-	breakingChangeVersion: number;
-	/** Raw manifest config section (Aidoku SourceInfo.Configuration), null when undeclared */
-	config: SourceConfig | null;
-	/** In the pinned list (browse.pinned_sources) */
-	pinned: boolean;
-	/** Index in the pinned list, i.e. the default priority on migration; null when not pinned */
-	pinOrder: number | null;
-}
-
-/** Aidoku SourceInfo.Configuration; the DTO passes through verbatim, only the consumed keys are listed here */
-export interface SourceConfig {
-	/** Hide filters while searching, and search requests no longer carry filter values (Aidoku Runner semantics) */
-	hidesFiltersWhileSearching?: boolean;
-	/** tag clickable: declaration wins; clicking sends a Select filter with id "genre" and the raw tag as value (Aidoku matchingGenreFilter) */
-	supportsTagSearch?: boolean;
-	/** artist clickable: declaration wins; when undeclared, fall back to inferring from the filter list (a text filter with id "artist" exists) */
-	supportsArtistSearch?: boolean;
-	/** author clickable: declaration wins; when undeclared, fall back to inferring from the filter list (a text filter with id "author" exists) */
-	supportsAuthorSearch?: boolean;
-	/** Concurrent request cap for this source; the server turns it into a per-source admission cap on calls */
-	maximumParallelRequests?: number;
-}
-
-export interface SourceRepo {
-	id: number;
+export type AddRepoRequest = {
 	url: string;
-	name: string | null;
-	sourceCount: number;
-	addedAt: number;
-	fetchedAt: number | null;
-	/** Normalized message of the last refresh failure; the UI marks the repo stale from it */
-	fetchError: string | null;
-}
+};
 
-export interface RepoSourceEntry {
+export type AddToLibraryRequest = {
+	mangaId: number;
+	categoryIds?: Array<number> | null;
+};
+
+export type AidokuImportResponse = {
+	dryRun: boolean;
+	imported: ImportCounts;
+	skipped: Array<AidokuSkipped>;
+};
+
+export type AidokuListing = {
+	id: string;
+	name: string;
+	kind: "Default" | "List";
+};
+
+export type AidokuSkipped = {
+	section: string;
+	sourceKey: string;
+	mangaKey: string;
+	chapterKey?: string;
+	reason: string;
+};
+
+export type ApiError = {
+	code: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
+	message: string;
+};
+
+export type AuthStatus = {
+	enabled: boolean;
+	user: AuthUser | null;
+};
+
+export type AuthUser = {
+	id: number;
+	username: string;
+	role: "admin" | "reader";
+};
+
+export type BackupCategory = {
+	name: string;
+	sortOrder?: number;
+	isDefault?: boolean;
+	includeInUpdate?: number;
+	includeInDownload?: number;
+	manga?: Array<BackupMangaRef>;
+};
+
+export type BackupChapter = {
+	key: string;
+	title?: string | null;
+	number?: number | null;
+	volume?: number | null;
+	scanlators?: Array<string>;
+	language?: string | null;
+	thumbnail?: string | null;
+	url?: string | null;
+	dateUploaded?: number | null;
+	sourceOrder?: number;
+	pageCount?: number;
+};
+
+export type BackupDoc = {
+	version: 1;
+	createdAt?: number;
+	sources?: Array<BackupSource>;
+	library?: Array<BackupManga>;
+	categories?: Array<BackupCategory>;
+	progress?: Array<BackupProgress>;
+	settings?: {
+		[key: string]: JsonValue;
+	};
+	sourceSettings?: {
+		[key: string]: SettingsValues;
+	};
+};
+
+export type BackupFile = {
+	name: string;
+	size: number;
+	createdAt: number;
+};
+
+export type BackupFiles = {
+	dir: string;
+	files: Array<BackupFile>;
+};
+
+export type BackupManga = {
+	sourceKey: string;
+	key: string;
+	title?: string;
+	authors?: Array<string>;
+	artists?: Array<string>;
+	description?: string | null;
+	tags?: Array<string>;
+	status?: number;
+	contentRating?: number;
+	viewer?: number;
+	coverUrl?: string | null;
+	url?: string | null;
+	initialized?: boolean;
+	updateStrategy?: number;
+	inLibrary?: boolean;
+	inLibraryAt?: number | null;
+	viewerFlags?: number;
+	incognito?: boolean;
+	sortKey?: string;
+};
+
+export type BackupMangaRef = {
+	sourceKey: string;
+	mangaKey: string;
+};
+
+export type BackupProgress = {
+	sourceKey: string;
+	mangaKey: string;
+	chapter: BackupChapter;
+	lastPageRead?: number;
+	isRead?: boolean;
+	isBookmarked?: boolean;
+	lastReadAt?: number | null;
+};
+
+export type BackupRestoreResponse = {
+	restored: {
+		library: number;
+		categories: number;
+		progress: number;
+		settings: number;
+		sourceSettings: number;
+	};
+	warnings: Array<string>;
+};
+
+export type BackupSource = {
 	key: string;
 	name: string;
 	version: number;
-	languages: string[];
-	contentRating: number;
-	iconUrl: string | null;
-	baseUrl: string | null;
-	repoId: number;
-	repoName: string | null;
-	/** Present when installed, for single-source updates */
-	installedId: number | null;
-	installedVersion: number | null;
-	updateVersion: number | null;
-}
+	repoUrl?: string | null;
+};
 
-export interface UpdateAllOutcome {
-	updated: string[];
-	failed: { key: string; reason: string }[];
-	/** Crosses breaking but the source cannot self-migrate: keys of sources that must go through the (same-source) migration page */
-	migrationRequired: string[];
-	/** Rows skipped during in-place rekeying (mapping failed/key collision), grouped by source */
-	migrationWarnings: { key: string; message: string }[];
-}
-
-/** Single-source update response: the source DTO plus the key-migration outcome of this breaking-crossing update */
-export interface SourceUpdate extends Source {
-	migrationRequired: boolean;
-	migrationWarnings: string[];
-}
-
-export interface Manga {
+export type BasicLoginRequest = {
 	key: string;
-	title: string;
-	cover: string | null;
-	authors: string[] | null;
-	artists: string[] | null;
-	description: string | null;
-	url: string | null;
-	tags: string[] | null;
-	status: string;
-	content_rating: string;
-	viewer: string;
-	update_strategy: string;
-	next_update_time: number | null;
-	/** Attached by search/list endpoints; source-side Manga embedded in home components lacks it */
-	sourceId?: number;
-	/** Present once in the library */
-	id?: number;
-}
+	username: string;
+	password: string;
+};
 
-export interface MangaDetail extends Manga {
-	id: number;
-	initialized: boolean;
-	chapterCount: number;
-	inLibrary: boolean;
-	incognito: boolean;
-	categoryIds: number[];
-}
+export type BatchProgressRequest = ProgressPatch & {
+	chapterIds: Array<number>;
+};
 
-export interface LibraryEntry extends Manga {
-	id: number;
-	inLibrary: boolean;
-	inLibraryAt: number | null;
-	unreadCount: number;
-}
-
-export interface Chapter {
-	key: string;
-	title: string | null;
-	chapter_number: number | null;
-	volume_number: number | null;
-	date_uploaded: number | string | null;
-	scanlators: string[] | null;
-	url: string | null;
-	language: string | null;
-	thumbnail: string | null;
-	locked: boolean;
-	id: number;
-	pageCount: number | null;
-	lastPageRead: number;
-	isRead: boolean;
-	isBookmarked: boolean;
-	lastReadAt: number | null;
-	/** Chapters embedded in history/recent carry no download state */
-	isDownloaded?: boolean;
-}
-
-export type PageContent =
-	| { Url: [string, string | null] }
-	| { Text: string }
-	| { Zip: [string, string] }
-	| { Image: unknown };
-
-export interface PageData {
-	index: number;
-	content: PageContent | null;
-	thumbnail: string | null;
-	hasDescription: boolean;
-	description: string | null;
-	width?: number;
-	height?: number;
-}
-
-export interface MangaPage {
-	entries: Manga[];
-	hasNextPage: boolean;
-}
-
-export interface LibraryPage {
-	entries: LibraryEntry[];
-	hasNextPage: boolean;
-}
-
-/** GET /library/source-counts: entry count per source in the library (including entries of disabled sources) */
-export interface LibrarySourceCount {
-	sourceId: number;
-	count: number;
-}
-
-export interface HistoryEntry {
-	chapter: Chapter;
-	manga: MangaDetail;
-	lastReadAt: number;
-	lastPageRead: number;
-	isRead: boolean;
-}
-
-export interface HistoryPage {
-	entries: HistoryEntry[];
-	hasNextPage: boolean;
-}
-
-export interface Category {
+export type Category = {
 	id: number;
 	name: string;
 	sortOrder: number;
 	isDefault: boolean;
-	mangaCount: number;
 	includeInDownload: number;
-}
+	mangaCount: number;
+};
 
-// ---- Library list filtering (query of GET /library) ----
-
-export type LibrarySort = 'added' | 'title' | 'lastRead' | 'unread';
-
-export type LibraryFilter = 'unread' | 'downloaded' | 'bookmarked';
-
-/** Tri-state multi-select: keyed by option id (string form), 1 include / -1 exclude, unselected keys are absent */
-export type TriStateSelection = Record<string, 1 | -1>;
-
-// ---- Filter groups (Aidoku-style persisted rule sets) ----
-
-/** Value-less flag types carry value: null; valued types carry their id/rating as a number */
-export type FilterGroupRuleType =
-	| 'downloaded'
-	| 'has_unread'
-	| 'started'
-	| 'completed'
-	| 'source'
-	| 'content_rating'
-	| 'category';
-
-export interface FilterGroupRule {
-	type: FilterGroupRuleType;
-	value: number | null;
-	exclude: boolean;
-}
-
-export interface FilterGroup {
-	id: number;
+export type CategoryNameRequest = {
 	name: string;
-	sortOrder: number;
-	rules: FilterGroupRule[];
-}
+};
 
-// ---- Downloads and updates ----
+export type Chapter = SourceChapter & {
+	id: number;
+	pageCount: number;
+	lastPageRead: number;
+	isRead: boolean;
+	isBookmarked: boolean;
+	lastReadAt: number | null;
+};
 
-export type DownloadStatus = 'queued' | 'downloading' | 'paused' | 'finished' | 'error';
+export type ChapterInput = {
+	key: string;
+	title?: string | null;
+	chapter_number?: number | null;
+	volume_number?: number | null;
+	date_uploaded?: number | null;
+	scanlators?: Array<string> | null;
+	url?: string | null;
+	language?: string | null;
+	thumbnail?: string | null;
+	locked: boolean;
+};
 
-export interface DownloadItem {
+export type ChapterProgress = {
+	chapterId: number;
+	lastPageRead: number;
+	isRead: boolean;
+	isBookmarked: boolean;
+	lastReadAt: number | null;
+};
+
+export type ChapterWithDownload = Chapter & {
+	isDownloaded: boolean;
+};
+
+export type ClearedResponse = {
+	cleared: number;
+};
+
+export type ContentRating = "Unknown" | "Safe" | "Suggestive" | "NSFW";
+
+export type CreateFilterGroupRequest = {
+	name: string;
+	rules?: Array<FilterRuleInput>;
+};
+
+export type CreateUserRequest = {
+	username: string;
+	password: string;
+	role: "admin" | "reader";
+};
+
+export type DeepLinkRequest = {
+	url: string;
+};
+
+export type DeepLinkResponse = {
+	result: DeepLinkTarget | null;
+};
+
+export type DeepLinkTarget = {
+	mangaKey: string | null;
+	chapterKey: string | null;
+	listing: AidokuListing | null;
+	mangaId: number | null;
+	chapterId: number | null;
+};
+
+export type Download = {
 	chapterId: number;
 	mangaId: number;
 	mangaTitle: string;
@@ -247,23 +249,816 @@ export interface DownloadItem {
 	path: string | null;
 	error: string | null;
 	retries: number;
-	/** Only has a value while downloading; null in every other state */
 	downloaded: number | null;
 	total: number | null;
 	createdAt: number;
 	updatedAt: number;
-}
+};
 
-export type DownloadEventKind = 'queued' | 'started' | 'progress' | 'paused' | 'finished' | 'error';
+export type DownloadStatus = "queued" | "downloading" | "paused" | "finished" | "error";
 
-/** /downloads/ws frames: the connection opens with one snapshot frame, then pushes events one by one */
-export type DownloadWsFrame =
-	| { type: 'snapshot'; running: boolean; downloads: DownloadItem[] }
-	| { type: DownloadEventKind; chapterId: number; downloaded: number; total: number }
-	// queue on/off change: chapterId/downloaded/total are fixed at 0, only running is meaningful
-	| { type: 'running'; chapterId: 0; downloaded: 0; total: 0; running: boolean };
+export type EnqueueDownloadsRequest = {
+	chapterIds: Array<number>;
+};
 
-export interface UpdateSummary {
+export type Error = {
+	error: ApiError;
+};
+
+export type FetchUpdatesRequest = {
+	categoryId?: number | null;
+};
+
+export type FilterGroup = {
+	id: number;
+	name: string;
+	sortOrder: number;
+	rules: Array<FilterRule>;
+};
+
+export type FilterRule = {
+	type: FilterRuleType;
+	value: number | null;
+	exclude: boolean;
+};
+
+export type FilterRuleInput = {
+	type: FilterRuleType;
+	value?: number | string | null;
+	exclude?: boolean;
+};
+
+export type FilterRuleType = "downloaded" | "has_unread" | "started" | "completed" | "source" | "content_rating" | "category";
+
+export type FilterValue = {
+	Text: {
+		id: string;
+		value: string;
+	};
+} | {
+	Sort: {
+		id: string;
+		index: number;
+		ascending: boolean;
+	};
+} | {
+	Check: {
+		id: string;
+		value: number;
+	};
+} | {
+	Select: {
+		id: string;
+		value: string;
+	};
+} | {
+	MultiSelect: {
+		id: string;
+		included: Array<string>;
+		excluded: Array<string>;
+	};
+} | {
+	Range: {
+		id: string;
+		from: number | null;
+		to: number | null;
+	};
+};
+
+export type GlobalSearchRequest = {
+	query?: string | null;
+	page?: number;
+	sourceIds: Array<number>;
+};
+
+export type GlobalSearchResponse = {
+	sources: Array<GlobalSearchResult>;
+};
+
+export type GlobalSearchResult = MangaPage & {
+	sourceId: number;
+	error?: {
+		code: string;
+		message: string;
+	};
+};
+
+export type HistoryEntry = {
+	chapter: Chapter;
+	manga: Manga;
+	lastReadAt: number;
+	lastPageRead: number;
+	isRead: boolean;
+};
+
+export type HistoryPage = {
+	entries: Array<HistoryEntry>;
+	hasNextPage: boolean;
+};
+
+export type HomeComponent = {
+	title: string | null;
+	subtitle: string | null;
+	value: HomeComponentValue;
+};
+
+export type HomeComponentValue = {
+	ImageScroller: {
+		links: Array<Link>;
+		auto_scroll_interval: number | null;
+		width: number | null;
+		height: number | null;
+	};
+} | {
+	BigScroller: {
+		entries: Array<SourceManga>;
+		auto_scroll_interval: number | null;
+	};
+} | {
+	Scroller: {
+		entries: Array<Link>;
+		listing: AidokuListing | null;
+	};
+} | {
+	MangaList: {
+		ranking: boolean;
+		page_size: number | null;
+		entries: Array<Link>;
+		listing: AidokuListing | null;
+	};
+} | {
+	MangaChapterList: {
+		page_size: number | null;
+		entries: Array<MangaWithChapter>;
+		listing: AidokuListing | null;
+	};
+} | {
+	Filters: Array<HomeFilterItem>;
+} | {
+	Links: Array<Link>;
+};
+
+export type HomeFilterItem = {
+	title: string;
+	values: Array<FilterValue> | null;
+};
+
+export type HomeLayout = {
+	components: Array<HomeComponent>;
+};
+
+export type IdResponse = {
+	id: number;
+};
+
+export type ImportCounts = {
+	library: number;
+	categories: number;
+	progress: number;
+};
+
+export type InstallSourceRequest = {
+	repoId: number;
+	sourceKey: string;
+};
+
+export type JsonValue = unknown;
+
+export type LibraryEntry = Manga & {
+	inLibraryAt: number | null;
+	unreadCount: number;
+};
+
+export type LibraryFilter = "unread" | "downloaded" | "bookmarked";
+
+export type LibraryPage = {
+	entries: Array<LibraryEntry>;
+	hasNextPage: boolean;
+};
+
+export type LibrarySort = "added" | "title" | "lastRead" | "unread";
+
+export type Link = {
+	title: string;
+	subtitle: string | null;
+	image_url: string | null;
+	value: LinkValue | null;
+};
+
+export type LinkValue = {
+	Url: string;
+} | {
+	Listing: AidokuListing;
+} | {
+	Manga: SourceManga;
+};
+
+export type Listing = {
+	id: string;
+	name: string;
+	kind: "default" | "list";
+};
+
+export type LoginRequest = {
+	username: string;
+	password: string;
+};
+
+export type LoginResponse = {
+	token: string;
+	expiresAt: number;
+	user: AuthUser;
+};
+
+export type Manga = SourceManga & {
+	id: number;
+	sourceId: number;
+	initialized: boolean;
+	chapterCount: number;
+	inLibrary: boolean;
+	incognito: boolean;
+	categoryIds: Array<number>;
+};
+
+export type MangaInput = {
+	key: string;
+	title: string;
+	cover?: string | null;
+	artists?: Array<string> | null;
+	authors?: Array<string> | null;
+	description?: string | null;
+	url?: string | null;
+	tags?: Array<string> | null;
+	status: MangaStatus;
+	content_rating: ContentRating;
+	viewer: Viewer;
+	update_strategy: UpdateStrategy;
+	next_update_time?: number | null;
+	chapters?: Array<ChapterInput> | null;
+};
+
+export type MangaPage = {
+	entries: Array<SearchManga>;
+	hasNextPage: boolean;
+	degraded?: boolean;
+};
+
+export type MangaStatus = "Unknown" | "Ongoing" | "Completed" | "Cancelled" | "Hiatus";
+
+export type MangaWithChapter = {
+	manga: SourceManga;
+	chapter: SourceChapter;
+};
+
+export type MigrateEntry = {
+	fromMangaId: number;
+	toSourceId: number;
+	toMangaKey: string;
+	toManga?: MangaInput | null;
+};
+
+export type MigrateMode = "copy" | "migrate" | "migrateWithHistory";
+
+export type MigrateRequest = {
+	mode: MigrateMode;
+	entries: Array<MigrateEntry>;
+};
+
+export type MigrateResponse = {
+	results: Array<MigrateResult>;
+};
+
+export type MigrateResult = {
+	fromMangaId: number;
+	ok: boolean;
+	toMangaId?: number;
+	warnings?: Array<string>;
+	reason?: "not_found" | "source_not_found" | "same_source" | "not_in_library" | "fetch_failed";
+	message?: string | null;
+};
+
+export type MigrationLookupResponse = {
+	query: string;
+	candidates: Array<SearchManga>;
+	degraded?: boolean;
+};
+
+export type MigrationSource = Source & {
+	mangaCount: number;
+};
+
+export type NotifyRequest = {
+	notification: string;
+};
+
+export type OAuthCompleteRequest = {
+	key: string;
+	url: string;
+};
+
+export type OAuthStartRequest = {
+	key: string;
+};
+
+export type Ok = {
+	ok: true;
+};
+
+export type Page = {
+	content: PageContent;
+	thumbnail: string | null;
+	hasDescription: boolean;
+	description: string | null;
+	index: number;
+	width?: number;
+	height?: number;
+};
+
+export type PageContent = {
+	Url: [string, {
+		[key: string]: string;
+	} | null];
+} | {
+	Text: string;
+} | {
+	Image: string;
+} | {
+	Zip: [string, string];
+} | {
+	Local: string;
+} | {
+	OpdsZip: string;
+};
+
+export type PageIcon = {
+	type: "system";
+	name: string;
+	color: string;
+	inset: number | null;
+} | {
+	type: "url";
+	url: string;
+};
+
+export type PasswordChangeRequest = {
+	currentPassword: string;
+	newPassword: string;
+};
+
+export type ProgressPatch = {
+	lastPageRead?: number;
+	isRead?: boolean;
+	isBookmarked?: boolean;
+};
+
+export type QueuedResponse = {
+	queued: Array<number>;
+};
+
+export type RecentEntry = {
+	chapter: Chapter;
+	manga: Manga;
+	fetchedAt: number;
+};
+
+export type RecentPage = {
+	entries: Array<RecentEntry>;
+	hasNextPage: boolean;
+};
+
+export type RegisterMangaRequest = {
+	sourceId: number;
+	mangaKey?: string;
+	manga?: MangaInput | null;
+};
+
+export type RegisterOpdsRequest = {
+	name: string;
+	url: string;
+	username?: string | null;
+	password?: string | null;
+};
+
+export type ReorderPinnedRequest = {
+	ids: Array<string>;
+};
+
+export type ReorderRequest = {
+	ids: Array<number>;
+};
+
+export type RepoSource = {
+	key: string;
+	name: string;
+	version: number;
+	languages: Array<string>;
+	contentRating: number;
+	iconUrl: string | null;
+	baseUrl: string | null;
+	repoId: number;
+	repoName: string | null;
+	installedId: number | null;
+	installedVersion: number | null;
+	updateVersion: number | null;
+};
+
+export type RestoreBackupRequest = {
+	name: string;
+};
+
+export type RunningResponse = {
+	running: boolean;
+};
+
+export type ScanOutcome = {
+	installed: Array<string>;
+	updated: Array<string>;
+	skipped: Array<SkippedSource>;
+};
+
+export type SearchManga = SourceManga & {
+	sourceId: number;
+	id?: number;
+};
+
+export type SearchRequest = {
+	query?: string | null;
+	page?: number;
+	filters?: Array<FilterValue> | null;
+};
+
+export type SelectCoverRequest = {
+	url: string;
+};
+
+export type SetCategoriesRequest = {
+	categoryIds: Array<number>;
+};
+
+export type SettingValue = string | {
+	Group: {
+		footer: string | null;
+		items: Array<SourceSetting>;
+	};
+} | {
+	Select: {
+		values: Array<string>;
+		titles: Array<string> | null;
+		auth_to_open: boolean | null;
+		default: string | null;
+	};
+} | {
+	MultiSelect: {
+		values: Array<string>;
+		titles: Array<string> | null;
+		auth_to_open: boolean | null;
+		default: Array<string> | null;
+	};
+} | {
+	Toggle: {
+		subtitle: string | null;
+		auth_to_disable: boolean | null;
+		default: boolean;
+	};
+} | {
+	Stepper: {
+		minimum_value: number;
+		maximum_value: number;
+		step_value: number | null;
+		default: number | null;
+	};
+} | {
+	Segment: {
+		options: Array<string>;
+		default: number | null;
+	};
+} | {
+	Text: {
+		placeholder: string | null;
+		autocapitalization_type: number | null;
+		autocorrection_disabled: boolean | null;
+		keyboard_type: number | null;
+		return_key_type: number | null;
+		secure: boolean | null;
+		default: string | null;
+	};
+} | {
+	Link: {
+		url: string;
+		external: boolean | null;
+	};
+} | {
+	Login: {
+		method: "basic" | "oauth" | "web";
+		url: string | null;
+		url_key: string | null;
+		logout_title: string | null;
+		pkce: boolean;
+		token_url: string | null;
+		callback_scheme: string | null;
+		use_email: boolean;
+		local_storage_keys: Array<string> | null;
+		clear_cookies_on_log_out: boolean;
+	};
+} | {
+	Page: {
+		items: Array<SourceSetting>;
+		inline_title: boolean | null;
+		auth_to_open: boolean | null;
+		icon: PageIcon | null;
+		info: string | null;
+	};
+} | {
+	EditableList: {
+		line_limit: number | null;
+		inline: boolean;
+		placeholder: string | null;
+		default: Array<string> | null;
+	};
+} | {
+	Picker: {
+		values: Array<string>;
+		titles: Array<string> | null;
+		default: string | null;
+	};
+};
+
+export type Settings = {
+	localDirs?: Array<string>;
+	localOneshotsDir?: string | null;
+	"incognito.enabled"?: boolean;
+	"library.default_category"?: string;
+	"library.show_uncategorized"?: boolean;
+	"library.excluded_update_categories"?: Array<number>;
+	"library.skip_titles"?: Array<"hasUnread" | "completed" | "notStarted">;
+	"library.refresh_metadata"?: boolean;
+	"library.update_interval_hours"?: number;
+	"local.dirs"?: Array<string>;
+	"local.oneshots_dir"?: string;
+	[key: string]: JsonValue;
+};
+
+export type SettingsValues = {
+	[key: string]: JsonValue;
+};
+
+export type SkippedSource = {
+	dir: string;
+	reason: string;
+};
+
+export type Source = {
+	id: number;
+	key: string;
+	name: string;
+	kind: "aidoku" | "local" | "opds";
+	version: number;
+	languages: Array<string>;
+	contentRating: number;
+	baseUrl: string | null;
+	breakingChangeVersion: number;
+	config: SourceConfig | null;
+	enabled: boolean;
+	installedAt: number;
+	updatedAt: number;
+	updateVersion: number | null;
+	missingFromRepos: boolean;
+	hasHome: boolean | null;
+	pinned: boolean;
+	pinOrder: number | null;
+};
+
+export type SourceChapter = {
+	key: string;
+	title: string | null;
+	chapter_number: number | null;
+	volume_number: number | null;
+	date_uploaded: number | null;
+	scanlators: Array<string> | null;
+	url: string | null;
+	language: string | null;
+	thumbnail: string | null;
+	locked: boolean;
+};
+
+export type SourceConfig = {
+	languageSelectType?: "single" | "multiple";
+	supportsArtistSearch?: boolean;
+	supportsAuthorSearch?: boolean;
+	supportsTagSearch?: boolean;
+	allowsBaseUrlSelect?: boolean;
+	breakingChangeVersion?: number;
+	hidesFiltersWhileSearching?: boolean;
+	maximumParallelRequests?: number;
+	[key: string]: JsonValue;
+};
+
+export type SourceCount = {
+	sourceId: number;
+	count: number;
+};
+
+export type SourceFilter = {
+	id: string;
+	title: string | null;
+	hide_from_header: boolean | null;
+	type: string;
+	placeholder?: string | null;
+	can_ascend?: boolean | null;
+	options?: Array<string> | null;
+	default?: JsonValue;
+	name?: string | null;
+	can_exclude?: boolean | null;
+	is_genre?: boolean | null;
+	uses_tag_style?: boolean | null;
+	ids?: Array<string> | null;
+	default_included?: Array<string> | null;
+	default_excluded?: Array<string> | null;
+	text?: string | null;
+	min?: number | null;
+	max?: number | null;
+	decimal?: boolean | null;
+};
+
+export type SourceLogoutRequest = {
+	key: string;
+	clearCookies?: boolean;
+};
+
+export type SourceManga = {
+	key: string;
+	title: string;
+	cover: string | null;
+	artists: Array<string> | null;
+	authors: Array<string> | null;
+	description: string | null;
+	url: string | null;
+	tags: Array<string> | null;
+	status: MangaStatus;
+	content_rating: ContentRating;
+	viewer: Viewer;
+	update_strategy: UpdateStrategy;
+	next_update_time: number | null;
+	chapters: Array<SourceChapter> | null;
+};
+
+export type SourcePatch = {
+	pinned?: boolean;
+	enabled?: boolean;
+};
+
+export type SourceRepo = {
+	id: number;
+	url: string;
+	name: string | null;
+	sourceCount: number;
+	addedAt: number;
+	fetchedAt: number | null;
+	fetchError: string | null;
+};
+
+export type SourceSetting = {
+	type: string;
+	key: string;
+	title: string | null;
+	notification: string | null;
+	requires: string | null;
+	requires_false: string | null;
+	refreshes: Array<string> | null;
+	value: SettingValue;
+};
+
+export type SourceSettings = {
+	settings: Array<SourceSetting>;
+	values: SettingsValues;
+};
+
+export type SourceWithMigration = Source & {
+	migrationRequired: boolean;
+	migrationWarnings: Array<string>;
+};
+
+export type StartedResponse = {
+	started: true;
+};
+
+export type SuwayomiImportResponse = {
+	dryRun: boolean;
+	imported: ImportCounts;
+	skipped: Array<SuwayomiSkipped>;
+	sources: Array<SuwayomiSourceReport>;
+};
+
+export type SuwayomiSkipped = {
+	section: string;
+	mihonSourceId: string;
+	mihonSourceName: string;
+	mangaKey: string;
+	reason: string;
+};
+
+export type SuwayomiSourceReport = {
+	mihonSourceId: string;
+	mihonSourceName: string;
+	mangaCount: number;
+	match: "mapped" | "auto" | "unmatched";
+	candidates: Array<{
+		key: string;
+		name: string;
+	}>;
+	aidokuSourceKey?: string;
+	aidokuSourceName?: string;
+	realignedKeys?: {
+		manga?: number;
+		chapter?: number;
+	};
+};
+
+export type SyncApplyResult = {
+	originSequence: number;
+	status: "applied" | "duplicate" | "stale" | "skipped";
+	reason?: "source_unavailable";
+};
+
+export type SyncChange = {
+	origin: string;
+	originUserId: number;
+	originSequence: number;
+	entityKind: "manga" | "manga_user" | "category" | "category_manga" | "chapter" | "chapter_user";
+	entityKey: string;
+	deleted: boolean;
+	modifiedAt: number;
+	identity: SyncIdentity;
+	snapshot: SyncSnapshot;
+};
+
+export type SyncCompactResponse = {
+	baseCursor: number;
+	removed: number;
+};
+
+export type SyncIdentity = {
+	[key: string]: JsonValue;
+};
+
+export type SyncPullResponse = {
+	origin: string;
+	userId: number;
+	nextCursor: number;
+	hasMore: boolean;
+	changes: Array<SyncChange>;
+};
+
+export type SyncPushRequest = {
+	origin: string;
+	changes: Array<SyncChange>;
+};
+
+export type SyncPushResponse = {
+	results: Array<SyncApplyResult>;
+};
+
+export type SyncSnapshot = {
+	lastModifiedAt: number;
+	[key: string]: JsonValue;
+};
+
+export type TextPage = {
+	type: "text";
+	text: string;
+};
+
+export type UpdateAllSourcesResponse = {
+	updated: Array<string>;
+	failed: Array<{
+		key: string;
+		reason: string;
+	}>;
+	migrationRequired: Array<string>;
+	migrationWarnings: Array<{
+		key: string;
+		message: string;
+	}>;
+};
+
+export type UpdateCategoryRequest = {
+	name?: string;
+	includeInDownload?: number;
+};
+
+export type UpdateFilterGroupRequest = {
+	name?: string;
+	rules?: Array<FilterRuleInput>;
+};
+
+export type UpdateMangaRequest = {
+	updateStrategy?: UpdateStrategy;
+	incognito?: boolean;
+};
+
+export type UpdateStrategy = "Always" | "Never";
+
+export type UpdateSummary = {
 	running: boolean;
 	total: number;
 	complete: number;
@@ -271,459 +1066,42 @@ export interface UpdateSummary {
 	skipped: number;
 	pending: number;
 	lastRunAt: number | null;
-}
-
-export type UpdateJobStatus = 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
-
-export interface UpdateJob {
-	status: UpdateJobStatus;
-	mangaId: number;
-	mangaTitle: string;
-	sourceId: number;
-	addedChapters: number;
-}
-
-/** /update/ws frames: the connection opens with one summary snapshot, then pushes job events */
-export type UpdateWsFrame =
-	| ({ type: 'summary' } & UpdateSummary)
-	| ({ type: 'job' } & UpdateJob);
-
-export interface UpdateRecentEntry {
-	chapter: Chapter;
-	manga: MangaDetail;
-	/** Written fetched_at in the contract; Sumidoku's own-field convention is camelCase — tolerate both */
-	fetchedAt?: number | null;
-	fetched_at?: number | null;
-}
-
-export interface UpdateRecentPage {
-	entries: UpdateRecentEntry[];
-	hasNextPage: boolean;
-}
-
-// ---- Source browsing ----
-
-export interface Listing {
-	id: string;
-	name: string;
-	kind: string;
-}
-
-/** Result of POST /sources/{id}/deep-link: source-side keys are echoed back verbatim,
- * while mangaId/chapterId are the server's internal ids after registering/matching by (source, key) */
-export interface DeepLinkResult {
-	mangaKey: string | null;
-	chapterKey: string | null;
-	listing: Listing | null;
-	mangaId: number | null;
-	chapterId: number | null;
-}
-
-export interface DeepLinkResponse {
-	result: DeepLinkResult | null;
-}
-
-// A Filter's wire shape is aidoku's custom flat structure: a type tag plus the variant fields laid flat
-export interface Filter {
-	id: string;
-	title: string | null;
-	hide_from_header?: boolean | null;
-	type: 'text' | 'sort' | 'check' | 'select' | 'multi-select' | 'note' | 'range';
-	placeholder?: string | null;
-	can_ascend?: boolean;
-	options?: string[];
-	default?: unknown;
-	name?: string | null;
-	can_exclude?: boolean;
-	is_genre?: boolean;
-	uses_tag_style?: boolean;
-	ids?: (string | null)[] | null;
-	default_included?: string[] | null;
-	default_excluded?: string[] | null;
-	text?: string;
-	min?: number | null;
-	max?: number | null;
-	decimal?: boolean;
-}
-
-export type FilterValue =
-	| { Text: { id: string; value: string } }
-	| { Sort: { id: string; index: number; ascending: boolean } }
-	| { Check: { id: string; value: number } }
-	| { Select: { id: string; value: string } }
-	| { MultiSelect: { id: string; included: string[]; excluded: string[] } }
-	| { Range: { id: string; from: number | null; to: number | null } };
-
-// ---- Source home (GET /sources/{id}/home, aidoku HomeLayout passed through verbatim) ----
-
-export interface HomeLayout {
-	components: HomeComponent[];
-}
-
-export interface HomeComponent {
-	title: string | null;
-	subtitle: string | null;
-	value: HomeComponentValue;
-}
-
-export type HomeComponentValue =
-	| {
-			ImageScroller: {
-				links: HomeLink[];
-				auto_scroll_interval: number | null;
-				width: number | null;
-				height: number | null;
-			};
-	  }
-	| { BigScroller: { entries: Manga[]; auto_scroll_interval: number | null } }
-	| { Scroller: { entries: HomeLink[]; listing: Listing | null } }
-	| {
-			MangaList: {
-				ranking: boolean;
-				page_size: number | null;
-				entries: HomeLink[];
-				listing: Listing | null;
-			};
-	  }
-	| {
-			MangaChapterList: {
-				page_size: number | null;
-				entries: MangaWithChapter[];
-				listing: Listing | null;
-			};
-	  }
-	| { Filters: HomeFilterItem[] }
-	| { Links: HomeLink[] };
-
-export interface HomeLink {
-	title: string;
-	subtitle: string | null;
-	image_url: string | null;
-	value: HomeLinkValue | null;
-}
-
-export type HomeLinkValue = { Url: string } | { Listing: Listing } | { Manga: Manga };
-
-export interface MangaWithChapter {
-	manga: Manga;
-	chapter: SourceChapter;
-}
-
-/** Source-side chapters embedded in home components/update streams (aidoku Chapter serialized verbatim), without server-attached fields */
-export interface SourceChapter {
-	key: string;
-	title: string | null;
-	chapter_number: number | null;
-	volume_number: number | null;
-	date_uploaded: number | string | null;
-	scanlators: string[] | null;
-	url: string | null;
-	language: string | null;
-	thumbnail: string | null;
-	locked: boolean;
-}
-
-export interface HomeFilterItem {
-	title: string;
-	values: FilterValue[] | null;
-}
-
-/** Partial events of the streaming home: layout replaces everything; component replaces by index (index == current length means append) */
-export type HomeStreamEvent =
-	| { type: 'layout'; layout: HomeLayout }
-	| { type: 'component'; index: number; component: HomeComponent };
-
-/** Partial events of a streaming search: appended one by one as they arrive */
-export type SearchStreamEvent = { type: 'manga'; manga: Manga };
-
-/** One source's result in an aggregate search: a non-empty error means that source failed and entries is empty */
-export interface SourceSearchResult {
-	sourceId: number;
-	entries: Manga[];
-	hasNextPage: boolean;
-	error?: { code: string; message: string };
-}
-
-export interface GlobalSearchResponse {
-	sources: SourceSearchResult[];
-}
-
-/** Stream events of an aggregate search: one per source completion/failure. The failure type is deliberately not called error —
- * apiStream treats type:'error' as a terminal stream error and rejects the whole request, which would destroy per-source failure isolation */
-export type GlobalSearchStreamEvent =
-	| { type: 'source'; source: SourceSearchResult }
-	| { type: 'sourceError'; sourceId: number; error: { code: string; message: string } };
-
-/** Partial event of a streaming manga update: the complete source-side Manga snapshot at that moment (mirroring upstream's
- * partialMangaPublisher); details/chapters fill in as the fetch progresses, and the terminal event overwrites everything */
-export type MangaUpdateStreamEvent = {
-	type: 'manga';
-	manga: Manga & { chapters?: SourceChapter[] };
 };
 
-// ---- Source settings ----
-
-export type PageIcon =
-	| { type: 'system'; name: string; color: string; inset?: number | null }
-	| { type: 'url'; url: string };
-
-export type SettingValue =
-	| { Group: { footer?: string | null; items: Setting[] } }
-	| {
-			Page: {
-				items: Setting[];
-				inline_title?: boolean | null;
-				auth_to_open?: boolean | null;
-				icon?: PageIcon | null;
-				info?: string | null;
-			};
-	  }
-	| {
-			Select: {
-				values: string[];
-				titles?: string[] | null;
-				auth_to_open?: boolean | null;
-				default?: string | null;
-			};
-	  }
-	| {
-			MultiSelect: {
-				values: string[];
-				titles?: string[] | null;
-				auth_to_open?: boolean | null;
-				default?: string[] | null;
-			};
-	  }
-	| { Toggle: { subtitle?: string | null; auth_to_disable?: boolean | null; default: boolean } }
-	| {
-			Stepper: {
-				minimum_value: number;
-				maximum_value: number;
-				step_value?: number | null;
-				default?: number | null;
-			};
-	  }
-	| { Segment: { options: string[]; default?: number | null } }
-	| {
-			Text: {
-				placeholder?: string | null;
-				secure?: boolean | null;
-				default?: string | null;
-			};
-	  }
-	// aidoku's unit variant serializes to a bare string without an object wrapper
-	| 'Button'
-	| { Button: Record<string, never> }
-	| { Link: { url: string; external?: boolean | null } }
-	| {
-			Login: {
-				method: 'basic' | 'oauth' | 'web';
-				use_email?: boolean | null;
-				url?: string | null;
-				url_key?: string | null;
-				logout_title?: string | null;
-				local_storage_keys?: string[] | null;
-				clear_cookies_on_log_out?: boolean | null;
-				[key: string]: unknown;
-			};
-	  };
-
-export interface Setting {
-	key: string;
-	title: string;
-	type:
-		| 'group'
-		| 'select'
-		| 'multi-select'
-		| 'switch'
-		| 'stepper'
-		| 'segment'
-		| 'text'
-		| 'button'
-		| 'link'
-		| 'login'
-		| 'page'
-		| 'editable-list'
-		| 'picker';
-	notification?: string | null;
-	requires?: string | null;
-	requires_false?: string | null;
-	refreshes?: string[] | null;
-	value: SettingValue;
-}
-
-export interface SourceSettings {
-	settings: Setting[] | null;
-	values: Record<string, unknown>;
-}
-
-// ---- Endpoints added in this wave ----
-
-export interface ScanOutcome {
-	installed: string[];
-	updated: string[];
-	skipped: { dir: string; reason: string }[];
-}
-
-export type UpdateStrategy = 'Always' | 'Never';
-
-export interface PatchMangaBody {
-	updateStrategy?: UpdateStrategy;
-	incognito?: boolean;
-}
-
-export interface PatchCategoryBody {
-	name?: string;
-	includeInDownload?: number;
-}
-
-export type ChapterPatchBody = {
-	lastPageRead?: number;
-	isRead?: boolean;
-	isBookmarked?: boolean;
+export type UpdateUserRequest = {
+	username?: string;
+	role?: "admin" | "reader";
+	password?: string;
 };
 
-export interface ChapterProgress {
-	chapterId: number;
-	lastPageRead: number;
-	isRead: boolean;
-	isBookmarked: boolean;
-	lastReadAt: number | null;
-}
+export type UpdatedResponse = {
+	updated: number;
+};
 
-export interface BackupRestoreResult {
-	restored: {
-		library: number;
-		categories: number;
-		progress: number;
-		settings: number;
-		sourceSettings: number;
-	};
-	warnings: string[];
-}
+export type UrlResponse = {
+	url: string;
+};
 
-export interface BackupFileEntry {
-	name: string;
-	/** Byte count */
-	size: number;
-	/** UTC timestamp (seconds) embedded in the file name */
+export type User = AuthUser & {
 	createdAt: number;
-}
+};
 
-export interface AidokuImportSkipped {
-	section: 'library' | 'categories' | 'progress' | string;
-	sourceKey: string;
-	mangaKey: string;
-	chapterKey?: string;
-	reason: string;
-}
+export type ValuesResponse = {
+	values: SettingsValues;
+};
 
-export interface AidokuImportResult {
-	dryRun: boolean;
-	imported: {
-		library: number;
-		categories: number;
-		progress: number;
+export type Version = {
+	version: string;
+};
+
+export type Viewer = "Unknown" | "LeftToRight" | "RightToLeft" | "Vertical" | "Webtoon";
+
+export type WebLoginRequest = {
+	key: string;
+	cookies: {
+		[key: string]: string;
 	};
-	skipped: AidokuImportSkipped[];
-}
-
-export interface SuwayomiImportSkipped {
-	section: 'library' | 'progress' | string;
-	/** Mihon source ids are int64 hashes that can exceed 2^53, so the server sends them as strings */
-	mihonSourceId: string;
-	mihonSourceName: string;
-	mangaKey: string;
-	reason: string;
-}
-
-export interface SuwayomiSourceGroup {
-	mihonSourceId: string;
-	mihonSourceName: string;
-	mangaCount: number;
-	/** auto = matched automatically by unique same name; mapped = explicitly mapped by the user; unmatched = no guessing, the whole group is skipped */
-	match: 'auto' | 'mapped' | 'unmatched';
-	aidokuSourceKey?: string;
-	aidokuSourceName?: string;
-	candidates: { key: string; name: string }[];
-}
-
-export interface SuwayomiImportResult {
-	dryRun: boolean;
-	imported: {
-		library: number;
-		categories: number;
-		progress: number;
+	localStorage?: {
+		[key: string]: string;
 	};
-	skipped: SuwayomiImportSkipped[];
-	sources: SuwayomiSourceGroup[];
-}
-
-export interface BackupListResponse {
-	/** The backup directory currently in effect on the server (env > setting > default) */
-	dir: string;
-	files: BackupFileEntry[];
-}
-
-// ---- Cross-source migration ----
-
-export interface MigrateSource extends Source {
-	/** Number of manga from this source in the library */
-	mangaCount: number;
-}
-
-export interface MigrateLookupResult {
-	/** The search term actually used (explicit query or the source entry's title) */
-	query: string;
-	candidates: Manga[];
-}
-
-export type MigrateMode = 'copy' | 'migrate' | 'migrateWithHistory';
-
-export interface MigrateEntryBody {
-	fromMangaId: number;
-	toSourceId: number;
-	toMangaKey: string;
-	/** The candidate entry held by the client; the server passes it as the get_manga_update argument */
-	toManga?: Manga;
-}
-
-export interface MigrateResultItem {
-	fromMangaId: number;
-	ok: boolean;
-	toMangaId?: number;
-	warnings?: string[];
-	reason?: string;
-	message?: string | null;
-}
-
-export interface MigrateResponse {
-	results: MigrateResultItem[];
-}
-
-export interface MigrateRequest {
-	mode: MigrateMode;
-	entries: MigrateEntryBody[];
-}
-
-// ---- Users and auth ----
-
-export interface AccountUser {
-	id: number;
-	username: string;
-	role: 'admin' | 'reader';
-}
-
-/** GET /auth/status: when enabled is false, user is always null (an auth-less deployment treats everything as the built-in admin) */
-export interface AuthStatus {
-	enabled: boolean;
-	user: AccountUser | null;
-}
-
-/** User-management list item; credential material never leaves the server, so there is no password field here */
-export interface ManagedUser {
-	id: number;
-	username: string;
-	role: 'admin' | 'reader';
-	createdAt: number;
-}
+};

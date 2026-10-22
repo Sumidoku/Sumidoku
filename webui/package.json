@@ -5,7 +5,8 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"build": "vite build",
+		"generate:api": "node scripts/generate-api-types.mjs",
+		"build": "npm run generate:api && vite build",
 		"check": "tsc --noEmit",
 		"test": "node --test \"tests/*.test.ts\"",
 		"preview": "vite preview"

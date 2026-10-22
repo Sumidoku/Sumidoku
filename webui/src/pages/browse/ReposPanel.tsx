@@ -11,7 +11,7 @@ import {
 	useSourceRepos,
 	useUpdateSource
 } from '../../api/hooks';
-import type { RepoSourceEntry, SourceRepo } from '../../api/types';
+import type { RepoSource, SourceRepo } from '../../api/types';
 import { relativeTime } from '../../lib/format';
 import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';
 import {
@@ -45,7 +45,7 @@ function repoTitle(repo: SourceRepo): string {
 	}
 }
 
-function EntryIcon({ entry }: { entry: RepoSourceEntry }) {
+function EntryIcon({ entry }: { entry: RepoSource }) {
 	const [failed, setFailed] = useState(false);
 	if (!entry.iconUrl || failed) {
 		return (
@@ -67,7 +67,7 @@ function EntryIcon({ entry }: { entry: RepoSourceEntry }) {
 	);
 }
 
-function EntryAction({ entry }: { entry: RepoSourceEntry }) {
+function EntryAction({ entry }: { entry: RepoSource }) {
 	const { t } = useTranslation();
 	const install = useInstallRepoSource();
 	const update = useUpdateSource();

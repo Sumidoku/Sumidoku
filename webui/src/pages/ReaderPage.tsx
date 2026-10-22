@@ -21,7 +21,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
-import type { Chapter, PageData } from '../api/types';
+import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
@@ -58,23 +58,23 @@ function readDir(): Dir {
 	return 'ltr';
 }
 
-function isText(p: PageData | undefined | null): p is PageData & { content: { Text: string } } {
+function isText(p: Page | undefined | null): p is Page & { content: { Text: string } } {
 	return !!p?.content && typeof p.content === 'object' && 'Text' in p.content;
 }
 
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
-function isUnsupported(p: PageData): boolean {
+function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
 }
 
-function pageDimensions(p: PageData | undefined | null): { width: number; height: number } | null {
+function pageDimensions(p: Page | undefined | null): { width: number; height: number } | null {
 	if (!p || typeof p.width !== 'number' || typeof p.height !== 'number') return null;
 	if (!Number.isFinite(p.width) || !Number.isFinite(p.height) || p.width <= 0 || p.height <= 0) return null;
 	return { width: p.width, height: p.height };
 }
 
 // A hasDescription page displays its description (already fetched by the server); other text pages use content.Text
-function pageText(p: PageData | undefined | null): string | null {
+function pageText(p: Page | undefined | null): string | null {
 	if (!p) return null;
 	if (p.hasDescription && typeof p.description === 'string') return p.description;
 	if (isText(p)) return p.content.Text;
@@ -91,7 +91,7 @@ function ReaderChapterItem({
 	current,
 	onClick
 }: {
-	chapter: Chapter;
+	chapter: ChapterWithDownload;
 	current: boolean;
 	onClick: () => void;
 }) {
@@ -297,7 +297,7 @@ function ReaderCore({
 			.then(() => {
 				if (markRead) r.readReported = true;
 				if (mangaId !== null) {
-					qc.setQueryData<Chapter[]>(qk.chapters(mangaId), (old) =>
+					qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), (old) =>
 						old?.map((c) =>
 							c.id === chapterId ? { ...c, lastPageRead: i, isRead: markRead ? true : c.isRead } : c
 						)
@@ -340,7 +340,7 @@ function ReaderCore({
 		prefetch(clamped);
 	}
 
-	function navCh(c: Chapter | null) {
+	function navCh(c: ChapterWithDownload | null) {
 		if (!c) return;
 		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`);
 	}

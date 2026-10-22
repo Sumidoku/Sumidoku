@@ -149,6 +149,119 @@ fn representative_response_shapes_match_handlers() {
 	assert!(errors.is_empty(), "{errors:?}");
 }
 
+fn contract_fixture() -> (Value, Value) {
+	let document = serde_json::json!({
+		"components": {"schemas": {
+			"Base": {
+				"type": "object", "required": ["id"],
+				"properties": {"id": {"type": "integer"}}
+			},
+			"Payload": {
+				"type": "object",
+				"required": ["tuple", "map", "array", "choice", "combined", "nullable", "mode"],
+				"properties": {
+					"tuple": {"x-tuple": [{"type": "string"}, {"type": "integer", "nullable": true}]},
+					"map": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer"}}},
+					"array": {"type": "array", "items": {"type": "boolean"}},
+					"choice": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+					"combined": {"allOf": [
+						{"$ref": "#/components/schemas/Base"},
+						{"type": "object", "required": ["extra"], "properties": {"extra": {"type": "boolean"}}}
+					]},
+					"nullable": {"type": "string", "nullable": true},
+					"mode": {"type": "string", "enum": ["a", "b"]}
+				}
+			}
+		}}
+	});
+	let schema = document["components"]["schemas"]["Payload"].clone();
+	(document, schema)
+}
+
+#[test]
+fn contract_validator_accepts_refs_collections_compositions_and_nullable() {
+	let (document, schema) = contract_fixture();
+	let value = serde_json::json!({
+		"tuple": ["cover", null],
+		"map": {"a": [1, 2]},
+		"array": [true, false],
+		"choice": "text",
+		"combined": {"id": 1, "extra": true},
+		"nullable": null,
+		"mode": "a"
+	});
+	common::contract::validate_json(&document, &schema, &value).expect("valid contract payload");
+}
+
+#[test]
+fn contract_validator_rejects_each_contract_violation() {
+	let (document, schema) = contract_fixture();
+	let valid = serde_json::json!({
+		"tuple": ["cover", null],
+		"map": {"a": [1, 2]},
+		"array": [true, false],
+		"choice": "text",
+		"combined": {"id": 1, "extra": true},
+		"nullable": null,
+		"mode": "a"
+	});
+	let reject = |value: Value, expected: &str| {
+		let error = common::contract::validate_json(&document, &schema, &value).expect_err("invalid payload must fail");
+		assert!(error.contains(expected), "expected {expected:?} in {error}");
+	};
+	reject(serde_json::json!({}), "required property");
+	let mut value = valid.clone();
+	value["tuple"] = serde_json::json!(["cover"]);
+	reject(value, "tuple items");
+	let mut value = valid.clone();
+	value["tuple"] = serde_json::json!(["cover", "bad"]);
+	reject(value, "$.tuple[1]");
+	let mut value = valid.clone();
+	value["map"] = serde_json::json!({"a": ["bad"]});
+	reject(value, "$.map.a[0]");
+	let mut value = valid.clone();
+	value["array"] = serde_json::json!([true, 1]);
+	reject(value, "$.array[1]");
+	let mut value = valid.clone();
+	value["choice"] = serde_json::json!(true);
+	reject(value, "oneOf");
+	let mut value = valid.clone();
+	value["combined"] = serde_json::json!({"id": 1});
+	reject(value, "$.combined.extra");
+	let mut value = valid.clone();
+	value["nullable"] = serde_json::json!(1);
+	reject(value, "$.nullable");
+	let mut value = valid;
+	value["mode"] = serde_json::json!("c");
+	reject(value, "enum");
+}
+
+#[test]
+fn response_validator_prefers_static_routes_and_skips_ndjson() {
+	let mut headers = axum::http::HeaderMap::new();
+	headers.insert(header::CONTENT_TYPE, "application/json".parse().expect("JSON header"));
+	common::contract::validate_response("PATCH", "/api/v1/categories/reorder", StatusCode::OK, &headers, b"[]")
+		.expect("static reorder response");
+	let error = common::contract::validate_response(
+		"GET",
+		"/api/v1/version",
+		StatusCode::OK,
+		&headers,
+		br#"{"version":1}"#,
+	)
+	.expect_err("real response schema must reject the wrong type");
+	assert!(error.contains("expected string"), "{error}");
+	headers.insert(header::CONTENT_TYPE, "application/x-ndjson".parse().expect("NDJSON header"));
+	common::contract::validate_response(
+		"POST",
+		"/api/v1/sources/1/search",
+		StatusCode::OK,
+		&headers,
+		b"not JSON",
+	)
+	.expect("NDJSON is outside the JSON response validator");
+}
+
 #[tokio::test]
 async fn spec_is_served_from_embedded_assets() {
 	let TestApp { app, tmp: _tmp, .. } = test_app().await;

@@ -5,7 +5,7 @@ import type { TFunction } from 'i18next';
 import { KeyRound, Trash2, UserPlus } from 'lucide-react';
 import { ApiError } from '../api/client';
 import { useCreateUser, useDeleteUser, useIsAdmin, useUpdateUser, useUsers, useWhoami } from '../api/hooks';
-import type { ManagedUser } from '../api/types';
+import type { User } from '../api/types';
 import { translateApiError } from '../i18n';
 import { Badge, Button, IconButton, Input, Modal, PageHeader, Select, Skeleton, pushToast } from '../components';
 import './users.css';
@@ -87,7 +87,7 @@ function CreateUserModal({ open, onClose }: { open: boolean; onClose: () => void
 	);
 }
 
-function ResetPasswordModal({ user, onClose }: { user: ManagedUser | null; onClose: () => void }) {
+function ResetPasswordModal({ user, onClose }: { user: User | null; onClose: () => void }) {
 	const { t } = useTranslation();
 	const update = useUpdateUser();
 	const [password, setPassword] = useState('');
@@ -137,7 +137,7 @@ function ResetPasswordModal({ user, onClose }: { user: ManagedUser | null; onClo
 	);
 }
 
-function UserRow({ user, selfId, onResetPassword }: { user: ManagedUser; selfId?: number; onResetPassword: () => void }) {
+function UserRow({ user, selfId, onResetPassword }: { user: User; selfId?: number; onResetPassword: () => void }) {
 	const { t } = useTranslation();
 	const update = useUpdateUser();
 	const del = useDeleteUser();
@@ -223,7 +223,7 @@ export default function UsersPage() {
 	// No requests before the identity is known: a reader arriving directly is spared a list fetch doomed to 403
 	const users = useUsers(isAdmin);
 	const [creating, setCreating] = useState(false);
-	const [resetting, setResetting] = useState<ManagedUser | null>(null);
+	const [resetting, setResetting] = useState<User | null>(null);
 
 	// A reader has no entries to click, so a direct URL visit bounces to the settings page (the server's 403 is the real gate)
 	if (whoami.data && !isAdmin) {

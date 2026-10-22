@@ -2,18 +2,18 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { ExternalLink } from 'lucide-react';
-import type { Setting } from '../../api/types';
+import type { SourceSetting } from '../../api/types';
 import { Button, Chip, Input, Modal, SegmentedControl, Select, Switch, pushToast } from '../../components';
 
 export interface SettingItemProps {
-	setting: Setting;
+	setting: SourceSetting;
 	/** Values already saved on the server */
 	values: Record<string, unknown>;
 	/** Local unsaved edits, shown in preference to values */
 	edits: Record<string, unknown>;
 	onEdit: (key: string, value: unknown) => void;
 	/** Button setting pressed: send its notification to the source */
-	onPressButton?: (setting: Setting) => Promise<void>;
+	onPressButton?: (setting: SourceSetting) => Promise<void>;
 	/** Basic login: the outer layer provides the endpoint call; when absent the login item degrades to a read-only hint */
 	onSubmitLogin?: (key: string, username: string, password: string) => Promise<void>;
 	/** Web login: paste cookies in exchange for a logged-in state */
@@ -508,7 +508,7 @@ export function SettingItem({
 		if (onSubmitLogin && method === 'basic') {
 			body = (
 				<LoginSetting
-					title={setting.title}
+					title={setting.title ?? ''}
 					useEmail={v.Login.use_email === true}
 					savedUsername={typeof savedUser === 'string' ? savedUser : ''}
 					loggedIn={marker === 'logged_in'}
@@ -519,7 +519,7 @@ export function SettingItem({
 			// Aidoku judges the logged-in state by a non-empty marker (not limited to the literal "logged_in")
 			body = (
 				<WebLoginSetting
-					title={setting.title}
+					title={setting.title ?? ''}
 					url={v.Login.url ?? null}
 					logoutTitle={v.Login.logout_title ?? null}
 					localStorageKeys={v.Login.local_storage_keys ?? []}
@@ -533,7 +533,7 @@ export function SettingItem({
 			// Logged-in check same as web: a non-empty marker (the <key> stores a token or callback string) means logged in
 			body = (
 				<OAuthSetting
-					title={setting.title}
+					title={setting.title ?? ''}
 					logoutTitle={v.Login.logout_title ?? null}
 					clearCookiesOnLogOut={v.Login.clear_cookies_on_log_out === true}
 					loggedIn={typeof marker === 'string' && marker !== ''}
@@ -553,7 +553,7 @@ export function SettingItem({
 	} else if (v === 'Button' || (typeof v === 'object' && 'Button' in v)) {
 		body = (
 			<ButtonRow
-				title={setting.title}
+				title={setting.title ?? ''}
 				hasAction={!!setting.notification && !!onPressButton}
 				onPress={() => onPressButton?.(setting) ?? Promise.resolve()}
 			/>
@@ -615,7 +615,7 @@ export function SettingItem({
 				<Switch
 					checked={(cur(setting.key) ?? v.Toggle.default) === true}
 					onChange={(on) => onEdit(setting.key, on)}
-					label={setting.title}
+					label={setting.title ?? ''}
 				/>
 			</label>
 		);
@@ -643,7 +643,7 @@ export function SettingItem({
 				<Button size="sm" onClick={() => setMsOpen(true)}>
 					{t('settingItem.selectedCount', { count: selected.length })}
 				</Button>
-				<Modal open={msOpen} title={setting.title} onClose={() => setMsOpen(false)}>
+				<Modal open={msOpen} title={setting.title ?? ''} onClose={() => setMsOpen(false)}>
 					<div className="setting-ms">
 						{v.MultiSelect.values.map((opt, i) => {
 							const on = selected.includes(opt);

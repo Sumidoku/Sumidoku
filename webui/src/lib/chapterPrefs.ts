@@ -1,4 +1,4 @@
-import type { Chapter } from '../api/types';
+import type { ChapterWithDownload } from '../api/types';
 import { toMillis } from './format';
 
 // Chapter list sort/filter prefs, stored in localStorage per manga; the detail page and the reader share the same entry
@@ -88,7 +88,7 @@ function tri(value: unknown, t: Tri): boolean {
 	return t === 1 ? !!value : !value;
 }
 
-export function applyPrefs(chapters: Chapter[], prefs: ChapterPrefs): Chapter[] {
+export function applyPrefs(chapters: ChapterWithDownload[], prefs: ChapterPrefs): ChapterWithDownload[] {
 	const list = [...chapters];
 
 	switch (prefs.sort) {
@@ -104,7 +104,7 @@ export function applyPrefs(chapters: Chapter[], prefs: ChapterPrefs): Chapter[] 
 			break;
 		case 'date': {
 			// Missing dates count as -Infinity, so they sink to the bottom
-			const millis = (c: Chapter) => toMillis(c.date_uploaded) ?? -Infinity;
+			const millis = (c: ChapterWithDownload) => toMillis(c.date_uploaded) ?? -Infinity;
 			list.sort((a, b) => millis(a) - millis(b));
 			if (!prefs.asc) list.reverse();
 			break;

@@ -586,9 +586,9 @@
           {"name": "categoryId", "in": "query", "schema": {"type": "integer", "format": "int64"}, "description": "0 means uncategorized."},
           {"name": "sourceId", "in": "query", "schema": {"type": "integer", "format": "int64"}},
           {"$ref": "#/components/parameters/Page"}, {"name": "search", "in": "query", "schema": {"type": "string"}},
-          {"name": "sort", "in": "query", "schema": {"type": "string", "enum": ["added", "title", "lastRead", "unread"], "default": "added"}},
-          {"name": "filter", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated unread, downloaded, bookmarked."},
-          {"name": "filterExclude", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated exclusions using the filter vocabulary."},
+          {"name": "sort", "in": "query", "schema": {"$ref": "#/components/schemas/LibrarySort", "default": "added"}},
+          {"name": "filter", "in": "query", "schema": {"type": "array", "items": {"$ref": "#/components/schemas/LibraryFilter"}}, "style": "form", "explode": false},
+          {"name": "filterExclude", "in": "query", "schema": {"type": "array", "items": {"$ref": "#/components/schemas/LibraryFilter"}}, "style": "form", "explode": false},
           {"name": "contentRating", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated ratings 1..3."},
           {"name": "contentRatingExclude", "in": "query", "schema": {"type": "string"}},
           {"name": "source", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated source ids."},
@@ -788,7 +788,7 @@
         "tags": ["downloads"], "operationId": "enqueueDownloads", "summary": "Enqueue chapter downloads",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/EnqueueDownloadsRequest"}}}},
         "responses": {
-          "200": {"description": "Number newly queued", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueuedResponse"}}}},
+          "200": {"description": "Newly queued chapter ids", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/QueuedResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
@@ -1158,26 +1158,30 @@
       "IdResponse": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer", "format": "int64"}}},
       "UrlResponse": {"type": "object", "required": ["url"], "properties": {"url": {"type": "string", "format": "uri"}}},
       "UpdatedResponse": {"type": "object", "required": ["updated"], "properties": {"updated": {"type": "integer", "format": "int64"}}},
-      "QueuedResponse": {"type": "object", "required": ["queued"], "properties": {"queued": {"type": "integer", "format": "int64"}}},
+      "QueuedResponse": {"type": "object", "required": ["queued"], "properties": {"queued": {"type": "array", "items": {"type": "integer", "format": "int64"}}}},
       "ClearedResponse": {"type": "object", "required": ["cleared"], "properties": {"cleared": {"type": "integer", "format": "int64"}}},
       "RunningResponse": {"type": "object", "required": ["running"], "properties": {"running": {"type": "boolean"}}},
       "StartedResponse": {"type": "object", "required": ["started"], "properties": {"started": {"type": "boolean", "enum": [true]}}},
-      "User": {
+      "AuthUser": {
         "type": "object", "required": ["id", "username", "role"],
         "properties": {
           "id": {"type": "integer", "format": "int64"}, "username": {"type": "string"},
-          "role": {"type": "string", "enum": ["admin", "reader"]},
-          "createdAt": {"type": "integer", "format": "int64", "description": "Unix seconds; present in user-management responses, absent from the auth identity."}
+          "role": {"type": "string", "enum": ["admin", "reader"]}
         }
+      },
+      "User": {
+        "allOf": [{"$ref": "#/components/schemas/AuthUser"}, {"type": "object", "required": ["createdAt"], "properties": {
+          "createdAt": {"type": "integer", "format": "int64", "description": "Unix seconds."}
+        }}]
       },
       "AuthStatus": {
         "type": "object", "required": ["enabled", "user"],
-        "properties": {"enabled": {"type": "boolean"}, "user": {"allOf": [{"$ref": "#/components/schemas/User"}], "nullable": true}}
+        "properties": {"enabled": {"type": "boolean"}, "user": {"allOf": [{"$ref": "#/components/schemas/AuthUser"}], "nullable": true}}
       },
       "LoginRequest": {"type": "object", "required": ["username", "password"], "properties": {"username": {"type": "string"}, "password": {"type": "string", "format": "password"}}},
       "LoginResponse": {
         "type": "object", "required": ["token", "expiresAt", "user"],
-        "properties": {"token": {"type": "string"}, "expiresAt": {"type": "integer", "format": "int64", "description": "Unix seconds."}, "user": {"$ref": "#/components/schemas/User"}}
+        "properties": {"token": {"type": "string"}, "expiresAt": {"type": "integer", "format": "int64", "description": "Unix seconds."}, "user": {"$ref": "#/components/schemas/AuthUser"}}
       },
       "CreateUserRequest": {
         "type": "object", "required": ["username", "password", "role"],
@@ -1188,16 +1192,28 @@
         "properties": {"username": {"type": "string", "minLength": 1}, "role": {"type": "string", "enum": ["admin", "reader"]}, "password": {"type": "string", "format": "password", "minLength": 1}}
       },
       "PasswordChangeRequest": {"type": "object", "required": ["currentPassword", "newPassword"], "properties": {"currentPassword": {"type": "string", "format": "password"}, "newPassword": {"type": "string", "format": "password", "minLength": 1}}},
+      "SourceConfig": {
+        "type": "object", "additionalProperties": {"$ref": "#/components/schemas/JsonValue"},
+        "description": "Aidoku SourceInfo.Configuration. Unknown manifest keys are preserved.",
+        "properties": {
+          "languageSelectType": {"type": "string", "enum": ["single", "multiple"]},
+          "supportsArtistSearch": {"type": "boolean"}, "supportsAuthorSearch": {"type": "boolean"},
+          "supportsTagSearch": {"type": "boolean"}, "allowsBaseUrlSelect": {"type": "boolean"},
+          "breakingChangeVersion": {"type": "integer", "format": "int64"},
+          "hidesFiltersWhileSearching": {"type": "boolean"},
+          "maximumParallelRequests": {"type": "integer", "format": "int64"}
+        }
+      },
       "Source": {
         "type": "object",
         "required": ["id", "key", "name", "kind", "version", "languages", "contentRating", "baseUrl", "breakingChangeVersion", "config", "enabled", "installedAt", "updatedAt", "updateVersion", "missingFromRepos", "hasHome", "pinned", "pinOrder"],
         "properties": {
           "id": {"type": "integer", "format": "int64"}, "key": {"type": "string"}, "name": {"type": "string"},
-          "kind": {"type": "string", "description": "aidoku, local or opds."},
+          "kind": {"type": "string", "enum": ["aidoku", "local", "opds"]},
           "version": {"type": "integer", "format": "int64"}, "languages": {"type": "array", "items": {"type": "string"}},
           "contentRating": {"type": "integer", "format": "int64", "minimum": 0, "maximum": 3},
           "baseUrl": {"type": "string", "nullable": true}, "breakingChangeVersion": {"type": "integer", "format": "int64"},
-          "config": {"$ref": "#/components/schemas/JsonValue"},
+          "config": {"allOf": [{"$ref": "#/components/schemas/SourceConfig"}], "nullable": true},
           "enabled": {"type": "boolean"}, "installedAt": {"type": "integer", "format": "int64"}, "updatedAt": {"type": "integer", "format": "int64"},
           "updateVersion": {"type": "integer", "format": "int64", "nullable": true},
           "missingFromRepos": {"type": "boolean"}, "hasHome": {"type": "boolean", "nullable": true},
@@ -1238,9 +1254,111 @@
           "value": {"$ref": "#/components/schemas/SettingValue"}
         }
       },
+      "PageIcon": {
+        "oneOf": [
+          {"type": "object", "required": ["type", "name", "color", "inset"], "properties": {
+            "type": {"type": "string", "enum": ["system"]}, "name": {"type": "string"},
+            "color": {"type": "string"}, "inset": {"type": "integer", "format": "int32", "nullable": true}
+          }},
+          {"type": "object", "required": ["type", "url"], "properties": {
+            "type": {"type": "string", "enum": ["url"]}, "url": {"type": "string"}
+          }}
+        ]
+      },
       "SettingValue": {
-        "description": "Aidoku externally tagged setting value. Button is the string Button; other kinds are one-key objects such as {Group:{...}}, {Select:{...}}, {Toggle:{...}}, {Stepper:{...}}, {Login:{...}} or {Page:{...}} with snake_case variant fields and recursively nested items.",
-        "oneOf": [{"type": "string"}, {"type": "object", "additionalProperties": {"$ref": "#/components/schemas/JsonValue"}}]
+        "description": "Aidoku externally tagged setting value. Button is a string; other kinds are one-key objects with snake_case fields. Unknown static setting kinds remain strings.",
+        "oneOf": [
+          {"type": "string"},
+          {"type": "object", "required": ["Group"], "properties": {"Group": {
+            "type": "object", "required": ["footer", "items"], "properties": {
+              "footer": {"type": "string", "nullable": true},
+              "items": {"type": "array", "items": {"$ref": "#/components/schemas/SourceSetting"}}
+            }
+          }}},
+          {"type": "object", "required": ["Select"], "properties": {"Select": {
+            "type": "object", "required": ["values", "titles", "auth_to_open", "default"], "properties": {
+              "values": {"type": "array", "items": {"type": "string"}},
+              "titles": {"type": "array", "items": {"type": "string"}, "nullable": true},
+              "auth_to_open": {"type": "boolean", "nullable": true}, "default": {"type": "string", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["MultiSelect"], "properties": {"MultiSelect": {
+            "type": "object", "required": ["values", "titles", "auth_to_open", "default"], "properties": {
+              "values": {"type": "array", "items": {"type": "string"}},
+              "titles": {"type": "array", "items": {"type": "string"}, "nullable": true},
+              "auth_to_open": {"type": "boolean", "nullable": true},
+              "default": {"type": "array", "items": {"type": "string"}, "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Toggle"], "properties": {"Toggle": {
+            "type": "object", "required": ["subtitle", "auth_to_disable", "default"], "properties": {
+              "subtitle": {"type": "string", "nullable": true}, "auth_to_disable": {"type": "boolean", "nullable": true},
+              "default": {"type": "boolean"}
+            }
+          }}},
+          {"type": "object", "required": ["Stepper"], "properties": {"Stepper": {
+            "type": "object", "required": ["minimum_value", "maximum_value", "step_value", "default"], "properties": {
+              "minimum_value": {"type": "number", "format": "double"}, "maximum_value": {"type": "number", "format": "double"},
+              "step_value": {"type": "number", "format": "double", "nullable": true},
+              "default": {"type": "number", "format": "double", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Segment"], "properties": {"Segment": {
+            "type": "object", "required": ["options", "default"], "properties": {
+              "options": {"type": "array", "items": {"type": "string"}},
+              "default": {"type": "integer", "format": "int32", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Text"], "properties": {"Text": {
+            "type": "object", "required": ["placeholder", "autocapitalization_type", "autocorrection_disabled", "keyboard_type", "return_key_type", "secure", "default"],
+            "properties": {
+              "placeholder": {"type": "string", "nullable": true},
+              "autocapitalization_type": {"type": "integer", "format": "int32", "nullable": true},
+              "autocorrection_disabled": {"type": "boolean", "nullable": true},
+              "keyboard_type": {"type": "integer", "format": "int32", "nullable": true},
+              "return_key_type": {"type": "integer", "format": "int32", "nullable": true},
+              "secure": {"type": "boolean", "nullable": true}, "default": {"type": "string", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Link"], "properties": {"Link": {
+            "type": "object", "required": ["url", "external"], "properties": {
+              "url": {"type": "string"}, "external": {"type": "boolean", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Login"], "properties": {"Login": {
+            "type": "object", "required": ["method", "url", "url_key", "logout_title", "pkce", "token_url", "callback_scheme", "use_email", "local_storage_keys", "clear_cookies_on_log_out"],
+            "properties": {
+              "method": {"type": "string", "enum": ["basic", "oauth", "web"]},
+              "url": {"type": "string", "nullable": true}, "url_key": {"type": "string", "nullable": true},
+              "logout_title": {"type": "string", "nullable": true}, "pkce": {"type": "boolean"},
+              "token_url": {"type": "string", "nullable": true}, "callback_scheme": {"type": "string", "nullable": true},
+              "use_email": {"type": "boolean"}, "local_storage_keys": {"type": "array", "items": {"type": "string"}, "nullable": true},
+              "clear_cookies_on_log_out": {"type": "boolean"}
+            }
+          }}},
+          {"type": "object", "required": ["Page"], "properties": {"Page": {
+            "type": "object", "required": ["items", "inline_title", "auth_to_open", "icon", "info"], "properties": {
+              "items": {"type": "array", "items": {"$ref": "#/components/schemas/SourceSetting"}},
+              "inline_title": {"type": "boolean", "nullable": true}, "auth_to_open": {"type": "boolean", "nullable": true},
+              "icon": {"allOf": [{"$ref": "#/components/schemas/PageIcon"}], "nullable": true},
+              "info": {"type": "string", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["EditableList"], "properties": {"EditableList": {
+            "type": "object", "required": ["line_limit", "inline", "placeholder", "default"], "properties": {
+              "line_limit": {"type": "integer", "format": "int32", "nullable": true}, "inline": {"type": "boolean"},
+              "placeholder": {"type": "string", "nullable": true},
+              "default": {"type": "array", "items": {"type": "string"}, "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Picker"], "properties": {"Picker": {
+            "type": "object", "required": ["values", "titles", "default"], "properties": {
+              "values": {"type": "array", "items": {"type": "string"}},
+              "titles": {"type": "array", "items": {"type": "string"}, "nullable": true},
+              "default": {"type": "string", "nullable": true}
+            }
+          }}}
+        ]
       },
       "SourceSettings": {
         "type": "object", "required": ["settings", "values"],
@@ -1259,8 +1377,8 @@
       "OAuthCompleteRequest": {"type": "object", "required": ["key", "url"], "properties": {"key": {"type": "string", "minLength": 1}, "url": {"type": "string", "format": "uri"}}},
       "SourceLogoutRequest": {"type": "object", "required": ["key"], "properties": {"key": {"type": "string", "minLength": 1}, "clearCookies": {"type": "boolean", "default": false}}},
       "SourceFilter": {
-        "type": "object", "required": ["id", "type"],
-        "description": "Flat normalized filter. Variant fields use snake_case; fields absent for a filter type may be omitted, while normalized static fields can be null.",
+        "type": "object", "required": ["id", "title", "hide_from_header", "type"],
+        "description": "Flat normalized filter. Common fields are always present; variant fields use snake_case and appear only for their filter kind.",
         "properties": {
           "id": {"type": "string"}, "title": {"type": "string", "nullable": true}, "hide_from_header": {"type": "boolean", "nullable": true},
           "type": {"type": "string", "description": "Known values are text, sort, check, select, multi-select, note and range; unknown static types are passed through."},
@@ -1283,7 +1401,7 @@
           {"type": "object", "required": ["Check"], "properties": {"Check": {"type": "object", "required": ["id", "value"], "properties": {"id": {"type": "string"}, "value": {"type": "integer", "format": "int32"}}}}},
           {"type": "object", "required": ["Select"], "properties": {"Select": {"type": "object", "required": ["id", "value"], "properties": {"id": {"type": "string"}, "value": {"type": "string"}}}}},
           {"type": "object", "required": ["MultiSelect"], "properties": {"MultiSelect": {"type": "object", "required": ["id", "included", "excluded"], "properties": {"id": {"type": "string"}, "included": {"type": "array", "items": {"type": "string"}}, "excluded": {"type": "array", "items": {"type": "string"}}}}}},
-          {"type": "object", "required": ["Range"], "properties": {"Range": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "from": {"type": "number", "format": "float", "nullable": true}, "to": {"type": "number", "format": "float", "nullable": true}}}}}
+          {"type": "object", "required": ["Range"], "properties": {"Range": {"type": "object", "required": ["id", "from", "to"], "properties": {"id": {"type": "string"}, "from": {"type": "number", "format": "float", "nullable": true}, "to": {"type": "number", "format": "float", "nullable": true}}}}}
         ]
       },
       "MangaStatus": {"type": "string", "enum": ["Unknown", "Ongoing", "Completed", "Cancelled", "Hiatus"]},
@@ -1355,9 +1473,7 @@
             "id": {"type": "integer", "format": "int64"}, "sourceId": {"type": "integer", "format": "int64"},
             "initialized": {"type": "boolean"}, "chapterCount": {"type": "integer", "format": "int64"},
             "inLibrary": {"type": "boolean"}, "incognito": {"type": "boolean"},
-            "categoryIds": {"type": "array", "items": {"type": "integer", "format": "int64"}},
-            "inLibraryAt": {"type": "integer", "format": "int64", "nullable": true, "description": "Added by library-list entries."},
-            "unreadCount": {"type": "integer", "format": "int64", "description": "Added by library-list entries."}
+            "categoryIds": {"type": "array", "items": {"type": "integer", "format": "int64"}}
           }
         }]
       },
@@ -1392,7 +1508,7 @@
       "GlobalSearchResult": {
         "allOf": [{"$ref": "#/components/schemas/MangaPage"}, {"type": "object", "required": ["sourceId"], "properties": {
           "sourceId": {"type": "integer", "format": "int64"},
-          "error": {"type": "object", "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}
+          "error": {"type": "object", "required": ["code", "message"], "properties": {"code": {"type": "string"}, "message": {"type": "string"}}}
         }}]
       },
       "GlobalSearchResponse": {"type": "object", "required": ["sources"], "properties": {"sources": {"type": "array", "items": {"$ref": "#/components/schemas/GlobalSearchResult"}}}},
@@ -1431,12 +1547,21 @@
         }
       },
       "PageContent": {
-        "description": "Externally tagged page content. Url is [url, context-or-null], Zip is [archive-url, entry-path]; local-source extensions use Local and OpdsZip strings.",
+        "description": "Externally tagged page content. x-tuple lists the exact positional schemas for Url and Zip; local-source extensions use Local and OpdsZip strings.",
         "oneOf": [
-          {"type": "object", "required": ["Url"], "properties": {"Url": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/components/schemas/JsonValue"}, "description": "Tuple [url:string, context:object<string,string>|null]; OpenAPI 3.0 cannot constrain the two positions separately."}}},
+          {"type": "object", "required": ["Url"], "properties": {"Url": {
+            "type": "array", "minItems": 2, "maxItems": 2, "items": {},
+            "x-tuple": [
+              {"type": "string"},
+              {"type": "object", "additionalProperties": {"type": "string"}, "nullable": true}
+            ]
+          }}},
           {"type": "object", "required": ["Text"], "properties": {"Text": {"type": "string"}}},
-          {"type": "object", "required": ["Image"], "properties": {"Image": {"type": "string"}}},
-          {"type": "object", "required": ["Zip"], "properties": {"Zip": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"}}}},
+          {"type": "object", "required": ["Image"], "properties": {"Image": {"type": "string", "description": "Materialized page blob file name."}}},
+          {"type": "object", "required": ["Zip"], "properties": {"Zip": {
+            "type": "array", "minItems": 2, "maxItems": 2, "items": {"type": "string"},
+            "x-tuple": [{"type": "string"}, {"type": "string"}]
+          }}},
           {"type": "object", "required": ["Local"], "properties": {"Local": {"type": "string"}}},
           {"type": "object", "required": ["OpdsZip"], "properties": {"OpdsZip": {"type": "string"}}}
         ]
@@ -1470,11 +1595,40 @@
       "HomeComponentValue": {
         "description": "Externally tagged Aidoku home component value.",
         "oneOf": [
-          {"type": "object", "required": ["ImageScroller"], "properties": {"ImageScroller": {"type": "object", "properties": {"links": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}}, "auto_scroll_interval": {"type": "number", "format": "float", "nullable": true}, "width": {"type": "integer", "format": "int32", "nullable": true}, "height": {"type": "integer", "format": "int32", "nullable": true}}}}},
-          {"type": "object", "required": ["BigScroller"], "properties": {"BigScroller": {"type": "object", "properties": {"entries": {"type": "array", "items": {"$ref": "#/components/schemas/SourceManga"}}, "auto_scroll_interval": {"type": "number", "format": "float", "nullable": true}}}}},
-          {"type": "object", "required": ["Scroller"], "properties": {"Scroller": {"type": "object", "properties": {"entries": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}}, "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}}}}},
-          {"type": "object", "required": ["MangaList"], "properties": {"MangaList": {"type": "object", "properties": {"ranking": {"type": "boolean"}, "page_size": {"type": "integer", "format": "int32", "nullable": true}, "entries": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}}, "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}}}}},
-          {"type": "object", "required": ["MangaChapterList"], "properties": {"MangaChapterList": {"type": "object", "properties": {"page_size": {"type": "integer", "format": "int32", "nullable": true}, "entries": {"type": "array", "items": {"$ref": "#/components/schemas/MangaWithChapter"}}, "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}}}}},
+          {"type": "object", "required": ["ImageScroller"], "properties": {"ImageScroller": {
+            "type": "object", "required": ["links", "auto_scroll_interval", "width", "height"], "properties": {
+              "links": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}},
+              "auto_scroll_interval": {"type": "number", "format": "float", "nullable": true},
+              "width": {"type": "integer", "format": "int32", "nullable": true},
+              "height": {"type": "integer", "format": "int32", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["BigScroller"], "properties": {"BigScroller": {
+            "type": "object", "required": ["entries", "auto_scroll_interval"], "properties": {
+              "entries": {"type": "array", "items": {"$ref": "#/components/schemas/SourceManga"}},
+              "auto_scroll_interval": {"type": "number", "format": "float", "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["Scroller"], "properties": {"Scroller": {
+            "type": "object", "required": ["entries", "listing"], "properties": {
+              "entries": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}},
+              "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["MangaList"], "properties": {"MangaList": {
+            "type": "object", "required": ["ranking", "page_size", "entries", "listing"], "properties": {
+              "ranking": {"type": "boolean"}, "page_size": {"type": "integer", "format": "int32", "nullable": true},
+              "entries": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}},
+              "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}
+            }
+          }}},
+          {"type": "object", "required": ["MangaChapterList"], "properties": {"MangaChapterList": {
+            "type": "object", "required": ["page_size", "entries", "listing"], "properties": {
+              "page_size": {"type": "integer", "format": "int32", "nullable": true},
+              "entries": {"type": "array", "items": {"$ref": "#/components/schemas/MangaWithChapter"}},
+              "listing": {"allOf": [{"$ref": "#/components/schemas/AidokuListing"}], "nullable": true}
+            }
+          }}},
           {"type": "object", "required": ["Filters"], "properties": {"Filters": {"type": "array", "items": {"$ref": "#/components/schemas/HomeFilterItem"}}}},
           {"type": "object", "required": ["Links"], "properties": {"Links": {"type": "array", "items": {"$ref": "#/components/schemas/Link"}}}}
         ]
@@ -1490,6 +1644,8 @@
         }}]
       },
       "LibraryPage": {"type": "object", "required": ["entries", "hasNextPage"], "properties": {"entries": {"type": "array", "items": {"$ref": "#/components/schemas/LibraryEntry"}}, "hasNextPage": {"type": "boolean"}}},
+      "LibrarySort": {"type": "string", "enum": ["added", "title", "lastRead", "unread"]},
+      "LibraryFilter": {"type": "string", "enum": ["unread", "downloaded", "bookmarked"]},
       "AddToLibraryRequest": {"type": "object", "required": ["mangaId"], "properties": {"mangaId": {"type": "integer", "format": "int64"}, "categoryIds": {"type": "array", "items": {"type": "integer", "format": "int64"}, "nullable": true}}},
       "SourceCount": {"type": "object", "required": ["sourceId", "count"], "properties": {"sourceId": {"type": "integer", "format": "int64"}, "count": {"type": "integer", "format": "int64"}}},
       "SetCategoriesRequest": {"type": "object", "required": ["categoryIds"], "properties": {"categoryIds": {"type": "array", "items": {"type": "integer", "format": "int64"}}}},
@@ -1507,10 +1663,11 @@
         "description": "includeInUpdate is rejected; update exclusions are stored in library.excluded_update_categories."
       },
       "ReorderRequest": {"type": "object", "required": ["ids"], "properties": {"ids": {"type": "array", "items": {"type": "integer", "format": "int64"}}}},
+      "FilterRuleType": {"type": "string", "enum": ["downloaded", "has_unread", "started", "completed", "source", "content_rating", "category"]},
       "FilterRule": {
         "type": "object", "required": ["type", "value", "exclude"],
         "properties": {
-          "type": {"type": "string", "enum": ["downloaded", "has_unread", "started", "completed", "source", "content_rating", "category"]},
+          "type": {"$ref": "#/components/schemas/FilterRuleType"},
           "value": {"type": "integer", "format": "int64", "nullable": true, "description": "Null for flag rules; an integer for valued rules."},
           "exclude": {"type": "boolean"}
         }
@@ -1518,7 +1675,7 @@
       "FilterRuleInput": {
         "type": "object", "required": ["type"],
         "properties": {
-          "type": {"type": "string", "enum": ["downloaded", "has_unread", "started", "completed", "source", "content_rating", "category"]},
+          "type": {"$ref": "#/components/schemas/FilterRuleType"},
           "value": {"description": "Omit or use null for flag rules; valued rules require an integer or numeric string.", "oneOf": [{"type": "integer", "format": "int64"}, {"type": "string"}], "nullable": true},
           "exclude": {"type": "boolean", "default": false}
         }
@@ -1549,9 +1706,10 @@
           "toMangaKey": {"type": "string", "minLength": 1}, "toManga": {"allOf": [{"$ref": "#/components/schemas/MangaInput"}], "nullable": true}
         }
       },
+      "MigrateMode": {"type": "string", "enum": ["copy", "migrate", "migrateWithHistory"]},
       "MigrateRequest": {
         "type": "object", "required": ["mode", "entries"],
-        "properties": {"mode": {"type": "string", "enum": ["copy", "migrate", "migrateWithHistory"]}, "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/MigrateEntry"}}}
+        "properties": {"mode": {"$ref": "#/components/schemas/MigrateMode"}, "entries": {"type": "array", "minItems": 1, "items": {"$ref": "#/components/schemas/MigrateEntry"}}}
       },
       "MigrationLookupResponse": {
         "type": "object", "required": ["query", "candidates"],
@@ -1567,12 +1725,13 @@
         }
       },
       "MigrateResponse": {"type": "object", "required": ["results"], "properties": {"results": {"type": "array", "items": {"$ref": "#/components/schemas/MigrateResult"}}}},
+      "DownloadStatus": {"type": "string", "enum": ["queued", "downloading", "paused", "finished", "error"]},
       "Download": {
         "type": "object", "required": ["chapterId", "mangaId", "mangaTitle", "chapterTitle", "status", "format", "path", "error", "retries", "downloaded", "total", "createdAt", "updatedAt"],
         "properties": {
           "chapterId": {"type": "integer", "format": "int64"}, "mangaId": {"type": "integer", "format": "int64"},
           "mangaTitle": {"type": "string"}, "chapterTitle": {"type": "string", "nullable": true},
-          "status": {"type": "string", "enum": ["queued", "downloading", "paused", "finished", "error"]},
+          "status": {"$ref": "#/components/schemas/DownloadStatus"},
           "format": {"type": "string"}, "path": {"type": "string", "nullable": true}, "error": {"type": "string", "nullable": true},
           "retries": {"type": "integer", "format": "int64"},
           "downloaded": {"type": "integer", "format": "int64", "nullable": true, "description": "Non-null only for an in-flight download with known progress."},

@@ -1,6 +1,8 @@
 // each test binary uses only part of the shared helpers
 #![allow(dead_code)]
 
+pub mod contract;
+
 use axum::Router;
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
@@ -200,6 +202,8 @@ async fn request_full_accept(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, headers, bytes.to_vec())
 }
 
@@ -223,6 +227,8 @@ pub async fn request_bytes(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, headers, bytes.to_vec())
 }
 
@@ -253,6 +259,8 @@ pub async fn request_with_headers(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &resp_headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, resp_headers, bytes.to_vec())
 }
 

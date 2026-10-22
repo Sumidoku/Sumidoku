@@ -1,7 +1,7 @@
 import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock, MinusCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chapterFileUrl } from '../../api/client';
-import type { Chapter } from '../../api/types';
+import type { ChapterWithDownload } from '../../api/types';
 import { chapterLabel, formatDate } from '../../lib/format';
 import { IconButton, MenuButton, Spinner } from '../../components';
 
@@ -9,7 +9,7 @@ import { IconButton, MenuButton, Spinner } from '../../components';
 export type ChapterDlState = 'idle' | 'pending' | 'queued';
 
 interface ChapterRowProps {
-	chapter: Chapter;
+	chapter: ChapterWithDownload;
 	selecting: boolean;
 	selected: boolean;
 	/** Normal mode enters reading, select mode toggles selection */

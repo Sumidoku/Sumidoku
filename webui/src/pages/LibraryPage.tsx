@@ -5,7 +5,8 @@ import type { TFunction } from 'i18next';
 import { BookOpen, Search, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import { useCategories, useFilterGroups, useLibrary, useLibrarySourceCounts, useServerSettings, useSources } from '../api/hooks';
-import type { LibraryFilter, LibrarySort, TriStateSelection } from '../api/types';
+import type { LibraryFilter, LibrarySort } from '../api/types';
+import type { TriStateSelection } from '../lib/triState';
 import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
 import { hasLibraryFilterPrefs, loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
 import {

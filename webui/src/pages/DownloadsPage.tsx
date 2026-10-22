@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download, Pause, Play, RotateCw, Trash2 } from 'lucide-react';
+import { Download as DownloadIcon, Pause, Play, RotateCw, Trash2 } from 'lucide-react';
 import { api, chapterFileUrl } from '../api/client';
 import {
 	useDeleteDownload,
@@ -9,7 +9,8 @@ import {
 	useDownloadsStop,
 	useEnqueueDownloads
 } from '../api/hooks';
-import type { DownloadItem, DownloadStatus, DownloadWsFrame } from '../api/types';
+import type { Download, DownloadStatus } from '../api/types';
+import type { DownloadWsFrame } from '../api/protocol';
 import {
 	Button,
 	Chip,
@@ -46,7 +47,7 @@ const EVENT_STATUS: Record<string, DownloadStatus> = {
 
 export default function DownloadsPage() {
 	const { t } = useTranslation();
-	const [items, setItems] = useState<DownloadItem[]>([]);
+	const [items, setItems] = useState<Download[]>([]);
 	const [running, setRunning] = useState(false);
 	const [online, setOnline] = useState(false);
 	const [loading, setLoading] = useState(true);
@@ -59,8 +60,8 @@ export default function DownloadsPage() {
 	const enqueue = useEnqueueDownloads();
 
 	// WS callbacks outside the effect can't close over the latest list, so sync via a ref; all writes go through applyItems
-	const itemsRef = useRef<DownloadItem[]>([]);
-	function applyItems(next: DownloadItem[] | ((cur: DownloadItem[]) => DownloadItem[])) {
+	const itemsRef = useRef<Download[]>([]);
+	function applyItems(next: Download[] | ((cur: Download[]) => Download[])) {
 		const value = typeof next === 'function' ? next(itemsRef.current) : next;
 		itemsRef.current = value;
 		setItems(value);
@@ -72,7 +73,7 @@ export default function DownloadsPage() {
 		if (refetchingRef.current) return;
 		refetchingRef.current = true;
 		try {
-			applyItems(await api<DownloadItem[]>('/downloads'));
+			applyItems(await api<Download[]>('/downloads'));
 		} finally {
 			refetchingRef.current = false;
 		}
@@ -101,7 +102,7 @@ export default function DownloadsPage() {
 			applyItems((cur) =>
 				cur.map((it) => {
 					if (it.chapterId !== m.chapterId) return it;
-					const patch: Partial<DownloadItem> = { status };
+					const patch: Partial<Download> = { status };
 					if (status === 'downloading' || status === 'finished') {
 						patch.downloaded = m.downloaded;
 						patch.total = m.total;
@@ -122,7 +123,7 @@ export default function DownloadsPage() {
 		const unsub = subscribeWS('/api/v1/downloads/ws', { onMessage, onStatus: setOnline });
 		void (async () => {
 			try {
-				applyItems(await api<DownloadItem[]>('/downloads'));
+				applyItems(await api<Download[]>('/downloads'));
 			} finally {
 				setLoading(false);
 			}
@@ -197,7 +198,7 @@ export default function DownloadsPage() {
 				</div>
 			) : sorted.length === 0 ? (
 				<EmptyState
-					icon={Download}
+					icon={DownloadIcon}
 					title={t('downloads.emptyTitle')}
 					hint={t('downloads.emptyHint')}
 				/>
@@ -259,7 +260,7 @@ export default function DownloadsPage() {
 											download
 											title={t('downloads.downloadCbz')}
 										>
-											<Download size={14} /> CBZ
+											<DownloadIcon size={14} /> CBZ
 										</a>
 									)}
 									{it.status !== 'error' && (

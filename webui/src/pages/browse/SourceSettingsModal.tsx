@@ -15,13 +15,13 @@ import {
 	useSourceSettings,
 	useWebLogin
 } from '../../api/hooks';
-import type { Setting } from '../../api/types';
+import type { SourceSetting } from '../../api/types';
 import { Button, IconButton, Modal, Spinner, pushToast } from '../../components';
 import { SettingItem } from '../settings/SettingItem';
 import '../settings.css';
 
 /** Flatten nested settings inside groups/pages, for looking up config items by key */
-function flattenSettings(list: Setting[]): Setting[] {
+function flattenSettings(list: SourceSetting[]): SourceSetting[] {
 	return list.flatMap((s) => {
 		const v = s.value;
 		if (typeof v === 'object' && 'Group' in v) return flattenSettings(v.Group.items);
@@ -78,7 +78,7 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	}
 
 	/** Pressing a Button setting sends its notification to the source, then refreshes the declared data */
-	async function onPressButton(setting: Setting) {
+	async function onPressButton(setting: SourceSetting) {
 		if (!setting.notification) return;
 		await notifySource.mutateAsync(setting.notification);
 		invalidateForRefreshes(qc, sourceId, setting.refreshes ?? []);
