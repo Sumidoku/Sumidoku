@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Full-object settings writes need presence and ownership rules.** A required
+nullable field must distinguish a missing field (reject) from an explicit null
+(clear). A server-managed field must not be written from a cached full-object
+save, or an old snapshot can erase newer state. Legacy partial writes can keep
+their own clear semantics, but structured full writes must not replay
+scheduler-owned timestamps. Test missing fields, explicit null, and a stale
+cached timestamp.
+- Evidence: 2026-10-22, #315's structured settings accepted a missing
+  `backup.dir` as `None` and could delete the existing override; writing
+  `backup.last_run` from the settings cache could clear a newer backup
+  timestamp. #317 required nullable fields, ignored `lastRun` on structured
+  writes, and added API regressions for missing fields, explicit clears, and
+  preservation. Sabotaging each behavior failed its target assertion before
+  restoration.
+
 **Changing sync ownership is a versioned migration, not an origin rewrite.**
 Preserve latest tombstones before deleting old origins, then append current
 rows and tombstones as local events with versions strictly above every prior
