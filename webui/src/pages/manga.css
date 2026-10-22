@@ -28,14 +28,23 @@
 	top: 10px;
 	left: 10px;
 	z-index: 1;
-	background: rgba(12, 14, 18, 0.55);
-	backdrop-filter: blur(6px);
-	border-color: transparent;
-	color: #eef0f5;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 50%;
+	background: rgba(12, 14, 18, 0.48);
+	backdrop-filter: blur(8px);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+	color: #f7f8fa;
 }
 
 .manga-hero__back:hover:not(:disabled) {
-	background: rgba(12, 14, 18, 0.75);
+	border-color: rgba(255, 255, 255, 0.35);
+	background: rgba(12, 14, 18, 0.72);
 }
 
 /* The dark-theme hero sits on a darkened cover, so the foreground stays in the light palette */
