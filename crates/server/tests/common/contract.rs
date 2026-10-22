@@ -50,12 +50,18 @@ fn literal_segments(template: &str) -> usize {
 		.count()
 }
 
-fn response_schema<'a>(
+enum RouteContract<'a> {
+	WebSocket,
+	NotFound(&'a Value),
+	Response(&'a Value),
+}
+
+fn route_contract<'a>(
 	document: &'a Value,
 	method: &str,
 	uri: &str,
 	status: StatusCode,
-) -> Result<Option<&'a Value>, String> {
+) -> Result<RouteContract<'a>, String> {
 	let actual_path = uri.split('?').next().unwrap_or(uri);
 	let method = method.to_ascii_lowercase();
 	let mut matched = None;
@@ -75,12 +81,12 @@ fn response_schema<'a>(
 	}
 	let Some((_, template, operation)) = matched else {
 		if !path_matched && status == StatusCode::NOT_FOUND {
-			return Ok(Some(&document["components"]["schemas"]["Error"]));
+			return Ok(RouteContract::NotFound(&document["components"]["schemas"]["Error"]));
 		}
 		return Err(format!("no OpenAPI operation for {method} {actual_path}"));
 	};
 	if operation.get("x-websocket").is_some() {
-		return Ok(None);
+		return Ok(RouteContract::WebSocket);
 	}
 	let responses = operation["responses"].as_object().expect("responses object");
 	let response = responses
@@ -92,14 +98,7 @@ fn response_schema<'a>(
 	} else {
 		response
 	};
-	let schema = &response["content"]["application/json"]["schema"];
-	if schema.is_null() {
-		return Err(format!("no application/json schema for {method} {template} status {status}"));
-	}
-	Ok(Some(match schema["$ref"].as_str() {
-		Some(reference) => resolve_ref(document, reference)?,
-		None => schema,
-	}))
+	Ok(RouteContract::Response(response))
 }
 
 fn validate(document: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
@@ -135,6 +134,26 @@ fn validate(document: &Value, schema: &Value, value: &Value, path: &str, errors:
 		&& !expected.contains(value)
 	{
 		errors.push(format!("{path}: value {value} is not in enum {expected:?}"));
+	}
+	if let Some(minimum) = schema["minLength"].as_u64()
+		&& let Some(text) = value.as_str()
+	{
+		let length = text.chars().count();
+		if length < minimum as usize {
+			errors.push(format!("{path}: expected at least {minimum} characters, got {length}"));
+		}
+	}
+	if let Some(minimum) = schema["minimum"].as_f64()
+		&& let Some(number) = value.as_f64()
+		&& number < minimum
+	{
+		errors.push(format!("{path}: expected number >= {minimum}, got {number}"));
+	}
+	if let Some(maximum) = schema["maximum"].as_f64()
+		&& let Some(number) = value.as_f64()
+		&& number > maximum
+	{
+		errors.push(format!("{path}: expected number <= {maximum}, got {number}"));
 	}
 
 	if let Some(tuple) = schema["x-tuple"].as_array() {
@@ -255,6 +274,65 @@ pub fn validate_json(document: &Value, schema: &Value, value: &Value) -> Result<
 	}
 }
 
+fn content_type(headers: &HeaderMap) -> Option<String> {
+	headers
+		.get(header::CONTENT_TYPE)
+		.and_then(|value| value.to_str().ok())
+		.and_then(|value| value.split(';').next())
+		.map(|value| value.trim().to_ascii_lowercase())
+}
+
+fn validate_json_body(document: &Value, schema: &Value, headers: &HeaderMap, bytes: &[u8]) -> Result<(), String> {
+	if content_type(headers).as_deref() != Some("application/json") {
+		return Err("expected application/json response".into());
+	}
+	if bytes.is_empty() {
+		return Err("empty application/json response".into());
+	}
+	let value: Value = serde_json::from_slice(bytes).map_err(|error| format!("invalid JSON response: {error}"))?;
+	validate_json(document, schema, &value)
+}
+
+pub fn validate_response_with_document(
+	document: &Value,
+	method: &str,
+	uri: &str,
+	status: StatusCode,
+	headers: &HeaderMap,
+	bytes: &[u8],
+) -> Result<(), String> {
+	if !uri.starts_with("/api/v1/") {
+		return Ok(());
+	}
+	match route_contract(document, method, uri, status)? {
+		RouteContract::WebSocket => Ok(()),
+		RouteContract::NotFound(schema) => validate_json_body(document, schema, headers, bytes),
+		RouteContract::Response(response) => {
+			let no_content = response["content"].as_object().is_none_or(|content| content.is_empty());
+			if no_content {
+				return if bytes.is_empty() {
+					Ok(())
+				} else {
+					Err("expected an empty response body".into())
+				};
+			}
+			let content = response["content"].as_object().expect("response content object");
+			let mime = content_type(headers).ok_or_else(|| "missing response Content-Type".to_string())?;
+			let media = content
+				.get(&mime)
+				.ok_or_else(|| format!("undocumented response content type {mime}"))?;
+			if mime != "application/json" {
+				return Ok(());
+			}
+			let schema = &media["schema"];
+			if schema.is_null() {
+				return Err("missing application/json response schema".into());
+			}
+			validate_json_body(document, schema, headers, bytes)
+		}
+	}
+}
+
 pub fn validate_response(
 	method: &str,
 	uri: &str,
@@ -262,21 +340,5 @@ pub fn validate_response(
 	headers: &HeaderMap,
 	bytes: &[u8],
 ) -> Result<(), String> {
-	if !uri.starts_with("/api/v1/") || bytes.is_empty() {
-		return Ok(());
-	}
-	let json = headers
-		.get(header::CONTENT_TYPE)
-		.and_then(|value| value.to_str().ok())
-		.and_then(|value| value.split(';').next())
-		.is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"));
-	if !json {
-		return Ok(());
-	}
-	let document = document();
-	let Some(schema) = response_schema(document, method, uri, status)? else {
-		return Ok(());
-	};
-	let value: Value = serde_json::from_slice(bytes).map_err(|error| format!("invalid JSON response: {error}"))?;
-	validate_json(document, schema, &value)
+	validate_response_with_document(document(), method, uri, status, headers, bytes)
 }

@@ -65,9 +65,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `crates/server/tests/common/contract.rs` checks real JSON responses in the
   shared request helpers against path/method/status/content schemas, including
   references, required properties, maps, arrays, enums, nullable fields,
-  oneOf/allOf and x-tuple. WebSocket frames, NDJSON events, binary content and
-  OPDS stay outside generation and response validation; their manually
-  maintained TypeScript protocols live in `webui/src/api/protocol.ts`.
+  oneOf/allOf and x-tuple. WebSocket frames and NDJSON events stay outside
+  generation and response validation; their manually maintained TypeScript
+  protocols live in `webui/src/api/protocol.ts`. Binary content and OPDS are
+  excluded from generation and response validation as well.
   `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its JavaScript, CSS,
   Apache-2.0 license and bundled dependency notices embedded in the binary.
   `validatorUrl: null` disables external spec validation, so the page needs no

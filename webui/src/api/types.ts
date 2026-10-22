@@ -320,8 +320,8 @@ export type FilterValue = {
 } | {
 	Range: {
 		id: string;
-		from: number | null;
-		to: number | null;
+		from?: number | null;
+		to?: number | null;
 	};
 };
 
@@ -594,7 +594,7 @@ export type PageIcon = {
 	type: "system";
 	name: string;
 	color: string;
-	inset: number | null;
+	inset?: number | null;
 } | {
 	type: "url";
 	url: string;
@@ -753,12 +753,12 @@ export type SettingValue = string | {
 		url: string | null;
 		url_key: string | null;
 		logout_title: string | null;
-		pkce: boolean;
+		pkce: boolean | null;
 		token_url: string | null;
 		callback_scheme: string | null;
-		use_email: boolean;
+		use_email: boolean | null;
 		local_storage_keys: Array<string> | null;
-		clear_cookies_on_log_out: boolean;
+		clear_cookies_on_log_out: boolean | null;
 	};
 } | {
 	Page: {
@@ -771,7 +771,7 @@ export type SettingValue = string | {
 } | {
 	EditableList: {
 		line_limit: number | null;
-		inline: boolean;
+		inline: boolean | null;
 		placeholder: string | null;
 		default: Array<string> | null;
 	};

@@ -475,16 +475,10 @@ export function SettingItem({
 				/>
 			</label>
 		);
-	} else if (setting.type === 'picker') {
-		// types.ts's SettingValue has no Picker variant; on the wire it is structurally identical to Select, so read it loosely
-		const p = (
-			v as unknown as Record<
-				string,
-				{ values?: string[]; titles?: (string | null)[] | null; default?: string | null } | undefined
-			>
-		).Picker;
-		const opts = p?.values ?? [];
-		const selected = typeof cur(setting.key) === 'string' ? (cur(setting.key) as string) : (p?.default ?? '');
+	} else if (typeof v === 'object' && 'Picker' in v) {
+		const p = v.Picker;
+		const opts = p.values;
+		const selected = typeof cur(setting.key) === 'string' ? (cur(setting.key) as string) : (p.default ?? '');
 		body = (
 			<div className="setting-row setting-row--col">
 				<span className="setting-row__title">{setting.title}</span>
@@ -495,7 +489,7 @@ export function SettingItem({
 							color={selected === opt ? 'accent' : 'default'}
 							onClick={() => onEdit(setting.key, opt)}
 						>
-							{p?.titles?.[i] ?? opt}
+							{p.titles?.[i] ?? opt}
 						</Chip>
 					))}
 				</div>

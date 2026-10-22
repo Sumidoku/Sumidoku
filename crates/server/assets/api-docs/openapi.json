@@ -1256,7 +1256,7 @@
       },
       "PageIcon": {
         "oneOf": [
-          {"type": "object", "required": ["type", "name", "color", "inset"], "properties": {
+          {"type": "object", "required": ["type", "name", "color"], "properties": {
             "type": {"type": "string", "enum": ["system"]}, "name": {"type": "string"},
             "color": {"type": "string"}, "inset": {"type": "integer", "format": "int32", "nullable": true}
           }},
@@ -1330,10 +1330,10 @@
             "properties": {
               "method": {"type": "string", "enum": ["basic", "oauth", "web"]},
               "url": {"type": "string", "nullable": true}, "url_key": {"type": "string", "nullable": true},
-              "logout_title": {"type": "string", "nullable": true}, "pkce": {"type": "boolean"},
+              "logout_title": {"type": "string", "nullable": true}, "pkce": {"type": "boolean", "nullable": true},
               "token_url": {"type": "string", "nullable": true}, "callback_scheme": {"type": "string", "nullable": true},
-              "use_email": {"type": "boolean"}, "local_storage_keys": {"type": "array", "items": {"type": "string"}, "nullable": true},
-              "clear_cookies_on_log_out": {"type": "boolean"}
+              "use_email": {"type": "boolean", "nullable": true}, "local_storage_keys": {"type": "array", "items": {"type": "string"}, "nullable": true},
+              "clear_cookies_on_log_out": {"type": "boolean", "nullable": true}
             }
           }}},
           {"type": "object", "required": ["Page"], "properties": {"Page": {
@@ -1346,7 +1346,7 @@
           }}},
           {"type": "object", "required": ["EditableList"], "properties": {"EditableList": {
             "type": "object", "required": ["line_limit", "inline", "placeholder", "default"], "properties": {
-              "line_limit": {"type": "integer", "format": "int32", "nullable": true}, "inline": {"type": "boolean"},
+              "line_limit": {"type": "integer", "format": "int32", "nullable": true}, "inline": {"type": "boolean", "nullable": true},
               "placeholder": {"type": "string", "nullable": true},
               "default": {"type": "array", "items": {"type": "string"}, "nullable": true}
             }
@@ -1401,7 +1401,7 @@
           {"type": "object", "required": ["Check"], "properties": {"Check": {"type": "object", "required": ["id", "value"], "properties": {"id": {"type": "string"}, "value": {"type": "integer", "format": "int32"}}}}},
           {"type": "object", "required": ["Select"], "properties": {"Select": {"type": "object", "required": ["id", "value"], "properties": {"id": {"type": "string"}, "value": {"type": "string"}}}}},
           {"type": "object", "required": ["MultiSelect"], "properties": {"MultiSelect": {"type": "object", "required": ["id", "included", "excluded"], "properties": {"id": {"type": "string"}, "included": {"type": "array", "items": {"type": "string"}}, "excluded": {"type": "array", "items": {"type": "string"}}}}}},
-          {"type": "object", "required": ["Range"], "properties": {"Range": {"type": "object", "required": ["id", "from", "to"], "properties": {"id": {"type": "string"}, "from": {"type": "number", "format": "float", "nullable": true}, "to": {"type": "number", "format": "float", "nullable": true}}}}}
+          {"type": "object", "required": ["Range"], "properties": {"Range": {"type": "object", "required": ["id"], "properties": {"id": {"type": "string"}, "from": {"type": "number", "format": "float", "nullable": true}, "to": {"type": "number", "format": "float", "nullable": true}}}}}
         ]
       },
       "MangaStatus": {"type": "string", "enum": ["Unknown", "Ongoing", "Completed", "Cancelled", "Hiatus"]},
