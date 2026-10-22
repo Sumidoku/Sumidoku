@@ -24,9 +24,9 @@ async fn library_update_settings_expose_effective_values() {
 	let app = app_with_interval(36).await;
 	let (status, body) = request(&app.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["library.skip_titles"], json!(["hasUnread", "completed", "notStarted"]));
-	assert_eq!(body["library.refresh_metadata"], false);
-	assert_eq!(body["library.update_interval_hours"], 36);
+	assert_eq!(body["library"]["skipTitles"], json!(["hasUnread", "completed", "notStarted"]));
+	assert_eq!(body["library"]["refreshMetadata"], false);
+	assert_eq!(body["library"]["updateIntervalHours"], 36);
 
 	let (status, body) = request(
 		&app.app,
@@ -40,14 +40,14 @@ async fn library_update_settings_expose_effective_values() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["library.skip_titles"], json!([]));
-	assert_eq!(body["library.refresh_metadata"], true);
-	assert_eq!(body["library.update_interval_hours"], 12);
+	assert_eq!(body["library"]["skipTitles"], json!([]));
+	assert_eq!(body["library"]["refreshMetadata"], true);
+	assert_eq!(body["library"]["updateIntervalHours"], 12);
 
 	let (_, body) = request(&app.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(body["library.skip_titles"], json!([]));
-	assert_eq!(body["library.refresh_metadata"], true);
-	assert_eq!(body["library.update_interval_hours"], 12);
+	assert_eq!(body["library"]["skipTitles"], json!([]));
+	assert_eq!(body["library"]["refreshMetadata"], true);
+	assert_eq!(body["library"]["updateIntervalHours"], 12);
 	let pool = connect_db(&app.db_path).await;
 	let (global,): (i64,) = sqlx::query_as(
 		"SELECT COUNT(*) FROM setting WHERE key IN (
@@ -116,7 +116,7 @@ async fn library_update_settings_validate_writes() {
 	}
 
 	let (_, body) = request(&app.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(body["library.skip_titles"], json!([]));
-	assert_eq!(body["library.refresh_metadata"], true);
-	assert_eq!(body["library.update_interval_hours"], 12);
+	assert_eq!(body["library"]["skipTitles"], json!([]));
+	assert_eq!(body["library"]["refreshMetadata"], true);
+	assert_eq!(body["library"]["updateIntervalHours"], 12);
 }

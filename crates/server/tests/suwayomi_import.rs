@@ -31,7 +31,7 @@ async fn post_backup(app: &Router, query: &str, bytes: &[u8]) -> (StatusCode, Va
 	let (status, _, resp) = request_bytes(
 		app,
 		"POST",
-		&format!("/api/v1/import/suwayomi{query}"),
+		&format!("/api/v1/backups/import/suwayomi{query}"),
 		bytes.to_vec(),
 		"application/octet-stream",
 	)

@@ -327,7 +327,7 @@ function SourceCard({
 					{s.enabled ? <Pause size={17} /> : <Play size={17} />}
 				</IconButton>
 			)}
-			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 404 — the local source has no home yet,
+			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 501 — the local source has no home yet,
 				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
 			{s.kind !== 'local' && (
 				<>

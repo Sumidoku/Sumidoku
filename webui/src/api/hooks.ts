@@ -39,6 +39,7 @@ import type {
 	RecentPage,
 	RepoSource,
 	ScanOutcome,
+	ServerSettings,
 	Source,
 	SourceCount,
 	SourceFilter,
@@ -88,22 +89,22 @@ export const qk = {
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
 	last.hasNextPage ? all.length + 1 : undefined;
 
-/** When dynamic capabilities (filters/listings) are unsupported the server 404s by convention; treat as an empty list, not an error */
-async function emptyOn404<T>(p: Promise<T[]>): Promise<T[]> {
+/** When dynamic capabilities (filters/listings) are unsupported the server returns 501 with code unsupported; treat as an empty list, not an error */
+async function emptyOnUnsupported<T>(p: Promise<T[]>): Promise<T[]> {
 	try {
 		return await p;
 	} catch (e) {
-		if (e instanceof ApiError && e.status === 404) return [];
+		if (e instanceof ApiError && e.code === 'unsupported') return [];
 		throw e;
 	}
 }
 
 /** When the home capability is unsupported, treat as null so pages show "this source has no home" instead of an error */
-async function nullOn404<T>(p: Promise<T>): Promise<T | null> {
+async function nullOnUnsupported<T>(p: Promise<T>): Promise<T | null> {
 	try {
 		return await p;
 	} catch (e) {
-		if (e instanceof ApiError && e.status === 404) return null;
+		if (e instanceof ApiError && e.code === 'unsupported') return null;
 		throw e;
 	}
 }
@@ -207,7 +208,7 @@ export function useLibrarySourceCounts(enabled = true) {
 export function useSourceFilters(sourceId: number, enabled = true) {
 	return useQuery({
 		queryKey: qk.sourceFilters(sourceId),
-		queryFn: () => emptyOn404(api<SourceFilter[]>(`/sources/${sourceId}/filters`, { silent: true })),
+		queryFn: () => emptyOnUnsupported(api<SourceFilter[]>(`/sources/${sourceId}/filters`, { silent: true })),
 		enabled
 	});
 }
@@ -215,7 +216,7 @@ export function useSourceFilters(sourceId: number, enabled = true) {
 export function useSourceListings(sourceId: number, enabled = true) {
 	return useQuery({
 		queryKey: qk.sourceListings(sourceId),
-		queryFn: () => emptyOn404(api<Listing[]>(`/sources/${sourceId}/listings`, { silent: true })),
+		queryFn: () => emptyOnUnsupported(api<Listing[]>(`/sources/${sourceId}/listings`, { silent: true })),
 		enabled
 	});
 }
@@ -225,7 +226,7 @@ export function useSourceHome(sourceId: number, enabled = true) {
 	return useQuery({
 		queryKey: qk.sourceHome(sourceId),
 		queryFn: ({ signal }) =>
-			nullOn404(
+			nullOnUnsupported(
 				apiStream<HomeLayout, HomeStreamEvent>(`/sources/${sourceId}/home`, {
 					silent: true,
 					signal,
@@ -760,17 +761,36 @@ export function useFetchUpdate() {
 export function useServerSettings() {
 	return useQuery({
 		queryKey: ['server-settings'],
-		queryFn: () => api<Record<string, unknown>>('/settings')
+		queryFn: () => api<ServerSettings>('/settings')
 	});
 }
 
 export function useSaveServerSettings() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: Record<string, unknown>) =>
-			api<Record<string, unknown>>('/settings', { method: 'PUT', body }),
+		mutationFn: (body: ServerSettings) => api<ServerSettings>('/settings', { method: 'PUT', body }),
 		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved)
 	});
+}
+
+type DeepPartial<T> = {
+	[P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
+};
+
+/** Merge a partial update into the current structured server settings and return the full object for PUT. */
+export function mergeServerSettings(
+	current: ServerSettings | undefined,
+	patch: DeepPartial<ServerSettings>
+): ServerSettings {
+	return {
+		incognito: { ...current?.incognito, ...patch.incognito },
+		library: { ...current?.library, ...patch.library },
+		local: { ...current?.local, ...patch.local },
+		download: { ...current?.download, ...patch.download },
+		backup: { ...current?.backup, ...patch.backup },
+		browse: { ...current?.browse, ...patch.browse },
+		readOnly: { ...current?.readOnly, ...patch.readOnly }
+	} as ServerSettings;
 }
 
 /** Restoring a backup: any section may change, so invalidate everything */
@@ -778,7 +798,7 @@ export function useRestoreBackup() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ doc, sections }: { doc: unknown; sections: string[] }) =>
-			api<BackupRestoreResponse>(`/backup?sections=${sections.join(',')}`, {
+			api<BackupRestoreResponse>(`/backups/document?sections=${sections.join(',')}`, {
 				method: 'POST',
 				body: doc
 			}),
@@ -789,7 +809,7 @@ export function useRestoreBackup() {
 export function useBackupFiles() {
 	return useQuery({
 		queryKey: qk.backups,
-		queryFn: () => api<BackupFiles>('/backups')
+		queryFn: () => api<BackupFiles>('/backups/files')
 	});
 }
 
@@ -798,7 +818,7 @@ export function useRestoreNamedBackup() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (name: string) =>
-			api<BackupRestoreResponse>('/backups/restore', { method: 'POST', body: { name } }),
+			api<BackupRestoreResponse>('/backups/files/restore', { method: 'POST', body: { name } }),
 		onSuccess: () => qc.invalidateQueries()
 	});
 }
@@ -808,7 +828,7 @@ export function useImportAidoku() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ file, dryRun }: { file: File; dryRun: boolean }) =>
-			api<AidokuImportResponse>(`/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
+			api<AidokuImportResponse>(`/backups/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
 		onSuccess: (_result, vars) => {
 			if (!vars.dryRun) qc.invalidateQueries();
 		}
@@ -832,7 +852,7 @@ export function useImportSuwayomi() {
 			if (mapping && Object.keys(mapping).length > 0) {
 				query += `&sourceMapping=${encodeURIComponent(JSON.stringify(mapping))}`;
 			}
-			return api<SuwayomiImportResponse>(`/import/suwayomi?${query}`, { method: 'POST', body: file });
+			return api<SuwayomiImportResponse>(`/backups/import/suwayomi?${query}`, { method: 'POST', body: file });
 		},
 		onSuccess: (_result, vars) => {
 			if (!vars.dryRun) qc.invalidateQueries();

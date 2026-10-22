@@ -192,6 +192,7 @@
     "aboutDesc": "API endpoints and project links",
     "tagline": "Self-hosted comic server",
     "endpoints": "REST API: /api/v1",
+    "apiDocs": "API Docs (Swagger UI)",
     "currentVersion": "Current version v{{version}}",
     "newVersion": "New version {{tag}} available",
     "upToDate": "Up to date"

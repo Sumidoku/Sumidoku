@@ -109,12 +109,12 @@ export default function LibraryPage() {
 	const sourcesQuery = useSources();
 	const countsQuery = useLibrarySourceCounts();
 	const serverSettings = useServerSettings();
-	const showUncategorized = serverSettings.data?.['library.show_uncategorized'] !== false;
+	const showUncategorized = serverSettings.data?.library.showUncategorized !== false;
 
 	// First-visit seed of the initial category chip from the server setting; runs at most once, and
 	// never over a stored selection or a chip the user already touched
 	useEffect(() => {
-		const raw = serverSettings.data?.['library.default_category'];
+		const raw = serverSettings.data?.library.defaultCategory;
 		if (defaultSeed.stored || defaultSeed.applied || defaultSeed.touched || raw === undefined) return;
 		defaultSeed.applied = true;
 		if (raw === 'uncategorized') setCategoryTri({ [UNCATEGORIZED]: 1 });

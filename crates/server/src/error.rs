@@ -47,11 +47,6 @@ impl ApiError {
 		)
 	}
 
-	/// When a source lacks a dynamic capability, the endpoint convention returns 404, but the code stays unsupported
-	pub fn unsupported_404(message: impl Into<String>) -> Self {
-		Self::new(StatusCode::NOT_FOUND, "unsupported", message)
-	}
-
 	pub fn bad_request(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
 	}

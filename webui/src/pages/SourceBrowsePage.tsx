@@ -148,7 +148,7 @@ export default function SourceBrowsePage() {
 	const sourceEnabled = source.data?.enabled ?? true;
 	const kind = source.data?.kind;
 	const isLocal = kind === 'local';
-	// Built-in sources (local/opds) have no filters/listings/home/deep-link concept (endpoints 404 unsupported), so those queries are not issued
+	// Built-in sources (local/opds) have no filters/listings/home/deep-link concept (endpoints 501 unsupported), so those queries are not issued
 	const isBuiltin = isLocal || kind === 'opds';
 	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isBuiltin);
 	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isBuiltin);

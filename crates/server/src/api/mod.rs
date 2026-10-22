@@ -19,6 +19,7 @@ pub mod reader;
 pub mod repo;
 pub mod search;
 pub mod settings;
+pub mod server_settings;
 pub mod source_import;
 pub mod suwayomi_backup;
 pub mod sync;
@@ -90,8 +91,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
 		.route("/api/v1/source-repos/install", post(repo::install_source))
 		.route("/api/v1/source-repos/update-all", post(repo::update_all))
-		.route("/api/v1/backups", get(backup::list_backups))
-		.route("/api/v1/backups/restore", post(backup::restore_backup))
+		.route("/api/v1/backups/files", get(backup::list_backups))
+		.route("/api/v1/backups/files/restore", post(backup::restore_backup))
 		.route("/api/v1/sync/compact", post(sync::compact));
 	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
@@ -122,7 +123,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/chapter/{id}/page/{index}", get(page::get_page))
 		.route("/api/v1/library", get(library::list_library).post(library::add_to_library))
 		.route("/api/v1/library/source-counts", get(library::source_counts))
-		.route("/api/v1/library/{manga_id}", delete(library::remove_from_library))
+		.route("/api/v1/library/{id}", delete(library::remove_from_library))
 		.route("/api/v1/migrate/sources", get(migrate::migrate_sources))
 		.route("/api/v1/migrate/lookup", get(migrate::migrate_lookup))
 		.route("/api/v1/migrate", post(migrate::migrate_execute))
@@ -154,7 +155,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
 		.route("/api/v1/downloads/ws", get(crate::api::download::downloads_ws))
 		.route(
-			"/api/v1/downloads/{chapter_id}",
+			"/api/v1/downloads/{id}",
 			delete(crate::api::download::delete_download),
 		)
 		.route("/api/v1/chapter/{id}/file", get(crate::api::download::get_chapter_file))
@@ -165,18 +166,18 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))
 		.route(
-			"/api/v1/backup",
+			"/api/v1/backups/document",
 			get(backup::export_backup)
 				.post(backup::import_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
 		.route(
-			"/api/v1/import/aidoku",
+			"/api/v1/backups/import/aidoku",
 			post(aidoku_backup::import_aidoku_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
 		.route(
-			"/api/v1/import/suwayomi",
+			"/api/v1/backups/import/suwayomi",
 			post(suwayomi_backup::import_suwayomi_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
@@ -309,12 +310,12 @@ async fn get_source_icon(
 	Ok(cover::bytes_response(bytes, mime, 86400))
 }
 
-/// When a dynamic capability (filters/listings) is unsupported, the endpoint convention answers 404 unsupported
+/// When a dynamic capability (filters/listings/home/deep-link) is unsupported, the endpoint convention answers 501 unsupported
 fn dynamic_capability_error(e: SourceError) -> ApiError {
 	match e {
-		SourceError::Unimplemented => ApiError::unsupported_404("feature not supported by source"),
+		SourceError::Unimplemented => ApiError::unsupported_501("feature not supported by source"),
 		SourceError::Unsupported(name) => {
-			ApiError::unsupported_404(format!("feature not supported by source: {name}"))
+			ApiError::unsupported_501(format!("feature not supported by source: {name}"))
 		}
 		other => ApiError::from(other),
 	}
@@ -1491,7 +1492,7 @@ pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
 async fn get_settings(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<server_settings::ServerSettings>> {
 	let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM setting ORDER BY key")
 		.fetch_all(&state.pool)
 		.await?;
@@ -1535,16 +1536,18 @@ async fn get_settings(
 		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
 		json!(library.excluded_update_categories),
 	);
-	Ok(Json(Value::Object(map)))
+	server_settings::ServerSettings::from_flat(&map).map(Json)
 }
 
-async fn put_settings(
-	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
-	Json(body): Json<HashMap<String, Value>>,
-) -> ApiResult<Json<Value>> {
+/// Validate and write a flat settings map. Shared by GET /settings and the backward-compatible
+/// flat-map variant of PUT /settings.
+pub(crate) async fn apply_settings(
+	state: &AppState,
+	user: &crate::auth::AuthUser,
+	body: &HashMap<String, Value>,
+) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	for (key, value) in &body {
+	for (key, value) in body {
 		if let Some(result) = crate::update::validate_library_setting(key, value) {
 			result?;
 		}
@@ -1597,5 +1600,23 @@ async fn put_settings(
 		.await?;
 	}
 	tx.commit().await?;
+	Ok(())
+}
+
+async fn put_settings(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	Json(body): Json<Value>,
+) -> ApiResult<Json<server_settings::ServerSettings>> {
+	let flat = match serde_json::from_value::<server_settings::ServerSettings>(body.clone()) {
+		Ok(settings) => settings.into_flat(),
+		Err(_) => {
+			// Fallback: accept the legacy flat dotted-key map for backward compatibility.
+			let map: HashMap<String, Value> = serde_json::from_value(body)
+				.map_err(|e| ApiError::bad_request(format!("invalid settings body: {e}")))?;
+			map
+		}
+	};
+	apply_settings(&state, &user, &flat).await?;
 	get_settings(State(state), Extension(user)).await
 }

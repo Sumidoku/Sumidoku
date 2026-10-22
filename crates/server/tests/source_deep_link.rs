@@ -14,7 +14,7 @@ use common::{TestApp, base_config, baseurl_wasm_path, deeplink_wasm_path, instal
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
-/// App with two sources: deeplink (has DeepLinkHandler) + baseurl (no export, the 404 unsupported control)
+/// App with two sources: deeplink (has DeepLinkHandler) + baseurl (no export, the 501 unsupported control)
 async fn dual_source_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	install_fixture_source(&tmp, "en.deeplink", "DeepLink Source", &deeplink_wasm_path());
@@ -119,7 +119,7 @@ async fn deep_link_rejects_unsupported_and_bad_input() {
 	let dynbase_id = source_id_by_key(&app.app, "en.dynbase").await;
 
 	let (status, body) = deep_link(&app.app, dynbase_id, "https://deeplink.fixture/manga/m1").await;
-	assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED, "{body}");
 	assert_eq!(body["error"]["code"], "unsupported");
 
 	let deeplink_id = source_id_by_key(&app.app, "en.deeplink").await;

@@ -120,8 +120,8 @@ async fn admin_settings_and_backup_cover_every_section() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["backup.enabled"], true);
-	assert_eq!(body["incognito.enabled"], true);
+	assert_eq!(body["backup"]["enabled"], true);
+	assert_eq!(body["incognito"]["enabled"], true);
 	let (status, body) = as_admin(
 		&app,
 		&admin,
@@ -177,7 +177,7 @@ async fn admin_settings_and_backup_cover_every_section() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	let (status, mut doc) = as_admin(&app, &admin, "GET", "/api/v1/backup", None).await;
+	let (status, mut doc) = as_admin(&app, &admin, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["categories"].as_array().expect("categories").len(), 1);
@@ -193,7 +193,7 @@ async fn admin_settings_and_backup_cover_every_section() {
 	doc["sourceSettings"]["en.example-source"]["password"] = json!("restored-credential");
 	doc["library"][0]["inLibrary"] = json!(false);
 	doc["progress"][0]["lastPageRead"] = json!(1);
-	let (status, body) = as_admin(&app, &admin, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = as_admin(&app, &admin, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["restored"]["library"], 1);
 	assert_eq!(body["restored"]["categories"], 1);
@@ -202,8 +202,8 @@ async fn admin_settings_and_backup_cover_every_section() {
 	assert!(body["restored"]["sourceSettings"].as_i64().expect("source settings count") >= 2);
 
 	let (_, settings) = as_admin(&app, &admin, "GET", "/api/v1/settings", None).await;
-	assert_eq!(settings["backup.enabled"], false);
-	assert_eq!(settings["incognito.enabled"], false);
+	assert_eq!(settings["backup"]["enabled"], false);
+	assert_eq!(settings["incognito"]["enabled"], false);
 	let (_, source_settings) = as_admin(
 		&app,
 		&admin,

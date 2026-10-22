@@ -2,7 +2,7 @@
 //! persisted only when opened / page bytes and order (image chapters and CBZ identical) / chapter
 //! number sorting / ComicInfo mapping / cover fallback chain / refresh rescan / failed-directory
 //! protection / local_dir config override / browse search arm (real scan + substring filter, same
-//! shape for single source and cross-source aggregation) / listings 404 unsupported /
+//! shape for single source and cross-source aggregation) / listings 501 unsupported /
 //! nested recognition (container-vs-series classification, relative-path keys, subtree absorption,
 //! nested failed-entry protection with the container prefix rule) / oneshots directory rule /
 //! EPUB chapters (divina profile: OPF spine-ordered pages, declared media types, natural-image
@@ -191,9 +191,9 @@ async fn migration_seeds_builtin_local_source() {
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "bad_request");
 
-	// no wasm instance: dynamic capabilities 404 unsupported per the endpoint contract
+	// no wasm instance: dynamic capabilities 501 unsupported per the endpoint contract
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{local_id}/filters"), None).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(body["error"]["code"], "unsupported");
 }
 
@@ -680,7 +680,7 @@ async fn settings_injected_local_dirs_not_stored() {
 	// GET injects the effective local directories (the config-layer value, default <config_dir>/local)
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDirs"], json!([effective]));
+	assert_eq!(body["readOnly"]["localDirs"], json!([effective]));
 
 	// a PUT to the injected key is skipped: the read-back is still the resolved value, other keys persist as usual
 	let (status, body) = request(
@@ -691,8 +691,8 @@ async fn settings_injected_local_dirs_not_stored() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localDirs"], json!([effective]));
-	assert_eq!(body["incognito.enabled"], true);
+	assert_eq!(body["readOnly"]["localDirs"], json!([effective]));
+	assert_eq!(body["incognito"]["enabled"], true);
 
 	// skipped is not shadowed: there is no localDirs row in the setting table
 	let pool = common::connect_db(&db_path).await;
@@ -707,9 +707,9 @@ async fn settings_injected_local_dirs_not_stored() {
 async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
-	// the local source has no listings concept: same contract as a wasm source lacking the capability, 404 unsupported
+	// the local source has no listings concept: same contract as a wasm source lacking the capability, 501 unsupported
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(body["error"]["code"], "unsupported");
 
 	let (status, body) = request(
@@ -719,7 +719,7 @@ async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. 
 		None,
 	)
 	.await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(body["error"]["code"], "unsupported");
 }
 
@@ -1238,7 +1238,7 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 	// unconfigured: the injected effective value is null
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localOneshotsDir"], serde_json::Value::Null, "{body}");
+	assert_eq!(body["readOnly"]["localOneshotsDir"], serde_json::Value::Null, "{body}");
 
 	// only a string is accepted
 	for value in [json!(123), json!(true), json!(["oneshots"])] {
@@ -1249,7 +1249,7 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 	enable_oneshots(&app).await;
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localOneshotsDir"], "oneshots", "{body}");
+	assert_eq!(body["readOnly"]["localOneshotsDir"], "oneshots", "{body}");
 	let entries = browse_local(&app).await;
 	assert!(
 		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
@@ -1260,7 +1260,7 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 	for value in [json!(""), json!("   ")] {
 		let (status, body) = put_oneshots_dir(&app, value).await;
 		assert_eq!(status, StatusCode::OK, "{body}");
-		assert_eq!(body["localOneshotsDir"], serde_json::Value::Null, "{body}");
+		assert_eq!(body["readOnly"]["localOneshotsDir"], serde_json::Value::Null, "{body}");
 		let mut entries = browse_local(&app).await;
 		entries.sort();
 		let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
@@ -1281,7 +1281,7 @@ async fn oneshots_dir_from_config_and_setting_override() {
 
 	let (status, body) = request(&t.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["localOneshotsDir"], "oneshots", "{body}");
+	assert_eq!(body["readOnly"]["localOneshotsDir"], "oneshots", "{body}");
 	let entries = browse_local(&t.app).await;
 	assert!(
 		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
@@ -1291,7 +1291,7 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	// a runtime setting wins over the config name: matching nothing, the directory is pass1-claimed again
 	let (status, body) = put_oneshots_dir(&t.app, json!("singles")).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["localOneshotsDir"], "singles", "{body}");
+	assert_eq!(body["readOnly"]["localOneshotsDir"], "singles", "{body}");
 	let mut entries = browse_local(&t.app).await;
 	entries.sort();
 	let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();

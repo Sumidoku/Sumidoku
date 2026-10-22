@@ -69,7 +69,7 @@ export interface ApiOptions {
 	body?: unknown;
 	/** multipart/form-data upload; the browser sets the Content-Type (with boundary) itself */
 	formData?: FormData;
-	/** Probing requests (e.g. a 404 meaning listings are unsupported) don't pop an error toast */
+	/** Probing requests (e.g. a 501 meaning listings are unsupported) don't pop an error toast */
 	silent?: boolean;
 }
 
@@ -230,7 +230,7 @@ export const chapterFileUrl = (chapterId: number) =>
 	withToken(`${BASE}/chapter/${chapterId}/file`);
 
 /** Full backup download URL; pair with `<a download>` to make the browser save it */
-export const backupUrl = () => withToken(`${BASE}/backup`);
+export const backupUrl = () => withToken(`${BASE}/backups/document`);
 
 export const sourceIconUrl = (sourceId: number) =>
 	withToken(`${BASE}/sources/${sourceId}/icon`);

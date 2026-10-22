@@ -6,11 +6,11 @@ transactional and reports what it skipped and why.
 
 ## Full backup (export / import)
 
-`GET /api/v1/backup` downloads the built-in admin's complete state —
+`GET /api/v1/backups/document` downloads the built-in admin's complete state —
 library membership and manga metadata, categories, reading progress, app
 settings and source settings — as one JSON document with a `version` field
 (currently `1`; unknown versions are rejected with `400`).
-`POST /api/v1/backup` imports it into the same owner state, optionally
+`POST /api/v1/backups/document` imports it into the same owner state, optionally
 limited with `?sections=library,categories,progress,settings,sourceSettings`.
 Import
 upserts by natural key (source key + manga key, chapter key, category
@@ -42,19 +42,19 @@ override for headless deployments:
 When enabled, a background task writes
 `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) every interval — a
 server-side full export built as the built-in admin, the same document an
-admin's `GET /api/v1/backup` serves — stamps `backup.last_run`, and
+admin's `GET /api/v1/backups/document` serves — stamps `backup.last_run`, and
 deletes files beyond the retention count, oldest first; the newest file is
 never deleted, even with `backup.retention_count = 0`. At startup, if more
 than one interval elapsed since `backup.last_run` (or no backup was ever
 taken), one backup runs immediately, so downtime does not leave a gap.
-`GET /api/v1/backups` lists the files (name, size, creation time, newest
-first); `POST /api/v1/backups/restore` with `{"name": "<file>"}` restores
+`GET /api/v1/backups/files` lists the files (name, size, creation time, newest
+first); `POST /api/v1/backups/files/restore` with `{"name": "<file>"}` restores
 one through the same validated import path as the upload endpoint, and the
 settings page lists them with a restore action.
 
 ## Importing from Aidoku
 
-`POST /api/v1/import/aidoku` imports an Aidoku app backup (`.aib`, a
+`POST /api/v1/backups/import/aidoku` imports an Aidoku app backup (`.aib`, a
 binary plist) into the library: library manga, reading progress (chapter
 read state and last page read) and categories with membership. Aidoku and
 Sumidoku share the same source ecosystem, so entries match on source key
@@ -63,7 +63,7 @@ and reported with a reason in the response `skipped` list, never
 half-imported silently. The import is additive — existing library entries
 and categories keep their current state, and progress merges by taking the
 larger last-page-read, OR-ing the read flag and keeping the newer read
-timestamp. `POST /api/v1/import/aidoku?dryRun=true` runs the same
+timestamp. `POST /api/v1/backups/import/aidoku?dryRun=true` runs the same
 transaction and rolls it back, returning the would-import report
 (per-section counts plus the skipped list) without writing anything. The
 web UI's settings page has an "从 Aidoku 导入" button under the backup
@@ -72,7 +72,7 @@ source configs and trackers are out of scope.
 
 ## Importing from Suwayomi/Mihon
 
-`POST /api/v1/import/suwayomi` imports a Suwayomi-Server or
+`POST /api/v1/backups/import/suwayomi` imports a Suwayomi-Server or
 Mihon/Tachiyomi backup (`.tachibk`, `.proto.gz` — both are gzip around one
 protobuf `Backup` message; raw proto and zip containers are sniffed too)
 into the library: library manga (`favorite` entries), chapter read history
