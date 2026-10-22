@@ -63,6 +63,7 @@ mod tests {
 			(16, "979AD5AC41A4DB74145E953C5DEEEEC8A1A2E58B5DD04176DC09A649C155BD1B91393C48AD38823593203B9018DFD2C4"),
 			(17, "25C04C3F4F4643EDAF682FAB6AFB7FCB13D9642E6B75FFF00F8230A7F2D71DD0C5D65CFFBD3E2B4914ADB6766E1B97F7"),
 			(18, "A00A6D869B8A591DCF5BDFC20B7909C8F892305FA8967C462954974A132C2D69E1D355E8B61ED670CEEF4E0F40701AEC"),
+			(19, "CAD71AA03E7223E612CB97C913DE0EE785EB26B45FE3485EFCF708C4A4C31B84AAAD2108D113E2DA7193ADFADB436B3C"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -142,6 +143,177 @@ mod tests {
 			.expect("load bob settings")
 			.excluded_update_categories;
 		assert_eq!(bob, vec![bob_existing]);
+		pool.close().await;
+	}
+
+	#[tokio::test]
+	async fn migration_19_removes_non_admin_state_and_preserves_admin() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+		let pool = super::create_pool(&url).await.expect("initial pool");
+		sqlx::query("UPDATE user SET role = 'reader' WHERE id = 1")
+			.execute(&pool)
+			.await
+			.expect("demote built-in user");
+		sqlx::query("INSERT INTO user (id, username, password_hash, role) VALUES (2, 'bob', '', 'reader')")
+			.execute(&pool)
+			.await
+			.expect("insert reader");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, version, wasm_path) VALUES ('en.test', 'Test', 1, 'unused') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("insert source");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'shared', 'Shared') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert manga");
+		let chapter_id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key) VALUES (?, 'chapter-1') RETURNING id")
+			.bind(manga_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert chapter");
+		for user_id in [1, 2] {
+			let category_id: i64 = sqlx::query_scalar("INSERT INTO category (user_id, name) VALUES (?, 'Books') RETURNING id")
+				.bind(user_id)
+				.fetch_one(&pool)
+				.await
+				.expect("insert category");
+			sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, ?)")
+				.bind(category_id)
+				.bind(manga_id)
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert category membership");
+			sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, 1)")
+				.bind(manga_id)
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert library state");
+			sqlx::query("INSERT INTO chapter_user (chapter_id, user_id, last_page_read) VALUES (?, ?, 7)")
+				.bind(chapter_id)
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert progress");
+			sqlx::query("INSERT INTO download (chapter_id, user_id, status) VALUES (?, ?, 'finished')")
+				.bind(chapter_id)
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert download");
+			sqlx::query("INSERT INTO filter_group (user_id, name) VALUES (?, 'Favorites')")
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert filter group");
+			sqlx::query("INSERT INTO auth_token (token_hash, user_id, created_at, expires_at) VALUES (?, ?, 0, 9999999999)")
+				.bind(format!("token-{user_id}"))
+				.bind(user_id)
+				.execute(&pool)
+				.await
+				.expect("insert session");
+			sqlx::query("INSERT INTO setting (key, value) VALUES (?, 'true')")
+				.bind(format!("user.{user_id}.incognito.enabled"))
+				.execute(&pool)
+				.await
+				.expect("insert setting");
+			sqlx::query(
+				"INSERT INTO sync_change
+				 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
+				 VALUES (?, 'manga_user', 'key', 0, 1, '{}', '{}', 'peer', ?, 'key', 1)",
+			)
+			.bind(user_id)
+			.bind(user_id)
+			.execute(&pool)
+			.await
+			.expect("insert sync change");
+			sqlx::query(
+				"INSERT INTO sync_alias (origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key)
+				 VALUES ('peer', ?, ?, 'manga_user', 'key', 'local')",
+			)
+			.bind(user_id)
+			.bind(user_id)
+			.execute(&pool)
+			.await
+			.expect("insert sync alias");
+			sqlx::query(
+				"INSERT INTO sync_origin_state (origin, origin_user_id, user_id, entity_kind, origin_entity_key, origin_sequence)
+				 VALUES ('peer', ?, ?, 'manga_user', 'key', 1)",
+			)
+			.bind(user_id)
+			.bind(user_id)
+			.execute(&pool)
+			.await
+			.expect("insert sync origin state");
+		}
+		let instance_id: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+			.fetch_one(&pool)
+			.await
+			.expect("instance id");
+		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 19")
+			.execute(&pool)
+			.await
+			.expect("remove migration 19 bookkeeping");
+		assert_eq!(deleted.rows_affected(), 1);
+		pool.close().await;
+
+		let pool = super::create_pool(&url).await.expect("rerun migrations");
+		assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM user").fetch_one(&pool).await.expect("users"), 1);
+		let role: String = sqlx::query_scalar("SELECT role FROM user WHERE id = 1")
+			.fetch_one(&pool)
+			.await
+			.expect("admin role");
+		assert_eq!(role, "admin");
+		for table in [
+			"manga_user",
+			"chapter_user",
+			"category",
+			"category_manga",
+			"download",
+			"filter_group",
+			"auth_token",
+			"sync_change",
+			"sync_alias",
+			"sync_origin_state",
+		] {
+			let remaining: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE user_id != 1"))
+				.fetch_one(&pool)
+				.await
+				.expect("remaining user rows");
+			assert_eq!(remaining, 0, "{table}");
+			let admin_rows: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE user_id = 1"))
+				.fetch_one(&pool)
+				.await
+				.expect("admin rows");
+			assert!(admin_rows > 0, "{table}");
+		}
+		for table in ["sync_change", "sync_alias", "sync_origin_state"] {
+			let remaining: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE origin_user_id != 1"))
+				.fetch_one(&pool)
+				.await
+				.expect("remaining origin rows");
+			assert_eq!(remaining, 0, "{table}");
+		}
+		let settings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key LIKE 'user.%' AND key NOT LIKE 'user.1.%'")
+			.fetch_one(&pool)
+			.await
+			.expect("non-admin settings");
+		assert_eq!(settings, 0);
+		let admin_setting: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'user.1.incognito.enabled'")
+			.fetch_one(&pool)
+			.await
+			.expect("admin setting");
+		assert_eq!(admin_setting, 1);
+		let current_instance: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+			.fetch_one(&pool)
+			.await
+			.expect("current instance id");
+		assert_eq!(current_instance, instance_id);
 		pool.close().await;
 	}
 }
