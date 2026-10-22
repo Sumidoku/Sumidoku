@@ -761,7 +761,7 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 	Err(ApiError::bad_request("unsupported local chapter format"))
 }
 
-/// Image entries inside an archive: directory entries, dot-prefixed names, and __MACOSX resource forks are not pages (the opds source's CBZ page splitting shares this rule)
+/// Image entries inside an archive: directory entries, dot-prefixed names, and __MACOSX resource forks are not pages
 pub(crate) fn is_image_entry(name: &str) -> bool {
 	!name.ends_with('/')
 		&& !name.split('/').any(|part| part.starts_with('.') || part == "__MACOSX")

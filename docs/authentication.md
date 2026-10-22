@@ -2,10 +2,9 @@
 
 Authentication is off until the built-in admin user has a password
 (`SUMIDOKU_AUTH_PASSWORD`, or the legacy `SUMIDOKU_BASIC_PASSWORD` alias).
-With a password configured, the web UI shows a login page, `/api/v1`
+With a password configured, the web UI shows a login page and `/api/v1`
 requires `Authorization: Bearer <token>` (a login-issued session token or
-a configured API key), and the OPDS catalogs require Basic auth.
-Unauthenticated requests get a uniform `401`
+a configured API key). Unauthenticated requests get a uniform `401`
 (`{"error":{"code":"unauthorized"}}`).
 
 With auth off, every request acts as the built-in admin — a no-password
@@ -56,6 +55,3 @@ breaking change.
 - `<img>` links and WebSocket clients cannot send headers; media and
   stream URLs accept `?access_token=<token>` as an alternative to the
   header.
-- OPDS clients authenticate with HTTP Basic using the admin username and
-  password. API keys do not work for OPDS. Each catalog exposes the admin's
-  library, progress and downloads.

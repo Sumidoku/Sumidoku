@@ -984,11 +984,6 @@ pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiRes
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
-/// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
-pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
-	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
-}
-
 async fn source_kind(pool: &SqlitePool, source_id: i64) -> ApiResult<String> {
 	let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM source WHERE id = ?")
 		.bind(source_id)
@@ -1031,12 +1026,6 @@ pub async fn load_pages(
 			.iter()
 			.map(|entry| crate::local::page_content_json(entry))
 			.collect();
-		store_page_rows(&state.pool, chapter_id, &rows).await?;
-	} else if source_is_opds(&state.pool, manga.source_id).await? {
-		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
-		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
-		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
-		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
 		store_page_rows(&state.pool, chapter_id, &rows).await?;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
@@ -1227,10 +1216,6 @@ pub async fn http_get(
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let max = state.config.net_zip_body_max_mb * 1024 * 1024;
-	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
-		return catalog.get_bytes(state, url, max).await;
-	}
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
 	let handle = state.get_handle(source_id).await?;
 	let accept_language = handle.accept_language();
@@ -1328,18 +1313,13 @@ pub async fn fetch_remote(
 /// Processor output is uniformly encoded as PNG (lossless, and the source-side decode chain already exists)
 const PROCESSED_MIME: &str = "image/png";
 
-/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present;
-/// an opds source has neither processor nor instance, so page images take a bare GET with basic credentials
+/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present
 pub async fn fetch_page_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 	context: Option<PageContext>,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
-	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
-		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
-	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().page_image_processor {
 		let image = fetch_remote(state, source_id, url, context).await?;
@@ -1352,16 +1332,12 @@ pub async fn fetch_page_image(
 	Ok((bytes, Some(PROCESSED_MIME.into())))
 }
 
-/// Cover fetch: same as above, through cover_image_processor; opds sources take the page-image arm
+/// Cover fetch: same as above, through cover_image_processor
 pub async fn fetch_cover_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
-	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
-		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
-	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().cover_image_processor {
 		let image = fetch_remote(state, source_id, url, None).await?;
@@ -1379,194 +1355,6 @@ fn process_input(image: RemoteImage, url: &str) -> aidoku_wasm::ProcessImageInpu
 		status: image.status,
 		response_headers: image.response_headers,
 		request_headers: image.request_headers,
-	}
-}
-
-const COVER_DEFAULT_MIME: &str = "image/jpeg";
-
-/// OPDS cover byte fetch: same flow as cover.rs (fresh disk cache first, on miss pull from upstream and write the cache)
-pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
-	let manga = manga_row(&state.pool, manga_id).await?;
-	let covers_dir = state.config.covers_dir.clone();
-	let cache_path = covers_dir.join(manga_id.to_string());
-	if let Some((bytes, mime)) = cover_cache_read(&cache_path, manga.last_fetched_at).await {
-		return Ok((bytes, Some(mime)));
-	}
-	let (bytes, mime) = if source_is_local(&state.pool, manga.source_id).await? {
-		crate::local::resolve_cover(&state.local_dirs().await?, &state.local_zip, &manga.key)
-			.await?
-			.ok_or_else(|| ApiError::not_found("cover not available"))?
-	} else {
-		let Some(url) = manga.cover_url.clone() else {
-			return Err(ApiError::not_found("cover not available"));
-		};
-		let (bytes, mime) = fetch_cover_image(state, manga.source_id, &url).await?;
-		(bytes, mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into()))
-	};
-	match cover_cache_write(&covers_dir, manga_id, &bytes, &mime).await {
-		Ok(()) => cover_cache_enforce_limit(&covers_dir, state.config.cover_cache_max),
-		Err(e) => tracing::warn!(manga_id, "cover cache write failed: {e}"),
-	}
-	Ok((bytes, Some(mime)))
-}
-
-fn cover_sidecar_path(cache_path: &Path) -> std::path::PathBuf {
-	cache_path.with_file_name(format!(
-		"{}.content-type",
-		cache_path.file_name().unwrap_or_default().to_string_lossy()
-	))
-}
-
-/// Cache-hit condition: the file exists and the manga details were not re-fetched after the cache write (last_fetched_at <= mtime)
-async fn cover_cache_read(cache_path: &Path, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
-	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
-	let mtime = metadata
-		.modified()
-		.ok()?
-		.duration_since(std::time::UNIX_EPOCH)
-		.ok()?
-		.as_secs() as i64;
-	if let Some(fetched) = last_fetched_at
-		&& fetched > mtime
-	{
-		return None;
-	}
-	let bytes = tokio::fs::read(cache_path).await.ok()?;
-	let mime = tokio::fs::read_to_string(cover_sidecar_path(cache_path))
-		.await
-		.ok()
-		.map(|s| s.trim().to_string())
-		.filter(|s| !s.is_empty())
-		.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
-	Some((bytes, mime))
-}
-
-/// Writes tmp first then renames, so a concurrent read never sees a half-written cache
-async fn cover_cache_write(covers_dir: &Path, id: i64, bytes: &[u8], mime: &str) -> std::io::Result<()> {
-	let tmp = covers_dir.join(format!(".{id}.tmp"));
-	tokio::fs::write(&tmp, bytes).await?;
-	tokio::fs::rename(&tmp, covers_dir.join(id.to_string())).await?;
-	let tmp = covers_dir.join(format!(".{id}.content-type.tmp"));
-	tokio::fs::write(&tmp, mime).await?;
-	tokio::fs::rename(&tmp, covers_dir.join(format!("{id}.content-type"))).await?;
-	Ok(())
-}
-
-/// LRU: when the cache file count exceeds the cap, delete oldest by mtime first (sidecar included)
-fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
-	let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
-	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
-		return;
-	};
-	for entry in read_dir.flatten() {
-		let name = entry.file_name();
-		// Only count the cover bodies (file name is a bare manga id); sidecars and tmp files are handled along with their body
-		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
-			continue;
-		}
-		let Ok(metadata) = entry.metadata() else {
-			continue;
-		};
-		let Ok(mtime) = metadata.modified() else {
-			continue;
-		};
-		entries.push((entry.path(), mtime));
-	}
-	if entries.len() <= max {
-		return;
-	}
-	entries.sort_by_key(|(_, mtime)| *mtime);
-	let excess = entries.len() - max;
-	for (path, _) in entries.into_iter().take(excess) {
-		let _ = std::fs::remove_file(cover_sidecar_path(&path));
-		let _ = std::fs::remove_file(path);
-	}
-}
-
-/// OPDS-PSE page-image byte fetch: same flow as page.rs (Url via fetch_page_image, Zip unpacked, Image reads the materialized blob)
-pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
-	let chapter = chapter_row(&state.pool, chapter_id).await?;
-	let pages = load_pages(state, chapter_id, false).await?;
-	let Some(page) = pages.iter().find(|page| page.idx == index) else {
-		return Err(ApiError::not_found("page not found"));
-	};
-	let stored: serde_json::Value = serde_json::from_str(&page.content)?;
-	let content = stored.get("content").cloned().unwrap_or(serde_json::Value::Null);
-	if content.get("Text").is_some() {
-		return Err(ApiError::bad_request("text page content cannot be streamed as image"));
-	}
-	if let Some(name) = content.get("Image").and_then(serde_json::Value::as_str) {
-		let bytes = page_image_blob(state, chapter_id, name).await?;
-		return Ok((bytes, Some(PROCESSED_MIME.into())));
-	}
-	let manga = manga_row(&state.pool, chapter.manga_id).await?;
-	if let Some(entry) = content.get("Local").and_then(serde_json::Value::as_str) {
-		let (bytes, mime) = crate::local::read_page(
-			&state.local_dirs().await?,
-			&state.local_zip,
-			&manga.key,
-			&chapter.key,
-			entry,
-		)
-		.await?;
-		return Ok((bytes, Some(mime)));
-	}
-	if let Some(entry) = content.get("OpdsZip").and_then(serde_json::Value::as_str) {
-		let (bytes, mime) = crate::opds_source::read_cbz_page(state, &manga, &chapter, entry).await?;
-		return Ok((bytes, Some(mime)));
-	}
-	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
-		let Some(zip_url) = zip.first().and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid zip page content"));
-		};
-		let Some(entry_path) = zip.get(1).and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid zip page content"));
-		};
-		let (zip_bytes, _) = http_get(state, manga.source_id, zip_url).await?;
-		let entry = zip_entry_bytes(&zip_bytes, entry_path)?;
-		return Ok((entry, Some(page_mime_for(entry_path).to_string())));
-	}
-	if let Some(url) = content.get("Url").and_then(serde_json::Value::as_array) {
-		let Some(url_str) = url.first().and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid url page content"));
-		};
-		let context: Option<PageContext> = match url.get(1) {
-			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
-			_ => None,
-		};
-		return fetch_page_image(state, manga.source_id, url_str, context).await;
-	}
-	Err(ApiError::bad_request("unknown page content"))
-}
-
-fn zip_entry_bytes(zip_bytes: &[u8], entry_path: &str) -> ApiResult<Vec<u8>> {
-	use std::io::Read;
-	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
-		.map_err(|e| ApiError::bad_gateway(format!("invalid zip archive: {e}")))?;
-	let mut entry = archive
-		.by_name(entry_path)
-		.map_err(|_| ApiError::not_found("zip entry not found"))?;
-	let mut out = Vec::with_capacity(entry.size() as usize);
-	entry
-		.read_to_end(&mut out)
-		.map_err(|e| ApiError::bad_gateway(format!("read zip entry failed: {e}")))?;
-	Ok(out)
-}
-
-fn page_mime_for(path: &str) -> &'static str {
-	let ext = path
-		.rsplit('.')
-		.next()
-		.map(str::to_ascii_lowercase)
-		.unwrap_or_default();
-	match ext.as_str() {
-		"jpg" | "jpeg" => "image/jpeg",
-		"png" => "image/png",
-		"webp" => "image/webp",
-		"gif" => "image/gif",
-		"bmp" => "image/bmp",
-		"avif" => "image/avif",
-		_ => "application/octet-stream",
 	}
 }
 

@@ -35,7 +35,7 @@ impl Default for NetConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
-	/// Site-wide password (shared by web UI login, /api/v1, and OPDS); None = auth disabled
+	/// Site-wide password (shared by web UI login and /api/v1); None = auth disabled
 	pub password: Option<String>,
 	/// Long-lived API keys, used directly as Bearer tokens; plaintext in config, never stored in the DB
 	pub api_keys: Vec<String>,
@@ -62,7 +62,6 @@ pub struct Config {
 	pub repo_refresh_interval_hours: u64,
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
-	pub opds_lazy_download: bool,
 	/// Idle-eviction threshold (minutes) for source instances; <= 0 disables the sweeper
 	pub source_idle_evict_minutes: i64,
 	/// Process RSS threshold (MiB): above it, source instances are evicted idlest-first; 0 = monitoring off
@@ -110,7 +109,6 @@ impl Default for Config {
 			repo_refresh_interval_hours: 1,
 			auto_download_new_chapters: false,
 			auto_download_limit: 5,
-			opds_lazy_download: false,
 			source_idle_evict_minutes: 30,
 			rss_threshold_mb: 1024,
 			wasm_memory_max_mb: 128,
@@ -151,7 +149,7 @@ impl Config {
 		self.covers_dir = self.config_dir.join("covers");
 	}
 
-	/// auth.password wins; when absent, legacy basic_password fills in (old configs from the OPDS era keep working)
+	/// auth.password wins; when absent, legacy basic_password fills in so old configs keep working
 	pub fn effective_password(&self) -> Option<&str> {
 		self.auth.password.as_deref().or(self.basic_password.as_deref())
 	}
@@ -164,11 +162,6 @@ impl Config {
 	/// Blob directory for page images materialized from PageContent::Image (<chapter_id>/<idx>.png), likewise pinned
 	pub fn page_blobs_dir(&self) -> PathBuf {
 		self.config_dir.join("page-blobs")
-	}
-
-	/// On-disk cache of OPDS source acquisition archives (named <chapter_id>); invalidated and re-fetched when page rows are rewritten
-	pub fn opds_cbz_dir(&self) -> PathBuf {
-		self.config_dir.join("opds-cbz")
 	}
 
 	/// Default destination for scheduled backups; backup_dir (env) or the backup.dir setting can change it
@@ -229,7 +222,6 @@ struct ConfigFile {
 	repo_refresh_interval_hours: Option<u64>,
 	auto_download_new_chapters: Option<bool>,
 	auto_download_limit: Option<usize>,
-	opds_lazy_download: Option<bool>,
 	source_idle_evict_minutes: Option<i64>,
 	rss_threshold_mb: Option<u64>,
 	wasm_memory_max_mb: Option<u64>,
@@ -310,9 +302,6 @@ impl Config {
 		}
 		if let Some(v) = file.auto_download_limit {
 			self.auto_download_limit = v;
-		}
-		if let Some(v) = file.opds_lazy_download {
-			self.opds_lazy_download = v;
 		}
 		if let Some(v) = file.source_idle_evict_minutes {
 			self.source_idle_evict_minutes = v;
@@ -453,11 +442,6 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.auto_download_limit = n;
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_OPDS_LAZY_DOWNLOAD")
-			&& let Ok(n) = v.parse()
-		{
-			self.opds_lazy_download = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES")
 			&& let Ok(n) = v.parse()

@@ -2,11 +2,8 @@ use aidoku::{Chapter, ContentRating, Manga, MangaStatus, UpdateStrategy, Viewer}
 use aidoku_wasm::DefaultValue;
 use serde_json::Value;
 
-/// source.kind: the built-in local source; OPDS catalog instances use SOURCE_KIND_OPDS; everything else is aidoku (migration default)
+/// source.kind: the built-in local source; everything else is aidoku (migration default)
 pub const SOURCE_KIND_LOCAL: &str = "local";
-
-/// source.kind: a built-in OPDS catalog instance (multiple instances share this kind; registration lives entirely in the DB, no wasm payload)
-pub const SOURCE_KIND_OPDS: &str = "opds";
 
 /// Reserved key of the built-in local source: no wasm package may register it
 pub const LOCAL_SOURCE_KEY: &str = "local.local";
@@ -40,9 +37,6 @@ impl SourceRow {
 		self.kind == SOURCE_KIND_LOCAL
 	}
 
-	pub fn is_opds(&self) -> bool {
-		self.kind == SOURCE_KIND_OPDS
-	}
 }
 
 #[derive(Debug, sqlx::FromRow)]

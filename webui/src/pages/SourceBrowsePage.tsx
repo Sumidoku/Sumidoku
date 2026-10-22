@@ -148,10 +148,9 @@ export default function SourceBrowsePage() {
 	const sourceEnabled = source.data?.enabled ?? true;
 	const kind = source.data?.kind;
 	const isLocal = kind === 'local';
-	// Built-in sources (local/opds) have no filters/listings/home/deep-link concept (endpoints 404 unsupported), so those queries are not issued
-	const isBuiltin = isLocal || kind === 'opds';
-	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isBuiltin);
-	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isBuiltin);
+	// The local source has no filters/listings/home/deep-link concept (endpoints 404 unsupported), so those queries are not issued
+	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isLocal);
+	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isLocal);
 
 	// hidesFiltersWhileSearching: filters hide in search mode, and search requests don't carry filter values
 	// (AidokuRunner simply clears filters when the query is non-empty before calling the source)
@@ -289,10 +288,10 @@ export default function SourceBrowsePage() {
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-	// Online entries' covers go through the source image proxy; built-in source entries skip cover resolution while browsing (lightweight), registered ones use the manga cover cache
+	// Online entries' covers go through the source image proxy; local source entries skip cover resolution while browsing (lightweight), registered ones use the manga cover cache
 	function entryCover(m: SearchManga): string | null {
 		if (m.cover) return sourceImageUrl(sourceId, m.cover);
-		if (isBuiltin && m.id) return coverUrl(m.id);
+		if (isLocal && m.id) return coverUrl(m.id);
 		return m.cover;
 	}
 
@@ -365,14 +364,14 @@ export default function SourceBrowsePage() {
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? t('sourceBrowse.sourceFallback')}</h1>
-				{/* hasHome === false (confirmed no get_home at registration) hides the button; null = unknown for old rows, stays visible. Built-in sources lack this capability */}
-				{!isBuiltin && source.data?.hasHome !== false && (
+				{/* hasHome === false (confirmed no get_home at registration) hides the button; null = unknown for old rows, stays visible. The local source lacks this capability */}
+				{!isLocal && source.data?.hasHome !== false && (
 					<Button className="source-page__actions" onClick={() => navigate(`/browse/${sourceId}/home`)}>
 						<House size={15} />
 						{t('sourceBrowse.home')}
 					</Button>
 				)}
-				{!isBuiltin && (
+				{!isLocal && (
 					<Button onClick={() => setShowLink(true)}>
 						<Link2 size={15} />
 						{t('sourceBrowse.openLink')}

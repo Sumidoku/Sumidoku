@@ -1,13 +1,12 @@
 mod common;
 
 use axum::Router;
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use common::{base_config, fixture_dir, request, request_with_headers, source_by_key, test_app};
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
 const ADMIN_PW: &str = "secret";
-const ADMIN_BASIC: &str = "Basic YWRtaW46c2VjcmV0";
 
 async fn login(app: &Router, username: &str, password: &str) -> (StatusCode, Value) {
 	request(
@@ -218,29 +217,6 @@ async fn admin_settings_and_backup_cover_every_section() {
 	assert_eq!(manga["inLibrary"], false);
 	let (_, chapters) = as_admin(&app, &admin, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(chapters[0]["lastPageRead"], 1);
-}
-
-#[tokio::test]
-async fn opds_basic_accepts_only_admin_credentials() {
-	let (app, _tmp, _) = admin_app().await;
-	let (status, headers, _) = request_with_headers(&app, "GET", "/opds/v1.2", None, &[]).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	assert_eq!(headers[header::WWW_AUTHENTICATE], "Basic realm=\"Sumidoku OPDS\"");
-	for credentials in ["Basic YWRtaW46d3Jvbmc=", "Basic Ym9iOnNlY3JldA=="] {
-		let (status, _, _) = request_with_headers(
-			&app,
-			"GET",
-			"/opds/v1.2",
-			None,
-			&[("authorization", credentials)],
-		)
-		.await;
-		assert_eq!(status, StatusCode::UNAUTHORIZED);
-	}
-	for path in ["/opds/v1.2", "/opds/v1.2/catalog", "/opds/v2", "/opds/v2/catalog"] {
-		let (status, _, _) = request_with_headers(&app, "GET", path, None, &[("authorization", ADMIN_BASIC)]).await;
-		assert_eq!(status, StatusCode::OK, "{path}");
-	}
 }
 
 #[tokio::test]

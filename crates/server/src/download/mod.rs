@@ -799,18 +799,6 @@ async fn page_bytes(
 		let entry = extract_zip_entry(&zip_bytes, entry_path)?;
 		return Ok((entry, ext_for_path(entry_path)));
 	}
-	if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
-		let chapter = chapter_row(&state.pool, chapter_id)
-			.await
-			.map_err(|e| format!("{e:?}"))?;
-		let manga = manga_row(&state.pool, chapter.manga_id)
-			.await
-			.map_err(|e| format!("{e:?}"))?;
-		let (bytes, mime) = crate::opds_source::read_cbz_page(state, &manga, &chapter, entry)
-			.await
-			.map_err(|e| format!("{e:?}"))?;
-		return Ok((bytes, ext_for_mime(Some(&mime)).to_string()));
-	}
 	Err("unknown page content".into())
 }
 

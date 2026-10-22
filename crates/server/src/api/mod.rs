@@ -11,7 +11,6 @@ pub mod listings;
 pub mod login;
 pub mod migrate;
 pub mod oauth;
-pub mod opds_source;
 pub mod page;
 pub mod partial;
 pub mod pins;
@@ -68,7 +67,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 			post(source_import::import_source)
 				.route_layer(axum::extract::DefaultBodyLimit::max(source_import::IMPORT_BODY_MAX)),
 		)
-		.route("/api/v1/sources/opds", post(opds_source::register_opds_source))
+		// The literal path must not fall through to /sources/{id}'s method-not-allowed response.
+		.route_service(
+			"/api/v1/sources/opds",
+			post(|| async { ApiError::not_found("route not found") }),
+		)
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
@@ -240,11 +243,8 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 		.execute(&state.pool)
 		.await?;
 	pins::prune_pinned(&state.pool, &row.key).await?;
-	// Uninstall also drops the on-disk package, otherwise the next directory scan would
-	// re-register the source. OPDS instances live entirely in the database (no package).
-	if !row.is_opds() {
-		remove_source_package(&state.config.sources_dir(), std::path::Path::new(&row.wasm_path)).await;
-	}
+	// Uninstall also drops the on-disk package, otherwise the next directory scan would re-register the source.
+	remove_source_package(&state.config.sources_dir(), std::path::Path::new(&row.wasm_path)).await;
 	Ok(StatusCode::NO_CONTENT)
 }
 
@@ -481,17 +481,6 @@ async fn search_source(
 		return Ok(Json(json!({
 			"entries": entries,
 			"hasNextPage": false,
-		}))
-		.into_response());
-	}
-	// opds sources likewise have no source call to stream; degraded marks a catalog without OpenSearch, where results are just traversal filtering
-	if crate::source::source_is_opds(&state.pool, id).await? {
-		let outcome = crate::opds_source::search(&state, id, body.query.as_deref()).await?;
-		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
-		return Ok(Json(json!({
-			"entries": entries,
-			"hasNextPage": false,
-			"degraded": outcome.degraded,
 		}))
 		.into_response());
 	}
@@ -908,11 +897,6 @@ async fn register_manga(
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
 	}
-	// opds sources same as the local arm: fetching upstream is a catalog feed pull, with no partial stream
-	if crate::source::source_is_opds(&state.pool, body.source_id).await? {
-		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
-		return Ok(Json(json!({ "id": manga_id })).into_response());
-	}
 	if !partial::wants_ndjson(&headers) {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
@@ -970,19 +954,6 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			manga_id,
 			&update.manga.chapters.clone().unwrap_or_default(),
 			&update.protected,
-		)
-		.await?;
-		return Ok(manga_id);
-	}
-	if crate::source::source_is_opds(&state.pool, source_id).await? {
-		let updated = crate::opds_source::manga_update(state, source_id, initial).await?;
-		let mut conn = state.pool.acquire().await?;
-		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
-		reconcile_chapters(
-			&mut conn,
-			manga_id,
-			&updated.chapters.clone().unwrap_or_default(),
-			&[],
 		)
 		.await?;
 		return Ok(manga_id);
@@ -1266,15 +1237,6 @@ async fn get_manga(
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
-		// opds-source refresh = re-pull the entry feed; like the local arm, nothing to stream
-		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
-			let mut updated = crate::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
-			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
-			let mut conn = state.pool.acquire().await?;
-			upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
-			row = manga_row(&state.pool, id).await?;
-			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
-		}
 		let handle = state.get_handle(row.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
@@ -1365,18 +1327,6 @@ async fn get_chapters(
 				&update.protected,
 			)
 			.await?;
-			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-				.bind(crate::model::unix_now())
-				.bind(id)
-				.execute(&mut *conn)
-				.await?;
-			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
-		}
-		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
-		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
-			let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
-			let mut conn = state.pool.acquire().await?;
-			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
@@ -1498,7 +1448,7 @@ async fn get_settings(
 	let mut map = serde_json::Map::new();
 	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
-		if key == "sync.instance_id" {
+		if key == "sync.instance_id" || key == "sync.retired_sources" {
 			continue;
 		}
 		if key.starts_with("user.") {
@@ -1549,7 +1499,7 @@ async fn put_settings(
 			result?;
 		}
 		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
-		if key == "localDirs" || key == "localOneshotsDir" || key == "sync.instance_id" {
+		if key == "localDirs" || key == "localOneshotsDir" || key == "sync.instance_id" || key == "sync.retired_sources" {
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated

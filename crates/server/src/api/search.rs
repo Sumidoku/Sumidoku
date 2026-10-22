@@ -110,37 +110,24 @@ pub(crate) async fn run_global_search(
 /// Execution and shaping of a single-source search: any failure in handle resolution, the source call, or id
 /// attaching is folded into that source's error entry; the success shape matches the non-streaming single-source search response, plus sourceId
 async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>, page: i32) -> Value {
-	let outcome: ApiResult<(Vec<Value>, bool, bool)> = async {
+	let outcome: ApiResult<(Vec<Value>, bool)> = async {
 		// The local source has no wasm instance; scan the directory on the same arm as the single-source endpoint, without degrading the aggregate into an error entry
 		if crate::source::source_is_local(&state.pool, source_id).await? {
 			let entries = super::local_search(state, source_id, query.as_deref()).await?;
-			return Ok((entries, false, false));
-		}
-		// opds sources same as the local arm; degraded marks a catalog without OpenSearch, where results are just traversal filtering
-		if crate::source::source_is_opds(&state.pool, source_id).await? {
-			let outcome = crate::opds_source::search(state, source_id, query.as_deref()).await?;
-			let entries = super::attach_internal_ids(state, source_id, outcome.entries).await?;
-			return Ok((entries, false, outcome.degraded));
+			return Ok((entries, false));
 		}
 		let handle = state.get_handle(source_id).await?;
 		let result = handle.get_search_manga_list(query, page, Vec::new()).await?;
 		let entries = super::attach_internal_ids(state, source_id, result.entries).await?;
-		Ok((entries, result.has_next_page, false))
+		Ok((entries, result.has_next_page))
 	}
 	.await;
 	match outcome {
-		Ok((entries, has_next_page, degraded)) => {
-			let mut value = json!({
-				"sourceId": source_id,
-				"entries": entries,
-				"hasNextPage": has_next_page,
-			});
-			// degraded appears only on the opds traversal fallback; don't add a new field to the wasm/local arms' results
-			if degraded {
-				value["degraded"] = json!(true);
-			}
-			value
-		}
+		Ok((entries, has_next_page)) => json!({
+			"sourceId": source_id,
+			"entries": entries,
+			"hasNextPage": has_next_page,
+		}),
 		Err(e) => error_entry(source_id, e.code(), e.message()),
 	}
 }

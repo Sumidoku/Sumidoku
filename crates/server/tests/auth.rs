@@ -1,14 +1,12 @@
 mod common;
 
 use axum::Router;
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use common::*;
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
 const PASSWORD: &str = "secret";
-/// base64("admin:secret"), the admin combination from the real-credentials era of OPDS
-const ADMIN_BASIC: &str = "Basic YWRtaW46c2VjcmV0";
 
 /// Under the unified credential model basic_password is the legacy alias of auth.password and likewise enables site-wide auth
 async fn password_app() -> (Router, tempfile::TempDir) {
@@ -200,42 +198,6 @@ async fn change_password() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let (status, _) = login(&app, "admin", "new-secret").await;
 	assert_eq!(status, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn opds_uses_real_credentials() {
-	let (app, _tmp) = password_app().await;
-	let (status, headers, _) = request_with_headers(&app, "GET", "/opds/v1.2", None, &[]).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	assert_eq!(
-		headers[header::WWW_AUTHENTICATE],
-		"Basic realm=\"Sumidoku OPDS\""
-	);
-	// wrong password (admin:wrong)
-	let (status, _, _) = request_with_headers(
-		&app,
-		"GET",
-		"/opds/v1.2",
-		None,
-		&[("authorization", "Basic YWRtaW46d3Jvbmc=")],
-	)
-	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// the any-username era is over: user:secret no longer passes
-	let (status, _, _) = request_with_headers(
-		&app,
-		"GET",
-		"/opds/v1.2",
-		None,
-		&[("authorization", "Basic dXNlcjpzZWNyZXQ=")],
-	)
-	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// real username+password passes on every v1.2 and v2 entry point
-	for path in ["/opds/v1.2", "/opds/v1.2/catalog", "/opds/v2", "/opds/v2/catalog"] {
-		let (status, _, _) = request_with_headers(&app, "GET", path, None, &[("authorization", ADMIN_BASIC)]).await;
-		assert_eq!(status, StatusCode::OK, "{path}");
-	}
 }
 
 #[tokio::test]

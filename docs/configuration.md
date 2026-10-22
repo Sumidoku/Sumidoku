@@ -55,7 +55,6 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_DOWNLOAD_CONCURRENCY` | `3` | concurrent chapter downloads |
 | `SUMIDOKU_DOWNLOAD_FORMAT` | `cbz` | download container format |
 | `SUMIDOKU_DOWNLOAD_MOVE_PATH` | — | override `download.move_path` (setting default empty = off): move each packaged download to the rendered template path — variables `{source}`, `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}`, `{filename}`; absolute targets like `/mnt/library/{author}/{manga}/{filename}` are the intended use |
-| `SUMIDOKU_OPDS_LAZY_DOWNLOAD` | `false` | let OPDS readers trigger downloads of missing pages |
 
 ## Backup
 
@@ -75,7 +74,7 @@ See [docs/authentication.md](authentication.md) for the model.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMIDOKU_AUTH_PASSWORD` | — | built-in admin's password, re-seeded on every boot; enables authentication (username + password login) for the web UI, REST API and OPDS |
+| `SUMIDOKU_AUTH_PASSWORD` | — | built-in admin's password, re-seeded on every boot; enables authentication (username + password login) for the web UI and REST API |
 | `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
 | `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |
 

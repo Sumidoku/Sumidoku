@@ -493,7 +493,6 @@ export type MangaInput = {
 export type MangaPage = {
 	entries: Array<SearchManga>;
 	hasNextPage: boolean;
-	degraded?: boolean;
 };
 
 export type MangaStatus = "Unknown" | "Ongoing" | "Completed" | "Cancelled" | "Hiatus";
@@ -533,7 +532,6 @@ export type MigrateResult = {
 export type MigrationLookupResponse = {
 	query: string;
 	candidates: Array<SearchManga>;
-	degraded?: boolean;
 };
 
 export type MigrationSource = Source & {
@@ -579,8 +577,6 @@ export type PageContent = {
 	Zip: [string, string];
 } | {
 	Local: string;
-} | {
-	OpdsZip: string;
 };
 
 export type PageIcon = {
@@ -623,13 +619,6 @@ export type RegisterMangaRequest = {
 	sourceId: number;
 	mangaKey?: string;
 	manga?: MangaInput | null;
-};
-
-export type RegisterOpdsRequest = {
-	name: string;
-	url: string;
-	username?: string | null;
-	password?: string | null;
 };
 
 export type ReorderPinnedRequest = {
@@ -804,7 +793,7 @@ export type Source = {
 	id: number;
 	key: string;
 	name: string;
-	kind: "aidoku" | "local" | "opds";
+	kind: "aidoku" | "local";
 	version: number;
 	languages: Array<string>;
 	contentRating: number;

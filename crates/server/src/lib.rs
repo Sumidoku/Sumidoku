@@ -7,8 +7,6 @@ pub mod download;
 pub mod error;
 pub mod local;
 pub mod model;
-pub mod opds;
-pub mod opds_source;
 pub mod rss;
 pub mod source;
 pub mod state;
@@ -34,6 +32,11 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.covers_dir)?;
 	std::fs::create_dir_all(&config.downloads_dir)?;
 	std::fs::create_dir_all(config.sources_dir())?;
+	match tokio::fs::remove_dir_all(config.config_dir.join("opds-cbz")).await {
+		Ok(()) => {}
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+		Err(e) => return Err(e.into()),
+	}
 	let pool = db::create_pool(&config.database_url).await?;
 	let (defaults_tx, defaults_rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_defaults_writer(pool.clone(), defaults_rx));
@@ -48,6 +51,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;
+	source::cover::sweep_cache(&state.pool, &state.config.covers_dir).await?;
 	tokio::spawn(downloads.run());
 	tokio::spawn(updater.run());
 	tokio::spawn(backups.run());
@@ -85,9 +89,6 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 		}
 	}
 	let app = api::router(state.clone());
-	let app = app
-		.nest("/opds/v1.2", opds::router(state.clone()))
-		.nest("/opds/v2", opds::v2::router(state.clone()));
 	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
 }
 

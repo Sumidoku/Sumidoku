@@ -331,8 +331,8 @@ impl AppState {
 		let Some((key, wasm_path, kind, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
-		// Built-in sources (local/opds) have no wasm payload, so any capability that needs an instance gets 404 unsupported
-		if kind == crate::model::SOURCE_KIND_LOCAL || kind == crate::model::SOURCE_KIND_OPDS {
+		// The built-in local source has no wasm payload, so any capability that needs an instance gets 404 unsupported
+		if kind == crate::model::SOURCE_KIND_LOCAL {
 			return Err(ApiError::unsupported_404("feature not supported by source"));
 		}
 		if !enabled {
