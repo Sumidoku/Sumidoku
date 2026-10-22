@@ -269,8 +269,21 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		.excluded_update_categories
 		.into_iter()
 		.collect();
-	let category_rows: Vec<(i64, String, i64, bool, i64)> = sqlx::query_as(
-		"SELECT id, name, sort_order, is_default, include_in_download
+	let excluded_download_key = format!(
+		"user.{user_id}.{}",
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
+	);
+	let excluded_download_categories: HashSet<i64> =
+		sqlx::query_scalar::<_, String>("SELECT value FROM setting WHERE key = ?")
+			.bind(&excluded_download_key)
+			.fetch_optional(pool)
+			.await?
+			.and_then(|raw| serde_json::from_str::<Vec<i64>>(&raw).ok())
+			.unwrap_or_default()
+			.into_iter()
+			.collect();
+	let category_rows: Vec<(i64, String, i64, bool)> = sqlx::query_as(
+		"SELECT id, name, sort_order, is_default
 		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
 	)
 	.bind(user_id)
@@ -294,13 +307,13 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	}
 	let categories = category_rows
 		.into_iter()
-		.map(|(id, name, sort_order, is_default, include_in_download)| {
+		.map(|(id, name, sort_order, is_default)| {
 			BackupCategory {
 				name,
 				sort_order,
 				is_default,
 				include_in_update: if excluded_update_categories.contains(&id) { 2 } else { 0 },
-				include_in_download,
+				include_in_download: if excluded_download_categories.contains(&id) { 2 } else { 0 },
 				manga: members.remove(&id).unwrap_or_default(),
 			}
 		})
@@ -363,7 +376,10 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		} else {
 			key
 		};
-		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES || key == "sync.instance_id" {
+		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
+			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
+			|| key == "sync.instance_id"
+		{
 			continue;
 		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
@@ -551,6 +567,17 @@ pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, b
 			restore_source_settings(&mut tx, &doc, &mut restored, &mut warnings, &mut touched_sources)
 				.await?;
 		}
+		if sections.contains(&Section::Categories)
+			&& doc.categories.iter().any(|category| category.include_in_download == 1)
+		{
+			// Include-only categories have no exclusion-list equivalent, so automatic downloads must stay conservative.
+			sqlx::query(
+				"INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'false')
+				 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+			)
+			.execute(&mut *tx)
+			.await?;
+		}
 		tx.commit().await?;
 	}
 	// Source settings may have changed credentials, so hot-restart running instances; a failure does not roll back (the import is committed; the restart waits for the next lazy load)
@@ -664,6 +691,39 @@ fn check_include_in(category: &str, field: &str, value: i64) -> ApiResult<i64> {
 	}
 }
 
+async fn merge_excluded_categories(
+	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
+	setting: &str,
+	migrated: Vec<i64>,
+) -> ApiResult<()> {
+	if migrated.is_empty() {
+		return Ok(());
+	}
+	let key = format!("user.{user_id}.{setting}");
+	let current: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
+		.bind(&key)
+		.fetch_optional(&mut **tx)
+		.await?;
+	let mut existing: Vec<i64> = current
+		.and_then(|(raw,)| serde_json::from_str(&raw).ok())
+		.unwrap_or_default();
+	for id in migrated {
+		if !existing.contains(&id) {
+			existing.push(id);
+		}
+	}
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES (?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+	)
+	.bind(&key)
+	.bind(serde_json::to_string(&existing)?)
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 async fn restore_categories(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
@@ -671,7 +731,8 @@ async fn restore_categories(
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
 ) -> ApiResult<()> {
-	let mut migrated_excluded: Vec<i64> = Vec::new();
+	let mut migrated_update: Vec<i64> = Vec::new();
+	let mut migrated_download: Vec<i64> = Vec::new();
 	for category in &doc.categories {
 		if category.name.trim().is_empty() {
 			return Err(ApiError::bad_request("backup category name must not be empty"));
@@ -686,35 +747,32 @@ async fn restore_categories(
 				.await?;
 		let category_id = match existing {
 			Some((id,)) => {
-				sqlx::query(
-					"UPDATE category SET sort_order = ?, is_default = ?, include_in_download = ?
-					 WHERE id = ?",
-				)
-				.bind(category.sort_order)
-				.bind(category.is_default)
-				.bind(category.include_in_download)
-				.bind(id)
-				.execute(&mut **tx)
-				.await?;
+				sqlx::query("UPDATE category SET sort_order = ?, is_default = ? WHERE id = ?")
+					.bind(category.sort_order)
+					.bind(category.is_default)
+					.bind(id)
+					.execute(&mut **tx)
+					.await?;
 				id
 			}
 			None => {
-				let result = sqlx::query(
-					"INSERT INTO category (user_id, name, sort_order, is_default, include_in_download)
-					 VALUES (?, ?, ?, ?, ?)",
+				sqlx::query_scalar(
+					"INSERT INTO category (user_id, name, sort_order, is_default)
+					 VALUES (?, ?, ?, ?) RETURNING id",
 				)
 				.bind(user_id)
 				.bind(&category.name)
 				.bind(category.sort_order)
 				.bind(category.is_default)
-				.bind(category.include_in_download)
-				.execute(&mut **tx)
-				.await?;
-				result.last_insert_rowid()
+				.fetch_one(&mut **tx)
+				.await?
 			}
 		};
 		if category.include_in_update == 2 {
-			migrated_excluded.push(category_id);
+			migrated_update.push(category_id);
+		}
+		if category.include_in_download == 2 {
+			migrated_download.push(category_id);
 		}
 		for member in &category.manga {
 			let Some(source_id) = source_id_by_key(tx, &member.source_key).await? else {
@@ -749,31 +807,20 @@ async fn restore_categories(
 		}
 		restored.categories += 1;
 	}
-	// Category names can resolve to different ids on this instance, so only the mapped ids may enter the setting.
-	if !migrated_excluded.is_empty() {
-		let key = format!("user.{user_id}.library.excluded_update_categories");
-		let current: Option<(String,)> =
-			sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-				.bind(&key)
-				.fetch_optional(&mut **tx)
-				.await?;
-		let mut existing: Vec<i64> = current
-			.and_then(|(raw,)| serde_json::from_str(&raw).ok())
-			.unwrap_or_default();
-		for id in migrated_excluded {
-			if !existing.contains(&id) {
-				existing.push(id);
-			}
-		}
-		sqlx::query(
-			"INSERT INTO setting (key, value) VALUES (?, ?)
-			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-		)
-		.bind(&key)
-		.bind(serde_json::to_string(&existing)?)
-		.execute(&mut **tx)
-		.await?;
-	}
+	merge_excluded_categories(
+		tx,
+		user_id,
+		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES,
+		migrated_update,
+	)
+	.await?;
+	merge_excluded_categories(
+		tx,
+		user_id,
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES,
+		migrated_download,
+	)
+	.await?;
 	Ok(())
 }
 
@@ -868,6 +915,7 @@ async fn restore_settings(
 		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
 		if key.starts_with("user.")
 			|| key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
+			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
 			|| key == "sync.instance_id"
 		{
 			continue;

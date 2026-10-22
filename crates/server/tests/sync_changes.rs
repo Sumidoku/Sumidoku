@@ -273,7 +273,7 @@ async fn noop_upserts_and_bookkeeping_stay_quiet_with_recursive_triggers() {
 	.execute(&mut *conn)
 	.await
 	.expect("bookkeeping update");
-	sqlx::query("UPDATE category SET include_in_update = 2 WHERE id = ?")
+	sqlx::query("UPDATE category SET include_in_update = 2, include_in_download = 2 WHERE id = ?")
 		.bind(category_id)
 		.execute(&mut *conn)
 		.await
@@ -374,7 +374,7 @@ async fn actual_changes_preserve_explicit_times() {
 	assert_eq!(events[0].snapshot["name"], "after");
 	assert_eq!(events[0].snapshot["sortOrder"], 8);
 	assert_eq!(events[0].snapshot["isDefault"], 1);
-	assert_eq!(events[0].snapshot["includeInDownload"], 2);
+	assert_eq!(events[0].snapshot["includeInDownload"], 0);
 
 	let cursor = high_watermark(&pool).await;
 	sqlx::query("UPDATE manga SET last_modified_at = 999999 WHERE id = ?")

@@ -175,7 +175,6 @@ export type Category = {
 	name: string;
 	sortOrder: number;
 	isDefault: boolean;
-	includeInDownload: number;
 	mangaCount: number;
 };
 
@@ -261,6 +260,17 @@ export type Download = {
 };
 
 export type DownloadSettings = {
+	autoDownloadNewChapters: boolean;
+	autoDownloadLimit: number;
+	downloadFormat: "cbz" | "folder";
+	downloadConcurrency: number;
+	deleteAfterManualRead: boolean;
+	deleteAfterRead: boolean;
+	allowDeleteBookmarked: boolean;
+	autoSkipMangaWithUnread: boolean;
+	autoIgnoreReuploads: boolean;
+	downloadAhead: boolean;
+	downloadAheadCount: number;
 	movePath: string | null;
 };
 
@@ -453,6 +463,7 @@ export type LibrarySettings = {
 	defaultCategory: string;
 	showUncategorized: boolean;
 	excludedUpdateCategories: Array<number>;
+	excludedDownloadCategories: Array<number>;
 	skipTitles: Array<string>;
 	refreshMetadata: boolean;
 	updateIntervalHours: number;
@@ -833,9 +844,21 @@ export type Settings = {
 	"library.default_category"?: string;
 	"library.show_uncategorized"?: boolean;
 	"library.excluded_update_categories"?: Array<number>;
+	"library.excluded_download_categories"?: Array<number>;
 	"library.skip_titles"?: Array<"hasUnread" | "completed" | "notStarted">;
 	"library.refresh_metadata"?: boolean;
 	"library.update_interval_hours"?: number;
+	auto_download_new_chapters?: boolean;
+	auto_download_limit?: number;
+	download_format?: "cbz" | "folder";
+	download_concurrency?: number;
+	delete_after_manual_read?: boolean;
+	delete_after_read?: boolean;
+	allow_delete_bookmarked?: boolean;
+	"downloads.auto_skip_manga_with_unread"?: boolean;
+	"downloads.auto_ignore_reuploads"?: boolean;
+	"downloads.download_ahead"?: boolean;
+	"downloads.download_ahead_count"?: number;
 	"local.dirs"?: Array<string>;
 	"local.oneshots_dir"?: string;
 	[key: string]: JsonValue;
@@ -1086,7 +1109,6 @@ export type UpdateAllSourcesResponse = {
 
 export type UpdateCategoryRequest = {
 	name?: string;
-	includeInDownload?: number;
 };
 
 export type UpdateFilterGroupRequest = {

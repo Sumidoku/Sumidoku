@@ -12,7 +12,7 @@ pub struct ImportCounts {
 	pub progress: i64,
 }
 
-/// A same-named existing category is used as-is (sort_order/the tri-state flags stay as they are); new categories append at the end
+/// A same-named existing category keeps its sort order; new categories append at the end
 pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, name: &str) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
@@ -29,8 +29,8 @@ pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, nam
 			.fetch_one(&mut **tx)
 			.await?;
 	let result = sqlx::query(
-		"INSERT INTO category (user_id, name, sort_order, is_default, include_in_download)
-		 VALUES (?, ?, ?, 0, 0)",
+		"INSERT INTO category (user_id, name, sort_order, is_default)
+		 VALUES (?, ?, ?, 0)",
 	)
 	.bind(user_id)
 	.bind(name)

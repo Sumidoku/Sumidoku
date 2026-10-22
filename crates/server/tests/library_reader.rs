@@ -463,61 +463,103 @@ async fn static_webui() {
 }
 
 #[tokio::test]
-async fn category_include_flags_patch() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+async fn deleting_category_clears_exclusions_before_id_reuse() {
+	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Old"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let category_id = body["id"].as_i64().expect("category id");
+	let pool = connect_db(&db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		sqlx::query("INSERT INTO setting (key, value) VALUES (?, ?)")
+			.bind(key)
+			.bind(format!("[{category_id}, 999]"))
+			.execute(&pool)
+			.await
+			.expect("seed category exclusions");
+	}
+	pool.close().await;
+
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/categories/{category_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Replacement"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["id"], category_id);
+
+	let pool = connect_db(&db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("category exclusions");
+		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+		assert_eq!(ids, vec![999], "{key}");
+	}
+}
+
+#[tokio::test]
+async fn category_include_in_download_patch_is_rejected() {
+	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
 	assert!(!body.as_object().unwrap().contains_key("includeInUpdate"));
-	assert_eq!(body["includeInDownload"], 0);
+	assert!(!body.as_object().unwrap().contains_key("includeInDownload"));
 	let cat_path = format!("/api/v1/categories/{cat}");
+	let pool = connect_db(&db_path).await;
+	sqlx::query("UPDATE category SET include_in_download = 1 WHERE id = ?")
+		.bind(cat)
+		.execute(&pool)
+		.await
+		.expect("seed legacy download flag");
+	pool.close().await;
 
-	let (status, body) = request(
-		&app,
-		"PATCH",
-		&cat_path,
-		Some(json!({"includeInDownload": 2, "name": "Flags2"})),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert!(!body.as_object().unwrap().contains_key("includeInUpdate"));
-	assert_eq!(body["includeInDownload"], 2);
-	assert_eq!(body["name"], "Flags2");
-
-	// read back to confirm persistence
-	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
-	let cats = body.as_array().expect("categories");
-	let row = cats
-		.iter()
-		.find(|c| c["id"].as_i64() == Some(cat))
-		.expect("category");
-	assert!(!row.as_object().unwrap().contains_key("includeInUpdate"));
-	assert_eq!(row["includeInDownload"], 2);
-
-	// {} and an empty body are both no-ops
-	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({}))).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInDownload"], 2);
-	let (status, body) = request(&app, "PATCH", &cat_path, None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInDownload"], 2);
-
-	// invalid values 400 and are not persisted
-	for bad in [json!({"includeInDownload": -1}), json!({"includeInDownload": "x"})] {
-		let (status, body) = request(&app, "PATCH", &cat_path, Some(bad.clone())).await;
-		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+	for patch in [
+		json!({"includeInDownload": 0}),
+		json!({"includeInDownload": 1}),
+		json!({"includeInDownload": 2}),
+		json!({"includeInDownload": null}),
+		json!({"includeInDownload": "x"}),
+		json!({"name": "Changed", "includeInDownload": 2}),
+	] {
+		let (status, body) = request(&app, "PATCH", &cat_path, Some(patch.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{patch}: {body}");
 		assert_eq!(body["error"]["code"], "bad_request");
+		assert!(
+			body["error"]["message"]
+				.as_str()
+				.expect("error message")
+				.contains("library.excluded_download_categories"),
+			"{body}"
+		);
 	}
+
 	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
-	let row = body
-		.as_array()
-		.expect("categories")
-		.iter()
-		.find(|c| c["id"].as_i64() == Some(cat))
-		.expect("category")
-		.clone();
-	assert!(!row.as_object().unwrap().contains_key("includeInUpdate"));
-	assert_eq!(row["includeInDownload"], 2);
+	assert_eq!(body[0]["name"], "Flags");
+	assert!(!body[0].as_object().unwrap().contains_key("includeInDownload"));
+	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({"name": "Flags2"}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["name"], "Flags2");
+	assert!(!body.as_object().unwrap().contains_key("includeInDownload"));
+	for body in [Some(json!({})), None] {
+		let (status, response) = request(&app, "PATCH", &cat_path, body).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(response["name"], "Flags2");
+	}
+	let pool = connect_db(&db_path).await;
+	let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+		.bind(cat)
+		.fetch_one(&pool)
+		.await
+		.expect("legacy flag is untouched");
+	assert_eq!(legacy, 1);
+	pool.close().await;
 
 	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInDownload": 1}))).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
@@ -552,7 +594,7 @@ async fn category_include_in_update_patch_is_rejected() {
 
 	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
 	assert_eq!(body[0]["name"], "Flags");
-	assert_eq!(body[0]["includeInDownload"], 0);
+	assert!(!body[0].as_object().unwrap().contains_key("includeInDownload"));
 }
 
 /// Registers the first three search results (full entries, titles persisted at registration), returning (id, title)

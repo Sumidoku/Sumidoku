@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
 
-/// Fills every section with data on instance A: shelve + categories (with include-in-download flag and ordering), two progress entries, settings, source settings
+/// Fills every section with data on instance A: shelve + ordered categories, two progress entries, settings, source settings
 async fn seed_full(app: &Router) {
 	let manga_id = register_example_manga(app).await;
 	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
@@ -20,14 +20,6 @@ async fn seed_full(app: &Router) {
 	let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": "Morning"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat_morning = body["id"].as_i64().expect("category id");
-	let (status, _) = request(
-		app,
-		"PATCH",
-		&format!("/api/v1/categories/{cat_evening}"),
-		Some(json!({"includeInDownload": 2})),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(
 		app,
 		"PATCH",
@@ -191,7 +183,7 @@ async fn export_import_round_trip() {
 	assert_eq!(tracking.1, 1);
 	b_pool.close().await;
 
-	// categories: order, tri-state flags, membership
+	// categories: order, public shape, membership
 	let (_, body) = request(&b.app, "GET", "/api/v1/categories", None).await;
 	let cats = body.as_array().expect("categories");
 	assert_eq!(cats.len(), 2);
@@ -200,7 +192,7 @@ async fn export_import_round_trip() {
 	assert_eq!(cats[0]["mangaCount"], 1);
 	assert_eq!(cats[1]["name"], "Evening");
 	assert!(!cats[1].as_object().unwrap().contains_key("includeInUpdate"));
-	assert_eq!(cats[1]["includeInDownload"], 2);
+	assert!(!cats[1].as_object().unwrap().contains_key("includeInDownload"));
 	assert_eq!(cats[1]["mangaCount"], 0);
 
 	// progress is reattached by chapter key (the fresh instance has only these two chapter rows)
@@ -444,6 +436,34 @@ async fn import_migrates_legacy_include_in_update_exclude() {
 }
 
 #[tokio::test]
+async fn import_legacy_download_include_only_disables_auto_download() {
+	let a = test_app().await;
+	let mut doc = export_doc(&a.app).await;
+	doc["categories"] = json!([{
+		"name": "Include only",
+		"sortOrder": 0,
+		"isDefault": false,
+		"includeInUpdate": 0,
+		"includeInDownload": 1,
+		"manga": []
+	}]);
+	doc["settings"]["auto_download_new_chapters"] = json!(true);
+
+	let b = fresh_target().await;
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'true')")
+		.execute(&pool)
+		.await
+		.expect("seed target auto download");
+	pool.close().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(settings["download"]["autoDownloadNewChapters"], false);
+}
+
+#[tokio::test]
 async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	let a = test_app().await;
 	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Excluded"}))).await;
@@ -451,34 +471,52 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	let source_excluded_id = body["id"].as_i64().expect("source category id");
 	let (status, _) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Normal"}))).await;
 	assert_eq!(status, StatusCode::OK);
-	let (status, body) = request(
-		&a.app,
-		"PUT",
-		"/api/v1/settings",
-		Some(json!({"library.excluded_update_categories": [source_excluded_id]})),
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES
+		 ('user.1.library.excluded_update_categories', ?),
+		 ('user.1.library.excluded_download_categories', ?)",
 	)
-	.await;
-	assert_eq!(status, StatusCode::OK, "{body}");
+	.bind(format!("[{source_excluded_id}]"))
+	.bind(format!("[{source_excluded_id}]"))
+	.execute(&pool)
+	.await
+	.expect("seed source exclusions");
+	pool.close().await;
 
 	let mut doc = export_doc(&a.app).await;
 	let categories = doc["categories"].as_array().expect("backup categories");
 	let excluded = categories.iter().find(|c| c["name"] == "Excluded").expect("excluded category");
 	assert_eq!(excluded["includeInUpdate"], 2);
+	assert_eq!(excluded["includeInDownload"], 2);
 	let normal = categories.iter().find(|c| c["name"] == "Normal").expect("normal category");
 	assert_eq!(normal["includeInUpdate"], 0);
+	assert_eq!(normal["includeInDownload"], 0);
 	assert!(doc["settings"].get("library.excluded_update_categories").is_none());
+	assert!(doc["settings"].get("library.excluded_download_categories").is_none());
 
 	let b = test_app().await;
 	let (status, body) = request(&b.app, "POST", "/api/v1/categories", Some(json!({"name": "Placeholder"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let placeholder_id = body["id"].as_i64().expect("placeholder category id");
 	assert_eq!(placeholder_id, source_excluded_id);
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES
+		 ('user.1.library.excluded_update_categories', ?),
+		 ('user.1.library.excluded_download_categories', ?)",
+	)
+	.bind(format!("[{placeholder_id}]"))
+	.bind(format!("[{placeholder_id}]"))
+	.execute(&pool)
+	.await
+	.expect("seed target exclusions");
+	pool.close().await;
 
-	// Older documents may still carry the raw list; it must not replace the mapped target ids.
-	doc["settings"]
-		.as_object_mut()
-		.expect("settings object")
-		.insert("library.excluded_update_categories".into(), json!([source_excluded_id]));
+	// Older documents may still carry raw lists; they must not replace mapped ids or existing exclusions.
+	let settings = doc["settings"].as_object_mut().expect("settings object");
+	settings.insert("library.excluded_update_categories".into(), json!([source_excluded_id]));
+	settings.insert("library.excluded_download_categories".into(), json!([source_excluded_id]));
 	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -492,8 +530,34 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 		.as_i64()
 		.expect("target category id");
 	assert_ne!(target_excluded_id, source_excluded_id);
-	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(settings["library"]["excludedUpdateCategories"], json!([target_excluded_id]));
+	let pool = connect_db(&b.db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("restored exclusions");
+		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+		assert_eq!(ids, vec![placeholder_id, target_excluded_id], "{key}");
+	}
+	let raw_settings: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM setting WHERE key IN (
+		 'library.excluded_update_categories', 'library.excluded_download_categories')",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("raw settings are ignored");
+	assert_eq!(raw_settings, 0);
+	let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+		.bind(target_excluded_id)
+		.fetch_one(&pool)
+		.await
+		.expect("legacy download flag");
+	assert_eq!(legacy, 0);
+	pool.close().await;
 }
 
 #[tokio::test]

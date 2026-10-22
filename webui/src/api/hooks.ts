@@ -48,7 +48,6 @@ import type {
 	SourceWithMigration,
 	SuwayomiImportResponse,
 	UpdateAllSourcesResponse,
-	UpdateCategoryRequest,
 	UpdateMangaRequest
 } from './types';
 import type {
@@ -391,15 +390,6 @@ export function usePatchManga() {
 		mutationFn: ({ id, ...body }: { id: number } & UpdateMangaRequest) =>
 			api<Manga>(`/manga/${id}`, { method: 'PATCH', body }),
 		onSuccess: (_d, { id }) => void qc.invalidateQueries({ queryKey: qk.manga(id) })
-	});
-}
-
-export function usePatchCategory() {
-	const qc = useQueryClient();
-	return useMutation({
-		mutationFn: ({ id, ...body }: { id: number } & UpdateCategoryRequest) =>
-			api<Category>(`/categories/${id}`, { method: 'PATCH', body }),
-		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.categories })
 	});
 }
 

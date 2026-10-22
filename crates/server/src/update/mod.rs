@@ -1,6 +1,6 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::{MangaRow, manga_from_row, unix_now, update_strategy_from_int};
-use crate::source::{reconcile_chapters, upsert_manga};
+use crate::source::{ReconcileOutcome, reconcile_chapters_detailed, upsert_manga};
 use crate::state::AppState;
 use serde::Serialize;
 use serde_json::Value;
@@ -180,7 +180,7 @@ impl UpdateSummary {
 	}
 }
 
-/// Library update detection: scheduled or manual fetches with runtime skip settings and category tri-state filtering.
+/// Library update detection: scheduled or manual fetches with runtime skip and download settings.
 pub struct UpdateScheduler {
 	// Weak prevents a reference cycle: AppState holds this scheduler through a OnceCell
 	state: Weak<AppState>,
@@ -190,8 +190,6 @@ pub struct UpdateScheduler {
 	last_scheduled_run_at: RwLock<Option<i64>>,
 	running: AtomicBool,
 	fetch_lock: Arc<Mutex<()>>,
-	auto_download: bool,
-	auto_download_limit: i64,
 	config_interval_hours: u64,
 	started_at: i64,
 }
@@ -206,8 +204,6 @@ impl UpdateScheduler {
 			last_scheduled_run_at: RwLock::new(None),
 			running: AtomicBool::new(false),
 			fetch_lock: Arc::new(Mutex::new(())),
-			auto_download: state.config.auto_download_new_chapters,
-			auto_download_limit: state.config.auto_download_limit as i64,
 			config_interval_hours: state.config.update_interval_hours,
 			started_at: unix_now(),
 		})
@@ -392,7 +388,7 @@ impl UpdateScheduler {
 		}
 		let is_local = kind == crate::model::SOURCE_KIND_LOCAL;
 		let is_opds = kind == crate::model::SOURCE_KIND_OPDS;
-		let outcome: ApiResult<Vec<i64>> = async {
+		let outcome: ApiResult<ReconcileOutcome> = async {
 			let state = self
 				.state
 				.upgrade()
@@ -413,20 +409,26 @@ impl UpdateScheduler {
 				(updated, Vec::new())
 			};
 			let mut tx = crate::db::begin_write(&self.pool).await?;
-			let new_ids = persist_success(&mut tx, &manga, &updated, &protected, &settings, unix_now()).await?;
+			let reconciled = persist_success(&mut tx, &manga, &updated, &protected, &settings, unix_now()).await?;
 			tx.commit().await?;
-			Ok(new_ids)
+			Ok(reconciled)
 		}
 		.await;
 		match outcome {
-			Ok(new_ids) => {
-				let added = new_ids.len() as i64;
+			Ok(reconciled) => {
+				let added = reconciled.new_ids.len() as i64;
 				self.account("complete").await;
 				self.emit_for(interested, "complete", &manga, added);
 				// Local manga never enters download management (the files are already local), so new-chapter auto-download is skipped
-				if added > 0 && self.auto_download && !is_local {
+				if added > 0 && !is_local {
 					for &user_id in interested {
-						self.enqueue_new_chapters(user_id, manga.id, new_ids.clone()).await;
+						self.enqueue_new_chapters(
+							user_id,
+							manga.id,
+							&reconciled.new_ids,
+							reconciled.previous_latest_chapter_number,
+						)
+						.await;
 					}
 				}
 			}
@@ -449,10 +451,28 @@ impl UpdateScheduler {
 		summary.pending = (summary.pending - 1).max(0);
 	}
 
-	/// auto_download_new_chapters linkage: at most limit newest chapters per manga go into the download queue
-	async fn enqueue_new_chapters(self: &Arc<Self>, user_id: i64, manga_id: i64, new_ids: Vec<i64>) {
+	async fn enqueue_new_chapters(
+		self: &Arc<Self>,
+		user_id: i64,
+		manga_id: i64,
+		new_ids: &[i64],
+		previous_latest_chapter_number: Option<f64>,
+	) {
+		if new_ids.is_empty() {
+			return;
+		}
 		let Some(state) = self.state.upgrade() else { return };
-		match download_allowed(&self.pool, user_id, manga_id).await {
+		let settings = match crate::download::DownloadSettings::load(&self.pool, user_id, &state.config).await {
+			Ok(settings) => settings,
+			Err(e) => {
+				tracing::warn!(manga_id, "download settings load failed: {e:?}");
+				return;
+			}
+		};
+		if !settings.auto_download_new_chapters {
+			return;
+		}
+		match download_allowed(&self.pool, user_id, manga_id, &settings.excluded_download_categories).await {
 			Ok(false) => return,
 			Err(e) => {
 				tracing::warn!(manga_id, "download category check failed: {e:?}");
@@ -460,16 +480,41 @@ impl UpdateScheduler {
 			}
 			_ => {}
 		}
-		// A smaller source_order marks a new chapter in the source's returned list
 		let placeholders = new_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-		let sql = format!(
-			"SELECT id FROM chapter WHERE id IN ({placeholders}) ORDER BY source_order ASC LIMIT ?"
-		);
+		if settings.auto_skip_manga_with_unread {
+			let sql = format!(
+				"SELECT 1 FROM chapter c WHERE c.manga_id = ? AND c.id NOT IN ({placeholders})
+				 AND NOT EXISTS (SELECT 1 FROM chapter_user cu
+				 WHERE cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1) LIMIT 1",
+			);
+			let mut query = sqlx::query_scalar::<_, i64>(&sql).bind(manga_id);
+			for id in new_ids {
+				query = query.bind(id);
+			}
+			match query.bind(user_id).fetch_optional(&self.pool).await {
+				Ok(Some(_)) => return,
+				Ok(None) => {}
+				Err(e) => {
+					tracing::warn!(manga_id, "auto download unread check failed: {e}");
+					return;
+				}
+			}
+		}
+		let mut sql = format!("SELECT id FROM chapter WHERE id IN ({placeholders})");
+		if settings.auto_ignore_reuploads && previous_latest_chapter_number.is_some() {
+			sql.push_str(" AND (number IS NULL OR number >= ?)");
+		}
+		sql.push_str(" ORDER BY source_order ASC LIMIT ?");
 		let mut query = sqlx::query_scalar::<_, i64>(&sql);
-		for id in &new_ids {
+		for id in new_ids {
 			query = query.bind(id);
 		}
-		match query.bind(self.auto_download_limit).fetch_all(&self.pool).await {
+		if settings.auto_ignore_reuploads
+			&& let Some(previous_latest) = previous_latest_chapter_number
+		{
+			query = query.bind(previous_latest);
+		}
+		match query.bind(settings.auto_download_limit).fetch_all(&self.pool).await {
 			Ok(ids) if !ids.is_empty() => {
 				state.downloads().enqueue(&ids, user_id).await;
 			}
@@ -500,7 +545,7 @@ async fn persist_success(
 	protected: &[String],
 	settings: &LibraryUpdateSettings,
 	fetched_at: i64,
-) -> ApiResult<Vec<i64>> {
+) -> ApiResult<ReconcileOutcome> {
 	let mut updated = updated.clone();
 	let (next_update_time, next_update_is_fallback) = resolved_next_update(
 		updated.next_update_time,
@@ -517,7 +562,7 @@ async fn persist_success(
 		updated.update_strategy = update_strategy_from_int(update_strategy);
 		upsert_manga(conn, manga.source_id, &updated, true, true, false).await?;
 	}
-	let new_ids = reconcile_chapters(
+	let reconciled = reconcile_chapters_detailed(
 		conn,
 		manga.id,
 		updated.chapters.as_deref().unwrap_or(&[]),
@@ -533,7 +578,7 @@ async fn persist_success(
 	.bind(manga.id)
 	.execute(&mut *conn)
 	.await?;
-	Ok(new_ids)
+	Ok(reconciled)
 }
 
 /// Update scope combines the admin's library, excluded categories, skip settings and per-manga schedule.
@@ -617,34 +662,29 @@ async fn select_manga(
 	Ok(rows)
 }
 
-/// include_in_download tri-state filtering, rules identical to the update scope
-async fn download_allowed(pool: &SqlitePool, user_id: i64, manga_id: i64) -> ApiResult<bool> {
-	let has_include: Option<(i64,)> =
-		sqlx::query_as("SELECT 1 FROM category WHERE user_id = ? AND include_in_download = 1 LIMIT 1")
-			.bind(user_id)
-			.fetch_optional(pool)
-			.await?;
-	if has_include.is_some() {
-		let hit: Option<(i64,)> = sqlx::query_as(
-			"SELECT 1 FROM category_manga cm JOIN category c ON c.id = cm.category_id
-			 WHERE cm.manga_id = ? AND cm.user_id = ? AND c.include_in_download = 1 LIMIT 1",
-		)
-		.bind(manga_id)
-		.bind(user_id)
-		.fetch_optional(pool)
-		.await?;
-		Ok(hit.is_some())
-	} else {
-		let blocked: Option<(i64,)> = sqlx::query_as(
-			"SELECT 1 FROM category_manga cm JOIN category c ON c.id = cm.category_id
-			 WHERE cm.manga_id = ? AND cm.user_id = ? AND c.include_in_download = 2 LIMIT 1",
-		)
-		.bind(manga_id)
-		.bind(user_id)
-		.fetch_optional(pool)
-		.await?;
-		Ok(blocked.is_none())
+async fn download_allowed(
+	pool: &SqlitePool,
+	user_id: i64,
+	manga_id: i64,
+	excluded_categories: &[i64],
+) -> ApiResult<bool> {
+	if excluded_categories.is_empty() {
+		return Ok(true);
 	}
+	let ids = excluded_categories
+		.iter()
+		.map(|id| id.to_string())
+		.collect::<Vec<_>>()
+		.join(",");
+	let blocked: Option<(i64,)> = sqlx::query_as(&format!(
+		"SELECT 1 FROM category_manga cm
+		 WHERE cm.manga_id = ? AND cm.user_id = ? AND cm.category_id IN ({ids}) LIMIT 1",
+	))
+	.bind(manga_id)
+	.bind(user_id)
+	.fetch_optional(pool)
+	.await?;
+	Ok(blocked.is_none())
 }
 
 #[cfg(test)]
@@ -809,7 +849,7 @@ mod tests {
 		let manga_id = add_manga(&state, source_id, "1").await;
 		add_to_library(&state, manga_id, 1).await;
 		let category_id: i64 = sqlx::query_scalar(
-			"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'blocked', 2) RETURNING id",
+			"INSERT INTO category (user_id, name) VALUES (1, 'blocked') RETURNING id",
 		)
 		.fetch_one(&state.pool)
 		.await
@@ -820,6 +860,12 @@ mod tests {
 			.execute(&state.pool)
 			.await
 			.expect("link category");
+		set_setting(
+			&state,
+			"user.1.library.excluded_download_categories",
+			serde_json::json!([category_id]),
+		)
+		.await;
 
 		let scheduler = UpdateScheduler::new(&state);
 		let guard = scheduler.try_acquire().expect("fetch guard");
@@ -831,6 +877,99 @@ mod tests {
 			.await
 			.expect("download owners");
 		assert_eq!(owners, Vec::<i64>::new());
+	}
+
+	#[tokio::test]
+	async fn auto_download_excludes_only_preexisting_unread_chapters() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		set_setting(&state, crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS, serde_json::json!(true)).await;
+		set_setting(&state, crate::download::AUTO_SKIP_MANGA_WITH_UNREAD, serde_json::json!(true)).await;
+		let scheduler = UpdateScheduler::new(&state);
+
+		let current_manga = add_manga(&state, source_id, "current").await;
+		let current_old = add_chapter(&state, current_manga, "old").await;
+		let current_new = add_chapter(&state, current_manga, "new").await;
+		scheduler
+			.enqueue_new_chapters(1, current_manga, &[current_old, current_new], None)
+			.await;
+		let current_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE chapter_id IN (?, ?)")
+			.bind(current_old)
+			.bind(current_new)
+			.fetch_one(&state.pool)
+			.await
+			.expect("current new chapters");
+		assert_eq!(current_count, 2, "unread rows in new_ids must not block themselves");
+
+		let old_manga = add_manga(&state, source_id, "old-unread").await;
+		let old = add_chapter(&state, old_manga, "old").await;
+		let new = add_chapter(&state, old_manga, "new").await;
+		scheduler.enqueue_new_chapters(1, old_manga, &[new], None).await;
+		let blocked_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE chapter_id = ?")
+			.bind(new)
+			.fetch_one(&state.pool)
+			.await
+			.expect("blocked download");
+		assert_eq!(blocked_count, 0, "an old chapter without progress is unread");
+		set_read(&state, old, 1).await;
+		scheduler.enqueue_new_chapters(1, old_manga, &[new], None).await;
+		let allowed_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE chapter_id = ?")
+			.bind(new)
+			.fetch_one(&state.pool)
+			.await
+			.expect("allowed download");
+		assert_eq!(allowed_count, 1);
+	}
+
+	#[tokio::test]
+	async fn auto_download_reupload_filter_is_strict_and_precedes_limit() {
+		let (state, source_id, _tmp) = union_state(Config::default()).await;
+		set_setting(&state, crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS, serde_json::json!(true)).await;
+		set_setting(&state, crate::download::AUTO_SKIP_MANGA_WITH_UNREAD, serde_json::json!(false)).await;
+		set_setting(&state, crate::download::AUTO_IGNORE_REUPLOADS, serde_json::json!(true)).await;
+		set_setting(&state, crate::download::AUTO_DOWNLOAD_LIMIT, serde_json::json!(1)).await;
+		let manga_id = add_manga(&state, source_id, "reupload").await;
+		let latest = add_chapter(&state, manga_id, "latest").await;
+		let low = add_chapter(&state, manga_id, "low").await;
+		let equal = add_chapter(&state, manga_id, "equal").await;
+		let high = add_chapter(&state, manga_id, "high").await;
+		for (id, number, order) in [(latest, 10.0, 0), (low, 9.0, 1), (equal, 10.0, 2), (high, 11.0, 3)] {
+			sqlx::query("UPDATE chapter SET number = ?, source_order = ? WHERE id = ?")
+				.bind(number)
+				.bind(order)
+				.bind(id)
+				.execute(&state.pool)
+				.await
+				.expect("chapter number and order");
+		}
+		let scheduler = UpdateScheduler::new(&state);
+		scheduler
+			.enqueue_new_chapters(1, manga_id, &[low, equal, high], Some(10.0))
+			.await;
+		let mut ids: Vec<i64> = sqlx::query_scalar(
+			"SELECT d.chapter_id FROM download d JOIN chapter c ON c.id = d.chapter_id ORDER BY c.source_order ASC",
+		)
+		.fetch_all(&state.pool)
+		.await
+		.expect("limited candidates");
+		assert_eq!(ids, vec![equal], "the boundary survives while the limit keeps the first source-order candidate");
+
+		set_setting(&state, crate::download::AUTO_DOWNLOAD_LIMIT, serde_json::json!(2)).await;
+		scheduler
+			.enqueue_new_chapters(1, manga_id, &[low, equal, high], Some(10.0))
+			.await;
+		ids = sqlx::query_scalar(
+			"SELECT d.chapter_id FROM download d JOIN chapter c ON c.id = d.chapter_id ORDER BY c.source_order ASC",
+		)
+		.fetch_all(&state.pool)
+		.await
+		.expect("all candidates");
+		assert_eq!(ids, vec![equal, high]);
+		let low_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE chapter_id = ?")
+			.bind(low)
+			.fetch_one(&state.pool)
+			.await
+			.expect("reupload candidate");
+		assert_eq!(low_count, 0);
 	}
 
 	#[tokio::test]

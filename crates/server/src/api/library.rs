@@ -439,12 +439,10 @@ struct CategoryRow {
 	name: String,
 	sort_order: i64,
 	is_default: bool,
-	include_in_download: i64,
 	manga_count: i64,
 }
 
 const CATEGORY_SELECT: &str = "SELECT c.id, c.name, c.sort_order, c.is_default,
-	 c.include_in_download,
 	 (SELECT COUNT(*) FROM category_manga cm
 	  WHERE cm.category_id = c.id AND cm.user_id = ?) AS manga_count
 	 FROM category c WHERE c.user_id = ?";
@@ -455,7 +453,6 @@ fn category_json(row: &CategoryRow) -> Value {
 		"name": row.name,
 		"sortOrder": row.sort_order,
 		"isDefault": row.is_default,
-		"includeInDownload": row.include_in_download,
 		"mangaCount": row.manga_count,
 	})
 }
@@ -572,14 +569,6 @@ pub async fn create_category(
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCategoryRequest {
 	pub name: Option<String>,
-	pub include_in_download: Option<i64>,
-}
-
-fn check_include_in(field: &str, value: i64) -> ApiResult<i64> {
-	match value {
-		v @ 0..=2 => Ok(v),
-		v => Err(ApiError::bad_request(format!("{field} must be 0, 1 or 2, got {v}"))),
-	}
 }
 
 /// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid values is 400; an empty body is a no-op
@@ -598,14 +587,15 @@ pub async fn update_category(
 					"includeInUpdate is no longer supported; use the library.excluded_update_categories setting",
 				));
 			}
+			if value.get("includeInDownload").is_some() {
+				return Err(ApiError::bad_request(
+					"includeInDownload is no longer supported; use the library.excluded_download_categories setting",
+				));
+			}
 			serde_json::from_value(value)
 				.map_err(|e| ApiError::bad_request(format!("invalid category patch: {e}")))?
 		}
 	};
-	let include_in_download = patch
-		.include_in_download
-		.map(|v| check_include_in("includeInDownload", v))
-		.transpose()?;
 	let name = match patch.name {
 		Some(name) => {
 			let name = name.trim();
@@ -617,19 +607,15 @@ pub async fn update_category(
 		}
 		None => None,
 	};
-	if name.is_none() && include_in_download.is_none() {
+	let Some(name) = name else {
 		return Ok(Json(category_json(&row)));
-	}
-	sqlx::query(
-		"UPDATE category SET name = ?, include_in_download = ?
-		 WHERE id = ? AND user_id = ?",
-	)
-	.bind(name.as_deref().unwrap_or(&row.name))
-	.bind(include_in_download.unwrap_or(row.include_in_download))
-	.bind(id)
-	.bind(user.id)
-	.execute(&state.pool)
-	.await?;
+	};
+	sqlx::query("UPDATE category SET name = ? WHERE id = ? AND user_id = ?")
+		.bind(name)
+		.bind(id)
+		.bind(user.id)
+		.execute(&state.pool)
+		.await?;
 	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
@@ -638,12 +624,22 @@ pub async fn delete_category(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	category_row(&state.pool, user.id, id).await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM category WHERE id = ? AND user_id = ?)")
+		.bind(id)
+		.bind(user.id)
+		.fetch_one(&mut *tx)
+		.await?;
+	if !exists {
+		return Err(ApiError::not_found("category not found"));
+	}
+	crate::db::remove_category_exclusions(&mut tx, user.id, id).await?;
 	sqlx::query("DELETE FROM category WHERE id = ? AND user_id = ?")
 		.bind(id)
 		.bind(user.id)
-		.execute(&state.pool)
+		.execute(&mut *tx)
 		.await?;
+	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)
 }
 

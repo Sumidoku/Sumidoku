@@ -1,3 +1,4 @@
+use crate::error::ApiResult;
 use crate::model::{ChapterRow, MangaRow, PageRow, unix_now};
 use crate::source::page_dimensions::{DIMENSION_HEAD_BYTES, PageDimensionUpdate, measure_with_fallback, persist_downloaded as persist_page_dimensions};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
@@ -11,13 +12,139 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use tokio::io::AsyncReadExt;
-use tokio::sync::{Mutex, Notify, Semaphore, broadcast};
+use tokio::sync::{Mutex, Notify, broadcast};
 use tokio::task::JoinSet;
 
 /// Per-chapter retry cap (first attempt not counted), backoff 2/4/8s
 const MAX_CHAPTER_RETRIES: u32 = 3;
 /// Parallel page-image cap within a chapter
 const PAGE_CONCURRENCY: usize = 5;
+
+pub const AUTO_DOWNLOAD_NEW_CHAPTERS: &str = "auto_download_new_chapters";
+pub const AUTO_DOWNLOAD_LIMIT: &str = "auto_download_limit";
+pub const DOWNLOAD_FORMAT: &str = "download_format";
+pub const DOWNLOAD_CONCURRENCY: &str = "download_concurrency";
+pub const DELETE_AFTER_MANUAL_READ: &str = "delete_after_manual_read";
+pub const DELETE_AFTER_READ: &str = "delete_after_read";
+pub const ALLOW_DELETE_BOOKMARKED: &str = "allow_delete_bookmarked";
+pub const AUTO_SKIP_MANGA_WITH_UNREAD: &str = "downloads.auto_skip_manga_with_unread";
+pub const AUTO_IGNORE_REUPLOADS: &str = "downloads.auto_ignore_reuploads";
+pub const DOWNLOAD_AHEAD: &str = "downloads.download_ahead";
+pub const DOWNLOAD_AHEAD_COUNT: &str = "downloads.download_ahead_count";
+pub const LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES: &str = "library.excluded_download_categories";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DownloadSettings {
+	pub auto_download_new_chapters: bool,
+	pub auto_download_limit: i64,
+	pub download_format: String,
+	pub download_concurrency: usize,
+	pub delete_after_manual_read: bool,
+	pub delete_after_read: bool,
+	pub allow_delete_bookmarked: bool,
+	pub auto_skip_manga_with_unread: bool,
+	pub auto_ignore_reuploads: bool,
+	pub download_ahead: bool,
+	pub download_ahead_count: i64,
+	pub excluded_download_categories: Vec<i64>,
+}
+
+impl DownloadSettings {
+	pub async fn load(pool: &SqlitePool, user_id: i64, config: &crate::config::Config) -> ApiResult<Self> {
+		let excluded_key = format!("user.{user_id}.{LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES}");
+		let rows: Vec<(String, String)> = sqlx::query_as(
+			"SELECT key, value FROM setting WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		)
+		.bind(AUTO_DOWNLOAD_NEW_CHAPTERS)
+		.bind(AUTO_DOWNLOAD_LIMIT)
+		.bind(DOWNLOAD_FORMAT)
+		.bind(DOWNLOAD_CONCURRENCY)
+		.bind(DELETE_AFTER_MANUAL_READ)
+		.bind(DELETE_AFTER_READ)
+		.bind(ALLOW_DELETE_BOOKMARKED)
+		.bind(AUTO_SKIP_MANGA_WITH_UNREAD)
+		.bind(AUTO_IGNORE_REUPLOADS)
+		.bind(DOWNLOAD_AHEAD)
+		.bind(DOWNLOAD_AHEAD_COUNT)
+		.bind(&excluded_key)
+		.fetch_all(pool)
+		.await?;
+		let values: HashMap<String, Value> = rows
+			.into_iter()
+			.filter_map(|(key, raw)| serde_json::from_str(&raw).ok().map(|value| (key, value)))
+			.collect();
+		let boolean = |key: &str, fallback: bool| {
+			values.get(key).and_then(Value::as_bool).unwrap_or(fallback)
+		};
+		let format = values
+			.get(DOWNLOAD_FORMAT)
+			.and_then(Value::as_str)
+			.unwrap_or(&config.download_format);
+		Ok(Self {
+			auto_download_new_chapters: boolean(AUTO_DOWNLOAD_NEW_CHAPTERS, config.auto_download_new_chapters),
+			auto_download_limit: values
+				.get(AUTO_DOWNLOAD_LIMIT)
+				.and_then(Value::as_i64)
+				.filter(|value| *value >= 0)
+				.unwrap_or(config.auto_download_limit as i64),
+			download_format: if format == "folder" { "folder".into() } else { "cbz".into() },
+			download_concurrency: values
+				.get(DOWNLOAD_CONCURRENCY)
+				.and_then(Value::as_u64)
+				.and_then(|value| usize::try_from(value).ok())
+				.unwrap_or(config.download_concurrency)
+				.max(1),
+			delete_after_manual_read: boolean(DELETE_AFTER_MANUAL_READ, false),
+			delete_after_read: boolean(DELETE_AFTER_READ, false),
+			allow_delete_bookmarked: boolean(ALLOW_DELETE_BOOKMARKED, false),
+			auto_skip_manga_with_unread: boolean(AUTO_SKIP_MANGA_WITH_UNREAD, true),
+			auto_ignore_reuploads: boolean(AUTO_IGNORE_REUPLOADS, false),
+			download_ahead: boolean(DOWNLOAD_AHEAD, false),
+			download_ahead_count: values
+				.get(DOWNLOAD_AHEAD_COUNT)
+				.and_then(Value::as_i64)
+				.filter(|value| *value >= 0)
+				.unwrap_or(2),
+			excluded_download_categories: values
+				.get(&excluded_key)
+				.filter(|value| {
+					value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
+				})
+				.and_then(|value| serde_json::from_value::<Vec<i64>>(value.clone()).ok())
+				.unwrap_or_default(),
+		})
+	}
+}
+
+fn valid_excluded_categories(value: &Value) -> bool {
+	value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
+}
+
+pub(crate) fn validate_download_setting(key: &str, value: &Value) -> Option<ApiResult<()>> {
+	let result = match key {
+		AUTO_DOWNLOAD_NEW_CHAPTERS | DELETE_AFTER_MANUAL_READ | DELETE_AFTER_READ | ALLOW_DELETE_BOOKMARKED
+		| AUTO_SKIP_MANGA_WITH_UNREAD | AUTO_IGNORE_REUPLOADS | DOWNLOAD_AHEAD if !value.is_boolean() => {
+			Err(crate::error::ApiError::bad_request(format!("{key} must be a boolean")))
+		}
+		AUTO_DOWNLOAD_LIMIT | DOWNLOAD_AHEAD_COUNT if value.as_u64().is_none() => {
+			Err(crate::error::ApiError::bad_request(format!("{key} must be a non-negative integer")))
+		}
+		DOWNLOAD_CONCURRENCY if !matches!(value.as_u64(), Some(1..)) => {
+			Err(crate::error::ApiError::bad_request("download_concurrency must be a positive integer"))
+		}
+		DOWNLOAD_FORMAT if !matches!(value.as_str(), Some("cbz" | "folder")) => {
+			Err(crate::error::ApiError::bad_request("download_format must be cbz or folder"))
+		}
+		LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES if !valid_excluded_categories(value) => {
+			Err(crate::error::ApiError::bad_request("library.excluded_download_categories must be an array of category ids"))
+		}
+		AUTO_DOWNLOAD_NEW_CHAPTERS | AUTO_DOWNLOAD_LIMIT | DOWNLOAD_FORMAT | DOWNLOAD_CONCURRENCY
+		| DELETE_AFTER_MANUAL_READ | DELETE_AFTER_READ | ALLOW_DELETE_BOOKMARKED | AUTO_SKIP_MANGA_WITH_UNREAD
+		| AUTO_IGNORE_REUPLOADS | DOWNLOAD_AHEAD | DOWNLOAD_AHEAD_COUNT | LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES => Ok(()),
+		_ => return None,
+	};
+	Some(result)
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadEvent {
@@ -42,7 +169,7 @@ struct QueueEntry {
 	user_id: i64,
 }
 
-/// Download manager: serial within a source, parallel across sources, with a global semaphore on concurrent sources.
+/// Download manager: serial within a source, parallel across sources, with a runtime cap on concurrent sources.
 /// The state machine lives in the download table (queued → downloading → (paused) → finished / error), recoverable across restarts.
 pub struct DownloadManager {
 	// Weak prevents a reference cycle: AppState holds this manager through a OnceCell
@@ -53,15 +180,13 @@ pub struct DownloadManager {
 	events: broadcast::Sender<DownloadEvent>,
 	running: AtomicBool,
 	active_sources: Mutex<HashSet<i64>>,
-	semaphore: Arc<Semaphore>,
 	progress: Mutex<HashMap<i64, (i64, i64)>>,
 	cancel: Mutex<HashSet<i64>>,
 	downloads_dir: PathBuf,
-	format: String,
 }
 
 enum FinishMode {
-	Update,
+	Update(i64),
 	Upsert,
 }
 
@@ -72,21 +197,23 @@ async fn persist_finished(
 	path: &str,
 	format: &str,
 	mode: FinishMode,
-) -> Result<(), sqlx::Error> {
+) -> Result<bool, sqlx::Error> {
 	let now = unix_now();
 	let mut tx = crate::db::begin_write(pool).await?;
-	match mode {
-		FinishMode::Update => {
+	let applied = match mode {
+		FinishMode::Update(attempt_id) => {
 			sqlx::query(
 				"UPDATE download SET status = 'finished', path = ?, error = NULL, updated_at = ?
-				 WHERE chapter_id = ? AND user_id = ?",
+				 WHERE chapter_id = ? AND user_id = ? AND status = 'downloading' AND updated_at = ?",
 			)
 			.bind(path)
 			.bind(now)
 			.bind(chapter_id)
 			.bind(user_id)
+			.bind(attempt_id)
 			.execute(&mut *tx)
-			.await?;
+			.await?
+			.rows_affected() == 1
 		}
 		FinishMode::Upsert => {
 			sqlx::query(
@@ -104,7 +231,12 @@ async fn persist_finished(
 			.bind(now)
 			.execute(&mut *tx)
 			.await?;
+			true
 		}
+	};
+	if !applied {
+		tx.rollback().await?;
+		return Ok(false);
 	}
 	sqlx::query(
 		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
@@ -114,7 +246,8 @@ async fn persist_finished(
 	.bind(user_id)
 	.execute(&mut *tx)
 	.await?;
-	tx.commit().await
+	tx.commit().await?;
+	Ok(true)
 }
 
 impl DownloadManager {
@@ -127,11 +260,9 @@ impl DownloadManager {
 			events: broadcast::channel(256).0,
 			running: AtomicBool::new(true),
 			active_sources: Mutex::new(HashSet::new()),
-			semaphore: Arc::new(Semaphore::new(state.config.download_concurrency.max(1))),
 			progress: Mutex::new(HashMap::new()),
 			cancel: Mutex::new(HashSet::new()),
 			downloads_dir: state.config.downloads_dir.clone(),
-			format: state.config.download_format.clone(),
 		})
 	}
 
@@ -141,6 +272,14 @@ impl DownloadManager {
 
 	pub fn downloads_dir(&self) -> &Path {
 		&self.downloads_dir
+	}
+
+	async fn settings(&self, user_id: i64) -> ApiResult<DownloadSettings> {
+		let state = self
+			.state
+			.upgrade()
+			.ok_or_else(|| crate::error::ApiError::bad_request("server is shutting down"))?;
+		DownloadSettings::load(&self.pool, user_id, &state.config).await
 	}
 
 	pub fn is_paused(&self) -> bool {
@@ -205,10 +344,14 @@ impl DownloadManager {
 
 	/// Enqueues the deduped chapter list; rows belong to user_id, already finished/queued/running ones are skipped, error rows are reset and requeued
 	pub async fn enqueue(self: &Arc<Self>, chapter_ids: &[i64], user_id: i64) -> Vec<i64> {
-		let format = match self.format.as_str() {
-			"folder" => "folder",
-			_ => "cbz",
+		let settings = match self.settings(user_id).await {
+			Ok(settings) => settings,
+			Err(e) => {
+				tracing::warn!("download settings load failed: {e:?}");
+				return Vec::new();
+			}
 		};
+		let format = settings.download_format.as_str();
 		let now = unix_now();
 		let mut seen = HashSet::new();
 		let mut queued = Vec::new();
@@ -380,6 +523,124 @@ impl DownloadManager {
 				.await;
 	}
 
+	async fn cleanup_attempt(&self, chapter_id: i64, path: Option<&str>) {
+		self.progress.lock().await.remove(&chapter_id);
+		self.cancel.lock().await.remove(&chapter_id);
+		self.cleanup_tmp(chapter_id).await;
+		let Some(path) = path else { return };
+		let referenced = sqlx::query_as::<_, (i64,)>("SELECT 1 FROM download WHERE path = ? LIMIT 1")
+			.bind(path)
+			.fetch_optional(&self.pool)
+			.await;
+		match referenced {
+			Ok(None) => {
+				let _ = remove_path(&product_path(&self.downloads_dir, path)).await;
+			}
+			Ok(Some(_)) => {}
+			Err(e) => tracing::warn!(chapter_id, "download artifact reference check failed: {e}"),
+		}
+	}
+
+	pub async fn delete(&self, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
+		let mut tx = crate::db::begin_write(&self.pool).await?;
+		let row: Option<(String, Option<String>)> =
+			sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
+				.bind(chapter_id)
+				.bind(user_id)
+				.fetch_optional(&mut *tx)
+				.await?;
+		let Some((status, path)) = row else {
+			tx.rollback().await?;
+			return Ok(false);
+		};
+		if status == "downloading" {
+			self.mark_cancel(chapter_id).await;
+		}
+		self.remove_from_queue(chapter_id, user_id).await;
+		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
+			.bind(chapter_id)
+			.bind(user_id)
+			.execute(&mut *tx)
+			.await?;
+		sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
+			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.execute(&mut *tx)
+		.await?;
+		let orphaned = if let Some(path) = &path {
+			let referenced: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM download WHERE path = ? LIMIT 1")
+				.bind(path)
+				.fetch_optional(&mut *tx)
+				.await?;
+			referenced.is_none()
+		} else {
+			false
+		};
+		tx.commit().await?;
+		self.progress.lock().await.remove(&chapter_id);
+		self.cleanup_tmp(chapter_id).await;
+		if let Some(path) = path
+			&& orphaned
+		{
+			let _ = remove_path(&product_path(&self.downloads_dir, &path)).await;
+		}
+		Ok(true)
+	}
+
+	pub async fn enqueue_reader_ahead(self: &Arc<Self>, chapter_id: i64, user_id: i64) -> ApiResult<Vec<i64>> {
+		let settings = self.settings(user_id).await?;
+		if !settings.download_ahead || settings.download_ahead_count == 0 {
+			return Ok(Vec::new());
+		}
+		let current: Option<(i64, i64, String)> = sqlx::query_as(
+			"SELECT c.manga_id, c.source_order, s.kind FROM chapter c
+			 JOIN manga m ON m.id = c.manga_id JOIN source s ON s.id = m.source_id WHERE c.id = ?",
+		)
+		.bind(chapter_id)
+		.fetch_optional(&self.pool)
+		.await?;
+		let Some((manga_id, source_order, source_kind)) = current else {
+			return Err(crate::error::ApiError::not_found("chapter not found"));
+		};
+		if source_kind == crate::model::SOURCE_KIND_LOCAL {
+			return Ok(Vec::new());
+		}
+		let candidates: Vec<i64> = sqlx::query_scalar(
+			"SELECT id FROM chapter c
+			 WHERE c.manga_id = ? AND c.source_order < ?
+			 AND NOT EXISTS (SELECT 1 FROM chapter_user cu
+			 WHERE cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1)
+			 ORDER BY c.source_order DESC LIMIT ?",
+		)
+		.bind(manga_id)
+		.bind(source_order)
+		.bind(user_id)
+		.bind(settings.download_ahead_count)
+		.fetch_all(&self.pool)
+		.await?;
+		let mut eligible = Vec::new();
+		for candidate in candidates {
+			let (downloaded, status): (bool, Option<String>) = sqlx::query_as(
+				"SELECT COALESCE(cu.is_downloaded, 0), d.status FROM chapter c
+				 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
+				 LEFT JOIN download d ON d.chapter_id = c.id AND d.user_id = ?
+				 WHERE c.id = ?",
+			)
+			.bind(user_id)
+			.bind(user_id)
+			.bind(candidate)
+			.fetch_one(&self.pool)
+			.await?;
+			if !downloaded && matches!(status.as_deref(), None | Some("error")) {
+				eligible.push(candidate);
+			}
+		}
+		Ok(self.enqueue(&eligible, user_id).await)
+	}
+
 	pub async fn run(self: Arc<Self>) {
 		// Keep a fallback poll besides notify, guarding against lost wakeups
 		let mut poll = tokio::time::interval(std::time::Duration::from_secs(2));
@@ -396,6 +657,14 @@ impl DownloadManager {
 		if !self.running.load(Ordering::SeqCst) {
 			return;
 		}
+		let settings = match self.settings(1).await {
+			Ok(settings) => settings,
+			Err(e) => {
+				tracing::warn!("download settings load failed: {e:?}");
+				return;
+			}
+		};
+		let concurrency = settings.download_concurrency.max(1);
 		let mut deferred = Vec::new();
 		loop {
 			let next = self.queue.lock().await.pop_front();
@@ -426,15 +695,14 @@ impl DownloadManager {
 			if status != "queued" {
 				continue;
 			}
-			if self.active_sources.lock().await.contains(&source_id) {
-				deferred.push(entry);
-				continue;
+			{
+				let mut active = self.active_sources.lock().await;
+				if active.contains(&source_id) || active.len() >= concurrency {
+					deferred.push(entry);
+					continue;
+				}
+				active.insert(source_id);
 			}
-			let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
-				deferred.push(entry);
-				continue;
-			};
-			self.active_sources.lock().await.insert(source_id);
 			let manager = self.clone();
 			tokio::spawn(async move {
 				let worker = manager.clone();
@@ -442,7 +710,6 @@ impl DownloadManager {
 				let inner =
 					tokio::spawn(async move { worker.run_chapter(entry.chapter_id, entry.user_id, source_id).await });
 				let _ = inner.await;
-				drop(permit);
 				manager.active_sources.lock().await.remove(&source_id);
 				manager.notify.notify_one();
 			});
@@ -451,6 +718,98 @@ impl DownloadManager {
 			let mut queue = self.queue.lock().await;
 			for entry in deferred {
 				queue.push_back(entry);
+			}
+		}
+	}
+
+	async fn handle_chapter_error(
+		self: &Arc<Self>,
+		chapter_id: i64,
+		user_id: i64,
+		attempt_id: i64,
+		message: &str,
+	) -> Option<u64> {
+		let retries = match sqlx::query_scalar::<_, i64>(
+			"SELECT retries FROM download
+			 WHERE chapter_id = ? AND user_id = ? AND status = 'downloading' AND updated_at = ?",
+		)
+		.bind(chapter_id)
+		.bind(user_id)
+		.bind(attempt_id)
+		.fetch_optional(&self.pool)
+		.await
+		{
+			Ok(Some(retries)) => retries,
+			Ok(None) => {
+				self.cleanup_attempt(chapter_id, None).await;
+				return None;
+			}
+			Err(e) => {
+				tracing::warn!(chapter_id, "download retry read failed: {e}");
+				self.cleanup_attempt(chapter_id, None).await;
+				return None;
+			}
+		};
+		self.apply_chapter_error(chapter_id, user_id, attempt_id, retries, message).await
+	}
+
+	async fn apply_chapter_error(
+		self: &Arc<Self>,
+		chapter_id: i64,
+		user_id: i64,
+		attempt_id: i64,
+		retries: i64,
+		message: &str,
+	) -> Option<u64> {
+		if retries >= MAX_CHAPTER_RETRIES as i64 {
+			let (downloaded, total) = self.progress.lock().await.get(&chapter_id).copied().unwrap_or((0, 0));
+			let result = sqlx::query(
+				"UPDATE download SET status = 'error', error = ?, updated_at = ?
+				 WHERE chapter_id = ? AND user_id = ? AND status = 'downloading' AND updated_at = ?",
+			)
+			.bind(message)
+			.bind(unix_now())
+			.bind(chapter_id)
+			.bind(user_id)
+			.bind(attempt_id)
+			.execute(&self.pool)
+			.await;
+			match result {
+				Ok(done) if done.rows_affected() == 1 => {
+					self.progress.lock().await.remove(&chapter_id);
+					self.emit("error", chapter_id, downloaded, total, user_id);
+				}
+				Ok(_) => {
+					self.cleanup_attempt(chapter_id, None).await;
+				}
+				Err(e) => {
+					tracing::warn!(chapter_id, "download error update failed: {e}");
+					self.cleanup_attempt(chapter_id, None).await;
+				}
+			}
+			return None;
+		}
+		let result = sqlx::query(
+			"UPDATE download SET retries = retries + 1, error = ?, updated_at = ?
+			 WHERE chapter_id = ? AND user_id = ? AND status = 'downloading' AND updated_at = ?",
+		)
+		.bind(message)
+		.bind(unix_now())
+		.bind(chapter_id)
+		.bind(user_id)
+		.bind(attempt_id)
+		.execute(&self.pool)
+		.await;
+		match result {
+			Ok(done) if done.rows_affected() == 1 => Some(1 << (retries + 1)),
+			Ok(_) => {
+				self.cleanup_attempt(chapter_id, None).await;
+				None
+			}
+			Err(e) => {
+				tracing::warn!(chapter_id, "download retry update failed: {e}");
+				self.cleanup_attempt(chapter_id, None).await;
+				None
 			}
 		}
 	}
@@ -484,81 +843,77 @@ impl DownloadManager {
 		let mut attempt = 0u32;
 		loop {
 			if self.cancel.lock().await.remove(&chapter_id) {
-				self.progress.lock().await.remove(&chapter_id);
-				self.cleanup_tmp(chapter_id).await;
+				self.cleanup_attempt(chapter_id, None).await;
 				return;
 			}
+			let attempt_id = match sqlx::query_scalar::<_, i64>(
+				"SELECT updated_at FROM download WHERE chapter_id = ? AND user_id = ? AND status = 'downloading'",
+			)
+			.bind(chapter_id)
+			.bind(user_id)
+			.fetch_optional(&self.pool)
+			.await
+			{
+				Ok(Some(id)) => id,
+				Ok(None) => {
+					self.cleanup_attempt(chapter_id, None).await;
+					return;
+				}
+				Err(e) => {
+					tracing::warn!(chapter_id, "download attempt read failed: {e}");
+					self.cleanup_attempt(chapter_id, None).await;
+					return;
+				}
+			};
 			attempt += 1;
 			match self.try_chapter(chapter_id, user_id, source_id, attempt == 1).await {
 				Ok((total, path)) => {
 					if self.cancel.lock().await.remove(&chapter_id) {
-						self.progress.lock().await.remove(&chapter_id);
-						self.cleanup_tmp(chapter_id).await;
+						self.cleanup_attempt(chapter_id, Some(&path)).await;
 						return;
 					}
-					let finished =
-						persist_finished(&self.pool, chapter_id, user_id, &path, &self.format, FinishMode::Update).await;
-					self.progress.lock().await.remove(&chapter_id);
-					if let Err(e) = finished {
-						tracing::warn!(chapter_id, "download finish update failed: {e}");
-					} else {
-						self.emit("finished", chapter_id, total, total, user_id);
+					let format = sqlx::query_scalar::<_, String>(
+						"SELECT format FROM download WHERE chapter_id = ? AND user_id = ?",
+					)
+					.bind(chapter_id)
+					.bind(user_id)
+					.fetch_one(&self.pool)
+					.await
+					.unwrap_or_else(|_| "cbz".into());
+					let finished = persist_finished(
+						&self.pool,
+						chapter_id,
+						user_id,
+						&path,
+						&format,
+						FinishMode::Update(attempt_id),
+					)
+					.await;
+					match finished {
+						Ok(true) => {
+							self.progress.lock().await.remove(&chapter_id);
+							self.emit("finished", chapter_id, total, total, user_id);
+							self.cleanup_tmp(chapter_id).await;
+						}
+						Ok(false) => self.cleanup_attempt(chapter_id, Some(&path)).await,
+						Err(e) => {
+							tracing::warn!(chapter_id, "download finish update failed: {e}");
+							self.progress.lock().await.remove(&chapter_id);
+							self.cleanup_tmp(chapter_id).await;
+						}
 					}
-					self.cleanup_tmp(chapter_id).await;
 					return;
 				}
 				Err(message) => {
 					if self.cancel.lock().await.remove(&chapter_id) {
-						self.progress.lock().await.remove(&chapter_id);
-						self.cleanup_tmp(chapter_id).await;
+						self.cleanup_attempt(chapter_id, None).await;
 						return;
 					}
-					let row: Option<(i64,)> = sqlx::query_as(
-						"SELECT retries FROM download WHERE chapter_id = ? AND user_id = ?",
-					)
-					.bind(chapter_id)
-					.bind(user_id)
-					.fetch_optional(&self.pool)
-					.await
-					.unwrap_or(None);
-					// A missing row means the download was deleted; exit silently
-					let Some((retries,)) = row else {
-						self.progress.lock().await.remove(&chapter_id);
+					let Some(delay) = self.handle_chapter_error(chapter_id, user_id, attempt_id, &message).await
+					else {
 						return;
 					};
-					if retries >= MAX_CHAPTER_RETRIES as i64 {
-						let (downloaded, total) =
-							self.progress.lock().await.remove(&chapter_id).unwrap_or((0, 0));
-						let result = sqlx::query(
-							"UPDATE download SET status = 'error', error = ?, updated_at = ?
-							 WHERE chapter_id = ? AND user_id = ?",
-						)
-						.bind(&message)
-						.bind(unix_now())
-						.bind(chapter_id)
-						.bind(user_id)
-						.execute(&self.pool)
-						.await;
-						if let Err(e) = result {
-							tracing::warn!(chapter_id, "download error update failed: {e}");
-						}
-						self.emit("error", chapter_id, downloaded, total, user_id);
-						return;
-					}
-					let result = sqlx::query(
-						"UPDATE download SET retries = retries + 1, error = ?, updated_at = ?
-						 WHERE chapter_id = ? AND user_id = ?",
-					)
-					.bind(&message)
-					.bind(unix_now())
-					.bind(chapter_id)
-					.bind(user_id)
-					.execute(&self.pool)
-					.await;
-					if let Err(e) = result {
-						tracing::warn!(chapter_id, "download retry update failed: {e}");
-					}
-					tokio::time::sleep(std::time::Duration::from_secs(1 << (retries + 1))).await;
+					tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
 				}
 			}
 		}
@@ -1382,7 +1737,7 @@ mod tests {
 		insert_downloading(&pool, chapter_id).await;
 		reject_finish_flag(&pool).await;
 
-		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update)
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update(0))
 			.await
 			.expect_err("flag write must fail");
 		assert_eq!(finish_state(&pool, chapter_id).await, (Some("downloading".into()), None));
@@ -1404,10 +1759,27 @@ mod tests {
 		let (pool, chapter_id, _tmp) = finish_db().await;
 		insert_downloading(&pool, chapter_id).await;
 
-		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update)
+		persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update(0))
 			.await
 			.expect("finish update");
 		assert_eq!(finish_state(&pool, chapter_id).await, (Some("finished".into()), Some(1)));
+	}
+
+	#[tokio::test]
+	async fn persist_finished_update_ignores_a_stale_attempt() {
+		let (pool, chapter_id, _tmp) = finish_db().await;
+		insert_downloading(&pool, chapter_id).await;
+		sqlx::query("UPDATE download SET updated_at = 7 WHERE chapter_id = ? AND user_id = 1")
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.expect("move attempt");
+
+		let applied = persist_finished(&pool, chapter_id, 1, "chapter.cbz", "cbz", FinishMode::Update(0))
+			.await
+			.expect("stale finish");
+		assert!(!applied);
+		assert_eq!(finish_state(&pool, chapter_id).await, (Some("downloading".into()), None));
 	}
 
 	#[tokio::test]
@@ -1464,5 +1836,363 @@ mod tests {
 		let result = move_product(&src, &blocker.join("a.cbz")).await;
 		assert!(result.is_err());
 		assert!(src.exists(), "source product must stay in place");
+	}
+
+	async fn manager_db(config: crate::config::Config) -> (Arc<AppState>, i64, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let mut config = config;
+		config.config_dir = tmp.path().to_path_buf();
+		config.database_url = format!("sqlite://{}/test.db?mode=rwc", tmp.path().display());
+		config.covers_dir = tmp.path().join("covers");
+		config.downloads_dir = tmp.path().join("downloads");
+		let pool = crate::db::create_pool(&config.database_url).await.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('manager-source', 'Source', '') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'manga') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("manga row");
+		let chapter_id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key) VALUES (?, 'chapter') RETURNING id")
+			.bind(manga_id)
+			.fetch_one(&pool)
+			.await
+			.expect("chapter row");
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
+		assert!(state.downloads.set(DownloadManager::new(&state)).is_ok());
+		(state, manga_id, chapter_id, tmp)
+	}
+
+	async fn set_setting(state: &AppState, key: &str, value: serde_json::Value) {
+		sqlx::query(
+			"INSERT INTO setting (key, value) VALUES (?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+		)
+		.bind(key)
+		.bind(serde_json::to_string(&value).expect("encode setting"))
+		.execute(&state.pool)
+		.await
+		.expect("set setting");
+	}
+
+	async fn add_ordered_chapter(state: &AppState, manga_id: i64, key: &str, source_order: i64) -> i64 {
+		sqlx::query_scalar("INSERT INTO chapter (manga_id, key, source_order) VALUES (?, ?, ?) RETURNING id")
+			.bind(manga_id)
+			.bind(key)
+			.bind(source_order)
+			.fetch_one(&state.pool)
+			.await
+			.expect("chapter row")
+	}
+
+	#[tokio::test]
+	async fn settings_reload_and_enqueue_uses_current_format() {
+		let config = crate::config::Config {
+			auto_download_new_chapters: true,
+			auto_download_limit: 7,
+			download_format: "folder".into(),
+			download_concurrency: 4,
+			..crate::config::Config::default()
+		};
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(config).await;
+		let loaded = DownloadSettings::load(&state.pool, 1, &state.config).await.expect("defaults");
+		assert!(loaded.auto_download_new_chapters);
+		assert_eq!(loaded.auto_download_limit, 7);
+		assert_eq!(loaded.download_format, "folder");
+		assert_eq!(loaded.download_concurrency, 4);
+		assert!(loaded.auto_skip_manga_with_unread);
+		assert_eq!(loaded.download_ahead_count, 2);
+
+		set_setting(&state, AUTO_DOWNLOAD_NEW_CHAPTERS, serde_json::json!(false)).await;
+		set_setting(&state, AUTO_DOWNLOAD_LIMIT, serde_json::json!(0)).await;
+		set_setting(&state, DOWNLOAD_FORMAT, serde_json::json!("cbz")).await;
+		set_setting(&state, DOWNLOAD_CONCURRENCY, serde_json::json!(1)).await;
+		set_setting(&state, DELETE_AFTER_MANUAL_READ, serde_json::json!(true)).await;
+		set_setting(&state, DELETE_AFTER_READ, serde_json::json!(true)).await;
+		set_setting(&state, ALLOW_DELETE_BOOKMARKED, serde_json::json!(true)).await;
+		set_setting(&state, AUTO_SKIP_MANGA_WITH_UNREAD, serde_json::json!(false)).await;
+		set_setting(&state, AUTO_IGNORE_REUPLOADS, serde_json::json!(true)).await;
+		set_setting(&state, DOWNLOAD_AHEAD, serde_json::json!(true)).await;
+		set_setting(&state, DOWNLOAD_AHEAD_COUNT, serde_json::json!(5)).await;
+		set_setting(&state, "user.1.library.excluded_download_categories", serde_json::json!([3, 4])).await;
+		let loaded = DownloadSettings::load(&state.pool, 1, &state.config).await.expect("runtime values");
+		assert!(!loaded.auto_download_new_chapters);
+		assert_eq!(loaded.auto_download_limit, 0);
+		assert_eq!(loaded.download_format, "cbz");
+		assert_eq!(loaded.download_concurrency, 1);
+		assert!(loaded.delete_after_manual_read && loaded.delete_after_read && loaded.allow_delete_bookmarked);
+		assert!(!loaded.auto_skip_manga_with_unread && loaded.auto_ignore_reuploads);
+		assert!(loaded.download_ahead);
+		assert_eq!(loaded.download_ahead_count, 5);
+		assert_eq!(loaded.excluded_download_categories, vec![3, 4]);
+
+		set_setting(&state, DOWNLOAD_FORMAT, serde_json::json!("folder")).await;
+		let manager = state.downloads();
+		assert_eq!(manager.enqueue(&[chapter_id], 1).await, vec![chapter_id]);
+		let format: String = sqlx::query_scalar("SELECT format FROM download WHERE chapter_id = ? AND user_id = 1")
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("format");
+		assert_eq!(format, "folder");
+		manager.delete(chapter_id, 1).await.expect("delete");
+		set_setting(&state, DOWNLOAD_FORMAT, serde_json::json!("cbz")).await;
+		assert_eq!(manager.enqueue(&[chapter_id], 1).await, vec![chapter_id]);
+		let format: String = sqlx::query_scalar("SELECT format FROM download WHERE chapter_id = ? AND user_id = 1")
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("format");
+		assert_eq!(format, "cbz");
+	}
+
+	#[tokio::test]
+	async fn delete_keeps_shared_artifact_until_last_reference() {
+		let (state, manga_id, first, _tmp) = manager_db(crate::config::Config::default()).await;
+		let second = add_ordered_chapter(&state, manga_id, "second", 1).await;
+		std::fs::create_dir_all(&state.config.downloads_dir).expect("downloads dir");
+		let artifact = state.config.downloads_dir.join("shared.cbz");
+		std::fs::write(&artifact, b"shared").expect("artifact");
+		for chapter_id in [first, second] {
+			sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'cbz', 'shared.cbz')")
+				.bind(chapter_id)
+				.execute(&state.pool)
+				.await
+				.expect("download row");
+			sqlx::query("INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, 1, 1)")
+				.bind(chapter_id)
+				.execute(&state.pool)
+				.await
+				.expect("download flag");
+		}
+		let manager = state.downloads();
+		assert!(manager.delete(first, 1).await.expect("first delete"));
+		assert!(artifact.exists());
+		assert_eq!(finish_state(&state.pool, first).await, (None, Some(0)));
+		assert!(manager.delete(second, 1).await.expect("second delete"));
+		assert!(!artifact.exists());
+		assert!(!manager.delete(second, 1).await.expect("missing delete"));
+	}
+
+	#[tokio::test]
+	async fn stale_attempt_cleanup_keeps_referenced_artifact() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		std::fs::create_dir_all(&state.config.downloads_dir).expect("downloads dir");
+		let artifact = state.config.downloads_dir.join("shared.cbz");
+		std::fs::write(&artifact, b"shared").expect("artifact");
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'cbz', 'shared.cbz')")
+			.bind(chapter_id)
+			.execute(&state.pool)
+			.await
+			.expect("download row");
+
+		let manager = state.downloads();
+		manager.cleanup_attempt(chapter_id, Some("shared.cbz")).await;
+		assert!(artifact.exists());
+	}
+
+	#[tokio::test]
+	async fn error_handling_retries_and_finishes_current_attempt() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		sqlx::query(
+			"INSERT INTO download (chapter_id, user_id, status, retries, updated_at)
+			 VALUES (?, 1, 'downloading', 0, 7)",
+		)
+		.bind(chapter_id)
+		.execute(&state.pool)
+		.await
+		.expect("downloading row");
+		let manager = state.downloads();
+		let mut events = manager.subscribe();
+
+		let delay = manager.handle_chapter_error(chapter_id, 1, 7, "boom").await;
+		assert_eq!(delay, Some(2));
+		let row: (String, i64, Option<String>) =
+			sqlx::query_as("SELECT status, retries, error FROM download WHERE chapter_id = ? AND user_id = 1")
+				.bind(chapter_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("retry row");
+		assert_eq!(row, ("downloading".into(), 1, Some("boom".into())));
+		assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+
+		sqlx::query("UPDATE download SET retries = ?, updated_at = 8 WHERE chapter_id = ? AND user_id = 1")
+			.bind(MAX_CHAPTER_RETRIES as i64)
+			.bind(chapter_id)
+			.execute(&state.pool)
+			.await
+			.expect("last retry");
+		manager.progress.lock().await.insert(chapter_id, (1, 2));
+		let delay = manager.handle_chapter_error(chapter_id, 1, 8, "final boom").await;
+		assert_eq!(delay, None);
+		let row: (String, i64, Option<String>) =
+			sqlx::query_as("SELECT status, retries, error FROM download WHERE chapter_id = ? AND user_id = 1")
+				.bind(chapter_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("error row");
+		assert_eq!(row, ("error".into(), MAX_CHAPTER_RETRIES as i64, Some("final boom".into())));
+		let event = events.recv().await.expect("error event");
+		assert_eq!(event.kind, "error");
+		assert_eq!((event.chapter_id, event.downloaded, event.total), (chapter_id, 1, 2));
+	}
+
+	#[tokio::test]
+	async fn stale_error_attempt_preserves_requeued_row_and_emits_nothing() {
+		for old_retries in [0, MAX_CHAPTER_RETRIES as i64] {
+			let (state, manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+			let source_id: i64 = sqlx::query_scalar("SELECT source_id FROM manga WHERE id = ?")
+				.bind(manga_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("source id");
+			sqlx::query(
+				"INSERT INTO download (chapter_id, user_id, status, retries, updated_at)
+				 VALUES (?, 1, 'downloading', ?, 41)",
+			)
+			.bind(chapter_id)
+			.bind(old_retries)
+			.execute(&state.pool)
+			.await
+			.expect("downloading row");
+			let manager = state.downloads();
+			let mut events = manager.subscribe();
+			let message = manager
+				.try_chapter(chapter_id, 1, source_id, true)
+				.await
+				.expect_err("controlled source failure");
+			assert!(manager.delete(chapter_id, 1).await.expect("delete"));
+			assert_eq!(manager.enqueue(&[chapter_id], 1).await, vec![chapter_id]);
+			let before: (String, i64, Option<String>, i64) = sqlx::query_as(
+				"SELECT status, retries, error, updated_at FROM download WHERE chapter_id = ? AND user_id = 1",
+			)
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("requeued row");
+			assert_eq!((&before.0, before.1, before.2.as_deref()), (&"queued".into(), 0, None));
+			while events.try_recv().is_ok() {}
+
+			assert_eq!(manager.handle_chapter_error(chapter_id, 1, 41, &message).await, None);
+			// The write phase models the row changing after a successful retries read.
+			assert_eq!(manager.apply_chapter_error(chapter_id, 1, 41, old_retries, &message).await, None);
+			assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+			let after: (String, i64, Option<String>, i64) = sqlx::query_as(
+				"SELECT status, retries, error, updated_at FROM download WHERE chapter_id = ? AND user_id = 1",
+			)
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("preserved row");
+			assert_eq!(after, before);
+		}
+	}
+
+	#[tokio::test]
+	async fn reader_ahead_orders_dedupes_and_does_not_recurse() {
+		let (state, manga_id, current, _tmp) = manager_db(crate::config::Config::default()).await;
+		sqlx::query("UPDATE chapter SET source_order = 10 WHERE id = ?")
+			.bind(current)
+			.execute(&state.pool)
+			.await
+			.expect("current order");
+		let next = add_ordered_chapter(&state, manga_id, "next", 9).await;
+		let retry = add_ordered_chapter(&state, manga_id, "retry", 8).await;
+		let later = add_ordered_chapter(&state, manga_id, "later", 7).await;
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format) VALUES (?, 1, 'error', 'cbz')")
+			.bind(retry)
+			.execute(&state.pool)
+			.await
+			.expect("error row");
+		set_setting(&state, DOWNLOAD_AHEAD, serde_json::json!(true)).await;
+		set_setting(&state, DOWNLOAD_AHEAD_COUNT, serde_json::json!(2)).await;
+		let manager = state.downloads();
+		let queued = manager.enqueue_reader_ahead(current, 1).await.expect("ahead");
+		assert_eq!(queued, vec![next, retry]);
+		let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE status = 'queued'")
+			.fetch_one(&state.pool)
+			.await
+			.expect("queue count");
+		assert_eq!(count, 2);
+		assert!(manager.enqueue_reader_ahead(current, 1).await.expect("deduped").is_empty());
+		let later_status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id = ?")
+			.bind(later)
+			.fetch_optional(&state.pool)
+			.await
+			.expect("later status");
+		assert_eq!(later_status, None);
+	}
+
+	#[tokio::test]
+	async fn reader_ahead_excludes_states_after_selecting_unread_window() {
+		let (state, manga_id, current, _tmp) = manager_db(crate::config::Config::default()).await;
+		sqlx::query("UPDATE chapter SET source_order = 10 WHERE id = ?")
+			.bind(current)
+			.execute(&state.pool)
+			.await
+			.expect("current order");
+		let queued = add_ordered_chapter(&state, manga_id, "queued", 9).await;
+		let error = add_ordered_chapter(&state, manga_id, "error", 8).await;
+		let outside = add_ordered_chapter(&state, manga_id, "outside", 7).await;
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format) VALUES (?, 1, 'queued', 'cbz')")
+			.bind(queued)
+			.execute(&state.pool)
+			.await
+			.expect("queued row");
+		set_setting(&state, DOWNLOAD_AHEAD, serde_json::json!(true)).await;
+		set_setting(&state, DOWNLOAD_AHEAD_COUNT, serde_json::json!(2)).await;
+		let manager = state.downloads();
+		assert_eq!(manager.enqueue_reader_ahead(current, 1).await.expect("ahead"), vec![error]);
+		let outside_status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id = ?")
+			.bind(outside)
+			.fetch_optional(&state.pool)
+			.await
+			.expect("outside status");
+		assert_eq!(outside_status, None);
+	}
+
+	#[tokio::test]
+	async fn reader_ahead_skips_local_source() {
+		let (state, manga_id, current, _tmp) = manager_db(crate::config::Config::default()).await;
+		sqlx::query("UPDATE source SET kind = 'local' WHERE id = (SELECT source_id FROM manga WHERE id = ?)")
+			.bind(manga_id)
+			.execute(&state.pool)
+			.await
+			.expect("local source");
+		sqlx::query("UPDATE chapter SET source_order = 10 WHERE id = ?")
+			.bind(current)
+			.execute(&state.pool)
+			.await
+			.expect("current order");
+		add_ordered_chapter(&state, manga_id, "next", 9).await;
+		add_ordered_chapter(&state, manga_id, "later", 8).await;
+		set_setting(&state, DOWNLOAD_AHEAD, serde_json::json!(true)).await;
+		set_setting(&state, DOWNLOAD_AHEAD_COUNT, serde_json::json!(2)).await;
+
+		let manager = state.downloads();
+		assert!(manager.enqueue_reader_ahead(current, 1).await.expect("ahead").is_empty());
+		let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM download")
+			.fetch_one(&state.pool)
+			.await
+			.expect("download count");
+		assert_eq!(count, 0);
+	}
+
+	#[tokio::test]
+	async fn dispatch_reloads_concurrency_without_cancelling_active_sources() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let manager = state.downloads();
+		manager.active_sources.lock().await.extend([91, 92]);
+		manager.enqueue(&[chapter_id], 1).await;
+		set_setting(&state, DOWNLOAD_CONCURRENCY, serde_json::json!(1)).await;
+		manager.dispatch().await;
+		assert_eq!(manager.active_sources.lock().await.len(), 2);
+		assert_eq!(manager.queue.lock().await.len(), 1);
 	}
 }

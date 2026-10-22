@@ -212,7 +212,9 @@ fn validate_category_snapshot(snapshot: &Value) -> ApiResult<()> {
 	string(snapshot, "name")?;
 	integer(snapshot, "sortOrder")?;
 	flag(snapshot, "isDefault")?;
-	integer(snapshot, "includeInDownload")?;
+	if snapshot.get("includeInDownload").is_some() {
+		integer(snapshot, "includeInDownload")?;
+	}
 	Ok(())
 }
 
@@ -1446,6 +1448,11 @@ async fn merge_category_stub(
 	.bind(format!("{stub_id}:%"))
 	.execute(&mut **tx)
 	.await?;
+	let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM category WHERE id = ?")
+		.bind(stub_id)
+		.fetch_one(&mut **tx)
+		.await?;
+	crate::db::remove_category_exclusions(tx, user_id, stub_id).await?;
 	sqlx::query("DELETE FROM category WHERE id = ?")
 		.bind(stub_id)
 		.execute(&mut **tx)
@@ -1459,6 +1466,10 @@ async fn apply_category(
 	user_id: i64,
 	change: &WireChange,
 ) -> ApiResult<Disposition> {
+	let mut snapshot = change.snapshot.clone();
+	if let Some(object) = snapshot.as_object_mut() {
+		object.insert("includeInDownload".into(), Value::from(0));
+	}
 	let mapped = mapped_key(tx, change, user_id, "category", &change.entity_key, false).await?;
 	let mapped_id = mapped
 		.as_deref()
@@ -1468,7 +1479,7 @@ async fn apply_category(
 	let child_mapped = category_from_membership(tx, change, user_id).await?;
 	let natural_id = sqlx::query_scalar("SELECT id FROM category WHERE user_id = ? AND name = ?")
 		.bind(user_id)
-		.bind(string(&change.snapshot, "name")?)
+		.bind(string(&snapshot, "name")?)
 		.fetch_optional(&mut **tx)
 		.await?;
 	let mut id = mapped_id.or(child_mapped).or(natural_id);
@@ -1498,6 +1509,7 @@ async fn apply_category(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
+		crate::db::remove_category_exclusions(tx, user_id, id).await?;
 		sqlx::query("DELETE FROM category WHERE id = ?")
 			.bind(id)
 			.execute(&mut **tx)
@@ -1512,7 +1524,7 @@ async fn apply_category(
 			Finish {
 				modified_at: change.modified_at,
 				identity: change.identity.clone(),
-				snapshot: change.snapshot.clone(),
+				snapshot,
 				preserve_origin: true,
 			},
 		)
@@ -1521,16 +1533,13 @@ async fn apply_category(
 	}
 	let mut stubs = HashSet::new();
 	let id = ensure_category(tx, change, user_id, id, &mut stubs).await?;
-	sqlx::query(
-		"UPDATE category SET name = ?, sort_order = ?, is_default = ?, include_in_download = ? WHERE id = ?",
-	)
-	.bind(string(&change.snapshot, "name")?)
-	.bind(integer(&change.snapshot, "sortOrder")?)
-	.bind(flag(&change.snapshot, "isDefault")?)
-	.bind(integer(&change.snapshot, "includeInDownload")?)
-	.bind(id)
-	.execute(&mut **tx)
-	.await?;
+	sqlx::query("UPDATE category SET name = ?, sort_order = ?, is_default = ? WHERE id = ?")
+		.bind(string(&snapshot, "name")?)
+		.bind(integer(&snapshot, "sortOrder")?)
+		.bind(flag(&snapshot, "isDefault")?)
+		.bind(id)
+		.execute(&mut **tx)
+		.await?;
 	finish(
 		tx,
 		start_sequence,
@@ -1541,7 +1550,7 @@ async fn apply_category(
 		Finish {
 			modified_at: change.modified_at,
 			identity: change.identity.clone(),
-			snapshot: change.snapshot.clone(),
+			snapshot,
 			preserve_origin: true,
 		},
 	)

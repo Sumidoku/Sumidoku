@@ -574,7 +574,13 @@ async fn update_auto_download_enqueues_new_chapters() {
 		.rows_affected();
 	assert_eq!(deleted, 1);
 
-	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	let (status, _) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.skip_titles": [], "downloads.auto_skip_manga_with_unread": false})),
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -707,4 +713,137 @@ async fn download_cancel_in_flight_removes_the_row() {
 	assert!(body.as_array().expect("downloads").is_empty());
 	let (_, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(body[0]["isDownloaded"], false);
+}
+
+#[tokio::test]
+async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeue() {
+	let t = downloads_app(|_| {}).await;
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let port = listener.local_addr().expect("local addr").port();
+	let base = format!("http://127.0.0.1:{port}");
+	let feed_url = format!("{base}/feed");
+	let feed = format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Race</title><id>race</id>
+  <entry><title>First</title><id>first</id><updated>2024-03-01T00:00:00Z</updated>
+    <link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/empty.cbz"/>
+  </entry>
+  <entry><title>Probe</title><id>probe</id><updated>2024-03-01T00:00:00Z</updated>
+    <link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/empty.cbz"/>
+  </entry>
+</feed>"#
+	);
+	let release = std::sync::Arc::new(tokio::sync::Notify::new());
+	let first_request = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+	let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+	let feed_release = release.clone();
+	let feed_handler = move || {
+		let release = feed_release.clone();
+		let first_request = first_request.clone();
+		let started_tx = started_tx.clone();
+		let feed = feed.clone();
+		async move {
+			if first_request.swap(false, std::sync::atomic::Ordering::SeqCst) {
+				let _ = started_tx.send(());
+				release.notified().await;
+			}
+			(
+				[(axum::http::header::CONTENT_TYPE, "application/atom+xml;profile=opds-catalog".to_string())],
+				feed,
+			)
+		}
+	};
+	let mut empty = std::io::Cursor::new(Vec::new());
+	zip::ZipWriter::new(&mut empty).finish().expect("empty cbz");
+	let empty = empty.into_inner();
+	let empty_handler = move || {
+		let empty = empty.clone();
+		async move { ([(axum::http::header::CONTENT_TYPE, "application/zip".to_string())], empty) }
+	};
+	let router = Router::new()
+		.route("/feed", axum::routing::get(feed_handler))
+		.route("/empty.cbz", axum::routing::get(empty_handler));
+	let _upstream = tokio::spawn(async move {
+		axum::serve(listener, router).await.expect("serve");
+	});
+
+	let pool = connect_db(&t.db_path).await;
+	let source_id: i64 = sqlx::query_scalar(
+		"INSERT INTO source (key, name, kind, base_url, wasm_path)
+		 VALUES ('opds.race', 'Race OPDS', 'opds', ?, '') RETURNING id",
+	)
+	.bind(&feed_url)
+	.fetch_one(&pool)
+	.await
+	.expect("opds source");
+	let manga_id: i64 = sqlx::query_scalar(
+		"INSERT INTO manga (source_id, key, title, url) VALUES (?, 'race', 'Race Manga', ?) RETURNING id",
+	)
+	.bind(source_id)
+	.bind(&feed_url)
+	.fetch_one(&pool)
+	.await
+	.expect("opds manga");
+	let chapter_id: i64 = sqlx::query_scalar(
+		"INSERT INTO chapter (manga_id, key, title, number, source_order)
+		 VALUES (?, 'first', 'First', 1, 0) RETURNING id",
+	)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("first chapter");
+	let probe_id: i64 = sqlx::query_scalar(
+		"INSERT INTO chapter (manga_id, key, title, number, source_order)
+		 VALUES (?, 'probe', 'Probe', 2, 1) RETURNING id",
+	)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("probe chapter");
+	let meta = chapter_meta(&pool, chapter_id).await;
+	let artifact = t.tmp.path().join("downloads").join(default_rel_path(&meta));
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/downloads/ws", None).await;
+	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut stream, &mut rest).await).expect("snapshot");
+	assert_eq!(snapshot["type"], "snapshot");
+
+	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([chapter_id]));
+	tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
+		.await
+		.expect("feed started")
+		.expect("feed start signal");
+	wait_download_status(&t.app, chapter_id, "downloading").await;
+	let (status, _) = request(&t.app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	release.notify_one();
+
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [probe_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let finished = read_ws_kind(&mut stream, &mut rest, "finished").await;
+	assert_eq!(finished["chapterId"], probe_id, "deleted attempt must not emit finished");
+	let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id = ? AND user_id = 1")
+		.bind(chapter_id)
+		.fetch_optional(&pool)
+		.await
+		.expect("deleted row");
+	assert_eq!(status, None);
+	let downloaded: Option<i64> = sqlx::query_scalar(
+		"SELECT is_downloaded FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
+	)
+	.bind(chapter_id)
+	.fetch_optional(&pool)
+	.await
+	.expect("download flag");
+	assert_eq!(downloaded, Some(0));
+	assert!(!artifact.exists(), "stale worker recreated {}", artifact.display());
+	assert!(!t.tmp.path().join("downloads/.tmp").join(chapter_id.to_string()).exists());
+
+	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([chapter_id]));
+	wait_download_status(&t.app, chapter_id, "finished").await;
+	assert!(artifact.is_file());
 }
