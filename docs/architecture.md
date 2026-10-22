@@ -438,12 +438,17 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   built-in row is forced back to the admin role, while admin data and sessions
   remain. Legacy `user_id` columns and `user.1.*` settings keys remain only as
   storage details; there are no additional accounts, roles or role-dependent
-  product branches. A one-time `sync.single_owner_rebaseline` marker then
-  compacts the current admin and shared rows into a fresh sync baseline, so
-  reader-originated latest events are not lost; the marker is removed only
-  after success and otherwise retried on the next boot. Incoming sync changes
-  with any other `origin_user_id` are rejected so old peers cannot
-  reintroduce reader data.
+  product branches. Before those deletions, the migration rehomes each latest
+  admin-owned tombstone that has a non-admin origin and rewrites its identity
+  to the admin. A one-time `sync.single_owner_rebaseline` marker then appends
+  current admin rows and latest tombstones as local events, preserving the
+  existing sequence history. Every appended version is strictly newer than
+  that entity's prior events, so preserved state also wins equal-time conflicts
+  on existing peers. Live row versions and snapshot timestamps move together;
+  the marker is cleared in the same transaction and otherwise retried on the
+  next boot. Ordinary compaction is unchanged. Incoming sync changes with any
+  other `origin_user_id` are rejected so old peers cannot reintroduce reader
+  data.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
@@ -814,9 +819,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   product at its default location without failing the download. Moved
   rows store the absolute target (a relative template target stays
   relative under `downloads_dir`), so the move target is a shared
-  content area: two users downloading the same chapter render the same
-  absolute file, the later one overwrites with identical content or
-  settles onto it without repacking, and deletion removes the file only
+  content area: downloading the same chapter again renders the same
+  absolute file, overwrites it with identical content or settles onto it
+  without repacking, and deletion removes the file only
   once no row references it (an already-missing file counts as
   deleted). Metadata edits only steer future downloads — earlier
   products stay where they were moved.
