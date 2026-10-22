@@ -132,6 +132,25 @@ async fn proxies_plain_get_without_feature() {
 }
 
 #[tokio::test]
+async fn proxies_svg_content_type() {
+	let t = dual_source_app().await;
+	let app = t.app.clone();
+	let source_id = source_id_by_key(&app, "en.mutation").await;
+	let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#.to_vec();
+	let (port, _upstream) = common::serve_bytes(vec![("/cover.svg", "image/svg+xml", svg.clone())]).await;
+	let (status, headers, bytes) = request_full(
+		&app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/image?url=http://127.0.0.1:{port}/cover.svg"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/svg+xml");
+	assert_eq!(bytes, svg);
+}
+
+#[tokio::test]
 async fn rejects_non_http_schemes() {
 	let t = dual_source_app().await;
 	let app = t.app.clone();

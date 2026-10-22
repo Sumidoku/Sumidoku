@@ -1137,7 +1137,8 @@
         "image/png": {"schema": {"type": "string", "format": "binary"}}, "image/jpeg": {"schema": {"type": "string", "format": "binary"}},
         "image/webp": {"schema": {"type": "string", "format": "binary"}}, "image/gif": {"schema": {"type": "string", "format": "binary"}},
         "image/bmp": {"schema": {"type": "string", "format": "binary"}}, "image/avif": {"schema": {"type": "string", "format": "binary"}},
-        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+        "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
+        "image/*": {"schema": {"type": "string", "format": "binary"}}
       }}
     },
     "schemas": {

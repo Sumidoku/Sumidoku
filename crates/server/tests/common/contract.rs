@@ -85,7 +85,7 @@ fn route_contract<'a>(
 		}
 		return Err(format!("no OpenAPI operation for {method} {actual_path}"));
 	};
-	if operation.get("x-websocket").is_some() {
+	if operation.get("x-websocket").is_some() && status == StatusCode::SWITCHING_PROTOCOLS {
 		return Ok(RouteContract::WebSocket);
 	}
 	let responses = operation["responses"].as_object().expect("responses object");
@@ -320,6 +320,10 @@ pub fn validate_response_with_document(
 			let mime = content_type(headers).ok_or_else(|| "missing response Content-Type".to_string())?;
 			let media = content
 				.get(&mime)
+				.or_else(|| {
+					let (kind, _) = mime.split_once('/')?;
+					content.get(&format!("{kind}/*"))
+				})
 				.ok_or_else(|| format!("undocumented response content type {mime}"))?;
 			if mime != "application/json" {
 				return Ok(());

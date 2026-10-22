@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import i18n from 'i18next';
 import formatZh from '../src/i18n/locales/zh-CN/format.json' with { type: 'json' };
-import { chapterLabel } from '../src/lib/format.ts';
+import { chapterLabel, formatRangeBound } from '../src/lib/format.ts';
 
 // The app registers every catalog through Vite's glob in src/i18n; under node the test
 // pins just the zh-CN format catalog chapterLabel renders through
@@ -55,4 +55,11 @@ test('仅标题 / 全空：与旧行为一致', () => {
 test('空白标题按无标题处理', () => {
 	assert.equal(chapterLabel({ ...base, volume_number: 3, title: '   ' }), '第 3 卷');
 	assert.equal(chapterLabel({ ...base, chapter_number: 5, title: '' }), '第 5 话');
+});
+
+test('range bounds handle undefined, null and zero without placeholder text', () => {
+	assert.equal(formatRangeBound(undefined), '');
+	assert.equal(formatRangeBound(null), '');
+	assert.equal(formatRangeBound(0), '0');
+	assert.equal(formatRangeBound(1.5), '1.5');
 });

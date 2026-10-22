@@ -307,11 +307,19 @@ fn response_fixture() -> Value {
 				"200": {"description": "NDJSON", "content": {"application/x-ndjson": {"schema": {"type": "string"}}}}
 			}}},
 			"/api/v1/binary": {"get": {"responses": {
-				"200": {"description": "Binary", "content": {"image/png": {"schema": {"type": "string", "format": "binary"}}}}
+				"200": {"description": "Binary", "content": {
+					"image/png": {"schema": {"type": "string", "format": "binary"}},
+					"image/*": {"schema": {"type": "string", "format": "binary"}}
+				}}
 			}}},
 			"/api/v1/ws": {"get": {
 				"x-websocket": {"messageFormat": "json-text"},
-				"responses": {"101": {"description": "Upgrade"}}
+				"responses": {
+					"101": {"description": "Upgrade"},
+					"401": {"description": "Unauthorized", "content": {"application/json": {"schema": {
+						"type": "object", "required": ["error"], "properties": {"error": {"type": "object"}}
+					}}}}
+				}
 			}}
 		}
 	})
@@ -342,7 +350,9 @@ fn response_validator_enforces_body_and_media_contract() {
 	check("GET", "/api/v1/stream", StatusCode::OK, Some("application/x-ndjson"), b"{}\n").expect("documented NDJSON");
 	reject(check("GET", "/api/v1/stream", StatusCode::OK, Some("application/json"), b"{}\n"), "content type application/json");
 	check("GET", "/api/v1/binary", StatusCode::OK, Some("image/png"), b"\x89PNG").expect("documented binary");
+	check("GET", "/api/v1/binary", StatusCode::OK, Some("image/svg+xml"), b"<svg/>").expect("documented image wildcard");
 	reject(check("GET", "/api/v1/binary", StatusCode::OK, Some("application/zip"), b"\x89PNG"), "content type application/zip");
+	reject(check("GET", "/api/v1/ws", StatusCode::UNAUTHORIZED, Some("application/json"), b""), "empty application/json");
 	check("GET", "/api/v1/ws", StatusCode::SWITCHING_PROTOCOLS, Some("text/plain"), b"frame").expect("WebSocket exemption");
 	let mut headers = axum::http::HeaderMap::new();
 	headers.insert(header::CONTENT_TYPE, "application/json".parse().expect("JSON header"));

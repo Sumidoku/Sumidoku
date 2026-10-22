@@ -13,6 +13,11 @@ export function toMillis(v: number | string | null | undefined): number | null {
 	return Number.isNaN(t) ? null : t;
 }
 
+export function formatRangeBound(value: number | null | undefined): string {
+	if (value === null || value === undefined) return '';
+	return String(value);
+}
+
 export function formatDate(v: number | string | null | undefined): string {
 	const ms = toMillis(v);
 	if (ms === null) return '';

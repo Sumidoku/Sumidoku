@@ -24,7 +24,7 @@ import {
 	useSourceSearch
 } from '../api/hooks';
 import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
-import { statusText } from '../lib/format';
+import { formatRangeBound, statusText } from '../lib/format';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
@@ -130,8 +130,8 @@ function applyFilterValues(s: FilterStates, values: FilterValue[]): FilterStates
 			next.multiVals[v.MultiSelect.id] = rec;
 		} else if ('Range' in v) {
 			next.rangeVals[v.Range.id] = {
-				from: v.Range.from === null ? '' : String(v.Range.from),
-				to: v.Range.to === null ? '' : String(v.Range.to)
+				from: formatRangeBound(v.Range.from),
+				to: formatRangeBound(v.Range.to)
 			};
 		}
 	}
