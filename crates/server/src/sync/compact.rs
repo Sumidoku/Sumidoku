@@ -75,10 +75,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 1, fans.user_id, 'manga', CAST(sm.manga_id AS TEXT),
-		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.origin_sequence ELSE 0 END, 0, sm.last_modified_at,
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, sm.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.identity ELSE sm.identity END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.snapshot ELSE sm.snapshot END
 		 FROM sync_manga_state sm
@@ -102,10 +102,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 2, mu.user_id, 'manga_user', mu.manga_id || ':' || mu.user_id,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.origin_sequence ELSE 0 END, 0, mu.last_modified_at,
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, mu.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.identity
 		   ELSE json_set(sm.identity, '$.userId', mu.user_id) END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = mu.last_modified_at THEN l.snapshot
@@ -129,10 +129,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 3, c.user_id, 'category', CAST(c.id AS TEXT),
-		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.origin_sequence ELSE 0 END, 0, c.last_modified_at,
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, c.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.identity
 		   ELSE json_object('categoryId', c.id, 'userId', c.user_id) END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.snapshot
@@ -155,10 +155,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 4, fans.user_id, 'chapter', CAST(scs.chapter_id AS TEXT),
-		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER) THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER) THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER) THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER) THEN l.origin_sequence ELSE 0 END, 0, CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER),
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER),
 		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER)
 		   THEN l.identity ELSE scs.identity END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = CAST(json_extract(scs.snapshot, '$.lastModifiedAt') AS INTEGER)
@@ -184,10 +184,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 5, cu.user_id, 'chapter_user', cu.chapter_id || ':' || cu.user_id,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.origin_sequence ELSE 0 END, 0, cu.last_modified_at,
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, cu.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.identity
 		   ELSE json_set(scs.identity, '$.userId', cu.user_id) END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = cu.last_modified_at THEN l.snapshot
@@ -211,10 +211,10 @@ async fn baseline_rows(
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
 		 SELECT 6, cm.user_id, 'category_manga', cm.category_id || ':' || cm.manga_id || ':' || cm.user_id,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.origin ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.origin_user_id ELSE 0 END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.origin_entity_key ELSE '' END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.origin_sequence ELSE 0 END, 0, cm.last_modified_at,
+		  CASE WHEN l.deleted = 0 THEN l.origin ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_user_id ELSE 0 END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_entity_key ELSE '' END,
+		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, cm.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.identity
 		   ELSE json_set(sm.identity, '$.categoryId', cm.category_id, '$.userId', cm.user_id) END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = cm.last_modified_at THEN l.snapshot
