@@ -472,6 +472,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `unreadCount` and the `sort=unread` ordering count with default-unread
   semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
   `filter=unread` keeps its own flagged-rows-only shape).
+  `sort=latestChapter` orders by each title's maximum chapter `fetched_at`
+  (the chapter's first-seen time), descending with `manga.id ASC` ties;
+  titles without chapters sort last.
 - Sync change foundation (`sync.rs`, migrations `0017_sync_change_tracking.sql`
   and `0018_sync_protocol.sql`): local `user_id` and accepted
   `origin_user_id` values are always 1; user references below are legacy

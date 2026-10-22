@@ -26,6 +26,7 @@ const SORT_OPTIONS: { value: LibrarySort; labelKey: string }[] = [
 	{ value: 'added', labelKey: 'library.sortAdded' },
 	{ value: 'title', labelKey: 'library.sortTitle' },
 	{ value: 'lastRead', labelKey: 'library.sortLastRead' },
+	{ value: 'latestChapter', labelKey: 'library.sortLatestChapter' },
 	{ value: 'unread', labelKey: 'library.sortUnread' }
 ];
 

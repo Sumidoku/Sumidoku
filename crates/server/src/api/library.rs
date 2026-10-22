@@ -60,6 +60,8 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	const LAST_READ: &str = " ORDER BY (SELECT MAX(cu.last_read_at) FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id) DESC, m.id ASC";
+	const LATEST_CHAPTER: &str = " ORDER BY (SELECT MAX(c.fetched_at) FROM chapter c
+		 WHERE c.manga_id = m.id) DESC, m.id ASC";
 	// Default-unread: a chapter with no chapter_user row counts as unread, same as the unreadCount badge
 	const UNREAD: &str = " ORDER BY (SELECT COUNT(*) FROM chapter c
 		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
@@ -69,6 +71,7 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 		Some("title") => Ok((" ORDER BY m.title COLLATE NOCASE ASC, m.id ASC", false)),
 		// In SQLite NULL sorts below any value, so DESC naturally sinks it to the end
 		Some("lastRead") => Ok((LAST_READ, true)),
+		Some("latestChapter") => Ok((LATEST_CHAPTER, false)),
 		Some("unread") => Ok((UNREAD, true)),
 		Some(other) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
 	}

@@ -172,6 +172,11 @@ test('limits reachability to ordinary JSON REST entry points', () => {
 	}
 });
 
+test('generated LibrarySort type includes latestChapter', () => {
+	const output = readFileSync(new URL('../src/api/types.ts', import.meta.url), 'utf8');
+	assert.match(output, /export type LibrarySort = [^\n]*"latestChapter"/);
+});
+
 test('generated Range type allows omitted nullable bounds', () => {
 	const output = readFileSync(new URL('../src/api/types.ts', import.meta.url), 'utf8');
 	assert.match(output, /Range: \{\n\t\tid: string;\n\t\tfrom\?: number \| null;\n\t\tto\?: number \| null;\n\t\};/);

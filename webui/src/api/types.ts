@@ -469,7 +469,7 @@ export type LibrarySettings = {
 	updateIntervalHours: number;
 };
 
-export type LibrarySort = "added" | "title" | "lastRead" | "unread";
+export type LibrarySort = "added" | "title" | "lastRead" | "latestChapter" | "unread";
 
 export type Link = {
 	title: string;
