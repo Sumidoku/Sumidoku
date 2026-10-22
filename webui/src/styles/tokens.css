@@ -1,4 +1,4 @@
-/* "Dark-night study" design tone: dark-first, low-saturation base + brand-red accent (from the logo #cf161b, brightened in dark mode to keep contrast); the covers are the only protagonists */
+/* "Dark-night study" design tone: dark-first, low-saturation base + brand-pink accent (from the logo #ff2f52, brightened in dark mode to keep contrast); the covers are the only protagonists */
 
 :root,
 [data-theme='dark'] {
@@ -9,11 +9,11 @@
 	--text: #e8eaf0;
 	--text-dim: #9aa1b2;
 	--text-faint: #6b7280;
-	--accent: #ed4248;
-	--accent-hover: #f25459;
-	--accent-soft: rgba(237, 66, 72, 0.1);
-	--accent-solid: #cf161b;
-	--accent-solid-hover: #b01216;
+	--accent: #ff4d6d;
+	--accent-hover: #ff6b85;
+	--accent-soft: rgba(255, 77, 109, 0.1);
+	--accent-solid: #ff2f52;
+	--accent-solid-hover: #d91a3e;
 	--danger: #f4673b;
 	--success: #3fb68b;
 	--warning: #d9a03f;
@@ -32,11 +32,11 @@
 	--text: #1a1d26;
 	--text-dim: #5b6172;
 	--text-faint: #9aa1b2;
-	--accent: #cf161b;
-	--accent-hover: #b01216;
-	--accent-soft: rgba(207, 22, 27, 0.1);
-	--accent-solid: #cf161b;
-	--accent-solid-hover: #b01216;
+	--accent: #ff2f52;
+	--accent-hover: #d91a3e;
+	--accent-soft: rgba(255, 47, 82, 0.1);
+	--accent-solid: #ff2f52;
+	--accent-solid-hover: #d91a3e;
 	--danger: #d9482e;
 	--success: #2f9e77;
 	--warning: #c08a2e;
