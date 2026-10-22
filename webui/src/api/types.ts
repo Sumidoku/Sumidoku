@@ -248,6 +248,8 @@ export type Download = {
 	mangaId: number;
 	mangaTitle: string;
 	chapterTitle: string | null;
+	chapterNumber: number | null;
+	volumeNumber: number | null;
 	status: DownloadStatus;
 	format: string;
 	path: string | null;

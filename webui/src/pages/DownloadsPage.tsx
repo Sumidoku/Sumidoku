@@ -11,6 +11,7 @@ import {
 } from '../api/hooks';
 import type { Download, DownloadStatus } from '../api/types';
 import type { DownloadWsFrame } from '../api/protocol';
+import { chapterLabel } from '../lib/format';
 import {
 	Button,
 	Chip,
@@ -206,7 +207,11 @@ export default function DownloadsPage() {
 				<div className="downloads-list">
 					{sorted.map((it) => {
 						const meta = STATUS_META[it.status];
-						const chapterName = it.chapterTitle?.trim() || t('downloads.unnamedChapter');
+						const chapterName = chapterLabel({
+							volume_number: it.volumeNumber,
+							chapter_number: it.chapterNumber,
+							title: it.chapterTitle
+						});
 						const total = it.total ?? 0;
 						const downloaded = it.downloaded ?? 0;
 						return (

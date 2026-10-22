@@ -39,12 +39,15 @@ struct DownloadRow {
 	manga_id: i64,
 	manga_title: String,
 	chapter_title: Option<String>,
+	chapter_number: Option<f64>,
+	volume_number: Option<f64>,
 }
 
 async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: i64) -> ApiResult<Vec<Value>> {
 	let rows: Vec<DownloadRow> = sqlx::query_as(
 		"SELECT d.chapter_id, d.status, d.format, d.path, d.error, d.retries,
-		 d.created_at, d.updated_at, m.id AS manga_id, m.title AS manga_title, c.title AS chapter_title
+		 d.created_at, d.updated_at, m.id AS manga_id, m.title AS manga_title, c.title AS chapter_title,
+		 c.number AS chapter_number, c.volume AS volume_number
 		 FROM download d
 		 JOIN chapter c ON c.id = d.chapter_id
 		 JOIN manga m ON m.id = c.manga_id
@@ -72,6 +75,8 @@ async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: 
 			"mangaId": row.manga_id,
 			"mangaTitle": row.manga_title,
 			"chapterTitle": row.chapter_title,
+			"chapterNumber": row.chapter_number,
+			"volumeNumber": row.volume_number,
 			"status": row.status,
 			"format": row.format,
 			"path": row.path,
