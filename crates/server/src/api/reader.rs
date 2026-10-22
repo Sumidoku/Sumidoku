@@ -136,21 +136,60 @@ fn progress_json(chapter_id: i64, progress: &ChapterProgress) -> Value {
 	})
 }
 
+#[derive(Clone, Copy)]
+enum ReadDeletion {
+	Manual,
+	Finished,
+}
+
+fn read_deletion(patch: &ProgressPatch, page_count: i64) -> Option<ReadDeletion> {
+	if patch.is_read == Some(true) && patch.last_page_read.is_none() {
+		Some(ReadDeletion::Manual)
+	} else if page_count > 0 && patch.last_page_read == Some(page_count - 1) {
+		Some(ReadDeletion::Finished)
+	} else {
+		None
+	}
+}
+
+async fn delete_after_progress(
+	state: &Arc<AppState>,
+	user_id: i64,
+	chapter_id: i64,
+	deletion: ReadDeletion,
+	progress: &ChapterProgress,
+	settings: &crate::download::DownloadSettings,
+) -> ApiResult<()> {
+	let enabled = match deletion {
+		ReadDeletion::Manual => settings.delete_after_manual_read,
+		ReadDeletion::Finished => settings.delete_after_read,
+	};
+	if !enabled || (progress.is_bookmarked && !settings.allow_delete_bookmarked) {
+		return Ok(());
+	}
+	state.downloads().delete(chapter_id, user_id).await?;
+	Ok(())
+}
+
 pub async fn update_chapter(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(patch): Json<ProgressPatch>,
 ) -> ApiResult<Json<Value>> {
-	chapter_row(&state.pool, id).await?;
-	let progress = if patch.is_empty() {
-		read_progress(&state.pool, user.id, id).await?
-	} else {
-		let mut tx = crate::db::begin_write(&state.pool).await?;
-		let merged = patch.apply(&mut tx, user.id, id).await?;
-		tx.commit().await?;
-		merged
-	};
+	let chapter = chapter_row(&state.pool, id).await?;
+	if patch.is_empty() {
+		let progress = read_progress(&state.pool, user.id, id).await?;
+		return Ok(Json(progress_json(id, &progress)));
+	}
+	let deletion = read_deletion(&patch, chapter.page_count);
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	let progress = patch.apply(&mut tx, user.id, id).await?;
+	tx.commit().await?;
+	if let Some(deletion) = deletion {
+		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+		delete_after_progress(&state, user.id, id, deletion, &progress, &settings).await?;
+	}
 	Ok(Json(progress_json(id, &progress)))
 }
 
@@ -172,18 +211,28 @@ pub async fn batch_update_chapters(
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let mut updated = 0;
+	let mut deletions = Vec::new();
 	for chapter_id in &body.chapter_ids {
-		let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM chapter WHERE id = ?")
+		let page_count: Option<(i64,)> = sqlx::query_as("SELECT page_count FROM chapter WHERE id = ?")
 			.bind(chapter_id)
 			.fetch_optional(&mut *tx)
 			.await?;
-		if exists.is_none() {
+		let Some((page_count,)) = page_count else {
 			continue;
+		};
+		let progress = body.patch.apply(&mut tx, user.id, *chapter_id).await?;
+		if let Some(deletion) = read_deletion(&body.patch, page_count) {
+			deletions.push((*chapter_id, progress, deletion));
 		}
-		body.patch.apply(&mut tx, user.id, *chapter_id).await?;
 		updated += 1;
 	}
 	tx.commit().await?;
+	if !deletions.is_empty() {
+		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+		for (chapter_id, progress, deletion) in deletions {
+			delete_after_progress(&state, user.id, chapter_id, deletion, &progress, &settings).await?;
+		}
+	}
 	Ok(Json(json!({ "updated": updated })))
 }
 
@@ -227,4 +276,242 @@ pub async fn get_history(
 		"entries": entries,
 		"hasNextPage": has_next_page,
 	})))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	async fn reader_db() -> (Arc<AppState>, i64, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let config = crate::config::Config {
+			config_dir: tmp.path().to_path_buf(),
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			covers_dir: tmp.path().join("covers"),
+			downloads_dir: tmp.path().join("downloads"),
+			..crate::config::Config::default()
+		};
+		let pool = crate::db::create_pool(&config.database_url).await.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('reader-source', 'Source', '') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'manga') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("manga row");
+		let chapter_id: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter (manga_id, key, page_count) VALUES (?, 'chapter', 3) RETURNING id",
+		)
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("chapter row");
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
+		assert!(state.downloads.set(crate::download::DownloadManager::new(&state)).is_ok());
+		(state, manga_id, chapter_id, tmp)
+	}
+
+	async fn set_setting(state: &AppState, key: &str, value: bool) {
+		sqlx::query(
+			"INSERT INTO setting (key, value) VALUES (?, ?)
+			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+		)
+		.bind(key)
+		.bind(if value { "true" } else { "false" })
+		.execute(&state.pool)
+		.await
+		.expect("set setting");
+	}
+
+	async fn add_chapter(state: &AppState, manga_id: i64, key: &str) -> i64 {
+		sqlx::query_scalar("INSERT INTO chapter (manga_id, key, page_count) VALUES (?, ?, 3) RETURNING id")
+			.bind(manga_id)
+			.bind(key)
+			.fetch_one(&state.pool)
+			.await
+			.expect("chapter row")
+	}
+
+	async fn insert_download(state: &AppState, chapter_id: i64, path: &str) {
+		std::fs::create_dir_all(&state.config.downloads_dir).expect("downloads dir");
+		std::fs::write(crate::download::product_path(&state.config.downloads_dir, path), b"download").expect("artifact");
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'cbz', ?)")
+			.bind(chapter_id)
+			.bind(path)
+			.execute(&state.pool)
+			.await
+			.expect("download row");
+		sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, 1, 1)
+			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
+		)
+		.bind(chapter_id)
+		.execute(&state.pool)
+		.await
+		.expect("download flag");
+	}
+
+	async fn set_bookmarked(state: &AppState, chapter_id: i64, bookmarked: bool) {
+		sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, is_bookmarked) VALUES (?, 1, ?)
+			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_bookmarked = excluded.is_bookmarked",
+		)
+		.bind(chapter_id)
+		.bind(bookmarked)
+		.execute(&state.pool)
+		.await
+		.expect("bookmark");
+	}
+
+	async fn apply_patch(state: &Arc<AppState>, chapter_id: i64, patch: ProgressPatch) {
+		let _ = update_chapter(
+			State(state.clone()),
+			Extension(crate::auth::AuthUser::admin()),
+			Path(chapter_id),
+			Json(patch),
+		)
+		.await
+		.expect("progress patch");
+	}
+
+	async fn download_count(state: &AppState, chapter_id: i64) -> i64 {
+		sqlx::query_scalar("SELECT COUNT(*) FROM download WHERE chapter_id = ? AND user_id = 1")
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("download count")
+	}
+
+	#[tokio::test]
+	async fn manual_and_reader_finished_deletion_have_independent_switches() {
+		let (state, _manga_id, chapter_id, _tmp) = reader_db().await;
+		set_setting(&state, crate::download::DELETE_AFTER_MANUAL_READ, true).await;
+		set_setting(&state, crate::download::DELETE_AFTER_READ, false).await;
+		insert_download(&state, chapter_id, "chapter.cbz").await;
+		apply_patch(
+			&state,
+			chapter_id,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, chapter_id).await, 0);
+		assert!(!state.config.downloads_dir.join("chapter.cbz").exists());
+		apply_patch(
+			&state,
+			chapter_id,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+
+		insert_download(&state, chapter_id, "chapter.cbz").await;
+		set_setting(&state, crate::download::DELETE_AFTER_MANUAL_READ, false).await;
+		set_setting(&state, crate::download::DELETE_AFTER_READ, true).await;
+		apply_patch(
+			&state,
+			chapter_id,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, chapter_id).await, 1);
+		apply_patch(
+			&state,
+			chapter_id,
+			ProgressPatch {
+				last_page_read: Some(2),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, chapter_id).await, 0);
+
+		insert_download(&state, chapter_id, "chapter.cbz").await;
+		set_setting(&state, crate::download::DELETE_AFTER_READ, false).await;
+		apply_patch(
+			&state,
+			chapter_id,
+			ProgressPatch {
+				last_page_read: Some(2),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, chapter_id).await, 1);
+	}
+
+	#[tokio::test]
+	async fn read_deletion_uses_merged_bookmark_and_shared_artifact_rules() {
+		let (state, manga_id, first, _tmp) = reader_db().await;
+		let second = add_chapter(&state, manga_id, "second").await;
+		set_bookmarked(&state, first, true).await;
+		insert_download(&state, first, "shared.cbz").await;
+		insert_download(&state, second, "shared.cbz").await;
+		set_setting(&state, crate::download::DELETE_AFTER_MANUAL_READ, true).await;
+		set_setting(&state, crate::download::ALLOW_DELETE_BOOKMARKED, false).await;
+		apply_patch(
+			&state,
+			first,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, first).await, 1);
+
+		apply_patch(
+			&state,
+			first,
+			ProgressPatch {
+				is_read: Some(true),
+				is_bookmarked: Some(false),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, first).await, 0);
+		assert!(state.config.downloads_dir.join("shared.cbz").exists());
+
+		set_bookmarked(&state, second, true).await;
+		apply_patch(
+			&state,
+			second,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, second).await, 1);
+		assert!(state.downloads().delete(second, 1).await.expect("explicit delete"));
+		assert!(!state.config.downloads_dir.join("shared.cbz").exists());
+
+		insert_download(&state, second, "shared.cbz").await;
+		set_setting(&state, crate::download::ALLOW_DELETE_BOOKMARKED, true).await;
+		apply_patch(
+			&state,
+			second,
+			ProgressPatch {
+				is_read: Some(true),
+				..ProgressPatch::default()
+			},
+		)
+		.await;
+		assert_eq!(download_count(&state, second).await, 0);
+		assert!(!state.config.downloads_dir.join("shared.cbz").exists());
+	}
 }

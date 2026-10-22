@@ -135,10 +135,10 @@ async fn baseline_rows(
 		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, c.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.identity
 		   ELSE json_object('categoryId', c.id, 'userId', c.user_id) END,
-		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN l.snapshot
+		  CASE WHEN l.deleted = 0 AND l.modified_at = c.last_modified_at THEN json_set(l.snapshot, '$.includeInDownload', 0)
 		   ELSE json_object(
 		    'id', c.id, 'userId', c.user_id, 'name', c.name, 'sortOrder', c.sort_order,
-		    'isDefault', c.is_default, 'includeInDownload', c.include_in_download,
+		    'isDefault', c.is_default, 'includeInDownload', 0,
 		    'lastModifiedAt', c.last_modified_at
 		   ) END
 		 FROM category c
@@ -241,12 +241,17 @@ async fn baseline_rows(
 		(5, "chapter_user", "NOT EXISTS (SELECT 1 FROM chapter_user t WHERE t.chapter_id || ':' || t.user_id = l.entity_key AND t.user_id = l.user_id)"),
 		(6, "category_manga", "NOT EXISTS (SELECT 1 FROM category_manga t WHERE t.category_id || ':' || t.manga_id || ':' || t.user_id = l.entity_key AND t.user_id = l.user_id)"),
 	] {
+		let snapshot = if kind == "category" {
+			"json_set(l.snapshot, '$.includeInDownload', 0)"
+		} else {
+			"l.snapshot"
+		};
 		let sql = format!(
 			"INSERT INTO sync_compaction_baseline
 			 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 			  origin_sequence, deleted, modified_at, identity, snapshot)
 			 SELECT {sort_order}, l.user_id, l.entity_kind, l.entity_key, l.origin, l.origin_user_id,
-			  l.origin_entity_key, l.origin_sequence, l.deleted, l.modified_at, l.identity, l.snapshot
+			  l.origin_entity_key, l.origin_sequence, l.deleted, l.modified_at, l.identity, {snapshot}
 			 FROM sync_compaction_latest l
 			 WHERE l.rn = 1 AND l.entity_kind = '{kind}' AND l.deleted = 1 AND {existence}"
 		);

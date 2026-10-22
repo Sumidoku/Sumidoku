@@ -27,7 +27,6 @@ import {
 	useFilterGroups,
 	useImportAidoku,
 	useImportSuwayomi,
-	usePatchCategory,
 	useRenameCategory,
 	useReorderCategories,
 	useReorderFilterGroups,
@@ -75,6 +74,7 @@ import {
 	TriStateDropdown,
 	pushToast
 } from '../components';
+import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
 import { SkippedItems } from './settings/SkippedItems';
 import './settings.css';
 
@@ -293,15 +293,9 @@ function SecuritySection() {
 	);
 }
 
-const TRI_STATE = [	{ value: 0, labelKey: 'settings.triDefault' },
-	{ value: 1, labelKey: 'settings.triOnly' },
-	{ value: 2, labelKey: 'settings.triExclude' }
-];
-
 function CategoriesSection() {
 	const { t } = useTranslation();
 	const categories = useCategories();
-	const patch = usePatchCategory();
 	const create = useCreateCategory();
 	const rename = useRenameCategory();
 	const del = useDeleteCategory();
@@ -408,24 +402,6 @@ function CategoriesSection() {
 										</IconButton>
 									)}
 								</span>
-							</div>
-							<div className="settings-cat__fields">
-								<div className="settings-cat__field">
-									<span className="settings-cat__label">{t('settings.download')}</span>
-									<Select
-										value={String(c.includeInDownload)}
-										onChange={(e) =>
-											patch.mutate({ id: c.id, includeInDownload: Number(e.currentTarget.value) })
-										}
-									>
-										{TRI_STATE.map((o) => (
-											<option key={o.value} value={o.value}>
-												{t(o.labelKey)}
-											</option>
-										))}
-									</Select>
-									<span className="settings-cat__hint">{t('settings.downloadHint')}</span>
-								</div>
 							</div>
 						</div>
 					))}
@@ -579,28 +555,156 @@ const LIBRARY_SKIP_RULES = [
 	{ key: 'notStarted', labelKey: 'settings.librarySkipNotStarted' }
 ];
 
+function DownloadNumberInput({
+	value,
+	min,
+	disabled,
+	onCommit
+}: {
+	value: number;
+	min: number;
+	disabled: boolean;
+	onCommit: (value: number) => void;
+}) {
+	const { t } = useTranslation();
+	const [text, setText] = useState(String(value));
+	useEffect(() => setText(String(value)), [value]);
+
+	function commit() {
+		const parsed = Number(text);
+		if (text.trim() === '' || !Number.isInteger(parsed) || parsed < min) {
+			pushToast(t('settings.minInteger', { min }));
+			setText(String(value));
+			return;
+		}
+		setText(String(parsed));
+		if (parsed !== value) onCommit(parsed);
+	}
+
+	return (
+		<Input
+			className="settings-backup__num"
+			type="number"
+			min={min}
+			value={text}
+			disabled={disabled}
+			onChange={(e) => setText(e.currentTarget.value)}
+			onBlur={commit}
+			onKeyDown={(e) => {
+				if (e.key === 'Enter') e.currentTarget.blur();
+			}}
+		/>
+	);
+}
+
+const DOWNLOAD_SWITCHES = [
+	{ key: 'autoDownloadNewChapters', labelKey: 'settings.autoDownloadNewChapters', fallback: false },
+	{ key: 'autoSkipMangaWithUnread', labelKey: 'settings.downloadSkipUnread', fallback: true },
+	{ key: 'autoIgnoreReuploads', labelKey: 'settings.downloadIgnoreReuploads', fallback: false },
+	{ key: 'deleteAfterManualRead', labelKey: 'settings.deleteAfterManualRead', fallback: false },
+	{ key: 'deleteAfterRead', labelKey: 'settings.deleteAfterRead', fallback: false },
+	{ key: 'allowDeleteBookmarked', labelKey: 'settings.allowDeleteBookmarked', fallback: false },
+	{ key: 'downloadAhead', labelKey: 'settings.downloadAhead', fallback: false }
+] as const;
+
+function DownloadSection() {
+	const { t } = useTranslation();
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const data = settings.data?.download;
+
+	return (
+		<Section title={t('settings.download')} desc={t('settings.downloadDesc')}>
+			{settings.isPending ? (
+				<Skeleton height={320} />
+			) : (
+				<>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.downloadFormat')}</span>
+						<Select
+							value={data?.downloadFormat ?? 'cbz'}
+							disabled={save.isPending}
+							onChange={(e) =>
+								save.mutate(
+									mergeServerSettings(settings.data, {
+										download: { downloadFormat: e.currentTarget.value as 'cbz' | 'folder' }
+									})
+								)
+							}
+						>
+							<option value="cbz">{t('settings.downloadFormatCbz')}</option>
+							<option value="folder">{t('settings.downloadFormatFolder')}</option>
+						</Select>
+					</div>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.downloadConcurrency')}</span>
+						<DownloadNumberInput
+							value={data?.downloadConcurrency ?? 3}
+							min={1}
+							disabled={save.isPending}
+							onCommit={(value) =>
+								save.mutate(mergeServerSettings(settings.data, { download: { downloadConcurrency: value } }))
+							}
+						/>
+					</div>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.autoDownloadLimit')}</span>
+						<DownloadNumberInput
+							value={data?.autoDownloadLimit ?? 5}
+							min={0}
+							disabled={save.isPending}
+							onCommit={(value) =>
+								save.mutate(mergeServerSettings(settings.data, { download: { autoDownloadLimit: value } }))
+							}
+						/>
+					</div>
+					<div className="settings-row">
+						<span className="settings-row__label">{t('settings.downloadAheadCount')}</span>
+						<DownloadNumberInput
+							value={data?.downloadAheadCount ?? 2}
+							min={0}
+							disabled={save.isPending}
+							onCommit={(value) =>
+								save.mutate(mergeServerSettings(settings.data, { download: { downloadAheadCount: value } }))
+							}
+						/>
+					</div>
+					{DOWNLOAD_SWITCHES.map(({ key, labelKey, fallback }) => (
+						<label key={key} className="settings-backup__section">
+							<Switch
+								checked={(data?.[key] ?? fallback) === true}
+								disabled={save.isPending}
+								onChange={(on) =>
+									save.mutate(mergeServerSettings(settings.data, { download: { [key]: on } }))
+								}
+								label={t(labelKey)}
+							/>
+							{t(labelKey)}
+						</label>
+					))}
+					<ExcludedCategoriesSetting
+						kind="download"
+						title={t('settings.excludedDownloadCategories')}
+						description={t('settings.excludedDownloadCategoriesDesc')}
+					/>
+				</>
+			)}
+		</Section>
+	);
+}
+
 function LibraryUpdateSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
 	const save = useSaveServerSettings();
-	const categories = useCategories();
-	const [choosingExcluded, setChoosingExcluded] = useState(false);
 	const intervalHours = Number(settings.data?.library.updateIntervalHours ?? 0);
 	const skipTitles = settings.data?.library.skipTitles ?? [];
-	const excludedCategories = settings.data?.library.excludedUpdateCategories ?? [];
 	const refreshMetadata = settings.data?.library.refreshMetadata === true;
 
 	function saveSkip(rule: string, on: boolean) {
 		const changed = on ? [...skipTitles, rule] : skipTitles.filter((value) => value !== rule);
 		const ordered = LIBRARY_SKIP_RULES.map(({ key }) => key).filter((key) => changed.includes(key));
 		save.mutate(mergeServerSettings(settings.data, { library: { skipTitles: ordered } }));
-	}
-
-	function toggleExcludedCategory(id: number, on: boolean) {
-		const changed = on
-			? [...excludedCategories, id]
-			: excludedCategories.filter((value) => value !== id);
-		save.mutate(mergeServerSettings(settings.data, { library: { excludedUpdateCategories: changed } }));
 	}
 
 	return (
@@ -655,65 +759,13 @@ function LibraryUpdateSection() {
 						/>
 						{t('settings.libraryRefreshMetadata')}
 					</label>
-					<div className="settings-row settings-row--top">
-						<div className="settings-row__stack">
-							<span className="settings-row__label">{t('settings.libraryExcludedUpdateCategories')}</span>
-							<p className="settings-cat__hint">{t('settings.libraryExcludedUpdateCategoriesDesc')}</p>
-						</div>
-						<div className="settings-excluded-cats">
-							{categories.isPending ? (
-								<Skeleton height={40} width={120} />
-							) : (categories.data ?? []).length === 0 ? (
-								<p className="faint">{t('settings.noCategories')}</p>
-							) : (
-								<>
-									<span className="settings-excluded-cats__summary">
-										{excludedCategories.length === 0
-											? t('settings.noExcludedCategories')
-											: t('settings.excludedCategoriesCount', { count: excludedCategories.length })}
-									</span>
-									<Button
-										size="sm"
-										disabled={save.isPending}
-										onClick={() => setChoosingExcluded(true)}
-									>
-										{t('settings.chooseExcludedCategories')}
-									</Button>
-								</>
-							)}
-						</div>
-					</div>
+					<ExcludedCategoriesSetting
+						kind="update"
+						title={t('settings.libraryExcludedUpdateCategories')}
+						description={t('settings.libraryExcludedUpdateCategoriesDesc')}
+					/>
 				</>
 			)}
-
-			<Modal
-				open={choosingExcluded}
-				title={t('settings.libraryExcludedUpdateCategories')}
-				onClose={() => setChoosingExcluded(false)}
-				footer={
-					<Button onClick={() => setChoosingExcluded(false)}>
-						{t('modal.close')}
-					</Button>
-				}
-			>
-				<div className="settings-excluded-cats__modal">
-					{(categories.data ?? []).length === 0 ? (
-						<p className="faint">{t('settings.noCategories')}</p>
-					) : (
-						(categories.data ?? []).map((c) => (
-							<label key={c.id} className="settings-cat-check">
-								<Switch
-									checked={excludedCategories.includes(c.id)}
-									disabled={save.isPending}
-									onChange={(on) => toggleExcludedCategory(c.id, on)}
-									label={c.name}
-								/>
-								<span className="settings-cat-check__name">{c.name}</span>
-							</label>
-						))
-					)}
-				</div>
-			</Modal>
 		</Section>
 	);
 }
@@ -1984,6 +2036,7 @@ export default function SettingsPage() {
 			<FilterGroupsSection />
 			<LibraryDisplaySection />
 			<LibraryUpdateSection />
+			<DownloadSection />
 			<LocalSourceSection />
 			<BackupSection />
 			<DownloadMoveSection />

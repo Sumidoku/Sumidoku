@@ -16,11 +16,18 @@ Import
 upserts by natural key (source key + manga key, chapter key, category
 name) inside a single transaction, so a failed or invalid backup leaves
 the database untouched; entries whose source is not installed are skipped
-and reported in the response `warnings`. Category update exclusions use the
-backup-only `includeInUpdate` field (`2` for excluded categories, `0` for all
-others). The raw `library.excluded_update_categories` setting is omitted from
-exports and ignored on import; category restoration maps names to target-local
-category ids before writing that setting. The settings page of the web UI has
+and reported in the response `warnings`. Category update and automatic-download
+exclusions use the backup-only `includeInUpdate` and `includeInDownload` fields
+(`2` for excluded categories, `0` for all others). Legacy `includeInDownload: 1`
+marks include-only categories, which an exclusion list cannot represent. A
+category restore containing any such entry forces `auto_download_new_chapters`
+to `false`, even when the target or backup enables it; review and reconfigure
+category exclusions and automatic downloads before re-enabling them. The raw
+`library.excluded_update_categories` and `library.excluded_download_categories`
+settings are omitted from exports and ignored on import; category restoration
+maps names to target-local category ids and merges those ids into the existing
+exclusion settings without writing the retired category columns. The settings
+page of the web UI has
 download and restore buttons. The file contains source settings, which may
 include site passwords — store it accordingly.
 

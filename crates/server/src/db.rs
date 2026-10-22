@@ -43,6 +43,33 @@ pub async fn begin_write(
 	pool.begin_with("BEGIN IMMEDIATE").await
 }
 
+pub async fn remove_category_exclusions(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	user_id: i64,
+	category_id: i64,
+) -> Result<(), sqlx::Error> {
+	let update_key = format!("user.{user_id}.library.excluded_update_categories");
+	let download_key = format!("user.{user_id}.library.excluded_download_categories");
+	sqlx::query(
+		"UPDATE setting
+		 SET value = (
+		  SELECT json_group_array(item.value) FROM json_each(setting.value) AS item
+		  WHERE item.value <> ?
+		 )
+		 WHERE key IN (?, ?)
+		  AND EXISTS (
+		   SELECT 1 FROM json_each(setting.value) AS item WHERE item.value = ?
+		  )",
+	)
+	.bind(category_id)
+	.bind(update_key)
+	.bind(download_key)
+	.bind(category_id)
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	/// Applied migrations are immutable: at startup sqlx compares the checksum embedded by
@@ -72,6 +99,7 @@ mod tests {
 			(17, "25C04C3F4F4643EDAF682FAB6AFB7FCB13D9642E6B75FFF00F8230A7F2D71DD0C5D65CFFBD3E2B4914ADB6766E1B97F7"),
 			(18, "A00A6D869B8A591DCF5BDFC20B7909C8F892305FA8967C462954974A132C2D69E1D355E8B61ED670CEEF4E0F40701AEC"),
 			(19, "E7FBBD708D51ABE490FC7258E694CE7F479548E5ED0E9544563CF7A990F1F7C8F30B4C28A565AD66F58F607AD88CE8B5"),
+			(20, "D07AFDEDADF92B2245A9C534B3A1F850C33C19BF5402EE4488559DCF6A671C4476501D3645EF3B7C6586714D5631E278"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -152,6 +180,150 @@ mod tests {
 			.excluded_update_categories;
 		assert_eq!(bob, vec![bob_existing]);
 		pool.close().await;
+	}
+
+	#[tokio::test]
+	async fn migration_20_converts_admin_exclusions_and_preserves_existing_setting() {
+		use sqlx::migrate::Migrate;
+		use std::str::FromStr;
+
+		for preserve_existing in [false, true] {
+			let tmp = tempfile::tempdir().expect("tempdir");
+			let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+			let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+				.expect("database url")
+				.create_if_missing(true)
+				.foreign_keys(true);
+			let pool = sqlx::sqlite::SqlitePoolOptions::new()
+				.max_connections(1)
+				.connect_with(options)
+				.await
+				.expect("connect pre-migration database");
+			let migrator = sqlx::migrate!("./migrations");
+			let mut conn = pool.acquire().await.expect("migration connection");
+			conn.ensure_migrations_table().await.expect("migration table");
+			for migration in migrator.iter().filter(|migration| migration.version < 20) {
+				conn.apply(migration).await.expect("apply pre-0020 migration");
+			}
+			drop(conn);
+
+			let first: i64 = sqlx::query_scalar(
+				"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'first', 2) RETURNING id",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("insert first legacy category");
+			let second: i64 = sqlx::query_scalar(
+				"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'second', 2) RETURNING id",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("insert second legacy category");
+			let included: i64 = sqlx::query_scalar(
+				"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'included', 1) RETURNING id",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("insert include-only category");
+			let preserved: i64 = sqlx::query_scalar(
+				"INSERT INTO category (user_id, name) VALUES (1, 'preserved') RETURNING id",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("insert preserved category");
+			sqlx::query("INSERT INTO user (id, username, password_hash, role) VALUES (2, 'bob', '', 'reader')")
+				.execute(&pool)
+				.await
+				.expect("insert non-admin user");
+			sqlx::query("INSERT INTO category (user_id, name, include_in_download) VALUES (2, 'bob', 2)")
+				.execute(&pool)
+				.await
+				.expect("insert non-admin legacy category");
+			if preserve_existing {
+				sqlx::query("INSERT INTO setting (key, value) VALUES ('user.1.library.excluded_download_categories', ?)")
+					.bind(format!("[{preserved}]"))
+					.execute(&pool)
+					.await
+					.expect("seed existing download exclusions");
+			}
+			sqlx::query("INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'true')")
+				.execute(&pool)
+				.await
+				.expect("seed enabled auto download");
+			let mut conn = pool.acquire().await.expect("migration connection");
+			conn.apply(migrator.iter().find(|migration| migration.version == 20).expect("migration 20"))
+				.await
+				.expect("apply 0020 migration");
+			drop(conn);
+
+			let auto_download: String = sqlx::query_scalar(
+				"SELECT value FROM setting WHERE key = 'auto_download_new_chapters'",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("migrated auto download setting");
+			assert!(!serde_json::from_str::<bool>(&auto_download).expect("auto download flag"));
+			let raw: String = sqlx::query_scalar(
+				"SELECT value FROM setting WHERE key = 'user.1.library.excluded_download_categories'",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("migrated admin exclusions");
+			let mut ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+			ids.sort_unstable();
+			let mut expected = if preserve_existing { vec![preserved] } else { vec![first, second] };
+			expected.sort_unstable();
+			assert_eq!(ids, expected, "preserve_existing={preserve_existing}");
+			let non_admin: Option<String> = sqlx::query_scalar(
+				"SELECT value FROM setting WHERE key = 'user.2.library.excluded_download_categories'",
+			)
+			.fetch_optional(&pool)
+			.await
+			.expect("non-admin exclusion setting");
+			assert!(non_admin.is_none());
+			let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+				.bind(first)
+				.fetch_one(&pool)
+				.await
+				.expect("legacy column remains");
+			assert_eq!(legacy, 2);
+			let included_flag: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+				.bind(included)
+				.fetch_one(&pool)
+				.await
+				.expect("include-only column remains");
+			assert_eq!(included_flag, 1);
+
+			let post: i64 = sqlx::query_scalar(
+				"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'post', 2) RETURNING id",
+			)
+			.fetch_one(&pool)
+			.await
+			.expect("insert post-migration category");
+			sqlx::query("UPDATE category SET name = 'renamed' WHERE id = ?")
+				.bind(post)
+				.execute(&pool)
+				.await
+				.expect("update post-migration category");
+			sqlx::query("DELETE FROM category WHERE id = ?")
+				.bind(post)
+				.execute(&pool)
+				.await
+				.expect("delete post-migration category");
+			let snapshots: Vec<String> = sqlx::query_scalar(
+				"SELECT snapshot FROM sync_change WHERE entity_kind = 'category' AND entity_key = ? ORDER BY sequence",
+			)
+			.bind(post.to_string())
+			.fetch_all(&pool)
+			.await
+			.expect("post-migration category events");
+			assert_eq!(snapshots.len(), 3);
+			for raw in snapshots {
+				let snapshot: serde_json::Value = serde_json::from_str(&raw).expect("category snapshot");
+				assert_eq!(snapshot["includeInDownload"], 0, "{snapshot}");
+			}
+			pool.close().await;
+		}
 	}
 
 	#[tokio::test]

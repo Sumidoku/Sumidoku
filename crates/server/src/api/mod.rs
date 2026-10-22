@@ -1455,11 +1455,15 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64) -> ApiResu
 
 async fn get_pages(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
 	chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, wants_refresh(&query)).await?;
+	if let Err(e) = state.downloads().enqueue_reader_ahead(id, user.id).await {
+		tracing::warn!(chapter_id = id, "reader-ahead enqueue failed: {}", e.message());
+	}
 	let mut out = Vec::with_capacity(pages.len());
 	for page in pages {
 		let mut value = serde_json::from_str::<Value>(&page.content)?;
@@ -1483,6 +1487,7 @@ pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
 	"library.default_category",
 	"library.show_uncategorized",
 	"library.excluded_update_categories",
+	"library.excluded_download_categories",
 ];
 
 pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
@@ -1536,6 +1541,22 @@ async fn get_settings(
 		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
 		json!(library.excluded_update_categories),
 	);
+	let download = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+	map.insert(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS.into(), json!(download.auto_download_new_chapters));
+	map.insert(crate::download::AUTO_DOWNLOAD_LIMIT.into(), json!(download.auto_download_limit));
+	map.insert(crate::download::DOWNLOAD_FORMAT.into(), json!(download.download_format));
+	map.insert(crate::download::DOWNLOAD_CONCURRENCY.into(), json!(download.download_concurrency));
+	map.insert(crate::download::DELETE_AFTER_MANUAL_READ.into(), json!(download.delete_after_manual_read));
+	map.insert(crate::download::DELETE_AFTER_READ.into(), json!(download.delete_after_read));
+	map.insert(crate::download::ALLOW_DELETE_BOOKMARKED.into(), json!(download.allow_delete_bookmarked));
+	map.insert(crate::download::AUTO_SKIP_MANGA_WITH_UNREAD.into(), json!(download.auto_skip_manga_with_unread));
+	map.insert(crate::download::AUTO_IGNORE_REUPLOADS.into(), json!(download.auto_ignore_reuploads));
+	map.insert(crate::download::DOWNLOAD_AHEAD.into(), json!(download.download_ahead));
+	map.insert(crate::download::DOWNLOAD_AHEAD_COUNT.into(), json!(download.download_ahead_count));
+	map.insert(
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES.into(),
+		json!(download.excluded_download_categories),
+	);
 	server_settings::ServerSettings::from_flat(&map).map(Json)
 }
 
@@ -1556,6 +1577,9 @@ pub(crate) async fn apply_settings(
 			continue;
 		}
 		if let Some(result) = crate::update::validate_library_setting(key, value) {
+			result?;
+		}
+		if let Some(result) = crate::download::validate_download_setting(key, value) {
 			result?;
 		}
 		// Read-only and instance-owned keys must not be overwritten through the public settings surface.

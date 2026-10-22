@@ -7050,7 +7050,6 @@
           "name",
           "sortOrder",
           "isDefault",
-          "includeInDownload",
           "mangaCount"
         ],
         "properties": {
@@ -7067,12 +7066,6 @@
           },
           "isDefault": {
             "type": "boolean"
-          },
-          "includeInDownload": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0,
-            "maximum": 2
           },
           "mangaCount": {
             "type": "integer",
@@ -7098,15 +7091,9 @@
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "includeInDownload": {
-            "type": "integer",
-            "format": "int64",
-            "minimum": 0,
-            "maximum": 2
           }
         },
-        "description": "includeInUpdate is rejected; update exclusions are stored in library.excluded_update_categories."
+        "description": "includeInUpdate and includeInDownload are rejected; exclusions are stored in library.excluded_update_categories and library.excluded_download_categories."
       },
       "ReorderRequest": {
         "type": "object",
@@ -7779,6 +7766,13 @@
               "format": "int64"
             }
           },
+          "library.excluded_download_categories": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
           "library.skip_titles": {
             "type": "array",
             "items": {
@@ -7796,6 +7790,49 @@
           "library.update_interval_hours": {
             "type": "integer",
             "format": "int64"
+          },
+          "auto_download_new_chapters": {
+            "type": "boolean"
+          },
+          "auto_download_limit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "download_format": {
+            "type": "string",
+            "enum": [
+              "cbz",
+              "folder"
+            ]
+          },
+          "download_concurrency": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "delete_after_manual_read": {
+            "type": "boolean"
+          },
+          "delete_after_read": {
+            "type": "boolean"
+          },
+          "allow_delete_bookmarked": {
+            "type": "boolean"
+          },
+          "downloads.auto_skip_manga_with_unread": {
+            "type": "boolean"
+          },
+          "downloads.auto_ignore_reuploads": {
+            "type": "boolean"
+          },
+          "downloads.download_ahead": {
+            "type": "boolean"
+          },
+          "downloads.download_ahead_count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           },
           "local.dirs": {
             "type": "array",
@@ -8176,7 +8213,8 @@
             "format": "int64",
             "minimum": 0,
             "maximum": 2,
-            "default": 0
+            "default": 0,
+            "description": "Portable backup-only field; 2 marks automatic-download exclusion."
           },
           "manga": {
             "type": "array",
@@ -8891,6 +8929,7 @@
           "defaultCategory",
           "showUncategorized",
           "excludedUpdateCategories",
+          "excludedDownloadCategories",
           "skipTitles",
           "refreshMetadata",
           "updateIntervalHours"
@@ -8903,6 +8942,13 @@
             "type": "boolean"
           },
           "excludedUpdateCategories": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "excludedDownloadCategories": {
             "type": "array",
             "items": {
               "type": "integer",
@@ -8946,9 +8992,63 @@
       "DownloadSettings": {
         "type": "object",
         "required": [
+          "autoDownloadNewChapters",
+          "autoDownloadLimit",
+          "downloadFormat",
+          "downloadConcurrency",
+          "deleteAfterManualRead",
+          "deleteAfterRead",
+          "allowDeleteBookmarked",
+          "autoSkipMangaWithUnread",
+          "autoIgnoreReuploads",
+          "downloadAhead",
+          "downloadAheadCount",
           "movePath"
         ],
         "properties": {
+          "autoDownloadNewChapters": {
+            "type": "boolean"
+          },
+          "autoDownloadLimit": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "downloadFormat": {
+            "type": "string",
+            "enum": [
+              "cbz",
+              "folder"
+            ]
+          },
+          "downloadConcurrency": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "deleteAfterManualRead": {
+            "type": "boolean"
+          },
+          "deleteAfterRead": {
+            "type": "boolean"
+          },
+          "allowDeleteBookmarked": {
+            "type": "boolean"
+          },
+          "autoSkipMangaWithUnread": {
+            "type": "boolean"
+          },
+          "autoIgnoreReuploads": {
+            "type": "boolean"
+          },
+          "downloadAhead": {
+            "type": "boolean"
+          },
+          "downloadAheadCount": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "movePath": {
             "type": "string",
             "nullable": true

@@ -141,6 +141,184 @@ async fn id_for_key(pool: &SqlitePool, table: &str, key: &str) -> i64 {
 }
 
 #[tokio::test]
+async fn category_snapshots_accept_and_sanitize_legacy_download_flag() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query(
+		"INSERT INTO category (id, user_id, name, sort_order, include_in_download, last_modified_at)
+		 VALUES (500, 1, 'Category remote', 2, 1, 1)",
+	)
+	.execute(&pool)
+	.await
+	.expect("seed target category");
+	pool.close().await;
+
+	let (_, initial) = pull(&a, &b, 0).await;
+	let category = event_of(&initial, "category");
+	assert_eq!(category["snapshot"]["includeInDownload"], 0);
+	let (status, applied) = push(&b, &a, json!([category.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+
+	let sequence = category["originSequence"].as_i64().expect("category sequence");
+	let mut legacy = category;
+	set_version(&mut legacy, sequence + 1, 1_000);
+	legacy["snapshot"]["includeInDownload"] = json!(2);
+	let (status, applied) = push(&b, &a, json!([legacy.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let pool = connect_db(&b.db_path).await;
+	let stored: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = 500")
+		.fetch_one(&pool)
+		.await
+		.expect("legacy column is not written");
+	assert_eq!(stored, 1);
+	pool.close().await;
+
+	legacy["deleted"] = json!(true);
+	legacy["originSequence"] = json!(sequence + 2);
+	legacy["modifiedAt"] = json!(1_001);
+	let (status, applied) = push(&b, &a, json!([legacy])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let pool = connect_db(&b.db_path).await;
+	let snapshots: Vec<String> = sqlx::query_scalar(
+		"SELECT snapshot FROM sync_change WHERE entity_kind = 'category' AND entity_key = '500' ORDER BY sequence",
+	)
+	.fetch_all(&pool)
+	.await
+	.expect("sanitized category events");
+	assert_eq!(snapshots.len(), 4);
+	for raw in snapshots {
+		let snapshot: Value = serde_json::from_str(&raw).expect("category snapshot");
+		assert_eq!(snapshot["includeInDownload"], 0, "{snapshot}");
+	}
+	let deleted: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM category WHERE id = 500")
+		.fetch_one(&pool)
+		.await
+		.expect("deleted category");
+	assert_eq!(deleted, 0);
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn sync_category_delete_clears_exclusions_before_id_reuse() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query(
+		"INSERT INTO category (id, user_id, name, sort_order, last_modified_at)
+		 VALUES (1, 1, 'Category remote', 2, 1)",
+	)
+	.execute(&pool)
+	.await
+	.expect("seed target category");
+	pool.close().await;
+
+	let (_, initial) = pull(&a, &b, 0).await;
+	let category = event_of(&initial, "category");
+	let (status, applied) = push(&b, &a, json!([category.clone()])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let pool = connect_db(&b.db_path).await;
+	let category_id: i64 = sqlx::query_scalar("SELECT id FROM category WHERE user_id = 1 AND name = 'Category remote'")
+		.fetch_one(&pool)
+		.await
+		.expect("mapped category");
+	assert_eq!(category_id, 1);
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		sqlx::query("INSERT INTO setting (key, value) VALUES (?, ?)")
+			.bind(key)
+			.bind(format!("[{category_id}, 999]"))
+			.execute(&pool)
+			.await
+			.expect("seed category exclusions");
+	}
+	pool.close().await;
+
+	let sequence = category["originSequence"].as_i64().expect("category sequence");
+	let mut tombstone = category;
+	tombstone["originSequence"] = json!(sequence + 1);
+	tombstone["modifiedAt"] = json!(1_000);
+	tombstone["deleted"] = json!(true);
+	let (status, applied) = push(&b, &a, json!([tombstone])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let (status, body) = request(&b.app, "POST", "/api/v1/categories", Some(json!({"name": "Replacement"}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["id"], category_id);
+
+	let pool = connect_db(&b.db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("category exclusions");
+		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+		assert_eq!(ids, vec![999], "{key}");
+	}
+}
+
+#[tokio::test]
+async fn compaction_removes_legacy_category_download_flags() {
+	let a = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query("INSERT INTO category (id, user_id, name, last_modified_at) VALUES (999, 1, 'Gone', 200)")
+		.execute(&pool)
+		.await
+		.expect("seed deleted category");
+	sqlx::query("DELETE FROM category WHERE id = 999")
+		.execute(&pool)
+		.await
+		.expect("create category tombstone");
+	sqlx::query(
+		"UPDATE sync_change SET snapshot = json_set(snapshot, '$.includeInDownload', 2)
+		 WHERE entity_kind = 'category'",
+	)
+	.execute(&pool)
+	.await
+	.expect("seed legacy category snapshots");
+	pool.close().await;
+
+	let (status, compacted) = request(&a.app, "POST", "/api/v1/sync/compact", None).await;
+	assert_eq!(status, StatusCode::OK, "{compacted}");
+	let pool = connect_db(&a.db_path).await;
+	let snapshots: Vec<String> = sqlx::query_scalar("SELECT snapshot FROM sync_change WHERE entity_kind = 'category'")
+		.fetch_all(&pool)
+		.await
+		.expect("compacted category events");
+	assert_eq!(snapshots.len(), 2);
+	for raw in snapshots {
+		let snapshot: Value = serde_json::from_str(&raw).expect("category snapshot");
+		assert_eq!(snapshot["includeInDownload"], 0, "{snapshot}");
+	}
+	pool.close().await;
+
+	let c = peer().await;
+	let (status, baseline) = pull(&a, &c, 0).await;
+	assert_eq!(status, StatusCode::OK, "{baseline}");
+	let categories: Vec<&Value> = baseline["changes"]
+		.as_array()
+		.expect("baseline changes")
+		.iter()
+		.filter(|change| change["entityKind"] == "category")
+		.collect();
+	assert_eq!(categories.len(), 2);
+	assert!(categories.iter().all(|change| change["snapshot"]["includeInDownload"] == 0));
+}
+
+#[tokio::test]
 async fn child_first_category_stub_does_not_duplicate_existing_name() {
 	let a = peer().await;
 	let b = peer().await;
@@ -456,6 +634,52 @@ async fn category_stub_merge_journals_row_only_version() {
 		assert_eq!(applied["results"][0]["status"], "stale");
 		b_pool.close().await;
 	}
+}
+
+#[tokio::test]
+async fn category_stub_merge_clears_exclusions_before_id_reuse() {
+	let a = peer().await;
+	let b = peer().await;
+	seed_initial(&a, 100, 700, 700, "remote", false).await;
+	seed_initial(&b, 900, 500, 900, "local", false).await;
+	let b_pool = connect_db(&b.db_path).await;
+	sqlx::query("UPDATE category SET name = 'Category remote' WHERE id = 500")
+		.execute(&b_pool)
+		.await
+		.expect("same-named local category");
+	let (_, initial) = pull(&a, &b, 0).await;
+	let mut stub_membership = event_of(&initial, "category_manga");
+	let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
+	set_version(&mut stub_membership, stub_sequence, 600);
+	let (status, applied) = push(&b, &a, json!([stub_membership])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	for key in ["user.1.library.excluded_update_categories", "user.1.library.excluded_download_categories"] {
+		sqlx::query("INSERT OR REPLACE INTO setting (key, value) VALUES (?, '[700]')")
+			.bind(key)
+			.execute(&b_pool)
+			.await
+			.expect("seed exclusion");
+	}
+	let mut category = event_of(&initial, "category");
+	let category_sequence = category["originSequence"].as_i64().expect("category sequence");
+	set_version(&mut category, category_sequence + 100, 9_000_000_000_000_000);
+	let (status, applied) = push(&b, &a, json!([category])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	sqlx::query("INSERT INTO category (id, user_id, name) VALUES (700, 1, 'Reused')")
+		.execute(&b_pool)
+		.await
+		.expect("reused category id");
+	for key in ["user.1.library.excluded_update_categories", "user.1.library.excluded_download_categories"] {
+		let excluded: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&b_pool)
+			.await
+			.expect("cleared exclusions");
+		assert_eq!(serde_json::from_str::<Value>(&excluded).expect("exclusions json"), json!([]), "{key}");
+	}
+	b_pool.close().await;
 }
 
 #[tokio::test]

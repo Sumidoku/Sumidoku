@@ -56,6 +56,26 @@ pinned — drop packages there and scan, no path setting exists.
 | `SUMIDOKU_DOWNLOAD_FORMAT` | `cbz` | download container format |
 | `SUMIDOKU_DOWNLOAD_MOVE_PATH` | — | override `download.move_path` (setting default empty = off): move each packaged download to the rendered template path — variables `{source}`, `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}`, `{filename}`; absolute targets like `/mnt/library/{author}/{manga}/{filename}` are the intended use |
 
+The download and library-update behavior settings are re-read from the `setting`
+table for each operation, so changes from the Settings page do not require a
+restart. The corresponding file/env values above are fallbacks when a setting is
+absent. `downloads_dir` remains deployment-level and has no runtime override.
+
+| Setting key | Default | Purpose |
+| --- | --- | --- |
+| `auto_download_new_chapters` | `false` | automatically download chapters found by library updates |
+| `auto_download_limit` | `5` | maximum automatic downloads per manga per update; `0` disables the candidates |
+| `download_format` | `cbz` | `cbz` archive or `folder` image directory |
+| `download_concurrency` | `3` | maximum sources downloading concurrently, with one chapter at a time per source |
+| `library.excluded_download_categories` | `[]` | admin category ids excluded from automatic downloads only; manual downloads and reader-ahead are unaffected |
+| `downloads.auto_skip_manga_with_unread` | `true` | skip automatic downloads when chapters that existed before the current refresh are unread; the new chapters themselves do not block |
+| `downloads.auto_ignore_reuploads` | `false` | exclude candidates whose number is below the previous latest chapter number; update results, unread counts and notifications are unchanged |
+| `delete_after_manual_read` | `false` | delete a download after directly marking its chapter read |
+| `delete_after_read` | `false` | delete a download when the reader reaches the final page |
+| `allow_delete_bookmarked` | `false` | allow the two read-driven deletion switches to delete bookmarked chapters |
+| `downloads.download_ahead` | `false` | enqueue following unread chapters after a successful reader page load |
+| `downloads.download_ahead_count` | `2` | maximum following unread chapters to consider for reader-ahead |
+
 ## Backup
 
 These four override the `backup.*` settings (headless deployments); see

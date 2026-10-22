@@ -104,60 +104,22 @@ pub async fn stop_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Jso
 	Ok(Json(json!({ "running": false })))
 }
 
-/// The artifact may be a cbz file or a folder directory; path resolution follows the single convention (absolute as-is / relative joined under downloads_dir).
-/// An already-missing artifact (mount dropped, manually cleaned, shared target deleted by another row) is treated as deleted
-async fn remove_product(downloads_dir: &std::path::Path, path: &str) {
-	let target = crate::download::product_path(downloads_dir, path);
-	if target.is_dir() {
-		let _ = tokio::fs::remove_dir_all(&target).await;
-	} else {
-		let _ = tokio::fs::remove_file(&target).await;
-	}
-}
-
-/// When another download row still references the same artifact path, the file is kept
-async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str, chapter_id: i64) -> ApiResult<bool> {
-	let referenced: Option<(i64,)> =
-		sqlx::query_as("SELECT 1 FROM download WHERE path = ? AND chapter_id != ? LIMIT 1")
-			.bind(path)
-			.bind(chapter_id)
-			.fetch_optional(pool)
-			.await?;
-	Ok(referenced.is_none())
-}
-
 pub async fn clear_downloads(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Json<Value>> {
 	let manager = state.downloads();
-	let rows: Vec<(i64, Option<String>)> =
-		sqlx::query_as("SELECT chapter_id, path FROM download WHERE status IN ('finished', 'error') AND user_id = ?")
-			.bind(user.id)
-			.fetch_all(&state.pool)
-			.await?;
+	let rows: Vec<i64> = sqlx::query_scalar(
+		"SELECT chapter_id FROM download WHERE status IN ('finished', 'error') AND user_id = ?",
+	)
+	.bind(user.id)
+	.fetch_all(&state.pool)
+	.await?;
 	let mut cleared = 0i64;
-	for (chapter_id, path) in rows {
-		if let Some(path) = path
-			&& product_orphaned(&state.pool, &path, chapter_id).await?
-		{
-			remove_product(manager.downloads_dir(), &path).await;
+	for chapter_id in rows {
+		if manager.delete(chapter_id, user.id).await? {
+			cleared += 1;
 		}
-		manager.cleanup_tmp(chapter_id).await;
-		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
-			.bind(chapter_id)
-			.bind(user.id)
-			.execute(&state.pool)
-			.await?;
-		sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
-		)
-		.bind(chapter_id)
-		.bind(user.id)
-		.execute(&state.pool)
-		.await?;
-		cleared += 1;
 	}
 	Ok(Json(json!({ "cleared": cleared })))
 }
@@ -167,41 +129,11 @@ pub async fn delete_download(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	let manager = state.downloads();
-	let row: Option<(String, Option<String>)> =
-		sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
-			.bind(id)
-			.bind(user.id)
-			.fetch_optional(&state.pool)
-			.await?;
-	let Some((status, path)) = row else {
-		return Err(ApiError::not_found("download not found"));
-	};
-	// A running one is marked for cancel first; the worker stops when it sees the mark before the next page
-	if status == "downloading" {
-		manager.mark_cancel(id).await;
+	if state.downloads().delete(id, user.id).await? {
+		Ok(StatusCode::NO_CONTENT)
+	} else {
+		Err(ApiError::not_found("download not found"))
 	}
-	manager.remove_from_queue(id, user.id).await;
-	if let Some(path) = path
-		&& product_orphaned(&state.pool, &path, id).await?
-	{
-		remove_product(manager.downloads_dir(), &path).await;
-	}
-	manager.cleanup_tmp(id).await;
-	sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
-		.bind(id)
-		.bind(user.id)
-		.execute(&state.pool)
-		.await?;
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
-		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
-	)
-	.bind(id)
-	.bind(user.id)
-	.execute(&state.pool)
-	.await?;
-	Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_chapter_file(

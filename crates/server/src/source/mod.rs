@@ -820,18 +820,40 @@ pub async fn upsert_manga(
 	Ok(id)
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconcileOutcome {
+	pub new_ids: Vec<i64>,
+	pub previous_latest_chapter_number: Option<f64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ExistingChapter {
+	id: i64,
+	key: String,
+	number: Option<f64>,
+	source_order: i64,
+}
+
 /// Chapter reconciliation: source_order takes the index in the source's response; a vanished chapter with a
 /// download row is locked and kept, otherwise deleted. Chapter keys in protected are never treated as vanished
 /// (entries the local source's scan failed to read — kmrs's failed-directory protection); a protected entry also
 /// covers the keys below it, since a container that failed to read was never walked and its chapters cannot enter
 /// the set one by one.
-/// Returns the chapter ids inserted by this reconciliation (update detection uses them to spot new chapters)
 pub async fn reconcile_chapters(
 	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
 	chapters: &[Chapter],
 	protected: &[String],
 ) -> ApiResult<Vec<i64>> {
+	Ok(reconcile_chapters_detailed(conn, manga_id, chapters, protected).await?.new_ids)
+}
+
+pub async fn reconcile_chapters_detailed(
+	conn: &mut sqlx::SqliteConnection,
+	manga_id: i64,
+	chapters: &[Chapter],
+	protected: &[String],
+) -> ApiResult<ReconcileOutcome> {
 	let now = unix_now();
 	// When the source has exactly one language, fill it into language-less chapters (mirroring AidokuRunner)
 	let fill_language: Option<String> =
@@ -845,17 +867,61 @@ pub async fn reconcile_chapters(
 			[only] => Some(only.clone()),
 			_ => None,
 		});
-	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
-		.bind(manga_id)
-		.fetch_all(&mut *conn)
-		.await?;
-	let known: HashSet<&String> = existing.iter().map(|(_, key)| key).collect();
+	let existing: Vec<ExistingChapter> = sqlx::query_as(
+		"SELECT id, key, number, source_order FROM chapter WHERE manga_id = ?",
+	)
+	.bind(manga_id)
+	.fetch_all(&mut *conn)
+	.await?;
+	let previous_latest_chapter_number = existing
+		.iter()
+		.min_by_key(|chapter| (chapter.source_order, chapter.id))
+		.and_then(|chapter| chapter.number);
+	let known: HashSet<String> = existing.iter().map(|chapter| chapter.key.clone()).collect();
+	let incoming: HashSet<String> = chapters.iter().map(|chapter| chapter.key.clone()).collect();
+	let is_protected = |key: &str| {
+		protected
+			.iter()
+			.any(|entry| key == entry || key.starts_with(&format!("{entry}/")))
+	};
 	let mut seen = HashSet::with_capacity(chapters.len());
-	let mut new_keys = Vec::new();
-	for (index, chapter) in chapters.iter().enumerate() {
+	let mut new_chapters = Vec::new();
+	for chapter in chapters {
 		if seen.insert(chapter.key.clone()) && !known.contains(&chapter.key) {
-			new_keys.push(chapter.key.clone());
+			new_chapters.push(chapter);
 		}
+	}
+	let mut rekeyed_ids = HashSet::new();
+	for chapter in &new_chapters {
+		let Some(number) = chapter.chapter_number.map(|n| n as f64) else {
+			continue;
+		};
+		let mut old_matches = existing.iter().filter(|old| {
+			!incoming.contains(&old.key) && !is_protected(&old.key) && old.number == Some(number)
+		});
+		let Some(old) = old_matches.next() else {
+			continue;
+		};
+		if old_matches.next().is_some()
+			|| new_chapters
+				.iter()
+				.filter(|candidate| candidate.chapter_number.map(|n| n as f64) == Some(number))
+				.count() != 1
+		{
+			continue;
+		}
+		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+			.bind(old.id)
+			.execute(&mut *conn)
+			.await?;
+		sqlx::query("UPDATE chapter SET key = ?, page_count = 0 WHERE id = ?")
+			.bind(&chapter.key)
+			.bind(old.id)
+			.execute(&mut *conn)
+			.await?;
+		rekeyed_ids.insert(old.id);
+	}
+	for (index, chapter) in chapters.iter().enumerate() {
 		let scanlators = serde_json::to_string(&chapter.scanlators.clone().unwrap_or_default())?;
 		// whitespace-only titles fold to NULL, matching the Aidoku host's "" -> nil
 		// normalization; the webui treats both as "no title" either way
@@ -879,7 +945,7 @@ pub async fn reconcile_chapters(
 			 scanlators = excluded.scanlators, language = excluded.language,
 			 thumbnail = excluded.thumbnail, url = excluded.url,
 			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
-			 locked = excluded.locked, fetched_at = excluded.fetched_at",
+			 locked = excluded.locked, fetched_at = chapter.fetched_at",
 		)
 		.bind(manga_id)
 		.bind(&chapter.key)
@@ -897,40 +963,40 @@ pub async fn reconcile_chapters(
 		.execute(&mut *conn)
 		.await?;
 	}
-	for (chapter_id, key) in existing {
-		let is_protected = protected
-			.iter()
-			.any(|entry| key == *entry || key.starts_with(&format!("{entry}/")));
-		if seen.contains(&key) || is_protected {
+	for old in &existing {
+		if seen.contains(&old.key) || rekeyed_ids.contains(&old.id) || is_protected(&old.key) {
 			continue;
 		}
 		let has_download: Option<(i64,)> =
 			sqlx::query_as("SELECT 1 FROM download WHERE chapter_id = ? LIMIT 1")
-				.bind(chapter_id)
+				.bind(old.id)
 				.fetch_optional(&mut *conn)
 				.await?;
 		if has_download.is_some() {
 			sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
-				.bind(chapter_id)
+				.bind(old.id)
 				.execute(&mut *conn)
 				.await?;
 		} else {
 			sqlx::query("DELETE FROM chapter WHERE id = ?")
-				.bind(chapter_id)
+				.bind(old.id)
 				.execute(&mut *conn)
 				.await?;
 		}
 	}
-	let mut new_ids = Vec::with_capacity(new_keys.len());
-	for key in new_keys {
+	let mut new_ids = Vec::with_capacity(new_chapters.len());
+	for chapter in new_chapters {
 		let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
 			.bind(manga_id)
-			.bind(&key)
+			.bind(&chapter.key)
 			.fetch_one(&mut *conn)
 			.await?;
 		new_ids.push(id);
 	}
-	Ok(new_ids)
+	Ok(ReconcileOutcome {
+		new_ids,
+		previous_latest_chapter_number,
+	})
 }
 
 pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
@@ -1571,5 +1637,189 @@ mod tests {
 		let addr = body_server(vec![b'x'; 2048], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 0).await.expect("0 不设限");
 		assert_eq!(bytes.len(), 2048);
+	}
+
+	async fn reconcile_db() -> (SqlitePool, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('reconcile-source', 'Source', '') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'manga') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("manga row");
+		(pool, manga_id, tmp)
+	}
+
+	fn reconcile_chapter(key: &str, number: Option<f32>, volume: Option<f32>) -> Chapter {
+		Chapter {
+			key: key.into(),
+			chapter_number: number,
+			volume_number: volume,
+			..Chapter::default()
+		}
+	}
+
+	async fn run_reconcile(pool: &SqlitePool, manga_id: i64, chapters: &[Chapter]) -> ReconcileOutcome {
+		let mut tx = crate::db::begin_write(pool).await.expect("write transaction");
+		let outcome = reconcile_chapters_detailed(&mut tx, manga_id, chapters, &[])
+			.await
+			.expect("reconcile");
+		tx.commit().await.expect("commit reconcile");
+		outcome
+	}
+
+	#[tokio::test]
+	async fn rekey_preserves_state_and_fetched_at_while_new_chapters_get_now() {
+		let (pool, manga_id, tmp) = reconcile_db().await;
+		let old_id: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter (manga_id, key, number, volume, source_order, page_count, fetched_at)
+			 VALUES (?, 'old', 1, 2, 0, 4, 123) RETURNING id",
+		)
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("old chapter");
+		sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded)
+			 VALUES (?, 1, 3, 1, 1, 99, 1)",
+		)
+		.bind(old_id)
+		.execute(&pool)
+		.await
+		.expect("progress");
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'cbz', 'old.cbz')")
+			.bind(old_id)
+			.execute(&pool)
+			.await
+			.expect("download");
+		sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, 0, '{\"content\":{\"Text\":\"old\"}}')")
+			.bind(old_id)
+			.execute(&pool)
+			.await
+			.expect("cached page");
+		let artifact = tmp.path().join("old.cbz");
+		std::fs::write(&artifact, b"downloaded").expect("artifact");
+
+		let first = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(2.0))]).await;
+		assert_eq!(first.new_ids, vec![old_id]);
+		assert_eq!(first.previous_latest_chapter_number, Some(1.0));
+		let row: (i64, String, i64, i64) = sqlx::query_as(
+			"SELECT id, key, fetched_at, page_count FROM chapter WHERE id = ?",
+		)
+		.bind(old_id)
+		.fetch_one(&pool)
+		.await
+		.expect("rekeyed chapter");
+		assert_eq!(row, (old_id, "new".into(), 123, 0));
+		let cached_pages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM page WHERE chapter_id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("cached pages");
+		assert_eq!(cached_pages, 0);
+		assert!(artifact.exists());
+		let progress: (i64, i64, i64, i64, i64) = sqlx::query_as(
+			"SELECT last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded FROM chapter_user WHERE chapter_id = ?",
+		)
+		.bind(old_id)
+		.fetch_one(&pool)
+		.await
+		.expect("preserved progress");
+		assert_eq!(progress, (3, 1, 1, 99, 1));
+		let path: String = sqlx::query_scalar("SELECT path FROM download WHERE chapter_id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("preserved download");
+		assert_eq!(path, "old.cbz");
+
+		let second = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(2.0))]).await;
+		assert!(second.new_ids.is_empty());
+		let fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("same-key timestamp");
+		assert_eq!(fetched_at, 123);
+
+		let third = run_reconcile(
+			&pool,
+			manga_id,
+			&[
+				reconcile_chapter("brand-new", Some(2.0), Some(2.0)),
+				reconcile_chapter("new", Some(1.0), Some(2.0)),
+			],
+		)
+		.await;
+		assert_eq!(third.new_ids.len(), 1);
+		let new_fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(third.new_ids[0])
+			.fetch_one(&pool)
+			.await
+			.expect("new timestamp");
+		assert!(new_fetched_at > 123);
+		let old_fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("rekey timestamp");
+		assert_eq!(old_fetched_at, 123);
+	}
+
+	#[tokio::test]
+	async fn rekey_matches_number_across_volume_change() {
+		let (pool, manga_id, _tmp) = reconcile_db().await;
+		let old_id: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter (manga_id, key, number, volume, page_count, fetched_at)
+			 VALUES (?, 'old', 1, 2, 4, 123) RETURNING id",
+		)
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("old chapter");
+
+		let outcome = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(3.0))]).await;
+		assert_eq!(outcome.new_ids, vec![old_id]);
+		let row: (String, Option<f64>, i64) =
+			sqlx::query_as("SELECT key, volume, page_count FROM chapter WHERE id = ?")
+				.bind(old_id)
+				.fetch_one(&pool)
+				.await
+				.expect("rekeyed chapter");
+		assert_eq!(row, ("new".into(), Some(3.0), 0));
+	}
+
+	#[tokio::test]
+	async fn rekey_requires_a_unique_vanished_number_match() {
+		let (pool, manga_id, _tmp) = reconcile_db().await;
+		for key in ["old-a", "old-b"] {
+			sqlx::query("INSERT INTO chapter (manga_id, key, number, volume, fetched_at) VALUES (?, ?, 1, 1, 123)")
+				.bind(manga_id)
+				.bind(key)
+				.execute(&pool)
+				.await
+				.expect("old chapter");
+		}
+		let outcome = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(1.0))]).await;
+		assert_eq!(outcome.new_ids.len(), 1);
+		let old_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE key IN ('old-a', 'old-b')")
+			.fetch_one(&pool)
+			.await
+			.expect("old rows");
+		assert_eq!(old_count, 0);
+		let new_key: String = sqlx::query_scalar("SELECT key FROM chapter WHERE id = ?")
+			.bind(outcome.new_ids[0])
+			.fetch_one(&pool)
+			.await
+			.expect("new row");
+		assert_eq!(new_key, "new");
 	}
 }

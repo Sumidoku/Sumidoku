@@ -555,7 +555,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   remote-to-local mappings independently of event versions; local events also
   register their own origin so a relay can sync back to the source instance.
   First matches use source/manga/chapter natural keys and category names; a
-  numeric category id alone never proves a match. Category membership identities
+  numeric category id alone never proves a match. Category snapshots always
+  carry numeric `includeInDownload: 0` for older peers that require the field.
+  Apply accepts legacy values but normalizes the journaled snapshot to `0` and
+  never writes the retired column; compaction likewise rewrites reused live and
+  tombstone snapshots to `0`, so legacy history cannot reintroduce old values
+  into a new baseline. Category membership identities
   carry `categoryOrigin`, `categoryOriginUserId` and `categoryOriginEntityKey`
   from their current parent event, allowing parent resolution across relay
   origins in either arrival order. Missing parents become zero-version stubs
@@ -628,7 +633,14 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise — except keys
   in the `protected` set (the local source's failed-directory protection,
-  see below), which survive the pass unread. Manga rows
+  see below), which survive the pass unread. A previously unseen key with one
+  unique vanished number match rekeys that existing row in place rather than
+  deleting and recreating it: the chapter id, reading progress, download rows
+  and artifacts survive, and its `fetched_at` is preserved. Page rows are
+  cleared and `page_count` resets to zero so the next page load fetches the new
+  key. Only truly new chapters receive the current timestamp; rekeyed replacements remain in
+  `new_ids`, leaving update results and notifications intact while the
+  downloads-only re-upload filter decides their candidates. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
   source `thumbnail`; a source declaring exactly one language fills missing
   chapter languages with it on reconcile, and a whitespace-only chapter title
@@ -670,11 +682,18 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   transaction; an unknown `version` or an invalid row answers 400 with the
   database untouched. Entries naming a source that is not installed are
   skipped and listed in the response `warnings`; the `restored` map counts
-  applied rows per section. Category update exclusions use the backup-only
-  `includeInUpdate` field (`2` for excluded categories, `0` for all others).
-  The raw `library.excluded_update_categories` setting is omitted from exports
-  and ignored during settings restore; category restoration maps names to
-  target-local ids before writing that setting. Progress entries carry a
+  applied rows per section. Category update and automatic-download exclusions
+  use the backup-only `includeInUpdate` and `includeInDownload` fields (`2` for
+  excluded categories, `0` for all others). Legacy `includeInDownload: 1` marks
+  include-only categories, which an exclusion list cannot represent. A category
+  restore containing any such entry forces `auto_download_new_chapters` to
+  `false`, even when the target or backup enables it; review and reconfigure
+  category exclusions and automatic downloads before re-enabling them. The raw
+  `library.excluded_update_categories` and `library.excluded_download_categories`
+  settings are omitted from exports and ignored during settings restore;
+  category restoration maps names to target-local ids and merges them into the
+  existing exclusion settings without writing the retired category columns.
+  Progress entries carry a
   chapter metadata snapshot so a fresh instance can recreate chapter rows ahead of the
   source's first fetch. The document's `version` field (currently `1`) is
   the format contract, and source setting values round-trip in the same
@@ -777,20 +796,36 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter. Download rows use
   the legacy `(chapter_id, user_id)` primary key with `user_id = 1`: enqueue,
-  pause, cancel, list and WebSocket events all belong to the admin. Artifact
-  files stay at deterministic paths and are reused when a chapter is already
-  downloaded. Both normal completion and existing-artifact settlement commit
-  the finished `download` row and the admin's `chapter_user.is_downloaded`
-  flag in one `BEGIN IMMEDIATE` transaction;
+  pause, cancel, list and WebSocket events all belong to the admin.
+  `DownloadSettings::load` reads the admin's current settings for enqueue,
+  dispatch, update and reader operations: format and source concurrency are not
+  captured at manager construction, and the update scheduler likewise reloads
+  its behavior toggles. Only `downloads_dir` stays fixed at deployment time.
+  Artifact files stay at deterministic paths and are reused when a chapter is
+  already downloaded. Both normal completion and existing-artifact settlement
+  commit the finished `download` row and the admin's
+  `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
   either write failing rolls both back, and the `finished` event is emitted
   only after commit. Non-text pages are measured from newly fetched bytes on
   every download, but their page-row updates commit only after packaging
-  succeeds: a failed attempt writes no partial metadata, and the move-failure fallback
-  still commits the measurements with the valid artifact. A row's stored
-  `path` resolves through
-  `download::product_path` — absolute is used as-is, relative joins
-  `downloads_dir` — and every read/delete site (`api/download.rs`)
-  goes through it.
+  succeeds: a failed attempt writes no partial metadata, and the move-failure
+  fallback still commits the measurements with the valid artifact. A row's
+  stored `path` resolves through `download::product_path` — absolute is used
+  as-is, relative joins `downloads_dir` — and every read/delete site
+  (`api/download.rs`) goes through it.
+  `DownloadManager::delete` is the shared removal routine for explicit delete,
+  clear and read-driven deletion: it removes the row, clears `is_downloaded`
+  and deletes the artifact once no other row references it. Manual progress
+  (`isRead: true` without `lastPageRead`) and reader completion
+  (`lastPageRead = pageCount - 1`) have independent `delete_after_manual_read`
+  and `delete_after_read` switches. Read-driven deletion skips bookmarks unless
+  `allow_delete_bookmarked` is enabled; that check does not restrict explicit
+  deletion. `enqueue_reader_ahead` runs after a successful reader page load:
+  `downloads.download_ahead` enables it and `downloads.download_ahead_count`
+  bounds the following unread chapters in source reading order. Existing
+  downloaded/queued/running chapters are skipped, errors may retry, and the
+  ordinary enqueue dedupe prevents repeated page loads from growing the queue;
+  download workers and image requests never recurse into reader-ahead.
 - Download move (`download/mod.rs:move_product`): when
   `download.move_path` is set (setting table, env
   `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
@@ -926,6 +961,26 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   manga rows; interval 0 is immediately due. The stored next update time is
   still advanced after success for the next source round trip. Manual fetches
   and the scheduled run both use the admin's library and auto-download rules.
+  Each update reloads `auto_download_new_chapters`, `auto_download_limit` and
+  the download filters. `library.excluded_download_categories` is the single
+  admin category exclusion list, stored as
+  `user.1.library.excluded_download_categories`; migration
+  `0020_excluded_download_categories.sql` converts only the admin's legacy
+  `include_in_download = 2` ids and preserves an existing new setting. Legacy
+  `include_in_download = 1` include-only categories cannot be represented by an
+  exclusion list, so any such row also forces `auto_download_new_chapters` to
+  `false`; review and reconfigure the exclusions and automatic downloads before
+  re-enabling them. Category REST responses omit `includeInDownload`, a PATCH
+  carrying it answers 400 and names the new setting, and backup remains its only
+  portable tri-state representation. REST and sync deletion remove the id from
+  both owner-scoped exclusion arrays in the same transaction, so a reused id
+  does not inherit the deleted category's exclusions. Exclusions affect only
+  update-driven automatic downloads, never an explicit manual enqueue. With
+  `downloads.auto_skip_manga_with_unread`, the unread query excludes the
+  current `new_ids`, so only pre-existing unread chapters block and a missing
+  progress row counts as unread. `downloads.auto_ignore_reuploads` removes
+  candidates whose number is below the previous latest chapter number; it does
+  not alter `new_ids`, update counts, unread state or notifications.
   The scheduler checks due every 60s and reloads the interval instead of
   capturing it at construction, so setting changes need no restart. Its
   memory-only `last_scheduled_run_at` is stamped only by a scheduled union at
