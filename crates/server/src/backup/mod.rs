@@ -87,9 +87,14 @@ impl BackupScheduler {
 			.map_err(|e| ApiError::internal(format!("rename backup: {e}")))?;
 		set_last_run(&self.pool, unix_now()).await?;
 		// A prune failure must not sink this backup; retry next cycle
-		if let Err(e) = prune(&settings.dir, settings.retention_count).await {
-			tracing::warn!("backup prune failed: {e:?}");
-		}
+		let pruned = match prune(&settings.dir, settings.retention_count).await {
+			Ok(pruned) => pruned,
+			Err(e) => {
+				tracing::warn!("backup prune failed: {e:?}");
+				0
+			}
+		};
+		tracing::info!(path = %path.display(), bytes = body.len() as u64, pruned, "backup written");
 		Ok(path)
 	}
 }

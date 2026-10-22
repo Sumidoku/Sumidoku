@@ -313,6 +313,7 @@ impl UpdateScheduler {
 		scope: Option<i64>,
 		_guard: OwnedMutexGuard<()>,
 	) {
+		let started = std::time::Instant::now();
 		let owners = Arc::new(owners);
 		let total = rows.len() as i64;
 		{
@@ -329,6 +330,7 @@ impl UpdateScheduler {
 			};
 		}
 		self.running.store(true, Ordering::SeqCst);
+		tracing::info!(scheduled = scope.is_none(), total, "library update started");
 		for row in &rows {
 			self.emit_for(owners.get(&row.id).map(Vec::as_slice).unwrap_or(&[]), "pending", row, 0);
 		}
@@ -350,13 +352,23 @@ impl UpdateScheduler {
 			});
 		}
 		while tasks.join_next().await.is_some() {}
-		{
+		let (complete, failed, skipped) = {
 			let mut summary = self.summary.write().await;
 			summary.running = false;
 			summary.pending = 0;
 			summary.last_run_at = Some(unix_now());
-		}
+			(summary.complete, summary.failed, summary.skipped)
+		};
 		self.running.store(false, Ordering::SeqCst);
+		tracing::info!(
+			scheduled = scope.is_none(),
+			total,
+			complete,
+			failed,
+			skipped,
+			dur_ms = started.elapsed().as_millis() as u64,
+			"library update finished"
+		);
 	}
 
 	async fn update_one(self: &Arc<Self>, manga: MangaRow, owners: &HashMap<i64, Vec<i64>>) {

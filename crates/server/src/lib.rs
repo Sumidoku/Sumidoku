@@ -27,7 +27,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 
 pub async fn build_app(config: Config) -> Result<Router, Error> {
 	std::fs::create_dir_all(&config.covers_dir)?;
@@ -84,7 +84,16 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 		}
 	}
 	let app = api::router(state.clone());
-	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
+	let trace = TraceLayer::new_for_http()
+		.make_span_with(|request: &Request| {
+			tracing::info_span!(
+				"http.request",
+				method = %request.method(),
+				path = %request.uri().path(),
+			)
+		})
+		.on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
+	Ok(webui_fallback(app, &state.config.webui_dir).layer(trace))
 }
 
 fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {

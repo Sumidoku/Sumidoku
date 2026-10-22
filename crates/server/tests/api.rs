@@ -12,6 +12,25 @@ const PNG: &[u8] = &[
 ];
 
 #[tokio::test]
+async fn http_response_logging_is_info_and_omits_query() {
+	let (logs, _guard) = common::capture_logs();
+	let TestApp { app, .. } = test_app().await;
+	logs.take();
+
+	let (status, _) = request(&app, "GET", "/api/v1/version?token=query-secret", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let text = logs.take();
+	let line = text
+		.lines()
+		.find(|line| line.contains("finished processing request"))
+		.unwrap_or_else(|| panic!("HTTP response log missing at INFO: {text}"));
+	for field in ["INFO", "method=GET", "path=/api/v1/version", "status=200", "latency="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
+	assert!(!text.contains("query-secret"), "query leaked into logs: {text}");
+}
+
+#[tokio::test]
 async fn full_flow() {
 	let TestApp { app, tmp, .. } = test_app().await;
 

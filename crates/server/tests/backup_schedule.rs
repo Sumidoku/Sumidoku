@@ -116,6 +116,7 @@ async fn scheduled_backup_runs_and_respects_due() {
 
 #[tokio::test]
 async fn scheduled_backup_matches_export_and_lists() {
+	let (logs, _guard) = common::capture_logs();
 	let app = test_app().await;
 	let manga_id = register_example_manga(&app.app).await;
 	let (status, _) = request(
@@ -136,6 +137,15 @@ async fn scheduled_backup_matches_export_and_lists() {
 	let scheduler = BackupScheduler::new(pool, base_config(&app.tmp));
 	let path = scheduler.run_once().await.expect("run once");
 	let bytes = std::fs::read(&path).expect("read backup file");
+	let text = logs.take();
+	let line = text
+		.lines()
+		.find(|line| line.contains("backup written"))
+		.unwrap_or_else(|| panic!("backup success log missing: {text}"));
+	for field in ["INFO", "path=", "pruned=0"] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
+	assert!(line.contains(&format!("bytes={}", bytes.len())), "backup size missing: {line}");
 	let mut from_file: Value = serde_json::from_slice(&bytes).expect("file json");
 
 	// createdAt is each document's own construction time; with it removed the two documents match field by field

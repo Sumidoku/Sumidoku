@@ -198,7 +198,9 @@ pub async fn add_repo(state: &Arc<AppState>, url: Url) -> ApiResult<SourceRepoRo
 	.bind(now)
 	.execute(&state.pool)
 	.await?;
-	repo_row(&state.pool, result.last_insert_rowid()).await
+	let id = result.last_insert_rowid();
+	tracing::info!(repo = id, entries = parsed.entries.len(), "source repository added");
+	repo_row(&state.pool, id).await
 }
 
 pub async fn delete_repo(state: &Arc<AppState>, id: i64) -> ApiResult<()> {
@@ -225,7 +227,9 @@ pub async fn refresh_repo(state: &Arc<AppState>, id: i64) -> ApiResult<SourceRep
 			.bind(id)
 			.execute(&state.pool)
 			.await?;
-			repo_row(&state.pool, id).await
+			let row = repo_row(&state.pool, id).await?;
+			tracing::info!(repo = id, entries = parsed.entries.len(), "source repository refreshed");
+			Ok(row)
 		}
 		Err(detail) => {
 			tracing::warn!(url = %row.url, "refresh repository failed: {detail}");
@@ -441,6 +445,7 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 	.await?;
 	// On update, kick out the running instance so the next call lazily loads the new package
 	state.evict_source(source.id).await;
+	tracing::info!(repo = repo_id, key, version = source.version, bytes = bytes.len(), "source package installed");
 	Ok(source)
 }
 
@@ -523,5 +528,12 @@ pub async fn update_all(state: &Arc<AppState>, user_id: i64) -> ApiResult<Update
 			}
 		}
 	}
+	tracing::info!(
+		updated = outcome.updated.len(),
+		failed = outcome.failed.len(),
+		migration_required = outcome.migration_required.len(),
+		migration_warnings = outcome.migration_warnings.len(),
+		"source update-all finished"
+	);
 	Ok(outcome)
 }
