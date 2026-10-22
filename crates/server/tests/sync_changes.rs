@@ -133,7 +133,20 @@ async fn migration_17_backfills_zero_timestamp_baseline() {
 		.expect("add old membership");
 	pool.close().await;
 
-	let pool = sumidoku_server::db::create_pool(&url).await.expect("apply 0017");
+	let options = SqliteConnectOptions::from_str(&url)
+		.expect("database url")
+		.create_if_missing(true)
+		.foreign_keys(true);
+	let pool = SqlitePoolOptions::new()
+		.max_connections(1)
+		.connect_with(options)
+		.await
+		.expect("connect migration database");
+	let mut conn = pool.acquire().await.expect("migration connection");
+	for migration in migrator.iter().filter(|migration| (17..=18).contains(&migration.version)) {
+		conn.apply(migration).await.expect("apply 0017/0018 migration");
+	}
+	drop(conn);
 	for table in ["manga", "manga_user", "category", "category_manga"] {
 		let values: Vec<i64> = sqlx::query_scalar(&format!("SELECT last_modified_at FROM {table}"))
 			.fetch_all(&pool)
