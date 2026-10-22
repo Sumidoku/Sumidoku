@@ -99,6 +99,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 
 #[tokio::test]
 async fn download_full_flow() {
+	let (logs, _guard) = common::capture_logs();
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
 	let downloads_dir = t.tmp.path().join("downloads");
@@ -133,6 +134,17 @@ async fn download_full_flow() {
 	assert_eq!(body["queued"], json!([]));
 
 	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let text = common::wait_for_log(&logs, "download finished").await;
+	assert!(text.contains("downloads queued"), "enqueue log missing: {text}");
+	assert!(text.contains("download started"), "start log missing: {text}");
+	let line = text
+		.lines()
+		.find(|line| line.contains("download finished"))
+		.expect("finish log");
+	for field in ["INFO", "pages=2", "attempt=1", "dur_ms=", "source_id="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
+	assert!(line.contains(&format!("chapter_id={chapter_id}")), "chapter id missing: {line}");
 	let rel_path = entry["path"].as_str().expect("download path").to_string();
 	let cbz_path = downloads_dir.join(&rel_path);
 	assert!(cbz_path.is_file(), "cbz should exist at {}", cbz_path.display());
@@ -515,6 +527,7 @@ async fn wait_update_complete(app: &Router, want_total: i64) {
 
 #[tokio::test]
 async fn update_fetch_reconciles_and_recent() {
+	let (logs, _guard) = common::capture_logs();
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
@@ -534,6 +547,15 @@ async fn update_fetch_reconciles_and_recent() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);
 	wait_update_complete(&app, 1).await;
+	let text = common::wait_for_log(&logs, "library update finished").await;
+	assert!(text.contains("library update started"), "update start log missing: {text}");
+	let line = text
+		.lines()
+		.find(|line| line.contains("library update finished"))
+		.expect("update finish log");
+	for field in ["INFO", "scheduled=false", "total=1", "complete=1", "failed=0", "skipped=0", "dur_ms="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
 
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chapter WHERE manga_id = ? AND key = '8'")
 		.bind(manga_id)

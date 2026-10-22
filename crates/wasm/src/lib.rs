@@ -12,7 +12,7 @@ mod source;
 mod traits;
 mod webview;
 
-pub use error::{Error, Result};
+pub use error::{Error, Result, log_safe_text};
 pub use features::SourceFeatures;
 pub use imports::HttpMethod;
 pub use partial::{HomeAccumulator, HomePartial};

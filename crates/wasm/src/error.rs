@@ -48,9 +48,9 @@ impl Error {
 	/// capped; payload-less variants are static classes by construction
 	pub fn log_safe(&self) -> String {
 		match self {
-			Self::Message(msg) => format!("message: {}", scrub_payload(msg)),
-			Self::Trap(msg) => format!("trap: {}", scrub_payload(msg)),
-			Self::Instance(msg) => format!("instance: {}", scrub_payload(msg)),
+			Self::Message(msg) => format!("message: {}", log_safe_text(msg)),
+			Self::Trap(msg) => format!("trap: {}", log_safe_text(msg)),
+			Self::Instance(msg) => format!("instance: {}", log_safe_text(msg)),
 			Self::Unsupported(feature) => format!("unsupported: {feature}"),
 			Self::Unimplemented => "unimplemented".into(),
 			Self::Request => "request".into(),
@@ -70,7 +70,7 @@ static URL_RE: std::sync::LazyLock<regex::Regex> =
 
 const LOG_PAYLOAD_MAX: usize = 200;
 
-fn scrub_payload(text: &str) -> String {
+pub fn log_safe_text(text: &str) -> String {
 	let scrubbed = URL_RE.replace_all(text, |caps: &regex::Captures| {
 		url::Url::parse(&caps[0])
 			.ok()

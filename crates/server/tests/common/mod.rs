@@ -118,6 +118,73 @@ pub struct TestApp {
 	pub db_path: PathBuf,
 }
 
+#[derive(Clone, Default)]
+pub struct LogBuffer {
+	bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl LogBuffer {
+	pub fn take(&self) -> String {
+		let mut guard = self.bytes.lock().expect("log buffer");
+		String::from_utf8(std::mem::take(&mut *guard)).expect("utf8 logs")
+	}
+
+	pub fn snapshot(&self) -> String {
+		String::from_utf8(self.bytes.lock().expect("log buffer").clone()).expect("utf8 logs")
+	}
+}
+
+pub struct LogWriter {
+	bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for LogWriter {
+	fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+		self.bytes.lock().expect("log buffer").extend_from_slice(buf);
+		Ok(buf.len())
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		Ok(())
+	}
+}
+
+impl tracing_subscriber::fmt::MakeWriter<'_> for LogBuffer {
+	type Writer = LogWriter;
+
+	fn make_writer(&self) -> Self::Writer {
+		LogWriter {
+			bytes: self.bytes.clone(),
+		}
+	}
+}
+
+pub fn capture_logs() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+	let logs = LogBuffer::default();
+	let subscriber = tracing_subscriber::fmt()
+		.with_writer(logs.clone())
+		.with_ansi(false)
+		.with_max_level(tracing::Level::INFO)
+		.finish();
+	let guard = tracing::subscriber::set_default(subscriber);
+	(logs, guard)
+}
+
+pub async fn wait_for_log(logs: &LogBuffer, needle: &str) -> String {
+	let started = std::time::Instant::now();
+	loop {
+		let text = logs.snapshot();
+		if text.contains(needle) {
+			return text;
+		}
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(5),
+			"timed out waiting for log {needle:?}; logs:\n{text}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+	}
+}
+
 pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 	Config {
 		addr: "127.0.0.1:0".into(),

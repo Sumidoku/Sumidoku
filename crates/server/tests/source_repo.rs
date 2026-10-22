@@ -188,6 +188,7 @@ async fn source_by_key(app: &axum::Router, key: &str) -> Value {
 
 #[tokio::test]
 async fn repo_lifecycle_install_and_update() {
+	let (logs, _guard) = common::capture_logs();
 	let app = test_app().await;
 	let repo = serve_repo().await;
 	stage_repo(&repo, 1, 3);
@@ -365,6 +366,22 @@ async fn repo_lifecycle_install_and_update() {
 	let other = source_by_key(&app.app, "en.other").await;
 	assert_eq!(other["version"], 4);
 
+	let text = logs.take();
+	for message in [
+		"source repository added",
+		"source repository refreshed",
+		"source package installed",
+		"source update-all finished",
+	] {
+		assert!(text.contains(message), "missing {message:?}: {text}");
+	}
+	let line = text
+		.lines()
+		.find(|line| line.contains("source update-all finished"))
+		.expect("update-all log");
+	for field in ["updated=1", "failed=0", "migration_required=0", "migration_warnings=0"] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
 	repo.serve.abort();
 }
 

@@ -420,6 +420,7 @@ impl DownloadManager {
 			self.emit("queued", chapter_id, 0, 0, user_id);
 		}
 		if !queued.is_empty() {
+			tracing::info!(requested = chapter_ids.len(), queued = queued.len(), "downloads queued");
 			self.notify.notify_one();
 		}
 		queued
@@ -777,6 +778,8 @@ impl DownloadManager {
 			match result {
 				Ok(done) if done.rows_affected() == 1 => {
 					self.progress.lock().await.remove(&chapter_id);
+					let error = aidoku_wasm::log_safe_text(message);
+					tracing::warn!(chapter_id, retries, downloaded, total, error = error.as_str(), "download failed");
 					self.emit("error", chapter_id, downloaded, total, user_id);
 				}
 				Ok(_) => {
@@ -801,7 +804,18 @@ impl DownloadManager {
 		.execute(&self.pool)
 		.await;
 		match result {
-			Ok(done) if done.rows_affected() == 1 => Some(1 << (retries + 1)),
+			Ok(done) if done.rows_affected() == 1 => {
+				let delay = 1u64 << (retries + 1);
+				let error = aidoku_wasm::log_safe_text(message);
+				tracing::warn!(
+					chapter_id,
+					retry = retries + 1,
+					delay_secs = delay,
+					error = error.as_str(),
+					"download retry scheduled"
+				);
+				Some(delay)
+			}
 			Ok(_) => {
 				self.cleanup_attempt(chapter_id, None).await;
 				None
@@ -840,6 +854,8 @@ impl DownloadManager {
 			}
 			_ => {}
 		}
+		let started = std::time::Instant::now();
+		tracing::info!(chapter_id, source_id, "download started");
 		let mut attempt = 0u32;
 		loop {
 			if self.cancel.lock().await.remove(&chapter_id) {
@@ -892,6 +908,15 @@ impl DownloadManager {
 					match finished {
 						Ok(true) => {
 							self.progress.lock().await.remove(&chapter_id);
+							tracing::info!(
+								chapter_id,
+								source_id,
+								pages = total,
+								attempt,
+								dur_ms = started.elapsed().as_millis() as u64,
+								path = %path,
+								"download finished"
+							);
 							self.emit("finished", chapter_id, total, total, user_id);
 							self.cleanup_tmp(chapter_id).await;
 						}
@@ -1571,6 +1596,34 @@ pub fn sanitize(name: &str) -> String {
 mod tests {
 	use super::*;
 
+	#[derive(Clone, Default)]
+	struct TestLogs(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+	impl TestLogs {
+		fn text(&self) -> String {
+			String::from_utf8(self.0.lock().expect("log buffer").clone()).expect("utf8 logs")
+		}
+	}
+
+	impl std::io::Write for TestLogs {
+		fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+			self.0.lock().expect("log buffer").extend_from_slice(buf);
+			Ok(buf.len())
+		}
+
+		fn flush(&mut self) -> std::io::Result<()> {
+			Ok(())
+		}
+	}
+
+	impl tracing_subscriber::fmt::MakeWriter<'_> for TestLogs {
+		type Writer = Self;
+
+		fn make_writer(&self) -> Self::Writer {
+			self.clone()
+		}
+	}
+
 	fn vars() -> MoveVars<'static> {
 		MoveVars {
 			source: "Example Source",
@@ -1999,6 +2052,13 @@ mod tests {
 
 	#[tokio::test]
 	async fn error_handling_retries_and_finishes_current_attempt() {
+		let logs = TestLogs::default();
+		let subscriber = tracing_subscriber::fmt()
+			.with_writer(logs.clone())
+			.with_ansi(false)
+			.with_max_level(tracing::Level::INFO)
+			.finish();
+		let _guard = tracing::subscriber::set_default(subscriber);
 		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
 		sqlx::query(
 			"INSERT INTO download (chapter_id, user_id, status, retries, updated_at)
@@ -2010,8 +2070,9 @@ mod tests {
 		.expect("downloading row");
 		let manager = state.downloads();
 		let mut events = manager.subscribe();
+		let retry_message = "fetch https://user:retry-pass@manga.example.com/secret/path?token=retry-secret failed";
 
-		let delay = manager.handle_chapter_error(chapter_id, 1, 7, "boom").await;
+		let delay = manager.handle_chapter_error(chapter_id, 1, 7, retry_message).await;
 		assert_eq!(delay, Some(2));
 		let row: (String, i64, Option<String>) =
 			sqlx::query_as("SELECT status, retries, error FROM download WHERE chapter_id = ? AND user_id = 1")
@@ -2019,7 +2080,7 @@ mod tests {
 				.fetch_one(&state.pool)
 				.await
 				.expect("retry row");
-		assert_eq!(row, ("downloading".into(), 1, Some("boom".into())));
+		assert_eq!(row, ("downloading".into(), 1, Some(retry_message.into())));
 		assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
 
 		sqlx::query("UPDATE download SET retries = ?, updated_at = 8 WHERE chapter_id = ? AND user_id = 1")
@@ -2029,7 +2090,8 @@ mod tests {
 			.await
 			.expect("last retry");
 		manager.progress.lock().await.insert(chapter_id, (1, 2));
-		let delay = manager.handle_chapter_error(chapter_id, 1, 8, "final boom").await;
+		let final_message = "fetch https://user:final-pass@manga.example.com/other/path?token=final-secret failed";
+		let delay = manager.handle_chapter_error(chapter_id, 1, 8, final_message).await;
 		assert_eq!(delay, None);
 		let row: (String, i64, Option<String>) =
 			sqlx::query_as("SELECT status, retries, error FROM download WHERE chapter_id = ? AND user_id = 1")
@@ -2037,10 +2099,29 @@ mod tests {
 				.fetch_one(&state.pool)
 				.await
 				.expect("error row");
-		assert_eq!(row, ("error".into(), MAX_CHAPTER_RETRIES as i64, Some("final boom".into())));
+		assert_eq!(row, ("error".into(), MAX_CHAPTER_RETRIES as i64, Some(final_message.into())));
 		let event = events.recv().await.expect("error event");
 		assert_eq!(event.kind, "error");
 		assert_eq!((event.chapter_id, event.downloaded, event.total), (chapter_id, 1, 2));
+
+		let text = logs.text();
+		let retry_line = text
+			.lines()
+			.find(|line| line.contains("download retry scheduled"))
+			.unwrap_or_else(|| panic!("retry log missing: {text}"));
+		for field in ["WARN", "retry=1", "delay_secs=2", "manga.example.com"] {
+			assert!(retry_line.contains(field), "missing {field:?} in {retry_line}");
+		}
+		let final_line = text
+			.lines()
+			.find(|line| line.contains("download failed"))
+			.unwrap_or_else(|| panic!("final failure log missing: {text}"));
+		for field in ["WARN", "retries=3", "downloaded=1", "total=2", "manga.example.com"] {
+			assert!(final_line.contains(field), "missing {field:?} in {final_line}");
+		}
+		for secret in ["retry-pass", "retry-secret", "final-pass", "final-secret", "/secret/path", "/other/path"] {
+			assert!(!text.contains(secret), "sensitive URL part {secret:?} leaked: {text}");
+		}
 	}
 
 	#[tokio::test]
