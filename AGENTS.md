@@ -31,6 +31,9 @@ blocking stays with the maintainer.
 Docs, lessons, and issue/PR text record mechanisms and numbers, never
 local machine details: no hostnames, absolute paths, internal domains
 or IPs, and no how-or-where a tool was installed on a private machine.
+Do not name or quote the maintainer or relay their private messages in
+public writing. Describe technical decisions directly, without personal
+attribution.
 
 ## Commands
 
