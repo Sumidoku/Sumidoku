@@ -14,6 +14,8 @@ pub enum Error {
 	Source(#[from] aidoku_wasm::Error),
 	#[error("auth: {0}")]
 	Auth(String),
+	#[error("sync: {0}")]
+	Sync(String),
 }
 
 #[derive(Debug)]
@@ -43,10 +45,6 @@ impl ApiError {
 			"unauthorized",
 			"authentication required",
 		)
-	}
-
-	pub fn forbidden(message: impl Into<String>) -> Self {
-		Self::new(StatusCode::FORBIDDEN, "forbidden", message)
 	}
 
 	/// When a source lacks a dynamic capability, the endpoint convention returns 404, but the code stays unsupported

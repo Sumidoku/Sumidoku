@@ -242,3 +242,18 @@ async fn opds_basic_accepts_only_admin_credentials() {
 		assert_eq!(status, StatusCode::OK, "{path}");
 	}
 }
+
+#[tokio::test]
+async fn openapi_describes_only_the_admin_owner() {
+	let (app, _tmp, admin) = admin_app().await;
+	let (status, doc) = as_admin(&app, &admin, "GET", "/api/openapi.json", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(doc["paths"].get("/api/v1/users").is_none());
+	assert!(doc["paths"].get("/api/v1/users/{id}").is_none());
+	assert_eq!(doc["components"]["schemas"]["SyncChange"]["properties"]["originUserId"]["enum"], json!([1]));
+	assert!(doc["components"]["responses"].get("Forbidden").is_none());
+	let codes = doc["components"]["schemas"]["ApiError"]["properties"]["code"]["enum"]
+		.as_array()
+		.expect("error codes");
+	assert!(!codes.iter().any(|code| code == "forbidden"));
+}

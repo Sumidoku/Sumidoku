@@ -23,6 +23,18 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 		.foreign_keys(true);
 	let pool = SqlitePoolOptions::new().connect_with(options).await?;
 	sqlx::migrate!("./migrations").run(&pool).await?;
+	let rebaseline: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'sync.single_owner_rebaseline'")
+		.fetch_optional(&pool)
+		.await?;
+	if rebaseline.is_some() {
+		// Deleting reader origins also removes their latest shared state; rebuild it from the remaining admin rows
+		crate::sync::compact::compact(&pool)
+			.await
+			.map_err(|e| Error::Sync(e.message().to_string()))?;
+		sqlx::query("DELETE FROM setting WHERE key = 'sync.single_owner_rebaseline'")
+			.execute(&pool)
+			.await?;
+	}
 	Ok(pool)
 }
 
@@ -63,7 +75,7 @@ mod tests {
 			(16, "979AD5AC41A4DB74145E953C5DEEEEC8A1A2E58B5DD04176DC09A649C155BD1B91393C48AD38823593203B9018DFD2C4"),
 			(17, "25C04C3F4F4643EDAF682FAB6AFB7FCB13D9642E6B75FFF00F8230A7F2D71DD0C5D65CFFBD3E2B4914ADB6766E1B97F7"),
 			(18, "A00A6D869B8A591DCF5BDFC20B7909C8F892305FA8967C462954974A132C2D69E1D355E8B61ED670CEEF4E0F40701AEC"),
-			(19, "CAD71AA03E7223E612CB97C913DE0EE785EB26B45FE3485EFCF708C4A4C31B84AAAD2108D113E2DA7193ADFADB436B3C"),
+			(19, "B79357E14D2E3A9F8777EB4BE37F3CBA1C234197BA4884EB8CB0B68640A5688F4147D40757EE8830F9B42BDFE665DD8C"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -251,6 +263,26 @@ mod tests {
 			.await
 			.expect("insert sync origin state");
 		}
+		sqlx::query("UPDATE manga SET title = 'Reader updated', last_modified_at = 5000 WHERE id = ?")
+			.bind(manga_id)
+			.execute(&pool)
+			.await
+			.expect("update shared manga");
+		sqlx::query("DELETE FROM sync_change WHERE entity_kind = 'manga' AND entity_key = ?")
+			.bind(manga_id.to_string())
+			.execute(&pool)
+			.await
+			.expect("remove old shared events");
+		sqlx::query(
+			"INSERT INTO sync_change
+			 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
+			 VALUES (1, 'manga', ?, 0, 5000, '{}', '{}', 'reader-peer', 2, ?, 9000)",
+		)
+		.bind(manga_id.to_string())
+		.bind(manga_id.to_string())
+		.execute(&pool)
+		.await
+		.expect("insert reader-shared event");
 		let instance_id: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
 			.fetch_one(&pool)
 			.await
@@ -314,6 +346,23 @@ mod tests {
 			.await
 			.expect("current instance id");
 		assert_eq!(current_instance, instance_id);
+		let baseline = crate::sync::changes_since_for_peer(&pool, 1, "new-peer", 0, 500)
+			.await
+			.expect("full baseline");
+		let shared = baseline
+			.changes
+			.iter()
+			.find(|change| change.entity_kind == "manga" && change.entity_key == manga_id.to_string())
+			.expect("shared manga baseline");
+		assert_eq!(shared.origin_user_id, 1);
+		assert_eq!(shared.origin, current_instance);
+		assert_eq!(shared.snapshot["title"], "Reader updated");
+		assert!(shared.origin_sequence > 0);
+		let marker: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'sync.single_owner_rebaseline'")
+			.fetch_one(&pool)
+			.await
+			.expect("rebaseline marker");
+		assert_eq!(marker, 0);
 		pool.close().await;
 	}
 }

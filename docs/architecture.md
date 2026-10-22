@@ -438,8 +438,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   built-in row is forced back to the admin role, while admin data and sessions
   remain. Legacy `user_id` columns and `user.1.*` settings keys remain only as
   storage details; there are no additional accounts, roles or role-dependent
-  product branches. Incoming sync changes with any other `origin_user_id`
-  are rejected so old peers cannot reintroduce reader data.
+  product branches. A one-time `sync.single_owner_rebaseline` marker then
+  compacts the current admin and shared rows into a fresh sync baseline, so
+  reader-originated latest events are not lost; the marker is removed only
+  after success and otherwise retried on the next boot. Incoming sync changes
+  with any other `origin_user_id` are rejected so old peers cannot
+  reintroduce reader data.
 - OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
   Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
   URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
@@ -955,9 +959,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
   failed fetch or persistence pass does not advance either timestamp. Events
   and the summary carry the fetch's owner, and both the WebSocket stream and
-  `GET /api/v1/update/summary` present them scoped to the requesting user
-  (`UpdateSummary::visible_to`): someone else's manual fetch reads as idle,
-  the union run is visible to everyone.
+  `GET /api/v1/update/summary` present manual and scheduled updates to the admin.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.

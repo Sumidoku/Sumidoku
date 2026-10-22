@@ -30,7 +30,7 @@ export type AidokuSkipped = {
 };
 
 export type ApiError = {
-	code: "bad_request" | "unauthorized" | "forbidden" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
+	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
 	message: string;
 };
 
@@ -975,7 +975,7 @@ export type SyncApplyResult = {
 
 export type SyncChange = {
 	origin: string;
-	originUserId: number;
+	originUserId: 1;
 	originSequence: number;
 	entityKind: "manga" | "manga_user" | "category" | "category_manga" | "chapter" | "chapter_user";
 	entityKey: string;

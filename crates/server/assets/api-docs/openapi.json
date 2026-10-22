@@ -75,7 +75,7 @@
         "tags": ["sources"], "operationId": "scanSources", "summary": "Scan the server source directory (admin)",
         "responses": {
           "200": {"description": "Scan outcome", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ScanOutcome"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -87,7 +87,7 @@
         "responses": {
           "200": {"description": "Installed source and migration report", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SourceWithMigration"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+           "413": {"$ref": "#/components/responses/PayloadTooLarge"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -99,7 +99,7 @@
         "responses": {
           "200": {"description": "Registered source", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Source"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -110,7 +110,7 @@
         "responses": {
           "200": {"description": "Pinned source keys in their new order", "content": {"application/json": {"schema": {"type": "array", "items": {"type": "string"}}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -122,7 +122,7 @@
         "responses": {
           "200": {"description": "Updated source", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Source"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
+           "404": {"$ref": "#/components/responses/NotFound"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       },
@@ -130,7 +130,7 @@
         "tags": ["sources"], "operationId": "deleteSource", "summary": "Uninstall a source (admin)",
         "responses": {
           "204": {"$ref": "#/components/responses/NoContent"}, "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -141,7 +141,7 @@
         "tags": ["sources"], "operationId": "updateSource", "summary": "Update a source from its repository (admin)",
         "responses": {
           "200": {"description": "Updated source and migration report", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SourceWithMigration"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "409": {"$ref": "#/components/responses/Conflict"},
           "default": {"$ref": "#/components/responses/Error"}
         }
@@ -153,7 +153,7 @@
         "tags": ["sources", "settings"], "operationId": "getSourceSettings", "summary": "Get normalized source setting definitions and values (admin)",
         "responses": {
           "200": {"description": "Setting definitions and bare JSON values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SourceSettings"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       },
@@ -164,7 +164,7 @@
         "responses": {
           "200": {"description": "Current values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ValuesResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
+           "404": {"$ref": "#/components/responses/NotFound"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -175,7 +175,7 @@
         "tags": ["sources", "settings"], "operationId": "resetSourceSettings", "summary": "Reset source settings to package defaults (admin)",
         "responses": {
           "200": {"description": "Current values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ValuesResponse"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -188,7 +188,7 @@
         "responses": {
           "200": {"description": "Delivered", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Ok"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "501": {"$ref": "#/components/responses/Unsupported"},
+           "501": {"$ref": "#/components/responses/Unsupported"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -199,7 +199,7 @@
         "tags": ["sources"], "operationId": "clearSourceCache", "summary": "Clear source login cookies and restart a loaded instance (admin)",
         "responses": {
           "200": {"description": "Cleared", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Ok"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -212,7 +212,7 @@
         "responses": {
           "200": {"description": "Login succeeded", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Ok"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "501": {"$ref": "#/components/responses/Unsupported"},
+           "501": {"$ref": "#/components/responses/Unsupported"},
           "502": {"$ref": "#/components/responses/BadGateway"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -225,7 +225,7 @@
         "responses": {
           "200": {"description": "Login state stored", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Ok"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "502": {"$ref": "#/components/responses/BadGateway"},
+           "502": {"$ref": "#/components/responses/BadGateway"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -238,7 +238,7 @@
         "responses": {
           "200": {"description": "Authorization URL", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UrlResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -250,7 +250,7 @@
         "responses": {
           "200": {"description": "Current source setting values", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/ValuesResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "502": {"$ref": "#/components/responses/BadGateway"},
+           "502": {"$ref": "#/components/responses/BadGateway"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -263,7 +263,7 @@
         "responses": {
           "200": {"description": "Logged out", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Ok"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -406,7 +406,7 @@
         }
       },
       "patch": {
-        "tags": ["manga"], "operationId": "updateManga", "summary": "Patch manga update strategy or per-user incognito state",
+        "tags": ["manga"], "operationId": "updateManga", "summary": "Patch manga update strategy or the admin's incognito state",
         "requestBody": {"required": false, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateMangaRequest"}}}},
         "responses": {
           "200": {"description": "Updated manga", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Manga"}}}},
@@ -858,7 +858,7 @@
     },
     "/api/v1/settings": {
       "get": {
-        "tags": ["settings"], "operationId": "getSettings", "summary": "Get global and current-user settings as a flat bare-JSON map",
+        "tags": ["settings"], "operationId": "getSettings", "summary": "Get the admin's settings as a flat bare-JSON map",
         "responses": {
           "200": {"description": "Settings", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Settings"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}, "default": {"$ref": "#/components/responses/Error"}
@@ -866,12 +866,12 @@
       },
       "put": {
         "tags": ["settings"], "operationId": "putSettings", "summary": "Merge settings and return the effective map",
-        "description": "Readers may write only incognito.enabled, library.default_category, library.show_uncategorized and library.excluded_update_categories. Admins may write other supported keys. Read-only and server-namespaced keys are ignored.",
+        "description": "The admin may write every supported key. Read-only and server-namespaced keys are ignored.",
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SettingsValues"}}}},
         "responses": {
           "200": {"description": "Effective settings", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Settings"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+          "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -880,7 +880,7 @@
         "tags": ["repos"], "operationId": "listSourceRepos", "summary": "List source repositories (admin)",
         "responses": {
           "200": {"description": "Repositories", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/SourceRepo"}}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       },
@@ -890,7 +890,7 @@
         "responses": {
           "200": {"description": "Added repository", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SourceRepo"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
+           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -900,7 +900,7 @@
         "tags": ["repos"], "operationId": "deleteSourceRepo", "summary": "Delete a source repository (admin)",
         "responses": {
           "204": {"$ref": "#/components/responses/NoContent"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
+           "404": {"$ref": "#/components/responses/NotFound"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -911,7 +911,7 @@
         "tags": ["repos"], "operationId": "refreshSourceRepo", "summary": "Refresh a repository's cached index (admin)",
         "responses": {
           "200": {"description": "Refreshed repository", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SourceRepo"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -926,7 +926,7 @@
         ],
         "responses": {
           "200": {"description": "Repository sources", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/RepoSource"}}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -938,7 +938,7 @@
         "responses": {
           "200": {"description": "Installed source", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Source"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
+           "404": {"$ref": "#/components/responses/NotFound"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -948,7 +948,7 @@
         "tags": ["repos"], "operationId": "updateAllSources", "summary": "Update all eligible installed sources (admin)",
         "responses": {
           "200": {"description": "Update report", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateAllSourcesResponse"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -958,7 +958,7 @@
         "tags": ["backups"], "operationId": "listBackups", "summary": "List server-side backup files (admin)",
         "responses": {
           "200": {"description": "Backup directory and files", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BackupFiles"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -970,15 +970,15 @@
         "responses": {
           "200": {"description": "Restore report", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BackupRestoreResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
+           "404": {"$ref": "#/components/responses/NotFound"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
     "/api/v1/backup": {
       "get": {
-        "tags": ["backups"], "operationId": "exportBackup", "summary": "Export the current user's backup JSON attachment",
-        "description": "Admin exports also include global settings and source settings; reader exports contain only their self-scoped data.",
+        "tags": ["backups"], "operationId": "exportBackup", "summary": "Export the admin's backup JSON attachment",
+        "description": "The export includes the admin's complete state, including global and source settings.",
         "responses": {
           "200": {"description": "Backup attachment with Content-Disposition", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BackupDoc"}}}},
           "401": {"$ref": "#/components/responses/Unauthorized"}, "default": {"$ref": "#/components/responses/Error"}
@@ -986,12 +986,12 @@
       },
       "post": {
         "tags": ["backups"], "operationId": "importBackup", "summary": "Validate and restore a Sumidoku backup document",
-        "parameters": [{"name": "sections", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated library,categories,progress,settings,sourceSettings. Omission selects all; settings and sourceSettings require admin."}],
+        "parameters": [{"name": "sections", "in": "query", "schema": {"type": "string"}, "description": "Comma-separated library,categories,progress,settings,sourceSettings. Omission selects all."}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BackupDoc"}}}},
         "responses": {
           "200": {"description": "Restore report", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/BackupRestoreResponse"}}}},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "413": {"$ref": "#/components/responses/PayloadTooLarge"},
+          "413": {"$ref": "#/components/responses/PayloadTooLarge"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -1053,7 +1053,7 @@
         "tags": ["sync"], "operationId": "compactSyncLog", "summary": "Compact the sync log into a fresh baseline (admin)",
         "responses": {
           "200": {"description": "Baseline cursor and removed event count", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/SyncCompactResponse"}}}},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
+          "401": {"$ref": "#/components/responses/Unauthorized"},
           "default": {"$ref": "#/components/responses/Error"}
         }
       }
@@ -1084,7 +1084,6 @@
       "NoContent": {"description": "No content"},
       "BadRequest": {"description": "Invalid request", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
       "Unauthorized": {"description": "Missing or invalid credential", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}, "example": {"error": {"code": "unauthorized", "message": "authentication required"}}}}},
-      "Forbidden": {"description": "The authenticated role cannot perform this operation", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
       "NotFound": {"description": "Resource not found", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
       "Unsupported": {"description": "Source capability unsupported; dynamic filters/listings/home/deep-link use HTTP 404, while notification, basic login and alternate covers use 501", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}, "example": {"error": {"code": "unsupported", "message": "feature not supported by source"}}}}},
       "Conflict": {"description": "State conflict, including duplicate, no_update, not_in_library, resync_required, source_disabled or busy", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Error"}}}},
@@ -1105,7 +1104,7 @@
       "ApiError": {
         "type": "object", "required": ["code", "message"],
         "properties": {
-          "code": {"type": "string", "enum": ["bad_request", "unauthorized", "forbidden", "not_found", "unsupported", "payload_too_large", "source_disabled", "duplicate", "no_update", "resync_required", "not_in_library", "bad_gateway", "source_error", "timeout", "internal", "busy"]},
+          "code": {"type": "string", "enum": ["bad_request", "unauthorized", "not_found", "unsupported", "payload_too_large", "source_disabled", "duplicate", "no_update", "resync_required", "not_in_library", "bad_gateway", "source_error", "timeout", "internal", "busy"]},
           "message": {"type": "string"}
         }
       },
@@ -1880,7 +1879,7 @@
       "SyncChange": {
         "type": "object", "required": ["origin", "originUserId", "originSequence", "entityKind", "entityKey", "deleted", "modifiedAt", "identity", "snapshot"],
         "properties": {
-          "origin": {"type": "string", "minLength": 1}, "originUserId": {"type": "integer", "format": "int64", "minimum": 1},
+          "origin": {"type": "string", "minLength": 1}, "originUserId": {"type": "integer", "format": "int64", "enum": [1]},
           "originSequence": {"type": "integer", "format": "int64", "minimum": 1},
           "entityKind": {"type": "string", "enum": ["manga", "manga_user", "category", "category_manga", "chapter", "chapter_user"]},
           "entityKey": {"type": "string", "minLength": 1, "description": "Original origin entity key, not a remapped local id."},
