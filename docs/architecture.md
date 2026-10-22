@@ -55,14 +55,27 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   failed dynamic-listings fetch degrades to the static list rather than
   failing the request.
 - API documentation (`api/docs.rs`, `assets/api-docs/`): `/api/openapi.json`
-  publishes a hand-maintained OpenAPI 3.0.3 document covering every `/api/v1`
-  route; OPDS is excluded. `/api/docs` and `/api/docs/` serve Swagger UI
-  5.34.0 with its JavaScript, CSS, Apache-2.0 license and bundled dependency
-  notices embedded in the binary. `validatorUrl: null` disables external spec
-  validation, so the page needs no external assets. The route drift test reads
-  `api/mod.rs` and compares the complete path/method set with the JSON; update
-  the document in the same PR as route or payload changes. Both Docker smoke
-  tests require the spec and the docs page.
+  publishes the hand-maintained OpenAPI 3.0.3 document that is the single REST
+  contract for every `/api/v1` route; OPDS is excluded. `cd webui && npm run
+  generate:api` uses only Node built-ins to regenerate the committed
+  `webui/src/api/types.ts` from the schema graph reachable through ordinary
+  JSON parameters, requests and responses. `npm run build` regenerates first,
+  and CI repeats generation followed by `git diff --exit-code` on the generated
+  file to reject stale output. The test-only validator in
+  `crates/server/tests/common/contract.rs` checks real JSON responses in the
+  shared request helpers against path/method/status/content schemas, including
+  references, required properties, maps, arrays, enums, nullable fields,
+  oneOf/allOf and x-tuple. WebSocket frames and NDJSON events stay outside
+  generation and response validation; their manually maintained TypeScript
+  protocols live in `webui/src/api/protocol.ts`. Binary content and OPDS are
+  excluded from generation and response validation as well.
+  `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its JavaScript, CSS,
+  Apache-2.0 license and bundled dependency notices embedded in the binary.
+  `validatorUrl: null` disables external spec validation, so the page needs no
+  external assets. The route drift test reads `api/mod.rs` and compares the
+  complete path/method set with the JSON; update the document in the same PR as
+  route or payload changes. Both Docker smoke tests require the spec and docs
+  page.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as

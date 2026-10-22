@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Search, SearchX, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
-import type { Manga, Source, SourceSearchResult } from '../api/types';
+import type { GlobalSearchResult, SearchManga, Source } from '../api/types';
 import { statusText } from '../lib/format';
 import {
 	type GlobalSearchFilterPrefs,
@@ -92,7 +92,7 @@ export default function SearchPage() {
 
 	const search = useGlobalSearch(sourceIds, query, query !== '' && sourceIds.length > 0);
 	const resultsById = useMemo(() => {
-		const map = new Map<number, SourceSearchResult>();
+		const map = new Map<number, GlobalSearchResult>();
 		for (const r of search.data?.sources ?? []) map.set(r.sourceId, r);
 		return map;
 	}, [search.data]);
@@ -101,7 +101,7 @@ export default function SearchPage() {
 	// The busy state uses a `<sourceId>:<key>` composite key: different sources can collide on the same key, and a bare key would cross-mark them
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-	async function openEntry(m: Manga) {
+	async function openEntry(m: SearchManga) {
 		if (m.id) {
 			navigate(`/manga/${m.id}`);
 			return;
@@ -120,7 +120,7 @@ export default function SearchPage() {
 		}
 	}
 
-	function busyKey(m: Manga): string {
+	function busyKey(m: SearchManga): string {
 		return `${m.sourceId}:${m.key}`;
 	}
 
@@ -238,10 +238,10 @@ function SourceSection({
 	onViewAll
 }: {
 	source: Source;
-	result: SourceSearchResult | undefined;
+	result: GlobalSearchResult | undefined;
 	pendingKey: string | null;
-	busyKey: (m: Manga) => string;
-	onOpen: (m: Manga) => void;
+	busyKey: (m: SearchManga) => string;
+	onOpen: (m: SearchManga) => void;
 	onViewAll: () => void;
 }) {
 	const { t } = useTranslation();

@@ -4,15 +4,9 @@ import { useTranslation } from 'react-i18next';
 import { BookOpen } from 'lucide-react';
 import { ApiError, api, setToken } from '../api/client';
 import { qk, queryClient } from '../api/hooks';
-import type { AccountUser } from '../api/types';
+import type { LoginResponse } from '../api/types';
 import { Button, Input } from '../components';
 import './login.css';
-
-interface LoginResponse {
-	token: string;
-	expiresAt: number;
-	user: AccountUser;
-}
 
 export default function LoginPage() {
 	const navigate = useNavigate();

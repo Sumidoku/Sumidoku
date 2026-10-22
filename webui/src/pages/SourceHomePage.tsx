@@ -6,13 +6,14 @@ import { ArrowLeft, ChevronRight, House, Search, TriangleAlert } from 'lucide-re
 import { sourceImageUrl } from '../api/client';
 import { useRegisterManga, useSource, useSourceHome } from '../api/hooks';
 import type {
+	AidokuListing,
 	HomeComponent,
 	HomeComponentValue,
 	HomeFilterItem,
-	HomeLink,
+	Link,
 	Listing,
-	Manga,
-	MangaWithChapter
+	MangaWithChapter,
+	SourceManga
 } from '../api/types';
 import { chapterLabel, relativeTime } from '../lib/format';
 import { Button, Chip, Cover, CoverCard, EmptyState, IconButton, Skeleton } from '../components';
@@ -29,11 +30,7 @@ export default function SourceHomePage() {
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
-	async function openManga(m: Manga) {
-		if (m.id) {
-			navigate(`/manga/${m.id}`);
-			return;
-		}
+	async function openManga(m: SourceManga) {
 		if (pendingKey) return;
 		setPendingKey(m.key);
 		try {
@@ -46,11 +43,11 @@ export default function SourceHomePage() {
 		}
 	}
 
-	function openListing(listing: Listing) {
+	function openListing(listing: Listing | AidokuListing) {
 		navigate(`/browse/${sourceId}?mode=${encodeURIComponent(listing.id)}`);
 	}
 
-	function openLink(link: HomeLink) {
+	function openLink(link: Link) {
 		const v = link.value;
 		if (!v) return;
 		if ('Url' in v) {
@@ -70,7 +67,7 @@ export default function SourceHomePage() {
 		navigate(`/browse/${sourceId}?${qs}`);
 	}
 
-	function linkBusy(link: HomeLink): boolean {
+	function linkBusy(link: Link): boolean {
 		return link.value !== null && 'Manga' in link.value && pendingKey === link.value.Manga.key;
 	}
 
@@ -224,7 +221,7 @@ export default function SourceHomePage() {
 		}
 		if ('MangaList' in v) {
 			const { ranking, page_size, entries } = v.MangaList;
-			const renderRow = (link: HomeLink, i: number) => {
+			const renderRow = (link: Link, i: number) => {
 				const tags = link.value && 'Manga' in link.value ? link.value.Manga.tags : null;
 				return (
 					<button
@@ -393,7 +390,7 @@ function HomeSection({
 	renderBody
 }: {
 	component: HomeComponent;
-	onOpenListing: (listing: Listing) => void;
+	onOpenListing: (listing: Listing | AidokuListing) => void;
 	renderBody: () => ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -429,7 +426,7 @@ function HomeImageScroller({
 	onOpenLink
 }: {
 	value: Extract<HomeComponentValue, { ImageScroller: unknown }>['ImageScroller'];
-	onOpenLink: (link: HomeLink) => void;
+	onOpenLink: (link: Link) => void;
 }) {
 	const { links, width, height, auto_scroll_interval } = value;
 	const ratio = width && height && width > 0 && height > 0 ? `${width} / ${height}` : undefined;

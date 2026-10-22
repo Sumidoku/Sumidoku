@@ -23,8 +23,8 @@ import {
 	useSourceListings,
 	useSourceSearch
 } from '../api/hooks';
-import type { Filter, FilterValue, Manga } from '../api/types';
-import { statusText } from '../lib/format';
+import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
+import { formatRangeBound, statusText } from '../lib/format';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
@@ -57,7 +57,7 @@ interface FilterStates {
 	rangeVals: Record<string, { from: string; to: string }>;
 }
 
-function initFilterStates(fs: Filter[]): FilterStates {
+function initFilterStates(fs: SourceFilter[]): FilterStates {
 	const s: FilterStates = {
 		textVals: {},
 		sortVals: {},
@@ -89,7 +89,7 @@ function initFilterStates(fs: Filter[]): FilterStates {
 }
 
 // The selected value takes ids (when present), otherwise the option name
-function optionKey(f: Filter, i: number): string {
+function optionKey(f: SourceFilter, i: number): string {
 	return f.ids?.[i] ?? f.options?.[i] ?? '';
 }
 
@@ -130,8 +130,8 @@ function applyFilterValues(s: FilterStates, values: FilterValue[]): FilterStates
 			next.multiVals[v.MultiSelect.id] = rec;
 		} else if ('Range' in v) {
 			next.rangeVals[v.Range.id] = {
-				from: v.Range.from === null ? '' : String(v.Range.from),
-				to: v.Range.to === null ? '' : String(v.Range.to)
+				from: formatRangeBound(v.Range.from),
+				to: formatRangeBound(v.Range.to)
 			};
 		}
 	}
@@ -274,7 +274,7 @@ export default function SourceBrowsePage() {
 		setSearchParams(m === 'search' ? {} : { mode: m }, { replace: true });
 	}
 
-	function cycleMulti(f: Filter, i: number) {
+	function cycleMulti(f: SourceFilter, i: number) {
 		const key = optionKey(f, i);
 		if (!key || !states) return;
 		const rec = { ...(states.multiVals[f.id] ?? {}) };
@@ -290,13 +290,13 @@ export default function SourceBrowsePage() {
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
 
 	// Online entries' covers go through the source image proxy; built-in source entries skip cover resolution while browsing (lightweight), registered ones use the manga cover cache
-	function entryCover(m: Manga): string | null {
+	function entryCover(m: SearchManga): string | null {
 		if (m.cover) return sourceImageUrl(sourceId, m.cover);
 		if (isBuiltin && m.id) return coverUrl(m.id);
 		return m.cover;
 	}
 
-	async function openEntry(m: Manga) {
+	async function openEntry(m: SearchManga) {
 		if (m.id) {
 			navigate(`/manga/${m.id}`);
 			return;
@@ -564,10 +564,10 @@ function FilterItem({
 	setStates,
 	onCycleMulti
 }: {
-	filter: Filter;
+	filter: SourceFilter;
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
-	onCycleMulti: (f: Filter, i: number) => void;
+	onCycleMulti: (f: SourceFilter, i: number) => void;
 }) {
 	const { t } = useTranslation();
 	if (f.type === 'note') {
@@ -771,7 +771,7 @@ function nextMultiVal(cur: CheckVal, canExclude: boolean): CheckVal {
 }
 
 /** Whether the filter in the draft would produce a submitted value (Aidoku enabledFilters convention, used to enable sorting) */
-function isFilterEnabled(f: Filter, states: FilterStates): boolean {
+function isFilterEnabled(f: SourceFilter, states: FilterStates): boolean {
 	switch (f.type) {
 		case 'sort':
 			return (states.sortVals[f.id]?.index ?? null) !== null;
@@ -787,7 +787,7 @@ function isFilterEnabled(f: Filter, states: FilterStates): boolean {
 }
 
 interface FilterChipProps {
-	filter: Filter;
+	filter: SourceFilter;
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
 	/** Chip changes submit immediately (Aidoku applies filter edits at once); setStates is async, so the new draft is passed along with the call */
@@ -949,7 +949,7 @@ function FilterHeader({
 	setStates,
 	onApply
 }: {
-	filters: Filter[];
+	filters: SourceFilter[];
 	states: FilterStates;
 	setStates: (s: FilterStates) => void;
 	onApply: (s: FilterStates) => void;

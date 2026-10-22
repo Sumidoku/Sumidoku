@@ -1,5 +1,6 @@
 import { pushToast } from '../components/Toast';
 import { translateApiError } from '../i18n';
+import type { StreamTerminal } from './protocol';
 
 const BASE = '/api/v1';
 const TOKEN_KEY = 'sumidoku.auth.token';
@@ -119,11 +120,6 @@ export const coverUrl = (mangaId: number, v?: string | null) => {
 	const sep = base.includes('?') ? '&' : '?';
 	return v ? `${base}${sep}v=${encodeURIComponent(v)}` : base;
 };
-
-/** The two terminal event shapes besides partial in an NDJSON streaming response */
-type StreamTerminal<TFinal> =
-	| { type: 'final'; payload: TFinal }
-	| { type: 'error'; error: { code: string; message: string } };
 
 export interface ApiStreamOptions<TPartial extends { type: string }> {
 	method?: string;

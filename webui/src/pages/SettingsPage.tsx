@@ -41,20 +41,20 @@ import {
 	useWhoami
 } from '../api/hooks';
 import type {
-	AidokuImportResult,
-	AidokuImportSkipped,
+	AidokuImportResponse,
+	AidokuSkipped,
 	AuthStatus,
-	BackupFileEntry,
-	BackupRestoreResult,
+	BackupFile,
+	BackupRestoreResponse,
 	Category,
 	FilterGroup,
-	FilterGroupRule,
-	FilterGroupRuleType,
-	SuwayomiImportResult,
-	SuwayomiImportSkipped,
-	SuwayomiSourceGroup,
-	TriStateSelection
+	FilterRule,
+	FilterRuleType,
+	SuwayomiImportResponse,
+	SuwayomiSkipped,
+	SuwayomiSourceReport
 } from '../api/types';
+import type { TriStateSelection } from '../lib/triState';
 import { MANGA_CONTENT_RATING_LEVELS } from '../lib/source';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
@@ -758,13 +758,13 @@ function draftOf(group: FilterGroup): GroupDraft {
 	return draft;
 }
 
-function rulesOf(draft: GroupDraft): FilterGroupRule[] {
-	const rules: FilterGroupRule[] = [];
+function rulesOf(draft: GroupDraft): FilterRule[] {
+	const rules: FilterRule[] = [];
 	for (const { type } of FLAG_RULE_TYPES) {
 		const state = draft.flags[type];
 		if (state !== 0) rules.push({ type, value: null, exclude: state === -1 });
 	}
-	const push = (type: FilterGroupRuleType, sel: TriStateSelection) => {
+	const push = (type: FilterRuleType, sel: TriStateSelection) => {
 		for (const [key, state] of Object.entries(sel)) {
 			rules.push({ type, value: Number(key), exclude: state === -1 });
 		}
@@ -1281,7 +1281,7 @@ function previewCounts(doc: Record<string, unknown>): Record<string, number> {
 	};
 }
 
-function BackupResultView({ result }: { result: BackupRestoreResult }) {
+function BackupResultView({ result }: { result: BackupRestoreResponse }) {
 	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
@@ -1310,13 +1310,13 @@ function BackupResultView({ result }: { result: BackupRestoreResult }) {
 	);
 }
 
-function aidokuSkippedLabel(t: TFunction, s: AidokuImportSkipped): string {
+function aidokuSkippedLabel(t: TFunction, s: AidokuSkipped): string {
 	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
 	const chapter = s.chapterKey ? t('settings.chapterSuffix', { key: s.chapterKey }) : '';
 	return `${what} ${s.sourceKey}/${s.mangaKey}${chapter}`;
 }
 
-function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
+function AidokuImportResultView({ result }: { result: AidokuImportResponse }) {
 	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
@@ -1343,13 +1343,13 @@ function AidokuImportResultView({ result }: { result: AidokuImportResult }) {
 	);
 }
 
-function suwayomiSkippedLabel(t: TFunction, s: SuwayomiImportSkipped): string {
+function suwayomiSkippedLabel(t: TFunction, s: SuwayomiSkipped): string {
 	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
 	const name = s.mihonSourceName || t('settings.sourceId', { id: s.mihonSourceId });
 	return `${what} ${name}/${s.mangaKey}`;
 }
 
-function suwayomiGroupName(t: TFunction, g: SuwayomiSourceGroup): string {
+function suwayomiGroupName(t: TFunction, g: SuwayomiSourceReport): string {
 	return g.mihonSourceName || t('settings.unknownSource', { id: g.mihonSourceId });
 }
 
@@ -1359,7 +1359,7 @@ function SuwayomiMappingSelect({
 	value,
 	onChange
 }: {
-	group: SuwayomiSourceGroup;
+	group: SuwayomiSourceReport;
 	value: string;
 	onChange: (key: string) => void;
 }) {
@@ -1384,7 +1384,7 @@ function SuwayomiMappingSelect({
 	);
 }
 
-function SuwayomiImportResultView({ result }: { result: SuwayomiImportResult }) {
+function SuwayomiImportResultView({ result }: { result: SuwayomiImportResponse }) {
 	const { t } = useTranslation();
 	return (
 		<div className="settings-backup__result">
@@ -1430,16 +1430,16 @@ function BackupSection({ isAdmin }: { isAdmin: boolean }) {
 	const fileRef = useRef<HTMLInputElement>(null);
 	const [preview, setPreview] = useState<BackupPreview | null>(null);
 	const [picked, setPicked] = useState<string[]>([]);
-	const [result, setResult] = useState<BackupRestoreResult | null>(null);
+	const [result, setResult] = useState<BackupRestoreResponse | null>(null);
 	const importAidoku = useImportAidoku();
 	const aibFileRef = useRef<HTMLInputElement>(null);
-	const [aib, setAib] = useState<{ file: File; preview: AidokuImportResult } | null>(null);
-	const [aibResult, setAibResult] = useState<AidokuImportResult | null>(null);
+	const [aib, setAib] = useState<{ file: File; preview: AidokuImportResponse } | null>(null);
+	const [aibResult, setAibResult] = useState<AidokuImportResponse | null>(null);
 	const importSuwayomi = useImportSuwayomi();
 	const swFileRef = useRef<HTMLInputElement>(null);
-	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResult } | null>(null);
+	const [sw, setSw] = useState<{ file: File; preview: SuwayomiImportResponse } | null>(null);
 	const [swMapping, setSwMapping] = useState<Record<string, string>>({});
-	const [swResult, setSwResult] = useState<SuwayomiImportResult | null>(null);
+	const [swResult, setSwResult] = useState<SuwayomiImportResponse | null>(null);
 	// The settings/sourceSettings sections write global state; the server rejects them for readers (403), so the options are hidden too
 	const sections = isAdmin
 		? BACKUP_SECTIONS
@@ -1840,8 +1840,8 @@ function ScheduledBackupSection() {
 	const save = useSaveServerSettings();
 	const backups = useBackupFiles();
 	const restore = useRestoreNamedBackup();
-	const [confirming, setConfirming] = useState<BackupFileEntry | null>(null);
-	const [result, setResult] = useState<BackupRestoreResult | null>(null);
+	const [confirming, setConfirming] = useState<BackupFile | null>(null);
+	const [result, setResult] = useState<BackupRestoreResponse | null>(null);
 	const [intervalText, setIntervalText] = useState<string | null>(null);
 	const [retentionText, setRetentionText] = useState<string | null>(null);
 

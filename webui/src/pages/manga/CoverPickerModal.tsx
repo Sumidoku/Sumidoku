@@ -3,11 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { Check, Images, TriangleAlert } from 'lucide-react';
 import { ApiError, sourceImageUrl } from '../../api/client';
 import { useAlternateCovers, useSelectCover } from '../../api/hooks';
-import type { MangaDetail } from '../../api/types';
+import type { Manga } from '../../api/types';
 import { Button, EmptyState, Modal, Spinner, pushToast } from '../../components';
 
 interface CoverPickerModalProps {
-	manga: MangaDetail;
+	manga: Manga;
 	onClose: () => void;
 }
 

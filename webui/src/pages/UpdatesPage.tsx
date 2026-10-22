@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ApiError, api, coverUrl } from '../api/client';
 import { useCategories, useFetchUpdate, useUpdateRecent } from '../api/hooks';
-import type { UpdateJob, UpdateJobStatus, UpdateSummary, UpdateWsFrame } from '../api/types';
+import type { UpdateSummary } from '../api/types';
+import type { UpdateJob, UpdateJobStatus, UpdateWsFrame } from '../api/protocol';
 import { subscribeWS } from '../api/ws';
 import { translateApiError } from '../i18n';
 import { chapterLabel, relativeTime } from '../lib/format';
@@ -249,7 +250,7 @@ export default function UpdatesPage() {
 										<Badge>{t('updates.newChapter')}</Badge>
 									</div>
 									<div className="faint updates-item__time">
-										{relativeTime(e.fetchedAt ?? e.fetched_at)}
+										{relativeTime(e.fetchedAt)}
 									</div>
 								</div>
 							</Link>

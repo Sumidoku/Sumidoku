@@ -8,50 +8,56 @@ import {
 import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
-	AidokuImportResult,
+	AidokuImportResponse,
 	AuthStatus,
-	BackupListResponse,
-	BackupRestoreResult,
+	BackupFiles,
+	BackupRestoreResponse,
 	Category,
-	Chapter,
-	ChapterPatchBody,
 	ChapterProgress,
+	ChapterWithDownload,
 	DeepLinkResponse,
-	Filter,
 	FilterGroup,
-	FilterGroupRule,
+	FilterRule,
 	FilterValue,
 	GlobalSearchResponse,
-	GlobalSearchStreamEvent,
+	GlobalSearchResult,
+	HistoryPage,
 	HomeLayout,
-	HomeStreamEvent,
 	LibraryPage,
 	LibrarySort,
-	LibrarySourceCount,
 	Listing,
-	ManagedUser,
 	Manga,
-	MangaDetail,
+	MangaInput,
 	MangaPage,
-	MangaUpdateStreamEvent,
-	MigrateLookupResult,
+	MigrationLookupResponse,
 	MigrateRequest,
 	MigrateResponse,
-	MigrateSource,
-	PageData,
-	PatchCategoryBody,
-	PatchMangaBody,
-	RepoSourceEntry,
+	MigrationSource,
+	Page,
+	ProgressPatch,
+	QueuedResponse,
+	RecentPage,
+	RepoSource,
 	ScanOutcome,
-	SearchStreamEvent,
 	Source,
+	SourceCount,
+	SourceFilter,
 	SourceRepo,
-	SourceSearchResult,
-	SourceUpdate,
-	SuwayomiImportResult,
-	TriStateSelection,
-	UpdateAllOutcome
+	SourceSettings,
+	SourceWithMigration,
+	SuwayomiImportResponse,
+	UpdateAllSourcesResponse,
+	UpdateCategoryRequest,
+	UpdateMangaRequest,
+	User
 } from './types';
+import type {
+	GlobalSearchStreamEvent,
+	HomeStreamEvent,
+	MangaUpdateStreamEvent,
+	SearchStreamEvent
+} from './protocol';
+import type { TriStateSelection } from '../lib/triState';
 
 export const queryClient = new QueryClient({
 	defaultOptions: {
@@ -132,14 +138,14 @@ export function useIsAdmin(): boolean {
 }
 
 export function useUsers(enabled = true) {
-	return useQuery({ queryKey: qk.users, queryFn: () => api<ManagedUser[]>('/users'), enabled });
+	return useQuery({ queryKey: qk.users, queryFn: () => api<User[]>('/users'), enabled });
 }
 
 export function useCreateUser() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: { username: string; password: string; role: string }) =>
-			api<ManagedUser>('/users', { method: 'POST', body, silent: true }),
+			api<User>('/users', { method: 'POST', body, silent: true }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.users })
 	});
 }
@@ -149,7 +155,7 @@ export function useUpdateUser() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ id, ...body }: { id: number; username?: string; role?: string; password?: string }) =>
-			api<ManagedUser>(`/users/${id}`, { method: 'PATCH', body, silent: true }),
+			api<User>(`/users/${id}`, { method: 'PATCH', body, silent: true }),
 		onSuccess: () => {
 			void qc.invalidateQueries({ queryKey: qk.users });
 			void qc.invalidateQueries({ queryKey: qk.whoami });
@@ -241,7 +247,7 @@ export function useCategories() {
 export function useLibrarySourceCounts(enabled = true) {
 	return useQuery({
 		queryKey: [...qk.library, 'source-counts'],
-		queryFn: () => api<LibrarySourceCount[]>('/library/source-counts'),
+		queryFn: () => api<SourceCount[]>('/library/source-counts'),
 		enabled
 	});
 }
@@ -249,7 +255,7 @@ export function useLibrarySourceCounts(enabled = true) {
 export function useSourceFilters(sourceId: number, enabled = true) {
 	return useQuery({
 		queryKey: qk.sourceFilters(sourceId),
-		queryFn: () => emptyOn404(api<Filter[]>(`/sources/${sourceId}/filters`, { silent: true })),
+		queryFn: () => emptyOn404(api<SourceFilter[]>(`/sources/${sourceId}/filters`, { silent: true })),
 		enabled
 	});
 }
@@ -340,7 +346,7 @@ export function useGlobalSearch(sourceIds: number[], query: string, enabled = tr
 				body: { query: query || undefined, page: 1, sourceIds },
 				signal,
 				onEvent: (ev) => {
-					const result: SourceSearchResult =
+					const result: GlobalSearchResult =
 						ev.type === 'source'
 							? ev.source
 							: { sourceId: ev.sourceId, entries: [], hasNextPage: false, error: ev.error };
@@ -371,7 +377,7 @@ export function useListing(sourceId: number, listingId: string, enabled = true) 
 
 export function useRegisterManga() {
 	return useMutation({
-		mutationFn: (body: { sourceId: number; manga: Manga }) =>
+		mutationFn: (body: { sourceId: number; manga: MangaInput }) =>
 			apiStream<{ id: number }, MangaUpdateStreamEvent>('/manga', {
 				method: 'POST',
 				body,
@@ -429,8 +435,8 @@ export function useSetMangaCategories() {
 export function usePatchManga() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ id, ...body }: { id: number } & PatchMangaBody) =>
-			api<MangaDetail>(`/manga/${id}`, { method: 'PATCH', body }),
+		mutationFn: ({ id, ...body }: { id: number } & UpdateMangaRequest) =>
+			api<Manga>(`/manga/${id}`, { method: 'PATCH', body }),
 		onSuccess: (_d, { id }) => void qc.invalidateQueries({ queryKey: qk.manga(id) })
 	});
 }
@@ -438,7 +444,7 @@ export function usePatchManga() {
 export function usePatchCategory() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ id, ...body }: { id: number } & PatchCategoryBody) =>
+		mutationFn: ({ id, ...body }: { id: number } & UpdateCategoryRequest) =>
 			api<Category>(`/categories/${id}`, { method: 'PATCH', body }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.categories })
 	});
@@ -448,7 +454,7 @@ export function usePatchCategory() {
 export function useUpdateChapter() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ id, mangaId: _mangaId, ...body }: { id: number; mangaId?: number } & ChapterPatchBody) =>
+		mutationFn: ({ id, mangaId: _mangaId, ...body }: { id: number; mangaId?: number } & ProgressPatch) =>
 			api<ChapterProgress>(`/chapter/${id}`, { method: 'PATCH', body }),
 		onSuccess: (_d, { mangaId }) => {
 			if (mangaId !== undefined) void qc.invalidateQueries({ queryKey: qk.chapters(mangaId) });
@@ -458,7 +464,7 @@ export function useUpdateChapter() {
 
 export function useBatchChapters() {
 	return useMutation({
-		mutationFn: (body: { chapterIds: number[] } & ChapterPatchBody) =>
+		mutationFn: (body: { chapterIds: number[] } & ProgressPatch) =>
 			api<{ updated: number }>('/chapter/batch', { method: 'POST', body })
 	});
 }
@@ -466,7 +472,7 @@ export function useBatchChapters() {
 export function useEnqueueDownloads() {
 	return useMutation({
 		mutationFn: (chapterIds: number[]) =>
-			api<{ queued: number }>('/downloads', { method: 'POST', body: { chapterIds } })
+			api<QueuedResponse>('/downloads', { method: 'POST', body: { chapterIds } })
 	});
 }
 
@@ -484,7 +490,7 @@ export function useImportSource() {
 		mutationFn: (file: File) => {
 			const form = new FormData();
 			form.append('file', file);
-			return api<SourceUpdate>('/sources/import', { method: 'POST', formData: form });
+			return api<SourceWithMigration>('/sources/import', { method: 'POST', formData: form });
 		},
 		onSuccess: () => invalidateSourceViews(qc)
 	});
@@ -562,7 +568,7 @@ export function useRepoSources(filter: RepoBrowseFilter, enabled = true) {
 			// explicit distinction: undefined means no filtering; an empty string means no rating is selected (the server matches the empty set)
 			if (filter.contentRating !== undefined) qs.set('contentRating', filter.contentRating);
 			const suffix = qs.size > 0 ? `?${qs}` : '';
-			return api<RepoSourceEntry[]>(`/source-repos/sources${suffix}`);
+			return api<RepoSource[]>(`/source-repos/sources${suffix}`);
 		},
 		enabled
 	});
@@ -622,7 +628,7 @@ export function useUpdateSource() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (sourceId: number) =>
-			api<SourceUpdate>(`/sources/${sourceId}/update`, { method: 'POST' }),
+			api<SourceWithMigration>(`/sources/${sourceId}/update`, { method: 'POST' }),
 		onSuccess: () => invalidateSourceViews(qc)
 	});
 }
@@ -630,7 +636,7 @@ export function useUpdateSource() {
 export function useUpdateAllSources() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: () => api<UpdateAllOutcome>('/source-repos/update-all', { method: 'POST' }),
+		mutationFn: () => api<UpdateAllSourcesResponse>('/source-repos/update-all', { method: 'POST' }),
 		onSuccess: () => invalidateSourceViews(qc)
 	});
 }
@@ -646,7 +652,7 @@ export interface MangaQueryOpts {
 export function useManga(id: number, opts: MangaQueryOpts = {}) {
 	return useQuery({
 		queryKey: qk.manga(id),
-		queryFn: () => api<MangaDetail>(`/manga/${id}`, { silent: opts.silent }),
+		queryFn: () => api<Manga>(`/manga/${id}`, { silent: opts.silent }),
 		enabled: opts.enabled ?? true,
 		// The detail page gates its whole render on this query and unmounts while the reader is open;
 		// the default 5-minute gc would drop the cache mid-session and returning would flash a full
@@ -658,7 +664,7 @@ export function useManga(id: number, opts: MangaQueryOpts = {}) {
 export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 	return useQuery({
 		queryKey: qk.chapters(mangaId),
-		queryFn: () => api<Chapter[]>(`/manga/${mangaId}/chapters`, { silent: opts.silent }),
+		queryFn: () => api<ChapterWithDownload[]>(`/manga/${mangaId}/chapters`, { silent: opts.silent }),
 		enabled: opts.enabled ?? true
 		// gcTime: the global 24h bound (see queryClient) — never Infinity here, chapter rows carry a
 		// per-row thumbnail string and a pathological source can embed base64 data URIs in it
@@ -669,7 +675,7 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 export function useChapterPages(chapterId: number) {
 	return useQuery({
 		queryKey: ['chapter', chapterId, 'pages'],
-		queryFn: () => api<PageData[]>(`/chapter/${chapterId}/pages`),
+		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`),
 		staleTime: Infinity
 	});
 }
@@ -679,12 +685,12 @@ export function useRefreshManga() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (id: number) =>
-			apiStream<MangaDetail, MangaUpdateStreamEvent>(`/manga/${id}?refresh`, {
+			apiStream<Manga, MangaUpdateStreamEvent>(`/manga/${id}?refresh`, {
 				onEvent: (ev) => {
 					if (ev.type !== 'manga') return;
 					// detail snapshots render progressively; chapters don't go into the detail cache — the terminal state overwrites everything on return
 					const { chapters, ...detail } = ev.manga;
-					qc.setQueryData<MangaDetail>(qk.manga(id), (cur) => (cur ? { ...cur, ...detail } : cur));
+					qc.setQueryData<Manga>(qk.manga(id), (cur) => (cur ? { ...cur, ...detail } : cur));
 				}
 			}),
 		onSuccess: (data, id) => qc.setQueryData(qk.manga(id), data)
@@ -704,7 +710,7 @@ export function useSelectCover() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ id, url }: { id: number; url: string }) =>
-			api<MangaDetail>(`/manga/${id}/cover`, { method: 'PUT', body: { url } }),
+			api<Manga>(`/manga/${id}/cover`, { method: 'PUT', body: { url } }),
 		onSuccess: (data, { id }) => {
 			qc.setQueryData(qk.manga(id), data);
 			void qc.invalidateQueries({ queryKey: qk.library });
@@ -718,15 +724,15 @@ export function useRefreshChapters() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (mangaId: number) =>
-			apiStream<Chapter[], MangaUpdateStreamEvent>(`/manga/${mangaId}/chapters?refresh`, {
+			apiStream<ChapterWithDownload[], MangaUpdateStreamEvent>(`/manga/${mangaId}/chapters?refresh`, {
 				onEvent: (ev) => {
 					if (ev.type !== 'manga' || !ev.manga.chapters) return;
 					// chapter snapshots render progressively: source-side chapters have no library id/progress yet, so negative ids are placeholders,
 					// and the page uses them to block read/select/download until the terminal state overwrites everything on return
-					const partial: Chapter[] = ev.manga.chapters.map((c, i) => ({
+					const partial: ChapterWithDownload[] = ev.manga.chapters.map((c, i) => ({
 						...c,
 						id: -(i + 1),
-						pageCount: null,
+						pageCount: 0,
 						lastPageRead: 0,
 						isRead: false,
 						isBookmarked: false,
@@ -741,12 +747,11 @@ export function useRefreshChapters() {
 }
 
 // ---- history / updates pagination ----
-import type { HistoryPage as HistoryPageData, SourceSettings, UpdateRecentPage } from './types';
 
 export function useHistory() {
 	return useInfiniteQuery({
 		queryKey: ['history'],
-		queryFn: ({ pageParam }) => api<HistoryPageData>(`/history?page=${pageParam}`),
+		queryFn: ({ pageParam }) => api<HistoryPage>(`/history?page=${pageParam}`),
 		initialPageParam: 1,
 		getNextPageParam: nextPage
 	});
@@ -755,7 +760,7 @@ export function useHistory() {
 export function useUpdateRecent() {
 	return useInfiniteQuery({
 		queryKey: ['update-recent'],
-		queryFn: ({ pageParam }) => api<UpdateRecentPage>(`/update/recent?page=${pageParam}`),
+		queryFn: ({ pageParam }) => api<RecentPage>(`/update/recent?page=${pageParam}`),
 		initialPageParam: 1,
 		getNextPageParam: nextPage
 	});
@@ -821,7 +826,7 @@ export function useRestoreBackup() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ doc, sections }: { doc: unknown; sections: string[] }) =>
-			api<BackupRestoreResult>(`/backup?sections=${sections.join(',')}`, {
+			api<BackupRestoreResponse>(`/backup?sections=${sections.join(',')}`, {
 				method: 'POST',
 				body: doc
 			}),
@@ -832,7 +837,7 @@ export function useRestoreBackup() {
 export function useBackupFiles() {
 	return useQuery({
 		queryKey: qk.backups,
-		queryFn: () => api<BackupListResponse>('/backups')
+		queryFn: () => api<BackupFiles>('/backups')
 	});
 }
 
@@ -841,7 +846,7 @@ export function useRestoreNamedBackup() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (name: string) =>
-			api<BackupRestoreResult>('/backups/restore', { method: 'POST', body: { name } }),
+			api<BackupRestoreResponse>('/backups/restore', { method: 'POST', body: { name } }),
 		onSuccess: () => qc.invalidateQueries()
 	});
 }
@@ -851,7 +856,7 @@ export function useImportAidoku() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: ({ file, dryRun }: { file: File; dryRun: boolean }) =>
-			api<AidokuImportResult>(`/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
+			api<AidokuImportResponse>(`/import/aidoku?dryRun=${dryRun}`, { method: 'POST', body: file }),
 		onSuccess: (_result, vars) => {
 			if (!vars.dryRun) qc.invalidateQueries();
 		}
@@ -875,7 +880,7 @@ export function useImportSuwayomi() {
 			if (mapping && Object.keys(mapping).length > 0) {
 				query += `&sourceMapping=${encodeURIComponent(JSON.stringify(mapping))}`;
 			}
-			return api<SuwayomiImportResult>(`/import/suwayomi?${query}`, { method: 'POST', body: file });
+			return api<SuwayomiImportResponse>(`/import/suwayomi?${query}`, { method: 'POST', body: file });
 		},
 		onSuccess: (_result, vars) => {
 			if (!vars.dryRun) qc.invalidateQueries();
@@ -1074,7 +1079,7 @@ function invalidateGroups(qc: QueryClient) {
 export function useCreateFilterGroup() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (body: { name: string; rules: FilterGroupRule[] }) =>
+		mutationFn: (body: { name: string; rules: FilterRule[] }) =>
 			api<FilterGroup>('/filter-groups', { method: 'POST', body, silent: true }),
 		onSuccess: () => invalidateGroups(qc)
 	});
@@ -1083,7 +1088,7 @@ export function useCreateFilterGroup() {
 export function useUpdateFilterGroup() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: ({ id, ...body }: { id: number; name?: string; rules?: FilterGroupRule[] }) =>
+		mutationFn: ({ id, ...body }: { id: number; name?: string; rules?: FilterRule[] }) =>
 			api<FilterGroup>(`/filter-groups/${id}`, { method: 'PATCH', body, silent: true }),
 		onSuccess: () => invalidateGroups(qc)
 	});
@@ -1111,7 +1116,7 @@ export function useReorderFilterGroups() {
 export function useMigrateSources() {
 	return useQuery({
 		queryKey: ['migrate', 'sources'],
-		queryFn: () => api<MigrateSource[]>('/migrate/sources')
+		queryFn: () => api<MigrationSource[]>('/migrate/sources')
 	});
 }
 
@@ -1119,7 +1124,7 @@ export function useMigrateSources() {
 export function migrateLookup(mangaId: number, targetSourceId: number, query?: string) {
 	const qs = new URLSearchParams({ mangaId: String(mangaId), targetSourceId: String(targetSourceId) });
 	if (query) qs.set('query', query);
-	return api<MigrateLookupResult>(`/migrate/lookup?${qs}`, { silent: true });
+	return api<MigrationLookupResponse>(`/migrate/lookup?${qs}`, { silent: true });
 }
 
 export function useMigrate() {

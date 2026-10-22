@@ -4,7 +4,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { ArrowLeft, ArrowRight, Ellipsis, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useLibrary, useMigrate, useMigrateSources } from '../../api/hooks';
-import type { LibraryEntry, Manga, MigrateMode, MigrateResultItem } from '../../api/types';
+import type { LibraryEntry, MigrateMode, MigrateResult, SearchManga } from '../../api/types';
 import { mapPool } from '../../lib/pool';
 import { compareSourceName } from '../../lib/source';
 import {
@@ -26,8 +26,8 @@ type Step = 'source' | 'series' | 'destinations' | 'match';
 interface Row {
 	manga: LibraryEntry;
 	state: 'pending' | 'matching' | 'matched' | 'notfound';
-	target?: Manga;
-	result?: MigrateResultItem;
+	target?: SearchManga;
+	result?: MigrateResult;
 }
 
 /** Batch auto-match: title-search target sources in priority order; the first source with results wins and its first entry is taken */
@@ -53,7 +53,7 @@ async function autoMatch(
 	});
 }
 
-function Reason({ item }: { item: MigrateResultItem }) {
+function Reason({ item }: { item: MigrateResult }) {
 	const { t } = useTranslation();
 	const text: Record<string, string> = {
 		not_found: t('migrate.reason.not_found'),
@@ -445,13 +445,13 @@ function RematchModal({
 	row: Row;
 	destinations: number[];
 	destName: (id: number) => string;
-	onPick: (candidate: Manga) => void;
+	onPick: (candidate: SearchManga) => void;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
 	const [query, setQuery] = useState(row.manga.title);
 	const [searching, setSearching] = useState(false);
-	const [results, setResults] = useState<Manga[] | null>(null);
+	const [results, setResults] = useState<SearchManga[] | null>(null);
 
 	async function search() {
 		setSearching(true);

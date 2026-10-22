@@ -290,3 +290,37 @@ async fn multi_language_single_select_setting() {
 	assert_eq!(item["value"]["Select"]["default"], "ja", "{body}");
 	assert_eq!(body["values"]["language"], "ja", "{body}");
 }
+
+#[tokio::test]
+async fn static_settings_preserve_normalized_nulls_and_omitted_icon_inset() {
+	let app = test_app().await;
+	common::install_fixture_source(
+		&app.tmp,
+		"en.static-nulls",
+		"Static Nulls",
+		&common::mutation_wasm_path(),
+	);
+	std::fs::write(
+		app.tmp.path().join("sources/en.static-nulls/settings.json"),
+		r#"[
+			{"type": "login", "key": "auth", "title": "Auth", "method": "oauth"},
+			{"type": "editable-list", "key": "paths", "title": "Paths"},
+			{"type": "page", "title": "Page", "icon": {"type": "system", "name": "gear", "color": "blue"}, "items": []}
+		]"#,
+	)
+	.expect("settings.json");
+	scan(&app.app).await;
+	let id = source_id_by_key(&app.app, "en.static-nulls").await;
+	let body = settings_body(&app.app, id).await;
+	let items = body["settings"].as_array().expect("settings array");
+	let login = items.iter().find(|item| item["key"] == "auth").expect("login setting");
+	for key in ["pkce", "use_email", "clear_cookies_on_log_out"] {
+		assert!(login["value"]["Login"][key].is_null(), "{key} should remain null: {body}");
+	}
+	let editable = items.iter().find(|item| item["key"] == "paths").expect("editable list");
+	assert!(editable["value"]["EditableList"]["inline"].is_null(), "{body}");
+	let page = items.iter().find(|item| item["type"] == "page").expect("page setting");
+	let icon = &page["value"]["Page"]["icon"];
+	assert_eq!(icon["type"], "system");
+	assert!(icon.get("inset").is_none(), "static icon omitted inset: {icon}");
+}

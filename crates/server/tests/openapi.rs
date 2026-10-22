@@ -149,6 +149,223 @@ fn representative_response_shapes_match_handlers() {
 	assert!(errors.is_empty(), "{errors:?}");
 }
 
+fn contract_fixture() -> (Value, Value) {
+	let document = serde_json::json!({
+		"components": {"schemas": {
+			"Base": {
+				"type": "object", "required": ["id"],
+				"properties": {"id": {"type": "integer"}}
+			},
+			"Payload": {
+				"type": "object",
+				"required": ["tuple", "map", "array", "choice", "combined", "nullable", "mode"],
+				"properties": {
+					"tuple": {"x-tuple": [{"type": "string"}, {"type": "integer", "nullable": true}]},
+					"map": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "integer"}}},
+					"array": {"type": "array", "items": {"type": "boolean"}},
+					"choice": {"oneOf": [{"type": "string"}, {"type": "integer"}]},
+					"combined": {"allOf": [
+						{"$ref": "#/components/schemas/Base"},
+						{"type": "object", "required": ["extra"], "properties": {"extra": {"type": "boolean"}}}
+					]},
+					"nullable": {"type": "string", "nullable": true},
+					"mode": {"type": "string", "enum": ["a", "b"]}
+				}
+			}
+		}}
+	});
+	let schema = document["components"]["schemas"]["Payload"].clone();
+	(document, schema)
+}
+
+#[test]
+fn contract_validator_accepts_refs_collections_compositions_and_nullable() {
+	let (document, schema) = contract_fixture();
+	let value = serde_json::json!({
+		"tuple": ["cover", null],
+		"map": {"a": [1, 2]},
+		"array": [true, false],
+		"choice": "text",
+		"combined": {"id": 1, "extra": true},
+		"nullable": null,
+		"mode": "a"
+	});
+	common::contract::validate_json(&document, &schema, &value).expect("valid contract payload");
+}
+
+#[test]
+fn contract_validator_rejects_each_contract_violation() {
+	let (document, schema) = contract_fixture();
+	let valid = serde_json::json!({
+		"tuple": ["cover", null],
+		"map": {"a": [1, 2]},
+		"array": [true, false],
+		"choice": "text",
+		"combined": {"id": 1, "extra": true},
+		"nullable": null,
+		"mode": "a"
+	});
+	let reject = |value: Value, expected: &str| {
+		let error = common::contract::validate_json(&document, &schema, &value).expect_err("invalid payload must fail");
+		assert!(error.contains(expected), "expected {expected:?} in {error}");
+	};
+	reject(serde_json::json!({}), "required property");
+	let mut value = valid.clone();
+	value["tuple"] = serde_json::json!(["cover"]);
+	reject(value, "tuple items");
+	let mut value = valid.clone();
+	value["tuple"] = serde_json::json!(["cover", "bad"]);
+	reject(value, "$.tuple[1]");
+	let mut value = valid.clone();
+	value["map"] = serde_json::json!({"a": ["bad"]});
+	reject(value, "$.map.a[0]");
+	let mut value = valid.clone();
+	value["array"] = serde_json::json!([true, 1]);
+	reject(value, "$.array[1]");
+	let mut value = valid.clone();
+	value["choice"] = serde_json::json!(true);
+	reject(value, "oneOf");
+	let mut value = valid.clone();
+	value["combined"] = serde_json::json!({"id": 1});
+	reject(value, "$.combined.extra");
+	let mut value = valid.clone();
+	value["nullable"] = serde_json::json!(1);
+	reject(value, "$.nullable");
+	let mut value = valid;
+	value["mode"] = serde_json::json!("c");
+	reject(value, "enum");
+}
+
+#[test]
+fn contract_validator_enforces_unicode_length_and_numeric_boundaries() {
+	let document = serde_json::json!({});
+	let cases = [
+		(
+			serde_json::json!({"type": "string", "minLength": 2}),
+			serde_json::json!("🦀🦀"),
+			serde_json::json!("🦀"),
+			"at least 2 characters",
+		),
+		(
+			serde_json::json!({"type": "integer", "minimum": 1}),
+			serde_json::json!(1),
+			serde_json::json!(0),
+			"number >= 1",
+		),
+		(
+			serde_json::json!({"type": "integer", "maximum": 3}),
+			serde_json::json!(3),
+			serde_json::json!(4),
+			"number <= 3",
+		),
+	];
+	for (schema, valid, invalid, expected) in cases {
+		common::contract::validate_json(&document, &schema, &valid).expect("valid boundary value");
+		let error = common::contract::validate_json(&document, &schema, &invalid).expect_err("out-of-range value");
+		assert!(error.contains(expected), "expected {expected:?} in {error}");
+	}
+}
+
+#[test]
+fn response_validator_prefers_static_routes_and_skips_ndjson() {
+	let mut headers = axum::http::HeaderMap::new();
+	headers.insert(header::CONTENT_TYPE, "application/json".parse().expect("JSON header"));
+	common::contract::validate_response("PATCH", "/api/v1/categories/reorder", StatusCode::OK, &headers, b"[]")
+		.expect("static reorder response");
+	let error = common::contract::validate_response(
+		"GET",
+		"/api/v1/version",
+		StatusCode::OK,
+		&headers,
+		br#"{"version":1}"#,
+	)
+	.expect_err("real response schema must reject the wrong type");
+	assert!(error.contains("expected string"), "{error}");
+	headers.insert(header::CONTENT_TYPE, "application/x-ndjson".parse().expect("NDJSON header"));
+	common::contract::validate_response(
+		"POST",
+		"/api/v1/sources/1/search",
+		StatusCode::OK,
+		&headers,
+		b"not JSON",
+	)
+	.expect("NDJSON is outside the JSON response validator");
+}
+
+fn response_fixture() -> Value {
+	serde_json::json!({
+		"paths": {
+			"/api/v1/json": {"get": {"responses": {
+				"200": {"description": "JSON", "content": {"application/json": {"schema": {
+					"type": "object", "required": ["ok"], "properties": {"ok": {"type": "boolean"}}
+				}}}}
+			}}},
+			"/api/v1/no-content": {"post": {"responses": {
+				"204": {"description": "No content"}
+			}}},
+			"/api/v1/stream": {"get": {"responses": {
+				"200": {"description": "NDJSON", "content": {"application/x-ndjson": {"schema": {"type": "string"}}}}
+			}}},
+			"/api/v1/binary": {"get": {"responses": {
+				"200": {"description": "Binary", "content": {
+					"image/png": {"schema": {"type": "string", "format": "binary"}},
+					"image/*": {"schema": {"type": "string", "format": "binary"}}
+				}}
+			}}},
+			"/api/v1/ws": {"get": {
+				"x-websocket": {"messageFormat": "json-text"},
+				"responses": {
+					"101": {"description": "Upgrade"},
+					"401": {"description": "Unauthorized", "content": {"application/json": {"schema": {
+						"type": "object", "required": ["error"], "properties": {"error": {"type": "object"}}
+					}}}}
+				}
+			}}
+		}
+	})
+}
+
+#[test]
+fn response_validator_enforces_body_and_media_contract() {
+	let document = response_fixture();
+	let check = |method: &str, path: &str, status: StatusCode, mime: Option<&str>, body: &[u8]| {
+		let mut headers = axum::http::HeaderMap::new();
+		if let Some(mime) = mime {
+			headers.insert(header::CONTENT_TYPE, mime.parse().expect("content type header"));
+		}
+		common::contract::validate_response_with_document(&document, method, path, status, &headers, body)
+	};
+	let reject = |result: Result<(), String>, expected: &str| {
+		let error = result.expect_err("contract violation must fail");
+		assert!(error.contains(expected), "expected {expected:?} in {error}");
+	};
+	check("GET", "/api/v1/json", StatusCode::OK, Some("application/json; charset=utf-8"), br#"{"ok":true}"#)
+		.expect("valid JSON");
+	reject(check("GET", "/api/v1/json", StatusCode::OK, Some("application/json"), b""), "empty application/json");
+	reject(check("GET", "/api/v1/json", StatusCode::OK, Some("text/plain"), br#"{"ok":true}"#), "content type text/plain");
+	reject(check("GET", "/api/v1/json", StatusCode::OK, None, br#"{"ok":true}"#), "missing response Content-Type");
+	reject(check("GET", "/api/v1/json", StatusCode::CREATED, Some("application/json"), br#"{"ok":true}"#), "no OpenAPI response");
+	check("POST", "/api/v1/no-content", StatusCode::NO_CONTENT, None, b"").expect("documented no-content");
+	reject(check("POST", "/api/v1/no-content", StatusCode::NO_CONTENT, Some("application/json"), b"{}"), "empty response body");
+	check("GET", "/api/v1/stream", StatusCode::OK, Some("application/x-ndjson"), b"{}\n").expect("documented NDJSON");
+	reject(check("GET", "/api/v1/stream", StatusCode::OK, Some("application/json"), b"{}\n"), "content type application/json");
+	check("GET", "/api/v1/binary", StatusCode::OK, Some("image/png"), b"\x89PNG").expect("documented binary");
+	check("GET", "/api/v1/binary", StatusCode::OK, Some("image/svg+xml"), b"<svg/>").expect("documented image wildcard");
+	reject(check("GET", "/api/v1/binary", StatusCode::OK, Some("application/zip"), b"\x89PNG"), "content type application/zip");
+	reject(check("GET", "/api/v1/ws", StatusCode::UNAUTHORIZED, Some("application/json"), b""), "empty application/json");
+	check("GET", "/api/v1/ws", StatusCode::SWITCHING_PROTOCOLS, Some("text/plain"), b"frame").expect("WebSocket exemption");
+	let mut headers = axum::http::HeaderMap::new();
+	headers.insert(header::CONTENT_TYPE, "application/json".parse().expect("JSON header"));
+	common::contract::validate_response(
+		"GET",
+		"/api/v1/nope",
+		StatusCode::NOT_FOUND,
+		&headers,
+		br#"{"error":{"code":"not_found","message":"missing"}}"#,
+	)
+	.expect("unknown-route JSON error");
+}
+
 #[tokio::test]
 async fn spec_is_served_from_embedded_assets() {
 	let TestApp { app, tmp: _tmp, .. } = test_app().await;

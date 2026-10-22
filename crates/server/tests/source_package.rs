@@ -512,6 +512,23 @@ async fn static_filters_normalize_to_runtime_shape() {
 }
 
 #[tokio::test]
+async fn range_filter_value_accepts_omitted_bounds() {
+	let app = test_app().await;
+	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let source_id = source_id_by_key(&app.app, "en.example-source").await;
+	let (status, body) = request(
+		&app.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1, "filters": [{"Range": {"id": "pages"}}]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert!(body["entries"].is_array(), "{body}");
+}
+
+#[tokio::test]
 async fn chapter_number_serializes_cleanly() {
 	let app = test_app().await;
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
