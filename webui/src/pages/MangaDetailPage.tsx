@@ -124,7 +124,7 @@ export default function MangaDetailPage() {
 	const manga = mangaQuery.data ?? null;
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	// The manifest declaration wins (Aidoku config?.supportsX ?? inferred); the filter list is the fallback when undeclared.
-	// While manga has not arrived, 0 stands in: the source is not found and filters 501 into an empty list, so nothing is tappable
+	// While manga has not arrived, 0 is only a placeholder and cannot match a real source
 	const sourceQuery = useSource(manga?.sourceId ?? 0);
 	// The local source has no filters concept (the endpoint returns 501 unsupported), so the query is not issued
 	const isLocal = sourceQuery.data?.kind === 'local';

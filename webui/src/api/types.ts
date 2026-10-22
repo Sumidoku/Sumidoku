@@ -483,7 +483,7 @@ export type Listing = {
 
 export type LocalSettings = {
 	dirs: Array<string>;
-	oneshotsDir?: string | null;
+	oneshotsDir: string | null;
 };
 
 export type LoginRequest = {
@@ -824,6 +824,21 @@ export type SettingValue = string | {
 		titles: Array<string> | null;
 		default: string | null;
 	};
+};
+
+export type Settings = {
+	localDirs?: Array<string>;
+	localOneshotsDir?: string | null;
+	"incognito.enabled"?: boolean;
+	"library.default_category"?: string;
+	"library.show_uncategorized"?: boolean;
+	"library.excluded_update_categories"?: Array<number>;
+	"library.skip_titles"?: Array<"hasUnread" | "completed" | "notStarted">;
+	"library.refresh_metadata"?: boolean;
+	"library.update_interval_hours"?: number;
+	"local.dirs"?: Array<string>;
+	"local.oneshots_dir"?: string;
+	[key: string]: JsonValue;
 };
 
 export type SettingsValues = {

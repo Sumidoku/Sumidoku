@@ -1054,7 +1054,7 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "404": {
+          "501": {
             "$ref": "#/components/responses/Unsupported"
           },
           "default": {
@@ -1147,7 +1147,7 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "404": {
+          "501": {
             "$ref": "#/components/responses/Unsupported"
           },
           "default": {
@@ -1230,7 +1230,7 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "404": {
+          "501": {
             "$ref": "#/components/responses/Unsupported"
           },
           "default": {
@@ -1278,7 +1278,7 @@
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
-          "404": {
+          "501": {
             "$ref": "#/components/responses/Unsupported"
           },
           "default": {
@@ -3106,7 +3106,7 @@
           "settings"
         ],
         "operationId": "getSettings",
-        "summary": "Get the admin's settings as a flat bare-JSON map",
+        "summary": "Get the admin's settings as a structured object",
         "responses": {
           "200": {
             "description": "Settings",
@@ -3131,14 +3131,21 @@
           "settings"
         ],
         "operationId": "putSettings",
-        "summary": "Merge settings and return the effective map",
-        "description": "The admin may write every supported key. Read-only and server-namespaced keys are ignored.",
+        "summary": "Update settings and return the effective structured object",
+        "description": "Accepts a complete structured ServerSettings object or a legacy flat dotted-key map. Read-only and server-namespaced keys are ignored.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ServerSettings"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ServerSettings"
+                  },
+                  {
+                    "$ref": "#/components/schemas/Settings"
+                  }
+                ]
               }
             }
           }
@@ -3765,7 +3772,7 @@
         ],
         "parameters": [
           {
-            "name": "missingOnly",
+            "name": "dryRun",
             "in": "query",
             "schema": {
               "type": "boolean",
@@ -3773,12 +3780,12 @@
             }
           },
           {
-            "name": "skipLocked",
+            "name": "sourceMapping",
             "in": "query",
             "schema": {
-              "type": "boolean",
-              "default": false
-            }
+              "type": "string"
+            },
+            "description": "URL-encoded JSON object mapping Mihon source ids to Aidoku source keys"
           }
         ],
         "requestBody": {
@@ -3862,7 +3869,7 @@
         }
       },
       "DownloadChapterId": {
-        "name": "chapter_id",
+        "name": "id",
         "in": "path",
         "required": true,
         "schema": {
@@ -8920,7 +8927,8 @@
       "LocalSettings": {
         "type": "object",
         "required": [
-          "dirs"
+          "dirs",
+          "oneshotsDir"
         ],
         "properties": {
           "dirs": {
@@ -8971,7 +8979,8 @@
           "lastRun": {
             "type": "integer",
             "format": "int64",
-            "nullable": true
+            "nullable": true,
+            "description": "Server-managed backup timestamp; ignored on structured writes."
           },
           "dir": {
             "type": "string",

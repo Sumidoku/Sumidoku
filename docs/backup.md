@@ -47,6 +47,9 @@ deletes files beyond the retention count, oldest first; the newest file is
 never deleted, even with `backup.retention_count = 0`. At startup, if more
 than one interval elapsed since `backup.last_run` (or no backup was ever
 taken), one backup runs immediately, so downtime does not leave a gap.
+Structured settings writes leave `backup.last_run` untouched, so saving an
+unrelated setting cannot replay an older timestamp. Legacy flat dotted-key
+writes retain their existing reset behavior.
 `GET /api/v1/backups/files` lists the files (name, size, creation time, newest
 first); `POST /api/v1/backups/files/restore` with `{"name": "<file>"}` restores
 one through the same validated import path as the upload endpoint, and the
