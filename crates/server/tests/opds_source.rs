@@ -384,10 +384,7 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 	let pages = body.as_array().expect("pages array");
 	assert_eq!(pages.len(), 2);
 	assert_eq!(pages[0]["content"]["OpdsZip"].as_str(), Some("p1.png"));
-	assert_eq!(pages[0]["width"], 1);
-	assert_eq!(pages[0]["height"], 1);
-	assert!(pages[1].get("width").is_none());
-	assert!(pages[1].get("height").is_none());
+	assert!(pages.iter().all(|page| page.get("width").is_none() && page.get("height").is_none()));
 	for (index, want) in [CBZ_PAGE_1, CBZ_PAGE_2].iter().enumerate() {
 		let (status, _, bytes) =
 			request_full(&t.app, "GET", &format!("/api/v1/chapter/{}/page/{index}", chapters[1].0), None).await;

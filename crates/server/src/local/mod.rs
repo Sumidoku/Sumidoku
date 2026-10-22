@@ -56,7 +56,6 @@ use serde_json::Value;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"];
 const ARCHIVE_EXTS: &[&str] = &["cbz", "zip", "epub"];
@@ -767,60 +766,6 @@ pub(crate) fn is_image_entry(name: &str) -> bool {
 	!name.ends_with('/')
 		&& !name.split('/').any(|part| part.starts_with('.') || part == "__MACOSX")
 		&& has_ext(name, IMAGE_EXTS)
-}
-
-/// Dimension measurement reads bytes without resolving EPUB media metadata; actual page responses keep the OPF lookup in read_page
-pub async fn read_page_bytes(
-	local_dirs: &[PathBuf],
-	zip: &Arc<ZipCache>,
-	manga_key: &str,
-	chapter_key: &str,
-	entry: &str,
-) -> ApiResult<Vec<u8>> {
-	let (bytes, _) = read_page_impl(local_dirs, zip, manga_key, chapter_key, entry, false).await?;
-	Ok(bytes)
-}
-
-/// Reads at most `head_bytes` from a page for dimension measurement: image chapters read a single file head,
-/// archive chapters extract only the leading bytes of the entry. The declared MIME is not resolved.
-pub async fn read_page_head(
-	local_dirs: &[PathBuf],
-	zip: &Arc<ZipCache>,
-	manga_key: &str,
-	chapter_key: &str,
-	entry: &str,
-	head_bytes: usize,
-) -> ApiResult<Vec<u8>> {
-	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
-	require_key(chapter_key)?;
-	let chapter_path = chapter_fs_path(dir, rel, chapter_key).await?;
-	let metadata = tokio::fs::metadata(&chapter_path)
-		.await
-		.map_err(|_| ApiError::not_found("local chapter not found"))?;
-	if metadata.is_dir() {
-		require_component(entry)?;
-		let file = tokio::fs::File::open(chapter_path.join(entry))
-			.await
-			.map_err(|_| ApiError::not_found("page not found"))?;
-		let mut buf = Vec::with_capacity(head_bytes);
-		tokio::io::AsyncReadExt::read_to_end(&mut file.take(head_bytes as u64), &mut buf)
-			.await
-			.map_err(|e| ApiError::internal(format!("read local page head failed: {e}")))?;
-		return Ok(buf);
-	}
-	let entry_name = entry.to_string();
-	let chapter_path = chapter_path.clone();
-	let zip = zip.clone();
-	tokio::task::spawn_blocking(move || zip.read_entry_head(&chapter_path, &entry_name, head_bytes))
-		.await
-		.map_err(|e| ApiError::internal(format!("read zip entry head failed: {e}")))?
-		.map_err(|e| {
-			if e.kind() == std::io::ErrorKind::NotFound {
-				ApiError::not_found("page not found")
-			} else {
-				ApiError::internal(format!("read local archive failed: {e}"))
-			}
-		})
 }
 
 /// Reads one page's bytes and mime: image chapters read a single file, archive chapters extract by entry name
