@@ -456,6 +456,27 @@
 	line-height: 1.5;
 }
 
+.settings-backup__skipped {
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	padding: 10px 12px;
+}
+
+.settings-backup__skipped > summary {
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.settings-backup__skipped[open] > summary {
+	margin-bottom: 10px;
+}
+
+.settings-backup__skipped .settings-modal-text {
+	color: var(--text-dim);
+	font-size: 13px;
+}
+
 .settings-backup__warnings {
 	margin: 8px 0 0;
 	padding-left: 18px;
@@ -463,6 +484,10 @@
 	line-height: 1.6;
 	max-height: 200px;
 	overflow-y: auto;
+}
+
+.settings-backup__warnings li {
+	overflow-wrap: anywhere;
 }
 
 .settings-backup__mapping {

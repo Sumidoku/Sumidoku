@@ -121,6 +121,8 @@
     "restored": "Restored: {{library}} library · {{categories}} categories · {{progress}} progress · {{settings}} settings · {{sourceSettings}} source settings",
     "restoredAll": "All entries restored; nothing was skipped",
     "skippedItems": "The following entries were skipped:",
+    "skippedItemsCount": "Skipped items ({{count}})",
+    "willSkipItemsCount": "Items to skip ({{count}})",
     "libraryEntry": "library entry",
     "progressEntry": "reading progress",
     "chapterSuffix": " / chapter {{key}}",
