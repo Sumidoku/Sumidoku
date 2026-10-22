@@ -1,5 +1,5 @@
 use crate::model::{ChapterRow, MangaRow, PageRow, unix_now};
-use crate::source::page_dimensions::{PageDimensionUpdate, image_dimensions, persist_downloaded as persist_page_dimensions};
+use crate::source::page_dimensions::{DIMENSION_HEAD_BYTES, PageDimensionUpdate, measure_with_fallback, persist_downloaded as persist_page_dimensions};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
 use crate::state::AppState;
 use aidoku::PageContext;
@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+use tokio::io::AsyncReadExt;
 use tokio::sync::{Mutex, Notify, Semaphore, broadcast};
 use tokio::task::JoinSet;
 
@@ -704,7 +705,8 @@ impl DownloadManager {
 	}
 }
 
-/// Fetches one page into the tmp dir; dimension updates stay in memory until the artifact is packaged
+/// Fetches one page into the tmp dir; dimension updates stay in memory until the artifact is packaged.
+/// Dimensions are measured from the written file with a 64 KiB head read, falling back to a full read only when necessary.
 async fn fetch_page(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -721,11 +723,36 @@ async fn fetch_page(
 		.await
 		.map_err(|e| format!("page {idx}: {e}"))?;
 	let name = format!("{idx:03}.{ext}");
-	tokio::fs::write(tmp_dir.join(&name), &bytes)
+	let path = tmp_dir.join(&name);
+	tokio::fs::write(&path, &bytes)
 		.await
 		.map_err(|e| format!("write page {idx}: {e}"))?;
-	let update = (!is_text).then(|| PageDimensionUpdate::new(page, image_dimensions(&bytes)));
+	let update = if is_text {
+		None
+	} else {
+		let head = read_page_file_head(&path, DIMENSION_HEAD_BYTES).await;
+		let path = path.clone();
+		let dims = measure_with_fallback(head, || async { read_page_file_full(&path).await }).await;
+		dims.map(|d| PageDimensionUpdate::new(page, d))
+	};
 	Ok((name, update))
+}
+
+async fn read_page_file_head(path: &Path, head_bytes: usize) -> crate::error::ApiResult<Vec<u8>> {
+	let file = tokio::fs::File::open(path)
+		.await
+		.map_err(|e| crate::error::ApiError::internal(format!("open downloaded page for dimension head read: {e}")))?;
+	let mut buf = Vec::with_capacity(head_bytes);
+	tokio::io::AsyncReadExt::read_to_end(&mut file.take(head_bytes as u64), &mut buf)
+		.await
+		.map_err(|e| crate::error::ApiError::internal(format!("read downloaded page head: {e}")))?;
+	Ok(buf)
+}
+
+async fn read_page_file_full(path: &Path) -> crate::error::ApiResult<Vec<u8>> {
+	tokio::fs::read(path)
+		.await
+		.map_err(|e| crate::error::ApiError::internal(format!("read downloaded page for dimension fallback: {e}")))
 }
 
 async fn page_bytes(
