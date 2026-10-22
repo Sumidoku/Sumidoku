@@ -824,6 +824,129 @@ async fn library_search_sort_filter() {
 }
 
 #[tokio::test]
+async fn library_latest_chapter_sort() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
+	for id in [a, b, c] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	for id in [a, b] {
+		sqlx::query("UPDATE chapter SET fetched_at = 100, date_uploaded = 100 WHERE manga_id = ?")
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("reset chapter timestamps");
+	}
+	let a_chapters = first_chapters(&app, a, 2).await;
+	let b_chapters = first_chapters(&app, b, 2).await;
+	for (chapter_id, fetched_at, date_uploaded) in [
+		(a_chapters[0], 100, 900),
+		(a_chapters[1], 200, 900),
+		(b_chapters[0], 300, 100),
+		(b_chapters[1], 100, 100),
+	] {
+		sqlx::query("UPDATE chapter SET fetched_at = ?, date_uploaded = ? WHERE id = ?")
+			.bind(fetched_at)
+			.bind(date_uploaded)
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.expect("set chapter timestamps");
+	}
+	for (id, last_fetch) in [(a, 900), (b, 100), (c, 1000)] {
+		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+			.bind(last_fetch)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set chapter refresh timestamp");
+	}
+	sqlx::query("DELETE FROM chapter WHERE manga_id = ?")
+		.bind(c)
+		.execute(&pool)
+		.await
+		.expect("remove chapters");
+
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a, c]);
+
+	sqlx::query("UPDATE chapter SET fetched_at = 300 WHERE id = ?")
+		.bind(a_chapters[1])
+		.execute(&pool)
+		.await
+		.expect("tie latest chapter timestamp");
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![a, b, c]);
+}
+
+#[tokio::test]
+async fn library_latest_chapter_refresh_keeps_first_seen_order() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b) = (ids[0].0, ids[1].0);
+	for id in [a, b] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	for (id, fetched_at, last_fetch) in [(a, 100, 1), (b, 200, 200)] {
+		sqlx::query("UPDATE chapter SET fetched_at = ? WHERE manga_id = ?")
+			.bind(fetched_at)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set first-seen timestamps");
+		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+			.bind(last_fetch)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set refresh timestamps");
+	}
+	let before: Vec<(i64, i64)> = sqlx::query_as("SELECT id, fetched_at FROM chapter WHERE manga_id = ? ORDER BY id")
+		.bind(a)
+		.fetch_all(&pool)
+		.await
+		.expect("chapters before refresh");
+	assert!(!before.is_empty());
+
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a]);
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{a}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body.as_array().expect("chapters").len(), before.len());
+	let after: Vec<(i64, i64)> = sqlx::query_as("SELECT id, fetched_at FROM chapter WHERE manga_id = ? ORDER BY id")
+		.bind(a)
+		.fetch_all(&pool)
+		.await
+		.expect("chapters after refresh");
+	assert_eq!(after, before);
+	let last_fetch: Option<i64> = sqlx::query_scalar("SELECT chapters_last_fetched_at FROM manga WHERE id = ?")
+		.bind(a)
+		.fetch_one(&pool)
+		.await
+		.expect("refresh timestamp");
+	assert!(last_fetch.expect("chapter refresh timestamp") > 200);
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a]);
+}
+
+#[tokio::test]
 async fn library_source_counts() {
 	let TestApp {
 		app,
