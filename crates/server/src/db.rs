@@ -27,13 +27,9 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 		.fetch_optional(&pool)
 		.await?;
 	if rebaseline.is_some() {
-		// Deleting reader origins also removes their latest shared state; rebuild it from the remaining admin rows
-		crate::sync::compact::compact(&pool)
+		crate::sync::compact::rebaseline(&pool)
 			.await
 			.map_err(|e| Error::Sync(e.message().to_string()))?;
-		sqlx::query("DELETE FROM setting WHERE key = 'sync.single_owner_rebaseline'")
-			.execute(&pool)
-			.await?;
 	}
 	Ok(pool)
 }
@@ -75,7 +71,7 @@ mod tests {
 			(16, "979AD5AC41A4DB74145E953C5DEEEEC8A1A2E58B5DD04176DC09A649C155BD1B91393C48AD38823593203B9018DFD2C4"),
 			(17, "25C04C3F4F4643EDAF682FAB6AFB7FCB13D9642E6B75FFF00F8230A7F2D71DD0C5D65CFFBD3E2B4914ADB6766E1B97F7"),
 			(18, "A00A6D869B8A591DCF5BDFC20B7909C8F892305FA8967C462954974A132C2D69E1D355E8B61ED670CEEF4E0F40701AEC"),
-			(19, "B79357E14D2E3A9F8777EB4BE37F3CBA1C234197BA4884EB8CB0B68640A5688F4147D40757EE8830F9B42BDFE665DD8C"),
+			(19, "E7FBBD708D51ABE490FC7258E694CE7F479548E5ED0E9544563CF7A990F1F7C8F30B4C28A565AD66F58F607AD88CE8B5"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -235,16 +231,6 @@ mod tests {
 				.await
 				.expect("insert setting");
 			sqlx::query(
-				"INSERT INTO sync_change
-				 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
-				 VALUES (?, 'manga_user', 'key', 0, 1, '{}', '{}', 'peer', ?, 'key', 1)",
-			)
-			.bind(user_id)
-			.bind(user_id)
-			.execute(&pool)
-			.await
-			.expect("insert sync change");
-			sqlx::query(
 				"INSERT INTO sync_alias (origin, origin_user_id, user_id, entity_kind, origin_entity_key, entity_key)
 				 VALUES ('peer', ?, ?, 'manga_user', 'key', 'local')",
 			)
@@ -263,11 +249,24 @@ mod tests {
 			.await
 			.expect("insert sync origin state");
 		}
+		let original_sequence: i64 = sqlx::query_scalar(
+			"SELECT sequence FROM sync_change WHERE entity_kind = 'manga' AND entity_key = ? ORDER BY sequence DESC LIMIT 1",
+		)
+		.bind(manga_id.to_string())
+		.fetch_one(&pool)
+		.await
+		.expect("original shared sequence");
 		sqlx::query("UPDATE manga SET title = 'Reader updated', last_modified_at = 5000 WHERE id = ?")
 			.bind(manga_id)
 			.execute(&pool)
 			.await
 			.expect("update shared manga");
+		let (shared_identity, shared_snapshot): (String, String) =
+			sqlx::query_as("SELECT identity, snapshot FROM sync_manga_state WHERE manga_id = ?")
+				.bind(manga_id)
+				.fetch_one(&pool)
+				.await
+				.expect("shared manga state");
 		sqlx::query("DELETE FROM sync_change WHERE entity_kind = 'manga' AND entity_key = ?")
 			.bind(manga_id.to_string())
 			.execute(&pool)
@@ -276,13 +275,100 @@ mod tests {
 		sqlx::query(
 			"INSERT INTO sync_change
 			 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
-			 VALUES (1, 'manga', ?, 0, 5000, '{}', '{}', 'reader-peer', 2, ?, 9000)",
+			 VALUES (1, 'manga', ?, 0, 5000, ?, ?, 'reader-peer', 2, ?, 9000)",
 		)
 		.bind(manga_id.to_string())
+		.bind(shared_identity)
+		.bind(shared_snapshot)
 		.bind(manga_id.to_string())
 		.execute(&pool)
 		.await
 		.expect("insert reader-shared event");
+		let deleted_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'deleted-shared', 'Delete me') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert deleted manga");
+		let (deleted_identity, deleted_snapshot): (String, String) =
+			sqlx::query_as("SELECT identity, snapshot FROM sync_manga_state WHERE manga_id = ?")
+				.bind(deleted_id)
+				.fetch_one(&pool)
+				.await
+				.expect("deleted manga state");
+		sqlx::query("DELETE FROM manga WHERE id = ?")
+			.bind(deleted_id)
+			.execute(&pool)
+			.await
+			.expect("delete shared manga");
+		sqlx::query("DELETE FROM sync_change WHERE entity_kind = 'manga' AND entity_key = ?")
+			.bind(deleted_id.to_string())
+			.execute(&pool)
+			.await
+			.expect("remove deleted manga events");
+		let deleted_modified_at = serde_json::from_str::<serde_json::Value>(&deleted_snapshot)
+			.expect("deleted snapshot json")["lastModifiedAt"]
+			.as_i64()
+			.expect("deleted snapshot time")
+			+ 1;
+		sqlx::query(
+			"INSERT INTO sync_change
+			 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
+			 VALUES (1, 'manga', ?, 1, ?, ?, ?, 'reader-peer', 2, ?, 9001)",
+		)
+		.bind(deleted_id.to_string())
+		.bind(deleted_modified_at)
+		.bind(deleted_identity)
+		.bind(deleted_snapshot)
+		.bind(deleted_id.to_string())
+		.execute(&pool)
+		.await
+		.expect("insert reader tombstone");
+		let owner_deleted_id: i64 = sqlx::query_scalar(
+			"INSERT INTO manga (id, source_id, key, title) VALUES (?, ?, 'removed-library', 'Removed library') RETURNING id",
+		)
+		.bind(deleted_id + 100)
+		.bind(source_id)
+		.fetch_one(&pool)
+		.await
+		.expect("insert owner-state manga");
+		sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 1)")
+			.bind(owner_deleted_id)
+			.execute(&pool)
+			.await
+			.expect("insert old admin library state");
+		sqlx::query("DELETE FROM manga_user WHERE manga_id = ? AND user_id = 1")
+			.bind(owner_deleted_id)
+			.execute(&pool)
+			.await
+			.expect("delete admin library state");
+		let owner_deleted_key = format!("{owner_deleted_id}:1");
+		let (owner_modified_at, owner_identity, owner_snapshot): (i64, String, String) = sqlx::query_as(
+			"SELECT modified_at, identity, snapshot FROM sync_change
+			 WHERE user_id = 1 AND entity_kind = 'manga_user' AND entity_key = ? AND deleted = 1
+			 ORDER BY sequence DESC LIMIT 1",
+		)
+		.bind(&owner_deleted_key)
+		.fetch_one(&pool)
+		.await
+		.expect("owner tombstone state");
+		sqlx::query("DELETE FROM sync_change WHERE user_id = 1 AND entity_kind = 'manga_user' AND entity_key = ? AND deleted = 1")
+			.bind(&owner_deleted_key)
+			.execute(&pool)
+			.await
+			.expect("replace owner tombstone origin");
+		sqlx::query(
+			"INSERT INTO sync_change
+			 (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot, origin, origin_user_id, origin_entity_key, origin_sequence)
+			 VALUES (1, 'manga_user', ?, 1, ?, json_set(?, '$.userId', 2), json_set(?, '$.userId', 2), 'reader-peer', 2, ?, 9002)",
+		)
+		.bind(&owner_deleted_key)
+		.bind(owner_modified_at)
+		.bind(owner_identity)
+		.bind(owner_snapshot)
+		.bind(format!("{owner_deleted_id}:2"))
+		.execute(&pool)
+		.await
+		.expect("insert reader owner-state tombstone");
 		let instance_id: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
 			.fetch_one(&pool)
 			.await
@@ -357,12 +443,107 @@ mod tests {
 		assert_eq!(shared.origin_user_id, 1);
 		assert_eq!(shared.origin, current_instance);
 		assert_eq!(shared.snapshot["title"], "Reader updated");
+		assert!(shared.modified_at > 5000);
 		assert!(shared.origin_sequence > 0);
 		let marker: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'sync.single_owner_rebaseline'")
 			.fetch_one(&pool)
 			.await
 			.expect("rebaseline marker");
 		assert_eq!(marker, 0);
+		let tombstone = baseline
+			.changes
+			.iter()
+			.rev()
+			.find(|change| change.entity_kind == "manga" && change.entity_key == deleted_id.to_string())
+			.expect("shared tombstone");
+		assert!(tombstone.deleted);
+		assert_eq!(tombstone.origin_user_id, 1);
+		assert!(tombstone.modified_at > deleted_modified_at);
+		let owner_tombstone = baseline
+			.changes
+			.iter()
+			.rev()
+			.find(|change| change.entity_kind == "manga_user" && change.entity_key == owner_deleted_key)
+			.expect("owner-state tombstone");
+		assert!(owner_tombstone.deleted);
+		assert_eq!(owner_tombstone.origin, current_instance);
+		assert_eq!(owner_tombstone.origin_user_id, 1);
+		assert_eq!(owner_tombstone.origin_entity_key, owner_deleted_key);
+		assert_eq!(owner_tombstone.identity["userId"], 1);
+		assert_eq!(owner_tombstone.snapshot["userId"], 1);
+		assert!(owner_tombstone.modified_at > owner_modified_at);
+
+		let peer_url = format!("sqlite://{}/peer.db?mode=rwc", tmp.path().display());
+		let peer_pool = super::create_pool(&peer_url).await.expect("peer pool");
+		let peer_source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, version, wasm_path) VALUES ('en.test', 'Test', 1, 'unused') RETURNING id",
+		)
+		.fetch_one(&peer_pool)
+		.await
+		.expect("insert peer source");
+		for (key, title) in [("shared", "Shared"), ("deleted-shared", "Delete me"), ("removed-library", "Removed library")] {
+			sqlx::query("INSERT INTO manga (source_id, key, title) VALUES (?, ?, ?)")
+				.bind(peer_source_id)
+				.bind(key)
+				.bind(title)
+				.execute(&peer_pool)
+				.await
+				.expect("insert peer manga");
+		}
+		sqlx::query("UPDATE manga SET last_modified_at = 1 WHERE key IN ('deleted-shared', 'removed-library')")
+			.execute(&peer_pool)
+			.await
+			.expect("set peer original versions");
+		sqlx::query("UPDATE manga SET last_modified_at = 5000 WHERE key = 'shared'")
+			.execute(&peer_pool)
+			.await
+			.expect("set peer conflict version");
+		sqlx::query(
+			"UPDATE sync_change SET modified_at = 1, snapshot = json_set(snapshot, '$.lastModifiedAt', 1)
+			 WHERE entity_kind = 'manga' AND entity_key IN (SELECT CAST(id AS TEXT) FROM manga WHERE key IN ('deleted-shared', 'removed-library'))",
+		)
+		.execute(&peer_pool)
+		.await
+		.expect("set peer event versions");
+		sqlx::query(
+			"UPDATE sync_change
+			 SET modified_at = 5000, snapshot = json_set(snapshot, '$.lastModifiedAt', 5000),
+			  origin = 'reader-peer', origin_user_id = 2, origin_sequence = 9000
+			 WHERE entity_kind = 'manga' AND entity_key = (SELECT CAST(id AS TEXT) FROM manga WHERE key = 'shared')",
+		)
+		.execute(&peer_pool)
+		.await
+		.expect("set peer equal-time conflict");
+		sqlx::query(
+			"INSERT INTO sync_origin_state (origin, origin_user_id, user_id, entity_kind, origin_entity_key, origin_sequence)
+			 VALUES (?, 1, 1, 'manga', ?, ?)",
+		)
+		.bind(&current_instance)
+		.bind(manga_id.to_string())
+		.bind(original_sequence)
+		.execute(&peer_pool)
+		.await
+		.expect("seed existing peer origin");
+		let wire: Vec<crate::sync::WireChange> = baseline.changes.iter().cloned().map(crate::sync::WireChange::from).collect();
+		crate::sync::apply::push(&peer_pool, &current_instance, 1, wire).await.expect("apply baseline");
+		let title: String = sqlx::query_scalar("SELECT title FROM manga WHERE key = 'shared'")
+			.fetch_one(&peer_pool)
+			.await
+			.expect("updated shared title");
+		assert_eq!(title, "Reader updated");
+		let deleted_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE key = 'deleted-shared'")
+			.fetch_one(&peer_pool)
+			.await
+			.expect("deleted manga count");
+		assert_eq!(deleted_count, 0);
+		let owner_count: i64 = sqlx::query_scalar(
+			"SELECT COUNT(*) FROM manga_user mu JOIN manga m ON m.id = mu.manga_id WHERE m.key = 'removed-library'",
+		)
+		.fetch_one(&peer_pool)
+		.await
+		.expect("deleted owner-state count");
+		assert_eq!(owner_count, 0);
+		peer_pool.close().await;
 		pool.close().await;
 	}
 }

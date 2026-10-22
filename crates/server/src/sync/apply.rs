@@ -630,7 +630,7 @@ async fn fanout_users(
 	Ok(users)
 }
 
-async fn set_final_version(
+pub(crate) async fn set_final_version(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	kind: &str,
 	local_key: &str,

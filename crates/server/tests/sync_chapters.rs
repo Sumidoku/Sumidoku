@@ -173,7 +173,20 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 	let old_high_watermark = high_watermark(&pool).await;
 	pool.close().await;
 
-	let pool = sumidoku_server::db::create_pool(&url).await.expect("apply 0018");
+	let options = SqliteConnectOptions::from_str(&url)
+		.expect("database url")
+		.create_if_missing(true)
+		.foreign_keys(true);
+	let pool = SqlitePoolOptions::new()
+		.max_connections(1)
+		.connect_with(options.clone())
+		.await
+		.expect("connect migration database");
+	let mut conn = pool.acquire().await.expect("migration connection");
+	for migration in migrator.iter().filter(|migration| migration.version == 18) {
+		conn.apply(migration).await.expect("apply 0018 migration");
+	}
+	drop(conn);
 	let instance: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
@@ -245,7 +258,11 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 		.expect("change count");
 	pool.close().await;
 
-	let pool = sumidoku_server::db::create_pool(&url).await.expect("restart migrated database");
+	let pool = SqlitePoolOptions::new()
+		.max_connections(1)
+		.connect_with(options)
+		.await
+		.expect("restart migrated database");
 	let restarted: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
