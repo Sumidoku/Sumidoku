@@ -55,15 +55,6 @@ async fn assert_local_origins(pool: &SqlitePool, events: &[SyncChange]) {
 	}
 }
 
-async fn add_user(pool: &SqlitePool, id: i64) {
-	sqlx::query("INSERT INTO user (id, username, role) VALUES (?, ?, 'reader')")
-		.bind(id)
-		.bind(format!("user{id}"))
-		.execute(pool)
-		.await
-		.expect("add user");
-}
-
 async fn local_source_id(pool: &SqlitePool) -> i64 {
 	sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
 		.fetch_one(pool)
@@ -147,7 +138,6 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 	}
 	drop(conn);
 
-	add_user(&pool, 2).await;
 	sqlx::query("INSERT INTO source (id, key, name, wasm_path) VALUES (10, 'test.source', 'Test', '')")
 		.execute(&pool)
 		.await
@@ -169,7 +159,7 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 	sqlx::query(
 		"INSERT INTO chapter_user
 		 (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded) VALUES
-		 (200, 1, 3, 1, 0, 123, 1), (200, 2, 5, 1, 1, 456, 0)",
+		 (200, 1, 3, 1, 0, 123, 1)",
 	)
 	.execute(&pool)
 	.await
@@ -220,25 +210,12 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 	let admin = since(&pool, 1, old_high_watermark).await;
 	assert_eq!(kinds(&admin), [("chapter", false), ("chapter", false), ("chapter_user", false)]);
 	assert!(admin.iter().all(|event| event.modified_at == 0));
-	let history_only = since(&pool, 2, old_high_watermark).await;
-	assert_eq!(kinds(&history_only), [("manga", false), ("chapter", false), ("chapter_user", false)]);
-	assert_eq!(history_only[0].modified_at, 100);
-	assert_eq!(history_only[1].modified_at, 0);
-	assert_eq!(history_only[2].modified_at, 0);
-	assert_eq!(history_only[2].snapshot["lastPageRead"], 5);
-	assert_eq!(history_only[2].snapshot["lastReadAt"], 456);
-	assert!(history_only[2].snapshot.get("isDownloaded").is_none());
+	assert_eq!(admin[2].snapshot["lastPageRead"], 3);
+	assert_eq!(admin[2].snapshot["lastReadAt"], 123);
+	assert!(admin[2].snapshot.get("isDownloaded").is_none());
 	assert!(admin[0].snapshot.get("fetchedAt").is_none());
 	assert_time_contract(&admin);
-	assert_time_contract(&history_only);
 	assert_local_origins(&pool, &admin).await;
-	assert_local_origins(&pool, &history_only).await;
-	let membership: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga_user WHERE manga_id = 100 AND user_id = 2")
-		.fetch_one(&pool)
-		.await
-		.expect("history-only membership");
-	assert_eq!(membership, 0);
-	assert!(!history_only.iter().any(|event| event.entity_kind == "manga_user"));
 
 	let states: Vec<(i64, String, String, String, String)> = sqlx::query_as(
 		"SELECT chapter_id, source_key, manga_key, chapter_key, snapshot FROM sync_chapter_state ORDER BY chapter_id",
@@ -296,7 +273,7 @@ async fn local_origin_fill_preserves_remote_metadata_and_mapped_entity_key() {
 		"INSERT INTO sync_change
 		 (user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key, origin_sequence,
 		  deleted, modified_at, identity, snapshot)
-		 VALUES (1, 'manga', 'local-mapped', 'peer-instance', 9, 'remote-key', 77, 0, 0, '{}', '{\"lastModifiedAt\":0}')",
+		 VALUES (1, 'manga', 'local-mapped', 'peer-instance', 1, 'remote-key', 77, 0, 0, '{}', '{\"lastModifiedAt\":0}')",
 	)
 	.execute(&pool)
 	.await
@@ -307,7 +284,7 @@ async fn local_origin_fill_preserves_remote_metadata_and_mapped_entity_key() {
 		.find(|event| event.origin == "peer-instance")
 		.expect("remote change");
 	assert_eq!(remote.entity_key, "local-mapped");
-	assert_eq!(remote.origin_user_id, 9);
+	assert_eq!(remote.origin_user_id, 1);
 	assert_eq!(remote.origin_entity_key, "remote-key");
 	assert_eq!(remote.origin_sequence, 77);
 }
@@ -401,13 +378,13 @@ async fn chapter_content_noop_rekey_and_recursive_updates_follow_the_time_contra
 async fn progress_changes_emit_parents_without_library_membership_and_download_stays_quiet() {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	add_user(&pool, 2).await;
 	let source_id = local_source_id(&pool).await;
 	let manga_id = add_manga(&pool, source_id, 100).await;
 	let chapter_id = add_chapter(&pool, manga_id, "history", 1_000).await;
+	let download_chapter_id = add_chapter(&pool, manga_id, "download", 1_001).await;
 	let cursor = high_watermark(&pool).await;
-	add_progress(&pool, chapter_id, 2, 2_000).await;
-	let events = since(&pool, 2, cursor).await;
+	add_progress(&pool, chapter_id, 1, 2_000).await;
+	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false), ("chapter_user", false)]);
 	assert_time_contract(&events);
 	assert_eq!(events[0].modified_at, 100);
@@ -418,7 +395,7 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	assert_eq!(events[2].snapshot["isBookmarked"], 1);
 	assert_eq!(events[2].snapshot["lastReadAt"], 50);
 	assert!(events[2].snapshot.get("isDownloaded").is_none());
-	let membership: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga_user WHERE manga_id = ? AND user_id = 2")
+	let membership: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga_user WHERE manga_id = ? AND user_id = 1")
 		.bind(manga_id)
 		.fetch_one(&pool)
 		.await
@@ -434,7 +411,7 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	sqlx::query(
 		"INSERT INTO chapter_user
 		 (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded)
-		 VALUES (?, 2, 3, 1, 1, 50, 0)
+		 VALUES (?, 1, 3, 1, 1, 50, 0)
 		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 		 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
 		 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at,
@@ -444,9 +421,9 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	.execute(&mut *conn)
 	.await
 	.expect("quiet progress upsert");
-	assert!(since(&pool, 2, cursor).await.is_empty());
+	assert!(since(&pool, 1, cursor).await.is_empty());
 	let progress_time: i64 = sqlx::query_scalar(
-		"SELECT last_modified_at FROM chapter_user WHERE chapter_id = ? AND user_id = 2",
+		"SELECT last_modified_at FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
 	)
 	.bind(chapter_id)
 	.fetch_one(&pool)
@@ -457,13 +434,13 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	sqlx::query(
 		"UPDATE chapter_user SET last_page_read = 8, is_read = 0, is_bookmarked = 0,
 		 last_read_at = 80, is_downloaded = 1, last_modified_at = 2001
-		 WHERE chapter_id = ? AND user_id = 2",
+		 WHERE chapter_id = ? AND user_id = 1",
 	)
 	.bind(chapter_id)
 	.execute(&mut *conn)
 	.await
 	.expect("actual progress update");
-	let events = since(&pool, 2, cursor).await;
+	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false), ("chapter_user", false)]);
 	assert_eq!(events.len(), 3);
 	assert_time_contract(&events);
@@ -474,34 +451,33 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	assert!(events[2].snapshot.get("isDownloaded").is_none());
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("UPDATE chapter_user SET is_downloaded = 0 WHERE chapter_id = ? AND user_id = 2")
+	sqlx::query("UPDATE chapter_user SET is_downloaded = 0 WHERE chapter_id = ? AND user_id = 1")
 		.bind(chapter_id)
 		.execute(&mut *conn)
 		.await
 		.expect("download-only update");
 	sqlx::query("INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, 1, 1)")
-		.bind(chapter_id)
+		.bind(download_chapter_id)
 		.execute(&mut *conn)
 		.await
 		.expect("download-only insert");
 	assert!(since(&pool, 1, cursor).await.is_empty());
-	assert!(since(&pool, 2, cursor).await.is_empty());
 	let download_insert_time: i64 = sqlx::query_scalar(
 		"SELECT last_modified_at FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
 	)
-	.bind(chapter_id)
+	.bind(download_chapter_id)
 	.fetch_one(&pool)
 	.await
 	.expect("download insert timestamp");
 	assert_eq!(download_insert_time, 0);
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM chapter_user WHERE chapter_id = ? AND user_id = 2")
+	sqlx::query("DELETE FROM chapter_user WHERE chapter_id = ? AND user_id = 1")
 		.bind(chapter_id)
 		.execute(&mut *conn)
 		.await
 		.expect("delete progress");
-	let events = since(&pool, 2, cursor).await;
+	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false), ("chapter_user", true)]);
 	assert_time_contract(&events);
 	assert_eq!(events[2].snapshot["lastModifiedAt"], 2_001);
@@ -590,13 +566,11 @@ async fn chapter_and_progress_writes_use_history_for_monotonic_versions() {
 }
 
 async fn seed_cascade(pool: &SqlitePool) -> (i64, i64, i64) {
-	add_user(pool, 2).await;
 	let source_id = local_source_id(pool).await;
 	let manga_id = add_manga(pool, source_id, 100).await;
 	add_library(pool, manga_id, 1, 101).await;
 	let chapter_id = add_chapter(pool, manga_id, "chapter", 1_000).await;
 	add_progress(pool, chapter_id, 1, 2_000).await;
-	add_progress(pool, chapter_id, 2, 2_001).await;
 	(source_id, manga_id, chapter_id)
 }
 
@@ -622,12 +596,10 @@ async fn chapter_delete_captures_progress_once_before_cascade() {
 		.execute(&pool)
 		.await
 		.expect("delete chapter");
-	for user_id in [1, 2] {
-		let events = since(&pool, user_id, cursor).await;
-		assert_eq!(kinds(&events), [("manga", false), ("chapter", true), ("chapter_user", true)]);
-		assert_time_contract(&events);
-		assert_cascade_identities(&events, chapter_id);
-	}
+	let events = since(&pool, 1, cursor).await;
+	assert_eq!(kinds(&events), [("manga", false), ("chapter", true), ("chapter_user", true)]);
+	assert_time_contract(&events);
+	assert_cascade_identities(&events, chapter_id);
 	let manga_exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE id = ?")
 		.bind(manga_id)
 		.fetch_one(&pool)
@@ -658,13 +630,9 @@ async fn manga_delete_captures_chapter_and_progress_before_parent_disappears() {
 		kinds(&admin),
 		[("manga", true), ("chapter", true), ("chapter_user", true), ("manga_user", true)]
 	);
-	let history_only = since(&pool, 2, cursor).await;
-	assert_eq!(kinds(&history_only), [("manga", true), ("chapter", true), ("chapter_user", true)]);
-	for events in [&admin, &history_only] {
-		assert_time_contract(events);
-		assert_cascade_identities(events, chapter_id);
-		assert_local_origins(&pool, events).await;
-	}
+	assert_time_contract(&admin);
+	assert_cascade_identities(&admin, chapter_id);
+	assert_local_origins(&pool, &admin).await;
 }
 
 #[tokio::test]
@@ -683,10 +651,6 @@ async fn source_delete_captures_chapter_and_progress_before_parent_disappears() 
 		kinds(&admin),
 		[("manga", true), ("chapter", true), ("chapter_user", true), ("manga_user", true)]
 	);
-	let history_only = since(&pool, 2, cursor).await;
-	assert_eq!(kinds(&history_only), [("manga", true), ("chapter", true), ("chapter_user", true)]);
-	for events in [&admin, &history_only] {
-		assert_time_contract(events);
-		assert_cascade_identities(events, chapter_id);
-	}
+	assert_time_contract(&admin);
+	assert_cascade_identities(&admin, chapter_id);
 }

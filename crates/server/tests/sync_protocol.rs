@@ -1573,12 +1573,6 @@ async fn auth_peer() -> Peer {
 		.fetch_one(&pool)
 		.await
 		.expect("instance id");
-	let hash = sumidoku_server::auth::hash_password("hunter2").expect("hash password");
-	sqlx::query("INSERT INTO user (id, username, password_hash, role) VALUES (2, 'bob', ?, 'reader')")
-		.bind(hash)
-		.execute(&pool)
-		.await
-		.expect("insert reader");
 	pool.close().await;
 	Peer {
 		app,
@@ -1589,85 +1583,60 @@ async fn auth_peer() -> Peer {
 }
 
 #[tokio::test]
-async fn reader_and_admin_sync_only_their_own_state() {
+async fn authenticated_admin_sync_rejects_non_admin_changes_without_writes() {
 	let a = auth_peer().await;
 	let sender = peer().await;
 	seed_initial(&a, 100, 500, 700, "auth", true).await;
 	let pool = connect_db(&a.db_path).await;
-	sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library, last_modified_at) VALUES (100, 2, 1, 300)")
-		.execute(&pool)
-		.await
-		.expect("reader library");
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, last_read_at, last_modified_at)
-		 VALUES (700, 2, 2, 0, 20, 301)",
-	)
-	.execute(&pool)
-	.await
-	.expect("reader progress");
-	sqlx::query("INSERT INTO category (id, user_id, name, last_modified_at) VALUES (600, 1, 'Admin only', 302), (601, 2, 'Bob only', 303)")
-		.execute(&pool)
-		.await
-		.expect("user categories");
 	let admin = login(&a.app, "admin", "secret").await;
-	let bob = login(&a.app, "bob", "hunter2").await;
-
-	let (status, bob_changes) = pull_authed(&a, &sender, &bob, 0).await;
-	assert_eq!(status, StatusCode::OK, "{bob_changes}");
-	assert_eq!(bob_changes["userId"], 2);
-	let bob_categories: Vec<&str> = bob_changes["changes"]
-		.as_array()
-		.expect("reader changes")
-		.iter()
-		.filter(|change| change["entityKind"] == "category")
-		.filter_map(|change| change["snapshot"]["name"].as_str())
-		.collect();
-	assert_eq!(bob_categories, ["Bob only"]);
 	let (status, admin_changes) = pull_authed(&a, &sender, &admin, 0).await;
 	assert_eq!(status, StatusCode::OK, "{admin_changes}");
 	assert_eq!(admin_changes["userId"], 1);
-	let admin_categories: Vec<&str> = admin_changes["changes"]
-		.as_array()
-		.expect("admin changes")
-		.iter()
-		.filter(|change| change["entityKind"] == "category")
-		.filter_map(|change| change["snapshot"]["name"].as_str())
-		.collect();
-	assert_eq!(admin_categories, ["Category auth", "Admin only"]);
+	assert!(!admin_changes["changes"].as_array().expect("admin changes").is_empty());
 
-	let mut remote = event_of(&bob_changes, "manga_user");
+	let mut remote = event_of(&admin_changes, "manga_user");
 	remote["origin"] = json!(sender.origin);
-	remote["originUserId"] = json!(1);
 	remote["originSequence"] = json!(5_000);
-	remote["entityKey"] = json!("remote-bob-state");
-	remote["identity"]["userId"] = json!(1);
+	remote["entityKey"] = json!("remote-admin-state");
 	remote["snapshot"]["inLibrary"] = json!(0);
 	set_version(&mut remote, 5_000, 5_000);
-	let (status, applied) = push_authed(&a, &sender, &bob, json!([remote])).await;
-	assert_eq!(status, StatusCode::OK, "{applied}");
-	assert_eq!(applied["results"][0]["status"], "applied");
-	let states: Vec<(i64, i64)> = sqlx::query_as("SELECT user_id, in_library FROM manga_user WHERE manga_id = 100 ORDER BY user_id")
-		.fetch_all(&pool)
-		.await
-		.expect("user library states");
-	assert_eq!(states, [(1, 1), (2, 0)]);
-	let admin_remote: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_change WHERE user_id = 1 AND origin = ?")
-		.bind(&sender.origin)
+	let mut non_admin = remote.clone();
+	non_admin["originUserId"] = json!(2);
+	non_admin["identity"]["userId"] = json!(2);
+	let (status, rejected) = push_authed(&a, &sender, &admin, json!([non_admin])).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{rejected}");
+	assert_eq!(rejected["error"]["code"], "bad_request");
+	let in_library: i64 = sqlx::query_scalar("SELECT in_library FROM manga_user WHERE manga_id = 100 AND user_id = 1")
 		.fetch_one(&pool)
 		.await
-		.expect("no admin remote event");
-	assert_eq!(admin_remote, 0);
-	let reader_dedupe: i64 = sqlx::query_scalar(
-		"SELECT COUNT(*) FROM sync_origin_state WHERE user_id = 2 AND origin = ? AND origin_entity_key = 'remote-bob-state'",
+		.expect("library unchanged");
+	assert_eq!(in_library, 1);
+	for table in ["sync_change", "sync_origin_state", "sync_alias"] {
+		let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE origin = ?"))
+			.bind(&sender.origin)
+			.fetch_one(&pool)
+			.await
+			.expect("rejected write count");
+		assert_eq!(count, 0, "{table} after rejected change");
+	}
+
+	let (status, applied) = push_authed(&a, &sender, &admin, json!([remote])).await;
+	assert_eq!(status, StatusCode::OK, "{applied}");
+	assert_eq!(applied["results"][0]["status"], "applied");
+	let in_library: i64 = sqlx::query_scalar("SELECT in_library FROM manga_user WHERE manga_id = 100 AND user_id = 1")
+		.fetch_one(&pool)
+		.await
+		.expect("applied library state");
+	assert_eq!(in_library, 0);
+	let dedupe: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM sync_origin_state
+		 WHERE origin = ? AND origin_user_id = 1 AND user_id = 1 AND origin_entity_key = 'remote-admin-state'",
 	)
 	.bind(&sender.origin)
 	.fetch_one(&pool)
 	.await
-	.expect("reader dedupe");
-	assert_eq!(reader_dedupe, 1);
-
-	let (status, _) = authed(&a, &bob, "POST", "/api/v1/sync/compact", None).await;
-	assert_eq!(status, StatusCode::FORBIDDEN);
+	.expect("admin dedupe");
+	assert_eq!(dedupe, 1);
 	let (status, compacted) = authed(&a, &admin, "POST", "/api/v1/sync/compact", None).await;
 	assert_eq!(status, StatusCode::OK, "{compacted}");
 	pool.close().await;

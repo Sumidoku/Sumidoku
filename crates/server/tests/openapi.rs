@@ -89,9 +89,9 @@ fn documented_routes(document: &Value) -> BTreeMap<String, BTreeSet<&'static str
 #[test]
 fn route_parser_reads_multiline_and_chained_methods() {
 	let routes = registered_routes();
-	assert_eq!(routes["/api/v1/users"], BTreeSet::from(["get", "post"]));
+	assert_eq!(routes["/api/v1/source-repos"], BTreeSet::from(["get", "post"]));
 	assert_eq!(routes["/api/v1/sources/import"], BTreeSet::from(["post"]));
-	assert_eq!(routes["/api/v1/users/{id}"], BTreeSet::from(["patch", "delete"]));
+	assert_eq!(routes["/api/v1/categories/{id}"], BTreeSet::from(["patch", "delete"]));
 	assert_eq!(routes["/api/v1/sync/changes"], BTreeSet::from(["get", "post"]));
 }
 
