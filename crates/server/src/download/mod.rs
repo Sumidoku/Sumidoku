@@ -176,15 +176,14 @@ impl DownloadManager {
 		});
 	}
 
-	/// Shared artifact: when another user has already downloaded the same chapter and the artifact is on disk, returns (path, format) so the row can settle straight to finished
-	async fn shared_artifact(&self, chapter_id: i64, user_id: i64) -> Option<(String, String)> {
+	/// Existing artifact for the same chapter: reuse it and settle straight to finished
+	async fn shared_artifact(&self, chapter_id: i64) -> Option<(String, String)> {
 		let row: Option<(String, String)> = sqlx::query_as(
 			"SELECT path, format FROM download
-			 WHERE chapter_id = ? AND user_id != ? AND status = 'finished' AND path IS NOT NULL
+			 WHERE chapter_id = ? AND status = 'finished' AND path IS NOT NULL
 			 ORDER BY updated_at DESC LIMIT 1",
 		)
 		.bind(chapter_id)
-		.bind(user_id)
 		.fetch_optional(&self.pool)
 		.await
 		.ok()?;
@@ -216,7 +215,7 @@ impl DownloadManager {
 			if !seen.insert(chapter_id) {
 				continue;
 			}
-			if let Some((path, shared_format)) = self.shared_artifact(chapter_id, user_id).await {
+			if let Some((path, shared_format)) = self.shared_artifact(chapter_id).await {
 				self.settle_finished(chapter_id, user_id, &path, &shared_format).await;
 				continue;
 			}
@@ -460,8 +459,8 @@ impl DownloadManager {
 			self.cleanup_tmp(chapter_id).await;
 			return;
 		}
-		// While queued, another user may have finished the same chapter: share the artifact, settle straight to finished without repackaging
-		if let Some((path, format)) = self.shared_artifact(chapter_id, user_id).await {
+		// While queued, an earlier download may have finished the same chapter: reuse the artifact instead of repackaging
+		if let Some((path, format)) = self.shared_artifact(chapter_id).await {
 			self.settle_finished(chapter_id, user_id, &path, &format).await;
 			return;
 		}

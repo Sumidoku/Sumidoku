@@ -21,7 +21,6 @@ import { ApiError, sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
 	useImportSource,
-	useIsAdmin,
 	usePinSource,
 	useRegisterOpdsSource,
 	useReorderPinned,
@@ -228,14 +227,12 @@ interface CardDnd {
 
 function SourceCard({
 	source: s,
-	isAdmin,
 	dnd,
 	onTogglePin,
 	onToggleEnabled,
 	onDelete
 }: {
 	source: Source;
-	isAdmin: boolean;
 	dnd?: CardDnd;
 	onTogglePin: (s: Source) => void;
 	onToggleEnabled: (s: Source) => void;
@@ -306,9 +303,9 @@ function SourceCard({
 					</div>
 				)}
 			</div>
-			{s.updateVersion !== null && isAdmin && <UpdateButton source={s} />}
+			{s.updateVersion !== null && <UpdateButton source={s} />}
 			{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
-			{isAdmin && s.kind !== 'local' && (
+			{s.kind !== 'local' && (
 				<IconButton
 					label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
 					onClick={(e) => {
@@ -319,7 +316,7 @@ function SourceCard({
 					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 				</IconButton>
 			)}
-			{isAdmin && s.kind !== 'local' && (
+			{s.kind !== 'local' && (
 				<IconButton
 					label={s.enabled ? t('browse.disable', { name: s.name }) : t('browse.enable', { name: s.name })}
 					onClick={(e) => {
@@ -345,19 +342,17 @@ function SourceCard({
 							<House size={17} />
 						</IconButton>
 					)}
-					{isAdmin && s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
-					{isAdmin && (
-						<IconButton
-							label={t('browse.uninstall', { name: s.name })}
-							variant="danger"
-							onClick={(e) => {
-								e.stopPropagation();
-								onDelete(s);
-							}}
-						>
-							<Trash size={17} />
-						</IconButton>
-					)}
+					{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
+					<IconButton
+						label={t('browse.uninstall', { name: s.name })}
+						variant="danger"
+						onClick={(e) => {
+							e.stopPropagation();
+							onDelete(s);
+						}}
+					>
+						<Trash size={17} />
+					</IconButton>
 				</>
 			)}
 		</div>
@@ -373,7 +368,6 @@ export default function BrowsePage() {
 	const pin = usePinSource();
 	const setEnabled = useSetSourceEnabled();
 	const reorderPinned = useReorderPinned();
-	const isAdmin = useIsAdmin();
 	const navigate = useNavigate();
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [registeringOpds, setRegisteringOpds] = useState(false);
@@ -500,45 +494,38 @@ export default function BrowsePage() {
 								<ArrowLeftRight size={15} />
 								{t('browse.migrate')}
 							</Button>
-							{isAdmin && updateCount > 0 && (
+							{updateCount > 0 && (
 								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
 									<CircleArrowUp size={15} />
 									{t('browse.updateAll', { count: updateCount })}
 								</Button>
 							)}
-							{isAdmin && (
-								<Button onClick={() => setRegisteringOpds(true)}>
-									<Plus size={15} />
-									{t('browse.addOpds')}
-								</Button>
-							)}
-							{isAdmin && <ImportAixButton />}
-							{isAdmin && (
-								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
-									<ScanSearch size={15} />
-									{t('browse.scan')}
-								</Button>
-							)}
+							<Button onClick={() => setRegisteringOpds(true)}>
+								<Plus size={15} />
+								{t('browse.addOpds')}
+							</Button>
+							<ImportAixButton />
+							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
+								<ScanSearch size={15} />
+								{t('browse.scan')}
+							</Button>
 						</>
 					) : undefined
 				}
 			/>
 
-			{/* Source repos are an admin surface (readers get a server 403), so the whole tab is admin-only */}
-			{isAdmin && (
-				<div className="browse__tabs">
-					<SegmentedControl
-						options={[
-							{ value: 'installed', label: t('browse.tabInstalled') },
-							{ value: 'repos', label: t('browse.tabRepos') }
-						]}
-						value={tab}
-						onChange={setTab}
-					/>
-				</div>
-			)}
+			<div className="browse__tabs">
+				<SegmentedControl
+					options={[
+						{ value: 'installed', label: t('browse.tabInstalled') },
+						{ value: 'repos', label: t('browse.tabRepos') }
+					]}
+					value={tab}
+					onChange={setTab}
+				/>
+			</div>
 
-			{isAdmin && tab === 'repos' ? (
+			{tab === 'repos' ? (
 				<ReposPanel />
 			) : sources.isPending ? (
 				<div className="source-list">
@@ -550,7 +537,7 @@ export default function BrowsePage() {
 				<EmptyState
 					icon={PackageOpen}
 					title={t('browse.emptyTitle')}
-					hint={isAdmin ? t('browse.emptyHintAdmin') : t('browse.emptyHint')}
+					hint={t('browse.emptyHintAdmin')}
 				/>
 			) : (
 				<>
@@ -562,10 +549,9 @@ export default function BrowsePage() {
 									<SourceCard
 										key={s.id}
 										source={s}
-										isAdmin={isAdmin}
 										// The local source is a fixed header of the section: no grip, no drag reordering
 										dnd={
-											isAdmin && s.kind !== 'local'
+											s.kind !== 'local'
 												? {
 														dragging: dragIndex === i,
 														dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
@@ -604,7 +590,6 @@ export default function BrowsePage() {
 									<SourceCard
 										key={s.id}
 										source={s}
-										isAdmin={isAdmin}
 										onTogglePin={(s) => void togglePin(s)}
 										onToggleEnabled={(s) => void toggleEnabled(s)}
 										onDelete={setPendingDelete}
@@ -622,7 +607,6 @@ export default function BrowsePage() {
 							<SourceCard
 								key={s.id}
 								source={s}
-								isAdmin={isAdmin}
 								onTogglePin={(s) => void togglePin(s)}
 								onToggleEnabled={(s) => void toggleEnabled(s)}
 								onDelete={setPendingDelete}

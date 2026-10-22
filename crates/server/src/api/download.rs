@@ -115,24 +115,21 @@ async fn remove_product(downloads_dir: &std::path::Path, path: &str) {
 	}
 }
 
-/// When another user still references the same artifact path, the file is kept (artifacts are shared; deleting one row must not delete another's goods)
-async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str, user_id: i64) -> ApiResult<bool> {
-	let referenced: Option<(i64,)> =
-		sqlx::query_as("SELECT 1 FROM download WHERE path = ? AND user_id != ? LIMIT 1")
-			.bind(path)
-			.bind(user_id)
-			.fetch_optional(pool)
-			.await?;
+/// When another download row still references the same artifact path, the file is kept
+async fn product_orphaned(pool: &sqlx::SqlitePool, path: &str) -> ApiResult<bool> {
+	let referenced: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM download WHERE path = ? LIMIT 1")
+		.bind(path)
+		.fetch_optional(pool)
+		.await?;
 	Ok(referenced.is_none())
 }
 
-/// When another user's in-flight row exists for the same chapter, the tmp dir belongs to that task and must not be cleaned
-async fn chapter_in_flight(pool: &sqlx::SqlitePool, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
+/// When another in-flight row exists for the same chapter, the tmp dir belongs to that task and must not be cleaned
+async fn chapter_in_flight(pool: &sqlx::SqlitePool, chapter_id: i64) -> ApiResult<bool> {
 	let active: Option<(i64,)> = sqlx::query_as(
-		"SELECT 1 FROM download WHERE chapter_id = ? AND user_id != ? AND status IN ('queued', 'downloading') LIMIT 1",
+		"SELECT 1 FROM download WHERE chapter_id = ? AND status IN ('queued', 'downloading') LIMIT 1",
 	)
 	.bind(chapter_id)
-	.bind(user_id)
 	.fetch_optional(pool)
 	.await?;
 	Ok(active.is_some())
@@ -151,11 +148,11 @@ pub async fn clear_downloads(
 	let mut cleared = 0i64;
 	for (chapter_id, path) in rows {
 		if let Some(path) = path
-			&& product_orphaned(&state.pool, &path, user.id).await?
+			&& product_orphaned(&state.pool, &path).await?
 		{
 			remove_product(manager.downloads_dir(), &path).await;
 		}
-		if !chapter_in_flight(&state.pool, chapter_id, user.id).await? {
+		if !chapter_in_flight(&state.pool, chapter_id).await? {
 			manager.cleanup_tmp(chapter_id).await;
 		}
 		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
@@ -197,11 +194,11 @@ pub async fn delete_download(
 	}
 	manager.remove_from_queue(chapter_id, user.id).await;
 	if let Some(path) = path
-		&& product_orphaned(&state.pool, &path, user.id).await?
+		&& product_orphaned(&state.pool, &path).await?
 	{
 		remove_product(manager.downloads_dir(), &path).await;
 	}
-	if !chapter_in_flight(&state.pool, chapter_id, user.id).await? {
+	if !chapter_in_flight(&state.pool, chapter_id).await? {
 		manager.cleanup_tmp(chapter_id).await;
 	}
 	sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")

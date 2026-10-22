@@ -23,7 +23,6 @@ pub mod source_import;
 pub mod suwayomi_backup;
 pub mod sync;
 pub mod update;
-pub mod users;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
@@ -61,14 +60,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/auth/status", get(crate::auth::status))
 		.route("/api/v1/auth/login", post(crate::auth::login))
 		.route("/api/v1/auth/logout", post(crate::auth::logout));
-	// Admin-only surface: global state and config (users/sources & repos/source settings & login/server-side backup restore).
-	// require_admin reads the role injected by require_auth; route_layer runs after it on the inner layer
+	// Global state and config; require_auth below establishes the single admin identity
 	let admin = Router::new()
-		.route("/api/v1/users", get(users::list_users).post(users::create_user))
-		.route(
-			"/api/v1/users/{id}",
-			patch(users::update_user).delete(users::delete_user),
-		)
 		.route("/api/v1/sources/scan", post(scan_sources))
 		.route(
 			"/api/v1/sources/import",
@@ -99,8 +92,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/source-repos/update-all", post(repo::update_all))
 		.route("/api/v1/backups", get(backup::list_backups))
 		.route("/api/v1/backups/restore", post(backup::restore_backup))
-		.route("/api/v1/sync/compact", post(sync::compact))
-		.route_layer(axum::middleware::from_fn(crate::auth::require_admin));
+		.route("/api/v1/sync/compact", post(sync::compact));
 	let protected = Router::new()
 		.route("/api/v1/sources", get(list_sources))
 		.route("/api/v1/search", post(search::search_all))
@@ -1483,10 +1475,8 @@ async fn get_pages(
 	Ok(Json(json!(out)))
 }
 
-/// User-scoped setting keys: stored in the DB under the user.<id>.<key> namespace, the API only ever sees bare keys;
-/// other users' namespace keys are neither visible nor writable. These are per-user library/display preferences —
-/// a reader must be able to write its own, and the library.* keys reference the user's own category ids; new keys
-/// are added on both the read and write sides together
+/// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
+/// the library.* values reference the admin's category ids. New keys are added on both read and write sides together
 pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
 	"incognito.enabled",
 	"library.default_category",
@@ -1553,12 +1543,6 @@ async fn put_settings(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
-	// Global keys are the config surface: a reader may only write user-scoped keys in its own namespace
-	if user.role != "admin"
-		&& let Some(key) = body.keys().find(|key| !USER_SCOPED_SETTING_KEYS.contains(&key.as_str()))
-	{
-		return Err(ApiError::forbidden(format!("setting {key} requires the admin role")));
-	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in &body {
 		if let Some(result) = crate::update::validate_library_setting(key, value) {

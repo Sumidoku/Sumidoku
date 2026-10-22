@@ -66,9 +66,8 @@ impl BackupScheduler {
 	}
 
 	async fn write_backup(&self, settings: &BackupSettings) -> ApiResult<PathBuf> {
-		// Scheduled backup is a server-side full export: always built with the built-in admin identity; the
-		// per-requester trimming (reader gets self-data only) only applies to GET /api/v1/backup, not here
-		let doc = build_backup_doc(&self.pool, crate::USER_ID, true).await?;
+		// Scheduled backup is a server-side full export built with the built-in admin identity
+		let doc = build_backup_doc(&self.pool).await?;
 		let body = serde_json::to_vec(&doc)?;
 		tokio::fs::create_dir_all(&settings.dir)
 			.await

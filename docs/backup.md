@@ -6,15 +6,13 @@ transactional and reports what it skipped and why.
 
 ## Full backup (export / import)
 
-`GET /api/v1/backup` downloads the requesting user's library state —
-library membership and manga metadata, categories, reading progress —
-plus, for admins, app settings and source settings, as one JSON document
-with a `version` field (currently `1`; unknown versions are rejected with
-`400`). A reader's export carries self-data only: no app settings, no
-source settings. `POST /api/v1/backup` imports it back into the
-requesting user's own state, optionally limited with
-`?sections=library,categories,progress,settings,sourceSettings` (the two
-settings sections require the admin role). Import
+`GET /api/v1/backup` downloads the built-in admin's complete state —
+library membership and manga metadata, categories, reading progress, app
+settings and source settings — as one JSON document with a `version` field
+(currently `1`; unknown versions are rejected with `400`).
+`POST /api/v1/backup` imports it into the same owner state, optionally
+limited with `?sections=library,categories,progress,settings,sourceSettings`.
+Import
 upserts by natural key (source key + manga key, chapter key, category
 name) inside a single transaction, so a failed or invalid backup leaves
 the database untouched; entries whose source is not installed are skipped

@@ -3,12 +3,12 @@
   "info": {
     "title": "Sumidoku API",
     "version": "0.23.0",
-    "description": "REST API under /api/v1. Protected endpoints accept either Authorization: Bearer <token> or the access_token query parameter; the header takes precedence. With authentication disabled, requests act as the built-in admin. Admin endpoints additionally require the admin role. Errors use {error:{code,message}}. Source capabilities that are not implemented use 404 with code unsupported on dynamic filters, listings, home and deep-link endpoints; other unsupported source operations may use 400 or 501 as documented. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
+    "description": "REST API under /api/v1. Protected endpoints accept either Authorization: Bearer <token> or the access_token query parameter; the header takes precedence. With authentication disabled, requests act as the built-in admin. The server has one built-in admin identity and no additional accounts or roles. Errors use {error:{code,message}}. Source capabilities that are not implemented use 404 with code unsupported on dynamic filters, listings, home and deep-link endpoints; other unsupported source operations may use 400 or 501 as documented. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
   },
   "servers": [{"url": "/"}],
   "security": [{"bearerAuth": []}, {"accessTokenQuery": []}],
   "tags": [
-    {"name": "auth"}, {"name": "users"}, {"name": "sources"}, {"name": "repos"},
+    {"name": "auth"}, {"name": "sources"}, {"name": "repos"},
     {"name": "manga"}, {"name": "library"}, {"name": "categories"}, {"name": "filter-groups"},
     {"name": "downloads"}, {"name": "updates"}, {"name": "settings"}, {"name": "backups"},
     {"name": "sync"}, {"name": "migration"}, {"name": "system"}
@@ -58,47 +58,6 @@
         "responses": {
           "204": {"$ref": "#/components/responses/NoContent"}, "400": {"$ref": "#/components/responses/BadRequest"},
           "401": {"$ref": "#/components/responses/Unauthorized"}, "default": {"$ref": "#/components/responses/Error"}
-        }
-      }
-    },
-    "/api/v1/users": {
-      "get": {
-        "tags": ["users"], "operationId": "listUsers", "summary": "List users (admin)",
-        "responses": {
-          "200": {"description": "Users", "content": {"application/json": {"schema": {"type": "array", "items": {"$ref": "#/components/schemas/User"}}}}},
-          "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "default": {"$ref": "#/components/responses/Error"}
-        }
-      },
-      "post": {
-        "tags": ["users"], "operationId": "createUser", "summary": "Create a user (admin)",
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CreateUserRequest"}}}},
-        "responses": {
-          "200": {"description": "Created user", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}},
-          "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "409": {"$ref": "#/components/responses/Conflict"},
-          "default": {"$ref": "#/components/responses/Error"}
-        }
-      }
-    },
-    "/api/v1/users/{id}": {
-      "parameters": [{"$ref": "#/components/parameters/UserId"}],
-      "patch": {
-        "tags": ["users"], "operationId": "updateUser", "summary": "Update a user or reset their password (admin)",
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/UpdateUserRequest"}}}},
-        "responses": {
-          "200": {"description": "Updated user", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/User"}}}},
-          "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
-          "403": {"$ref": "#/components/responses/Forbidden"}, "404": {"$ref": "#/components/responses/NotFound"},
-          "409": {"$ref": "#/components/responses/Conflict"}, "default": {"$ref": "#/components/responses/Error"}
-        }
-      },
-      "delete": {
-        "tags": ["users"], "operationId": "deleteUser", "summary": "Delete a user (admin)",
-        "responses": {
-          "204": {"$ref": "#/components/responses/NoContent"}, "400": {"$ref": "#/components/responses/BadRequest"},
-          "401": {"$ref": "#/components/responses/Unauthorized"}, "403": {"$ref": "#/components/responses/Forbidden"},
-          "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}
         }
       }
     },
@@ -1106,7 +1065,6 @@
       "accessTokenQuery": {"type": "apiKey", "in": "query", "name": "access_token", "description": "Alternative credential for image and WebSocket clients that cannot send Authorization."}
     },
     "parameters": {
-      "UserId": {"name": "id", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}},
       "SourceId": {"name": "id", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}},
       "MangaId": {"name": "id", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}},
       "LibraryMangaId": {"name": "manga_id", "in": "path", "required": true, "schema": {"type": "integer", "format": "int64"}},
@@ -1165,16 +1123,10 @@
       "RunningResponse": {"type": "object", "required": ["running"], "properties": {"running": {"type": "boolean"}}},
       "StartedResponse": {"type": "object", "required": ["started"], "properties": {"started": {"type": "boolean", "enum": [true]}}},
       "AuthUser": {
-        "type": "object", "required": ["id", "username", "role"],
+        "type": "object", "required": ["id", "username"],
         "properties": {
-          "id": {"type": "integer", "format": "int64"}, "username": {"type": "string"},
-          "role": {"type": "string", "enum": ["admin", "reader"]}
+          "id": {"type": "integer", "format": "int64"}, "username": {"type": "string"}
         }
-      },
-      "User": {
-        "allOf": [{"$ref": "#/components/schemas/AuthUser"}, {"type": "object", "required": ["createdAt"], "properties": {
-          "createdAt": {"type": "integer", "format": "int64", "description": "Unix seconds."}
-        }}]
       },
       "AuthStatus": {
         "type": "object", "required": ["enabled", "user"],
@@ -1184,14 +1136,6 @@
       "LoginResponse": {
         "type": "object", "required": ["token", "expiresAt", "user"],
         "properties": {"token": {"type": "string"}, "expiresAt": {"type": "integer", "format": "int64", "description": "Unix seconds."}, "user": {"$ref": "#/components/schemas/AuthUser"}}
-      },
-      "CreateUserRequest": {
-        "type": "object", "required": ["username", "password", "role"],
-        "properties": {"username": {"type": "string", "minLength": 1}, "password": {"type": "string", "format": "password", "minLength": 1}, "role": {"type": "string", "enum": ["admin", "reader"]}}
-      },
-      "UpdateUserRequest": {
-        "type": "object",
-        "properties": {"username": {"type": "string", "minLength": 1}, "role": {"type": "string", "enum": ["admin", "reader"]}, "password": {"type": "string", "format": "password", "minLength": 1}}
       },
       "PasswordChangeRequest": {"type": "object", "required": ["currentPassword", "newPassword"], "properties": {"currentPassword": {"type": "string", "format": "password"}, "newPassword": {"type": "string", "format": "password", "minLength": 1}}},
       "SourceConfig": {

@@ -1,4 +1,4 @@
-//! Full backup: export/import of one user's library, categories, progress, settings, and source settings.
+//! Full backup: export/import of the admin's library, categories, progress, settings, and source settings.
 //! BackupDoc is the external contract (evolves via the version field); the .aib/.tachibk importers map onto it too
 
 use crate::error::{ApiError, ApiResult};
@@ -6,7 +6,6 @@ use crate::model::{default_value_to_json, json_to_default_value, unix_now};
 use crate::source::repo::{self, SourceRepoRow};
 use crate::state::AppState;
 use aidoku_wasm::DefaultValue;
-use axum::Extension;
 use axum::extract::{Query, State};
 use axum::http::header;
 use axum::response::{IntoResponse, Json, Response};
@@ -203,11 +202,9 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-/// Export-document construction: shared by the GET handler and the scheduled-backup scheduler, producing byte-identical output.
-/// User-scoped data (library/categories/progress) contains only user_id's rows; a non-admin document strips the global settings
-/// (keeping only the bare keys translated back from the owner's namespace keys) and all of source_settings —
-/// source login credentials are globally shared (decision point 5), and a reader export gets self-data only (decision point 11)
-pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> ApiResult<BackupDoc> {
+/// Export-document construction shared by the GET handler and the scheduler, producing the admin's complete state
+pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
+	let user_id = crate::USER_ID;
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
@@ -357,17 +354,14 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 	let mut settings = BTreeMap::new();
 	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
-		// User-scoped namespace keys are exported only for the owner, restored to bare keys (same contract as the /settings API);
-		// all other keys are config-side and never enter a non-admin document
+		// Legacy owner namespace keys are restored to bare keys, matching the settings API contract
 		let key = if key.starts_with("user.") {
 			match key.strip_prefix(&own_prefix) {
 				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
 				_ => continue,
 			}
-		} else if admin {
-			key
 		} else {
-			continue;
+			key
 		};
 		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES || key == "sync.instance_id" {
 			continue;
@@ -377,25 +371,22 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 		settings.insert(key, value);
 	}
 
-	// Non-admin skips this whole query: source settings carry login credentials and not a byte of them may appear in a reader's document
 	let mut source_settings: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
-	if admin {
-		let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
-			"SELECT s.key, ss.key, ss.value FROM source_setting ss
-			 JOIN source s ON s.id = ss.source_id ORDER BY s.key, ss.key",
-		)
-		.fetch_all(pool)
-		.await?;
-		for (source_key, key, raw) in source_setting_rows {
-			match serde_json::from_str::<DefaultValue>(&raw) {
-				Ok(value) => {
-					source_settings
-						.entry(source_key)
-						.or_default()
-						.insert(key, default_value_to_json(&value));
-				}
-				Err(e) => tracing::warn!(source_key, key, "skip unparsable source_setting: {e}"),
+	let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
+		"SELECT s.key, ss.key, ss.value FROM source_setting ss
+		 JOIN source s ON s.id = ss.source_id ORDER BY s.key, ss.key",
+	)
+	.fetch_all(pool)
+	.await?;
+	for (source_key, key, raw) in source_setting_rows {
+		match serde_json::from_str::<DefaultValue>(&raw) {
+			Ok(value) => {
+				source_settings
+					.entry(source_key)
+					.or_default()
+					.insert(key, default_value_to_json(&value));
 			}
+			Err(e) => tracing::warn!(source_key, key, "skip unparsable source_setting: {e}"),
 		}
 	}
 
@@ -414,9 +405,8 @@ pub async fn build_backup_doc(pool: &SqlitePool, user_id: i64, admin: bool) -> A
 
 pub async fn export_backup(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Response> {
-	let doc = build_backup_doc(&state.pool, user.id, user.role == "admin").await?;
+	let doc = build_backup_doc(&state.pool).await?;
 	let body = serde_json::to_vec(&doc)?;
 	let date = chrono::Utc::now().format("%Y%m%d");
 	let disposition = format!("attachment; filename=\"sumidoku-backup-{date}.json\"");
@@ -454,7 +444,6 @@ pub struct RestoreRequest {
 /// Restores from a file already in the backup directory: the server reads the file, taking the same validate+transaction path as an upload import
 pub async fn restore_backup(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<RestoreRequest>,
 ) -> ApiResult<Json<Value>> {
 	if crate::backup::parse_backup_name(&body.name).is_none() {
@@ -468,7 +457,7 @@ pub async fn restore_backup(
 		}
 		Err(e) => return Err(ApiError::internal(format!("read backup: {e}"))),
 	};
-	let result = import_backup_doc(&state, user.id, true, None, &bytes).await?;
+	let result = import_backup_doc(&state, None, &bytes).await?;
 	Ok(Json(result))
 }
 
@@ -517,29 +506,17 @@ struct Restored {
 
 pub async fn import_backup(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<ImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
-	let result = import_backup_doc(&state, user.id, user.role == "admin", query.sections.as_deref(), &body).await?;
+	let result = import_backup_doc(&state, query.sections.as_deref(), &body).await?;
 	Ok(Json(result))
 }
 
-/// The validate + single-transaction import executor: shared by the POST handler and the "restore from existing backup" endpoint.
-/// User-scoped sections (library/categories/progress) belong to user_id; settings/sourceSettings are global state, restorable by admin only
-pub async fn import_backup_doc(
-	state: &AppState,
-	user_id: i64,
-	admin: bool,
-	sections_query: Option<&str>,
-	body: &[u8],
-) -> ApiResult<Value> {
+/// The validate + single-transaction import executor: shared by upload and restore-from-list endpoints
+pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, body: &[u8]) -> ApiResult<Value> {
+	let user_id = crate::USER_ID;
 	let sections = parse_sections(sections_query)?;
-	if !admin && (sections.contains(&Section::Settings) || sections.contains(&Section::SourceSettings)) {
-		return Err(ApiError::forbidden(
-			"settings and sourceSettings sections require the admin role",
-		));
-	}
 	let raw: Value = serde_json::from_slice(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid backup document: {e}")))?;
 	let version = raw.get("version").and_then(Value::as_i64);

@@ -536,7 +536,7 @@ async fn persist_success(
 	Ok(new_ids)
 }
 
-/// Update scope combines the caller's library, per-user excluded categories, skip settings and per-manga schedule.
+/// Update scope combines the admin's library, excluded categories, skip settings and per-manga schedule.
 /// The deprecated per-category include_in_update tri-state is no longer consulted.
 async fn select_manga(
 	pool: &SqlitePool,
@@ -712,13 +712,6 @@ mod tests {
 			.expect("add to library");
 	}
 
-	async fn insert_bob(state: &AppState) {
-		sqlx::query("INSERT INTO user (username, password_hash, role) VALUES ('bob', '', 'reader')")
-			.execute(&state.pool)
-			.await
-			.expect("insert bob");
-	}
-
 	async fn set_setting(state: &AppState, key: &str, value: serde_json::Value) {
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
@@ -773,20 +766,17 @@ mod tests {
 	async fn union_fetch_pulls_shared_manga_once() {
 		let (state, source_id, _tmp) = union_state(Config::default()).await;
 		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
-		insert_bob(&state).await;
 		let m1 = add_manga(&state, source_id, "1").await;
 		let m2 = add_manga(&state, source_id, "2").await;
 		let m3 = add_manga(&state, source_id, "3").await;
-		add_to_library(&state, m1, 1).await;
-		add_to_library(&state, m2, 2).await;
-		add_to_library(&state, m3, 1).await;
-		add_to_library(&state, m3, 2).await;
+		for manga_id in [m1, m2, m3] {
+			add_to_library(&state, manga_id, 1).await;
+		}
 
 		let scheduler = UpdateScheduler::new(&state);
 		let guard = scheduler.try_acquire().expect("fetch guard");
 		scheduler.fetch_union(guard).await;
 
-		// The union covers both users' libraries, and m3, shelved by both, is still fetched from the source only once
 		let summary = scheduler.summary().await;
 		assert_eq!(summary.total, 3);
 		assert_eq!(summary.complete, 3);
@@ -809,25 +799,22 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn union_fetch_auto_download_filters_per_user() {
+	async fn union_fetch_auto_download_respects_excluded_category() {
 		let config = Config {
 			auto_download_new_chapters: true,
 			..Config::default()
 		};
 		let (state, source_id, _tmp) = union_state(config).await;
 		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
-		insert_bob(&state).await;
 		let manga_id = add_manga(&state, source_id, "1").await;
 		add_to_library(&state, manga_id, 1).await;
-		add_to_library(&state, manga_id, 2).await;
-		// bob's category marks the same manga as not auto-downloadable
 		let category_id: i64 = sqlx::query_scalar(
-			"INSERT INTO category (user_id, name, include_in_download) VALUES (2, 'blocked', 2) RETURNING id",
+			"INSERT INTO category (user_id, name, include_in_download) VALUES (1, 'blocked', 2) RETURNING id",
 		)
 		.fetch_one(&state.pool)
 		.await
 		.expect("insert category");
-		sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 2)")
+		sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
 			.bind(category_id)
 			.bind(manga_id)
 			.execute(&state.pool)
@@ -843,7 +830,7 @@ mod tests {
 			.fetch_all(&state.pool)
 			.await
 			.expect("download owners");
-		assert_eq!(owners, vec![1], "auto download must only enqueue for the allowing user");
+		assert_eq!(owners, Vec::<i64>::new());
 	}
 
 	#[tokio::test]
@@ -903,21 +890,22 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn read_skip_rules_use_current_users_progress() {
+	async fn read_skip_rules_use_admin_progress() {
 		let (state, source_id, _tmp) = union_state(Config::default()).await;
-		insert_bob(&state).await;
-		let manga_id = add_manga(&state, source_id, "shared").await;
-		add_to_library(&state, manga_id, 1).await;
-		add_to_library(&state, manga_id, 2).await;
+		let started = add_manga(&state, source_id, "started").await;
+		let unread = add_manga(&state, source_id, "unread").await;
+		for manga_id in [started, unread] {
+			add_to_library(&state, manga_id, 1).await;
+		}
 		for key in ["c1", "c2"] {
-			let chapter_id = add_chapter(&state, manga_id, key).await;
+			let chapter_id = add_chapter(&state, started, key).await;
 			set_read(&state, chapter_id, 1).await;
 		}
+		add_chapter(&state, unread, "c1").await;
 
 		for rule in ["hasUnread", "notStarted"] {
 			set_setting(&state, "library.skip_titles", serde_json::json!([rule])).await;
-			assert_eq!(selected_ids(&state, 1, None).await, vec![manga_id], "rule {rule}");
-			assert_eq!(selected_ids(&state, 2, None).await, Vec::<i64>::new(), "rule {rule}");
+			assert_eq!(selected_ids(&state, 1, None).await, vec![started], "rule {rule}");
 		}
 	}
 
