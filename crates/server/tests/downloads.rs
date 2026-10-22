@@ -114,6 +114,11 @@ async fn download_full_flow() {
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	let pool = connect_db(&t.db_path).await;
 	point_page_at_local(&pool, chapter_id, port).await;
+	sqlx::query("UPDATE chapter SET title = NULL, number = 50 WHERE id = ?")
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("numbered chapter without a separate title");
 	let (manga_key,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
 		.bind(manga_id)
 		.fetch_one(&pool)
@@ -150,6 +155,9 @@ async fn download_full_flow() {
 	assert!(cbz_path.is_file(), "cbz should exist at {}", cbz_path.display());
 	assert_eq!(entry["downloaded"], Value::Null);
 	assert_eq!(entry["total"], Value::Null);
+	assert_eq!(entry["chapterTitle"], Value::Null);
+	assert_eq!(entry["chapterNumber"], json!(50.0));
+	assert_eq!(entry["volumeNumber"], Value::Null);
 
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
 	assert_eq!(body[0]["isDownloaded"], true);

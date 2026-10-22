@@ -7469,6 +7469,8 @@
           "mangaId",
           "mangaTitle",
           "chapterTitle",
+          "chapterNumber",
+          "volumeNumber",
           "status",
           "format",
           "path",
@@ -7493,6 +7495,16 @@
           },
           "chapterTitle": {
             "type": "string",
+            "nullable": true
+          },
+          "chapterNumber": {
+            "type": "number",
+            "format": "float",
+            "nullable": true
+          },
+          "volumeNumber": {
+            "type": "number",
+            "format": "float",
             "nullable": true
           },
           "status": {
