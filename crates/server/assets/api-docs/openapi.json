@@ -561,7 +561,8 @@
             "image/gif": {"schema": {"type": "string", "format": "binary"}},
             "image/bmp": {"schema": {"type": "string", "format": "binary"}},
             "image/avif": {"schema": {"type": "string", "format": "binary"}},
-            "application/octet-stream": {"schema": {"type": "string", "format": "binary"}}
+            "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
+            "image/*": {"schema": {"type": "string", "format": "binary"}}
           }},
           "400": {"$ref": "#/components/responses/BadRequest"}, "401": {"$ref": "#/components/responses/Unauthorized"},
           "404": {"$ref": "#/components/responses/NotFound"}, "default": {"$ref": "#/components/responses/Error"}

@@ -170,6 +170,18 @@ async fn original_bytes_untouched_without_width_or_when_narrow() {
 	assert_eq!(upstream.small_hits.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn svg_original_bytes_and_mime_pass_through() {
+	let (t, chapter_id, _upstream, _big, _small) = url_page_app().await;
+	let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#.to_vec();
+	let (port, _svg_upstream) = common::serve_bytes(vec![("/page.svg", "image/svg+xml", svg.clone())]).await;
+	rewrite_page(&t.db_path, chapter_id, 1, &format!("http://127.0.0.1:{port}/page.svg")).await;
+	let (status, headers, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/svg+xml");
+	assert_eq!(bytes, svg);
+}
+
 async fn canvas_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	install_fixture_source(&tmp, "en.canvas", "Canvas Source", &canvas_wasm_path());
