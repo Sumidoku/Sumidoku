@@ -16,7 +16,7 @@ services:
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
       # reuse this compose's trawl (≥ v1.9.1) as the webview browser backend
       # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
-      # site-wide auth (web UI/REST/OPDS share one password)
+      # site-wide auth (web UI and REST API share one password)
       # - SUMIDOKU_AUTH_PASSWORD=
       # - SUMIDOKU_AUTH_API_KEYS=key1,key2
     depends_on:

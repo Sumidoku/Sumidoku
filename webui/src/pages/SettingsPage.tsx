@@ -2062,9 +2062,6 @@ function AboutSection() {
 						{upToDate && ` · ${t('settings.upToDate')}`}
 					</p>
 				)}
-				<p className="faint">
-					{t('settings.opdsHint')}
-				</p>
 				<a
 					className="setting-link"
 					href="https://github.com/Sumidoku/Sumidoku"

@@ -1,8 +1,8 @@
 //! OPDS 2.0 (JSON) catalog contract for the built-in OPDS source: per-response format detection (Content-Type
 //! plus a JSON body sniff for mislabeled servers), templated search links ({?query}), series drill-down through
 //! feed-typed self links, chapter pages enumerated from the publication manifest's readingOrder, and the
-//! acquisition CBZ fallback kept from 1.2. The mock mirrors this server's own /opds/v2 output (opds/v2.rs) plus
-//! a Komga-style publication document for the page list
+//! acquisition CBZ fallback kept from 1.2. The mock mirrors upstream OPDS 2.0 catalog and publication documents,
+//! including a Komga-style publication document for the page list
 mod common;
 
 use axum::Router;
@@ -46,7 +46,7 @@ fn root_feed(state: &MockState) -> String {
 	.to_string()
 }
 
-/// A series is a publication whose self link is feed-typed (this server's own manga_publication shape)
+/// A series is a publication whose self link is feed-typed (an OPDS 2.0 publication document)
 fn series_publication(base: &str, id: &str, title: &str) -> Value {
 	json!({
 		"metadata": {

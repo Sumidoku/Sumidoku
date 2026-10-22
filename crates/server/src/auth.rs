@@ -53,7 +53,7 @@ pub fn sha256_hex(raw: &str) -> String {
 	out
 }
 
-/// The login identity resolved from one request; require_auth / OPDS basic_auth inject it into request extensions
+/// The login identity resolved from one request; require_auth injects it into request extensions
 #[derive(Debug, Clone)]
 pub struct AuthUser {
 	pub id: i64,
@@ -73,8 +73,6 @@ pub struct AuthState {
 	admin_password_hash: RwLock<Option<String>>,
 	/// sha256 fingerprints of the config-side API keys, resident in memory
 	api_key_hashes: HashSet<String>,
-	/// OPDS fires one request per page image, so per-request argon2 is too expensive; cache the last verified (username, password fingerprint, identity)
-	basic_cache: RwLock<Option<(String, String, AuthUser)>>,
 }
 
 impl AuthState {
@@ -82,17 +80,11 @@ impl AuthState {
 		Self {
 			admin_password_hash: RwLock::new(None),
 			api_key_hashes: api_keys.iter().map(|k| sha256_hex(k)).collect(),
-			basic_cache: RwLock::new(None),
 		}
 	}
 
 	pub async fn enabled(&self) -> bool {
 		self.admin_password_hash.read().await.is_some()
-	}
-
-	/// After the admin password changes, the OPDS-cached identity is voided too
-	pub(crate) async fn invalidate_basic_cache(&self) {
-		*self.basic_cache.write().await = None;
 	}
 
 	pub(crate) async fn set_admin_password_hash(&self, hash: String) {
@@ -316,37 +308,5 @@ pub async fn change_password(
 		.execute(&state.pool)
 		.await?;
 	state.auth.set_admin_password_hash(new_hash).await;
-	state.auth.invalidate_basic_cache().await;
 	Ok(StatusCode::NO_CONTENT)
-}
-
-/// OPDS Basic verifies real username+password (§9 keeps Basic semantics); a cache hit avoids per-request argon2
-pub(crate) async fn basic_user(state: &AppState, headers: &axum::http::HeaderMap) -> ApiResult<Option<AuthUser>> {
-	let cred = headers
-		.get(axum::http::header::AUTHORIZATION)
-		.and_then(|v| v.to_str().ok())
-		.and_then(|v| v.strip_prefix("Basic "))
-		.and_then(crate::opds::base64_decode)
-		.and_then(|raw| String::from_utf8(raw).ok());
-	let Some(cred) = cred else {
-		return Ok(None);
-	};
-	let Some((username, password)) = cred.split_once(':') else {
-		return Ok(None);
-	};
-	let fingerprint = sha256_hex(password);
-	{
-		let cache = state.auth.basic_cache.read().await;
-		if let Some((cached_username, cached_fingerprint, user)) = cache.as_ref()
-			&& cached_username == username
-			&& cached_fingerprint == &fingerprint
-		{
-			return Ok(Some(user.clone()));
-		}
-	}
-	let Some(user) = verify_user_credentials(&state.pool, username, password).await? else {
-		return Ok(None);
-	};
-	*state.auth.basic_cache.write().await = Some((username.to_string(), fingerprint, user.clone()));
-	Ok(Some(user))
 }

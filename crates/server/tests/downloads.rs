@@ -318,16 +318,12 @@ async fn download_move_to_absolute_template_target() {
 		"default location must be empty after the move"
 	);
 
-	// page reads and OPDS streaming work as usual (unified path resolution: absolute paths used verbatim)
+	// file reads use the recorded absolute path verbatim
 	let bytes = std::fs::read(&target).expect("read moved cbz");
 	let (status, _, file_bytes) =
 		request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(file_bytes, bytes);
-	let (status, _, opds_bytes) =
-		request_full(&app, "GET", &format!("/opds/v1.2/file/{chapter_id}"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(opds_bytes, bytes);
 
 	// deletion uses the recorded absolute path
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;

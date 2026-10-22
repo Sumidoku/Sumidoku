@@ -46,10 +46,10 @@ function fixture() {
 					responses: { 204: { description: 'Done' } }
 				}
 			},
-			'/opds/v2': {
+			'/status': {
 				get: {
 					responses: {
-						200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/OpdsOnly' } } } }
+						200: { content: { 'application/json': { schema: { $ref: '#/components/schemas/NonRestOnly' } } } }
 					}
 				}
 			}
@@ -105,7 +105,7 @@ function fixture() {
 				WsOnly: { type: 'string' },
 				BinaryOnly: { type: 'string', format: 'binary' },
 				MultipartOnly: { type: 'object' },
-				OpdsOnly: { type: 'object' }
+				NonRestOnly: { type: 'object' }
 			}
 		}
 	};
@@ -167,7 +167,7 @@ test('limits reachability to ordinary JSON REST entry points', () => {
 		['Base', 'Composite', 'Input', 'ParameterOnly']
 	);
 	const output = generateTypes(document);
-	for (const excluded of ['Unused', 'NdjsonOnly', 'WsOnly', 'BinaryOnly', 'MultipartOnly', 'OpdsOnly']) {
+	for (const excluded of ['Unused', 'NdjsonOnly', 'WsOnly', 'BinaryOnly', 'MultipartOnly', 'NonRestOnly']) {
 		assert.doesNotMatch(output, new RegExp(`export type ${excluded}\\b`));
 	}
 });

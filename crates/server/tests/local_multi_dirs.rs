@@ -208,7 +208,7 @@ async fn mirrored_relative_path_registers_from_first_directory() {
 }
 
 #[tokio::test]
-async fn numbered_directory_key_reads_pages_covers_and_opds() {
+async fn numbered_directory_key_reads_pages_and_covers() {
 	let t = two_dir_app().await;
 	enable_both_dirs(&t).await;
 
@@ -244,31 +244,11 @@ async fn numbered_directory_key_reads_pages_covers_and_opds() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, b"beta-1-a");
 
-	// OPDS-PSE and both cover endpoints share the same directory resolution
-	let (status, _, bytes) = request_full(
-		&t.app.app,
-		"GET",
-		&format!("/opds/v1.2/stream/{chapter_id}/0"),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, b"beta-1-a");
-
 	// cover fallback: the last chapter in the descending list (ch 1.cbz), its first page
 	let (status, _, bytes) = request_full(
 		&t.app.app,
 		"GET",
 		&format!("/api/v1/manga/{beta_id}/cover"),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, b"beta-1-a");
-	let (status, _, bytes) = request_full(
-		&t.app.app,
-		"GET",
-		&format!("/opds/v1.2/cover/{beta_id}"),
 		None,
 	)
 	.await;

@@ -1,6 +1,6 @@
 //! End-to-end regression for the image processor (issue #116): ciphertext (undecodable) bytes go into
 //! the processor verbatim and come out decrypted as an image; decodable images go in as pixels through
-//! the canvas branch; all five entry paths output the same proper PNG.
+//! the canvas branch; all four entry paths output the same proper PNG.
 //! The fixture source lives in crates/wasm/tests/fixtures/rawimg-src (no_std cdylib);
 //! rebuild with `cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`,
 //! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
@@ -8,8 +8,7 @@
 mod common;
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::routing::get;
 use common::{TestApp, base_config, connect_db, install_fixture_source, rawimg_wasm_path, request, request_full};
 use image::ImageReader;
@@ -17,7 +16,6 @@ use serde_json::json;
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
-use tower::ServiceExt;
 
 /// The same key and plaintext as reconciled with rawimg-src/src/lib.rs (2x2 RGBA red-green/blue-white)
 const KEY: u8 = 0x5A;
@@ -274,29 +272,4 @@ async fn download_processes_opaque_bytes() {
 		.read_to_end(&mut data)
 		.expect("read page entry");
 	assert_plain_pixels(&data, "download page");
-}
-
-/// OPDS cover and detail page cover share fetch_cover_image: identical output
-#[tokio::test]
-async fn opds_cover_processes_opaque_bytes() {
-	let t = rawimg_app().await;
-	let app = t.app.clone();
-	let manga_id = register_rawimg_manga(&app).await;
-	let (port, _upstream) = serve_images().await;
-	set_cover_url(&t, manga_id, format!("http://127.0.0.1:{port}/cipher")).await;
-
-	let request = Request::builder()
-		.method("GET")
-		.uri(format!("/opds/v1.2/cover/{manga_id}"))
-		.header(header::HOST, "opds.test")
-		.header("x-forwarded-proto", "https")
-		.body(Body::empty())
-		.expect("build request");
-	let response = app.clone().oneshot(request).await.expect("response");
-	assert_eq!(response.status(), StatusCode::OK);
-	assert_eq!(response.headers()["content-type"], "image/png");
-	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-		.await
-		.expect("read body");
-	assert_plain_pixels(&bytes, "opds cover");
 }

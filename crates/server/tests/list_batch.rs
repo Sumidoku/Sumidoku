@@ -184,19 +184,6 @@ async fn list_endpoints_constant_sql_per_page() {
 		first_chapters.push(chapters[0]);
 	}
 
-	// both OPDS feed versions are inherently a single JOIN query; lock that in so it doesn't regress
-	for path in [
-		"/opds/v1.2/library",
-		"/opds/v1.2/history",
-		"/opds/v1.2/updates",
-		"/opds/v2/library",
-		"/opds/v2/history",
-		"/opds/v2/updates",
-	] {
-		let (stmts, _) = counted_get(&app, &counter, path).await;
-		assert_eq!(stmts.len(), 1, "GET {path} should run one statement regardless of rows: {stmts:?}");
-	}
-
 	// history: 8 rows vs 1 row, the statement count must be the same (old implementation was 1+8*4 vs 1+1*4)
 	let (many, body) = counted_get(&app, &counter, "/api/v1/history").await;
 	assert_eq!(entry_count(&body), 8);

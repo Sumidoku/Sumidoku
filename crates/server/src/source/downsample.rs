@@ -1,5 +1,5 @@
 //! Downsampled page-image variants: the reader fetches a shrunk PNG at display width; original bytes pass through
-//! verbatim when no parameter is given, when the image would be upscaled, or when decoding fails; downloads/OPDS never come through here
+//! verbatim when no parameter is given, when the image would be upscaled, or when decoding fails; downloads never come through here
 use image::ImageReader;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};

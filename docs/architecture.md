@@ -56,7 +56,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   failing the request.
 - API documentation (`api/docs.rs`, `assets/api-docs/`): `/api/openapi.json`
   publishes the hand-maintained OpenAPI 3.0.3 document that is the single REST
-  contract for every `/api/v1` route; OPDS is excluded. `cd webui && npm run
+  contract for every `/api/v1` route; external OPDS feeds are excluded. `cd webui && npm run
   generate:api` uses only Node built-ins to regenerate the committed
   `webui/src/api/types.ts` from the schema graph reachable through ordinary
   JSON parameters, requests and responses. `npm run build` regenerates first,
@@ -67,8 +67,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   references, required properties, maps, arrays, enums, nullable fields,
   oneOf/allOf and x-tuple. WebSocket frames and NDJSON events stay outside
   generation and response validation; their manually maintained TypeScript
-  protocols live in `webui/src/api/protocol.ts`. Binary content and OPDS are
-  excluded from generation and response validation as well.
+  protocols live in `webui/src/api/protocol.ts`. Binary content and external
+  OPDS feeds are excluded from generation and response validation as well.
   `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its JavaScript, CSS,
   Apache-2.0 license and bundled dependency notices embedded in the binary.
   `validatorUrl: null` disables external spec validation, so the page needs no
@@ -296,8 +296,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   OPF-declared media type with the extension mapping as fallback.
   `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
-  and stores `{"Local": entry}` page rows; the reader (`api/page.rs`) and
-  OPDS-PSE read image files directly and extract single archive entries
+  and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
+  reads image files directly and extracts single archive entries
   (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
   with the downsample pipeline untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
@@ -445,15 +445,6 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   next boot. Ordinary compaction is unchanged. Incoming sync changes with any
   other `origin_user_id` are rejected so old peers cannot reintroduce reader
   data.
-- OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
-  Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
-  URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
-  and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
-  when authentication is enabled and verifies real usernames and passwords
-  (before v0.16.1 any non-empty username passed with the site password);
-  the resolved `AuthUser` scopes every feed to the admin's library,
-  progress and downloads. Repeated verifications hit a one-entry cache so
-  per-page image requests don't pay argon2 each time.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
 - Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows
@@ -644,8 +635,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `manga_user.viewer_flags` is the admin's viewer override: API responses
   report it as the manga `viewer` while the source value stays stored.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
-  stamped whenever `lastPageRead` is written; the history page and both OPDS
-  history feeds select rows where it is non-null. The admin's
+  stamped whenever `lastPageRead` is written; the history page selects rows
+  where it is non-null. The admin's
   `incognito.enabled` setting — stored as the legacy key
   `user.1.incognito.enabled` and translated to a bare key by
   `GET`/`PUT /api/v1/settings` — or a per-manga `manga_user.incognito` flag
@@ -797,8 +788,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   still commits the measurements with the valid artifact. A row's stored
   `path` resolves through
   `download::product_path` — absolute is used as-is, relative joins
-  `downloads_dir` — and every read/delete site (`api/download.rs`,
-  `opds/mod.rs`) goes through it.
+  `downloads_dir` — and every read/delete site (`api/download.rs`)
+  goes through it.
 - Download move (`download/mod.rs:move_product`): when
   `download.move_path` is set (setting table, env
   `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
@@ -825,9 +816,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `PageContent::Image` page holds an actor-local rid, so `load_pages`
   exchanges it for PNG bytes in the same call that fetched the page list
   and stores them under `config_dir/page-blobs/<chapter_id>/<idx>.png`; the
-  page row keeps just the file name. The reader (`api/page.rs`), OPDS-PSE
-  (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
-  page_bytes`) all read the blob; chapter dirs whose chapter row is gone
+  page row keeps just the file name. The reader (`api/page.rs`) and
+  downloads (`download/mod.rs:page_bytes`) read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
@@ -853,9 +843,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   startup blob sweep invalidates them for free; a `<idx>.pass` marker
   records "not resized at this bucket" (narrow image or undecodable bytes)
   so repeat hits skip re-decoding. Pages never upscale and any failure
-  falls back to the original bytes, so a request without `width` — and the
-  downloads and OPDS-PSE paths, which never pass one — stays byte-identical
-  to the unmodified pipeline. Decode+resize runs on a blocking thread with
+  falls back to the original bytes, so a request without `width` — and
+  downloads, which never pass one — stays byte-identical to the
+  unmodified pipeline. Decode+resize runs on a blocking thread with
   a Lanczos3 filter (line art survives shrinking better; the cost lands
   only on a variant's first request). The web reader asks for its
   container width times the device pixel ratio
@@ -867,14 +857,13 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   and stores it in the page row's `description` field. A failed
   description export fails the whole chapter load, same as image
   materialization. The reader renders a flagged page with a description
-  as a text page (`webui/src/pages/ReaderPage.tsx:pageText`); OPDS and
-  downloads keep reading only the page `content`.
+  as a text page (`webui/src/pages/ReaderPage.tsx:pageText`); downloads
+  keep reading only the page `content`.
 - Image processors: when a source exports `process_page_image` /
   `process_cover_image`, `fetch_page_image` / `fetch_cover_image`
   (`source/mod.rs`) pass the fetched response through the actor
   (`SourceHandle::process_page_image`) and replace the bytes with the
-  returned PNG — for the reader, OPDS, downloads and the cover endpoint
-  alike. The processor input follows AidokuRunner's `store(value:)`
+  returned PNG — for the reader, downloads and the cover endpoint alike. The processor input follows AidokuRunner's `store(value:)`
   semantics: bytes the host can decode arrive as pixels, so width/height
   and canvas composition work (jmcomic-style descrambling depends on it)
   and `ImageRef.data()` returns a PNG re-encode; bytes the host cannot
@@ -893,8 +882,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
-  file is missing or `last_fetched_at` is newer than its mtime; OPDS reads
-  the same cache via `source/mod.rs:cover_bytes`.
+  file is missing or `last_fetched_at` is newer than its mtime.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.

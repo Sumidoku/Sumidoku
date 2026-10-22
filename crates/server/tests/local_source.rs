@@ -325,16 +325,6 @@ async fn cbz_chapter_pages_and_bytes_match_image_chapter() {
 		assert_eq!(bytes, want);
 	}
 
-	// OPDS-PSE shares the same Local branch
-	let (status, _, bytes) = request_full(
-		&app,
-		"GET",
-		&format!("/opds/v1.2/stream/{chapter_id}/0"),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, b"alpha-4-a");
 }
 
 #[tokio::test]
@@ -375,16 +365,6 @@ async fn cover_falls_back_to_last_chapter_first_page() {
 	assert_eq!(headers["content-type"], "image/png");
 	assert_eq!(bytes, b"delta-1-m");
 
-	// the OPDS cover shares the same cache and the same branch
-	let (status, _, bytes) = request_full(
-		&app,
-		"GET",
-		&format!("/opds/v1.2/cover/{delta_id}"),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, b"delta-1-m");
 }
 
 #[tokio::test]
