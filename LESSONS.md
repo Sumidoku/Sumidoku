@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An event log is not the authoritative current state when ownership changes.**
+After deleting another account's origin, rebuild the sync baseline from the
+current rows instead of assuming the remaining log is complete. Make the
+rebuild retryable and verify a full pull of an entity whose last update came
+from the removed account, not only that the old origin is gone.
+- Evidence: 2026-10-22, #306's review caught a reader-authored latest shared
+  manga event being removed by the single-owner migration. A one-time
+  compaction now reconstructs the admin baseline, and the migration test pulls
+  the current shared title with the local admin origin.
+
 **Removing a tenant filter changes reference semantics; it is not a mechanical
 cleanup.** When a query distinguishes the current row from other rows, replace
 tenant exclusion with the actual entity exclusion needed by the operation.
