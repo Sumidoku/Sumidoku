@@ -931,3 +931,7 @@
 button.menu-row:hover:not(:disabled) {
 	background: var(--bg-hover);
 }
+
+.menu-row--danger {
+	color: var(--danger);
+}

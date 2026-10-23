@@ -12,6 +12,7 @@ import {
 	Play,
 	Plus,
 	ScanSearch,
+	Settings,
 	Trash,
 	TriangleAlert,
 	Upload
@@ -39,6 +40,7 @@ import {
 	EmptyState,
 	IconButton,
 	Input,
+	MenuButton,
 	Modal,
 	PageHeader,
 	SegmentedControl,
@@ -46,7 +48,7 @@ import {
 	pushToast
 } from '../components';
 import ReposPanel from './browse/ReposPanel';
-import { SourceSettingsButton } from './browse/SourceSettingsModal';
+import { SourceSettingsButton, SourceSettingsDialog } from './browse/SourceSettingsModal';
 import { iconColor } from './browse/iconColor';
 
 function SourceIcon({ source }: { source: Source }) {
@@ -71,13 +73,12 @@ function SourceIcon({ source }: { source: Source }) {
 	);
 }
 
-function UpdateButton({ source }: { source: Source }) {
+function useSourceUpdate(source: Source) {
 	const { t } = useTranslation();
 	const update = useUpdateSource();
 	const navigate = useNavigate();
 
-	async function onClick(e: React.MouseEvent) {
-		e.stopPropagation();
+	async function onUpdate() {
 		try {
 			const r = await update.mutateAsync(source.id);
 			pushToast(t('browse.updated', { name: source.name, version: r.version }), 'info');
@@ -91,8 +92,20 @@ function UpdateButton({ source }: { source: Source }) {
 		}
 	}
 
+	return { onUpdate, pending: update.isPending };
+}
+
+function UpdateButton({ source, onUpdate, pending }: { source: Source; onUpdate: () => Promise<void>; pending: boolean }) {
 	return (
-		<Button size="sm" variant="primary" loading={update.isPending} onClick={(e) => void onClick(e)}>
+		<Button
+			size="sm"
+			variant="primary"
+			loading={pending}
+			onClick={(e) => {
+				e.stopPropagation();
+				void onUpdate();
+			}}
+		>
 			<CircleArrowUp size={14} />
 			v{source.updateVersion}
 		</Button>
@@ -225,7 +238,7 @@ interface CardDnd {
 	onDragEnd: () => void;
 }
 
-function SourceCard({
+export function SourceCard({
 	source: s,
 	dnd,
 	onTogglePin,
@@ -240,6 +253,9 @@ function SourceCard({
 }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const update = useSourceUpdate(s);
+	const [settingsOpen, setSettingsOpen] = useState(false);
+	const hasActions = s.kind !== 'local' || s.updateVersion !== null;
 	const cls = ['source-card'];
 	if (s.enabled) cls.push('source-card--link');
 	else cls.push('source-card--disabled');
@@ -303,58 +319,107 @@ function SourceCard({
 					</div>
 				)}
 			</div>
-			{s.updateVersion !== null && <UpdateButton source={s} />}
-			{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
-			{s.kind !== 'local' && (
-				<IconButton
-					label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
-					onClick={(e) => {
-						e.stopPropagation();
-						onTogglePin(s);
-					}}
-				>
-					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
-				</IconButton>
-			)}
-			{s.kind !== 'local' && (
-				<IconButton
-					label={s.enabled ? t('browse.disable', { name: s.name }) : t('browse.enable', { name: s.name })}
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleEnabled(s);
-					}}
-				>
-					{s.enabled ? <Pause size={17} /> : <Play size={17} />}
-				</IconButton>
-			)}
-			{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 501 — the local source has no home yet,
-				so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
-			{s.kind !== 'local' && (
-				<>
-					{s.kind !== 'opds' && s.hasHome !== false && (
-						<IconButton
-							label={t('browse.home', { name: s.name })}
-							onClick={(e) => {
-								e.stopPropagation();
-								navigate(`/browse/${s.id}/home`);
-							}}
-						>
-							<House size={17} />
-						</IconButton>
-					)}
-					{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
+			<div className="source-card__actions">
+				{s.updateVersion !== null && <UpdateButton source={s} onUpdate={update.onUpdate} pending={update.pending} />}
+				{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
+				{s.kind !== 'local' && (
 					<IconButton
-						label={t('browse.uninstall', { name: s.name })}
-						variant="danger"
+						label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
 						onClick={(e) => {
 							e.stopPropagation();
-							onDelete(s);
+							onTogglePin(s);
 						}}
 					>
-						<Trash size={17} />
+						{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
 					</IconButton>
-				</>
+				)}
+				{s.kind !== 'local' && (
+					<IconButton
+						label={s.enabled ? t('browse.disable', { name: s.name }) : t('browse.enable', { name: s.name })}
+						onClick={(e) => {
+							e.stopPropagation();
+							onToggleEnabled(s);
+						}}
+					>
+						{s.enabled ? <Pause size={17} /> : <Play size={17} />}
+					</IconButton>
+				)}
+				{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 501 — the local source has no home yet,
+					so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
+				{s.kind !== 'local' && (
+					<>
+						{s.kind !== 'opds' && s.hasHome !== false && (
+							<IconButton
+								label={t('browse.home', { name: s.name })}
+								onClick={(e) => {
+									e.stopPropagation();
+									navigate(`/browse/${s.id}/home`);
+								}}
+							>
+								<House size={17} />
+							</IconButton>
+						)}
+						{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
+						<IconButton
+							label={t('browse.uninstall', { name: s.name })}
+							variant="danger"
+							onClick={(e) => {
+								e.stopPropagation();
+								onDelete(s);
+							}}
+						>
+							<Trash size={17} />
+						</IconButton>
+					</>
+				)}
+			</div>
+			{hasActions && (
+				<div className="source-card__mobile-actions">
+					<MenuButton label={t('browse.actions', { name: s.name })}>
+						{(close) => (
+							<>
+								{s.updateVersion !== null && (
+									<button type="button" className="menu-row" disabled={update.pending} onClick={() => { close(); void update.onUpdate(); }}>
+										<span>{t('browse.updateAction', { version: s.updateVersion })}</span>
+										<CircleArrowUp size={14} />
+									</button>
+								)}
+								{s.kind !== 'local' && (
+									<button type="button" className="menu-row" onClick={() => { close(); onTogglePin(s); }}>
+										<span>{s.pinned ? t('browse.unpinAction') : t('browse.pinAction')}</span>
+										{s.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+									</button>
+								)}
+								{s.kind !== 'local' && (
+									<button type="button" className="menu-row" onClick={() => { close(); onToggleEnabled(s); }}>
+										<span>{s.enabled ? t('browse.disableAction') : t('browse.enableAction')}</span>
+										{s.enabled ? <Pause size={14} /> : <Play size={14} />}
+									</button>
+								)}
+								{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
+									<button type="button" className="menu-row" onClick={() => { close(); navigate(`/browse/${s.id}/home`); }}>
+										<span>{t('browse.homeAction')}</span>
+										<House size={14} />
+									</button>
+								)}
+								{s.kind !== 'local' && s.kind !== 'opds' && (
+									<button type="button" className="menu-row" onClick={() => { close(); setSettingsOpen(true); }}>
+										<span>{t('common.nav.settings')}</span>
+										<Settings size={14} />
+									</button>
+								)}
+								{s.kind !== 'local' && (
+									<button type="button" className="menu-row menu-row--danger" onClick={() => { close(); onDelete(s); }}>
+										<span>{t('browse.uninstallConfirm')}</span>
+										<Trash size={14} />
+									</button>
+								)}
+							</>
+						)}
+					</MenuButton>
+				</div>
 			)}
+			<SourceSettingsDialog sourceId={s.id} sourceName={s.name} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 		</div>
 	);
 }
