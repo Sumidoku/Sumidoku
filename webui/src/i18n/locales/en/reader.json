@@ -6,8 +6,8 @@
       "webtoon": "Webtoon"
     },
     "invalidChapter": "Invalid chapter address",
-    "documentTitle": "{{title}} · Reading - Sumidoku",
-    "documentTitleEmpty": "Reading - Sumidoku",
+    "documentTitle": "{{title}} · Reading",
+    "documentTitleEmpty": "Reading",
     "loadFailed": "Failed to load chapter",
     "retry": "Retry",
     "noPages": "This chapter has no pages",

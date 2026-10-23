@@ -1448,6 +1448,11 @@ new service worker is waiting, the UI offers Reload and Later: Reload activates
 it and reloads the page, while Later only dismisses the prompt; there is no
 automatic reload. This provides installation and an application shell, not
 offline chapters or offline reading progress.
+Route handles provide translated fallback document titles, and
+`DocumentTitleProvider` appends ` · Sumidoku`. Source, manga and reader pages
+replace the fallback with content names through `useDocumentTitle`; overrides
+are scoped to the current pathname so a previous page cannot overwrite the next
+page's title.
 
 When authentication is on, the
 login page takes the admin username + password with an initially empty username

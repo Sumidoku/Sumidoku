@@ -1,4 +1,5 @@
 import { createBrowserRouter, Navigate, RouterProvider, useParams } from 'react-router-dom';
+import { DocumentTitleProvider } from './components/DocumentTitle';
 import { AppLayout } from './layout/AppLayout';
 import BrowsePage from './pages/BrowsePage';
 import DownloadsPage from './pages/DownloadsPage';
@@ -17,27 +18,32 @@ import UpdatesPage from './pages/UpdatesPage';
 
 const router = createBrowserRouter([
 	{
-		element: <AppLayout />,
+		element: <DocumentTitleProvider />,
 		children: [
-			{ path: '/', element: <Navigate to="/library" replace /> },
-			{ path: '/library', element: <LibraryPage /> },
-			{ path: '/browse', element: <BrowsePage /> },
-			{ path: '/browse/:sourceId', element: <SourceBrowseRoute /> },
-			{ path: '/browse/:sourceId/home', element: <SourceHomePage /> },
-			{ path: '/search', element: <SearchPage /> },
-			{ path: '/manga/:id', element: <MangaDetailPage /> },
-			{ path: '/migrate', element: <MigratePage /> },
-			{ path: '/history', element: <HistoryPage /> },
-			{ path: '/downloads', element: <DownloadsPage /> },
-			{ path: '/updates', element: <UpdatesPage /> },
-			{ path: '/settings', element: <SettingsPage /> },
-			{ path: '*', element: <NotFound /> }
+			{
+				element: <AppLayout />,
+				children: [
+					{ path: '/', element: <Navigate to="/library" replace />, handle: { title: 'common.nav.library' } },
+					{ path: '/library', element: <LibraryPage />, handle: { title: 'common.nav.library' } },
+					{ path: '/browse', element: <BrowsePage />, handle: { title: 'common.nav.browse' } },
+					{ path: '/browse/:sourceId', element: <SourceBrowseRoute />, handle: { title: 'sourceBrowse.sourceFallback' } },
+					{ path: '/browse/:sourceId/home', element: <SourceHomePage />, handle: { title: 'sourceHome.sourceFallback' } },
+					{ path: '/search', element: <SearchPage />, handle: { title: 'common.nav.search' } },
+					{ path: '/manga/:id', element: <MangaDetailPage />, handle: { title: 'mangaDetail.documentTitle' } },
+					{ path: '/migrate', element: <MigratePage />, handle: { title: 'migrate.title' } },
+					{ path: '/history', element: <HistoryPage />, handle: { title: 'common.nav.history' } },
+					{ path: '/downloads', element: <DownloadsPage />, handle: { title: 'common.nav.downloads' } },
+					{ path: '/updates', element: <UpdatesPage />, handle: { title: 'common.nav.updates' } },
+					{ path: '/settings', element: <SettingsPage />, handle: { title: 'common.nav.settings' } },
+					{ path: '*', element: <NotFound />, handle: { title: 'notFound.title' } }
+				]
+			},
+			// The reader is full-screen, without the AppLayout navigation
+			{ path: '/reader/:chapterId', element: <ReaderPage />, handle: { title: 'reader.documentTitleEmpty' } },
+			// The login page also has a standalone layout (no protected page renders while unauthenticated)
+			{ path: '/login', element: <LoginPage />, handle: { title: 'login.submit' } }
 		]
-	},
-	// The reader is full-screen, without the AppLayout navigation
-	{ path: '/reader/:chapterId', element: <ReaderPage /> },
-	// The login page also has a standalone layout (no protected page renders while unauthenticated)
-	{ path: '/login', element: <LoginPage /> }
+	}
 ]);
 
 // The browse page has state initialized once from the entry params (stored filter values, deep-link params);

@@ -14,6 +14,7 @@ import {
 	X
 } from 'lucide-react';
 import { coverUrl, sourceImageUrl } from '../api/client';
+import { useDocumentTitle } from '../components/DocumentTitle';
 import {
 	useDeepLink,
 	useListing,
@@ -145,6 +146,7 @@ export default function SourceBrowsePage() {
 	const navigate = useNavigate();
 
 	const source = useSource(sourceId);
+	useDocumentTitle(source.data?.name);
 	const sourceEnabled = source.data?.enabled ?? true;
 	const kind = source.data?.kind;
 	const isLocal = kind === 'local';

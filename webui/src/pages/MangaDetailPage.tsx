@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../api/client';
+import { useDocumentTitle } from '../components/DocumentTitle';
 import {
 	qk,
 	useAddToLibrary,
@@ -122,6 +123,7 @@ export default function MangaDetailPage() {
 	const mangaQuery = useManga(mangaId);
 	const chaptersQuery = useMangaChapters(mangaId);
 	const manga = mangaQuery.data ?? null;
+	useDocumentTitle(manga?.title);
 	const chapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	// The manifest declaration wins (Aidoku config?.supportsX ?? inferred); the filter list is the fallback when undeclared.
 	// While manga has not arrived, 0 is only a placeholder and cannot match a real source

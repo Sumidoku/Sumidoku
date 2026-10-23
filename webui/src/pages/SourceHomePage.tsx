@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ChevronRight, House, Search, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
+import { useDocumentTitle } from '../components/DocumentTitle';
 import { useRegisterManga, useSource, useSourceHome } from '../api/hooks';
 import type {
 	AidokuListing,
@@ -25,6 +26,7 @@ export default function SourceHomePage() {
 	const navigate = useNavigate();
 
 	const source = useSource(sourceId);
+	useDocumentTitle(source.data?.name);
 	const homeQuery = useSourceHome(sourceId, source.data?.enabled ?? true);
 
 	const register = useRegisterManga();
