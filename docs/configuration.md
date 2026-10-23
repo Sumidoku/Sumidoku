@@ -97,7 +97,7 @@ See [docs/authentication.md](authentication.md) for the model.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMIDOKU_AUTH_USERNAME` | `admin` | built-in admin's login username, written onto the user row on every boot; the login page prefills it |
+| `SUMIDOKU_AUTH_USERNAME` | `admin` | built-in admin's login username, written onto the user row on every boot; exposed by `/api/v1/auth/status` only with a valid authenticated identity |
 | `SUMIDOKU_AUTH_PASSWORD` | — | built-in admin's password, re-seeded on every boot; enables authentication (username + password login) for the web UI and REST API |
 | `SUMIDOKU_AUTH_API_KEYS` | — | comma-separated long-lived API keys; usable as `Authorization: Bearer <key>` |
 | `SUMIDOKU_BASIC_PASSWORD` | — | legacy alias of `SUMIDOKU_AUTH_PASSWORD`; only applies when the latter is unset |

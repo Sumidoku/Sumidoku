@@ -4299,7 +4299,6 @@
         "type": "object",
         "required": [
           "enabled",
-          "username",
           "user"
         ],
         "properties": {
@@ -4308,7 +4307,7 @@
           },
           "username": {
             "type": "string",
-            "description": "The built-in admin's login username (\"admin\" unless configured), exposed unauthenticated so the login page can prefill it"
+            "description": "The built-in admin's login username, present only when the request has a valid authenticated identity"
           },
           "user": {
             "allOf": [

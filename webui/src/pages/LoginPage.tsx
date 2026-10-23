@@ -11,18 +11,16 @@ import './login.css';
 export default function LoginPage() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
-	const [username, setUsername] = useState('admin');
+	const [username, setUsername] = useState('');
 	const [password, setPassword] = useState('');
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState('');
 
-	// The login page is pointless when the server has auth disabled, so bounce straight home; the status
-	// also carries the configured login username, which replaces the default "admin" prefill
+	// The login page is pointless when the server has auth disabled, so bounce straight home
 	useEffect(() => {
 		api<AuthStatus>('/auth/status', { silent: true })
 			.then((s) => {
 				if (!s.enabled) navigate('/', { replace: true });
-				else if (s.username) setUsername(s.username);
 			})
 			.catch(() => {});
 	}, [navigate]);
