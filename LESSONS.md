@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Dynamic fallbacks must treat an empty string as absent, not only null or
+undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
+suppressing the fallback just as a real title would. Normalize empty values
+before applying overrides and include a blank-content case in browser
+acceptance.
+- Evidence: 2026-10-24, #359's document-title override used `title ?? null`;
+  the example manga detail returned `"title":""`, so the route fallback was
+  suppressed and the tab became plain `Sumidoku`. Normalizing with `title ||
+  null` restored `漫画 · Sumidoku`; sabotaging it failed `blank content titles
+  keep the route fallback`, and the test passed again after restoration.
+
 **Derived state must be invalidated when its producer or input changes;
 fresh fixtures cannot prove an upgrade.** When a parser changes, rows
 written by the old parser need an explicit migration or versioned rebuild,
