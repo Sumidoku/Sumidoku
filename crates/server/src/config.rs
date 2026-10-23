@@ -226,6 +226,7 @@ struct AuthConfigFile {
 #[serde(default)]
 struct ConfigFile {
 	addr: Option<String>,
+	/// legacy: no longer effective — the file lives inside the config dir, so it cannot set it; kept only to warn
 	config_dir: Option<PathBuf>,
 	call_concurrency: Option<usize>,
 	log: Option<String>,
@@ -261,26 +262,45 @@ struct ConfigFile {
 }
 
 impl Config {
-	/// Defaults ← ./config.toml (optional) ← environment variables (SUMIDOKU_ prefix)
+	/// Defaults ← <config_dir>/config.toml (optional) ← environment variables (SUMIDOKU_ prefix).
+	/// config_dir itself is env-only: the file lives inside it, so the file cannot set it
 	pub fn load() -> Self {
 		let mut config = Self::default();
-		if let Ok(raw) = std::fs::read_to_string("./config.toml") {
-			match toml::from_str::<ConfigFile>(&raw) {
-				Ok(file) => config.apply_file(file),
-				Err(e) => eprintln!("invalid ./config.toml, using defaults: {e}"),
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_CONFIG_DIR") {
+			config.config_dir = PathBuf::from(v);
+		}
+		if let Some(file) = Self::read_file(&config.config_dir) {
+			config.apply_file(file);
 		}
 		config.apply_env();
 		config.derive_paths();
 		config
 	}
 
+	/// Reads <config_dir>/config.toml: absent or unreadable → None, invalid → None with a warning
+	fn read_file(config_dir: &std::path::Path) -> Option<ConfigFile> {
+		let path = config_dir.join("config.toml");
+		let raw = std::fs::read_to_string(&path).ok()?;
+		match toml::from_str::<ConfigFile>(&raw) {
+			Ok(file) => {
+				if file.config_dir.is_some() {
+					eprintln!(
+						"{}: config_dir is no longer settable here (the file lives inside it); use SUMIDOKU_CONFIG_DIR",
+						path.display()
+					);
+				}
+				Some(file)
+			}
+			Err(e) => {
+				eprintln!("invalid {}, using defaults: {e}", path.display());
+				None
+			}
+		}
+	}
+
 	fn apply_file(&mut self, file: ConfigFile) {
 		if let Some(v) = file.addr {
 			self.addr = v;
-		}
-		if let Some(v) = file.config_dir {
-			self.config_dir = v;
 		}
 		if let Some(v) = file.call_concurrency {
 			self.call_concurrency = v;
@@ -590,6 +610,34 @@ fn split_csv(raw: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn config_file_lives_under_config_dir() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		assert!(Config::read_file(tmp.path()).is_none(), "absent file is fine");
+		std::fs::write(tmp.path().join("config.toml"), "log = \"debug\"\n").expect("write");
+		let file = Config::read_file(tmp.path()).expect("parsed");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.log, "debug");
+	}
+
+	#[test]
+	fn config_dir_key_in_file_is_ignored() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		std::fs::write(tmp.path().join("config.toml"), "config_dir = \"/elsewhere\"\n").expect("write");
+		let file = Config::read_file(tmp.path()).expect("parsed");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.config_dir, PathBuf::from("./data"), "the file cannot relocate its own dir");
+	}
+
+	#[test]
+	fn invalid_config_file_falls_back_to_defaults() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		std::fs::write(tmp.path().join("config.toml"), "log = [not, a, string]\n").expect("write");
+		assert!(Config::read_file(tmp.path()).is_none(), "invalid toml is dropped, not fatal");
+	}
 
 	#[test]
 	fn browser_trawl_from_file() {
