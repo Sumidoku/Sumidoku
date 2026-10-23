@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
+import { useDocumentTitle } from '../components/DocumentTitle';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate } from '../lib/format';
@@ -434,12 +435,7 @@ function ReaderCore({
 		}
 	}, [chaptersOpen, asc]);
 
-	useEffect(() => {
-		document.title = mangaTitle ? t('reader.documentTitle', { title: mangaTitle }) : t('reader.documentTitleEmpty');
-		return () => {
-			document.title = 'Sumidoku';
-		};
-	}, [mangaTitle, t]);
+	useDocumentTitle(mangaTitle ? t('reader.documentTitle', { title: mangaTitle }) : null);
 
 	function setMode(m: Mode) {
 		if (m === mode) return;
