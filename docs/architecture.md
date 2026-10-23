@@ -306,7 +306,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   pages. A page's mime is the OPF-declared media type with the extension
   mapping as fallback. Migration 0021 clears cached local EPUB page rows
   and counts from older parsers while preserving reading progress; the
-  next open rebuilds them under these rules.
+  next open rebuilds them under these rules. Migration 0022 adds
+  `chapter.epub_divina_compatible`: true for divina, false for other
+  EPUBs, and NULL for non-EPUB or unknown. Local scans and page rebuilds
+  refresh the value.
   `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)

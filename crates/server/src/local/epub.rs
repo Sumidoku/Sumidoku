@@ -366,6 +366,14 @@ pub fn read_package(zip: &ZipCache, path: &Path) -> Option<Package> {
 	Some(package)
 }
 
+pub fn divina_pages(zip: &ZipCache, path: &Path) -> Vec<Page> {
+	read_package(zip, path).map(|package| package.pages(zip, path)).unwrap_or_default()
+}
+
+pub fn is_divina(zip: &ZipCache, path: &Path) -> bool {
+	!divina_pages(zip, path).is_empty()
+}
+
 /// OPF hrefs are URIs: percent-encoded octets decode back to the raw zip entry name
 fn percent_decode(href: &str) -> String {
 	fn hex(b: u8) -> Option<u8> {
