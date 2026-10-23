@@ -35,6 +35,8 @@ impl Default for NetConfig {
 
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
+	/// Built-in admin's login username; None/blank = "admin"
+	pub username: Option<String>,
 	/// Site-wide password (shared by web UI login and /api/v1); None = auth disabled
 	pub password: Option<String>,
 	/// Long-lived API keys, used directly as Bearer tokens; plaintext in config, never stored in the DB
@@ -149,6 +151,16 @@ impl Config {
 		self.covers_dir = self.config_dir.join("covers");
 	}
 
+	/// Built-in admin's login username: the configured value (blank counts as unset), otherwise "admin"
+	pub fn effective_username(&self) -> &str {
+		self.auth
+			.username
+			.as_deref()
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.unwrap_or("admin")
+	}
+
 	/// auth.password wins; when absent, legacy basic_password fills in so old configs keep working
 	pub fn effective_password(&self) -> Option<&str> {
 		self.auth.password.as_deref().or(self.basic_password.as_deref())
@@ -205,6 +217,7 @@ impl Config {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AuthConfigFile {
+	username: Option<String>,
 	password: Option<String>,
 	api_keys: Option<Vec<String>>,
 }
@@ -353,6 +366,9 @@ impl Config {
 			self.basic_password = Some(v);
 		}
 		if let Some(auth) = file.auth {
+			if auth.username.is_some() {
+				self.auth.username = auth.username;
+			}
 			if auth.password.is_some() {
 				self.auth.password = auth.password;
 			}
@@ -524,6 +540,9 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_USERNAME") {
+			self.auth.username = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_PASSWORD") {
 			self.auth.password = Some(v);
 		}
@@ -588,6 +607,28 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_TRAWL") };
 		assert_eq!(config.net.browser_trawl.as_deref(), Some("http://127.0.0.1:8191"));
+	}
+
+	#[test]
+	fn auth_username_defaults_to_admin_and_blank_counts_as_unset() {
+		assert_eq!(Config::default().effective_username(), "admin");
+		let mut config = Config::default();
+		config.auth.username = Some("  ".into());
+		assert_eq!(config.effective_username(), "admin");
+	}
+
+	#[test]
+	fn auth_username_from_file_and_env() {
+		let file: ConfigFile = toml::from_str("[auth]\nusername = \"owner\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.effective_username(), "owner");
+
+		unsafe { std::env::set_var("SUMIDOKU_AUTH_USERNAME", "env-owner") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_AUTH_USERNAME") };
+		assert_eq!(config.effective_username(), "env-owner");
 	}
 
 	#[test]

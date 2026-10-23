@@ -4299,11 +4299,16 @@
         "type": "object",
         "required": [
           "enabled",
+          "username",
           "user"
         ],
         "properties": {
           "enabled": {
             "type": "boolean"
+          },
+          "username": {
+            "type": "string",
+            "description": "The built-in admin's login username (\"admin\" unless configured), exposed unauthenticated so the login page can prefill it"
           },
           "user": {
             "allOf": [

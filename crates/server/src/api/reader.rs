@@ -372,7 +372,7 @@ mod tests {
 	async fn apply_patch(state: &Arc<AppState>, chapter_id: i64, patch: ProgressPatch) {
 		let _ = update_chapter(
 			State(state.clone()),
-			Extension(crate::auth::AuthUser::admin()),
+			Extension(state.auth.admin_user()),
 			Path(chapter_id),
 			Json(patch),
 		)

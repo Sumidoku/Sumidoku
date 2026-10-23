@@ -168,7 +168,7 @@ impl AppState {
 		let call_concurrency = config.call_concurrency;
 		let policy = SumidokuNetPolicy::from_config(&config);
 		let http = RoutedClients::new(policy.clone());
-		let auth = crate::auth::AuthState::new(&config.auth.api_keys);
+		let auth = crate::auth::AuthState::new(&config.auth.api_keys, config.effective_username());
 		Arc::new(Self {
 			pool,
 			config,
