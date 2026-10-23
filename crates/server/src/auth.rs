@@ -221,18 +221,22 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null. The top-level username is the login page's prefill, exposed regardless of authentication
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
 pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
 	let enabled = state.auth.enabled().await;
 	let user = match enabled {
 		true => bearer_user(&state, presented_token(&req)).await?,
 		false => None,
 	};
-	Ok(Json(json!({
+	let mut body = json!({
 		"enabled": enabled,
-		"username": state.auth.admin_username,
-		"user": user.map(|u| json!({ "id": u.id, "username": u.username })),
-	})))
+		"user": Value::Null,
+	});
+	if let Some(user) = user {
+		body["username"] = Value::String(user.username.clone());
+		body["user"] = json!({ "id": user.id, "username": user.username });
+	}
+	Ok(Json(body))
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> ApiResult<Json<Value>> {

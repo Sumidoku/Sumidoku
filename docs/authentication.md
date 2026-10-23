@@ -38,9 +38,9 @@ breaking change.
 - **Admin username** — `SUMIDOKU_AUTH_USERNAME` env or `auth.username` in
   `config.toml`; unset or blank means `admin`. On every boot a configured
   value is written onto the built-in admin's user row. `GET
-  /api/v1/auth/status` returns it as the top-level `username` field
-  (regardless of authentication), and the login page prefills its username
-  field with it.
+  /api/v1/auth/status` returns it as the top-level `username` field only
+  with a valid authenticated identity; anonymous responses omit it, and the
+  login page starts with an empty username field.
 - **Admin password** — `SUMIDOKU_AUTH_PASSWORD` env or `auth.password` in
   `config.toml`. On every boot it is hashed (argon2) onto the built-in
   admin's user row, so the config value overrides a password previously

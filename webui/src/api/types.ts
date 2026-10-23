@@ -36,7 +36,7 @@ export type ApiError = {
 
 export type AuthStatus = {
 	enabled: boolean;
-	username: string;
+	username?: string;
 	user: AuthUser | null;
 };
 
