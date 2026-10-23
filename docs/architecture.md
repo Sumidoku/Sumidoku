@@ -1465,6 +1465,9 @@ reader uses positive known page dimensions (populated during downloads) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,
 reserving space before lazy loads; text, unsupported and unknown-dimension
 pages get no forced ratio, and paged mode keeps its fixed viewport.
+Text pages also offer font-family, font-size and line-height controls persisted
+in `sumidoku.reader.typography`; the same style applies to paged and continuous
+rendering, and typography changes recompute paged text columns.
 
 ## Known gaps
 
