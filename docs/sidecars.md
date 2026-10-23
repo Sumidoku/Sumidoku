@@ -5,7 +5,8 @@ optional sidecar unlocks sources that fight back:
 [trawl](https://github.com/germondai/trawl), an external HTTP service
 (Camoufox/Firefox inside) that solves Cloudflare challenges and doubles as
 the browser backend for webview login flows. It is already wired into the
-compose file.
+compose file with both its API (`SUMIDOKU_NET_BROWSER_TRAWL`) and forward
+proxy (`SUMIDOKU_NET_TRAWL_PROXY`) enabled by default.
 
 ## Cloudflare bypass (trawl)
 
@@ -13,8 +14,9 @@ Sources behind Cloudflare anti-bot protection are solved through a
 [trawl](https://github.com/germondai/trawl) sidecar, with its forward proxy
 kept as the fallback.
 
-With `SUMIDOKU_NET_BROWSER_TRAWL` pointing at the trawl API (e.g.
-`http://trawl:8191`, requires trawl ≥ v1.9.1), a direct request answered
+`SUMIDOKU_NET_BROWSER_TRAWL` points at the trawl API (e.g.
+`http://trawl:8191`, requires trawl ≥ v1.9.1); the compose file enables it by
+default. A direct request answered
 `403`/`503` with Cloudflare headers triggers a one-off solve through trawl's
 scrape API. The answer carries the `cf_clearance` cookie and the solving
 browser's user agent — CF binds the cookie to that UA (and IP), so Sumidoku

@@ -3,9 +3,14 @@ use aidoku_wasm::{ClearanceReplay, NetPolicy, NetRoute};
 use reqwest::{Client, StatusCode, Url};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_ATTEMPTS: u32 = 3;
+
+/// A challenged host stays routed through trawl this long before the next direct
+/// attempt re-solves: a transient solver failure (trawl restart, timeout, 500) must
+/// not pin the host to the proxy for the rest of the process lifetime
+const CHALLENGED_COOLDOWN: Duration = Duration::from_secs(300);
 
 /// NetPolicy implementation: direct > relay(TRAWL) > challenged host(TRAWL) > global proxy > direct.
 /// A direct hit on a CF challenge is first answered by a clearance solve through the trawl scrape
@@ -26,8 +31,13 @@ pub struct SumidokuNetPolicy {
 	allow_direct_fallback: bool,
 	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
-	/// Hosts that hit a CF challenge and now permanently go via trawl (in-process memory; the first request after a restart relearns)
-	challenged: RwLock<HashSet<String>>,
+	/// Hosts that hit a CF challenge and are routed through trawl; the timestamp (not set
+	/// membership alone) decides, so a host whose solver recovered is released back onto
+	/// direct after the cooldown instead of sticking to the proxy forever
+	challenged: RwLock<HashMap<String, Instant>>,
+	/// Hosts with a solve currently in flight; a concurrent request skips the duplicate
+	/// solve and falls back to the proxy path instead
+	solving: RwLock<HashSet<String>>,
 	/// Solved clearances by host, replayed direct; a refused one is dropped and re-solved
 	clearances: RwLock<HashMap<String, ClearanceReplay>>,
 }
@@ -55,7 +65,8 @@ impl SumidokuNetPolicy {
 			allow_direct_fallback: config.net.allow_direct_fallback,
 			browser_headers: config.net.browser_headers,
 			ca_pem,
-			challenged: RwLock::new(HashSet::new()),
+			challenged: RwLock::new(HashMap::new()),
+			solving: RwLock::new(HashSet::new()),
 			clearances: RwLock::new(HashMap::new()),
 		})
 	}
@@ -64,10 +75,17 @@ impl SumidokuNetPolicy {
 		list.iter().any(|d| host == d || host.ends_with(&format!(".{d}")))
 	}
 
-	/// Whether this host has hit a CF challenge. Exact match: each mirror/subdomain that hits a challenge is
-	/// recorded for itself, with no suffix spreading, so unshielded image hosts on the same domain are not dragged into the proxy.
+	/// Whether this host is currently routed through trawl after a CF challenge. Exact match:
+	/// each mirror/subdomain that hits a challenge is recorded for itself, with no suffix
+	/// spreading, so unshielded image hosts on the same domain are not dragged into the proxy.
+	/// Time-boxed: after the cooldown the host is released back to direct, where the next
+	/// challenge re-solves instead of sticking on the proxy for the process lifetime
 	fn is_challenged(&self, host: &str) -> bool {
-		self.challenged.read().expect("challenged lock").contains(host)
+		self.challenged
+			.read()
+			.expect("challenged lock")
+			.get(host)
+			.is_some_and(|since| since.elapsed() < CHALLENGED_COOLDOWN)
 	}
 
 	/// Remembers a host that hit a challenge; only called when there really is a trawl to escalate to
@@ -75,13 +93,15 @@ impl SumidokuNetPolicy {
 		if host.is_empty() {
 			return;
 		}
-		let inserted = self
-			.challenged
-			.write()
-			.expect("challenged lock")
-			.insert(host.to_string());
-		if inserted {
-			tracing::info!(host, "cloudflare challenge seen, routing host through trawl");
+		{
+			let mut challenged = self.challenged.write().expect("challenged lock");
+			let fresh = !challenged.contains_key(host);
+			challenged.insert(host.to_string(), Instant::now());
+			// Released hosts must not linger in the map forever
+			challenged.retain(|_, since| since.elapsed() < CHALLENGED_COOLDOWN);
+			if fresh {
+				tracing::info!(host, "cloudflare challenge seen, routing host through trawl");
+			}
 		}
 	}
 
@@ -146,13 +166,26 @@ impl NetPolicy for SumidokuNetPolicy {
 			return None;
 		}
 		let api = self.trawl_api.as_ref()?;
-		let replay = aidoku_wasm::browser::trawl::solve_clearance(api, host)?;
-		tracing::info!(host, "cloudflare clearance solved, replaying direct");
-		self.clearances
-			.write()
-			.expect("clearances lock")
-			.insert(host.to_string(), replay.clone());
-		Some(replay)
+		{
+			let mut solving = self.solving.write().expect("solving lock");
+			if !solving.insert(host.to_string()) {
+				// Another request is already solving this host; the caller falls back to
+				// the proxy path instead of starting a second browser session
+				tracing::debug!(host, "clearance solve already in flight, skipping");
+				return None;
+			}
+		}
+		let solved = (|| {
+			let replay = aidoku_wasm::browser::trawl::solve_clearance(api, host)?;
+			tracing::info!(host, "cloudflare clearance solved, replaying direct");
+			self.clearances
+				.write()
+				.expect("clearances lock")
+				.insert(host.to_string(), replay.clone());
+			Some(replay)
+		})();
+		self.solving.write().expect("solving lock").remove(host);
+		solved
 	}
 
 	fn clear_clearance(&self, host: &str) {
@@ -306,6 +339,8 @@ impl RoutedClients {
 					.ok()
 					.flatten();
 					if fresh.is_some() {
+						// The direct replay gets a fresh retry budget, matching the wasm net path
+						attempt = 0;
 						continue;
 					}
 				}
@@ -951,6 +986,56 @@ mod tests {
 			NetRoute::Proxy("http://trawl:8192".into()),
 			"clearance 被丢弃后回到代理"
 		);
+	}
+
+	#[test]
+	fn challenged_host_releases_after_cooldown() {
+		let p = policy(|c| {
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		p.trawl_escalation(&url);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into()),
+			"刚标记的 host 在冷却期内走代理"
+		);
+		// The solver has recovered meanwhile: a stale challenge mark releases the host back
+		// to direct, where the next CF challenge re-solves instead of sticking on the proxy
+		p.challenged
+			.write()
+			.expect("challenged lock")
+			.insert(
+				"cf.example.com".into(),
+				Instant::now() - CHALLENGED_COOLDOWN - Duration::from_secs(1),
+			);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Direct,
+			"冷却期后回到直连重新解题"
+		);
+	}
+
+	#[test]
+	fn in_flight_solve_is_not_repeated() {
+		let solver = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
+			)
+		});
+		let p = policy(|c| {
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		// Another request is already solving this host
+		p.solving
+			.write()
+			.expect("solving lock")
+			.insert("cf.example.com".into());
+		assert_eq!(p.solve_clearance(&url), None, "在解时不重复解题");
+		assert_eq!(solver.hits(), 0, "solver 不被重复调用");
 	}
 
 	#[tokio::test]

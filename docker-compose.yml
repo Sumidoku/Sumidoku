@@ -13,9 +13,10 @@ services:
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
+      # CF clearance solver + webview browser backend (trawl's API port; requires trawl ≥ v1.9.1,
+      # satisfied by the `latest` image below). Without it, challenged hosts fall back to the proxy.
+      - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
-      # reuse this compose's trawl (≥ v1.9.1) as the webview browser backend
-      # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
       # site-wide auth (web UI and REST API share one password)
       # - SUMIDOKU_AUTH_PASSWORD=
       # - SUMIDOKU_AUTH_API_KEYS=key1,key2
