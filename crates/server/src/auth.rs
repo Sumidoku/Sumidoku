@@ -60,15 +60,10 @@ pub struct AuthUser {
 	pub username: String,
 }
 
-impl AuthUser {
-	/// Built-in admin (seed value of user 1): passwordless deployments and config-side api_keys both act as
-	/// admin; the username here is display-only, no DB lookup
-	pub(crate) fn admin() -> Self {
-		Self { id: 1, username: "admin".into() }
-	}
-}
-
 pub struct AuthState {
+	/// Built-in admin's login username (config-side; "admin" when unset); passwordless deployments and
+	/// config-side api_keys display it without a DB lookup
+	admin_username: String,
 	/// In-memory copy of user 1's argon2 PHC string; None = auth disabled (no password configured)
 	admin_password_hash: RwLock<Option<String>>,
 	/// sha256 fingerprints of the config-side API keys, resident in memory
@@ -76,11 +71,17 @@ pub struct AuthState {
 }
 
 impl AuthState {
-	pub fn new(api_keys: &[String]) -> Self {
+	pub fn new(api_keys: &[String], username: &str) -> Self {
 		Self {
+			admin_username: username.to_string(),
 			admin_password_hash: RwLock::new(None),
 			api_key_hashes: api_keys.iter().map(|k| sha256_hex(k)).collect(),
 		}
+	}
+
+	/// Built-in admin (user 1): passwordless deployments and config-side api_keys both act as admin
+	pub(crate) fn admin_user(&self) -> AuthUser {
+		AuthUser { id: 1, username: self.admin_username.clone() }
 	}
 
 	pub async fn enabled(&self) -> bool {
@@ -92,10 +93,17 @@ impl AuthState {
 	}
 }
 
-/// Establishes the admin password at startup: the config/env side wins (overriding the stored hash), otherwise
-/// keeps the hash already in the DB; an empty string in the DB = auth disabled. The change-password endpoint
-/// only writes the DB; on restart a config-side password still wins
+/// Establishes the admin username and password at startup: the config/env side wins (a configured username is
+/// written onto user 1, a configured password overrides the stored hash), otherwise keeps what is already in
+/// the DB; an empty string in the DB = auth disabled. The change-password endpoint only writes the DB; on
+/// restart a config-side password still wins
 pub async fn init(state: &AppState) -> Result<(), Error> {
+	if state.config.auth.username.is_some() {
+		sqlx::query("UPDATE user SET username = ? WHERE id = 1")
+			.bind(state.config.effective_username())
+			.execute(&state.pool)
+			.await?;
+	}
 	if let Some(password) = state.config.effective_password() {
 		let hash = hash_password(password)?;
 		sqlx::query("UPDATE user SET password_hash = ? WHERE id = 1")
@@ -183,7 +191,7 @@ async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Optio
 	};
 	let fingerprint = sha256_hex(&token);
 	if state.auth.api_key_hashes.contains(&fingerprint) {
-		return Ok(Some(AuthUser::admin()));
+		return Ok(Some(state.auth.admin_user()));
 	}
 	session_user(state, &fingerprint).await
 }
@@ -191,7 +199,7 @@ async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Optio
 /// Uniform /api/v1 auth: with auth disabled every request is the built-in admin; invalid/absent credentials always get the same uniform 401
 pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
-		req.extensions_mut().insert(AuthUser::admin());
+		req.extensions_mut().insert(state.auth.admin_user());
 		return next.run(req).await;
 	}
 	// axum Body is UnsyncBoxBody (not Sync), so &Request cannot be held across await; take the credential first
@@ -213,7 +221,7 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null. The top-level username is the login page's prefill, exposed regardless of authentication
 pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
 	let enabled = state.auth.enabled().await;
 	let user = match enabled {
@@ -222,6 +230,7 @@ pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResu
 	};
 	Ok(Json(json!({
 		"enabled": enabled,
+		"username": state.auth.admin_username,
 		"user": user.map(|u| json!({ "id": u.id, "username": u.username })),
 	})))
 }

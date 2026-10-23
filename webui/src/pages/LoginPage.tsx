@@ -4,23 +4,25 @@ import { useTranslation } from 'react-i18next';
 import { BookOpen } from 'lucide-react';
 import { ApiError, api, setToken } from '../api/client';
 import { qk, queryClient } from '../api/hooks';
-import type { LoginResponse } from '../api/types';
+import type { AuthStatus, LoginResponse } from '../api/types';
 import { Button, Input } from '../components';
 import './login.css';
 
 export default function LoginPage() {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
-	const [username, setUsername] = useState('');
+	const [username, setUsername] = useState('admin');
 	const [password, setPassword] = useState('');
 	const [pending, setPending] = useState(false);
 	const [error, setError] = useState('');
 
-	// The login page is pointless when the server has auth disabled, so bounce straight home
+	// The login page is pointless when the server has auth disabled, so bounce straight home; the status
+	// also carries the configured login username, which replaces the default "admin" prefill
 	useEffect(() => {
-		api<{ enabled: boolean }>('/auth/status', { silent: true })
+		api<AuthStatus>('/auth/status', { silent: true })
 			.then((s) => {
 				if (!s.enabled) navigate('/', { replace: true });
+				else if (s.username) setUsername(s.username);
 			})
 			.catch(() => {});
 	}, [navigate]);
@@ -37,7 +39,7 @@ export default function LoginPage() {
 			});
 			setToken(res.token);
 			// The login response carries the identity: write it straight into the cache so whoami doesn't answer null for a beat after entering the home page
-			queryClient.setQueryData(qk.whoami, { enabled: true, user: res.user });
+			queryClient.setQueryData(qk.whoami, { enabled: true, username: res.user.username, user: res.user });
 			navigate('/', { replace: true });
 		} catch (e) {
 			// The 401 shape is uniform to the outside, not distinguishing "user does not exist" from "wrong password"

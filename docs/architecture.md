@@ -431,8 +431,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   Login is username + password (`POST /api/v1/auth/login`), answered with an
   admin session token (`auth_token.user_id`, SHA-256 at rest, 30-day rolling
   expiry) and the `{id, username}` identity; there is no role field or user
-  management API. Auth is off until the built-in admin has a password, seeded
-  from config on every boot or stored by a previous password change. With
+   management API. The login username defaults to `admin` and can be set in
+   config (`auth.username` / `SUMIDOKU_AUTH_USERNAME`), re-seeded onto the
+   user row on every boot; `/api/v1/auth/status` exposes it as a top-level
+   `username` so the login page can prefill it. Auth is off until the
+   built-in admin has a password, seeded
+   from config on every boot or stored by a previous password change. With
   auth off every request acts as the same admin. `require_auth` is the only
   route gate: bearer credentials resolve against configured API keys or an
   admin session, and handlers continue to bind the legacy `AuthUser.id`
@@ -1437,7 +1441,8 @@ automatic reload. This provides installation and an application shell, not
 offline chapters or offline reading progress.
 
 When authentication is on, the
-login page takes the admin username + password, the client (`api/client.ts`) sends
+login page takes the admin username + password (the username field prefilled
+from `/api/v1/auth/status`, `admin` by default), the client (`api/client.ts`) sends
 the stored session token as a bearer header, media/websocket URLs carry
 it as an `access_token` query (`withToken`), and any `401` clears the
 token and lands on `/login`. The settings page shows the admin account and

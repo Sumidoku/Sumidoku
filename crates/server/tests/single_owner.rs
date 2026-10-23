@@ -60,6 +60,7 @@ async fn admin_login_and_status_have_no_role() {
 	let (status, body) = as_admin(&app, &admin, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], true);
+	assert_eq!(body["username"], "admin");
 	assert_eq!(body["user"], json!({"id": 1, "username": "admin"}));
 	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -69,7 +70,34 @@ async fn admin_login_and_status_have_no_role() {
 	let (status, body) = request(&open.app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], false);
+	assert_eq!(body["username"], "admin");
 	assert_eq!(body["user"], Value::Null);
+}
+
+/// A configured auth.username replaces "admin" as the login identity: the login page's prefill comes from
+/// /auth/status, login accepts only the configured name, and the session identity reflects it
+#[tokio::test]
+async fn config_username_is_the_login_identity() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.username = Some("owner".into());
+	config.auth.password = Some(ADMIN_PW.into());
+	let app = build_app(config).await.expect("build app");
+
+	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["username"], "owner");
+
+	let (status, _) = login(&app, "admin", ADMIN_PW).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	let (status, body) = login(&app, "owner", ADMIN_PW).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["user"], json!({"id": 1, "username": "owner"}));
+
+	let token = format!("Bearer {}", body["token"].as_str().expect("token"));
+	let (status, body) = as_admin(&app, &token, "GET", "/api/v1/auth/status", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["user"], json!({"id": 1, "username": "owner"}));
 }
 
 #[tokio::test]
