@@ -31,6 +31,7 @@ services:
       - MITM_PORT=8192
       - MITM_CA_DIR=/data/proxy-ca
       - MITM_MAX_TIER=3
+      - TIER1_TRANSPORT=wreq
       # this compose ships no redis; the session cache lives in process memory
       - SESSION_CACHE_DRIVER=memory
     volumes:

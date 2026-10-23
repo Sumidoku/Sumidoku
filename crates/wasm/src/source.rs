@@ -120,6 +120,9 @@ impl SourceInstance {
 			crate::imports::CookieJar::new(config.cookies.clone(), config.cookie_sink.clone()),
 		);
 		net.accept_language = config.accept_language.clone();
+		if let Some(api) = &config.browser_trawl {
+			net.set_trawl(api);
+		}
 
 		let memory_max = usize::try_from(config.limits.memory_max)
 			.map_err(|_| Error::Instance("memory_max does not fit usize".into()))?;
@@ -428,10 +431,15 @@ impl SourceInstance {
 		let key_rid = self.store_arg(&key, &mut t)?;
 		let username_rid = self.store_arg(&username, &mut t)?;
 		let password_rid = self.store_arg(&password, &mut t)?;
+		// The login sequence (warm-up GETs then the POST) is the only request group that
+		// may escalate to a trawl browser session on a CF challenge; mark it so the net
+		// host routes those requests accordingly, then clear unconditionally
+		self.host().net.set_login_in_progress(true);
 		let ret = self.call_raw(
 			"handle_basic_login",
 			&[key_rid.into(), username_rid.into(), password_rid.into()],
 		);
+		self.host().net.set_login_in_progress(false);
 		let result = ret.and_then(|r| self.read_result::<bool>(r));
 		self.cleanup(t);
 		// Aligned with Aidoku: after a successful login, write the credentials and the key's marker into defaults (persisted via the sink)
