@@ -24,7 +24,7 @@ import {
 	useSourceSearch
 } from '../api/hooks';
 import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
-import { formatRangeBound, statusText } from '../lib/format';
+import { entrySubtitle, formatRangeBound } from '../lib/format';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	Button,
@@ -493,7 +493,9 @@ export default function SourceBrowsePage() {
 				>
 					{listMode ? (
 						<div className="home-rows">
-							{entries.map((m, i) => (
+						{entries.map((m, i) => {
+							const sub = entrySubtitle(m);
+							return (
 								<button
 									key={m.key + i}
 									type="button"
@@ -504,13 +506,14 @@ export default function SourceBrowsePage() {
 									<Cover src={entryCover(m)} title={m.title} />
 									<span className="home-row__main">
 										<span className="home-row__title">{m.title}</span>
-										<span className="home-row__subtitle">{m.authors?.[0] ?? statusText(m.status)}</span>
+										{sub && <span className="home-row__subtitle">{sub}</span>}
 										{m.tags && m.tags.length > 0 && (
 											<span className="home-row__tags">{m.tags.join(' · ')}</span>
 										)}
 									</span>
 								</button>
-							))}
+							);
+						})}
 						</div>
 					) : (
 						<div className="cover-grid">
@@ -519,7 +522,7 @@ export default function SourceBrowsePage() {
 									key={m.key + i}
 									src={entryCover(m)}
 									title={m.title}
-									subtitle={m.authors?.[0] ?? statusText(m.status)}
+									subtitle={entrySubtitle(m)}
 									busy={pendingKey === m.key}
 									onClick={() => void openEntry(m)}
 								/>
