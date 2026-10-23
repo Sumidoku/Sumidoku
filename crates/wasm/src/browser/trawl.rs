@@ -77,6 +77,135 @@ pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::Clea
 	Some(crate::traits::ClearanceReplay { user_agent, clearance })
 }
 
+/// Fetch a page through a host-level trawl browser session: the scrape API returns the
+/// site's raw response (original HTML/bytes, no DOM serialization — unlike the proxy's
+/// browser tiers), so a source's parser sees the page exactly as served. The session id
+/// derives from the host, so consecutive fetches of the same host reuse the backend's
+/// session and its solved challenge — one solve per host instead of per request.
+/// Blocking: the wasm net host calls this on the actor thread, the async server path
+/// wraps it in spawn_blocking.
+pub fn scrape_page(
+	api_base: &str,
+	session_id: &str,
+	url: &str,
+	method: &str,
+	headers: &[(String, String)],
+	body: Option<&[u8]>,
+	timeout: Duration,
+) -> Option<crate::traits::ScrapePage> {
+	#[derive(serde::Deserialize)]
+	struct ScrapeAnswer {
+		#[serde(default)]
+		url: Option<String>,
+		#[serde(default, rename = "statusCode")]
+		status_code: Option<u16>,
+		#[serde(default)]
+		html: String,
+		/// The backend serializes its Uint8Array body JSON-side; decode leniently (Buffer
+		/// shape or plain numeric array). None when the backend never exposed it
+		#[serde(default)]
+		body: Option<serde_json::Value>,
+		#[serde(default, rename = "responseHeaders")]
+		response_headers: Option<serde_json::Map<String, serde_json::Value>>,
+		#[serde(default, rename = "contentType")]
+		content_type: Option<String>,
+		#[serde(default)]
+		cookies: Vec<TrawlCookie>,
+	}
+	let client = reqwest::blocking::Client::builder()
+		.use_rustls_tls()
+		.timeout(timeout + CLIENT_GRACE)
+		.build()
+		.ok()?;
+	let mut request_body = serde_json::Map::new();
+	request_body.insert("url".into(), serde_json::Value::String(url.to_string()));
+	request_body.insert("method".into(), serde_json::Value::String(method.to_string()));
+	request_body.insert("maxTimeout".into(), serde_json::json!(timeout.as_millis() as u64));
+	// Browser sessions require maxTier >= 3; tier 3 needs no proxy on session creation
+	request_body.insert("maxTier".into(), serde_json::json!(3));
+	request_body.insert("sessionId".into(), serde_json::Value::String(session_id.to_string()));
+	if !headers.is_empty() {
+		let map = headers
+			.iter()
+			.map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+			.collect();
+		request_body.insert("headers".into(), serde_json::Value::Object(map));
+	}
+	if let Some(bytes) = body {
+		// Text bodies pass through lossily; binary bodies are out of the scrape API's
+		// reach (no external binary channel) and stay on the proxy fallback
+		request_body.insert(
+			"body".into(),
+			serde_json::Value::String(String::from_utf8_lossy(bytes).into_owned()),
+		);
+	}
+	let text = client
+		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(serde_json::Value::Object(request_body).to_string())
+		.send()
+		.and_then(|r| r.error_for_status())
+		.and_then(|r| r.text())
+		.ok()?;
+	let answer: ScrapeAnswer = serde_json::from_str(&text).ok()?;
+	let status = answer.status_code.unwrap_or(200);
+	// Prefer the raw body when the backend exposed it (binary-safe), else the html field
+	let data = decode_body(&answer.body).unwrap_or_else(|| answer.html.as_bytes().to_vec());
+	let mut response_headers = Vec::new();
+	if let Some(map) = &answer.response_headers {
+		for (key, value) in map {
+			if let Some(value) = value.as_str() {
+				response_headers.push((key.to_ascii_lowercase(), value.to_string()));
+			}
+		}
+	}
+	if let Some(content_type) = &answer.content_type {
+		response_headers.push(("content-type".to_string(), content_type.clone()));
+	}
+	let cookies = answer
+		.cookies
+		.into_iter()
+		.map(|c| (c.name, c.value))
+		.collect();
+	let fallback_url = url::Url::parse(url).ok()?;
+	let page_url = answer
+		.url
+		.as_deref()
+		.and_then(|u| url::Url::parse(u).ok())
+		.unwrap_or(fallback_url);
+	Some(crate::traits::ScrapePage {
+		url: page_url,
+		status,
+		headers: response_headers,
+		data,
+		cookies,
+	})
+}
+
+/// Lenient decode of the backend's serialized Uint8Array: Buffer-shaped objects
+/// ({"type":"Buffer","data":[...]}), plain numeric arrays and raw strings all decode
+/// to bytes; anything else is treated as absent
+fn decode_body(value: &Option<serde_json::Value>) -> Option<Vec<u8>> {
+	let value = value.as_ref()?;
+	match value {
+		serde_json::Value::Array(items) => items
+			.iter()
+			.map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
+			.collect(),
+		serde_json::Value::Object(map) => map
+			.get("data")
+			.and_then(|d| d.as_array())
+			.map(|data| {
+				data.iter()
+					.map(|v| v.as_u64().and_then(|n| u8::try_from(n).ok()))
+					.collect()
+			})
+			.unwrap_or(None),
+		serde_json::Value::String(s) => Some(s.as_bytes().to_vec()),
+		_ => None,
+	}
+}
+
 pub struct TrawlConnector {
 	base: String,
 	id_prefix: String,
@@ -818,6 +947,98 @@ mod tests {
 		assert!(
 			id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
 			"id 只含合法字符: {id}"
+		);
+	}
+
+	#[test]
+	fn scrape_page_sends_host_session_and_parses_html() {
+		let mock = MockTrawl::new(|method, path, body| {
+			let body: serde_json::Value = serde_json::from_str(body).expect("json");
+			assert_eq!(body["sessionId"], "sumidoku-net-a-example", "host 会话 id 确定性");
+			assert_eq!(body["maxTier"], 3, "浏览器会话要求 maxTier >= 3");
+			assert_eq!(body["method"], "GET");
+			assert_eq!(body["headers"]["Accept"], "text/html");
+			assert!(body["maxTimeout"].is_number());
+			match (method, path) {
+				("POST", "/scrape") => (
+					200,
+					r#"{"url":"https://a.example/p","html":"<html>ok</html>","statusCode":200,"contentType":"text/html; charset=utf-8","responseHeaders":{"server":"cloudflare","x-test":"1"},"cookies":[{"name":"cf_clearance","value":"abc","domain":".example","path":"/"},{"name":"sid","value":"x"}],"tier":3,"sessionCached":true}"#
+						.to_string(),
+				),
+				_ => (500, r#"{"error":"unexpected"}"#.to_string()),
+			}
+		});
+		let page = scrape_page(
+			&mock.url,
+			"sumidoku-net-a-example",
+			"https://a.example/p",
+			"GET",
+			&[("Accept".to_string(), "text/html".to_string())],
+			None,
+			Duration::from_secs(10),
+		)
+		.expect("scraped");
+		assert_eq!(page.status, 200);
+		assert_eq!(page.url.as_str(), "https://a.example/p");
+		assert_eq!(page.data, b"<html>ok</html>");
+		assert!(page.headers.iter().any(|(k, v)| k == "content-type" && v == "text/html; charset=utf-8"), "contentType 并入响应头");
+		assert!(page.headers.iter().any(|(k, v)| k == "server" && v == "cloudflare"));
+		assert_eq!(page.cookies.len(), 2);
+		assert!(page.cookies.iter().any(|(n, v)| n == "cf_clearance" && v == "abc"));
+	}
+
+	#[test]
+	fn scrape_page_prefers_binary_body_over_html() {
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/scrape") => (
+				200,
+				r#"{"html":"fallback","body":{"type":"Buffer","data":[104,105]},"statusCode":200}"#.to_string(),
+			),
+			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
+		});
+		let page = scrape_page(
+			&mock.url,
+			"sumidoku-net-a-example",
+			"https://a.example/img",
+			"GET",
+			&[],
+			None,
+			Duration::from_secs(10),
+		)
+		.expect("scraped");
+		assert_eq!(page.data, b"hi", "二进制 body 优先于 html");
+	}
+
+	#[test]
+	fn scrape_page_decodes_plain_numeric_array_body() {
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/scrape") => (200, r#"{"body":[0,255,7],"statusCode":200}"#.to_string()),
+			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
+		});
+		let page = scrape_page(
+			&mock.url,
+			"sumidoku-net-a-example",
+			"https://a.example/bin",
+			"GET",
+			&[],
+			None,
+			Duration::from_secs(10),
+		)
+		.expect("scraped");
+		assert_eq!(page.data, vec![0, 255, 7]);
+	}
+
+	#[test]
+	fn scrape_page_failures_are_none() {
+		let mock = MockTrawl::new(|_, _, _| (500, r#"{"error":"busy"}"#.to_string()));
+		assert_eq!(
+			scrape_page(&mock.url, "s", "https://a.example/", "GET", &[], None, Duration::from_secs(10)),
+			None
+		);
+		let mock = MockTrawl::new(|_, _, _| (503, r#"{"error":"sessions unavailable"}"#.to_string()));
+		assert_eq!(
+			scrape_page(&mock.url, "s", "https://a.example/", "GET", &[], None, Duration::from_secs(10)),
+			None
 		);
 	}
 }

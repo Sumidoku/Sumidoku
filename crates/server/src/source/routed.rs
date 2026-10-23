@@ -1,5 +1,5 @@
 use crate::config::Config;
-use aidoku_wasm::{ClearanceReplay, NetPolicy, NetRoute};
+use aidoku_wasm::{ClearanceReplay, NetPolicy, NetRoute, ScrapePage};
 use reqwest::{Client, StatusCode, Url};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -193,6 +193,36 @@ impl NetPolicy for SumidokuNetPolicy {
 			.write()
 			.expect("clearances lock")
 			.remove(host);
+	}
+
+	fn scrape_page(
+		&self,
+		url: &Url,
+		method: &str,
+		headers: &[(String, String)],
+		body: Option<&[u8]>,
+		timeout: Duration,
+	) -> Option<ScrapePage> {
+		let host = url.host_str().unwrap_or_default();
+		// direct_domains is an explicit "never touch" pin; the session scrape yields to it too
+		if host.is_empty() || Self::domain_match(&self.direct_domains, host) {
+			return None;
+		}
+		let api = self.trawl_api.as_ref()?;
+		// Deterministic host-level session id: consecutive fetches of the same host reuse
+		// the backend's session and its solved challenge — one solve per host, not per request
+		let session_id = format!("sumidoku-net-{}", host.replace('.', "_"));
+		let page = aidoku_wasm::browser::trawl::scrape_page(
+			api,
+			&session_id,
+			url.as_str(),
+			method,
+			headers,
+			body,
+			timeout,
+		)?;
+		tracing::info!(host, session = %session_id, status = %page.status, "host session scrape returned page");
+		Some(page)
 	}
 }
 

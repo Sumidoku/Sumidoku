@@ -302,6 +302,7 @@ pub(crate) fn perform(
 	let mut escalated = false;
 	let mut suite_stripped = false;
 	let mut solved = false;
+	let mut scraped = false;
 	loop {
 		attempt += 1;
 		let client = net.clients.get(&route).expect("client built above");
@@ -331,6 +332,51 @@ pub(crate) fn perform(
 					replay = Some(fresh);
 					attempt = 0;
 					continue;
+				}
+			}
+			// Host-session scrape comes before the proxy: fetch the page through a trawl
+			// session that is reused per host, so later pages of the same site ride the
+			// already-solved challenge instead of solving per request. The proxy stays the
+			// fallback for binary/streaming responses and solve failures. Cookies the
+			// session gained fold back into the jar so subsequent direct requests carry
+			// them too
+			if !scraped {
+				scraped = true;
+				let method_str = reqwest::Method::from(request.method).as_str().to_string();
+				let header_vec: Vec<(String, String)> = request
+					.headers
+					.iter()
+					.filter_map(|(name, value)| {
+						value.to_str().ok().map(|value| (name.as_str().to_string(), value.to_string()))
+					})
+					.collect();
+				if let Some(page) = net.policy.scrape_page(
+					&url,
+					&method_str,
+					&header_vec,
+					request.body.as_deref(),
+					timeout,
+				) {
+					for (name, value) in &page.cookies {
+						let set_cookie = format!("{name}={value}; Path=/");
+						net.jar.store(&url, &set_cookie);
+					}
+					let mut response_headers = HeaderMap::new();
+					for (name, value) in &page.headers {
+						if let Ok(name) = HeaderName::from_bytes(name.as_bytes())
+							&& let Ok(value) = HeaderValue::from_str(value)
+						{
+							// append keeps multiple set-cookie values instead of overwriting
+							response_headers.append(name, value);
+						}
+					}
+					request.response = Some(NetResponse {
+						url: page.url,
+						status: StatusCode::from_u16(page.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+						headers: response_headers,
+						data: page.data,
+					});
+					return Ok(());
 				}
 			}
 			// CF escalation comes before backoff: a 503 challenge page must not burn the direct connection's backoff attempts for nothing
@@ -826,6 +872,7 @@ mod tests {
 	struct EscalationPolicy {
 		trawl: Option<String>,
 		solver: Option<String>,
+		scraper: Option<String>,
 		clearances: Mutex<HashMap<String, crate::traits::ClearanceReplay>>,
 	}
 
@@ -862,6 +909,20 @@ mod tests {
 
 		fn clear_clearance(&self, host: &str) {
 			self.clearances.lock().expect("clearances lock").remove(host);
+		}
+
+		fn scrape_page(
+			&self,
+			url: &Url,
+			method: &str,
+			headers: &[(String, String)],
+			body: Option<&[u8]>,
+			timeout: Duration,
+		) -> Option<crate::traits::ScrapePage> {
+			let api = self.scraper.as_ref()?;
+			let host = url.host_str().unwrap_or_default();
+			let session_id = format!("sumidoku-net-{}", host.replace('.', "_"));
+			crate::browser::trawl::scrape_page(api, &session_id, url.as_str(), method, headers, body, timeout)
 		}
 	}
 
@@ -988,6 +1049,82 @@ mod tests {
 		assert_eq!(second.data, b"direct-with-clearance");
 		assert_eq!(origin.hits(), 2);
 		assert_eq!(trawl.hits(), 1);
+	}
+
+	#[test]
+	fn cf_challenge_scrapes_host_page_when_solve_fails_and_folds_cookies_back() {
+		let origin = mock_server(|head| {
+			if head.contains("cf_clearance=ok") {
+				respond("200 OK", &[], "direct-with-clearance")
+			} else {
+				respond(
+					"403 Forbidden",
+					&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+					"challenged",
+				)
+			}
+		});
+		let origin_addr = origin.addr.clone();
+		let scraper = mock_server(move |_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				&format!(
+					r#"{{"url":"http://{origin_addr}/manga/1","html":"<html>scraped-by-host-session</html>","statusCode":200,"contentType":"text/html","cookies":[{{"name":"cf_clearance","value":"ok","domain":".example","path":"/"}}]}}"#
+				),
+			)
+		});
+		// No solver and no MITM proxy: the host-session scrape is the only fallback
+		let policy = Arc::new(EscalationPolicy {
+			scraper: Some(format!("http://{}", scraper.addr)),
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let first = get(&mut net, &url);
+		assert_eq!(first.status, StatusCode::OK);
+		assert_eq!(first.data, b"<html>scraped-by-host-session</html>");
+		assert_eq!(origin.hits(), 1, "直连一次撞挑战即转 host 会话化 scrape");
+		assert_eq!(scraper.hits(), 1, "页面经 trawl scrape 取回");
+
+		// The session cookie folds back into the jar: the next request replays direct
+		let second = get(&mut net, &url);
+		assert_eq!(second.status, StatusCode::OK);
+		assert_eq!(second.data, b"direct-with-clearance");
+		assert_eq!(origin.hits(), 2);
+		assert_eq!(scraper.hits(), 1, "后续直连不再经浏览器");
+	}
+
+	#[test]
+	fn host_session_scrape_is_tried_before_mitm_escalation() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let scraper = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				r#"{"html":"scraped","statusCode":200}"#,
+			)
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &[], "via-mitm"));
+		let policy = Arc::new(EscalationPolicy {
+			trawl: Some(format!("http://{}", trawl.addr)),
+			scraper: Some(format!("http://{}", scraper.addr)),
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let first = get(&mut net, &url);
+		assert_eq!(first.data, b"scraped", "scrape 成功时不升级到 MITM");
+		assert_eq!(scraper.hits(), 1);
+		assert_eq!(trawl.hits(), 0, "MITM 只作兜底");
 	}
 
 	const SOLVER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";

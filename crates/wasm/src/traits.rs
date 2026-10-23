@@ -1,6 +1,7 @@
 use crate::runtime::store::DefaultValue;
 use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
+use std::time::Duration;
 use url::Url;
 
 /// Cookie name carrying the Cloudflare clearance
@@ -26,6 +27,22 @@ pub struct ClearanceReplay {
 	pub user_agent: String,
 	/// Bare cf_clearance cookie value; empty when the solve met no challenge
 	pub clearance: String,
+}
+
+/// A page fetched through a host-level trawl browser session (session reuse per host):
+/// the site's own response (original HTML/bytes) plus any cookies the session set.
+/// Unlike the proxy's browser tiers, the scrape API returns the raw response rather than
+/// a DOM serialization, so a source's HTML parser sees the page exactly as served
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScrapePage {
+	pub url: Url,
+	pub status: u16,
+	/// Response headers, lowercased keys preserved verbatim (content-type, set-cookie, …)
+	pub headers: Vec<(String, String)>,
+	/// Original response bytes; binary when the backend exposed them
+	pub data: Vec<u8>,
+	/// Cookies the session gained on this navigation, to fold back into the jar
+	pub cookies: Vec<(String, String)>,
 }
 
 /// CF challenge fingerprint: 403/503 + CF-family response headers. cf-ray/server ride on
@@ -141,6 +158,23 @@ pub trait NetPolicy: Send + Sync {
 	/// A cached clearance the site just refused: drop it so the next challenge re-solves
 	fn clear_clearance(&self, host: &str) {
 		let _ = host;
+	}
+	/// Fetch `url` through a host-level trawl browser session and return the page as the
+	/// site served it (original HTML/bytes, no DOM serialization). The session id derives
+	/// from the host, so consecutive fetches of the same host reuse the backend's session
+	/// and its solved challenge — one solve per host instead of per request. None when no
+	/// browser backend is configured or the fetch failed. Blocking: the wasm net host calls
+	/// this on the actor thread, the async server path wraps it in spawn_blocking
+	fn scrape_page(
+		&self,
+		url: &Url,
+		method: &str,
+		headers: &[(String, String)],
+		body: Option<&[u8]>,
+		timeout: Duration,
+	) -> Option<ScrapePage> {
+		let _ = (url, method, headers, body, timeout);
+		None
 	}
 }
 
