@@ -431,6 +431,8 @@ async fn static_webui() {
 	std::fs::create_dir_all(webui.join("assets")).expect("mkdir assets");
 	std::fs::write(webui.join("index.html"), "<html><body>sumidoku-webui</body></html>").expect("index");
 	std::fs::write(webui.join("assets/app.js"), "console.log(1)").expect("asset");
+	std::fs::write(webui.join("sw.js"), "// service worker").expect("service worker");
+	std::fs::write(webui.join("manifest.webmanifest"), "{}").expect("manifest");
 	let mut config = base_config(&tmp);
 	config.webui_dir = webui;
 	let app = build_app(config).await.expect("build app");
@@ -443,9 +445,20 @@ async fn static_webui() {
 	assert_eq!(status, StatusCode::OK);
 	assert!(String::from_utf8(bytes).expect("utf8").contains("sumidoku-webui"));
 
-	let (status, _, bytes) = request_full(&app, "GET", "/assets/app.js", None).await;
+	let (status, headers, bytes) = request_full(&app, "GET", "/assets/app.js", None).await;
 	assert_eq!(status, StatusCode::OK);
+	assert!(!headers.contains_key("cache-control"));
 	assert_eq!(bytes, b"console.log(1)");
+
+	for (path, expected) in [
+		("/sw.js", b"// service worker".as_slice()),
+		("/manifest.webmanifest", b"{}".as_slice()),
+	] {
+		let (status, headers, bytes) = request_full(&app, "GET", path, None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "no-cache");
+		assert_eq!(bytes.as_slice(), expected);
+	}
 
 	// the API is not swallowed by the SPA; the built-in local source is persisted by the migration, so even an empty DB has one row
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
@@ -1245,6 +1258,15 @@ async fn embedded_webui() {
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(headers["cache-control"], "no-cache");
 		assert_eq!(bytes, index);
+
+		for path in ["/sw.js", "/manifest.webmanifest"] {
+			let (status, headers, _) = request_full(&app, "GET", path, None).await;
+			assert_eq!(status, StatusCode::OK);
+			assert_eq!(headers["cache-control"], "no-cache");
+		}
+		let (status, headers, _) = request_full(&app, "GET", "/icon.svg", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "private, max-age=3600");
 
 		// path traversal is rejected, keeping the JSON 404
 		let (status, body) = request(&app, "GET", "/../../secret", None).await;

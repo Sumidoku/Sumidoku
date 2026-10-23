@@ -118,8 +118,18 @@ fn webui_disk_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 			if path.starts_with("/api") || path.starts_with("/opds") {
 				return ApiError::not_found("route not found").into_response();
 			}
+			let no_cache = matches!(path, "/sw.js" | "/manifest.webmanifest");
 			match serve.oneshot(req).await {
-				Ok(response) => response.into_response(),
+				Ok(response) => {
+					let mut response = response.into_response();
+					if no_cache {
+						response.headers_mut().insert(
+							axum::http::header::CACHE_CONTROL,
+							axum::http::HeaderValue::from_static("no-cache"),
+						);
+					}
+					response
+				}
 				Err(e) => match e {},
 			}
 		}

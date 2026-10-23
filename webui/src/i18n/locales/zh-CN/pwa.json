@@ -1,0 +1,8 @@
+{
+  "pwa": {
+    "updateLabel": "应用更新",
+    "updateAvailable": "新版本可用",
+    "reload": "重新加载",
+    "later": "稍后"
+  }
+}

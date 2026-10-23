@@ -30,7 +30,7 @@ pub(crate) fn normalize_embed_path(path: &str) -> Option<String> {
 }
 
 pub(crate) fn embed_cache_control(path: &str) -> &'static str {
-	if path == "index.html" || path == "404.html" {
+	if matches!(path, "index.html" | "404.html" | "sw.js" | "manifest.webmanifest") {
 		"no-cache"
 	} else if path.starts_with("assets/") || path.starts_with("_app/") {
 		// Build artifacts carry a content hash in the file name, so changing content never reuses a URL
@@ -72,6 +72,8 @@ mod tests {
 	fn cache_control_tiers() {
 		assert_eq!(embed_cache_control("index.html"), "no-cache");
 		assert_eq!(embed_cache_control("404.html"), "no-cache");
+		assert_eq!(embed_cache_control("sw.js"), "no-cache");
+		assert_eq!(embed_cache_control("manifest.webmanifest"), "no-cache");
 		assert_eq!(
 			embed_cache_control("assets/app-a1b2c3.js"),
 			"public, max-age=31536000, immutable"
