@@ -19,8 +19,8 @@
 //! manga, never manga of their own — so a flat single-level library scans byte-identically to before.
 //!
 //! Archive chapters are CBZ/ZIP and divina-profile EPUB (image-based books; reflowable text is out of scope):
-//! an EPUB takes its page list from the OPF spine restricted to image manifest items, falling back to the CBZ
-//! rule (natural-sorted image entries) when the OPF is missing or unparseable (`local/epub.rs`).
+//! EPUB pages follow the OPF spine through direct image items or XHTML/SVG single-image pages. The mimetype,
+//! manifest, spine and zip entries must agree; invalid or non-divina packages yield no pages (`local/epub.rs`).
 //!
 //! Manga metadata resolves by a first-hit-wins chain, no per-field merge (`read_manga_metadata`): the manga
 //! directory's top-level ComicInfo.xml (authoritative when present, even unparsable) → the first chapter
@@ -700,9 +700,8 @@ async fn chapter_fs_path(local_dir: &Path, manga_key: &str, chapter_key: &str) -
 	Ok(manga_path.join(chapter_key))
 }
 
-/// Chapter page listing: image chapters list image files, archive chapters list image entries; both in
-/// case-insensitive natural order — except a divina EPUB, whose pages come from the OPF spine (a missing
-/// or unparseable OPF falls back to the natural-order rule)
+/// Chapter page listing: image chapters and CBZ/ZIP archives use case-insensitive natural order;
+/// divina EPUBs use OPF spine order, and invalid or non-divina EPUBs have no pages
 pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
@@ -743,13 +742,15 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 			let pages = {
 				let path = path.clone();
 				let zip = zip.clone();
-				tokio::task::spawn_blocking(move || epub::read_package(&zip, &path).map(|package| package.pages()))
-					.await
-					.map_err(|e| ApiError::internal(format!("read epub package failed: {e}")))?
+				tokio::task::spawn_blocking(move || {
+					epub::read_package(&zip, &path)
+						.map(|package| package.pages(&zip, &path))
+						.unwrap_or_default()
+				})
+				.await
+				.map_err(|e| ApiError::internal(format!("read epub package failed: {e}")))?
 			};
-			if let Some(pages) = pages {
-				return Ok(pages.into_iter().map(|page| page.entry).collect());
-			}
+			return Ok(pages.into_iter().map(|page| page.entry).collect());
 		}
 		let names = {
 			let path = path.clone();
@@ -816,9 +817,7 @@ async fn read_page_impl(
 		tokio::task::spawn_blocking(move || {
 			let bytes = zip.read_entry(&chapter_path, &entry_name)?;
 			let declared = if is_epub {
-				epub::read_package(&zip, &chapter_path)
-					.and_then(|package| package.pages().into_iter().find(|page| page.entry == entry_name))
-					.map(|page| page.media_type)
+				epub::read_package(&zip, &chapter_path).and_then(|package| package.declared_media_type(&entry_name))
 			} else {
 				None
 			};
