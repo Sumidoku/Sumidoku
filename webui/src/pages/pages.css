@@ -121,6 +121,85 @@
 	margin-top: -6px;
 }
 
+.library__category-chips {
+	display: contents;
+}
+
+.library__tools {
+	display: contents;
+}
+
+@media (max-width: 767px) {
+	.library__filters {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		padding-bottom: 4px;
+		scrollbar-width: none;
+	}
+
+	.library__filters::-webkit-scrollbar {
+		display: none;
+	}
+
+	.library__filters > * {
+		flex: none;
+	}
+
+	.library__categories {
+		display: block;
+		overflow: visible;
+	}
+
+	.library__category-chips {
+		display: flex;
+		flex-wrap: nowrap;
+		gap: 8px;
+		overflow-x: auto;
+		padding-bottom: 4px;
+		scrollbar-width: none;
+	}
+
+	.library__category-chips::-webkit-scrollbar {
+		display: none;
+	}
+
+	.library__category-chips > * {
+		flex: none;
+	}
+
+	.library__tools {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 8px;
+		margin-bottom: 10px;
+	}
+
+	.library__tools .chip-dropdown,
+	.library__tools .select {
+		width: 100%;
+		min-width: 0;
+	}
+
+	.library__tools .chip,
+	.library__tools .select__field {
+		width: 100%;
+		min-height: 38px;
+	}
+
+	.library__tools .chip {
+		justify-content: center;
+	}
+
+	.library__tools .select__field {
+		padding-right: 24px;
+		padding-left: 10px;
+	}
+
+	.library__tools .select__chevron {
+		right: 7px;
+	}
+}
+
 /* ============ Browse (source list) ============ */
 
 .source-list {
