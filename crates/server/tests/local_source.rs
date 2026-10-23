@@ -1665,6 +1665,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		],
 	);
 	write_cbz(&tmp.path().join("local/Types/images.cbz"), &[("1.png", b"cbz")]);
+	write_page(&tmp.path().join("local/Types/fake.epub"), "1.png", b"directory");
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
@@ -1672,9 +1673,14 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	let manga_id = register_local(&t.app, "Types").await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(true)),
+		("fake.epub".to_string(), None),
 		("images.cbz".to_string(), None),
 		("prose.epub".to_string(), Some(false)),
 	];
+	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
+
+	let directory_id = chapter_id_of(&t.app, manga_id, "fake.epub").await;
+	assert!(!epub_page_entries(&t.app, directory_id).await.is_empty());
 	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
 
 	let chapter_id = chapter_id_of(&t.app, manga_id, "divina.epub").await;
@@ -1703,6 +1709,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	assert_eq!(status, StatusCode::OK);
 	let expected = vec![
 		("divina.epub".to_string(), Some(false)),
+		("fake.epub".to_string(), None),
 		("images.cbz".to_string(), None),
 		("prose.epub".to_string(), Some(false)),
 	];
@@ -1717,6 +1724,30 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	assert_eq!(status, StatusCode::OK);
 	let expected = vec![
 		("divina.epub".to_string(), Some(true)),
+		("fake.epub".to_string(), None),
+		("images.cbz".to_string(), None),
+		("prose.epub".to_string(), Some(false)),
+	];
+	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
+
+	let replacement = t.tmp.path().join("local/Types/replacement.epub");
+	write_epub(
+		&replacement,
+		Some(("OEBPS/content.opf", &prose)),
+		&[
+			(
+				"OEBPS/text/page.xhtml",
+				br#"<html><body>This is an ordinary reflowable prose page with too much text.<img src="../images/1.png"/></body></html>"#,
+			),
+			("OEBPS/images/1.png", b"atomic-prose"),
+		],
+	);
+	std::fs::rename(&replacement, t.tmp.path().join("local/Types/divina.epub")).expect("replace EPUB atomically");
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let expected = vec![
+		("divina.epub".to_string(), Some(false)),
+		("fake.epub".to_string(), None),
 		("images.cbz".to_string(), None),
 		("prose.epub".to_string(), Some(false)),
 	];
