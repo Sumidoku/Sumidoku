@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { createServer } from 'vite';
 
-test('library exposes category strips and a dedicated responsive tools region', async () => {
+test('library toolbar groups controls and reveals active advanced filters', async () => {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -16,20 +16,74 @@ test('library exposes category strips and a dedicated responsive tools region', 
 		server: { middlewareMode: true }
 	});
 	try {
-		await vite.ssrLoadModule('/src/i18n');
+		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+		await i18n.changeLanguage('en');
 		const { default: LibraryPage } = await vite.ssrLoadModule('/src/pages/LibraryPage.tsx');
-		const markup = renderToStaticMarkup(
+		const { LibraryToolbar } = await vite.ssrLoadModule('/src/pages/library/LibraryToolbar.tsx');
+		const pageMarkup = renderToStaticMarkup(
 			createElement(
 				QueryClientProvider,
 				{ client: new QueryClient() },
 				createElement(MemoryRouter, null, createElement(LibraryPage))
 			)
 		);
-		assert.match(markup, /class="library__filters library__categories"/);
-		assert.match(markup, /class="library__category-chips"/);
-		assert.match(markup, /<\/div><\/div><div class="library__filters library__filters--status">/);
-		assert.match(markup, /class="library__tools"/);
-		assert.match(markup, /aria-label="Sort"/);
+		assert.match(pageMarkup, /class="library__toolbar"/);
+		assert.match(pageMarkup, /class="library__categories"/);
+		assert.match(pageMarkup, /aria-label="Library controls"/);
+		assert.match(pageMarkup, /aria-label="Sort"/);
+		assert.match(pageMarkup, /aria-expanded="false"/);
+		assert.doesNotMatch(pageMarkup, /class="library__filter-panel"/);
+
+		const activeMarkup = renderToStaticMarkup(
+			createElement(LibraryToolbar, {
+				searchInput: '',
+				onSearchInput: () => {},
+				sort: 'added',
+				onSort: () => {},
+				filterTri: { unread: 1 },
+				ratings: {},
+				sourceTri: {},
+				categoryTri: { '3': 1 },
+				groupId: 7,
+				groups: [{ id: 7, name: 'Unread only', sortOrder: 0, rules: [] }],
+				categories: [{ id: 3, name: 'Reading', mangaCount: 12, isDefault: false, sortOrder: 0 }],
+				sourceOptions: [],
+				showUncategorized: true,
+				onFilterCycle: () => {},
+				onRatingCycle: () => {},
+				onSourceCycle: () => {},
+				onCategoryCycle: () => {},
+				onGroupChange: () => {},
+				onResetRatings: () => {},
+				onResetSources: () => {},
+				onClearFilters: () => {}
+			})
+		);
+		assert.match(activeMarkup, /aria-expanded="true"/);
+		assert.match(activeMarkup, /class="library__filter-count">2</);
+		assert.match(activeMarkup, /class="library__filter-panel"/);
+		assert.match(activeMarkup, />Status</);
+		assert.match(activeMarkup, />More filters</);
+		assert.match(activeMarkup, />Filter groups</);
+		assert.match(activeMarkup, /Reading（12）/);
+		assert.match(activeMarkup, />Clear filters</);
+	} finally {
+		await vite.close();
+	}
+});
+
+test('advanced filter count excludes search, categories and sorting', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const { advancedFilterCount } = await vite.ssrLoadModule('/src/pages/library/LibraryToolbar.tsx');
+		assert.equal(advancedFilterCount({}, {}, {}, null), 0);
+		assert.equal(advancedFilterCount({ unread: 1, downloaded: -1 }, { '1': 1 }, { '2': 1, '3': -1 }, 7), 6);
 	} finally {
 		await vite.close();
 	}
