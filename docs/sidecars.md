@@ -9,23 +9,31 @@ compose file.
 
 ## Cloudflare bypass (trawl)
 
-Sources behind Cloudflare anti-bot protection are fetched through a
-[trawl](https://github.com/germondai/trawl) sidecar: a challenge-aware
-forward proxy that passes ordinary traffic through and solves detected
-challenges with a real browser.
+Sources behind Cloudflare anti-bot protection are solved through a
+[trawl](https://github.com/germondai/trawl) sidecar, with its forward proxy
+kept as the fallback.
 
-With `SUMIDOKU_NET_TRAWL_PROXY` set, a direct request answered `403`/`503`
-with Cloudflare headers is retried once through trawl, and that host is
-remembered: every later request for it also goes through trawl. A
-`cf_clearance` cookie is bound to the user agent (and IP) that solved the
-challenge, so replaying it from Sumidoku's own client with a different user
-agent is refused; routing the host through trawl instead lets trawl keep the
-clearance and the solving browser's user agent together (its plain-HTTP tier
-replays both, so no browser runs per request). Publishing a host in
+With `SUMIDOKU_NET_BROWSER_TRAWL` pointing at the trawl API (e.g.
+`http://trawl:8191`, requires trawl ≥ v1.9.1), a direct request answered
+`403`/`503` with Cloudflare headers triggers a one-off solve through trawl's
+scrape API. The answer carries the `cf_clearance` cookie and the solving
+browser's user agent — CF binds the cookie to that UA (and IP), so Sumidoku
+caches the pair per host and replays it on plain direct requests, which look
+like the solver's Firefox (no `sec-ch-ua`, Firefox's navigation `Accept`).
+A clearance the site refuses is dropped and re-solved once per request.
+Pages then load at direct-request speed; a browser runs only while solving.
+
+Without `SUMIDOKU_NET_BROWSER_TRAWL`, or when a solve fails, the fallback is
+`SUMIDOKU_NET_TRAWL_PROXY`: the challenged request retries once through
+trawl's forward proxy and the host is remembered, so every later request for
+it also goes through trawl. Know the proxy's cost: its browser tiers answer
+HTML with the rendered DOM, and a fragment response that declares no charset
+is decoded by the browser's locale fallback (windows-1252) — non-ASCII text
+arrives mangled. Publishing a host in
 `SUMIDOKU_NET_RELAY_DOMAINS` skips the first failed direct attempt; a host in
-`SUMIDOKU_NET_DIRECT_DOMAINS` is pinned to direct and opted out of the
-escalation entirely. Without `SUMIDOKU_NET_TRAWL_PROXY`, behavior is
-unchanged: requests go direct and the challenge page reaches the source.
+`SUMIDOKU_NET_DIRECT_DOMAINS` is pinned to direct and opted out of solving and
+escalation entirely. With neither variable set, requests go direct and the
+challenge page reaches the source.
 
 HTTPS sources also need `SUMIDOKU_NET_TRAWL_CA`: trawl terminates TLS
 locally to inspect responses and re-signs with its own root CA, which the

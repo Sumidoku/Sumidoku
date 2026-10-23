@@ -1052,17 +1052,24 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   two semaphores reproduces the `min(declared, global)` bound while
   undeclared sources keep the global cap alone.
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
-  direct, per-domain relay, or a global proxy, decided per host. When
-  `net.trawl_proxy` is set, a direct request answered 403/503 with Cloudflare
-  headers retries once through the trawl forward proxy (MITM CA in
-  `net.trawl_ca`), ahead of the 429/5xx backoff — in the source net imports
-  (`crates/wasm/src/imports/net.rs:perform`) and in the server's own fetches
-  alike; the challenged host is then remembered and every later request for it
-  also goes through trawl, because a `cf_clearance` is bound to the user agent
-  that solved it and Sumidoku's own client would replay it with a different one
-  (trawl keeps the clearance and its browser user agent together and replays
-  both over plain HTTP). `net.direct_domains` opts a host out of escalation,
-  `net.relay_domains` routes a host through trawl from the first request.
+  direct, per-domain relay, or a global proxy, decided per host. A direct
+  request answered 403/503 with Cloudflare headers first triggers a clearance
+  solve through the trawl scrape API (`net.browser_trawl`,
+  `browser/trawl.rs:solve_clearance`), ahead of the 429/5xx backoff — in the
+  source net imports (`crates/wasm/src/imports/net.rs:perform`) and in the
+  server's own fetches alike. The answer's `cf_clearance` and the solving
+  browser's user agent are cached per host and replayed on plain direct
+  requests: CF binds the cookie to that UA, so the pair travels together and
+  the replayed request drops the Chrome-only suite members (Firefox has no
+  `sec-ch-ua`) and carries Firefox's navigation `Accept` (no
+  `signed-exchange`). A refused clearance is dropped and re-solved once per
+  request. Only when no solver is configured or the solve fails does the host
+  fall back to the trawl forward proxy (MITM CA in `net.trawl_ca`) and stay
+  marked "challenged" — the proxy's browser tiers answer HTML with the
+  serialized DOM, which mangles fragment responses that declare no charset,
+  so it is the fallback, not the default. `net.direct_domains` opts a host
+  out of solving and escalation, `net.relay_domains` routes a host through
+  trawl from the first request.
   Set-Cookie on the solved response still lands in the source's cookie jar.
   These server-side fetches — covers, page images and zip pages
   (`fetch_remote` / `http_get`) — bypass the wasm net host, so they attach
