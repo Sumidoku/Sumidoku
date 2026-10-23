@@ -1,8 +1,8 @@
 # Configuration
 
 Everything is optional — a bare `docker compose up -d` works. Precedence,
-lowest to highest: built-in defaults ← `./config.toml` (relative to the
-working directory, may be absent) ← `SUMIDOKU_*` environment variables.
+lowest to highest: built-in defaults ← `config.toml` in the config dir
+(may be absent) ← `SUMIDOKU_*` environment variables.
 `config.toml` keys are the snake_case names of the variables below
 (`net.*` and `auth.*` sections for the grouped ones).
 
@@ -11,6 +11,9 @@ source packages (`sources/`), materialized page images (`page-blobs/`)
 and the default scheduled-backup destination (`backups/`) all live under
 it and are not separately configurable. `sources/` in particular is
 pinned — drop packages there and scan, no path setting exists.
+`config.toml` is read from this directory too, so the config dir itself
+is environment-only: a `config_dir` key in the file is ignored with a
+warning (the file cannot relocate the directory it is read from).
 
 ## Volumes (Docker)
 
@@ -24,7 +27,7 @@ pinned — drop packages there and scan, no path setting exists.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SUMIDOKU_ADDR` | `0.0.0.0:3000` | listen address |
-| `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `./data` otherwise | data root (see above) |
+| `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `./data` otherwise | data root (see above); `config.toml` is read from here |
 | `SUMIDOKU_LOG` | `info` | log level (tracing filter) |
 | `SUMIDOKU_CALL_CONCURRENCY` | `8` | max concurrent calls into a source instance |
 | `SUMIDOKU_USER_AGENT` | a Chrome desktop UA | global User-Agent for source fetches |
@@ -118,9 +121,10 @@ Sidecar setup and the routing model are in [docs/sidecars.md](sidecars.md).
 
 ## config.toml example
 
+Placed in the config dir (`./data/config.toml` outside Docker, `/config/config.toml` in the image):
+
 ```toml
 addr = "0.0.0.0:3000"
-config_dir = "/config"
 log = "info"
 
 [auth]
