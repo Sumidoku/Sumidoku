@@ -65,6 +65,18 @@ test('build emits install metadata with matching icons and one manifest link', a
 	assert.doesNotMatch(index, /registerSW\.js/);
 });
 
+test('build locks the mobile viewport to the app scale', async () => {
+	const index = await readFile(path.join(outDir, 'index.html'), 'utf8');
+	assert.match(
+		index,
+		/<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" \/>/
+	);
+	const cssHref = index.match(/href="(\/assets\/[^"]+\.css)"/)?.[1];
+	assert.ok(cssHref);
+	const css = await readFile(path.join(outDir, cssHref), 'utf8');
+	assert.match(css, /touch-action:pan-x pan-y/);
+});
+
 test('build includes the Workbox runtime license notice', async () => {
 	const notice = await readFile(path.join(outDir, 'licenses/workbox.txt'), 'utf8');
 	assert.match(notice, /Copyright 2018 Google LLC/);
