@@ -1,10 +1,35 @@
-<!-- reviewed-through: fa2a384 (2026-10-19) -->
+<!-- reviewed-through: 098abaf (2026-10-24) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**Derived state must be invalidated when its producer or input changes;
+fresh fixtures cannot prove an upgrade.** When a parser changes, rows
+written by the old parser need an explicit migration or versioned rebuild,
+and caches holding open files need an identity/version check before every
+hit. Recomputing only new requests leaves old rows and old inode handles
+serving stale data indefinitely. Start regressions with seeded old rows and
+with atomic rename/truncate, not only a clean database or initial open.
+- Evidence: 2026-10-23/24, #349 review found old EPUB page rows bypassing
+  the new detection until migration 0021 invalidated them; its upgrade test
+  failed with two stale rows before the fix. #352 review found ZipCache
+  returning old bytes after atomic rename and a stale central directory
+  after truncation. File-version checks now reopen changed files, and both
+  regressions fail again when invalidation is disabled.
+
+**Type-specific state must come from the entity's actual shape, not its
+filename suffix.** A directory named `.epub` is still an image-directory
+chapter, so deriving `epub_divina_compatible` from `ends_with` marks it true
+on first read even though no EPUB analysis happened. Compute and return the
+flag from the same code path that reads the chapter, and include
+directory-with-suffix fixtures.
+- Evidence: 2026-10-24, #352 review caught `load_pages` turning
+  `chapter.epub/1.png` into `Some(true)`. `chapter_pages` now returns
+  `(pages, Option<bool>)`, with NULL for directories/CBZ and the actual
+  result for EPUB files, and the regression holds NULL after page rebuild.
 
 **Mojibake can enter as valid UTF-8 when a middlebox answers with the
 browser's serialized DOM instead of the wire bytes — capture the upstream
