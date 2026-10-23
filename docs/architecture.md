@@ -271,11 +271,20 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   directory, resolves metadata by a first-hit-wins chain (no per-field
   merge) — top-level `ComicInfo.xml` (authoritative when present, even
   unparsable) → the first chapter archive carrying one, in chapter
-  order (extracted in-memory) → a `series.json` sidecar (flat schema:
-  title, author/authors, artist/artists, description, genres, status
-  enum; a broken file warns and falls through) → the first EPUB chapter
-  whose OPF parses (`dc:title`/`dc:creator`/`dc:description`/`dc:subject`;
-  no artist/status counterpart) — and feeds the same
+  order (extracted in-memory) → a `series.json` sidecar (flat schema or
+  Mylar's nested `metadata`: title, role-mapped creators, description,
+  combined genres/tags, status, age rating and `readingDirection`; a broken
+  file warns and falls through) → the first EPUB chapter whose OPF parses
+  (EPUB 3 `belongs-to-collection`, then OPF 2 `calibre:series`/`series`, then
+  the first `dc:title`; role-aware creators, the first HTML-cleaned
+  `dc:description`, normalized/deduplicated `dc:subject` and spine
+  `page-progression-direction`; no status counterpart). JSON arrays and OPF
+  author/artist/tag lists stay structured, so their commas are literal; flat
+  series.json scalars and ComicInfo.xml fields use comma splitting. Mylar
+  `readingDirection` and OPF
+  spine direction set `Manga.viewer`. OPF `series_index` and language stay
+  unmapped rather than leaking the first EPUB's book metadata into every
+  chapter. The result feeds the same
   `upsert_manga` + `reconcile_chapters` as an online fetch; the scan
   skips dot entries, `@eaDir` and unreadable items at every level
   (failed items land in the reconcile protection set by full relative

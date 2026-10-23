@@ -3,6 +3,7 @@
 //! description←Summary, tags←Genre+Tags+Categories, status←PublishingStatusTachiyomi.
 //! Tachiyomi extension fields carry a `ty:` namespace prefix, and quick-xml matches element names literally, so both spellings are accepted.
 
+use aidoku::{ContentRating, Viewer};
 use serde::Deserialize;
 
 pub const COMIC_INFO_FILE: &str = "ComicInfo.xml";
@@ -38,6 +39,33 @@ pub struct ComicInfo {
 	pub status: Option<String>,
 	#[serde(rename = "ty:PublishingStatusTachiyomi")]
 	pub status_ty: Option<String>,
+	#[serde(skip)]
+	pub author_names: Option<Vec<String>>,
+	#[serde(skip)]
+	pub artist_names: Option<Vec<String>>,
+	#[serde(skip)]
+	pub tag_names: Option<Vec<String>>,
+	#[serde(skip)]
+	pub content_rating: ContentRating,
+	#[serde(skip)]
+	pub viewer: Viewer,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CreatorNames {
+	pub writer: Vec<String>,
+	pub penciller: Vec<String>,
+	pub inker: Vec<String>,
+	pub colorist: Vec<String>,
+	pub letterer: Vec<String>,
+	pub cover_artist: Vec<String>,
+}
+
+impl CreatorNames {
+	pub(crate) fn into_lists(self) -> (Option<Vec<String>>, Option<Vec<String>>) {
+		let artists = [self.penciller, self.inker, self.colorist, self.letterer, self.cover_artist].concat();
+		(normalized_names(self.writer), normalized_names(artists))
+	}
 }
 
 /// Parse failure returns None (the caller proceeds with no metadata, using the directory name as title)
@@ -49,6 +77,17 @@ pub fn parse(bytes: &[u8]) -> Option<ComicInfo> {
 			None
 		}
 	}
+}
+
+pub(crate) fn normalized_names(names: Vec<String>) -> Option<Vec<String>> {
+	let mut out: Vec<String> = Vec::new();
+	for name in names {
+		let name = name.trim();
+		if !name.is_empty() && !out.iter().any(|seen| seen == name) {
+			out.push(name.to_string());
+		}
+	}
+	(!out.is_empty()).then_some(out)
 }
 
 /// Comma-separated list → blanks removed and deduped (first-seen order kept); None/all-blank → None
@@ -71,26 +110,30 @@ impl ComicInfo {
 	}
 
 	pub fn authors(&self) -> Option<Vec<String>> {
-		split_list(&[self.writer.as_deref()])
+		self.author_names.clone().or_else(|| split_list(&[self.writer.as_deref()]))
 	}
 
 	pub fn artists(&self) -> Option<Vec<String>> {
-		split_list(&[
-			self.penciller.as_deref(),
-			self.inker.as_deref(),
-			self.colorist.as_deref(),
-			self.letterer.as_deref(),
-			self.cover_artist.as_deref(),
-		])
+		self.artist_names.clone().or_else(|| {
+			split_list(&[
+				self.penciller.as_deref(),
+				self.inker.as_deref(),
+				self.colorist.as_deref(),
+				self.letterer.as_deref(),
+				self.cover_artist.as_deref(),
+			])
+		})
 	}
 
 	pub fn tags(&self) -> Option<Vec<String>> {
-		split_list(&[
-			self.genre.as_deref(),
-			self.tags.as_deref(),
-			self.categories.as_deref(),
-			self.categories_ty.as_deref(),
-		])
+		self.tag_names.clone().or_else(|| {
+			split_list(&[
+				self.genre.as_deref(),
+				self.tags.as_deref(),
+				self.categories.as_deref(),
+				self.categories_ty.as_deref(),
+			])
+		})
 	}
 
 	pub fn description(&self) -> Option<String> {

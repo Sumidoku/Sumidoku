@@ -3,11 +3,12 @@
 //! items; hrefs resolve against the OPF location into zip entry paths. Only the divina profile
 //! (image-based books) is supported — a reflowable text document parses fine but yields no pages.
 
+use aidoku::Viewer;
 use quick_xml::de::from_reader;
 use serde::Deserialize;
 use std::path::Path;
 
-use super::comic_info::ComicInfo;
+use super::comic_info::{ComicInfo, CreatorNames, normalized_names};
 use super::zip_cache::ZipCache;
 
 /// The image media types a divina page may declare; anything else in the spine (nav documents, stylesheets) is not a page
@@ -37,25 +38,135 @@ pub struct Package {
 pub struct PackageMetadata {
 	// quick-xml's serde matches elements by local name (the prefix is stripped), so dc:title is "title" here
 	#[serde(rename = "title")]
-	pub title: Option<String>,
+	pub title: Vec<String>,
 	#[serde(rename = "creator")]
-	pub creators: Vec<String>,
+	pub creators: Vec<Creator>,
 	#[serde(rename = "description")]
-	pub description: Option<String>,
+	pub description: Vec<String>,
 	#[serde(rename = "subject")]
 	pub subjects: Vec<String>,
+	#[serde(rename = "meta")]
+	metas: Vec<Meta>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Creator {
+	#[serde(rename = "@id")]
+	id: Option<String>,
+	#[serde(rename = "@role")]
+	role: Option<String>,
+	#[serde(rename = "$text")]
+	name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Meta {
+	#[serde(rename = "@property")]
+	property: Option<String>,
+	#[serde(rename = "@name")]
+	name: Option<String>,
+	#[serde(rename = "@content")]
+	content: Option<String>,
+	#[serde(rename = "@refines")]
+	refines: Option<String>,
+	#[serde(rename = "@scheme")]
+	scheme: Option<String>,
+	#[serde(rename = "$text")]
+	text: String,
+}
+
+fn normalize_text(raw: &str) -> String {
+	raw.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn non_empty(raw: &str) -> Option<String> {
+	let text = normalize_text(raw);
+	(!text.is_empty()).then_some(text)
+}
+
+fn clean_html(html: &str) -> String {
+	aidoku_wasm::clean_html_text(html)
+}
+
+fn refined_role(metas: &[Meta], creator: &Creator) -> Option<String> {
+	let id = creator.id.as_deref().filter(|id| !id.is_empty())?;
+	metas
+		.iter()
+		.find(|meta| {
+			meta.property.as_deref() == Some("role")
+				&& meta.scheme.as_deref() == Some("marc:relators")
+				&& meta.refines.as_deref().is_some_and(|refines| refines.trim_start_matches('#') == id)
+		})
+		.and_then(|meta| non_empty(&meta.text))
 }
 
 impl PackageMetadata {
-	/// The metadata chain's shared shape: dc:title→series, dc:creator→writer, dc:description→summary,
-	/// dc:subject→genre. EPUB has no artist or status counterpart, so those stay unset.
 	pub fn into_comic_info(self) -> ComicInfo {
+		let series = self
+			.metas
+			.iter()
+			.find(|meta| meta.property.as_deref() == Some("belongs-to-collection"))
+			.and_then(|meta| non_empty(&meta.text))
+			.or_else(|| {
+				["calibre:series", "series"].iter().find_map(|name| {
+					self.metas
+						.iter()
+						.find(|meta| meta.name.as_deref() == Some(*name))
+						.and_then(|meta| meta.content.as_deref())
+						.and_then(non_empty)
+				})
+			})
+			.or_else(|| self.title.first().and_then(|title| non_empty(title)));
+		let summary = self
+			.description
+			.first()
+			.map(|description| clean_html(description))
+			.filter(|description| !description.is_empty());
+		let tag_names = normalized_names(self.subjects.iter().map(|subject| normalize_text(subject)).collect());
+		let mut creators = CreatorNames::default();
+		for creator in &self.creators {
+			let Some(name) = non_empty(&creator.name) else {
+				continue;
+			};
+			let role = creator
+				.role
+				.as_deref()
+				.map(str::trim)
+				.filter(|role| !role.is_empty())
+				.map(str::to_string)
+				.or_else(|| refined_role(&self.metas, creator));
+			match role.as_deref() {
+				Some("edt" | "trl") => {}
+				Some("art" | "ill") => creators.penciller.push(name),
+				Some("clr") => creators.colorist.push(name),
+				Some("cov") => creators.cover_artist.push(name),
+				_ => creators.writer.push(name),
+			}
+		}
+		let (author_names, artist_names) = creators.into_lists();
 		ComicInfo {
-			series: self.title,
-			writer: (!self.creators.is_empty()).then(|| self.creators.join(", ")),
-			summary: self.description,
-			genre: (!self.subjects.is_empty()).then(|| self.subjects.join(", ")),
+			series,
+			summary,
+			tag_names,
+			author_names,
+			artist_names,
 			..ComicInfo::default()
+		}
+	}
+}
+
+impl Package {
+	pub fn into_comic_info(self) -> ComicInfo {
+		let viewer = match self.spine.page_progression_direction.as_deref() {
+			Some("ltr") => Viewer::LeftToRight,
+			Some("rtl") => Viewer::RightToLeft,
+			_ => Viewer::Unknown,
+		};
+		ComicInfo {
+			viewer,
+			..self.metadata.into_comic_info()
 		}
 	}
 }
@@ -80,6 +191,8 @@ struct ManifestItem {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Spine {
+	#[serde(rename = "@page-progression-direction")]
+	page_progression_direction: Option<String>,
 	#[serde(rename = "itemref")]
 	itemrefs: Vec<ItemRef>,
 }
@@ -289,9 +402,10 @@ mod tests {
 		let path = tmp.path().join("x.epub");
 		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(OPF), &[]);
 		let metadata = &read_package(&ZipCache::new(), &path).expect("package").metadata;
-		assert_eq!(metadata.title.as_deref(), Some("Spine Book"));
-		assert_eq!(metadata.creators, ["Author One", "Author Two"]);
-		assert_eq!(metadata.description.as_deref(), Some("desc"));
+		assert_eq!(metadata.title.first().map(String::as_str), Some("Spine Book"));
+		let creators: Vec<&str> = metadata.creators.iter().map(|creator| creator.name.as_str()).collect();
+		assert_eq!(creators, ["Author One", "Author Two"]);
+		assert_eq!(metadata.description.first().map(String::as_str), Some("desc"));
 		assert_eq!(metadata.subjects, ["manga", "action"]);
 	}
 
@@ -310,6 +424,135 @@ mod tests {
 		assert_eq!(info.tags().expect("tags"), vec!["manga", "action"]);
 		assert_eq!(info.artists(), None);
 		assert_eq!(info.status(), 0);
+	}
+
+	#[test]
+	fn repeated_title_and_description_use_first_and_keep_pages() {
+		let opf = OPF
+			.replace(
+				"<dc:title>Spine Book</dc:title>",
+				"<dc:title>First Title</dc:title><dc:title>Second Title</dc:title>",
+			)
+			.replace(
+				"<dc:description>desc</dc:description>",
+				"<dc:description>&lt;p&gt;First &lt;b&gt;description&lt;/b&gt;&lt;/p&gt;</dc:description><dc:description>Second description</dc:description>",
+			);
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let path = tmp.path().join("x.epub");
+		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(&opf), &[]);
+		let package = read_package(&ZipCache::new(), &path).expect("package");
+		let pages = package.pages();
+		let entries: Vec<&str> = pages.iter().map(|page| page.entry.as_str()).collect();
+		assert_eq!(entries, ["OEBPS/images/b.jpg", "OEBPS/images/c d.png", "OEBPS/images/a.png"]);
+		let info = package.into_comic_info();
+		assert_eq!(info.title(), Some("First Title"));
+		assert_eq!(info.description().as_deref(), Some("First description"));
+	}
+
+	fn comic_info_from_opf(opf: &str) -> ComicInfo {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let path = tmp.path().join("x.epub");
+		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(opf), &[]);
+		read_package(&ZipCache::new(), &path)
+			.expect("package")
+			.metadata
+			.into_comic_info()
+	}
+
+	#[test]
+	fn epub3_collection_wins_over_other_titles() {
+		let info = comic_info_from_opf(
+			r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:title>Book Title</dc:title>
+    <opf:meta property="belongs-to-collection">  EPUB3
+      Series  </opf:meta>
+    <opf:meta name="series" content="EPUB2 Series"/>
+    <opf:meta name="calibre:series" content="Calibre Series"/>
+  </metadata>
+  <manifest/><spine/>
+</package>"#,
+		);
+		assert_eq!(info.title(), Some("EPUB3 Series"));
+	}
+
+	#[test]
+	fn epub2_series_fallbacks_and_dc_title() {
+		let calibre = comic_info_from_opf(
+			r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Book Title</dc:title>
+    <meta name="series" content="EPUB2 Series"/>
+    <meta name="calibre:series" content="Calibre Series"/>
+  </metadata>
+  <manifest/><spine/>
+</package>"#,
+		);
+		assert_eq!(calibre.title(), Some("Calibre Series"));
+
+		let bare = comic_info_from_opf(
+			r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>Book Title</dc:title>
+    <meta name="series" content=" EPUB2 Series "/>
+  </metadata>
+  <manifest/><spine/>
+</package>"#,
+		);
+		assert_eq!(bare.title(), Some("EPUB2 Series"));
+
+		let title_only = comic_info_from_opf(OPF);
+		assert_eq!(title_only.title(), Some("Spine Book"));
+	}
+
+	#[test]
+	fn creator_roles_and_refines_map_to_authors_and_artists() {
+		let info = comic_info_from_opf(
+			r##"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:creator id="pen" opf:role="art"> Penciller,
+      One </dc:creator>
+    <dc:creator id="default">Last, First</dc:creator>
+    <dc:creator id="editor" opf:role="edt">Ignored Editor</dc:creator>
+    <dc:creator id="writer" opf:role="aut">OPF Writer</dc:creator>
+    <opf:meta refines="#writer" property="role" scheme="marc:relators">art</opf:meta>
+    <dc:creator id="color">Refined Colorist</dc:creator>
+    <opf:meta refines="#color" property="role" scheme="marc:relators">clr</opf:meta>
+    <dc:creator id="cover">Refined Cover</dc:creator>
+    <opf:meta refines="#cover" property="role" scheme="marc:relators">cov</opf:meta>
+    <dc:creator id="ill" opf:role="ill">Illustrator</dc:creator>
+  </metadata>
+  <manifest/><spine/>
+</package>"##,
+		);
+		assert_eq!(info.authors().expect("authors"), vec!["Last, First", "OPF Writer"]);
+		assert_eq!(
+			info.artists().expect("artists"),
+			vec!["Penciller, One", "Illustrator", "Refined Colorist", "Refined Cover"]
+		);
+	}
+
+	#[test]
+	fn description_is_cleaned_and_subjects_are_normalized() {
+		let info = comic_info_from_opf(
+			r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:description>&lt;p&gt; A &lt;b&gt;great&lt;/b&gt; book. &lt;/p&gt;&lt;p&gt;Second &amp;amp; final.&lt;/p&gt;</dc:description>
+    <dc:subject> Action,
+      Drama </dc:subject>
+    <dc:subject>Action, Drama</dc:subject>
+    <dc:subject> Mystery </dc:subject>
+  </metadata>
+  <manifest/><spine/>
+</package>"#,
+		);
+		assert_eq!(info.description().as_deref(), Some("A great book. Second & final."));
+		assert_eq!(info.tags().expect("tags"), vec!["Action, Drama", "Mystery"]);
 	}
 
 	#[test]
