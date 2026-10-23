@@ -314,8 +314,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
   reads image files directly and extracts single archive entries
-  (`by_name`) through a 16-handle `ZipArchive` LRU (`local/zip_cache.rs`),
-  with the downsample pipeline untouched. Covers reuse the disk cache with
+  (`by_name`) through a version-checked 16-handle `ZipArchive` LRU
+  (`local/zip_cache.rs`), so replaced archives are reopened. Page rows,
+  counts, and compatibility are committed together. The downsample pipeline
+  is untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
   `cover.*` sidecar in the manga directory → first page of the chapter
   list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered

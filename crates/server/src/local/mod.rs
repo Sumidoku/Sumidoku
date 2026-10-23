@@ -736,9 +736,9 @@ async fn chapter_fs_path(local_dir: &Path, manga_key: &str, chapter_key: &str) -
 	Ok(manga_path.join(chapter_key))
 }
 
-/// Chapter page listing: image chapters and CBZ/ZIP archives use case-insensitive natural order;
+/// Chapter page listing and divina compatibility: image chapters and CBZ/ZIP archives use natural order;
 /// divina EPUBs use OPF spine order, and invalid or non-divina EPUBs have no pages
-pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
+pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<(Vec<String>, Option<bool>)> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
 	let path = chapter_fs_path(dir, rel, chapter_key).await?;
@@ -771,7 +771,7 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 			}
 		}
 		pages.sort_by(|a, b| natural_sort::compare(a, b));
-		return Ok(pages);
+		return Ok((pages, None));
 	}
 	if metadata.is_file() && has_ext(chapter_key, ARCHIVE_EXTS) {
 		if has_ext(chapter_key, &["epub"]) {
@@ -782,7 +782,8 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 					.await
 					.map_err(|e| ApiError::internal(format!("read epub package failed: {e}")))?
 			};
-			return Ok(pages.into_iter().map(|page| page.entry).collect());
+			let compatible = Some(!pages.is_empty());
+			return Ok((pages.into_iter().map(|page| page.entry).collect(), compatible));
 		}
 		let names = {
 			let path = path.clone();
@@ -794,7 +795,7 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 		};
 		let mut pages: Vec<String> = names.into_iter().filter(|n| is_image_entry(n)).collect();
 		pages.sort_by(|a, b| natural_sort::compare(a, b));
-		return Ok(pages);
+		return Ok((pages, None));
 	}
 	Err(ApiError::bad_request("unsupported local chapter format"))
 }
@@ -913,7 +914,7 @@ pub async fn resolve_cover(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 	let Some(last) = chapters.last() else {
 		return Ok(None);
 	};
-	let pages = chapter_pages(local_dirs, zip, manga_key, &last.key).await?;
+	let (pages, _) = chapter_pages(local_dirs, zip, manga_key, &last.key).await?;
 	let Some(first) = pages.first() else {
 		return Ok(None);
 	};

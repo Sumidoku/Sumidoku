@@ -1083,23 +1083,13 @@ pub async fn load_pages(
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if source_is_local(&state.pool, manga.source_id).await? {
-		let entries = crate::local::chapter_pages(
+		let (entries, compatible) = crate::local::chapter_pages(
 			&state.local_dirs().await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,
 		)
 		.await?;
-		let compatible = if chapter.key.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("epub")) {
-			Some(!entries.is_empty())
-		} else {
-			None
-		};
-		sqlx::query("UPDATE chapter SET epub_divina_compatible = ? WHERE id = ?")
-			.bind(compatible)
-			.bind(chapter_id)
-			.execute(&state.pool)
-			.await?;
 		// A local chapter has no materialized blobs, but may have downsample variants: invalidate them when the page
 		// rows are rewritten (on the online path, materialize_image_pages' whole-directory removal carries the same duty)
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
@@ -1107,13 +1097,13 @@ pub async fn load_pages(
 			.iter()
 			.map(|entry| crate::local::page_content_json(entry))
 			.collect();
-		store_page_rows(&state.pool, chapter_id, &rows).await?;
+		store_page_rows(&state.pool, chapter_id, &rows, compatible).await?;
 	} else if source_is_opds(&state.pool, manga.source_id).await? {
 		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
 		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
 		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
-		store_page_rows(&state.pool, chapter_id, &rows).await?;
+		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
 		let mut pages = handle
@@ -1134,7 +1124,7 @@ pub async fn load_pages(
 				})
 			})
 			.collect();
-		store_page_rows(&state.pool, chapter_id, &rows).await?;
+		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
 	}
 	let stored: Vec<PageRow> = sqlx::query_as(
 		"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
@@ -1145,8 +1135,8 @@ pub async fn load_pages(
 	Ok(stored)
 }
 
-/// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count; the variant cache expires with the directory lifecycle
-async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value]) -> ApiResult<()> {
+/// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count and divina compatibility
+async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value], compatible: Option<bool>) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(pool).await?;
 	sqlx::query("DELETE FROM page WHERE chapter_id = ?")
 		.bind(chapter_id)
@@ -1163,8 +1153,9 @@ async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json:
 		.execute(&mut *tx)
 		.await?;
 	}
-	sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
+	sqlx::query("UPDATE chapter SET page_count = ?, epub_divina_compatible = ? WHERE id = ?")
 		.bind(rows.len() as i64)
+		.bind(compatible)
 		.bind(chapter_id)
 		.execute(&mut *tx)
 		.await?;
