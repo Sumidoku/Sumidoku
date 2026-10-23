@@ -24,8 +24,11 @@
 //!
 //! Manga metadata resolves by a first-hit-wins chain, no per-field merge (`read_manga_metadata`): the manga
 //! directory's top-level ComicInfo.xml (authoritative when present, even unparsable) → the first chapter
-//! archive carrying one, in chapter order → a series.json sidecar (flat schema; a broken file warns and
-//! falls through) → the first EPUB chapter whose OPF parses, in chapter order.
+//! archive carrying one, in chapter order → a series.json sidecar (flat or Mylar nested schema; a broken
+//! file warns and falls through) → the first EPUB chapter whose OPF parses, in chapter order. JSON arrays and
+//! OPF author/artist/tag lists stay structured, so their commas are literal; flat series.json scalars and
+//! ComicInfo.xml keep comma-separated list semantics. Mylar readingDirection and OPF spine
+//! page-progression-direction map to the manga viewer.
 //!
 //! With a oneshots name configured (config local_oneshots_dir, overridable by the local.oneshots_dir setting),
 //! the oneshots rule outranks both passes: a directory whose relative path contains the name (case-insensitive
@@ -549,6 +552,8 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 		manga.artists = info.artists();
 		manga.description = info.description();
 		manga.tags = info.tags();
+		manga.content_rating = info.content_rating;
+		manga.viewer = info.viewer;
 		manga.status = match info.status() {
 			1 => MangaStatus::Ongoing,
 			2 => MangaStatus::Completed,
@@ -661,7 +666,7 @@ async fn epub_opf_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &st
 			tokio::task::spawn_blocking(move || epub::read_package(&zip, &path)).await
 		};
 		match package {
-			Ok(Some(package)) => return Some(package.metadata.into_comic_info()),
+			Ok(Some(package)) => return Some(package.into_comic_info()),
 			Ok(None) => continue,
 			Err(e) => {
 				tracing::warn!(chapter = %chapter.key, "epub metadata task failed: {e}");

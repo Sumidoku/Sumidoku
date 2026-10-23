@@ -6,6 +6,18 @@ use scraper::node::{Node, Text};
 use std::{cell::RefCell, ops::Deref, rc::Rc};
 use url::Url;
 
+pub fn clean_html_text(html: &str) -> String {
+	let fragment = Html::parse_fragment(html);
+	fragment
+		.root_element()
+		.text()
+		.collect::<Vec<_>>()
+		.join(" ")
+		.split_whitespace()
+		.collect::<Vec<_>>()
+		.join(" ")
+}
+
 #[derive(Debug, Clone)]
 pub struct HtmlDocument {
 	pub html: Rc<RefCell<Html>>,

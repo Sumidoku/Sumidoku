@@ -10,13 +10,16 @@
 //! (first hit wins: top-level ComicInfo.xml > archive ComicInfo.xml > series.json > EPUB OPF)
 mod common;
 
+use aidoku::{ContentRating, Viewer};
 use axum::Router;
 use axum::http::StatusCode;
 use common::{TestApp, base_config, request, request_full, source_by_key, test_app};
 use serde_json::json;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
+use sumidoku_server::local::{ZipCache, manga_update};
 
 const COMIC_INFO_ALPHA: &str = r#"<?xml version="1.0"?>
 <ComicInfo xmlns:ty="http://www.w3.org/2001/XMLSchema">
@@ -1671,7 +1674,7 @@ async fn epub_opf_maps_into_manga() {
 	let body = manga_json(&t.app, manga_id).await;
 	assert_eq!(body["title"], "Book Title");
 	assert_eq!(body["authors"], json!(["Writer One", "Writer Two"]));
-	assert!(body["artists"].is_null(), "EPUB metadata has no artist counterpart: {body}");
+	assert!(body["artists"].is_null(), "creators without artist roles leave artists unset: {body}");
 	assert_eq!(body["description"], "book desc");
 	assert_eq!(body["tags"], json!(["manga", "action"]));
 	assert_eq!(body["status"], "Unknown");
@@ -1753,6 +1756,154 @@ async fn broken_series_json_falls_through_to_epub_opf() {
 	let body = manga_json(&t.app, manga_id).await;
 	assert_eq!(body["title"], "Book Title", "{body}");
 	assert_eq!(body["authors"], json!(["Writer One", "Writer Two"]));
+}
+
+#[tokio::test]
+async fn structured_metadata_preserves_commas_in_api() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	let mylar = root.join("MylarCommas");
+	std::fs::create_dir_all(&mylar).expect("mkdir mylar");
+	std::fs::write(
+		mylar.join("series.json"),
+		r#"{"metadata":{"name":"Mylar Commas","year":2024,"authors":[{"name":"Last, First"},{"name":"Artist, One","role":"penciller"}],"tags":["Tag, One","Tag Two"]}}"#,
+	)
+	.expect("write series.json");
+	write_page(&mylar.join("ch 1"), "1.png", b"mylar-page");
+	let opf = divina_opf_with_metadata(
+		r#"<dc:title>OPF Commas</dc:title>
+    <dc:creator>Last, First</dc:creator>
+    <dc:creator xmlns:opf="http://www.idpf.org/2007/opf" opf:role="art">Artist, One</dc:creator>
+    <dc:subject>Tag, One</dc:subject>
+    <dc:subject> Tag, One </dc:subject>
+    <dc:subject>Tag Two</dc:subject>"#,
+		&[("p1", "images/1.png", "image/png")],
+		&["p1"],
+	);
+	write_epub(
+		&root.join("OpfCommas/ch 1.epub"),
+		Some(("OEBPS/content.opf", &opf)),
+		&[("OEBPS/images/1.png", b"opf-page")],
+	);
+	let config = base_config(&tmp);
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp { app, tmp, db_path };
+
+	let mylar_id = register_local(&t.app, "MylarCommas").await;
+	let body = manga_json(&t.app, mylar_id).await;
+	assert_eq!(body["authors"], json!(["Last, First"]));
+	assert_eq!(body["artists"], json!(["Artist, One"]));
+	assert_eq!(body["tags"], json!(["Tag, One", "Tag Two"]));
+
+	let opf_id = register_local(&t.app, "OpfCommas").await;
+	let body = manga_json(&t.app, opf_id).await;
+	assert_eq!(body["authors"], json!(["Last, First"]));
+	assert_eq!(body["artists"], json!(["Artist, One"]));
+	assert_eq!(body["tags"], json!(["Tag, One", "Tag Two"]));
+}
+
+#[tokio::test]
+async fn mylar_reading_direction_maps_to_aidoku_viewer() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	let local_dirs = vec![root.clone()];
+	let zip = Arc::new(ZipCache::new());
+	let cases = [
+		(Some("LEFT_TO_RIGHT"), Viewer::LeftToRight),
+		(Some("RIGHT_TO_LEFT"), Viewer::RightToLeft),
+		(Some("VERTICAL"), Viewer::Vertical),
+		(Some("WEBTOON"), Viewer::Webtoon),
+		(Some("SIDEWAYS"), Viewer::Unknown),
+		(None, Viewer::Unknown),
+	];
+	let mut actual = Vec::new();
+	for (index, (reading_direction, _)) in cases.iter().enumerate() {
+		let key = format!("Direction{index}");
+		let dir = root.join(&key);
+		std::fs::create_dir_all(&dir).expect("mkdir direction");
+		let reading_direction = reading_direction
+			.map(|direction| format!(r#""readingDirection":"{direction}","#))
+			.unwrap_or_default();
+		let json = format!(
+			r#"{{"metadata":{{"name":"Direction {index}","year":2024,"volume":1,{reading_direction}"status":"Continuing"}}}}"#
+		);
+		std::fs::write(dir.join("series.json"), json).expect("write series.json");
+		write_page(&dir.join("ch 1"), "1.png", b"direction-page");
+		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		actual.push(update.manga.viewer);
+	}
+	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
+}
+
+#[tokio::test]
+async fn epub_spine_direction_maps_to_aidoku_viewer() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	let local_dirs = vec![root.clone()];
+	let zip = Arc::new(ZipCache::new());
+	let cases = [
+		(Some("rtl"), Viewer::RightToLeft),
+		(Some("ltr"), Viewer::LeftToRight),
+		(Some("vertical"), Viewer::Unknown),
+		(None, Viewer::Unknown),
+	];
+	let mut actual = Vec::new();
+	for (index, (direction, _)) in cases.iter().enumerate() {
+		let key = format!("Spine{index}");
+		let opf = String::from_utf8(divina_opf_with_metadata(
+			OPF_METADATA,
+			&[("p1", "images/1.png", "image/png")],
+			&["p1"],
+		))
+		.expect("opf utf8");
+		let opf = if let Some(direction) = direction {
+			opf.replace("<spine>", &format!("<spine page-progression-direction=\"{direction}\">"))
+		} else {
+			opf
+		};
+		write_epub(
+			&root.join(&key).join("ch 1.epub"),
+			Some(("OEBPS/content.opf", opf.as_bytes())),
+			&[("OEBPS/images/1.png", b"spine-page")],
+		);
+		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		actual.push(update.manga.viewer);
+	}
+	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
+}
+
+#[tokio::test]
+async fn mylar_age_ratings_map_to_aidoku_content_ratings() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let root = tmp.path().join("local");
+	let local_dirs = vec![root.clone()];
+	let zip = Arc::new(ZipCache::new());
+	let cases = [
+		(Some("All"), ContentRating::Safe),
+		(Some("9+"), ContentRating::Safe),
+		(Some("12+"), ContentRating::Safe),
+		(Some("15+"), ContentRating::Suggestive),
+		(Some("17+"), ContentRating::Suggestive),
+		(Some("Adult"), ContentRating::NSFW),
+		(Some("MA15+"), ContentRating::Unknown),
+		(None, ContentRating::Unknown),
+	];
+	let mut actual = Vec::new();
+	for (index, (age_rating, _)) in cases.iter().enumerate() {
+		let key = format!("Rating{index}");
+		let dir = root.join(&key);
+		std::fs::create_dir_all(&dir).expect("mkdir rating");
+		let age_rating = age_rating.map(|rating| format!(r#""age_rating":"{rating}","#)).unwrap_or_default();
+		let json = format!(
+			r#"{{"metadata":{{"name":"Rating {index}","year":2024,"volume":1,{age_rating}"status":"Continuing"}}}}"#
+		);
+		std::fs::write(dir.join("series.json"), json).expect("write series.json");
+		write_page(&dir.join("ch 1"), "1.png", b"rating-page");
+		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		actual.push(update.manga.content_rating);
+	}
+	assert_eq!(actual, cases.map(|(_, rating)| rating));
 }
 
 #[tokio::test]

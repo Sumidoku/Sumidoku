@@ -14,6 +14,7 @@ mod webview;
 
 pub use error::{Error, Result, log_safe_text};
 pub use features::SourceFeatures;
+pub use html_dom::clean_html_text;
 pub use imports::HttpMethod;
 pub use partial::{HomeAccumulator, HomePartial};
 pub use runtime::actor::SourceHandle;
