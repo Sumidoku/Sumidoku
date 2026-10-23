@@ -63,6 +63,14 @@ pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::Clea
 		"sumidoku-net",
 		&host.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
 	);
+	// The scrape endpoint only ever uses an existing session (use = require): a solve
+	// carrying a sessionId but no created session 404s ("Session not found") and always
+	// falls back to the proxy. Create idempotently first (201 created / 409 a same-id
+	// session is still alive) so the host-level session actually exists and later solves
+	// ride the already-solved session instead of re-solving Turnstile from scratch.
+	if !ensure_session(api_base, &session, &client) {
+		return None;
+	}
 	let body = serde_json::json!({
 		"url": format!("https://{host}/"),
 		"maxTimeout": SOLVE_TIMEOUT.as_millis() as u64,
@@ -89,6 +97,113 @@ pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::Clea
 		.map(|c| c.value)
 		.unwrap_or_default();
 	Some(crate::traits::ClearanceReplay { user_agent, clearance })
+}
+
+/// Deterministic login-session id for a host. Kept separate from the solve session
+/// (sumidoku-net-<host>): the solve session only carries clearance, the login session
+/// carries the site's own auth cookies — separate lifetimes, no interference.
+pub fn login_session_id(host: &str) -> String {
+	session_id(
+		"sumidoku-login",
+		&host.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
+	)
+}
+
+/// Create a trawl session idempotently: 201 = created, 409 = a same-id session is still
+/// alive (adopted after a restart; keepPage was likewise set by the old instance). Any
+/// other status or a transport error → false.
+pub fn ensure_session(api_base: &str, id: &str, client: &reqwest::blocking::Client) -> bool {
+	let body = serde_json::json!({"id": id, "keepPage": true});
+	let Ok(response) = client
+		.post(format!("{}/sessions", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(body.to_string())
+		.timeout(SESSION_CREATE_TIMEOUT)
+		.send()
+	else {
+		return false;
+	};
+	matches!(response.status().as_u16(), 201 | 409)
+}
+
+/// Outcome of a session-backed request: the page body plus the session's post-navigation
+/// cookies (the site's Set-Cookie lands in the trawl context and comes back here, so the
+/// caller can mirror them into its own jar for later non-browser requests).
+pub struct SessionRequestOutcome {
+	pub status: u16,
+	pub cookies: Vec<BrowserCookie>,
+	pub body: Vec<u8>,
+}
+
+/// Session-backed request with an arbitrary method/body — the shape a login sequence
+/// needs. The session must already exist (ensure_session); the trawl browser context
+/// accumulates cookies across calls in the same session (warm-up GETs, then the POST
+/// login), which plain direct/proxy hops cannot provide. trawl's tier 3 replays POST
+/// bodies via route interception, verified against wenku8's login form.
+/// Blocking: called from the wasm net host on the actor thread.
+pub fn session_request(
+	api_base: &str,
+	session: &str,
+	method: &str,
+	url: &str,
+	headers: &[(String, String)],
+	body: Option<&[u8]>,
+	timeout: Duration,
+) -> Option<SessionRequestOutcome> {
+	let client = reqwest::blocking::Client::builder()
+		.use_rustls_tls()
+		.timeout(timeout + CLIENT_GRACE)
+		.build()
+		.ok()?;
+	let mut req = serde_json::json!({
+		"url": url,
+		"sessionId": session,
+		"method": method.to_uppercase(),
+		"maxTimeout": timeout.as_millis() as u64,
+	});
+	if !headers.is_empty() {
+		let map: serde_json::Map<String, serde_json::Value> = headers
+			.iter()
+			.map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+			.collect();
+		req["headers"] = map.into();
+	}
+	if let Some(bytes) = body {
+		// Login form bodies are percent-encoded GBK, i.e. ASCII, so a lossy UTF-8 read
+		// is exact; anything else non-UTF-8 cannot be carried in trawl's JSON body anyway
+		req["body"] = String::from_utf8_lossy(bytes).into_owned().into();
+	}
+	let response = client
+		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(req.to_string())
+		.timeout(timeout + CLIENT_GRACE)
+		.send()
+		.ok()?;
+	let status = response.status().as_u16();
+	if status == 404 || status == 410 {
+		// Session lost (browser swapped / expired): the caller replays through a fresh
+		// ensure_session + this call again
+		return None;
+	}
+	let text = response.text().ok()?;
+	let result: ScrapeResult = serde_json::from_str(&text).ok()?;
+	let body = result
+		.body
+		.and_then(buffer_to_bytes)
+		.or_else(|| result.html.clone().map(String::into_bytes))
+		.unwrap_or_default();
+	Some(SessionRequestOutcome {
+		status,
+		cookies: result.cookies.into_iter().map(BrowserCookie::from).collect(),
+		body,
+	})
+}
+
+/// Decode trawl's `{type:"Buffer", data:[...]}` body field into raw bytes.
+fn buffer_to_bytes(value: serde_json::Value) -> Option<Vec<u8>> {
+	let data = value.get("data")?.as_array()?;
+	data.iter().map(|v| v.as_u64().map(|n| n as u8)).collect()
 }
 
 pub struct TrawlConnector {
@@ -403,6 +518,12 @@ fn value_to_string(value: &serde_json::Value) -> String {
 struct ScrapeResult {
 	#[serde(default)]
 	cookies: Vec<TrawlCookie>,
+	/// Page content: trawl returns either the decoded `html` string or the raw `body`
+	/// Buffer (e.g. for binary content); the login path prefers the raw bytes
+	#[serde(default)]
+	html: Option<String>,
+	#[serde(default)]
+	body: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -546,6 +667,7 @@ mod tests {
 	#[test]
 	fn solve_clearance_pairs_the_cookie_with_the_solver_ua() {
 		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/sessions") => ok_session(),
 			("POST", "/scrape") => (
 				200,
 				r#"{"cookies":[{"name":"cf_clearance","value":"abc"},{"name":"other","value":"x"}],"userAgent":"Camoufox/152"}"#
@@ -561,7 +683,16 @@ mod tests {
 				clearance: "abc".into(),
 			}
 		);
-		let (_, _, body) = &mock.requests()[0];
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2, "solve creates the host session first, then scrapes");
+		assert_eq!(
+			(requests[0].0.as_str(), requests[0].1.as_str()),
+			("POST", "/sessions"),
+			"the scrape endpoint requires an existing session"
+		);
+		let create = body_json(&requests, 0);
+		assert_eq!(create, serde_json::json!({"id": "sumidoku-net-cf_example", "keepPage": true}));
+		let (_, _, body) = &requests[1];
 		let body: serde_json::Value = serde_json::from_str(body).expect("json");
 		assert_eq!(body["url"], "https://cf.example/");
 		assert_eq!(body["sessionId"], "sumidoku-net-cf_example", "host-level session id is deterministic");
@@ -574,8 +705,9 @@ mod tests {
 		let mock = MockTrawl::new(|_, _, _| (500, r#"{"error":"busy"}"#.to_string()));
 		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
 		// A solve without a user agent is no replay at all
-		let mock = MockTrawl::new(|_, _, _| {
-			(200, r#"{"cookies":[{"name":"cf_clearance","value":"abc"}],"userAgent":""}"#.to_string())
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/sessions") => ok_session(),
+			_ => (200, r#"{"cookies":[{"name":"cf_clearance","value":"abc"}],"userAgent":""}"#.to_string()),
 		});
 		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
 	}

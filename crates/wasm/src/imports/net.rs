@@ -236,9 +236,19 @@ pub(crate) fn perform(
 
 	net.rate.acquire();
 
-	// Request headers are assembled only once: retries and the CF escalation resend the
-	// same set; doing it inside the loop would splice jar cookies into Cookie again and again
+	// A login sequence runs inside a trawl browser session: the session accumulates the
+	// site's cookies across calls (warm-up GETs then the POST), which plain direct/proxy
+	// hops cannot. The first login request tries direct; on a CF challenge the host
+	// escalates to its login session (see the challenge branch below) and the rest of the
+	// sequence rides it. Only basic_login() sets this, so ordinary requests never do.
 	let host = url.host_str().unwrap_or_default().to_string();
+	if net.login_in_progress()
+		&& net.trawl_api().is_some()
+		&& let Some(sid) = net.login_session(&host)
+	{
+		// Already escalated in this sequence: everything left goes through the session
+		return net.session_scrape(&url, request, &sid, timeout, body_max);
+	}
 	let mut replay = net.policy.clearance_replay(&host);
 	if let Some(replay) = &replay {
 		// The clearance is bound to the solving browser's UA, which wins outright here —
@@ -322,6 +332,18 @@ pub(crate) fn perform(
 			if replay.take().is_some() {
 				net.policy.clear_clearance(&host);
 			}
+			// Login flow on a challenged host: escalate straight to the browser session.
+			// Solving + replaying direct cannot carry the login form's sequence (warm-up
+			// cookies, POST body), so the whole login rides a dedicated session.
+			if net.login_in_progress() && net.trawl_api().is_some() {
+				let sid = crate::browser::trawl::login_session_id(&host);
+				if net.ensure_login_session(&sid) {
+					net.set_login_session(host.clone(), sid.clone());
+					return net.session_scrape(&url, request, &sid, timeout, body_max);
+				}
+				// Session creation failed (pool initializing / saturated): fall through to
+				// the normal solve → proxy path
+			}
 			// Solve once per request and replay direct: the proxy returns browser-serialized
 			// DOM on its browser tiers, so it stays the fallback for when solving fails
 			if !solved {
@@ -392,6 +414,95 @@ pub(crate) fn perform(
 			data: bytes,
 		});
 		return Ok(());
+	}
+}
+
+impl crate::runtime::env::NetState {
+	/// Create the host's login session idempotently (201 created / 409 already alive).
+	fn ensure_login_session(&self, sid: &str) -> bool {
+		let Some(api) = self.trawl_api() else {
+			return false;
+		};
+		let Ok(client) = reqwest::blocking::Client::builder().use_rustls_tls().build() else {
+			return false;
+		};
+		crate::browser::trawl::ensure_session(api, sid, &client)
+	}
+
+	/// Run a request inside a trawl browser session: warm-up GETs and the POST login share
+	/// one session so the site's cookies accumulate in the browser context; the returned
+	/// cookies are mirrored into our jar for later non-browser requests. The response body
+	/// and status are written back onto the request like any other hop.
+	fn session_scrape(
+		&mut self,
+		url: &Url,
+		request: &mut NetRequest,
+		sid: &str,
+		timeout: Duration,
+		body_max: u64,
+	) -> std::result::Result<(), SendFailure> {
+		let Some(api) = self.trawl_api().map(str::to_string) else {
+			return Err(SendFailure::Request);
+		};
+		let method = match request.method {
+			HttpMethod::Get => "GET",
+			HttpMethod::Post => "POST",
+			HttpMethod::Put => "PUT",
+			HttpMethod::Head => "HEAD",
+			HttpMethod::Delete => "DELETE",
+			HttpMethod::Patch => "PATCH",
+			HttpMethod::Options => "OPTIONS",
+			HttpMethod::Connect => "CONNECT",
+			HttpMethod::Trace => "TRACE",
+		};
+		let headers: Vec<(String, String)> = request
+			.headers
+			.iter()
+			.map(|(name, value)| {
+				(
+					name.as_str().to_string(),
+					value.to_str().map(str::to_string).unwrap_or_default(),
+				)
+			})
+			.collect();
+		let outcome = crate::browser::trawl::session_request(
+			&api,
+			sid,
+			method,
+			url.as_str(),
+			&headers,
+			request.body.as_deref(),
+			timeout,
+		)
+		.ok_or(SendFailure::Request)?;
+		let status = reqwest::StatusCode::from_u16(outcome.status)
+			.unwrap_or(reqwest::StatusCode::BAD_GATEWAY);
+		// Mirror the session's site cookies into the jar (login state): later
+		// non-browser requests carry them without a browser. cf_clearance is deliberately
+		// excluded — it is bound to the session browser's own fingerprint, so on any
+		// non-solver request (MITM fast-path sends our UA, not the browser's) it is
+		// refused by CF, and two same-named clearances confuse the WAF. Clearance is
+		// managed exclusively by the solve path (splice_clearance replaces it).
+		for cookie in outcome.cookies {
+			if cookie.domain.is_empty()
+				|| cookie.name.is_empty()
+				|| cookie.name == crate::traits::CF_CLEARANCE_COOKIE
+			{
+				continue;
+			}
+			let domain = cookie.domain.trim_start_matches('.').to_string();
+			self.jar.insert(&domain, &cookie.name, &cookie.value);
+		}
+		if outcome.body.len() as u64 > body_max {
+			return Err(SendFailure::BodyTooLarge);
+		}
+		request.response = Some(NetResponse {
+			url: url.clone(),
+			status,
+			headers: HeaderMap::new(),
+			data: outcome.body,
+		});
+		Ok(())
 	}
 }
 
@@ -944,6 +1055,102 @@ mod tests {
 		request.response.expect("response stored")
 	}
 
+	/// Login-session trawl mock: /sessions creates (201), /scrape returns a login page
+	/// plus a site cookie and the session browser's own cf_clearance, and every request
+	/// head is recorded
+	fn login_trawl_server() -> MockServer {
+		mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					r#"{"cookies":[{"name":"PHPSESSID","value":"sess1","domain":".127.0.0.1","path":"/"},{"name":"cf_clearance","value":"solver-bound","domain":".127.0.0.1","path":"/"}],"html":"登录成功"}"#,
+				)
+			}
+		})
+	}
+
+	#[test]
+	fn login_flow_escalates_to_session_on_challenge_and_rides_it() {
+		let origin = mock_server(|_| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let trawl = login_trawl_server();
+		let policy = Arc::new(EscalationPolicy {
+			trawl: None,
+			solver: None,
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		net.set_trawl(&format!("http://{}", trawl.addr));
+		net.set_login_in_progress(true);
+		let url = Url::parse(&format!("http://{}/login.php", origin.addr)).unwrap();
+
+		// First login request: direct hits the challenge → escalate to the login session
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(response.data, "登录成功".as_bytes());
+		let heads = trawl.heads();
+		assert_eq!(heads.len(), 2, "升会话：先幂等建会话，再 /scrape");
+		assert!(heads[0].starts_with("POST /sessions"), "create first: {}", heads[0]);
+		assert!(heads[1].starts_with("POST /scrape"), "scrape second: {}", heads[1]);
+		// The session's site cookies flow back into the jar for later non-browser
+		// requests; its cf_clearance must not (UA-bound to the session browser, it only
+		// confuses CF on our own requests)
+		let cookie = net.jar.header_for(&url).expect("jar header");
+		assert!(cookie.contains("PHPSESSID=sess1"), "jar: {cookie}");
+		assert!(!cookie.contains("cf_clearance"), "jar must not mirror session clearance: {cookie}");
+		// Only requests inside basic_login() escalate; outside it the session is ignored
+		net.set_login_in_progress(false);
+
+		// Next login request rides the established session without re-creating it
+		net.set_login_in_progress(true);
+		let second = get(&mut net, &url);
+		assert_eq!(second.data, "登录成功".as_bytes());
+		let heads = trawl.heads();
+		assert_eq!(heads.len(), 3, "已升会话后不再建会话");
+		assert!(heads[2].starts_with("POST /scrape"), "third: {}", heads[2]);
+	}
+
+	#[test]
+	fn login_flow_without_challenge_stays_direct() {
+		let origin = mock_server(|_| respond("200 OK", &[], "plain-login-page"));
+		let trawl = login_trawl_server();
+		let policy = Arc::new(EscalationPolicy {
+			trawl: None,
+			solver: None,
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		net.set_trawl(&format!("http://{}", trawl.addr));
+		net.set_login_in_progress(true);
+		let url = Url::parse(&format!("http://{}/login.php", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.data, b"plain-login-page");
+		assert_eq!(trawl.hits(), 0, "无 CF 挑战的登录源零浏览器开销");
+	}
+
+	#[test]
+	fn login_session_id_is_isolated_from_solve_sessions() {
+		assert_eq!(crate::browser::trawl::login_session_id("www.wenku8.net"), "sumidoku-login-www_wenku8_net");
+		assert_ne!(
+			crate::browser::trawl::login_session_id("www.wenku8.net"),
+			"sumidoku-net-www_wenku8_net",
+			"login and solve sessions must not share state"
+		);
+	}
+
 	#[test]
 	fn cf_challenge_escalates_via_trawl_and_reuses_clearance() {
 		let origin = mock_server(|head| {
@@ -993,14 +1200,24 @@ mod tests {
 	const SOLVER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
 
 	fn solver_server() -> MockServer {
-		mock_server(|_head| {
-			respond(
-				"200 OK",
-				&["content-type: application/json"],
-				&format!(
-					r#"{{"cookies":[{{"name":"cf_clearance","value":"ok"}}],"userAgent":"{SOLVER_UA}"}}"#
-				),
-			)
+		mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				// solve_clearance creates the host session before scraping (201 created /
+				// 409 already alive); any other status makes the solve fail
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					&format!(
+						r#"{{"cookies":[{{"name":"cf_clearance","value":"ok"}}],"userAgent":"{SOLVER_UA}"}}"#
+					),
+				)
+			}
 		})
 	}
 
@@ -1049,7 +1266,7 @@ mod tests {
 		assert_eq!(response.status, StatusCode::OK);
 		assert_eq!(response.data, b"direct-with-clearance");
 		assert_eq!(origin.hits(), 2, "挑战一次，解题后直连重放");
-		assert_eq!(solver.hits(), 1, "解题一次");
+		assert_eq!(solver.hits(), 2, "解题一次：先幂等建会话，再 /scrape 解题");
 		assert_eq!(trawl.hits(), 0, "解题成功就不该惊动 trawl 代理");
 		assert_replay_head(&origin.heads()[1], "ok");
 	}
@@ -1087,14 +1304,22 @@ mod tests {
 				)
 			}
 		});
-		let solver = mock_server(|_head| {
-			respond(
-				"200 OK",
-				&["content-type: application/json"],
-				&format!(
-					r#"{{"cookies":[{{"name":"cf_clearance","value":"fresh"}}],"userAgent":"{SOLVER_UA}"}}"#
-				),
-			)
+		let solver = mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					&format!(
+						r#"{{"cookies":[{{"name":"cf_clearance","value":"fresh"}}],"userAgent":"{SOLVER_UA}"}}"#
+					),
+				)
+			}
 		});
 		let policy = Arc::new(EscalationPolicy {
 			solver: Some(format!("http://{}", solver.addr)),
@@ -1113,7 +1338,7 @@ mod tests {
 
 		let response = get(&mut net, &url);
 		assert_eq!(response.status, StatusCode::OK);
-		assert_eq!(solver.hits(), 1, "被拒的旧 clearance 触发重解");
+		assert_eq!(solver.hits(), 2, "被拒的旧 clearance 触发重解：先幂等建会话，再 /scrape 解题");
 		assert!(origin.heads()[0].contains("cf_clearance=old"), "先用旧值: {}", origin.heads()[0]);
 		assert_replay_head(&origin.heads()[1], "fresh");
 		assert_eq!(

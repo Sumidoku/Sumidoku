@@ -4,6 +4,7 @@ use crate::runtime::store::{DefaultValue, GlobalStore};
 use crate::traits::{DefaultsSink, HostLogger, NetPolicy, NetRoute};
 use crate::{Error, Result};
 use reqwest::blocking::Client;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -171,6 +172,15 @@ pub struct NetState {
 	/// Accept-Language added when the source does not send one (derived from the source languages, see default_accept_language)
 	pub accept_language: String,
 	ca: Option<Vec<u8>>,
+	/// trawl API base (net.browser_trawl): enables the login-session path and the
+	/// clearance solver. None for sources without trawl configured
+	trawl_api: Option<String>,
+	/// Set while the source's basic_login() runs: the sequence's requests (warm-up GETs
+	/// then the POST) are the only ones eligible for the trawl login session
+	login_in_progress: Cell<bool>,
+	/// host → trawl session id, established when a login request hits a CF challenge and
+	/// escalates to the browser session; the rest of the sequence rides it
+	login_sessions: RefCell<HashMap<String, String>>,
 }
 
 impl NetState {
@@ -183,7 +193,37 @@ impl NetState {
 			rate: RateLimiter::default(),
 			accept_language: crate::traits::DEFAULT_ACCEPT_LANGUAGE.to_string(),
 			ca,
+			trawl_api: None,
+			login_in_progress: Cell::new(false),
+			login_sessions: RefCell::new(HashMap::new()),
 		}
+	}
+
+	/// Attach the trawl API base so login sequences and clearance solves can use sessions.
+	pub fn set_trawl(&mut self, api: &str) {
+		self.trawl_api = Some(api.to_string());
+	}
+
+	pub fn trawl_api(&self) -> Option<&str> {
+		self.trawl_api.as_deref()
+	}
+
+	/// Marks whether the source is currently inside basic_login(): requests issued while
+	/// set may escalate to a trawl browser session on a CF challenge
+	pub fn set_login_in_progress(&self, in_progress: bool) {
+		self.login_in_progress.set(in_progress);
+	}
+
+	pub fn login_in_progress(&self) -> bool {
+		self.login_in_progress.get()
+	}
+
+	pub fn login_session(&self, host: &str) -> Option<String> {
+		self.login_sessions.borrow().get(host).cloned()
+	}
+
+	pub fn set_login_session(&self, host: String, session: String) {
+		self.login_sessions.borrow_mut().insert(host, session);
 	}
 
 	pub fn client_for(&mut self, route: &NetRoute) -> Result<&Client> {

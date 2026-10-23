@@ -1051,12 +1051,22 @@ mod tests {
 				)
 			}
 		});
-		let solver = mock_server(|_head| {
-			respond(
-				"200 OK",
-				&["content-type: application/json"],
-				r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
-			)
+		let solver = mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				// solve_clearance creates the host session before scraping (201 created /
+				// 409 already alive); any other status makes the solve fail
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
+				)
+			}
 		});
 		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
 		let policy = policy(|c| {
@@ -1070,7 +1080,7 @@ mod tests {
 		assert_eq!(response.status(), StatusCode::OK);
 		assert_eq!(response.text().await.expect("body"), "img");
 		assert_eq!(origin.hits(), 2, "挑战一次，解题后直连重放");
-		assert_eq!(solver.hits(), 1, "解题一次");
+		assert_eq!(solver.hits(), 2, "解题一次：先幂等建会话，再 /scrape 解题");
 		assert_eq!(trawl.hits(), 0, "解题成功就不该落到 trawl 代理");
 		let head = origin.heads()[1].to_ascii_lowercase();
 		assert!(head.contains("user-agent: camoufox/152"), "UA: {head}");
@@ -1086,7 +1096,7 @@ mod tests {
 		let second = clients.get(&url).await.expect("second get");
 		assert_eq!(second.status(), StatusCode::OK);
 		assert_eq!(origin.hits(), 3, "缓存命中，不再撞挑战");
-		assert_eq!(solver.hits(), 1, "不重复解题");
+		assert_eq!(solver.hits(), 2, "缓存命中，不重复解题");
 	}
 
 	#[tokio::test]
@@ -1098,7 +1108,17 @@ mod tests {
 				"challenged",
 			)
 		});
-		let solver = mock_server(|_head| respond("500 Internal Server Error", &[], "busy"));
+		let solver = mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond("500 Internal Server Error", &[], "busy")
+			}
+		});
 		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
 		let policy = policy(|c| {
 			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
@@ -1109,7 +1129,7 @@ mod tests {
 
 		let response = clients.get(&url).await.expect("get");
 		assert_eq!(response.text().await.expect("body"), "solved-via-trawl");
-		assert_eq!(solver.hits(), 1, "先试解题");
+		assert_eq!(solver.hits(), 2, "先建会话再解题：会话创建成功、解题 500");
 		assert_eq!(trawl.hits(), 1, "解题失败落到 trawl 代理");
 	}
 
