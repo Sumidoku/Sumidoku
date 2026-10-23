@@ -244,7 +244,7 @@ impl Package {
 		let mut pages_with_images: Vec<Vec<String>> = vec![];
 		for itemref in &self.spine.itemrefs {
 			let Some(item) = self.manifest_item(&itemref.idref) else {
-				continue;
+				return vec![];
 			};
 			let page_path = normalize_href(&self.opf_dir, &item.href);
 			if item.media_type.to_ascii_lowercase().starts_with("image") {
@@ -395,6 +395,8 @@ fn percent_decode(href: &str) -> String {
 }
 
 fn join_zip_path(base: &str, href: &str) -> String {
+	let base = base.replace('\\', "/");
+	let href = href.replace('\\', "/");
 	let mut segments: Vec<&str> = if href.starts_with('/') {
 		vec![]
 	} else {
@@ -895,6 +897,7 @@ mod tests {
 	fn dot_segments_and_percent_decoding() {
 		assert_eq!(join_zip_path("OEBPS", "./images/a.png"), "OEBPS/images/a.png");
 		assert_eq!(join_zip_path("OEBPS/x", "../images/a.png"), "OEBPS/images/a.png");
+		assert_eq!(join_zip_path("OEBPS\\text", "..\\images\\a.png"), "OEBPS/images/a.png");
 		assert_eq!(join_zip_path("OEBPS", "/images/a.png"), "images/a.png");
 		assert_eq!(join_zip_path("", "images/a.png"), "images/a.png");
 		assert_eq!(resolve_relative("OEBPS/text/page.xhtml", "../images/a.png"), "OEBPS/images/a.png");

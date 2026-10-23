@@ -100,6 +100,7 @@ mod tests {
 			(18, "A00A6D869B8A591DCF5BDFC20B7909C8F892305FA8967C462954974A132C2D69E1D355E8B61ED670CEEF4E0F40701AEC"),
 			(19, "E7FBBD708D51ABE490FC7258E694CE7F479548E5ED0E9544563CF7A990F1F7C8F30B4C28A565AD66F58F607AD88CE8B5"),
 			(20, "D07AFDEDADF92B2245A9C534B3A1F850C33C19BF5402EE4488559DCF6A671C4476501D3645EF3B7C6586714D5631E278"),
+			(21, "4948B2920F5805B91B5BA635C67C55BCA2EE7F6B67E6F9C99C9062A8D5C142185BDD8942FBDBF3678F65631DEB98C7EB"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -324,6 +325,102 @@ mod tests {
 			}
 			pool.close().await;
 		}
+	}
+
+	#[tokio::test]
+	async fn migration_21_invalidates_only_local_epub_page_cache() {
+		use sqlx::migrate::Migrate;
+		use std::str::FromStr;
+
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+		let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+			.expect("database url")
+			.create_if_missing(true)
+			.foreign_keys(true);
+		let pool = sqlx::sqlite::SqlitePoolOptions::new()
+			.max_connections(1)
+			.connect_with(options)
+			.await
+			.expect("connect pre-migration database");
+		let migrator = sqlx::migrate!("./migrations");
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.ensure_migrations_table().await.expect("migration table");
+		for migration in migrator.iter().filter(|migration| migration.version < 21) {
+			conn.apply(migration).await.expect("apply pre-0021 migration");
+		}
+		drop(conn);
+
+		let source_id: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+			.fetch_one(&pool)
+			.await
+			.expect("local source");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'Book', 'Book') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert manga");
+		let epub_id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key, page_count) VALUES (?, 'ch 1.epub', 2) RETURNING id")
+			.bind(manga_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert EPUB chapter");
+		let cbz_id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key, page_count) VALUES (?, 'ch 2.cbz', 1) RETURNING id")
+			.bind(manga_id)
+			.fetch_one(&pool)
+			.await
+			.expect("insert CBZ chapter");
+		for (chapter_id, idx) in [(epub_id, 0), (epub_id, 1), (cbz_id, 0)] {
+			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, '{}')")
+				.bind(chapter_id)
+				.bind(idx)
+				.execute(&pool)
+				.await
+				.expect("insert cached page");
+		}
+		sqlx::query("INSERT INTO chapter_user (chapter_id, user_id, last_page_read) VALUES (?, 1, 1)")
+			.bind(epub_id)
+			.execute(&pool)
+			.await
+			.expect("insert reading progress");
+
+		let mut conn = pool.acquire().await.expect("migration connection");
+		for migration in migrator.iter().filter(|migration| migration.version == 21) {
+			conn.apply(migration).await.expect("apply 0021 migration");
+		}
+		drop(conn);
+
+		let cached: i64 = sqlx::query_scalar("SELECT count(*) FROM page WHERE chapter_id = ?")
+			.bind(epub_id)
+			.fetch_one(&pool)
+			.await
+			.expect("EPUB cache count");
+		assert_eq!(cached, 0, "local EPUB page cache must be invalidated");
+		let page_count: i64 = sqlx::query_scalar("SELECT page_count FROM chapter WHERE id = ?")
+			.bind(epub_id)
+			.fetch_one(&pool)
+			.await
+			.expect("EPUB page count");
+		assert_eq!(page_count, 0);
+		let last_page_read: i64 = sqlx::query_scalar("SELECT last_page_read FROM chapter_user WHERE chapter_id = ? AND user_id = 1")
+			.bind(epub_id)
+			.fetch_one(&pool)
+			.await
+			.expect("reading progress");
+		assert_eq!(last_page_read, 1, "derived page invalidation must preserve reading progress");
+		let cbz_cached: i64 = sqlx::query_scalar("SELECT count(*) FROM page WHERE chapter_id = ?")
+			.bind(cbz_id)
+			.fetch_one(&pool)
+			.await
+			.expect("CBZ cache count");
+		assert_eq!(cbz_cached, 1, "non-EPUB cache must be preserved");
+		let cbz_page_count: i64 = sqlx::query_scalar("SELECT page_count FROM chapter WHERE id = ?")
+			.bind(cbz_id)
+			.fetch_one(&pool)
+			.await
+			.expect("CBZ page count");
+		assert_eq!(cbz_page_count, 1);
+		pool.close().await;
 	}
 
 	#[tokio::test]

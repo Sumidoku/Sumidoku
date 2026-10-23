@@ -1610,13 +1610,19 @@ async fn epub_non_divina_and_incomplete_books_have_no_pages() {
 			("OEBPS/images/unlisted.png", b"unlisted"),
 		],
 	);
+	let dangling = divina_opf(&[("page", "images/1.png", "image/png")], &["page", "missing"]);
+	write_epub(
+		&tmp.path().join("local/Cases/dangling.epub"),
+		Some(("OEBPS/content.opf", &dangling)),
+		&[("OEBPS/images/1.png", b"dangling")],
+	);
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	let t = TestApp { app, tmp, db_path };
 	let manga_id = register_local(&t.app, "Cases").await;
 
-	for key in ["prose.epub", "multi.epub", "missing.epub", "unlisted.epub"] {
+	for key in ["prose.epub", "multi.epub", "missing.epub", "unlisted.epub", "dangling.epub"] {
 		let chapter_id = chapter_id_of(&t.app, manga_id, key).await;
 		let entries = epub_page_entries(&t.app, chapter_id).await;
 		assert!(entries.is_empty(), "{key} must not be divina-compatible: {entries:?}");

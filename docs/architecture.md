@@ -304,7 +304,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   and zip entries must agree, body text must stay within 15 normalized
   UTF-16 units per page, and invalid or non-divina packages yield no
   pages. A page's mime is the OPF-declared media type with the extension
-  mapping as fallback.
+  mapping as fallback. Migration 0021 clears cached local EPUB page rows
+  and counts from older parsers while preserving reading progress; the
+  next open rebuilds them under these rules.
   `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
