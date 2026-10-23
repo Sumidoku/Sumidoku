@@ -3,6 +3,31 @@ use reqwest::header::HeaderMap;
 use reqwest::StatusCode;
 use url::Url;
 
+/// Cookie name carrying the Cloudflare clearance
+pub const CF_CLEARANCE_COOKIE: &str = "cf_clearance";
+
+/// The Chrome-only client hints in BROWSER_HEADERS. Firefox (the solver's browser) does
+/// not implement UA Client Hints at all, so a clearance replay under its UA drops these
+/// instead of faking values
+pub const CHROME_ONLY_HEADERS: &[&str] = &["sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform"];
+
+/// Firefox's navigation Accept: no signed-exchange, and it enumerates image/png and
+/// image/svg+xml. A clearance replay under a Firefox UA must not keep the Chrome
+/// document Accept from BROWSER_HEADERS
+pub const FIREFOX_DOCUMENT_ACCEPT: &str =
+	"text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/png,image/svg+xml,*/*;q=0.8";
+
+/// A Cloudflare clearance solved by the browser sidecar, replayed on direct requests.
+/// CF binds the cookie to the solving browser's user agent (and IP), so the pair is
+/// cached and applied together — replaying the cookie under a different UA just
+/// re-challenges (aidoku-cf-relay's with_clearance makes the same pairing)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClearanceReplay {
+	pub user_agent: String,
+	/// Bare cf_clearance cookie value; empty when the solve met no challenge
+	pub clearance: String,
+}
+
 /// CF challenge fingerprint: 403/503 + CF-family response headers. cf-ray/server ride on
 /// every CF response and do not distinguish a challenge from a hard block — the cost of a
 /// wrong escalation is just trawl relaying the 403 once more
@@ -100,6 +125,22 @@ pub trait NetPolicy: Send + Sync {
 	fn trawl_escalation(&self, url: &Url) -> Option<NetRoute> {
 		let _ = url;
 		None
+	}
+	/// A solved clearance cached for this host, replayed on direct requests so the trawl
+	/// proxy is only needed while solving, not for every page
+	fn clearance_replay(&self, host: &str) -> Option<ClearanceReplay> {
+		let _ = host;
+		None
+	}
+	/// Solve a fresh clearance for `url`'s host (a blocking call to the solver API) and
+	/// cache it; None when no solver is configured or the solve failed
+	fn solve_clearance(&self, url: &Url) -> Option<ClearanceReplay> {
+		let _ = url;
+		None
+	}
+	/// A cached clearance the site just refused: drop it so the next challenge re-solves
+	fn clear_clearance(&self, host: &str) {
+		let _ = host;
 	}
 }
 

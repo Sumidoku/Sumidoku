@@ -1,5 +1,5 @@
 use crate::config::Config;
-use aidoku_wasm::{NetPolicy, NetRoute};
+use aidoku_wasm::{ClearanceReplay, NetPolicy, NetRoute};
 use reqwest::{Client, StatusCode, Url};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -8,22 +8,28 @@ use std::time::Duration;
 const MAX_ATTEMPTS: u32 = 3;
 
 /// NetPolicy implementation: direct > relay(TRAWL) > challenged host(TRAWL) > global proxy > direct.
-/// A direct hit on a CF challenge (403/503 + CF headers) escalates through trawl_escalation and marks the host
-/// "challenged" — from then on it always goes via trawl: clearance is bound to the solving browser's UA, replaying
-/// it over a direct connection is rejected by CF, so trawl itself must hold both clearance and UA (its Tier 1
-/// replays over plain HTTP without launching a browser). The engine (source net imports) and server-side direct
-/// fetches (covers/page images/downloads) share this one routing.
+/// A direct hit on a CF challenge is first answered by a clearance solve through the trawl scrape
+/// API (net.browser_trawl): the answer's cf_clearance and the solving browser's user agent are
+/// cached per host and replayed on plain direct requests — CF binds the cookie to that UA, so the
+/// pair must travel together (aidoku-cf-relay's with_clearance does the same). Only when no solver
+/// is configured or the solve fails does the host fall back to the trawl MITM proxy and stay
+/// marked "challenged". The engine (source net imports) and server-side direct fetches
+/// (covers/page images/downloads) share this one routing.
 pub struct SumidokuNetPolicy {
 	user_agent: String,
 	direct_domains: Vec<String>,
 	relay_domains: Vec<String>,
 	trawl_proxy: Option<String>,
+	/// trawl session/scrape API address (http://…), from net.browser_trawl; also the clearance solver
+	trawl_api: Option<String>,
 	global_proxy: Option<String>,
 	allow_direct_fallback: bool,
 	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
 	/// Hosts that hit a CF challenge and now permanently go via trawl (in-process memory; the first request after a restart relearns)
 	challenged: RwLock<HashSet<String>>,
+	/// Solved clearances by host, replayed direct; a refused one is dropped and re-solved
+	clearances: RwLock<HashMap<String, ClearanceReplay>>,
 }
 
 impl SumidokuNetPolicy {
@@ -44,11 +50,13 @@ impl SumidokuNetPolicy {
 			direct_domains: config.net.direct_domains.clone(),
 			relay_domains: config.net.relay_domains.clone(),
 			trawl_proxy: config.net.trawl_proxy.clone(),
+			trawl_api: config.net.browser_trawl.clone(),
 			global_proxy: config.net.proxy.clone(),
 			allow_direct_fallback: config.net.allow_direct_fallback,
 			browser_headers: config.net.browser_headers,
 			ca_pem,
 			challenged: RwLock::new(HashSet::new()),
+			clearances: RwLock::new(HashMap::new()),
 		})
 	}
 
@@ -89,7 +97,8 @@ impl NetPolicy for SumidokuNetPolicy {
 			return NetRoute::Direct;
 		}
 		if let Some(proxy) = &self.trawl_proxy
-			&& (Self::domain_match(&self.relay_domains, host) || self.is_challenged(host))
+			&& (Self::domain_match(&self.relay_domains, host)
+				|| (self.is_challenged(host) && self.clearance_replay(host).is_none()))
 		{
 			return NetRoute::Proxy(proxy.clone());
 		}
@@ -120,6 +129,37 @@ impl NetPolicy for SumidokuNetPolicy {
 		let proxy = self.trawl_proxy.clone()?;
 		self.mark_challenged(host);
 		Some(NetRoute::Proxy(proxy))
+	}
+
+	fn clearance_replay(&self, host: &str) -> Option<ClearanceReplay> {
+		self.clearances
+			.read()
+			.expect("clearances lock")
+			.get(host)
+			.cloned()
+	}
+
+	fn solve_clearance(&self, url: &Url) -> Option<ClearanceReplay> {
+		let host = url.host_str().unwrap_or_default();
+		// direct_domains is an explicit "never touch" pin; solving yields to it too
+		if host.is_empty() || Self::domain_match(&self.direct_domains, host) {
+			return None;
+		}
+		let api = self.trawl_api.as_ref()?;
+		let replay = aidoku_wasm::browser::trawl::solve_clearance(api, host)?;
+		tracing::info!(host, "cloudflare clearance solved, replaying direct");
+		self.clearances
+			.write()
+			.expect("clearances lock")
+			.insert(host.to_string(), replay.clone());
+		Some(replay)
+	}
+
+	fn clear_clearance(&self, host: &str) {
+		self.clearances
+			.write()
+			.expect("clearances lock")
+			.remove(host);
 	}
 }
 
@@ -201,12 +241,14 @@ impl RoutedClients {
 		accept_language: Option<&str>,
 	) -> Result<reqwest::RequestBuilder, FetchError> {
 		let client = self.client_for(url)?;
+		let replay = self.policy.clearance_replay(url.host_str().unwrap_or_default());
 		Ok(apply_default_headers(
 			client.request(method, url.clone()),
 			headers,
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
 			self.policy.browser_headers(url),
+			replay.as_ref(),
 		))
 	}
 
@@ -224,6 +266,7 @@ impl RoutedClients {
 	) -> Result<reqwest::Response, FetchError> {
 		let via_proxy = matches!(self.policy.route_for(url), NetRoute::Proxy(_));
 		let mut attempt = 0;
+		let mut solved = false;
 		loop {
 			attempt += 1;
 			let result = self
@@ -241,13 +284,35 @@ impl RoutedClients {
 				}
 			};
 			let status = response.status();
-			// CF escalation comes before backoff: a 503 challenge page must not burn the direct path's retry budget
-			if !via_proxy
-				&& aidoku_wasm::is_cf_challenge(status, response.headers())
-				&& let Some(route) = self.policy.trawl_escalation(url)
-			{
-				tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
-				return self.get_via(&route, url, accept_language).await;
+			if !via_proxy && aidoku_wasm::is_cf_challenge(status, response.headers()) {
+				// A cached clearance that still meets a challenge is stale: drop and re-solve
+				// once, replaying direct; the trawl proxy is the fallback when solving fails.
+				// Solving is blocking HTTP, so it runs off the runtime threads
+				if self
+					.policy
+					.clearance_replay(url.host_str().unwrap_or_default())
+					.is_some()
+				{
+					self.policy.clear_clearance(url.host_str().unwrap_or_default());
+				}
+				if !solved {
+					solved = true;
+					let policy = self.policy.clone();
+					let solve_url = url.clone();
+					let fresh = tokio::task::spawn_blocking(move || {
+						policy.solve_clearance(&solve_url)
+					})
+					.await
+					.ok()
+					.flatten();
+					if fresh.is_some() {
+						continue;
+					}
+				}
+				if let Some(route) = self.policy.trawl_escalation(url) {
+					tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
+					return self.get_via(&route, url, accept_language).await;
+				}
 			}
 			let retry_after = response
 				.headers()
@@ -286,6 +351,7 @@ impl RoutedClients {
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
 			self.policy.browser_headers(url),
+			None,
 		)
 		.send()
 		.await
@@ -310,6 +376,7 @@ impl RoutedClients {
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
 			self.policy.browser_headers(url),
+			None,
 		)
 		.send()
 		.await
@@ -329,33 +396,73 @@ fn base_builder() -> reqwest::ClientBuilder {
 /// Assembles the default headers: the source's same-named headers win, and only the missing ones get the
 /// global User-Agent, the browser header suite, and the host-side Accept-Language.
 /// The key is "check first, fill after" — reqwest's header() appends, so inserting a default first would pair it with the source value as two same-named headers.
+/// With a clearance replay the solver browser's UA wins outright (the cookie is bound to it), the
+/// Chrome-only suite headers are dropped and Accept becomes Firefox's navigation value (real
+/// Firefox has no sec-ch-ua and no signed-exchange), and cf_clearance leads the Cookie header.
 fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
 	source_headers: &[(String, String)],
 	global_user_agent: String,
 	accept_language: Option<&str>,
 	browser_headers: bool,
+	replay: Option<&ClearanceReplay>,
 ) -> reqwest::RequestBuilder {
 	let has = |name: &str| {
 		source_headers
 			.iter()
 			.any(|(key, _)| key.eq_ignore_ascii_case(name))
 	};
-	let has_user_agent = has("user-agent");
 	let has_accept_language = has("accept-language");
 	let mut builder = builder;
-	if !has_user_agent {
-		builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+	match replay {
+		Some(replay) => {
+			builder = builder.header(reqwest::header::USER_AGENT, replay.user_agent.clone());
+		}
+		None if !has("user-agent") => {
+			builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+		}
+		None => {}
 	}
 	if browser_headers {
 		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			if replay.is_some() && aidoku_wasm::CHROME_ONLY_HEADERS.contains(&name) {
+				continue;
+			}
+			let value = if replay.is_some() && name == "accept" {
+				aidoku_wasm::FIREFOX_DOCUMENT_ACCEPT
+			} else {
+				value
+			};
 			if !has(name) {
 				builder = builder.header(name, value);
 			}
 		}
 	}
+	let replay_clearance = replay
+		.filter(|r| !r.clearance.is_empty())
+		.map(|r| r.clearance.clone());
 	for (name, value) in source_headers {
+		if replay_clearance.is_some() && name.eq_ignore_ascii_case("cookie") {
+			continue;
+		}
 		builder = builder.header(name, value);
+	}
+	if let Some(clearance) = replay_clearance {
+		let existing = source_headers
+			.iter()
+			.find(|(key, _)| key.eq_ignore_ascii_case("cookie"))
+			.map(|(_, value)| value.as_str())
+			.unwrap_or_default();
+		let mut merged = format!("{}={clearance}", aidoku_wasm::CF_CLEARANCE_COOKIE);
+		for part in existing
+			.split(';')
+			.map(str::trim)
+			.filter(|part| !part.is_empty() && !part.starts_with("cf_clearance="))
+		{
+			merged.push_str("; ");
+			merged.push_str(part);
+		}
+		builder = builder.header(reqwest::header::COOKIE, merged);
 	}
 	if !has_accept_language
 		&& let Some(value) = accept_language.filter(|value| !value.is_empty())
@@ -814,6 +921,111 @@ mod tests {
 		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
 		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
 		assert_eq!(trawl.hits(), 2);
+	}
+
+	#[test]
+	fn solved_clearance_unsticks_the_proxy_route() {
+		let p = policy(|c| {
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		p.trawl_escalation(&url);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into())
+		);
+		p.clearances
+			.write()
+			.expect("clearances lock")
+			.insert(
+				"cf.example.com".into(),
+				ClearanceReplay {
+					user_agent: "ua".into(),
+					clearance: "ok".into(),
+				},
+			);
+		assert_eq!(p.route_for(&url), NetRoute::Direct, "已解题的 host 回直连");
+		p.clear_clearance("cf.example.com");
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into()),
+			"clearance 被丢弃后回到代理"
+		);
+	}
+
+	#[tokio::test]
+	async fn get_solves_clearance_and_replays_direct() {
+		let origin = mock_server(|head| {
+			if head.contains("cf_clearance=ok") {
+				respond("200 OK", &["content-type: image/jpeg"], "img")
+			} else {
+				respond(
+					"403 Forbidden",
+					&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+					"challenged",
+				)
+			}
+		});
+		let solver = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
+			)
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients.get(&url).await.expect("get");
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.text().await.expect("body"), "img");
+		assert_eq!(origin.hits(), 2, "挑战一次，解题后直连重放");
+		assert_eq!(solver.hits(), 1, "解题一次");
+		assert_eq!(trawl.hits(), 0, "解题成功就不该落到 trawl 代理");
+		let head = origin.heads()[1].to_ascii_lowercase();
+		assert!(head.contains("user-agent: camoufox/152"), "UA: {head}");
+		assert!(!head.contains("sec-ch-ua:"), "Firefox 不发 sec-ch-ua: {head}");
+		assert!(!head.contains("signed-exchange"), "Firefox 不发 signed-exchange: {head}");
+		assert!(
+			head.contains(&format!("accept: {}", aidoku_wasm::FIREFOX_DOCUMENT_ACCEPT)),
+			"Firefox Accept: {head}"
+		);
+		assert!(head.contains("cookie: cf_clearance=ok"), "cookie: {head}");
+
+		// The clearance is cached: the next request goes straight direct with the replay
+		let second = clients.get(&url).await.expect("second get");
+		assert_eq!(second.status(), StatusCode::OK);
+		assert_eq!(origin.hits(), 3, "缓存命中，不再撞挑战");
+		assert_eq!(solver.hits(), 1, "不重复解题");
+	}
+
+	#[tokio::test]
+	async fn failed_solve_falls_back_to_trawl_proxy() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let solver = mock_server(|_head| respond("500 Internal Server Error", &[], "busy"));
+		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients.get(&url).await.expect("get");
+		assert_eq!(response.text().await.expect("body"), "solved-via-trawl");
+		assert_eq!(solver.hits(), 1, "先试解题");
+		assert_eq!(trawl.hits(), 1, "解题失败落到 trawl 代理");
 	}
 
 	/// Live smoke test: hits real sites, not part of the fixed suite (run manually with nextest --run-ignored all).

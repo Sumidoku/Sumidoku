@@ -6,6 +6,36 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Mojibake can enter as valid UTF-8 when a middlebox answers with the
+browser's serialized DOM instead of the wire bytes — capture the upstream
+response before blaming the decoder.** trawl's MITM proxy is byte-faithful on
+its direct tier, but its browser tiers answer HTML requests with
+`page.content()`: the headless browser decodes the original bytes by HTML5
+rules, so a `text/html` fragment with no charset declaration (18mh's
+`/manga/get` chapter list) is read as windows-1252 and every CJK title
+becomes `ç¬¬1è©±`-style mojibake, then re-encoded as clean UTF-8 that no
+host-side `decode_body` heuristic can flag. Full pages survive because their
+`<meta charset>` decodes correctly in the browser, so the signature is
+"only fragment-sourced fields garble" (chapter titles garbled, manga title
+fine, chapter numbers lost because the `第` prefix never survives). The
+decoder was exonerated by fetching the real response with the site's own
+`cf_clearance` + matching UA and finding zero invalid UTF-8 bytes; the
+garble was introduced by the proxy tier in between. The durable fix belongs
+upstream (browser tier should return the navigation body bytes or honor the
+original charset); Sumidoku's own mitigation is to stop feeding hosts to the
+proxy: a challenged host is now solved once through the trawl scrape API and
+the (cf_clearance, solver-UA) pair is replayed direct — byte-faithful and at
+direct-request speed, with the proxy kept only as the solve-failure fallback.
+- Evidence: 2026-10-23, zh.18mh chapter titles on docker 1.2.0 with trawl
+  configured: live `/manga/get?mid=5994&mode=all` verified valid UTF-8 with
+  `Content-Type: text/html` (no charset); trawl `browserCapture.ts` returns
+  `page.content()` and `server.ts:serveViaScrape` documents browser tiers as
+  "the rendered solved DOM"; the host stuck on trawl per
+  `routed.rs:challenged_host_sticks_to_trawl`; trawl's own `/v1` endpoint
+  returned `data-ct="ç¬¬1è©±"` for wire bytes carrying `第1話`. A speculative
+  decode-side fix (sparse-UTF-8 outranking single-byte labels) was validated
+  and then reverted once the real mechanism was found upstream of the decoder.
+
 **Full-object settings writes need presence and ownership rules.** A required
 nullable field must distinguish a missing field (reject) from an explicit null
 (clear). A server-managed field must not be written from a cached full-object
@@ -623,6 +653,15 @@ consumed before trusting a "transparent" handoff.
 - Evidence: 2026-10-19, bakamh's managed challenge worked through
   aidoku-cf-relay and Suwayomi but not Sumidoku; `routed.rs:trawl_escalation`
   now marks the host and `route_for` keeps it on trawl.
+- Superseded: 2026-10-23, the proxy-sticky fix traded the UA mismatch for two
+  new failures — trawl's browser tiers answer HTML with the serialized DOM
+  (charset-less fragments arrive as windows-1252 mojibake, see the zh.18mh
+  entry below), and a browser runs per request. The pairing rule itself was
+  right; the conclusion "so trawl must hold the pair" was not. Sumidoku now
+  holds the pair itself: `solve_clearance` takes the solver's userAgent from
+  the scrape answer together with cf_clearance and replays both over direct
+  connections (relay.py's shape), with the proxy kept as the solve-failure
+  fallback.
 
 **A change event's `currentTarget` is dead by the time a deferred state
 updater runs — read the value eagerly.** React nulls `currentTarget` when

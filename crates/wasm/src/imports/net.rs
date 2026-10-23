@@ -8,7 +8,7 @@ use crate::{
 use image::ImageReader;
 use reqwest::{
 	StatusCode,
-	header::{ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
+	header::{ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName, HeaderValue, SET_COOKIE, USER_AGENT},
 };
 use crate::traits::CookieSink;
 use std::{collections::HashMap, io::{Cursor, Read}, str::FromStr, sync::Arc, time::Duration};
@@ -238,7 +238,15 @@ pub(crate) fn perform(
 
 	// Request headers are assembled only once: retries and the CF escalation resend the
 	// same set; doing it inside the loop would splice jar cookies into Cookie again and again
-	if !request.headers.contains_key(USER_AGENT) {
+	let host = url.host_str().unwrap_or_default().to_string();
+	let mut replay = net.policy.clearance_replay(&host);
+	if let Some(replay) = &replay {
+		// The clearance is bound to the solving browser's UA, which wins outright here —
+		// replaying under any other UA just re-challenges
+		if let Ok(value) = HeaderValue::from_str(&replay.user_agent) {
+			request.headers.insert(USER_AGENT, value);
+		}
+	} else if !request.headers.contains_key(USER_AGENT) {
 		let ua = net
 			.policy
 			.user_agent()
@@ -259,6 +267,16 @@ pub(crate) fn perform(
 	let mut injected_suite: Vec<HeaderName> = Vec::new();
 	if net.policy.browser_headers(&url) {
 		for &(name, value) in crate::traits::BROWSER_HEADERS {
+			// A clearance replay speaks as the solver's Firefox: no sec-ch-ua (Firefox has
+			// no UA client hints) and Firefox's navigation Accept (no signed-exchange)
+			if replay.is_some() && crate::traits::CHROME_ONLY_HEADERS.contains(&name) {
+				continue;
+			}
+			let value = if replay.is_some() && name == "accept" {
+				crate::traits::FIREFOX_DOCUMENT_ACCEPT
+			} else {
+				value
+			};
 			if !request.headers.contains_key(name) {
 				let name = HeaderName::from_static(name);
 				request.headers.insert(name.clone(), HeaderValue::from_static(value));
@@ -276,10 +294,14 @@ pub(crate) fn perform(
 			request.headers.insert(COOKIE, value);
 		}
 	}
+	if let Some(replay) = &replay {
+		splice_clearance(&mut request.headers, &replay.clearance);
+	}
 
 	let mut attempt = 0;
 	let mut escalated = false;
 	let mut suite_stripped = false;
+	let mut solved = false;
 	loop {
 		attempt += 1;
 		let client = net.clients.get(&route).expect("client built above");
@@ -295,19 +317,34 @@ pub(crate) fn perform(
 			return Err(SendFailure::Request);
 		};
 		let status = response.status();
-		// CF escalation comes before backoff: a 503 challenge page must not burn the direct connection's backoff attempts for nothing
-		if !escalated
-			&& route == NetRoute::Direct
-			&& crate::traits::is_cf_challenge(status, response.headers())
-			&& let Some(trawl_route) = net.policy.trawl_escalation(&url)
-		{
-			if net.client_for(&trawl_route).is_err() {
-				return Err(SendFailure::Request);
+		if route == NetRoute::Direct && crate::traits::is_cf_challenge(status, response.headers()) {
+			// A cached clearance that still meets a challenge is stale: drop it before deciding
+			if replay.take().is_some() {
+				net.policy.clear_clearance(&host);
 			}
-			route = trawl_route;
-			escalated = true;
-			attempt = 0;
-			continue;
+			// Solve once per request and replay direct: the proxy returns browser-serialized
+			// DOM on its browser tiers, so it stays the fallback for when solving fails
+			if !solved {
+				solved = true;
+				if let Some(fresh) = net.policy.solve_clearance(&url) {
+					apply_clearance_replay(&mut request.headers, &fresh, &injected_suite);
+					replay = Some(fresh);
+					attempt = 0;
+					continue;
+				}
+			}
+			// CF escalation comes before backoff: a 503 challenge page must not burn the direct connection's backoff attempts for nothing
+			if !escalated
+				&& let Some(trawl_route) = net.policy.trawl_escalation(&url)
+			{
+				if net.client_for(&trawl_route).is_err() {
+					return Err(SendFailure::Request);
+				}
+				route = trawl_route;
+				escalated = true;
+				attempt = 0;
+				continue;
+			}
 		}
 		let retry_after = response
 			.headers()
@@ -361,6 +398,58 @@ pub(crate) fn perform(
 enum BodyRead {
 	TooLarge,
 	Request,
+}
+
+/// Replay a freshly solved clearance on already-assembled headers: the solver's UA
+/// replaces whatever is there (the cookie is bound to it), the injected Chrome-only
+/// headers come off, an injected Accept becomes Firefox's navigation value, and
+/// cf_clearance leads the Cookie header. Source-declared headers are never in
+/// `injected_suite`, so they survive untouched
+fn apply_clearance_replay(
+	headers: &mut HeaderMap,
+	replay: &crate::traits::ClearanceReplay,
+	injected_suite: &[HeaderName],
+) {
+	if let Ok(value) = HeaderValue::from_str(&replay.user_agent) {
+		headers.insert(USER_AGENT, value);
+	}
+	for &name in crate::traits::CHROME_ONLY_HEADERS {
+		let name = HeaderName::from_static(name);
+		if injected_suite.contains(&name) {
+			headers.remove(&name);
+		}
+	}
+	if injected_suite.contains(&ACCEPT) {
+		headers.insert(
+			ACCEPT,
+			HeaderValue::from_static(crate::traits::FIREFOX_DOCUMENT_ACCEPT),
+		);
+	}
+	splice_clearance(headers, &replay.clearance);
+}
+
+/// cf_clearance leads the Cookie header; any older value under the same name is dropped
+/// (a stale clearance re-challenges, and two same-named cookies confuse the WAF)
+fn splice_clearance(headers: &mut HeaderMap, clearance: &str) {
+	if clearance.is_empty() {
+		return;
+	}
+	let existing = headers
+		.get(COOKIE)
+		.and_then(|v| v.to_str().ok())
+		.unwrap_or_default();
+	let mut merged = format!("{}={clearance}", crate::traits::CF_CLEARANCE_COOKIE);
+	for part in existing
+		.split(';')
+		.map(str::trim)
+		.filter(|part| !part.is_empty() && !part.starts_with("cf_clearance="))
+	{
+		merged.push_str("; ");
+		merged.push_str(part);
+	}
+	if let Ok(value) = HeaderValue::from_str(&merged) {
+		headers.insert(COOKIE, value);
+	}
 }
 
 /// Bounded response-body read: when the header-declared length exceeds the cap, fail fast;
@@ -733,8 +822,11 @@ mod tests {
 	use std::sync::atomic::{AtomicUsize, Ordering};
 	use std::sync::{Arc, Mutex};
 
+	#[derive(Default)]
 	struct EscalationPolicy {
 		trawl: Option<String>,
+		solver: Option<String>,
+		clearances: Mutex<HashMap<String, crate::traits::ClearanceReplay>>,
 	}
 
 	/// Existing tests unrelated to the cap all get a generous limit; the cap's behavior is pinned by dedicated tests
@@ -751,6 +843,25 @@ mod tests {
 
 		fn trawl_escalation(&self, _url: &Url) -> Option<NetRoute> {
 			self.trawl.as_ref().map(|p| NetRoute::Proxy(p.clone()))
+		}
+
+		fn clearance_replay(&self, host: &str) -> Option<crate::traits::ClearanceReplay> {
+			self.clearances.lock().expect("clearances lock").get(host).cloned()
+		}
+
+		fn solve_clearance(&self, url: &Url) -> Option<crate::traits::ClearanceReplay> {
+			let api = self.solver.as_ref()?;
+			let host = url.host_str().unwrap_or_default();
+			let replay = crate::browser::trawl::solve_clearance(api, host)?;
+			self.clearances
+				.lock()
+				.expect("clearances lock")
+				.insert(host.to_string(), replay.clone());
+			Some(replay)
+		}
+
+		fn clear_clearance(&self, host: &str) {
+			self.clearances.lock().expect("clearances lock").remove(host);
 		}
 	}
 
@@ -855,6 +966,7 @@ mod tests {
 		});
 		let policy = Arc::new(EscalationPolicy {
 			trawl: Some(format!("http://{}", trawl.addr)),
+			..Default::default()
 		});
 		let mut net = NetState::new(policy, CookieJar::default());
 		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
@@ -876,6 +988,165 @@ mod tests {
 		assert_eq!(second.data, b"direct-with-clearance");
 		assert_eq!(origin.hits(), 2);
 		assert_eq!(trawl.hits(), 1);
+	}
+
+	const SOLVER_UA: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:152.0) Gecko/20100101 Firefox/152.0";
+
+	fn solver_server() -> MockServer {
+		mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				&format!(
+					r#"{{"cookies":[{{"name":"cf_clearance","value":"ok"}}],"userAgent":"{SOLVER_UA}"}}"#
+				),
+			)
+		})
+	}
+
+	fn challenged_without_clearance(head: &str) -> Vec<u8> {
+		if head.contains("cf_clearance=ok") {
+			respond("200 OK", &[], "direct-with-clearance")
+		} else {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		}
+	}
+
+	/// The replayed request must look like the solver's Firefox: its UA, no sec-ch-ua,
+	/// Firefox's navigation Accept, cf_clearance leading the Cookie header
+	fn assert_replay_head(head: &str, clearance: &str) {
+		let head = head.to_ascii_lowercase();
+		assert!(head.contains(&format!("user-agent: {}", SOLVER_UA.to_ascii_lowercase())), "UA: {head}");
+		for &name in crate::traits::CHROME_ONLY_HEADERS {
+			assert!(!head.contains(&format!("{name}:")), "重放不该带 {name}: {head}");
+		}
+		assert!(
+			head.contains(&format!("accept: {}", crate::traits::FIREFOX_DOCUMENT_ACCEPT)),
+			"Firefox Accept: {head}"
+		);
+		assert!(!head.contains("signed-exchange"), "Firefox 不发 signed-exchange: {head}");
+		assert!(head.contains(&format!("cookie: cf_clearance={clearance}")), "cookie: {head}");
+	}
+
+	#[test]
+	fn cf_challenge_solves_clearance_and_replays_direct() {
+		let origin = mock_server(challenged_without_clearance);
+		let solver = solver_server();
+		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
+		let policy = Arc::new(EscalationPolicy {
+			trawl: Some(format!("http://{}", trawl.addr)),
+			solver: Some(format!("http://{}", solver.addr)),
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/get", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(response.data, b"direct-with-clearance");
+		assert_eq!(origin.hits(), 2, "挑战一次，解题后直连重放");
+		assert_eq!(solver.hits(), 1, "解题一次");
+		assert_eq!(trawl.hits(), 0, "解题成功就不该惊动 trawl 代理");
+		assert_replay_head(&origin.heads()[1], "ok");
+	}
+
+	#[test]
+	fn cached_clearance_replays_without_a_challenge_round_trip() {
+		let origin = mock_server(challenged_without_clearance);
+		let policy = Arc::new(EscalationPolicy::default());
+		policy.clearances.lock().expect("clearances lock").insert(
+			"127.0.0.1".into(),
+			crate::traits::ClearanceReplay {
+				user_agent: SOLVER_UA.into(),
+				clearance: "ok".into(),
+			},
+		);
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/get", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(origin.hits(), 1, "缓存的 clearance 直接生效，不用先撞一次挑战");
+		assert_replay_head(&origin.heads()[0], "ok");
+	}
+
+	#[test]
+	fn refused_clearance_is_dropped_and_solved_fresh() {
+		let origin = mock_server(|head| {
+			if head.contains("cf_clearance=fresh") {
+				respond("200 OK", &[], "direct-with-clearance")
+			} else {
+				respond(
+					"403 Forbidden",
+					&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+					"challenged",
+				)
+			}
+		});
+		let solver = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				&format!(
+					r#"{{"cookies":[{{"name":"cf_clearance","value":"fresh"}}],"userAgent":"{SOLVER_UA}"}}"#
+				),
+			)
+		});
+		let policy = Arc::new(EscalationPolicy {
+			solver: Some(format!("http://{}", solver.addr)),
+			..Default::default()
+		});
+		policy.clearances.lock().expect("clearances lock").insert(
+			"127.0.0.1".into(),
+			crate::traits::ClearanceReplay {
+				user_agent: SOLVER_UA.into(),
+				clearance: "old".into(),
+			},
+		);
+		let policy_ref = policy.clone();
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/get", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(solver.hits(), 1, "被拒的旧 clearance 触发重解");
+		assert!(origin.heads()[0].contains("cf_clearance=old"), "先用旧值: {}", origin.heads()[0]);
+		assert_replay_head(&origin.heads()[1], "fresh");
+		assert_eq!(
+			policy_ref.clearances.lock().expect("clearances lock")["127.0.0.1"].clearance,
+			"fresh",
+			"缓存里换上了新值"
+		);
+	}
+
+	#[test]
+	fn failed_solve_falls_back_to_trawl_proxy() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let solver = mock_server(|_head| respond("500 Internal Server Error", &[], "busy"));
+		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
+		let policy = Arc::new(EscalationPolicy {
+			trawl: Some(format!("http://{}", trawl.addr)),
+			solver: Some(format!("http://{}", solver.addr)),
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		let response = get(&mut net, &url);
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(response.data, b"solved-via-trawl");
+		assert_eq!(solver.hits(), 1, "先试解题");
+		assert_eq!(trawl.hits(), 1, "解题失败落到 trawl 代理");
 	}
 
 	#[test]
@@ -902,6 +1173,7 @@ mod tests {
 		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
 		let policy = Arc::new(EscalationPolicy {
 			trawl: Some(format!("http://{}", trawl.addr)),
+			..Default::default()
 		});
 		let mut net = NetState::new(policy, CookieJar::default());
 		let url = Url::parse(&format!("http://{}/private", origin.addr)).unwrap();

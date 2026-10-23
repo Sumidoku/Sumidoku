@@ -29,6 +29,54 @@ const SESSION_OP_TIMEOUT: Duration = Duration::from_secs(30);
 /// what we get is an uninformative interruption
 const CLIENT_GRACE: Duration = Duration::from_secs(10);
 
+/// Challenge solve budget. A solve runs inside a source call on the wasm actor thread,
+/// so it must stay well under the call timeout (60s default); the async server path has
+/// no such bound but shares the value
+const SOLVE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One-off challenge solve through the trawl scrape API — the shape aidoku-cf-relay
+/// uses: a plain POST with no session, navigating the site's root. The answer carries
+/// the cf_clearance cookie and the solving browser's user agent; CF binds the cookie to
+/// that UA, so both come back together as a ClearanceReplay. Blocking: the wasm net host
+/// calls this on the actor thread, the async server path wraps it in spawn_blocking.
+pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::ClearanceReplay> {
+	#[derive(serde::Deserialize)]
+	struct SolveAnswer {
+		#[serde(default)]
+		cookies: Vec<TrawlCookie>,
+		#[serde(default, rename = "userAgent")]
+		user_agent: Option<String>,
+	}
+	let client = reqwest::blocking::Client::builder()
+		.use_rustls_tls()
+		.timeout(SOLVE_TIMEOUT + CLIENT_GRACE)
+		.build()
+		.ok()?;
+	let body = serde_json::json!({
+		"url": format!("https://{host}/"),
+		"maxTimeout": SOLVE_TIMEOUT.as_millis() as u64,
+	});
+	let text = client
+		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(body.to_string())
+		.send()
+		.and_then(|r| r.error_for_status())
+		.and_then(|r| r.text())
+		.ok()?;
+	let answer: SolveAnswer = serde_json::from_str(&text).ok()?;
+	let user_agent = answer.user_agent.filter(|ua| !ua.is_empty())?;
+	// No cf_clearance means the site showed no challenge this time; the UA alone is still
+	// a usable replay (aidoku-cf-relay forwards the same way)
+	let clearance = answer
+		.cookies
+		.into_iter()
+		.find(|c| c.name == crate::traits::CF_CLEARANCE_COOKIE)
+		.map(|c| c.value)
+		.unwrap_or_default();
+	Some(crate::traits::ClearanceReplay { user_agent, clearance })
+}
+
 pub struct TrawlConnector {
 	base: String,
 	id_prefix: String,
@@ -479,6 +527,41 @@ mod tests {
 				r#"{{"url":"https://a.example/","html":"","cookies":{cookies},"userAgent":"","statusCode":200,"tier":3,"sessionCached":false,"timings":[],"totalMs":1}}"#
 			),
 		)
+	}
+
+	#[test]
+	fn solve_clearance_pairs_the_cookie_with_the_solver_ua() {
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/scrape") => (
+				200,
+				r#"{"cookies":[{"name":"cf_clearance","value":"abc"},{"name":"other","value":"x"}],"userAgent":"Camoufox/152"}"#
+					.to_string(),
+			),
+			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
+		});
+		let replay = solve_clearance(&mock.url, "cf.example").expect("solved");
+		assert_eq!(
+			replay,
+			crate::traits::ClearanceReplay {
+				user_agent: "Camoufox/152".into(),
+				clearance: "abc".into(),
+			}
+		);
+		let (_, _, body) = &mock.requests()[0];
+		let body: serde_json::Value = serde_json::from_str(body).expect("json");
+		assert_eq!(body["url"], "https://cf.example/");
+		assert!(body["maxTimeout"].is_number());
+	}
+
+	#[test]
+	fn solve_clearance_failures_are_none() {
+		let mock = MockTrawl::new(|_, _, _| (500, r#"{"error":"busy"}"#.to_string()));
+		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
+		// A solve without a user agent is no replay at all
+		let mock = MockTrawl::new(|_, _, _| {
+			(200, r#"{"cookies":[{"name":"cf_clearance","value":"abc"}],"userAgent":""}"#.to_string())
+		});
+		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
 	}
 
 	fn state_with(mock: &MockTrawl) -> BrowserState {

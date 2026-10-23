@@ -250,7 +250,7 @@ impl BrowserState {
 	}
 }
 
-mod trawl;
+pub mod trawl;
 
 #[cfg(test)]
 pub(crate) mod mock {

@@ -105,13 +105,13 @@ Sidecar setup and the routing model are in [docs/sidecars.md](sidecars.md).
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SUMIDOKU_NET_PROXY` | — | global forward proxy for source fetches |
-| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; challenged hosts are solved once and then kept on trawl |
+| `SUMIDOKU_NET_TRAWL_PROXY` | — | trawl forward-proxy URL; fallback for challenged hosts when solving is unavailable or fails |
 | `SUMIDOKU_NET_TRAWL_CA` | — | trawl's MITM root CA (PEM); required for HTTPS sources through trawl |
 | `SUMIDOKU_NET_RELAY_DOMAINS` | — | comma-separated domains always fetched through trawl |
 | `SUMIDOKU_NET_DIRECT_DOMAINS` | — | comma-separated domains pinned to direct (never escalated to trawl) |
 | `SUMIDOKU_NET_ALLOW_DIRECT_FALLBACK` | `false` | allow falling back to direct when the proxy path fails |
 | `SUMIDOKU_NET_BROWSER_HEADERS` | `true` | fill the browser header suite (`sec-ch-ua`, `accept`, `sec-fetch-*`, `upgrade-insecure-requests`) matching the Chrome user agent on source fetches; set `false` for honest semantics on API/XHR-heavy sources |
-| `SUMIDOKU_NET_BROWSER_TRAWL` | — | trawl API URL (e.g. `http://trawl:8191`, requires trawl ≥ v1.9.1); browser backend for webview using trawl sessions |
+| `SUMIDOKU_NET_BROWSER_TRAWL` | — | trawl API URL (e.g. `http://trawl:8191`, requires trawl ≥ v1.9.1); browser backend for webview using trawl sessions, and the Cloudflare clearance solver: a challenged host is solved once here, then replayed direct with the solving browser's user agent |
 | `SUMIDOKU_NET_BODY_MAX_MB` | `32` | response body cap for source fetches; shared by the wasm net host and the server-side cover/page fetches because both buffer a source-controlled endpoint's body in the same process — the cap counts decoded bytes; `0` disables |
 | `SUMIDOKU_NET_ZIP_BODY_MAX_MB` | `128` | body cap for zip page archives, which pack a whole chapter into one response and legitimately exceed the page-image cap; `0` disables |
 
