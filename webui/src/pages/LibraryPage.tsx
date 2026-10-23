@@ -1,53 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
-import { BookOpen, Search, SearchX } from 'lucide-react';
+import { BookOpen, SearchX } from 'lucide-react';
 import { coverUrl } from '../api/client';
 import { useCategories, useFilterGroups, useLibrary, useLibrarySourceCounts, useServerSettings, useSources } from '../api/hooks';
-import type { LibraryFilter, LibrarySort } from '../api/types';
+import type { LibrarySort } from '../api/types';
 import type { TriStateSelection } from '../lib/triState';
-import { MANGA_CONTENT_RATING_LEVELS, compareSourceName } from '../lib/source';
+import { compareSourceName } from '../lib/source';
 import { hasLibraryFilterPrefs, loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
-import {
-	Button,
-	Chip,
-	CoverCard,
-	EmptyState,
-	InfiniteList,
-	Input,
-	PageHeader,
-	Select,
-	Skeleton,
-	TriStateDropdown
-} from '../components';
+import { Button, CoverCard, EmptyState, InfiniteList, PageHeader, Skeleton } from '../components';
+import { LibraryToolbar, UNCATEGORIZED } from './library/LibraryToolbar';
+import './library/library.css';
 
-const SORT_OPTIONS: { value: LibrarySort; labelKey: string }[] = [
-	{ value: 'added', labelKey: 'library.sortAdded' },
-	{ value: 'title', labelKey: 'library.sortTitle' },
-	{ value: 'lastRead', labelKey: 'library.sortLastRead' },
-	{ value: 'latestChapter', labelKey: 'library.sortLatestChapter' },
-	{ value: 'unread', labelKey: 'library.sortUnread' }
-];
-
-const FILTER_OPTIONS: { value: LibraryFilter; labelKey: string }[] = [
-	{ value: 'unread', labelKey: 'library.filterUnread' },
-	{ value: 'downloaded', labelKey: 'library.filterDownloaded' },
-	{ value: 'bookmarked', labelKey: 'library.filterBookmarked' }
-];
-
-/** Tri-state key of the built-in "uncategorized" arm (mirrors the API's category=0) */
-const UNCATEGORIZED = '0';
-/** Next state of the tri-state cycle: unselected → include → exclude → unselected */
 function nextTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 	return cur === 0 ? 1 : cur === 1 ? -1 : 0;
-}
-
-/** Same tri-state chip tooltip as the manga detail page's chapter filter */
-function triTitle(t: TFunction, label: string, state: 1 | -1 | 0): string {
-	if (state === 1) return t('library.triInclude', { label });
-	if (state === -1) return t('library.triExclude', { label });
-	return t('library.triNone', { label });
 }
 
 function cycled(sel: TriStateSelection, key: string): TriStateSelection {
@@ -196,121 +162,30 @@ export default function LibraryPage() {
 
 	return (
 		<div className="page container">
-			<PageHeader
-				title={t('common.nav.library')}
-				actions={
-					<Input
-						className="library__search"
-						icon={<Search size={15} />}
-						type="search"
-						placeholder={t('library.searchPlaceholder')}
-						value={searchInput}
-						onChange={(e) => setSearchInput(e.currentTarget.value)}
-					/>
-				}
+			<PageHeader title={t('common.nav.library')} />
+			<LibraryToolbar
+				searchInput={searchInput}
+				onSearchInput={setSearchInput}
+				sort={sort}
+				onSort={setSort}
+				filterTri={filterTri}
+				ratings={ratings}
+				sourceTri={sourceTri}
+				categoryTri={categoryTri}
+				groupId={groupId}
+				groups={filterGroups.data ?? []}
+				categories={categories.data ?? []}
+				sourceOptions={triOptions}
+				showUncategorized={showUncategorized}
+				onFilterCycle={(key) => setFilterTri((cur) => cycled(cur, key))}
+				onRatingCycle={(key) => setRatings((cur) => cycled(cur, key))}
+				onSourceCycle={(key) => setSourceTri((cur) => cycled(cur, key))}
+				onCategoryCycle={cycleCategory}
+				onGroupChange={setGroupId}
+				onResetRatings={() => setRatings({})}
+				onResetSources={() => setSourceTri({})}
+				onClearFilters={clearFilters}
 			/>
-
-			{/* Filter groups are their own strip above the category chips: one active group at a time,
-			    tapping the active chip clears it; the selection persists like the other chip states */}
-			{(filterGroups.data ?? []).length > 0 && (
-				<div className="library__filters library__groups">
-					{(filterGroups.data ?? []).map((g) => (
-						<Chip
-							key={g.id}
-							color={groupId === g.id ? 'accent' : 'default'}
-							title={t('library.groupHint', { name: g.name })}
-							onClick={() => setGroupId((cur) => (cur === g.id ? null : g.id))}
-						>
-							{g.name}
-						</Chip>
-					))}
-				</div>
-			)}
-
-			<div className="library__filters library__categories">
-				<div className="library__category-chips">
-					{/* Category tri-state chips replace the old category tabs: no chip selected = 全部; 未分类 is the API's category=0 arm */}
-					{showUncategorized && (
-						<Chip
-							color={
-								categoryTri[UNCATEGORIZED] === 1
-									? 'accent'
-									: categoryTri[UNCATEGORIZED] === -1
-										? 'danger'
-										: 'default'
-							}
-							className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
-							title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
-							onClick={() => cycleCategory(UNCATEGORIZED)}
-						>
-							{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}
-							{t('library.uncategorized')}
-						</Chip>
-					)}
-					{(categories.data ?? []).map((c) => {
-						const st = categoryTri[String(c.id)] ?? 0;
-						return (
-							<Chip
-								key={c.id}
-								color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
-								className={st === -1 ? 'chip--exclude' : undefined}
-								title={triTitle(t, c.name, st)}
-								onClick={() => cycleCategory(String(c.id))}
-							>
-								{st === -1 ? '− ' : ''}
-								{c.name}（{c.mangaCount}）
-							</Chip>
-						);
-					})}
-				</div>
-				<div className="library__tools">
-					{/* Same tri-state dropdown as the cross-source search page; sources include disabled ones — library entries may belong to them */}
-					<TriStateDropdown
-						label={t('library.rating')}
-						options={MANGA_CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
-						states={ratings}
-						onCycle={(k) => setRatings((cur) => cycled(cur, k))}
-						onReset={() => setRatings({})}
-					/>
-					<TriStateDropdown
-						label={t('library.source')}
-						options={triOptions}
-						states={sourceTri}
-						onCycle={(k) => setSourceTri((cur) => cycled(cur, k))}
-						onReset={() => setSourceTri({})}
-					/>
-					<Select
-						aria-label={t('library.sort')}
-						value={sort}
-						onChange={(e) => setSort(e.currentTarget.value as LibrarySort)}
-					>
-						{SORT_OPTIONS.map((o) => (
-							<option key={o.value} value={o.value}>
-								{t(o.labelKey)}
-							</option>
-						))}
-					</Select>
-				</div>
-			</div>
-
-			{/* Same tri-state chips as the manga detail page's chapter filter: unselected → include → exclude */}
-			<div className="library__filters library__filters--status">
-				{FILTER_OPTIONS.map((o) => {
-					const st = filterTri[o.value] ?? 0;
-					return (
-						<Chip
-							key={o.value}
-							color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
-							className={st === -1 ? 'chip--exclude' : undefined}
-							title={triTitle(t, t(o.labelKey), st)}
-							onClick={() => setFilterTri((cur) => cycled(cur, o.value))}
-						>
-							{st === -1 ? '− ' : ''}
-							{t(o.labelKey)}
-						</Chip>
-					);
-				})}
-			</div>
 
 			{query.isPending ? (
 				<div className="cover-grid">
@@ -360,7 +235,6 @@ export default function LibraryPage() {
 					</div>
 				</InfiniteList>
 			)}
-
 		</div>
 	);
 }
