@@ -55,6 +55,13 @@ export function statusText(s: string | null | undefined): string {
 	return key ? i18n.t(key) : s;
 }
 
+export function entrySubtitle(m: { authors?: Array<string> | null; status?: string | null }): string | undefined {
+	const author = m.authors?.[0];
+	if (author) return author;
+	if (!m.status || m.status.toLowerCase() === 'unknown') return undefined;
+	return statusText(m.status);
+}
+
 export function chapterLabel(c: {
 	volume_number: number | null;
 	chapter_number: number | null;

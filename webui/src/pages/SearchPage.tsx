@@ -5,7 +5,7 @@ import { Search, SearchX, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
 import type { GlobalSearchResult, SearchManga, Source } from '../api/types';
-import { statusText } from '../lib/format';
+import { entrySubtitle } from '../lib/format';
 import {
 	type GlobalSearchFilterPrefs,
 	type TriState,
@@ -270,7 +270,7 @@ function SourceSection({
 							<CoverCard
 								src={m.cover ? sourceImageUrl(source.id, m.cover) : m.cover}
 								title={m.title}
-								subtitle={m.authors?.[0] ?? statusText(m.status)}
+								subtitle={entrySubtitle(m)}
 								busy={pendingKey === busyKey(m)}
 								onClick={() => onOpen(m)}
 							/>
