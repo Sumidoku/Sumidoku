@@ -10,6 +10,11 @@ interface MenuButtonProps {
 	children: (close: () => void) => ReactNode;
 }
 
+export function handleMenuToggle(event: { stopPropagation: () => void }, toggle: () => void): void {
+	event.stopPropagation();
+	toggle();
+}
+
 // Anchored dropdown for row-level action menus (chapter rows, list items). The popover goes through a
 // portal because row containers commonly clip absolute positioning; same pattern as the manga page's MoreMenu.
 export function MenuButton({ label, children }: MenuButtonProps) {
@@ -46,13 +51,13 @@ export function MenuButton({ label, children }: MenuButtonProps) {
 
 	return (
 		<div className="menu-anchor" ref={btnRef}>
-			<IconButton label={label} onClick={toggle}>
+			<IconButton label={label} onClick={(event) => handleMenuToggle(event, toggle)}>
 				<MoreVertical size={16} />
 			</IconButton>
 			{open &&
 				pos &&
 				createPortal(
-					<div className="menu-pop card" ref={popRef} style={{ top: pos.top, right: pos.right }}>
+					<div className="menu-pop card" ref={popRef} style={{ top: pos.top, right: pos.right }} onClick={(event) => event.stopPropagation()}>
 						{children(() => setOpen(false))}
 					</div>,
 					document.body
