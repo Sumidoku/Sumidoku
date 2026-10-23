@@ -1414,7 +1414,20 @@ Vite 8 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `src/components` shared pieces, `src/api` the REST client,
 `@tanstack/react-query` for server state. `npm run check` is
 `tsc --noEmit`, and `npm test` runs the Node test suite. The build lands in
-`webui/build` and the server embeds it (see above). When authentication is on, the
+`webui/build` and the server embeds it (see above). The installable PWA shell
+uses `vite-plugin-pwa`'s `generateSW` strategy. Precaching covers only the built
+JavaScript, CSS and HTML plus the web manifest and install icons; API requests
+and manga media are network-only at the service-worker layer, and `/api` and
+`/opds` navigations bypass the SPA fallback. Both disk and embedded serving
+return `Cache-Control: no-cache` for `/sw.js` and `/manifest.webmanifest`, while
+hashed assets and other responses keep their existing cache policies. The
+Workbox MIT notice is served at `/licenses/workbox.txt`. When a
+new service worker is waiting, the UI offers Reload and Later: Reload activates
+it and reloads the page, while Later only dismisses the prompt; there is no
+automatic reload. This provides installation and an application shell, not
+offline chapters or offline reading progress.
+
+When authentication is on, the
 login page takes the admin username + password, the client (`api/client.ts`) sends
 the stored session token as a bearer header, media/websocket URLs carry
 it as an `access_token` query (`withToken`), and any `401` clears the

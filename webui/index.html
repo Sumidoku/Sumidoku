@@ -3,11 +3,12 @@
 	<head>
 		<meta charset="utf-8" />
 		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-		<meta name="theme-color" content="#0f1115" />
+		<meta name="theme-color" content="#100f12" />
 		<link rel="icon" type="image/svg+xml" href="/icon.svg" />
+		<link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 		<title>Sumidoku</title>
 		<script>
-			// 首屏前先落主题，避免暗色用户看到一帧亮色
+			// Apply the saved theme before the first paint to avoid a light flash in dark mode.
 			try {
 				var t = localStorage.getItem('sumidoku.theme');
 				if (t === 'system') {
