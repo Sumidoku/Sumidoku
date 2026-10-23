@@ -189,6 +189,30 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	);
 }
 
+export function SourceSettingsDialog({
+	sourceId,
+	sourceName,
+	open,
+	onClose
+}: {
+	sourceId: number;
+	sourceName: string;
+	open: boolean;
+	onClose: () => void;
+}) {
+	const { t } = useTranslation();
+	return (
+		<Modal
+			open={open}
+			title={t('sourceSettings.title', { name: sourceName })}
+			onClose={onClose}
+			panelClassName="modal__panel--wide"
+		>
+			{open && <SourceSettingsPanel sourceId={sourceId} />}
+		</Modal>
+	);
+}
+
 /** The gear at the right of an installed-source card: settings live in a modal, config items come from the source package */
 export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: number; sourceName: string }) {
 	const { t } = useTranslation();
@@ -205,14 +229,7 @@ export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: numbe
 			>
 				<Settings size={17} />
 			</IconButton>
-			<Modal
-				open={open}
-				title={t('sourceSettings.title', { name: sourceName })}
-				onClose={() => setOpen(false)}
-				panelClassName="modal__panel--wide"
-			>
-				{open && <SourceSettingsPanel sourceId={sourceId} />}
-			</Modal>
+			<SourceSettingsDialog sourceId={sourceId} sourceName={sourceName} open={open} onClose={() => setOpen(false)} />
 		</>
 	);
 }

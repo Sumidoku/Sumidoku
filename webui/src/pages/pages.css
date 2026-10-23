@@ -144,6 +144,33 @@
 		border-color 0.15s;
 }
 
+.source-card__actions {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	flex: none;
+}
+
+.source-card__mobile-actions {
+	display: none;
+}
+
+@media (max-width: 767px) {
+	.source-card {
+		gap: 10px;
+		padding: 12px;
+	}
+
+	.source-card__actions {
+		display: none;
+	}
+
+	.source-card__mobile-actions {
+		display: block;
+		flex: none;
+	}
+}
+
 .source-card--link:hover {
 	background: var(--bg-hover);
 	border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
