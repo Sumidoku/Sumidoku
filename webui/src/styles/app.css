@@ -10,6 +10,11 @@ body {
 	padding: 0;
 }
 
+html {
+	/* Readers handle zoom locally instead of scaling the whole page. */
+	touch-action: pan-x pan-y;
+}
+
 body {
 	background: var(--bg);
 	color: var(--text);

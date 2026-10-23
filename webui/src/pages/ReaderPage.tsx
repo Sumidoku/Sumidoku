@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, PointerEvent as RPointerEvent } from 'react';
+import type { ChangeEvent, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -25,6 +25,7 @@ import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
+import { usePinchZoom } from './reader/usePinchZoom';
 import './reader.css';
 
 // continuous is the stored value for "scroll" in the old localStorage; renaming it would lose existing users' settings
@@ -209,6 +210,7 @@ function ReaderCore({
 	const [cur, setCurState] = useState(0);
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
+	const contentResizeRef = useRef<() => void>(() => {});
 
 	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
 	const colRef = useRef(0);
@@ -217,6 +219,22 @@ function ReaderCore({
 	const textLayoutRef = useRef(textLayout);
 	textLayoutRef.current = textLayout;
 	const textColsRef = useRef<HTMLDivElement>(null);
+
+	const {
+		targetRef: zoomRef,
+		zoomed,
+		touchAction,
+		onPointerDown: pinchPointerDown,
+		onPointerMove: pinchPointerMove,
+		onPointerUp: pinchPointerUp,
+		onPointerCancel: pinchPointerCancel,
+		consumeClick,
+		reset: resetPinch
+	} = usePinchZoom({ zoomedTouchAction: mode === 'paged' ? 'none' : 'pan-y' });
+	// Layout changes leave stale pan offsets behind
+	useLayoutEffect(() => {
+		resetPinch();
+	}, [mode, idx, col, dir, imgWidth, resetPinch]);
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
@@ -550,13 +568,16 @@ function ReaderCore({
 		const onScroll = () => {
 			if (raf === 0) raf = requestAnimationFrame(update);
 		};
+		contentResizeRef.current = onScroll;
 		update();
-		window.addEventListener('scroll', onScroll, { passive: true });
-		// Lazy-loaded images change the container height, so recompute the current page with a ResizeObserver
+		root.addEventListener('scroll', onScroll, { passive: true });
+		// Lazy content can change a page box without a scroll event, so recompute the visible page as they resize
 		const ro = new ResizeObserver(onScroll);
 		ro.observe(root);
+		root.querySelectorAll('[data-page]').forEach((el) => ro.observe(el));
 		return () => {
-			window.removeEventListener('scroll', onScroll);
+			contentResizeRef.current = () => {};
+			root.removeEventListener('scroll', onScroll);
 			ro.disconnect();
 			if (raf) cancelAnimationFrame(raf);
 		};
@@ -564,11 +585,31 @@ function ReaderCore({
 
 	// A light tap in the middle summons the toolbar; swipes don't trigger it
 	const downRef = useRef({ x: 0, y: 0 });
-	function onPointerDown(e: RPointerEvent) {
-		downRef.current = { x: e.clientX, y: e.clientY };
+	function onPagedClick(which: 'left' | 'right' | 'mid') {
+		if (consumeClick()) return;
+		if (zoomed || which === 'mid') {
+			setOverlay((v) => !v);
+			return;
+		}
+		onZone(which);
 	}
-	function onPointerUp(e: RPointerEvent) {
+	function onPagedContainerClick(e: RMouseEvent<HTMLDivElement>) {
+		if (e.target !== e.currentTarget) return;
+		const rect = e.currentTarget.getBoundingClientRect();
+		const ratio = (e.clientX - rect.left) / rect.width;
+		onPagedClick(ratio < 0.28 ? 'left' : ratio > 0.72 ? 'right' : 'mid');
+	}
+	function onContinuousPointerDown(e: RPointerEvent<HTMLDivElement>) {
+		downRef.current = { x: e.clientX, y: e.clientY };
+		pinchPointerDown(e);
+	}
+	function onContinuousClick(e: RMouseEvent<HTMLDivElement>) {
+		if (consumeClick()) return;
 		if (Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 10) return;
+		if (zoomed) {
+			setOverlay((v) => !v);
+			return;
+		}
 		const third = window.innerWidth / 3;
 		if (e.clientX > third && e.clientX < third * 2) setOverlay((v) => !v);
 	}
@@ -637,84 +678,124 @@ function ReaderCore({
 	return (
 		<div className="reader">
 			{mode === 'paged' ? (
-				<div className="reader__paged">
-					{curPage &&
-						(curText !== null ? (
-							<div className="reader__text-paged">
-								<div
-									className="reader-text reader-text--cols"
-									ref={textColsRef}
-									style={{
-										columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
-										transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
-									}}
-									dangerouslySetInnerHTML={{ __html: md(curText) }}
+				<div
+					className="reader__paged"
+					style={{ touchAction }}
+					onClick={onPagedContainerClick}
+					onPointerDown={pinchPointerDown}
+					onPointerMove={pinchPointerMove}
+					onPointerUp={pinchPointerUp}
+					onPointerCancel={pinchPointerCancel}
+				>
+					<div
+						className="reader__zoom"
+						ref={zoomRef}
+						style={{ transformOrigin: '0 0', willChange: zoomed ? 'transform' : undefined }}
+					>
+						{curPage &&
+							(curText !== null ? (
+								<div className="reader__text-paged">
+									<div
+										className="reader-text reader-text--cols"
+										ref={textColsRef}
+										style={{
+											columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
+											transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
+										}}
+										dangerouslySetInnerHTML={{ __html: md(curText) }}
+									/>
+								</div>
+							) : isUnsupported(curPage) ? (
+								<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
+							) : (
+								<img
+									className="reader__img"
+									src={pageUrl(chapterId, curPage.index, imgWidth)}
+									alt={t('reader.pageAlt', { page: idx + 1 })}
+									width={curDimensions?.width}
+									height={curDimensions?.height}
+									draggable={false}
 								/>
-							</div>
-						) : isUnsupported(curPage) ? (
-							<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
-						) : (
-							<img
-								className="reader__img"
-								src={pageUrl(chapterId, curPage.index, imgWidth)}
-								alt={t('reader.pageAlt', { page: idx + 1 })}
-								width={curDimensions?.width}
-								height={curDimensions?.height}
-							/>
-						))}
+							))}
+					</div>
 					<button
 						type="button"
 						className="reader__zone reader__zone--left"
 						aria-label={t('reader.prevPage')}
-						onClick={() => onZone('left')}
+						onClick={(e) => {
+							e.stopPropagation();
+							onPagedClick('left');
+						}}
 					/>
 					<button
 						type="button"
 						className="reader__zone reader__zone--right"
 						aria-label={t('reader.nextPage')}
-						onClick={() => onZone('right')}
+						onClick={(e) => {
+							e.stopPropagation();
+							onPagedClick('right');
+						}}
 					/>
 					<button
 						type="button"
 						className="reader__zone reader__zone--mid"
 						aria-label={t('reader.toggleToolbar')}
-						onClick={() => setOverlay((v) => !v)}
+						onClick={(e) => {
+							e.stopPropagation();
+							onPagedClick('mid');
+						}}
 					/>
 				</div>
 			) : (
 				<div
-					className={mode === 'webtoon' ? 'reader__cont reader__cont--webtoon' : 'reader__cont'}
-					ref={contRef}
-					onPointerDown={onPointerDown}
-					onPointerUp={onPointerUp}
+					className="reader__continuous"
+					style={{ touchAction }}
+					onClick={onContinuousClick}
+					onPointerDown={onContinuousPointerDown}
+					onPointerMove={pinchPointerMove}
+					onPointerUp={pinchPointerUp}
+					onPointerCancel={pinchPointerCancel}
 				>
-					{pages.map((p) => {
-						const text = pageText(p);
-						const unsupported = isUnsupported(p);
-						const dimensions = text === null && !unsupported ? pageDimensions(p) : null;
-						return (
-							<div
-								className="reader__pg"
-								data-page={p.index}
-								key={p.index}
-								style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}
-							>
-								{text !== null ? (
-									<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
-								) : unsupported ? (
-									<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
-								) : (
-									<img
-										src={pageUrl(chapterId, p.index, imgWidth)}
-										alt={t('reader.pageAlt', { page: p.index + 1 })}
-										width={dimensions?.width}
-										height={dimensions?.height}
-										loading="lazy"
-									/>
-								)}
-							</div>
-						);
-					})}
+					<div
+						className="reader__zoom"
+						ref={zoomRef}
+						style={{ transformOrigin: '0 0', willChange: zoomed ? 'transform' : undefined }}
+					>
+						<div
+							className={mode === 'webtoon' ? 'reader__cont reader__cont--webtoon' : 'reader__cont'}
+							ref={contRef}
+						>
+							{pages.map((p) => {
+								const text = pageText(p);
+								const unsupported = isUnsupported(p);
+								const dimensions = text === null && !unsupported ? pageDimensions(p) : null;
+								return (
+									<div
+										className="reader__pg"
+										data-page={p.index}
+										key={p.index}
+										style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}
+									>
+										{text !== null ? (
+											<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
+										) : unsupported ? (
+											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
+										) : (
+											<img
+												src={pageUrl(chapterId, p.index, imgWidth)}
+												alt={t('reader.pageAlt', { page: p.index + 1 })}
+												width={dimensions?.width}
+												height={dimensions?.height}
+												loading="lazy"
+												onLoad={() => contentResizeRef.current()}
+												draggable={false}
+											/>
+										)}
+									</div>
+								);
+							})}
+						</div>
+					</div>
 				</div>
 			)}
 
