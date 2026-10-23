@@ -34,11 +34,15 @@ const CLIENT_GRACE: Duration = Duration::from_secs(10);
 /// no such bound but shares the value
 const SOLVE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// One-off challenge solve through the trawl scrape API — the shape aidoku-cf-relay
-/// uses: a plain POST with no session, navigating the site's root. The answer carries
-/// the cf_clearance cookie and the solving browser's user agent; CF binds the cookie to
-/// that UA, so both come back together as a ClearanceReplay. Blocking: the wasm net host
-/// calls this on the actor thread, the async server path wraps it in spawn_blocking.
+/// Challenge solve through the trawl scrape API — the shape aidoku-cf-relay uses: a
+/// plain POST navigating the site's root. The answer carries the cf_clearance cookie and
+/// the solving browser's user agent; CF binds the cookie to that UA, so both come back
+/// together as a ClearanceReplay. The call carries a deterministic host-level session id
+/// (sumidoku-net-<host>): the backend reuses the same session for every solve of this
+/// host, so a later solve (after the challenged cooldown, or after a refused clearance)
+/// rides the already-solved session instead of re-solving Turnstile from scratch.
+/// Blocking: the wasm net host calls this on the actor thread, the async server path
+/// wraps it in spawn_blocking.
 pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::ClearanceReplay> {
 	#[derive(serde::Deserialize)]
 	struct SolveAnswer {
@@ -52,9 +56,19 @@ pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::Clea
 		.timeout(SOLVE_TIMEOUT + CLIENT_GRACE)
 		.build()
 		.ok()?;
+	// Deterministic host-level session id: every solve of the same host reuses the
+	// backend's session and its solved challenge — one Turnstile solve per host, not
+	// per request
+	let session = session_id(
+		"sumidoku-net",
+		&host.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
+	);
 	let body = serde_json::json!({
 		"url": format!("https://{host}/"),
 		"maxTimeout": SOLVE_TIMEOUT.as_millis() as u64,
+		"sessionId": session,
+		// Browser sessions require maxTier >= 3; tier 3 needs no proxy on session creation
+		"maxTier": 3,
 	});
 	let text = client
 		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
@@ -550,6 +564,8 @@ mod tests {
 		let (_, _, body) = &mock.requests()[0];
 		let body: serde_json::Value = serde_json::from_str(body).expect("json");
 		assert_eq!(body["url"], "https://cf.example/");
+		assert_eq!(body["sessionId"], "sumidoku-net-cf_example", "host-level session id is deterministic");
+		assert_eq!(body["maxTier"], 3, "browser sessions require maxTier >= 3");
 		assert!(body["maxTimeout"].is_number());
 	}
 
