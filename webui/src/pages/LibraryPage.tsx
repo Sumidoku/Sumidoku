@@ -75,12 +75,11 @@ function pruneSelection(
 
 export default function LibraryPage() {
 	const { t } = useTranslation();
-	const [searchInput, setSearchInput] = useState('');
-	const [search, setSearch] = useState('');
-	const [sort, setSort] = useState<LibrarySort>('added');
-	// Chip states restore from localStorage (search input and sort stay session-local); the prefs are
-	// loaded once — the pruning effect below drops ids that no longer exist
+	// Controls restore from localStorage; the prefs are loaded once — the pruning effect below drops ids that no longer exist
 	const [initialPrefs] = useState(loadLibraryFilters);
+	const [searchInput, setSearchInput] = useState(initialPrefs.search);
+	const [search, setSearch] = useState(initialPrefs.search.trim());
+	const [sort, setSort] = useState<LibrarySort>(initialPrefs.sort);
 	const [filterTri, setFilterTri] = useState<TriStateSelection>(initialPrefs.filters);
 	const [ratings, setRatings] = useState<TriStateSelection>(initialPrefs.ratings);
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>(initialPrefs.sources);
@@ -122,10 +121,10 @@ export default function LibraryPage() {
 		else if (raw !== 'all' && /^\d+$/.test(String(raw))) setCategoryTri({ [String(raw)]: 1 });
 	}, [serverSettings.data, defaultSeed]);
 
-	// Persist the chip states across sessions (the clear-filters button and chip clicks flow through the same setters)
+	// Persist all library controls across sessions (the clear-filters button and chip clicks flow through the same setters)
 	useEffect(() => {
-		saveLibraryFilters({ filters: filterTri, ratings, sources: sourceTri, categories: categoryTri, group: groupId });
-	}, [filterTri, ratings, sourceTri, categoryTri, groupId]);
+		saveLibraryFilters({ search: searchInput, sort, filters: filterTri, ratings, sources: sourceTri, categories: categoryTri, group: groupId });
+	}, [searchInput, sort, filterTri, ratings, sourceTri, categoryTri, groupId]);
 
 	// Restored ids may belong to since-deleted categories or uninstalled sources: a stale include id
 	// would filter the library down to nothing with no chip showing why, so drop unknown ids once
