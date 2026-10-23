@@ -1,7 +1,6 @@
-//! Divina-profile EPUB reading for the local source: an EPUB is an OCF zip, so entries come through
-//! the same ZipCache as CBZ. The page list is the OPF spine order restricted to image manifest
-//! items; hrefs resolve against the OPF location into zip entry paths. Only the divina profile
-//! (image-based books) is supported — a reflowable text document parses fine but yields no pages.
+//! Divina-profile EPUB reading through the same ZipCache as CBZ. Direct image spine items and
+//! XHTML/SVG single-image pages resolve in OPF order; every spine page must produce exactly one
+//! image, and reflowable text or incomplete packages yield no pages.
 
 use aidoku::Viewer;
 use quick_xml::de::from_reader;
@@ -11,8 +10,7 @@ use std::path::Path;
 use super::comic_info::{ComicInfo, CreatorNames, normalized_names};
 use super::zip_cache::ZipCache;
 
-/// The image media types a divina page may declare; anything else in the spine (nav documents, stylesheets) is not a page
-const IMAGE_MEDIA_TYPES: &[&str] = &["image/jpeg", "image/png", "image/webp", "image/gif"];
+const DIVINA_LETTER_COUNT_THRESHOLD: usize = 15;
 
 /// One page resolved from the OPF: the zip entry path plus the manifest-declared media type
 pub struct Page {
@@ -223,30 +221,121 @@ struct Rootfile {
 }
 
 impl Package {
-	/// Page list in spine reading order, restricted to manifest items declaring an image media
-	/// type; entries not referenced by the spine and non-image spine items never appear
-	pub fn pages(&self) -> Vec<Page> {
-		let mut out = Vec::new();
+	pub fn pages(&self, zip: &ZipCache, path: &Path) -> Vec<Page> {
+		let entry_names = match zip.entry_names(path) {
+			Ok(names) => names,
+			Err(e) => {
+				tracing::warn!(path = %path.display(), "list EPUB entries failed: {e}");
+				return vec![];
+			}
+		};
+		let spine_paths: Vec<String> = self
+			.spine
+			.itemrefs
+			.iter()
+			.filter_map(|itemref| self.manifest_item(&itemref.idref))
+			.map(|item| normalize_href(&self.opf_dir, &item.href))
+			.collect();
+		let page_count = entry_names
+			.iter()
+			.filter(|name| spine_paths.iter().any(|spine| entry_matches(spine, name)))
+			.count();
+
+		let mut pages_with_images: Vec<Vec<String>> = vec![];
 		for itemref in &self.spine.itemrefs {
-			let Some(item) = self.manifest.items.iter().find(|item| item.id == itemref.idref) else {
-				continue;
+			let Some(item) = self.manifest_item(&itemref.idref) else {
+				return vec![];
 			};
-			if !IMAGE_MEDIA_TYPES.contains(&item.media_type.as_str()) {
+			let page_path = normalize_href(&self.opf_dir, &item.href);
+			if item.media_type.to_ascii_lowercase().starts_with("image") {
+				pages_with_images.push(vec![normalize_zip_path(&page_path)]);
 				continue;
 			}
-			out.push(Page {
-				entry: join_zip_path(&self.opf_dir, &percent_decode(&item.href)),
-				media_type: item.media_type.clone(),
+			let Ok(bytes) = zip.read_entry(path, &page_path) else {
+				pages_with_images.push(vec![]);
+				continue;
+			};
+			let Ok(content) = String::from_utf8(bytes) else {
+				pages_with_images.push(vec![]);
+				continue;
+			};
+			match scan_divina_page(&content, &page_path, DIVINA_LETTER_COUNT_THRESHOLD) {
+				Ok(Some(images)) => pages_with_images.push(images),
+				Ok(None) => return vec![],
+				Err(e) => {
+					tracing::warn!(path = %path.display(), page = %page_path, "parse EPUB divina page failed: {e}");
+					return vec![];
+				}
+			}
+		}
+		if pages_with_images.len() != page_count {
+			return vec![];
+		}
+
+		let mut images_path = vec![];
+		for images in &pages_with_images {
+			let mut seen: Vec<&String> = vec![];
+			for image in images {
+				if !seen.contains(&image) {
+					seen.push(image);
+					images_path.push(image.clone());
+				}
+			}
+		}
+		if images_path.len() != page_count {
+			return vec![];
+		}
+
+		let mut pages = vec![];
+		for image_path in images_path {
+			let Some(media_type) = self
+				.manifest
+				.items
+				.iter()
+				.find(|item| entry_matches(&normalize_href(&self.opf_dir, &item.href), &image_path))
+				.map(|item| item.media_type.clone())
+			else {
+				return vec![];
+			};
+			if !media_type.to_ascii_lowercase().starts_with("image/")
+				|| !entry_names.iter().any(|name| entry_matches(&image_path, name))
+			{
+				return vec![];
+			}
+			pages.push(Page {
+				entry: image_path,
+				media_type,
 			});
 		}
-		out
+		if pages.len() != page_count {
+			return vec![];
+		}
+		pages
+	}
+
+	pub fn declared_media_type(&self, entry: &str) -> Option<String> {
+		self.manifest
+			.items
+			.iter()
+			.find(|item| entry_matches(&normalize_href(&self.opf_dir, &item.href), entry))
+			.map(|item| item.media_type.clone())
+	}
+
+	fn manifest_item(&self, id: &str) -> Option<&ManifestItem> {
+		self.manifest.items.iter().find(|item| item.id == id)
 	}
 }
 
-/// Reads the OPF package document of an EPUB archive. Any missing or unparseable step (container,
-/// rootfile, OPF) yields None — the caller then falls back to the CBZ rule, so a broken EPUB still
-/// reads as a plain image archive instead of erroring the chapter.
+/// Reads the OPF package document of a valid EPUB archive. Any missing or unparseable step yields None.
 pub fn read_package(zip: &ZipCache, path: &Path) -> Option<Package> {
+	let Ok(mimetype) = zip.read_entry(path, "mimetype") else {
+		tracing::warn!(path = %path.display(), "EPUB mimetype entry is missing");
+		return None;
+	};
+	if mimetype.trim_ascii() != b"application/epub+zip" {
+		tracing::warn!(path = %path.display(), "invalid EPUB mimetype");
+		return None;
+	}
 	let container = zip.read_entry(path, "META-INF/container.xml").ok()?;
 	let container: Container = match from_reader(&container[..]) {
 		Ok(container) => container,
@@ -277,6 +366,14 @@ pub fn read_package(zip: &ZipCache, path: &Path) -> Option<Package> {
 	Some(package)
 }
 
+pub fn divina_pages(zip: &ZipCache, path: &Path) -> Vec<Page> {
+	read_package(zip, path).map(|package| package.pages(zip, path)).unwrap_or_default()
+}
+
+pub fn is_divina(zip: &ZipCache, path: &Path) -> bool {
+	!divina_pages(zip, path).is_empty()
+}
+
 /// OPF hrefs are URIs: percent-encoded octets decode back to the raw zip entry name
 fn percent_decode(href: &str) -> String {
 	fn hex(b: u8) -> Option<u8> {
@@ -302,23 +399,191 @@ fn percent_decode(href: &str) -> String {
 		out.push(bytes[i]);
 		i += 1;
 	}
-	String::from_utf8_lossy(&out).into_owned()
+	String::from_utf8(out).unwrap_or_else(|_| href.to_string())
 }
 
-/// Joins an OPF-relative href onto the OPF directory, resolving dot segments so the result names a
-/// real zip entry
 fn join_zip_path(base: &str, href: &str) -> String {
-	let mut segments: Vec<&str> = base.split('/').filter(|s| !s.is_empty()).collect();
+	let base = base.replace('\\', "/");
+	let href = href.replace('\\', "/");
+	let mut segments: Vec<&str> = if href.starts_with('/') {
+		vec![]
+	} else {
+		base.split('/').filter(|s| !s.is_empty()).collect()
+	};
 	for segment in href.split('/') {
 		match segment {
 			"" | "." => {}
 			".." => {
-				segments.pop();
+				if matches!(segments.last(), Some(s) if *s != "..") {
+					segments.pop();
+				} else {
+					segments.push(segment);
+				}
 			}
 			_ => segments.push(segment),
 		}
 	}
 	segments.join("/")
+}
+
+fn normalize_zip_path(path: &str) -> String {
+	join_zip_path("", path)
+}
+
+fn normalize_href(opf_dir: &str, href: &str) -> String {
+	// Split the fragment before decoding so %23 remains a path character.
+	let (base, anchor) = match href.find('#') {
+		Some(i) => (&href[..i], &href[i + 1..]),
+		None => (href, ""),
+	};
+	let resolved = join_zip_path(opf_dir, &percent_decode(base));
+	if anchor.is_empty() {
+		resolved
+	} else {
+		format!("{resolved}#{}", percent_decode(anchor))
+	}
+}
+
+fn entry_matches(href: &str, entry_name: &str) -> bool {
+	href == entry_name || href.trim_start_matches('/') == entry_name
+}
+
+fn resolve_relative(page_path: &str, src: &str) -> String {
+	let base = match page_path.rfind('/') {
+		Some(i) => &page_path[..=i],
+		None => "",
+	};
+	join_zip_path(base, src)
+}
+
+fn scan_divina_page(content: &str, page_path: &str, letter_count_threshold: usize) -> Result<Option<Vec<String>>, quick_xml::Error> {
+	let mut reader = quick_xml::Reader::from_reader(content.as_bytes());
+	reader.config_mut().trim_text(false);
+	reader.config_mut().allow_dangling_amp = true;
+	let mut buffer = Vec::new();
+	let mut stack: Vec<String> = Vec::new();
+	let mut inside_body = false;
+	let mut in_word = false;
+	let mut word_count = 0usize;
+	let mut non_ws_units = 0usize;
+	let mut images: Vec<String> = vec![];
+	let mut svg_images: Vec<String> = vec![];
+
+	loop {
+		match reader.read_event_into(&mut buffer) {
+			Ok(quick_xml::events::Event::Start(e)) => {
+				let qname = e.name();
+				let name = xml_local_name(qname.as_ref());
+				if name == "body" {
+					inside_body = true;
+				} else if name == "img" {
+					push_image_attr(e.attributes().flatten(), "src", page_path, &mut images);
+				} else if name == "image" && stack.last().map(|parent| parent == "svg").unwrap_or(false) {
+					push_image_href(e.attributes().flatten(), page_path, &mut svg_images);
+				}
+				stack.push(name.to_string());
+			}
+			Ok(quick_xml::events::Event::Empty(e)) => {
+				let qname = e.name();
+				let name = xml_local_name(qname.as_ref());
+				if name == "img" {
+					push_image_attr(e.attributes().flatten(), "src", page_path, &mut images);
+				} else if name == "image" && stack.last().map(|parent| parent == "svg").unwrap_or(false) {
+					push_image_href(e.attributes().flatten(), page_path, &mut svg_images);
+				}
+			}
+			Ok(quick_xml::events::Event::End(e)) => {
+				let qname = e.name();
+				let name = xml_local_name(qname.as_ref());
+				if name == "body" {
+					inside_body = false;
+				}
+				if stack.last().map(|parent| parent == name).unwrap_or(false) {
+					stack.pop();
+				}
+			}
+			Ok(quick_xml::events::Event::Text(text)) if inside_body => {
+				add_body_text(&text, &mut in_word, &mut word_count, &mut non_ws_units);
+			}
+			Ok(quick_xml::events::Event::GeneralRef(reference)) if inside_body => {
+				let resolved = match reference.as_ref() {
+					"lt" => Some('<'),
+					"gt" => Some('>'),
+					"amp" => Some('&'),
+					"apos" => Some('\''),
+					"quot" => Some('"'),
+					_ => reference.resolve_char_ref().ok().flatten(),
+				};
+				match resolved {
+					Some(c) => add_body_text(c.encode_utf8(&mut [0; 4]), &mut in_word, &mut word_count, &mut non_ws_units),
+					None => add_body_text(&format!("&{};", reference.as_ref()), &mut in_word, &mut word_count, &mut non_ws_units),
+				}
+			}
+			Ok(quick_xml::events::Event::CData(text)) if inside_body => {
+				add_body_text(&text, &mut in_word, &mut word_count, &mut non_ws_units);
+			}
+			Ok(quick_xml::events::Event::Eof) => break,
+			Err(e) => return Err(e),
+			_ => {}
+		}
+		buffer.clear();
+	}
+
+	if in_word {
+		word_count += 1;
+	}
+	let text_len = non_ws_units + word_count.saturating_sub(1);
+	if text_len > letter_count_threshold {
+		return Ok(None);
+	}
+	images.extend(svg_images);
+	Ok(Some(images))
+}
+
+fn xml_local_name(name: &str) -> &str {
+	name.rsplit(':').next().unwrap_or(name)
+}
+
+fn add_body_text(chunk: &str, in_word: &mut bool, word_count: &mut usize, non_ws_units: &mut usize) {
+	for c in chunk.chars() {
+		if c.is_whitespace() {
+			if *in_word {
+				*word_count += 1;
+				*in_word = false;
+			}
+		} else {
+			*in_word = true;
+			*non_ws_units += c.len_utf16();
+		}
+	}
+}
+
+fn attr_value(attr: &quick_xml::events::attributes::Attribute<'_>) -> String {
+	quick_xml::escape::unescape(&attr.value)
+		.map(|value| value.into_owned())
+		.unwrap_or_else(|_| attr.value.clone().into_owned())
+}
+
+fn push_image_attr<'a>(
+	attrs: impl Iterator<Item = quick_xml::events::attributes::Attribute<'a>>,
+	key: &'static str,
+	page_path: &str,
+	images: &mut Vec<String>,
+) {
+	for attr in attrs {
+		if attr.key.as_ref() == key {
+			images.push(resolve_relative(page_path, &percent_decode(&attr_value(&attr))));
+		}
+	}
+}
+
+fn push_image_href<'a>(attrs: impl Iterator<Item = quick_xml::events::attributes::Attribute<'a>>, page_path: &str, images: &mut Vec<String>) {
+	for attr in attrs {
+		let key = attr.key.as_ref();
+		if key == "href" || key.ends_with(":href") {
+			images.push(resolve_relative(page_path, &percent_decode(&attr_value(&attr))));
+		}
+	}
 }
 
 #[cfg(test)]
@@ -328,6 +593,10 @@ mod tests {
 	fn make_epub(path: &Path, container: Option<&str>, opf_path: &str, opf: Option<&str>, entries: &[(&str, &[u8])]) {
 		let file = std::fs::File::create(path).expect("create epub");
 		let mut writer = zip::ZipWriter::new(file);
+		writer
+			.start_file("mimetype", zip::write::SimpleFileOptions::default())
+			.expect("start mimetype");
+		std::io::Write::write_all(&mut writer, b"application/epub+zip").expect("write mimetype");
 		if let Some(container) = container {
 			writer
 				.start_file("META-INF/container.xml", zip::write::SimpleFileOptions::default())
@@ -375,9 +644,7 @@ mod tests {
     <item id="css" href="style.css" media-type="text/css"/>
   </manifest>
   <spine>
-    <itemref idref="nav"/>
     <itemref idref="p2"/>
-    <itemref idref="missing"/>
     <itemref idref="p3"/>
     <itemref idref="p1"/>
   </spine>
@@ -387,9 +654,19 @@ mod tests {
 	fn spine_pages_filter_resolve_and_keep_order() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let path = tmp.path().join("x.epub");
-		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(OPF), &[]);
+		make_epub(
+			&path,
+			Some(CONTAINER),
+			"OEBPS/content.opf",
+			Some(OPF),
+			&[
+				("OEBPS/images/a.png", b"a"),
+				("OEBPS/images/b.jpg", b"b"),
+				("OEBPS/images/c d.png", b"c"),
+			],
+		);
 		let package = read_package(&ZipCache::new(), &path).expect("package");
-		let pages = package.pages();
+		let pages = package.pages(&ZipCache::new(), &path);
 		let entries: Vec<&str> = pages.iter().map(|p| p.entry.as_str()).collect();
 		assert_eq!(entries, ["OEBPS/images/b.jpg", "OEBPS/images/c d.png", "OEBPS/images/a.png"]);
 		let media_types: Vec<&str> = pages.iter().map(|p| p.media_type.as_str()).collect();
@@ -400,7 +677,17 @@ mod tests {
 	fn metadata_is_exposed() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let path = tmp.path().join("x.epub");
-		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(OPF), &[]);
+		make_epub(
+			&path,
+			Some(CONTAINER),
+			"OEBPS/content.opf",
+			Some(OPF),
+			&[
+				("OEBPS/images/a.png", b"a"),
+				("OEBPS/images/b.jpg", b"b"),
+				("OEBPS/images/c d.png", b"c"),
+			],
+		);
 		let metadata = &read_package(&ZipCache::new(), &path).expect("package").metadata;
 		assert_eq!(metadata.title.first().map(String::as_str), Some("Spine Book"));
 		let creators: Vec<&str> = metadata.creators.iter().map(|creator| creator.name.as_str()).collect();
@@ -413,7 +700,17 @@ mod tests {
 	fn metadata_maps_into_comic_info() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let path = tmp.path().join("x.epub");
-		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(OPF), &[]);
+		make_epub(
+			&path,
+			Some(CONTAINER),
+			"OEBPS/content.opf",
+			Some(OPF),
+			&[
+				("OEBPS/images/a.png", b"a"),
+				("OEBPS/images/b.jpg", b"b"),
+				("OEBPS/images/c d.png", b"c"),
+			],
+		);
 		let info = read_package(&ZipCache::new(), &path)
 			.expect("package")
 			.metadata
@@ -439,9 +736,19 @@ mod tests {
 			);
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let path = tmp.path().join("x.epub");
-		make_epub(&path, Some(CONTAINER), "OEBPS/content.opf", Some(&opf), &[]);
+		make_epub(
+			&path,
+			Some(CONTAINER),
+			"OEBPS/content.opf",
+			Some(&opf),
+			&[
+				("OEBPS/images/a.png", b"a"),
+				("OEBPS/images/b.jpg", b"b"),
+				("OEBPS/images/c d.png", b"c"),
+			],
+		);
 		let package = read_package(&ZipCache::new(), &path).expect("package");
-		let pages = package.pages();
+		let pages = package.pages(&ZipCache::new(), &path);
 		let entries: Vec<&str> = pages.iter().map(|page| page.entry.as_str()).collect();
 		assert_eq!(entries, ["OEBPS/images/b.jpg", "OEBPS/images/c d.png", "OEBPS/images/a.png"]);
 		let info = package.into_comic_info();
@@ -560,9 +867,15 @@ mod tests {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let path = tmp.path().join("x.epub");
 		let container = CONTAINER.replace("OEBPS/content.opf", "content.opf");
-		make_epub(&path, Some(&container), "content.opf", Some(OPF), &[]);
+		make_epub(
+			&path,
+			Some(&container),
+			"content.opf",
+			Some(OPF),
+			&[("images/a.png", b"a"), ("images/b.jpg", b"b"), ("images/c d.png", b"c")],
+		);
 		let package = read_package(&ZipCache::new(), &path).expect("package");
-		let pages = package.pages();
+		let pages = package.pages(&ZipCache::new(), &path);
 		let entries: Vec<&str> = pages.iter().map(|p| p.entry.as_str()).collect();
 		assert_eq!(entries, ["images/b.jpg", "images/c d.png", "images/a.png"]);
 	}
@@ -592,9 +905,42 @@ mod tests {
 	fn dot_segments_and_percent_decoding() {
 		assert_eq!(join_zip_path("OEBPS", "./images/a.png"), "OEBPS/images/a.png");
 		assert_eq!(join_zip_path("OEBPS/x", "../images/a.png"), "OEBPS/images/a.png");
+		assert_eq!(join_zip_path("OEBPS\\text", "..\\images\\a.png"), "OEBPS/images/a.png");
+		assert_eq!(join_zip_path("OEBPS", "/images/a.png"), "images/a.png");
 		assert_eq!(join_zip_path("", "images/a.png"), "images/a.png");
+		assert_eq!(resolve_relative("OEBPS/text/page.xhtml", "../images/a.png"), "OEBPS/images/a.png");
+		assert_eq!(normalize_href("OEBPS", "images/a%23b.png#cover%20x"), "OEBPS/images/a#b.png#cover x");
+		assert!(entry_matches("/images/a.png", "images/a.png"));
 		assert_eq!(percent_decode("c%20d.png"), "c d.png");
 		assert_eq!(percent_decode("100%.png"), "100%.png");
 		assert_eq!(percent_decode("%E4%B8%AD.png"), "中.png");
+		assert_eq!(percent_decode("%FF.png"), "%FF.png");
+	}
+
+	#[test]
+	fn divina_text_counts_normalized_whitespace() {
+		let html = r#"<html><body><p>aaaa</p>  <p>bbbb</p><img src="i.png"/></body></html>"#;
+		assert!(matches!(scan_divina_page(html, "page.xhtml", 8), Ok(None)));
+		assert!(matches!(scan_divina_page(html, "page.xhtml", 9), Ok(Some(_))));
+	}
+
+	#[test]
+	fn divina_text_unescape_failure_counts_raw_chunk() {
+		let html = r"<html><body><p>a&nbsp;b</p></body></html>";
+		assert!(matches!(scan_divina_page(html, "page.xhtml", 5), Ok(None)));
+	}
+
+	#[test]
+	fn divina_image_src_is_xml_unescaped() {
+		let html = r#"<html><body><img src="a&amp;b.png"/></body></html>"#;
+		let images = scan_divina_page(html, "page.xhtml", 100).unwrap().unwrap();
+		assert_eq!(images, vec!["a&b.png"]);
+	}
+
+	#[test]
+	fn divina_images_keep_img_then_svg_order() {
+		let html = r#"<html><body><svg><image xlink:href="s.png"/></svg><img src="i.png"/></body></html>"#;
+		let images = scan_divina_page(html, "page.xhtml", 100).unwrap().unwrap();
+		assert_eq!(images, vec!["i.png", "s.png"]);
 	}
 }

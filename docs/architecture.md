@@ -297,12 +297,19 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   with a natural-order tiebreak, unnumbered ones last; pages are a
   chapter's own direct image files, sorted case-insensitive naturally.
   A divina-profile EPUB (image-based books; reflowable text is out of
-  scope) instead takes its page list from the OPF spine restricted to
-  image manifest items (`local/epub.rs`: the package document is
-  located through `META-INF/container.xml`, hrefs resolve against the
-  OPF location), falling back to the natural-sorted archive images when
-  the OPF is missing or unparseable, and a page's mime is the
-  OPF-declared media type with the extension mapping as fallback.
+  scope) instead takes its page list from direct image spine items or
+  XHTML/SVG pages that each resolve to exactly one image (`local/epub.rs`:
+  the `mimetype` entry must be `application/epub+zip`, and the package
+  document is located through `META-INF/container.xml`). Manifest, spine
+  and zip entries must agree, body text must stay within 15 normalized
+  UTF-16 units per page, and invalid or non-divina packages yield no
+  pages. A page's mime is the OPF-declared media type with the extension
+  mapping as fallback. Migration 0021 clears cached local EPUB page rows
+  and counts from older parsers while preserving reading progress; the
+  next open rebuilds them under these rules. Migration 0022 adds
+  `chapter.epub_divina_compatible`: true for divina, false for other
+  EPUBs, and NULL for non-EPUB or unknown. Local scans and page rebuilds
+  refresh the value.
   `load_pages`
   (`source/mod.rs`) lists the chapter from the filesystem for local manga
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)

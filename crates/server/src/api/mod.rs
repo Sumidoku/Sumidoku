@@ -973,6 +973,13 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			&update.protected,
 		)
 		.await?;
+		crate::local::store_epub_divina(
+			&mut conn,
+			manga_id,
+			&update.manga.chapters.clone().unwrap_or_default(),
+			&update.epub_divina,
+		)
+		.await?;
 		return Ok(manga_id);
 	}
 	if crate::source::source_is_opds(&state.pool, source_id).await? {
@@ -1264,6 +1271,13 @@ async fn get_manga(
 			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
 			let mut conn = state.pool.acquire().await?;
 			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
+			crate::local::store_epub_divina(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.epub_divina,
+			)
+			.await?;
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
@@ -1364,6 +1378,13 @@ async fn get_chapters(
 				id,
 				&update.manga.chapters.clone().unwrap_or_default(),
 				&update.protected,
+			)
+			.await?;
+			crate::local::store_epub_divina(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.epub_divina,
 			)
 			.await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")

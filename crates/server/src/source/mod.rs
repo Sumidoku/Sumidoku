@@ -1090,6 +1090,16 @@ pub async fn load_pages(
 			&chapter.key,
 		)
 		.await?;
+		let compatible = if chapter.key.rsplit('.').next().is_some_and(|ext| ext.eq_ignore_ascii_case("epub")) {
+			Some(!entries.is_empty())
+		} else {
+			None
+		};
+		sqlx::query("UPDATE chapter SET epub_divina_compatible = ? WHERE id = ?")
+			.bind(compatible)
+			.bind(chapter_id)
+			.execute(&state.pool)
+			.await?;
 		// A local chapter has no materialized blobs, but may have downsample variants: invalidate them when the page
 		// rows are rewritten (on the online path, materialize_image_pages' whole-directory removal carries the same duty)
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;

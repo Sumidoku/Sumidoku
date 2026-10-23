@@ -19,8 +19,9 @@
 //! manga, never manga of their own — so a flat single-level library scans byte-identically to before.
 //!
 //! Archive chapters are CBZ/ZIP and divina-profile EPUB (image-based books; reflowable text is out of scope):
-//! an EPUB takes its page list from the OPF spine restricted to image manifest items, falling back to the CBZ
-//! rule (natural-sorted image entries) when the OPF is missing or unparseable (`local/epub.rs`).
+//! EPUB pages follow the OPF spine through direct image items or XHTML/SVG single-image pages. The mimetype,
+//! manifest, spine and zip entries must agree; invalid or non-divina packages yield no pages (`local/epub.rs`).
+//! Each chapter's computed compatibility is persisted as true/false for EPUB and NULL for other formats.
 //!
 //! Manga metadata resolves by a first-hit-wins chain, no per-field merge (`read_manga_metadata`): the manga
 //! directory's top-level ComicInfo.xml (authoritative when present, even unparsable) → the first chapter
@@ -56,7 +57,7 @@ pub use zip_cache::ZipCache;
 use crate::error::{ApiError, ApiResult};
 use aidoku::{Chapter, Manga, MangaStatus};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -77,10 +78,10 @@ pub struct LocalChapter {
 	pub is_archive: bool,
 }
 
-/// Result of manga_update: the source-side Manga snapshot + chapter paths (relative to the manga directory) that
-/// failed to read (reconcile protection set)
+/// Result of manga_update: the source-side Manga snapshot, EPUB divina results, and failed paths
 pub struct LocalUpdate {
 	pub manga: Manga,
+	pub epub_divina: HashMap<String, bool>,
 	pub protected: Vec<String>,
 }
 
@@ -537,6 +538,18 @@ fn to_aidoku_chapter(chapter: &LocalChapter) -> Chapter {
 pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<LocalUpdate> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	let (chapters, failed) = scan_chapters(dir, rel).await?;
+	let oneshot = tokio::fs::metadata(dir.join(rel)).await.is_ok_and(|metadata| metadata.is_file());
+	let mut epub_divina = HashMap::new();
+	for chapter in chapters.iter().filter(|chapter| chapter.is_archive && has_ext(&chapter.key, &["epub"])) {
+		let path = chapter_archive_path(dir, rel, &chapter.key, oneshot);
+		let compatible = {
+			let zip = zip.clone();
+			tokio::task::spawn_blocking(move || epub::is_divina(&zip, &path))
+				.await
+				.map_err(|e| ApiError::internal(format!("analyze EPUB compatibility failed: {e}")))?
+		};
+		epub_divina.insert(chapter.key.clone(), compatible);
+	}
 	// the title is the leaf name (a oneshot drops the archive extension): the full key would repeat the
 	// container path on every nested row; ComicInfo still overrides it below
 	let mut manga = Manga {
@@ -565,8 +578,31 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 	manga.chapters = Some(chapters.iter().map(to_aidoku_chapter).collect());
 	Ok(LocalUpdate {
 		manga,
+		epub_divina,
 		protected: failed,
 	})
+}
+
+pub async fn store_epub_divina(
+	conn: &mut sqlx::SqliteConnection,
+	manga_id: i64,
+	chapters: &[Chapter],
+	values: &HashMap<String, bool>,
+) -> ApiResult<()> {
+	for chapter in chapters {
+		let compatible = if has_ext(&chapter.key, &["epub"]) {
+			values.get(&chapter.key).copied()
+		} else {
+			None
+		};
+		sqlx::query("UPDATE chapter SET epub_divina_compatible = ? WHERE manga_id = ? AND key = ?")
+			.bind(compatible)
+			.bind(manga_id)
+			.bind(&chapter.key)
+			.execute(&mut *conn)
+			.await?;
+	}
+	Ok(())
 }
 
 /// Manga metadata resolution, first hit wins — there is no per-field merge. The chain:
@@ -700,9 +736,8 @@ async fn chapter_fs_path(local_dir: &Path, manga_key: &str, chapter_key: &str) -
 	Ok(manga_path.join(chapter_key))
 }
 
-/// Chapter page listing: image chapters list image files, archive chapters list image entries; both in
-/// case-insensitive natural order — except a divina EPUB, whose pages come from the OPF spine (a missing
-/// or unparseable OPF falls back to the natural-order rule)
+/// Chapter page listing: image chapters and CBZ/ZIP archives use case-insensitive natural order;
+/// divina EPUBs use OPF spine order, and invalid or non-divina EPUBs have no pages
 pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str, chapter_key: &str) -> ApiResult<Vec<String>> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
 	require_key(chapter_key)?;
@@ -743,13 +778,11 @@ pub async fn chapter_pages(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 			let pages = {
 				let path = path.clone();
 				let zip = zip.clone();
-				tokio::task::spawn_blocking(move || epub::read_package(&zip, &path).map(|package| package.pages()))
+				tokio::task::spawn_blocking(move || epub::divina_pages(&zip, &path))
 					.await
 					.map_err(|e| ApiError::internal(format!("read epub package failed: {e}")))?
 			};
-			if let Some(pages) = pages {
-				return Ok(pages.into_iter().map(|page| page.entry).collect());
-			}
+			return Ok(pages.into_iter().map(|page| page.entry).collect());
 		}
 		let names = {
 			let path = path.clone();
@@ -816,9 +849,7 @@ async fn read_page_impl(
 		tokio::task::spawn_blocking(move || {
 			let bytes = zip.read_entry(&chapter_path, &entry_name)?;
 			let declared = if is_epub {
-				epub::read_package(&zip, &chapter_path)
-					.and_then(|package| package.pages().into_iter().find(|page| page.entry == entry_name))
-					.map(|page| page.media_type)
+				epub::read_package(&zip, &chapter_path).and_then(|package| package.declared_media_type(&entry_name))
 			} else {
 				None
 			};
