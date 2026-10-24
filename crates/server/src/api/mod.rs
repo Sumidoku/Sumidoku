@@ -24,6 +24,7 @@ pub mod server_settings;
 pub mod source_import;
 pub mod suwayomi_backup;
 pub mod sync;
+pub mod task;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -159,6 +160,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 			delete(crate::api::download::delete_download),
 		)
 		.route("/api/v1/chapter/{id}/file", get(crate::api::download::get_chapter_file))
+		.route("/api/v1/tasks", get(task::list_tasks))
+		.route("/api/v1/tasks/{id}", delete(task::cancel_task))
 		.route("/api/v1/update/fetch", post(crate::api::update::fetch_updates))
 		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))

@@ -60,6 +60,7 @@ pub struct AppState {
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
 	pub events: tokio::sync::OnceCell<Arc<crate::events::EventHub>>,
+	pub tasks: tokio::sync::OnceCell<Arc<crate::task::TaskManager>>,
 }
 
 pub struct DefaultsWrite {
@@ -184,6 +185,7 @@ impl AppState {
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
 			events: tokio::sync::OnceCell::new(),
+			tasks: tokio::sync::OnceCell::new(),
 		})
 	}
 
@@ -197,6 +199,10 @@ impl AppState {
 
 	pub fn events(&self) -> Arc<crate::events::EventHub> {
 		self.events.get().expect("event hub installed").clone()
+	}
+
+	pub fn tasks(&self) -> Arc<crate::task::TaskManager> {
+		self.tasks.get().expect("task manager installed").clone()
 	}
 
 	/// Whether the source is the default local instance: its rows predate per-instance settings, so it

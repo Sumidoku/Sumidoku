@@ -13,6 +13,7 @@ pub mod rss;
 pub mod source;
 pub mod state;
 pub mod sync;
+pub mod task;
 pub mod update;
 pub mod webui_assets;
 
@@ -52,6 +53,12 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	assert!(state.events.set(event_hub.clone()).is_ok());
 	event_hub.forward_downloads(downloads.clone());
 	event_hub.forward_update(updater.clone());
+	let tasks = task::TaskManager::new(&state);
+	assert!(state.tasks.set(tasks.clone()).is_ok());
+	event_hub.forward_tasks(tasks.clone());
+	// A task left running by the previous process goes back to pending before the dispatcher starts
+	tasks.recover().await?;
+	tokio::spawn(tasks.run());
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;

@@ -47,6 +47,9 @@
       "name": "updates"
     },
     {
+      "name": "tasks"
+    },
+    {
       "name": "settings"
     },
     {
@@ -3013,6 +3016,107 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks": {
+      "get": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "listTasks",
+        "summary": "List background tasks: queued and running work first, then the bounded finished history",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Comma-separated status filter; each value is one of pending, running, done, failed, cancelled",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceId",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Task list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "cancelTask",
+        "summary": "Cancel a queued or running task",
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "The task already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -7764,6 +7868,75 @@
             "type": "integer",
             "format": "int64",
             "nullable": true
+          }
+        }
+      },
+      "Task": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "sourceId",
+          "payload",
+          "priority",
+          "status",
+          "createdAt",
+          "startedAt",
+          "finishedAt",
+          "error",
+          "result"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Deduplication key, e.g. local_scan:3"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/JsonValue"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int64",
+            "description": "8 manual, 4 scheduled, 1 derived"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "running",
+              "done",
+              "failed",
+              "cancelled"
+            ]
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "startedAt": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "result": {
+            "$ref": "#/components/schemas/JsonValue"
           }
         }
       },

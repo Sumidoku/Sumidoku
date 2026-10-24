@@ -81,6 +81,8 @@ pub struct Config {
 	pub backup_retention_count: Option<u32>,
 	/// Backup destination, allowed outside config_dir
 	pub backup_dir: Option<PathBuf>,
+	/// Background task worker count; tasks of one local source still serialize regardless of pool size
+	pub task_pool_size: usize,
 	/// Local manga roots (scan targets of the built-in local source); None = [<config_dir>/local]
 	pub local_dirs: Option<Vec<PathBuf>>,
 	/// Name marking a oneshots directory for the local source; None/blank = the rule is off
@@ -121,8 +123,9 @@ impl Default for Config {
 			backup_enabled: None,
 			backup_interval_hours: None,
 			backup_retention_count: None,
-			backup_dir: None,
-			local_dirs: None,
+		backup_dir: None,
+		task_pool_size: 2,
+		local_dirs: None,
 			local_oneshots_dir: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
@@ -252,6 +255,7 @@ struct ConfigFile {
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
 	backup_dir: Option<PathBuf>,
+	task_pool_size: Option<usize>,
 	local_dirs: Option<Vec<PathBuf>>,
 	/// legacy: one-item spelling of local_dirs, effective only when local_dirs is absent
 	local_dir: Option<PathBuf>,
@@ -373,6 +377,9 @@ impl Config {
 		}
 		if file.backup_dir.is_some() {
 			self.backup_dir = file.backup_dir;
+		}
+		if let Some(v) = file.task_pool_size {
+			self.task_pool_size = v;
 		}
 		if file.local_dirs.is_some() {
 			self.local_dirs = file.local_dirs;
@@ -536,6 +543,11 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_DIR") {
 			self.backup_dir = Some(PathBuf::from(v));
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_TASK_POOL_SIZE")
+			&& let Ok(n) = v.parse()
+		{
+			self.task_pool_size = n;
 		}
 		// ';' is the list separator (paths may contain ','); empty segments are ignored, and a value
 		// parsing to zero paths counts as unset so the single-item fallback still applies

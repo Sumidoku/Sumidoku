@@ -98,6 +98,27 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   login cookie, CLI clients may use bearer authentication, and URL access
   tokens are not accepted. The former download and update WebSocket endpoints
   are removed.
+- Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
+  the `task` table is the queue — a persistent row per task whose string id
+  doubles as the deduplication key (e.g. `local_scan:3`), so enqueueing an
+  already queued task only bumps its priority (kmrs's `ON CONFLICT` upsert:
+  manual 8 > scheduled 4 > derived 1) and a finished row is requeued fresh.
+  `TaskManager` dispatches pending rows to a worker pool sized by
+  `task_pool_size` (config file/env `SUMIDOKU_TASK_POOL_SIZE`, default 2) in
+  priority-then-creation order; tasks of one local source never run
+  concurrently, and a global (source-less) task conflicts with everything
+  (kmrs `GROUP_ID` semantics over `source_id`, 0 reserved for the global
+  group). Status transitions pending → running → done/failed/cancelled are
+  row updates broadcast as instance-wide `task` events through the SSE hub
+  (`events.rs:forward_tasks`). `DELETE /api/v1/tasks/{id}` cancels: a pending
+  row flips to cancelled in place, a running one gets a flag the handler
+  checks between items (the flag wins over the outcome at finish). Boot
+  recovery (`TaskManager::recover`, wired in `build_app`) requeues rows left
+  running by the previous process, so handlers must tolerate re-execution. A
+  kind with no registered handler (e.g. a downgrade over a newer database)
+  fails visibly instead of sitting pending. Finished rows are trimmed to the
+  latest 100. `GET /api/v1/tasks` lists live work first and accepts
+  `status`/`kind`/`sourceId` filters.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as

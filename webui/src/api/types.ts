@@ -1088,6 +1088,20 @@ export type SyncSnapshot = {
 	[key: string]: JsonValue;
 };
 
+export type Task = {
+	id: string;
+	kind: string;
+	sourceId: number | null;
+	payload: JsonValue;
+	priority: number;
+	status: "pending" | "running" | "done" | "failed" | "cancelled";
+	createdAt: number;
+	startedAt: number | null;
+	finishedAt: number | null;
+	error: string | null;
+	result: JsonValue;
+};
+
 export type TextPage = {
 	type: "text";
 	text: string;
