@@ -526,9 +526,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
   treated as absent; invalid tokens answer 400. The entry payload's
-  `unreadCount` and the `sort=unread` ordering count with default-unread
-  semantics — a chapter with no `chapter_user` row is unread (the ad-hoc
-  `filter=unread` keeps its own flagged-rows-only shape).
+  `unreadCount`, `sort=unread` and the ad-hoc `filter=unread` all count a
+  chapter with no read `chapter_user` row as unread, including a missing row.
   `sort=latestChapter` orders by each title's maximum chapter `fetched_at`
   (the chapter's first-seen time), descending with `manga.id ASC` ties;
   titles without chapters sort last.
@@ -671,8 +670,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `chapter_user.is_downloaded`), `started` (EXISTS
   `chapter_user.last_read_at`), `completed` (`m.status = 2`),
   `has_unread` (default-unread: EXISTS a chapter with no read
-  `chapter_user` row — never the ad-hoc `filter=unread` shape, which
-  would drop never-opened and partially-read manga), and the valued
+  `chapter_user` row, including a missing row), and the valued
   `source` / `content_rating` / `category` (one id per row). Evaluation
   matches Aidoku's filter loop (`compile_group`): includes OR within one
   valued dimension, excludes apply per value, dimensions and flag rules

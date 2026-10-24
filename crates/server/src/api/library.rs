@@ -78,6 +78,15 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 }
 
 fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
+	// Missing rows and explicit unread rows both count as unread.
+	if filter == "unread" {
+		let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
+		return Ok(format!(
+			"{head} (SELECT 1 FROM chapter c
+			 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
+			 WHERE c.manga_id = m.id AND cu.chapter_id IS NULL)"
+		));
+	}
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id AND ";

@@ -685,6 +685,33 @@ fn entry_ids(body: &Value) -> Vec<i64> {
 }
 
 #[tokio::test]
+async fn library_unread_filters_include_missing_chapter_user_rows() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// No chapter_user row exists yet: unread is the default, not an explicit flag.
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![manga_id]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+
+	let pool = connect_db(&db_path).await;
+	for chapter_id in first_chapters(&app, manga_id, usize::MAX).await {
+		put_chapter_user(&pool, chapter_id, true, false, false, None).await;
+	}
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![manga_id]);
+}
+
+#[tokio::test]
 async fn library_search_sort_filter() {
 	let TestApp {
 		app,
@@ -715,12 +742,13 @@ async fn library_search_sort_filter() {
 	}
 	let a_ch = first_chapters(&app, a, 2).await;
 	let b_ch = first_chapters(&app, b, 1).await;
-	let c_ch = first_chapters(&app, c, 1).await;
-	// A: 2 unread (one bookmarked, read @100); B: 1 unread downloaded, read @300; C: 1 read, no read time
+	// A: 2 unread (one bookmarked, read @100); B: 1 unread downloaded, read @300; C: all read, no read time
 	put_chapter_user(&pool, a_ch[0], false, true, false, Some(100)).await;
 	put_chapter_user(&pool, a_ch[1], false, false, false, None).await;
 	put_chapter_user(&pool, b_ch[0], false, false, true, Some(300)).await;
-	put_chapter_user(&pool, c_ch[0], true, false, false, None).await;
+	for chapter_id in first_chapters(&app, c, usize::MAX).await {
+		put_chapter_user(&pool, chapter_id, true, false, false, None).await;
+	}
 
 	// default added ordering + unreadCount
 	let (status, body) = request(&app, "GET", "/api/v1/library", None).await;
@@ -743,10 +771,10 @@ async fn library_search_sort_filter() {
 			)
 		})
 		.collect();
-	// chapters with an is_read=1 row: C has one, A and B none — every other chapter counts as unread
+	// chapters with an is_read=1 row: C has all chapters read, A and B none — every other chapter counts as unread
 	assert_eq!(
 		counts,
-		std::collections::HashMap::from([(a, totals[&a]), (b, totals[&b]), (c, totals[&c] - 1)])
+		std::collections::HashMap::from([(a, totals[&a]), (b, totals[&b]), (c, 0)])
 	);
 
 	// search: B's full title hits only B
@@ -791,7 +819,7 @@ async fn library_search_sort_filter() {
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=lastRead", None).await;
 	assert_eq!(entry_ids(&body), vec![b, a, c]);
 	// the badge's default-unread count desc, ties broken by id asc
-	let mut by_unread = [(a, totals[&a]), (b, totals[&b]), (c, totals[&c] - 1)];
+	let mut by_unread = [(a, totals[&a]), (b, totals[&b]), (c, 0)];
 	by_unread.sort_by_key(|&(id, count)| (-count, id));
 	let unread_order: Vec<i64> = by_unread.iter().map(|&(id, _)| id).collect();
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=unread", None).await;
