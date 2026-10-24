@@ -257,6 +257,29 @@
 	pointer-events: none;
 }
 
+.reader__typography {
+	display: grid;
+	gap: 10px;
+}
+
+.reader__typography .select {
+	width: 100%;
+}
+
+.reader__typography label {
+	display: grid;
+	grid-template-columns: 56px minmax(0, 1fr) 38px;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.reader__typography input[type='range'] {
+	width: 100%;
+	min-width: 0;
+	accent-color: var(--accent);
+}
+
 /* ---------- Chapter drawer ---------- */
 
 .reader__drawer-mask {

@@ -25,8 +25,16 @@ import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
-import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
+import { Button, EmptyState, IconButton, SegmentedControl, Select, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
+import {
+	FONT_SIZE_LIMITS,
+	LINE_HEIGHT_LIMITS,
+	loadTypography,
+	saveTypography,
+	typographyStyle
+} from './reader/typography';
+import type { ReaderFont, ReaderTypography } from './reader/typography';
 import './reader.css';
 
 // continuous is the stored value for "scroll" in the old localStorage; renaming it would lose existing users' settings
@@ -202,6 +210,14 @@ function ReaderCore({
 	const [chaptersOpen, setChaptersOpen] = useState(false);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
 	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
+	const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
+	const textStyle = typographyStyle(typography);
+
+	function updateTypography(patch: Partial<ReaderTypography>) {
+		const next = { ...typography, ...patch };
+		setTypography(next);
+		saveTypography(next);
+	}
 
 	const idxRef = useRef(0);
 	const [idx, setIdxState] = useState(0);
@@ -522,7 +538,7 @@ function ReaderCore({
 		const ro = new ResizeObserver(recompute);
 		ro.observe(el);
 		return () => ro.disconnect();
-	}, [mode, idx, pages]);
+	}, [mode, idx, pages, typography]);
 
 	// Continuous/webtoon progress = the highest page number that has entered the viewport
 	useEffect(() => {
@@ -695,6 +711,7 @@ function ReaderCore({
 										className="reader-text reader-text--cols"
 										ref={textColsRef}
 										style={{
+											...textStyle,
 											columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
 											transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
 										}}
@@ -773,7 +790,7 @@ function ReaderCore({
 										style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}
 									>
 										{text !== null ? (
-											<div className="reader-text" dangerouslySetInnerHTML={{ __html: md(text) }} />
+											<div className="reader-text" style={textStyle} dangerouslySetInnerHTML={{ __html: md(text) }} />
 										) : unsupported ? (
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
@@ -849,6 +866,43 @@ function ReaderCore({
 							value={dir}
 							onChange={setDir}
 						/>
+					</div>
+					<div className="reader__settings-title">{t('reader.typography')}</div>
+					<div className="reader__typography">
+						<Select
+							aria-label={t('reader.fontFamily')}
+							value={typography.font}
+							onChange={(e) => updateTypography({ font: e.currentTarget.value as ReaderFont })}
+						>
+							<option value="default">{t('reader.fontDefault')}</option>
+							<option value="sans">{t('reader.fontSans')}</option>
+							<option value="serif">{t('reader.fontSerif')}</option>
+							<option value="mono">{t('reader.fontMono')}</option>
+						</Select>
+						<label>
+							<span>{t('reader.fontSize')}</span>
+							<input
+								type="range"
+								min={FONT_SIZE_LIMITS.min}
+								max={FONT_SIZE_LIMITS.max}
+								step={FONT_SIZE_LIMITS.step}
+								value={typography.fontSize}
+								onChange={(e) => updateTypography({ fontSize: Number(e.currentTarget.value) })}
+							/>
+							<span>{Math.round(typography.fontSize * 100)}%</span>
+						</label>
+						<label>
+							<span>{t('reader.lineHeight')}</span>
+							<input
+								type="range"
+								min={LINE_HEIGHT_LIMITS.min}
+								max={LINE_HEIGHT_LIMITS.max}
+								step={LINE_HEIGHT_LIMITS.step}
+								value={typography.lineHeight}
+								onChange={(e) => updateTypography({ lineHeight: Number(e.currentTarget.value) })}
+							/>
+							<span>{typography.lineHeight.toFixed(1)}</span>
+						</label>
 					</div>
 				</div>
 			)}
