@@ -244,11 +244,12 @@ export default function SourceBrowsePage() {
 		setSubmitted({ query, filters: dropFilters ? [] : values });
 	}
 
-	// Only local directory filtering is live; remote source requests wait for explicit submission.
+	// Only local directory filtering is live; remote source requests wait for explicit submission —
+	// except clearing the box, which always resubmits to restore the unsearched results.
 	const submittedQueryRef = useRef(submitted.query);
 	submittedQueryRef.current = submitted.query;
 	useEffect(() => {
-		if (!isLocal) return;
+		if (!isLocal && input.trim() !== '') return;
 		const t = setTimeout(() => {
 			if (input.trim() !== submittedQueryRef.current) runSearch();
 		}, 500);
