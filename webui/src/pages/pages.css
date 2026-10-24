@@ -242,8 +242,10 @@
 }
 
 .source-card__grip {
+	/* Keep the handle after the content so every card shares the same leading alignment */
 	display: flex;
 	align-items: center;
+	order: 1;
 	flex: none;
 	color: var(--text-faint);
 	cursor: grab;

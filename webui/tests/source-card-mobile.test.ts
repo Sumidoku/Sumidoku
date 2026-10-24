@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -71,4 +72,11 @@ test('source card keeps desktop actions and exposes a mobile more trigger', asyn
 test('source card without actions does not expose an empty mobile menu', async () => {
 	const markup = await renderSource({ id: 1, key: 'local.local', name: 'Local', kind: 'local', hasHome: null, updateVersion: null, contentRating: 0, languages: [] });
 	assert.doesNotMatch(markup, /source-card__mobile-actions/);
+});
+
+test('drag handle stays after card content instead of shifting the leading column', () => {
+	const css = readFileSync(new URL('../src/pages/pages.css', import.meta.url), 'utf8');
+	const rule = css.match(/\.source-card__grip\s*\{([^}]*)\}/);
+	assert.ok(rule);
+	assert.match(rule[1], /\border:\s*1;/);
 });
