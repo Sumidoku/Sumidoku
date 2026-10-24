@@ -277,6 +277,33 @@ async fn instance_settings_roundtrip_and_rescan() {
 }
 
 #[tokio::test]
+async fn oneshots_blank_disables_rule_while_null_restores_config_fallback() {
+	let root = tempfile::tempdir().expect("root");
+	write_page(&root.path().join("Alpha/ch 1"), "1.png", b"alpha-1-1");
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.local_oneshots_dir = Some("oneshots".into());
+	let app = build_app(config).await.expect("build app");
+
+	let (status, first) = register_local(
+		&app,
+		json!({"type": "local", "name": "B", "paths": [root.path().to_string_lossy()], "oneshotsDir": " "}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{first}");
+	let id = first["id"].as_i64().expect("id");
+	let doc = instance_settings(&app, id).await;
+	assert_eq!(doc["values"]["oneshotsDir"], Value::Null, "an explicit blank disables the configured fallback");
+
+	let (status, body) = request(&app, "PUT", &format!("/api/v1/sources/{id}/settings"), Some(json!({"oneshotsDir": null}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["values"]["oneshotsDir"], "oneshots");
+	let (status, body) = request(&app, "POST", &format!("/api/v1/sources/{id}/settings/reset"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["values"]["oneshotsDir"], "oneshots");
+}
+
+#[tokio::test]
 async fn delete_instance_cascades() {
 	let t = instance_app().await;
 	let (_, first) = register_local(

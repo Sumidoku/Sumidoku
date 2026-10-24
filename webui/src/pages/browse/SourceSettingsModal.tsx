@@ -70,8 +70,8 @@ function LocalSourcePanel({ sourceId }: { sourceId: number }) {
 	const dirty = cleaned.join('\n') !== currentPaths.join('\n') || oneshotsName !== currentOneshots;
 
 	async function onSave() {
-		// an empty oneshots field clears the override (null), so the config fallback still applies
-		await save.mutateAsync({ edits: { paths: cleaned, oneshotsDir: oneshotsName || null } });
+		// an empty oneshots field stays an explicit blank so it turns the rule off rather than clearing the override
+		await save.mutateAsync({ edits: { paths: cleaned, oneshotsDir: oneshotsName } });
 		setDirs(null);
 		setOneshots(null);
 		pushToast(t('sourceSettings.saved'), 'info');

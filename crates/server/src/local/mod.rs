@@ -1015,7 +1015,7 @@ pub async fn register_instance(
 		.bind(raw)
 		.execute(&state.pool)
 		.await?;
-	if let Some(oneshots) = oneshots_dir.map(str::trim).filter(|s| !s.is_empty()) {
+	if let Some(oneshots) = oneshots_dir.map(str::trim) {
 		let raw = serde_json::to_string(&DefaultValue::String(oneshots.to_string()))?;
 		sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'oneshotsDir', ?)")
 			.bind(source_id)
