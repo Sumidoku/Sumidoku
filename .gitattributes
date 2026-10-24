@@ -1,0 +1,4 @@
+# sqlx embeds each migration file's bytes at compile time and validates them against
+# _sqlx_migrations at boot; a CRLF checkout (Windows autocrlf) would embed different bytes than an
+# LF-built release binary and refuse existing databases, so these files must be byte-stable
+crates/server/migrations/*.sql text eol=lf

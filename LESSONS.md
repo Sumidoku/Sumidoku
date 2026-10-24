@@ -19,6 +19,36 @@ terminal-versus-requeue interleavings.
   let old cleanup remove the new execution's flag, producing `task_finishing`;
   terminal requeue emitted `pending → running → pending → pending`, dropping
   `done`. The probes were removed after reproduction.
+**Commit before anything can move the working tree; a shared checkout is
+not a safe place for uncommitted work.** Another session switching the
+branch under you — or any rebase/checkout/stash you didn't run — can drop
+or strand uncommitted hunks silently, and the damage surfaces far from the
+cause (a struct definition gone while its uses remain). Commit completed
+units as soon as they compile, and after any unexpected branch state,
+inventory `git status` against what you think is uncommitted before
+continuing.
+- Evidence: 2026-10-25, the working tree moved from `task-system` to
+  `feat/local-source` mid-session (the branch was rebased and pushed by a
+  concurrent session); the uncommitted `ChapterMeta` struct and a
+  `comic_info` helper vanished while their call sites stayed, caught only
+  by a targeted re-check of recent edits before the next compile. The same
+  day's `reset HEAD~` churn on `feat/local-source` then dropped this very
+  lesson's commit (59948ef), and it had to be re-applied from the session
+  transcript.
+
+**Migration files must be byte-stable across platforms: force LF in
+.gitattributes.** sqlx embeds each migration's bytes at compile time and
+validates them against `_sqlx_migrations` at boot, so a CRLF checkout
+(Windows autocrlf) embeds different checksums than an LF-built release
+binary — a Windows-local build refuses a Linux-created database, and the
+checksum pin test fails on CRLF hosts while CI stays green.
+`crates/server/migrations/*.sql text eol=lf` settles both.
+- Evidence: 2026-10-25, `db::tests::shipped_migrations_are_immutable`
+  failed on a WSL/Linux run over the Windows checkout: migration 1 hashed
+  F9D6E6… (CRLF) against pin 0A32F7… (LF); the dev database's stored
+  checksum matched CRLF because it was applied by a Windows-compiled
+  binary.
+ (docs: record shared-checkout and migration-eol lessons)
 
 **A missing state row is meaningful: default semantics must be shared by
 every read path.** When absence means unread, counts, sorting and
