@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Search drafts, submitted queries and view navigation are separate
+transitions.** Only local data should be searched live; remote source calls and
+the search-view URL belong to explicit submission. If typing drives all three,
+every keystroke costs a request and a navigation, and filters become reachable
+only after the query has already started. Keep the draft separate from the
+submitted query, and make filters available before the first submission.
+- Evidence: 2026-10-24, aggregate and single-source searches fired after 500ms,
+  aggregate filters were hidden until active, and mobile input pushed
+  `view=search`. Moving remote calls and URL activation to submit preserved
+  local live filtering. The filter regression failed with `Rating` missing;
+  browser sabotage reproduced the route jump and early empty results before the
+  fixes were restored.
+
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
 replaced session from a failed request, so the caller keeps reusing the dead
