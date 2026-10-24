@@ -11,3 +11,10 @@ test('updates settle from SSE summaries without polling or job-driven running st
 	assert.ok(jobHandler);
 	assert.doesNotMatch(jobHandler, /setSummary\(/);
 });
+
+test('update mutation cannot overwrite a completed event with optimistic running state', () => {
+	const source = readFileSync(new URL('../src/pages/UpdatesPage.tsx', import.meta.url), 'utf8');
+	const runUpdate = source.match(/\tasync function runUpdate[\s\S]*?\n\t\}/)?.[0];
+	assert.ok(runUpdate);
+	assert.doesNotMatch(runUpdate, /setSummary\(/);
+});

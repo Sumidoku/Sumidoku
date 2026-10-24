@@ -115,7 +115,6 @@ export default function UpdatesPage() {
 		try {
 			await fetchUpdate.mutateAsync(categoryId);
 			pushToast(t('updates.started'), 'info');
-			setSummary((s) => (s ? { ...s, running: true } : s));
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 409) pushToast(t('updates.alreadyRunning'), 'info');
 			else if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
