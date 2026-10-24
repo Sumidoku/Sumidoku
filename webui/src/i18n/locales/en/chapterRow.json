@@ -12,7 +12,7 @@
     "chapterActions": "Chapter actions",
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",
-    "markPreviousRead": "Mark previous as read",
-    "markPreviousUnread": "Mark previous as unread"
+    "markPreviousRead": "Mark all chapters below as read",
+    "markPreviousUnread": "Mark all chapters below as unread"
   }
 }

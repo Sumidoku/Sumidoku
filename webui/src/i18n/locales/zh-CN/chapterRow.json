@@ -12,7 +12,7 @@
     "chapterActions": "章节操作",
     "markRead": "标记已读",
     "markUnread": "标记未读",
-    "markPreviousRead": "标记上一章为已读",
-    "markPreviousUnread": "标记上一章为未读"
+    "markPreviousRead": "标记下方所有章节为已读",
+    "markPreviousUnread": "标记下方所有章节为未读"
   }
 }
