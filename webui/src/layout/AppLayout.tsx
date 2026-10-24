@@ -5,6 +5,9 @@ import { Moon, Sun } from 'lucide-react';
 import { IconButton } from '../components';
 import { readSidebarCollapsed, writeSidebarCollapsed } from '../lib/sidebarPrefs';
 import { useResolvedTheme, useTheme } from '../lib/theme';
+import { useWhoami } from '../api/hooks';
+import { sse } from '../api/sse';
+import { authAllowsEvents } from '../lib/auth';
 import { DesktopSidebar } from './DesktopSidebar';
 import { NAV } from './navigation';
 
@@ -27,9 +30,15 @@ function ThemeToggle() {
 export function AppLayout() {
 	const { t } = useTranslation();
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
+	const auth = useWhoami();
 	useEffect(() => {
 		writeSidebarCollapsed(sidebarCollapsed);
 	}, [sidebarCollapsed]);
+	useEffect(() => {
+		if (authAllowsEvents(auth.data)) sse.start();
+		else sse.stop();
+	}, [auth.data]);
+	useEffect(() => () => sse.stop(), []);
 	return (
 		<div className={sidebarCollapsed ? 'app app--sidebar-collapsed' : 'app'}>
 			<DesktopSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)}>

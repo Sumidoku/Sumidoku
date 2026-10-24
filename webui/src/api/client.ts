@@ -1,12 +1,14 @@
 import { pushToast } from '../components/Toast';
 import { translateApiError } from '../i18n';
 import type { StreamTerminal } from './protocol';
+import { sse } from './sse';
 
 const BASE = '/api/v1';
 
 /** Unified 401 handling: jump to the login page; login/password-change requests are handled locally by the page (avoids loops and false kicks) */
 function handleUnauthorized(path: string) {
 	if (location.pathname === '/login' || path === '/auth/login' || path === '/auth/password') return;
+	sse.stop();
 	location.assign('/login');
 }
 

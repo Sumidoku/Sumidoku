@@ -92,9 +92,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   the hub through one ordered channel. A lagged client connection ends so
   native `EventSource` reconnects; a lagged forwarding subscription instead
   asks each connection for a fresh snapshot. Heartbeat comments are sent every
-  15 seconds. Browser API requests use the login cookie, CLI clients may use
-  bearer authentication, and URL access tokens are not accepted. The former
-  download and update WebSocket endpoints are removed.
+  15 seconds. The browser keeps one SSE connection open across route changes;
+  `AppLayout` starts it only when the auth state allows and stops it on logout,
+  password change and unauthorized responses. Browser API requests use the
+  login cookie, CLI clients may use bearer authentication, and URL access
+  tokens are not accepted. The former download and update WebSocket endpoints
+  are removed.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
