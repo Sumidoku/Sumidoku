@@ -197,6 +197,10 @@
 		padding: 9px 0;
 	}
 
+	.app__sidebar--collapsed .side-nav__chevron {
+		display: none;
+	}
+
 	.app__sidebar-foot {
 		display: flex;
 		align-items: center;

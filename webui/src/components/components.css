@@ -127,6 +127,15 @@
 	white-space: nowrap;
 }
 
+.chip__tri-state {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	flex: none;
+}
+
 .chip--clickable {
 	cursor: pointer;
 	min-height: 36px;
@@ -182,6 +191,15 @@
 	border: none;
 	border-radius: var(--r-sm);
 	cursor: pointer;
+}
+
+.chip-dropdown__state {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 14px;
+	height: 14px;
+	flex: none;
 }
 
 .chip-dropdown__item:hover {

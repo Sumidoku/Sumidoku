@@ -45,12 +45,11 @@ export function TriStateDropdown({ label, options, states, onCycle, onReset }: T
 								className="chip-dropdown__item"
 								onClick={() => onCycle(opt.key)}
 							>
-								<span>
-									{st === -1 ? '− ' : ''}
-									{opt.label}
+								<span>{opt.label}</span>
+								<span className="chip-dropdown__state" aria-hidden="true">
+									{st === 1 && <Check size={14} />}
+									{st === -1 && <X size={14} />}
 								</span>
-								{st === 1 && <Check size={14} />}
-								{st === -1 && <X size={14} />}
 							</button>
 						);
 					})}
