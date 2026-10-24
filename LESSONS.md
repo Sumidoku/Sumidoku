@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Live values need a fixed slot in reading order, not an auto-aligned
+position.** Changing counts and percentages must not push related metadata or
+jump to the opposite edge. Put progress next to the date or label it describes,
+with space reserved for the final value; tri-state labels also need a stable
+icon slot rather than a text prefix that changes their width.
+- Evidence: 2026-10-24, chapter download progress pushed metadata and then sat
+  detached at the far right. The fixed slot now renders
+  `2023-08-18 1 / 2 · 50%` in that order, while include/exclude cycles keep the
+  same label position in chapter, library and source controls. Desktop and
+  mobile browser checks covered live SSE updates and the collapsed sidebar.
+
 **Search drafts, submitted queries and view navigation are separate
 transitions.** Only local data should be searched live; remote source calls and
 the search-view URL belong to explicit submission. If typing drives all three,
