@@ -18,7 +18,7 @@
     "addLocalDir": "Add directory",
     "localOneshotsDirLabel": "Oneshots directory",
     "localOneshotsDirPlaceholder": "oneshots",
-    "localOneshotsDirDesc": "A directory whose path contains this name (case-insensitive) is never listed itself; every archive directly inside becomes its own one-chapter manga titled by the file name. Empty falls back to the server config (SUMIDOKU_LOCAL_ONESHOTS_DIR)",
+    "localOneshotsDirDesc": "A directory whose path contains this name (case-insensitive) is never listed itself; every archive directly inside becomes its own one-chapter manga titled by the file name. Leaving the field blank disables the oneshots rule for this source; resetting restores the server config (SUMIDOKU_LOCAL_ONESHOTS_DIR).",
     "resetLocalConfirm": "Clear the oneshots override of this local source? The directory list is kept."
   }
 }
