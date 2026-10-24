@@ -494,6 +494,12 @@ button.manga-menu__row:hover:not(:disabled) {
 	color: var(--success);
 }
 
+.chapter-row__unread {
+	color: var(--accent);
+	font-size: 11px;
+	font-weight: 600;
+}
+
 .chapter-row__prog {
 	color: var(--accent);
 	font-variant-numeric: tabular-nums;

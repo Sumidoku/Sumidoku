@@ -3,6 +3,7 @@
     "locked": "Locked",
     "bookmarked": "Bookmarked",
     "downloaded": "Downloaded",
+    "unread": "Unread",
     "downloadCbz": "Download CBZ file",
     "downloadChapter": "Download chapter",
     "enqueueing": "Adding to download queue",

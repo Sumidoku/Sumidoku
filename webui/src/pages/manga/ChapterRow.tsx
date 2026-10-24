@@ -92,6 +92,7 @@ export function ChapterRow({
 				)}
 			</span>
 			<span className="chapter-row__status">
+				{!c.isRead && <span className="chapter-row__unread">{t('chapterRow.unread')}</span>}
 				{c.locked && (
 					<span className="chapter-row__lock" title={t('chapterRow.locked')}>
 						<Lock size={14} />
