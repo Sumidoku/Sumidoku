@@ -54,6 +54,12 @@ submitted query, and make filters available before the first submission.
   local live filtering. The filter regression failed with `Rating` missing;
   browser sabotage reproduced the route jump and early empty results before the
   fixes were restored.
+- Seen again: 2026-10-24, #401 review found that restoring a non-empty query
+  re-applied stored filters even when the source hides filters while searching,
+  so the restored request could differ from the original. The request boundary
+  must apply the same drop rule on fresh submission and restoration. A temporary
+  aggregate `?q=` regression failed on base and passed on the PR head, but the
+  PR contained no permanent test for it.
 
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
