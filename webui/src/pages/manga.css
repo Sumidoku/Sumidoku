@@ -553,6 +553,21 @@ button.manga-menu__row:hover:not(:disabled) {
 	font-variant-numeric: tabular-nums;
 }
 
+.manga-download-rules {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+}
+
+.manga-download-rules .select,
+.manga-download-rules .input {
+	width: 100%;
+}
+
+.manga-download-rules p {
+	margin: 0;
+}
+
 /* ============ Category modal ============ */
 
 .manga-cats {

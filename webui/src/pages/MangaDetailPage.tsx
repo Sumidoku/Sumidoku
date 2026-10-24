@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
 import { api, coverUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import {
@@ -27,6 +27,8 @@ import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { sse } from '../api/sse';
 import { createMangaDownloadEventHandlers, downloadActivitySnapshot } from '../lib/downloadEvents';
 import type { MangaDownloadActivity } from '../lib/downloadEvents';
+import { selectDownloadChapterIds } from '../lib/downloadRules';
+import type { DownloadRule } from '../lib/downloadRules';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -144,6 +146,10 @@ export default function MangaDetailPage() {
 	const [search, setSearch] = useState('');
 	const [migrateOpen, setMigrateOpen] = useState(false);
 	const [coverPickerOpen, setCoverPickerOpen] = useState(false);
+	const [downloadRulesOpen, setDownloadRulesOpen] = useState(false);
+	const [downloadRule, setDownloadRule] = useState<DownloadRule>('unread');
+	const [downloadLatest, setDownloadLatest] = useState('10');
+	const [downloadRuleQueued, setDownloadRuleQueued] = useState<number | null>(null);
 	// Sort/filter prefs persist per manga; loadedId keeps a manga switch from writing the previous entry's prefs under the new key
 	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
 	const [loadedId, setLoadedId] = useState(mangaId);
@@ -219,6 +225,10 @@ export default function MangaDetailPage() {
 	const categoriesQuery = useCategories();
 
 	const unread = useMemo(() => chapters.filter((c) => !c.isRead).length, [chapters]);
+	const downloadRuleIds = useMemo(
+		() => selectDownloadChapterIds(chapters, downloadRule, Number(downloadLatest)),
+		[chapters, downloadRule, downloadLatest]
+	);
 
 	// Languages/scanlation groups only feed the filter options, deduplicated across all chapters
 	const languages = useMemo(() => {
@@ -429,6 +439,15 @@ export default function MangaDetailPage() {
 				pushToast(t('mangaDetail.queuedChapters', { count: res.queued.length }), 'info');
 				exitSelect();
 			}
+		});
+	}
+
+	function downloadByRule() {
+		const ids = downloadRuleIds;
+		if (ids.length === 0) return;
+		setDownloadRuleQueued(null);
+		enqueueDownloads.mutate(ids, {
+			onSuccess: (res) => setDownloadRuleQueued(res.queued.length)
 		});
 	}
 
@@ -691,6 +710,20 @@ export default function MangaDetailPage() {
 											<span>{t('mangaDetail.refreshChapters')}</span>
 											{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
 										</button>
+										{!isLocal && chapters.length > 0 && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setDownloadRuleQueued(null);
+													setDownloadRulesOpen(true);
+												}}
+											>
+												<span>{t('mangaDetail.downloadRulesTitle')}</span>
+												<DownloadIcon size={14} />
+											</button>
+										)}
 										{manga.inLibrary && (
 											<button
 												type="button"
@@ -938,6 +971,59 @@ export default function MangaDetailPage() {
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
 
 			{coverPickerOpen && <CoverPickerModal manga={manga} onClose={() => setCoverPickerOpen(false)} />}
+
+			<Modal
+				open={downloadRulesOpen}
+				title={t('mangaDetail.downloadRulesTitle')}
+				onClose={() => setDownloadRulesOpen(false)}
+				footer={
+					<>
+						<Button onClick={() => setDownloadRulesOpen(false)}>{t('common.cancel')}</Button>
+						<Button
+							variant="primary"
+							loading={enqueueDownloads.isPending}
+							disabled={downloadRuleIds.length === 0 || enqueueDownloads.isPending}
+							onClick={downloadByRule}
+						>
+							{t('mangaDetail.download')}
+						</Button>
+					</>
+				}
+			>
+				<div className="manga-download-rules">
+					<Select
+						value={downloadRule}
+						aria-label={t('mangaDetail.downloadRule')}
+						onChange={(e) => {
+							setDownloadRule(e.currentTarget.value as DownloadRule);
+							setDownloadRuleQueued(null);
+						}}
+					>
+						<option value="unread">{t('mangaDetail.downloadRuleUnread')}</option>
+						<option value="latest">{t('mangaDetail.downloadRuleLatest')}</option>
+						<option value="all">{t('mangaDetail.downloadRuleAll')}</option>
+					</Select>
+					{downloadRule === 'latest' && (
+						<Input
+							type="number"
+							min={1}
+							step={1}
+							inputMode="numeric"
+							aria-label={t('mangaDetail.downloadRuleLatestCount')}
+							value={downloadLatest}
+							onChange={(e) => {
+								setDownloadLatest(e.currentTarget.value);
+								setDownloadRuleQueued(null);
+							}}
+						/>
+					)}
+					<p className="muted">{t('mangaDetail.downloadRulesScope')}</p>
+					<p>{t('mangaDetail.downloadRuleMatches', { count: downloadRuleIds.length })}</p>
+					{downloadRuleQueued !== null && (
+						<p role="status">{t('mangaDetail.queuedChapters', { count: downloadRuleQueued })}</p>
+					)}
+				</div>
+			</Modal>
 
 			<Modal
 				open={removeOpen}
