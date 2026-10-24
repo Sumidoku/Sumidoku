@@ -89,6 +89,8 @@ pub struct NetRequest {
 	pub method: HttpMethod,
 	pub url: Option<Url>,
 	pub headers: HeaderMap,
+	/// Host-injected browser identity headers must not override the identity of a browser session.
+	injected_headers: Vec<HeaderName>,
 	pub body: Option<Vec<u8>>,
 	pub timeout: Option<f64>,
 	pub response: Option<NetResponse>,
@@ -100,6 +102,7 @@ impl NetRequest {
 			method,
 			url: None,
 			headers: HeaderMap::new(),
+			injected_headers: Vec::new(),
 			body: None,
 			timeout: None,
 			response: None,
@@ -255,6 +258,7 @@ pub(crate) fn perform(
 		// replaying under any other UA just re-challenges
 		if let Ok(value) = HeaderValue::from_str(&replay.user_agent) {
 			request.headers.insert(USER_AGENT, value);
+			request.injected_headers.push(USER_AGENT);
 		}
 	} else if !request.headers.contains_key(USER_AGENT) {
 		let ua = net
@@ -263,6 +267,7 @@ pub(crate) fn perform(
 			.unwrap_or_else(|| FALLBACK_USER_AGENT.to_string());
 		if let Ok(value) = HeaderValue::from_str(&ua) {
 			request.headers.insert(USER_AGENT, value);
+			request.injected_headers.push(USER_AGENT);
 		}
 	}
 	if !request.headers.contains_key(ACCEPT_LANGUAGE)
@@ -290,7 +295,8 @@ pub(crate) fn perform(
 			if !request.headers.contains_key(name) {
 				let name = HeaderName::from_static(name);
 				request.headers.insert(name.clone(), HeaderValue::from_static(value));
-				injected_suite.push(name);
+				injected_suite.push(name.clone());
+				request.injected_headers.push(name);
 			}
 		}
 	}
@@ -458,23 +464,47 @@ impl crate::runtime::env::NetState {
 		let headers: Vec<(String, String)> = request
 			.headers
 			.iter()
-			.map(|(name, value)| {
-				(
-					name.as_str().to_string(),
-					value.to_str().map(str::to_string).unwrap_or_default(),
-				)
+			.filter_map(|(name, value)| {
+				if request.injected_headers.contains(name) {
+					return None;
+				}
+				let value = value.to_str().map(str::to_string).unwrap_or_default();
+				let value = if name == COOKIE {
+					// The browser session owns clearance for its own fingerprint; a direct replay must not override it.
+					value
+						.split(';')
+						.map(str::trim)
+						.filter(|part| !part.is_empty() && !part.starts_with("cf_clearance="))
+						.collect::<Vec<_>>()
+						.join("; ")
+				} else {
+					value
+				};
+				if name == COOKIE && value.is_empty() {
+					None
+				} else {
+					Some((name.as_str().to_string(), value))
+				}
 			})
 			.collect();
-		let outcome = crate::browser::trawl::session_request(
-			&api,
-			sid,
-			method,
-			url.as_str(),
-			&headers,
-			request.body.as_deref(),
-			timeout,
-		)
-		.ok_or(SendFailure::Request)?;
+		let send = || {
+			crate::browser::trawl::session_request(
+				&api,
+				sid,
+				method,
+				url.as_str(),
+				&headers,
+				request.body.as_deref(),
+				timeout,
+			)
+		};
+		let outcome = match send() {
+			Ok(outcome) => outcome,
+			Err(crate::browser::trawl::SessionRequestError::Gone) if self.ensure_login_session(sid) => {
+				send().map_err(|_| SendFailure::Request)?
+			}
+			Err(_) => return Err(SendFailure::Request),
+		};
 		let status = reqwest::StatusCode::from_u16(outcome.status)
 			.unwrap_or(reqwest::StatusCode::BAD_GATEWAY);
 		// Mirror the session's site cookies into the jar (login state): later
@@ -1120,6 +1150,149 @@ mod tests {
 		let heads = trawl.heads();
 		assert_eq!(heads.len(), 3, "已升会话后不再建会话");
 		assert!(heads[2].starts_with("POST /scrape"), "third: {}", heads[2]);
+	}
+
+	fn json_trawl_server() -> (String, Arc<Mutex<Vec<serde_json::Value>>>) {
+		use std::io::BufRead as _;
+
+		let listener = TcpListener::bind("127.0.0.1:0").expect("bind json trawl");
+		let addr = listener.local_addr().expect("json trawl addr").to_string();
+		let requests = Arc::new(Mutex::new(Vec::new()));
+		let seen = requests.clone();
+		std::thread::spawn(move || {
+			for stream in listener.incoming() {
+				let Ok(mut stream) = stream else { break };
+				let mut reader = std::io::BufReader::new(stream.try_clone().expect("clone stream"));
+				let mut head = String::new();
+				loop {
+					let mut line = String::new();
+					match reader.read_line(&mut line) {
+						Ok(0) | Err(_) => break,
+						Ok(_) => {
+							head.push_str(&line);
+							if line == "\r\n" { break }
+						}
+					}
+				}
+				let len = head
+					.lines()
+					.filter_map(|line| line.split_once(':'))
+					.find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+					.and_then(|(_, value)| value.trim().parse::<usize>().ok())
+					.unwrap_or(0);
+				let mut body = vec![0; len];
+				reader.read_exact(&mut body).expect("read json body");
+				let create = head.starts_with("POST /sessions");
+				if !create {
+					seen.lock().expect("requests lock").push(serde_json::from_slice(&body).expect("scrape json"));
+				}
+				let (status, body) = if create {
+					("201 Created", r#"{"id":"s","keepPage":true}"#)
+				} else {
+					("200 OK", r#"{"cookies":[],"html":"登录成功"}"#)
+				};
+				if stream.write_all(&respond(status, &["content-type: application/json"], body)).is_err() {
+					break;
+				}
+			}
+		});
+		(addr, requests)
+	}
+
+	#[test]
+	fn login_session_strips_only_host_injected_browser_headers() {
+		let origin = mock_server(|_| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let (trawl, requests) = json_trawl_server();
+		let policy = Arc::new(EscalationPolicy {
+			trawl: None,
+			solver: None,
+			..Default::default()
+		});
+		policy.clearances.lock().expect("clearances lock").insert(
+			"127.0.0.1".into(),
+			crate::traits::ClearanceReplay {
+				user_agent: "solver-agent".into(),
+				clearance: "stale".into(),
+			},
+		);
+		let mut net = NetState::new(policy, CookieJar::default());
+		net.set_trawl(&format!("http://{trawl}"));
+		net.set_login_in_progress(true);
+		let url = Url::parse(&format!("http://{}/login.php", origin.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Post);
+		request.url = Some(url);
+		request.headers.insert(reqwest::header::REFERER, HeaderValue::from_static("https://source.example/login"));
+		request.headers.insert(COOKIE, HeaderValue::from_static("session=keep"));
+		request.body = Some(b"username=fixture&password=fixture".to_vec());
+
+		perform(&mut net, &mut request, Duration::from_secs(10), TEST_BODY_MAX).expect("session request");
+		let requests = requests.lock().expect("requests lock");
+		assert_eq!(requests.len(), 1);
+		let headers = requests[0]["headers"].as_object().expect("forwarded headers");
+		for name in ["user-agent", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform", "sec-fetch-dest", "accept"] {
+			assert!(!headers.contains_key(name), "host-injected {name} reached the browser: {headers:?}");
+		}
+		assert_eq!(headers["referer"], "https://source.example/login");
+		assert_eq!(headers["cookie"], "session=keep");
+	}
+
+	#[test]
+	fn login_flow_recreates_expired_session_and_replays_request() {
+		let origin = mock_server(|_| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let scrapes = Arc::new(AtomicUsize::new(0));
+		let scrape_count = scrapes.clone();
+		let trawl = mock_server(move |head| {
+			if head.starts_with("POST /sessions") {
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else if scrape_count.fetch_add(1, Ordering::SeqCst) == 0 {
+				respond("404 Not Found", &["content-type: application/json"], r#"{"error":"session expired"}"#)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					r#"{"cookies":[{"name":"PHPSESSID","value":"sess1","domain":".127.0.0.1","path":"/"}],"html":"登录成功"}"#,
+				)
+			}
+		});
+		let policy = Arc::new(EscalationPolicy {
+			trawl: None,
+			solver: None,
+			..Default::default()
+		});
+		let mut net = NetState::new(policy, CookieJar::default());
+		net.set_trawl(&format!("http://{}", trawl.addr));
+		net.set_login_in_progress(true);
+		let url = Url::parse(&format!("http://{}/login.php", origin.addr)).unwrap();
+		let mut request = NetRequest::new(HttpMethod::Post);
+		request.url = Some(url.clone());
+		request.body = Some(b"username=fixture&password=fixture".to_vec());
+
+		perform(&mut net, &mut request, Duration::from_secs(10), TEST_BODY_MAX).expect("recreate the expired session");
+		let response = request.response.expect("response stored");
+		assert_eq!(response.status, StatusCode::OK);
+		assert_eq!(response.data, "登录成功".as_bytes());
+		assert!(net.jar.header_for(&url).expect("jar header").contains("PHPSESSID=sess1"));
+		let heads = trawl.heads();
+		assert_eq!(heads.len(), 4, "create, expired scrape, recreate, replay: {heads:?}");
+		for (index, prefix) in ["POST /sessions", "POST /scrape", "POST /sessions", "POST /scrape"].into_iter().enumerate() {
+			assert!(heads[index].starts_with(prefix), "request {index}: {}", heads[index]);
+		}
 	}
 
 	#[test]
