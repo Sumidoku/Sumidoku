@@ -126,6 +126,12 @@ pub fn ensure_session(api_base: &str, id: &str, client: &reqwest::blocking::Clie
 	matches!(response.status().as_u16(), 201 | 409)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRequestError {
+	Gone,
+	Failed,
+}
+
 /// Outcome of a session-backed request: the page body plus the session's post-navigation
 /// cookies (the site's Set-Cookie lands in the trawl context and comes back here, so the
 /// caller can mirror them into its own jar for later non-browser requests).
@@ -149,12 +155,12 @@ pub fn session_request(
 	headers: &[(String, String)],
 	body: Option<&[u8]>,
 	timeout: Duration,
-) -> Option<SessionRequestOutcome> {
+) -> Result<SessionRequestOutcome, SessionRequestError> {
 	let client = reqwest::blocking::Client::builder()
 		.use_rustls_tls()
 		.timeout(timeout + CLIENT_GRACE)
 		.build()
-		.ok()?;
+		.map_err(|_| SessionRequestError::Failed)?;
 	let mut req = serde_json::json!({
 		"url": url,
 		"sessionId": session,
@@ -179,21 +185,21 @@ pub fn session_request(
 		.body(req.to_string())
 		.timeout(timeout + CLIENT_GRACE)
 		.send()
-		.ok()?;
+		.map_err(|_| SessionRequestError::Failed)?;
 	let status = response.status().as_u16();
 	if status == 404 || status == 410 {
 		// Session lost (browser swapped / expired): the caller replays through a fresh
 		// ensure_session + this call again
-		return None;
+		return Err(SessionRequestError::Gone);
 	}
-	let text = response.text().ok()?;
-	let result: ScrapeResult = serde_json::from_str(&text).ok()?;
+	let text = response.text().map_err(|_| SessionRequestError::Failed)?;
+	let result: ScrapeResult = serde_json::from_str(&text).map_err(|_| SessionRequestError::Failed)?;
 	let body = result
 		.body
 		.and_then(buffer_to_bytes)
 		.or_else(|| result.html.clone().map(String::into_bytes))
 		.unwrap_or_default();
-	Some(SessionRequestOutcome {
+	Ok(SessionRequestOutcome {
 		status,
 		cookies: result.cookies.into_iter().map(BrowserCookie::from).collect(),
 		body,
