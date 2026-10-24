@@ -19,7 +19,7 @@ const SCHEDULE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 pub const LIBRARY_SKIP_TITLES: &str = "library.skip_titles";
 pub const LIBRARY_REFRESH_METADATA: &str = "library.refresh_metadata";
 pub const LIBRARY_UPDATE_INTERVAL_HOURS: &str = "library.update_interval_hours";
-const LIBRARY_LAST_SCHEDULED_RUN_AT: &str = "library.last_scheduled_run_at";
+pub(crate) const LIBRARY_LAST_SCHEDULED_RUN_AT: &str = "library.last_scheduled_run_at";
 pub const LIBRARY_EXCLUDED_UPDATE_CATEGORIES: &str = "library.excluded_update_categories";
 pub const SKIP_TITLE_RULES: [&str; 3] = ["hasUnread", "completed", "notStarted"];
 

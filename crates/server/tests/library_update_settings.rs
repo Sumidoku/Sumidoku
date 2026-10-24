@@ -234,3 +234,34 @@ async fn structured_settings_reject_partial_or_malformed_groups() {
 	.expect("no structured groups stored as flat keys");
 	assert_eq!(garbage, 0);
 }
+
+#[tokio::test]
+async fn scheduled_library_clock_is_server_owned() {
+	let app = app_with_interval(0).await;
+	let pool = connect_db(&app.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('library.last_scheduled_run_at', '456')")
+		.execute(&pool)
+		.await
+		.expect("seed scheduler clock");
+
+	let (status, mut settings) = request(&app.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(settings.get("library.last_scheduled_run_at").is_none(), "{settings}");
+	settings["library.last_scheduled_run_at"] = json!(123);
+	let (status, body) = request(&app.app, "PUT", "/api/v1/settings", Some(settings)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, body) = request(
+		&app.app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.last_scheduled_run_at": 123})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'library.last_scheduled_run_at'")
+		.fetch_one(&pool)
+		.await
+		.expect("scheduler clock must survive both settings write forms");
+	assert_eq!(stored, "456");
+}

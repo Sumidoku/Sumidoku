@@ -1047,9 +1047,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   capturing it at construction, so setting changes need no restart. A scheduled
   union stamps `library.last_scheduled_run_at` in the settings at start and
   finish; due uses that persisted timestamp and is immediate when no scheduled
-  batch has run. Manual batches still stamp the summary's `last_run_at` for
-  reporting, but never the scheduled-only clock, so they cannot postpone the
-  union. Restarting the process does not defer a due union by another interval.
+  batch has run. The key is excluded from structured settings extras, and both
+  settings write forms ignore it because only the scheduler owns it. Manual
+  batches still stamp the summary's `last_run_at` for reporting, but never the
+  scheduled-only clock, so they cannot postpone the union. Restarting the process does not defer a due union by another interval.
   Each manga fetch also reloads refresh/interval. WASM receives the refresh
   flag as `needs_details`; details returned by WASM, local or OPDS are
   upserted only when it is true. Before that upsert, the write transaction
