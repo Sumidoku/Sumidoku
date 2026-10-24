@@ -40,7 +40,7 @@
     "uninstallTitle": "Uninstall source {{name}}?",
     "uninstallConfirm": "Uninstall",
     "uninstalled": "Uninstalled {{name}}",
-    "deleteHint": "This also deletes the source package on the server, and future directory scans will not reinstall it; your library and downloads are not affected.",
+    "deleteHint": "This removes the source, its library entries and reading progress. Downloaded files on the server are kept.",
     "scanDone": "Scan complete: {{installed}} installed, {{updated}} updated, {{skipped}} skipped",
     "scanSkipped": "Skipped {{dir}}: {{reason}}",
     "updateAllDone": "Update complete: {{updated}} updated, {{failed}} failed",
