@@ -24,9 +24,11 @@ category restore containing any such entry forces `auto_download_new_chapters`
 to `false`, even when the target or backup enables it; review and reconfigure
 category exclusions and automatic downloads before re-enabling them. The raw
 `library.excluded_update_categories` and `library.excluded_download_categories`
-settings are omitted from exports and ignored on import; category restoration
-maps names to target-local category ids and merges those ids into the existing
-exclusion settings without writing the retired category columns. The settings
+settings are omitted from exports and ignored on import. Scheduler-owned runtime
+timestamps such as `library.last_scheduled_run_at` are omitted too and ignored on
+import; category restoration maps names to target-local category ids and merges
+those ids into the existing exclusion settings without writing the retired
+category columns. The settings
 page of the web UI has
 download and restore buttons. The file contains source settings, which may
 include site passwords — store it accordingly.
