@@ -82,7 +82,7 @@ function NavGroup({
 				<span className="side-nav__label" hidden={collapsed}>{t(labelKey)}</span>
 				<ChevronRight size={14} className={open ? 'side-nav__chevron side-nav__chevron--open' : 'side-nav__chevron'} />
 			</button>
-			<div id={id} className="side-nav__children" hidden={!open}>
+			<div id={id} className="side-nav__children" hidden={!open} style={{ display: open ? undefined : 'none' }}>
 				{items.map((item) => <NavItem key={item.to} item={item} collapsed={collapsed} />)}
 			</div>
 		</div>

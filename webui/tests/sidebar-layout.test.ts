@@ -53,6 +53,7 @@ test('expanded sidebar keeps visible labels and collapse control', async () => {
 
 test('sidebar groups start collapsed outside their routes', async () => {
 	const markup = await renderSidebar(false);
+	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 3);
 	for (const group of ['common.nav.library', 'common.nav.downloads', 'common.nav.settings']) {
 		assert.match(markup, new RegExp(`data-nav-group="${group}"[^>]*aria-expanded="false"`));
 	}
@@ -60,6 +61,7 @@ test('sidebar groups start collapsed outside their routes', async () => {
 
 test('settings deep link opens only the settings group and exposes section links', async () => {
 	const markup = await renderSidebar(false, '/settings?section=downloads');
+	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 2);
 	assert.match(markup, /data-nav-group="common.nav.settings"[^>]*aria-expanded="true"/);
 	assert.match(markup, /data-nav-group="common.nav.library"[^>]*aria-expanded="false"/);
 	assert.match(markup, /data-nav-group="common.nav.downloads"[^>]*aria-expanded="false"/);
