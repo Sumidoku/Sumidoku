@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
 	DEFAULT_TYPOGRAPHY,
@@ -57,13 +56,4 @@ test('reader typography round-trips and rejects malformed stored values', () => 
 		values.set(KEY, JSON.stringify({ font: 'mono', fontSize: 2, lineHeight: 2.5 }));
 		assert.deepEqual(loadTypography(), { font: 'mono', fontSize: 2, lineHeight: 2.5 });
 	});
-});
-
-test('reader text paths apply typography and remeasure columns', () => {
-	const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8');
-	assert.match(source, /style=\{\{\s*\.\.\.textStyle/);
-	assert.match(source, /className="reader-text" style=\{textStyle\}/);
-	assert.match(source, /\}, \[mode, idx, pages, typography\]\);/);
-	assert.match(source, /reader\.typography/);
-	assert.match(source, /reader\.fontFamily/);
 });

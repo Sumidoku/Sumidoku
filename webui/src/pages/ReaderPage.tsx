@@ -25,21 +25,16 @@ import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
-import { Button, EmptyState, IconButton, SegmentedControl, Select, Spinner } from '../components';
+import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
-import {
-	FONT_SIZE_LIMITS,
-	LINE_HEIGHT_LIMITS,
-	loadTypography,
-	saveTypography,
-	typographyStyle
-} from './reader/typography';
-import type { ReaderFont, ReaderTypography } from './reader/typography';
+import { pageText } from './reader/pageText';
+import { ReaderSettings } from './reader/ReaderSettings';
+import type { Mode, Dir } from './reader/ReaderSettings';
+import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
+import type { ReaderTypography } from './reader/typography';
 import './reader.css';
 
 // continuous is the stored value for "scroll" in the old localStorage; renaming it would lose existing users' settings
-type Mode = 'paged' | 'continuous' | 'webtoon';
-type Dir = 'ltr' | 'rtl';
 
 const MODES: { key: Mode; icon: LucideIcon }[] = [
 	{ key: 'paged', icon: BookOpen },
@@ -68,10 +63,6 @@ function readDir(): Dir {
 	return 'ltr';
 }
 
-function isText(p: Page | undefined | null): p is Page & { content: { Text: string } } {
-	return !!p?.content && typeof p.content === 'object' && 'Text' in p.content;
-}
-
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -81,14 +72,6 @@ function pageDimensions(p: Page | undefined | null): { width: number; height: nu
 	if (!p || typeof p.width !== 'number' || typeof p.height !== 'number') return null;
 	if (!Number.isFinite(p.width) || !Number.isFinite(p.height) || p.width <= 0 || p.height <= 0) return null;
 	return { width: p.width, height: p.height };
-}
-
-// A hasDescription page displays its description (already fetched by the server); other text pages use content.Text
-function pageText(p: Page | undefined | null): string | null {
-	if (!p) return null;
-	if (p.hasDescription && typeof p.description === 'string') return p.description;
-	if (isText(p)) return p.content.Text;
-	return null;
 }
 
 // Keep the old trust model: markdown output is not sanitized
@@ -853,58 +836,14 @@ function ReaderCore({
 			</div>
 
 			{overlay && settingsOpen && (
-				<div className="reader__settings card">
-					<div className="reader__settings-title">
-						{mode !== 'paged' ? t('reader.directionPagedOnly') : t('reader.direction')}
-					</div>
-					<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-						<SegmentedControl
-							options={[
-								{ value: 'ltr', label: t('reader.ltr') },
-								{ value: 'rtl', label: t('reader.rtl') }
-							]}
-							value={dir}
-							onChange={setDir}
-						/>
-					</div>
-					<div className="reader__settings-title">{t('reader.typography')}</div>
-					<div className="reader__typography">
-						<Select
-							aria-label={t('reader.fontFamily')}
-							value={typography.font}
-							onChange={(e) => updateTypography({ font: e.currentTarget.value as ReaderFont })}
-						>
-							<option value="default">{t('reader.fontDefault')}</option>
-							<option value="sans">{t('reader.fontSans')}</option>
-							<option value="serif">{t('reader.fontSerif')}</option>
-							<option value="mono">{t('reader.fontMono')}</option>
-						</Select>
-						<label>
-							<span>{t('reader.fontSize')}</span>
-							<input
-								type="range"
-								min={FONT_SIZE_LIMITS.min}
-								max={FONT_SIZE_LIMITS.max}
-								step={FONT_SIZE_LIMITS.step}
-								value={typography.fontSize}
-								onChange={(e) => updateTypography({ fontSize: Number(e.currentTarget.value) })}
-							/>
-							<span>{Math.round(typography.fontSize * 100)}%</span>
-						</label>
-						<label>
-							<span>{t('reader.lineHeight')}</span>
-							<input
-								type="range"
-								min={LINE_HEIGHT_LIMITS.min}
-								max={LINE_HEIGHT_LIMITS.max}
-								step={LINE_HEIGHT_LIMITS.step}
-								value={typography.lineHeight}
-								onChange={(e) => updateTypography({ lineHeight: Number(e.currentTarget.value) })}
-							/>
-							<span>{typography.lineHeight.toFixed(1)}</span>
-						</label>
-					</div>
-				</div>
+				<ReaderSettings
+					mode={mode}
+					dir={dir}
+					onDirChange={setDir}
+					currentPage={curPage}
+					typography={typography}
+					onTypographyChange={updateTypography}
+				/>
 			)}
 
 			{chaptersOpen && (
