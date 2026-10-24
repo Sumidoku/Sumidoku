@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Event-driven state needs one owner for each transition; a request's success
+continuation must not reapply optimistic state that an event may already have
+superseded.** A mutation accepted by the server is not proof that the work is
+still running when the client continuation resumes. Keep the optimistic state
+only when the same ordering channel can guarantee it is still current, and
+exercise the fast-completion path in a real browser.
+- Evidence: 2026-10-24, global SSE browser acceptance: a 6 ms library update
+  emitted `updateComplete`, then `runUpdate`'s `await` continuation wrote
+  `running: true` and left the page running indefinitely. Removing that write
+  made the summary events the sole owner of running transitions; the regression
+  failed when the write was restored and passed after its removal, and the next
+  browser run returned to the completed state.
+
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
 suppressing the fallback just as a real title would. Normalize empty values
