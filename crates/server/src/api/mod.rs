@@ -1700,7 +1700,11 @@ pub(crate) async fn apply_settings(
 			result?;
 		}
 		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
-		if key == "localDirs" || key == "localOneshotsDir" || key == "sync.instance_id" {
+		if key == "localDirs"
+			|| key == "localOneshotsDir"
+			|| key == "sync.instance_id"
+			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+		{
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
