@@ -83,7 +83,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   connection replays retained events after `Last-Event-ID`, sends a current
   download/update snapshot, then sends live events with duplicate ids
   suppressed. Journal entries expire after 15 minutes; an expired replay
-  simply falls back to the current snapshot. The event names are `snapshot`,
+  simply falls back to the current snapshot. A cursor beyond the journal's
+  current maximum id is also reset to that snapshot, which covers restoring a
+  different database. Journal or snapshot failures close the stream for a
+  reconnect instead of dropping a terminal event silently or presenting an
+  empty download list as current. The event names are `snapshot`,
   `download`, `running`, `update`, `updateSummary` and `updateComplete`.
   `updateSummary` carries the start and per-item counts, while
   `updateComplete` carries the final stopped state, so the updates page does

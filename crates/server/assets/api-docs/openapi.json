@@ -96,7 +96,7 @@
         "operationId": "getAuthStatus",
         "summary": "Get authentication status and the optional current identity",
         "security": [],
-        "description": "A bearer token or access_token query value is optional. When authentication is disabled, user is null.",
+        "description": "A bearer token or access_token query value is optional. When authentication is disabled, user is null. A valid login session token also sets or refreshes the sumidoku.session cookie for /api/v1/events, allowing existing browser sessions to continue without logging in again. API keys do not mint this cookie.",
         "responses": {
           "200": {
             "description": "Authentication status",
@@ -3107,7 +3107,7 @@
         ],
         "operationId": "streamEvents",
         "summary": "Stream download and library update events over SSE",
-        "description": "The stream sends retained events newer than Last-Event-ID, then a current snapshot, then live events. Events are retained for 15 minutes; expired events are skipped in favor of the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. A heartbeat comment is sent every 15 seconds. Unlike image and legacy WebSocket endpoints, this endpoint does not accept access_token in the URL.",
+        "description": "The stream sends retained events newer than Last-Event-ID, then a current snapshot, then live events. Events are retained for 15 minutes; expired events are skipped in favor of the snapshot. A cursor beyond the journal's current maximum id is reset to the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. Journal or snapshot failures close the stream so the client can reconnect and resynchronize. A heartbeat comment is sent every 15 seconds. Unlike image and legacy WebSocket endpoints, this endpoint does not accept access_token in the URL.",
         "security": [
           {
             "bearerAuth": []

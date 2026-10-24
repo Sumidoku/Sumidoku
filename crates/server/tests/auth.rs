@@ -126,6 +126,12 @@ async fn session_cookie_is_limited_to_events() {
 	let body: Value = serde_json::from_slice(&bytes).expect("login json");
 	let token = body["token"].as_str().expect("token");
 	let cookie = format!("sumidoku.session={token}");
+	let bearer = format!("Bearer {token}");
+	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &bearer)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let refreshed = headers.get("set-cookie").expect("refreshed session cookie").to_str().expect("cookie text");
+	assert!(refreshed.contains("sumidoku.session="));
+	assert!(refreshed.contains("Max-Age=2592000"));
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("cookie", &cookie)]).await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let addr = serve_app(app.clone()).await;
@@ -296,6 +302,16 @@ async fn api_keys_authenticate_without_login() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
+	let (status, headers, _) = request_with_headers(
+		&app,
+		"GET",
+		"/api/v1/auth/status",
+		None,
+		&[("authorization", "Bearer smk_test_key")],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",

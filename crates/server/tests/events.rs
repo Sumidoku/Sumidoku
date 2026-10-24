@@ -104,3 +104,31 @@ async fn update_complete_carries_final_summary() {
 	let ids = frames.map(|frame| frame["id"].as_i64().unwrap());
 	assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
 }
+
+#[tokio::test]
+async fn future_cursor_resets_to_snapshot_and_live_events() {
+	let app = test_app().await;
+	let addr = serve_app(app.app.clone()).await;
+	let (mut stream, mut rest) = tokio::time::timeout(
+		std::time::Duration::from_secs(5),
+		connect_sse(addr, "/api/v1/events", Some(i64::MAX - 1), &[]),
+	)
+	.await
+	.expect("connect sse");
+	let snapshot = tokio::time::timeout(std::time::Duration::from_secs(5), read_sse_kind(&mut stream, &mut rest, "snapshot"))
+		.await
+		.expect("initial snapshot");
+	assert_eq!(snapshot["data"]["type"], "snapshot");
+	let (status, _) = tokio::time::timeout(
+		std::time::Duration::from_secs(5),
+		request(&app.app, "POST", "/api/v1/downloads/stop", None),
+	)
+	.await
+	.expect("stop downloads");
+	assert_eq!(status, StatusCode::OK);
+	let running = tokio::time::timeout(std::time::Duration::from_secs(5), common::read_sse_event(&mut stream, &mut rest))
+		.await
+		.expect("running event");
+	assert_eq!(running["type"], "running");
+	assert_eq!(running["data"]["running"], false);
+}

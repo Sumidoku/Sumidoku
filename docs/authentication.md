@@ -55,8 +55,11 @@ breaking change.
   age; HTTPS responses add `Secure`. The cookie authenticates only
   `GET /api/v1/events`, allowing the same-origin `EventSource` to reuse the
   login session without putting the token in its URL. Other API routes do
-  not accept it. Logout and password changes clear the cookie; password
-  changes also revoke every session token as described above.
+  not accept it. `GET /api/v1/auth/status` also refreshes the cookie when
+  presented with a valid session token, so an existing browser session that
+  predates the cookie can continue without logging in again. API keys do not
+  mint this cookie. Logout and password changes clear it; password changes
+  also revoke every session token as described above.
 - **API keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
   `auth.api_keys` in `config.toml`. Long-lived, used directly as
   `Authorization: Bearer <key>`, never stored in the database, and act

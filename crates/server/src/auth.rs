@@ -250,22 +250,31 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
-pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display and SSE cookie; with auth disabled user is always null
+pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Response> {
+	let https = is_https(req.uri(), req.headers());
+	let token = presented_token(&req);
 	let enabled = state.auth.enabled().await;
 	let user = match enabled {
-		true => bearer_user(&state, presented_token(&req)).await?,
+		true => bearer_user(&state, token.clone()).await?,
 		false => None,
 	};
 	let mut body = json!({
 		"enabled": enabled,
 		"user": Value::Null,
 	});
-	if let Some(user) = user {
+	if let Some(user) = &user {
 		body["username"] = Value::String(user.username.clone());
 		body["user"] = json!({ "id": user.id, "username": user.username });
 	}
-	Ok(Json(body))
+	let mut response = Json(body).into_response();
+	if user.is_some()
+		&& let Some(token) = token
+		&& !state.auth.api_key_hashes.contains(&sha256_hex(&token))
+	{
+		set_cookie_header(&mut response, session_cookie_value(&token, https));
+	}
+	Ok(response)
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Response> {

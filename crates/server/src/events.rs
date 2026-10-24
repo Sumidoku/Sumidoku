@@ -17,6 +17,7 @@ pub struct AppEvent {
 pub struct EventHub {
 	pool: sqlx::SqlitePool,
 	sender: broadcast::Sender<AppEvent>,
+	reset: broadcast::Sender<()>,
 	record_lock: tokio::sync::Mutex<()>,
 }
 
@@ -25,12 +26,17 @@ impl EventHub {
 		Arc::new(Self {
 			pool,
 			sender: broadcast::channel(256).0,
+			reset: broadcast::channel(1).0,
 			record_lock: tokio::sync::Mutex::new(()),
 		})
 	}
 
 	pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
 		self.sender.subscribe()
+	}
+
+	pub fn subscribe_reset(&self) -> broadcast::Receiver<()> {
+		self.reset.subscribe()
 	}
 
 	async fn record(&self, kind: &str, payload: Value, user_id: Option<i64>) {
@@ -47,6 +53,7 @@ impl EventHub {
 			Ok(result) => result.last_insert_rowid(),
 			Err(e) => {
 				tracing::warn!(kind, "event journal write failed: {e}");
+				let _ = self.reset.send(());
 				return;
 			}
 		};
@@ -67,6 +74,10 @@ impl EventHub {
 		.bind(user_id)
 		.fetch_all(&self.pool)
 		.await
+	}
+
+	pub async fn latest_id(&self) -> Result<i64, sqlx::Error> {
+		sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM app_event").fetch_one(&self.pool).await
 	}
 
 	#[cfg(test)]
