@@ -97,6 +97,11 @@ exercise the fast-completion path in a real browser.
   made the summary events the sole owner of running transitions; the regression
   failed when the write was restored and passed after its removal, and the next
   browser run returned to the completed state.
+- Seen again: 2026-10-24, manga detail treated any download event as a reason
+  to skip the REST seed, dropping existing queued rows. Only a real snapshot
+  replaces that seed; pending events merge into it. The wiring regression
+  failed on the old guard, and a 15-second delayed response made two queued
+  rows vanish before the merge was restored.
 
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
