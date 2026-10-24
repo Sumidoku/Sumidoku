@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
-import { coverUrl } from '../api/client';
+import { api, coverUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import {
 	qk,
@@ -22,10 +22,11 @@ import {
 	useSourceFilters,
 	useUpdateChapter
 } from '../api/hooks';
-import type { ChapterWithDownload, FilterValue, SourceFilter } from '../api/types';
+import type { ChapterWithDownload, Download, FilterValue, SourceFilter } from '../api/types';
 import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { sse } from '../api/sse';
-import { createMangaDownloadEventHandlers } from '../lib/downloadEvents';
+import { createMangaDownloadEventHandlers, downloadActivitySnapshot } from '../lib/downloadEvents';
+import type { MangaDownloadActivity } from '../lib/downloadEvents';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -149,11 +150,12 @@ export default function MangaDetailPage() {
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
 
-	// Enqueue feedback starts locally; terminal events reconcile it with the actual download state
-	const [dlQueued, setDlQueued] = useState<Set<number>>(new Set());
+	const [dlActivity, setDlActivity] = useState<Map<number, MangaDownloadActivity>>(new Map());
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
 
 	useEffect(() => {
+		let active = true;
+		let receivedEvent = false;
 		const handlers = createMangaDownloadEventHandlers(qk.chapters(mangaId), qk.library, {
 			setChapters: (updater) => {
 				qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), updater);
@@ -161,21 +163,34 @@ export default function MangaDetailPage() {
 			invalidate: (queryKey) => {
 				void qc.invalidateQueries({ queryKey });
 			},
-			clearQueued: (chapterId) => {
-				setDlQueued((prev) => {
-					const next = new Set(prev);
-					next.delete(chapterId);
+			setActivity: (chapterId, activity) => {
+				setDlActivity((prev) => {
+					const next = new Map(prev);
+					if (activity) next.set(chapterId, activity);
+					else next.delete(chapterId);
 					return next;
 				});
+			},
+			syncActivity: (downloads) => {
+				setDlActivity(downloadActivitySnapshot(downloads, mangaId));
 			}
 		});
-		const unsubDownload = sse.on('download', (msg) =>
-			handlers.onDownload(msg as DownloadChapterEvent)
-		);
-		const unsubSnapshot = sse.on('snapshot', (msg) =>
-			handlers.onSnapshot((msg as EventSnapshot).downloads)
-		);
+		const unsubDownload = sse.on('download', (msg) => {
+			receivedEvent = true;
+			handlers.onDownload(msg as DownloadChapterEvent);
+		});
+		const unsubSnapshot = sse.on('snapshot', (msg) => {
+			receivedEvent = true;
+			handlers.onSnapshot((msg as EventSnapshot).downloads);
+		});
+		// The shared stream snapshots only on connection; do not let this route's seed overwrite a newer event.
+		void api<Download[]>('/downloads')
+			.then((downloads) => {
+				if (active && !receivedEvent) handlers.onSnapshot(downloads);
+			})
+			.catch(() => undefined);
 		return () => {
+			active = false;
 			unsubDownload();
 			unsubSnapshot();
 		};
@@ -321,18 +336,17 @@ export default function MangaDetailPage() {
 
 	function dlStateOf(c: ChapterWithDownload): ChapterDlState {
 		if (dlPending.has(c.id)) return 'pending';
-		if (dlQueued.has(c.id)) return 'queued';
+		const activity = dlActivity.get(c.id);
+		if (activity?.status === 'downloading') return 'downloading';
+		if (activity) return 'queued';
 		return 'idle';
 	}
 
 	function downloadChapter(c: ChapterWithDownload) {
-		if (c.id < 0 || dlPending.has(c.id) || dlQueued.has(c.id) || c.isDownloaded) return;
+		if (c.id < 0 || dlPending.has(c.id) || dlActivity.has(c.id) || c.isDownloaded) return;
 		setDlPending((prev) => new Set(prev).add(c.id));
 		enqueueDownloads.mutate([c.id], {
-			onSuccess: () => {
-				setDlQueued((prev) => new Set(prev).add(c.id));
-				pushToast(t('mangaDetail.downloadQueued'), 'info');
-			},
+			onSuccess: () => pushToast(t('mangaDetail.downloadQueued'), 'info'),
 			onSettled: () =>
 				setDlPending((prev) => {
 					const next = new Set(prev);
@@ -413,7 +427,6 @@ export default function MangaDetailPage() {
 		enqueueDownloads.mutate(ids, {
 			onSuccess: (res) => {
 				pushToast(t('mangaDetail.queuedChapters', { count: res.queued.length }), 'info');
-				setDlQueued((prev) => new Set([...prev, ...ids]));
 				exitSelect();
 			}
 		});
@@ -857,6 +870,7 @@ export default function MangaDetailPage() {
 							selected={selected.has(c.id)}
 							onActivate={() => activate(c)}
 							dlState={dlStateOf(c)}
+							downloadProgress={dlActivity.get(c.id)?.progress ?? undefined}
 							onDownload={() => downloadChapter(c)}
 							hideDownload={isLocal}
 							onToggleBookmark={() => {

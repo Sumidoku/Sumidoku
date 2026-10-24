@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyDownloadEvent, mergeDownloadResponse } from '../src/lib/downloadEvents.ts';
+import {
+	applyDownloadEvent,
+	downloadActivitySnapshot,
+	formatDownloadProgress,
+	mergeDownloadResponse
+} from '../src/lib/downloadEvents.ts';
 import type { DownloadChapterEvent } from '../src/api/protocol.ts';
 import type { Download, DownloadStatus } from '../src/api/types.ts';
 
@@ -63,4 +68,23 @@ test('error responses keep their latest error text while merging state', () => {
 
 	assert.equal(merged[0].status, 'error');
 	assert.equal(merged[0].error, 'new error');
+});
+
+test('download progress text includes page counts and a percentage', () => {
+	assert.equal(formatDownloadProgress({ downloaded: 3, total: 8 }), '3 / 8 · 37%');
+	assert.equal(formatDownloadProgress({ downloaded: 2, total: 0 }), '2');
+});
+
+test('activity snapshots restore only active downloads for the current manga', () => {
+	const activity = downloadActivitySnapshot([
+		{ ...download(7, 'downloading'), downloaded: 3, total: 8 },
+		download(8, 'queued'),
+		download(9, 'finished'),
+		{ ...download(10, 'downloading'), mangaId: 4 }
+	], 3);
+
+	assert.deepEqual(activity, new Map([
+		[7, { status: 'downloading', progress: { downloaded: 3, total: 8 } }],
+		[8, { status: 'queued', progress: null }]
+	]));
 });

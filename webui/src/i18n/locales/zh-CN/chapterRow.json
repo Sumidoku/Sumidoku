@@ -7,6 +7,7 @@
     "downloadChapter": "下载本章",
     "enqueueing": "正在加入下载队列",
     "enqueued": "已在下载队列中",
+    "downloading": "正在下载本章",
     "addBookmark": "加书签",
     "removeBookmark": "取消书签",
     "chapterActions": "章节操作",
