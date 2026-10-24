@@ -25,7 +25,7 @@ import {
 import type { ChapterWithDownload, Download, FilterValue, SourceFilter } from '../api/types';
 import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { sse } from '../api/sse';
-import { createMangaDownloadEventHandlers, downloadActivitySnapshot } from '../lib/downloadEvents';
+import { createMangaDownloadEventHandlers, downloadActivitySnapshot, mergeDownloadResponse } from '../lib/downloadEvents';
 import type { MangaDownloadActivity } from '../lib/downloadEvents';
 import { selectDownloadChapterIds } from '../lib/downloadRules';
 import type { DownloadRule } from '../lib/downloadRules';
@@ -156,7 +156,8 @@ export default function MangaDetailPage() {
 
 	useEffect(() => {
 		let active = true;
-		let receivedEvent = false;
+		let receivedSnapshot = false;
+		const pendingEvents = new Map<number, DownloadChapterEvent>();
 		const handlers = createMangaDownloadEventHandlers(qk.chapters(mangaId), qk.library, {
 			setChapters: (updater) => {
 				qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), updater);
@@ -177,17 +178,22 @@ export default function MangaDetailPage() {
 			}
 		});
 		const unsubDownload = sse.on('download', (msg) => {
-			receivedEvent = true;
-			handlers.onDownload(msg as DownloadChapterEvent);
+			const event = msg as DownloadChapterEvent;
+			pendingEvents.set(event.chapterId, event);
+			handlers.onDownload(event);
 		});
 		const unsubSnapshot = sse.on('snapshot', (msg) => {
-			receivedEvent = true;
+			receivedSnapshot = true;
+			pendingEvents.clear();
 			handlers.onSnapshot((msg as EventSnapshot).downloads);
 		});
-		// The shared stream snapshots only on connection; do not let this route's seed overwrite a newer event.
+		// Only a real snapshot replaces the REST seed; ordinary events merge into it instead of suppressing it.
 		void api<Download[]>('/downloads')
 			.then((downloads) => {
-				if (active && !receivedEvent) handlers.onSnapshot(downloads);
+				if (active && !receivedSnapshot) {
+					handlers.onSnapshot(mergeDownloadResponse([], downloads, pendingEvents));
+					pendingEvents.clear();
+				}
 			})
 			.catch(() => undefined);
 		return () => {
