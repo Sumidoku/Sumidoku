@@ -189,15 +189,14 @@ async fn migration_seeds_builtin_local_source() {
 	assert_eq!(source_by_key(&body, "en.example-source")["kind"], "aidoku");
 	let local_id = local["id"].as_i64().expect("local id");
 
-	// the built-in source can't be deleted
-	let (status, body) = request(&app, "DELETE", &format!("/api/v1/sources/{local_id}"), None).await;
-	assert_eq!(status, StatusCode::BAD_REQUEST);
-	assert_eq!(body["error"]["code"], "bad_request");
-
 	// no wasm instance: dynamic capabilities 501 unsupported per the endpoint contract
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{local_id}/filters"), None).await;
 	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
 	assert_eq!(body["error"]["code"], "unsupported");
+
+	// without an explicit config root list the default instance is deletable
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/sources/{local_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
 }
 
 #[tokio::test]
