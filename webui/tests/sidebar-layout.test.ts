@@ -51,21 +51,33 @@ test('expanded sidebar keeps visible labels and collapse control', async () => {
 	assert.match(markup, /aria-expanded="true"/);
 });
 
+test('frequent destinations stay outside collapsible groups', async () => {
+	const markup = await renderSidebar(false);
+	const topLevel = markup.slice(markup.indexOf('<nav'), markup.indexOf('data-nav-group='));
+	assert.deepEqual(
+		[...topLevel.matchAll(/href="([^"]+)"/g)].map((match) => match[1]),
+		['/library', '/browse', '/updates']
+	);
+});
+
 test('sidebar groups start collapsed outside their routes', async () => {
 	const markup = await renderSidebar(false);
-	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 3);
-	for (const group of ['common.nav.library', 'common.nav.downloads', 'common.nav.settings']) {
+	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 2);
+	for (const group of ['common.nav.activity', 'common.nav.settings']) {
 		assert.match(markup, new RegExp(`data-nav-group="${group}"[^>]*aria-expanded="false"`));
 	}
 });
 
 test('settings deep link opens only the settings group and exposes section links', async () => {
 	const markup = await renderSidebar(false, '/settings?section=downloads');
-	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 2);
+	assert.equal(markup.match(/class="side-nav__children" hidden="" style="display:none"/g)?.length, 1);
 	assert.match(markup, /data-nav-group="common.nav.settings"[^>]*aria-expanded="true"/);
-	assert.match(markup, /data-nav-group="common.nav.library"[^>]*aria-expanded="false"/);
-	assert.match(markup, /data-nav-group="common.nav.downloads"[^>]*aria-expanded="false"/);
+	assert.match(markup, /data-nav-group="common.nav.activity"[^>]*aria-expanded="false"/);
 	assert.match(markup, /href="\/settings\?section=downloads"/);
+	const activeHrefs = [...markup.matchAll(/<a\b[^>]*>/g)]
+		.filter(([anchor]) => anchor.includes('side-nav__item--active'))
+		.map(([anchor]) => anchor.match(/href="([^"]+)"/)?.[1]);
+	assert.deepEqual(activeHrefs, ['/settings?section=downloads']);
 });
 
 test('sidebar preference round-trips and rejects unknown values', () => {

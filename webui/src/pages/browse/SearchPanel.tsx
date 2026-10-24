@@ -2,16 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Search, SearchX, TriangleAlert } from 'lucide-react';
-import { sourceImageUrl } from '../api/client';
-import { useGlobalSearch, useRegisterManga, useSources } from '../api/hooks';
-import type { GlobalSearchResult, SearchManga, Source } from '../api/types';
-import { entrySubtitle } from '../lib/format';
+import { sourceImageUrl } from '../../api/client';
+import { useGlobalSearch, useRegisterManga, useSources } from '../../api/hooks';
+import type { GlobalSearchResult, SearchManga, Source } from '../../api/types';
+import { entrySubtitle } from '../../lib/format';
 import {
 	type GlobalSearchFilterPrefs,
 	type TriState,
 	loadGlobalSearchFilters,
 	saveGlobalSearchFilters
-} from '../lib/globalSearchPrefs';
+} from '../../lib/globalSearchPrefs';
 import {
 	CONTENT_RATING_LEVELS,
 	MULTI_LANGUAGE,
@@ -19,8 +19,8 @@ import {
 	compareSourceName,
 	isMultiLanguage,
 	languageLabel
-} from '../lib/source';
-import { Button, CoverCard, EmptyState, Input, Skeleton, TriStateDropdown } from '../components';
+} from '../../lib/source';
+import { Button, CoverCard, EmptyState, Input, Skeleton, TriStateDropdown } from '../../components';
 
 type FilterGroup = 'ratings' | 'langs' | 'sources';
 
@@ -55,7 +55,7 @@ function sourceMatches(s: Source, f: GlobalSearchFilterPrefs): boolean {
 	);
 }
 
-export default function SearchPage() {
+export function SearchPanel({ active, onActiveChange }: { active: boolean; onActiveChange: (active: boolean) => void }) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const sourcesQuery = useSources();
@@ -69,6 +69,12 @@ export default function SearchPage() {
 		const timer = setTimeout(() => setQuery(input.trim()), 500);
 		return () => clearTimeout(timer);
 	}, [input]);
+	useEffect(() => {
+		if (!active) {
+			setInput('');
+			setQuery('');
+		}
+	}, [active]);
 
 	// Disabled sources neither participate nor appear as filter candidates; display and candidate order follow source name (same convention as the browse page)
 	const sources = useMemo(
@@ -90,7 +96,7 @@ export default function SearchPage() {
 	const selected = useMemo(() => sources.filter((s) => sourceMatches(s, filters)), [sources, filters]);
 	const sourceIds = useMemo(() => selected.map((s) => s.id), [selected]);
 
-	const search = useGlobalSearch(sourceIds, query, query !== '' && sourceIds.length > 0);
+	const search = useGlobalSearch(sourceIds, query, active && query !== '' && sourceIds.length > 0);
 	const resultsById = useMemo(() => {
 		const map = new Map<number, GlobalSearchResult>();
 		for (const r of search.data?.sources ?? []) map.set(r.sourceId, r);
@@ -146,12 +152,13 @@ export default function SearchPage() {
 	});
 
 	return (
-		<div className="page container">
+		<div className="browse__search">
 			<form
 				className="source-page__search"
 				onSubmit={(e) => {
 					e.preventDefault();
 					setQuery(input.trim());
+					onActiveChange(input.trim() !== '');
 				}}
 			>
 				<Input
@@ -159,71 +166,91 @@ export default function SearchPage() {
 					type="search"
 					placeholder={t('search.placeholder')}
 					value={input}
-					onChange={(e) => setInput(e.currentTarget.value)}
+					onChange={(e) => {
+						const value = e.currentTarget.value;
+						setInput(value);
+						onActiveChange(value.trim() !== '');
+					}}
 				/>
+				{active && (
+					<Button
+						type="button"
+						onClick={() => {
+							setInput('');
+							setQuery('');
+							onActiveChange(false);
+						}}
+					>
+						{t('common.cancel')}
+					</Button>
+				)}
 			</form>
 
-			<div className="filter-header">
-				<TriStateDropdown
-					label={t('search.rating')}
-					options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
-					states={filters.ratings}
-					onCycle={(k) => cycle('ratings', k)}
-					onReset={() => resetGroup('ratings')}
-				/>
-				<TriStateDropdown
-					label={t('search.language')}
-					options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
-					states={filters.langs}
-					onCycle={(k) => cycle('langs', k)}
-					onReset={() => resetGroup('langs')}
-				/>
-				<TriStateDropdown
-					label={t('search.source')}
-					options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
-					states={filters.sources}
-					onCycle={(k) => cycle('sources', k)}
-					onReset={() => resetGroup('sources')}
-				/>
-			</div>
+			{active && (
+				<>
+					<div className="filter-header">
+						<TriStateDropdown
+							label={t('search.rating')}
+							options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
+							states={filters.ratings}
+							onCycle={(k) => cycle('ratings', k)}
+							onReset={() => resetGroup('ratings')}
+						/>
+						<TriStateDropdown
+							label={t('search.language')}
+							options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
+							states={filters.langs}
+							onCycle={(k) => cycle('langs', k)}
+							onReset={() => resetGroup('langs')}
+						/>
+						<TriStateDropdown
+							label={t('search.source')}
+							options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
+							states={filters.sources}
+							onCycle={(k) => cycle('sources', k)}
+							onReset={() => resetGroup('sources')}
+						/>
+					</div>
 
-			{query === '' ? (
-				<EmptyState icon={Search} title={t('search.emptyTitle')} hint={t('search.emptyHint')} />
-			) : selected.length === 0 ? (
-				<EmptyState
-					icon={SearchX}
-					title={t('search.noSourcesTitle')}
-					hint={t('search.noSourcesHint')}
-				/>
-			) : search.isError ? (
-				<EmptyState
-					icon={TriangleAlert}
-					title={t('search.loadFailedTitle')}
-					hint={search.error?.message}
-					action={
-						<Button variant="primary" onClick={() => void search.refetch()}>
-							{t('search.retry')}
-						</Button>
-					}
-				/>
-			) : visible.length === 0 && !search.isFetching ? (
-				<EmptyState
-					icon={SearchX}
-					title={t('search.noResultsTitle')}
-					hint={t('search.noResultsHint')}
-				/>
-			) : (
-				visible.map((s) => (
-					<SourceSection
-						key={s.id}
-						source={s}
-						result={resultsById.get(s.id)}
-						pendingKey={pendingKey}
-						busyKey={busyKey}
-						onOpen={(m) => void openEntry(m)}
-						onViewAll={() => navigate(`/browse/${s.id}?q=${encodeURIComponent(query)}`)}
-					/>
-				))
+					{query === '' ? (
+						<EmptyState icon={Search} title={t('search.emptyTitle')} hint={t('search.emptyHint')} />
+					) : selected.length === 0 ? (
+						<EmptyState
+							icon={SearchX}
+							title={t('search.noSourcesTitle')}
+							hint={t('search.noSourcesHint')}
+						/>
+					) : search.isError ? (
+						<EmptyState
+							icon={TriangleAlert}
+							title={t('search.loadFailedTitle')}
+							hint={search.error?.message}
+							action={
+								<Button variant="primary" onClick={() => void search.refetch()}>
+									{t('search.retry')}
+								</Button>
+							}
+						/>
+					) : visible.length === 0 && !search.isFetching ? (
+						<EmptyState
+							icon={SearchX}
+							title={t('search.noResultsTitle')}
+							hint={t('search.noResultsHint')}
+						/>
+					) : (
+						visible.map((s) => (
+							<SourceSection
+								key={s.id}
+								source={s}
+								result={resultsById.get(s.id)}
+								pendingKey={pendingKey}
+								busyKey={busyKey}
+								onOpen={(m) => void openEntry(m)}
+								onViewAll={() => navigate(`/browse/${s.id}?q=${encodeURIComponent(query)}`)}
+							/>
+						))
+					)}
+				</>
 			)}
 		</div>
 	);

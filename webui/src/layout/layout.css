@@ -180,6 +180,11 @@
 		border-left: 1px solid var(--border);
 	}
 
+	.side-nav__children .side-nav__item {
+		padding: 7px 10px;
+		font-size: 13.5px;
+	}
+
 	.app__sidebar--collapsed .side-nav__children {
 		margin-left: 0;
 		padding-left: 0;

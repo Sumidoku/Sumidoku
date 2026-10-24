@@ -174,7 +174,7 @@ export default function SourceBrowsePage() {
 		const deep = parseFiltersParam(searchParams.get('filters'));
 		return deep.length > 0 ? deep : loadFilterPrefs(sourceId);
 	});
-	// ?q= deep link ("view all" on the cross-source search page): prefills the input and enters search mode with that term directly
+	// ?q= deep link ("view all" on cross-source results): prefills the input and enters search mode with that term directly
 	const [initialQuery] = useState(() => (searchParams.get('q') ?? '').trim());
 	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
 	const [input, setInput] = useState(initialQuery);

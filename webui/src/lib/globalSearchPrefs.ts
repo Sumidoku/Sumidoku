@@ -1,4 +1,4 @@
-// Tri-state filters (include/exclude) of the cross-source search page, kept in localStorage across sessions.
+// Tri-state filters (include/exclude) of the cross-source search view, kept in localStorage across sessions.
 // The filters only decide which sources participate (client-side filtering; the server does not filter);
 // the raw mapping is stored as-is — leftover ids of uninstalled sources simply never match, no cleanup needed
 

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ChevronRight, Database, Download, Info, Library, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, ChevronRight, Database, Download, Info, Library, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { IconButton } from '../components';
 import { NAV } from './navigation';
@@ -19,8 +19,8 @@ interface DesktopSidebarProps {
 	children: ReactNode;
 }
 
-const LIBRARY_NAV = NAV.filter((item) => ['/library', '/browse', '/search', '/history'].includes(item.to));
-const ACTIVITY_NAV = NAV.filter((item) => ['/downloads', '/updates'].includes(item.to));
+const PRIMARY_NAV = NAV.filter((item) => ['/library', '/browse', '/updates'].includes(item.to));
+const ACTIVITY_NAV = NAV.filter((item) => ['/history', '/downloads'].includes(item.to));
 const SETTINGS_NAV: readonly NavItemData[] = [
 	{ to: '/settings', labelKey: 'settings.groupGeneral', icon: SettingsIcon },
 	{ to: '/settings?section=library', labelKey: 'settings.groupLibrary', icon: Library },
@@ -31,17 +31,24 @@ const SETTINGS_NAV: readonly NavItemData[] = [
 
 function NavItem({ item, collapsed }: { item: NavItemData; collapsed: boolean }) {
 	const { t } = useTranslation();
+	const { pathname, search } = useLocation();
 	const Icon = item.icon;
+	const [path, query = ''] = item.to.split('?');
+	const currentSection = new URLSearchParams(search).get('section') ?? 'general';
+	const itemSection = new URLSearchParams(query).get('section') ?? 'general';
+	const pathMatches = pathname === path || pathname.startsWith(`${path}/`);
+	const isActive = pathMatches && (path !== '/settings' || currentSection === itemSection);
 	return (
-		<NavLink
+		<Link
 			to={item.to}
-			className={({ isActive }) => isActive ? 'side-nav__item side-nav__item--active' : 'side-nav__item'}
+			className={isActive ? 'side-nav__item side-nav__item--active' : 'side-nav__item'}
+			aria-current={isActive ? 'page' : undefined}
 			aria-label={collapsed ? t(item.labelKey) : undefined}
 			title={collapsed ? t(item.labelKey) : undefined}
 		>
 			<Icon size={18} aria-hidden="true" />
 			<span className="side-nav__label" hidden={collapsed}>{t(item.labelKey)}</span>
-		</NavLink>
+		</Link>
 	);
 }
 
@@ -103,17 +110,11 @@ export function DesktopSidebar({ collapsed, onToggle, children }: DesktopSidebar
 				<span className="app__logo-text" hidden={collapsed}>Sumidoku</span>
 			</NavLink>
 			<nav className="side-nav" aria-label={t('layout.primaryNav')}>
+				{PRIMARY_NAV.map((item) => <NavItem key={item.to} item={item} collapsed={collapsed} />)}
 				<NavGroup
-					labelKey="common.nav.library"
-					icon={Library}
-					match={['/library', '/browse', '/search', '/history', '/manga', '/reader']}
-					items={LIBRARY_NAV}
-					collapsed={collapsed}
-				/>
-				<NavGroup
-					labelKey="common.nav.downloads"
-					icon={Download}
-					match={['/downloads', '/updates']}
+					labelKey="common.nav.activity"
+					icon={Activity}
+					match={['/history', '/downloads']}
 					items={ACTIVITY_NAV}
 					collapsed={collapsed}
 				/>
