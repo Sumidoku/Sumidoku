@@ -191,6 +191,7 @@ pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 		config_dir: tmp.path().to_path_buf(),
 		database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
 		covers_dir: tmp.path().join("covers"),
+		downloads_dir: tmp.path().join("downloads"),
 		webui_dir: tmp.path().join("webui"),
 		call_concurrency: 8,
 		log: "warn".into(),
@@ -462,7 +463,6 @@ pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port:
 		.expect("rewrite page 0");
 }
 
-/// Serves the app on a random port for real (the WS handshake needs real TCP)
 pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let addr = listener.local_addr().expect("local addr");
@@ -472,80 +472,103 @@ pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 	addr
 }
 
-/// Minimal WS client: completes the handshake and returns the stream plus the leftover buffer after the headers (token goes in the Authorization header)
-pub async fn connect_ws(
+pub async fn connect_sse_response(
 	addr: std::net::SocketAddr,
 	path: &str,
-	token: Option<&str>,
-) -> (tokio::net::TcpStream, Vec<u8>) {
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>, String) {
 	use tokio::io::{AsyncReadExt, AsyncWriteExt};
 	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-	let auth = token.map(|t| format!("Authorization: {t}\r\n")).unwrap_or_default();
-	let handshake = format!(
-		"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{auth}\r\n"
-	);
-	stream.write_all(handshake.as_bytes()).await.expect("write handshake");
+	let last = last_event_id.map(|id| format!("Last-Event-ID: {id}\r\n")).unwrap_or_default();
+	let extra = headers.iter().map(|(name, value)| format!("{name}: {value}\r\n")).collect::<String>();
+	let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{last}{extra}\r\n");
+	stream.write_all(request.as_bytes()).await.expect("write sse request");
 	let mut received = Vec::new();
 	let mut tmp = [0u8; 4096];
 	loop {
-		let n = stream.read(&mut tmp).await.expect("read handshake");
-		assert!(n > 0, "connection closed during handshake");
+		let n = stream.read(&mut tmp).await.expect("read sse headers");
+		assert!(n > 0, "connection closed during sse handshake");
 		received.extend_from_slice(&tmp[..n]);
 		if received.windows(4).any(|w| w == b"\r\n\r\n") {
 			break;
 		}
 	}
-	let head_end = received
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.expect("header end");
-	let head = String::from_utf8_lossy(&received[..head_end]);
-	assert!(head.contains("101"), "{head}");
+	let head_end = received.windows(4).position(|w| w == b"\r\n\r\n").expect("header end");
+	let head = String::from_utf8_lossy(&received[..head_end]).into_owned();
 	let rest = received[head_end + 4..].to_vec();
+	(stream, rest, head)
+}
+
+pub async fn connect_sse(
+	addr: std::net::SocketAddr,
+	path: &str,
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>) {
+	let (stream, rest, head) = connect_sse_response(addr, path, last_event_id, headers).await;
+	assert!(head.contains("200 OK"), "{head}");
 	(stream, rest)
 }
 
-/// Reads one text frame (server frames are not masked)
-pub async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
+pub async fn read_sse_event(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Value {
 	use tokio::io::AsyncReadExt;
-	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
+	loop {
+		if let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+			let frame = buf.drain(..pos + 2).collect::<Vec<_>>();
+			let text = String::from_utf8_lossy(&frame);
+			if text.starts_with(':') {
+				continue;
+			}
+			let mut kind = None;
+			let mut id = None;
+			let mut data = None;
+			for line in text.lines() {
+				if let Some(value) = line.strip_prefix("event:") {
+					kind = Some(value.to_string());
+				} else if let Some(value) = line.strip_prefix("id:") {
+					id = value.parse::<i64>().ok();
+				} else if let Some(value) = line.strip_prefix("data:") {
+					data = Some(value.to_string());
+				}
+			}
+			if kind.is_none() {
+				continue;
+			}
+			let payload = serde_json::from_str(&data.unwrap_or_default()).unwrap_or(Value::Null);
+			return serde_json::json!({ "type": kind, "id": id, "data": payload });
+		}
 		let mut tmp = [0u8; 4096];
-		while buf.len() < want {
-			let n = stream.read(&mut tmp).await.expect("read frame");
-			assert!(n > 0, "connection closed mid-frame");
-			buf.extend_from_slice(&tmp[..n]);
-		}
+		let n = stream.read(&mut tmp).await.expect("read sse event");
+		assert!(n > 0, "connection closed mid-sse-event");
+		buf.extend_from_slice(&tmp[..n]);
 	}
-	fill(stream, buf, 2).await;
-	let (offset, len) = match buf[1] & 0x7f {
-		126 => {
-			fill(stream, buf, 4).await;
-			(4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
-		}
-		127 => {
-			fill(stream, buf, 10).await;
-			(10, u64::from_be_bytes(buf[2..10].try_into().expect("len")) as usize)
-		}
-		n => (2, n as usize),
-	};
-	fill(stream, buf, offset + len).await;
-	let payload = buf[offset..offset + len].to_vec();
-	buf.drain(..offset + len);
-	payload
 }
 
-/// Reads until an event frame of the given type arrives (intermediate frames discarded), 10s backstop
-pub async fn read_ws_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+pub async fn read_sse_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
 	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 	loop {
 		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
 		assert!(remaining > std::time::Duration::ZERO, "no {kind} event in time");
-		let frame = tokio::time::timeout(remaining, read_ws_frame(stream, buf))
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
 			.await
-			.expect("ws read timeout");
-		let value: Value = serde_json::from_slice(&frame).expect("event json");
-		if value["type"] == kind {
-			return value;
+			.expect("sse read timeout");
+		if frame["type"] == kind {
+			return frame;
+		}
+	}
+}
+
+pub async fn read_sse_data(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event data in time");
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
+			.await
+			.expect("sse read timeout");
+		if frame["data"]["type"] == kind {
+			return frame["data"].clone();
 		}
 	}
 }

@@ -27,10 +27,19 @@ export type MangaUpdateStreamEvent = { type: 'manga'; manga: SourceManga };
 
 export type DownloadEventKind = 'queued' | 'started' | 'progress' | 'paused' | 'finished' | 'error';
 
-export type DownloadWsFrame =
-	| { type: 'snapshot'; running: boolean; downloads: Download[] }
-	| { type: DownloadEventKind; chapterId: number; downloaded: number; total: number }
-	| { type: 'running'; chapterId: 0; downloaded: 0; total: 0; running: boolean };
+export type DownloadChapterEvent = {
+	type: DownloadEventKind;
+	chapterId: number;
+	downloaded: number;
+	total: number;
+};
+
+export type EventSnapshot = {
+	type: 'snapshot';
+	running: boolean;
+	downloads: Download[];
+	updateSummary: UpdateSummary;
+};
 
 export type UpdateJobStatus = 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
 
@@ -42,6 +51,4 @@ export interface UpdateJob {
 	addedChapters: number;
 }
 
-export type UpdateWsFrame =
-	| ({ type: 'summary' } & UpdateSummary)
-	| ({ type: 'job' } & UpdateJob);
+export type UpdateEvent = { type: 'job' } & UpdateJob;

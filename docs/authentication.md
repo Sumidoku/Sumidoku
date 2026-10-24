@@ -3,9 +3,10 @@
 Authentication is off until the built-in admin user has a password
 (`SUMIDOKU_AUTH_PASSWORD`, or the legacy `SUMIDOKU_BASIC_PASSWORD` alias).
 With a password configured, the web UI shows a login page and `/api/v1`
-requires `Authorization: Bearer <token>` (a login-issued session token or
-a configured API key). Unauthenticated requests get a uniform `401`
-(`{"error":{"code":"unauthorized"}}`).
+requires a session credential. Browser requests use the login cookie; CLI
+and other non-browser clients may use `Authorization: Bearer <token>` (a
+login-issued session token or configured API key). Unauthenticated requests
+get a uniform `401` (`{"error":{"code":"unauthorized"}}`).
 
 With auth off, every request acts as the built-in admin — a no-password
 deployment behaves exactly like a single-user one.
@@ -50,14 +51,19 @@ breaking change.
   Changing it revokes every admin session token.
 - **Session tokens** — the login page exchanges the admin username and
   password for a bearer token (30-day rolling expiry) bound to the built-in
-  admin.
+  admin. Login also sets a `sumidoku.session` cookie containing the same
+  token, with `Path=/`, `HttpOnly`, `SameSite=Strict` and a 30-day maximum
+  age; HTTPS responses add `Secure`. Browser API requests, including SSE,
+  images and file downloads, use this cookie instead of putting credentials
+  in URLs. Logout and password changes clear it; password changes also
+  revoke every session token as described above.
 - **API keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
   `auth.api_keys` in `config.toml`. Long-lived, used directly as
   `Authorization: Bearer <key>`, never stored in the database, and act
-  with the built-in admin's identity.
+  with the built-in admin's identity. Bearer session tokens remain available
+  for CLI and other non-browser clients.
 
 ## Notes
 
-- `<img>` links and WebSocket clients cannot send headers; media and
-  stream URLs accept `?access_token=<token>` as an alternative to the
-  header.
+- URL `access_token` parameters are not accepted. The browser uses the
+  session cookie for all API requests; other clients use the bearer header.

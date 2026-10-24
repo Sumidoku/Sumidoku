@@ -3,7 +3,7 @@ mod common;
 use axum::Router;
 use axum::http::StatusCode;
 use common::{
-	TestApp, base_config, connect_db, connect_ws, fixture_dir, point_page_at_local, read_ws_frame, read_ws_kind,
+	TestApp, base_config, connect_db, connect_sse, fixture_dir, point_page_at_local, read_sse_data, read_sse_kind,
 	register_example_manga, request, request_full, serve_app, serve_bytes,
 };
 use common::PNG;
@@ -13,7 +13,6 @@ use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
 use sumidoku_server::download::sanitize;
 
-/// Download tests need downloads_dir inside tmp (base_config doesn't set it; the default ./downloads would pollute the repo)
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -603,6 +602,10 @@ async fn update_auto_download_enqueues_new_chapters() {
 		.expect("delete chapter")
 		.rows_affected();
 	assert_eq!(deleted, 1);
+	let addr = serve_app(app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
 
 	let (status, _) = request(
 		&app,
@@ -615,59 +618,59 @@ async fn update_auto_download_enqueues_new_chapters() {
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);
-	wait_update_complete(&app, 1).await;
-
-	// the new chapter is auto-enqueued (the worker's later success or failure doesn't change the enqueue fact)
-	let deadline = Instant::now() + Duration::from_secs(10);
-	loop {
-		let row: Option<(String,)> = sqlx::query_as(
-			"SELECT d.status FROM download d JOIN chapter c ON c.id = d.chapter_id WHERE c.key = '8'",
-		)
-		.fetch_optional(&pool)
+	let queued = read_sse_data(&mut stream, &mut rest, "queued").await;
+	let chapter_key: String = sqlx::query_scalar("SELECT key FROM chapter WHERE id = ?")
+		.bind(queued["chapterId"].as_i64().expect("queued chapter id"))
+		.fetch_one(&pool)
 		.await
-		.expect("query download");
-		if row.is_some() {
-			break;
-		}
-		assert!(Instant::now() < deadline, "auto download did not enqueue chapter 8");
-		tokio::time::sleep(Duration::from_millis(100)).await;
+		.expect("queued chapter");
+	assert_eq!(chapter_key, "8");
+	let completed = read_sse_kind(&mut stream, &mut rest, "updateComplete").await;
+	assert_eq!(completed["data"]["running"], false);
+	assert_eq!(completed["data"]["total"], 1);
+	assert_eq!(completed["data"]["complete"], 1);
+}
+
+#[tokio::test]
+async fn legacy_websocket_routes_are_not_registered() {
+	let t = downloads_app(|_| {}).await;
+	for path in ["/api/v1/downloads/ws", "/api/v1/update/ws"] {
+		let request = axum::http::Request::get(path)
+			.body(axum::body::Body::empty())
+			.expect("legacy route request");
+		let response = tower::ServiceExt::oneshot(t.app.clone(), request).await.expect("legacy route response");
+		let status = response.status();
+		assert!(
+			status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+			"unexpected legacy WebSocket response for {path}: {status}"
+		);
 	}
 }
 
 #[tokio::test]
-async fn downloads_ws_pushes_snapshot() {
+async fn downloads_sse_pushes_snapshot() {
 	let t = downloads_app(|_| {}).await;
 	let addr = serve_app(t.app.clone()).await;
-	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/downloads/ws", None).await;
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let value: Value = serde_json::from_slice(&payload).expect("snapshot json");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let value = read_sse_data(&mut stream, &mut rest, "snapshot").await;
 	assert!(value["type"].is_string(), "{value}");
 	assert_eq!(value["type"], "snapshot");
 	assert!(value["downloads"].is_array(), "{value}");
 	assert_eq!(value["running"], true, "{value}");
 
-	// stop → running event frame (chapterId=0 placeholder, running=false)
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let event: Value = serde_json::from_slice(&payload).expect("running event json");
-	assert_eq!(event["type"], "running", "{event}");
-	assert_eq!(event["chapterId"], 0);
-	assert_eq!(event["downloaded"], 0);
-	assert_eq!(event["total"], 0);
-	assert_eq!(event["running"], false);
+	let event = read_sse_kind(&mut stream, &mut rest, "running").await;
+	assert_eq!(event["data"]["running"], false, "{event}");
 
-	// start → running=true
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/start", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let event: Value = serde_json::from_slice(&payload).expect("running event json");
-	assert_eq!(event["type"], "running", "{event}");
-	assert_eq!(event["running"], true);
+	let event = read_sse_kind(&mut stream, &mut rest, "running").await;
+	assert_eq!(event["data"]["running"], true, "{event}");
 }
 
 #[tokio::test]
-async fn downloads_ws_pushes_queued_event() {
+async fn downloads_sse_pushes_queued_event() {
 	let t = downloads_app(|_| {}).await;
 	let manga_id = register_example_manga(&t.app).await;
 	let chapter_id = first_chapter_id(&t.app, manga_id).await;
@@ -677,41 +680,45 @@ async fn downloads_ws_pushes_queued_event() {
 	let pool = connect_db(&t.db_path).await;
 	point_page_at_local(&pool, chapter_id, port).await;
 	let addr = serve_app(t.app.clone()).await;
-	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/downloads/ws", None).await;
-	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut stream, &mut rest).await).expect("snapshot");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
 	assert_eq!(snapshot["type"], "snapshot");
 
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
-	let event = read_ws_kind(&mut stream, &mut rest, "queued").await;
+	let event = read_sse_data(&mut stream, &mut rest, "queued").await;
 	assert_eq!(event["chapterId"], chapter_id);
 }
 
 #[tokio::test]
-async fn update_ws_pushes_job_and_completed_summary() {
+async fn update_sse_pushes_job_and_completed_summary() {
 	let t = downloads_app(|_| {}).await;
 	let manga_id = register_example_manga(&t.app).await;
 	let (status, _) = request(&t.app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let addr = serve_app(t.app.clone()).await;
-	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/update/ws", None).await;
-	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut stream, &mut rest).await).expect("snapshot");
-	assert_eq!(snapshot["type"], "summary");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+	assert_eq!(snapshot["updateSummary"]["running"], false);
 
 	let (status, _) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(&t.app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
-	let event = read_ws_kind(&mut stream, &mut rest, "job").await;
+	let event = read_sse_data(&mut stream, &mut rest, "job").await;
 	assert_eq!(event["mangaId"], manga_id);
-	wait_update_complete(&t.app, 1).await;
+	let completed = read_sse_kind(&mut stream, &mut rest, "updateComplete").await;
+	assert_eq!(completed["data"]["running"], false);
+	assert_eq!(completed["data"]["total"], 1);
+	assert_eq!(completed["data"]["complete"], 1);
 
-	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/update/ws", None).await;
-	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut stream, &mut rest).await).expect("snapshot");
-	assert_eq!(snapshot["type"], "summary");
-	assert_eq!(snapshot["running"], false);
-	assert_eq!(snapshot["total"], 1);
-	assert_eq!(snapshot["complete"], 1);
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+	assert_eq!(snapshot["updateSummary"]["running"], false);
+	assert_eq!(snapshot["updateSummary"]["total"], 1);
+	assert_eq!(snapshot["updateSummary"]["complete"], 1);
 }
 
 #[tokio::test]
@@ -834,8 +841,8 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	let meta = chapter_meta(&pool, chapter_id).await;
 	let artifact = t.tmp.path().join("downloads").join(default_rel_path(&meta));
 	let addr = serve_app(t.app.clone()).await;
-	let (mut stream, mut rest) = connect_ws(addr, "/api/v1/downloads/ws", None).await;
-	let snapshot: Value = serde_json::from_slice(&read_ws_frame(&mut stream, &mut rest).await).expect("snapshot");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
 	assert_eq!(snapshot["type"], "snapshot");
 
 	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
@@ -852,7 +859,7 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [probe_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
-	let finished = read_ws_kind(&mut stream, &mut rest, "finished").await;
+	let finished = read_sse_data(&mut stream, &mut rest, "finished").await;
 	assert_eq!(finished["chapterId"], probe_id, "deleted attempt must not emit finished");
 	let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id = ? AND user_id = 1")
 		.bind(chapter_id)

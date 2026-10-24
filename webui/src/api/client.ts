@@ -3,53 +3,11 @@ import { translateApiError } from '../i18n';
 import type { StreamTerminal } from './protocol';
 
 const BASE = '/api/v1';
-const TOKEN_KEY = 'sumidoku.auth.token';
-let memoryToken: string | null = null;
 
-export function getToken(): string | null {
-	try {
-		return localStorage.getItem(TOKEN_KEY) ?? memoryToken;
-	} catch {
-		return memoryToken;
-	}
-}
-
-export function setToken(token: string) {
-	memoryToken = token;
-	try {
-		localStorage.setItem(TOKEN_KEY, token);
-	} catch {
-		// Private mode blocks the write, so the in-memory token carries this session (re-login required after refresh)
-	}
-}
-
-export function clearToken() {
-	memoryToken = null;
-	try {
-		localStorage.removeItem(TOKEN_KEY);
-	} catch {
-		// Same as above
-	}
-}
-
-/** Unified 401 handling: clear the token and jump to the login page; login/password-change requests are handled locally by the page (avoids loops and false kicks) */
+/** Unified 401 handling: jump to the login page; login/password-change requests are handled locally by the page (avoids loops and false kicks) */
 function handleUnauthorized(path: string) {
 	if (location.pathname === '/login' || path === '/auth/login' || path === '/auth/password') return;
-	clearToken();
 	location.assign('/login');
-}
-
-function authHeaders(): Record<string, string> {
-	const token = getToken();
-	return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
-/** <img>/<a>/WebSocket cannot send an Authorization header, so media and stream URLs carry the token as a query param */
-export function withToken(url: string): string {
-	const token = getToken();
-	if (!token) return url;
-	const sep = url.includes('?') ? '&' : '?';
-	return `${url}${sep}access_token=${encodeURIComponent(token)}`;
 }
 
 export class ApiError extends Error {
@@ -83,10 +41,10 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 			method,
 			headers:
 				formData !== undefined
-					? authHeaders()
+					? undefined
 					: body !== undefined
-						? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json', ...authHeaders() }
-						: authHeaders(),
+						? { 'Content-Type': raw ? 'application/octet-stream' : 'application/json' }
+						: undefined,
 			body: formData ?? (body !== undefined ? (raw ? (body as BodyInit) : JSON.stringify(body)) : undefined)
 		});
 	} catch {
@@ -115,10 +73,8 @@ export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
 
 /** v is a version marker (pass manga.cover): after a cover change the endpoint URL is unchanged while the response is cacheable with max-age=86400 — without it the browser keeps showing the old image */
 export const coverUrl = (mangaId: number, v?: string | null) => {
-	const base = withToken(`${BASE}/manga/${mangaId}/cover`);
-	// base may carry no query (withToken returns it unchanged without a token), so detect the separator ourselves
-	const sep = base.includes('?') ? '&' : '?';
-	return v ? `${base}${sep}v=${encodeURIComponent(v)}` : base;
+	const base = `${BASE}/manga/${mangaId}/cover`;
+	return v ? `${base}?v=${encodeURIComponent(v)}` : base;
 };
 
 export interface ApiStreamOptions<TPartial extends { type: string }> {
@@ -147,7 +103,6 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 			method,
 			headers: {
 				Accept: 'application/x-ndjson',
-				...authHeaders(),
 				...(body !== undefined ? { 'Content-Type': 'application/json' } : {})
 			},
 			body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -223,18 +178,16 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 }
 
 export const pageUrl = (chapterId: number, index: number, width?: number) =>
-	withToken(`${BASE}/chapter/${chapterId}/page/${index}${width ? `?width=${width}` : ''}`);
+	`${BASE}/chapter/${chapterId}/page/${index}${width ? `?width=${width}` : ''}`;
 
 /** CBZ file URL of a downloaded chapter; pair with `<a download>` to trigger a browser download */
-export const chapterFileUrl = (chapterId: number) =>
-	withToken(`${BASE}/chapter/${chapterId}/file`);
+export const chapterFileUrl = (chapterId: number) => `${BASE}/chapter/${chapterId}/file`;
 
 /** Full backup download URL; pair with `<a download>` to make the browser save it */
-export const backupUrl = () => withToken(`${BASE}/backups/document`);
+export const backupUrl = () => `${BASE}/backups/document`;
 
-export const sourceIconUrl = (sourceId: number) =>
-	withToken(`${BASE}/sources/${sourceId}/icon`);
+export const sourceIconUrl = (sourceId: number) => `${BASE}/sources/${sourceId}/icon`;
 
 /** Only the server can attach the anti-hotlink headers a source image host declares, so browse/home covers are fetched through the server proxy */
 export const sourceImageUrl = (sourceId: number, url: string) =>
-	withToken(`${BASE}/sources/${sourceId}/image?url=${encodeURIComponent(url)}`);
+	`${BASE}/sources/${sourceId}/image?url=${encodeURIComponent(url)}`;

@@ -709,7 +709,7 @@ export function useUpdateRecent() {
 	});
 }
 
-// Download list state is driven by /downloads/ws and owned by the page; only operation hooks live here
+// Download list state is driven by /events and owned by the page; only operation hooks live here
 export function useDownloadsStart() {
 	return useMutation({
 		mutationFn: () => api<{ running: boolean }>('/downloads/start', { method: 'POST' })

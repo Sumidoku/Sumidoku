@@ -3,7 +3,7 @@
   "info": {
     "title": "Sumidoku API",
     "version": "0.23.0",
-    "description": "REST API under /api/v1. Protected endpoints accept either Authorization: Bearer <token> or the access_token query parameter; the header takes precedence. With authentication disabled, requests act as the built-in admin. The server has one built-in admin identity and no additional accounts or roles. Errors use {error:{code,message}}. Source capabilities that are not implemented use 501 with code unsupported; dynamic filters, listings, home and deep-link endpoints follow the same convention. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
+    "description": "REST API under /api/v1. Browser requests use the sumidoku.session login cookie; CLI and other non-browser clients may use Authorization: Bearer <token>. With authentication disabled, requests act as the built-in admin. The server has one built-in admin identity and no additional accounts or roles. Errors use {error:{code,message}}. Source capabilities that are not implemented use 501 with code unsupported; dynamic filters, listings, home and deep-link endpoints follow the same convention. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "bearerAuth": []
     },
     {
-      "accessTokenQuery": []
+      "sessionCookie": []
     }
   ],
   "tags": [
@@ -96,7 +96,7 @@
         "operationId": "getAuthStatus",
         "summary": "Get authentication status and the optional current identity",
         "security": [],
-        "description": "A bearer token or access_token query value is optional. When authentication is disabled, user is null.",
+        "description": "A bearer token or session cookie is optional. When authentication is disabled, user is null.",
         "responses": {
           "200": {
             "description": "Authentication status",
@@ -2887,46 +2887,6 @@
         }
       }
     },
-    "/api/v1/downloads/ws": {
-      "get": {
-        "tags": [
-          "downloads"
-        ],
-        "operationId": "downloadsWebSocket",
-        "summary": "Stream download snapshots and events over WebSocket",
-        "description": "Use a WebSocket upgrade request. The first text frame is a snapshot; subsequent text frames are progress, queue, completion, error and running events. Non-close client messages are ignored.",
-        "x-websocket": {
-          "messageFormat": "json-text",
-          "frames": [
-            {
-              "direction": "server",
-              "when": "immediately after upgrade",
-              "schema": {
-                "$ref": "#/components/schemas/DownloadsSnapshot"
-              }
-            },
-            {
-              "direction": "server",
-              "when": "download manager event",
-              "schema": {
-                "$ref": "#/components/schemas/DownloadEvent"
-              }
-            }
-          ]
-        },
-        "responses": {
-          "101": {
-            "description": "Switching Protocols; UTF-8 JSON text frames follow."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/api/v1/downloads/{id}": {
       "parameters": [
         {
@@ -3060,36 +3020,90 @@
         }
       }
     },
-    "/api/v1/update/ws": {
+    "/api/v1/events": {
       "get": {
         "tags": [
-          "updates"
+          "events"
         ],
-        "operationId": "updatesWebSocket",
-        "summary": "Stream library update summary and job events over WebSocket",
-        "description": "Use a WebSocket upgrade request. The first text frame is a summary with type=summary; subsequent job events belong to the authenticated user. Non-close client messages are ignored.",
-        "x-websocket": {
-          "messageFormat": "json-text",
-          "frames": [
+        "operationId": "streamEvents",
+        "summary": "Stream download and library update events over SSE",
+        "description": "The stream replays retained events newer than Last-Event-ID, then sends a current snapshot, then live events. The in-memory ring retains the latest 1024 events; ring overflow or a process restart makes the snapshot authoritative. A cursor beyond the current maximum id is reset to the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. Snapshot query failures close the stream so the client can reconnect and resynchronize. A heartbeat comment is sent every 15 seconds.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "Replay retained events with ids strictly greater than this value before sending the snapshot.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "x-sse": {
+          "heartbeatSeconds": 15,
+          "capacity": 1024,
+          "events": [
             {
-              "direction": "server",
-              "when": "immediately after upgrade",
+              "name": "snapshot",
               "schema": {
-                "$ref": "#/components/schemas/UpdateSummaryFrame"
+                "$ref": "#/components/schemas/EventSnapshot"
               }
             },
             {
-              "direction": "server",
-              "when": "library update job event",
+              "name": "download",
+              "schema": {
+                "$ref": "#/components/schemas/DownloadEvent"
+              },
+              "description": "Chapter events only; the manager running state is sent as a separate running event."
+            },
+            {
+              "name": "running",
+              "schema": {
+                "$ref": "#/components/schemas/RunningResponse"
+              }
+            },
+            {
+              "name": "update",
               "schema": {
                 "$ref": "#/components/schemas/UpdateEvent"
               }
+            },
+            {
+              "name": "updateSummary",
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              },
+              "description": "Sent when an update starts and after each job is accounted; running is true."
+            },
+            {
+              "name": "updateComplete",
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              },
+              "description": "Sent when an update finishes; running is false and pending is zero."
             }
           ]
         },
         "responses": {
-          "101": {
-            "description": "Switching Protocols; UTF-8 JSON text frames follow."
+          "200": {
+            "description": "Server-sent event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -3833,11 +3847,11 @@
         "scheme": "bearer",
         "bearerFormat": "Session token or configured API key"
       },
-      "accessTokenQuery": {
+      "sessionCookie": {
         "type": "apiKey",
-        "in": "query",
-        "name": "access_token",
-        "description": "Alternative credential for image and WebSocket clients that cannot send Authorization."
+        "in": "cookie",
+        "name": "sumidoku.session",
+        "description": "Login-issued session cookie used by browser API requests. CLI and other non-browser clients use bearer authentication instead."
       }
     },
     "parameters": {
@@ -7590,6 +7604,24 @@
           }
         }
       },
+      "EventSnapshot": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DownloadsSnapshot"
+          },
+          {
+            "type": "object",
+            "required": [
+              "updateSummary"
+            ],
+            "properties": {
+              "updateSummary": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              }
+            }
+          }
+        ]
+      },
       "DownloadEvent": {
         "type": "object",
         "required": [
@@ -7681,27 +7713,6 @@
             "nullable": true
           }
         }
-      },
-      "UpdateSummaryFrame": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/UpdateSummary"
-          },
-          {
-            "type": "object",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "summary"
-                ]
-              }
-            }
-          }
-        ]
       },
       "UpdateEvent": {
         "type": "object",

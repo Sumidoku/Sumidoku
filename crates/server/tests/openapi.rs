@@ -105,7 +105,8 @@ fn document_describes_shared_contracts() {
 	let document = document();
 	assert_eq!(document["openapi"], "3.0.3");
 	assert!(document["components"]["securitySchemes"]["bearerAuth"].is_object());
-	assert!(document["components"]["securitySchemes"]["accessTokenQuery"].is_object());
+	assert!(document["components"]["securitySchemes"]["accessTokenQuery"].is_null());
+	assert!(document["components"]["securitySchemes"]["sessionCookie"].is_object());
 	assert!(document["components"]["schemas"]["ApiError"]["properties"]["code"].is_object());
 	assert!(document["components"]["schemas"]["ApiError"]["properties"]["message"].is_object());
 	assert!(document["paths"]["/api/v1/sync/changes"]["get"].is_object());
@@ -127,10 +128,13 @@ fn document_describes_shared_contracts() {
 	let names: Vec<&str> = parameters.iter().filter_map(|parameter| parameter["name"].as_str()).collect();
 	assert_eq!(names, ["dryRun", "sourceMapping"]);
 	for path in ["/api/v1/downloads/ws", "/api/v1/update/ws"] {
-		let operation = &document["paths"][path]["get"];
-		assert!(operation["responses"]["101"].is_object(), "missing WebSocket upgrade for {path}");
-		assert!(operation["x-websocket"].is_object(), "missing WebSocket frame contract for {path}");
+		assert!(document["paths"][path].is_null(), "legacy WebSocket path remains for {path}");
 	}
+	let events = &document["paths"]["/api/v1/events"]["get"];
+	assert!(events["responses"]["200"]["content"]["text/event-stream"].is_object());
+	assert_eq!(events["x-sse"]["capacity"], 1024);
+	assert_eq!(events["security"], serde_json::json!([{"bearerAuth": []}, {"sessionCookie": []}]));
+	assert!(document["components"]["schemas"]["EventSnapshot"]["allOf"].is_array());
 }
 
 #[test]

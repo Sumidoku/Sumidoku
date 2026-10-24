@@ -14,7 +14,7 @@ import {
 	Trash2,
 	Upload
 } from 'lucide-react';
-import { ApiError, api, backupUrl, clearToken } from '../api/client';
+import { ApiError, api, backupUrl } from '../api/client';
 import {
 	qk,
 	queryClient,
@@ -222,8 +222,7 @@ function SecuritySection() {
 				silent: true
 			});
 			pushToast(t('settings.passwordChanged'), 'info');
-			clearToken();
-			navigate('/login');
+				navigate('/login');
 		} catch (e) {
 			pushToast(e instanceof ApiError && e.status === 401 ? t('settings.wrongPassword') : t('settings.changeFailed'));
 		} finally {
@@ -233,7 +232,6 @@ function SecuritySection() {
 
 	async function logout() {
 		await api('/auth/logout', { method: 'POST', silent: true }).catch(() => {});
-		clearToken();
 		queryClient.setQueryData(qk.whoami, (cur: AuthStatus | undefined) =>
 			cur ? { ...cur, user: null } : cur
 		);

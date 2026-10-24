@@ -157,7 +157,7 @@ pub struct DownloadEvent {
 	/// Carried only by running events (kind="running", chapter_id=0); chapter events always have None, kept off the wire
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub running: Option<bool>,
-	/// Owning user of the row; WS filters per connection user. running events are global manager state (None, broadcast to all)
+	/// Owning user of the row; event streams filter per connection user. running events are global manager state (None, broadcast to all)
 	#[serde(skip)]
 	pub user_id: Option<i64>,
 }

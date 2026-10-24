@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { BookOpen } from 'lucide-react';
-import { ApiError, api, setToken } from '../api/client';
+import { ApiError, api } from '../api/client';
 import { qk, queryClient } from '../api/hooks';
 import type { AuthStatus, LoginResponse } from '../api/types';
 import { Button, Input } from '../components';
@@ -35,7 +35,6 @@ export default function LoginPage() {
 				body: { username, password },
 				silent: true
 			});
-			setToken(res.token);
 			// The login response carries the identity: write it straight into the cache so whoami doesn't answer null for a beat after entering the home page
 			queryClient.setQueryData(qk.whoami, { enabled: true, username: res.user.username, user: res.user });
 			navigate('/', { replace: true });
