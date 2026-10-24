@@ -24,7 +24,7 @@
 }
 
 .login-card__brand h1 {
-	font-family: var(--font-display);
+	font-family: var(--font-brand);
 	font-size: 20px;
 	color: var(--text);
 	letter-spacing: -0.015em;

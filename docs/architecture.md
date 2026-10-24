@@ -1474,9 +1474,9 @@ new service worker is waiting, the UI offers Reload and Later: Reload activates
 it and reloads the page, while Later only dismisses the prompt; there is no
 automatic reload. This provides installation and an application shell, not
 offline chapters or offline reading progress.
-Typography uses system stacks through `--font-sans`, `--font-display` and
-`--font-mono`; the display stack is limited to brand marks and page-header
-titles, while content names and controls stay sans.
+Typography uses system stacks through `--font-sans`, `--font-display`,
+`--font-brand` and `--font-mono`; brand marks use the rounded brand stack,
+page-header titles use display serif, and content names and controls stay sans.
 Route handles provide translated fallback document titles, and
 `DocumentTitleProvider` appends ` · Sumidoku`. Source, manga and reader pages
 replace the fallback with content names through `useDocumentTitle`; overrides

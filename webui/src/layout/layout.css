@@ -78,7 +78,7 @@
 }
 
 .app__logo-text {
-	font-family: var(--font-display);
+	font-family: var(--font-brand);
 	font-size: 17px;
 	font-weight: 600;
 	letter-spacing: -0.01em;
