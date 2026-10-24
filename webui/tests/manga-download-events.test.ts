@@ -128,14 +128,16 @@ test('snapshot clears terminal chapters without clearing active downloads', () =
 	]));
 });
 
-test('manga detail wires subscriptions, seeds activity and cleans them up', () => {
+test('manga detail merges REST seeding with events and cleans up subscriptions', () => {
 	const source = readFileSync(new URL('../src/pages/MangaDetailPage.tsx', import.meta.url), 'utf8');
 	assert.match(source, /createMangaDownloadEventHandlers\(qk\.chapters\(mangaId\), qk\.library/);
 	assert.match(source, /sse\.on\('download'/);
 	assert.match(source, /sse\.on\('snapshot', \(msg\) =>/);
 	assert.match(source, /handlers\.onSnapshot\(\(msg as EventSnapshot\)\.downloads\)/);
-	assert.match(source, /api<Download\[\]>\('\/downloads'\)/);
-	assert.match(source, /if \(active && !receivedEvent\) handlers\.onSnapshot\(downloads\)/);
+	assert.match(source, /pendingEvents\.set\(event\.chapterId, event\)/);
+	assert.match(source, /handlers\.onSnapshot\(mergeDownloadResponse\(\[\], downloads, pendingEvents\)\)/);
+	assert.match(source, /receivedSnapshot = true/);
+	assert.doesNotMatch(source, /receivedEvent/);
 	assert.match(source, /unsubDownload\(\);\s*unsubSnapshot\(\);/);
 	assert.doesNotMatch(source, /setDlQueued|subscribeWS/);
 });
