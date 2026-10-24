@@ -370,6 +370,32 @@ pub async fn register_example_manga(app: &Router) -> i64 {
 	body["id"].as_i64().expect("manga id")
 }
 
+/// Phase-2 browse reads the scan index: tests trigger the scan explicitly and wait for the queued tasks
+/// (scan + derived analysis) to settle
+pub async fn local_scan_and_settle(app: &Router, source_id: Option<i64>) {
+	let body = source_id.map(|id| json!({"sourceId": id}));
+	let (status, body) = request(app, "POST", "/api/v1/local/scan", body).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let started = std::time::Instant::now();
+	loop {
+		let (status, body) = request(app, "GET", "/api/v1/tasks", None).await;
+		assert_eq!(status, StatusCode::OK);
+		let tasks = body.as_array().expect("tasks array");
+		let live = tasks
+			.iter()
+			.filter(|task| task["status"] == "pending" || task["status"] == "running")
+			.count();
+		if live == 0 {
+			return;
+		}
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(15),
+			"tasks never settled: {body}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+	}
+}
+
 pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {
 	sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rw", db_path.display()))
 		.await

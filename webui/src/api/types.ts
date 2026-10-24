@@ -201,6 +201,7 @@ export type CategoryNameRequest = {
 
 export type Chapter = SourceChapter & {
 	id: number;
+	trashed: boolean;
 	pageCount: number;
 	lastPageRead: number;
 	isRead: boolean;
@@ -513,6 +514,17 @@ export type Listing = {
 	kind: "default" | "list";
 };
 
+export type LocalTrashEntry = {
+	manga: {
+		id: number;
+		sourceId: number;
+		key: string;
+		title: string;
+	};
+	trashedAt: number;
+	trashedChapters: number;
+};
+
 export type LoginRequest = {
 	username: string;
 	password: string;
@@ -528,6 +540,7 @@ export type Manga = SourceManga & {
 	id: number;
 	sourceId: number;
 	initialized: boolean;
+	trashed: boolean;
 	chapterCount: number;
 	inLibrary: boolean;
 	incognito: boolean;

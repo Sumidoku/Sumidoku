@@ -433,23 +433,39 @@ impl UpdateScheduler {
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
 			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
 			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
-			let (updated, protected, epub_divina) = if is_local {
-				let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
-				(update.manga, update.protected, Some(update.epub_divina))
-			} else if is_opds {
-				let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
-				(updated, Vec::new(), None)
+			if is_local {
+				// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
+				// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
+				let (_, reconciled, _) = crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key).await?;
+				let now = unix_now();
+				let (next_update_time, next_update_is_fallback) =
+					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
+				sqlx::query(
+					"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
+				)
+				.bind(next_update_time)
+				.bind(next_update_is_fallback)
+				.bind(now)
+				.bind(manga.id)
+				.execute(&state.pool)
+				.await?;
+				Ok(reconciled)
 			} else {
-				let handle = state.get_handle(manga.source_id).await?;
-				let updated = handle
-					.get_manga_update(manga_from_row(&manga), settings.refresh_metadata, true)
-					.await?;
-				(updated, Vec::new(), None)
-			};
-			let mut tx = crate::db::begin_write(&self.pool).await?;
-			let reconciled = persist_success(&mut tx, &manga, &updated, &protected, epub_divina.as_ref(), &settings, unix_now()).await?;
-			tx.commit().await?;
-			Ok(reconciled)
+				let (updated, protected) = if is_opds {
+					let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+					(updated, Vec::new())
+				} else {
+					let handle = state.get_handle(manga.source_id).await?;
+					let updated = handle
+						.get_manga_update(manga_from_row(&manga), settings.refresh_metadata, true)
+						.await?;
+					(updated, Vec::new())
+				};
+				let mut tx = crate::db::begin_write(&self.pool).await?;
+				let reconciled = persist_success(&mut tx, &manga, &updated, &protected, &settings, unix_now()).await?;
+				tx.commit().await?;
+				Ok(reconciled)
+			}
 		}
 		.await;
 		match outcome {
@@ -583,7 +599,6 @@ async fn persist_success(
 	manga: &MangaRow,
 	updated: &aidoku::Manga,
 	protected: &[String],
-	epub_divina: Option<&HashMap<String, bool>>,
 	settings: &LibraryUpdateSettings,
 	fetched_at: i64,
 ) -> ApiResult<ReconcileOutcome> {
@@ -608,11 +623,9 @@ async fn persist_success(
 		manga.id,
 		updated.chapters.as_deref().unwrap_or(&[]),
 		protected,
+		false,
 	)
 	.await?;
-	if let Some(values) = epub_divina {
-		crate::local::store_epub_divina(conn, manga.id, updated.chapters.as_deref().unwrap_or(&[]), values).await?;
-	}
 	sqlx::query(
 		"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
 	)
@@ -633,9 +646,11 @@ async fn select_manga(
 	category_id: Option<i64>,
 	config_interval_hours: u64,
 ) -> ApiResult<Vec<MangaRow>> {
+	// trashed local manga are gone from disk: refreshing them can only 404, so they sit out update runs
+	// until a scan restores them
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
-	 WHERE mu.in_library = 1 AND m.update_strategy != 1";
+	 WHERE mu.in_library = 1 AND m.update_strategy != 1 AND m.trashed_at IS NULL";
 	let settings = LibraryUpdateSettings::load(pool, user_id, config_interval_hours).await?;
 	let seconds = interval_seconds(settings.update_interval_hours);
 	// When updating from a specific category, Aidoku ignores that category in the global exclusion list
@@ -1569,7 +1584,7 @@ mod tests {
 			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
-		persist_success(&mut tx, &row, &updated, &[], None, &settings, 1000)
+		persist_success(&mut tx, &row, &updated, &[], &settings, 1000)
 			.await
 			.expect("persist successful fetch");
 		tx.commit().await.expect("commit successful fetch");
@@ -1609,7 +1624,7 @@ mod tests {
 			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
-		persist_success(&mut tx, &row, &updated, &[], None, &settings, fetched_at)
+		persist_success(&mut tx, &row, &updated, &[], &settings, fetched_at)
 			.await
 			.expect("persist successful fetch");
 		tx.commit().await.expect("commit successful fetch");

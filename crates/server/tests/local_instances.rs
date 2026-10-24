@@ -56,7 +56,9 @@ async fn instance_settings(app: &Router, source_id: i64) -> Value {
 	body
 }
 
+/// Browse reads the scan index (phase 2): scan-and-settle first, then read
 async fn browse_keys(app: &Router, source_id: i64) -> Vec<String> {
+	common::local_scan_and_settle(app, Some(source_id)).await;
 	let (status, body) = request(
 		app,
 		"POST",

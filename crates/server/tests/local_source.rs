@@ -14,7 +14,7 @@ use aidoku::{ContentRating, Viewer};
 use axum::Router;
 use axum::http::StatusCode;
 use common::{TestApp, base_config, request, request_full, source_by_key, test_app};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
@@ -203,7 +203,7 @@ async fn migration_seeds_builtin_local_source() {
 async fn scan_lists_only_real_manga_dirs() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_local_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
@@ -464,12 +464,35 @@ async fn refresh_rescans_added_and_removed_chapters() {
 	std::fs::remove_dir_all(tmp.path().join("local/Alpha/ch 2")).expect("remove ch 2");
 	let (status, _) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let keys: Vec<String> = chapters_of(&app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
+	// the vanished chapter is trashed, not deleted: the row stays with its progress until purged
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let ch2 = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.find(|c| c["key"] == "ch 2")
+		.expect("ch 2 trashed, not gone");
+	assert_eq!(ch2["trashed"], true);
+	let active: Vec<&Value> = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.filter(|c| c["trashed"] == false)
 		.collect();
-	assert!(!keys.iter().any(|k| k == "ch 2"), "真删除的章节应对账掉: {keys:?}");
+	assert!(!active.iter().any(|c| c["key"] == "ch 2"));
+
+	// reappearing on disk restores the row in place on the next refresh
+	write_page(&tmp.path().join("local/Alpha/ch 2"), "1.png", b"alpha-2-1-back");
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let ch2 = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.find(|c| c["key"] == "ch 2")
+		.expect("ch 2 restored");
+	assert_eq!(ch2["trashed"], false);
 }
 
 #[cfg(unix)]
@@ -654,11 +677,17 @@ async fn update_scheduler_rescans_local_library() {
 }
 
 #[tokio::test]
-async fn browse_search_scans_dirs_and_filters() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+async fn browse_search_reads_the_index_and_filters() {
+	let TestApp { app, tmp: _tmp, .. } = local_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
 	let source_id = local_source_id(&app).await;
+	common::local_scan_and_settle(&app, None).await;
 
-	// empty query (absent or pure whitespace) returns everything: browse = real scan, entries in the online search shape (sourceId attached)
+	// empty query (absent or pure whitespace) returns everything indexed, entries in the online search
+	// shape (sourceId attached); indexed rows always carry the internal id
 	for body in [json!({}), json!({"query": "  "})] {
 		let (status, body) = request(
 			&app,
@@ -675,7 +704,7 @@ async fn browse_search_scans_dirs_and_filters() {
 		for entry in entries {
 			assert_eq!(entry["sourceId"], source_id);
 			assert_eq!(entry["key"], entry["title"]);
-			assert!(entry["id"].is_null(), "未入库的条目不带内部 id: {entry}");
+			assert!(entry["id"].is_i64(), "indexed entries carry their id: {entry}");
 		}
 	}
 
@@ -692,7 +721,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0]["title"], "Alpha");
 
-	// shelved entries carry the internal id, which the browse page uses to jump straight to the detail page
+	// a shelved entry's id is the one the browse page uses to jump straight to the detail page
 	let manga_id = register_local(&app, "Beta").await;
 	let (status, body) = request(
 		&app,
@@ -704,7 +733,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["entries"][0]["id"], manga_id);
 
-	// a directory name nothing scans to: an empty set is not an error
+	// a name nothing was indexed under: an empty set is not an error
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -720,6 +749,8 @@ async fn browse_search_scans_dirs_and_filters() {
 async fn aggregate_search_includes_local_source() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
+	// the local arm answers from the scan index, so index first
+	common::local_scan_and_settle(&app, None).await;
 
 	// cross-source aggregation with the local source selected yields a result entry, not an unsupported error entry
 	let (status, body) = request(
@@ -836,7 +867,7 @@ async fn nested_app() -> TestApp {
 async fn nested_scan_discovers_series_under_containers() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_nested_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	// the publisher grouping directory itself is never a manga
@@ -847,6 +878,8 @@ async fn nested_scan_discovers_series_under_containers() {
 async fn nested_browse_lists_leaf_titles_and_filters() {
 	let TestApp { app, tmp: _tmp, .. } = nested_app().await;
 	let source_id = local_source_id(&app).await;
+	// browse reads the scan index: index first, then read
+	common::local_scan_and_settle(&app, None).await;
 
 	let (status, body) = request(
 		&app,
@@ -946,7 +979,7 @@ async fn manga_absorbs_nested_archives() {
 	let t = TestApp { app, tmp, db_path };
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Absorbed"]);
@@ -1132,7 +1165,7 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 	assert_eq!(chapters_of(&t.app, manga_id).await.len(), 3);
 
 	// an unlistable container degrades the scan instead of erroring; the prefix rule protects its whole
-	// subtree while a truly deleted sibling still reconciles away
+	// subtree while a truly deleted sibling is trashed (phase 2), not deleted
 	let vol1 = tau.join("vol1");
 	let mut perms = std::fs::metadata(&vol1).expect("metadata").permissions();
 	use std::os::unix::fs::PermissionsExt;
@@ -1140,27 +1173,31 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 	std::fs::set_permissions(&vol1, perms).expect("chmod 000");
 	std::fs::remove_dir_all(tau.join("ch 9")).expect("remove ch 9");
 
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	keys.sort();
-	assert_eq!(keys, ["vol1/ch 1", "vol1/ch 2"], "{keys:?}");
+	let chapters = body.as_array().expect("chapters array");
+	let ch9 = chapters.iter().find(|c| c["key"] == "ch 9").expect("ch 9 trashed, not gone");
+	assert_eq!(ch9["trashed"], true);
+	for key in ["vol1/ch 1", "vol1/ch 2"] {
+		let chapter = chapters.iter().find(|c| c["key"] == key).expect("protected chapter stays");
+		assert_eq!(chapter["trashed"], false, "{key} protected by the unreadable container");
+	}
 
 	let mut perms = std::fs::metadata(&vol1).expect("metadata").permissions();
 	perms.set_mode(0o755);
 	std::fs::set_permissions(&vol1, perms).expect("chmod 755");
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	assert_eq!(keys, ["vol1/ch 2", "vol1/ch 1"], "ch 9 stays deleted, the subtree scans again: {keys:?}");
+	let chapters = body.as_array().expect("chapters array");
+	assert_eq!(chapters.len(), 3);
+	let ch9 = chapters.iter().find(|c| c["key"] == "ch 9").expect("ch 9 still trashed");
+	assert_eq!(ch9["trashed"], true, "ch 9 stays trashed; the subtree scans again");
+	for key in ["vol1/ch 1", "vol1/ch 2"] {
+		assert_eq!(
+			chapters.iter().find(|c| c["key"] == key).expect("chapter")["trashed"],
+			false
+		);
+	}
 }
 
 // ----- oneshots directory (SUMIDOKU_LOCAL_ONESHOTS_DIR / the local.oneshots_dir setting) -----
@@ -2187,7 +2224,7 @@ async fn mylar_reading_direction_maps_to_aidoku_viewer() {
 		);
 		std::fs::write(dir.join("series.json"), json).expect("write series.json");
 		write_page(&dir.join("ch 1"), "1.png", b"direction-page");
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.viewer);
 	}
 	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
@@ -2224,7 +2261,7 @@ async fn epub_spine_direction_maps_to_aidoku_viewer() {
 			Some(("OEBPS/content.opf", opf.as_bytes())),
 			&[("OEBPS/images/1.png", b"spine-page")],
 		);
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.viewer);
 	}
 	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
@@ -2257,7 +2294,7 @@ async fn mylar_age_ratings_map_to_aidoku_content_ratings() {
 		);
 		std::fs::write(dir.join("series.json"), json).expect("write series.json");
 		write_page(&dir.join("ch 1"), "1.png", b"rating-page");
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.content_rating);
 	}
 	assert_eq!(actual, cases.map(|(_, rating)| rating));

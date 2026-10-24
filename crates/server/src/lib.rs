@@ -58,7 +58,12 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	event_hub.forward_tasks(tasks.clone());
 	// A task left running by the previous process goes back to pending before the dispatcher starts
 	tasks.recover().await?;
+	local::scan::register_handlers(&tasks).await;
 	tokio::spawn(tasks.run());
+	local::scan::enqueue_startup_scan(&state)
+		.await
+		.map_err(|e| Error::Local(e.message().to_string()))?;
+	tokio::spawn(local::scan::run_scheduler(state.clone()));
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;

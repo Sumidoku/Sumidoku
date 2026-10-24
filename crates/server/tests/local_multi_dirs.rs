@@ -109,7 +109,9 @@ async fn local_source_id(app: &Router) -> i64 {
 		.expect("local source id")
 }
 
+/// Browse reads the scan index (phase 2): scan-and-settle first, then read
 async fn browse_keys(app: &Router, source_id: i64) -> Vec<serde_json::Value> {
+	common::local_scan_and_settle(app, Some(source_id)).await;
 	let (status, body) = request(
 		app,
 		"POST",

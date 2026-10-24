@@ -291,8 +291,9 @@ no alias is derived from migration text.
   because boot (`local::ensure_default_instance`, wired in `build_app`) would
   otherwise recreate it empty. Every wasm-capability endpoint (filters,
   listings, home, deep link, login) answers 501 `unsupported` for local rows.
-  There is no index table: browsing walks the instance's roots recursively in
-  real time — the instance's own `paths` source setting wins; the default
+  Browsing reads the scan index (the `manga` table), never the filesystem;
+  the walker contract below is the scan's discovery engine — the
+  instance's own `paths` source setting wins; the default
   instance additionally falls back to the legacy global `local.dirs` setting
   and then the config layer (config `local_dirs` (`SUMIDOKU_LOCAL_DIRS`,
   semicolon-separated with empty segments ignored; the single
@@ -300,7 +301,8 @@ no alias is derived from migration text.
   `[<config_dir>/local]`); `state.rs:local_dirs` resolves the layers, and a
   wrong-shaped stored value counts as unset) — `POST
   /sources/{id}/search` (`api/mod.rs:search_source`) branches for
-  `kind = local` to `scan_manga_dirs`, which discovers manga top-down
+  `kind = local` to the index read (`local_search`), whose rows the scan
+  produces through `scan_roots_full`, discovering manga top-down
   with nearest-qualifying-ancestor absorption: a directory directly
   holding chapter archives qualifies (the Komga trigger), one with no
   archive anywhere below qualifies by the backward-compatible relaxed
@@ -335,16 +337,24 @@ no alias is derived from migration text.
   roots and deduplicates by relative path: the same path present in
   several roots lists once, from the lowest-indexed root (first
   directory wins), while shadowed copies stay addressable by their
-  numbered keys. Titles are the leaf segment of the relative path; the
-  case-insensitive substring filter matches the title (Suwayomi's
-  `contains(query, ignoreCase = true)`), the internal id is attached
-  when the manga is registered, and `hasNextPage` is always false; the
-  response is always buffered (there is no source call to stream), and
-  the aggregate search reuses the same arm so a selected Local yields a
-  section instead of an error entry. A manga persists only when opened
-  or shelved (Suwayomi semantics): `find_or_register_manga` scans the
-  directory, resolves metadata by a first-hit-wins chain (no per-field
-  merge) — top-level `ComicInfo.xml` (authoritative when present, even
+  numbered keys; the index read repeats the rule (a numbered key is
+  shadowed when its bare form exists) and hides trashed rows. Titles are
+  the leaf segment of the relative path (analysis later replaces them
+  with metadata titles); the case-insensitive substring filter matches
+  the title (Suwayomi's `contains(query, ignoreCase = true)`), every
+  index row carries its internal id, and `hasNextPage` is always false;
+  the response is always buffered (there is no source call to stream),
+  an instance with no rows gets its first scan kicked at manual
+  priority, and the aggregate search reuses the same arm so a selected
+  Local yields a section instead of an error entry. A manga persists
+  when opened, shelved, or indexed by a scan: a never-indexed open
+  registers through `find_or_register_manga`'s full `manga_update`
+  chain (the one synchronous expensive path); every other online access
+  to a persisted row is an entry-level enumeration
+  (`local/scan.rs:scan_manga_entry`) that reconciles chapters in trash
+  mode and kicks the analysis pass. Metadata resolves by a
+  first-hit-wins chain (no per-field merge) — top-level `ComicInfo.xml`
+  (authoritative when present, even
   unparsable) → the first chapter archive carrying one, in chapter
   order (extracted in-memory) → a `series.json` sidecar (flat schema or
   Mylar's nested `metadata`: title, role-mapped creators, description,
@@ -396,22 +406,62 @@ no alias is derived from migration text.
   the byte source switched to the fallback chain (`local::resolve_cover`):
   `cover.*` sidecar in the manga directory → first page of the chapter
   list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
-  one) → 404 placeholder.    `?refresh=1` on the chapters endpoint re-scans;
-  the library update scheduler treats the local scan as the source call.
+  one) → 404 placeholder, and local covers are served capped at 600px
+  wide (the downsample pipeline's Lanczos3 helper; the cache stores the
+  downscaled PNG).    `?refresh=1` and the library update scheduler both
+  run the entry-level scan (`local/scan.rs:scan_manga_entry`), never the
+  archive-opening chain.
   Auto-download skips local manga (files are already local), and the web
   UI hides the download buttons for `kind = local`, shows a manual refresh
   button on the chapter list, and edits each instance's roots and oneshots
   marker in its source settings: `GET/PUT /api/v1/sources/{id}/settings`
-  answer a server-synthesized definition for local rows (`paths` as an
-  unknown-to-Aidoku `list` type plus a `oneshotsDir` text) with the
+  answer a server-synthesized definition for local rows (`paths` and
+  `exclusions` as unknown-to-Aidoku `list` types, a `oneshotsDir` text and
+  the `forceModifiedTime`/`analyzePages`/`analyzeMetadata` toggles) with the
   effective, fallback-resolved values; PUT validates `paths` against the
-  filesystem and rejects unknown keys, `oneshotsDir: null` clears the
-  override, and reset clears only the oneshots override (the roots have no
-  default). The retired global `local` settings group is rejected on write
+  filesystem and rejects unknown keys, `null` clears an override back to
+  the config layer, reset clears every override (the roots have no
+  default), and editing a scan-affecting key enqueues a rescan (kmrs's
+  `check_library_should_rescan`). The retired global `local` settings group
+  is rejected on write
   (400); the legacy flat `local.dirs` / `local.oneshots_dir` keys remain
   accepted and keep working as the default instance's fallback layer. RAR/CBR, PDF and 7z are
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
+  Phase 2 (migration `0024_local_trash.sql`, `local/scan.rs`,
+  `local/analyze.rs`): the scheduled full scan (config `local_scan_secs` /
+  `SUMIDOKU_LOCAL_SCAN_SECS`, 0 = off; `local_scan_on_startup` enqueues at
+  boot) indexes every discovered manga and chapter at enumeration cost —
+  leaf-name title, `initialized = 0`, no archive IO — and diffs persisted
+  rows against the filesystem: a vanished, unprotected row is trashed
+  (`trashed_at`, kmrs's `DELETED_DATE`), never deleted; reappearance clears
+  the flag in place (a same-dir rename needs no user action). Protection
+  layers: unreadable entries prefix-protect their subtrees
+  (kmrs's `failed_directories`), a missing/unreadable root fails the whole
+  scan (kmrs's unavailable library), a zero-hit scan with any failure
+  trashes nothing, excluded subtrees (`exclusions`, case-insensitive
+  substrings — browse skips them too) and entries that exist but are not
+  directories are out of the diff's sight. `scan_mtime` is the change
+  detector: the max directory mtime across the manga subtree (chapters nest
+  at any depth, so top-level mtime alone is insufficient), plus file mtimes
+  when the instance's `forceModifiedTime` is on (kmrs's
+  `scan_force_modified_time`, for in-place archive edits); an unchanged,
+  non-trashed manga skips reconciliation, and a changed one is marked
+  `initialized = 0` so analysis re-reads its embedded metadata (kmrs's
+  OUTDATED). The post-scan analysis pass (`local_analyze` task, gated by
+  `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
+  CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
+  (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and
+  manga-level authors/artists/tags aggregated from chapters when the chain
+  found none — and page rows through the reader's own `load_pages` write
+  path. Opening an indexed-but-unanalyzed manga stays cheap and kicks the
+  analysis task; only a never-indexed open pays the synchronous chain.
+  Trashed rows stay visible (manga/chapter JSON carry `trashed`), the
+  update scheduler skips them, and the trash API lives at
+  `GET/DELETE /api/v1/local/trash` (emptying runs as `empty_trash` tasks),
+  `DELETE /api/v1/local/trash/{id}` and `POST .../restore` (409 while the
+  directory is still missing). `POST /api/v1/local/scan` enqueues manual
+  scans. All three run as tasks (see the task bullet), per-instance serial.
 - Built-in OPDS source (`opds_source/mod.rs`): `source.kind = opds` turns an
   OPDS catalog — Komga, Kavita, Calibre-Web — into a first-class source,
   multi-instance from day one. Both wire formats are accepted, detected per

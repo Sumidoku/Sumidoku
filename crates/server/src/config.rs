@@ -85,6 +85,17 @@ pub struct Config {
 	pub local_dirs: Option<Vec<PathBuf>>,
 	/// Name marking a oneshots directory for the local source; None/blank = the rule is off
 	pub local_oneshots_dir: Option<String>,
+	/// Scheduled local scan interval (seconds); 0 = off, manual scans only
+	pub local_scan_secs: u64,
+	/// Enqueue a local scan of every instance at boot
+	pub local_scan_on_startup: bool,
+	/// Global defaults for the per-instance local settings of the same semantics; the instance's own
+	/// source_setting wins when set (state.rs local_* resolvers)
+	pub local_scan_force_modified_time: bool,
+	/// ';'-separated exclusion substrings (paths may contain ','); matched case-insensitively on relative paths
+	pub local_scan_exclusions: Vec<String>,
+	pub local_analyze_pages: bool,
+	pub local_analyze_metadata: bool,
 	/// legacy: compatibility alias for auth.password, effective only when auth.password is absent
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
@@ -125,6 +136,12 @@ impl Default for Config {
 			task_pool_size: 2,
 			local_dirs: None,
 			local_oneshots_dir: None,
+			local_scan_secs: 0,
+			local_scan_on_startup: false,
+			local_scan_force_modified_time: false,
+			local_scan_exclusions: Vec::new(),
+			local_analyze_pages: true,
+			local_analyze_metadata: true,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -257,6 +274,12 @@ struct ConfigFile {
 	/// legacy: one-item spelling of local_dirs, effective only when local_dirs is absent
 	local_dir: Option<PathBuf>,
 	local_oneshots_dir: Option<String>,
+	local_scan_secs: Option<u64>,
+	local_scan_on_startup: Option<bool>,
+	local_scan_force_modified_time: Option<bool>,
+	local_scan_exclusions: Option<Vec<String>>,
+	local_analyze_pages: Option<bool>,
+	local_analyze_metadata: Option<bool>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
@@ -385,6 +408,24 @@ impl Config {
 		}
 		if let Some(v) = file.local_oneshots_dir {
 			self.local_oneshots_dir = Some(v);
+		}
+		if let Some(v) = file.local_scan_secs {
+			self.local_scan_secs = v;
+		}
+		if let Some(v) = file.local_scan_on_startup {
+			self.local_scan_on_startup = v;
+		}
+		if let Some(v) = file.local_scan_force_modified_time {
+			self.local_scan_force_modified_time = v;
+		}
+		if let Some(v) = file.local_scan_exclusions {
+			self.local_scan_exclusions = v;
+		}
+		if let Some(v) = file.local_analyze_pages {
+			self.local_analyze_pages = v;
+		}
+		if let Some(v) = file.local_analyze_metadata {
+			self.local_analyze_metadata = v;
 		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
@@ -562,6 +603,38 @@ impl Config {
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_ONESHOTS_DIR") {
 			self.local_oneshots_dir = Some(v);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_SCAN_SECS")
+			&& let Ok(n) = v.parse()
+		{
+			self.local_scan_secs = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_SCAN_ON_STARTUP")
+			&& let Ok(n) = v.parse()
+		{
+			self.local_scan_on_startup = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_SCAN_FORCE_MODIFIED_TIME")
+			&& let Ok(n) = v.parse()
+		{
+			self.local_scan_force_modified_time = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_SCAN_EXCLUSIONS") {
+			self.local_scan_exclusions = v
+				.split(';')
+				.map(|s| s.trim().to_string())
+				.filter(|s| !s.is_empty())
+				.collect();
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_ANALYZE_PAGES")
+			&& let Ok(n) = v.parse()
+		{
+			self.local_analyze_pages = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_ANALYZE_METADATA")
+			&& let Ok(n) = v.parse()
+		{
+			self.local_analyze_metadata = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
