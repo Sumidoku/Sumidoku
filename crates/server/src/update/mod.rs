@@ -19,6 +19,7 @@ const SCHEDULE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 pub const LIBRARY_SKIP_TITLES: &str = "library.skip_titles";
 pub const LIBRARY_REFRESH_METADATA: &str = "library.refresh_metadata";
 pub const LIBRARY_UPDATE_INTERVAL_HOURS: &str = "library.update_interval_hours";
+const LIBRARY_LAST_SCHEDULED_RUN_AT: &str = "library.last_scheduled_run_at";
 pub const LIBRARY_EXCLUDED_UPDATE_CATEGORIES: &str = "library.excluded_update_categories";
 pub const SKIP_TITLE_RULES: [&str; 3] = ["hasUnread", "completed", "notStarted"];
 
@@ -131,9 +132,29 @@ fn resolved_next_update(
 	}
 }
 
-fn is_due(started_at: i64, last_run_at: Option<i64>, now: i64, interval_hours: u64) -> bool {
+fn is_due(last_run_at: Option<i64>, now: i64, interval_hours: u64) -> bool {
 	interval_hours > 0
-		&& now.saturating_sub(last_run_at.unwrap_or(started_at)) >= interval_seconds(interval_hours)
+		&& last_run_at.is_none_or(|at| now.saturating_sub(at) >= interval_seconds(interval_hours))
+}
+
+async fn scheduled_run_at(pool: &SqlitePool) -> ApiResult<Option<i64>> {
+	let raw: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+		.bind(LIBRARY_LAST_SCHEDULED_RUN_AT)
+		.fetch_optional(pool)
+		.await?;
+	Ok(raw.and_then(|value| serde_json::from_str(&value).ok()))
+}
+
+async fn stamp_scheduled_run_at(pool: &SqlitePool, at: i64) -> ApiResult<()> {
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES (?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+	)
+	.bind(LIBRARY_LAST_SCHEDULED_RUN_AT)
+	.bind(at.to_string())
+	.execute(pool)
+	.await?;
+	Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,11 +214,9 @@ pub struct UpdateScheduler {
 	pool: SqlitePool,
 	signals: broadcast::Sender<UpdateSignal>,
 	summary: RwLock<UpdateSummary>,
-	last_scheduled_run_at: RwLock<Option<i64>>,
 	running: AtomicBool,
 	fetch_lock: Arc<Mutex<()>>,
 	config_interval_hours: u64,
-	started_at: i64,
 }
 
 impl UpdateScheduler {
@@ -207,11 +226,9 @@ impl UpdateScheduler {
 			pool: state.pool.clone(),
 			signals: broadcast::channel(256).0,
 			summary: RwLock::new(UpdateSummary::default()),
-			last_scheduled_run_at: RwLock::new(None),
 			running: AtomicBool::new(false),
 			fetch_lock: Arc::new(Mutex::new(())),
 			config_interval_hours: state.config.update_interval_hours,
-			started_at: unix_now(),
 		})
 	}
 
@@ -245,8 +262,8 @@ impl UpdateScheduler {
 	async fn scheduled_due(&self, now: i64) -> ApiResult<bool> {
 		// update_interval_hours is global; any user id works for loading it.
 		let settings = LibraryUpdateSettings::load(&self.pool, 1, self.config_interval_hours).await?;
-		let last_run_at = *self.last_scheduled_run_at.read().await;
-		Ok(is_due(self.started_at, last_run_at, now, settings.update_interval_hours))
+		let last_run_at = scheduled_run_at(&self.pool).await?;
+		Ok(is_due(last_run_at, now, settings.update_interval_hours))
 	}
 
 	async fn run_scheduled_if_due(self: &Arc<Self>) -> ApiResult<bool> {
@@ -256,7 +273,7 @@ impl UpdateScheduler {
 		let Some(guard) = self.try_acquire() else {
 			return Ok(false);
 		};
-		self.fetch_union(guard).await;
+		self.fetch_union(guard).await?;
 		Ok(true)
 	}
 
@@ -273,8 +290,8 @@ impl UpdateScheduler {
 	}
 
 	/// Scheduled full sweep: the union of every user's library, with each manga fetched from its source only once; auto-download follows each user's own filtering
-	pub async fn fetch_union(self: &Arc<Self>, guard: OwnedMutexGuard<()>) {
-		*self.last_scheduled_run_at.write().await = Some(unix_now());
+	pub async fn fetch_union(self: &Arc<Self>, guard: OwnedMutexGuard<()>) -> ApiResult<()> {
+		stamp_scheduled_run_at(&self.pool, unix_now()).await?;
 		let user_ids: Vec<i64> = match sqlx::query_scalar(
 			"SELECT DISTINCT user_id FROM manga_user WHERE in_library = 1 ORDER BY user_id",
 		)
@@ -284,7 +301,7 @@ impl UpdateScheduler {
 			Ok(ids) => ids,
 			Err(e) => {
 				tracing::warn!("update union user select failed: {e:?}");
-				return;
+				return Ok(());
 			}
 		};
 		let mut rows: Vec<MangaRow> = Vec::new();
@@ -309,7 +326,8 @@ impl UpdateScheduler {
 			}
 		}
 		self.run_fetch(rows, owners, None, guard).await;
-		*self.last_scheduled_run_at.write().await = Some(unix_now());
+		stamp_scheduled_run_at(&self.pool, unix_now()).await?;
+		Ok(())
 	}
 
 	async fn run_fetch(
@@ -841,12 +859,13 @@ mod tests {
 
 		let scheduler = UpdateScheduler::new(&state);
 		let guard = scheduler.try_acquire().expect("fetch guard");
-		scheduler.fetch_union(guard).await;
+		scheduler.fetch_union(guard).await.expect("union fetch");
 
 		let summary = scheduler.summary().await;
 		assert_eq!(summary.total, 3);
 		assert_eq!(summary.complete, 3);
 		assert_eq!(summary.user_id, None);
+		assert!(scheduled_run_at(&state.pool).await.expect("scheduled run timestamp").is_some());
 		for manga_id in [m1, m2, m3] {
 			let stamped: Option<i64> =
 				sqlx::query_scalar("SELECT chapters_last_fetched_at FROM manga WHERE id = ?")
@@ -895,7 +914,7 @@ mod tests {
 
 		let scheduler = UpdateScheduler::new(&state);
 		let guard = scheduler.try_acquire().expect("fetch guard");
-		scheduler.fetch_union(guard).await;
+		scheduler.fetch_union(guard).await.expect("union fetch");
 		assert_eq!(scheduler.summary().await.complete, 1);
 
 		let owners: Vec<i64> = sqlx::query_scalar("SELECT user_id FROM download GROUP BY user_id")
@@ -1310,21 +1329,23 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn scheduled_due_reloads_interval_and_uses_last_run() {
+	async fn scheduled_due_reloads_interval_and_uses_persisted_last_run() {
 		let (state, _, _tmp) = union_state(Config::default()).await;
 		let scheduler = UpdateScheduler::new(&state);
-		let started_at = scheduler.started_at;
+		let started_at = unix_now();
 		assert!(!scheduler.scheduled_due(started_at + 7200).await.expect("disabled due"));
 
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
+		assert!(scheduler.scheduled_due(started_at).await.expect("first run without history is due"));
+		set_setting(&state, LIBRARY_LAST_SCHEDULED_RUN_AT, serde_json::json!(started_at)).await;
 		assert!(!scheduler.scheduled_due(started_at + 3599).await.expect("early due"));
 		assert!(scheduler.scheduled_due(started_at + 3600).await.expect("interval due"));
-		*scheduler.last_scheduled_run_at.write().await = Some(started_at + 1800);
-		assert!(!scheduler.scheduled_due(started_at + 3600).await.expect("last run early"));
-		assert!(scheduler.scheduled_due(started_at + 5400).await.expect("last run due"));
 
+		let restarted = UpdateScheduler::new(&state);
+		assert!(!restarted.scheduled_due(started_at + 3599).await.expect("restart early due"));
+		assert!(restarted.scheduled_due(started_at + 5400).await.expect("restart interval due"));
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(0)).await;
-		assert!(!scheduler.scheduled_due(started_at + 100_000).await.expect("disabled again"));
+		assert!(!restarted.scheduled_due(started_at + 100_000).await.expect("disabled again"));
 	}
 
 	#[tokio::test]
@@ -1418,14 +1439,14 @@ mod tests {
 	async fn manual_summary_time_does_not_defer_scheduled_due() {
 		let (state, _, _tmp) = union_state(Config::default()).await;
 		let scheduler = UpdateScheduler::new(&state);
-		let started_at = scheduler.started_at;
+		let now = unix_now();
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
 		let guard = scheduler.try_acquire().expect("manual fetch guard");
 		scheduler.fetch(1, None, guard).await;
 		assert!(scheduler.summary().await.last_run_at.is_some());
-		scheduler.summary.write().await.last_run_at = Some(started_at + 100_000);
+		scheduler.summary.write().await.last_run_at = Some(now + 100_000);
 
-		assert!(scheduler.scheduled_due(started_at + 3600).await.expect("manual time must not defer"));
+		assert!(scheduler.scheduled_due(now + 3600).await.expect("manual time must not defer"));
 	}
 
 	#[tokio::test]
