@@ -3100,6 +3100,100 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "events"
+        ],
+        "operationId": "streamEvents",
+        "summary": "Stream download and library update events over SSE",
+        "description": "The stream sends retained events newer than Last-Event-ID, then a current snapshot, then live events. Events are retained for 15 minutes; expired events are skipped in favor of the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. A heartbeat comment is sent every 15 seconds. Unlike image and legacy WebSocket endpoints, this endpoint does not accept access_token in the URL.",
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "description": "Replay retained events with ids strictly greater than this value before sending the snapshot.",
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "x-sse": {
+          "heartbeatSeconds": 15,
+          "retentionSeconds": 900,
+          "events": [
+            {
+              "name": "snapshot",
+              "schema": {
+                "$ref": "#/components/schemas/EventSnapshot"
+              }
+            },
+            {
+              "name": "download",
+              "schema": {
+                "$ref": "#/components/schemas/DownloadEvent"
+              },
+              "description": "Chapter events only; the manager running state is sent as a separate running event."
+            },
+            {
+              "name": "running",
+              "schema": {
+                "$ref": "#/components/schemas/RunningResponse"
+              }
+            },
+            {
+              "name": "update",
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEvent"
+              }
+            },
+            {
+              "name": "updateSummary",
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              },
+              "description": "Sent when an update starts and after each job is accounted; running is true."
+            },
+            {
+              "name": "updateComplete",
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              },
+              "description": "Sent when an update finishes; running is false and pending is zero."
+            }
+          ]
+        },
+        "responses": {
+          "200": {
+            "description": "Server-sent event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/settings": {
       "get": {
         "tags": [
@@ -3837,7 +3931,13 @@
         "type": "apiKey",
         "in": "query",
         "name": "access_token",
-        "description": "Alternative credential for image and WebSocket clients that cannot send Authorization."
+        "description": "Alternative credential for image and legacy WebSocket clients that cannot send Authorization. Not accepted by /api/v1/events."
+      },
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "sumidoku.session",
+        "description": "Login-issued session cookie accepted only by /api/v1/events; other endpoints require bearer authentication."
       }
     },
     "parameters": {
@@ -7589,6 +7689,24 @@
             }
           }
         }
+      },
+      "EventSnapshot": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DownloadsSnapshot"
+          },
+          {
+            "type": "object",
+            "required": [
+              "updateSummary"
+            ],
+            "properties": {
+              "updateSummary": {
+                "$ref": "#/components/schemas/UpdateSummary"
+              }
+            }
+          }
+        ]
       },
       "DownloadEvent": {
         "type": "object",

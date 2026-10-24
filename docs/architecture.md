@@ -65,17 +65,37 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `crates/server/tests/common/contract.rs` checks real JSON responses in the
   shared request helpers against path/method/status/content schemas, including
   references, required properties, maps, arrays, enums, nullable fields,
-  oneOf/allOf and x-tuple. WebSocket frames and NDJSON events stay outside
-  generation and response validation; their manually maintained TypeScript
-  protocols live in `webui/src/api/protocol.ts`. Binary content and external
-  OPDS feeds are excluded from generation and response validation as well.
-  `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its JavaScript, CSS,
-  Apache-2.0 license and bundled dependency notices embedded in the binary.
-  `validatorUrl: null` disables external spec validation, so the page needs no
-  external assets. The route drift test reads `api/mod.rs` and compares the
-  complete path/method set with the JSON; update the document in the same PR as
-  route or payload changes. Both Docker smoke tests require the spec and docs
-  page.
+  oneOf/allOf and x-tuple. WebSocket frames, SSE streams and NDJSON events stay
+  outside generation and response validation; their manually maintained
+  TypeScript protocols live in `webui/src/api/protocol.ts`. Binary content and
+  external OPDS feeds are excluded from generation and response validation as
+  well. `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its
+  JavaScript, CSS, Apache-2.0 license and bundled dependency notices embedded
+  in the binary. `validatorUrl: null` disables external spec validation, so the
+  page needs no external assets. The route drift test reads `api/mod.rs` and
+  compares the complete path/method set with the JSON; update the document in
+  the same PR as route or payload changes. Both Docker smoke tests require the
+  spec and docs page.
+- Unified event stream (`events.rs`, `api/events.rs`): `GET /api/v1/events`
+  is a same-origin SSE endpoint for downloads and library updates. The event
+  hub subscribes to the existing download/update broadcasts, writes each event
+  to the `app_event` journal, then broadcasts it to SSE connections. A new
+  connection replays retained events after `Last-Event-ID`, sends a current
+  download/update snapshot, then sends live events with duplicate ids
+  suppressed. Journal entries expire after 15 minutes; an expired replay
+  simply falls back to the current snapshot. The event names are `snapshot`,
+  `download`, `running`, `update`, `updateSummary` and `updateComplete`.
+  `updateSummary` carries the start and per-item counts, while
+  `updateComplete` carries the final stopped state, so the updates page does
+  not poll. Update jobs and summaries reach the hub through one ordered
+  channel, and journal writes are serialized in id order. A lagged client
+  connection ends so native `EventSource` reconnects; a lagged forwarding
+  subscription instead asks each connection for a fresh snapshot. Heartbeat
+  comments are sent every 15 seconds. Login-issued cookie authentication is
+  restricted to this endpoint (see `docs/authentication.md`); bearer
+  authentication also works, while URL access tokens do not. The existing
+  download and update WebSocket endpoints retain their original protocols for
+  compatibility.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
@@ -821,7 +841,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
   sources, with a page-level fetch cap inside a chapter. Download rows use
   the legacy `(chapter_id, user_id)` primary key with `user_id = 1`: enqueue,
-  pause, cancel, list and WebSocket events all belong to the admin.
+  pause, cancel, list and stream events all belong to the admin.
   `DownloadSettings::load` reads the admin's current settings for enqueue,
   dispatch, update and reader operations: format and source concurrency are not
   captured at manager construction, and the update scheduler likewise reloads
@@ -1028,7 +1048,7 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   update transaction's final write stores the resolved provenance. The same
   transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
   failed fetch or persistence pass does not advance either timestamp. Events
-  and the summary carry the fetch's owner, and both the WebSocket stream and
+  and the summary carry the fetch's owner. The WebSocket and SSE streams and
   `GET /api/v1/update/summary` present manual and scheduled updates to the admin.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;

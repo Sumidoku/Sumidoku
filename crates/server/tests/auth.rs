@@ -107,6 +107,43 @@ async fn login_token_flow() {
 	assert_eq!(status, StatusCode::OK);
 }
 
+#[tokio::test]
+async fn session_cookie_is_limited_to_events() {
+	let (app, _tmp) = password_app().await;
+	let (status, headers, bytes) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/login",
+		Some(json!({"username": "admin", "password": PASSWORD})),
+		&[("x-forwarded-proto", "https")],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let set_cookie = headers.get("set-cookie").expect("session cookie").to_str().expect("cookie text");
+	assert!(set_cookie.contains("HttpOnly"));
+	assert!(set_cookie.contains("SameSite=Strict"));
+	assert!(set_cookie.contains("Secure"));
+	let body: Value = serde_json::from_slice(&bytes).expect("login json");
+	let token = body["token"].as_str().expect("token");
+	let cookie = format!("sumidoku.session={token}");
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("cookie", &cookie)]).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	let addr = serve_app(app.clone()).await;
+	let (_query_stream, _query_rest, query_head) =
+		connect_sse_response(addr, &format!("/api/v1/events?access_token={token}"), None, &[]).await;
+	assert!(query_head.contains("401 Unauthorized"), "{query_head}");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", Some(0), &[("Cookie", &cookie)]).await;
+	let snapshot = read_sse_kind(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["data"]["type"], "snapshot");
+	let auth = format!("Bearer {token}");
+	let (status, _, _) = request_with_headers(&app, "POST", "/api/v1/auth/logout", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, headers, _) = request_with_headers(&app, "POST", "/api/v1/auth/logout", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let cleared = headers.get("set-cookie").expect("clear cookie").to_str().expect("clear text");
+	assert!(cleared.contains("Max-Age=0"));
+}
+
 /// A session token belongs to the logged-in user in the DB
 #[tokio::test]
 async fn token_carries_user_identity() {
@@ -178,7 +215,7 @@ async fn change_password() {
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-	let (status, _, _) = request_with_headers(
+	let (status, headers, _) = request_with_headers(
 		&app,
 		"PUT",
 		"/api/v1/auth/password",
@@ -187,6 +224,8 @@ async fn change_password() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
+	let cleared = headers.get("set-cookie").expect("clear cookie").to_str().expect("clear text");
+	assert!(cleared.contains("Max-Age=0"));
 
 	// changing the password revokes all of the user's session tokens
 	for auth in [&auth, &other] {

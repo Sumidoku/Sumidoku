@@ -50,7 +50,13 @@ breaking change.
   Changing it revokes every admin session token.
 - **Session tokens** — the login page exchanges the admin username and
   password for a bearer token (30-day rolling expiry) bound to the built-in
-  admin.
+  admin. Login also sets a `sumidoku.session` cookie containing the same
+  token, with `Path=/`, `HttpOnly`, `SameSite=Strict` and a 30-day maximum
+  age; HTTPS responses add `Secure`. The cookie authenticates only
+  `GET /api/v1/events`, allowing the same-origin `EventSource` to reuse the
+  login session without putting the token in its URL. Other API routes do
+  not accept it. Logout and password changes clear the cookie; password
+  changes also revoke every session token as described above.
 - **API keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
   `auth.api_keys` in `config.toml`. Long-lived, used directly as
   `Authorization: Bearer <key>`, never stored in the database, and act
@@ -58,6 +64,7 @@ breaking change.
 
 ## Notes
 
-- `<img>` links and WebSocket clients cannot send headers; media and
-  stream URLs accept `?access_token=<token>` as an alternative to the
-  header.
+- `<img>` links and legacy WebSocket clients cannot send headers; media and
+  those stream URLs accept `?access_token=<token>` as an alternative to the
+  header. `/api/v1/events` accepts the session cookie or bearer header
+  instead, and rejects the URL parameter.

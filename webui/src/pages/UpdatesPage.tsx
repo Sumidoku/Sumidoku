@@ -5,7 +5,7 @@ import { ApiError, api, coverUrl } from '../api/client';
 import { useCategories, useFetchUpdate, useUpdateRecent } from '../api/hooks';
 import type { UpdateSummary } from '../api/types';
 import type { UpdateJob, UpdateJobStatus, UpdateWsFrame } from '../api/protocol';
-import { subscribeWS } from '../api/ws';
+import { sse } from '../api/sse';
 import { translateApiError } from '../i18n';
 import { chapterLabel, relativeTime } from '../lib/format';
 import {
@@ -52,16 +52,31 @@ export default function UpdatesPage() {
 	);
 
 	useEffect(() => {
-		function onMessage(msg: unknown) {
-			if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+		let receivedEvent = false;
+
+		function onSnapshot(msg: unknown) {
+			const m = msg as { updateSummary: UpdateSummary };
+			receivedEvent = true;
+			setSummary(m.updateSummary);
+			setSummaryLoaded(true);
+		}
+
+		function onSummary(msg: unknown) {
+			receivedEvent = true;
+			setSummary(msg as UpdateSummary);
+			setSummaryLoaded(true);
+		}
+
+		function onComplete(msg: unknown) {
+			receivedEvent = true;
+			setSummary({ ...(msg as UpdateSummary), running: false });
+			setSummaryLoaded(true);
+		}
+
+		function onJob(msg: unknown) {
 			const m = msg as UpdateWsFrame;
-			if (m.type === 'summary') {
-				const { type: _type, ...s } = m;
-				setSummary(s);
-				setSummaryLoaded(true);
-				return;
-			}
 			if (m.type !== 'job') return;
+			receivedEvent = true;
 			const { type: _t, ...job } = m;
 			// Consecutive events for the same manga keep only the newest, so the live list doesn't get flooded
 			setJobs((cur) =>
@@ -70,33 +85,29 @@ export default function UpdatesPage() {
 					50
 				)
 			);
-			// A job event means work is running; the contract has no round-finished event, so running settles via polling reconciliation
-			setSummary((s) => (s && !s.running ? { ...s, running: true } : s));
 		}
 
-		const unsub = subscribeWS('/api/v1/update/ws', { onMessage, onStatus: setOnline });
+		const unsubStatus = sse.onStatus(setOnline);
+		const unsubSnapshot = sse.on('snapshot', onSnapshot);
+		const unsubSummary = sse.on('updateSummary', onSummary);
+		const unsubComplete = sse.on('updateComplete', onComplete);
+		const unsubJob = sse.on('update', onJob);
 		void (async () => {
 			try {
-				setSummary(await api<UpdateSummary>('/update/summary'));
+				const initial = await api<UpdateSummary>('/update/summary');
+				if (!receivedEvent) setSummary(initial);
 			} finally {
 				setSummaryLoaded(true);
 			}
 		})();
-		return unsub;
+		return () => {
+			unsubStatus();
+			unsubSnapshot();
+			unsubSummary();
+			unsubComplete();
+			unsubJob();
+		};
 	}, []);
-
-	// While running, poll the summary every 4s to reconcile: refresh counts + settle running (the WS pushes no round-finished event)
-	useEffect(() => {
-		if (!summary?.running) return;
-		const timer = setInterval(async () => {
-			try {
-				setSummary(await api<UpdateSummary>('/update/summary', { silent: true }));
-			} catch {
-				// On failure, wait for the next round
-			}
-		}, 4000);
-		return () => clearInterval(timer);
-	}, [summary?.running]);
 
 	async function runUpdate(categoryId?: number) {
 		if (updating) return;

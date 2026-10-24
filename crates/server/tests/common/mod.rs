@@ -191,6 +191,7 @@ pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 		config_dir: tmp.path().to_path_buf(),
 		database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
 		covers_dir: tmp.path().join("covers"),
+		downloads_dir: tmp.path().join("downloads"),
 		webui_dir: tmp.path().join("webui"),
 		call_concurrency: 8,
 		log: "warn".into(),
@@ -546,6 +547,93 @@ pub async fn read_ws_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>,
 		let value: Value = serde_json::from_slice(&frame).expect("event json");
 		if value["type"] == kind {
 			return value;
+		}
+	}
+}
+
+pub async fn connect_sse_response(
+	addr: std::net::SocketAddr,
+	path: &str,
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>, String) {
+	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+	let last = last_event_id.map(|id| format!("Last-Event-ID: {id}\r\n")).unwrap_or_default();
+	let extra = headers.iter().map(|(name, value)| format!("{name}: {value}\r\n")).collect::<String>();
+	let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{last}{extra}\r\n");
+	stream.write_all(request.as_bytes()).await.expect("write sse request");
+	let mut received = Vec::new();
+	let mut tmp = [0u8; 4096];
+	loop {
+		let n = stream.read(&mut tmp).await.expect("read sse headers");
+		assert!(n > 0, "connection closed during sse handshake");
+		received.extend_from_slice(&tmp[..n]);
+		if received.windows(4).any(|w| w == b"\r\n\r\n") {
+			break;
+		}
+	}
+	let head_end = received.windows(4).position(|w| w == b"\r\n\r\n").expect("header end");
+	let head = String::from_utf8_lossy(&received[..head_end]).into_owned();
+	let rest = received[head_end + 4..].to_vec();
+	(stream, rest, head)
+}
+
+pub async fn connect_sse(
+	addr: std::net::SocketAddr,
+	path: &str,
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>) {
+	let (stream, rest, head) = connect_sse_response(addr, path, last_event_id, headers).await;
+	assert!(head.contains("200 OK"), "{head}");
+	(stream, rest)
+}
+
+pub async fn read_sse_event(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Value {
+	use tokio::io::AsyncReadExt;
+	loop {
+		if let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+			let frame = buf.drain(..pos + 2).collect::<Vec<_>>();
+			let text = String::from_utf8_lossy(&frame);
+			if text.starts_with(':') {
+				continue;
+			}
+			let mut kind = None;
+			let mut id = None;
+			let mut data = None;
+			for line in text.lines() {
+				if let Some(value) = line.strip_prefix("event:") {
+					kind = Some(value.to_string());
+				} else if let Some(value) = line.strip_prefix("id:") {
+					id = value.parse::<i64>().ok();
+				} else if let Some(value) = line.strip_prefix("data:") {
+					data = Some(value.to_string());
+				}
+			}
+			if kind.is_none() {
+				continue;
+			}
+			let payload = serde_json::from_str(&data.unwrap_or_default()).unwrap_or(Value::Null);
+			return serde_json::json!({ "type": kind, "id": id, "data": payload });
+		}
+		let mut tmp = [0u8; 4096];
+		let n = stream.read(&mut tmp).await.expect("read sse event");
+		assert!(n > 0, "connection closed mid-sse-event");
+		buf.extend_from_slice(&tmp[..n]);
+	}
+}
+
+pub async fn read_sse_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event in time");
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
+			.await
+			.expect("sse read timeout");
+		if frame["type"] == kind {
+			return frame;
 		}
 	}
 }

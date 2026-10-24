@@ -131,6 +131,11 @@ fn document_describes_shared_contracts() {
 		assert!(operation["responses"]["101"].is_object(), "missing WebSocket upgrade for {path}");
 		assert!(operation["x-websocket"].is_object(), "missing WebSocket frame contract for {path}");
 	}
+	let events = &document["paths"]["/api/v1/events"]["get"];
+	assert!(events["responses"]["200"]["content"]["text/event-stream"].is_object());
+	assert_eq!(events["x-sse"]["retentionSeconds"], 900);
+	assert_eq!(events["security"], serde_json::json!([{"bearerAuth": []}, {"sessionCookie": []}]));
+	assert!(document["components"]["schemas"]["EventSnapshot"]["allOf"].is_array());
 }
 
 #[test]

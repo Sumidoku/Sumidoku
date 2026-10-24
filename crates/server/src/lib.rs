@@ -5,6 +5,7 @@ pub mod config;
 pub mod db;
 pub mod download;
 pub mod error;
+pub mod events;
 pub mod local;
 pub mod model;
 pub mod opds_source;
@@ -44,6 +45,10 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);
 	assert!(state.updater.set(updater.clone()).is_ok());
+	let event_hub = events::EventHub::new(state.pool.clone());
+	assert!(state.events.set(event_hub.clone()).is_ok());
+	event_hub.forward_downloads(downloads.clone());
+	event_hub.forward_update(updater.clone());
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;

@@ -149,7 +149,7 @@ pub struct UpdateEvent {
 	pub source_id: i64,
 	#[serde(rename = "addedChapters")]
 	pub added_chapters: i64,
-	/// The user the event belongs to (whose library this manga is in); WS filters per connection user
+	/// The user the event belongs to (whose library this manga is in); event streams filter per connection user
 	#[serde(skip)]
 	pub user_id: Option<i64>,
 }
@@ -180,12 +180,19 @@ impl UpdateSummary {
 	}
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum UpdateSignal {
+	Job(UpdateEvent),
+	Summary(UpdateSummary),
+}
+
 /// Library update detection: scheduled or manual fetches with runtime skip and download settings.
 pub struct UpdateScheduler {
 	// Weak prevents a reference cycle: AppState holds this scheduler through a OnceCell
 	state: Weak<AppState>,
 	pool: SqlitePool,
 	events: broadcast::Sender<UpdateEvent>,
+	signals: broadcast::Sender<UpdateSignal>,
 	summary: RwLock<UpdateSummary>,
 	last_scheduled_run_at: RwLock<Option<i64>>,
 	running: AtomicBool,
@@ -200,6 +207,7 @@ impl UpdateScheduler {
 			state: Arc::downgrade(state),
 			pool: state.pool.clone(),
 			events: broadcast::channel(256).0,
+			signals: broadcast::channel(256).0,
 			summary: RwLock::new(UpdateSummary::default()),
 			last_scheduled_run_at: RwLock::new(None),
 			running: AtomicBool::new(false),
@@ -211,6 +219,10 @@ impl UpdateScheduler {
 
 	pub fn subscribe(&self) -> broadcast::Receiver<UpdateEvent> {
 		self.events.subscribe()
+	}
+
+	pub(crate) fn subscribe_signals(&self) -> broadcast::Receiver<UpdateSignal> {
+		self.signals.subscribe()
 	}
 
 	pub async fn summary(&self) -> UpdateSummary {
@@ -330,6 +342,7 @@ impl UpdateScheduler {
 			};
 		}
 		self.running.store(true, Ordering::SeqCst);
+		let _ = self.signals.send(UpdateSignal::Summary(self.summary.read().await.clone()));
 		tracing::info!(scheduled = scope.is_none(), total, "library update started");
 		for row in &rows {
 			self.emit_for(owners.get(&row.id).map(Vec::as_slice).unwrap_or(&[]), "pending", row, 0);
@@ -360,6 +373,7 @@ impl UpdateScheduler {
 			(summary.complete, summary.failed, summary.skipped)
 		};
 		self.running.store(false, Ordering::SeqCst);
+		let _ = self.signals.send(UpdateSignal::Summary(self.summary.read().await.clone()));
 		tracing::info!(
 			scheduled = scope.is_none(),
 			total,
@@ -461,6 +475,7 @@ impl UpdateScheduler {
 			_ => {}
 		}
 		summary.pending = (summary.pending - 1).max(0);
+		let _ = self.signals.send(UpdateSignal::Summary(summary.clone()));
 	}
 
 	async fn enqueue_new_chapters(
@@ -537,7 +552,7 @@ impl UpdateScheduler {
 
 	fn emit_for(&self, user_ids: &[i64], status: &'static str, manga: &MangaRow, added_chapters: i64) {
 		for &user_id in user_ids {
-			let _ = self.events.send(UpdateEvent {
+			let event = UpdateEvent {
 				kind: "job",
 				status,
 				manga_id: manga.id,
@@ -545,7 +560,9 @@ impl UpdateScheduler {
 				source_id: manga.source_id,
 				added_chapters,
 				user_id: Some(user_id),
-			});
+			};
+			let _ = self.events.send(event.clone());
+			let _ = self.signals.send(UpdateSignal::Job(event));
 		}
 	}
 }

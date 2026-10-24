@@ -2,6 +2,7 @@ pub mod aidoku_backup;
 pub mod backup;
 pub mod docs;
 pub mod download;
+pub mod events;
 pub mod filter_groups;
 pub mod filters;
 pub mod import_merge;
@@ -163,6 +164,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
 		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
+		.route("/api/v1/events", get(crate::api::events::events))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))
 		.route(

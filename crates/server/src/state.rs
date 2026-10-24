@@ -59,6 +59,7 @@ pub struct AppState {
 	// Injected once during build_app assembly, after AppState::new (the manager depends back on state)
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
+	pub events: tokio::sync::OnceCell<Arc<crate::events::EventHub>>,
 }
 
 pub struct DefaultsWrite {
@@ -182,6 +183,7 @@ impl AppState {
 			local_zip: Arc::new(crate::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
+			events: tokio::sync::OnceCell::new(),
 		})
 	}
 
@@ -191,6 +193,10 @@ impl AppState {
 			.get()
 			.expect("download manager installed")
 			.clone()
+	}
+
+	pub fn events(&self) -> Arc<crate::events::EventHub> {
+		self.events.get().expect("event hub installed").clone()
 	}
 
 	/// Effective local roots: a non-empty local.dirs setting (a JSON string array, written from the settings

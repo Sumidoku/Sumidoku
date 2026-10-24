@@ -43,7 +43,7 @@ struct DownloadRow {
 	volume_number: Option<f64>,
 }
 
-async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: i64) -> ApiResult<Vec<Value>> {
+pub(crate) async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: i64) -> ApiResult<Vec<Value>> {
 	let rows: Vec<DownloadRow> = sqlx::query_as(
 		"SELECT d.chapter_id, d.status, d.format, d.path, d.error, d.retries,
 		 d.created_at, d.updated_at, m.id AS manga_id, m.title AS manga_title, c.title AS chapter_title,

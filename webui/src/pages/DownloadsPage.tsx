@@ -10,8 +10,9 @@ import {
 	useEnqueueDownloads
 } from '../api/hooks';
 import type { Download, DownloadStatus } from '../api/types';
-import type { DownloadWsFrame } from '../api/protocol';
+import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { chapterLabel } from '../lib/format';
+import { applyDownloadEvent, mergeDownloadResponse } from '../lib/downloadEvents';
 import {
 	Button,
 	Chip,
@@ -23,7 +24,7 @@ import {
 	pushToast
 } from '../components';
 import type { ChipColor } from '../components';
-import { subscribeWS } from '../api/ws';
+import { sse } from '../api/sse';
 import './downloads.css';
 
 const ORDER: DownloadStatus[] = ['queued', 'downloading', 'paused', 'error', 'finished'];
@@ -34,16 +35,6 @@ const STATUS_META: Record<DownloadStatus, { labelKey: string; color: ChipColor }
 	paused: { labelKey: 'downloads.statusPaused', color: 'warning' },
 	finished: { labelKey: 'downloads.statusFinished', color: 'success' },
 	error: { labelKey: 'downloads.statusError', color: 'danger' }
-};
-
-// a progress frame can also arrive before started; any progress means downloading
-const EVENT_STATUS: Record<string, DownloadStatus> = {
-	queued: 'queued',
-	started: 'downloading',
-	progress: 'downloading',
-	paused: 'paused',
-	finished: 'finished',
-	error: 'error'
 };
 
 export default function DownloadsPage() {
@@ -60,7 +51,7 @@ export default function DownloadsPage() {
 	const del = useDeleteDownload();
 	const enqueue = useEnqueueDownloads();
 
-	// WS callbacks outside the effect can't close over the latest list, so sync via a ref; all writes go through applyItems
+	// Event callbacks outside the effect can't close over the latest list, so sync via a ref; all writes go through applyItems
 	const itemsRef = useRef<Download[]>([]);
 	function applyItems(next: Download[] | ((cur: Download[]) => Download[])) {
 		const value = typeof next === 'function' ? next(itemsRef.current) : next;
@@ -68,68 +59,82 @@ export default function DownloadsPage() {
 		setItems(value);
 	}
 
-	// Events carry only chapterId; an unseen task needs a full-list fetch to fill in its title, and concurrent events coalesce into one fetch
+	// Events carry only chapterId, so unseen rows need their metadata; coalesced fetches replay the latest event instead of overwriting it
 	const refetchingRef = useRef(false);
+	const refreshAgainRef = useRef(false);
+	const snapshotVersionRef = useRef(0);
+	const pendingEventsRef = useRef(new Map<number, DownloadChapterEvent>());
 	async function refreshMissing() {
-		if (refetchingRef.current) return;
+		if (refetchingRef.current) {
+			refreshAgainRef.current = true;
+			return;
+		}
 		refetchingRef.current = true;
 		try {
-			applyItems(await api<Download[]>('/downloads'));
+			do {
+				refreshAgainRef.current = false;
+				const snapshotVersion = snapshotVersionRef.current;
+				const response = await api<Download[]>('/downloads');
+				if (snapshotVersion === snapshotVersionRef.current) {
+					applyItems((cur) => mergeDownloadResponse(cur, response, pendingEventsRef.current));
+					pendingEventsRef.current.clear();
+				}
+			} while (refreshAgainRef.current);
 		} finally {
 			refetchingRef.current = false;
+			refreshAgainRef.current = false;
+			pendingEventsRef.current.clear();
 		}
 	}
 
 	useEffect(() => {
-		function onMessage(msg: unknown) {
-			if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
-			const m = msg as DownloadWsFrame;
-			if (m.type === 'snapshot') {
-				applyItems(m.downloads);
-				setRunning(m.running);
-				setLoading(false);
-				return;
-			}
-			if (m.type === 'running') {
-				setRunning(m.running);
-				return;
-			}
-			const status = EVENT_STATUS[m.type];
-			if (!status) return;
-			if (!itemsRef.current.some((it) => it.chapterId === m.chapterId)) {
-				void refreshMissing();
-				return;
-			}
-			applyItems((cur) =>
-				cur.map((it) => {
-					if (it.chapterId !== m.chapterId) return it;
-					const patch: Partial<Download> = { status };
-					if (status === 'downloading' || status === 'finished') {
-						patch.downloaded = m.downloaded;
-						patch.total = m.total;
-						if (status === 'finished') {
-							patch.error = null;
-							if (m.total > 0) patch.downloaded = m.total;
-						}
-					} else {
-						patch.downloaded = null;
-						patch.total = null;
-						if (status === 'queued') patch.error = null;
-					}
-					return { ...it, ...patch };
-				})
-			);
+		let receivedEvent = false;
+
+		function onSnapshot(msg: unknown) {
+			const m = msg as EventSnapshot;
+			if (m.type !== 'snapshot') return;
+			receivedEvent = true;
+			snapshotVersionRef.current += 1;
+			refreshAgainRef.current = false;
+			pendingEventsRef.current.clear();
+			applyItems(m.downloads);
+			setRunning(m.running);
+			setLoading(false);
 		}
 
-		const unsub = subscribeWS('/api/v1/downloads/ws', { onMessage, onStatus: setOnline });
+		function onRunning(msg: unknown) {
+			receivedEvent = true;
+			setRunning((msg as { running: boolean }).running);
+		}
+
+		function onDownload(msg: unknown) {
+			const m = msg as DownloadChapterEvent;
+			receivedEvent = true;
+			const missing = !itemsRef.current.some((it) => it.chapterId === m.chapterId);
+			if (refetchingRef.current || missing) pendingEventsRef.current.set(m.chapterId, m);
+			if (refetchingRef.current) refreshAgainRef.current = true;
+			applyItems((cur) => applyDownloadEvent(cur, m));
+			if (missing) void refreshMissing();
+		}
+
+		const unsubStatus = sse.onStatus(setOnline);
+		const unsubSnapshot = sse.on('snapshot', onSnapshot);
+		const unsubRunning = sse.on('running', onRunning);
+		const unsubDownload = sse.on('download', onDownload);
 		void (async () => {
 			try {
-				applyItems(await api<Download[]>('/downloads'));
+				const initial = await api<Download[]>('/downloads');
+				if (!receivedEvent) applyItems(initial);
 			} finally {
 				setLoading(false);
 			}
 		})();
-		return unsub;
+		return () => {
+			unsubStatus();
+			unsubSnapshot();
+			unsubRunning();
+			unsubDownload();
+		};
 		// applyItems/refreshMissing only touch refs and setState, so the first-render closure is fine; subscribe once
 	}, []);
 

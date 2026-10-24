@@ -23,8 +23,9 @@ import {
 	useUpdateChapter
 } from '../api/hooks';
 import type { ChapterWithDownload, FilterValue, SourceFilter } from '../api/types';
-import type { DownloadWsFrame } from '../api/protocol';
-import { subscribeWS } from '../api/ws';
+import type { DownloadChapterEvent } from '../api/protocol';
+import { sse } from '../api/sse';
+import { createMangaDownloadEventHandlers } from '../lib/downloadEvents';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -153,25 +154,29 @@ export default function MangaDetailPage() {
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
 
 	useEffect(() => {
-		const unsub = subscribeWS('/api/v1/downloads/ws', {
-			onMessage: (msg) => {
-				if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
-				const m = msg as DownloadWsFrame;
-				if (m.type !== 'finished' && m.type !== 'error') return;
+		const handlers = createMangaDownloadEventHandlers(qk.chapters(mangaId), qk.library, {
+			setChapters: (updater) => {
+				qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), updater);
+			},
+			invalidate: (queryKey) => {
+				void qc.invalidateQueries({ queryKey });
+			},
+			clearQueued: (chapterId) => {
 				setDlQueued((prev) => {
 					const next = new Set(prev);
-					next.delete(m.chapterId);
+					next.delete(chapterId);
 					return next;
 				});
-				if (m.type === 'finished') {
-					qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), (old) =>
-						old?.map((c) => (c.id === m.chapterId ? { ...c, isDownloaded: true } : c))
-					);
-					void qc.invalidateQueries({ queryKey: qk.library });
-				}
 			}
 		});
-		return unsub;
+		const unsubDownload = sse.on('download', (msg) =>
+			handlers.onDownload(msg as DownloadChapterEvent)
+		);
+		const unsubSnapshot = sse.on('snapshot', handlers.onSnapshot);
+		return () => {
+			unsubDownload();
+			unsubSnapshot();
+		};
 	}, [mangaId, qc]);
 
 	// Switching mangaId on the same route does not remount the component, so reload the prefs of the new manga

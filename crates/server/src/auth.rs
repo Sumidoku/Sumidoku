@@ -5,7 +5,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
 use axum::{Extension, Json};
 use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
@@ -120,7 +120,28 @@ pub async fn init(state: &AppState) -> Result<(), Error> {
 	Ok(())
 }
 
-/// Takes the credential from Authorization: Bearer or the access_token query (<img>/WebSocket cannot send headers)
+const SESSION_COOKIE: &str = "sumidoku.session";
+
+fn is_https(uri: &Uri, headers: &HeaderMap) -> bool {
+	uri.scheme_str() == Some("https")
+		|| headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https")
+}
+
+fn session_cookie_value(token: &str, https: bool) -> String {
+	let secure = if https { "; Secure" } else { "" };
+	format!("{SESSION_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Strict{secure}")
+}
+
+fn session_cookie_clear(https: bool) -> String {
+	let secure = if https { "; Secure" } else { "" };
+	format!("{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict{secure}")
+}
+
+fn set_cookie_header(response: &mut Response, value: String) {
+	response.headers_mut().insert(axum::http::header::SET_COOKIE, HeaderValue::from_str(&value).expect("valid cookie"));
+}
+
+/// Takes the credential from Authorization: Bearer, the SSE-only session cookie, or the access_token query
 fn presented_token(req: &Request) -> Option<String> {
 	if let Some(value) = req
 		.headers()
@@ -129,6 +150,14 @@ fn presented_token(req: &Request) -> Option<String> {
 		.and_then(|v| v.strip_prefix("Bearer "))
 	{
 		return Some(value.to_string());
+	}
+	if req.uri().path() == "/api/v1/events" {
+		return req
+			.headers()
+			.get(axum::http::header::COOKIE)
+			.and_then(|v| v.to_str().ok())
+			.and_then(|v| v.split(';').find_map(|part| part.trim().strip_prefix(SESSION_COOKIE)?.strip_prefix('=')))
+			.map(str::to_string);
 	}
 	let query = req.uri().query()?;
 	for pair in query.split('&') {
@@ -239,7 +268,7 @@ pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResu
 	Ok(Json(body))
 }
 
-pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> ApiResult<Json<Value>> {
+pub async fn login(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Response> {
 	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
 	}
@@ -263,22 +292,27 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 		.bind(now)
 		.execute(&state.pool)
 		.await?;
-	Ok(Json(json!({
+	let mut response = Json(json!({
 		"token": token,
 		"expiresAt": expires_at,
 		"user": { "id": user.id, "username": user.username },
-	})))
+	}))
+	.into_response();
+	set_cookie_header(&mut response, session_cookie_value(&token, is_https(&uri, &headers)));
+	Ok(response)
 }
 
 /// Revokes the presented bearer; missing credential/unknown token also gets 204, not leaking token validity
-pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> StatusCode {
+pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Response {
 	if let Some(token) = presented_token(&req) {
 		let _ = sqlx::query("DELETE FROM auth_token WHERE token_hash = ?")
 			.bind(sha256_hex(&token))
 			.execute(&state.pool)
 			.await;
 	}
-	StatusCode::NO_CONTENT
+	let mut response = StatusCode::NO_CONTENT.into_response();
+	set_cookie_header(&mut response, session_cookie_clear(is_https(req.uri(), req.headers())));
+	response
 }
 
 #[derive(Debug, Deserialize)]
@@ -291,9 +325,11 @@ pub struct PasswordChangeRequest {
 /// Password change: after verifying the old one and storing the new, revoke every admin session token
 pub async fn change_password(
 	State(state): State<Arc<AppState>>,
+	uri: Uri,
+	headers: HeaderMap,
 	Extension(user): Extension<AuthUser>,
 	Json(body): Json<PasswordChangeRequest>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Response> {
 	if body.new_password.is_empty() {
 		return Err(ApiError::bad_request("newPassword must not be empty"));
 	}
@@ -321,5 +357,7 @@ pub async fn change_password(
 		.execute(&state.pool)
 		.await?;
 	state.auth.set_admin_password_hash(new_hash).await;
-	Ok(StatusCode::NO_CONTENT)
+	let mut response = StatusCode::NO_CONTENT.into_response();
+	set_cookie_header(&mut response, session_cookie_clear(is_https(&uri, &headers)));
+	Ok(response)
 }

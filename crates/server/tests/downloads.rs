@@ -13,7 +13,6 @@ use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
 use sumidoku_server::download::sanitize;
 
-/// Download tests need downloads_dir inside tmp (base_config doesn't set it; the default ./downloads would pollute the repo)
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
