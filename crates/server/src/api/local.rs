@@ -48,6 +48,16 @@ pub async fn list_trash(
 	Ok(Json(json!(crate::local::scan::list_trash(&state, query.source_id).await?)))
 }
 
+/// Manual per-manga analysis (kmrs's per-book reanalyze): enqueues the analysis kind narrowed by a
+/// mangaId payload; the task system serializes it with the instance's scan work
+pub async fn analyze_manga(
+	State(state): State<Arc<AppState>>,
+	Path(manga_id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+	let task = crate::local::analyze::enqueue_manga_analysis(&state, manga_id).await?;
+	Ok(Json(task.to_json()))
+}
+
 pub async fn restore_trash(
 	State(state): State<Arc<AppState>>,
 	Path(manga_id): Path<i64>,

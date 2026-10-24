@@ -112,6 +112,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
+		.route("/api/v1/manga/{id}/analyze", post(local::analyze_manga))
 		.route(
 			"/api/v1/manga/{id}/cover",
 			get(cover::get_cover).put(cover::select_cover),

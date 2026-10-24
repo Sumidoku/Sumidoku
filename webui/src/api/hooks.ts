@@ -703,6 +703,7 @@ export function useRefreshChapters() {
 					const partial: ChapterWithDownload[] = ev.manga.chapters.map((c, i) => ({
 						...c,
 						id: -(i + 1),
+						trashed: false,
 						pageCount: 0,
 						lastPageRead: 0,
 						isRead: false,

@@ -107,13 +107,26 @@ pub async fn scan_instance(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 				outcome.protected += 1;
 				continue;
 			}
-			// only a genuinely absent path trashes: an entry that exists but is not a directory (a regular
-			// file in the manga dir's place) or is unreadable is protected — we cannot know its state
+			// only a genuinely absent path trashes. An existing but wrong-typed entry (a regular file in the
+			// manga dir's place) or an unreadable one is protected — we cannot know its state. A oneshot key
+			// names a file: a present file is its normal state, so the row trashes when discovery no longer
+			// claims it (the oneshots rule was turned off); a directory in its place stays protected
 			let protected_entry = match super::resolve_key(&roots, &row.key) {
-				Ok((dir, rel)) => !matches!(
-					tokio::fs::metadata(dir.join(rel)).await,
-					Err(e) if e.kind() == std::io::ErrorKind::NotFound
-				),
+				Ok((dir, rel)) => match tokio::fs::metadata(dir.join(rel)).await {
+					Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+					Err(_) => true,
+					Ok(metadata) => {
+						let oneshot_key = row
+							.key
+							.rsplit('/')
+							.next()
+							.unwrap_or(&row.key)
+							.rsplit('.')
+							.next()
+							.is_some_and(|ext| ["cbz", "zip", "epub"].iter().any(|e| e.eq_ignore_ascii_case(ext)));
+						if oneshot_key { !metadata.is_file() } else { !metadata.is_dir() }
+					}
+				},
 				Err(_) => true,
 			};
 			if protected_entry {
@@ -253,17 +266,17 @@ pub async fn scan_manga_entry(state: &AppState, source_id: i64, manga_key: &str)
 	let reconciled = reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
 	tx.commit().await?;
 	// The analysis pass owns archive-opening work; opening or refreshing an unanalyzed manga kicks it at
-	// manual priority (the per-instance dedup id makes repeats free)
-	if let Err(e) = state
-		.tasks()
-		.enqueue(
-			&format!("{KIND_ANALYZE}:{source_id}"),
-			KIND_ANALYZE,
-			Some(source_id),
-			json!({}),
-			PRIORITY_MANUAL,
-		)
-		.await
+	// manual priority (the per-instance dedup id makes repeats free); harnesses without the manager skip
+	if let Some(tasks) = state.maybe_tasks()
+		&& let Err(e) = tasks
+			.enqueue(
+				&format!("{KIND_ANALYZE}:{source_id}"),
+				KIND_ANALYZE,
+				Some(source_id),
+				json!({}),
+				PRIORITY_MANUAL,
+			)
+			.await
 	{
 		tracing::warn!(source_id, "enqueue analysis failed: {}", e.message());
 	}

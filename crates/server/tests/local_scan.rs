@@ -109,7 +109,12 @@ async fn manga_row(pool: &sqlx::SqlitePool, key: &str) -> Option<(i64, String, b
 
 #[tokio::test]
 async fn scan_indexes_then_trashes_restores_and_purges() {
-	let t = scan_app().await;
+	// phase A runs with both analysis passes off: scan-level indexing stays uninitialized
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
 	let pool = common::connect_db(&t.db_path).await;
 	let source_id = local_source_id(&t.app).await;
 
@@ -130,7 +135,17 @@ async fn scan_indexes_then_trashes_restores_and_purges() {
 		.expect("library count");
 	assert_eq!(in_library, 0, "indexing never shelves");
 
-	// the derived analysis pass filled metadata and page rows with no reader involved
+	// phase B: turn both passes on for the instance; the next scan's derived analysis fills metadata and
+	// page rows with no reader involved
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"analyzePages": true, "analyzeMetadata": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle(&t.app).await;
 	let (alpha_id, title, initialized, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
 	assert!(initialized, "analysis ran: {title}");
 	let beta_title: String = sqlx::query_scalar("SELECT title FROM manga WHERE key = 'Beta'")
@@ -149,14 +164,14 @@ async fn scan_indexes_then_trashes_restores_and_purges() {
 		.expect("beta tags");
 	assert_eq!(beta_tags, r#"["ChapterTag"]"#, "manga tags aggregate from chapters");
 	let chapter_title: Option<String> = sqlx::query_scalar(
-		"SELECT title FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Beta' AND c.key = 'ch 1.cbz'",
+		"SELECT c.title FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Beta' AND c.key = 'ch 1.cbz'",
 	)
 	.fetch_one(&pool)
 	.await
 	.expect("chapter title");
 	assert_eq!(chapter_title.as_deref(), Some("Chapter One Title"), "ComicInfo Title overrides the filename");
 	let chapter_writers: String = sqlx::query_scalar(
-		"SELECT scanlators FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Beta' AND c.key = 'ch 1.cbz'",
+		"SELECT c.scanlators FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Beta' AND c.key = 'ch 1.cbz'",
 	)
 	.fetch_one(&pool)
 	.await
@@ -389,6 +404,50 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
 	assert_eq!(scan_task["result"]["reconciled"], 1, "in-place edit caught with the toggle on: {scan_task}");
+	pool.close().await;
+}
+
+/// POST /manga/{id}/analyze runs the pass for one manga only
+#[tokio::test]
+async fn manga_level_manual_analysis() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (_, _, initialized, _, _) = manga_row(&pool, "Beta").await.expect("Beta");
+	assert!(!initialized);
+	let (beta_id, _, _, _, _) = manga_row(&pool, "Beta").await.expect("Beta");
+
+	// manga-level analysis fills exactly that manga, even with the instance switches off... no: the
+	// switches gate the pass; re-enable them per instance, then analyze
+	let source_id = local_source_id(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"analyzePages": true, "analyzeMetadata": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/manga/{beta_id}/analyze"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["kind"], "local_analyze");
+	assert_eq!(body["payload"]["mangaId"], beta_id);
+	scan_and_settle_quiet(&t.app).await;
+
+	let (_, title, initialized, _, _) = manga_row(&pool, "Beta").await.expect("Beta");
+	assert!(initialized);
+	assert_eq!(title, "Indexed Series");
+	// Alpha was never analyzed by the manga-scoped task
+	let (_, _, alpha_initialized, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	assert!(!alpha_initialized, "manga-scoped analysis must not spill to other manga");
+
+	// a non-local manga is rejected
+	let (status, _) = request(&t.app, "POST", "/api/v1/manga/9999/analyze", None).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
 	pool.close().await;
 }
 

@@ -1584,6 +1584,44 @@
         }
       }
     },
+    "/api/v1/manga/{id}/analyze": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MangaId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "analyzeLocalManga",
+        "summary": "Enqueue the analysis pass for one local manga (metadata + page rows); task events carry progress",
+        "responses": {
+          "200": {
+            "description": "The enqueued analysis task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/manga/{id}/chapters": {
       "parameters": [
         {
@@ -4595,7 +4633,10 @@
               "timeout",
               "internal",
               "busy",
-              "task_finished"
+              "task_finished",
+              "not_trashed",
+              "gone",
+              "root_unavailable"
             ]
           },
           "message": {

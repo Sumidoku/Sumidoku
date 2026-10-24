@@ -434,9 +434,45 @@ impl UpdateScheduler {
 			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
 			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
 			if is_local {
-				// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
-				// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
-				let (_, reconciled, _) = crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key).await?;
+				if settings.refresh_metadata {
+					// refresh_metadata opts into the archive-opening chain inline (the analysis pass's
+					// equivalent): metadata + trash-mode reconcile + divina + chapter metadata
+					let update = crate::local::manga_update(
+						&state.local_dirs(manga.source_id).await?,
+						&state.local_zip,
+						&manga.key,
+						&state.local_exclusions(manga.source_id).await?,
+					)
+					.await?;
+					let now = unix_now();
+					let mut tx = crate::db::begin_write(&self.pool).await?;
+					let (next_update_time, next_update_is_fallback) =
+						resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
+					// upsert overwrites update_strategy with the source default otherwise: the user's
+					// per-manga choice survives the refresh (persist_success's rule)
+					let mut refreshed = update.manga.clone();
+					refreshed.update_strategy = update_strategy_from_int(manga.update_strategy);
+					upsert_manga(&mut tx, manga.source_id, &refreshed, true, true, false).await?;
+					let chapters = update.manga.chapters.clone().unwrap_or_default();
+					let reconciled =
+						reconcile_chapters_detailed(&mut tx, manga.id, &chapters, &update.protected, true).await?;
+					crate::local::store_epub_divina(&mut tx, manga.id, &chapters, &update.epub_divina).await?;
+					crate::local::store_chapter_metadata(&mut tx, manga.id, &update.chapter_meta).await?;
+					sqlx::query(
+						"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
+					)
+					.bind(next_update_time)
+					.bind(next_update_is_fallback)
+					.bind(now)
+					.bind(manga.id)
+					.execute(&mut *tx)
+					.await?;
+					tx.commit().await?;
+					Ok(reconciled)
+				} else {
+					// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
+					// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
+					let (_, reconciled, _) = crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key).await?;
 				let now = unix_now();
 				let (next_update_time, next_update_is_fallback) =
 					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
@@ -450,6 +486,7 @@ impl UpdateScheduler {
 				.execute(&state.pool)
 				.await?;
 				Ok(reconciled)
+			}
 			} else {
 				let (updated, protected) = if is_opds {
 					let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;

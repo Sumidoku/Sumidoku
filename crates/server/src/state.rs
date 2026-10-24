@@ -205,6 +205,12 @@ impl AppState {
 		self.tasks.get().expect("task manager installed").clone()
 	}
 
+	/// Best-effort task kicks (analysis-on-open, rescan-on-settings-change) skip silently in harnesses that
+	/// never installed the manager; the API surface uses tasks() instead, where build_app guarantees it
+	pub fn maybe_tasks(&self) -> Option<Arc<crate::task::TaskManager>> {
+		self.tasks.get().cloned()
+	}
+
 	/// Whether the source is the default local instance: its rows predate per-instance settings, so it
 	/// keeps the legacy global/config fallback layers that other instances never had
 	async fn is_default_local(&self, source_id: i64) -> ApiResult<bool> {
