@@ -1189,8 +1189,44 @@ pub struct RefreshQuery {
 	pub refresh: Option<String>,
 }
 
+/// Query params of the chapter list endpoint: refresh plus the sort key and direction
+#[derive(Debug, Deserialize)]
+pub struct ChaptersQuery {
+	pub refresh: Option<String>,
+	pub sort: Option<String>,
+	pub order: Option<String>,
+}
+
 pub(crate) fn wants_refresh(query: &RefreshQuery) -> bool {
-	matches!(query.refresh.as_deref(), Some("") | Some("1") | Some("true"))
+	refresh_flag(query.refresh.as_deref())
+}
+
+fn refresh_flag(refresh: Option<&str>) -> bool {
+	matches!(refresh, Some("") | Some("1") | Some("true"))
+}
+
+/// Chapter list ORDER BY: `sort` picks the key (`source` = source_order, `chapter` = number, `date` = date_uploaded),
+/// `order=asc|desc` the direction — absent keeps the key's default: source stays in the source's listing order
+/// (ASC), chapter and date default to newest-first (DESC). Numberless chapters count lowest, so they open ASC and
+/// close DESC; missing dates sink to the bottom of the default date order (SQLite sorts NULL below any value)
+fn chapter_order_by(sort: Option<&str>, order: Option<&str>) -> ApiResult<&'static str> {
+	let asc = match order {
+		None => None,
+		Some("asc") => Some(true),
+		Some("desc") => Some(false),
+		Some(other) => return Err(ApiError::bad_request(format!("invalid order: {other}"))),
+	};
+	match (sort, asc) {
+		(None, None | Some(true)) | (Some("source"), None | Some(true)) => {
+			Ok(" ORDER BY c.source_order ASC, c.id ASC")
+		}
+		(None, Some(false)) | (Some("source"), Some(false)) => Ok(" ORDER BY c.source_order DESC, c.id ASC"),
+		(Some("chapter"), Some(true)) => Ok(" ORDER BY c.number ASC, c.source_order ASC, c.id ASC"),
+		(Some("chapter"), None | Some(false)) => Ok(" ORDER BY c.number DESC, c.source_order ASC, c.id ASC"),
+		(Some("date"), Some(true)) => Ok(" ORDER BY c.date_uploaded ASC, c.source_order ASC, c.id ASC"),
+		(Some("date"), None | Some(false)) => Ok(" ORDER BY c.date_uploaded DESC, c.source_order ASC, c.id ASC"),
+		(Some(other), _) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
+	}
 }
 
 pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -> ApiResult<Value> {
@@ -1473,11 +1509,12 @@ async fn get_chapters(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
-	Query(query): Query<RefreshQuery>,
+	Query(query): Query<ChaptersQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
+	let order_by = chapter_order_by(query.sort.as_deref(), query.order.as_deref())?;
 	let manga = manga_row(&state.pool, id).await?;
-	if wants_refresh(&query) {
+	if refresh_flag(query.refresh.as_deref()) {
 		// Local-source refresh = rescan the directory; chapter entries that fail to read go into the reconcile protection set, not treated as vanished-and-deleted
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
 			let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
@@ -1499,9 +1536,9 @@ async fn get_chapters(
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
-				.execute(&mut *conn)
-				.await?;
-			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
+			.execute(&mut *conn)
+			.await?;
+			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
 		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
@@ -1511,9 +1548,9 @@ async fn get_chapters(
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
-				.execute(&mut *conn)
-				.await?;
-			return Ok(Json(chapters_json(&state, user.id, id).await?).into_response());
+			.execute(&mut *conn)
+			.await?;
+			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		let handle = state.get_handle(manga.source_id).await?;
 		if partial::wants_ndjson(&headers) {
@@ -1531,7 +1568,7 @@ async fn get_chapters(
 					.bind(id)
 					.execute(&mut *conn)
 					.await?;
-				chapters_json(&state, user_id, id).await
+				chapters_json(&state, user_id, id, order_by).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
 			return Ok(partial::ndjson_response(line_rx));
@@ -1547,16 +1584,16 @@ async fn get_chapters(
 			.execute(&mut *conn)
 			.await?;
 	}
-	Ok(Json(chapters_json(&state, user.id, id).await?).into_response())
+	Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response())
 }
 
-async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64) -> ApiResult<Value> {
-	let rows: Vec<ChapterUserRow> = sqlx::query_as(
+async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: &str) -> ApiResult<Value> {
+	let rows: Vec<ChapterUserRow> = sqlx::query_as(&format!(
 		"SELECT c.*, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter c
 		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
-		 WHERE c.manga_id = ? ORDER BY c.source_order ASC",
-	)
+		 WHERE c.manga_id = ?{order_by}"
+	))
 	.bind(user_id)
 	.bind(manga_id)
 	.fetch_all(&state.pool)
@@ -1789,4 +1826,26 @@ async fn put_settings(
 	};
 	apply_settings(&state, &user, &flat).await?;
 	get_settings(State(state), Extension(user)).await
+}
+
+#[cfg(test)]
+mod tests {
+	use super::chapter_order_by;
+
+	#[test]
+	fn chapter_order_by_keys_and_directions() {
+		assert_eq!(chapter_order_by(None, None).unwrap(), " ORDER BY c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("source"), Some("asc")).unwrap(), " ORDER BY c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("source"), Some("desc")).unwrap(), " ORDER BY c.source_order DESC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("chapter"), None).unwrap(), " ORDER BY c.number DESC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("chapter"), Some("asc")).unwrap(), " ORDER BY c.number ASC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("date"), None).unwrap(), " ORDER BY c.date_uploaded DESC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("date"), Some("asc")).unwrap(), " ORDER BY c.date_uploaded ASC, c.source_order ASC, c.id ASC");
+	}
+
+	#[test]
+	fn chapter_order_by_rejects_unknown_values() {
+		assert!(chapter_order_by(Some("title"), None).is_err());
+		assert!(chapter_order_by(None, Some("up")).is_err());
+	}
 }
