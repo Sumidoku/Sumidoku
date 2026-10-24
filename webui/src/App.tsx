@@ -10,7 +10,6 @@ import MangaDetailPage from './pages/MangaDetailPage';
 import MigratePage from './pages/migrate/MigratePage';
 import NotFound from './pages/NotFound';
 import ReaderPage from './pages/ReaderPage';
-import SearchPage from './pages/SearchPage';
 import SettingsPage from './pages/SettingsPage';
 import SourceBrowsePage from './pages/SourceBrowsePage';
 import SourceHomePage from './pages/SourceHomePage';
@@ -28,7 +27,7 @@ const router = createBrowserRouter([
 					{ path: '/browse', element: <BrowsePage />, handle: { title: 'common.nav.browse' } },
 					{ path: '/browse/:sourceId', element: <SourceBrowseRoute />, handle: { title: 'sourceBrowse.sourceFallback' } },
 					{ path: '/browse/:sourceId/home', element: <SourceHomePage />, handle: { title: 'sourceHome.sourceFallback' } },
-					{ path: '/search', element: <SearchPage />, handle: { title: 'common.nav.search' } },
+					{ path: '/search', element: <Navigate to="/browse?view=search" replace />, handle: { title: 'common.nav.search' } },
 					{ path: '/manga/:id', element: <MangaDetailPage />, handle: { title: 'mangaDetail.documentTitle' } },
 					{ path: '/migrate', element: <MigratePage />, handle: { title: 'migrate.title' } },
 					{ path: '/history', element: <HistoryPage />, handle: { title: 'common.nav.history' } },

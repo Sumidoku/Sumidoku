@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
 	ArrowLeftRight,
 	CircleArrowUp,
@@ -48,6 +48,7 @@ import {
 	pushToast
 } from '../components';
 import ReposPanel from './browse/ReposPanel';
+import { SearchPanel } from './browse/SearchPanel';
 import { SourceSettingsButton, SourceSettingsDialog } from './browse/SourceSettingsModal';
 import { iconColor } from './browse/iconColor';
 
@@ -434,6 +435,8 @@ export default function BrowsePage() {
 	const setEnabled = useSetSourceEnabled();
 	const reorderPinned = useReorderPinned();
 	const navigate = useNavigate();
+	const [searchParams, setSearchParams] = useSearchParams();
+	const searching = searchParams.get('view') === 'search';
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [registeringOpds, setRegisteringOpds] = useState(false);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
@@ -553,7 +556,7 @@ export default function BrowsePage() {
 			<PageHeader
 				title={t('common.nav.browse')}
 				actions={
-					tab === 'installed' ? (
+					!searching && tab === 'installed' ? (
 						<>
 							<Button onClick={() => navigate('/migrate')}>
 								<ArrowLeftRight size={15} />
@@ -579,18 +582,27 @@ export default function BrowsePage() {
 				}
 			/>
 
-			<div className="browse__tabs">
-				<SegmentedControl
-					options={[
-						{ value: 'installed', label: t('browse.tabInstalled') },
-						{ value: 'repos', label: t('browse.tabRepos') }
-					]}
-					value={tab}
-					onChange={setTab}
-				/>
-			</div>
+			<SearchPanel
+				active={searching}
+				onActiveChange={(active) => {
+					if (active !== searching) setSearchParams(active ? { view: 'search' } : {});
+				}}
+			/>
 
-			{tab === 'repos' ? (
+			{!searching && (
+				<div className="browse__tabs">
+					<SegmentedControl
+						options={[
+							{ value: 'installed', label: t('browse.tabInstalled') },
+							{ value: 'repos', label: t('browse.tabRepos') }
+						]}
+						value={tab}
+						onChange={setTab}
+					/>
+				</div>
+			)}
+
+			{!searching && (tab === 'repos' ? (
 				<ReposPanel />
 			) : sources.isPending ? (
 				<div className="source-list">
@@ -679,7 +691,7 @@ export default function BrowsePage() {
 						))}
 					</div>
 				</>
-			)}
+			))}
 
 			<Modal
 				open={pendingDelete !== null}

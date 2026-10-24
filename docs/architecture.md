@@ -142,8 +142,8 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   value as the buffered response. The per-source failure type is
   `sourceError`, not `error`, because the streaming client treats
   `{"type":"error"}` as the terminal failure of the whole request. The
-  web UI's `/search` page (`webui/src/pages/SearchPage.tsx`) renders each
-  arriving section as a horizontal cover scroller and offers tri-state
+  browse page's search view (`webui/src/pages/browse/SearchPanel.tsx`) renders
+  each arriving section as a horizontal cover scroller and offers tri-state
   (include/exclude) content-rating / language / source filters persisted
   to localStorage — filtering is client-side and only decides which
   source ids are sent.
@@ -1486,7 +1486,12 @@ page's title.
 When authentication is on, the
 login page takes the admin username + password with an initially empty username
 field, browser API requests use the login cookie, CLI clients may send a
-bearer header, and any `401` lands on `/login`. The settings page shows the admin account and
+bearer header, and any `401` lands on `/login`. Desktop navigation keeps library,
+browse and updates at the top level; activity and settings start collapsed and
+open on an active route. The browse page keeps cross-source search above its
+installed/repository views, with `/search` redirecting to its search view.
+Settings sections are linked from the settings group, while mobile keeps the
+settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
 reader uses positive known page dimensions (populated during downloads) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,

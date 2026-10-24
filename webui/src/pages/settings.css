@@ -77,6 +77,16 @@
 	}
 }
 
+@media (min-width: 768px) {
+	.settings-layout {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.settings-nav {
+		display: none;
+	}
+}
+
 .settings-section {
 	margin-bottom: 14px;
 }

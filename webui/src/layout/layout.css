@@ -152,6 +152,45 @@
 		font-weight: 600;
 	}
 
+	.side-nav__group-trigger {
+		width: 100%;
+		border: 0;
+		background: transparent;
+		font: inherit;
+		text-align: left;
+		cursor: pointer;
+	}
+
+	.side-nav__chevron {
+		margin-left: auto;
+		color: var(--text-faint);
+		transition: transform 0.15s ease;
+	}
+
+	.side-nav__chevron--open {
+		transform: rotate(90deg);
+	}
+
+	.side-nav__children {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin-left: 21px;
+		padding-left: 7px;
+		border-left: 1px solid var(--border);
+	}
+
+	.side-nav__children .side-nav__item {
+		padding: 7px 10px;
+		font-size: 13.5px;
+	}
+
+	.app__sidebar--collapsed .side-nav__children {
+		margin-left: 0;
+		padding-left: 0;
+		border-left: 0;
+	}
+
 	.app__sidebar--collapsed .side-nav__item {
 		justify-content: center;
 		gap: 0;
