@@ -213,6 +213,8 @@ export type ChapterProgress = {
 	lastReadAt: number | null;
 };
 
+export type ChapterSort = "source" | "chapter" | "date";
+
 export type ChapterWithDownload = Chapter & {
 	isDownloaded: boolean;
 };
@@ -871,6 +873,8 @@ export type SkippedSource = {
 	dir: string;
 	reason: string;
 };
+
+export type SortOrder = "asc" | "desc";
 
 export type Source = {
 	id: number;

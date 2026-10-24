@@ -1480,6 +1480,22 @@
         },
         {
           "$ref": "#/components/parameters/Refresh"
+        },
+        {
+          "name": "sort",
+          "in": "query",
+          "schema": {
+            "$ref": "#/components/schemas/ChapterSort",
+            "default": "source"
+          }
+        },
+        {
+          "name": "order",
+          "in": "query",
+          "schema": {
+            "$ref": "#/components/schemas/SortOrder"
+          },
+          "description": "Absent keeps the key's default direction: source ascends in the source's listing order, chapter and date descend newest-first. Invalid values answer 400."
         }
       ],
       "get": {
@@ -1487,7 +1503,7 @@
           "manga"
         ],
         "operationId": "getMangaChapters",
-        "summary": "List chapters in source order, optionally refreshing them",
+        "summary": "List chapters, optionally refreshing and sorting them",
         "description": "Refresh supports NDJSON manga/final/error events; the final payload is the chapter array.",
         "responses": {
           "200": {
@@ -7053,6 +7069,22 @@
           "lastRead",
           "latestChapter",
           "unread"
+        ]
+      },
+      "ChapterSort": {
+        "type": "string",
+        "enum": [
+          "source",
+          "chapter",
+          "date"
+        ],
+        "description": "source = the source's listing order, chapter = chapter number (numberless chapters count lowest), date = upload date (missing dates sink to the bottom of the default descending order)."
+      },
+      "SortOrder": {
+        "type": "string",
+        "enum": [
+          "asc",
+          "desc"
         ]
       },
       "LibraryFilter": {

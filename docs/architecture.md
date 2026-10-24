@@ -513,7 +513,13 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   (progress, read/bookmark/download flags, history stamp). Their legacy
   composite keys include `user_id`, which is always 1, and every REST query
   and write binds that same admin identity. `source_order` is the source's own chapter
-  index.   `GET /api/v1/library`
+  index.   `GET /api/v1/manga/{id}/chapters` orders by
+  `sort=source|chapter|date` (the source's listing order, chapter number and
+  upload date respectively) and `order=asc|desc` — absent keeps the key's
+  default: source stays ascending while chapter and date default to
+  newest-first; invalid values answer 400. Numberless chapters count lowest
+  and missing dates sink to the bottom of the default date order.
+  `GET /api/v1/library`
   filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
   boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
   chapter flags) and the tri-state pairs
