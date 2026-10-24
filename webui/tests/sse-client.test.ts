@@ -74,7 +74,7 @@ test('shares one EventSource and dispatches only to the matching event handlers'
 	offUpdate();
 });
 
-test('closes the EventSource when the last event handler is removed', (t) => {
+test('keeps the EventSource open when the last event handler is removed', (t) => {
 	const instances = installMockEventSource(t);
 	const client = new SseClient();
 	let downloadCalls = 0;
@@ -87,7 +87,21 @@ test('closes the EventSource when the last event handler is removed', (t) => {
 	source.emit('download', JSON.stringify({ type: 'progress' }));
 	assert.equal(downloadCalls, 0);
 	offUpdate();
-	assert.equal(source.closed, true);
+	assert.equal(source.closed, false);
+});
+
+test('start is idempotent and stop closes the connection', (t) => {
+	const instances = installMockEventSource(t);
+	const client = new SseClient();
+	client.start();
+	client.start();
+	assert.equal(instances.length, 1);
+	assert.equal(instances[0].closed, false);
+	client.stop();
+	assert.equal(instances[0].closed, true);
+	client.start();
+	assert.equal(instances.length, 2);
+	assert.equal(instances[1].closed, false);
 });
 
 test('ignores malformed JSON and non-object messages', (t) => {

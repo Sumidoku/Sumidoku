@@ -23,7 +23,6 @@ export class SseClient {
 			if (!current) return;
 			current.delete(handler);
 			if (current.size === 0) this.handlers.delete(name);
-			if (this.handlers.size === 0) this.disconnect();
 		};
 	}
 
@@ -33,6 +32,14 @@ export class SseClient {
 		return () => {
 			this.statusHandlers.delete(handler);
 		};
+	}
+
+	start() {
+		this.connect();
+	}
+
+	stop() {
+		this.disconnect();
 	}
 
 	private connect() {
