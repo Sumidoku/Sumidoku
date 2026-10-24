@@ -182,7 +182,8 @@ cached timestamp.
   structured `extra` map, so saving a stale snapshot could move the scheduler
   clock. `scheduled_library_clock_is_server_owned` exposed the key before the
   guard, and removing only the guard let both write forms replace `456` with
-  `123`.
+  `123`. The same key also leaked into backup documents and could be restored;
+  backup export now omits it and import ignores it.
 
 **Changing sync ownership is a versioned migration, not an origin rewrite.**
 Preserve latest tombstones before deleting old origins, then append current
