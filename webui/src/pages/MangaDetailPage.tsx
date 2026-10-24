@@ -23,6 +23,8 @@ import {
 	useUpdateChapter
 } from '../api/hooks';
 import type { ChapterWithDownload, FilterValue, SourceFilter } from '../api/types';
+import type { DownloadWsFrame } from '../api/protocol';
+import { subscribeWS } from '../api/ws';
 import { statusText } from '../lib/format';
 import {
 	applyPrefs,
@@ -146,9 +148,31 @@ export default function MangaDetailPage() {
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
 
-	// Enqueueing only records local instant feedback; download progress lives on the downloads page
+	// Enqueue feedback starts locally; terminal events reconcile it with the actual download state
 	const [dlQueued, setDlQueued] = useState<Set<number>>(new Set());
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
+
+	useEffect(() => {
+		const unsub = subscribeWS('/api/v1/downloads/ws', {
+			onMessage: (msg) => {
+				if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+				const m = msg as DownloadWsFrame;
+				if (m.type !== 'finished' && m.type !== 'error') return;
+				setDlQueued((prev) => {
+					const next = new Set(prev);
+					next.delete(m.chapterId);
+					return next;
+				});
+				if (m.type === 'finished') {
+					qc.setQueryData<ChapterWithDownload[]>(qk.chapters(mangaId), (old) =>
+						old?.map((c) => (c.id === m.chapterId ? { ...c, isDownloaded: true } : c))
+					);
+					void qc.invalidateQueries({ queryKey: qk.library });
+				}
+			}
+		});
+		return unsub;
+	}, [mangaId, qc]);
 
 	// Switching mangaId on the same route does not remount the component, so reload the prefs of the new manga
 	useEffect(() => {
