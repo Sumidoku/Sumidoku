@@ -149,6 +149,7 @@ export default function MangaDetailPage() {
 	const [downloadRulesOpen, setDownloadRulesOpen] = useState(false);
 	const [downloadRule, setDownloadRule] = useState<DownloadRule>('unread');
 	const [downloadLatest, setDownloadLatest] = useState('10');
+	const [downloadRuleQueued, setDownloadRuleQueued] = useState<number | null>(null);
 	// Sort/filter prefs persist per manga; loadedId keeps a manga switch from writing the previous entry's prefs under the new key
 	const [prefs, setPrefs] = useState<ChapterPrefs>(() => loadPrefs(mangaId));
 	const [loadedId, setLoadedId] = useState(mangaId);
@@ -444,11 +445,9 @@ export default function MangaDetailPage() {
 	function downloadByRule() {
 		const ids = downloadRuleIds;
 		if (ids.length === 0) return;
+		setDownloadRuleQueued(null);
 		enqueueDownloads.mutate(ids, {
-			onSuccess: (res) => {
-				pushToast(t('mangaDetail.queuedChapters', { count: res.queued.length }), 'info');
-				setDownloadRulesOpen(false);
-			}
+			onSuccess: (res) => setDownloadRuleQueued(res.queued.length)
 		});
 	}
 
@@ -717,6 +716,7 @@ export default function MangaDetailPage() {
 												className="manga-menu__row"
 												onClick={() => {
 													closeMenu();
+													setDownloadRuleQueued(null);
 													setDownloadRulesOpen(true);
 												}}
 											>
@@ -994,7 +994,10 @@ export default function MangaDetailPage() {
 					<Select
 						value={downloadRule}
 						aria-label={t('mangaDetail.downloadRule')}
-						onChange={(e) => setDownloadRule(e.currentTarget.value as DownloadRule)}
+						onChange={(e) => {
+							setDownloadRule(e.currentTarget.value as DownloadRule);
+							setDownloadRuleQueued(null);
+						}}
 					>
 						<option value="unread">{t('mangaDetail.downloadRuleUnread')}</option>
 						<option value="latest">{t('mangaDetail.downloadRuleLatest')}</option>
@@ -1008,11 +1011,17 @@ export default function MangaDetailPage() {
 							inputMode="numeric"
 							aria-label={t('mangaDetail.downloadRuleLatestCount')}
 							value={downloadLatest}
-							onChange={(e) => setDownloadLatest(e.currentTarget.value)}
+							onChange={(e) => {
+								setDownloadLatest(e.currentTarget.value);
+								setDownloadRuleQueued(null);
+							}}
 						/>
 					)}
 					<p className="muted">{t('mangaDetail.downloadRulesScope')}</p>
 					<p>{t('mangaDetail.downloadRuleMatches', { count: downloadRuleIds.length })}</p>
+					{downloadRuleQueued !== null && (
+						<p role="status">{t('mangaDetail.queuedChapters', { count: downloadRuleQueued })}</p>
+					)}
 				</div>
 			</Modal>
 

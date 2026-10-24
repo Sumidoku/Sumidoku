@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { selectDownloadChapterIds } from '../src/lib/downloadRules.ts';
 import type { ChapterWithDownload } from '../src/api/types.ts';
@@ -65,4 +66,10 @@ test('latest N rejects non-positive or fractional counts', () => {
 	for (const count of [0, -1, 1.5, Number.NaN]) {
 		assert.deepEqual(selectDownloadChapterIds([chapter(1)], 'latest', count), []);
 	}
+});
+
+test('rule dialog keeps the actual queued count visible', () => {
+	const source = readFileSync(new URL('../src/pages/MangaDetailPage.tsx', import.meta.url), 'utf8');
+	assert.match(source, /onSuccess: \(res\) => setDownloadRuleQueued\(res\.queued\.length\)/);
+	assert.match(source, /<p role="status">\{t\('mangaDetail\.queuedChapters', \{ count: downloadRuleQueued \}\)\}<\/p>/);
 });
