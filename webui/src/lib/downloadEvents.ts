@@ -1,6 +1,16 @@
 import type { DownloadChapterEvent } from '../api/protocol';
 import type { ChapterWithDownload, Download, DownloadStatus } from '../api/types';
 
+export type DownloadProgress = {
+	downloaded: number;
+	total: number;
+};
+
+export type MangaDownloadActivity = {
+	status: Extract<DownloadStatus, 'queued' | 'downloading' | 'paused'>;
+	progress: DownloadProgress | null;
+};
+
 // A progress frame can also arrive before started; any progress means downloading.
 const EVENT_STATUS: Record<DownloadChapterEvent['type'], DownloadStatus> = {
 	queued: 'queued',
@@ -10,6 +20,31 @@ const EVENT_STATUS: Record<DownloadChapterEvent['type'], DownloadStatus> = {
 	finished: 'finished',
 	error: 'error'
 };
+
+export function formatDownloadProgress({ downloaded, total }: DownloadProgress): string {
+	const counts = total > 0 ? `${downloaded} / ${total}` : `${downloaded}`;
+	if (total <= 0) return counts;
+	const percent = Math.min(100, Math.max(0, Math.floor((downloaded / total) * 100)));
+	return `${counts} · ${percent}%`;
+}
+
+export function downloadActivitySnapshot(
+	downloads: readonly Download[],
+	mangaId: number
+): Map<number, MangaDownloadActivity> {
+	const activity = new Map<number, MangaDownloadActivity>();
+	for (const download of downloads) {
+		if (download.mangaId !== mangaId) continue;
+		const status = download.status;
+		if (status !== 'queued' && status !== 'downloading' && status !== 'paused') continue;
+		const progress =
+			status === 'downloading' && download.downloaded !== null && download.total !== null
+				? { downloaded: download.downloaded, total: download.total }
+				: null;
+		activity.set(download.chapterId, { status, progress });
+	}
+	return activity;
+}
 
 export function applyDownloadEvent(
 	items: readonly Download[],
@@ -76,25 +111,33 @@ export function createMangaDownloadEventHandlers(
 			) => ChapterWithDownload[] | undefined
 		) => void;
 		invalidate: (queryKey: readonly unknown[]) => void;
-		clearQueued: (chapterId: number) => void;
+		setActivity: (chapterId: number, activity: MangaDownloadActivity | null) => void;
+		syncActivity: (downloads: readonly Download[]) => void;
 	}
 ) {
 	return {
 		onDownload(event: DownloadChapterEvent) {
-			if (event.type !== 'finished' && event.type !== 'error') return;
-			actions.clearQueued(event.chapterId);
+			const status = EVENT_STATUS[event.type];
+			if (status === 'downloading') {
+				actions.setActivity(event.chapterId, {
+					status,
+					progress: { downloaded: event.downloaded, total: event.total }
+				});
+				return;
+			}
+			if (status === 'queued' || status === 'paused') {
+				actions.setActivity(event.chapterId, { status, progress: null });
+				return;
+			}
+			actions.setActivity(event.chapterId, null);
 			if (event.type !== 'finished') return;
 			actions.setChapters((chapters) => markChapterDownloaded(chapters, event.chapterId));
 			actions.invalidate(chaptersKey);
 			actions.invalidate(libraryKey);
 		},
 		onSnapshot(downloads: readonly Download[]) {
+			actions.syncActivity(downloads);
 			actions.invalidate(chaptersKey);
-			for (const download of downloads) {
-				if (download.status === 'finished' || download.status === 'error') {
-					actions.clearQueued(download.chapterId);
-				}
-			}
 		}
 	};
 }

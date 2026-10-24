@@ -12,7 +12,7 @@ import {
 import type { Download, DownloadStatus } from '../api/types';
 import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { chapterLabel } from '../lib/format';
-import { applyDownloadEvent, mergeDownloadResponse } from '../lib/downloadEvents';
+import { applyDownloadEvent, formatDownloadProgress, mergeDownloadResponse } from '../lib/downloadEvents';
 import {
 	Button,
 	Chip,
@@ -231,7 +231,7 @@ export default function DownloadsPage() {
 										<div className="downloads-item__progress">
 											<ProgressBar value={total > 0 ? downloaded / total : null} />
 											<span className="faint downloads-item__pv">
-												{total > 0 ? `${downloaded} / ${total}` : `${downloaded}`}
+												{formatDownloadProgress({ downloaded, total })}
 											</span>
 										</div>
 									)}

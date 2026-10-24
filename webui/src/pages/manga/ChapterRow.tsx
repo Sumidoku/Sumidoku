@@ -2,11 +2,12 @@ import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock, MinusCircle } 
 import { useTranslation } from 'react-i18next';
 import { chapterFileUrl } from '../../api/client';
 import type { ChapterWithDownload } from '../../api/types';
+import { formatDownloadProgress } from '../../lib/downloadEvents';
+import type { DownloadProgress } from '../../lib/downloadEvents';
 import { chapterLabel, formatDate } from '../../lib/format';
 import { IconButton, MenuButton, Spinner } from '../../components';
 
-/** idle = downloadable; pending = enqueue request in flight; queued = enqueued (watch download progress on the downloads page) */
-export type ChapterDlState = 'idle' | 'pending' | 'queued';
+export type ChapterDlState = 'idle' | 'pending' | 'queued' | 'downloading';
 
 interface ChapterRowProps {
 	chapter: ChapterWithDownload;
@@ -15,6 +16,7 @@ interface ChapterRowProps {
 	/** Normal mode enters reading, select mode toggles selection */
 	onActivate: () => void;
 	dlState: ChapterDlState;
+	downloadProgress?: DownloadProgress;
 	onDownload: () => void;
 	/** A local manga's files are already on disk, so no download entry is rendered */
 	hideDownload?: boolean;
@@ -35,6 +37,7 @@ export function ChapterRow({
 	selected,
 	onActivate,
 	dlState,
+	downloadProgress,
 	onDownload,
 	hideDownload,
 	onToggleBookmark,
@@ -78,8 +81,11 @@ export function ChapterRow({
 			<span className="chapter-row__num">{c.chapter_number ?? '—'}</span>
 			<span className="chapter-row__main">
 				<span className="chapter-row__title">{chapterLabel(c)}</span>
-				{(uploaded || scanlator) && (
+				{(uploaded || scanlator || downloadProgress) && (
 					<span className="chapter-row__meta">
+						{downloadProgress && (
+							<span className="chapter-row__prog">{formatDownloadProgress(downloadProgress)}</span>
+						)}
 						{uploaded && <span>{uploaded}</span>}
 						{scanlator && <span>{scanlator}</span>}
 					</span>
@@ -130,7 +136,16 @@ export function ChapterRow({
 							<Download size={16} />
 						</IconButton>
 					) : (
-						<IconButton label={dlState === 'pending' ? t('chapterRow.enqueueing') : t('chapterRow.enqueued')} disabled>
+						<IconButton
+							label={
+								dlState === 'pending'
+									? t('chapterRow.enqueueing')
+									: dlState === 'downloading'
+										? t('chapterRow.downloading')
+										: t('chapterRow.enqueued')
+							}
+							disabled
+						>
 							<Spinner size={15} />
 						</IconButton>
 					))}

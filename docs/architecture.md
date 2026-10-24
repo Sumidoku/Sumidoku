@@ -853,8 +853,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   commit the finished `download` row and the admin's
   `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
   either write failing rolls both back, and the `finished` event is emitted
-  only after commit. The manga detail listens for terminal events too, releasing
-  queued buttons and setting `isDownloaded` on completion. Non-text pages are measured from newly fetched bytes on
+  only after commit. The manga detail seeds its active queue and per-page
+  progress with one download-list request, then follows events; terminal events
+  clear the activity and completion sets `isDownloaded`. Non-text pages are measured from newly fetched bytes on
   every download, but their page-row updates commit only after packaging
   succeeds: a failed attempt writes no partial metadata, and the move-failure
   fallback still commits the measurements with the valid artifact. A row's
