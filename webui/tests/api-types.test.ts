@@ -168,7 +168,7 @@ test('limits reachability to ordinary JSON REST entry points', () => {
 	);
 	const output = generateTypes(document);
 	for (const excluded of ['Unused', 'NdjsonOnly', 'WsOnly', 'BinaryOnly', 'MultipartOnly', 'NonRestOnly']) {
-		assert.doesNotMatch(output, new RegExp(`export type ${excluded}\b`));
+		assert.doesNotMatch(output, new RegExp(`export type ${excluded}\\b`));
 	}
 });
 
