@@ -1513,7 +1513,9 @@ browse and updates at the top level; activity and settings start collapsed and
 open on an active route. The browse page keeps cross-source search above its
 installed/repository views, with `/search` redirecting to its search view.
 Remote source and cross-source searches run on explicit submission; local-source
-filtering uses a 500ms debounce. Aggregate rating/language/source filters can be
+filtering uses a 500ms debounce. Clearing a source's search box resubmits an
+empty query so the unsearched results return without waiting for submission.
+Aggregate rating/language/source filters can be
 changed before the first query, and the search view's URL changes on submission.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and

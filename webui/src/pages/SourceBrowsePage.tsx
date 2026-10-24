@@ -8,6 +8,7 @@ import {
 	House,
 	Link2,
 	ListFilter,
+	RotateCcw,
 	Search,
 	SearchX,
 	TriangleAlert,
@@ -244,11 +245,12 @@ export default function SourceBrowsePage() {
 		setSubmitted({ query, filters: dropFilters ? [] : values });
 	}
 
-	// Only local directory filtering is live; remote source requests wait for explicit submission.
+	// Only local directory filtering is live; remote source requests wait for explicit submission —
+	// except clearing the box, which always resubmits to restore the unsearched results.
 	const submittedQueryRef = useRef(submitted.query);
 	submittedQueryRef.current = submitted.query;
 	useEffect(() => {
-		if (!isLocal) return;
+		if (!isLocal && input.trim() !== '') return;
 		const t = setTimeout(() => {
 			if (input.trim() !== submittedQueryRef.current) runSearch();
 		}, 500);
@@ -799,24 +801,37 @@ interface FilterChipProps {
 	onApply: (s: FilterStates) => void;
 }
 
-/** Chip dropdown menu item; children receive close so the menu can be dismissed after a pick */
+/** Chip dropdown menu item; children receive close so the menu can be dismissed after a pick.
+ * `reset` marks an action row: dimmed danger-hover styling and a RotateCcw icon instead of a checkmark (same convention as TriStateDropdown) */
 function ChipMenuItem({
 	checked,
 	excluded,
+	reset,
 	onClick,
 	children
 }: {
 	checked?: boolean;
 	excluded?: boolean;
+	reset?: boolean;
 	onClick: () => void;
 	children: ReactNode;
 }) {
 	return (
-		<button type="button" className="chip-dropdown__item" onClick={onClick}>
+		<button
+			type="button"
+			className={reset ? 'chip-dropdown__item chip-dropdown__item--reset' : 'chip-dropdown__item'}
+			onClick={onClick}
+		>
 			<span>{children}</span>
 			<span className="chip-dropdown__state" aria-hidden="true">
-				{checked && <Check size={14} />}
-				{excluded && <X size={14} />}
+				{reset ? (
+					<RotateCcw size={14} />
+				) : (
+					<>
+						{checked && <Check size={14} />}
+						{excluded && <X size={14} />}
+					</>
+				)}
 			</span>
 		</button>
 	);
@@ -895,7 +910,7 @@ function SelectFilterChip({ filter: f, states, setStates, onApply }: FilterChipP
 				<>
 					{cur !== '' && (
 						// the reset entry is an action, not a state: no checkmark
-						<ChipMenuItem onClick={() => pick('', close)}>
+						<ChipMenuItem reset onClick={() => pick('', close)}>
 							{t('sourceBrowse.reset')}
 						</ChipMenuItem>
 					)}
