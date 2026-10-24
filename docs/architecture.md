@@ -1033,12 +1033,12 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   candidates whose number is below the previous latest chapter number; it does
   not alter `new_ids`, update counts, unread state or notifications.
   The scheduler checks due every 60s and reloads the interval instead of
-  capturing it at construction, so setting changes need no restart. Its
-  memory-only `last_scheduled_run_at` is stamped only by a scheduled union at
-  start and finish; due uses that timestamp, or scheduler construction time
-  when no scheduled batch has run. Manual batches still stamp the summary's
-  `last_run_at` for reporting, but never the scheduled-only clock, so they
-  cannot postpone the union. A restart waits a full configured interval.
+  capturing it at construction, so setting changes need no restart. A scheduled
+  union stamps `library.last_scheduled_run_at` in the settings at start and
+  finish; due uses that persisted timestamp and is immediate when no scheduled
+  batch has run. Manual batches still stamp the summary's `last_run_at` for
+  reporting, but never the scheduled-only clock, so they cannot postpone the
+  union. Restarting the process does not defer a due union by another interval.
   Each manga fetch also reloads refresh/interval. WASM receives the refresh
   flag as `needs_details`; details returned by WASM, local or OPDS are
   upserted only when it is true. Before that upsert, the write transaction
