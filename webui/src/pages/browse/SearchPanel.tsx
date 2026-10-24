@@ -55,15 +55,24 @@ function sourceMatches(s: Source, f: GlobalSearchFilterPrefs): boolean {
 	);
 }
 
-export function SearchPanel({ active, onActiveChange }: { active: boolean; onActiveChange: (active: boolean) => void }) {
+export function SearchPanel({
+	active,
+	initialQuery = '',
+	onActiveChange
+}: {
+	active: boolean;
+	/** Submitted query restored from the URL after detail navigation unmounted the page */
+	initialQuery?: string;
+	onActiveChange: (active: boolean, query: string) => void;
+}) {
 	const navigate = useNavigate();
 	const { t } = useTranslation();
 	const sourcesQuery = useSources();
 	const [filters, setFilters] = useState<GlobalSearchFilterPrefs>(loadGlobalSearchFilters);
 	useEffect(() => saveGlobalSearchFilters(filters), [filters]);
 
-	const [input, setInput] = useState('');
-	const [query, setQuery] = useState('');
+	const [input, setInput] = useState(initialQuery);
+	const [query, setQuery] = useState(initialQuery);
 	useEffect(() => {
 		if (!active) {
 			setInput('');
@@ -152,8 +161,9 @@ export function SearchPanel({ active, onActiveChange }: { active: boolean; onAct
 				className="source-page__search"
 				onSubmit={(e) => {
 					e.preventDefault();
-					setQuery(input.trim());
-					onActiveChange(input.trim() !== '');
+					const q = input.trim();
+					setQuery(q);
+					onActiveChange(q !== '', q);
 				}}
 			>
 				<Input
@@ -169,7 +179,7 @@ export function SearchPanel({ active, onActiveChange }: { active: boolean; onAct
 						onClick={() => {
 							setInput('');
 							setQuery('');
-							onActiveChange(false);
+							onActiveChange(false, '');
 						}}
 					>
 						{t('common.cancel')}

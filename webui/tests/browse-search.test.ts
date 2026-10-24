@@ -52,3 +52,8 @@ test('search deep link replaces the source tabs instead of nesting another tab',
 	assert.doesNotMatch(markup, /role="tab"/);
 	assert.doesNotMatch(markup, /class="source-list"/);
 });
+
+test('search deep link restores the submitted query into the input', async () => {
+	const markup = await renderBrowse('/browse?view=search&q=needle');
+	assert.match(markup, /type="search"[^>]*value="needle"/);
+});

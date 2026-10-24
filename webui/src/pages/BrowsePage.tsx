@@ -483,8 +483,13 @@ export default function BrowsePage() {
 
 			<SearchPanel
 				active={searching}
-				onActiveChange={(active) => {
-					if (active !== searching) setSearchParams(active ? { view: 'search' } : {});
+				initialQuery={searchParams.get('q') ?? ''}
+				onActiveChange={(active, query) => {
+					if (active === searching && query === (searchParams.get('q') ?? '')) return;
+					// replace, not push: drilling into a result and back must restore the search, not walk old submissions
+					setSearchParams(active ? (query ? { view: 'search', q: query } : { view: 'search' }) : {}, {
+						replace: true
+					});
 				}}
 			/>
 
