@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Fallback-bearing settings need three states: absent, explicit blank, and a
+value.** An empty field is not interchangeable with null when absence inherits
+a fallback but blank disables the feature. Preserve that distinction in both
+registration and editors, and test with a non-empty fallback so inheritance and
+off cannot accidentally pass as the same result.
+- Evidence: 2026-10-24, local-source registration discarded blank oneshots and
+  the editor cleared them to null; with config set to `oneshots`, both paths
+  re-enabled the rule instead of turning it off. The regression failed with the
+  fallback string before the fix and passed afterwards; null and reset still
+  restore the fallback.
+
 **Query-string navigation needs query-aware current-page state.** React
 Router's `NavLink` derives `isActive` from the pathname, so destinations that
 differ only in their query all become active and receive `aria-current`.
