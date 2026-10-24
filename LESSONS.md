@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A deduplication key is not an execution identity; carry a generation through
+completion and publication.** When a finished task can requeue under the same
+id, old and new executions overlap during cleanup even if their handlers never
+overlap. Make finish and cancellation cleanup conditional on that execution,
+and publish the exact transition instead of re-reading the mutable row;
+otherwise old cleanup can disable cancellation for new work and events can
+skip or regress states. Test dispatch-versus-cancel, cross-group requeue, and
+terminal-versus-requeue interleavings.
+- Evidence: 2026-10-24, #394 review forced those interleavings. Pending
+  cancellation returned `running` instead of `cancelled`; cross-group requeue
+  let old cleanup remove the new execution's flag, producing `task_finishing`;
+  terminal requeue emitted `pending → running → pending → pending`, dropping
+  `done`. The probes were removed after reproduction.
+
 **A missing state row is meaningful: default semantics must be shared by
 every read path.** When absence means unread, counts, sorting and
 include/exclude filters must all apply that rule. Joining only explicit rows
