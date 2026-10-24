@@ -52,7 +52,7 @@ export function mergeDownloadResponse(
 			status: currentItem.status,
 			downloaded: currentItem.downloaded,
 			total: currentItem.total,
-			error: currentItem.error
+			error: currentItem.status === 'error' ? item.error : currentItem.error
 		};
 	});
 }
@@ -88,8 +88,13 @@ export function createMangaDownloadEventHandlers(
 			actions.invalidate(chaptersKey);
 			actions.invalidate(libraryKey);
 		},
-		onSnapshot() {
+		onSnapshot(downloads: readonly Download[]) {
 			actions.invalidate(chaptersKey);
+			for (const download of downloads) {
+				if (download.status === 'finished' || download.status === 'error') {
+					actions.clearQueued(download.chapterId);
+				}
+			}
 		}
 	};
 }

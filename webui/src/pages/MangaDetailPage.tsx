@@ -23,7 +23,7 @@ import {
 	useUpdateChapter
 } from '../api/hooks';
 import type { ChapterWithDownload, FilterValue, SourceFilter } from '../api/types';
-import type { DownloadChapterEvent } from '../api/protocol';
+import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { sse } from '../api/sse';
 import { createMangaDownloadEventHandlers } from '../lib/downloadEvents';
 import { statusText } from '../lib/format';
@@ -172,7 +172,9 @@ export default function MangaDetailPage() {
 		const unsubDownload = sse.on('download', (msg) =>
 			handlers.onDownload(msg as DownloadChapterEvent)
 		);
-		const unsubSnapshot = sse.on('snapshot', handlers.onSnapshot);
+		const unsubSnapshot = sse.on('snapshot', (msg) =>
+			handlers.onSnapshot((msg as EventSnapshot).downloads)
+		);
 		return () => {
 			unsubDownload();
 			unsubSnapshot();

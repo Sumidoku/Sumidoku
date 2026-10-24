@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createMangaDownloadEventHandlers } from '../src/lib/downloadEvents.ts';
 import type { DownloadChapterEvent } from '../src/api/protocol.ts';
-import type { ChapterWithDownload } from '../src/api/types.ts';
+import type { ChapterWithDownload, Download, DownloadStatus } from '../src/api/types.ts';
 
 const chaptersKey = ['manga', 3, 'chapters'] as const;
 const libraryKey = ['library'] as const;
@@ -28,6 +28,26 @@ function chapter(id: number): ChapterWithDownload {
 		isBookmarked: false,
 		lastReadAt: null,
 		isDownloaded: false
+	};
+}
+
+function download(chapterId: number, status: DownloadStatus): Download {
+	return {
+		chapterId,
+		mangaId: 3,
+		mangaTitle: 'Manga',
+		chapterTitle: `Chapter ${chapterId}`,
+		chapterNumber: chapterId,
+		volumeNumber: null,
+		status,
+		format: 'cbz',
+		path: null,
+		error: status === 'error' ? 'failed' : null,
+		retries: 0,
+		downloaded: status === 'downloading' ? 1 : null,
+		total: status === 'downloading' ? 10 : null,
+		createdAt: 1,
+		updatedAt: 1
 	};
 }
 
@@ -66,15 +86,25 @@ test('finished and snapshot invalidate chapter queries that have no cached data'
 	assert.deepEqual(h.invalidated, [chaptersKey, libraryKey]);
 
 	h.invalidated.length = 0;
-	h.handlers.onSnapshot();
+	h.handlers.onSnapshot([]);
 	assert.deepEqual(h.invalidated, [chaptersKey]);
+});
+
+test('snapshot clears terminal queued chapters without clearing active downloads', () => {
+	const h = harness(undefined);
+
+	h.handlers.onSnapshot([download(7, 'error'), download(8, 'finished'), download(9, 'downloading')]);
+
+	assert.deepEqual(h.invalidated, [chaptersKey]);
+	assert.deepEqual(h.cleared, [7, 8]);
 });
 
 test('manga detail wires both subscriptions and cleans them up', () => {
 	const source = readFileSync(new URL('../src/pages/MangaDetailPage.tsx', import.meta.url), 'utf8');
 	assert.match(source, /createMangaDownloadEventHandlers\(qk\.chapters\(mangaId\), qk\.library/);
 	assert.match(source, /sse\.on\('download'/);
-	assert.match(source, /sse\.on\('snapshot', handlers\.onSnapshot\)/);
+	assert.match(source, /sse\.on\('snapshot', \(msg\) =>/);
+	assert.match(source, /handlers\.onSnapshot\(\(msg as EventSnapshot\)\.downloads\)/);
 	assert.match(source, /unsubDownload\(\);\s*unsubSnapshot\(\);/);
 	assert.doesNotMatch(source, /subscribeWS/);
 });

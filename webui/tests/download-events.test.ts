@@ -53,3 +53,14 @@ test('unseen response rows replay the latest cached finished event', () => {
 	assert.equal(merged[0].total, 10);
 	assert.equal(merged[0].mangaTitle, 'Manga');
 });
+
+test('error responses keep their latest error text while merging state', () => {
+	const event: DownloadChapterEvent = { type: 'error', chapterId: 7, downloaded: 1, total: 10 };
+	const current = applyDownloadEvent([{ ...download(7, 'downloading'), error: 'old error' }], event);
+	const response = [{ ...download(7, 'error'), error: 'new error' }];
+
+	const merged = mergeDownloadResponse(current, response, new Map([[7, event]]));
+
+	assert.equal(merged[0].status, 'error');
+	assert.equal(merged[0].error, 'new error');
+});
