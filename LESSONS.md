@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A cached browser session needs a distinct lost-session outcome and a bounded
+recovery path.** A generic transport failure cannot distinguish an expired or
+replaced session from a failed request, so the caller keeps reusing the dead
+id. Preserve that distinction, recreate the session once, and replay the
+original method, headers and body.
+- Evidence: 2026-10-24, basic login cached a trawl session id and a 404 became
+  a generic request error on every later attempt. The regression failed with
+  `recreate the expired session: Request` before the lost-session outcome was
+  separated and one recreate-and-replay was added. A real wenku8 package then
+  logged in again after forced session deletion with a real trawl browser;
+  removing the recovery path made the regression fail again.
+
 **Fallback-bearing settings need three states: absent, explicit blank, and a
 value.** An empty field is not interchangeable with null when absence inherits
 a fallback but blank disables the feature. Preserve that distinction in both
