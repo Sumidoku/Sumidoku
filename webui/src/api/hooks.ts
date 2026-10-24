@@ -37,6 +37,7 @@ import type {
 	ProgressPatch,
 	QueuedResponse,
 	RecentPage,
+	RegisterInternalRequest,
 	RepoSource,
 	ScanOutcome,
 	ServerSettings,
@@ -439,11 +440,11 @@ export function useImportSource() {
 	});
 }
 
-export function useRegisterOpdsSource() {
+export function useRegisterInternalSource() {
 	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (req: { name: string; url: string; username?: string; password?: string }) =>
-			api<Source>('/sources/opds', { method: 'POST', body: req }),
+		mutationFn: (req: RegisterInternalRequest) =>
+			api<Source>('/sources/internal', { method: 'POST', body: req }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
 	});
 }
@@ -776,11 +777,9 @@ export function mergeServerSettings(
 		...current,
 		incognito: { ...current?.incognito, ...patch.incognito },
 		library: { ...current?.library, ...patch.library },
-		local: { ...current?.local, ...patch.local },
 		download: { ...current?.download, ...patch.download },
 		backup: { ...current?.backup, ...patch.backup },
-		browse: { ...current?.browse, ...patch.browse },
-		readOnly: { ...current?.readOnly, ...patch.readOnly }
+		browse: { ...current?.browse, ...patch.browse }
 	} as ServerSettings;
 }
 

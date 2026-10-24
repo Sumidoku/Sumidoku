@@ -137,29 +137,30 @@ async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{settings}");
-	assert_eq!(settings["local"]["oneshotsDir"], "oneshots");
 	assert_eq!(settings["backup"]["dir"], "custom-backups");
 	assert_eq!(settings["backup"]["lastRun"], 123);
 
-	settings["local"]["oneshotsDir"] = serde_json::Value::Null;
 	settings["backup"]["dir"] = serde_json::Value::Null;
 	settings["backup"]["lastRun"] = serde_json::Value::Null;
 	let (status, body) = request(&app.app, "PUT", "/api/v1/settings", Some(settings)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["local"]["oneshotsDir"], serde_json::Value::Null);
 	assert_eq!(body["backup"]["dir"], serde_json::Value::Null);
 	assert_eq!(body["backup"]["lastRun"], 123);
-	assert_eq!(body["readOnly"]["localOneshotsDir"], serde_json::Value::Null);
 	assert_eq!(body["custom.option"], json!({"keep": true}));
 
 	let pool = connect_db(&app.db_path).await;
-	let remaining: i64 = sqlx::query_scalar(
-		"SELECT COUNT(*) FROM setting WHERE key IN ('local.oneshots_dir', 'backup.dir')",
-	)
-	.fetch_one(&pool)
-	.await
-	.expect("cleared overrides");
+	// the legacy local.oneshots_dir row stays stored (still the default local instance's fallback layer);
+	// only the nullable overrides that were explicitly nulled are gone
+	let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'backup.dir'")
+		.fetch_one(&pool)
+		.await
+		.expect("cleared overrides");
 	assert_eq!(remaining, 0);
+	let oneshots: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'local.oneshots_dir'")
+		.fetch_one(&pool)
+		.await
+		.expect("legacy oneshots row");
+	assert_eq!(oneshots, 1);
 	let last_run: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'backup.last_run'")
 		.fetch_one(&pool)
 		.await
@@ -189,18 +190,12 @@ async fn structured_settings_require_present_nullable_fields() {
 		&app.app,
 		"PUT",
 		"/api/v1/settings",
-		Some(json!({"local.oneshots_dir": "oneshots", "backup.dir": "custom-backups"})),
+		Some(json!({"backup.dir": "custom-backups"})),
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{settings}");
 
-	for (group, field) in [
-		("backup", "dir"),
-		("backup", "lastRun"),
-		("download", "movePath"),
-		("local", "oneshotsDir"),
-		("readOnly", "localOneshotsDir"),
-	] {
+	for (group, field) in [("backup", "dir"), ("backup", "lastRun"), ("download", "movePath")] {
 		let mut body = settings.clone();
 		let removed = body[group]
 			.as_object_mut()
@@ -212,7 +207,6 @@ async fn structured_settings_require_present_nullable_fields() {
 	}
 
 	let (_, body) = request(&app.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(body["local"]["oneshotsDir"], "oneshots");
 	assert_eq!(body["backup"]["dir"], "custom-backups");
 }
 

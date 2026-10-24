@@ -1,15 +1,20 @@
-//! Filesystem side of the built-in local source: walks the local roots live (no index table; rows land in the DB only on open/shelve).
+//! Filesystem side of the built-in local sources: walks one instance's roots live (no index table; rows land in the DB only on open/shelve).
 //!
-//! The source has one or more root directories (config local_dirs, overridable at runtime by the local.dirs
-//! setting — see state.rs). Manga and chapter keys are validated relative paths (`valid_key`): nested layouts
-//! address their target from the owning root / the manga directory (`publisher/series`, `vol1/ch01`), while `..`,
-//! absolute and drive-prefixed forms stay rejected so API input can never escape the roots. Across roots the key
-//! carries the root index: a bare path addresses root 0 (the pre-multi-dir form, so rows persisted before
-//! multiple roots keep resolving), and `N:<path>` addresses root N >= 1 (`0:` is rejected so a root-0 manga has
-//! exactly one key form). Browsing unions the roots; the same relative path present in several roots is listed
-//! once, from the lowest-indexed root (first directory wins — mirrors of the same content), while the shadowed
-//! copies stay addressable by their numbered keys. One collision is inherent: a root-0 directory named like the
-//! prefix form (`1:Foo`) resolves as root 1's `Foo` — don't name directories that way.
+//! A local instance (a source row with kind = local, registered through `POST /api/v1/sources/internal`)
+//! has one or more root directories in its own `paths` source setting; the default instance
+//! (local.local, seeded by migration 0011) additionally falls back to the legacy global local.dirs
+//! setting and then the config layer — see state.rs. Manga and chapter keys are validated relative
+//! paths (`valid_key`): nested layouts address their target from the owning root / the manga directory
+//! (`publisher/series`, `vol1/ch01`), while `..`, absolute and drive-prefixed forms stay rejected so
+//! API input can never escape the roots. Across an instance's roots the key carries the root index: a
+//! bare path addresses root 0 (the pre-multi-dir form, so rows persisted before multiple roots keep
+//! resolving), and `N:<path>` addresses root N >= 1 (`0:` is rejected so a root-0 manga has exactly one
+//! key form). Browsing unions the instance's roots; the same relative path present in several roots is
+//! listed once, from the lowest-indexed root (first directory wins — mirrors of the same content),
+//! while the shadowed copies stay addressable by their numbered keys. One collision is inherent: a
+//! root-0 directory named like the prefix form (`1:Foo`) resolves as root 1's `Foo` — don't name
+//! directories that way. Roots never span instances: two instances over the same directory produce
+//! independent manga rows.
 //!
 //! Discovery is top-down with nearest-qualifying-ancestor
 //! absorption: a directory directly holding chapter archives qualifies (pass 1, the Komga trigger), one with no
@@ -31,7 +36,9 @@
 //! ComicInfo.xml keep comma-separated list semantics. Mylar readingDirection and OPF spine
 //! page-progression-direction map to the manga viewer.
 //!
-//! With a oneshots name configured (config local_oneshots_dir, overridable by the local.oneshots_dir setting),
+//! With a oneshots name configured on the instance (its `oneshotsDir` source setting; the default
+//! instance falls back to the legacy global setting, then config local_oneshots_dir — an explicit blank
+//! turns the rule off for that instance),
 //! the oneshots rule outranks both passes: a directory whose relative path contains the name (case-insensitive
 //! substring, kmrs's ScanOptions::oneshots_dir) is never claimed — every archive directly inside becomes its
 //! own one-chapter manga keyed by the archive path (`oneshots/Foo.cbz`) and titled by the file stem, and
@@ -55,7 +62,10 @@ pub mod zip_cache;
 pub use zip_cache::ZipCache;
 
 use crate::error::{ApiError, ApiResult};
+use crate::model::SourceRow;
+use crate::state::AppState;
 use aidoku::{Chapter, Manga, MangaStatus};
+use aidoku_wasm::DefaultValue;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -930,4 +940,120 @@ pub fn page_content_json(entry: &str) -> Value {
 		"hasDescription": false,
 		"description": null,
 	})
+}
+
+/// Registration/settings validation for an instance's roots: at least one entry, every entry a
+/// non-empty path that exists and is a directory. The scan treats a vanished root as empty, so this
+/// check is the only guard against a typo silently emptying the browse list
+pub async fn validate_paths(paths: &[String]) -> ApiResult<Vec<String>> {
+	if paths.is_empty() {
+		return Err(ApiError::bad_request("paths must not be empty"));
+	}
+	let mut dirs = Vec::with_capacity(paths.len());
+	for path in paths {
+		let trimmed = path.trim();
+		if trimmed.is_empty() {
+			return Err(ApiError::bad_request("paths must not contain empty entries"));
+		}
+		match tokio::fs::metadata(trimmed).await {
+			Ok(metadata) if metadata.is_dir() => dirs.push(trimmed.to_string()),
+			Ok(_) => return Err(ApiError::bad_request(format!("local path is not a directory: {trimmed}"))),
+			Err(e) => return Err(ApiError::bad_request(format!("local path is not readable: {trimmed} ({e})"))),
+		}
+	}
+	Ok(dirs)
+}
+
+const SOURCE_ROW_SELECT: &str = "SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+	 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source WHERE id = ?";
+
+/// Instance registration: key takes local.<slug>, collisions append a -2/-3 counter (the opds rule;
+/// a name slugging to "local" collides with the reserved default key and takes the counter form).
+/// Paths land in the instance's own source setting; the oneshots marker only when provided
+pub async fn register_instance(
+	state: &AppState,
+	name: &str,
+	paths: &[String],
+	oneshots_dir: Option<&str>,
+) -> ApiResult<SourceRow> {
+	let name = name.trim();
+	if name.is_empty() {
+		return Err(ApiError::bad_request("name must not be empty"));
+	}
+	let dirs = validate_paths(paths).await?;
+	let slug = crate::source::slugify(name).ok_or_else(|| ApiError::bad_request("name has no usable characters"))?;
+	let mut key = format!("local.{slug}");
+	let mut counter = 2;
+	loop {
+		let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM source WHERE key = ?")
+			.bind(&key)
+			.fetch_optional(&state.pool)
+			.await?;
+		if exists.is_none() {
+			break;
+		}
+		key = format!("local.{slug}-{counter}");
+		counter += 1;
+	}
+	let now = crate::model::unix_now();
+	let result = sqlx::query(
+		"INSERT INTO source (key, name, kind, version, languages, content_rating, base_url,
+		 breaking_change_version, wasm_path, enabled, installed_at, updated_at)
+		 VALUES (?, ?, ?, 0, '[]', 0, NULL, 0, '', 1, ?, ?)",
+	)
+	.bind(&key)
+	.bind(name)
+	.bind(crate::model::SOURCE_KIND_LOCAL)
+	.bind(now)
+	.bind(now)
+	.execute(&state.pool)
+	.await?;
+	let source_id = result.last_insert_rowid();
+	let raw = serde_json::to_string(&DefaultValue::StringArray(dirs))?;
+	sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)")
+		.bind(source_id)
+		.bind(raw)
+		.execute(&state.pool)
+		.await?;
+	if let Some(oneshots) = oneshots_dir.map(str::trim).filter(|s| !s.is_empty()) {
+		let raw = serde_json::to_string(&DefaultValue::String(oneshots.to_string()))?;
+		sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'oneshotsDir', ?)")
+			.bind(source_id)
+			.bind(raw)
+			.execute(&state.pool)
+			.await?;
+	}
+	let row: Option<SourceRow> = sqlx::query_as(SOURCE_ROW_SELECT)
+		.bind(source_id)
+		.fetch_optional(&state.pool)
+		.await?;
+	row.ok_or_else(|| ApiError::internal("registered local source missing"))
+}
+
+/// Startup guarantee: a deployment whose config explicitly names local roots (file/env) always has the
+/// default local instance. Deleting local.local through the API is refused while that config stands, so
+/// a missing row here means the config appeared after an earlier deletion — recreate the instance fresh
+pub async fn ensure_default_instance(state: &AppState) -> ApiResult<()> {
+	if state.config.local_dirs.is_none() {
+		return Ok(());
+	}
+	let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
+		.bind(crate::model::LOCAL_SOURCE_KEY)
+		.fetch_optional(&state.pool)
+		.await?;
+	if exists.is_some() {
+		return Ok(());
+	}
+	let now = crate::model::unix_now();
+	sqlx::query(
+		"INSERT INTO source (key, name, kind, version, languages, wasm_path, enabled, installed_at, updated_at)
+		 VALUES (?, 'Local', ?, 0, '[]', '', 1, ?, ?)",
+	)
+	.bind(crate::model::LOCAL_SOURCE_KEY)
+	.bind(crate::model::SOURCE_KIND_LOCAL)
+	.bind(now)
+	.bind(now)
+	.execute(&state.pool)
+	.await?;
+	Ok(())
 }

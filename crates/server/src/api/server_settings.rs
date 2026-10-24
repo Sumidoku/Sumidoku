@@ -23,12 +23,9 @@ pub(crate) const ROOT_GROUPS: [&str; 7] = [
 pub struct ServerSettings {
 	pub incognito: IncognitoSettings,
 	pub library: LibrarySettings,
-	pub local: LocalSettings,
 	pub download: DownloadSettings,
 	pub backup: BackupSettings,
 	pub browse: BrowseSettings,
-	#[serde(rename = "readOnly")]
-	pub read_only: ReadOnlySettings,
 	/// Any settings keys the server does not yet model as typed fields. Preserved round-trip so that
 	/// backups, custom settings, or future keys are not lost when writing the structured view back.
 	#[serde(flatten)]
@@ -51,14 +48,6 @@ pub struct LibrarySettings {
 	pub skip_titles: Vec<String>,
 	pub refresh_metadata: bool,
 	pub update_interval_hours: u64,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalSettings {
-	pub dirs: Vec<String>,
-	#[serde(deserialize_with = "required_option")]
-	pub oneshots_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -116,14 +105,6 @@ pub struct BrowseSettings {
 	pub pinned_sources: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReadOnlySettings {
-	pub local_dirs: Vec<String>,
-	#[serde(deserialize_with = "required_option")]
-	pub local_oneshots_dir: Option<String>,
-}
-
 fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
 	D: serde::Deserializer<'de>,
@@ -162,10 +143,6 @@ impl ServerSettings {
 			refresh_metadata: get_bool(map, "library.refresh_metadata").unwrap_or(false),
 			update_interval_hours: get_u64(map, "library.update_interval_hours").unwrap_or(0),
 		};
-		let local = LocalSettings {
-			dirs: get_string_array(map, "local.dirs").unwrap_or_default(),
-			oneshots_dir: get_string(map, "local.oneshots_dir"),
-		};
 		let download = DownloadSettings {
 			auto_download_new_chapters: get_bool(map, "auto_download_new_chapters").unwrap_or(false),
 			auto_download_limit: get_u64(map, "auto_download_limit").unwrap_or(5),
@@ -190,12 +167,10 @@ impl ServerSettings {
 		let browse = BrowseSettings {
 			pinned_sources: get_string_array(map, "browse.pinned_sources").unwrap_or_default(),
 		};
-		let read_only = ReadOnlySettings {
-			local_dirs: get_string_array(map, "localDirs").unwrap_or_default(),
-			local_oneshots_dir: get_string(map, "localOneshotsDir"),
-		};
 
 		// Anything not modeled above is preserved round-trip (excluding injected/read-only/internal keys).
+		// The legacy global local.* rows keep working as the default local instance's fallback layer
+		// (state.local_dirs), so they stay stored but are no longer exposed in the structured view.
 		let known: HashSet<&str> = [
 			"incognito.enabled",
 			"library.default_category",
@@ -225,8 +200,6 @@ impl ServerSettings {
 			"backup.last_run",
 			"backup.dir",
 			"browse.pinned_sources",
-			"localDirs",
-			"localOneshotsDir",
 			"sync.instance_id",
 		]
 		.iter()
@@ -240,7 +213,7 @@ impl ServerSettings {
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();
 
-		Ok(Self { incognito, library, local, download, backup, browse, read_only, extra })
+		Ok(Self { incognito, library, download, backup, browse, extra })
 	}
 
 	/// Convert the structured request body into the legacy flat map understood by `apply_settings`.
@@ -260,8 +233,6 @@ impl ServerSettings {
 		map.insert("library.skip_titles".into(), json!(self.library.skip_titles));
 		map.insert("library.refresh_metadata".into(), json!(self.library.refresh_metadata));
 		map.insert("library.update_interval_hours".into(), json!(self.library.update_interval_hours));
-		map.insert("local.dirs".into(), json!(self.local.dirs));
-		map.insert("local.oneshots_dir".into(), json!(self.local.oneshots_dir));
 		map.insert(
 			"auto_download_new_chapters".into(),
 			json!(self.download.auto_download_new_chapters),

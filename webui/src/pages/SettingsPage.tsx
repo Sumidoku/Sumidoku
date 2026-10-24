@@ -1063,114 +1063,6 @@ function FilterGroupsSection() {
 	);
 }
 
-function LocalSourceSection() {
-	const { t } = useTranslation();
-	const settings = useServerSettings();
-	const save = useSaveServerSettings();
-	const [dirs, setDirs] = useState<string[] | null>(null);
-	const [oneshots, setOneshots] = useState<string | null>(null);
-
-	useEffect(() => {
-		if (!settings.data || dirs !== null) return;
-		setDirs(settings.data.readOnly.localDirs);
-		setOneshots(settings.data.readOnly.localOneshotsDir ?? '');
-	}, [settings.data, dirs]);
-
-	if (dirs === null || oneshots === null || !settings.data) {
-		return (
-			<Section
-				title={t('settings.localSourceTitle')}
-				desc={t('settings.localSourceDesc')}
-			>
-				<Skeleton height={48} />
-			</Section>
-		);
-	}
-
-	// readOnly.localDirs/localOneshotsDir are the server's read-only injections of the effective values; edits are
-	// saved as the local.dirs / local.oneshotsDir overrides, and an empty value clears it (the config
-	// layer takes over again)
-	const effective = settings.data.readOnly.localDirs;
-	const effectiveOneshots = settings.data.readOnly.localOneshotsDir ?? '';
-	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
-	const oneshotsName = oneshots.trim();
-	const dirty = cleaned.join('\n') !== effective.join('\n') || oneshotsName !== effectiveOneshots;
-
-	async function onSave() {
-		try {
-			const saved = await save.mutateAsync(
-				mergeServerSettings(settings.data, {
-					local: { dirs: cleaned, oneshotsDir: oneshotsName || null }
-				})
-			);
-			setDirs(saved.readOnly.localDirs);
-			setOneshots(saved.readOnly.localOneshotsDir ?? '');
-			pushToast(t('settings.localSourceSaved'), 'info');
-		} catch (e) {
-			if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
-		}
-	}
-
-	return (
-		<Section
-			title={t('settings.localSourceTitle')}
-			desc={t('settings.localSourceDesc')}
-		>
-			{dirs.length > 0 && (
-				<div className="settings-kv">
-					{dirs.map((dir, i) => (
-						<div key={i} className="settings-kv__row">
-							<Input
-								placeholder={t('settings.localDirPlaceholder')}
-								value={dir}
-								onChange={(e) => {
-									// currentTarget is already null by the time the deferred updater runs, so take the value first
-									const v = e.currentTarget.value;
-									setDirs((cur) => (cur ?? []).map((d, j) => (j === i ? v : d)));
-								}}
-							/>
-							<IconButton
-								label={t('common.delete')}
-								variant="danger"
-								onClick={() => setDirs((cur) => (cur ?? []).filter((_, j) => j !== i))}
-							>
-								<Trash2 size={16} />
-							</IconButton>
-						</div>
-					))}
-				</div>
-			)}
-			<div className="settings-kv__add">
-				<Button onClick={() => setDirs((cur) => [...(cur ?? []), ''])}>
-					{t('settings.addLocalDir')}
-				</Button>
-			</div>
-			<div className="settings-row">
-				<span className="settings-row__label">{t('settings.localOneshotsDirLabel')}</span>
-				<Input
-					placeholder={t('settings.localOneshotsDirPlaceholder')}
-					value={oneshots}
-					onChange={(e) => {
-						const v = e.currentTarget.value;
-						setOneshots(v);
-					}}
-				/>
-			</div>
-			<p className="settings-local__hint">{t('settings.localOneshotsDirDesc')}</p>
-			<div className="settings-kv__save">
-				<Button
-					variant="primary"
-					disabled={!dirty}
-					loading={save.isPending}
-					onClick={() => void onSave()}
-				>
-					{t('common.save')}
-				</Button>
-			</div>
-		</Section>
-	);
-}
-
 const BACKUP_SECTIONS = [
 	{ key: 'library', labelKey: 'settings.backupLibrary' },
 	{ key: 'categories', labelKey: 'settings.backupCategories' },
@@ -2047,7 +1939,6 @@ export default function SettingsPage() {
 							<FilterGroupsSection />
 							<LibraryDisplaySection />
 							<LibraryUpdateSection />
-							<LocalSourceSection />
 						</>
 					),
 					downloads: (

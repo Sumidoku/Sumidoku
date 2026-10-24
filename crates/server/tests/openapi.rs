@@ -148,14 +148,11 @@ fn representative_response_shapes_match_handlers() {
 	if document["components"]["schemas"]["LibrarySettings"]["properties"]["skipTitles"]["type"] != "array" {
 		errors.push("LibrarySettings.skipTitles must be an array");
 	}
-	if !document["components"]["schemas"]["ServerSettings"]["properties"]["readOnly"].is_object() {
-		errors.push("ServerSettings must expose its readOnly group");
+	if document["components"]["schemas"]["ServerSettings"]["properties"].get("local").is_some() {
+		errors.push("ServerSettings must not expose the retired local group");
 	}
-	if !document["components"]["schemas"]["LocalSettings"]["required"]
-		.as_array()
-		.is_some_and(|fields| fields.iter().any(|field| field == "oneshotsDir"))
-	{
-		errors.push("LocalSettings.oneshotsDir must be required and nullable");
+	if !document["components"]["schemas"]["RegisterInternalRequest"]["oneOf"].is_array() {
+		errors.push("RegisterInternalRequest must be a oneOf dispatch on type");
 	}
 	if document["components"]["schemas"]["SourceRepo"]["properties"]["name"]["nullable"] != true {
 		errors.push("SourceRepo.name must be nullable");

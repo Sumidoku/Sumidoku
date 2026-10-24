@@ -168,16 +168,21 @@ test('limits reachability to ordinary JSON REST entry points', () => {
 	);
 	const output = generateTypes(document);
 	for (const excluded of ['Unused', 'NdjsonOnly', 'WsOnly', 'BinaryOnly', 'MultipartOnly', 'NonRestOnly']) {
-		assert.doesNotMatch(output, new RegExp(`export type ${excluded}\\b`));
+		assert.doesNotMatch(output, new RegExp(`export type ${excluded}\b`));
 	}
 });
 
+/** The committed generated file is LF; a Windows checkout with autocrlf materializes CRLF, so reads normalize */
+function readTypes(): string {
+	return readFileSync(new URL('../src/api/types.ts', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+}
+
 test('generated LibrarySort type includes latestChapter', () => {
-	const output = readFileSync(new URL('../src/api/types.ts', import.meta.url), 'utf8');
+	const output = readTypes();
 	assert.match(output, /export type LibrarySort = [^\n]*"latestChapter"/);
 });
 
 test('generated Range type allows omitted nullable bounds', () => {
-	const output = readFileSync(new URL('../src/api/types.ts', import.meta.url), 'utf8');
+	const output = readTypes();
 	assert.match(output, /Range: \{\n\t\tid: string;\n\t\tfrom\?: number \| null;\n\t\tto\?: number \| null;\n\t\};/);
 });

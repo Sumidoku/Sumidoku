@@ -6,13 +6,13 @@ pub mod events;
 pub mod filter_groups;
 pub mod filters;
 pub mod import_merge;
+pub mod internal_source;
 pub mod key_realign;
 pub mod library;
 pub mod listings;
 pub mod login;
 pub mod migrate;
 pub mod oauth;
-pub mod opds_source;
 pub mod page;
 pub mod partial;
 pub mod pins;
@@ -70,7 +70,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 			post(source_import::import_source)
 				.route_layer(axum::extract::DefaultBodyLimit::max(source_import::IMPORT_BODY_MAX)),
 		)
-		.route("/api/v1/sources/opds", post(opds_source::register_opds_source))
+		.route("/api/v1/sources/internal", post(internal_source::register_internal_source))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
@@ -232,8 +232,12 @@ async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 
 async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
 	let row = source_row(&state, id).await?;
-	if row.is_local() {
-		return Err(ApiError::bad_request("the built-in local source cannot be deleted"));
+	// The default local instance while the deployment config explicitly names local roots would be
+	// recreated empty on the next boot, so deleting it is refused until the config stops defining it
+	if row.key == crate::model::LOCAL_SOURCE_KEY && state.config.local_dirs.is_some() {
+		return Err(ApiError::bad_request(
+			"the default local source is defined by the server config (SUMIDOKU_LOCAL_DIRS/local_dirs); remove it there first",
+		));
 	}
 	state.evict_source(id).await;
 	sqlx::query("DELETE FROM source WHERE id = ?")
@@ -242,8 +246,8 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 		.await?;
 	pins::prune_pinned(&state.pool, &row.key).await?;
 	// Uninstall also drops the on-disk package, otherwise the next directory scan would
-	// re-register the source. OPDS instances live entirely in the database (no package).
-	if !row.is_opds() {
+	// re-register the source. Internal instances (local/opds) live entirely in the database (no package).
+	if !row.is_opds() && !row.is_local() {
 		remove_source_package(&state.config.sources_dir(), std::path::Path::new(&row.wasm_path)).await;
 	}
 	Ok(StatusCode::NO_CONTENT)
@@ -445,8 +449,8 @@ pub(crate) async fn attach_internal_ids(
 /// (a oneshot drops the archive extension); ComicInfo and the cover are left for find_or_register_manga to
 /// resolve on open; everything returns in one page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
-	let oneshots = state.local_oneshots_dir().await?;
-	let dirs = crate::local::scan_manga_dirs(&state.local_dirs().await?, oneshots.as_deref()).await?;
+	let oneshots = state.local_oneshots_dir(source_id).await?;
+	let dirs = crate::local::scan_manga_dirs(&state.local_dirs(source_id).await?, oneshots.as_deref()).await?;
 	let needle = query
 		.map(str::trim)
 		.filter(|q| !q.is_empty())
@@ -675,15 +679,49 @@ pub(crate) async fn load_settings_items(
 	}
 }
 
+/// A local instance's settings document (no wasm package, so the definition is server-synthesized):
+/// the roots list and the oneshots marker. Values are the effective — fallback-resolved — ones, so an
+/// edit starts from what the instance actually scans; saving materializes them into source_setting
+async fn local_settings_doc(state: &AppState, id: i64) -> ApiResult<Value> {
+	let paths = state.local_dirs(id).await?;
+	let oneshots = state.local_oneshots_dir(id).await?;
+	Ok(json!({
+		"settings": [
+			// unknown-to-Aidoku type on purpose: the value keeps the raw string form (the same
+			// convention as unknown static kinds), and the web UI renders the local editor by source kind
+			{
+				"type": "list", "key": "paths", "title": "Directories",
+				"notification": null, "requires": null, "requires_false": null, "refreshes": null,
+				"value": "list",
+			},
+			{
+				"type": "text", "key": "oneshotsDir", "title": "Oneshots directory",
+				"notification": null, "requires": null, "requires_false": null, "refreshes": null,
+				"value": { "Text": {
+					"placeholder": null, "autocapitalization_type": null, "autocorrection_disabled": null,
+					"keyboard_type": null, "return_key_type": null, "secure": null, "default": null,
+				} },
+			},
+		],
+		"values": {
+			"paths": paths.iter().map(|dir| dir.to_string_lossy()).collect::<Vec<_>>(),
+			"oneshotsDir": oneshots,
+		},
+	}))
+}
+
 async fn get_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		return Ok(Json(local_settings_doc(&state, id).await?));
+	}
 	let handle = state.get_handle(id).await?;
 	let doc = package_json(&state, id, "source.json")
 		.await?
 		.unwrap_or_else(|| json!({}));
-	let row = source_row(&state, id).await?;
 	let mut items = load_settings_items(&state, id, &handle).await?;
 	// Synthetic settings rank before static/dynamic settings, aligned with AidokuRunner's extraSettings (language before base url);
 	// when the source itself already declares the same key, the synthetic item is skipped so the list never shows two same-key settings
@@ -726,7 +764,68 @@ async fn put_source_settings(
 	RawQuery(raw): RawQuery,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
-	source_row(&state, id).await?;
+	let row = source_row(&state, id).await?;
+	// A local instance accepts exactly its two synthesized settings: the roots list (validated against
+	// the filesystem before the write transaction) and the oneshots marker (null clears the override,
+	// an explicit blank turns the rule off for this instance)
+	if row.is_local() {
+		let mut parsed_paths: Option<Vec<String>> = None;
+		let mut oneshots: Option<Option<String>> = None;
+		for (key, value) in &body {
+			match key.as_str() {
+				"paths" => {
+					let paths = serde_json::from_value::<Vec<String>>(value.clone())
+						.map_err(|_| ApiError::bad_request("paths must be an array of directory paths"))?;
+					parsed_paths = Some(crate::local::validate_paths(&paths).await?);
+				}
+				"oneshotsDir" => {
+					oneshots = Some(match value {
+						Value::Null => None,
+						Value::String(name) => Some(name.trim().to_string()),
+						_ => return Err(ApiError::bad_request("oneshotsDir must be a string or null")),
+					});
+				}
+				_ => return Err(ApiError::bad_request(format!("unknown local source setting: {key}"))),
+			}
+		}
+		let mut tx = crate::db::begin_write(&state.pool).await?;
+		if let Some(dirs) = parsed_paths {
+			let raw = serde_json::to_string(&json_to_default_value(&json!(dirs)))?;
+			sqlx::query(
+				"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)
+				 ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value",
+			)
+			.bind(id)
+			.bind(raw)
+			.execute(&mut *tx)
+			.await?;
+		}
+		if let Some(oneshots) = oneshots {
+			match oneshots {
+				None => {
+					sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+						.bind(id)
+						.execute(&mut *tx)
+						.await?;
+				}
+				Some(name) => {
+					let raw = serde_json::to_string(&json_to_default_value(&json!(name)))?;
+					sqlx::query(
+						"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'oneshotsDir', ?)
+						 ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value",
+					)
+					.bind(id)
+					.bind(raw)
+					.execute(&mut *tx)
+					.await?;
+				}
+			}
+		}
+		tx.commit().await?;
+		// No instance to restart: the next scan reads the new values
+		let values = local_settings_doc(&state, id).await?["values"].clone();
+		return Ok(Json(json!({ "values": values })));
+	}
 	{
 		let mut tx = crate::db::begin_write(&state.pool).await?;
 		for (key, value) in &body {
@@ -811,7 +910,17 @@ async fn reset_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	source_row(&state, id).await?;
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		// The roots list has no default to reset to (registration requires it); only the oneshots
+		// override clears, falling back to the legacy global layer / config for the default instance
+		sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+			.bind(id)
+			.execute(&state.pool)
+			.await?;
+		let values = local_settings_doc(&state, id).await?["values"].clone();
+		return Ok(Json(json!({ "values": values })));
+	}
 	let settings = package_json(&state, id, "settings.json").await?;
 	let doc = package_json(&state, id, "source.json")
 		.await?
@@ -963,7 +1072,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		return Ok(id);
 	}
 	if crate::source::source_is_local(&state.pool, source_id).await? {
-		let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &initial.key).await?;
+		let update = crate::local::manga_update(&state.local_dirs(source_id).await?, &state.local_zip, &initial.key).await?;
 		let mut conn = state.pool.acquire().await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &update.manga, true, true, true).await?;
 		reconcile_chapters(
@@ -1267,7 +1376,7 @@ async fn get_manga(
 	if wants_refresh(&query) {
 		// Local-source refresh = rescan the directory; no source call to stream, ndjson gets the buffered response too
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
-			let mut update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &row.key).await?;
+			let mut update = crate::local::manga_update(&state.local_dirs(row.source_id).await?, &state.local_zip, &row.key).await?;
 			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
 			let mut conn = state.pool.acquire().await?;
 			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
@@ -1371,7 +1480,7 @@ async fn get_chapters(
 	if wants_refresh(&query) {
 		// Local-source refresh = rescan the directory; chapter entries that fail to read go into the reconcile protection set, not treated as vanished-and-deleted
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-			let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &manga.key).await?;
+			let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
 			let mut conn = state.pool.acquire().await?;
 			reconcile_chapters(
 				&mut conn,
@@ -1538,19 +1647,6 @@ async fn get_settings(
 		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
-	// The effective local directories resolve from the local.dirs setting over the config layer (file/env):
-	// inject the resolved list read-only into the response (camelCase, distinct from the dotted keys in the table)
-	map.insert(
-		"localDirs".into(),
-		json!(state
-			.local_dirs()
-			.await?
-			.iter()
-			.map(|dir| dir.to_string_lossy())
-			.collect::<Vec<_>>()),
-	);
-	// same read-only injection for the oneshots marker (null when neither layer names one)
-	map.insert("localOneshotsDir".into(), json!(state.local_oneshots_dir().await?));
 	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
 	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
 	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
@@ -1658,8 +1754,19 @@ pub(crate) async fn apply_settings(
 async fn put_settings(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-	Json(body): Json<Value>,
+	Json(mut body): Json<Value>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
+	// The local directories moved to the per-instance source settings (GET/PUT /sources/{id}/settings):
+	// a structured body still carrying the old `local` group fails loudly instead of silently doing nothing
+	if body.as_object().is_some_and(|map| map.contains_key("local")) {
+		return Err(ApiError::bad_request(
+			"local directories are now per-source: use the local source's own settings",
+		));
+	}
+	// readOnly was always server-injected; a stale client's full-object write simply drops it
+	if let Some(map) = body.as_object_mut() {
+		map.remove("readOnly");
+	}
 	let flat = match serde_json::from_value::<server_settings::ServerSettings>(body.clone()) {
 		Ok(settings) => settings.into_flat(),
 		Err(e)

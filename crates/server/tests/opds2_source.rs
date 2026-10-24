@@ -285,7 +285,7 @@ async fn v2_catalog_search_update_and_pages() {
 	let t = opds_app().await;
 	let (port, _server) = mock_v2_catalog(false).await;
 	let url = format!("http://127.0.0.1:{port}/opds/v2/root");
-	let (status, body) = request(&t.app, "POST", "/api/v1/sources/opds", Some(json!({"name": "Demo V2", "url": &url}))).await;
+	let (status, body) = request(&t.app, "POST", "/api/v1/sources/internal", Some(json!({"type": "opds", "name": "Demo V2", "url": &url}))).await;
 	assert_eq!(status, StatusCode::OK, "register opds instance: {body}");
 	assert_eq!(body["key"], "opds.demo-v2");
 	let source_id = body["id"].as_i64().expect("source id");
@@ -379,7 +379,7 @@ async fn v2_mislabeled_content_type_still_parses_json() {
 	let t = opds_app().await;
 	let (port, _server) = mock_v2_catalog(true).await;
 	let url = format!("http://127.0.0.1:{port}/opds/v2/root");
-	let (status, body) = request(&t.app, "POST", "/api/v1/sources/opds", Some(json!({"name": "Mislabeled", "url": &url}))).await;
+	let (status, body) = request(&t.app, "POST", "/api/v1/sources/internal", Some(json!({"type": "opds", "name": "Mislabeled", "url": &url}))).await;
 	assert_eq!(status, StatusCode::OK, "register opds instance: {body}");
 	let source_id = body["id"].as_i64().expect("source id");
 

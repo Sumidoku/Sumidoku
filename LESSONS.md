@@ -16,6 +16,17 @@ non-default section.
   the fix and only the downloads href after matching `section`; browser
   acceptance then showed one highlighted item.
 
+**SSR render tests inherit the machine locale; force the language in the
+test.** The web UI's i18n falls back to `navigator.language` when no stored
+preference exists, so a render-to-static-markup test asserting English aria
+labels fails on a zh-CN host while CI (English) stays green — the suite is
+only red where a contributor's machine disagrees with CI. Call
+`i18n.changeLanguage('en')` right after loading the module, or keep the
+assertions language-independent.
+- Evidence: 2026-10-24, internal-source work (#257): source-card-mobile and
+  sidebar-layout tests failed on a zh-CN workstation with Chinese labels
+  while CI was green; both now force English.
+
 **Event-driven state needs one owner for each transition; a request's success
 continuation must not reapply optimistic state that an event may already have
 superseded.** A mutation accepted by the server is not proof that the work is

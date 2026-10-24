@@ -434,7 +434,7 @@ impl UpdateScheduler {
 			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
 			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
 			let (updated, protected, epub_divina) = if is_local {
-				let update = crate::local::manga_update(&state.local_dirs().await?, &state.local_zip, &manga.key).await?;
+				let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
 				(update.manga, update.protected, Some(update.epub_divina))
 			} else if is_opds {
 				let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;

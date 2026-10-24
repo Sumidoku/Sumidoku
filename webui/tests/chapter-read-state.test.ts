@@ -37,7 +37,9 @@ async function renderChapter(isRead: boolean) {
 		server: { middlewareMode: true }
 	});
 	try {
-		await vite.ssrLoadModule('/src/i18n');
+		// the assertions match English labels: force the language instead of inheriting the machine locale
+		const { default: i18n } = await vite.ssrLoadModule('/src/i18n');
+		await i18n.changeLanguage('en');
 		const { ChapterRow } = await vite.ssrLoadModule('/src/pages/manga/ChapterRow.tsx');
 		return renderToStaticMarkup(
 			createElement(

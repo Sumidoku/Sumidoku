@@ -1045,9 +1045,27 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	row.ok_or_else(|| ApiError::not_found("chapter not found"))
 }
 
+/// Derives an instance slug from a display name: lowercase alphanumeric runs joined with -; no usable
+/// character at all means no key can be built. Shared by the internal-source registrations (opds/local)
+pub(crate) fn slugify(name: &str) -> Option<String> {
+	let mut slug = String::new();
+	let mut dash = false;
+	for c in name.chars().flat_map(char::to_lowercase) {
+		if c.is_ascii_alphanumeric() {
+			if dash && !slug.is_empty() {
+				slug.push('-');
+			}
+			slug.push(c);
+			dash = false;
+		} else {
+			dash = true;
+		}
+	}
+	(!slug.is_empty()).then_some(slug)
+}
+
 /// The built-in local source (kind = local) has no wasm instance; chapters/pages/covers all take the filesystem branch
-pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
-	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
+pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
 /// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
@@ -1084,7 +1102,7 @@ pub async fn load_pages(
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if source_is_local(&state.pool, manga.source_id).await? {
 		let (entries, compatible) = crate::local::chapter_pages(
-			&state.local_dirs().await?,
+			&state.local_dirs(manga.source_id).await?,
 			&state.local_zip,
 			&manga.key,
 			&chapter.key,

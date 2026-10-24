@@ -16,7 +16,9 @@ async function renderSidebar(collapsed: boolean, path = '/'): Promise<string> {
 		server: { middlewareMode: true }
 	});
 	try {
-		await vite.ssrLoadModule('/src/i18n');
+		// the assertions match English labels: force the language instead of inheriting the machine locale
+		const { default: i18n } = await vite.ssrLoadModule('/src/i18n');
+		await i18n.changeLanguage('en');
 		const { DesktopSidebar } = await vite.ssrLoadModule('/src/layout/DesktopSidebar.tsx');
 		return renderToStaticMarkup(
 			createElement(

@@ -239,10 +239,10 @@ async fn opds_app() -> TestApp {
 
 async fn register_instance(app: &Router, name: &str, url: &str, auth: Option<(&str, &str)>) -> Value {
 	let body = match auth {
-		Some((username, password)) => json!({"name": name, "url": url, "username": username, "password": password}),
-		None => json!({"name": name, "url": url}),
+		Some((username, password)) => json!({"type": "opds", "name": name, "url": url, "username": username, "password": password}),
+		None => json!({"type": "opds", "name": name, "url": url}),
 	};
-	let (status, body) = request(app, "POST", "/api/v1/sources/opds", Some(body)).await;
+	let (status, body) = request(app, "POST", "/api/v1/sources/internal", Some(body)).await;
 	assert_eq!(status, StatusCode::OK, "register opds instance: {body}");
 	body
 }
@@ -337,11 +337,11 @@ async fn register_two_instances_and_search_and_browse() {
 
 	// registration parameter validation: empty name / bad URL / non-http scheme all 400
 	for body in [
-		json!({"name": "", "url": &url}),
-		json!({"name": "x", "url": "not-a-url"}),
-		json!({"name": "x", "url": "ftp://host/catalog"}),
+		json!({"type": "opds", "name": "", "url": &url}),
+		json!({"type": "opds", "name": "x", "url": "not-a-url"}),
+		json!({"type": "opds", "name": "x", "url": "ftp://host/catalog"}),
 	] {
-		let (status, _) = request(&t.app, "POST", "/api/v1/sources/opds", Some(body)).await;
+		let (status, _) = request(&t.app, "POST", "/api/v1/sources/internal", Some(body)).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 	}
 }

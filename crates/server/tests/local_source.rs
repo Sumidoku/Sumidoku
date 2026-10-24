@@ -676,16 +676,33 @@ async fn aggregate_search_includes_local_source() {
 }
 
 #[tokio::test]
-async fn settings_injected_local_dirs_not_stored() {
+async fn settings_no_longer_inject_local_dirs() {
 	let TestApp { app, tmp, db_path } = local_app().await;
 	let effective = tmp.path().join("local").to_string_lossy().into_owned();
 
-	// GET injects the effective local directories (the config-layer value, default <config_dir>/local)
+	// the global settings response carries neither the retired local group nor the readOnly injections
 	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localDirs"], json!([effective]));
+	assert!(body.get("local").is_none(), "{body}");
+	assert!(body.get("readOnly").is_none(), "{body}");
 
-	// a PUT to the injected key is skipped: the read-back is still the resolved value, other keys persist as usual
+	// the effective roots live on the instance's own settings instead (config-layer value here)
+	let source_id = local_source_id(&app).await;
+	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/settings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["values"]["paths"], json!([effective]));
+
+	// a structured write still carrying the retired local group is rejected loudly, not silently dropped
+	let (status, body) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"local": {"dirs": ["/elsewhere"], "oneshotsDir": null}})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+	// the retired flat readOnly key stays skipped: other keys persist as usual, nothing lands in the table
 	let (status, body) = request(
 		&app,
 		"PUT",
@@ -693,11 +710,9 @@ async fn settings_injected_local_dirs_not_stored() {
 		Some(json!({"localDirs": ["/elsewhere"], "incognito.enabled": true})),
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localDirs"], json!([effective]));
+	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["incognito"]["enabled"], true);
 
-	// skipped is not shadowed: there is no localDirs row in the setting table
 	let pool = common::connect_db(&db_path).await;
 	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'localDirs'")
 		.fetch_optional(&pool)
@@ -1108,6 +1123,14 @@ async fn put_oneshots_dir(app: &Router, value: serde_json::Value) -> (StatusCode
 	request(app, "PUT", "/api/v1/settings", Some(json!({"local.oneshots_dir": value}))).await
 }
 
+/// The default instance's effective oneshots marker, read through the per-instance settings surface
+async fn oneshots_value(app: &Router) -> serde_json::Value {
+	let source_id = local_source_id(app).await;
+	let (status, body) = request(app, "GET", &format!("/api/v1/sources/{source_id}/settings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	body["values"]["oneshotsDir"].clone()
+}
+
 async fn enable_oneshots(app: &Router) {
 	let (status, body) = put_oneshots_dir(app, json!("oneshots")).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -1238,10 +1261,8 @@ async fn oneshots_rule_matches_at_any_depth_case_insensitive() {
 async fn oneshots_dir_setting_validation_clear_and_injection() {
 	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
 
-	// unconfigured: the injected effective value is null
-	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localOneshotsDir"], serde_json::Value::Null, "{body}");
+	// unconfigured: the effective value is null
+	assert_eq!(oneshots_value(&app).await, serde_json::Value::Null);
 
 	// only a string is accepted
 	for value in [json!(123), json!(true), json!(["oneshots"])] {
@@ -1250,9 +1271,7 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 	}
 
 	enable_oneshots(&app).await;
-	let (status, body) = request(&app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localOneshotsDir"], "oneshots", "{body}");
+	assert_eq!(oneshots_value(&app).await, json!("oneshots"));
 	let entries = browse_local(&app).await;
 	assert!(
 		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
@@ -1263,7 +1282,7 @@ async fn oneshots_dir_setting_validation_clear_and_injection() {
 	for value in [json!(""), json!("   ")] {
 		let (status, body) = put_oneshots_dir(&app, value).await;
 		assert_eq!(status, StatusCode::OK, "{body}");
-		assert_eq!(body["readOnly"]["localOneshotsDir"], serde_json::Value::Null, "{body}");
+		assert_eq!(oneshots_value(&app).await, serde_json::Value::Null);
 		let mut entries = browse_local(&app).await;
 		entries.sort();
 		let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
@@ -1283,8 +1302,8 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	let t = TestApp { app, tmp, db_path };
 
 	let (status, body) = request(&t.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localOneshotsDir"], "oneshots", "{body}");
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(oneshots_value(&t.app).await, json!("oneshots"), "config alone enables the rule");
 	let entries = browse_local(&t.app).await;
 	assert!(
 		entries.iter().any(|(k, _)| k == "oneshots/Foo.cbz"),
@@ -1294,7 +1313,7 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	// a runtime setting wins over the config name: matching nothing, the directory is pass1-claimed again
 	let (status, body) = put_oneshots_dir(&t.app, json!("singles")).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["readOnly"]["localOneshotsDir"], "singles", "{body}");
+	assert_eq!(oneshots_value(&t.app).await, json!("singles"));
 	let mut entries = browse_local(&t.app).await;
 	entries.sort();
 	let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();

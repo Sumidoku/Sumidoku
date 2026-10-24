@@ -234,20 +234,29 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   target key differs from the origin's (identical `(source, key)` still
   reports `same_source`); the new-key row is fetched or reused and progress
   carries by chapter number as usual.
-- Built-in local source (`local/mod.rs`, migration `0011_source_kind.sql`):
-  `source.kind` is `aidoku` for every installed package and `local` for the
-  built-in `local.local` row the migration seeds; the row cannot be deleted
-  (400), is excluded from repo management and metadata backfill, and every
-  wasm-capability endpoint (filters, listings, home, deep link, settings,
-  login) answers 501 `unsupported` for it. There is no index table:
-  browsing walks the local roots recursively in real time — config
-  `local_dirs` (`SUMIDOKU_LOCAL_DIRS`, semicolon-separated with empty
-  segments ignored; the single `SUMIDOKU_LOCAL_DIR` / `local_dir`
-  spelling is a one-item fallback, default `[<config_dir>/local]`),
-  overridden at runtime by a non-empty `local.dirs` setting (a JSON
-  string array written from the Settings page, no restart needed;
-  `state.rs:local_dirs` resolves the two layers, and a wrong-shaped
-  stored value counts as unset) — `POST
+- Built-in local sources (`local/mod.rs`, migration `0011_source_kind.sql`):
+  `source.kind` is `aidoku` for every installed package and `local` for local
+  instances; `local.local` is the seeded default instance. Registration goes
+  through the shared internal-source endpoint `POST /api/v1/sources/internal`
+  (`api/internal_source.rs`, a tagged-union dispatch — a future built-in kind is
+  one more variant): `{type: "local", name, paths, oneshotsDir?}` validates
+  every path (must exist and is a directory), derives the key as `local.<slug>`
+  with a `-2` collision counter (the opds rule), and never pins — the Browse
+  page groups internal sources into their own Internal sources section, with
+  pinning an opt-in on top. Every local instance is deletable through the
+  ordinary surface — except that deleting `local.local` answers 400 while the
+  deployment config explicitly names local roots (`SUMIDOKU_LOCAL_DIRS` / file),
+  because boot (`local::ensure_default_instance`, wired in `build_app`) would
+  otherwise recreate it empty. Every wasm-capability endpoint (filters,
+  listings, home, deep link, login) answers 501 `unsupported` for local rows.
+  There is no index table: browsing walks the instance's roots recursively in
+  real time — the instance's own `paths` source setting wins; the default
+  instance additionally falls back to the legacy global `local.dirs` setting
+  and then the config layer (config `local_dirs` (`SUMIDOKU_LOCAL_DIRS`,
+  semicolon-separated with empty segments ignored; the single
+  `SUMIDOKU_LOCAL_DIR` / `local_dir` spelling is a one-item fallback, default
+  `[<config_dir>/local]`); `state.rs:local_dirs` resolves the layers, and a
+  wrong-shaped stored value counts as unset) — `POST
   /sources/{id}/search` (`api/mod.rs:search_source`) branches for
   `kind = local` to `scan_manga_dirs`, which discovers manga top-down
   with nearest-qualifying-ancestor absorption: a directory directly
@@ -257,9 +266,11 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   discovery descends; a claimed manga absorbs its subtree, so nested
   series never appear as manga of their own and a flat single-level
   library scans byte-identically to the pre-nesting behavior. A
-  configured oneshots name (config `local_oneshots_dir` /
-  `SUMIDOKU_LOCAL_ONESHOTS_DIR`, overridable at runtime by the
-  `local.oneshots_dir` setting, blank = off) outranks both passes: a
+  configured oneshots name (the instance's `oneshotsDir` source setting —
+  an explicit blank turns the rule off, an absent setting falls back for
+  the default instance to the legacy global `local.oneshots_dir`, then to
+  config `local_oneshots_dir` / `SUMIDOKU_LOCAL_ONESHOTS_DIR`) outranks
+  both passes: a
   directory whose relative path contains it (case-insensitive
   substring, kmrs's `ScanOptions::oneshots_dir`) is never claimed —
   each archive directly inside becomes its own one-chapter manga keyed
@@ -343,29 +354,30 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   the byte source switched to the fallback chain (`local::resolve_cover`):
   `cover.*` sidecar in the manga directory → first page of the chapter
   list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
-  one) → 404 placeholder. `?refresh=1` on the chapters endpoint re-scans;
+  one) → 404 placeholder.    `?refresh=1` on the chapters endpoint re-scans;
   the library update scheduler treats the local scan as the source call.
   Auto-download skips local manga (files are already local), and the web
   UI hides the download buttons for `kind = local`, shows a manual refresh
-  button on the chapter list, and edits the directory list in Settings:
-  `GET /api/v1/settings` exposes the resolved list as `readOnly.localDirs`,
-  distinct from the structured `local.dirs` override and the legacy flat
-  keys in the `setting` table. The read-only keys are ignored on writes.
-  Both structured and legacy flat PUT accept the dotted storage keys for
-  backward compatibility; the override requires a string array of non-empty
-  paths and takes effect without a restart. The oneshots name follows the
-  same pattern: `readOnly.localOneshotsDir` is null when neither layer names
-  one, structured `local.oneshotsDir: null` clears the override, and the
-  legacy flat form accepts a string (an empty one also clears it). RAR/CBR, PDF and 7z are
+  button on the chapter list, and edits each instance's roots and oneshots
+  marker in its source settings: `GET/PUT /api/v1/sources/{id}/settings`
+  answer a server-synthesized definition for local rows (`paths` as an
+  unknown-to-Aidoku `list` type plus a `oneshotsDir` text) with the
+  effective, fallback-resolved values; PUT validates `paths` against the
+  filesystem and rejects unknown keys, `oneshotsDir: null` clears the
+  override, and reset clears only the oneshots override (the roots have no
+  default). The retired global `local` settings group is rejected on write
+  (400); the legacy flat `local.dirs` / `local.oneshots_dir` keys remain
+  accepted and keep working as the default instance's fallback layer. RAR/CBR, PDF and 7z are
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
-- Built-in OPDS source (`opds_source/mod.rs`, registration endpoint
-  `api/opds_source.rs`): `source.kind = opds` turns an OPDS catalog —
-  Komga, Kavita, Calibre-Web — into a first-class source, multi-instance
-  from day one. Both wire formats are accepted, detected per response by
-  Content-Type with a JSON body sniff for mislabeled servers: 1.2 (Atom)
-  through `parse_feed`, 2.0 (JSON) through `parse_feed_json`, both filling
-  the same `Feed` model. `POST /api/v1/sources/opds` (admin) takes
+- Built-in OPDS source (`opds_source/mod.rs`): `source.kind = opds` turns an
+  OPDS catalog — Komga, Kavita, Calibre-Web — into a first-class source,
+  multi-instance from day one. Both wire formats are accepted, detected per
+  response by Content-Type with a JSON body sniff for mislabeled servers: 1.2
+  (Atom) through `parse_feed`, 2.0 (JSON) through `parse_feed_json`, both
+  filling the same `Feed` model. Registration shares the internal-source
+  endpoint: `POST /api/v1/sources/internal` with `{type: "opds", name, url,
+  username?, password?}` takes
   name + catalog URL + optional basic credentials; keys are `opds.<slug>`
   with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
   land in `source_setting` (`username`/`password`), instances are
@@ -398,8 +410,9 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   updater, aggregate search and migrate all branch to the catalog client
   the same way they branch for `kind = local`, so migrate between an
   OPDS instance and any other source works unchanged. The Browse page
-  gets an admin-only registration dialog (`BrowsePage.tsx`
-  `OpdsRegisterModal`) and hides the home/settings buttons on opds cards.
+  gets an admin-only internal-source dialog (`BrowsePage.tsx`
+  `InternalSourceModal`, a kind picker over the registration dispatch) and
+  hides the home/settings buttons on opds cards.
   The 2.0 mapping (`parse_feed_json`): navigation items become drill
   entries (href doubles as the key), publications become entries
   (`metadata.identifier/title/author/modified/description` onto the 1.2
