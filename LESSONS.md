@@ -1,4 +1,4 @@
-<!-- reviewed-through: 098abaf (2026-10-24) -->
+<!-- reviewed-through: eb1c2f0 (2026-10-25) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
@@ -63,6 +63,10 @@ off cannot accidentally pass as the same result.
   re-enabled the rule instead of turning it off. The regression failed with the
   fallback string before the fix and passed afterwards; null and reset still
   restore the fallback.
+- Seen again: 2026-10-24, the Local settings help described blank as falling
+  back to server config even though it disables the rule. Saving blank read
+  back `null`, while reset restored `oneshots`; both translations now
+  distinguish the two operations.
 
 **Query-string navigation needs query-aware current-page state.** React
 Router's `NavLink` derives `isActive` from the pathname, so destinations that
