@@ -1,4 +1,4 @@
-import { Bookmark, Check, CheckCircle2, Download, FileDown, Lock, MinusCircle } from 'lucide-react';
+import { Bookmark, Check, CheckCircle2, Download, FileDown, ListChecks, ListMinus, Lock, MinusCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chapterFileUrl } from '../../api/client';
 import type { ChapterWithDownload } from '../../api/types';
@@ -83,29 +83,23 @@ export function ChapterRow({
 				<span className="chapter-row__title">{chapterLabel(c)}</span>
 				{(uploaded || scanlator || downloadProgress) && (
 					<span className="chapter-row__meta">
-						{downloadProgress && (
-							<span className="chapter-row__prog">{formatDownloadProgress(downloadProgress)}</span>
-						)}
 						{uploaded && <span>{uploaded}</span>}
+						{downloadProgress && (
+							<span className="chapter-row__download-progress">{formatDownloadProgress(downloadProgress)}</span>
+						)}
 						{scanlator && <span>{scanlator}</span>}
 					</span>
 				)}
 			</span>
 			<span className="chapter-row__status">
-				{!c.isRead && <span className="chapter-row__unread">{t('chapterRow.unread')}</span>}
+				{!c.isRead && (
+					<span className="chapter-row__unread" title={t('chapterRow.unread')}>
+						<span className="chapter-row__unread-label">{t('chapterRow.unread')}</span>
+					</span>
+				)}
 				{c.locked && (
 					<span className="chapter-row__lock" title={t('chapterRow.locked')}>
 						<Lock size={14} />
-					</span>
-				)}
-				{c.isBookmarked && (
-					<span className="chapter-row__bm" title={t('chapterRow.bookmarked')}>
-						<Bookmark size={14} fill="currentColor" />
-					</span>
-				)}
-				{c.isDownloaded && (
-					<span className="chapter-row__dl-ok" title={t('chapterRow.downloaded')}>
-						<CheckCircle2 size={14} />
 					</span>
 				)}
 				{!c.isRead && c.lastPageRead > 0 && (
@@ -116,117 +110,119 @@ export function ChapterRow({
 				<span className="chapter-row__actions">
 					{!hideDownload &&
 						(c.isDownloaded ? (
-						<a
-							className="chapter-row__cbz"
-							href={chapterFileUrl(c.id)}
-							download
-							title={t('chapterRow.downloadCbz')}
-							aria-label={t('chapterRow.downloadCbz')}
-							onClick={(e) => e.stopPropagation()}
-						>
-							<FileDown size={16} />
-						</a>
-					) : dlState === 'idle' ? (
-						<IconButton
-							label={t('chapterRow.downloadChapter')}
-							onClick={(e) => {
-								e.stopPropagation();
-								onDownload();
-							}}
-						>
-							<Download size={16} />
-						</IconButton>
-					) : (
-						<IconButton
-							label={
-								dlState === 'pending'
-									? t('chapterRow.enqueueing')
-									: dlState === 'downloading'
-										? t('chapterRow.downloading')
-										: t('chapterRow.enqueued')
-							}
-							disabled
-						>
-							<Spinner size={15} />
-						</IconButton>
-					))}
-				<IconButton
-					label={c.isBookmarked ? t('chapterRow.removeBookmark') : t('chapterRow.addBookmark')}
-					disabled={bookmarkPending}
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleBookmark();
-					}}
-				>
-					<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
-				</IconButton>
-				{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
-					<MenuButton label={t('chapterRow.chapterActions')}>
-						{(close) => (
-							<>
-								{/* Aidoku MARK_READ: offered while the chapter is not completed */}
-								{onMarkRead && !c.isRead && (
-									<button
-										type="button"
-										className="menu-row"
-										disabled={markPending}
-										onClick={() => {
-											close();
-											onMarkRead();
-										}}
-									>
-										<span>{t('chapterRow.markRead')}</span>
-										<CheckCircle2 size={14} />
-									</button>
-								)}
-								{/* Aidoku MARK_UNREAD: offered while the chapter carries any reading trace */}
-								{onMarkUnread && (c.isRead || c.lastPageRead > 0 || (c.lastReadAt ?? 0) > 0) && (
-									<button
-										type="button"
-										className="menu-row"
-										disabled={markPending}
-										onClick={() => {
-											close();
-											onMarkUnread();
-										}}
-									>
-										<span>{t('chapterRow.markUnread')}</span>
-										<MinusCircle size={14} />
-									</button>
-								)}
-								{/* Aidoku MARK_PREVIOUS: the parent withholds these on the last visible row */}
-								{onMarkPreviousRead && (
-									<button
-										type="button"
-										className="menu-row"
-										disabled={markPending}
-										onClick={() => {
-											close();
-											onMarkPreviousRead();
-										}}
-									>
-										<span>{t('chapterRow.markPreviousRead')}</span>
-										<CheckCircle2 size={14} />
-									</button>
-								)}
-								{onMarkPreviousUnread && (
-									<button
-										type="button"
-										className="menu-row"
-										disabled={markPending}
-										onClick={() => {
-											close();
-											onMarkPreviousUnread();
-										}}
-									>
-										<span>{t('chapterRow.markPreviousUnread')}</span>
-										<MinusCircle size={14} />
-									</button>
-								)}
-							</>
-						)}
-					</MenuButton>
-				)}
+							<a
+								className="chapter-row__cbz"
+								href={chapterFileUrl(c.id)}
+								download
+								title={t('chapterRow.downloadCbz')}
+								aria-label={t('chapterRow.downloadCbz')}
+								onClick={(e) => e.stopPropagation()}
+							>
+								<FileDown size={16} />
+							</a>
+						) : dlState === 'idle' ? (
+							<IconButton
+								label={t('chapterRow.downloadChapter')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onDownload();
+								}}
+							>
+								<Download size={16} />
+							</IconButton>
+						) : (
+							<IconButton
+								label={
+									dlState === 'pending'
+										? t('chapterRow.enqueueing')
+										: dlState === 'downloading'
+											? t('chapterRow.downloading')
+											: t('chapterRow.enqueued')
+								}
+								disabled
+							>
+								<Spinner size={15} />
+							</IconButton>
+						))}
+					<IconButton
+						label={c.isBookmarked ? t('chapterRow.removeBookmark') : t('chapterRow.addBookmark')}
+						className={c.isBookmarked ? 'chapter-row__bookmark--active' : undefined}
+						aria-pressed={c.isBookmarked}
+						disabled={bookmarkPending}
+						onClick={(e) => {
+							e.stopPropagation();
+							onToggleBookmark();
+						}}
+					>
+						<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
+					</IconButton>
+					{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
+						<MenuButton label={t('chapterRow.chapterActions')}>
+							{(close) => (
+								<>
+									{/* Aidoku MARK_READ: offered while the chapter is not completed */}
+									{onMarkRead && !c.isRead && (
+										<button
+											type="button"
+											className="menu-row"
+											disabled={markPending}
+											onClick={() => {
+												close();
+												onMarkRead();
+											}}
+										>
+											<span>{t('chapterRow.markRead')}</span>
+											<CheckCircle2 size={14} />
+										</button>
+									)}
+									{/* Aidoku MARK_UNREAD: offered while the chapter carries any reading trace */}
+									{onMarkUnread && (c.isRead || c.lastPageRead > 0 || (c.lastReadAt ?? 0) > 0) && (
+										<button
+											type="button"
+											className="menu-row"
+											disabled={markPending}
+											onClick={() => {
+												close();
+												onMarkUnread();
+											}}
+										>
+											<span>{t('chapterRow.markUnread')}</span>
+											<MinusCircle size={14} />
+										</button>
+									)}
+									{/* Aidoku MARK_PREVIOUS: the parent withholds these on the last visible row */}
+									{onMarkPreviousRead && (
+										<button
+											type="button"
+											className="menu-row"
+											disabled={markPending}
+											onClick={() => {
+												close();
+												onMarkPreviousRead();
+											}}
+										>
+											<span>{t('chapterRow.markPreviousRead')}</span>
+											<ListChecks size={14} />
+										</button>
+									)}
+									{onMarkPreviousUnread && (
+										<button
+											type="button"
+											className="menu-row"
+											disabled={markPending}
+											onClick={() => {
+												close();
+												onMarkPreviousUnread();
+											}}
+										>
+											<span>{t('chapterRow.markPreviousUnread')}</span>
+											<ListMinus size={14} />
+										</button>
+									)}
+								</>
+							)}
+						</MenuButton>
+					)}
 				</span>
 			)}
 		</div>

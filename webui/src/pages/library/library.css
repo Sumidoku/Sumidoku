@@ -58,18 +58,7 @@
 }
 
 .library__sort {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
-.library__sort-label {
-	color: var(--text-dim);
-	font-size: 13px;
-}
-
-.library__sort .select {
-	min-width: 160px;
+	flex: none;
 }
 
 .library__sort .select__field {
@@ -179,13 +168,8 @@
 		min-width: 0;
 	}
 
-	.library__sort-label {
-		display: none;
-	}
-
-	.library__sort .select {
+	.library__sort .select__field {
 		width: 100%;
-		min-width: 0;
 	}
 
 	.library__categories {

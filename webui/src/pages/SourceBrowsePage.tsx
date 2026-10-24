@@ -716,11 +716,10 @@ function FilterItem({
 						return (
 							<Chip
 								key={i}
-								color={st === 1 ? 'accent' : st === -1 ? 'danger' : 'default'}
+								triState={st}
 								title={f.can_exclude ? t('sourceBrowse.cycleTriHint') : t('sourceBrowse.cycleHint')}
 								onClick={() => onCycleMulti(f, i)}
 							>
-								{st === -1 ? '− ' : ''}
 								{opt}
 							</Chip>
 						);
@@ -815,8 +814,10 @@ function ChipMenuItem({
 	return (
 		<button type="button" className="chip-dropdown__item" onClick={onClick}>
 			<span>{children}</span>
-			{checked && <Check size={14} />}
-			{excluded && <X size={14} />}
+			<span className="chip-dropdown__state" aria-hidden="true">
+				{checked && <Check size={14} />}
+				{excluded && <X size={14} />}
+			</span>
 		</button>
 	);
 }
@@ -938,7 +939,6 @@ function MultiSelectFilterChip({ filter: f, states, setStates, onApply }: Filter
 					const st = rec[key] ?? 0;
 					return (
 						<ChipMenuItem key={i} checked={st === 1} excluded={st === -1} onClick={() => toggle(i)}>
-							{st === -1 ? '− ' : ''}
 							{opt}
 						</ChipMenuItem>
 					);

@@ -82,11 +82,6 @@ const SORT_OPTIONS: { value: SortKey; labelKey: string }[] = [
 	{ value: 'date', labelKey: 'mangaDetail.sortDate' }
 ];
 
-/** Tri-state chip colors: include=accent, exclude=danger, off=default */
-function triColor(t: Tri): ChipColor {
-	return t === 1 ? 'accent' : t === -1 ? 'danger' : 'default';
-}
-
 // Author/artist search capability mirrors Aidoku supportsAuthorSearch: the manifest declaration wins;
 // only when undeclared (undefined) does it fall back to inferring from the filter list (a text filter with the same id suffices)
 function creatorSearchable(
@@ -538,14 +533,6 @@ export default function MangaDetailPage() {
 					<div className="manga-hero__cover">
 						{manga.content_rating === 'NSFW' && <span className="manga-hero__nsfw">NSFW</span>}
 						<Cover src={coverUrl(mangaId, manga.cover)} title={manga.title} />
-						<button
-							type="button"
-							className="manga-hero__cover-edit"
-							onClick={() => setCoverPickerOpen(true)}
-						>
-							<Images size={13} />
-							{t('mangaDetail.changeCover')}
-						</button>
 					</div>
 					<div className="manga-hero__info">
 						<h1 className="manga-hero__title">{manga.title}</h1>
@@ -710,6 +697,17 @@ export default function MangaDetailPage() {
 											<span>{t('mangaDetail.refreshChapters')}</span>
 											{refreshChapters.isPending ? <Spinner size={14} /> : <RefreshCw size={14} />}
 										</button>
+										<button
+											type="button"
+											className="manga-menu__row"
+											onClick={() => {
+												closeMenu();
+												setCoverPickerOpen(true);
+											}}
+										>
+											<span>{t('mangaDetail.changeCover')}</span>
+											<Images size={14} />
+										</button>
 										{!isLocal && chapters.length > 0 && (
 											<button
 												type="button"
@@ -780,42 +778,50 @@ export default function MangaDetailPage() {
 					</div>
 				) : (
 					<div className="manga-chaps__tools">
-						<Input
-							icon={<Search size={15} />}
-							type="search"
-							placeholder={t('mangaDetail.searchPlaceholder')}
-							value={search}
-							onChange={(e) => setSearch(e.currentTarget.value)}
-						/>
-						<Select
-							value={prefs.sort}
-							title={t('mangaDetail.sortBy')}
-							aria-label={t('mangaDetail.sortBy')}
-							onChange={(e) => {
-								const v = e.currentTarget.value as SortKey;
-								setPrefs((p) => ({ ...p, sort: v }));
-							}}
-						>
-							{SORT_OPTIONS.map((o) => (
-								<option key={o.value} value={o.value}>
-									{t(o.labelKey)}
-								</option>
-							))}
-						</Select>
-						<Button
-							size="sm"
-							title={prefs.asc ? t('mangaDetail.ascHint') : t('mangaDetail.descHint')}
-							onClick={() => setPrefs((p) => ({ ...p, asc: !p.asc }))}
-						>
-							<ArrowDownUp size={14} />
-							{prefs.asc ? t('mangaDetail.ascending') : t('mangaDetail.descending')}
-						</Button>
+						<div className="manga-chaps__query">
+							<Input
+								icon={<Search size={15} />}
+								type="search"
+								placeholder={t('mangaDetail.searchPlaceholder')}
+								value={search}
+								onChange={(e) => setSearch(e.currentTarget.value)}
+							/>
+							<div className="manga-chaps__order">
+								<Select
+									value={prefs.sort}
+									title={t('mangaDetail.sortBy')}
+									aria-label={t('mangaDetail.sortBy')}
+									onChange={(e) => {
+										const v = e.currentTarget.value as SortKey;
+										setPrefs((p) => ({ ...p, sort: v }));
+									}}
+								>
+									{SORT_OPTIONS.map((o) => (
+										<option key={o.value} value={o.value}>
+											{t(o.labelKey)}
+										</option>
+									))}
+								</Select>
+								<Button
+									size="sm"
+									title={prefs.asc ? t('mangaDetail.ascHint') : t('mangaDetail.descHint')}
+									onClick={() => setPrefs((p) => ({ ...p, asc: !p.asc }))}
+								>
+									<ArrowDownUp size={14} />
+									{prefs.asc ? t('mangaDetail.ascending') : t('mangaDetail.descending')}
+								</Button>
+							</div>
+							{chapters.length > 0 && (
+								<Button size="sm" onClick={() => setSelecting(true)}>
+									{t('mangaDetail.select')}
+								</Button>
+							)}
+						</div>
 						<div className="manga-chaps__filters">
 							{CHAP_FILTERS.map((f) => (
 								<Chip
 									key={f.value}
-									color={triColor(prefs.filters[f.value])}
-									className={prefs.filters[f.value] === -1 ? 'chip--exclude' : undefined}
+									triState={prefs.filters[f.value]}
 									title={triTitle(t(f.labelKey), prefs.filters[f.value])}
 									onClick={() =>
 										setPrefs((p) => ({
@@ -863,11 +869,6 @@ export default function MangaDetailPage() {
 									</option>
 								))}
 							</Select>
-						)}
-						{chapters.length > 0 && (
-							<Button size="sm" onClick={() => setSelecting(true)}>
-								{t('mangaDetail.select')}
-							</Button>
 						)}
 					</div>
 				)}

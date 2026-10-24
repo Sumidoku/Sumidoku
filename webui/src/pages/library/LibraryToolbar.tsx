@@ -112,28 +112,28 @@ export function LibraryToolbar({
 						<span>{t('library.filters')}</span>
 						{activeCount > 0 && <span className="library__filter-count">{activeCount}</span>}
 					</Button>
-					<label className="library__sort">
-						<span className="library__sort-label">{t('library.sort')}</span>
-						<Select aria-label={t('library.sort')} value={sort} onChange={(e) => onSort(e.currentTarget.value as LibrarySort)}>
-							{SORT_OPTIONS.map((option) => (
-								<option key={option.value} value={option.value}>
-									{t(option.labelKey)}
-								</option>
-							))}
-						</Select>
-					</label>
+					<Select
+						className="library__sort"
+						aria-label={t('library.sort')}
+						value={sort}
+						onChange={(e) => onSort(e.currentTarget.value as LibrarySort)}
+					>
+						{SORT_OPTIONS.map((option) => (
+							<option key={option.value} value={option.value}>
+								{t(option.labelKey)}
+							</option>
+						))}
+					</Select>
 				</div>
 			</div>
 
 			<div className="library__categories" role="group" aria-label={t('library.categories')}>
 				{showUncategorized && (
 					<Chip
-						color={categoryTri[UNCATEGORIZED] === 1 ? 'accent' : categoryTri[UNCATEGORIZED] === -1 ? 'danger' : 'default'}
-						className={categoryTri[UNCATEGORIZED] === -1 ? 'chip--exclude' : undefined}
+						triState={categoryTri[UNCATEGORIZED] ?? 0}
 						title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
 						onClick={() => onCategoryCycle(UNCATEGORIZED)}
 					>
-						{categoryTri[UNCATEGORIZED] === -1 ? '− ' : ''}
 						{t('library.uncategorized')}
 					</Chip>
 				)}
@@ -142,12 +142,10 @@ export function LibraryToolbar({
 					return (
 						<Chip
 							key={category.id}
-							color={state === 1 ? 'accent' : state === -1 ? 'danger' : 'default'}
-							className={state === -1 ? 'chip--exclude' : undefined}
+							triState={state}
 							title={triTitle(t, category.name, state)}
 							onClick={() => onCategoryCycle(String(category.id))}
 						>
-							{state === -1 ? '− ' : ''}
 							{category.name}（{category.mangaCount}）
 						</Chip>
 					);
@@ -164,12 +162,10 @@ export function LibraryToolbar({
 								return (
 									<Chip
 										key={option.value}
-										color={state === 1 ? 'accent' : state === -1 ? 'danger' : 'default'}
-										className={state === -1 ? 'chip--exclude' : undefined}
+										triState={state}
 										title={triTitle(t, t(option.labelKey), state)}
 										onClick={() => onFilterCycle(option.value)}
 									>
-										{state === -1 ? '− ' : ''}
 										{t(option.labelKey)}
 									</Chip>
 								);
