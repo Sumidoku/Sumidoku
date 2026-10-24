@@ -1486,7 +1486,10 @@ page's title.
 When authentication is on, the
 login page takes the admin username + password with an initially empty username
 field, browser API requests use the login cookie, CLI clients may send a
-bearer header, and any `401` lands on `/login`. The settings page shows the admin account and
+bearer header, and any `401` lands on `/login`. Desktop navigation groups library,
+downloads and settings; groups start collapsed and open on an active route.
+Settings sections are linked from the settings group, while mobile keeps the
+settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
 reader uses positive known page dimensions (populated during downloads) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,
