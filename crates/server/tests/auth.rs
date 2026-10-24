@@ -96,7 +96,7 @@ async fn login_token_flow() {
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// <img>/WebSocket can't send the Authorization header, so media and streaming endpoints accept the token via query
+	// URL credentials are not accepted.
 	let (status, _) = request(
 		&app,
 		"GET",
@@ -104,11 +104,11 @@ async fn login_token_flow() {
 		None,
 	)
 	.await;
-	assert_eq!(status, StatusCode::OK);
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
-async fn session_cookie_is_limited_to_events() {
+async fn session_cookie_authenticates_api_and_events() {
 	let (app, _tmp) = password_app().await;
 	let (status, headers, bytes) = request_with_headers(
 		&app,
@@ -126,14 +126,10 @@ async fn session_cookie_is_limited_to_events() {
 	let body: Value = serde_json::from_slice(&bytes).expect("login json");
 	let token = body["token"].as_str().expect("token");
 	let cookie = format!("sumidoku.session={token}");
-	let bearer = format!("Bearer {token}");
-	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &bearer)]).await;
-	assert_eq!(status, StatusCode::OK);
-	let refreshed = headers.get("set-cookie").expect("refreshed session cookie").to_str().expect("cookie text");
-	assert!(refreshed.contains("sumidoku.session="));
-	assert!(refreshed.contains("Max-Age=2592000"));
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("cookie", &cookie)]).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(status, StatusCode::OK);
+	let (status, _, _) = request_with_headers(&app, "POST", "/api/v1/downloads/stop", None, &[("cookie", &cookie)]).await;
+	assert_eq!(status, StatusCode::OK);
 	let addr = serve_app(app.clone()).await;
 	let (_query_stream, _query_rest, query_head) =
 		connect_sse_response(addr, &format!("/api/v1/events?access_token={token}"), None, &[]).await;
@@ -293,7 +289,7 @@ async fn api_keys_authenticate_without_login() {
 	config.auth.password = Some(PASSWORD.into());
 	config.auth.api_keys = vec!["smk_test_key".into()];
 	let app = build_app(config).await.expect("build app");
-	let (status, _, _) = request_with_headers(
+	let (status, headers, _) = request_with_headers(
 		&app,
 		"GET",
 		"/api/v1/sources",
@@ -302,6 +298,7 @@ async fn api_keys_authenticate_without_login() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
 	let (status, headers, _) = request_with_headers(
 		&app,
 		"GET",

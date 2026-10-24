@@ -2,14 +2,12 @@ use crate::download::DownloadManager;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use axum::Extension;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,52 +175,4 @@ pub async fn get_chapter_file(
 		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
 	};
 	Ok(([(header::CONTENT_TYPE, "application/zip")], bytes).into_response())
-}
-
-pub async fn downloads_ws(
-	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
-	ws: WebSocketUpgrade,
-) -> Response {
-	let manager = state.downloads();
-	ws.on_upgrade(move |mut socket: WebSocket| async move {
-		let snapshot = match download_entries(&state, &manager, user.id).await {
-			Ok(entries) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": entries }),
-			Err(_) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": [] }),
-		};
-		if socket
-			.send(Message::Text(snapshot.to_string().into()))
-			.await
-			.is_err()
-		{
-			return;
-		}
-		let mut rx = manager.subscribe();
-		loop {
-			tokio::select! {
-				event = rx.recv() => {
-					match event {
-						Ok(event) => {
-							// Row events go only to their owning user; running is global manager state, broadcast to all
-							if event.user_id.is_some_and(|owner| owner != user.id) {
-								continue;
-							}
-							let text = serde_json::to_string(&event).unwrap_or_default();
-							if socket.send(Message::Text(text.into())).await.is_err() {
-								return;
-							}
-						}
-						Err(broadcast::error::RecvError::Lagged(_)) => continue,
-						Err(_) => return,
-					}
-				}
-				message = socket.recv() => {
-					match message {
-						Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
-						Some(Ok(_)) => {}
-					}
-				}
-			}
-		}
-	})
 }

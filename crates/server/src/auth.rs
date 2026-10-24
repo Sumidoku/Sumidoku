@@ -141,7 +141,7 @@ fn set_cookie_header(response: &mut Response, value: String) {
 	response.headers_mut().insert(axum::http::header::SET_COOKIE, HeaderValue::from_str(&value).expect("valid cookie"));
 }
 
-/// Takes the credential from Authorization: Bearer, the SSE-only session cookie, or the access_token query
+/// Takes the credential from Authorization: Bearer or the browser session cookie
 fn presented_token(req: &Request) -> Option<String> {
 	if let Some(value) = req
 		.headers()
@@ -151,21 +151,11 @@ fn presented_token(req: &Request) -> Option<String> {
 	{
 		return Some(value.to_string());
 	}
-	if req.uri().path() == "/api/v1/events" {
-		return req
-			.headers()
-			.get(axum::http::header::COOKIE)
-			.and_then(|v| v.to_str().ok())
-			.and_then(|v| v.split(';').find_map(|part| part.trim().strip_prefix(SESSION_COOKIE)?.strip_prefix('=')))
-			.map(str::to_string);
-	}
-	let query = req.uri().query()?;
-	for pair in query.split('&') {
-		if let Some(value) = pair.strip_prefix("access_token=") {
-			return Some(value.to_string());
-		}
-	}
-	None
+	req.headers()
+		.get(axum::http::header::COOKIE)
+		.and_then(|v| v.to_str().ok())
+		.and_then(|v| v.split(';').find_map(|part| part.trim().strip_prefix(SESSION_COOKIE)?.strip_prefix('=')))
+		.map(str::to_string)
 }
 
 /// Username+password verification: unknown user and wrong password take the same path, so externally there is only one uniform 401
@@ -250,31 +240,22 @@ pub struct LoginRequest {
 	pub password: String,
 }
 
-/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display and SSE cookie; with auth disabled user is always null
-pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Response> {
-	let https = is_https(req.uri(), req.headers());
-	let token = presented_token(&req);
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
+pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
 	let enabled = state.auth.enabled().await;
 	let user = match enabled {
-		true => bearer_user(&state, token.clone()).await?,
+		true => bearer_user(&state, presented_token(&req)).await?,
 		false => None,
 	};
 	let mut body = json!({
 		"enabled": enabled,
 		"user": Value::Null,
 	});
-	if let Some(user) = &user {
+	if let Some(user) = user {
 		body["username"] = Value::String(user.username.clone());
 		body["user"] = json!({ "id": user.id, "username": user.username });
 	}
-	let mut response = Json(body).into_response();
-	if user.is_some()
-		&& let Some(token) = token
-		&& !state.auth.api_key_hashes.contains(&sha256_hex(&token))
-	{
-		set_cookie_header(&mut response, session_cookie_value(&token, https));
-	}
-	Ok(response)
+	Ok(Json(body))
 }
 
 pub async fn login(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Response> {

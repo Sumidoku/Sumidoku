@@ -3,7 +3,7 @@
   "info": {
     "title": "Sumidoku API",
     "version": "0.23.0",
-    "description": "REST API under /api/v1. Protected endpoints accept either Authorization: Bearer <token> or the access_token query parameter; the header takes precedence. With authentication disabled, requests act as the built-in admin. The server has one built-in admin identity and no additional accounts or roles. Errors use {error:{code,message}}. Source capabilities that are not implemented use 501 with code unsupported; dynamic filters, listings, home and deep-link endpoints follow the same convention. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
+    "description": "REST API under /api/v1. Browser requests use the sumidoku.session login cookie; CLI and other non-browser clients may use Authorization: Bearer <token>. With authentication disabled, requests act as the built-in admin. The server has one built-in admin identity and no additional accounts or roles. Errors use {error:{code,message}}. Source capabilities that are not implemented use 501 with code unsupported; dynamic filters, listings, home and deep-link endpoints follow the same convention. Selected source calls accept Accept: application/x-ndjson and then return newline-delimited JSON events instead of the buffered JSON body."
   },
   "servers": [
     {
@@ -15,7 +15,7 @@
       "bearerAuth": []
     },
     {
-      "accessTokenQuery": []
+      "sessionCookie": []
     }
   ],
   "tags": [
@@ -96,7 +96,7 @@
         "operationId": "getAuthStatus",
         "summary": "Get authentication status and the optional current identity",
         "security": [],
-        "description": "A bearer token or access_token query value is optional. When authentication is disabled, user is null. A valid login session token also sets or refreshes the sumidoku.session cookie for /api/v1/events, allowing existing browser sessions to continue without logging in again. API keys do not mint this cookie.",
+        "description": "A bearer token or session cookie is optional. When authentication is disabled, user is null.",
         "responses": {
           "200": {
             "description": "Authentication status",
@@ -2887,46 +2887,6 @@
         }
       }
     },
-    "/api/v1/downloads/ws": {
-      "get": {
-        "tags": [
-          "downloads"
-        ],
-        "operationId": "downloadsWebSocket",
-        "summary": "Stream download snapshots and events over WebSocket",
-        "description": "Use a WebSocket upgrade request. The first text frame is a snapshot; subsequent text frames are progress, queue, completion, error and running events. Non-close client messages are ignored.",
-        "x-websocket": {
-          "messageFormat": "json-text",
-          "frames": [
-            {
-              "direction": "server",
-              "when": "immediately after upgrade",
-              "schema": {
-                "$ref": "#/components/schemas/DownloadsSnapshot"
-              }
-            },
-            {
-              "direction": "server",
-              "when": "download manager event",
-              "schema": {
-                "$ref": "#/components/schemas/DownloadEvent"
-              }
-            }
-          ]
-        },
-        "responses": {
-          "101": {
-            "description": "Switching Protocols; UTF-8 JSON text frames follow."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/api/v1/downloads/{id}": {
       "parameters": [
         {
@@ -3060,46 +3020,6 @@
         }
       }
     },
-    "/api/v1/update/ws": {
-      "get": {
-        "tags": [
-          "updates"
-        ],
-        "operationId": "updatesWebSocket",
-        "summary": "Stream library update summary and job events over WebSocket",
-        "description": "Use a WebSocket upgrade request. The first text frame is a summary with type=summary; subsequent job events belong to the authenticated user. Non-close client messages are ignored.",
-        "x-websocket": {
-          "messageFormat": "json-text",
-          "frames": [
-            {
-              "direction": "server",
-              "when": "immediately after upgrade",
-              "schema": {
-                "$ref": "#/components/schemas/UpdateSummaryFrame"
-              }
-            },
-            {
-              "direction": "server",
-              "when": "library update job event",
-              "schema": {
-                "$ref": "#/components/schemas/UpdateEvent"
-              }
-            }
-          ]
-        },
-        "responses": {
-          "101": {
-            "description": "Switching Protocols; UTF-8 JSON text frames follow."
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "default": {
-            "$ref": "#/components/responses/Error"
-          }
-        }
-      }
-    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -3107,7 +3027,7 @@
         ],
         "operationId": "streamEvents",
         "summary": "Stream download and library update events over SSE",
-        "description": "The stream sends retained events newer than Last-Event-ID, then a current snapshot, then live events. Events are retained for 15 minutes; expired events are skipped in favor of the snapshot. A cursor beyond the journal's current maximum id is reset to the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. Journal or snapshot failures close the stream so the client can reconnect and resynchronize. A heartbeat comment is sent every 15 seconds. Unlike image and legacy WebSocket endpoints, this endpoint does not accept access_token in the URL.",
+        "description": "The stream replays retained events newer than Last-Event-ID, then sends a current snapshot, then live events. The in-memory ring retains the latest 1024 events; ring overflow or a process restart makes the snapshot authoritative. A cursor beyond the current maximum id is reset to the snapshot. Event ids are monotonically increasing and duplicate ids are suppressed. Snapshot query failures close the stream so the client can reconnect and resynchronize. A heartbeat comment is sent every 15 seconds.",
         "security": [
           {
             "bearerAuth": []
@@ -3131,7 +3051,7 @@
         ],
         "x-sse": {
           "heartbeatSeconds": 15,
-          "retentionSeconds": 900,
+          "capacity": 1024,
           "events": [
             {
               "name": "snapshot",
@@ -3927,17 +3847,11 @@
         "scheme": "bearer",
         "bearerFormat": "Session token or configured API key"
       },
-      "accessTokenQuery": {
-        "type": "apiKey",
-        "in": "query",
-        "name": "access_token",
-        "description": "Alternative credential for image and legacy WebSocket clients that cannot send Authorization. Not accepted by /api/v1/events."
-      },
       "sessionCookie": {
         "type": "apiKey",
         "in": "cookie",
         "name": "sumidoku.session",
-        "description": "Login-issued session cookie accepted only by /api/v1/events; other endpoints require bearer authentication."
+        "description": "Login-issued session cookie used by browser API requests. CLI and other non-browser clients use bearer authentication instead."
       }
     },
     "parameters": {
@@ -7799,27 +7713,6 @@
             "nullable": true
           }
         }
-      },
-      "UpdateSummaryFrame": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/UpdateSummary"
-          },
-          {
-            "type": "object",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "summary"
-                ]
-              }
-            }
-          }
-        ]
       },
       "UpdateEvent": {
         "type": "object",

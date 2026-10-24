@@ -4,14 +4,12 @@ use crate::model::ChapterUserRow;
 use crate::state::AppState;
 use crate::PAGE_SIZE;
 use axum::Extension;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -102,52 +100,4 @@ pub async fn get_recent(
 		"entries": entries,
 		"hasNextPage": has_next_page,
 	})))
-}
-
-pub async fn updates_ws(
-	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
-	ws: WebSocketUpgrade,
-) -> Response {
-	let scheduler = state.updater();
-	ws.on_upgrade(move |mut socket: WebSocket| async move {
-		let snapshot_summary = scheduler.summary().await.visible_to(user.id);
-		let mut snapshot = serde_json::to_value(snapshot_summary).unwrap_or_default();
-		if let Some(object) = snapshot.as_object_mut() {
-			object.insert("type".into(), json!("summary"));
-		}
-		if socket
-			.send(Message::Text(snapshot.to_string().into()))
-			.await
-			.is_err()
-		{
-			return;
-		}
-		let mut rx = scheduler.subscribe();
-		loop {
-			tokio::select! {
-				event = rx.recv() => {
-					match event {
-						Ok(event) => {
-							if event.user_id != Some(user.id) {
-								continue;
-							}
-							let text = serde_json::to_string(&event).unwrap_or_default();
-							if socket.send(Message::Text(text.into())).await.is_err() {
-								return;
-							}
-						}
-						Err(broadcast::error::RecvError::Lagged(_)) => continue,
-						Err(_) => return,
-					}
-				}
-				message = socket.recv() => {
-					match message {
-						Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
-						Some(Ok(_)) => {}
-					}
-				}
-			}
-		}
-	})
 }

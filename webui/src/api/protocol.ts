@@ -41,11 +41,6 @@ export type EventSnapshot = {
 	updateSummary: UpdateSummary;
 };
 
-export type DownloadWsFrame =
-	| { type: 'snapshot'; running: boolean; downloads: Download[] }
-	| DownloadChapterEvent
-	| { type: 'running'; chapterId: 0; downloaded: 0; total: 0; running: boolean };
-
 export type UpdateJobStatus = 'pending' | 'running' | 'complete' | 'failed' | 'skipped';
 
 export interface UpdateJob {
@@ -56,6 +51,4 @@ export interface UpdateJob {
 	addedChapters: number;
 }
 
-export type UpdateWsFrame =
-	| ({ type: 'summary' } & UpdateSummary)
-	| ({ type: 'job' } & UpdateJob);
+export type UpdateEvent = { type: 'job' } & UpdateJob;

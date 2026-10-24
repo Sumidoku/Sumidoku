@@ -154,7 +154,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
 		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
-		.route("/api/v1/downloads/ws", get(crate::api::download::downloads_ws))
 		.route(
 			"/api/v1/downloads/{id}",
 			delete(crate::api::download::delete_download),
@@ -163,7 +162,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/fetch", post(crate::api::update::fetch_updates))
 		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
-		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
 		.route("/api/v1/events", get(crate::api::events::events))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { ApiError, api, coverUrl } from '../api/client';
 import { useCategories, useFetchUpdate, useUpdateRecent } from '../api/hooks';
 import type { UpdateSummary } from '../api/types';
-import type { UpdateJob, UpdateJobStatus, UpdateWsFrame } from '../api/protocol';
+import type { UpdateEvent, UpdateJob, UpdateJobStatus } from '../api/protocol';
 import { sse } from '../api/sse';
 import { translateApiError } from '../i18n';
 import { chapterLabel, relativeTime } from '../lib/format';
@@ -74,10 +74,8 @@ export default function UpdatesPage() {
 		}
 
 		function onJob(msg: unknown) {
-			const m = msg as UpdateWsFrame;
-			if (m.type !== 'job') return;
 			receivedEvent = true;
-			const { type: _t, ...job } = m;
+			const { type: _t, ...job } = msg as UpdateEvent;
 			// Consecutive events for the same manga keep only the newest, so the live list doesn't get flooded
 			setJobs((cur) =>
 				[{ ...job, seq: ++jobSeq.current }, ...cur.filter((j) => j.mangaId !== job.mangaId)].slice(

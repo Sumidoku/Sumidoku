@@ -191,7 +191,6 @@ pub struct UpdateScheduler {
 	// Weak prevents a reference cycle: AppState holds this scheduler through a OnceCell
 	state: Weak<AppState>,
 	pool: SqlitePool,
-	events: broadcast::Sender<UpdateEvent>,
 	signals: broadcast::Sender<UpdateSignal>,
 	summary: RwLock<UpdateSummary>,
 	last_scheduled_run_at: RwLock<Option<i64>>,
@@ -206,7 +205,6 @@ impl UpdateScheduler {
 		Arc::new(Self {
 			state: Arc::downgrade(state),
 			pool: state.pool.clone(),
-			events: broadcast::channel(256).0,
 			signals: broadcast::channel(256).0,
 			summary: RwLock::new(UpdateSummary::default()),
 			last_scheduled_run_at: RwLock::new(None),
@@ -215,10 +213,6 @@ impl UpdateScheduler {
 			config_interval_hours: state.config.update_interval_hours,
 			started_at: unix_now(),
 		})
-	}
-
-	pub fn subscribe(&self) -> broadcast::Receiver<UpdateEvent> {
-		self.events.subscribe()
 	}
 
 	pub(crate) fn subscribe_signals(&self) -> broadcast::Receiver<UpdateSignal> {
@@ -561,7 +555,6 @@ impl UpdateScheduler {
 				added_chapters,
 				user_id: Some(user_id),
 			};
-			let _ = self.events.send(event.clone());
 			let _ = self.signals.send(UpdateSignal::Job(event));
 		}
 	}

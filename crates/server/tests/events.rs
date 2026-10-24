@@ -9,7 +9,7 @@ use common::PNG;
 use serde_json::json;
 
 #[tokio::test]
-async fn event_replay_is_bounded_and_deduplicated() {
+async fn event_replay_is_ordered_and_deduplicated() {
 	let app = test_app().await;
 	let manga_id = register_example_manga(&app.app).await;
 	let (status, body) = request(&app.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
@@ -55,13 +55,6 @@ async fn event_replay_is_bounded_and_deduplicated() {
 	assert_eq!(running["data"]["running"], false);
 	assert!(running["id"].as_i64().unwrap() > finished["id"].as_i64().unwrap());
 
-	let pool = connect_db(&app.db_path).await;
-	let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM app_event").fetch_one(&pool).await.expect("event count");
-	assert!(count >= 5, "{count}");
-	sqlx::query("UPDATE app_event SET created_at = 0").execute(&pool).await.expect("age events");
-	let (mut old, mut old_rest) = connect_sse(addr, "/api/v1/events", Some(0), &[]).await;
-	let old_snapshot = read_sse_kind(&mut old, &mut old_rest, "snapshot").await;
-	assert_eq!(old_snapshot["data"]["type"], "snapshot");
 }
 
 #[tokio::test]

@@ -4,9 +4,9 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-pub const EVENT_RETENTION_SECS: i64 = 15 * 60;
+const EVENT_CAPACITY: usize = 1024;
 
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone)]
 pub struct AppEvent {
 	pub id: i64,
 	pub kind: String,
@@ -14,20 +14,26 @@ pub struct AppEvent {
 	pub user_id: Option<i64>,
 }
 
+struct EventState {
+	next_id: i64,
+	events: std::collections::VecDeque<AppEvent>,
+}
+
 pub struct EventHub {
-	pool: sqlx::SqlitePool,
+	state: tokio::sync::Mutex<EventState>,
 	sender: broadcast::Sender<AppEvent>,
-	reset: broadcast::Sender<()>,
-	record_lock: tokio::sync::Mutex<()>,
 }
 
 impl EventHub {
-	pub fn new(pool: sqlx::SqlitePool) -> Arc<Self> {
+	pub fn new() -> Arc<Self> {
+		// A restart must not hand a reconnecting client an earlier run's events under the same cursor.
+		let next_id = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_millis() as i64;
 		Arc::new(Self {
-			pool,
+			state: tokio::sync::Mutex::new(EventState { next_id, events: std::collections::VecDeque::new() }),
 			sender: broadcast::channel(256).0,
-			reset: broadcast::channel(1).0,
-			record_lock: tokio::sync::Mutex::new(()),
 		})
 	}
 
@@ -35,49 +41,30 @@ impl EventHub {
 		self.sender.subscribe()
 	}
 
-	pub fn subscribe_reset(&self) -> broadcast::Receiver<()> {
-		self.reset.subscribe()
-	}
-
 	async fn record(&self, kind: &str, payload: Value, user_id: Option<i64>) {
-		let _guard = self.record_lock.lock().await;
-		let now = crate::model::unix_now();
-		let result = sqlx::query("INSERT INTO app_event (kind, payload, user_id, created_at) VALUES (?, ?, ?, ?)")
-			.bind(kind)
-			.bind(payload.to_string())
-			.bind(user_id)
-			.bind(now)
-			.execute(&self.pool)
-			.await;
-		let id = match result {
-			Ok(result) => result.last_insert_rowid(),
-			Err(e) => {
-				tracing::warn!(kind, "event journal write failed: {e}");
-				let _ = self.reset.send(());
-				return;
-			}
-		};
-		let _ = sqlx::query("DELETE FROM app_event WHERE created_at < ?")
-			.bind(now - EVENT_RETENTION_SECS)
-			.execute(&self.pool)
-			.await;
-		let _ = self.sender.send(AppEvent { id, kind: kind.to_string(), payload: payload.to_string(), user_id });
+		let mut state = self.state.lock().await;
+		state.next_id += 1;
+		let event = AppEvent { id: state.next_id, kind: kind.to_string(), payload: payload.to_string(), user_id };
+		if state.events.len() == EVENT_CAPACITY {
+			state.events.pop_front();
+		}
+		state.events.push_back(event.clone());
+		let _ = self.sender.send(event);
 	}
 
-	pub async fn after(&self, user_id: i64, after: i64) -> Result<Vec<AppEvent>, sqlx::Error> {
-		sqlx::query_as::<_, AppEvent>(
-			"SELECT id, kind, payload, user_id FROM app_event
-			 WHERE id > ? AND created_at >= ? AND (user_id = ? OR user_id IS NULL) ORDER BY id",
-		)
-		.bind(after)
-		.bind(crate::model::unix_now() - EVENT_RETENTION_SECS)
-		.bind(user_id)
-		.fetch_all(&self.pool)
-		.await
+	pub async fn after(&self, user_id: i64, after: i64) -> Vec<AppEvent> {
+		self.state
+			.lock()
+			.await
+			.events
+			.iter()
+			.filter(|event| event.id > after && event.user_id.is_none_or(|owner| owner == user_id))
+			.cloned()
+			.collect()
 	}
 
-	pub async fn latest_id(&self) -> Result<i64, sqlx::Error> {
-		sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM app_event").fetch_one(&self.pool).await
+	pub async fn latest_id(&self) -> i64 {
+		self.state.lock().await.next_id
 	}
 
 	#[cfg(test)]
@@ -139,12 +126,8 @@ mod tests {
 	use super::*;
 
 	#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-	async fn records_are_broadcast_in_journal_order() {
-		let tmp = tempfile::tempdir().expect("tempdir");
-		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
-			.await
-			.expect("pool");
-		let hub = EventHub::new(pool);
+	async fn records_are_broadcast_in_id_order() {
+		let hub = EventHub::new();
 		let mut rx = hub.subscribe();
 		for _ in 0..8 {
 			let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(64));
@@ -164,5 +147,17 @@ mod tests {
 			}
 			assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
 		}
+	}
+
+	#[tokio::test]
+	async fn ring_keeps_only_the_latest_1024_events() {
+		let hub = EventHub::new();
+		for chapter_id in 0..1100 {
+			hub.record("download", serde_json::json!({ "chapterId": chapter_id }), Some(1)).await;
+		}
+		let events = hub.after(1, 0).await;
+		assert_eq!(events.len(), 1024);
+		assert_eq!(events[0].id, events[1023].id - 1023);
+		assert!(events.windows(2).all(|pair| pair[0].id < pair[1].id));
 	}
 }

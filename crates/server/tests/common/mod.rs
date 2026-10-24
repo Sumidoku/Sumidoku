@@ -463,7 +463,6 @@ pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port:
 		.expect("rewrite page 0");
 }
 
-/// Serves the app on a random port for real (the WS handshake needs real TCP)
 pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let addr = listener.local_addr().expect("local addr");
@@ -471,84 +470,6 @@ pub async fn serve_app(app: Router) -> std::net::SocketAddr {
 		axum::serve(listener, app.into_make_service()).await.expect("serve");
 	});
 	addr
-}
-
-/// Minimal WS client: completes the handshake and returns the stream plus the leftover buffer after the headers (token goes in the Authorization header)
-pub async fn connect_ws(
-	addr: std::net::SocketAddr,
-	path: &str,
-	token: Option<&str>,
-) -> (tokio::net::TcpStream, Vec<u8>) {
-	use tokio::io::{AsyncReadExt, AsyncWriteExt};
-	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-	let auth = token.map(|t| format!("Authorization: {t}\r\n")).unwrap_or_default();
-	let handshake = format!(
-		"GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n{auth}\r\n"
-	);
-	stream.write_all(handshake.as_bytes()).await.expect("write handshake");
-	let mut received = Vec::new();
-	let mut tmp = [0u8; 4096];
-	loop {
-		let n = stream.read(&mut tmp).await.expect("read handshake");
-		assert!(n > 0, "connection closed during handshake");
-		received.extend_from_slice(&tmp[..n]);
-		if received.windows(4).any(|w| w == b"\r\n\r\n") {
-			break;
-		}
-	}
-	let head_end = received
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.expect("header end");
-	let head = String::from_utf8_lossy(&received[..head_end]);
-	assert!(head.contains("101"), "{head}");
-	let rest = received[head_end + 4..].to_vec();
-	(stream, rest)
-}
-
-/// Reads one text frame (server frames are not masked)
-pub async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
-	use tokio::io::AsyncReadExt;
-	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
-		let mut tmp = [0u8; 4096];
-		while buf.len() < want {
-			let n = stream.read(&mut tmp).await.expect("read frame");
-			assert!(n > 0, "connection closed mid-frame");
-			buf.extend_from_slice(&tmp[..n]);
-		}
-	}
-	fill(stream, buf, 2).await;
-	let (offset, len) = match buf[1] & 0x7f {
-		126 => {
-			fill(stream, buf, 4).await;
-			(4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
-		}
-		127 => {
-			fill(stream, buf, 10).await;
-			(10, u64::from_be_bytes(buf[2..10].try_into().expect("len")) as usize)
-		}
-		n => (2, n as usize),
-	};
-	fill(stream, buf, offset + len).await;
-	let payload = buf[offset..offset + len].to_vec();
-	buf.drain(..offset + len);
-	payload
-}
-
-/// Reads until an event frame of the given type arrives (intermediate frames discarded), 10s backstop
-pub async fn read_ws_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
-	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-	loop {
-		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-		assert!(remaining > std::time::Duration::ZERO, "no {kind} event in time");
-		let frame = tokio::time::timeout(remaining, read_ws_frame(stream, buf))
-			.await
-			.expect("ws read timeout");
-		let value: Value = serde_json::from_slice(&frame).expect("event json");
-		if value["type"] == kind {
-			return value;
-		}
-	}
 }
 
 pub async fn connect_sse_response(
@@ -634,6 +555,20 @@ pub async fn read_sse_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>
 			.expect("sse read timeout");
 		if frame["type"] == kind {
 			return frame;
+		}
+	}
+}
+
+pub async fn read_sse_data(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event data in time");
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
+			.await
+			.expect("sse read timeout");
+		if frame["data"]["type"] == kind {
+			return frame["data"].clone();
 		}
 	}
 }

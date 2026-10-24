@@ -45,7 +45,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);
 	assert!(state.updater.set(updater.clone()).is_ok());
-	let event_hub = events::EventHub::new(state.pool.clone());
+	let event_hub = events::EventHub::new();
 	assert!(state.events.set(event_hub.clone()).is_ok());
 	event_hub.forward_downloads(downloads.clone());
 	event_hub.forward_update(updater.clone());
