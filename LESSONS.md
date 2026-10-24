@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Query-string navigation needs query-aware current-page state.** React
+Router's `NavLink` derives `isActive` from the pathname, so destinations that
+differ only in their query all become active and receive `aria-current`.
+Compare the parameters that select the content when deriving both, and test a
+non-default section.
+- Evidence: 2026-10-24, the settings sidebar marked all five section links
+  active at `?section=downloads`. The regression returned all five hrefs before
+  the fix and only the downloads href after matching `section`; browser
+  acceptance then showed one highlighted item.
+
 **Event-driven state needs one owner for each transition; a request's success
 continuation must not reapply optimistic state that an event may already have
 superseded.** A mutation accepted by the server is not proof that the work is
