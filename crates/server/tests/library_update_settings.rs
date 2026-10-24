@@ -265,3 +265,26 @@ async fn scheduled_library_clock_is_server_owned() {
 		.expect("scheduler clock must survive both settings write forms");
 	assert_eq!(stored, "456");
 }
+
+#[tokio::test]
+async fn scheduled_library_clock_stays_out_of_backups() {
+	let app = app_with_interval(0).await;
+	let pool = connect_db(&app.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('library.last_scheduled_run_at', '456')")
+		.execute(&pool)
+		.await
+		.expect("seed scheduler clock");
+
+	let (status, mut doc) = request(&app.app, "GET", "/api/v1/backups/document", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(doc["settings"].get("library.last_scheduled_run_at").is_none(), "{doc}");
+
+	doc["settings"]["library.last_scheduled_run_at"] = json!(123);
+	let (status, body) = request(&app.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'library.last_scheduled_run_at'")
+		.fetch_one(&pool)
+		.await
+		.expect("scheduler clock must survive restoring an old backup");
+	assert_eq!(stored, "456");
+}
