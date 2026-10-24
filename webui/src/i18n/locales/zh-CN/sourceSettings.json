@@ -18,7 +18,7 @@
     "addLocalDir": "添加目录",
     "localOneshotsDirLabel": "Oneshots 目录",
     "localOneshotsDirPlaceholder": "oneshots",
-    "localOneshotsDirDesc": "路径中包含该名字的目录（大小写不敏感）本身不会被列出，其中直接放置的压缩档各自成为一部以文件名命名的单章节漫画。留空则回退到服务端配置（SUMIDOKU_LOCAL_ONESHOTS_DIR）",
+    "localOneshotsDirDesc": "路径中包含该名字的目录（大小写不敏感）本身不会被列出，其中直接放置的压缩档各自成为一部以文件名命名的单章节漫画。留空会关闭该本地源的 oneshots 规则；重置后才回退到服务端配置（SUMIDOKU_LOCAL_ONESHOTS_DIR）",
     "resetLocalConfirm": "清除该本地源的 oneshots 覆盖设置？目录列表会保留。"
   }
 }
