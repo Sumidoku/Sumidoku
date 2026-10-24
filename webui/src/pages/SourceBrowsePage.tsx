@@ -244,15 +244,16 @@ export default function SourceBrowsePage() {
 		setSubmitted({ query, filters: dropFilters ? [] : values });
 	}
 
-	// Input auto-submits after a 500ms debounce; the filter draft does not debounce and is only submitted together on Enter/apply-filters
+	// Only local directory filtering is live; remote source requests wait for explicit submission.
 	const submittedQueryRef = useRef(submitted.query);
 	submittedQueryRef.current = submitted.query;
 	useEffect(() => {
+		if (!isLocal) return;
 		const t = setTimeout(() => {
 			if (input.trim() !== submittedQueryRef.current) runSearch();
 		}, 500);
 		return () => clearTimeout(t);
-	}, [input]);
+	}, [input, isLocal]);
 
 	const isSearch = mode === 'search';
 	const filtersHidden = !!sourceConfig?.hidesFiltersWhileSearching && input.trim() !== '';

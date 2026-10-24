@@ -38,6 +38,13 @@ test('browse keeps global search directly above the source views', async () => {
 	assert.doesNotMatch(markup, /Cross-source search/);
 });
 
+test('aggregate filters are available before entering a query', async () => {
+	const markup = await renderBrowse();
+	assert.match(markup, />Rating</);
+	assert.match(markup, />Language</);
+	assert.match(markup, />Source</);
+});
+
 test('search deep link replaces the source tabs instead of nesting another tab', async () => {
 	const markup = await renderBrowse('/browse?view=search');
 	assert.match(markup, /type="search"[^>]*placeholder="Search all sources…"/);
