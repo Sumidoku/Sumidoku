@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A missing state row is meaningful: default semantics must be shared by
+every read path.** When absence means unread, counts, sorting and
+include/exclude filters must all apply that rule. Joining only explicit rows
+makes never-opened entries disappear from inclusion and survive exclusion.
+Test both no-row and fully-read states against the same API.
+- Evidence: 2026-10-24, ad-hoc unread filters required `is_read = 0` while the
+  badge counted missing rows as unread. A fresh manga vanished from
+  `filter=unread` and survived `filterExclude=unread`; the regression failed
+  with `left: []`, `right: [1]`. The shared left-join rule fixed the real API,
+  and removing only that fix reproduced the failure.
+
 **Live values need a fixed slot in reading order, not an auto-aligned
 position.** Changing counts and percentages must not push related metadata or
 jump to the opposite edge. Put progress next to the date or label it describes,
