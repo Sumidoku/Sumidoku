@@ -62,13 +62,8 @@ export function SearchPanel({ active, onActiveChange }: { active: boolean; onAct
 	const [filters, setFilters] = useState<GlobalSearchFilterPrefs>(loadGlobalSearchFilters);
 	useEffect(() => saveGlobalSearchFilters(filters), [filters]);
 
-	// 500ms input debounce, same as in-source search
 	const [input, setInput] = useState('');
 	const [query, setQuery] = useState('');
-	useEffect(() => {
-		const timer = setTimeout(() => setQuery(input.trim()), 500);
-		return () => clearTimeout(timer);
-	}, [input]);
 	useEffect(() => {
 		if (!active) {
 			setInput('');
@@ -166,11 +161,7 @@ export function SearchPanel({ active, onActiveChange }: { active: boolean; onAct
 					type="search"
 					placeholder={t('search.placeholder')}
 					value={input}
-					onChange={(e) => {
-						const value = e.currentTarget.value;
-						setInput(value);
-						onActiveChange(value.trim() !== '');
-					}}
+					onChange={(e) => setInput(e.currentTarget.value)}
 				/>
 				{active && (
 					<Button
@@ -186,32 +177,32 @@ export function SearchPanel({ active, onActiveChange }: { active: boolean; onAct
 				)}
 			</form>
 
+			<div className="filter-header">
+				<TriStateDropdown
+					label={t('search.rating')}
+					options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
+					states={filters.ratings}
+					onCycle={(k) => cycle('ratings', k)}
+					onReset={() => resetGroup('ratings')}
+				/>
+				<TriStateDropdown
+					label={t('search.language')}
+					options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
+					states={filters.langs}
+					onCycle={(k) => cycle('langs', k)}
+					onReset={() => resetGroup('langs')}
+				/>
+				<TriStateDropdown
+					label={t('search.source')}
+					options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
+					states={filters.sources}
+					onCycle={(k) => cycle('sources', k)}
+					onReset={() => resetGroup('sources')}
+				/>
+			</div>
+
 			{active && (
 				<>
-					<div className="filter-header">
-						<TriStateDropdown
-							label={t('search.rating')}
-							options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))}
-							states={filters.ratings}
-							onCycle={(k) => cycle('ratings', k)}
-							onReset={() => resetGroup('ratings')}
-						/>
-						<TriStateDropdown
-							label={t('search.language')}
-							options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))}
-							states={filters.langs}
-							onCycle={(k) => cycle('langs', k)}
-							onReset={() => resetGroup('langs')}
-						/>
-						<TriStateDropdown
-							label={t('search.source')}
-							options={sources.map((s) => ({ key: String(s.id), label: s.name }))}
-							states={filters.sources}
-							onCycle={(k) => cycle('sources', k)}
-							onReset={() => resetGroup('sources')}
-						/>
-					</div>
-
 					{query === '' ? (
 						<EmptyState icon={Search} title={t('search.emptyTitle')} hint={t('search.emptyHint')} />
 					) : selected.length === 0 ? (

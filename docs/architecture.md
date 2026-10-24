@@ -1503,6 +1503,9 @@ bearer header, and any `401` lands on `/login`. Desktop navigation keeps library
 browse and updates at the top level; activity and settings start collapsed and
 open on an active route. The browse page keeps cross-source search above its
 installed/repository views, with `/search` redirecting to its search view.
+Remote source and cross-source searches run on explicit submission; local-source
+filtering uses a 500ms debounce. Aggregate rating/language/source filters can be
+changed before the first query, and the search view's URL changes on submission.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
