@@ -495,11 +495,6 @@ export type Listing = {
 	kind: "default" | "list";
 };
 
-export type LocalSettings = {
-	dirs: Array<string>;
-	oneshotsDir: string | null;
-};
-
 export type LoginRequest = {
 	username: string;
 	password: string;
@@ -656,11 +651,6 @@ export type QueuedResponse = {
 	queued: Array<number>;
 };
 
-export type ReadOnlySettings = {
-	localDirs: Array<string>;
-	localOneshotsDir: string | null;
-};
-
 export type RecentEntry = {
 	chapter: Chapter;
 	manga: Manga;
@@ -672,13 +662,23 @@ export type RecentPage = {
 	hasNextPage: boolean;
 };
 
+export type RegisterInternalRequest = RegisterOpdsInstance | RegisterLocalInstance;
+
+export type RegisterLocalInstance = {
+	type: "local";
+	name: string;
+	paths: Array<string>;
+	oneshotsDir?: string | null;
+};
+
 export type RegisterMangaRequest = {
 	sourceId: number;
 	mangaKey?: string;
 	manga?: MangaInput | null;
 };
 
-export type RegisterOpdsRequest = {
+export type RegisterOpdsInstance = {
+	type: "opds";
 	name: string;
 	url: string;
 	username?: string | null;
@@ -740,11 +740,9 @@ export type SelectCoverRequest = {
 export type ServerSettings = {
 	incognito: IncognitoSettings;
 	library: LibrarySettings;
-	local: LocalSettings;
 	download: DownloadSettings;
 	backup: BackupSettings;
 	browse: BrowseSettings;
-	readOnly: ReadOnlySettings;
 	[key: string]: JsonValue;
 };
 
@@ -841,8 +839,6 @@ export type SettingValue = string | {
 };
 
 export type Settings = {
-	localDirs?: Array<string>;
-	localOneshotsDir?: string | null;
 	"incognito.enabled"?: boolean;
 	"library.default_category"?: string;
 	"library.show_uncategorized"?: boolean;

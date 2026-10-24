@@ -41,6 +41,9 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
 	auth::init(&state).await?;
+	local::ensure_default_instance(&state)
+		.await
+		.map_err(|e| Error::Local(e.message().to_string()))?;
 	let downloads = download::DownloadManager::new(&state);
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);

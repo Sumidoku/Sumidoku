@@ -23,20 +23,18 @@ test('structured settings merge preserves extra keys and nested values', async (
 			refreshMetadata: false,
 			updateIntervalHours: 0
 		},
-		local: { dirs: [], oneshotsDir: 'oneshots' },
 		download: { movePath: null },
 		backup: { enabled: false, intervalHours: 24, retentionCount: 10, lastRun: null, dir: 'backups' },
 		browse: { pinnedSources: [] },
-		readOnly: { localDirs: [], localOneshotsDir: null },
 		'custom.option': { keep: true }
 	};
 	const merged = mergeServerSettings(current, {
 		library: { refreshMetadata: true },
-		local: { oneshotsDir: null }
+		backup: { dir: null }
 	});
 	assert.deepEqual(merged['custom.option'], { keep: true });
 	assert.equal(merged.library.refreshMetadata, true);
 	assert.deepEqual(merged.library.skipTitles, ['hasUnread']);
-	assert.equal(merged.local.oneshotsDir, null);
-	assert.deepEqual(merged.readOnly, current.readOnly);
+	assert.equal(merged.backup.dir, null);
+	assert.equal(merged.backup.intervalHours, 24);
 });

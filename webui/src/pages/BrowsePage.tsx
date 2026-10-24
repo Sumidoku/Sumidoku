@@ -18,12 +18,11 @@ import {
 	Upload
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { ApiError, sourceIconUrl } from '../api/client';
+import { sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
 	useImportSource,
 	usePinSource,
-	useRegisterOpdsSource,
 	useReorderPinned,
 	useScanSources,
 	useSetSourceEnabled,
@@ -32,14 +31,12 @@ import {
 	useUpdateSource
 } from '../api/hooks';
 import type { Source } from '../api/types';
-import { translateApiError } from '../i18n';
 import { compareSourceName, contentRatingColor, contentRatingLabel, languageLabel } from '../lib/source';
 import {
 	Button,
 	Chip,
 	EmptyState,
 	IconButton,
-	Input,
 	MenuButton,
 	Modal,
 	PageHeader,
@@ -49,6 +46,7 @@ import {
 } from '../components';
 import ReposPanel from './browse/ReposPanel';
 import { SearchPanel } from './browse/SearchPanel';
+import { InternalSourceModal } from './browse/InternalSourceModal';
 import { SourceSettingsButton, SourceSettingsDialog } from './browse/SourceSettingsModal';
 import { iconColor } from './browse/iconColor';
 
@@ -148,87 +146,6 @@ function ImportAixButton() {
 	);
 }
 
-function OpdsRegisterModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-	const { t } = useTranslation();
-	const register = useRegisterOpdsSource();
-	const [name, setName] = useState('');
-	const [url, setUrl] = useState('');
-	const [username, setUsername] = useState('');
-	const [password, setPassword] = useState('');
-
-	function reset() {
-		setName('');
-		setUrl('');
-		setUsername('');
-		setPassword('');
-	}
-
-	async function submit() {
-		try {
-			const trimmedUrl = url.trim();
-			const source = await register.mutateAsync({
-				name: name.trim(),
-				url: trimmedUrl,
-				...(username.trim() ? { username: username.trim(), password } : {})
-			});
-			pushToast(t('browse.opdsAdded', { name: source.name }), 'info');
-			reset();
-			onClose();
-		} catch (e) {
-			if (e instanceof ApiError && e.status === 400) pushToast(translateApiError(e.code, e.message));
-			else pushToast(t('browse.addFailed'));
-		}
-	}
-
-	return (
-		<Modal
-			open={open}
-			title={t('browse.addOpds')}
-			onClose={onClose}
-			footer={
-				<>
-					<Button onClick={onClose}>{t('common.cancel')}</Button>
-					<Button
-						variant="primary"
-						loading={register.isPending}
-						disabled={!name.trim() || !url.trim()}
-						onClick={() => void submit()}
-					>
-						{t('browse.add')}
-					</Button>
-				</>
-			}
-		>
-			<div className="opds-form">
-				<Input
-					placeholder={t('browse.opdsNamePlaceholder')}
-					value={name}
-					onChange={(e) => setName(e.currentTarget.value)}
-				/>
-				<Input
-					placeholder={t('browse.opdsUrlPlaceholder')}
-					value={url}
-					onChange={(e) => setUrl(e.currentTarget.value)}
-				/>
-				<Input
-					placeholder={t('browse.opdsUsernamePlaceholder')}
-					autoComplete="off"
-					value={username}
-					onChange={(e) => setUsername(e.currentTarget.value)}
-				/>
-				<Input
-					type="password"
-					placeholder={t('browse.opdsPasswordPlaceholder')}
-					autoComplete="new-password"
-					value={password}
-					onChange={(e) => setPassword(e.currentTarget.value)}
-				/>
-				<p className="muted">{t('browse.opdsHint')}</p>
-			</div>
-		</Modal>
-	);
-}
-
 /** Passed when the pinned section's cards enable drag-sorting; the plain list does not pass it */
 interface CardDnd {
 	dragging: boolean;
@@ -256,7 +173,6 @@ export function SourceCard({
 	const navigate = useNavigate();
 	const update = useSourceUpdate(s);
 	const [settingsOpen, setSettingsOpen] = useState(false);
-	const hasActions = s.kind !== 'local' || s.updateVersion !== null;
 	const cls = ['source-card'];
 	if (s.enabled) cls.push('source-card--link');
 	else cls.push('source-card--disabled');
@@ -322,18 +238,16 @@ export function SourceCard({
 			</div>
 			<div className="source-card__actions">
 				{s.updateVersion !== null && <UpdateButton source={s} onUpdate={update.onUpdate} pending={update.pending} />}
-				{/* The built-in local source is always pinned at the top, so it gets no pin toggle of its own */}
-				{s.kind !== 'local' && (
-					<IconButton
-						label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
-						onClick={(e) => {
-							e.stopPropagation();
-							onTogglePin(s);
-						}}
-					>
-						{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
-					</IconButton>
-				)}
+				<IconButton
+					label={s.pinned ? t('browse.unpin', { name: s.name }) : t('browse.pin', { name: s.name })}
+					onClick={(e) => {
+						e.stopPropagation();
+						onTogglePin(s);
+					}}
+				>
+					{s.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+				</IconButton>
+				{/* Disabling only gates wasm/opds instantiation today; the local scan reads the filesystem directly */}
 				{s.kind !== 'local' && (
 					<IconButton
 						label={s.enabled ? t('browse.disable', { name: s.name }) : t('browse.enable', { name: s.name })}
@@ -345,82 +259,72 @@ export function SourceCard({
 						{s.enabled ? <Pause size={17} /> : <Play size={17} />}
 					</IconButton>
 				)}
-				{/* Built-in sources (local/opds) have no wasm capabilities (home/settings 501 — the local source has no home yet,
-					so no home button either); the local source cannot be uninstalled (server 400) or unpinned, opds instances can be uninstalled */}
-				{s.kind !== 'local' && (
-					<>
-						{s.kind !== 'opds' && s.hasHome !== false && (
-							<IconButton
-								label={t('browse.home', { name: s.name })}
-								onClick={(e) => {
-									e.stopPropagation();
-									navigate(`/browse/${s.id}/home`);
-								}}
-							>
-								<House size={17} />
-							</IconButton>
-						)}
-						{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} />}
-						<IconButton
-							label={t('browse.uninstall', { name: s.name })}
-							variant="danger"
-							onClick={(e) => {
-								e.stopPropagation();
-								onDelete(s);
-							}}
-						>
-							<Trash size={17} />
-						</IconButton>
-					</>
+				{/* Internal sources (local/opds) have no wasm home; local and aidoku sources have settings,
+					opds credentials are write-once at registration; every source can be uninstalled */}
+				{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
+					<IconButton
+						label={t('browse.home', { name: s.name })}
+						onClick={(e) => {
+							e.stopPropagation();
+							navigate(`/browse/${s.id}/home`);
+						}}
+					>
+						<House size={17} />
+					</IconButton>
 				)}
+				{s.kind !== 'opds' && <SourceSettingsButton sourceId={s.id} sourceName={s.name} sourceKind={s.kind} />}
+				<IconButton
+					label={t('browse.uninstall', { name: s.name })}
+					variant="danger"
+					onClick={(e) => {
+						e.stopPropagation();
+						onDelete(s);
+					}}
+				>
+					<Trash size={17} />
+				</IconButton>
 			</div>
-			{hasActions && (
-				<div className="source-card__mobile-actions">
-					<MenuButton label={t('browse.actions', { name: s.name })}>
-						{(close) => (
-							<>
-								{s.updateVersion !== null && (
-									<button type="button" className="menu-row" disabled={update.pending} onClick={() => { close(); void update.onUpdate(); }}>
-										<span>{t('browse.updateAction', { version: s.updateVersion })}</span>
-										<CircleArrowUp size={14} />
-									</button>
-								)}
-								{s.kind !== 'local' && (
-									<button type="button" className="menu-row" onClick={() => { close(); onTogglePin(s); }}>
-										<span>{s.pinned ? t('browse.unpinAction') : t('browse.pinAction')}</span>
-										{s.pinned ? <PinOff size={14} /> : <Pin size={14} />}
-									</button>
-								)}
-								{s.kind !== 'local' && (
-									<button type="button" className="menu-row" onClick={() => { close(); onToggleEnabled(s); }}>
-										<span>{s.enabled ? t('browse.disableAction') : t('browse.enableAction')}</span>
-										{s.enabled ? <Pause size={14} /> : <Play size={14} />}
-									</button>
-								)}
-								{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
-									<button type="button" className="menu-row" onClick={() => { close(); navigate(`/browse/${s.id}/home`); }}>
-										<span>{t('browse.homeAction')}</span>
-										<House size={14} />
-									</button>
-								)}
-								{s.kind !== 'local' && s.kind !== 'opds' && (
-									<button type="button" className="menu-row" onClick={() => { close(); setSettingsOpen(true); }}>
-										<span>{t('common.nav.settings')}</span>
-										<Settings size={14} />
-									</button>
-								)}
-								{s.kind !== 'local' && (
-									<button type="button" className="menu-row menu-row--danger" onClick={() => { close(); onDelete(s); }}>
-										<span>{t('browse.uninstallConfirm')}</span>
-										<Trash size={14} />
-									</button>
-								)}
-							</>
-						)}
-					</MenuButton>
-				</div>
-			)}
-			<SourceSettingsDialog sourceId={s.id} sourceName={s.name} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+			<div className="source-card__mobile-actions">
+				<MenuButton label={t('browse.actions', { name: s.name })}>
+					{(close) => (
+						<>
+							{s.updateVersion !== null && (
+								<button type="button" className="menu-row" disabled={update.pending} onClick={() => { close(); void update.onUpdate(); }}>
+									<span>{t('browse.updateAction', { version: s.updateVersion })}</span>
+									<CircleArrowUp size={14} />
+								</button>
+							)}
+							<button type="button" className="menu-row" onClick={() => { close(); onTogglePin(s); }}>
+								<span>{s.pinned ? t('browse.unpinAction') : t('browse.pinAction')}</span>
+								{s.pinned ? <PinOff size={14} /> : <Pin size={14} />}
+							</button>
+							{s.kind !== 'local' && (
+								<button type="button" className="menu-row" onClick={() => { close(); onToggleEnabled(s); }}>
+									<span>{s.enabled ? t('browse.disableAction') : t('browse.enableAction')}</span>
+									{s.enabled ? <Pause size={14} /> : <Play size={14} />}
+								</button>
+							)}
+							{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
+								<button type="button" className="menu-row" onClick={() => { close(); navigate(`/browse/${s.id}/home`); }}>
+									<span>{t('browse.homeAction')}</span>
+									<House size={14} />
+								</button>
+							)}
+							{s.kind !== 'opds' && (
+								<button type="button" className="menu-row" onClick={() => { close(); setSettingsOpen(true); }}>
+									<span>{t('common.nav.settings')}</span>
+									<Settings size={14} />
+								</button>
+							)}
+							<button type="button" className="menu-row menu-row--danger" onClick={() => { close(); onDelete(s); }}>
+								<span>{t('browse.uninstallConfirm')}</span>
+								<Trash size={14} />
+							</button>
+						</>
+					)}
+				</MenuButton>
+			</div>
+			<SourceSettingsDialog sourceId={s.id} sourceName={s.name} sourceKind={s.kind} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 		</div>
 	);
 }
@@ -438,24 +342,21 @@ export default function BrowsePage() {
 	const [searchParams, setSearchParams] = useSearchParams();
 	const searching = searchParams.get('view') === 'search';
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
-	const [registeringOpds, setRegisteringOpds] = useState(false);
+	const [registeringInternal, setRegisteringInternal] = useState(false);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
 
-	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder.
-	// The built-in local source has no pin state of its own: it is always shown pinned at the top
+	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder
 	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
+	// Internal sources (local/opds instances) group into their own section; pinning stays an opt-in on top
+	const internalSources = all.filter((s) => s.kind !== 'aidoku');
 	// Aidoku-style separate section: updatable sources grouped together, below the pinned section and above the full list
 	const updateSources = all.filter((s) => s.updateVersion !== null);
 	const updateCount = updateSources.length;
 	const pinnedSources = all
-		.filter((s) => s.pinned || s.kind === 'local')
-		.sort((a, b) => {
-			if (a.kind === 'local') return -1;
-			if (b.kind === 'local') return 1;
-			return (a.pinOrder ?? 0) - (b.pinOrder ?? 0);
-		});
+		.filter((s) => s.pinned)
+		.sort((a, b) => (a.pinOrder ?? 0) - (b.pinOrder ?? 0));
 
 	async function onScan() {
 		try {
@@ -532,11 +433,9 @@ export default function BrowsePage() {
 		setDragIndex(null);
 		setOverIndex(null);
 		if (from === null || from === target) return;
-		// The local source occupies index 0 of the rendered section but is not part of the
-		// server-side pinned set, so drag indices shift by one and its key stays out of the payload
-		const keys = pinnedSources.filter((s) => s.kind !== 'local').map((s) => s.key);
-		const [moved] = keys.splice(from - 1, 1);
-		keys.splice(target - 1, 0, moved);
+		const keys = pinnedSources.map((s) => s.key);
+		const [moved] = keys.splice(from, 1);
+		keys.splice(target, 0, moved);
 		reorderPinned.mutate(keys);
 	}
 
@@ -568,9 +467,9 @@ export default function BrowsePage() {
 									{t('browse.updateAll', { count: updateCount })}
 								</Button>
 							)}
-							<Button onClick={() => setRegisteringOpds(true)}>
+							<Button onClick={() => setRegisteringInternal(true)}>
 								<Plus size={15} />
-								{t('browse.addOpds')}
+								{t('browse.addInternal')}
 							</Button>
 							<ImportAixButton />
 							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
@@ -626,29 +525,40 @@ export default function BrowsePage() {
 									<SourceCard
 										key={s.id}
 										source={s}
-										// The local source is a fixed header of the section: no grip, no drag reordering
-										dnd={
-											s.kind !== 'local'
-												? {
-														dragging: dragIndex === i,
-														dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
-														onDragStart: (e) => {
-															e.dataTransfer.setData('text/plain', s.key);
-															e.dataTransfer.effectAllowed = 'move';
-															setDragIndex(i);
-														},
-														onDragOver: (e) => {
-															e.preventDefault();
-															setOverIndex(i);
-														},
-														onDrop: () => onDropPinned(i),
-														onDragEnd: () => {
-															setDragIndex(null);
-															setOverIndex(null);
-														}
-													}
-												: undefined
-										}
+										dnd={{
+											dragging: dragIndex === i,
+											dragOver: overIndex === i && dragIndex !== null && dragIndex !== i,
+											onDragStart: (e) => {
+												e.dataTransfer.setData('text/plain', s.key);
+												e.dataTransfer.effectAllowed = 'move';
+												setDragIndex(i);
+											},
+											onDragOver: (e) => {
+												e.preventDefault();
+												setOverIndex(i);
+											},
+											onDrop: () => onDropPinned(i),
+											onDragEnd: () => {
+												setDragIndex(null);
+												setOverIndex(null);
+											}
+										}}
+										onTogglePin={(s) => void togglePin(s)}
+										onToggleEnabled={(s) => void toggleEnabled(s)}
+										onDelete={setPendingDelete}
+									/>
+								))}
+							</div>
+						</>
+					)}
+					{internalSources.length > 0 && (
+						<>
+							<h2 className="browse__section">{t('browse.sectionInternal')}</h2>
+							<div className="source-list">
+								{internalSources.map((s) => (
+									<SourceCard
+										key={s.id}
+										source={s}
 										onTogglePin={(s) => void togglePin(s)}
 										onToggleEnabled={(s) => void toggleEnabled(s)}
 										onDelete={setPendingDelete}
@@ -675,7 +585,7 @@ export default function BrowsePage() {
 							</div>
 						</>
 					)}
-					{(pinnedSources.length > 0 || updateSources.length > 0) && (
+					{(pinnedSources.length > 0 || internalSources.length > 0 || updateSources.length > 0) && (
 						// when any section appears above, the full list needs an "All" heading to set it apart
 						<h2 className="browse__section">{t('browse.sectionAll')}</h2>
 					)}
@@ -708,7 +618,7 @@ export default function BrowsePage() {
 			>
 				<p className="muted">{t('browse.deleteHint')}</p>
 			</Modal>
-			<OpdsRegisterModal open={registeringOpds} onClose={() => setRegisteringOpds(false)} />
+			<InternalSourceModal open={registeringInternal} onClose={() => setRegisteringInternal(false)} />
 		</div>
 	);
 }

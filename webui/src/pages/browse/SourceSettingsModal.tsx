@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Settings } from 'lucide-react';
@@ -16,7 +16,7 @@ import {
 	useWebLogin
 } from '../../api/hooks';
 import type { SourceSetting } from '../../api/types';
-import { Button, IconButton, Modal, Spinner, pushToast } from '../../components';
+import { Button, IconButton, Input, LocalDirsEditor, Modal, Spinner, pushToast } from '../../components';
 import { SettingItem } from '../settings/SettingItem';
 import '../settings.css';
 
@@ -31,6 +31,105 @@ function flattenSettings(list: SourceSetting[]): SourceSetting[] {
 }
 
 type PendingAction = 'reset' | 'clear' | null;
+
+/** Local instances configure through the same endpoint but with server-synthesized settings: the roots
+	list (paths) and the oneshots marker — no wasm schema, no login/cache surface */
+function LocalSourcePanel({ sourceId }: { sourceId: number }) {
+	const { t } = useTranslation();
+	const query = useSourceSettings(sourceId);
+	const save = useSaveSourceSettings(sourceId);
+	const reset = useResetSourceSettings(sourceId);
+	const [dirs, setDirs] = useState<string[] | null>(null);
+	const [oneshots, setOneshots] = useState<string | null>(null);
+	const [pendingReset, setPendingReset] = useState(false);
+
+	const values = query.data?.values as { paths?: unknown; oneshotsDir?: unknown } | undefined;
+	const currentPaths: string[] = Array.isArray(values?.paths)
+		? values.paths.filter((p): p is string => typeof p === 'string')
+		: [];
+	const currentOneshots = typeof values?.oneshotsDir === 'string' ? values.oneshotsDir : '';
+
+	useEffect(() => {
+		if (!values || dirs !== null) return;
+		setDirs(currentPaths);
+		setOneshots(currentOneshots);
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- one-time initialization from the loaded values
+	}, [values, dirs]);
+
+	if (query.isPending || dirs === null || oneshots === null) {
+		return (
+			<div className="settings-source__loading">
+				<Spinner /> {t('common.loading')}
+			</div>
+		);
+	}
+	if (!query.data) return <p className="faint settings-source__empty">{t('sourceSettings.loadFailed')}</p>;
+
+	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
+	const oneshotsName = oneshots.trim();
+	const dirty = cleaned.join('\n') !== currentPaths.join('\n') || oneshotsName !== currentOneshots;
+
+	async function onSave() {
+		// an empty oneshots field stays an explicit blank so it turns the rule off rather than clearing the override
+		await save.mutateAsync({ edits: { paths: cleaned, oneshotsDir: oneshotsName } });
+		setDirs(null);
+		setOneshots(null);
+		pushToast(t('sourceSettings.saved'), 'info');
+	}
+
+	async function onReset() {
+		// the server keeps paths on reset (they have no default) and clears the oneshots override
+		await reset.mutateAsync();
+		setDirs(null);
+		setOneshots(null);
+		setPendingReset(false);
+		pushToast(t('sourceSettings.resetDone'), 'info');
+	}
+
+	return (
+		<div className="settings-source__body">
+			<LocalDirsEditor dirs={dirs} onChange={setDirs} />
+			<div className="settings-row">
+				<span className="settings-row__label">{t('sourceSettings.localOneshotsDirLabel')}</span>
+				<Input
+					placeholder={t('sourceSettings.localOneshotsDirPlaceholder')}
+					value={oneshots}
+					onChange={(e) => setOneshots(e.currentTarget.value)}
+				/>
+			</div>
+			<p className="settings-local__hint">{t('sourceSettings.localOneshotsDirDesc')}</p>
+			<div className="settings-source__save">
+				<Button variant="ghost" size="sm" onClick={() => setPendingReset(true)}>
+					{t('sourceSettings.resetSettings')}
+				</Button>
+				<Button
+					variant="primary"
+					size="sm"
+					loading={save.isPending}
+					disabled={!dirty || cleaned.length === 0}
+					onClick={() => void onSave()}
+				>
+					{t('common.save')}
+				</Button>
+			</div>
+			<Modal
+				open={pendingReset}
+				title={t('sourceSettings.resetSettings')}
+				onClose={() => setPendingReset(false)}
+				footer={
+					<>
+						<Button onClick={() => setPendingReset(false)}>{t('common.cancel')}</Button>
+						<Button variant="primary" loading={reset.isPending} onClick={() => void onReset()}>
+							{t('sourceSettings.reset')}
+						</Button>
+					</>
+				}
+			>
+				<p>{t('sourceSettings.resetLocalConfirm')}</p>
+			</Modal>
+		</div>
+	);
+}
 
 function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 	const { t } = useTranslation();
@@ -192,11 +291,13 @@ function SourceSettingsPanel({ sourceId }: { sourceId: number }) {
 export function SourceSettingsDialog({
 	sourceId,
 	sourceName,
+	sourceKind,
 	open,
 	onClose
 }: {
 	sourceId: number;
 	sourceName: string;
+	sourceKind?: string;
 	open: boolean;
 	onClose: () => void;
 }) {
@@ -208,13 +309,13 @@ export function SourceSettingsDialog({
 			onClose={onClose}
 			panelClassName="modal__panel--wide"
 		>
-			{open && <SourceSettingsPanel sourceId={sourceId} />}
+			{open && (sourceKind === 'local' ? <LocalSourcePanel sourceId={sourceId} /> : <SourceSettingsPanel sourceId={sourceId} />)}
 		</Modal>
 	);
 }
 
 /** The gear at the right of an installed-source card: settings live in a modal, config items come from the source package */
-export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: number; sourceName: string }) {
+export function SourceSettingsButton({ sourceId, sourceName, sourceKind }: { sourceId: number; sourceName: string; sourceKind?: string }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
 
@@ -229,7 +330,7 @@ export function SourceSettingsButton({ sourceId, sourceName }: { sourceId: numbe
 			>
 				<Settings size={17} />
 			</IconButton>
-			<SourceSettingsDialog sourceId={sourceId} sourceName={sourceName} open={open} onClose={() => setOpen(false)} />
+			<SourceSettingsDialog sourceId={sourceId} sourceName={sourceName} sourceKind={sourceKind} open={open} onClose={() => setOpen(false)} />
 		</>
 	);
 }

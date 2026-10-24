@@ -9,6 +9,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, MangaRow, SOURCE_KIND_OPDS, SourceRow, unix_now};
+use crate::source::slugify;
 use crate::state::{AppState, load_defaults};
 use aidoku::{Chapter, Manga};
 use aidoku_wasm::DefaultValue;
@@ -1024,24 +1025,6 @@ fn page_opds_zip_json(entry: &str) -> Value {
 		"hasDescription": false,
 		"description": null,
 	})
-}
-
-/// Derives an instance slug from name: lowercase alphanumeric runs joined with -; no usable character at all means no key can be built
-fn slugify(name: &str) -> Option<String> {
-	let mut slug = String::new();
-	let mut dash = false;
-	for c in name.chars().flat_map(char::to_lowercase) {
-		if c.is_ascii_alphanumeric() {
-			if dash && !slug.is_empty() {
-				slug.push('-');
-			}
-			slug.push(c);
-			dash = false;
-		} else {
-			dash = true;
-		}
-	}
-	(!slug.is_empty()).then_some(slug)
 }
 
 /// Instance registration: key takes opds.<slug>, collisions append a -2/-3 counter (Aidoku precedent for same-named sources coexisting);

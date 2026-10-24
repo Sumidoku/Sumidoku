@@ -199,15 +199,32 @@ impl AppState {
 		self.events.get().expect("event hub installed").clone()
 	}
 
-	/// Effective local roots: a non-empty local.dirs setting (a JSON string array, written from the settings
-	/// page) overrides the config layer at runtime, no restart needed. A wrong-shaped stored value can only
-	/// arrive through a backup restore and counts as unset, same rule as the backup.* settings
-	pub async fn local_dirs(&self) -> ApiResult<Vec<std::path::PathBuf>> {
-		let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.dirs'")
+	/// Whether the source is the default local instance: its rows predate per-instance settings, so it
+	/// keeps the legacy global/config fallback layers that other instances never had
+	async fn is_default_local(&self, source_id: i64) -> ApiResult<bool> {
+		let row: Option<(String,)> = sqlx::query_as("SELECT key FROM source WHERE id = ?")
+			.bind(source_id)
 			.fetch_optional(&self.pool)
 			.await?;
+		Ok(row.is_some_and(|(key,)| key == crate::model::LOCAL_SOURCE_KEY))
+	}
+
+	/// Effective scan roots of one local instance: the instance's own `paths` source setting wins; the
+	/// default instance additionally falls back to the legacy global local.dirs setting, then the config
+	/// layer, so pre-multi-instance deployments keep scanning the same roots until the per-instance
+	/// setting is edited. A wrong-shaped stored value counts as unset, same rule as the backup.* settings
+	pub async fn local_dirs(&self, source_id: i64) -> ApiResult<Vec<std::path::PathBuf>> {
+		let row: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'paths'")
+				.bind(source_id)
+				.fetch_optional(&self.pool)
+				.await?;
 		if let Some(dirs) = row
-			.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
+			.and_then(|(raw,)| serde_json::from_str::<DefaultValue>(&raw).ok())
+			.and_then(|value| match value {
+				DefaultValue::StringArray(dirs) => Some(dirs),
+				_ => None,
+			})
 			.map(|dirs| {
 				dirs.into_iter()
 					.filter(|dir| !dir.trim().is_empty())
@@ -218,21 +235,57 @@ impl AppState {
 		{
 			return Ok(dirs);
 		}
-		Ok(self.config.local_dirs())
+		if self.is_default_local(source_id).await? {
+			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.dirs'")
+				.fetch_optional(&self.pool)
+				.await?;
+			if let Some(dirs) = row
+				.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
+				.map(|dirs| {
+					dirs.into_iter()
+						.filter(|dir| !dir.trim().is_empty())
+						.map(std::path::PathBuf::from)
+						.collect::<Vec<_>>()
+				})
+				&& !dirs.is_empty()
+			{
+				return Ok(dirs);
+			}
+			return Ok(self.config.local_dirs());
+		}
+		Ok(Vec::new())
 	}
 
-	/// Effective oneshots-directory marker: a non-empty local.oneshots_dir setting overrides the config
-	/// layer at runtime, same as local.dirs; a blank or wrong-shaped stored value counts as unset
-	pub async fn local_oneshots_dir(&self) -> ApiResult<Option<String>> {
-		let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.oneshots_dir'")
-			.fetch_optional(&self.pool)
-			.await?;
-		if let Some(name) = row
-			.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
-			.map(|name| name.trim().to_string())
-			&& !name.is_empty()
-		{
-			return Ok(Some(name));
+	/// Effective oneshots-directory marker of one local instance: the instance's own `oneshotsDir`
+	/// source setting wins — including an explicit blank, which turns the rule off for that instance —
+	/// and an absent setting falls back to the legacy global local.oneshots_dir (default instance only),
+	/// then the config layer. A blank or wrong-shaped legacy value counts as unset, the pre-existing rule
+	pub async fn local_oneshots_dir(&self, source_id: i64) -> ApiResult<Option<String>> {
+		let row: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+				.bind(source_id)
+				.fetch_optional(&self.pool)
+				.await?;
+		if let Some((raw,)) = row {
+			return Ok(match serde_json::from_str::<DefaultValue>(&raw) {
+				Ok(DefaultValue::String(name)) => {
+					let name = name.trim().to_string();
+					(!name.is_empty()).then_some(name)
+				}
+				_ => None,
+			});
+		}
+		if self.is_default_local(source_id).await? {
+			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.oneshots_dir'")
+				.fetch_optional(&self.pool)
+				.await?;
+			if let Some(name) = row
+				.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+				.map(|name| name.trim().to_string())
+				&& !name.is_empty()
+			{
+				return Ok(Some(name));
+			}
 		}
 		Ok(self.config.local_oneshots_dir().map(str::to_string))
 	}

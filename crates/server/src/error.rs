@@ -16,6 +16,8 @@ pub enum Error {
 	Auth(String),
 	#[error("sync: {0}")]
 	Sync(String),
+	#[error("local: {0}")]
+	Local(String),
 }
 
 #[derive(Debug)]

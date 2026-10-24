@@ -1,7 +1,8 @@
-//! Multiple local directories for the built-in local source: config layer (SUMIDOKU_LOCAL_DIRS >
-//! SUMIDOKU_LOCAL_DIR > <config_dir>/local) with the runtime local.dirs setting override / browse
-//! unions the roots and the first directory wins a mirrored relative path / directory-indexed keys
-//! (`N:<path>`, bare = directory 0) with old bare-key rows still resolving / settings validation
+//! Multiple roots of one local instance: config layer (SUMIDOKU_LOCAL_DIRS > SUMIDOKU_LOCAL_DIR >
+//! <config_dir>/local) with the instance's own paths source setting (and the legacy global local.dirs
+//! override as the default instance's fallback layer) / browse unions the roots and the first directory
+//! wins a mirrored relative path / directory-indexed keys (`N:<path>`, bare = directory 0) with old
+//! bare-key rows still resolving / settings validation
 mod common;
 
 use axum::Router;
@@ -71,7 +72,8 @@ async fn two_dir_app() -> TwoDirApp {
 	}
 }
 
-/// Points the runtime override at both roots; paths go in as strings exactly like a settings-page save
+/// Points the default instance's roots at both directories through the legacy global override; the
+/// effective list reads back through the instance's own settings (the per-instance surface)
 async fn enable_both_dirs(t: &TwoDirApp) {
 	let (status, body) = request(
 		&t.app.app,
@@ -84,7 +86,16 @@ async fn enable_both_dirs(t: &TwoDirApp) {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["readOnly"]["localDirs"], json!([
+	let source_id = local_source_id(&t.app.app).await;
+	let (status, body) = request(
+		&t.app.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["values"]["paths"], json!([
 		t.dir_a.path().to_string_lossy(),
 		t.dir_b.path().to_string_lossy(),
 	]));
@@ -343,7 +354,7 @@ async fn settings_local_dirs_put_validation_and_config_fallback() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{value}: {body}");
 	}
 
-	// a valid override takes effect immediately and reads back through the injected localDirs
+	// a valid override takes effect immediately and reads back through the instance settings
 	enable_both_dirs(&t).await;
 
 	// an empty array clears the override: resolution falls back to the config layer (directory A)
@@ -355,12 +366,20 @@ async fn settings_local_dirs_put_validation_and_config_fallback() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
+	let source_id = local_source_id(&t.app.app).await;
+	let (status, body) = request(
+		&t.app.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(
-		body["readOnly"]["localDirs"],
+		body["values"]["paths"],
 		json!([t.dir_a.path().to_string_lossy()]),
 		"the cleared override exposes the config layer again"
 	);
-	let source_id = local_source_id(&t.app.app).await;
 	let entries = browse_keys(&t.app.app, source_id).await;
 	let mut keys: Vec<&str> = entries.iter().map(|e| e["key"].as_str().unwrap()).collect();
 	keys.sort();
@@ -368,22 +387,28 @@ async fn settings_local_dirs_put_validation_and_config_fallback() {
 }
 
 #[tokio::test]
-async fn settings_get_exposes_local_dirs_array() {
+async fn settings_no_longer_expose_local_dirs_globally() {
 	let t = two_dir_app().await;
 
-	// no override stored: the injected value is the config layer, and the retired localDir key is gone
+	// the global settings response has no local groups at all: the effective roots live on the instance
 	let (status, body) = request(&t.app.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localDirs"], json!([t.dir_a.path().to_string_lossy()]));
-	assert!(body.get("localDir").is_none(), "localDir is replaced by localDirs: {body}");
+	assert!(body.get("local").is_none(), "{body}");
+	assert!(body.get("readOnly").is_none(), "{body}");
+
+	let source_id = local_source_id(&t.app.app).await;
+	let (status, body) = request(
+		&t.app.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	// nothing stored per-instance: the effective value falls back to the config layer
+	assert_eq!(body["values"]["paths"], json!([t.dir_a.path().to_string_lossy()]));
 
 	enable_both_dirs(&t).await;
-	let (status, body) = request(&t.app.app, "GET", "/api/v1/settings", None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["readOnly"]["localDirs"], json!([
-		t.dir_a.path().to_string_lossy(),
-		t.dir_b.path().to_string_lossy(),
-	]));
 }
 
 #[tokio::test]

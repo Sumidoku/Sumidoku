@@ -38,7 +38,9 @@ async function renderSource(overrides = {}) {
 		server: { middlewareMode: true }
 	});
 	try {
-		await vite.ssrLoadModule('/src/i18n');
+		// the assertions match English aria labels: force the language instead of inheriting the machine locale
+		const { default: i18n } = await vite.ssrLoadModule('/src/i18n');
+		await i18n.changeLanguage('en');
 		const { SourceCard } = await vite.ssrLoadModule('/src/pages/BrowsePage.tsx');
 		return renderToStaticMarkup(
 			createElement(
@@ -69,9 +71,13 @@ test('source card keeps desktop actions and exposes a mobile more trigger', asyn
 	assert.match(markup, /aria-label="Uninstall Test Source"/);
 });
 
-test('source card without actions does not expose an empty mobile menu', async () => {
+test('local source card exposes pin, settings and uninstall but no enable toggle', async () => {
 	const markup = await renderSource({ id: 1, key: 'local.local', name: 'Local', kind: 'local', hasHome: null, updateVersion: null, contentRating: 0, languages: [] });
-	assert.doesNotMatch(markup, /source-card__mobile-actions/);
+	assert.match(markup, /source-card__mobile-actions/);
+	assert.match(markup, /aria-label="Pin Local"/);
+	assert.match(markup, /aria-label="Uninstall Local"/);
+	assert.doesNotMatch(markup, /aria-label="Disable Local"/);
+	assert.doesNotMatch(markup, /aria-label="Home for Local"/);
 });
 
 test('drag handle stays after card content instead of shifting the leading column', () => {

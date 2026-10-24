@@ -317,19 +317,19 @@
         }
       }
     },
-    "/api/v1/sources/opds": {
+    "/api/v1/sources/internal": {
       "post": {
         "tags": [
           "sources"
         ],
-        "operationId": "registerOpdsSource",
-        "summary": "Register an OPDS catalog source (admin)",
+        "operationId": "registerInternalSource",
+        "summary": "Register an internal (built-in) source instance: an OPDS catalog or a local directory set (admin)",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RegisterOpdsRequest"
+                "$ref": "#/components/schemas/RegisterInternalRequest"
               }
             }
           }
@@ -452,7 +452,7 @@
           "sources"
         ],
         "operationId": "deleteSource",
-        "summary": "Uninstall a source (admin)",
+        "summary": "Uninstall a source (admin). Internal instances (local/opds) are deletable too; the default local instance answers 400 while the deployment config explicitly names local roots",
         "responses": {
           "204": {
             "$ref": "#/components/responses/NoContent"
@@ -4631,13 +4631,34 @@
           }
         }
       },
-      "RegisterOpdsRequest": {
+      "RegisterInternalRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/RegisterOpdsInstance"
+          },
+          {
+            "$ref": "#/components/schemas/RegisterLocalInstance"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type"
+        },
+        "description": "Internal (built-in) source registration, dispatched on type."
+      },
+      "RegisterOpdsInstance": {
         "type": "object",
         "required": [
+          "type",
           "name",
           "url"
         ],
         "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "opds"
+            ]
+          },
           "name": {
             "type": "string"
           },
@@ -4653,6 +4674,38 @@
             "type": "string",
             "format": "password",
             "nullable": true
+          }
+        }
+      },
+      "RegisterLocalInstance": {
+        "type": "object",
+        "required": [
+          "type",
+          "name",
+          "paths"
+        ],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "local"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Root directories of the instance; each must exist and be a directory."
+          },
+          "oneshotsDir": {
+            "type": "string",
+            "nullable": true,
+            "description": "Directory-name marker enabling the oneshots rule for this instance; absent falls back to the server config."
           }
         }
       },
@@ -7763,20 +7816,8 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
         },
-        "description": "Flat bare-JSON settings map. Dotted persisted keys remain dotted; localDirs and localOneshotsDir are read-only camelCase injections. Values may be strings, integers, booleans, arrays, objects or null.",
+        "description": "Flat bare-JSON settings map. Dotted persisted keys remain dotted. Values may be strings, integers, booleans, arrays, objects or null.",
         "properties": {
-          "localDirs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "readOnly": true
-          },
-          "localOneshotsDir": {
-            "type": "string",
-            "nullable": true,
-            "readOnly": true
-          },
           "incognito.enabled": {
             "type": "boolean"
           },
@@ -7866,10 +7907,12 @@
             "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "description": "Legacy: the default local instance's fallback root list. New writes belong in the instance's own source settings."
           },
           "local.oneshots_dir": {
-            "type": "string"
+            "type": "string",
+            "description": "Legacy: the default local instance's fallback oneshots marker. New writes belong in the instance's own source settings."
           }
         }
       },
@@ -8906,11 +8949,9 @@
         "required": [
           "incognito",
           "library",
-          "local",
           "download",
           "backup",
-          "browse",
-          "readOnly"
+          "browse"
         ],
         "properties": {
           "incognito": {
@@ -8918,9 +8959,6 @@
           },
           "library": {
             "$ref": "#/components/schemas/LibrarySettings"
-          },
-          "local": {
-            "$ref": "#/components/schemas/LocalSettings"
           },
           "download": {
             "$ref": "#/components/schemas/DownloadSettings"
@@ -8930,15 +8968,12 @@
           },
           "browse": {
             "$ref": "#/components/schemas/BrowseSettings"
-          },
-          "readOnly": {
-            "$ref": "#/components/schemas/ReadOnlySettings"
           }
         },
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
         },
-        "description": "Structured server settings. Known groups are typed; any additional flat keys are preserved round-trip in additionalProperties."
+        "description": "Structured server settings. Known groups are typed; any additional flat keys are preserved round-trip in additionalProperties. The retired `local` group is rejected on write: local directories are per-source settings now."
       },
       "IncognitoSettings": {
         "type": "object",
@@ -8995,25 +9030,6 @@
           "updateIntervalHours": {
             "type": "integer",
             "format": "int64"
-          }
-        }
-      },
-      "LocalSettings": {
-        "type": "object",
-        "required": [
-          "dirs",
-          "oneshotsDir"
-        ],
-        "properties": {
-          "dirs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "oneshotsDir": {
-            "type": "string",
-            "nullable": true
           }
         }
       },
@@ -9111,25 +9127,6 @@
             "description": "Server-managed backup timestamp; ignored on structured writes."
           },
           "dir": {
-            "type": "string",
-            "nullable": true
-          }
-        }
-      },
-      "ReadOnlySettings": {
-        "type": "object",
-        "required": [
-          "localDirs",
-          "localOneshotsDir"
-        ],
-        "properties": {
-          "localDirs": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "localOneshotsDir": {
             "type": "string",
             "nullable": true
           }

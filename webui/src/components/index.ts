@@ -16,6 +16,7 @@ export { IconButton } from './IconButton';
 export type { IconButtonProps } from './IconButton';
 export { InfiniteList } from './InfiniteList';
 export type { InfiniteListProps } from './InfiniteList';
+export { LocalDirsEditor } from './LocalDirsEditor';
 export { Input } from './Input';
 export type { InputProps } from './Input';
 export { Modal } from './Modal';
