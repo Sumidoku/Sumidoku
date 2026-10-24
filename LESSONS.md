@@ -178,6 +178,11 @@ cached timestamp.
   writes, and added API regressions for missing fields, explicit clears, and
   preservation. Sabotaging each behavior failed its target assertion before
   restoration.
+- Seen again: 2026-10-24, `library.last_scheduled_run_at` traveled in the
+  structured `extra` map, so saving a stale snapshot could move the scheduler
+  clock. `scheduled_library_clock_is_server_owned` exposed the key before the
+  guard, and removing only the guard let both write forms replace `456` with
+  `123`.
 
 **Changing sync ownership is a versioned migration, not an origin rewrite.**
 Preserve latest tombstones before deleting old origins, then append current
