@@ -138,6 +138,10 @@ submitted query, and make filters available before the first submission.
   must apply the same drop rule on fresh submission and restoration. A temporary
   aggregate `?q=` regression failed on base and passed on the PR head, but the
   PR contained no permanent test for it.
+- Seen again: 2026-10-25, #400 mapped clearing the input to a resubmission:
+  without that gesture, an old submitted query kept remote results after the
+  box was empty. Remote debounce now skips only non-empty drafts, so blank
+  resubmits and restores the unsearched list; the PR added no permanent test.
 
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
