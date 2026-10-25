@@ -378,6 +378,37 @@ async fn cover_missing_answers_404() {
 	assert_eq!(body["error"]["code"], "not_found");
 }
 
+/// Local covers are user files at original resolution; the server caps the served width at 600 and
+/// caches the downscaled JPEG (the second GET must come from the cache with the same bytes)
+#[tokio::test]
+async fn local_cover_is_capped_at_600px() {
+	let TestApp { app, tmp, .. } = local_app().await;
+	let root = tmp.path().join("local");
+	let big = root.join("Bigcover");
+	std::fs::create_dir_all(big.join("ch 1")).expect("mkdir chapter");
+	write_page(&big.join("ch 1"), "1.png", b"bigcover-1-1");
+	std::fs::write(big.join("cover.png"), big_png()).expect("write big cover");
+	let manga_id = register_local(&app, "Bigcover").await;
+
+	let (status, headers, bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/jpeg");
+	let decoded = image::ImageReader::new(std::io::Cursor::new(&bytes))
+		.with_guessed_format()
+		.expect("cover format")
+		.decode()
+		.expect("cover decode");
+	assert_eq!(
+		(decoded.width(), decoded.height()),
+		(450, 600),
+		"3000x4000 sidecar: the longest edge fits 600 (kmrs semantics), the ratio is kept"
+	);
+	let (status, _, cached) = request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(cached, bytes, "the cached artifact is the downscaled JPEG");
+}
+
 #[tokio::test]
 async fn refresh_rescans_added_and_removed_chapters() {
 	let TestApp { app, tmp, .. } = local_app().await;

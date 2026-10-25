@@ -17,6 +17,10 @@ use std::sync::Arc;
 const DEFAULT_MIME: &str = "image/jpeg";
 const COVER_MAX_AGE: u64 = 86400;
 
+/// Local-source covers are user-owned files at original resolution (a cover.* sidecar or a chapter's first
+/// page), far larger than any display slot; cap the served width — the cached artifact is the downscaled JPEG
+pub const LOCAL_COVER_MAX_WIDTH: u32 = 600;
+
 #[derive(Debug, Deserialize)]
 pub struct ImageQuery {
 	pub url: String,
@@ -54,9 +58,22 @@ pub async fn get_cover(
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
 	let (bytes, mime) = if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-		crate::local::resolve_cover(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key)
-			.await?
-			.ok_or_else(|| ApiError::not_found("cover not available"))?
+		let (bytes, mime) =
+			crate::local::resolve_cover(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key)
+				.await?
+				.ok_or_else(|| ApiError::not_found("cover not available"))?;
+		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); a narrow
+		// or undecodable image passes through at its original bytes, same as the page variants
+		let (resized, original) = tokio::task::spawn_blocking(move || {
+			let resized = crate::source::downsample::downsample_jpeg(&bytes, LOCAL_COVER_MAX_WIDTH);
+			(resized, bytes)
+		})
+		.await
+		.map_err(|e| ApiError::internal(format!("cover downsample task failed: {e}")))?;
+		match resized {
+			Some(jpeg) => (jpeg, "image/jpeg".into()),
+			None => (original, mime),
+		}
 	} else {
 		let Some(url) = manga.cover_url.clone() else {
 			return Err(ApiError::not_found("cover not available"));
