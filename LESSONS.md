@@ -193,6 +193,11 @@ with atomic rename/truncate, not only a clean database or initial open.
   returning old bytes after atomic rename and a stale central directory
   after truncation. File-version checks now reopen changed files, and both
   regressions fail again when invalidation is disabled.
+- Seen again: 2026-10-25, #403 downsampled local covers only on a cache miss,
+  so original-size artifacts written before the transform stayed eligible
+  forever. #411 requires a derivative-variant marker on every local cache hit.
+  Disabling that check made the seeded-cache regression return `image/png`
+  instead of `image/jpeg`; restoring it rebuilt the artifact at 450×600.
 
 **Type-specific state must come from the entity's actual shape, not its
 filename suffix.** A directory named `.epub` is still an image-directory
