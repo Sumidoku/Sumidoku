@@ -207,6 +207,10 @@
 		display: none;
 	}
 
+	.side-nav__group-open-mark {
+		color: var(--text-faint);
+	}
+
 	.app__sidebar-foot {
 		display: flex;
 		align-items: center;
