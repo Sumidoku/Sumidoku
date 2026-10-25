@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**State guards belong before optimized content paths.** A cache, download
+artifact or other fast path must not return content before the endpoint checks
+the entity's current state. Otherwise list and detail routes can disagree, and
+the optimized read becomes a bypass around trash, permission or progress
+rules. Seed the fast-path artifact in the forbidden state and prove it returns
+the guarded error.
+- Evidence: 2026-10-25, #424's downloaded-product page read was combined with
+  #406's trashed-chapter guard. The single-page route returned 200 from a
+  finished product before the guard while the page list returned 404; moving
+  the guard first made the regression return the expected `not_found`, and
+  restoring the old order made it 200 again.
+
 **Capture the response model before triggering work that may change it.**
 When an endpoint's contract is to return the pre-trigger state and then start
 background backfill, read the response rows before enqueueing. A fast worker
