@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
 	applyDownloadEvent,
+	applyRetrySuccess,
 	downloadActivitySnapshot,
 	formatDownloadProgress,
 	mergeDownloadResponse
@@ -73,6 +74,24 @@ test('error responses keep their latest error text while merging state', () => {
 test('download progress text includes page counts and a percentage', () => {
 	assert.equal(formatDownloadProgress({ downloaded: 3, total: 8 }), '3 / 8 · 37%');
 	assert.equal(formatDownloadProgress({ downloaded: 2, total: 0 }), '2');
+});
+
+test('retry success re-queues only rows still errored', () => {
+	const rows = [
+		download(1, 'error'),
+		download(2, 'error'),
+		download(3, 'downloading'),
+		download(4, 'finished')
+	];
+
+	const updated = applyRetrySuccess(rows, [1, 2, 3, 4]);
+
+	assert.equal(updated[0].status, 'queued');
+	assert.equal(updated[0].error, null);
+	assert.equal(updated[1].status, 'queued');
+	// A row an event already advanced keeps its newer state instead of regressing to queued
+	assert.equal(updated[2].status, 'downloading');
+	assert.equal(updated[3].status, 'finished');
 });
 
 test('activity snapshots restore only active downloads for the current manga', () => {
