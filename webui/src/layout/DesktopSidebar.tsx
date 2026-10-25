@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, ChevronRight, Database, Download, Info, Library, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon } from 'lucide-react';
+import { Activity, ChevronDown, ChevronRight, Database, Download, Info, Library, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon, SlidersHorizontal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { IconButton } from '../components';
 import { NAV } from './navigation';
@@ -22,7 +22,7 @@ interface DesktopSidebarProps {
 const PRIMARY_NAV = NAV.filter((item) => ['/library', '/browse', '/updates'].includes(item.to));
 const ACTIVITY_NAV = NAV.filter((item) => ['/history', '/downloads'].includes(item.to));
 const SETTINGS_NAV: readonly NavItemData[] = [
-	{ to: '/settings', labelKey: 'settings.groupGeneral', icon: SettingsIcon },
+	{ to: '/settings', labelKey: 'settings.groupGeneral', icon: SlidersHorizontal },
 	{ to: '/settings?section=library', labelKey: 'settings.groupLibrary', icon: Library },
 	{ to: '/settings?section=downloads', labelKey: 'settings.groupDownloads', icon: Download },
 	{ to: '/settings?section=backups', labelKey: 'settings.groupBackups', icon: Database },
@@ -85,7 +85,9 @@ function NavGroup({
 				title={collapsed ? t(labelKey) : undefined}
 				onClick={() => setOpen((value) => !value)}
 			>
-				<Icon size={18} aria-hidden="true" />
+				{collapsed && open
+					? <ChevronDown size={18} aria-hidden="true" className="side-nav__group-open-mark" />
+					: <Icon size={18} aria-hidden="true" />}
 				<span className="side-nav__label" hidden={collapsed}>{t(labelKey)}</span>
 				<ChevronRight size={14} className={open ? 'side-nav__chevron side-nav__chevron--open' : 'side-nav__chevron'} />
 			</button>
