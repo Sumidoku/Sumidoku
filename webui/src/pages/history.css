@@ -45,6 +45,11 @@
 	white-space: nowrap;
 }
 
+.history-item__extra {
+	font-size: 12.5px;
+	margin-top: 1px;
+}
+
 .history-item__right {
 	display: flex;
 	flex-direction: column;

@@ -4,6 +4,7 @@
     "emptyHint": "看过的章节会出现在这里，方便随时续读",
     "goLibrary": "去书库",
     "finished": "已读完",
-    "progress": "读到 P.{{page}}"
+    "progress": "读到 P.{{page}}",
+    "more": "+{{count}} 更多"
   }
 }
