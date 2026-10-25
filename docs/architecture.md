@@ -109,14 +109,16 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   `ON CONFLICT` upsert; manual 8 > scheduled 4 > derived 1). `TaskManager`
   dispatches pending rows to a worker pool sized by
   `task_pool_size` (config file/env `SUMIDOKU_TASK_POOL_SIZE`, default 2) in
-  priority-then-creation order, paging past blocked groups instead of
-  starving runnable work; tasks of one local source never run concurrently,
-  and a global (source-less) task conflicts with everything (kmrs
-  `GROUP_ID` semantics over `source_id`, 0 reserved for the global group).
-  Every transition is a single guarded UPDATE whose RETURNING row is what
-  gets broadcast as the instance-wide `task` event through the SSE hub
-  (`events.rs:forward_tasks`), so events never republish a state a later
-  transition replaced. `DELETE /api/v1/tasks/{id}` cancels: the row flips
+  priority-then-creation order with id as the tie-breaker, keyset-paging past
+  blocked groups and failed kinds without skipping later candidates; tasks
+  of one local source never run concurrently, and a global (source-less)
+  task conflicts with everything (kmrs `GROUP_ID` semantics over `source_id`,
+  0 reserved for the global group). Every transition is a single guarded
+  UPDATE whose RETURNING row is what gets broadcast as the instance-wide
+  `task` event through the SSE hub (`events.rs:forward_tasks`), so events
+  never republish a state a later transition replaced. Cancellation publishes
+  before history trimming, so a terminal requeue cannot overtake it.
+  `DELETE /api/v1/tasks/{id}` cancels: the row flips
   to cancelled atomically for pending and running alike, a running handler
   also gets a flag it checks between items, and the worker's terminal write
   is guarded on status = 'running' so a mid-flight cancel always wins; a

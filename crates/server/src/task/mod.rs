@@ -24,8 +24,8 @@ const TERMINAL: [&str; 3] = [STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
 /// Finished rows kept for inspection; older ones are pruned as new tasks finish
 const FINISHED_KEEP: i64 = 100;
-/// Page depth when picking the next task: blocked groups are skipped by paging, never by starving
-/// whatever is runnable behind them
+/// Page size for keyset candidate selection: the cursor advances past failed rows too,
+/// so they cannot hide runnable work behind them
 const PICK_PAGE: i64 = 64;
 
 const COLUMNS: &str = "id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result";
@@ -216,10 +216,14 @@ impl TaskManager {
 	/// by a late done. Losing the race to a terminal transition re-reads and answers 409
 	pub async fn cancel(&self, id: &str) -> ApiResult<TaskRow> {
 		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
+		#[cfg(test)]
+		if row.id == CANCEL_BEFORE_UPDATE.id {
+			CANCEL_BEFORE_UPDATE.reached.notify_one();
+			CANCEL_BEFORE_UPDATE.resume.notified().await;
+		}
 		if row.is_terminal() {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		}
-		let was_running = row.status == STATUS_RUNNING;
 		let updated: Option<TaskRow> = sqlx::query_as(&format!(
 			"UPDATE task SET status = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('pending', 'running') RETURNING {COLUMNS}"
 		))
@@ -230,16 +234,19 @@ impl TaskManager {
 		let Some(row) = updated else {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		};
-		if was_running {
-			// Between the finish write and the worker's cleanup the flag may already be gone: the row
-			// state still wins, so a missing flag only means the handler could not be nudged
-			if let Some(flag) = self.inner.lock().await.cancels.get(id) {
-				flag.store(true, Ordering::SeqCst);
-			}
+		// A pending→running race can install the flag after the first read, so set whatever is registered now
+		if let Some(flag) = self.inner.lock().await.cancels.get(id) {
+			flag.store(true, Ordering::SeqCst);
 		}
-		self.trim_finished().await?;
+		// Publish before trimming so a terminal requeue cannot overtake the older cancellation
 		let _ = self.signals.send(row.clone());
 		self.wake.notify_one();
+		self.trim_finished().await?;
+		#[cfg(test)]
+		if row.id == CANCEL_BEFORE_REQUEUE.id {
+			CANCEL_BEFORE_REQUEUE.reached.notify_one();
+			CANCEL_BEFORE_REQUEUE.resume.notified().await;
+		}
 		Ok(row)
 	}
 
@@ -262,7 +269,7 @@ impl TaskManager {
 
 	async fn dispatch(self: &Arc<Self>) {
 		loop {
-			match self.pick_next(0).await {
+			match self.pick_next(None).await {
 				Ok(Some((task, handler, cancelled))) => {
 					let manager = self.clone();
 					tokio::spawn(async move {
@@ -278,22 +285,34 @@ impl TaskManager {
 		}
 	}
 
-	async fn pick_next(self: &Arc<Self>, offset: i64) -> ApiResult<Option<(TaskRow, Handler, Arc<AtomicBool>)>> {
+	async fn pick_next(
+		self: &Arc<Self>,
+		after: Option<(i64, i64, String)>,
+	) -> ApiResult<Option<(TaskRow, Handler, Arc<AtomicBool>)>> {
 		let mut inner = self.inner.lock().await;
 		if inner.active >= self.workers {
 			return Ok(None);
 		}
+		let cursor = after.as_ref();
 		let candidates: Vec<TaskRow> = sqlx::query_as(&format!(
-			"SELECT {COLUMNS} FROM task WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT ? OFFSET ?"
+			"SELECT {COLUMNS} FROM task WHERE status = 'pending'
+			 AND (? IS NULL OR priority < ? OR (priority = ? AND created_at > ?) OR (created_at = ? AND id > ?))
+			 ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?"
 		))
+		.bind(cursor.map(|c| c.0))
+		.bind(cursor.map(|c| c.0))
+		.bind(cursor.map(|c| c.0))
+		.bind(cursor.map(|c| c.1))
+		.bind(cursor.map(|c| c.1))
+		.bind(cursor.map(|c| c.2.clone()))
 		.bind(PICK_PAGE)
-		.bind(offset)
 		.fetch_all(&self.pool)
 		.await?;
 		if candidates.is_empty() {
 			return Ok(None);
 		}
-	for task in candidates {
+		let next = candidates.last().map(|task| (task.priority, task.created_at, task.id.clone()));
+		for task in candidates {
 			let group = task.source_id.unwrap_or(0);
 			let blocked = if group == 0 {
 				!inner.running_groups.is_empty()
@@ -338,9 +357,9 @@ impl TaskManager {
 			let _ = self.signals.send(task.clone());
 			return Ok(Some((task, handler, cancelled)));
 		}
-		// this page was all blocked or raced away: keep paging instead of starving runnable work
+		// this page was all blocked or raced away: continue after its last row, including rows failed above
 		drop(inner);
-		Box::pin(self.pick_next(offset + PICK_PAGE)).await
+		Box::pin(self.pick_next(next)).await
 	}
 
 	async fn execute(self: Arc<Self>, task: TaskRow, handler: Handler, cancelled: Arc<AtomicBool>) {
@@ -420,6 +439,26 @@ impl TaskManager {
 		Ok(())
 	}
 }
+
+#[cfg(test)]
+struct CancelTestGate {
+	id: &'static str,
+	reached: Notify,
+	resume: Notify,
+}
+
+#[cfg(test)]
+static CANCEL_BEFORE_UPDATE: CancelTestGate = CancelTestGate {
+	id: "cancel-race-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
+#[cfg(test)]
+static CANCEL_BEFORE_REQUEUE: CancelTestGate = CancelTestGate {
+	id: "cancel-requeue-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
 
 #[cfg(test)]
 mod tests {
@@ -815,6 +854,107 @@ mod tests {
 			}
 		}
 		assert_eq!(statuses, [STATUS_PENDING, STATUS_RUNNING, STATUS_DONE]);
+	}
+
+	#[tokio::test]
+	async fn failed_kinds_do_not_skip_pending_candidates() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		manager.register("noop", ok_handler()).await;
+		for index in 0..193 {
+			manager
+				.enqueue(&format!("ghost-{index:03}"), "ghost", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+				.await
+				.expect("enqueue unknown kind");
+		}
+		manager
+			.enqueue("valid", "noop", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+			.await
+			.expect("enqueue valid task");
+		manager.dispatch().await;
+		let pending: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE kind = 'ghost' AND status = 'pending'")
+			.fetch_one(&manager.pool)
+			.await
+			.expect("pending unknown kinds");
+		assert_eq!(pending, 0, "failed kinds must not advance past runnable candidates");
+		wait_status(&manager, "valid", STATUS_DONE).await;
+	}
+
+	#[tokio::test]
+	async fn cancel_during_pending_to_running_sets_handler_flag() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let finished = Arc::new(Notify::new());
+		let saw_cancel = Arc::new(AtomicBool::new(false));
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			let finished = finished.clone();
+			let saw_cancel = saw_cancel.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				let finished = finished.clone();
+				let saw_cancel = saw_cancel.clone();
+				Box::pin(async move {
+					started.notify_one();
+					release.notified().await;
+					saw_cancel.store(run.is_cancelled(), Ordering::SeqCst);
+					finished.notify_one();
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("race", handler).await;
+		manager
+			.enqueue("cancel-race-test", "race", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("enqueue");
+
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel("cancel-race-test").await });
+		CANCEL_BEFORE_UPDATE.reached.notified().await;
+		manager.dispatch().await;
+		started.notified().await;
+		CANCEL_BEFORE_UPDATE.resume.notify_one();
+		let row = cancel.await.expect("cancel task").expect("cancel");
+		assert_eq!(row.status, STATUS_CANCELLED);
+		release.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(5), finished.notified())
+			.await
+			.expect("handler did not finish");
+		assert!(saw_cancel.load(Ordering::SeqCst), "the handler must observe a cancel that raced its dispatch");
+	}
+
+	#[tokio::test]
+	async fn cancellation_is_published_before_terminal_requeue() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		manager.register("noop", ok_handler()).await;
+		let mut rx = manager.subscribe();
+		manager
+			.enqueue("cancel-requeue-test", "noop", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("enqueue");
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel("cancel-requeue-test").await });
+		CANCEL_BEFORE_REQUEUE.reached.notified().await;
+		manager
+			.enqueue("cancel-requeue-test", "noop", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+			.await
+			.expect("requeue");
+		CANCEL_BEFORE_REQUEUE.resume.notify_one();
+		cancel.await.expect("cancel task").expect("cancel");
+
+		let mut statuses = Vec::new();
+		for _ in 0..3 {
+			let event = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+				.await
+				.expect("missing task event")
+				.expect("event");
+			assert_eq!(event.id, "cancel-requeue-test");
+			statuses.push(event.status);
+		}
+		assert_eq!(statuses, [STATUS_PENDING, STATUS_CANCELLED, STATUS_PENDING]);
 	}
 
 	#[tokio::test]
