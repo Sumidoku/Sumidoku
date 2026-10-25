@@ -24,6 +24,10 @@ export function Modal({ open, title, onClose, children, footer, panelClassName }
 	useEffect(() => {
 		if (!open) return;
 		panelRef.current?.focus();
+	}, [open]);
+
+	useEffect(() => {
+		if (!open) return;
 		const onKey = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') {
 				onClose();
