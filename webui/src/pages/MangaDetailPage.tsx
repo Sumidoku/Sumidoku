@@ -259,7 +259,7 @@ export default function MangaDetailPage() {
 	}, [chapters, prefs, search]);
 
 	const continueCh = useMemo(() => {
-		const readable = (c: ChapterWithDownload) => !c.locked || !!c.isDownloaded;
+		const readable = (c: ChapterWithDownload) => !c.trashed && (!c.locked || !!c.isDownloaded);
 		const resume = visible
 			.filter((c) => readable(c) && !c.isRead && (c.lastReadAt ?? 0) > 0)
 			.reduce<ChapterWithDownload | null>(
@@ -297,6 +297,11 @@ export default function MangaDetailPage() {
 				return next;
 			});
 		} else {
+			// A trashed chapter's files were moved aside by the scan; it can be restored from the browse trash tab
+			if (c.trashed) {
+				pushToast(t('mangaDetail.trashedChapter'), 'info');
+				return;
+			}
 			navigate(readTarget(c));
 		}
 	}
@@ -577,6 +582,11 @@ export default function MangaDetailPage() {
 						)}
 						<div className="manga-hero__chips">
 							<Chip color={statusColor}>{statusText(manga.status)}</Chip>
+							{manga.trashed && (
+								<Chip color="warning" title={t('mangaDetail.trashedHint')}>
+									{t('mangaDetail.trashed')}
+								</Chip>
+							)}
 							{manga.url && (
 								<a
 									className="manga-hero__source"

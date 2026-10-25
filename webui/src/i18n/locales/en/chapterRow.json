@@ -1,6 +1,7 @@
 {
   "chapterRow": {
     "locked": "Locked",
+    "trashed": "Trashed",
     "bookmarked": "Bookmarked",
     "downloaded": "Downloaded",
     "unread": "Unread",

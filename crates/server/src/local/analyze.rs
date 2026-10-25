@@ -121,7 +121,7 @@ pub async fn enqueue_manga_analysis(state: &AppState, manga_id: i64) -> ApiResul
 /// One manga's metadata pass: the same manga_update + upsert + reconcile + divina stamp as the on-open
 /// register path, committed in one transaction
 async fn analyze_metadata(state: &Arc<AppState>, source_id: i64, manga_id: i64, key: &str) -> ApiResult<()> {
-	let update = super::manga_update(
+	let mut update = super::manga_update(
 		&state.local_dirs(source_id).await?,
 		&state.local_zip,
 		key,
@@ -129,6 +129,17 @@ async fn analyze_metadata(state: &Arc<AppState>, source_id: i64, manga_id: i64, 
 	)
 	.await?;
 	let mut tx = crate::db::begin_write(&state.pool).await?;
+	// the analysis upsert must not clobber scheduler-owned fields: preserve the row's update_strategy and
+	// next_update_time, or an analyzed title previously marked Never would re-enter scheduled updates with
+	// the default Manga's Always/NULL (and the upsert's next_update_is_fallback CASE keeps its fallback flag)
+	let (strategy, next_at): (i64, Option<i64>) = sqlx::query_as(
+		"SELECT update_strategy, next_update_time FROM manga WHERE id = ?",
+	)
+	.bind(manga_id)
+	.fetch_one(&mut *tx)
+	.await?;
+	update.manga.update_strategy = crate::model::update_strategy_from_int(strategy);
+	update.manga.next_update_time = next_at;
 	crate::source::upsert_manga(&mut tx, source_id, &update.manga, true, true, true).await?;
 	let chapters = update.manga.chapters.clone().unwrap_or_default();
 	crate::source::reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &update.protected, true).await?;

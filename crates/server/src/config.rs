@@ -85,7 +85,8 @@ pub struct Config {
 	pub local_dirs: Option<Vec<PathBuf>>,
 	/// Name marking a oneshots directory for the local source; None/blank = the rule is off
 	pub local_oneshots_dir: Option<String>,
-	/// Scheduled local scan interval (seconds); 0 = off, manual scans only
+	/// Scheduled local scan interval (seconds); 0 = the scheduler is off, but manual, browse-kicked,
+	/// startup and settings-triggered scans still run
 	pub local_scan_secs: u64,
 	/// Enqueue a local scan of every instance at boot
 	pub local_scan_on_startup: bool,

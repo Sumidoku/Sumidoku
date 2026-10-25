@@ -155,6 +155,11 @@ async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let _ = tokio::fs::remove_file(cache_path).await;
 }
 
+/// Purge paths (local trash) drop the derived cover cache with the row
+pub(crate) async fn invalidate_cover(covers_dir: &FsPath, id: i64) {
+	invalidate_cache(covers_dir, id).await;
+}
+
 fn sidecar_path(cache_path: &FsPath) -> PathBuf {
 	cache_path.with_file_name(format!("{}.content-type", cache_path.file_name().unwrap_or_default().to_string_lossy()))
 }

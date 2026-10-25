@@ -1,8 +1,9 @@
-//! Filesystem side of the built-in local sources. Browsing walks one instance's roots live; persistence comes
-//! from two directions: opening/shelving a manga registers it through manga_update, and the scheduled full
-//! scan (`scan.rs`, kmrs-style) indexes every discovered manga/chapter at enumeration cost and soft-deletes
-//! (trashes) what vanished, with failed-directory protection. Post-scan background analysis (`analyze.rs`)
-//! fills metadata and page rows; purge/restore live on the trash endpoints (`api/local.rs`).
+//! Filesystem side of the built-in local sources. Browsing reads the scan index (rows in the manga table),
+//! never the live filesystem: rows come from two directions — opening/shelving a manga registers it through
+//! manga_update, and the scheduled full scan (`scan.rs`, kmrs-style) indexes every discovered manga/chapter
+//! at enumeration cost and soft-deletes (trashes) what vanished, with failed-directory protection. Post-scan
+//! background analysis (`analyze.rs`) fills metadata and page rows; purge/restore live on the trash endpoints
+//! (`api/local.rs`).
 //!
 //! A local instance (a source row with kind = local, registered through `POST /api/v1/sources/internal`)
 //! has one or more root directories in its own `paths` source setting; the default instance
@@ -325,14 +326,12 @@ pub async fn scan_roots_full(
 	oneshots: Option<&str>,
 	exclusions: &[String],
 ) -> ApiResult<(Vec<String>, Vec<String>)> {
-	// lowercased once here; discover lowercases each candidate relative path before the substring test
-	let oneshots = oneshots.map(str::to_lowercase);
-	let exclusions: Vec<String> = exclusions.iter().map(|exclusion| exclusion.to_lowercase()).collect();
+	// exclusions arrive lowercased from the resolver (scan_one_dir lowercases oneshots once for both callers)
 	let mut seen = HashSet::new();
 	let mut out = Vec::new();
 	let mut failed_out = Vec::new();
 	for (index, dir) in local_dirs.iter().enumerate() {
-		let (keys, failed) = scan_one_dir(dir, oneshots.as_deref(), &exclusions).await?;
+		let (keys, failed) = scan_one_dir(dir, oneshots, exclusions, false).await?;
 		for rel in keys {
 			if !seen.insert(rel.clone()) {
 				continue;
@@ -352,16 +351,31 @@ pub async fn scan_roots_full(
 	Ok((out, failed_out))
 }
 
-/// Single-root scan: discovers manga under one root by the module-doc classification contract; a missing
-/// root is an empty listing, not an error. Failed entries come back alongside, for the reconcile protection set
+/// Single-root scan: discovers manga under one root by the module-doc classification contract. `strict`
+/// selects the caller's root-missing contract: browse (scan_roots_full) treats a missing root as an empty
+/// listing, while the lifecycle scan (scan_instance) fails outright — a root that disappears between the
+/// instance's precheck and this traversal must not degrade into an empty contribution that trashes the
+/// root's whole index. Failed entries come back alongside, for the reconcile protection set
 async fn scan_one_dir(
 	local_dir: &Path,
 	oneshots: Option<&str>,
 	exclusions: &[String],
+	strict: bool,
 ) -> ApiResult<(Vec<String>, Vec<String>)> {
+	// lowercased here so both callers (scan_roots_full and the per-root scan_instance loop) apply the
+	// case-insensitive substring rule the same way; discover lowercases each candidate relative path
+	let oneshots = oneshots.map(str::to_lowercase);
 	let mut read_dir = match tokio::fs::read_dir(local_dir).await {
 		Ok(read_dir) => read_dir,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((Vec::new(), Vec::new())),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			if strict {
+				return Err(ApiError::conflict(
+					"root_unavailable",
+					format!("local root is not a readable directory: {}", local_dir.display()),
+				));
+			}
+			return Ok((Vec::new(), Vec::new()));
+		}
 		Err(e) => return Err(io_scan_err(&e)),
 	};
 	let mut failed = Vec::new();
@@ -369,7 +383,7 @@ async fn scan_one_dir(
 	let mut out = Vec::new();
 	for item in first.iter().filter(|item| item.is_dir) {
 		if let Some(items) = classify_items(local_dir, &item.name, &mut failed).await? {
-			discover(local_dir, item.name.clone(), items, &mut out, oneshots, exclusions, &mut failed).await?;
+			discover(local_dir, item.name.clone(), items, &mut out, oneshots.as_deref(), exclusions, &mut failed).await?;
 		}
 	}
 	Ok((out, failed))
@@ -515,6 +529,15 @@ async fn scan_chapters(local_dir: &Path, manga_key: &str, exclusions: &[String])
 			.map(|d| d.as_millis() as i64)
 			.unwrap_or(0);
 		let date_uploaded = Some(mtime_ms / 1000);
+		// the oneshot's "directory level" is its containing directory: forceModifiedTime off means an
+		// in-place rewrite is invisible (same rule as ordinary manga); on joins the file mtime
+		let parent_ms = tokio::fs::metadata(local_dir.join(manga_key).parent().map(Path::to_path_buf).unwrap_or_else(|| local_dir.to_path_buf()))
+			.await
+			.ok()
+			.and_then(|metadata| metadata.modified().ok())
+			.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+			.map(|d| d.as_millis() as i64)
+			.unwrap_or(mtime_ms);
 		return Ok(ChapterScan {
 			chapters: vec![LocalChapter {
 				number: chapter_number::parse_chapter_number(&display),
@@ -524,8 +547,8 @@ async fn scan_chapters(local_dir: &Path, manga_key: &str, exclusions: &[String])
 				is_archive: true,
 			}],
 			failed: Vec::new(),
-			dir_mtime_ms: mtime_ms,
-			all_mtime_ms: mtime_ms,
+			dir_mtime_ms: parent_ms,
+			all_mtime_ms: parent_ms.max(mtime_ms),
 		});
 	}
 	let mut chapters = Vec::new();
@@ -611,6 +634,9 @@ async fn collect_chapters(
 			}
 			let full_rel = join_rel(manga_key, &key).to_lowercase();
 			if exclusions.iter().any(|exclusion| full_rel.contains(exclusion)) {
+				// an excluded subtree is skipped for content purposes, but rows already persisted under it
+				// must not look vanished to the reconcile: record it in the protection set
+				failed.push(key);
 				continue;
 			}
 			let mut child_dir = match open_dir(&local_dir.join(manga_key).join(&key)).await {

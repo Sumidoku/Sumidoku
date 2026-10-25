@@ -18,7 +18,18 @@
     "addLocalDir": "Add directory",
     "localOneshotsDirLabel": "Oneshots directory",
     "localOneshotsDirPlaceholder": "oneshots",
+
     "localOneshotsDirDesc": "A directory whose path contains this name (case-insensitive) is never listed itself; every archive directly inside becomes its own one-chapter manga titled by the file name. Leaving the field blank disables the oneshots rule for this source; resetting restores the server config (SUMIDOKU_LOCAL_ONESHOTS_DIR).",
-    "resetLocalConfirm": "Clear the oneshots override of this local source? The directory list is kept."
+    "localExclusionsLabel": "Exclusions",
+    "localExclusionPlaceholder": "Substring, e.g. @eaDir",
+    "addExclusion": "Add exclusion",
+    "localExclusionsDesc": "A path containing any of these substrings (case-insensitive) is skipped by the scan",
+    "localForceModifiedTime": "Force modified-time refresh",
+    "localAnalyzePages": "Analyze pages",
+    "localAnalyzeMetadata": "Analyze metadata",
+    "localScanFlagsDesc": "These override the server config fallbacks for this instance; scan-affecting changes trigger a rescan automatically",
+    "scanNow": "Scan now",
+    "scanQueued": "Scan queued",
+    "resetLocalConfirm": "Clear this local source's overrides (oneshots, exclusions and the scan toggles)? The directory list is kept."
   }
 }

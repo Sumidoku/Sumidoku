@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
 	ArrowLeftRight,
 	CircleArrowUp,
+	FolderSearch,
 	GripVertical,
 	House,
 	PackageOpen,
@@ -22,8 +23,10 @@ import { sourceIconUrl } from '../api/client';
 import {
 	useDeleteSource,
 	useImportSource,
+	useLocalScanActive,
 	usePinSource,
 	useReorderPinned,
+	useScanLocal,
 	useScanSources,
 	useSetSourceEnabled,
 	useSources,
@@ -46,6 +49,7 @@ import {
 } from '../components';
 import ReposPanel from './browse/ReposPanel';
 import { SearchPanel } from './browse/SearchPanel';
+import { TrashPanel } from './browse/TrashPanel';
 import { InternalSourceModal } from './browse/InternalSourceModal';
 import { AddRepoModal } from './browse/AddRepoModal';
 import { SourceSettingsButton, SourceSettingsDialog } from './browse/SourceSettingsModal';
@@ -345,14 +349,18 @@ export default function BrowsePage() {
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [registeringInternal, setRegisteringInternal] = useState(false);
 	const [addRepoOpen, setAddRepoOpen] = useState(false);
-	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
+	const [tab, setTab] = useState<'installed' | 'repos' | 'trash'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
+	const scanLocal = useScanLocal();
+	// SSE task events own the running state (AppLayout subscription invalidates qk.tasks); the button only reads it
+	const localScanning = useLocalScanActive();
 
 	// Installed sources sort alphabetically by name; the pinned section sorts separately by pinOrder
 	const all = useMemo(() => [...(sources.data ?? [])].sort(compareSourceName), [sources.data]);
 	// Internal sources (local/opds instances) group into their own section; pinning stays an opt-in on top
 	const internalSources = all.filter((s) => s.kind !== 'aidoku');
+	const hasLocal = all.some((s) => s.kind === 'local');
 	// Aidoku-style separate section: updatable sources grouped together, below the pinned section and above the full list
 	const updateSources = all.filter((s) => s.updateVersion !== null);
 	const updateCount = updateSources.length;
@@ -374,6 +382,15 @@ export default function BrowsePage() {
 			for (const s of r.skipped.slice(0, 3)) {
 				pushToast(t('browse.scanSkipped', { dir: s.dir, reason: s.reason }), 'info');
 			}
+		} catch {
+			// client already popped an error toast
+		}
+	}
+
+	async function onScanLocal() {
+		try {
+			await scanLocal.mutateAsync(null);
+			pushToast(t('browse.scanLocalQueued'), 'info');
 		} catch {
 			// client already popped an error toast
 		}
@@ -475,12 +492,21 @@ export default function BrowsePage() {
 									{t('browse.addInternal')}
 								</Button>
 								<ImportAixButton />
+								{hasLocal && (
+									<Button
+										loading={scanLocal.isPending || localScanning}
+										onClick={() => void onScanLocal()}
+									>
+										<FolderSearch size={15} />
+										{t('browse.scanLocal')}
+									</Button>
+								)}
 								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
 									<ScanSearch size={15} />
 									{t('browse.scan')}
 								</Button>
 							</>
-						) : (
+						) : tab === 'repos' ? (
 							<Button variant="primary" onClick={() => setAddRepoOpen(true)}>
 								<Plus size={15} />
 								{t('reposPanel.addRepo')}
@@ -507,7 +533,8 @@ export default function BrowsePage() {
 					<SegmentedControl
 						options={[
 							{ value: 'installed', label: t('browse.tabInstalled') },
-							{ value: 'repos', label: t('browse.tabRepos') }
+							{ value: 'repos', label: t('browse.tabRepos') },
+							{ value: 'trash', label: t('browse.tabTrash') }
 						]}
 						value={tab}
 						onChange={setTab}
@@ -515,7 +542,9 @@ export default function BrowsePage() {
 				</div>
 			)}
 
-			{!searching && (tab === 'repos' ? (
+			{!searching && (tab === 'trash' ? (
+				<TrashPanel />
+			) : tab === 'repos' ? (
 				<ReposPanel />
 			) : sources.isPending ? (
 				<div className="source-list">

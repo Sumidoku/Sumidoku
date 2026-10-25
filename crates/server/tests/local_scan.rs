@@ -303,6 +303,32 @@ async fn a_missing_root_fails_the_scan_and_trashes_nothing() {
 		.await
 		.expect("trash count");
 	assert_eq!(count, 0, "an unavailable root trashes nothing");
+	// the previous index stays intact and keeps serving: nothing was trashed, nothing deleted
+	let live: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE trashed_at IS NULL")
+		.fetch_one(&pool)
+		.await
+		.expect("live count");
+	assert_eq!(live, 2, "the failed scan leaves the previous index intact");
+	let (_, _, _, alpha_trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha survives");
+	assert_eq!(alpha_trashed, None, "Alpha stays live");
+	let (_, _, _, beta_trashed, _) = manga_row(&pool, "Beta").await.expect("Beta survives");
+	assert_eq!(beta_trashed, None, "Beta stays live");
+	let source_id = local_source_id(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert_eq!(keys, ["Alpha", "Beta"], "browse keeps serving the intact index: {keys:?}");
 	pool.close().await;
 }
 
@@ -363,6 +389,14 @@ async fn unchanged_manga_skip_reconciliation_and_mtime_modes() {
 
 	// a deep addition bumps a descendant directory's mtime: caught without forceModifiedTime
 	write_page(&t.tmp.path().join("local/Alpha/deep/ch 3"), "1.png", b"alpha-3-1");
+	// the new entry is absent from the index before the scan: the scan is what brings it in
+	let pre_scan: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Alpha' AND c.key = 'deep/ch 3'",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("pre-scan count");
+	assert_eq!(pre_scan, 0, "a file added after the last scan is not in the index before the next scan");
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
 	assert_eq!(scan_task["result"]["reconciled"], 1, "{scan_task}");
@@ -399,7 +433,18 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 	// the settings write enqueued a rescan (kmrs's check_library_should_rescan)
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
-	assert_eq!(scan_task["result"]["reconciled"], 1, "the pending in-place edit reconciles: {scan_task}");
+	// The first toggle replaces the stored directory-only mtime with a file-inclusive baseline, so Alpha
+	// may legitimately reconcile too — assert Beta's effect (its row gets stamped) instead of requiring
+	// the global reconciled count to be exactly one
+	assert!(
+		scan_task["result"]["reconciled"].as_i64() >= Some(1),
+		"the pending in-place edit reconciles: {scan_task}"
+	);
+	let beta_mtime: Option<i64> = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
+		.fetch_one(&pool)
+		.await
+		.expect("beta row");
+	assert!(beta_mtime.is_some(), "Beta carries a scan_mtime after the toggle: {scan_task}");
 	write_cbz(&t.tmp.path().join("local/Beta/ch 1.cbz"), &[("1.png", b"beta-1-1-third")]);
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
@@ -515,6 +560,329 @@ async fn empty_trash_purges_everything_trashed() {
 	pool.close().await;
 }
 
+#[tokio::test]
+async fn fresh_browse_returns_empty_then_the_kicked_scan_indexes() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	let source_id = local_source_id(&t.app).await;
+
+	// a fresh instance serves no rows and kicks its first scan (manual priority) — the first response is
+	// empty, the index arrives with the task
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["entries"].as_array().expect("entries").len(), 0, "{body}");
+	let (status, body) = request(&t.app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	assert!(
+		tasks.iter().any(|task| task["kind"] == "local_scan"),
+		"the empty first response kicked the scan: {tasks:?}"
+	);
+
+	// once it settles, browse serves the index
+	scan_and_settle_quiet(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert_eq!(keys, ["Alpha", "Beta"], "{keys:?}");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn existing_rows_browse_before_the_scan_and_manual_scan_backfills() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	let source_id = local_source_id(&t.app).await;
+	// Gamma exists on disk and in the index: a pre-upgrade install that was opened/shelved but never scanned
+	write_page(&t.tmp.path().join("local/Gamma/ch 1"), "1.png", b"gamma-1-1");
+	sqlx::query("INSERT INTO manga (source_id, key, title) VALUES (?, 'Gamma', 'Gamma')")
+		.bind(source_id)
+		.execute(&pool)
+		.await
+		.expect("seed pre-upgrade row");
+
+	// browse shows the persisted subset (rows > 0, so no scan is kicked), not the on-disk Alpha/Beta
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert_eq!(
+		keys,
+		["Gamma"],
+		"an upgrade with existing rows shows the persisted subset until a scan: {keys:?}"
+	);
+
+	// the manual scan backfills the rest of the library
+	scan_and_settle(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert_eq!(keys, ["Alpha", "Beta", "Gamma"], "the manual scan backfills the index: {keys:?}");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn nested_chapters_under_an_excluded_subtree_stay_protected() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	let source_id = local_source_id(&t.app).await;
+	write_page(&t.tmp.path().join("local/Alpha/deep/ch 3"), "1.png", b"alpha-3-1");
+	scan_and_settle(&t.app).await;
+	let deep_id: i64 = sqlx::query_scalar(
+		"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Alpha' AND c.key = 'deep/ch 3'",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("deep chapter indexed");
+
+	// the subtree becomes excluded: the rescan skips it for content, but its container lands in the
+	// protection set — persisted chapters under it must not look vanished and get trashed
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"exclusions": ["deep"]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let tasks = scan_and_settle(&t.app).await;
+	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+	assert_eq!(scan_task["result"]["chaptersTrashed"], 0, "{scan_task}");
+	let trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM chapter WHERE id = ?")
+		.bind(deep_id)
+		.fetch_one(&pool)
+		.await
+		.expect("deep chapter");
+	assert_eq!(trashed, None, "an excluded subtree's persisted chapters are protected, not trashed");
+	let alpha_trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM manga WHERE key = 'Alpha'")
+		.fetch_one(&pool)
+		.await
+		.expect("alpha");
+	assert_eq!(alpha_trashed, None, "the manga row itself stays live");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn settings_reset_rescans_and_restores_the_excluded_rows() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	let source_id = local_source_id(&t.app).await;
+	scan_and_settle(&t.app).await;
+
+	// exclude Alpha through the instance settings: the write enqueues a rescan that hides and protects it
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"exclusions": ["Alpha"]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert!(!keys.contains(&"Alpha"), "the excluded row is hidden: {keys:?}");
+
+	// reset clears the overrides and enqueues another rescan: the index converges back to the config rules
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/settings/reset"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let keys: Vec<&str> = body["entries"]
+		.as_array()
+		.expect("entries")
+		.iter()
+		.filter_map(|e| e["key"].as_str())
+		.collect();
+	assert_eq!(keys, ["Alpha", "Beta"], "reset re-serves the previously excluded rows: {keys:?}");
+	let alpha_trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM manga WHERE key = 'Alpha'")
+		.fetch_one(&pool)
+		.await
+		.expect("alpha");
+	assert_eq!(alpha_trashed, None, "exclusion protection never trashed the row");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn restore_untrashes_only_the_chapters_back_on_disk() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	scan_and_settle(&t.app).await;
+	// only ch 1 returns: restore reconciles against disk instead of blanket-clearing the flags
+	write_page(&t.tmp.path().join("local/Alpha/ch 1"), "1.png", b"alpha-1-1");
+	let (status, _) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/local/trash/{alpha_id}/restore"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	scan_and_settle_quiet(&t.app).await;
+
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	assert_eq!(trashed, None, "the manga untrashes once its directory is back");
+	let ch1_trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM chapter WHERE manga_id = ? AND key = 'ch 1'")
+		.bind(alpha_id)
+		.fetch_one(&pool)
+		.await
+		.expect("ch 1");
+	assert_eq!(ch1_trashed, None, "ch 1 untrashes");
+	let ch2_trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM chapter WHERE manga_id = ? AND key = 'ch 2'")
+		.bind(alpha_id)
+		.fetch_one(&pool)
+		.await
+		.expect("ch 2");
+	assert!(ch2_trashed.is_some(), "ch 2 stays trashed — its files are still missing");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn empty_trash_never_deletes_a_restored_manga() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	std::fs::remove_dir_all(t.tmp.path().join("local/Beta")).expect("remove Beta");
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+
+	// Alpha's directory is back and the row is restored before the trash is emptied: each purge is
+	// guarded by the row's current trash state, so a restored manga survives emptying
+	write_page(&t.tmp.path().join("local/Alpha/ch 1"), "1.png", b"alpha-1-1");
+	let (status, _) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/local/trash/{alpha_id}/restore"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(&t.app, "DELETE", "/api/v1/local/trash", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle_quiet(&t.app).await;
+
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha survives empty-trash");
+	assert_eq!(trashed, None, "a restored manga is not purged by empty-trash");
+	assert!(manga_row(&pool, "Beta").await.is_none(), "a still-trashed manga is purged");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn local_scan_clock_is_server_owned() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('local.last_scan_at', '456')")
+		.execute(&pool)
+		.await
+		.expect("seed scan clock");
+
+	let (status, mut settings) = request(&t.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(settings.get("local.last_scan_at").is_none(), "{settings}");
+	settings["local.last_scan_at"] = json!(123);
+	let (status, body) = request(&t.app, "PUT", "/api/v1/settings", Some(settings)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, body) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"local.last_scan_at": 123}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'local.last_scan_at'")
+		.fetch_one(&pool)
+		.await
+		.expect("scan clock must survive both settings write forms");
+	assert_eq!(stored, "456");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn local_scan_clock_stays_out_of_backups() {
+	let t = scan_app().await;
+	let pool = common::connect_db(&t.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('local.last_scan_at', '456')")
+		.execute(&pool)
+		.await
+		.expect("seed scan clock");
+
+	let (status, mut doc) = request(&t.app, "GET", "/api/v1/backups/document", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(doc["settings"].get("local.last_scan_at").is_none(), "{doc}");
+	doc["settings"]["local.last_scan_at"] = json!(123);
+	let (status, body) = request(&t.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'local.last_scan_at'")
+		.fetch_one(&pool)
+		.await
+		.expect("scan clock must survive restoring an old backup");
+	assert_eq!(stored, "456");
+	pool.close().await;
+}
+
 /// Waits for tasks already in the queue (used after empty_trash, which enqueues its own)
 async fn scan_and_settle_quiet(app: &axum::Router) -> Vec<Value> {
 	let started = std::time::Instant::now();
@@ -530,4 +898,309 @@ async fn scan_and_settle_quiet(app: &axum::Router) -> Vec<Value> {
 		assert!(started.elapsed() < std::time::Duration::from_secs(15), "tasks never settled: {body}");
 		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
 	}
+}
+
+/// The analysis upsert must not clobber scheduler-owned fields: a title the user marked Never (or with a
+/// pending next update) must keep that scheduling after the derived metadata pass, not re-enter scheduled
+/// updates with the default Manga's Always/NULL
+#[tokio::test]
+async fn analysis_preserves_user_update_strategy_and_next_update() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (beta_id, _, _, _, _) = manga_row(&pool, "Beta").await.expect("Beta");
+	// user-owned scheduling: Never (1) with a pending next update
+	sqlx::query("UPDATE manga SET update_strategy = 1, next_update_time = 1234567890 WHERE id = ?")
+		.bind(beta_id)
+		.execute(&pool)
+		.await
+		.expect("set strategy");
+	let source_id = local_source_id(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"analyzePages": true, "analyzeMetadata": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/manga/{beta_id}/analyze"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle_quiet(&t.app).await;
+	let (strategy, next_at): (i64, Option<i64>) = sqlx::query_as(
+		"SELECT update_strategy, next_update_time FROM manga WHERE id = ?",
+	)
+	.bind(beta_id)
+	.fetch_one(&pool)
+	.await
+	.expect("strategy row");
+	assert_eq!(strategy, 1, "analysis must not reset a user's Never strategy");
+	assert_eq!(next_at, Some(1234567890), "analysis must keep the pending next update");
+	pool.close().await;
+}
+
+/// A restore racing a purge must not recreate the row through the ordinary insert path: the purge's cascade
+/// has already removed progress and library links, so restore has to refuse instead of reporting success
+/// on a fresh id
+#[tokio::test]
+async fn restore_after_purge_does_not_recreate_the_row() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	// trash Alpha by removing it from disk, then purge it
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	scan_and_settle(&t.app).await;
+	let (status, _) = request(&t.app, "DELETE", &format!("/api/v1/local/trash/{alpha_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE key = 'Alpha'")
+		.fetch_one(&pool)
+		.await
+		.expect("alpha count");
+	assert_eq!(count, 0, "purge removed the row");
+	// restore must refuse (the row is gone) and must not re-create it
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{alpha_id}/restore"), None).await;
+	assert!(!status.is_success(), "restore after purge must fail: {status} {body}");
+	let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE key = 'Alpha'")
+		.fetch_one(&pool)
+		.await
+		.expect("alpha count");
+	assert_eq!(count, 0, "restore never re-creates a purged row");
+	pool.close().await;
+}
+
+/// Restore must validate the on-disk entry's shape, not just its existence: an arbitrary regular file in
+/// the manga's place would otherwise manufacture a fake oneshot chapter that later scans then protect
+#[tokio::test]
+async fn restore_rejects_a_wrong_typed_replacement() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	scan_and_settle(&t.app).await;
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha trashed");
+	assert!(trashed.is_some(), "Alpha sits in the trash");
+	// replace the directory with a regular text file: not a manga dir, not an archive
+	std::fs::write(t.tmp.path().join("local/Alpha"), b"not a manga").expect("write impostor");
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{alpha_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(body["error"]["code"], "gone", "{body}");
+	// no pseudo-chapter materialized and restored under the fake entry (the pre-existing trashed chapter
+	// rows stay trashed; restore must not have re-created any live one)
+	let count: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Alpha' AND c.trashed_at IS NULL",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("chapter count");
+	assert_eq!(count, 0, "no live pseudo-chapter from a wrong-typed restore");
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha still trashed");
+	assert!(trashed.is_some(), "the row stays trashed after the refused restore");
+	pool.close().await;
+}
+
+/// The batch progress endpoint must apply the trashed-chapter guard too, or a batch update would write
+/// progress/history for a chapter whose files are gone even though the single-chapter and read paths refuse
+#[tokio::test]
+async fn batch_progress_skips_trashed_chapters() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let ch1: i64 = sqlx::query_scalar(
+		"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Beta' AND c.key = 'ch 1.cbz'",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("chapter id");
+	// trash Beta/ch 1 by removing it from disk and rescanning
+	std::fs::remove_file(t.tmp.path().join("local/Beta/ch 1.cbz")).expect("remove ch1");
+	scan_and_settle(&t.app).await;
+	let trashed: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM chapter WHERE id = ?")
+		.bind(ch1)
+		.fetch_one(&pool)
+		.await
+		.expect("trashed flag");
+	assert!(trashed.is_some(), "chapter sits in the trash");
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [ch1], "isRead": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["updated"], 0, "a trashed chapter writes no batch progress: {body}");
+	let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter_user WHERE chapter_id = ?")
+		.bind(ch1)
+		.fetch_one(&pool)
+		.await
+		.expect("progress count");
+	assert_eq!(count, 0, "no progress row appears for a trashed chapter");
+	pool.close().await;
+}
+
+/// Restore clears the manga's trash flag before the entry rescan; when the directory came back with the
+/// same mtime (a rename away and back), the unchanged fast path would skip chapter reconciliation and leave
+/// every chapter trashed. Restore must force chapter reconciliation and untrash the chapters with the manga
+#[tokio::test]
+async fn restore_with_unchanged_mtime_still_untrashes_chapters() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	// move the directory away and back with rename — the same inode keeps its mtime, so the entry-level
+	// rescan would see an unchanged subtree and skip chapter reconciliation without the force
+	let away = t.tmp.path().join("away");
+	std::fs::create_dir_all(&away).expect("away dir");
+	std::fs::rename(t.tmp.path().join("local/Alpha"), away.join("Alpha")).expect("move away");
+	scan_and_settle(&t.app).await;
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha trashed");
+	assert!(trashed.is_some(), "Alpha sits in the trash after the directory left");
+	std::fs::rename(away.join("Alpha"), t.tmp.path().join("local/Alpha")).expect("move back");
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{alpha_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	// the chapters must come out of the trash with the manga, not stay trashed behind a cleared manga flag
+	let live: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Alpha' AND c.trashed_at IS NULL",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("live chapters");
+	assert_eq!(live, 2, "all chapters untrashed with the restored manga");
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha restored");
+	assert_eq!(trashed, None);
+	pool.close().await;
+}
+
+/// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one: once
+/// every row sits in the trash, browsing must serve an empty visible list without re-triggering a full
+/// filesystem scan on every call
+#[tokio::test]
+async fn an_all_trashed_instance_does_not_rekick_a_scan_on_browse() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	let source_id = local_source_id(&t.app).await;
+	scan_and_settle(&t.app).await;
+	// trash everything: remove both manga directories and rescan
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	std::fs::remove_dir_all(t.tmp.path().join("local/Beta")).expect("remove Beta");
+	scan_and_settle(&t.app).await;
+	let trashed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE trashed_at IS NOT NULL")
+		.fetch_one(&pool)
+		.await
+		.expect("trashed count");
+	assert_eq!(trashed, 2, "every row is in the trash");
+	// browse serves the empty visible list but must not kick another scan
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["entries"].as_array().expect("entries").len(), 0, "{body}");
+	let (status, body) = request(&t.app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	assert!(
+		!tasks.iter().any(|task| {
+			task["kind"] == "local_scan" && (task["status"] == "pending" || task["status"] == "running")
+		}),
+		"an all-trashed browse must not re-kick the scan: {tasks:?}"
+	);
+	pool.close().await;
+}
+
+/// An empty instance (no manga at all) scans and settles cleanly: the inputs checkpoint still runs after
+/// the persisted pass (there are no rows to checkpoint against), so the handler converges without looping
+#[tokio::test]
+async fn empty_instance_scan_settles_cleanly() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let empty_dir = tmp.path().join("empty");
+	std::fs::create_dir_all(&empty_dir).expect("empty dir");
+	let mut config = base_config(&tmp);
+	config.local_dirs = Some(vec![empty_dir]);
+	config.local_analyze_pages = false;
+	config.local_analyze_metadata = false;
+	let app = build_app(config).await.expect("build app");
+	let (status, body) = request(&app, "POST", "/api/v1/local/scan", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let started = std::time::Instant::now();
+	loop {
+		let (status, body) = request(&app, "GET", "/api/v1/tasks", None).await;
+		assert_eq!(status, StatusCode::OK);
+		let tasks = body.as_array().expect("tasks array");
+		if !tasks.is_empty()
+			&& tasks.iter().all(|task| task["status"] != "pending" && task["status"] != "running")
+		{
+			let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+			assert_eq!(scan_task["status"], "done", "{scan_task}");
+			assert_eq!(scan_task["result"]["indexed"], 0, "an empty root indexes nothing: {scan_task}");
+			break;
+		}
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(15),
+			"tasks never settled: {body}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+	}
+}
+
+/// A manual scan requested while the browse-kicked first scan is live must not be acknowledged and lost:
+/// the one-outstanding-execution contract folds the newest payload into the running task, and the executed
+/// scan carries the manual trigger's refreshMetadata = true
+#[tokio::test]
+async fn live_payload_moves_to_the_newest_trigger() {
+	let t = scan_app().await;
+	let source_id = local_source_id(&t.app).await;
+	// browse kicks the first scan with refresh_metadata = false
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["entries"].as_array().expect("entries").len(), 0, "{body}");
+	// an immediate manual scan lands on the same live task; its payload must replace the kick's
+	let (status, _) = request(&t.app, "POST", "/api/v1/local/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	scan_and_settle_quiet(&t.app).await;
+	let (status, body) = request(&t.app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	let scan_tasks: Vec<&Value> = tasks.iter().filter(|task| task["kind"] == "local_scan").collect();
+	let last = scan_tasks.last().expect("scan task");
+	assert_eq!(last["status"], "done", "{last}");
+	assert_eq!(
+		last["payload"]["refreshMetadata"], true,
+		"the executed scan carried the newest (manual) trigger's payload: {last}"
+	);
 }

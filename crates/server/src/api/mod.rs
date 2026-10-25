@@ -471,13 +471,18 @@ pub(crate) async fn attach_internal_ids(
 /// all gets its first scan kicked at manual priority — the dedup id makes repeated browsing cheap — and the
 /// web UI refreshes on the task SSE event; everything returns in one page, hasNextPage is always false
 pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
-	let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE source_id = ?")
+	// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one:
+	// once every row sits in the trash, every browse would otherwise re-trigger a full filesystem scan.
+	// The zero-row check and the response snapshot are both captured BEFORE the kick, so an immediately
+	// scheduled worker cannot index rows between enqueue and this SELECT — keeping the accepted
+	// first-browse-empty-response contract (the kicked scan's rows land on the next browse)
+	let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE source_id = ?")
 		.bind(source_id)
 		.fetch_one(&state.pool)
 		.await?;
-	if rows == 0
+	if total == 0
 		&& let Err(e) =
-			crate::local::scan::enqueue_scan(state, Some(source_id), crate::task::PRIORITY_MANUAL).await
+			crate::local::scan::enqueue_scan(state, Some(source_id), crate::task::PRIORITY_MANUAL, false).await
 	{
 		tracing::warn!(source_id, "enqueue first scan on browse failed: {}", e.message());
 	}
@@ -499,6 +504,15 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 		.filter(|q| !q.is_empty())
 		.map(str::to_lowercase);
 	rows.retain(|(_, _, title)| needle.as_ref().is_none_or(|n| title.to_lowercase().contains(n)));
+	// exclusions apply to the read model too: an excluded subtree is hidden, never indexed further, and
+	// (on the scan side) protected from trashing
+	let exclusions = state.local_exclusions(source_id).await?;
+	if !exclusions.is_empty() {
+		rows.retain(|(_, key, _)| {
+			let lowered = key.to_lowercase();
+			!exclusions.iter().any(|exclusion| lowered.contains(exclusion))
+		});
+	}
 	rows.sort_by(|a, b| crate::local::natural_sort::compare(&a.1, &b.1));
 	rows.into_iter()
 		.map(|(id, key, title)| {
@@ -929,7 +943,7 @@ async fn put_source_settings(
 		tx.commit().await?;
 		// kmrs's check_library_should_rescan: editing a scan-affecting setting re-scans the instance
 		if rescan
-			&& let Err(e) = crate::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL).await
+			&& let Err(e) = crate::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await
 		{
 			tracing::warn!(source_id = id, "enqueue rescan on settings change failed: {}", e.message());
 		}
@@ -1024,7 +1038,7 @@ async fn reset_source_settings(
 	let row = source_row(&state, id).await?;
 	if row.is_local() {
 		// The roots list has no default to reset to (registration requires it); every other override clears,
-		// falling back to the legacy global layer / config
+		// falling back to the legacy global layer / config — and the index must converge to the new rules
 		sqlx::query(
 			"DELETE FROM source_setting WHERE source_id = ? AND key IN
 			 ('oneshotsDir', 'exclusions', 'forceModifiedTime', 'analyzePages', 'analyzeMetadata')",
@@ -1032,6 +1046,9 @@ async fn reset_source_settings(
 		.bind(id)
 		.execute(&state.pool)
 		.await?;
+		if let Err(e) = crate::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await {
+			tracing::warn!(source_id = id, "enqueue rescan on settings reset failed: {}", e.message());
+		}
 		let values = local_settings_doc(&state, id).await?["values"].clone();
 		return Ok(Json(json!({ "values": values })));
 	}
@@ -1560,7 +1577,7 @@ async fn get_manga(
 		// Local-source refresh = entry-level rescan (enumeration only): chapter changes reconcile here,
 		// embedded metadata belongs to the analysis pass the rescan kicks; no source call to stream
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, row.source_id, &row.key).await?;
+			crate::local::scan::scan_manga_entry(&state, row.source_id, &row.key, true, false).await?;
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
@@ -1657,7 +1674,7 @@ async fn get_chapters(
 		// into the reconcile protection set, not treated as vanished-and-trashed; metadata/page analysis is
 		// the background pass the rescan kicks
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key).await?;
+			crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
@@ -1751,7 +1768,11 @@ pub(crate) async fn get_pages(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
-	chapter_row(&state.pool, id).await?;
+	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
+	let row = chapter_row(&state.pool, id).await?;
+	if row.trashed_at.is_some() {
+		return Err(ApiError::not_found("chapter is in the trash"));
+	}
 	// A finished download product is the preferred page list: entries are derived from the artifact
 	// with no source access, so downloaded chapters stay readable offline. An explicit refresh still
 	// pulls from the source; without a product the page cache/source path is unchanged.
@@ -1875,6 +1896,7 @@ pub(crate) async fn apply_settings(
 			|| key == "localOneshotsDir"
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;
 		}

@@ -13,6 +13,8 @@
     "timeout": "源请求超时",
     "bad_gateway": "上游服务请求失败",
     "internal": "服务器内部错误",
+    "gone": "目录仍不存在；请先在磁盘上恢复，或清除该条目",
+    "not_trashed": "该条目不在回收站中",
     "network": "网络请求失败",
     "http": "请求失败（HTTP {{status}}）",
     "stream_parse": "流式响应包含无法解析的事件",

@@ -381,6 +381,21 @@
 	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
+.cover-card__trashed {
+	position: absolute;
+	top: 6px;
+	left: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 20px;
+	height: 20px;
+	border-radius: 999px;
+	background: var(--warning, #d97706);
+	color: #fff;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
 .cover-card__busy {
 	position: absolute;
 	inset: 0;

@@ -451,7 +451,13 @@ impl UpdateScheduler {
 					// upsert overwrites update_strategy with the source default otherwise: the user's
 					// per-manga choice survives the refresh (persist_success's rule)
 					let mut refreshed = update.manga.clone();
-					refreshed.update_strategy = update_strategy_from_int(manga.update_strategy);
+					// persist_success's rule: re-read inside the write transaction so a Never chosen during
+					// the (slow) fetch survives
+					let update_strategy: i64 = sqlx::query_scalar("SELECT update_strategy FROM manga WHERE id = ?")
+						.bind(manga.id)
+						.fetch_one(&mut *tx)
+						.await?;
+					refreshed.update_strategy = update_strategy_from_int(update_strategy);
 					upsert_manga(&mut tx, manga.source_id, &refreshed, true, true, false).await?;
 					let chapters = update.manga.chapters.clone().unwrap_or_default();
 					let reconciled =
@@ -472,7 +478,8 @@ impl UpdateScheduler {
 				} else {
 					// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
 					// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
-					let (_, reconciled, _) = crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key).await?;
+					let (_, reconciled, _) =
+					crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, false, false).await?;
 				let now = unix_now();
 				let (next_update_time, next_update_is_fallback) =
 					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
@@ -1306,6 +1313,77 @@ mod tests {
 				.await
 				.expect("details after refresh");
 		assert_eq!(after, ("Local Series".into(), Some("fresh metadata".into()), 1));
+	}
+
+	#[tokio::test]
+	async fn local_refresh_metadata_false_survives_the_background_analysis_pass() {
+		// The harness above has no TaskManager, so it cannot see the production bypass: with a real manager,
+		// the entry scan's analysis enqueue actually runs. refresh_metadata = false must keep the user's
+		// metadata — the scan reconciles enumeration, it does not invalidate analyzed rows, and the derived
+		// analysis pass only rewrites initialized = 0 manga
+		let (state, _, _tmp) = union_state(Config::default()).await;
+		let tasks = crate::task::TaskManager::new(&state);
+		assert!(state.tasks.set(tasks.clone()).is_ok());
+		crate::local::scan::register_handlers(&tasks).await;
+		tokio::spawn(tasks.run());
+		let root = state.config.config_dir.join("local");
+		let chapter_dir = root.join("Series").join("ch 1");
+		std::fs::create_dir_all(&chapter_dir).expect("create local chapter");
+		std::fs::write(chapter_dir.join("1.png"), b"page").expect("write local page");
+		std::fs::write(
+			root.join("Series").join("series.json"),
+			r#"{"title":"Local Series","description":"fresh metadata"}"#,
+		)
+		.expect("write local metadata");
+		let source_id: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+			.fetch_one(&state.pool)
+			.await
+			.expect("local source");
+		let manga_id = add_manga(&state, source_id, "Series").await;
+		// an already-analyzed manga: initialized = 1, stale scan_mtime forces the entry scan to reconcile
+		sqlx::query(
+			"UPDATE manga SET title = 'Stale', description = 'old', update_strategy = 1, initialized = 1, scan_mtime = 1 WHERE id = ?",
+		)
+		.bind(manga_id)
+		.execute(&state.pool)
+		.await
+		.expect("set initial details");
+
+		// the production call the update scheduler makes for a local manga with refresh_metadata = false
+		crate::local::scan::scan_manga_entry(&state, source_id, "Series", false, false)
+			.await
+			.expect("entry scan");
+		// the entry scan enqueued the analysis pass; wait for the queue to settle
+		let started = std::time::Instant::now();
+		loop {
+			let live: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE status IN ('pending', 'running')")
+				.fetch_one(&state.pool)
+				.await
+				.expect("live tasks");
+			if live == 0 {
+				break;
+			}
+			assert!(started.elapsed() < std::time::Duration::from_secs(15), "analysis never settled");
+			tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+		}
+		let analyze_done: i64 = sqlx::query_scalar(
+			"SELECT COUNT(*) FROM task WHERE kind = 'local_analyze' AND status = 'done'",
+		)
+		.fetch_one(&state.pool)
+		.await
+		.expect("analysis ran");
+		assert_eq!(analyze_done, 1, "the production analysis pass ran");
+
+		let after: (String, Option<String>) = sqlx::query_as("SELECT title, description FROM manga WHERE id = ?")
+			.bind(manga_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("details after entry scan + analysis");
+		assert_eq!(
+			after,
+			("Stale".into(), Some("old".into())),
+			"refresh_metadata = false keeps the user's metadata through background analysis"
+		);
 	}
 
 	#[tokio::test]

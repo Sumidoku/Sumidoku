@@ -229,6 +229,7 @@ export default function LibraryPage() {
 								src={coverUrl(m.id, m.cover)}
 								title={m.title}
 								unreadCount={m.unreadCount}
+								trashed={m.trashed}
 								to={`/manga/${m.id}`}
 							/>
 						))}

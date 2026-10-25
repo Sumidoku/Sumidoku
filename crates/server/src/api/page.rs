@@ -85,6 +85,10 @@ pub async fn get_page(
 	}
 
 	let chapter = chapter_row(&state.pool, id).await?;
+	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
+	if chapter.trashed_at.is_some() {
+		return Err(ApiError::not_found("chapter is in the trash"));
+	}
 	let pages = load_pages(&state, id, false).await?;
 	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));

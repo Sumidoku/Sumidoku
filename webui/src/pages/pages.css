@@ -265,6 +265,71 @@
 	margin-bottom: 16px;
 }
 
+/* ============ Browse trash tab ============ */
+
+.trash__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+	margin-bottom: 12px;
+}
+
+.trash-row {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 10px 14px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+
+.trash-row__cover {
+	width: 44px;
+	flex: none;
+}
+
+.trash-row__main {
+	flex: 1;
+	min-width: 0;
+}
+
+.trash-row__title {
+	font-weight: 600;
+	font-size: 14.5px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.trash-row__meta {
+	margin-top: 2px;
+	font-size: 12.5px;
+	color: var(--text-faint);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.trash-row__actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex: none;
+}
+
+@media (max-width: 767px) {
+	.trash-row {
+		flex-wrap: wrap;
+	}
+
+	.trash-row__actions {
+		width: 100%;
+		justify-content: flex-end;
+	}
+}
+
 .opds-form {
 	display: flex;
 	flex-direction: column;

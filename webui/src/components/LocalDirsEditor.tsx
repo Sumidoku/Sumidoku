@@ -4,8 +4,18 @@ import { Button } from './Button';
 import { IconButton } from './IconButton';
 import { Input } from './Input';
 
-/** Controlled editor for a local instance's root directories: one input per path plus add/remove rows */
-export function LocalDirsEditor({ dirs, onChange }: { dirs: string[]; onChange: (dirs: string[]) => void }) {
+/** Controlled editor for a list of strings (local root directories, exclusion substrings): one input per row plus add/remove */
+export function LocalDirsEditor({
+	dirs,
+	onChange,
+	placeholder,
+	addLabel
+}: {
+	dirs: string[];
+	onChange: (dirs: string[]) => void;
+	placeholder?: string;
+	addLabel?: string;
+}) {
 	const { t } = useTranslation();
 	return (
 		<>
@@ -14,7 +24,7 @@ export function LocalDirsEditor({ dirs, onChange }: { dirs: string[]; onChange: 
 					{dirs.map((dir, i) => (
 						<div key={i} className="settings-kv__row">
 							<Input
-								placeholder={t('sourceSettings.localDirPlaceholder')}
+								placeholder={placeholder ?? t('sourceSettings.localDirPlaceholder')}
 								value={dir}
 								onChange={(e) => {
 									// currentTarget is already null by the time the deferred updater runs, so take the value first
@@ -34,7 +44,7 @@ export function LocalDirsEditor({ dirs, onChange }: { dirs: string[]; onChange: 
 				</div>
 			)}
 			<div className="settings-kv__add">
-				<Button onClick={() => onChange([...dirs, ''])}>{t('sourceSettings.addLocalDir')}</Button>
+				<Button onClick={() => onChange([...dirs, ''])}>{addLabel ?? t('sourceSettings.addLocalDir')}</Button>
 			</div>
 		</>
 	);

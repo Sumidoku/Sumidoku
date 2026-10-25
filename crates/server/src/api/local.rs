@@ -30,7 +30,8 @@ pub async fn scan_now(
 			return Err(ApiError::bad_request("not a local source"));
 		}
 	}
-	let tasks = crate::local::scan::enqueue_scan(&state, source_id, PRIORITY_MANUAL).await?;
+	// a manual scan is an explicit refresh: it opts into metadata re-reads
+	let tasks = crate::local::scan::enqueue_scan(&state, source_id, PRIORITY_MANUAL, true).await?;
 	let tasks: Vec<Value> = tasks.iter().map(|task| task.to_json()).collect();
 	Ok(Json(json!(tasks)))
 }

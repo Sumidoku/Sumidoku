@@ -1,22 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { Settings } from 'lucide-react';
+import { FolderSearch, Settings } from 'lucide-react';
 import {
 	invalidateForRefreshes,
 	useBasicLogin,
 	useClearSourceCache,
+	useLocalScanActive,
 	useLoginLogout,
 	useNotifySource,
 	useOAuthLoginComplete,
 	useOAuthLoginStart,
 	useResetSourceSettings,
 	useSaveSourceSettings,
+	useScanLocal,
 	useSourceSettings,
 	useWebLogin
 } from '../../api/hooks';
 import type { SourceSetting } from '../../api/types';
-import { Button, IconButton, Input, LocalDirsEditor, Modal, Spinner, pushToast } from '../../components';
+import { Button, IconButton, Input, LocalDirsEditor, Modal, Spinner, Switch, pushToast } from '../../components';
 import { SettingItem } from '../settings/SettingItem';
 import '../settings.css';
 
@@ -33,30 +35,56 @@ function flattenSettings(list: SourceSetting[]): SourceSetting[] {
 type PendingAction = 'reset' | 'clear' | null;
 
 /** Local instances configure through the same endpoint but with server-synthesized settings: the roots
-	list (paths) and the oneshots marker — no wasm schema, no login/cache surface */
+	list (paths), the oneshots marker, exclusion substrings and the three scan/analysis toggles — no wasm
+	schema, no login/cache surface */
 function LocalSourcePanel({ sourceId }: { sourceId: number }) {
 	const { t } = useTranslation();
 	const query = useSourceSettings(sourceId);
 	const save = useSaveSourceSettings(sourceId);
 	const reset = useResetSourceSettings(sourceId);
+	const scanLocal = useScanLocal();
+	// SSE task events own the running state (AppLayout subscription invalidates qk.tasks); the button only reads it
+	const scanning = useLocalScanActive(sourceId);
 	const [dirs, setDirs] = useState<string[] | null>(null);
 	const [oneshots, setOneshots] = useState<string | null>(null);
+	const [exclusions, setExclusions] = useState<string[] | null>(null);
+	const [flags, setFlags] = useState<{ forceModifiedTime: boolean; analyzePages: boolean; analyzeMetadata: boolean } | null>(null);
 	const [pendingReset, setPendingReset] = useState(false);
 
-	const values = query.data?.values as { paths?: unknown; oneshotsDir?: unknown } | undefined;
+	const values = query.data?.values as
+		| {
+				paths?: unknown;
+				oneshotsDir?: unknown;
+				exclusions?: unknown;
+				forceModifiedTime?: unknown;
+				analyzePages?: unknown;
+				analyzeMetadata?: unknown;
+		  }
+		| undefined;
 	const currentPaths: string[] = Array.isArray(values?.paths)
 		? values.paths.filter((p): p is string => typeof p === 'string')
 		: [];
 	const currentOneshots = typeof values?.oneshotsDir === 'string' ? values.oneshotsDir : '';
+	const currentExclusions: string[] = Array.isArray(values?.exclusions)
+		? values.exclusions.filter((x): x is string => typeof x === 'string')
+		: [];
+	// the server resolves the config-layer fallback, so an unset toggle still arrives as a real boolean
+	const currentFlags = {
+		forceModifiedTime: values?.forceModifiedTime === true,
+		analyzePages: values?.analyzePages === true,
+		analyzeMetadata: values?.analyzeMetadata === true
+	};
 
 	useEffect(() => {
 		if (!values || dirs !== null) return;
 		setDirs(currentPaths);
 		setOneshots(currentOneshots);
+		setExclusions(currentExclusions);
+		setFlags(currentFlags);
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- one-time initialization from the loaded values
 	}, [values, dirs]);
 
-	if (query.isPending || dirs === null || oneshots === null) {
+	if (query.isPending || dirs === null || oneshots === null || exclusions === null || flags === null) {
 		return (
 			<div className="settings-source__loading">
 				<Spinner /> {t('common.loading')}
@@ -67,23 +95,46 @@ function LocalSourcePanel({ sourceId }: { sourceId: number }) {
 
 	const cleaned = dirs.map((d) => d.trim()).filter(Boolean);
 	const oneshotsName = oneshots.trim();
-	const dirty = cleaned.join('\n') !== currentPaths.join('\n') || oneshotsName !== currentOneshots;
+	const cleanedExclusions = exclusions.map((x) => x.trim()).filter(Boolean);
+	const dirty =
+		cleaned.join('\n') !== currentPaths.join('\n') ||
+		oneshotsName !== currentOneshots ||
+		cleanedExclusions.join('\n') !== currentExclusions.join('\n') ||
+		flags.forceModifiedTime !== currentFlags.forceModifiedTime ||
+		flags.analyzePages !== currentFlags.analyzePages ||
+		flags.analyzeMetadata !== currentFlags.analyzeMetadata;
+
+	function clearDraft() {
+		setDirs(null);
+		setOneshots(null);
+		setExclusions(null);
+		setFlags(null);
+	}
 
 	async function onSave() {
 		// an empty oneshots field stays an explicit blank so it turns the rule off rather than clearing the override
-		await save.mutateAsync({ edits: { paths: cleaned, oneshotsDir: oneshotsName } });
-		setDirs(null);
-		setOneshots(null);
+		await save.mutateAsync({
+			edits: { paths: cleaned, oneshotsDir: oneshotsName, exclusions: cleanedExclusions, ...flags! }
+		});
+		clearDraft();
 		pushToast(t('sourceSettings.saved'), 'info');
 	}
 
 	async function onReset() {
-		// the server keeps paths on reset (they have no default) and clears the oneshots override
+		// the server keeps paths on reset (they have no default) and clears the other overrides
 		await reset.mutateAsync();
-		setDirs(null);
-		setOneshots(null);
+		clearDraft();
 		setPendingReset(false);
 		pushToast(t('sourceSettings.resetDone'), 'info');
+	}
+
+	async function onScan() {
+		try {
+			await scanLocal.mutateAsync(sourceId);
+			pushToast(t('sourceSettings.scanQueued'), 'info');
+		} catch {
+			// client already popped an error toast
+		}
 	}
 
 	return (
@@ -98,7 +149,48 @@ function LocalSourcePanel({ sourceId }: { sourceId: number }) {
 				/>
 			</div>
 			<p className="settings-local__hint">{t('sourceSettings.localOneshotsDirDesc')}</p>
+			<div className="settings-row settings-row--top">
+				<div className="settings-row__stack">
+					<span className="settings-row__label">{t('sourceSettings.localExclusionsLabel')}</span>
+				</div>
+			</div>
+			<LocalDirsEditor
+				dirs={exclusions}
+				onChange={setExclusions}
+				placeholder={t('sourceSettings.localExclusionPlaceholder')}
+				addLabel={t('sourceSettings.addExclusion')}
+			/>
+			<p className="settings-local__hint">{t('sourceSettings.localExclusionsDesc')}</p>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('sourceSettings.localForceModifiedTime')}</span>
+				<Switch
+					checked={flags.forceModifiedTime}
+					onChange={(v) => setFlags({ ...flags, forceModifiedTime: v })}
+					label={t('sourceSettings.localForceModifiedTime')}
+				/>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('sourceSettings.localAnalyzePages')}</span>
+				<Switch
+					checked={flags.analyzePages}
+					onChange={(v) => setFlags({ ...flags, analyzePages: v })}
+					label={t('sourceSettings.localAnalyzePages')}
+				/>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('sourceSettings.localAnalyzeMetadata')}</span>
+				<Switch
+					checked={flags.analyzeMetadata}
+					onChange={(v) => setFlags({ ...flags, analyzeMetadata: v })}
+					label={t('sourceSettings.localAnalyzeMetadata')}
+				/>
+			</div>
+			<p className="settings-local__hint">{t('sourceSettings.localScanFlagsDesc')}</p>
 			<div className="settings-source__save">
+				<Button size="sm" loading={scanLocal.isPending || scanning} onClick={() => void onScan()}>
+					<FolderSearch size={14} />
+					{t('sourceSettings.scanNow')}
+				</Button>
 				<Button variant="ghost" size="sm" onClick={() => setPendingReset(true)}>
 					{t('sourceSettings.resetSettings')}
 				</Button>

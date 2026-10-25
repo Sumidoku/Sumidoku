@@ -6,6 +6,7 @@ import type {
 	HomeLayout,
 	SearchManga,
 	SourceManga,
+	Task,
 	UpdateSummary
 } from './types';
 
@@ -52,3 +53,6 @@ export interface UpdateJob {
 }
 
 export type UpdateEvent = { type: 'job' } & UpdateJob;
+
+/** Named `task` event on /events: the data payload is the Task DTO itself (kinds include local_scan, local_analyze, empty_trash) */
+export type TaskEvent = Task;

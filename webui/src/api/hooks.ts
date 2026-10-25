@@ -28,6 +28,7 @@ import type {
 	LibraryPage,
 	LibrarySort,
 	Listing,
+	LocalTrashEntry,
 	Manga,
 	MangaInput,
 	MangaPage,
@@ -50,6 +51,7 @@ import type {
 	SourceSettings,
 	SourceWithMigration,
 	SuwayomiImportResponse,
+	Task,
 	UpdateAllSourcesResponse,
 	UpdateMangaRequest
 } from './types';
@@ -59,6 +61,7 @@ import type {
 	MangaUpdateStreamEvent,
 	SearchStreamEvent
 } from './protocol';
+import { sse } from './sse';
 import type { TriStateSelection } from '../lib/triState';
 
 export const queryClient = new QueryClient({
@@ -86,7 +89,9 @@ export const qk = {
 	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
 	backups: ['backups'] as const,
 	whoami: ['whoami'] as const,
-	apiKeys: ['api-keys'] as const
+	apiKeys: ['api-keys'] as const,
+	tasks: ['tasks'] as const,
+	localTrash: ['local-trash'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -509,6 +514,104 @@ export function useReorderPinned() {
 		mutationFn: (ids: string[]) =>
 			api<string[]>('/sources/reorder-pinned', { method: 'POST', body: { ids } }),
 		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.sources })
+	});
+}
+
+// ---- Local sources: scan tasks and trash ----
+
+export function useTasks() {
+	return useQuery({ queryKey: qk.tasks, queryFn: () => api<Task[]>('/tasks') });
+}
+
+/** True while a local scan/analyze task is pending or running; kept current by SSE task events (subscribeTaskEvents). A global task (sourceId null) counts for every source */
+export function useLocalScanActive(sourceId?: number) {
+	const tasks = useTasks();
+	return (
+		tasks.data?.some(
+			(task) =>
+				(task.kind === 'local_scan' || task.kind === 'local_analyze') &&
+				(task.status === 'pending' || task.status === 'running') &&
+				(sourceId === undefined || task.sourceId === null || task.sourceId === sourceId)
+		) ?? false
+	);
+}
+
+export function useLocalTrash() {
+	return useQuery({ queryKey: qk.localTrash, queryFn: () => api<LocalTrashEntry[]>('/local/trash') });
+}
+
+/** Scanning is background work: the POST only enqueues, progress arrives through SSE task events */
+export function useScanLocal() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (sourceId: number | null) =>
+			api<Task[]>('/local/scan', { method: 'POST', body: { sourceId } }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.tasks })
+	});
+}
+
+// silent: a 409 'gone' (the trashed directory is still missing on disk) is turned into the conflict toast by the caller
+export function useRestoreTrash() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (mangaId: number) =>
+			api<{ ok: boolean }>(`/local/trash/${mangaId}/restore`, { method: 'POST', silent: true }),
+		onSuccess: (_d, mangaId) => {
+			void qc.invalidateQueries({ queryKey: qk.localTrash });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: qk.manga(mangaId) });
+		}
+	});
+}
+
+export function usePurgeTrash() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (mangaId: number) => api(`/local/trash/${mangaId}`, { method: 'DELETE' }),
+		onSuccess: () => {
+			void qc.invalidateQueries({ queryKey: qk.localTrash });
+			void qc.invalidateQueries({ queryKey: qk.library });
+		}
+	});
+}
+
+/** Emptying the trash enqueues one empty_trash task per instance; the task events then refresh the list */
+export function useEmptyTrash() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (sourceId?: number) =>
+			api<Task[]>(`/local/trash${sourceId !== undefined ? `?sourceId=${sourceId}` : ''}`, { method: 'DELETE' }),
+		onSuccess: () => {
+			void qc.invalidateQueries({ queryKey: qk.tasks });
+			void qc.invalidateQueries({ queryKey: qk.localTrash });
+		}
+	});
+}
+
+const TERMINAL_TASK_STATUSES: Task['status'][] = ['done', 'failed', 'cancelled'];
+
+/**
+ * Single owner of task-event-driven invalidation (subscribed once from AppLayout): every task event refreshes
+ * the task list; a terminal local_scan/local_analyze refreshes everything the scan may have changed (library,
+ * manga/chapter details, source browse/search caches and the trash), a terminal empty_trash refreshes the
+ * trash and the manga views
+ */
+export function subscribeTaskEvents(qc: QueryClient): () => void {
+	return sse.on('task', (data) => {
+		const task = data as Task;
+		void qc.invalidateQueries({ queryKey: qk.tasks });
+		if (!TERMINAL_TASK_STATUSES.includes(task.status)) return;
+		if (task.kind === 'local_scan' || task.kind === 'local_analyze') {
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+			void qc.invalidateQueries({ queryKey: ['sources'] });
+			void qc.invalidateQueries({ queryKey: ['global-search'] });
+			void qc.invalidateQueries({ queryKey: qk.localTrash });
+		} else if (task.kind === 'empty_trash') {
+			void qc.invalidateQueries({ queryKey: qk.localTrash });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+		}
 	});
 }
 

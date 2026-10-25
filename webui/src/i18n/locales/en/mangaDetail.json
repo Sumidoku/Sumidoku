@@ -1,6 +1,9 @@
 {
   "mangaDetail": {
     "documentTitle": "Manga",
+    "trashed": "In trash",
+    "trashedHint": "This manga's directory disappeared; restore it from the browse trash tab or purge it there",
+    "trashedChapter": "This chapter is in the trash and cannot be read",
     "filterUnread": "Unread",
     "filterDownloaded": "Downloaded",
     "filterBookmarked": "Bookmarked",

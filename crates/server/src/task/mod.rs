@@ -83,6 +83,11 @@ impl TaskRun {
 	pub fn is_cancelled(&self) -> bool {
 		self.cancelled.load(Ordering::SeqCst)
 	}
+
+	/// The raw flag for a handler that passes cancellation into a helper's own loop (e.g. scan_instance)
+	pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+		self.cancelled.clone()
+	}
 }
 
 pub type Handler =
@@ -138,10 +143,13 @@ impl TaskManager {
 		self.inner.lock().await.handlers.insert(kind.to_string(), handler);
 	}
 
-	/// Upsert by id. A live (pending/running) task keeps its identity — kind, source and payload stay
+	/// Upsert by id. A live (pending/running) task keeps its identity — kind, source and status stay
 	/// with the execution that owns them — and only gains priority; a terminal row is requeued fresh
 	/// with the new trigger's identity and priority (a manual run must not permanently promote later
-	/// scheduled runs)
+	/// scheduled runs). The payload, however, always reflects the newest trigger: a manual
+	/// `refreshMetadata = true` (or a settings rescan) requested while the same task is live must not
+	/// be acknowledged and then lost — the running handler reloads it when it reruns after its inputs
+	/// checkpoint observed the change (one-outstanding-execution does not discard newer work)
 	pub async fn enqueue(
 		&self,
 		id: &str,
@@ -159,7 +167,7 @@ impl TaskManager {
 				priority = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.priority ELSE MAX(task.priority, excluded.priority) END,
 				kind = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.kind ELSE task.kind END,
 				source_id = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.source_id ELSE task.source_id END,
-				payload = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.payload ELSE task.payload END,
+				payload = excluded.payload,
 				status = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN 'pending' ELSE task.status END,
 				created_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.created_at ELSE task.created_at END,
 				started_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.started_at END,
@@ -567,7 +575,10 @@ mod tests {
 	async fn live_enqueue_keeps_identity_terminal_requeue_resets_it() {
 		let (_state, manager, _tmp) = test_state(1).await;
 		manager.register("noop", ok_handler()).await;
-		// A live row's identity belongs to the execution that owns it: only the priority moves
+		// A live row's identity belongs to the execution that owns it (kind/source/status): only priority
+		// moves. The payload, however, tracks the newest trigger — a manual refreshMetadata=true requested
+		// mid-run must not be acknowledged and then lost (the running handler reloads it after its inputs
+		// checkpoint observed the change)
 		manager
 			.enqueue("t:1", "noop", None, serde_json::json!({"a": 1}), PRIORITY_SCHEDULED)
 			.await
@@ -576,7 +587,7 @@ mod tests {
 			.enqueue("t:1", "other", Some(1), serde_json::json!({"b": 2}), PRIORITY_MANUAL)
 			.await
 			.expect("live re-enqueue");
-		assert_eq!((row.kind.as_str(), row.source_id, row.payload.as_str()), ("noop", None, r#"{"a":1}"#));
+		assert_eq!((row.kind.as_str(), row.source_id, row.payload.as_str()), ("noop", None, r#"{"b":2}"#));
 		assert_eq!(row.priority, PRIORITY_MANUAL);
 
 		tokio::spawn(manager.clone().run());

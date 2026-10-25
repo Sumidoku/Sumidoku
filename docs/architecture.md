@@ -137,9 +137,13 @@ no alias is derived from migration text.
   with no registered handler (e.g. a downgrade over a newer database) fails
   visibly instead of sitting pending. Finished rows are trimmed to the
   latest 100 on every terminal transition. `GET /api/v1/tasks` lists live
-  work first and accepts `status`/`kind`/`sourceId` filters. This change
-  registers no production task kinds or producers yet; the local
-  scan/analyze/empty_trash handlers land with #256.
+  work first and accepts `status`/`kind`/`sourceId` filters. Production
+  kinds and producers: the local scan/analyze/empty_trash handlers
+  (`local/scan.rs:register_handlers`, wired in `build_app`) — scheduled and
+  manual full scans (`local_scan:{id}`, `refreshMetadata` in the payload),
+  derived analysis (`local_analyze:{id}`) and trash emptying (`empty_trash`)
+  — plus the one-shot local scan scheduler (`local_scan_secs` /
+  `local_scan_on_startup`).
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
@@ -428,7 +432,7 @@ no alias is derived from migration text.
   accepted and keep working as the default instance's fallback layer. RAR/CBR, PDF and 7z are
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
-  Phase 2 (migration `0024_local_trash.sql`, `local/scan.rs`,
+  Phase 2 (migration `0025_local_trash.sql`, `local/scan.rs`,
   `local/analyze.rs`): the scheduled full scan (config `local_scan_secs` /
   `SUMIDOKU_LOCAL_SCAN_SECS`, 0 = off; `local_scan_on_startup` enqueues at
   boot) indexes every discovered manga and chapter at enumeration cost —
@@ -447,8 +451,9 @@ no alias is derived from migration text.
   when the instance's `forceModifiedTime` is on (kmrs's
   `scan_force_modified_time`, for in-place archive edits); an unchanged,
   non-trashed manga skips reconciliation, and a changed one is marked
-  `initialized = 0` so analysis re-reads its embedded metadata (kmrs's
-  OUTDATED). The post-scan analysis pass (`local_analyze` task, gated by
+  `initialized = 0` — only with the caller's metadata-refresh opt-in
+  (`refresh_metadata`, kmrs's OUTDATED; enumeration alone never invalidates
+  metadata) — so the analysis pass re-reads its embedded metadata. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
   CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
   (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and
@@ -456,8 +461,11 @@ no alias is derived from migration text.
   found none — and page rows through the reader's own `load_pages` write
   path. Opening an indexed-but-unanalyzed manga stays cheap and kicks the
   analysis task; only a never-indexed open pays the synchronous chain.
-  Trashed rows stay visible (manga/chapter JSON carry `trashed`), the
-  update scheduler skips them, and the trash API lives at
+  Trashed rows stay visible: manga/chapter JSON carry a `trashed` boolean —
+  an additive field in every source's response schema (online and OPDS
+  sources are untouched in fetch/reconcile logic, but their JSON gains the
+  field too; OpenAPI marks it required) — the update scheduler skips them,
+  and the trash API lives at
   `GET/DELETE /api/v1/local/trash` (emptying runs as `empty_trash` tasks),
   `DELETE /api/v1/local/trash/{id}` and `POST .../restore` (409 while the
   directory is still missing). `POST /api/v1/local/scan` enqueues manual

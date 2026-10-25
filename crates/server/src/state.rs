@@ -304,7 +304,8 @@ impl AppState {
 
 	/// Effective exclusion substrings of one local instance (kmrs scan_directory_exclusions): the instance's
 	/// own `exclusions` source setting wins — an explicit empty array turns the rule off for that instance —
-	/// and an absent setting falls back to the config layer. A wrong-shaped stored value counts as unset
+	/// and an absent setting falls back to the config layer. A wrong-shaped stored value counts as unset.
+	/// Values are lowercased once here: every consumer matches case-insensitively against a lowered path
 	pub async fn local_exclusions(&self, source_id: i64) -> ApiResult<Vec<String>> {
 		let row: Option<(String,)> =
 			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'exclusions'")
@@ -316,11 +317,17 @@ impl AppState {
 		{
 			return Ok(exclusions
 				.into_iter()
-				.map(|exclusion| exclusion.trim().to_string())
+				.map(|exclusion| exclusion.trim().to_lowercase())
 				.filter(|exclusion| !exclusion.is_empty())
 				.collect());
 		}
-		Ok(self.config.local_scan_exclusions.clone())
+		Ok(self
+			.config
+			.local_scan_exclusions
+			.iter()
+			.map(|exclusion| exclusion.trim().to_lowercase())
+			.filter(|exclusion| !exclusion.is_empty())
+			.collect())
 	}
 
 	/// One boolean instance setting of the local source (forceModifiedTime / analyzePages / analyzeMetadata):

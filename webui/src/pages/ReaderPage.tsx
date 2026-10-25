@@ -183,7 +183,9 @@ function ReaderCore({
 	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
 	const [asc, setAsc] = useState(() => prefs.asc);
-	const chapters = useMemo(() => applyPrefs(rawChapters, { ...prefs, asc }), [rawChapters, prefs, asc]);
+	// Trashed chapters are unreadable (the API refuses them): navigation and the drawer skip them; the raw
+	// list keeps them so the current chapter's title/progress still resolve
+	const chapters = useMemo(() => applyPrefs(rawChapters, { ...prefs, asc }).filter((c) => !c.trashed), [rawChapters, prefs, asc]);
 	const navChapters = useMemo(() => (asc ? [...chapters].reverse() : chapters), [chapters, asc]);
 
 	const [mode, setModeState] = useState<Mode>(readMode);
