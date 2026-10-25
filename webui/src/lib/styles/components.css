@@ -401,19 +401,26 @@
 }
 
 .modal__panel {
+	/* bits-ui Dialog 把 Overlay(mask) 与 Content(panel) 渲染成同级兄弟，不再嵌套，
+	   所以 panel 要自行定位并盖在 mask(z-index:100) 之上，否则被遮挡看不见 */
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	z-index: 101;
 	background: var(--bg-elev);
 	border: 1px solid var(--border);
 	border-radius: var(--r-lg);
 	box-shadow: var(--shadow);
-	width: min(480px, 100%);
-	max-height: 80vh;
+	width: min(480px, calc(100% - 32px));
+	max-height: min(80vh, calc(100dvh - 32px));
 	display: flex;
 	flex-direction: column;
 	animation: modal-in 0.2s ease-out;
 }
 
 .modal__panel.modal__panel--wide {
-	width: min(640px, 100%);
+	width: min(640px, calc(100% - 32px));
 }
 
 .modal__panel:focus {
@@ -450,7 +457,8 @@
 @keyframes modal-in {
 	from {
 		opacity: 0;
-		transform: translateY(4px) scale(0.98);
+		/* 保留居中位移，叠加入场的轻微上浮+缩放；结束回到 panel 自身的 translate(-50%,-50%) */
+		transform: translate(-50%, -50%) translateY(4px) scale(0.98);
 	}
 }
 
