@@ -233,10 +233,14 @@ impl TaskManager {
 		let inner = self.inner.lock().await;
 		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
 		#[cfg(test)]
-		if row.id == CANCEL_AFTER_READ.id {
+		let inner = if row.id == CANCEL_AFTER_READ.id {
 			CANCEL_AFTER_READ.reached.notify_one();
+			drop(inner);
 			CANCEL_AFTER_READ.resume.notified().await;
-		}
+			self.inner.lock().await
+		} else {
+			inner
+		};
 		if row.is_terminal() {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		}
@@ -1283,31 +1287,18 @@ mod tests {
 		CANCEL_AFTER_READ.reached.notified().await;
 		finish_old.notify_one();
 		wait_status(&manager, CANCEL_AFTER_READ.id, STATUS_DONE).await;
-		let requeue_done = Arc::new(AtomicBool::new(false));
+		CANCEL_AFTER_READ.resume.notify_one();
+		let outcome = cancel.await.expect("cancel task");
+		assert_eq!(outcome.expect_err("after-read cancel must lose to the terminal transition").code(), "task_finished");
 		let requeue_manager = manager.clone();
-		let requeue_flag = requeue_done.clone();
 		let requeue = tokio::spawn(async move {
 			requeue_manager
 				.enqueue(CANCEL_AFTER_READ.id, "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
 				.await
 				.expect("requeue");
-			requeue_flag.store(true, Ordering::SeqCst);
 		});
-		let wait_started = std::time::Instant::now();
-		while !requeue_done.load(Ordering::SeqCst) && wait_started.elapsed() < std::time::Duration::from_millis(100) {
-			tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-		}
-		let dispatched_before_resume = requeue_done.load(Ordering::SeqCst);
-		if dispatched_before_resume {
-			manager.dispatch().await;
-		}
-		CANCEL_AFTER_READ.resume.notify_one();
-		let outcome = cancel.await.expect("cancel task");
-		assert_eq!(outcome.expect_err("after-read cancel must lose to the terminal transition").code(), "task_finished");
 		requeue.await.expect("requeue task");
-		if !dispatched_before_resume {
-			manager.dispatch().await;
-		}
+		manager.dispatch().await;
 		new_started.notified().await;
 		release_new.notify_one();
 		tokio::time::timeout(std::time::Duration::from_secs(5), new_finished.notified())
