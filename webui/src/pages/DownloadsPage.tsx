@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Download as DownloadIcon, Pause, Play, RotateCw, Trash2 } from 'lucide-react';
+import { Check, Download as DownloadIcon, Pause, Play, RotateCw, Trash2 } from 'lucide-react';
 import { api, chapterFileUrl } from '../api/client';
 import {
 	useDeleteDownload,
@@ -12,7 +12,7 @@ import {
 import type { Download, DownloadStatus } from '../api/types';
 import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { chapterLabel } from '../lib/format';
-import { applyDownloadEvent, formatDownloadProgress, mergeDownloadResponse } from '../lib/downloadEvents';
+import { applyDownloadEvent, applyRetrySuccess, formatDownloadProgress, mergeDownloadResponse } from '../lib/downloadEvents';
 import {
 	Button,
 	Chip,
@@ -44,6 +44,9 @@ export default function DownloadsPage() {
 	const [online, setOnline] = useState(false);
 	const [loading, setLoading] = useState(true);
 	const [busy, setBusy] = useState(false);
+	const [selecting, setSelecting] = useState(false);
+	const [selected, setSelected] = useState<Set<number>>(new Set());
+	const [batchBusy, setBatchBusy] = useState(false);
 
 	const start = useDownloadsStart();
 	const stop = useDownloadsStop();
@@ -149,6 +152,17 @@ export default function DownloadsPage() {
 	// The server's clear deletes error entries along with finished ones; the button is disabled when nothing is clearable
 	const hasClearable = items.some((it) => it.status === 'finished' || it.status === 'error');
 
+	// Selection is derived against the live list, so rows removed by events never linger in the count
+	const selectedItems = useMemo(
+		() => sorted.filter((it) => selected.has(it.chapterId)),
+		[sorted, selected]
+	);
+	const allSelected = sorted.length > 0 && sorted.every((it) => selected.has(it.chapterId));
+	const selectedErrors = useMemo(
+		() => selectedItems.filter((it) => it.status === 'error'),
+		[selectedItems]
+	);
+
 	async function toggleRunning() {
 		setBusy(true);
 		try {
@@ -171,28 +185,101 @@ export default function DownloadsPage() {
 		}
 	}
 
+	function toggleSelected(chapterId: number) {
+		setSelected((prev) => {
+			const next = new Set(prev);
+			if (next.has(chapterId)) next.delete(chapterId);
+			else next.add(chapterId);
+			return next;
+		});
+	}
+
+	function toggleAll() {
+		setSelected(allSelected ? new Set() : new Set(sorted.map((it) => it.chapterId)));
+	}
+
+	function exitSelect() {
+		setSelecting(false);
+		setSelected(new Set());
+	}
+
+	async function retrySelected() {
+		const ids = selectedErrors.map((it) => it.chapterId);
+		if (ids.length === 0) return;
+		setBatchBusy(true);
+		try {
+			await enqueue.mutateAsync(ids);
+			// Only rows still errored move to queued; an event that already advanced the row keeps its state
+			applyItems((cur) => applyRetrySuccess(cur, ids));
+			pushToast(t('downloads.retryQueued', { count: ids.length }), 'info');
+		} catch {
+			pushToast(t('downloads.retryFailed'), 'error');
+		} finally {
+			setBatchBusy(false);
+		}
+	}
+
+	async function batchDelete() {
+		const ids = selectedItems.map((it) => it.chapterId);
+		if (ids.length === 0) return;
+		setBatchBusy(true);
+		try {
+			// Per-row DELETE is the same endpoint the row button uses; silent keeps one toast for the whole batch
+			await Promise.all(ids.map((id) => api(`/downloads/${id}`, { method: 'DELETE', silent: true })));
+			applyItems((cur) => cur.filter((x) => !selected.has(x.chapterId)));
+			pushToast(t('downloads.deletedSelected', { count: ids.length }), 'info');
+		} catch {
+			pushToast(t('downloads.deleteFailed'), 'error');
+			void refreshMissing();
+		} finally {
+			setBatchBusy(false);
+		}
+	}
+
+	// Clearing or deleting the last task while selecting would leave a dead selection bar
+	useEffect(() => {
+		if (selecting && sorted.length === 0) exitSelect();
+	}, [selecting, sorted.length]);
+
 	return (
 		<div className="page container">
 			<PageHeader
 				title={t('common.nav.downloads')}
 				actions={
-					<>
-						<span
-							className={online ? 'ws-dot ws-dot--on' : 'ws-dot'}
-							title={online ? t('downloads.wsOk') : t('downloads.wsDown')}
-						/>
-						<Button
-							variant={running ? 'ghost' : 'primary'}
-							disabled={busy}
-							onClick={() => void toggleRunning()}
-						>
-							{running ? <Pause size={14} /> : <Play size={14} />}
-							{running ? t('downloads.pause') : t('downloads.start')}
-						</Button>
-						<Button disabled={busy || !hasClearable} onClick={() => void clearFinished()}>
-							{t('downloads.clearFinished')}
-						</Button>
-					</>
+					selecting ? (
+						<>
+							<Button size="sm" onClick={toggleAll}>
+								{allSelected ? t('downloads.deselectAll') : t('downloads.selectAll')}
+							</Button>
+							<span className="downloads-sel-count">
+								{t('downloads.selectedShort', { count: selectedItems.length })}
+							</span>
+							<Button size="sm" onClick={exitSelect}>
+								{t('downloads.done')}
+							</Button>
+						</>
+					) : (
+						<>
+							<span
+								className={online ? 'ws-dot ws-dot--on' : 'ws-dot'}
+								title={online ? t('downloads.wsOk') : t('downloads.wsDown')}
+							/>
+							<Button
+								variant={running ? 'ghost' : 'primary'}
+								disabled={busy}
+								onClick={() => void toggleRunning()}
+							>
+								{running ? <Pause size={14} /> : <Play size={14} />}
+								{running ? t('downloads.pause') : t('downloads.start')}
+							</Button>
+							<Button disabled={busy || !hasClearable} onClick={() => void clearFinished()}>
+								{t('downloads.clearFinished')}
+							</Button>
+							<Button disabled={sorted.length === 0} onClick={() => setSelecting(true)}>
+								{t('downloads.select')}
+							</Button>
+						</>
+					)
 				}
 			/>
 
@@ -209,7 +296,7 @@ export default function DownloadsPage() {
 					hint={t('downloads.emptyHint')}
 				/>
 			) : (
-				<div className="downloads-list">
+				<div className={selecting ? 'downloads-list downloads-list--selecting' : 'downloads-list'}>
 					{sorted.map((it) => {
 						const meta = STATUS_META[it.status];
 						const chapterName = chapterLabel({
@@ -219,8 +306,37 @@ export default function DownloadsPage() {
 						});
 						const total = it.total ?? 0;
 						const downloaded = it.downloaded ?? 0;
+						const isSelected = selected.has(it.chapterId);
 						return (
-							<div key={it.chapterId} className="downloads-item card">
+							<div
+								key={it.chapterId}
+								className={[
+									'downloads-item card',
+									selecting ? 'downloads-item--selecting' : '',
+									selecting && isSelected ? 'downloads-item--selected' : ''
+								]
+									.filter(Boolean)
+									.join(' ')}
+								role={selecting ? 'button' : undefined}
+								tabIndex={selecting ? 0 : undefined}
+								aria-pressed={selecting ? isSelected : undefined}
+								onClick={selecting ? () => toggleSelected(it.chapterId) : undefined}
+								onKeyDown={
+									selecting
+										? (e) => {
+												if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+													e.preventDefault();
+													toggleSelected(it.chapterId);
+												}
+											}
+										: undefined
+								}
+							>
+								{selecting && (
+									<span className="downloads-item__check">
+										{isSelected && <Check size={12} strokeWidth={3} />}
+									</span>
+								)}
 								<div className="downloads-item__main">
 									<div className="downloads-item__row">
 										<span className="downloads-item__manga">{it.mangaTitle}</span>
@@ -242,38 +358,31 @@ export default function DownloadsPage() {
 										</div>
 									)}
 								</div>
-								<div className="downloads-item__acts">
-									{it.status === 'error' && (
-										<IconButton
-											label={t('downloads.retry')}
-											disabled={enqueue.isPending}
-											onClick={() =>
-												enqueue.mutate([it.chapterId], {
-													onSuccess: () =>
-														applyItems((cur) =>
-															cur.map((x) =>
-																x.chapterId === it.chapterId
-																	? { ...x, status: 'queued', error: null }
-																	: x
-															)
-														)
-												})
-											}
-										>
-											<RotateCw size={16} />
-										</IconButton>
-									)}
-									{it.status === 'finished' && (
-										<a
-											className="downloads-item__cbz"
-											href={chapterFileUrl(it.chapterId)}
-											download
-											title={t('downloads.downloadCbz')}
-										>
-											<DownloadIcon size={14} /> CBZ
-										</a>
-									)}
-									{it.status !== 'error' && (
+								{!selecting && (
+									<div className="downloads-item__acts">
+										{it.status === 'error' && (
+											<IconButton
+												label={t('downloads.retry')}
+												disabled={enqueue.isPending}
+												onClick={() =>
+													enqueue.mutate([it.chapterId], {
+														onSuccess: () => applyItems((cur) => applyRetrySuccess(cur, [it.chapterId]))
+													})
+												}
+											>
+												<RotateCw size={16} />
+											</IconButton>
+										)}
+										{it.status === 'finished' && (
+											<a
+												className="downloads-item__cbz"
+												href={chapterFileUrl(it.chapterId)}
+												download
+												title={t('downloads.downloadCbz')}
+											>
+												<DownloadIcon size={14} /> CBZ
+											</a>
+										)}
 										<IconButton
 											label={t('downloads.deleteTask')}
 											variant="danger"
@@ -289,11 +398,36 @@ export default function DownloadsPage() {
 										>
 											<Trash2 size={16} />
 										</IconButton>
-									)}
-								</div>
+									</div>
+								)}
 							</div>
 						);
 					})}
+				</div>
+			)}
+			{selecting && (
+				<div className="downloads-batch">
+					<span className="downloads-batch__count">
+						{t('downloads.selectedShort', { count: selectedItems.length })}
+					</span>
+					<Button
+						size="sm"
+						variant="primary"
+						disabled={batchBusy || selectedErrors.length === 0}
+						onClick={() => void retrySelected()}
+					>
+						<RotateCw size={14} />
+						{t('downloads.retry')}
+					</Button>
+					<Button
+						size="sm"
+						variant="danger"
+						disabled={batchBusy || selectedItems.length === 0}
+						onClick={() => void batchDelete()}
+					>
+						<Trash2 size={14} />
+						{t('downloads.delete')}
+					</Button>
 				</div>
 			)}
 		</div>

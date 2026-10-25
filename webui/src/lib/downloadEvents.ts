@@ -70,6 +70,22 @@ export function applyDownloadEvent(
 	});
 }
 
+/**
+ * A retry response re-queues only rows still errored. Rows an event already
+ * advanced (queued/downloading/finished) keep their newer state instead of
+ * regressing to queued.
+ */
+export function applyRetrySuccess(
+	items: readonly Download[],
+	chapterIds: readonly number[]
+): Download[] {
+	return items.map((item) =>
+		chapterIds.includes(item.chapterId) && item.status === 'error'
+			? { ...item, status: 'queued', error: null }
+			: item
+	);
+}
+
 export function mergeDownloadResponse(
 	current: readonly Download[],
 	response: readonly Download[],
