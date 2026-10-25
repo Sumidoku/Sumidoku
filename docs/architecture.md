@@ -9,9 +9,16 @@ here. Link to symbols rather than copying details that drift.
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 Migrations in `crates/server/migrations`. Applied migrations are immutable:
 sqlx embeds each file's SHA-384 at compile time and validates it against
-`_sqlx_migrations` at startup, aborting the boot on any byte change, so a
-schema change is always a new numbered file — never an edit, comments
-included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
+`_sqlx_migrations` at startup, so a schema change is always a new numbered
+file — never an edit, comments included (`db.rs:shipped_migrations_are_immutable`
+pins the canonical set). Canonical files use English comments and LF, enforced
+by `.gitattributes` and `db.rs:shipped_migrations_use_ascii_comments_and_lf`.
+A closed per-version list records the exact historical Chinese and CRLF
+checksums (`db.rs:LEGACY_MIGRATION_CHECKSUMS`). After a checksum mismatch,
+`create_pool` validates every applied row before normalizing registered aliases
+in one transaction and rerunning the migrator (`db.rs:normalize_migration_checksums`).
+Unknown versions or checksums still abort startup without partial updates;
+no alias is derived from migration text.
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`,
@@ -960,6 +967,16 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   page row keeps just the file name. The reader (`api/page.rs`) and
   downloads (`download/mod.rs:page_bytes`) read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Downloaded chapters read from the product (`download/mod.rs:pages_from_product`,
+  `read_product_page`): a finished download artifact is the preferred reader page source.
+  `GET /chapter/{id}/pages` derives the page list from the product (text entries inlined as
+  `Text`, image entries as `{"Downloaded": <entry>}`) and
+  `GET /chapter/{id}/page/{index}` serves bytes straight from the artifact — no source
+  access, so downloaded chapters stay readable offline. CBZ handles go through the shared
+  `ZipCache` (version-checked, so atomic re-downloads never serve stale bytes); folder
+  products read page files directly. The derived rows are live, never written to the page
+  table, so a deleted/moved product falls back to the page cache/source path unchanged;
+  an explicit `refresh` on the pages endpoint still pulls from the source.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
@@ -1023,12 +1040,15 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
-  file is missing or `last_fetched_at` is newer than its mtime.
+  file is missing or `last_fetched_at` is newer than its mtime. Local covers
+  are downsampled to fit a 600px longest edge; their cache hits also require
+  an `<id>.variant` sidecar matching the current transform, so unversioned
+  original-size artifacts cannot bypass the cap.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
   `PUT /api/v1/manga/{id}/cover` `{url}` persists a pick to
-  `manga.cover_url` and deletes both cache files: the freshness key is
+  `manga.cover_url` and deletes the cache files: the freshness key is
   `last_fetched_at`, which a user pick must not move, so without the
   delete the stale bytes keep serving and the pick never takes effect.
   Because the cover response is `max-age=86400` cacheable, the web UI

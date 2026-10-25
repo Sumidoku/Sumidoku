@@ -1,4 +1,4 @@
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, MangaRow, PageRow, unix_now};
 use crate::source::page_dimensions::{DIMENSION_HEAD_BYTES, PageDimensionUpdate, measure_with_fallback, persist_downloaded as persist_page_dimensions};
 use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
@@ -1305,6 +1305,209 @@ pub fn product_path(downloads_dir: &Path, path: &str) -> PathBuf {
 	}
 }
 
+/// A chapter's finished download artifact: its format and resolved on-disk path.
+pub struct DownloadProduct {
+	pub format: String,
+	pub path: PathBuf,
+}
+
+/// Resolves a chapter's finished download product. Returns None when there is no finished row,
+/// the stored path is missing, or the artifact is no longer on disk (moved away or deleted);
+/// callers fall back to the page cache/source path in that case.
+async fn finished_product(state: &Arc<AppState>, chapter_id: i64) -> ApiResult<Option<DownloadProduct>> {
+	let row: Option<(String, Option<String>)> = sqlx::query_as(
+		"SELECT format, path FROM download WHERE chapter_id = ? AND user_id = ? AND status = 'finished'",
+	)
+	.bind(chapter_id)
+	.bind(crate::USER_ID)
+	.fetch_optional(&state.pool)
+	.await?;
+	let Some((format, path)) = row else {
+		return Ok(None);
+	};
+	let Some(path) = path else {
+		return Ok(None);
+	};
+	let path = product_path(&state.config.downloads_dir, &path);
+	let meta = match tokio::fs::metadata(&path).await {
+		Ok(meta) => meta,
+		Err(_) => return Ok(None),
+	};
+	if (format == "folder" && !meta.is_dir()) || (format != "folder" && !meta.is_file()) {
+		return Ok(None);
+	}
+	Ok(Some(DownloadProduct { format, path }))
+}
+
+/// Sort key for a product's page files: the downloader writes {idx:03}.{ext}, so the leading
+/// number is the page position; files without a numeric prefix sort after the numbered ones.
+fn product_entry_key(entry: &str) -> (u64, String) {
+	let digits = entry.bytes().take_while(|b| b.is_ascii_digit()).count();
+	let number = if digits > 0 {
+		entry[..digits].parse().unwrap_or(u64::MAX)
+	} else {
+		u64::MAX
+	};
+	(number, entry.to_string())
+}
+
+/// Page file names inside a finished product in reading order (position == reader page index),
+/// ComicInfo.xml excluded. None when the chapter has no usable finished product.
+pub async fn product_entries(state: &Arc<AppState>, chapter_id: i64) -> ApiResult<Option<Vec<String>>> {
+	let Some(product) = finished_product(state, chapter_id).await? else {
+		return Ok(None);
+	};
+	Ok(Some(product_entry_names(state, &product).await?))
+}
+
+async fn product_entry_names(state: &Arc<AppState>, product: &DownloadProduct) -> ApiResult<Vec<String>> {
+	let mut entries = if product.format == "folder" {
+		let mut names = Vec::new();
+		let mut read_dir = tokio::fs::read_dir(&product.path)
+			.await
+			.map_err(|e| ApiError::internal(format!("read product dir: {e}")))?;
+		while let Some(entry) = read_dir
+			.next_entry()
+			.await
+			.map_err(|e| ApiError::internal(format!("read product dir: {e}")))?
+		{
+			let name = entry.file_name().to_string_lossy().into_owned();
+			if name == "ComicInfo.xml" || entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
+				continue;
+			}
+			names.push(name);
+		}
+		names
+	} else {
+		// CBZ handles go through the shared ZipCache: reopening an archive re-reads the whole
+		// central directory, which would cost one full read per page request.
+		let zip = state.local_zip.clone();
+		let path = product.path.clone();
+		let names = tokio::task::spawn_blocking(move || zip.entry_names(&path))
+			.await
+			.map_err(|e| ApiError::internal(format!("read product archive task failed: {e}")))?
+			.map_err(|e| ApiError::internal(format!("read product archive: {e}")))?;
+		names.into_iter().filter(|name| name != "ComicInfo.xml").collect()
+	};
+	entries.sort_by_key(|entry| product_entry_key(entry));
+	Ok(entries)
+}
+
+/// Reads one named entry's bytes from the finished product. The entry must be a single file
+/// component; entries always come from `product_entries`, never from client input.
+pub async fn read_product_entry(state: &Arc<AppState>, chapter_id: i64, entry: &str) -> ApiResult<Option<Vec<u8>>> {
+	if entry.is_empty()
+		|| entry == "." || entry == ".."
+		|| entry.bytes().any(|b| matches!(b, b'/' | b'\\' | b':'))
+	{
+		return Err(ApiError::bad_request("invalid product entry"));
+	}
+	let Some(product) = finished_product(state, chapter_id).await? else {
+		return Ok(None);
+	};
+	read_product_entry_from(state, &product, entry).await
+}
+
+async fn read_product_entry_from(
+	state: &Arc<AppState>,
+	product: &DownloadProduct,
+	entry: &str,
+) -> ApiResult<Option<Vec<u8>>> {
+	let result: std::io::Result<Vec<u8>> = if product.format == "folder" {
+		tokio::fs::read(product.path.join(entry)).await
+	} else {
+		let zip = state.local_zip.clone();
+		let path = product.path.clone();
+		let entry = entry.to_string();
+		tokio::task::spawn_blocking(move || zip.read_entry(&path, &entry))
+			.await
+			.map_err(|e| ApiError::internal(format!("read product entry task failed: {e}")))?
+	};
+	match result {
+		Ok(bytes) => Ok(Some(bytes)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+		Err(e) => Err(ApiError::from(sqlx::Error::Io(e))),
+	}
+}
+
+/// Reads the page at `index` from the finished product: (bytes, entry name).
+/// None when there is no usable product, the index is out of range, or the entry vanished.
+pub async fn read_product_page(
+	state: &Arc<AppState>,
+	chapter_id: i64,
+	index: usize,
+) -> ApiResult<Option<(Vec<u8>, String)>> {
+	let Some(product) = finished_product(state, chapter_id).await? else {
+		return Ok(None);
+	};
+	let entries = product_entry_names(state, &product).await?;
+	let Some(entry) = entries.get(index).cloned() else {
+		return Ok(None);
+	};
+	match read_product_entry_from(state, &product, &entry).await? {
+		Some(bytes) => Ok(Some((bytes, entry))),
+		None => Ok(None),
+	}
+}
+
+/// True when a product page file is a text page (the downloader stores Text pages as {idx:03}.txt).
+pub fn is_text_entry(entry: &str) -> bool {
+	entry
+		.rsplit('.')
+		.next()
+		.map(|ext| ext.eq_ignore_ascii_case("txt"))
+		.unwrap_or(false)
+}
+
+/// Synthesizes page rows for a downloaded chapter from its finished product with no source access,
+/// so the page list stays readable when the source is unreachable. Text entries are inlined from
+/// the product; image entries carry the `{"Downloaded": <entry>}` marker that `api/page.rs`
+/// resolves against the product. Dimensions from existing page rows are reused when present.
+/// Nothing is written to the page table: the rows are derived live, so a deleted product falls
+/// back to the page cache/source path automatically.
+pub async fn pages_from_product(state: &Arc<AppState>, chapter_id: i64) -> ApiResult<Option<Vec<PageRow>>> {
+	let Some(entries) = product_entries(state, chapter_id).await? else {
+		return Ok(None);
+	};
+	let dims: Vec<(i64, Option<i64>, Option<i64>)> =
+		sqlx::query_as("SELECT idx, width, height FROM page WHERE chapter_id = ?")
+			.bind(chapter_id)
+			.fetch_all(&state.pool)
+			.await?;
+	let dims: HashMap<i64, (Option<i64>, Option<i64>)> = dims
+		.into_iter()
+		.map(|(idx, width, height)| (idx, (width, height)))
+		.collect();
+	let mut rows = Vec::with_capacity(entries.len());
+	for (idx, entry) in entries.iter().enumerate() {
+		let content = if is_text_entry(entry) {
+			match read_product_entry(state, chapter_id, entry).await? {
+				Some(bytes) => serde_json::json!({ "Text": String::from_utf8_lossy(&bytes).into_owned() }),
+				None => serde_json::json!({ "Downloaded": entry }),
+			}
+		} else {
+			serde_json::json!({ "Downloaded": entry })
+		};
+		let (width, height) = dims.get(&(idx as i64)).copied().unwrap_or((None, None));
+		// Keep the same wire shape as cached page rows: content plus the required page-list
+		// fields. Product pages have no thumbnail or description, matching the local-source rows.
+		rows.push(PageRow {
+			idx: idx as i64,
+			content: serde_json::to_string(&serde_json::json!({
+				"content": content,
+				"thumbnail": null,
+				"hasDescription": false,
+				"description": null,
+			}))
+			.map_err(|e| ApiError::internal(format!("serialize product page: {e}")))?,
+			width,
+			height,
+			dimensions_checked: false,
+		});
+	}
+	Ok(Some(rows))
+}
+
 /// Move-template layering: env (config.download_move_path) > the download.move_path setting > empty (no move)
 async fn move_template(pool: &SqlitePool, config: &crate::config::Config) -> Option<String> {
 	let raw = match &config.download_move_path {
@@ -1920,6 +2123,93 @@ mod tests {
 		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
 		assert!(state.downloads.set(DownloadManager::new(&state)).is_ok());
 		(state, manga_id, chapter_id, tmp)
+	}
+
+	/// Writes a CBZ-style archive (ComicInfo.xml first, then the given pages) with the same layout
+	/// the downloader produces, so the product readers see real artifacts.
+	fn write_test_cbz(path: &Path, pages: &[(&str, &[u8])]) {
+		use std::io::Write;
+		let file = std::fs::File::create(path).expect("create cbz");
+		let mut archive = zip::ZipWriter::new(file);
+		let options = zip::write::SimpleFileOptions::default();
+		archive.start_file("ComicInfo.xml", options).expect("start comic info");
+		archive.write_all(b"<ComicInfo/>").expect("write comic info");
+		for (name, bytes) in pages {
+			archive.start_file(*name, options).expect("start page");
+			archive.write_all(bytes).expect("write page");
+		}
+		archive.finish().expect("finish cbz");
+	}
+
+	async fn insert_finished_product(state: &AppState, chapter_id: i64, format: &str, path: &str) {
+		sqlx::query(
+			"INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', ?, ?)",
+		)
+		.bind(chapter_id)
+		.bind(format)
+		.bind(path)
+		.execute(&state.pool)
+		.await
+		.expect("finished download row");
+	}
+
+	#[tokio::test]
+	async fn pages_from_product_lists_cbz_entries_and_inlines_text() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		write_test_cbz(
+			&dir.join("000.cbz"),
+			&[("000.png", b"\x89PNG-0"), ("001.png", b"\x89PNG-1"), ("002.txt", b"hello text")],
+		);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/000.cbz").await;
+		let rows = pages_from_product(&state, chapter_id).await.expect("product pages").expect("some");
+		assert_eq!(rows.len(), 3);
+		assert_eq!(rows[0].idx, 0);
+		assert!(rows[0].content.contains("\"Downloaded\":\"000.png\""));
+		assert!(rows[2].content.contains("\"Text\":\"hello text\""));
+	}
+
+	#[tokio::test]
+	async fn pages_from_product_reads_folder_format() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga/ch");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		std::fs::write(dir.join("ComicInfo.xml"), b"<ComicInfo/>").expect("comic info");
+		std::fs::write(dir.join("000.png"), b"\x89PNG-F").expect("page");
+		std::fs::write(dir.join("001.txt"), b"chapter one").expect("text page");
+		insert_finished_product(&state, chapter_id, "folder", "Source/Manga/ch").await;
+		let rows = pages_from_product(&state, chapter_id).await.expect("product pages").expect("some");
+		assert_eq!(rows.len(), 2);
+		assert!(rows[0].content.contains("\"Downloaded\":\"000.png\""));
+		assert!(rows[1].content.contains("\"Text\":\"chapter one\""));
+	}
+
+	#[tokio::test]
+	async fn pages_from_product_none_without_usable_product() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		// No download row at all
+		assert!(pages_from_product(&state, chapter_id).await.expect("no row").is_none());
+		// A finished row whose artifact is missing on disk is not a usable product either
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/gone.cbz").await;
+		assert!(pages_from_product(&state, chapter_id).await.expect("missing file").is_none());
+	}
+
+	#[tokio::test]
+	async fn read_product_page_orders_entries_by_numeric_prefix() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		// Entries deliberately out of archive order: position 0 must still resolve to 000.png
+		write_test_cbz(
+			&dir.join("000.cbz"),
+			&[("002.png", b"two"), ("000.png", b"zero"), ("001.png", b"one")],
+		);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/000.cbz").await;
+		let (bytes, entry) = read_product_page(&state, chapter_id, 0).await.expect("page 0").expect("some");
+		assert_eq!(entry, "000.png");
+		assert_eq!(bytes, b"zero");
+		assert!(read_product_page(&state, chapter_id, 3).await.expect("oob").is_none());
 	}
 
 	async fn set_setting(state: &AppState, key: &str, value: serde_json::Value) {

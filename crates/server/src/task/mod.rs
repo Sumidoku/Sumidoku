@@ -679,13 +679,18 @@ mod tests {
 	async fn a_blocked_group_never_starves_runnable_work() {
 		let (_state, manager, _tmp) = test_state(2).await;
 		insert_sources(&manager, 2).await;
-		let handler: Handler = Arc::new(|run| {
-			Box::pin(async move {
-				if run.task.id == "t:blocker" {
-					tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-				}
-				Ok(serde_json::json!({}))
-			})
+		let release_blocker = Arc::new(Notify::new());
+		let handler: Handler = Arc::new({
+			let release = release_blocker.clone();
+			move |run| {
+				let release = release.clone();
+				Box::pin(async move {
+					if run.task.id == "t:blocker" {
+						release.notified().await;
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
 		});
 		manager.register("grouped", handler).await;
 		tokio::spawn(manager.clone().run());
@@ -709,6 +714,8 @@ mod tests {
 		wait_status(&manager, "t:runnable", STATUS_DONE).await;
 		let blocker = manager.get("t:blocker").await.expect("row").expect("exists");
 		assert_eq!(blocker.status, STATUS_RUNNING, "the blocker outlives the runnable task");
+		release_blocker.notify_one();
+		wait_status(&manager, "t:blocker", STATUS_DONE).await;
 	}
 
 	#[tokio::test]

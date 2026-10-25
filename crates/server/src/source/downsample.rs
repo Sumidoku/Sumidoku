@@ -172,6 +172,13 @@ mod tests {
 			.decode()
 			.expect("decode");
 		assert_eq!((image.width(), image.height()), (300, 400));
+		let out = downsample_jpeg(&solid_png(300, 800), 400).expect("narrow portrait resized");
+		let image = ImageReader::new(Cursor::new(out))
+			.with_guessed_format()
+			.expect("format")
+			.decode()
+			.expect("decode");
+		assert_eq!((image.width(), image.height()), (150, 400));
 		// already small enough: pass-through
 		assert!(downsample_jpeg(&solid_png(400, 300), 400).is_none());
 	}

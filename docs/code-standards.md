@@ -17,7 +17,8 @@ one; a PR that misses one gets a comment saying which.
 
 | Rule | What a reviewer looks at |
 | --- | --- |
-| An applied migration file never changes again — comment edits included. | sqlx checksums the whole file against `_sqlx_migrations` at startup; any byte change refuses to boot every existing deployment. Schema changes are new numbered files only. `db.rs:shipped_migrations_are_immutable` pins the shipped checksums; a PR touching an existing file under `crates/server/migrations/` is a stop. |
+| Schema changes are new numbered files only; do not edit an applied migration. | sqlx checksums the whole file against `_sqlx_migrations` at startup. `db.rs:shipped_migrations_are_immutable` pins the canonical checksums. The explicitly registered historical Chinese/English LF/CRLF variants are a closed compatibility set; accepting any other old-file edit or deriving a replacement checksum from migration text is a stop. |
+| Migration comments are English and files use LF. | Keep comments ASCII in `crates/server/migrations/*.sql`; `db.rs:shipped_migrations_use_ascii_comments_and_lf` rejects other encodings and CR/CRLF bytes. `.gitattributes` forces LF checkouts. |
 
 ## Acceptance criteria
 

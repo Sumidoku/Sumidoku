@@ -1629,14 +1629,23 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: 
 	Ok(json!(chapters))
 }
 
-async fn get_pages(
+pub(crate) async fn get_pages(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
 	chapter_row(&state.pool, id).await?;
-	let pages = load_pages(&state, id, wants_refresh(&query)).await?;
+	// A finished download product is the preferred page list: entries are derived from the artifact
+	// with no source access, so downloaded chapters stay readable offline. An explicit refresh still
+	// pulls from the source; without a product the page cache/source path is unchanged.
+	let pages = if wants_refresh(&query) {
+		load_pages(&state, id, true).await?
+	} else if let Some(pages) = crate::download::pages_from_product(&state, id).await? {
+		pages
+	} else {
+		load_pages(&state, id, false).await?
+	};
 	if let Err(e) = state.downloads().enqueue_reader_ahead(id, user.id).await {
 		tracing::warn!(chapter_id = id, "reader-ahead enqueue failed: {}", e.message());
 	}

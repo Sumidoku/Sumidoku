@@ -43,6 +43,15 @@ attribution.
 - When `webui/` changed, also `cargo build --release -p sumidoku-server`:
   rust-embed only bundles `webui/build` into a release binary.
 
+## Database migrations
+
+- Schema changes are new numbered files only; do not edit an applied migration.
+- Keep migration comments in English and files in LF. `.gitattributes` and
+  `db.rs:shipped_migrations_use_ascii_comments_and_lf` enforce the encoding.
+- `db.rs:shipped_migrations_are_immutable` pins canonical checksums. The
+  explicitly listed historical Chinese/English LF/CRLF checksums are a closed
+  compatibility set, not permission for further edits or derived aliases.
+
 ## Layout
 
 - `crates/server` — axum HTTP server: REST `/api/v1` and embedded web UI

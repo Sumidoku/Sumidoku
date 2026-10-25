@@ -19,6 +19,18 @@ terminal-versus-requeue interleavings.
   let old cleanup remove the new execution's flag, producing `task_finishing`;
   terminal requeue emitted `pending → running → pending → pending`, dropping
   `done`. The probes were removed after reproduction.
+
+**A concurrency test must preserve its precondition with explicit gates, not a
+guessed duration.** A fixed sleep lets setup latency consume the state the
+assertion expects to inspect. Hold the blocking execution with a notification,
+release it only after the required competing transition completes, and await
+its cleanup.
+- Evidence: 2026-10-25, `a_blocked_group_never_starves_runnable_work` failed
+  with `left: "done"`, `right: "running"` after the 64 enqueues outlasted its
+  300ms blocker. An explicit gate kept the blocker running until the other
+  group finished; the regression then passed 20 consecutive runs and the full
+  workspace suite passed 916 tests with 2 skipped.
+
 **Commit before anything can move the working tree; a shared checkout is
 not a safe place for uncommitted work.** Another session switching the
 branch under you — or any rebase/checkout/stash you didn't run — can drop
@@ -181,6 +193,11 @@ with atomic rename/truncate, not only a clean database or initial open.
   returning old bytes after atomic rename and a stale central directory
   after truncation. File-version checks now reopen changed files, and both
   regressions fail again when invalidation is disabled.
+- Seen again: 2026-10-25, #403 downsampled local covers only on a cache miss,
+  so original-size artifacts written before the transform stayed eligible
+  forever. #411 requires a derivative-variant marker on every local cache hit.
+  Disabling that check made the seeded-cache regression return `image/png`
+  instead of `image/jpeg`; restoring it rebuilt the artifact at 450×600.
 
 **Type-specific state must come from the entity's actual shape, not its
 filename suffix.** A directory named `.epub` is still an image-directory
@@ -1008,20 +1025,24 @@ level off with its continuations at the old depth is the signature.
   conditional blocks at `webui/src/pages/BrowsePage.tsx:562-631` with green
   web gates.
 
-**A migration file is a shipped artifact, not source text — editing one,
-comments included, breaks every existing deployment at boot.** sqlx
-embeds each migration's SHA-384 at compile time and validates it against
-`_sqlx_migrations` at startup, so a comment translation has the same
-blast radius as a schema change (a `VersionMismatch` panic). Restyling or
-"tidying" an applied migration is a breaking change; schema work lands
-as a new numbered file. The guard lives in
-`db.rs:shipped_migrations_are_immutable`, which pins the embedded
-checksums.
+**A migration file is a shipped artifact, not source text — editing one
+without an explicit compatibility alias breaks existing deployments at boot.**
+sqlx embeds each migration's SHA-384 at compile time and validates it against
+`_sqlx_migrations` at startup, so a comment translation has the same blast
+radius as a schema change (a `VersionMismatch` panic). Restyling or "tidying"
+an applied migration is a breaking change; schema work lands as a new numbered
+file. Canonical files use English comments and LF. Compatibility requires a
+closed list of exact historical checksums: deriving a CRLF alias from the
+current file would silently extend acceptance with every later edit.
 - Evidence: 2026-10-21, the comment-translation sweep (#236) touched 10
   applied migrations and 0.19.0 refused to boot on upgraded databases
   (`Migrate(VersionMismatch(1))`); the restore was verified by matching
   the restored file's SHA-384 against a pre-sweep database's recorded
   checksum.
+- Seen again: 2026-10-25, #418 restored the reviewed English comments across
+  all 24 migrations and registered the historical Chinese and CRLF SHA-384
+  values explicitly. The English/LF guards and startup regressions live in
+  `db.rs:shipped_migrations_use_ascii_comments_and_lf` and the migration tests.
 
 **quick-xml's serde matches elements by local name — the namespace prefix is
 stripped, so `dc:title` must be renamed to the bare `title`, and only

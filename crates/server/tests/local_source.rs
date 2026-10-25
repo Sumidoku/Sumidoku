@@ -378,10 +378,10 @@ async fn cover_missing_answers_404() {
 	assert_eq!(body["error"]["code"], "not_found");
 }
 
-/// Local covers are user files at original resolution; the server caps the served width at 600 and
+/// Local covers are user files at original resolution; the server caps the longest edge at 600 and
 /// caches the downscaled JPEG (the second GET must come from the cache with the same bytes)
 #[tokio::test]
-async fn local_cover_is_capped_at_600px() {
+async fn local_cover_uses_longest_edge_cap() {
 	let TestApp { app, tmp, .. } = local_app().await;
 	let root = tmp.path().join("local");
 	let big = root.join("Bigcover");
@@ -407,6 +407,43 @@ async fn local_cover_is_capped_at_600px() {
 	let (status, _, cached) = request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(cached, bytes, "the cached artifact is the downscaled JPEG");
+}
+
+#[tokio::test]
+async fn local_cover_rebuilds_unversioned_cache() {
+	let TestApp { app, tmp, .. } = local_app().await;
+	let root = tmp.path().join("local");
+	let big = root.join("Bigcover");
+	std::fs::create_dir_all(big.join("ch 1")).expect("mkdir chapter");
+	write_page(&big.join("ch 1"), "1.png", b"bigcover-1-1");
+	let original = big_png();
+	std::fs::write(big.join("cover.png"), &original).expect("write big cover");
+	let manga_id = register_local(&app, "Bigcover").await;
+	let cache_path = tmp.path().join("covers").join(manga_id.to_string());
+	std::fs::create_dir_all(cache_path.parent().expect("cache parent")).expect("mkdir cache");
+	std::fs::write(&cache_path, &original).expect("seed original cache bytes");
+	std::fs::write(cache_path.with_file_name(format!("{manga_id}.content-type")), "image/png")
+		.expect("seed cache content type");
+
+	let (status, headers, bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/jpeg");
+	assert_ne!(bytes, original, "the unversioned original must not be served");
+	let decoded = image::ImageReader::new(std::io::Cursor::new(&bytes))
+		.with_guessed_format()
+		.expect("cover format")
+		.decode()
+		.expect("cover decode");
+	assert_eq!((decoded.width(), decoded.height()), (450, 600));
+	assert_eq!(std::fs::read(&cache_path).expect("rebuilt cache"), bytes);
+	assert_eq!(
+		std::fs::read_to_string(cache_path.with_file_name(format!("{manga_id}.variant"))).expect("cache variant"),
+		"local-longest-edge-600-v1"
+	);
+	let (status, _, cached) = request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(cached, bytes, "the rebuilt artifact is reusable");
 }
 
 #[tokio::test]
