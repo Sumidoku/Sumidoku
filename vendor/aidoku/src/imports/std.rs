@@ -316,10 +316,201 @@ pub fn parse_date_with_options<T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: A
 	Some(result as i64)
 }
 
-/// 宿主侧链接占位：ImageRef::drop 等路径在非 wasm 目标上也会引用这些符号，
-/// 宿主的 GlobalStore 清扫由宿主自己驱动，这里只满足链接。
+/// Link placeholders for non-wasm targets: host code can reach these externs
+/// (e.g. `ImageRef::drop` reaches `destroy`), but descriptor bookkeeping there
+/// is driven by the host runtime itself, so the stubs only satisfy the linker.
+/// `get`, `get_image` and `html` are declared by two import modules each; off
+/// wasm the import module is ignored, so one stub covers both declarations.
+/// `send`, `select` and `remove` deliberately get no stub: a no-op under one
+/// of those names gets pulled by the binary's own references to the real C
+/// runtime/socket function and hijacks it process-wide (every socket write
+/// binds to the stub); those names always resolve from the system libraries
+/// std already links (libc, ws2_32, the UCRT).
 #[cfg(not(target_arch = "wasm32"))]
 mod host_stubs {
 	#[unsafe(no_mangle)]
 	pub extern "C" fn destroy(_rid: i32) {}
+
+	#[unsafe(no_mangle)]
+	pub extern "C" fn add_class() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn append() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn attr() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn base_uri() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn buffer_len() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn child_nodes() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn children() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn class_name() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn context_create() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn context_eval() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn context_eval_async() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn context_get() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn copy_image() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn current_date() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn data() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn data_len() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn draw_image() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn draw_text() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn escape() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn fill() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn first() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_header() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_image() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_image_data() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_image_height() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_image_width() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_status_code() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn get_url() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn has_attr() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn has_class() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn html() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn id() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn init() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn kind() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn last() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn load_font() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn new_context() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn new_font() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn new_image() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn next() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn outer_html() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn own_text() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn parent() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn parse() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn parse_date() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn parse_fragment() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn prepend() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn previous() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn print() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn read_buffer() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn read_data() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn remove_attr() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn remove_class() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn select_first() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn send_all() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn send_partial_result() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_attr() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_body() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_header() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_html() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_rate_limit() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_text() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_timeout() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_transform() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn set_url() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn siblings() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn size() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn stroke() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn system_font() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn tag_name() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn text() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn unescape() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn untrimmed_text() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn utc_offset() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_add_user_script() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_create() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_delete_cookie() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_eval() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_eval_async() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_get_cookies() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_load() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_load_html() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_set_rule_list() {}
+	#[unsafe(no_mangle)]
+	pub extern "C" fn webview_wait_for_load() {}
+}
+
+/// `sleep` has no Windows provider (the UCRT exports only `_sleep`, and
+/// `Sleep` is a different symbol), while unix libc always provides it — so the
+/// no-op stub exists only where the link would otherwise fail, and unix builds
+/// bind the aidoku call site to the real function instead.
+#[cfg(all(not(target_arch = "wasm32"), windows))]
+mod host_stubs_win {
+	#[unsafe(no_mangle)]
+	pub extern "C" fn sleep() {}
 }
