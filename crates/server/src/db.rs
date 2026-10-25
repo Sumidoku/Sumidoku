@@ -1,7 +1,50 @@
 use crate::error::Error;
+use sha2::{Digest, Sha384};
 use sqlx::SqlitePool;
+use sqlx::migrate::{MigrateError, Migration, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use std::str::FromStr;
+
+fn crlf_checksum(migration: &Migration) -> Vec<u8> {
+	let sql = migration.sql.replace("\r\n", "\n").replace('\n', "\r\n");
+	Sha384::digest(sql.as_bytes()).to_vec()
+}
+
+/// Older Windows builds could record CRLF hashes for the same migration bytes. Validate every row before
+/// changing any of them: only that exact known variant is normalized, and unknown history still aborts boot
+async fn normalize_crlf_migrations(pool: &SqlitePool, migrator: &Migrator) -> Result<bool, sqlx::Error> {
+	let mut tx = begin_write(pool).await?;
+	let applied: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
+		.fetch_all(&mut *tx)
+		.await?;
+	let mut updates = Vec::new();
+	for (version, stored) in applied {
+		let Some(migration) = migrator.iter().find(|migration| migration.version == version) else {
+			return Ok(false);
+		};
+		if stored.as_slice() == migration.checksum.as_ref() {
+			continue;
+		}
+		if stored.as_slice() != crlf_checksum(migration).as_slice() {
+			return Ok(false);
+		}
+		updates.push((version, stored, migration.checksum.to_vec()));
+	}
+	for (version, stored, checksum) in updates {
+		let changed = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ? AND checksum = ?")
+			.bind(checksum)
+			.bind(version)
+			.bind(stored)
+			.execute(&mut *tx)
+			.await?
+			.rows_affected();
+		if changed != 1 {
+			return Ok(false);
+		}
+	}
+	tx.commit().await?;
+	Ok(true)
+}
 
 pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 	// The parent directory of the file path after sqlite:// must exist first, otherwise rwc cannot create the DB
@@ -22,7 +65,17 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 		.journal_mode(SqliteJournalMode::Wal)
 		.foreign_keys(true);
 	let pool = SqlitePoolOptions::new().connect_with(options).await?;
-	sqlx::migrate!("./migrations").run(&pool).await?;
+	let migrator = sqlx::migrate!("./migrations");
+	match migrator.run(&pool).await {
+		Ok(()) => {}
+		Err(error @ MigrateError::VersionMismatch(_)) => {
+			if !normalize_crlf_migrations(&pool, &migrator).await? {
+				return Err(error.into());
+			}
+			migrator.run(&pool).await?;
+		}
+		Err(error) => return Err(error.into()),
+	}
 	let rebaseline: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'sync.single_owner_rebaseline'")
 		.fetch_optional(&pool)
 		.await?;
@@ -72,6 +125,8 @@ pub async fn remove_category_exclusions(
 
 #[cfg(test)]
 mod tests {
+	use super::SqlitePool;
+
 	/// Applied migrations are immutable: at startup sqlx compares the checksum embedded by
 	/// migrate! against what _sqlx_migrations recorded when the migration was applied, and any
 	/// byte change — a comment edit included — aborts the boot with VersionMismatch for every
@@ -119,6 +174,93 @@ mod tests {
 				"migration {version} changed after it shipped; existing deployments refuse to boot"
 			);
 		}
+	}
+
+	async fn write_crlf_checksums(pool: &SqlitePool) {
+		for migration in sqlx::migrate!("./migrations").iter() {
+			sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+				.bind(super::crlf_checksum(migration))
+				.bind(migration.version)
+				.execute(pool)
+				.await
+				.expect("write CRLF checksum");
+		}
+	}
+
+	#[tokio::test]
+	async fn crlf_history_normalizes_and_continues_migrations() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+		let pool = SqlitePool::connect(&url).await.expect("blank database");
+		sqlx::raw_sql(
+			"CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+				version BIGINT PRIMARY KEY,
+				description TEXT NOT NULL,
+				installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				success BOOLEAN NOT NULL,
+				checksum BLOB NOT NULL,
+				execution_time BIGINT NOT NULL
+			)",
+		)
+		.execute(&pool)
+		.await
+		.expect("migration bookkeeping");
+		let first = sqlx::migrate!("./migrations").iter().next().expect("initial migration");
+		sqlx::raw_sql(first.sql.as_ref()).execute(&pool).await.expect("apply initial schema");
+		sqlx::query("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, ?, TRUE, ?, 0)")
+			.bind(first.version)
+			.bind(first.description.as_ref())
+			.bind(super::crlf_checksum(first))
+			.execute(&pool)
+			.await
+			.expect("record CRLF-applied initial migration");
+		pool.close().await;
+
+		let pool = super::create_pool(&url).await.expect("open CRLF-applied database");
+		for migration in sqlx::migrate!("./migrations").iter() {
+			let stored: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = ?")
+				.bind(migration.version)
+				.fetch_one(&pool)
+				.await
+				.expect("normalized migration record");
+			assert_eq!(stored.as_slice(), migration.checksum.as_ref(), "migration {} was not normalized", migration.version);
+		}
+		let api_key_table: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'api_key'")
+			.fetch_one(&pool)
+			.await
+			.expect("api_key table");
+		assert_eq!(api_key_table, 1, "the pending migration must run after normalization");
+		pool.close().await;
+	}
+
+	#[tokio::test]
+	async fn unknown_checksum_does_not_normalize_any_history() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+		let pool = super::create_pool(&url).await.expect("seed LF history");
+		write_crlf_checksums(&pool).await;
+		sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 2")
+			.bind(vec![0u8; 48])
+			.execute(&pool)
+			.await
+			.expect("write unknown checksum");
+		pool.close().await;
+
+		let error = super::create_pool(&url).await.expect_err("unknown checksum must abort startup");
+		assert!(matches!(error, crate::error::Error::Migrate(sqlx::migrate::MigrateError::VersionMismatch(1))), "unexpected startup error: {error:?}");
+		let pool = SqlitePool::connect(&url).await.expect("inspect unchanged history");
+		let first: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+			.fetch_one(&pool)
+			.await
+			.expect("first checksum");
+		let first_migration = sqlx::migrate!("./migrations").iter().find(|migration| migration.version == 1).expect("migration 1");
+		assert_eq!(first, super::crlf_checksum(first_migration), "the valid row must not be rewritten before all rows validate");
+		let second: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 2")
+			.fetch_one(&pool)
+			.await
+			.expect("second checksum");
+		assert_eq!(second, vec![0u8; 48], "the unknown checksum must remain untouched");
+		pool.close().await;
 	}
 
 	#[tokio::test]
