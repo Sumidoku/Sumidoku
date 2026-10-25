@@ -1,0 +1,14 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "Sélectionnées (l'ordre = la priorité)",
+    "addAllPinnedTitle": "Ajouter toutes les sources épinglées dans l'ordre d'épinglage",
+    "addAllPinned_one": "Sélectionner toutes les épinglées ({{count}})",
+    "addAllPinned_other": "Sélectionner toutes les épinglées ({{count}})",
+    "emptyHint": "Aucune source cible pour l'instant — cliquez ci-dessous pour en ajouter ; l'ordre détermine la priorité de la correspondance automatique.",
+    "remove": "Retirer {{name}}",
+    "availableHeading": "Disponibles",
+    "noMore": "Plus aucune source à ajouter.",
+    "add": "Ajouter {{name}}",
+    "pinned": "Épinglée"
+  }
+}

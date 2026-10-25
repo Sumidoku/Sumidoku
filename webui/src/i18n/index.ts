@@ -1,18 +1,24 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
-export type Language = 'zh-CN' | 'en';
+export type Language = 'en' | 'zh-CN' | 'fr' | 'it';
+
+const LANGUAGES: readonly Language[] = ['en', 'zh-CN', 'fr', 'it'];
 
 const STORAGE_KEY = 'sumidoku.language';
 
 function detectLanguage(): Language {
 	try {
 		const stored = localStorage.getItem(STORAGE_KEY);
-		if (stored === 'zh-CN' || stored === 'en') return stored;
+		if (LANGUAGES.includes(stored as Language)) return stored as Language;
 	} catch {
 		// Private mode blocks the read; fall through to the browser language
 	}
-	return navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en';
+	const nav = navigator.language.toLowerCase();
+	if (nav.startsWith('zh')) return 'zh-CN';
+	if (nav.startsWith('fr')) return 'fr';
+	if (nav.startsWith('it')) return 'it';
+	return 'en';
 }
 
 // Catalogs live one file per namespace per locale (locales/<lang>/<ns>.json, the file
@@ -31,7 +37,7 @@ for (const [path, mod] of Object.entries(modules)) {
 void i18n.use(initReactI18next).init({
 	resources,
 	lng: detectLanguage(),
-	fallbackLng: 'zh-CN',
+	fallbackLng: 'en',
 	interpolation: {
 		// React already escapes interpolated values
 		escapeValue: false

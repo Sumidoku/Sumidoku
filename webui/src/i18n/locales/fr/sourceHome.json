@@ -1,0 +1,17 @@
+{
+  "sourceHome": {
+    "backToBrowse": "Retour à Parcourir",
+    "backToSource": "Retour à {{name}}",
+    "sourceFallback": "Source",
+    "sourceDisabled": "Cette source est désactivée",
+    "sourceDisabledHint": "Réinstallez-la ou activez-la avant de la parcourir",
+    "loadFailed": "Échec du chargement",
+    "retry": "Réessayer",
+    "noHome": "Cette source n'a pas de page d'accueil",
+    "noHomeHint": "La source ne fournit aucun contenu d'accueil ; vous pouvez rechercher directement ou parcourir par liste",
+    "goSearch": "Aller à la recherche",
+    "emptyHome": "La page d'accueil est vide",
+    "emptyHomeHint": "La source a renvoyé une mise en page d'accueil vide",
+    "viewAll": "Tout voir"
+  }
+}

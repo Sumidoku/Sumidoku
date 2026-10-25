@@ -1,0 +1,42 @@
+{
+  "reader": {
+    "mode": {
+      "paged": "Page par page",
+      "continuous": "Défilement",
+      "webtoon": "Webtoon"
+    },
+    "invalidChapter": "Adresse de chapitre invalide",
+    "documentTitle": "{{title}} · Lecture",
+    "documentTitleEmpty": "Lecture",
+    "loadFailed": "Échec du chargement du chapitre",
+    "retry": "Réessayer",
+    "noPages": "Ce chapitre n'a aucune page",
+    "back": "Retour",
+    "unsupportedPage": "Ce type de page n'est pas encore pris en charge",
+    "pageAlt": "Page {{page}}",
+    "prevPage": "Page précédente",
+    "nextPage": "Page suivante",
+    "toggleToolbar": "Afficher ou masquer la barre d'outils",
+    "reading": "Lecture",
+    "settings": "Paramètres de lecture",
+    "typography": "Typographie",
+    "fontFamily": "Police",
+    "fontDefault": "Par défaut",
+    "fontSans": "Sans empattement",
+    "fontSerif": "Avec empattement",
+    "fontMono": "Monospace",
+    "fontSize": "Taille de police",
+    "lineHeight": "Hauteur de ligne",
+    "direction": "Sens de lecture",
+    "directionPagedOnly": "Sens de lecture (mode page par page uniquement)",
+    "ltr": "Gauche à droite",
+    "rtl": "Droite à gauche",
+    "prevChapter": "Chapitre précédent",
+    "nextChapter": "Chapitre suivant",
+    "jumpToPage": "Aller à la page",
+    "chapters": "Chapitres",
+    "noChapters": "Aucun chapitre",
+    "ascending": "Croissant",
+    "descending": "Décroissant"
+  }
+}

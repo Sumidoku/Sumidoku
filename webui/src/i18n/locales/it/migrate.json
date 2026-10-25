@@ -1,0 +1,56 @@
+{
+  "migrate": {
+    "title": "Migra",
+    "back": "Indietro",
+    "pickSourceHint": "Scegli la fonte da cui migrare (sono elencate solo le fonti con voci in libreria):",
+    "inLibrary_one": "{{count}} titolo in libreria",
+    "inLibrary_other": "{{count}} titoli in libreria",
+    "libraryEmpty": "La tua libreria è vuota",
+    "libraryEmptyHint": "Aggiungi prima dei manga alla libreria, poi migra",
+    "selectedCount": "Fonte: <b>{{source}}</b> · {{selected}} / {{total}} selezionati",
+    "clearAll": "Azzera",
+    "selectAll": "Seleziona tutto",
+    "pickDestinations": "Scegli le destinazioni",
+    "loadMore": "Carica altro",
+    "startMatch_one": "Avvia abbinamento ({{count}} titolo)",
+    "startMatch_other": "Avvia abbinamento ({{count}} titoli)",
+    "status": "Destinazioni: {{dests}} · {{matched}} / {{total}} abbinati{{matching}}{{executed}}",
+    "statusMatching": " · abbinamento…",
+    "statusExecuted": " · {{done}} migrati",
+    "retryUnmatched": "Riprova i non abbinati",
+    "notFound": "Non trovato",
+    "gotoTarget": "Migrato — vedi la destinazione →",
+    "confirmTitle_one": "{{mode}} {{count}} titolo?",
+    "confirmTitle_other": "{{mode}} {{count}} titoli?",
+    "confirmAction": "Conferma: {{mode}}",
+    "unmatchedUntouched_one": "{{count}} titolo non abbinato resterà invariato.",
+    "unmatchedUntouched_other": "{{count}} titoli non abbinati resteranno invariati.",
+    "toastDone_one": "{{count}} titolo migrato",
+    "toastDone_other": "{{count}} titoli migrati",
+    "toastPartial": "{{done}} titoli completati, {{failed}} non riusciti",
+    "moreActions": "Altre azioni",
+    "rematch": "Cerca di nuovo",
+    "skipEntry": "Salta questa voce",
+    "rematchTitle": "Cerca di nuovo: {{title}}",
+    "rematchHint": "Vengono cercate tutte le fonti di destinazione; clicca un candidato per usarlo come abbinamento.",
+    "rematchNoHits": "Nessuna corrispondenza. Prova con una parola chiave diversa.",
+    "mode": {
+      "copy": "Copia",
+      "migrate": "Migra",
+      "migrateWithHistory": "Migra (mantieni la cronologia)"
+    },
+    "modeHint": {
+      "copy": "Aggiunge la destinazione alla libreria e trasferisce i progressi; la voce di origine resta invariata",
+      "migrate": "Aggiunge la destinazione alla libreria e trasferisce i progressi; la voce di origine esce dalla libreria e i suoi progressi di lettura vengono azzerati",
+      "migrateWithHistory": "Aggiunge la destinazione alla libreria e trasferisce i progressi; la voce di origine esce dalla libreria ma conserva la sua cronologia di lettura"
+    },
+    "reason": {
+      "not_found": "La voce di origine non esiste",
+      "not_in_library": "La voce di origine non è nella libreria",
+      "source_not_found": "La fonte di destinazione non esiste",
+      "same_source": "Destinazione e origine sono la stessa voce",
+      "fetch_failed": "Recupero dei dettagli della destinazione non riuscito",
+      "fetch_failed_with_message": "Recupero dei dettagli della destinazione non riuscito: {{message}}"
+    }
+  }
+}

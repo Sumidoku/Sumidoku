@@ -1,0 +1,33 @@
+{
+  "library": {
+    "sortAdded": "Ajoutés récemment",
+    "sortTitle": "Titre",
+    "sortLastRead": "Lus récemment",
+    "sortLatestChapter": "Dernier chapitre",
+    "sortUnread": "Plus de non lus",
+    "filterUnread": "Non lus",
+    "filterDownloaded": "Téléchargés",
+    "filterBookmarked": "Marque-pages",
+    "triInclude": "Affiche uniquement les mangas « {{label}} » ; cliquez pour les exclure",
+    "triExclude": "Exclut les mangas « {{label}} » ; cliquez pour effacer le filtre",
+    "triNone": "Aucun filtrage par « {{label}} » ; cliquez pour n'afficher que ceux-là",
+    "searchPlaceholder": "Rechercher dans la bibliothèque…",
+    "uncategorized": "Sans catégorie",
+    "rating": "Classification",
+    "source": "Source",
+    "sort": "Tri",
+    "toolbar": "Contrôles de la bibliothèque",
+    "filters": "Filtres",
+    "categories": "Catégories",
+    "status": "Statut",
+    "moreFilters": "Plus de filtres",
+    "filterGroups": "Groupes de filtres",
+    "emptyFilteredTitle": "Aucun manga ne correspond",
+    "emptyFilteredHint": "Essayez un autre mot-clé, ou effacez les filtres et réessayez",
+    "clearFilters": "Effacer les filtres",
+    "emptyTitle": "Votre bibliothèque est vide",
+    "emptyHint": "Choisissez quelques mangas dans Parcourir pour les ajouter à votre bibliothèque",
+    "goBrowse": "Aller à Parcourir",
+    "groupHint": "Filtre selon les règles du groupe « {{name}} » ; cliquez à nouveau pour effacer"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "errors": {
+    "bad_request": "Requête invalide",
+    "unauthorized": "Vous n'êtes pas connecté ou la session a expiré",
+    "forbidden": "Permission refusée",
+    "not_found": "La ressource demandée est introuvable",
+    "duplicate": "Une entrée du même nom existe déjà",
+    "unsupported": "Cette fonctionnalité n'est pas prise en charge",
+    "no_update": "Déjà à jour",
+    "not_in_library": "Le manga n'est pas dans la bibliothèque",
+    "source_disabled": "Cette source est désactivée",
+    "source_error": "La requête vers la source a échoué",
+    "timeout": "La requête vers la source a expiré",
+    "bad_gateway": "La requête en amont a échoué",
+    "internal": "Erreur interne du serveur",
+    "gone": "Le répertoire est toujours manquant ; restaurez-le d'abord sur le disque, ou purgez l'entrée",
+    "not_trashed": "Cette entrée n'est pas à la corbeille",
+    "network": "La requête réseau a échoué",
+    "http": "La requête a échoué (HTTP {{status}})",
+    "stream_parse": "Le flux contenait un événement impossible à analyser",
+    "stream_terminal": "Le flux s'est terminé sans événement final"
+  }
+}

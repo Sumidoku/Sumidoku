@@ -1,0 +1,10 @@
+{
+  "history": {
+    "emptyTitle": "Aucun historique de lecture pour l'instant",
+    "emptyHint": "Les chapitres que vous lisez apparaîtront ici, prêts à être repris à tout moment",
+    "goLibrary": "Aller à la bibliothèque",
+    "finished": "Terminé",
+    "progress": "Page {{page}}",
+    "more": "+{{count}} de plus"
+  }
+}

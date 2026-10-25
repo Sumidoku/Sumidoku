@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "confirm": "Confirmer",
+    "reset": "Réinitialiser",
+    "loading": "Chargement…",
+    "trashed": "À la corbeille",
+    "search": "Rechercher",
+    "nav": {
+      "library": "Bibliothèque",
+      "browse": "Parcourir",
+      "search": "Recherche",
+      "history": "Historique",
+      "downloads": "Téléchargements",
+      "updates": "Mises à jour",
+      "activity": "Activité",
+      "settings": "Paramètres"
+    }
+  }
+}

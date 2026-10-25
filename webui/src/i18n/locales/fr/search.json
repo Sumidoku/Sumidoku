@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "Rechercher dans toutes les sources…",
+    "rating": "Classification",
+    "language": "Langue",
+    "source": "Source",
+    "emptyTitle": "Recherche multi-sources",
+    "emptyHint": "Saisissez un mot-clé pour rechercher dans toutes les sources correspondant aux filtres",
+    "noSourcesTitle": "Aucune source ne correspond aux filtres",
+    "noSourcesHint": "Ajustez les filtres de classification / langue / source",
+    "loadFailedTitle": "Échec du chargement",
+    "retry": "Réessayer",
+    "noResultsTitle": "Aucun résultat",
+    "noResultsHint": "Essayez un autre mot-clé ou ajustez les filtres",
+    "viewAll": "Tout voir"
+  }
+}

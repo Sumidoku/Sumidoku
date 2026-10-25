@@ -1,0 +1,23 @@
+{
+  "errors": {
+    "bad_request": "Richiesta non valida",
+    "unauthorized": "Accesso non effettuato o sessione scaduta",
+    "forbidden": "Permesso negato",
+    "not_found": "La risorsa richiesta non è stata trovata",
+    "duplicate": "Esiste già una voce con lo stesso nome",
+    "unsupported": "Questa funzione non è supportata",
+    "no_update": "Già aggiornato",
+    "not_in_library": "Il manga non è nella libreria",
+    "source_disabled": "Questa fonte è disabilitata",
+    "source_error": "La richiesta alla fonte non è riuscita",
+    "timeout": "La richiesta alla fonte è scaduta",
+    "bad_gateway": "La richiesta a monte non è riuscita",
+    "internal": "Errore interno del server",
+    "gone": "La cartella risulta ancora mancante; ripristinala su disco oppure elimina definitivamente la voce",
+    "not_trashed": "Questa voce non è nel cestino",
+    "network": "Richiesta di rete non riuscita",
+    "http": "Richiesta non riuscita (HTTP {{status}})",
+    "stream_parse": "Il flusso conteneva un evento impossibile da analizzare",
+    "stream_terminal": "Il flusso è terminato senza un evento conclusivo"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "Cerca in tutte le fonti…",
+    "rating": "Classificazione",
+    "language": "Lingua",
+    "source": "Fonte",
+    "emptyTitle": "Ricerca tra le fonti",
+    "emptyHint": "Inserisci una parola chiave per cercare in ogni fonte che corrisponde ai filtri",
+    "noSourcesTitle": "Nessuna fonte corrisponde ai filtri",
+    "noSourcesHint": "Modifica i filtri di classificazione / lingua / fonte",
+    "loadFailedTitle": "Caricamento non riuscito",
+    "retry": "Riprova",
+    "noResultsTitle": "Nessun risultato",
+    "noResultsHint": "Prova con una parola chiave diversa o modifica i filtri",
+    "viewAll": "Vedi tutto"
+  }
+}

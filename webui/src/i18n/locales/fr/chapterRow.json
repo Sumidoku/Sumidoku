@@ -1,0 +1,21 @@
+{
+  "chapterRow": {
+    "locked": "Verrouillé",
+    "trashed": "À la corbeille",
+    "bookmarked": "Marque-page",
+    "downloaded": "Téléchargé",
+    "unread": "Non lu",
+    "downloadCbz": "Télécharger le fichier CBZ",
+    "downloadChapter": "Télécharger le chapitre",
+    "enqueueing": "Ajout à la file de téléchargement",
+    "enqueued": "Dans la file de téléchargement",
+    "downloading": "Téléchargement du chapitre",
+    "addBookmark": "Ajouter un marque-page",
+    "removeBookmark": "Retirer le marque-page",
+    "chapterActions": "Actions du chapitre",
+    "markRead": "Marquer comme lu",
+    "markUnread": "Marquer comme non lu",
+    "markPreviousRead": "Marquer tous les chapitres en dessous comme lus",
+    "markPreviousUnread": "Marquer tous les chapitres en dessous comme non lus"
+  }
+}

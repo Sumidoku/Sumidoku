@@ -1,0 +1,14 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "Selezionate (ordine = priorità)",
+    "addAllPinnedTitle": "Aggiungi tutte le fonti fissate in ordine di fissaggio",
+    "addAllPinned_one": "Seleziona tutte le fissate ({{count}})",
+    "addAllPinned_other": "Seleziona tutte le fissate ({{count}})",
+    "emptyHint": "Ancora nessuna fonte di destinazione: clicca qui sotto per aggiungerne; l'ordine decide la priorità dell'abbinamento automatico.",
+    "remove": "Rimuovi {{name}}",
+    "availableHeading": "Disponibili",
+    "noMore": "Nessun'altra fonte da aggiungere.",
+    "add": "Aggiungi {{name}}",
+    "pinned": "Fissata"
+  }
+}

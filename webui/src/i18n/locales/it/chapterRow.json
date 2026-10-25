@@ -1,0 +1,21 @@
+{
+  "chapterRow": {
+    "locked": "Bloccato",
+    "trashed": "Nel cestino",
+    "bookmarked": "Con segnalibro",
+    "downloaded": "Scaricato",
+    "unread": "Non letto",
+    "downloadCbz": "Scarica il file CBZ",
+    "downloadChapter": "Scarica il capitolo",
+    "enqueueing": "Aggiunta alla coda di download",
+    "enqueued": "In coda di download",
+    "downloading": "Download del capitolo in corso",
+    "addBookmark": "Aggiungi segnalibro",
+    "removeBookmark": "Rimuovi segnalibro",
+    "chapterActions": "Azioni del capitolo",
+    "markRead": "Segna come letto",
+    "markUnread": "Segna come non letto",
+    "markPreviousRead": "Segna come letti tutti i capitoli sotto questo",
+    "markPreviousUnread": "Segna come non letti tutti i capitoli sotto questo"
+  }
+}
