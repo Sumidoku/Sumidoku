@@ -1,18 +1,82 @@
 use crate::error::Error;
-use sha2::{Digest, Sha384};
 use sqlx::SqlitePool;
-use sqlx::migrate::{MigrateError, Migration, Migrator};
+use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
 use std::str::FromStr;
 
-fn crlf_checksum(migration: &Migration) -> Vec<u8> {
-	let sql = migration.sql.replace("\r\n", "\n").replace('\n', "\r\n");
-	Sha384::digest(sql.as_bytes()).to_vec()
-}
+/// Only reviewed historical artifacts belong here; deriving aliases from migration text would also accept
+/// unreviewed edits.
+const LEGACY_MIGRATION_CHECKSUMS: &[(i64, &[&str])] = &[
+	(1, &[
+		"0A32F7A388114C455681CDB0ED294244A840677D32F58CB18A0AFB5DFA0377288B89A35A7CE7375D4ACBAD57CE472D0B",
+		"F9D6E68BEC408DCC687E65E4D97D4F9987CE9CB0EEEBBA048995344CFBA3AEF6FCE700B44C119ECDE1D586C97CCC4710",
+		"6333085A0FC9C6B58386799D8C93BAE9AB8A2CB329E7C2A5A838AA2DBE3A6330E11CFCB659FA201967D29E71D446C2F8",
+	]),
+	(2, &[
+		"F90D878C9B462832EF37AFDD96D0AA7FF7A90CF7905C93CEBDAEA164B8303DAD26B8231C2D47495A973FF0B0CF680226",
+		"83179819E4B49211075933A1D2FCDB005A6EF760DDBEBD7C4DEF9F864B1BD72671F05AD2A54E8E20A4A724E93B5E7138",
+		"9033269236C2674E1FEB565BF6A2C41373FA46E1802F79C0650EA04A0867FB3C39E1412907B5405E5C08EE099D2129FE",
+	]),
+	(3, &["1B5F3CB55FA7C81A0D2A6A5D1A698F944974F1FA1238745323C5F416EE26C8E57687A377A994F985C7EBE3375E89F029"]),
+	(4, &[
+		"2A2410B566CD5B92D818FD1C144D4CB0B904CD36C0872FEA8F4DBC2105C6DE0FE111894309A5368D03C8DF04AE9CB05F",
+		"6ECB84D05B30D1557770FD49AF0BE8F00EEB7AAB41AFF80152DEB7FC3634FCABAE28F51BAC42CA1D17BE279C241E4954",
+		"00638E47DD627EF5FD251D3A28498DD00E534848FA7912F00EA7AA93D7AE96C50388DB16B9CA088D8A57ACFE249426F8",
+	]),
+	(5, &[
+		"2D3B48A60599AF7DC2D1BD3036EA1A423547C34E16E36D27D1E5C33A0954D8ECF260D4336B8A475B19B05B823C50F5EA",
+		"2FC1AAAAC879F39295A3D74BE7FC12585251EA41B59C30B9FF5146728A71197C21F8981782D7EA5DA20ADB39FAF0149C",
+		"87E63A176FE781A5FFDC8F581A8E71BC36B86634110DE2428AC9066F69F355B1AD20F0F41F745A84ED7D97ECFBE09FE2",
+	]),
+	(6, &[
+		"DD02CC7EF46C7FEDF95DA0D295F225CAA78DB2FF0A5F66B5905262030C347B9F167EAC20E3F11D04AACA9BEE39ADA69D",
+		"9D10E54D48F0C32EA964FDC255AE0EB170D63A2AB00E1B7E7BCCCFFF57E7B12C724656BF1777E74CD564B8812ABBF82A",
+		"677E9A17D09AE74B294E9DF066C03859A7B861E24381BF3367494033A01BD75B3C37C814EED742BF12A87491DAE143BD",
+	]),
+	(7, &[
+		"4E26367A7F96C839BDA030B87BE724476BE9A6F68C3D9B07A86D157A451C0C88E21D46ADBE86D99DF3668E97E5C39293",
+		"C3AEDB481F0A00C668AE114691B62BEE7536C7AE3D66B26B21870E9FD821F1AF18DBCB083B92572492F1D5EF47866168",
+		"4C9DF6A9621FA45A9E61CA7293D9E69CAA83EEA694558DEECA0D9D4AE7B0766B14530B14D81ED4D3EA60D99B5CB32488",
+	]),
+	(8, &["05D3A55F1D9E7498823BE25BAAEA64EE8E899C519572564EEAF46867713215433F20674401D0C95B3BDF8E1D2F868CCD"]),
+	(9, &[
+		"5919FC62FCD1C0C234CAD0EA2A033DDF869F1EBF7F6FF4D77F18D4E2136BCB4FB22E5F675F94E0A7639320D9EF7CDF30",
+		"98C07EE10B63893B626C80280D11DD2370497FA241EF805ED206886D748392E9B87FAB6528CC01DEF45D5BA75E128BA2",
+		"A0543EAC2AD7565B8D3F588B46298D7AB631C0296B256651591EFEAFC8224B23E9185B2C904738A13133659A4CE1DFD3",
+	]),
+	(10, &[
+		"0F04A6323ABDD6D7C27FEB05F7603C3E7DFFC47F955E498FD6991EFE9F4B9B5E2993CEE2D39AE4E31046E0FE340DBCCC",
+		"7577484F65644F20BAEC3FA268D60B000772FE243EFACBF21748D543ECCE6905506E3FD4359ACAC52560D94422D82EDA",
+		"71C038C9BC3F70A5FF1965EE7BE1CF811CEAB47D578F7F8396F8E1FD7BFDE379A3000C9D15ADD84EE7B7645A6BEBFFC9",
+	]),
+	(11, &[
+		"9C5CD7FF3766B4F91B7FDFBBA814B95D0C9773E0461EB2C81D1ACC630CA949E024BD26DF786C22EC0BF9C079ABB3B370",
+		"981CA8FC5758999EF715AC2A4C7594D7FE7DD696C411E7BC7C8A28AD68C1095D6D20CD3B1E191D8A8829AE4CCCCBA11E",
+		"0D116C7C8E6E1D8B189F2DBC713DBD7CA6B7F3D29B03A319710B82F8A4873E2EEC6A30AC5BAACAA831C1295102D1239C",
+	]),
+	(12, &[
+		"CB4F4889F693EBC5CF83387C447C1B2B229A65A2C0D739399946295C3AE1F44F4B47A520CC831F7057B2F62936AA4EE3",
+		"1785F25EA121AF6B352B1A71527DD78FCAF331B56C162A48C240D81349229CB592802C4CF94F43B8A89BFCFF7E7003A5",
+		"FE7A143F9AABAE0F56578587AF335877DF939500916CDC48909D01820470A2A3391B457F7837AF59AB51CE00A9904F10",
+	]),
+	(13, &["AFEA83F78159738F14881DABA227D5D27DD578FBFBC09E6CCBEAE16A54532AF36FE6D4EF74CA42B93E3EFC8F22AAB755"]),
+	(14, &["992C56FF5FB96E5E17C5C926AE71E0B8033F4713D6C479FC78F0D23C6C9E2F5B6051B1FEF0862F710D9482D6F6B759A4"]),
+	(15, &["C55D2D59D5B7C5AF9EDC524A6EC153FD82D51BFC1A52F3A3F1BFC24E162C54F35775F83CB53BDD9D37B80F2577DEC301"]),
+	(16, &["82BD50096CC6EB5EA5A7C2DAA2F4C47AD12840B848D2ED74437593A8D2ECEAB8498F65B49152C9D649647B9581D41084"]),
+	(17, &["766DC769B584DEFBBFAE914C9FFAD310596DF43FAD84684BBE2337030F318C0A9066F7E7A68EDFCBC7E9A7CB66C8C301"]),
+	(18, &["77CC68C849A72257FBA5D613A6B211EAC966A788BEFF2EADC3F6456A6F2EB2A0F33D194461E350F9A8A4F83D0431F3D0"]),
+	(19, &["D0314C5C5C85A566A93BED6782FE2486D77063D954ED11507D16CAE414B8CE902F6AAB2E0FA41F8D5336D0D2DDB5B8B7"]),
+	(20, &["FD6A230C00AAE64A6FFA6672BEDC5B6E05904BE26FEFDABAADF0A340CE22B3AE4BE6112CF2CBF89564F6430E756919BA"]),
+	(21, &["7A81A9CCE76CB09E1033455BD1635CE4ED0969DAA16C30837C73E73D74C6213D873303DC7B332FA07FB65425F4E37DF0"]),
+	(22, &["F6C4BFF54C9271013C46AADEB63E2584A94BF7FDAFAB8E70D22A0E0D2148CE2D95FE44DEEE6D61DD2D6BB663ADC6FF59"]),
+	(23, &["74E8B3E3AD9397A714D9576892269BB464785956B17FF0B23857C523B3D520144A55B0CD874D4304CA9F5B04F549AF31"]),
+	(24, &[
+		"07A2159B0996857C1D3AC78A5722CBAAA5E625D7D097B7428F02A808AD929B5A8B6E64034A4EB158D5627280C0D02065",
+		"60728293ED53593660887F681F4CA1F4BE91B77697C64A435BDB00218D12D2D64D29E83AB4D9560254CD2B4DC0204C3A",
+	]),
+];
 
-/// Older Windows builds could record CRLF hashes for the same migration bytes. Validate every row before
-/// changing any of them: only that exact known variant is normalized, and unknown history still aborts boot
-async fn normalize_crlf_migrations(pool: &SqlitePool, migrator: &Migrator) -> Result<bool, sqlx::Error> {
+async fn normalize_migration_checksums(pool: &SqlitePool, migrator: &Migrator) -> Result<bool, sqlx::Error> {
 	let mut tx = begin_write(pool).await?;
 	let applied: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations ORDER BY version")
 		.fetch_all(&mut *tx)
@@ -25,7 +89,11 @@ async fn normalize_crlf_migrations(pool: &SqlitePool, migrator: &Migrator) -> Re
 		if stored.as_slice() == migration.checksum.as_ref() {
 			continue;
 		}
-		if stored.as_slice() != crlf_checksum(migration).as_slice() {
+		let stored_hex: String = stored.iter().map(|byte| format!("{byte:02X}")).collect();
+		if !LEGACY_MIGRATION_CHECKSUMS
+			.iter()
+			.any(|(candidate, checksums)| *candidate == version && checksums.contains(&stored_hex.as_str()))
+		{
 			return Ok(false);
 		}
 		updates.push((version, stored, migration.checksum.to_vec()));
@@ -69,7 +137,7 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 	match migrator.run(&pool).await {
 		Ok(()) => {}
 		Err(error @ MigrateError::VersionMismatch(_)) => {
-			if !normalize_crlf_migrations(&pool, &migrator).await? {
+			if !normalize_migration_checksums(&pool, &migrator).await? {
 				return Err(error.into());
 			}
 			migrator.run(&pool).await?;
@@ -127,26 +195,23 @@ pub async fn remove_category_exclusions(
 mod tests {
 	use super::SqlitePool;
 
-	/// Applied migrations are immutable: at startup sqlx compares the checksum embedded by
-	/// migrate! against what _sqlx_migrations recorded when the migration was applied, and any
-	/// byte change — a comment edit included — aborts the boot with VersionMismatch for every
-	/// existing deployment. Pin the embedded SHA-384 checksums; adding a NEW migration appends a
-	/// pin, touching an old file fails here before it can ship.
+	/// Existing databases reject changed migration bytes unless their exact old checksum is registered.
+	/// Pin the canonical SHA-384 for every shipped file; new migrations append a pin.
 	#[test]
 	fn shipped_migrations_are_immutable() {
 		static PINS: &[(i64, &str)] = &[
-			(1, "0A32F7A388114C455681CDB0ED294244A840677D32F58CB18A0AFB5DFA0377288B89A35A7CE7375D4ACBAD57CE472D0B"),
-			(2, "F90D878C9B462832EF37AFDD96D0AA7FF7A90CF7905C93CEBDAEA164B8303DAD26B8231C2D47495A973FF0B0CF680226"),
+			(1, "2BBFC0F9B10375B680176FBC7CE075876B0D43D90130E42FDD1EC1D2A560A91F4476D87DBB9C0B5A308B3C48890C0BFE"),
+			(2, "D1FE7428542831CAAF01356004ACE36008C9E2604C4774F1CD548E2EE8B8EC6386EC360EA9DDAA494D9C305D85EF5E1F"),
 			(3, "80C6884AA4E7DED4D12CD811053401A14D69E367A1198E9627A77398F591E4DC76789978B79D1FDC9EF075AB30867740"),
-			(4, "2A2410B566CD5B92D818FD1C144D4CB0B904CD36C0872FEA8F4DBC2105C6DE0FE111894309A5368D03C8DF04AE9CB05F"),
-			(5, "2D3B48A60599AF7DC2D1BD3036EA1A423547C34E16E36D27D1E5C33A0954D8ECF260D4336B8A475B19B05B823C50F5EA"),
-			(6, "DD02CC7EF46C7FEDF95DA0D295F225CAA78DB2FF0A5F66B5905262030C347B9F167EAC20E3F11D04AACA9BEE39ADA69D"),
-			(7, "4E26367A7F96C839BDA030B87BE724476BE9A6F68C3D9B07A86D157A451C0C88E21D46ADBE86D99DF3668E97E5C39293"),
+			(4, "2A36EBD887C8D99AA6E839C0BDCC6B382EDC39A5900F607BBCB6CE8F464DB7EE605865F56F30F139E09D799E5BAFBDAD"),
+			(5, "1C5C49BCE9352908302CD5598446EF326F8605B64DBDB54BC58E6295E79F6FBEB0340A6F4840C9400D8C7314F90889B9"),
+			(6, "271EC3A8E5CA791B9DCD976106FE2DE3C9C9442E5B4DA0FCE6822AD7AF58E60A50184933772285E96911C0B58E3B4BDF"),
+			(7, "B55448C4795B655F3800548D19DFF7ACA45B5EA7A20D8E23EC77896BCCD5283C91A94C6A88683FF94B8CDAAFF4B6C7EC"),
 			(8, "016A8DDD216337B4EF752DD381F936B3D6CC8AE0FB1A3BF10E61AB89046EC53D5B945DE5233B8841C43292E628BEAACE"),
-			(9, "5919FC62FCD1C0C234CAD0EA2A033DDF869F1EBF7F6FF4D77F18D4E2136BCB4FB22E5F675F94E0A7639320D9EF7CDF30"),
-			(10, "0F04A6323ABDD6D7C27FEB05F7603C3E7DFFC47F955E498FD6991EFE9F4B9B5E2993CEE2D39AE4E31046E0FE340DBCCC"),
-			(11, "9C5CD7FF3766B4F91B7FDFBBA814B95D0C9773E0461EB2C81D1ACC630CA949E024BD26DF786C22EC0BF9C079ABB3B370"),
-			(12, "CB4F4889F693EBC5CF83387C447C1B2B229A65A2C0D739399946295C3AE1F44F4B47A520CC831F7057B2F62936AA4EE3"),
+			(9, "2A38E3CD5A3159F3C12593CA2A8775C01C7C32DB9611521B797A14F4A2E07AEA9D46FD1ECED496AC24128767BDC2C6ED"),
+			(10, "AB5F1422B6793F9042AE2859B25E1F18F6B174E20D1623EAFD2DE9EBB0EA61CFBEE7125A3AE13DD09D9EC09E0BB16A5F"),
+			(11, "020926C55040999A906FC446FEBBB07C0E3DFA136D0D1500774535F2A01E3720A349E98037052D10B45CEAD41EF804FD"),
+			(12, "33E3D54667BB06025A355ED95F24E528D63AB861A72A4ABB7654E86845A34BD2498AD3A2D0DAD497EF1284ABA543345E"),
 		(13, "AF887712FE6A23301CA3699D25BAB83041C55C15FE2AE1CEE7F8DE8B4EA67BE512884251BD5D8920AD1DF95E61F36370"),
 			(14, "DDAEC2A8EF7367BF09182F1458A33773A9C1124595E71D3DDB8A9867A5C9D14B6D4FCBE176432E802DEF0218AAB99CF3"),
 			(15, "D9FEC20F2FABD842778568556A897C88B343E29055DAD28D5787ECA10C698DB4BDB2F3448C79A4D7610AD8EC56B89A83"),
@@ -158,7 +223,7 @@ mod tests {
 			(21, "4948B2920F5805B91B5BA635C67C55BCA2EE7F6B67E6F9C99C9062A8D5C142185BDD8942FBDBF3678F65631DEB98C7EB"),
 			(22, "355E27DBABAA8F72A28E96069416BD5705F87974D6B52EB3C74CFB989595C28A5DBAEC14EA6DD437D79E58E6D8A376BC"),
 			(23, "E0786EC097D86F201751F36198D1D8070E4B1DFC94966618BEAB41F5C0143B5D41FE1C664DBE8110D083154D2896C394"),
-			(24, "07A2159B0996857C1D3AC78A5722CBAAA5E625D7D097B7428F02A808AD929B5A8B6E64034A4EB158D5627280C0D02065"),
+			(24, "B91C6E8048633C33A9AD09AC1DBDDA4D9E4EA95A436F547EAC5F8D4FBD6C4153A43420A9AF4860DA36CDACE750124C64"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -176,70 +241,120 @@ mod tests {
 		}
 	}
 
-	async fn write_crlf_checksums(pool: &SqlitePool) {
+	#[test]
+	fn shipped_migrations_use_ascii_comments_and_lf() {
 		for migration in sqlx::migrate!("./migrations").iter() {
-			sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
-				.bind(super::crlf_checksum(migration))
-				.bind(migration.version)
-				.execute(pool)
+			assert!(!migration.sql.contains('\r'), "migration {} must use LF line endings", migration.version);
+			for comment in migration.sql.lines().filter(|line| line.trim_start().starts_with("--")) {
+				assert!(comment.is_ascii(), "migration {} comments must be English", migration.version);
+			}
+		}
+	}
+
+	fn decode_checksum(hex: &str) -> Vec<u8> {
+		assert_eq!(hex.len(), 96);
+		(0..hex.len())
+			.step_by(2)
+			.map(|index| u8::from_str_radix(&hex[index..index + 2], 16).expect("hex checksum"))
+			.collect()
+	}
+
+	async fn write_checksum(pool: &SqlitePool, version: i64, checksum: &str) {
+		let changed = sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = ?")
+			.bind(decode_checksum(checksum))
+			.bind(version)
+			.execute(pool)
+			.await
+			.expect("write migration checksum")
+			.rows_affected();
+		assert_eq!(changed, 1);
+	}
+
+	#[tokio::test]
+	async fn legacy_checksum_history_normalizes_and_continues_migrations() {
+		for (variant, legacy_checksum) in [
+			("Chinese LF", "0A32F7A388114C455681CDB0ED294244A840677D32F58CB18A0AFB5DFA0377288B89A35A7CE7375D4ACBAD57CE472D0B"),
+			("Chinese CRLF", "F9D6E68BEC408DCC687E65E4D97D4F9987CE9CB0EEEBBA048995344CFBA3AEF6FCE700B44C119ECDE1D586C97CCC4710"),
+			("English CRLF", "6333085A0FC9C6B58386799D8C93BAE9AB8A2CB329E7C2A5A838AA2DBE3A6330E11CFCB659FA201967D29E71D446C2F8"),
+		] {
+			let tmp = tempfile::tempdir().expect("tempdir");
+			let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+			let pool = SqlitePool::connect(&url).await.expect("blank database");
+			sqlx::raw_sql(
+				"CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+					version BIGINT PRIMARY KEY,
+					description TEXT NOT NULL,
+					installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					success BOOLEAN NOT NULL,
+					checksum BLOB NOT NULL,
+					execution_time BIGINT NOT NULL
+				)",
+			)
+			.execute(&pool)
+			.await
+			.expect("migration bookkeeping");
+			let first = sqlx::migrate!("./migrations").iter().next().expect("initial migration");
+			sqlx::raw_sql(first.sql.as_ref()).execute(&pool).await.expect("apply initial schema");
+			sqlx::query("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, ?, TRUE, ?, 0)")
+				.bind(first.version)
+				.bind(first.description.as_ref())
+				.bind(decode_checksum(legacy_checksum))
+				.execute(&pool)
 				.await
-				.expect("write CRLF checksum");
+				.expect("record legacy initial migration");
+			pool.close().await;
+
+			let pool = super::create_pool(&url).await.unwrap_or_else(|error| panic!("open {variant} database: {error}"));
+			for migration in sqlx::migrate!("./migrations").iter() {
+				let stored: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = ?")
+					.bind(migration.version)
+					.fetch_one(&pool)
+					.await
+					.expect("normalized migration record");
+				assert_eq!(stored.as_slice(), migration.checksum.as_ref(), "{variant}: migration {} was not normalized", migration.version);
+			}
+			let api_key_table: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'api_key'")
+				.fetch_one(&pool)
+				.await
+				.expect("api_key table");
+			assert_eq!(api_key_table, 1, "{variant}: the pending migration must run after normalization");
+			pool.close().await;
 		}
 	}
 
 	#[tokio::test]
-	async fn crlf_history_normalizes_and_continues_migrations() {
-		let tmp = tempfile::tempdir().expect("tempdir");
-		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
-		let pool = SqlitePool::connect(&url).await.expect("blank database");
-		sqlx::raw_sql(
-			"CREATE TABLE IF NOT EXISTS _sqlx_migrations (
-				version BIGINT PRIMARY KEY,
-				description TEXT NOT NULL,
-				installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-				success BOOLEAN NOT NULL,
-				checksum BLOB NOT NULL,
-				execution_time BIGINT NOT NULL
-			)",
-		)
-		.execute(&pool)
-		.await
-		.expect("migration bookkeeping");
-		let first = sqlx::migrate!("./migrations").iter().next().expect("initial migration");
-		sqlx::raw_sql(first.sql.as_ref()).execute(&pool).await.expect("apply initial schema");
-		sqlx::query("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, ?, TRUE, ?, 0)")
-			.bind(first.version)
-			.bind(first.description.as_ref())
-			.bind(super::crlf_checksum(first))
-			.execute(&pool)
-			.await
-			.expect("record CRLF-applied initial migration");
-		pool.close().await;
+	async fn api_key_chinese_history_normalizes() {
+		for legacy_checksum in [
+			"07A2159B0996857C1D3AC78A5722CBAAA5E625D7D097B7428F02A808AD929B5A8B6E64034A4EB158D5627280C0D02065",
+			"60728293ED53593660887F681F4CA1F4BE91B77697C64A435BDB00218D12D2D64D29E83AB4D9560254CD2B4DC0204C3A",
+		] {
+			let tmp = tempfile::tempdir().expect("tempdir");
+			let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
+			let pool = super::create_pool(&url).await.expect("seed current history");
+			write_checksum(&pool, 24, legacy_checksum).await;
+			pool.close().await;
 
-		let pool = super::create_pool(&url).await.expect("open CRLF-applied database");
-		for migration in sqlx::migrate!("./migrations").iter() {
-			let stored: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = ?")
-				.bind(migration.version)
+			let pool = super::create_pool(&url).await.expect("open Chinese API key history");
+			let stored: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 24")
 				.fetch_one(&pool)
 				.await
-				.expect("normalized migration record");
-			assert_eq!(stored.as_slice(), migration.checksum.as_ref(), "migration {} was not normalized", migration.version);
+				.expect("normalized API key checksum");
+			assert_eq!(stored, decode_checksum("B91C6E8048633C33A9AD09AC1DBDDA4D9E4EA95A436F547EAC5F8D4FBD6C4153A43420A9AF4860DA36CDACE750124C64"));
+			pool.close().await;
 		}
-		let api_key_table: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'api_key'")
-			.fetch_one(&pool)
-			.await
-			.expect("api_key table");
-		assert_eq!(api_key_table, 1, "the pending migration must run after normalization");
-		pool.close().await;
 	}
 
 	#[tokio::test]
 	async fn unknown_checksum_does_not_normalize_any_history() {
+		const CHINESE_CRLF: &str = "F9D6E68BEC408DCC687E65E4D97D4F9987CE9CB0EEEBBA048995344CFBA3AEF6FCE700B44C119ECDE1D586C97CCC4710";
+		const ENGLISH_CRLF: &str = "9033269236C2674E1FEB565BF6A2C41373FA46E1802F79C0650EA04A0867FB3C39E1412907B5405E5C08EE099D2129FE";
+
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let url = format!("sqlite://{}/migration.db?mode=rwc", tmp.path().display());
-		let pool = super::create_pool(&url).await.expect("seed LF history");
-		write_crlf_checksums(&pool).await;
-		sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 2")
+		let pool = super::create_pool(&url).await.expect("seed current history");
+		write_checksum(&pool, 1, CHINESE_CRLF).await;
+		write_checksum(&pool, 2, ENGLISH_CRLF).await;
+		sqlx::query("UPDATE _sqlx_migrations SET checksum = ? WHERE version = 3")
 			.bind(vec![0u8; 48])
 			.execute(&pool)
 			.await
@@ -249,17 +364,19 @@ mod tests {
 		let error = super::create_pool(&url).await.expect_err("unknown checksum must abort startup");
 		assert!(matches!(error, crate::error::Error::Migrate(sqlx::migrate::MigrateError::VersionMismatch(1))), "unexpected startup error: {error:?}");
 		let pool = SqlitePool::connect(&url).await.expect("inspect unchanged history");
-		let first: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 1")
+		for (version, expected) in [(1, CHINESE_CRLF), (2, ENGLISH_CRLF)] {
+			let stored: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = ?")
+				.bind(version)
+				.fetch_one(&pool)
+				.await
+				.expect("legacy checksum");
+			assert_eq!(stored, decode_checksum(expected), "migration {version} changed before all rows validated");
+		}
+		let unknown: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 3")
 			.fetch_one(&pool)
 			.await
-			.expect("first checksum");
-		let first_migration = sqlx::migrate!("./migrations").iter().find(|migration| migration.version == 1).expect("migration 1");
-		assert_eq!(first, super::crlf_checksum(first_migration), "the valid row must not be rewritten before all rows validate");
-		let second: Vec<u8> = sqlx::query_scalar("SELECT checksum FROM _sqlx_migrations WHERE version = 2")
-			.fetch_one(&pool)
-			.await
-			.expect("second checksum");
-		assert_eq!(second, vec![0u8; 48], "the unknown checksum must remain untouched");
+			.expect("unknown checksum");
+		assert_eq!(unknown, vec![0u8; 48], "the unknown checksum must remain untouched");
 		pool.close().await;
 	}
 

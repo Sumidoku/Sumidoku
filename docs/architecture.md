@@ -11,11 +11,14 @@ Migrations in `crates/server/migrations`. Applied migrations are immutable:
 sqlx embeds each file's SHA-384 at compile time and validates it against
 `_sqlx_migrations` at startup, so a schema change is always a new numbered
 file — never an edit, comments included (`db.rs:shipped_migrations_are_immutable`
-pins the shipped set). A database written by an older CRLF build can hold the
-corresponding hash of the exact same migration bytes; `create_pool` validates
-every applied row before normalizing only that known variant to the LF hash
-(`db.rs:normalize_crlf_migrations`). Unknown versions or checksums still abort
-startup, and no migration file is modified.
+pins the canonical set). Canonical files use English comments and LF, enforced
+by `.gitattributes` and `db.rs:shipped_migrations_use_ascii_comments_and_lf`.
+A closed per-version list records the exact historical Chinese and CRLF
+checksums (`db.rs:LEGACY_MIGRATION_CHECKSUMS`). After a checksum mismatch,
+`create_pool` validates every applied row before normalizing registered aliases
+in one transaction and rerunning the migrator (`db.rs:normalize_migration_checksums`).
+Unknown versions or checksums still abort startup without partial updates;
+no alias is derived from migration text.
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`,
