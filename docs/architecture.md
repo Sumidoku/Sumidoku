@@ -967,6 +967,16 @@ no alias is derived from migration text.
   page row keeps just the file name. The reader (`api/page.rs`) and
   downloads (`download/mod.rs:page_bytes`) read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Downloaded chapters read from the product (`download/mod.rs:pages_from_product`,
+  `read_product_page`): a finished download artifact is the preferred reader page source.
+  `GET /chapter/{id}/pages` derives the page list from the product (text entries inlined as
+  `Text`, image entries as `{"Downloaded": <entry>}`) and
+  `GET /chapter/{id}/page/{index}` serves bytes straight from the artifact — no source
+  access, so downloaded chapters stay readable offline. CBZ handles go through the shared
+  `ZipCache` (version-checked, so atomic re-downloads never serve stale bytes); folder
+  products read page files directly. The derived rows are live, never written to the page
+  table, so a deleted/moved product falls back to the page cache/source path unchanged;
+  an explicit `refresh` on the pages endpoint still pulls from the source.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions

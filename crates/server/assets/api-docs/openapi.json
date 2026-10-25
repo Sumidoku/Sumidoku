@@ -6893,6 +6893,18 @@
                 "type": "string"
               }
             }
+          },
+          {
+            "type": "object",
+            "required": [
+              "Downloaded"
+            ],
+            "properties": {
+              "Downloaded": {
+                "type": "string",
+                "description": "Page served from the chapter's finished download product."
+              }
+            }
           }
         ]
       },
