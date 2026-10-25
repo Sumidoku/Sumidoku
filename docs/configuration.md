@@ -30,6 +30,7 @@ warning (the file cannot relocate the directory it is read from).
 | `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `./data` otherwise | data root (see above); `config.toml` is read from here |
 | `SUMIDOKU_LOG` | `info` | log level (tracing filter) |
 | `SUMIDOKU_CALL_CONCURRENCY` | `8` | max concurrent calls into a source instance |
+| `SUMIDOKU_TASK_POOL_SIZE` | `2` | background task workers; tasks of one source still serialize regardless of pool size |
 | `SUMIDOKU_USER_AGENT` | a Chrome desktop UA | global User-Agent for source fetches |
 | `SUMIDOKU_COVER_CACHE_MAX` | `512` | max cached cover files on disk |
 | `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |

@@ -30,7 +30,7 @@ export type AidokuSkipped = {
 };
 
 export type ApiError = {
-	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy";
+	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy" | "task_finished";
 	message: string;
 };
 
@@ -1090,6 +1090,20 @@ export type SyncPushResponse = {
 export type SyncSnapshot = {
 	lastModifiedAt: number;
 	[key: string]: JsonValue;
+};
+
+export type Task = {
+	id: string;
+	kind: string;
+	sourceId: number | null;
+	payload: JsonValue;
+	priority: number;
+	status: "pending" | "running" | "done" | "failed" | "cancelled";
+	createdAt: number;
+	startedAt: number | null;
+	finishedAt: number | null;
+	error: string | null;
+	result: JsonValue;
 };
 
 export type TextPage = {

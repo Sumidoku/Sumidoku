@@ -77,6 +77,11 @@ impl ApiError {
 		Self::new(StatusCode::CONFLICT, "resync_required", message)
 	}
 
+	/// Generic state conflict for cases with no dedicated constructor (e.g. cancelling a finished task)
+	pub fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, code, message)
+	}
+
 	pub fn message(&self) -> &str {
 		&self.message
 	}

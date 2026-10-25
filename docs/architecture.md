@@ -100,6 +100,35 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   login cookie, CLI clients may use bearer authentication, and URL access
   tokens are not accepted. The former download and update WebSocket endpoints
   are removed.
+- Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
+  the `task` table is the queue — a persistent row per task whose string id
+  doubles as the deduplication key (e.g. `local_scan:3`). Enqueueing over a
+  live (pending/running) row only bumps its priority — kind, source and
+  payload stay with the execution that owns them — while a terminal row is
+  requeued fresh with the new trigger's identity and priority (kmrs's
+  `ON CONFLICT` upsert; manual 8 > scheduled 4 > derived 1). `TaskManager`
+  dispatches pending rows to a worker pool sized by
+  `task_pool_size` (config file/env `SUMIDOKU_TASK_POOL_SIZE`, default 2) in
+  priority-then-creation order, paging past blocked groups instead of
+  starving runnable work; tasks of one local source never run concurrently,
+  and a global (source-less) task conflicts with everything (kmrs
+  `GROUP_ID` semantics over `source_id`, 0 reserved for the global group).
+  Every transition is a single guarded UPDATE whose RETURNING row is what
+  gets broadcast as the instance-wide `task` event through the SSE hub
+  (`events.rs:forward_tasks`), so events never republish a state a later
+  transition replaced. `DELETE /api/v1/tasks/{id}` cancels: the row flips
+  to cancelled atomically for pending and running alike, a running handler
+  also gets a flag it checks between items, and the worker's terminal write
+  is guarded on status = 'running' so a mid-flight cancel always wins; a
+  finished task answers 409 `task_finished`. Boot recovery
+  (`TaskManager::recover`, wired in `build_app`) requeues rows left running
+  by the previous process, so handlers must tolerate re-execution. A kind
+  with no registered handler (e.g. a downgrade over a newer database) fails
+  visibly instead of sitting pending. Finished rows are trimmed to the
+  latest 100 on every terminal transition. `GET /api/v1/tasks` lists live
+  work first and accepts `status`/`kind`/`sourceId` filters. This change
+  registers no production task kinds or producers yet; the local
+  scan/analyze/empty_trash handlers land with #256.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as

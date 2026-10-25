@@ -1,4 +1,5 @@
 use crate::download::DownloadManager;
+use crate::task::TaskManager;
 use crate::update::UpdateScheduler;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -86,6 +87,23 @@ impl EventHub {
 							hub.record("download", payload, event.user_id).await;
 						}
 					}
+					Err(broadcast::error::RecvError::Lagged(_)) => {
+						hub.record("resync", Value::Null, None).await;
+					}
+					Err(_) => break,
+				}
+			}
+		});
+	}
+
+	/// Task lifecycle transitions are instance-wide (not per-user), so they broadcast to every connection
+	pub fn forward_tasks(self: &Arc<Self>, manager: Arc<TaskManager>) {
+		let mut rx = manager.subscribe();
+		let hub = self.clone();
+		tokio::spawn(async move {
+			loop {
+				match rx.recv().await {
+					Ok(task) => hub.record("task", task.to_json(), None).await,
 					Err(broadcast::error::RecvError::Lagged(_)) => {
 						hub.record("resync", Value::Null, None).await;
 					}
