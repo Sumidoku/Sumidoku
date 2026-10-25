@@ -1577,7 +1577,7 @@ async fn get_manga(
 		// Local-source refresh = entry-level rescan (enumeration only): chapter changes reconcile here,
 		// embedded metadata belongs to the analysis pass the rescan kicks; no source call to stream
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, row.source_id, &row.key, true, false).await?;
+			crate::local::scan::scan_manga_entry(&state, row.source_id, &row.key, true, false, None).await?;
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
@@ -1674,7 +1674,7 @@ async fn get_chapters(
 		// into the reconcile protection set, not treated as vanished-and-trashed; metadata/page analysis is
 		// the background pass the rescan kicks
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false).await?;
+			crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false, None).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)

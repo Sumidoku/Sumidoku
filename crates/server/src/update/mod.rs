@@ -479,7 +479,7 @@ impl UpdateScheduler {
 					// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
 					// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
 					let (_, reconciled, _) =
-					crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, false, false).await?;
+					crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, false, false, None).await?;
 				let now = unix_now();
 				let (next_update_time, next_update_is_fallback) =
 					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
@@ -1350,7 +1350,7 @@ mod tests {
 		.expect("set initial details");
 
 		// the production call the update scheduler makes for a local manga with refresh_metadata = false
-		crate::local::scan::scan_manga_entry(&state, source_id, "Series", false, false)
+		crate::local::scan::scan_manga_entry(&state, source_id, "Series", false, false, None)
 			.await
 			.expect("entry scan");
 		// the entry scan enqueued the analysis pass; wait for the queue to settle

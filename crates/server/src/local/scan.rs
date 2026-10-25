@@ -367,6 +367,7 @@ pub async fn scan_manga_entry(
 	manga_key: &str,
 	refresh_metadata: bool,
 	force_reconcile: bool,
+	expected_manga_id: Option<i64>,
 ) -> ApiResult<(i64, crate::source::ReconcileOutcome, bool)> {
 	let roots = state.local_dirs(source_id).await?;
 	let exclusions = state.local_exclusions(source_id).await?;
@@ -383,6 +384,13 @@ pub async fn scan_manga_entry(
 	.bind(manga_key)
 	.fetch_optional(&mut *tx)
 	.await?;
+	// Restore must keep the original row, not a replacement with the same source and key.
+	if let Some(row) = &existing
+		&& let Some(expected) = expected_manga_id
+		&& (row.id != expected || row.trashed_at.is_none())
+	{
+		return Err(crate::error::ApiError::conflict("not_trashed", "the original manga row was purged or already restored"));
+	}
 	// Refresh may reclassify a live row, but a trashed row can return only under its recorded shape.
 	if let Some(row) = &existing
 		&& row.trashed_at.is_some()
@@ -754,7 +762,7 @@ pub async fn restore_manga(state: &Arc<AppState>, manga_id: i64) -> ApiResult<()
 	}
 	// The row stays trashed until the entry scan validates its shape and commits, so a failed rescan leaves
 	// the original row and all user state untouched instead of restoring a different entry kind.
-	scan_manga_entry(state, row.source_id, &row.key, true, true).await?;
+	scan_manga_entry(state, row.source_id, &row.key, true, true, Some(manga_id)).await?;
 	Ok(())
 }
 
@@ -801,4 +809,100 @@ async fn empty_trash(run: &crate::task::TaskRun, source_id: i64) -> ApiResult<Va
 		}
 	}
 	Ok(json!({ "purged": purged, "total": total }))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::config::Config;
+	use tokio::sync::mpsc;
+
+	async fn local_state() -> (Arc<AppState>, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let root = tmp.path().join("local");
+		std::fs::create_dir_all(root.join("Alpha.cbz/ch 1")).expect("chapter directory");
+		std::fs::write(root.join("Alpha.cbz/ch 1/1.png"), b"page").expect("page");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+			.fetch_one(&pool)
+			.await
+			.expect("local source");
+		let config = Config {
+			config_dir: tmp.path().to_path_buf(),
+			covers_dir: tmp.path().join("covers"),
+			downloads_dir: tmp.path().join("downloads"),
+			local_dirs: Some(vec![root]),
+			..Config::default()
+		};
+		let (defaults_tx, _defaults_rx) = mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = mpsc::unbounded_channel();
+		(AppState::new(pool, config, defaults_tx, cookie_tx), source_id, tmp)
+	}
+
+	#[tokio::test]
+	async fn restore_does_not_claim_a_replacement_row_with_the_same_key() {
+		let (state, source_id, _tmp) = local_state().await;
+		let original_id: i64 = sqlx::query_scalar(
+			"INSERT INTO manga (source_id, key, title, trashed_at, local_entry_kind) VALUES (?, 'Alpha.cbz', 'Alpha', 1, 'directory') RETURNING id",
+		)
+		.bind(source_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("original manga");
+		sqlx::query("DELETE FROM manga WHERE id = ?")
+			.bind(original_id)
+			.execute(&state.pool)
+			.await
+			.expect("purge original");
+		let replacement_id: i64 = sqlx::query_scalar(
+			"INSERT INTO manga (source_id, key, title, local_entry_kind) VALUES (?, 'Alpha.cbz', 'Replacement', 'directory') RETURNING id",
+		)
+		.bind(source_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("replacement manga");
+
+		let error = scan_manga_entry(&state, source_id, "Alpha.cbz", true, true, Some(original_id))
+			.await
+			.expect_err("the original id must not restore a replacement row");
+		assert_eq!(error.code(), "not_trashed");
+		let (id, title, trashed_at): (i64, String, Option<i64>) =
+			sqlx::query_as("SELECT id, title, trashed_at FROM manga WHERE source_id = ? AND key = 'Alpha.cbz'")
+				.bind(source_id)
+				.fetch_one(&state.pool)
+				.await
+				.expect("replacement row");
+		assert_eq!(id, replacement_id);
+		assert_eq!(title, "Replacement");
+		assert_eq!(trashed_at, None);
+	}
+
+	#[tokio::test]
+	async fn restore_rejects_a_row_that_was_already_restored() {
+		let (state, source_id, _tmp) = local_state().await;
+		let manga_id: i64 = sqlx::query_scalar(
+			"INSERT INTO manga (source_id, key, title, trashed_at, local_entry_kind) VALUES (?, 'Alpha.cbz', 'Alpha', 1, 'directory') RETURNING id",
+		)
+		.bind(source_id)
+		.fetch_one(&state.pool)
+		.await
+		.expect("trashed manga");
+
+		let (restored_id, _, _) = scan_manga_entry(&state, source_id, "Alpha.cbz", true, true, Some(manga_id))
+			.await
+			.expect("first restore");
+		assert_eq!(restored_id, manga_id);
+		let error = scan_manga_entry(&state, source_id, "Alpha.cbz", true, true, Some(manga_id))
+			.await
+			.expect_err("a second restore must lose to the first");
+		assert_eq!(error.code(), "not_trashed");
+		let trashed_at: Option<i64> = sqlx::query_scalar("SELECT trashed_at FROM manga WHERE id = ?")
+			.bind(manga_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("restored row");
+		assert_eq!(trashed_at, None);
+	}
 }

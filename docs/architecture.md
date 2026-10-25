@@ -466,8 +466,10 @@ no alias is derived from migration text.
   Manual restore and entry-level refresh compare the current entry with the
   recorded kind, never the filename. Manual restore answers 409 for a missing,
   mismatched or unknown shape; entry refresh can answer 404 for a missing path.
-  Live rows may backfill a missing kind; trashed rows need a full scan to learn
-  it before they can be restored. A full scan also restores a discovered
+  Restore also verifies inside the write transaction that the original row id
+  is still trashed, so a late request cannot claim a same-key replacement or
+  restore the same row twice. Live rows may backfill a missing kind; trashed
+  rows need a full scan to learn it before they can be restored. A full scan also restores a discovered
   trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
   CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
