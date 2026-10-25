@@ -476,6 +476,12 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 	// The zero-row check and the response snapshot are both captured BEFORE the kick, so an immediately
 	// scheduled worker cannot index rows between enqueue and this SELECT — keeping the accepted
 	// first-browse-empty-response contract (the kicked scan's rows land on the next browse)
+	let mut rows: Vec<(i64, String, String)> = sqlx::query_as(
+		"SELECT id, key, title FROM manga WHERE source_id = ? AND trashed_at IS NULL",
+	)
+	.bind(source_id)
+	.fetch_all(&state.pool)
+	.await?;
 	let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE source_id = ?")
 		.bind(source_id)
 		.fetch_one(&state.pool)
@@ -486,12 +492,6 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 	{
 		tracing::warn!(source_id, "enqueue first scan on browse failed: {}", e.message());
 	}
-	let mut rows: Vec<(i64, String, String)> = sqlx::query_as(
-		"SELECT id, key, title FROM manga WHERE source_id = ? AND trashed_at IS NULL",
-	)
-	.bind(source_id)
-	.fetch_all(&state.pool)
-	.await?;
 	// first directory wins: a numbered key (N:rel) is shadowed when the bare rel exists in the same instance
 	let bare: HashSet<String> = rows
 		.iter()

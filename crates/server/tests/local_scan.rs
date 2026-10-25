@@ -28,6 +28,12 @@ fn write_cbz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
 	writer.finish().expect("finish cbz");
 }
 
+fn bump_mtime(path: &std::path::Path) {
+	let previous = std::fs::metadata(path).expect("archive metadata").modified().expect("archive mtime");
+	let file = std::fs::OpenOptions::new().write(true).open(path).expect("open archive mtime");
+	file.set_modified(previous + std::time::Duration::from_secs(2)).expect("advance archive mtime");
+}
+
 const COMIC_INFO_SERIES_ONLY: &str = r#"<?xml version="1.0"?>
 <ComicInfo>
   <Series>Indexed Series</Series>
@@ -424,11 +430,17 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 	let t = scan_app().await;
 	let pool = common::connect_db(&t.db_path).await;
 	let source_id = local_source_id(&t.app).await;
+	let archive = t.tmp.path().join("local/Beta/ch 1.cbz");
 	scan_and_settle(&t.app).await;
-	write_cbz(&t.tmp.path().join("local/Beta/ch 1.cbz"), &[("1.png", b"beta-1-1-edited")]);
+	write_cbz(&archive, &[("1.png", b"beta-1-1-edited")]);
+	bump_mtime(&archive);
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
 	assert_eq!(scan_task["result"]["unchanged"], 2, "in-place edit invisible without the toggle: {scan_task}");
+	let beta_before: i64 = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
+		.fetch_one(&pool)
+		.await
+		.expect("beta mtime before toggle");
 
 	let (status, body) = request(
 		&t.app,
@@ -438,25 +450,20 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	// the settings write enqueued a rescan (kmrs's check_library_should_rescan)
-	let tasks = scan_and_settle(&t.app).await;
-	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
-	// The first toggle replaces the stored directory-only mtime with a file-inclusive baseline, so Alpha
-	// may legitimately reconcile too — assert Beta's effect (its row gets stamped) instead of requiring
-	// the global reconciled count to be exactly one
-	assert!(
-		scan_task["result"]["reconciled"].as_i64() >= Some(1),
-		"the pending in-place edit reconciles: {scan_task}"
-	);
-	let beta_mtime: Option<i64> = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
+	scan_and_settle(&t.app).await;
+	let beta_after: i64 = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
 		.fetch_one(&pool)
 		.await
-		.expect("beta row");
-	assert!(beta_mtime.is_some(), "Beta carries a scan_mtime after the toggle: {scan_task}");
-	write_cbz(&t.tmp.path().join("local/Beta/ch 1.cbz"), &[("1.png", b"beta-1-1-third")]);
-	let tasks = scan_and_settle(&t.app).await;
-	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
-	assert_eq!(scan_task["result"]["reconciled"], 1, "in-place edit caught with the toggle on: {scan_task}");
+		.expect("beta mtime after toggle");
+	assert!(beta_after > beta_before, "the pending edit must be observed: {beta_before} -> {beta_after}");
+	write_cbz(&archive, &[("1.png", b"beta-1-1-third")]);
+	bump_mtime(&archive);
+	scan_and_settle(&t.app).await;
+	let beta_third: i64 = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
+		.fetch_one(&pool)
+		.await
+		.expect("beta mtime after second edit");
+	assert!(beta_third > beta_after, "the second edit must be observed: {beta_after} -> {beta_third}");
 	pool.close().await;
 }
 

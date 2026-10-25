@@ -447,6 +447,56 @@ async fn local_cover_rebuilds_unversioned_cache() {
 }
 
 #[tokio::test]
+async fn first_browse_uses_pre_kick_snapshot() {
+	let TestApp { app, tmp: _tmp, db_path } = local_app().await;
+	let source_id = local_source_id(&app).await;
+	let pool = common::connect_db(&db_path).await;
+	sqlx::query(
+		"CREATE TRIGGER index_during_enqueue AFTER INSERT ON task
+		 WHEN NEW.kind = 'local_scan'
+		 BEGIN
+		  INSERT INTO manga (source_id, key, title) VALUES (NEW.source_id, 'Triggered', 'Triggered');
+		 END",
+	)
+	.execute(&pool)
+	.await
+	.expect("create enqueue trigger");
+	let (status, body) = request(&app, "POST", &format!("/api/v1/sources/{source_id}/search"), Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["entries"].as_array().expect("entries").len(), 0, "the first response predates the kicked scan: {body}");
+	sqlx::query("DROP TRIGGER index_during_enqueue").execute(&pool).await.expect("drop enqueue trigger");
+	common::local_scan_and_settle(&app, None).await;
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn scan_checks_inputs_after_the_last_upsert() {
+	let TestApp { app, tmp, db_path } = local_app().await;
+	for name in ["Gamma", "Delta", "Epsilon"] {
+		std::fs::remove_dir_all(tmp.path().join("local").join(name)).expect("remove extra fixture");
+	}
+	let pool = common::connect_db(&db_path).await;
+	sqlx::query(
+		"CREATE TRIGGER exclude_beta_after_insert AFTER INSERT ON manga
+		 WHEN NEW.key = 'Beta'
+		 BEGIN
+		  INSERT INTO source_setting (source_id, key, value) VALUES (NEW.source_id, 'exclusions', '{\"StringArray\":[\"beta\"]}')
+		  ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value;
+		 END",
+	)
+	.execute(&pool)
+	.await
+	.expect("create upsert trigger");
+	common::local_scan_and_settle(&app, None).await;
+	let (status, body) = request(&app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	let scan = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+	assert_eq!(scan["result"]["scanned"], 1, "the final pass excludes Beta: {scan}");
+	pool.close().await;
+}
+
+#[tokio::test]
 async fn refresh_rescans_added_and_removed_chapters() {
 	let TestApp { app, tmp, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
@@ -1819,6 +1869,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
+	common::local_scan_and_settle(&t.app, None).await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(true)),
 		("fake.epub".to_string(), None),
@@ -1832,6 +1883,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
 
 	let chapter_id = chapter_id_of(&t.app, manga_id, "divina.epub").await;
+	assert!(!epub_page_entries(&t.app, chapter_id).await.is_empty());
 	let pool = common::connect_db(&t.db_path).await;
 	sqlx::query("UPDATE chapter SET epub_divina_compatible = NULL WHERE id = ?")
 		.bind(chapter_id)
@@ -1839,7 +1891,8 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		.await
 		.expect("reset divina flag");
 	pool.close().await;
-	assert!(!epub_page_entries(&t.app, chapter_id).await.is_empty());
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
 	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
 
 	write_epub(

@@ -334,6 +334,10 @@ pub async fn scan_instance(
 		}
 	}
 	}
+	// No later per-key checkpoint can catch a settings write made during the final upsert batch.
+	if !outcome.inputs_changed && inputs_stale(state, source_id, &roots, &oneshots, &exclusions, force).await? {
+		outcome.inputs_changed = true;
+	}
 	Ok(outcome)
 }
 
