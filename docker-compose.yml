@@ -7,9 +7,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config       # database, settings, cover cache, source packages
+      - ./config:/config # database, settings, cover cache, source packages
       - ./downloads:/downloads
-      - trawl-ca:/trawl-ca:ro  # TRAWL shared CA
+      - trawl-ca:/trawl-ca:ro # TRAWL shared CA
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
