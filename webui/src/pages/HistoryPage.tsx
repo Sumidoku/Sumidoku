@@ -48,7 +48,7 @@ export default function HistoryPage() {
 							<Link
 								key={h.chapter.id}
 								className="history-item card"
-								to={`/reader/${h.chapter.id}?manga=${h.manga.id}&page=${h.lastPageRead}`}
+								to={`/manga/${h.manga.id}`}
 							>
 								<div className="history-item__thumb">
 									<Cover src={coverUrl(h.manga.id, h.manga.cover)} title={h.manga.title} />
