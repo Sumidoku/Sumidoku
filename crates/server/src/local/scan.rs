@@ -108,8 +108,8 @@ async fn inputs_stale(
 /// analysis pass re-reads embedded metadata): enumeration/reconcile always happens, metadata re-reads only
 /// with the user's opt-in. `cancelled` (the task's flag) stops the per-manga loops between entries; work
 /// already committed stands and the next scan continues from it. The inputs checkpoint runs on every
-/// `INPUTS_CHECKPOINT_EVERY` rows of both passes plus once after the persisted pass, so even an empty
-/// scan observes a settings write and the handler reruns on the fresh configuration
+/// `INPUTS_CHECKPOINT_EVERY` rows of both passes plus once after each pass, so empty scans and the final
+/// upsert observe settings writes and the handler reruns on the fresh configuration
 pub async fn scan_instance(
 	state: &Arc<AppState>,
 	source_id: i64,

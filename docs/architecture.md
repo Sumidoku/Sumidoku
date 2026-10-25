@@ -143,7 +143,10 @@ no alias is derived from migration text.
   manual full scans (`local_scan:{id}`, `refreshMetadata` in the payload),
   derived analysis (`local_analyze:{id}`) and trash emptying (`empty_trash`)
   — plus the one-shot local scan scheduler (`local_scan_secs` /
-  `local_scan_on_startup`).
+  `local_scan_on_startup`). Scan inputs are re-read every 32 rows and after
+  each pass; the newest `refreshMetadata` payload is reloaded between passes.
+  Completion requires a stable pass, otherwise repeated changes fail with
+  `inputs_changing` instead of being acknowledged unapplied.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
