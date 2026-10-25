@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Filesystem-time fixtures must set the exact mtimes they depend on.** A scan
+keyed by directory mtime can pass alone and miss a change under load when
+creation and mutation land in the same timestamp tick. Advance the exact file
+or directory mtime to known values; do not rely on wall-clock progression or
+sleeps.
+- Evidence: 2026-10-25, #433's workspace run failed
+  `refresh_rescans_added_and_removed_chapters` with `Bool(false)` because the
+  refresh could not see the chapter removal. Setting the manga directory to
+  successive +2/+4/+6-second mtimes made add, remove and reappear
+  deterministic, and all 59 local-source tests passed.
+
 **A dynamic SQL identifier list is an input-size contract; chunk it below the
 bound-variable cap.** A batch endpoint cannot let the caller's selection size
 become a 500 through one `IN (...)` statement, and the cap depends on the
