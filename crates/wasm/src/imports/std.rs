@@ -1,8 +1,7 @@
-use crate::{
-	WasmEnv,
-	runtime::store::{FFIResult, Ptr, Rid},
+use crate::runtime::{
+	env::Ctx,
+	store::{FFIResult, Ptr, Rid},
 };
-use wasmer::FunctionEnvMut;
 
 enum Result {
 	Success,
@@ -24,48 +23,48 @@ impl From<Result> for i32 {
 	}
 }
 
-pub fn destroy(mut env: FunctionEnvMut<WasmEnv>, rid: Rid) {
-	env.data_mut().store.remove(rid);
-	// webview rid 可能挂着浏览器 context，随 destroy 一并回收
-	if let Some(line) = env.data_mut().browser.destroy(rid) {
-		env.data().log(&line);
+pub fn destroy(ctx: &mut impl Ctx, rid: Rid) {
+	ctx.host().store.remove(rid);
+	// A webview rid may have a browser context attached; reclaim it along with destroy
+	if let Some(line) = ctx.host().browser.destroy(rid) {
+		ctx.host().log(&line);
 	}
 }
 
-pub fn buffer_len(env: FunctionEnvMut<WasmEnv>, rid: Rid) -> FFIResult {
-	let Some(data) = env.data().store.get(rid).and_then(|item| item.as_encoded()) else {
+pub fn buffer_len(ctx: &mut impl Ctx, rid: Rid) -> FFIResult {
+	let Some(data) = ctx.host().store.get(rid).and_then(|item| item.as_encoded()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	data.len() as FFIResult
 }
 
-pub fn read_buffer(env: FunctionEnvMut<WasmEnv>, rid: Rid, ptr: Ptr, size: u32) -> FFIResult {
-	let Some(data) = env.data().store.get(rid).and_then(|item| item.as_encoded()) else {
+pub fn read_buffer(ctx: &mut impl Ctx, rid: Rid, ptr: Ptr, size: u32) -> FFIResult {
+	let Some(data) = ctx.host().store.get(rid).and_then(|item| item.as_encoded()) else {
 		return Result::InvalidDescriptor.into();
 	};
 	if size as usize > data.len() {
 		return Result::FailedMemoryWrite.into();
 	}
 	let data = data.iter().take(size as usize).copied().collect::<Vec<_>>();
-	if env.data().write_buffer(&env, ptr, &data).is_err() {
+	if ctx.write_buffer(ptr, &data).is_err() {
 		Result::FailedMemoryWrite.into()
 	} else {
 		Result::Success.into()
 	}
 }
 
-pub fn current_date(_env: FunctionEnvMut<WasmEnv>) -> f64 {
+pub fn current_date(_ctx: &mut impl Ctx) -> f64 {
 	chrono::Utc::now().timestamp() as f64
 }
 
-pub fn utc_offset(_env: FunctionEnvMut<WasmEnv>) -> i64 {
+pub fn utc_offset(_ctx: &mut impl Ctx) -> i64 {
 	chrono::Local::now().offset().utc_minus_local() as i64
 }
 
-// 签名由源 ABI 固定，无法归并参数
+// The signature is fixed by the source ABI; parameters cannot be merged
 #[allow(clippy::too_many_arguments)]
 pub fn parse_date(
-	env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	date_str: Ptr,
 	date_len: u32,
 	format_str: Ptr,
@@ -76,19 +75,19 @@ pub fn parse_date(
 	timezone_len: u32,
 ) -> f64 {
 	let invalid = || Into::<i32>::into(Result::InvalidDateString) as f64;
-	let Ok(string) = env.data().read_string(&env, date_str, date_len) else {
+	let Ok(string) = ctx.read_string(date_str, date_len) else {
 		return Into::<i32>::into(Result::InvalidString) as f64;
 	};
-	let Ok(format) = env.data().read_string(&env, format_str, format_len) else {
+	let Ok(format) = ctx.read_string(format_str, format_len) else {
 		return Into::<i32>::into(Result::InvalidString) as f64;
 	};
 	let timezone_string = if timezone_len > 0 {
-		env.data().read_string(&env, timezone_str, timezone_len).ok()
+		ctx.read_string(timezone_str, timezone_len).ok()
 	} else {
 		None
 	};
 	let locale_string = if locale_len > 0 {
-		env.data().read_string(&env, locale_str, locale_len).ok()
+		ctx.read_string(locale_str, locale_len).ok()
 	} else {
 		None
 	};
@@ -107,8 +106,9 @@ fn parse_date_impl(string: &str, format: &str, locale: Option<&str>, timezone: O
 	};
 
 	let subsec = |nanos: u32| f64::from(nanos) / 1e9;
-	// 格式含偏移 token 时串里的偏移优先于 timezone 参数（Swift DateFormatter 同语义）；
-	// 且必须走 DateTime 解析：NaiveDateTime 会静默丢弃偏移量
+	// When the format has an offset token, the offset in the string wins over the timezone
+	// parameter (same semantics as Swift DateFormatter); and parsing must go through
+	// DateTime: NaiveDateTime silently drops the offset
 	if translated.has_zone_offset {
 		let dt = chrono::DateTime::parse_from_str(input, &translated.fmt).ok()?;
 		return Some(dt.timestamp() as f64 + subsec(dt.timestamp_subsec_nanos()));
@@ -117,7 +117,7 @@ fn parse_date_impl(string: &str, format: &str, locale: Option<&str>, timezone: O
 	let naive = chrono::NaiveDateTime::parse_from_str(input, &translated.fmt)
 		.ok()
 		.or_else(|| {
-			// 纯日期串按当天 00:00 计（DateFormatter 同语义）
+			// A date-only string counts as 00:00 of that day (same semantics as DateFormatter)
 			chrono::NaiveDate::parse_from_str(input, &translated.fmt)
 				.ok()
 				.and_then(|d| d.and_hms_opt(0, 0, 0))
@@ -126,8 +126,9 @@ fn parse_date_impl(string: &str, format: &str, locale: Option<&str>, timezone: O
 	Some(dt.timestamp() as f64 + subsec(dt.timestamp_subsec_nanos()))
 }
 
-/// AidokuRunner 语义：时区缺席、"current"、不可解析都落系统当前时区；
-/// 系统时区名都拿不到时退回 UTC，保持结果确定
+/// AidokuRunner semantics: an absent timezone, "current", and an unparseable one all land
+/// on the system timezone; when even the system timezone name is unavailable, fall back to
+/// UTC to keep results deterministic
 fn resolve_timezone(timezone: Option<&str>) -> chrono_tz::Tz {
 	timezone
 		.filter(|tz| !tz.is_empty() && *tz != "current")
@@ -150,7 +151,7 @@ fn swift_date_format_to_chrono(format: &str) -> ChronoFormat {
 
 	while let Some(c) = chars.next() {
 		if c == '\'' {
-			// TR35 字面量：'...' 原样透传，'' 转义出一个引号
+			// TR35 literals: '...' passes through verbatim, '' escapes to a single quote
 			if chars.peek() == Some(&'\'') {
 				chars.next();
 				fmt.push('\'');
@@ -228,8 +229,9 @@ fn swift_date_format_to_chrono(format: &str) -> ChronoFormat {
 				while chars.peek() == Some(&'S') {
 					chars.next();
 				}
-				// chrono 的 %f 按纳秒计数，%.f 才是秒小数且自带小数点：
-				// 格式里 S 前的字面点并入 token，否则两个点都要吃
+				// chrono's %f counts nanoseconds, while %.f is the fractional second and
+				// brings its own dot: the literal dot before the S token in the format is
+				// merged into the token, otherwise both dots would need consuming
 				if fmt.ends_with('.') {
 					fmt.pop();
 				}
@@ -261,7 +263,7 @@ fn swift_date_format_to_chrono(format: &str) -> ChronoFormat {
 				while chars.peek() == Some(&c) {
 					chars.next();
 				}
-				// %#z 是 chrono 唯一能同吃 Z、±HH、±HHMM、±HH:MM 的解析符
+				// %#z is chrono's only specifier that accepts Z, ±HH, ±HHMM, and ±HH:MM alike
 				has_zone_offset = true;
 				"%#z"
 			}
@@ -285,7 +287,7 @@ fn swift_date_format_to_chrono(format: &str) -> ChronoFormat {
 	}
 }
 
-// % 是 chrono 的格式前导符，字面量里出现的要转义
+// % is chrono's format lead-in; occurrences inside literals must be escaped
 fn push_literal(fmt: &mut String, c: char) {
 	if c == '%' {
 		fmt.push_str("%%");
@@ -294,12 +296,13 @@ fn push_literal(fmt: &mut String, c: char) {
 	}
 }
 
-/// 源实际用到的月名写法（Aidoku-Community/sources 的 parse_date 调用点）；
-/// chrono 只认英文，解析前把其它写法替换成英文缩写（%b/%B 都接受缩写）
+/// Month-name spellings actually used by sources (parse_date call sites in
+/// Aidoku-Community/sources); chrono only recognizes English, so other spellings are
+/// replaced with English abbreviations before parsing (both %b/%B accept abbreviations)
 struct LocaleMonths {
 	full: [&'static str; 12],
 	abbr: [&'static str; 12],
-	// 同一月份的其它常见写法（如西语九月 sep/sept）
+	// Other common spellings of the same month (e.g. Spanish September: sep/sept)
 	extra: &'static [(&'static str, usize)],
 }
 
@@ -383,7 +386,7 @@ const AR: LocaleMonths = LocaleMonths {
 	extra: &[],
 };
 
-// 中日「N月」、韩「N월」：月名是数字式，locale 只影响写法不影响数值
+// Chinese/Japanese "N月" and Korean "N월": month names are numeric — the locale only affects the spelling, not the value
 const CJK: LocaleMonths = LocaleMonths {
 	full: [
 		"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月",
@@ -419,8 +422,9 @@ fn locale_months(lang: &str) -> Option<&'static LocaleMonths> {
 	})
 }
 
-/// 把串里的本地化月名替换成英文缩写：逐字符扫、最长优先（"marzo" 不被 "mar" 截胡）、
-/// 与字母相邻的边界处不命中，缩写可顺带吃掉一个句点（ene. / janv.）
+/// Replace localized month names in the string with English abbreviations: scan char by
+/// char, longest match first ("marzo" is not cut off by "mar"); no match at boundaries
+/// adjacent to letters; an abbreviation may consume a trailing period (ene. / janv.)
 fn normalize_month_names<'a>(string: &'a str, locale: Option<&str>) -> std::borrow::Cow<'a, str> {
 	let lang = locale
 		.and_then(|l| l.split(['_', '-']).next())
@@ -469,7 +473,7 @@ fn normalize_month_names<'a>(string: &'a str, locale: Option<&str>) -> std::borr
 	std::borrow::Cow::Owned(out)
 }
 
-/// 逐字符 Unicode 大小写不敏感的前缀匹配，返回吃掉的字节数
+/// Char-by-char Unicode case-insensitive prefix match; returns the number of bytes consumed
 fn match_ignore_case(rest: &str, alias: &str) -> Option<usize> {
 	let mut consumed = 0;
 	let mut rest_chars = rest.chars();
@@ -491,12 +495,13 @@ mod tests {
 		iana_time_zone::get_timezone().expect("local timezone name")
 	}
 
-	// 以下格式/ locale 组合全部取自 Aidoku-Community/sources 的真实调用，
-	// 期望值以 UTC 显式时区钉死，与运行环境无关
+	// The format/locale combinations below all come from real calls in
+	// Aidoku-Community/sources; expected values are pinned with an explicit UTC timezone,
+	// independent of the runtime environment
 
 	#[test]
 	fn full_datetime_with_explicit_timezone() {
-		// 现状即绿的回归护栏（zh.jmcomic）
+		// Regression guard that is green as-is (zh.jmcomic)
 		assert_eq!(
 			parse_date_impl("2024-01-15 12:00:00", "yyyy-MM-dd HH:mm:ss", None, Some("Asia/Tokyo")),
 			Some(1705287600.0)
@@ -505,7 +510,7 @@ mod tests {
 
 	#[test]
 	fn date_only_parses_as_midnight() {
-		// en.mangademon: 纯日期串
+		// en.mangademon: date-only string
 		assert_eq!(
 			parse_date_impl("2024-01-15", "yyyy-MM-dd", Some("en_US"), Some("UTC")),
 			Some(1705276800.0)
@@ -514,7 +519,7 @@ mod tests {
 
 	#[test]
 	fn date_only_with_japanese_literals() {
-		// ja.spoilerplus: 格式里的年月日是裸字面量
+		// ja.spoilerplus: the year/month/day in the format are bare literals
 		assert_eq!(
 			parse_date_impl("2024年01月15日", "yyyy年MM月dd日", Some("ja_JP"), Some("Asia/Tokyo")),
 			Some(1705244400.0)
@@ -523,7 +528,7 @@ mod tests {
 
 	#[test]
 	fn quoted_literals_are_verbatim() {
-		// TR35 单引号字面量（ja.rawdevart 的 'T' 同款）；'' 是转义的单个引号
+		// TR35 single-quote literals (same as ja.rawdevart's 'T'); '' is an escaped single quote
 		assert_eq!(
 			parse_date_impl("2024年01月15日", "yyyy'年'MM'月'dd'日'", None, Some("UTC")),
 			Some(1705276800.0)
@@ -536,7 +541,7 @@ mod tests {
 
 	#[test]
 	fn fractional_seconds_token() {
-		// S = 秒的小数位，rawdevart DATE_FORMAT 的 SSS
+		// S = the fractional-second digits, the SSS of rawdevart's DATE_FORMAT
 		assert_eq!(
 			parse_date_impl("2024-01-15T12:00:00.500", "yyyy-MM-dd'T'HH:mm:ss.SSS", None, Some("UTC")),
 			Some(1705320000.5)
@@ -545,7 +550,7 @@ mod tests {
 
 	#[test]
 	fn iso8601_zone_tokens() {
-		// X/x 系列：Z、±HH:MM、±HHMM、±HH 全形态（rawdevart DATE_FORMAT 的 XXX）
+		// The X/x family: all of Z, ±HH:MM, ±HHMM, ±HH (the XXX of rawdevart's DATE_FORMAT)
 		assert_eq!(
 			parse_date_impl("2024-01-15T12:00:00Z", "yyyy-MM-dd'T'HH:mm:ssXXX", None, Some("UTC")),
 			Some(1705320000.0)
@@ -562,7 +567,7 @@ mod tests {
 			parse_date_impl("2024-01-15 12:00:00 +0900", "yyyy-MM-dd HH:mm:ss x", None, Some("UTC")),
 			Some(1705287600.0)
 		);
-		// 串内偏移量优先于 timezone 参数
+		// The offset inside the string wins over the timezone parameter
 		assert_eq!(
 			parse_date_impl("2024-01-15T12:00:00+09:00", "yyyy-MM-dd'T'HH:mm:ssXXX", None, Some("UTC")),
 			parse_date_impl("2024-01-15T12:00:00+09:00", "yyyy-MM-dd'T'HH:mm:ssXXX", None, Some("America/New_York"))
@@ -589,7 +594,7 @@ mod tests {
 
 	#[test]
 	fn unknown_timezone_falls_back_to_local() {
-		// AidokuRunner 里 TimeZone(identifier:) 失败 = 保持当前时区
+		// In AidokuRunner, TimeZone(identifier:) failing = keep the current timezone
 		let local = local_tz();
 		let (s, f) = ("2024-06-15 12:00:00", "yyyy-MM-dd HH:mm:ss");
 		assert_eq!(
@@ -600,12 +605,12 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_spanish() {
-		// es.latazamediollena 的实际格式
+		// The actual format of es.latazamediollena
 		assert_eq!(
 			parse_date_impl("5 de enero de 2024", "d 'de' MMMM 'de' yyyy", Some("es_ES"), Some("UTC")),
 			Some(1704412800.0)
 		);
-		// 缩写带句号的写法也要吃
+		// The abbreviated spelling with a period must also be consumed
 		assert_eq!(
 			parse_date_impl("5 ene. 2024", "d MMM yyyy", Some("es"), Some("UTC")),
 			Some(1704412800.0)
@@ -614,7 +619,7 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_italian() {
-		// mangaworld 模板
+		// The mangaworld template
 		assert_eq!(
 			parse_date_impl("5 gennaio 2024", "d MMMM yyyy", Some("it"), Some("UTC")),
 			Some(1704412800.0)
@@ -623,7 +628,7 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_portuguese() {
-		// pt.flowermanga（MMMMM 窄形式按全名解析）
+		// pt.flowermanga (the MMMMM narrow form is parsed by full name)
 		assert_eq!(
 			parse_date_impl("5 de janeiro de 2024", "d 'de' MMMMM 'de' yyyy", Some("pt_BR"), Some("UTC")),
 			Some(1704412800.0)
@@ -650,7 +655,7 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_indonesian() {
-		// id.komiktap（mangathemesia 模板默认格式）
+		// id.komiktap (the mangathemesia template's default format)
 		assert_eq!(
 			parse_date_impl("Januari 05, 2024", "MMMM dd, yyyy", Some("id"), Some("UTC")),
 			Some(1704412800.0)
@@ -659,7 +664,7 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_arabic() {
-		// ar.aasq（阿拉伯文逗号 U+060C + 三位 y）
+		// ar.aasq (Arabic comma U+060C + three-digit y)
 		assert_eq!(
 			parse_date_impl("5 يناير\u{060c} 2024", "d MMM\u{060c} yyy", Some("ar"), Some("UTC")),
 			Some(1704412800.0)
@@ -668,7 +673,7 @@ mod tests {
 
 	#[test]
 	fn locale_month_names_japanese() {
-		// ja.rawfree：ja locale 的 MMM 是「N月」数字式
+		// ja.rawfree: MMM in the ja locale is the numeric "N月" form
 		assert_eq!(
 			parse_date_impl("1月 5, 2024", "MMM d, yyyy", Some("ja_JP"), Some("UTC")),
 			Some(1704412800.0)
@@ -677,7 +682,7 @@ mod tests {
 
 	#[test]
 	fn english_month_names_work_regardless_of_locale() {
-		// en_US_POSIX 护栏：英文月名任何情况下都可用（现状即绿）
+		// en_US_POSIX guard: English month names work in every case (green as-is)
 		assert_eq!(
 			parse_date_impl("Jan 5, 2024", "MMM d, yyyy", Some("en_US_POSIX"), Some("UTC")),
 			Some(1704412800.0)

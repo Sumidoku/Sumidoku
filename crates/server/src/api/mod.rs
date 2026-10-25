@@ -1,8 +1,14 @@
 pub mod aidoku_backup;
+pub mod api_keys;
 pub mod backup;
+pub mod docs;
 pub mod download;
+pub mod events;
+pub mod filter_groups;
 pub mod filters;
 pub mod import_merge;
+pub mod internal_source;
+pub mod key_realign;
 pub mod library;
 pub mod listings;
 pub mod login;
@@ -15,7 +21,11 @@ pub mod reader;
 pub mod repo;
 pub mod search;
 pub mod settings;
+pub mod server_settings;
+pub mod source_import;
 pub mod suwayomi_backup;
+pub mod sync;
+pub mod task;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -35,7 +45,7 @@ use axum::extract::{Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{delete, get, patch, post, put};
-use axum::Router;
+use axum::{Extension, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
@@ -43,19 +53,53 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 
 pub fn router(state: Arc<AppState>) -> Router {
-	// 公开面：健康检查 + 认证自身（登录都进不来就死锁了）
+	// Public surface: health check + auth itself (if login can't be reached, everything deadlocks)
 	let public = Router::new()
 		.route("/health", get(health))
+		.route("/api/openapi.json", get(docs::openapi))
+		.route("/api/docs", get(docs::index))
+		.route("/api/docs/", get(docs::index))
+		.route("/api/docs/{file}", get(docs::file))
+		.route("/api/v1/version", get(version))
 		.route("/api/v1/auth/status", get(crate::auth::status))
 		.route("/api/v1/auth/login", post(crate::auth::login))
 		.route("/api/v1/auth/logout", post(crate::auth::logout));
-	let protected = Router::new()
-		.route("/api/v1/sources", get(list_sources))
+	// Global state and config; require_auth below establishes the single admin identity
+	let admin = Router::new()
 		.route("/api/v1/sources/scan", post(scan_sources))
-		.route("/api/v1/search", post(search::search_all))
+		.route(
+			"/api/v1/sources/import",
+			post(source_import::import_source)
+				.route_layer(axum::extract::DefaultBodyLimit::max(source_import::IMPORT_BODY_MAX)),
+		)
+		.route("/api/v1/sources/internal", post(internal_source::register_internal_source))
 		.route("/api/v1/sources/reorder-pinned", post(pins::reorder_pinned))
 		.route("/api/v1/sources/{id}", delete(delete_source).patch(pins::patch_source))
 		.route("/api/v1/sources/{id}/update", post(repo::update_source))
+		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
+		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
+		.route("/api/v1/sources/{id}/notify", post(notify_source))
+		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
+		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
+		.route("/api/v1/sources/{id}/login/web", post(login::web_login))
+		.route("/api/v1/sources/{id}/login/oauth/start", post(oauth::oauth_start))
+		.route("/api/v1/sources/{id}/login/oauth/complete", post(oauth::oauth_complete))
+		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
+		.route(
+			"/api/v1/source-repos",
+			get(repo::list_repos).post(repo::add_repo),
+		)
+		.route("/api/v1/source-repos/{id}", delete(repo::delete_repo))
+		.route("/api/v1/source-repos/{id}/refresh", post(repo::refresh_repo))
+		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
+		.route("/api/v1/source-repos/install", post(repo::install_source))
+		.route("/api/v1/source-repos/update-all", post(repo::update_all))
+		.route("/api/v1/backups/files", get(backup::list_backups))
+		.route("/api/v1/backups/files/restore", post(backup::restore_backup))
+		.route("/api/v1/sync/compact", post(sync::compact));
+	let protected = Router::new()
+		.route("/api/v1/sources", get(list_sources))
+		.route("/api/v1/search", post(search::search_all))
 		.route("/api/v1/sources/{id}/icon", get(get_source_icon))
 		.route("/api/v1/sources/{id}/image", get(cover::get_source_image))
 		.route("/api/v1/sources/{id}/filters", get(get_filters))
@@ -64,28 +108,6 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/sources/{id}/listings/{listing_id}", get(get_manga_list))
 		.route("/api/v1/sources/{id}/home", get(get_home))
 		.route("/api/v1/sources/{id}/deep-link", post(deep_link))
-		.route("/api/v1/sources/{id}/settings", get(get_source_settings).put(put_source_settings))
-		.route("/api/v1/sources/{id}/settings/reset", post(reset_source_settings))
-		.route("/api/v1/sources/{id}/notify", post(notify_source))
-		.route("/api/v1/sources/{id}/cache/clear", post(clear_source_cache))
-		.route("/api/v1/sources/{id}/login/basic", post(basic_login))
-		.route("/api/v1/sources/{id}/login/web", post(login::web_login))
-		.route("/api/v1/sources/{id}/login/web/browser", post(login::browser_login_start))
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/complete",
-			post(login::browser_login_complete),
-		)
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/cancel",
-			post(login::browser_login_cancel),
-		)
-		.route(
-			"/api/v1/sources/{id}/login/web/browser/{session}/stream",
-			get(login::browser_login_stream),
-		)
-		.route("/api/v1/sources/{id}/login/oauth/start", post(oauth::oauth_start))
-		.route("/api/v1/sources/{id}/login/oauth/complete", post(oauth::oauth_complete))
-		.route("/api/v1/sources/{id}/login/logout", post(login::logout))
 		.route("/api/v1/manga", post(register_manga))
 		.route("/api/v1/manga/{id}", get(get_manga).patch(update_manga))
 		.route("/api/v1/manga/{id}/chapters", get(get_chapters))
@@ -103,7 +125,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/chapter/{id}/pages", get(get_pages))
 		.route("/api/v1/chapter/{id}/page/{index}", get(page::get_page))
 		.route("/api/v1/library", get(library::list_library).post(library::add_to_library))
-		.route("/api/v1/library/{manga_id}", delete(library::remove_from_library))
+		.route("/api/v1/library/source-counts", get(library::source_counts))
+		.route("/api/v1/library/{id}", delete(library::remove_from_library))
 		.route("/api/v1/migrate/sources", get(migrate::migrate_sources))
 		.route("/api/v1/migrate/lookup", get(migrate::migrate_lookup))
 		.route("/api/v1/migrate", post(migrate::migrate_execute))
@@ -113,6 +136,18 @@ pub fn router(state: Arc<AppState>) -> Router {
 			patch(library::update_category).delete(library::delete_category),
 		)
 		.route("/api/v1/categories/reorder", patch(library::reorder_categories))
+		.route(
+			"/api/v1/filter-groups",
+			get(filter_groups::list_groups).post(filter_groups::create_group),
+		)
+		.route(
+			"/api/v1/filter-groups/{id}",
+			patch(filter_groups::update_group).delete(filter_groups::delete_group),
+		)
+		.route(
+			"/api/v1/filter-groups/reorder",
+			patch(filter_groups::reorder_groups),
+		)
 		.route("/api/v1/history", get(reader::get_history))
 		.route(
 			"/api/v1/downloads",
@@ -121,45 +156,42 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
 		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
-		.route("/api/v1/downloads/ws", get(crate::api::download::downloads_ws))
 		.route(
-			"/api/v1/downloads/{chapter_id}",
+			"/api/v1/downloads/{id}",
 			delete(crate::api::download::delete_download),
 		)
 		.route("/api/v1/chapter/{id}/file", get(crate::api::download::get_chapter_file))
+		.route("/api/v1/tasks", get(task::list_tasks))
+		.route("/api/v1/tasks/{id}", delete(task::cancel_task))
 		.route("/api/v1/update/fetch", post(crate::api::update::fetch_updates))
 		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
-		.route("/api/v1/update/ws", get(crate::api::update::updates_ws))
+		.route("/api/v1/events", get(crate::api::events::events))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
+		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))
 		.route(
-			"/api/v1/backup",
+			"/api/v1/backups/document",
 			get(backup::export_backup)
 				.post(backup::import_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
-		.route("/api/v1/backups", get(backup::list_backups))
-		.route("/api/v1/backups/restore", post(backup::restore_backup))
 		.route(
-			"/api/v1/import/aidoku",
+			"/api/v1/backups/import/aidoku",
 			post(aidoku_backup::import_aidoku_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
 		.route(
-			"/api/v1/import/suwayomi",
+			"/api/v1/backups/import/suwayomi",
 			post(suwayomi_backup::import_suwayomi_backup)
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
-		.route(
-			"/api/v1/source-repos",
-			get(repo::list_repos).post(repo::add_repo),
-		)
-		.route("/api/v1/source-repos/{id}", delete(repo::delete_repo))
-		.route("/api/v1/source-repos/{id}/refresh", post(repo::refresh_repo))
-		.route("/api/v1/source-repos/sources", get(repo::browse_sources))
-		.route("/api/v1/source-repos/install", post(repo::install_source))
-		.route("/api/v1/source-repos/update-all", post(repo::update_all))
 		.route("/api/v1/auth/password", put(crate::auth::change_password))
+		.route(
+			"/api/v1/auth/api-keys",
+			get(api_keys::list_keys).post(api_keys::create_key),
+		)
+		.route("/api/v1/auth/api-keys/{id}", delete(api_keys::revoke_key))
+		.merge(admin)
 		.layer(axum::middleware::from_fn_with_state(
 			state.clone(),
 			crate::auth::require_auth,
@@ -171,10 +203,14 @@ async fn health() -> Json<Value> {
 	Json(json!({"status": "ok"}))
 }
 
+async fn version() -> Json<Value> {
+	Json(json!({"version": env!("CARGO_PKG_VERSION")}))
+}
+
 pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow> {
 	let row: Option<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source WHERE id = ?",
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source WHERE id = ?",
 	)
 	.bind(id)
 	.fetch_optional(&state.pool)
@@ -184,8 +220,8 @@ pub(crate) async fn source_row(state: &AppState, id: i64) -> ApiResult<SourceRow
 
 async fn list_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source ORDER BY id",
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
 	.await?;
@@ -205,13 +241,56 @@ async fn scan_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Valu
 
 async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
 	let row = source_row(&state, id).await?;
+	// The default local instance while the deployment config explicitly names local roots would be
+	// recreated empty on the next boot, so deleting it is refused until the config stops defining it
+	if row.key == crate::model::LOCAL_SOURCE_KEY && state.config.local_dirs.is_some() {
+		return Err(ApiError::bad_request(
+			"the default local source is defined by the server config (SUMIDOKU_LOCAL_DIRS/local_dirs); remove it there first",
+		));
+	}
 	state.evict_source(id).await;
 	sqlx::query("DELETE FROM source WHERE id = ?")
 		.bind(id)
 		.execute(&state.pool)
 		.await?;
 	pins::prune_pinned(&state.pool, &row.key).await?;
+	// Uninstall also drops the on-disk package, otherwise the next directory scan would
+	// re-register the source. Internal instances (local/opds) live entirely in the database (no package).
+	if !row.is_opds() && !row.is_local() {
+		remove_source_package(&state.config.sources_dir(), std::path::Path::new(&row.wasm_path)).await;
+	}
 	Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes the package a source row was registered from: the containing directory for directory
+/// packages (`wasm_path` is `<dir>/main.wasm`), the `.aix` file itself plus its written-out icon
+/// sidecar otherwise. Only paths inside `sources_dir` are touched; a missing or undeletable
+/// package only warns — the database row is already gone.
+async fn remove_source_package(sources_dir: &std::path::Path, wasm_path: &std::path::Path) {
+	if !wasm_path.starts_with(sources_dir) {
+		tracing::warn!(?wasm_path, "source package outside sources_dir left in place");
+		return;
+	}
+	let (package, is_dir) = match wasm_path.extension().map(|e| e.to_ascii_lowercase()) {
+		Some(ext) if ext == "aix" => (wasm_path.to_path_buf(), false),
+		_ => match wasm_path.parent() {
+			Some(parent) if parent != wasm_path => (parent.to_path_buf(), true),
+			_ => return,
+		},
+	};
+	let result = if is_dir {
+		tokio::fs::remove_dir_all(&package).await
+	} else {
+		tokio::fs::remove_file(&package).await
+	};
+	if let Err(e) = result {
+		tracing::warn!(?package, "failed to remove source package: {e}");
+		return;
+	}
+	if !is_dir {
+		// the `.aix` icon sidecar (`<name>.png`, written at registration) dies with the package
+		let _ = tokio::fs::remove_file(wasm_path.with_extension("png")).await;
+	}
 }
 
 async fn get_source_icon(
@@ -244,19 +323,19 @@ async fn get_source_icon(
 	Ok(cover::bytes_response(bytes, mime, 86400))
 }
 
-/// 动态能力（filters/listings）不支持时按端点约定 404 unsupported
+/// When a dynamic capability (filters/listings/home/deep-link) is unsupported, the endpoint convention answers 501 unsupported
 fn dynamic_capability_error(e: SourceError) -> ApiError {
 	match e {
-		SourceError::Unimplemented => ApiError::unsupported_404("feature not supported by source"),
+		SourceError::Unimplemented => ApiError::unsupported_501("feature not supported by source"),
 		SourceError::Unsupported(name) => {
-			ApiError::unsupported_404(format!("feature not supported by source: {name}"))
+			ApiError::unsupported_501(format!("feature not supported by source: {name}"))
 		}
 		other => ApiError::from(other),
 	}
 }
 
-/// 读源包里的静态 json（source.json/settings.json/filters.json）；
-/// 目录源读 wasm_path 同级文件，.aix 源从 zip 内 `Payload/` 取；缺失或解析失败都按 None 处理
+/// Reads a static json from the source package (source.json/settings.json/filters.json);
+/// directory sources read the file next to wasm_path, .aix sources take it from the zip's `Payload/`; missing or unparsable both yield None
 async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option<Value>> {
 	let row = source_row(state, id).await?;
 	let Some(raw) = read_package_file(&row.wasm_path, file).await else {
@@ -265,7 +344,7 @@ async fn package_json(state: &AppState, id: i64, file: &str) -> ApiResult<Option
 	Ok(serde_json::from_slice(&raw).ok())
 }
 
-/// 目录源与 .aix 源共用的静态文件读取：先找 wasm_path 同级文件，再退回 zip 内 `Payload/<file>`
+/// Static-file read shared by directory and .aix sources: try the file next to wasm_path first, then fall back to the zip's `Payload/<file>`
 async fn read_package_file(wasm_path: &str, file: &str) -> Option<Vec<u8>> {
 	let path = std::path::PathBuf::from(wasm_path);
 	if let Some(dir) = path.parent()
@@ -280,7 +359,7 @@ async fn read_package_file(wasm_path: &str, file: &str) -> Option<Vec<u8>> {
 		.flatten()
 }
 
-/// 从 `.aix`（zip）读取 `Payload/` 下的条目；非 zip 或条目缺失都按 None 处理
+/// Reads an entry under `Payload/` from an `.aix` (zip); non-zip or missing entry both yield None
 fn read_aix_entry(path: &std::path::Path, entry: &str) -> Option<Vec<u8>> {
 	use aidoku_wasm::package::{JSON_ENTRY_MAX, read_zip_entry};
 	let file = std::fs::File::open(path).ok()?;
@@ -293,8 +372,8 @@ async fn get_filters(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态筛选器在前，动态导出结果追加在后；
-	// 静态项归一成动态导出的形状（动态项已是该形状，原样透传）
+	// Aligned with AidokuRunner: static filters first, dynamic exported results appended;
+	// static items are normalized into the dynamic-export shape (dynamic items already have it, passed through as-is)
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
 		&& let Some(filters) = doc.get("filters")
@@ -306,22 +385,25 @@ async fn get_filters(
 	{
 		out.extend(filters::normalize_static_filters(&filters));
 	}
-	match handle.get_filters().await {
-		Ok(filters) => {
-			if let Value::Array(items) = serde_json::to_value(filters)? {
-				out.extend(items);
+	if handle.features().dynamic_filters {
+		match handle.get_filters().await {
+			Ok(filters) => {
+				if let Value::Array(items) = serde_json::to_value(filters)? {
+					out.extend(items);
+				}
 			}
-			Ok(Json(Value::Array(out)))
-		}
-		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
-			if out.is_empty() {
-				Err(dynamic_capability_error(e))
-			} else {
-				Ok(Json(Value::Array(out)))
+			Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+				if out.is_empty() {
+					return Err(dynamic_capability_error(e));
+				}
 			}
+			Err(e) => return Err(ApiError::from(e)),
 		}
-		Err(e) => Err(ApiError::from(e)),
 	}
+	if out.is_empty() {
+		return Err(dynamic_capability_error(SourceError::Unsupported("get_filters")));
+	}
+	Ok(Json(Value::Array(out)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -332,7 +414,7 @@ pub struct SearchRequest {
 	pub filters: Option<Vec<FilterValue>>,
 }
 
-/// 已入库漫画的 key → 内部 id，流式与非流式搜索共用同一份 attach 语义
+/// key → internal id for in-library manga; streaming and non-streaming search share the same attach semantics
 pub(crate) async fn known_manga_ids(state: &AppState, source_id: i64) -> ApiResult<HashMap<String, i64>> {
 	let known: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ?")
 		.bind(source_id)
@@ -357,7 +439,7 @@ pub(crate) fn manga_json_with_ids(
 	Ok(value)
 }
 
-/// 搜索/列表返回的源侧 Manga 附加 sourceId；已入库的再附内部 id
+/// Attaches sourceId to source-side Manga from search/list results; in-library ones also get the internal id
 pub(crate) async fn attach_internal_ids(
 	state: &AppState,
 	source_id: i64,
@@ -370,6 +452,33 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
+/// Browse/search for the local source: actually scans the local roots; a non-empty query filters by title substring
+/// (case-insensitive, same as Suwayomi LocalSource's contains(query, ignoreCase = true)). Browsing stays
+/// lightweight — keys are relative paths (numbered roots carry the `N:` prefix) and titles their leaf segment
+/// (a oneshot drops the archive extension); ComicInfo and the cover are left for find_or_register_manga to
+/// resolve on open; everything returns in one page, hasNextPage is always false
+pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
+	let oneshots = state.local_oneshots_dir(source_id).await?;
+	let dirs = crate::local::scan_manga_dirs(&state.local_dirs(source_id).await?, oneshots.as_deref()).await?;
+	let needle = query
+		.map(str::trim)
+		.filter(|q| !q.is_empty())
+		.map(str::to_lowercase);
+	let entries: Vec<Manga> = dirs
+		.into_iter()
+		.map(|key| {
+			let title = crate::local::title_of(&key);
+			Manga {
+				key,
+				title,
+				..Manga::default()
+			}
+		})
+		.filter(|manga| needle.as_ref().is_none_or(|n| manga.title.to_lowercase().contains(n)))
+		.collect();
+	attach_internal_ids(state, source_id, entries).await
+}
+
 async fn search_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -379,6 +488,26 @@ async fn search_source(
 	let page = body.page.unwrap_or(1);
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
+	}
+	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal, same as register's local arm)
+	if crate::source::source_is_local(&state.pool, id).await? {
+		let entries = local_search(&state, id, body.query.as_deref()).await?;
+		return Ok(Json(json!({
+			"entries": entries,
+			"hasNextPage": false,
+		}))
+		.into_response());
+	}
+	// opds sources likewise have no source call to stream; degraded marks a catalog without OpenSearch, where results are just traversal filtering
+	if crate::source::source_is_opds(&state.pool, id).await? {
+		let outcome = crate::opds_source::search(&state, id, body.query.as_deref()).await?;
+		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
+		return Ok(Json(json!({
+			"entries": entries,
+			"hasNextPage": false,
+			"degraded": outcome.degraded,
+		}))
+		.into_response());
 	}
 	let handle = state.get_handle(id).await?;
 	if !partial::wants_ndjson(&headers) {
@@ -409,8 +538,8 @@ async fn get_listings(
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
 	let handle = state.get_handle(id).await?;
-	// 对齐 AidokuRunner：静态 listings 在前，动态导出结果追加在后；
-	// 两种来源统一归一成 listing_json 的形状，kind 静态是数值、动态是枚举名
+	// Aligned with AidokuRunner: static listings first, dynamic exported results appended;
+	// both sources are normalized to the listing_json shape, where kind is a number for static and an enum name for dynamic
 	let mut out: Vec<Value> = Vec::new();
 	if let Some(doc) = package_json(&state, id, "source.json").await?
 		&& let Some(items) = doc.get("listings").and_then(|v| v.as_array())
@@ -422,20 +551,21 @@ async fn get_listings(
 				.map(|l| listings::listing_json(&l)),
 		);
 	}
-	match handle.get_listings().await {
-		Ok(listings) => {
-			out.extend(listings.iter().map(listings::listing_json));
-			Ok(Json(Value::Array(out)))
-		}
-		Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
-			if out.is_empty() {
-				Err(dynamic_capability_error(e))
-			} else {
-				Ok(Json(Value::Array(out)))
+	if handle.features().dynamic_listings {
+		match handle.get_listings().await {
+			Ok(listings) => out.extend(listings.iter().map(listings::listing_json)),
+			Err(e @ (SourceError::Unimplemented | SourceError::Unsupported(_))) => {
+				if out.is_empty() {
+					return Err(dynamic_capability_error(e));
+				}
 			}
+			Err(e) => return Err(ApiError::from(e)),
 		}
-		Err(e) => Err(ApiError::from(e)),
 	}
+	if out.is_empty() {
+		return Err(dynamic_capability_error(SourceError::Unsupported("get_listings")));
+	}
+	Ok(Json(Value::Array(out)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -443,8 +573,8 @@ pub struct PageQuery {
 	pub page: Option<i32>,
 }
 
-/// 静态（source.json listings）在前、动态导出结果追加在后，与 get_listings 端点同序；
-/// 动态拉取失败只记日志按纯静态继续，不拖累 manga 列表
+/// Static (source.json listings) first, dynamic exported results appended, same order as the get_listings endpoint;
+/// a failed dynamic fetch is only logged and we continue static-only, not dragging the manga list down
 async fn combined_listings(
 	state: &AppState,
 	id: i64,
@@ -456,10 +586,12 @@ async fn combined_listings(
 	{
 		out.extend(items.iter().filter_map(listings::parse_static_listing));
 	}
-	match handle.get_listings().await {
-		Ok(listings) => out.extend(listings),
-		Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {}
-		Err(e) => tracing::warn!(source_id = id, "dynamic listings fetch failed, static only: {e}"),
+	if handle.features().dynamic_listings {
+		match handle.get_listings().await {
+			Ok(listings) => out.extend(listings),
+			Err(SourceError::Unimplemented | SourceError::Unsupported(_)) => {}
+			Err(e) => tracing::warn!(source_id = id, "dynamic listings fetch failed, static only: {e}"),
+		}
 	}
 	Ok(out)
 }
@@ -474,8 +606,8 @@ async fn get_manga_list(
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
 	let handle = state.get_handle(id).await?;
-	// 按 id 在源声明的 listings 里找真实 listing（Aidoku 只会传源自己给的对象）；
-	// 找不到时透传 id 本身，源自行决定怎么响应，与既有行为一致
+	// Looks up the real listing by id among the source-declared listings (Aidoku only ever passes objects the source itself gave);
+	// when not found, the id itself is passed through and the source decides how to respond, matching existing behavior
 	let listing = combined_listings(&state, id, &handle)
 		.await?
 		.into_iter()
@@ -493,8 +625,8 @@ async fn get_manga_list(
 	})))
 }
 
-/// 组件数组定序即稳定标识：流式请求里 send_partial_result 的部分结果按下标增量替换，
-/// 不破坏现有字段；下标由 wasm 层按上游 title 匹配语义解析（见 partial.rs）
+/// The component array's order is the stable identity: in a streaming request, send_partial_result partials replace
+/// by index incrementally without disturbing existing fields; the index is resolved by the wasm layer with upstream title-matching semantics (see partial.rs)
 async fn get_home(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -505,7 +637,7 @@ async fn get_home(
 		let home = handle.get_home().await.map_err(dynamic_capability_error)?;
 		return Ok(Json(serde_json::to_value(home)?).into_response());
 	}
-	// 能力缺失要在流开始前返回 404，保持与非流式相同的状态码契约
+	// A missing capability must return 501 before the stream starts, keeping the same status-code contract as non-streaming
 	if !handle.features().home {
 		return Err(dynamic_capability_error(SourceError::Unsupported("get_home")));
 	}
@@ -525,9 +657,9 @@ pub(crate) async fn current_values(state: &AppState, source_id: i64) -> ApiResul
 	Ok(Value::Object(values))
 }
 
-/// 设置定义加载：静态 settings.json 与动态 get_settings 合并（静态在前、动态追加、
-/// 同键去重，对齐 AidokuRunner 的 staticSettings + getSettings()）；动态项顺带播种
-/// 默认值，对齐 Runner 的 register(defaults:)
+/// Settings-definition loading: static settings.json merged with dynamic get_settings (static first, dynamic appended,
+/// same-key deduped — aligned with AidokuRunner's staticSettings + getSettings()); dynamic items also seed
+/// default values, aligned with Runner's register(defaults:)
 pub(crate) async fn load_settings_items(
 	state: &AppState,
 	id: i64,
@@ -537,6 +669,9 @@ pub(crate) async fn load_settings_items(
 		.await?
 		.map(|raw| settings::normalize_static_settings(&raw))
 		.unwrap_or_default();
+	if !handle.features().dynamic_settings {
+		return Ok(static_items);
+	}
 	match handle.get_settings().await {
 		Ok(settings) => {
 			let dynamic_items = serde_json::to_value(settings)?
@@ -553,18 +688,52 @@ pub(crate) async fn load_settings_items(
 	}
 }
 
+/// A local instance's settings document (no wasm package, so the definition is server-synthesized):
+/// the roots list and the oneshots marker. Values are the effective — fallback-resolved — ones, so an
+/// edit starts from what the instance actually scans; saving materializes them into source_setting
+async fn local_settings_doc(state: &AppState, id: i64) -> ApiResult<Value> {
+	let paths = state.local_dirs(id).await?;
+	let oneshots = state.local_oneshots_dir(id).await?;
+	Ok(json!({
+		"settings": [
+			// unknown-to-Aidoku type on purpose: the value keeps the raw string form (the same
+			// convention as unknown static kinds), and the web UI renders the local editor by source kind
+			{
+				"type": "list", "key": "paths", "title": "Directories",
+				"notification": null, "requires": null, "requires_false": null, "refreshes": null,
+				"value": "list",
+			},
+			{
+				"type": "text", "key": "oneshotsDir", "title": "Oneshots directory",
+				"notification": null, "requires": null, "requires_false": null, "refreshes": null,
+				"value": { "Text": {
+					"placeholder": null, "autocapitalization_type": null, "autocorrection_disabled": null,
+					"keyboard_type": null, "return_key_type": null, "secure": null, "default": null,
+				} },
+			},
+		],
+		"values": {
+			"paths": paths.iter().map(|dir| dir.to_string_lossy()).collect::<Vec<_>>(),
+			"oneshotsDir": oneshots,
+		},
+	}))
+}
+
 async fn get_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		return Ok(Json(local_settings_doc(&state, id).await?));
+	}
 	let handle = state.get_handle(id).await?;
 	let doc = package_json(&state, id, "source.json")
 		.await?
 		.unwrap_or_else(|| json!({}));
-	let row = source_row(&state, id).await?;
 	let mut items = load_settings_items(&state, id, &handle).await?;
-	// 合成设置排在静态/动态设置之前，对齐 AidokuRunner 的 extraSettings（语言在 base url 之前）；
-	// 源已自行声明同名键时跳过合成项，避免列表里出现两个同键设置
+	// Synthetic settings rank before static/dynamic settings, aligned with AidokuRunner's extraSettings (language before base url);
+	// when the source itself already declares the same key, the synthetic item is skipped so the list never shows two same-key settings
 	let declared = settings::declared_keys(&items);
 	let mut extras: Vec<Value> = Vec::new();
 	if let Some(language) = settings::language_setting(&doc)
@@ -584,15 +753,11 @@ async fn get_source_settings(
 	Ok(Json(json!({
 		"settings": items,
 		"values": values,
-		// webui 据此决定 web 登录项显示「在浏览器中打开登录页」还是只有粘贴区
-		"capabilities": {
-			"browserLogin": state.browser_logins.get().map(|m| m.configured()).unwrap_or(false),
-		},
 	})))
 }
 
-/// serde_urlencoded 不收重复键；notify 可重复（一次保存可能改多个带
-/// notification 的设置，逐个送达），改用手工解析
+/// serde_urlencoded rejects duplicate keys; notify may repeat (one save can change several settings with
+/// notifications, delivered one by one), so parse by hand
 fn notify_params(raw: Option<&str>) -> Vec<String> {
 	raw.map(|q| {
 		url::form_urlencoded::parse(q.as_bytes())
@@ -608,9 +773,70 @@ async fn put_source_settings(
 	RawQuery(raw): RawQuery,
 	Json(body): Json<HashMap<String, Value>>,
 ) -> ApiResult<Json<Value>> {
-	source_row(&state, id).await?;
+	let row = source_row(&state, id).await?;
+	// A local instance accepts exactly its two synthesized settings: the roots list (validated against
+	// the filesystem before the write transaction) and the oneshots marker (null clears the override,
+	// an explicit blank turns the rule off for this instance)
+	if row.is_local() {
+		let mut parsed_paths: Option<Vec<String>> = None;
+		let mut oneshots: Option<Option<String>> = None;
+		for (key, value) in &body {
+			match key.as_str() {
+				"paths" => {
+					let paths = serde_json::from_value::<Vec<String>>(value.clone())
+						.map_err(|_| ApiError::bad_request("paths must be an array of directory paths"))?;
+					parsed_paths = Some(crate::local::validate_paths(&paths).await?);
+				}
+				"oneshotsDir" => {
+					oneshots = Some(match value {
+						Value::Null => None,
+						Value::String(name) => Some(name.trim().to_string()),
+						_ => return Err(ApiError::bad_request("oneshotsDir must be a string or null")),
+					});
+				}
+				_ => return Err(ApiError::bad_request(format!("unknown local source setting: {key}"))),
+			}
+		}
+		let mut tx = crate::db::begin_write(&state.pool).await?;
+		if let Some(dirs) = parsed_paths {
+			let raw = serde_json::to_string(&json_to_default_value(&json!(dirs)))?;
+			sqlx::query(
+				"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)
+				 ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value",
+			)
+			.bind(id)
+			.bind(raw)
+			.execute(&mut *tx)
+			.await?;
+		}
+		if let Some(oneshots) = oneshots {
+			match oneshots {
+				None => {
+					sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+						.bind(id)
+						.execute(&mut *tx)
+						.await?;
+				}
+				Some(name) => {
+					let raw = serde_json::to_string(&json_to_default_value(&json!(name)))?;
+					sqlx::query(
+						"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'oneshotsDir', ?)
+						 ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value",
+					)
+					.bind(id)
+					.bind(raw)
+					.execute(&mut *tx)
+					.await?;
+				}
+			}
+		}
+		tx.commit().await?;
+		// No instance to restart: the next scan reads the new values
+		let values = local_settings_doc(&state, id).await?["values"].clone();
+		return Ok(Json(json!({ "values": values })));
+	}
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		for (key, value) in &body {
 			let encoded = serde_json::to_string(&json_to_default_value(value))?;
 			sqlx::query(
@@ -625,7 +851,7 @@ async fn put_source_settings(
 		}
 		tx.commit().await?;
 	}
-	// 实例在跑才热重启；没跑的下一次懒加载自然吃到新 defaults
+	// Hot-restart only when the instance is running; a stopped one picks up the new defaults on its next lazy load
 	let handle = state
 		.sources
 		.read()
@@ -654,8 +880,8 @@ pub struct NotifyRequest {
 	pub notification: String,
 }
 
-/// 直接给在跑（或懒加载拉起）的实例送 notification，不重启——Button 设置的
-/// 按下语义（Aidoku app：按下即 handleNotification，实例状态保留）
+/// Sends the notification straight to the running (or lazily started) instance without a restart — the press
+/// semantics of a Button setting (Aidoku app: pressing fires handleNotification, instance state kept)
 async fn notify_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -669,7 +895,7 @@ async fn notify_source(
 	Ok(Json(json!({ "ok": true })))
 }
 
-/// 实例在跑才热重启（换 defaults/cookies）；没跑的下一次懒加载自然吃到新值
+/// Hot-restart only when the instance is running (swapping defaults/cookies); a stopped one picks up the new values on its next lazy load
 pub(crate) async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()> {
 	let handle = state
 		.sources
@@ -688,12 +914,22 @@ pub(crate) async fn restart_if_loaded(state: &AppState, id: i64) -> ApiResult<()
 	Ok(())
 }
 
-/// 清空该源的 settings 覆盖值后按包内静态 schema 重新播种默认值（对齐重装语义）
+/// Clears the source's settings overrides and re-seeds defaults from the package's static schema (aligned with reinstall semantics)
 async fn reset_source_settings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	source_row(&state, id).await?;
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		// The roots list has no default to reset to (registration requires it); only the oneshots
+		// override clears, falling back to the legacy global layer / config for the default instance
+		sqlx::query("DELETE FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+			.bind(id)
+			.execute(&state.pool)
+			.await?;
+		let values = local_settings_doc(&state, id).await?["values"].clone();
+		return Ok(Json(json!({ "values": values })));
+	}
 	let settings = package_json(&state, id, "settings.json").await?;
 	let doc = package_json(&state, id, "source.json")
 		.await?
@@ -710,7 +946,7 @@ async fn reset_source_settings(
 	Ok(Json(json!({ "values": values })))
 }
 
-/// 清该源的登录 cookie 并重启实例；不动封面缓存与下载
+/// Clears the source's login cookies and restarts the instance; cover cache and downloads are untouched
 async fn clear_source_cache(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -732,7 +968,7 @@ pub struct BasicLoginRequest {
 	pub password: String,
 }
 
-/// 基本登录：凭据交给源校验，成功后由源内 sink 落库（username/password/marker）
+/// Basic login: credentials go to the source for verification; on success the in-source sink persists them (username/password/marker)
 async fn basic_login(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -760,8 +996,8 @@ pub struct RegisterMangaRequest {
 	pub source_id: i64,
 	#[serde(default)]
 	pub manga_key: String,
-	/// 客户端手里的搜索条目；有它就以它为 get_manga_update 入参，
-	/// 源没改动的字段（典型是 cover）才不会丢
+	/// The search entry in the client's hands; when present it becomes the get_manga_update input,
+	/// so fields the source did not change (typically cover) are not lost
 	pub manga: Option<Manga>,
 }
 
@@ -786,11 +1022,21 @@ async fn register_manga(
 		return Err(ApiError::bad_request("mangaKey must not be empty"));
 	}
 	source_row(&state, body.source_id).await?;
+	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal)
+	if crate::source::source_is_local(&state.pool, body.source_id).await? {
+		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+		return Ok(Json(json!({ "id": manga_id })).into_response());
+	}
+	// opds sources same as the local arm: fetching upstream is a catalog feed pull, with no partial stream
+	if crate::source::source_is_opds(&state.pool, body.source_id).await? {
+		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
+		return Ok(Json(json!({ "id": manga_id })).into_response());
+	}
 	if !partial::wants_ndjson(&headers) {
 		let manga_id = find_or_register_manga(&state, body.source_id, initial).await?;
 		return Ok(Json(json!({ "id": manga_id })).into_response());
 	}
-	// 已登记命中没有源调用可流：直接缓冲响应，客户端按非流式终态处理
+	// An already-registered hit has no source call to stream: answer buffered directly, the client treats it as a non-streaming terminal
 	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(body.source_id)
 		.bind(&initial.key)
@@ -813,6 +1059,7 @@ async fn register_manga(
 			&mut conn,
 			manga_id,
 			&updated.chapters.clone().unwrap_or_default(),
+			&[],
 		)
 		.await?;
 		Ok::<_, ApiError>(json!({ "id": manga_id }))
@@ -821,8 +1068,8 @@ async fn register_manga(
 	Ok(partial::ndjson_response(line_rx))
 }
 
-/// (source, key) 已有 manga 行就直接命中；没有则回源拉详情 + 章节登记（不入库），
-/// 浏览页点开条目与深链落地共用这条路径
+/// When (source, key) already has a manga row, hit it directly; otherwise fetch details + chapters from the source and
+/// register (not shelved) — the path shared by opening an entry from the browse page and by deep-link landing
 pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64, initial: Manga) -> ApiResult<i64> {
 	let existing: Option<(i64,)> =
 		sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
@@ -833,6 +1080,39 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 	if let Some((id,)) = existing {
 		return Ok(id);
 	}
+	if crate::source::source_is_local(&state.pool, source_id).await? {
+		let update = crate::local::manga_update(&state.local_dirs(source_id).await?, &state.local_zip, &initial.key).await?;
+		let mut conn = state.pool.acquire().await?;
+		let manga_id = upsert_manga(&mut conn, source_id, &update.manga, true, true, true).await?;
+		reconcile_chapters(
+			&mut conn,
+			manga_id,
+			&update.manga.chapters.clone().unwrap_or_default(),
+			&update.protected,
+		)
+		.await?;
+		crate::local::store_epub_divina(
+			&mut conn,
+			manga_id,
+			&update.manga.chapters.clone().unwrap_or_default(),
+			&update.epub_divina,
+		)
+		.await?;
+		return Ok(manga_id);
+	}
+	if crate::source::source_is_opds(&state.pool, source_id).await? {
+		let updated = crate::opds_source::manga_update(state, source_id, initial).await?;
+		let mut conn = state.pool.acquire().await?;
+		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
+		reconcile_chapters(
+			&mut conn,
+			manga_id,
+			&updated.chapters.clone().unwrap_or_default(),
+			&[],
+		)
+		.await?;
+		return Ok(manga_id);
+	}
 	let handle = state.get_handle(source_id).await?;
 	let updated = handle.get_manga_update(initial, true, true).await?;
 	let mut conn = state.pool.acquire().await?;
@@ -841,6 +1121,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		&mut conn,
 		manga_id,
 		&updated.chapters.clone().unwrap_or_default(),
+		&[],
 	)
 	.await?;
 	Ok(manga_id)
@@ -851,10 +1132,10 @@ pub struct DeepLinkRequest {
 	pub url: String,
 }
 
-/// 把 URL 交给源的 handle_deep_link 并解析成前端可直接导航的目标：Manga/Chapter
-/// 变体按 (source, key) 登记/命中 manga 行后回内部 id——chapter key 不在章节列表里
-/// 时 chapterId 为 null，前端落到 manga 页；Listing 原样回传，由前端切到该列表；
-/// 源不认这个 URL 时 result 为 null
+/// Hands the URL to the source's handle_deep_link and resolves it into a target the frontend can navigate to
+/// directly: Manga/Chapter variants register/hit the manga row by (source, key) and return the internal id — when
+/// the chapter key is not in the chapter list, chapterId is null and the frontend lands on the manga page; Listing
+/// is passed through as-is for the frontend to switch to; when the source does not recognize the URL, result is null
 async fn deep_link(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -917,19 +1198,56 @@ pub struct RefreshQuery {
 	pub refresh: Option<String>,
 }
 
-pub(crate) fn wants_refresh(query: &RefreshQuery) -> bool {
-	matches!(query.refresh.as_deref(), Some("") | Some("1") | Some("true"))
+/// Query params of the chapter list endpoint: refresh plus the sort key and direction
+#[derive(Debug, Deserialize)]
+pub struct ChaptersQuery {
+	pub refresh: Option<String>,
+	pub sort: Option<String>,
+	pub order: Option<String>,
 }
 
-pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Value> {
+pub(crate) fn wants_refresh(query: &RefreshQuery) -> bool {
+	refresh_flag(query.refresh.as_deref())
+}
+
+fn refresh_flag(refresh: Option<&str>) -> bool {
+	matches!(refresh, Some("") | Some("1") | Some("true"))
+}
+
+/// Chapter list ORDER BY: `sort` picks the key (`source` = source_order, `chapter` = number, `date` = date_uploaded),
+/// `order=asc|desc` the direction — absent keeps the key's default: source stays in the source's listing order
+/// (ASC), chapter and date default to newest-first (DESC). Numberless chapters count lowest, so they open ASC and
+/// close DESC; missing dates sink to the bottom of the default date order (SQLite sorts NULL below any value)
+fn chapter_order_by(sort: Option<&str>, order: Option<&str>) -> ApiResult<&'static str> {
+	let asc = match order {
+		None => None,
+		Some("asc") => Some(true),
+		Some("desc") => Some(false),
+		Some(other) => return Err(ApiError::bad_request(format!("invalid order: {other}"))),
+	};
+	match (sort, asc) {
+		(None, None | Some(true)) | (Some("source"), None | Some(true)) => {
+			Ok(" ORDER BY c.source_order ASC, c.id ASC")
+		}
+		(None, Some(false)) | (Some("source"), Some(false)) => Ok(" ORDER BY c.source_order DESC, c.id ASC"),
+		(Some("chapter"), Some(true)) => Ok(" ORDER BY c.number ASC, c.source_order ASC, c.id ASC"),
+		(Some("chapter"), None | Some(false)) => Ok(" ORDER BY c.number DESC, c.source_order ASC, c.id ASC"),
+		(Some("date"), Some(true)) => Ok(" ORDER BY c.date_uploaded ASC, c.source_order ASC, c.id ASC"),
+		(Some("date"), None | Some(false)) => Ok(" ORDER BY c.date_uploaded DESC, c.source_order ASC, c.id ASC"),
+		(Some(other), _) => Err(ApiError::bad_request(format!("invalid sort: {other}"))),
+	}
+}
+
+pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -> ApiResult<Value> {
 	let (chapter_count,): (i64,) =
 		sqlx::query_as("SELECT COUNT(*) FROM chapter WHERE manga_id = ?")
 			.bind(row.id)
 			.fetch_one(&state.pool)
 			.await?;
 	let manga_user: Option<(bool, i64, bool)> =
-		sqlx::query_as("SELECT in_library, viewer_flags, incognito FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_as("SELECT in_library, viewer_flags, incognito FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(row.id)
+			.bind(user_id)
 			.fetch_optional(&state.pool)
 			.await?;
 	let mut value = serde_json::to_value(manga_from_row(row))?;
@@ -952,15 +1270,16 @@ pub(crate) async fn manga_json(state: &AppState, row: &MangaRow) -> ApiResult<Va
 		json!(manga_user.map(|(_, _, incognito)| incognito).unwrap_or(false)),
 	);
 	let category_ids: Vec<i64> =
-		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(row.id)
+			.bind(user_id)
 			.fetch_all(&state.pool)
 			.await?;
 	object.insert("categoryIds".into(), json!(category_ids));
 	Ok(value)
 }
 
-/// viewer_flags 非零即用户阅读方向覆盖：响应 viewer 用覆盖值，库里的源值不动
+/// A non-zero viewer_flags is the user's reading-direction override: the response's viewer uses the override, the stored source value untouched
 fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_flags: i64) -> ApiResult<()> {
 	if viewer_flags != 0 {
 		object.insert("viewer".into(), serde_json::to_value(viewer_from_int(viewer_flags))?);
@@ -968,9 +1287,9 @@ fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_fla
 	Ok(())
 }
 
-/// 列表端点的批量版 manga_json：三条 IN 查询替代逐行三查询，输出与入参同序；
-/// 缺行按单查缺省（0 / false / 空数组）补齐
-pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
+/// Batch manga_json for list endpoints: three IN queries instead of three queries per row, output in input order;
+/// missing rows are filled with the single-fetch defaults (0 / false / empty array)
+pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
 	if rows.is_empty() {
 		return Ok(Vec::new());
 	}
@@ -984,9 +1303,9 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 	}
 	let chapter_counts: HashMap<i64, i64> = q.fetch_all(&state.pool).await?.into_iter().collect();
 	let library_sql = format!(
-		"SELECT manga_id, in_library, viewer_flags, incognito FROM manga_user WHERE user_id = 1 AND manga_id IN ({placeholders})"
+		"SELECT manga_id, in_library, viewer_flags, incognito FROM manga_user WHERE user_id = ? AND manga_id IN ({placeholders})"
 	);
-	let mut q = sqlx::query_as::<_, (i64, bool, i64, bool)>(&library_sql);
+	let mut q = sqlx::query_as::<_, (i64, bool, i64, bool)>(&library_sql).bind(user_id);
 	for row in rows {
 		q = q.bind(row.id);
 	}
@@ -997,9 +1316,9 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 		.map(|(id, in_library, flags, incognito)| (id, (in_library, flags, incognito)))
 		.collect();
 	let category_sql = format!(
-		"SELECT manga_id, category_id FROM category_manga WHERE user_id = 1 AND manga_id IN ({placeholders})"
+		"SELECT manga_id, category_id FROM category_manga WHERE user_id = ? AND manga_id IN ({placeholders})"
 	);
-	let mut q = sqlx::query_as::<_, (i64, i64)>(&category_sql);
+	let mut q = sqlx::query_as::<_, (i64, i64)>(&category_sql).bind(user_id);
 	for row in rows {
 		q = q.bind(row.id);
 	}
@@ -1040,19 +1359,19 @@ pub(crate) async fn manga_json_batch(state: &AppState, rows: &[&MangaRow]) -> Ap
 	Ok(out)
 }
 
-/// history/update 的漫画列：批量取行再批量序列化，输出与 ids 同序；缺行同 manga_row 的 404
-pub(crate) async fn manga_json_by_ids(state: &AppState, ids: &[i64]) -> ApiResult<Vec<Value>> {
+/// The manga column for history/update: batch-fetch rows then batch-serialize, output in ids order; a missing row is the same 404 as manga_row
+pub(crate) async fn manga_json_by_ids(state: &AppState, user_id: i64, ids: &[i64]) -> ApiResult<Vec<Value>> {
 	let rows = manga_rows_by_ids(&state.pool, ids).await?;
 	let refs: Vec<&MangaRow> = ids
 		.iter()
 		.map(|id| rows.get(id))
 		.collect::<Option<Vec<_>>>()
 		.ok_or_else(|| ApiError::not_found("manga not found"))?;
-	manga_json_batch(state, &refs).await
+	manga_json_batch(state, user_id, &refs).await
 }
 
-/// f32 经 serde_json 会先转 f64 再按 f64 最短表示打印（281.1 变 281.1000061035156），
-/// 用 f32 自己的最短表示还原成干净小数
+/// serde_json prints an f32 by widening to f64 with f64's shortest representation (281.1 becomes 281.1000061035156),
+/// so re-render with f32's own shortest representation to get the clean decimal back
 fn f32_json(value: f64) -> Value {
 	format!("{}", value as f32)
 		.parse::<f64>()
@@ -1082,7 +1401,7 @@ pub(crate) fn chapter_json(row: &ChapterRow, progress: Option<&ChapterProgress>)
 }
 
 pub(crate) fn progress_of(row: &ChapterUserRow) -> Option<ChapterProgress> {
-	// last_page_read 列非空，LEFT JOIN 出 NULL 即用户行不存在
+	// The last_page_read column is non-null, so a NULL from the LEFT JOIN means the user row does not exist
 	row.last_page_read.map(|last_page_read| ChapterProgress {
 		last_page_read,
 		is_read: row.is_read.unwrap_or(false),
@@ -1093,24 +1412,51 @@ pub(crate) fn progress_of(row: &ChapterUserRow) -> Option<ChapterProgress> {
 
 async fn get_manga(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
 	let mut row = manga_row(&state.pool, id).await?;
 	if wants_refresh(&query) {
+		// Local-source refresh = rescan the directory; no source call to stream, ndjson gets the buffered response too
+		if crate::source::source_is_local(&state.pool, row.source_id).await? {
+			let mut update = crate::local::manga_update(&state.local_dirs(row.source_id).await?, &state.local_zip, &row.key).await?;
+			update.manga.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
+			let mut conn = state.pool.acquire().await?;
+			upsert_manga(&mut conn, row.source_id, &update.manga, true, true, false).await?;
+			crate::local::store_epub_divina(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.epub_divina,
+			)
+			.await?;
+			row = manga_row(&state.pool, id).await?;
+			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
+		}
+		// opds-source refresh = re-pull the entry feed; like the local arm, nothing to stream
+		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
+			let mut updated = crate::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
+			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
+			let mut conn = state.pool.acquire().await?;
+			upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
+			row = manga_row(&state.pool, id).await?;
+			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
+		}
 		let handle = state.get_handle(row.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
 			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
 			let input = manga_from_row(&row);
 			let source_id = row.source_id;
+			let user_id = user.id;
 			let call = tokio::spawn(async move {
 				let updated = handle.get_manga_update_streaming(input, true, false, partial_tx).await?;
 				let mut conn = state.pool.acquire().await?;
 				upsert_manga(&mut conn, source_id, &updated, true, true, false).await?;
 				let row = manga_row(&state.pool, id).await?;
-				manga_json(&state, &row).await
+				manga_json(&state, user_id, &row).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
 			return Ok(partial::ndjson_response(line_rx));
@@ -1122,7 +1468,7 @@ async fn get_manga(
 		upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
 		row = manga_row(&state.pool, id).await?;
 	}
-	Ok(Json(manga_json(&state, &row).await?).into_response())
+	Ok(Json(manga_json(&state, user.id, &row).await?).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1132,9 +1478,10 @@ pub struct UpdateMangaRequest {
 	pub incognito: Option<bool>,
 }
 
-/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法值 400；空 body 视为无操作
+/// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid values is 400; an empty body is a no-op
 async fn update_manga(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
@@ -1152,44 +1499,85 @@ async fn update_manga(
 			.await?;
 	}
 	if let Some(incognito) = patch.incognito {
-		// manga_user 行可能不存在（未入库）：单本隐身不依赖入库状态，upsert 建行
+		// The manga_user row may not exist (not in library): per-manga incognito does not depend on library state, upsert creates the row
 		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, 1, ?)
+			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET incognito = excluded.incognito",
 		)
 		.bind(id)
+		.bind(user.id)
 		.bind(incognito)
 		.execute(&state.pool)
 		.await?;
 	}
 	let row = manga_row(&state.pool, id).await?;
-	Ok(Json(manga_json(&state, &row).await?))
+	Ok(Json(manga_json(&state, user.id, &row).await?))
 }
 
 async fn get_chapters(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
-	Query(query): Query<RefreshQuery>,
+	Query(query): Query<ChaptersQuery>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
+	let order_by = chapter_order_by(query.sort.as_deref(), query.order.as_deref())?;
 	let manga = manga_row(&state.pool, id).await?;
-	if wants_refresh(&query) {
+	if refresh_flag(query.refresh.as_deref()) {
+		// Local-source refresh = rescan the directory; chapter entries that fail to read go into the reconcile protection set, not treated as vanished-and-deleted
+		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
+			let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
+			let mut conn = state.pool.acquire().await?;
+			reconcile_chapters(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.protected,
+			)
+			.await?;
+			crate::local::store_epub_divina(
+				&mut conn,
+				id,
+				&update.manga.chapters.clone().unwrap_or_default(),
+				&update.epub_divina,
+			)
+			.await?;
+			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+				.bind(crate::model::unix_now())
+				.bind(id)
+			.execute(&mut *conn)
+			.await?;
+			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
+		}
+		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
+		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
+			let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+			let mut conn = state.pool.acquire().await?;
+			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
+			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+				.bind(crate::model::unix_now())
+				.bind(id)
+			.execute(&mut *conn)
+			.await?;
+			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
+		}
 		let handle = state.get_handle(manga.source_id).await?;
 		if partial::wants_ndjson(&headers) {
 			let (line_tx, line_rx) = mpsc::unbounded_channel();
 			let (partial_tx, partial_rx) = mpsc::unbounded_channel();
+			let user_id = user.id;
 			let call = tokio::spawn(async move {
 				let updated = handle
 					.get_manga_update_streaming(manga_from_row(&manga), false, true, partial_tx)
 					.await?;
 				let mut conn = state.pool.acquire().await?;
-				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
+				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 				sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 					.bind(crate::model::unix_now())
 					.bind(id)
 					.execute(&mut *conn)
 					.await?;
-				chapters_json(&state, id).await
+				chapters_json(&state, user_id, id, order_by).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
 			return Ok(partial::ndjson_response(line_rx));
@@ -1198,30 +1586,32 @@ async fn get_chapters(
 			.get_manga_update(manga_from_row(&manga), false, true)
 			.await?;
 		let mut conn = state.pool.acquire().await?;
-		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default()).await?;
+		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 			.bind(crate::model::unix_now())
 			.bind(id)
 			.execute(&mut *conn)
 			.await?;
 	}
-	Ok(Json(chapters_json(&state, id).await?).into_response())
+	Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response())
 }
 
-async fn chapters_json(state: &AppState, manga_id: i64) -> ApiResult<Value> {
-	let rows: Vec<ChapterUserRow> = sqlx::query_as(
+async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: &str) -> ApiResult<Value> {
+	let rows: Vec<ChapterUserRow> = sqlx::query_as(&format!(
 		"SELECT c.*, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter c
-		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = 1
-		 WHERE c.manga_id = ? ORDER BY c.source_order ASC",
-	)
+		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
+		 WHERE c.manga_id = ?{order_by}"
+	))
+	.bind(user_id)
 	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?;
 	let downloaded: HashSet<i64> = sqlx::query_scalar(
-		"SELECT chapter_id FROM chapter_user WHERE user_id = 1 AND is_downloaded = 1
+		"SELECT chapter_id FROM chapter_user WHERE user_id = ? AND is_downloaded = 1
 		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 	)
+	.bind(user_id)
 	.bind(manga_id)
 	.fetch_all(&state.pool)
 	.await?
@@ -1241,49 +1631,230 @@ async fn chapters_json(state: &AppState, manga_id: i64) -> ApiResult<Value> {
 
 async fn get_pages(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
 	chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, wants_refresh(&query)).await?;
+	if let Err(e) = state.downloads().enqueue_reader_ahead(id, user.id).await {
+		tracing::warn!(chapter_id = id, "reader-ahead enqueue failed: {}", e.message());
+	}
 	let mut out = Vec::with_capacity(pages.len());
-	for (index, content) in pages {
-		let mut value = serde_json::from_str::<Value>(&content)?;
+	for page in pages {
+		let mut value = serde_json::from_str::<Value>(&page.content)?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
-		object.insert("index".into(), json!(index));
+		object.insert("index".into(), json!(page.idx));
+		if let (Some(width), Some(height)) = (page.width, page.height) {
+			object.insert("width".into(), json!(width));
+			object.insert("height".into(), json!(height));
+		}
 		out.push(value);
 	}
 	Ok(Json(json!(out)))
 }
 
-async fn get_settings(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+/// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
+/// the library.* values reference the admin's category ids. New keys are added on both read and write sides together
+pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
+	"incognito.enabled",
+	"library.default_category",
+	"library.show_uncategorized",
+	"library.excluded_update_categories",
+	"library.excluded_download_categories",
+];
+
+pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
+	format!("user.{user_id}.{key}")
+}
+
+async fn get_settings(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<server_settings::ServerSettings>> {
 	let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM setting ORDER BY key")
 		.fetch_all(&state.pool)
 		.await?;
 	let mut map = serde_json::Map::new();
+	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
+		if key == "sync.instance_id" {
+			continue;
+		}
+		if key.starts_with("user.") {
+			if let Some(scoped) = key.strip_prefix(&own_prefix)
+				&& USER_SCOPED_SETTING_KEYS.contains(&scoped)
+			{
+				map.insert(scoped.into(), serde_json::from_str(&raw)?);
+			}
+			continue;
+		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
-	Ok(Json(Value::Object(map)))
+	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
+	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
+	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
+	map.insert(
+		crate::update::LIBRARY_UPDATE_INTERVAL_HOURS.into(),
+		json!(library.update_interval_hours),
+	);
+	map.insert(
+		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
+		json!(library.excluded_update_categories),
+	);
+	let download = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+	map.insert(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS.into(), json!(download.auto_download_new_chapters));
+	map.insert(crate::download::AUTO_DOWNLOAD_LIMIT.into(), json!(download.auto_download_limit));
+	map.insert(crate::download::DOWNLOAD_FORMAT.into(), json!(download.download_format));
+	map.insert(crate::download::DOWNLOAD_CONCURRENCY.into(), json!(download.download_concurrency));
+	map.insert(crate::download::DELETE_AFTER_MANUAL_READ.into(), json!(download.delete_after_manual_read));
+	map.insert(crate::download::DELETE_AFTER_READ.into(), json!(download.delete_after_read));
+	map.insert(crate::download::ALLOW_DELETE_BOOKMARKED.into(), json!(download.allow_delete_bookmarked));
+	map.insert(crate::download::AUTO_SKIP_MANGA_WITH_UNREAD.into(), json!(download.auto_skip_manga_with_unread));
+	map.insert(crate::download::AUTO_IGNORE_REUPLOADS.into(), json!(download.auto_ignore_reuploads));
+	map.insert(crate::download::DOWNLOAD_AHEAD.into(), json!(download.download_ahead));
+	map.insert(crate::download::DOWNLOAD_AHEAD_COUNT.into(), json!(download.download_ahead_count));
+	map.insert(
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES.into(),
+		json!(download.excluded_download_categories),
+	);
+	server_settings::ServerSettings::from_flat(&map).map(Json)
 }
 
-async fn put_settings(
-	State(state): State<Arc<AppState>>,
-	Json(body): Json<HashMap<String, Value>>,
-) -> ApiResult<Json<Value>> {
-	let mut tx = state.pool.begin().await?;
-	for (key, value) in &body {
+/// Validate and write a flat settings map. Shared by GET /settings and the backward-compatible
+/// flat-map variant of PUT /settings.
+pub(crate) async fn apply_settings(
+	state: &AppState,
+	user: &crate::auth::AuthUser,
+	body: &HashMap<String, Value>,
+) -> ApiResult<()> {
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	for (key, value) in body {
+		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
+			sqlx::query("DELETE FROM setting WHERE key = ?")
+				.bind(key)
+				.execute(&mut *tx)
+				.await?;
+			continue;
+		}
+		if let Some(result) = crate::update::validate_library_setting(key, value) {
+			result?;
+		}
+		if let Some(result) = crate::download::validate_download_setting(key, value) {
+			result?;
+		}
+		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
+		if key == "localDirs"
+			|| key == "localOneshotsDir"
+			|| key == "sync.instance_id"
+			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+		{
+			continue;
+		}
+		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
+		// rather than stored raw like the other keys; an empty array clears the override
+		if key == "local.dirs"
+			&& !value
+				.as_array()
+				.is_some_and(|dirs| dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty())))
+		{
+			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
+		}
+		// local.oneshots_dir marks oneshots directories (state.local_oneshots_dir); a string, empty clears the override
+		if key == "local.oneshots_dir" && !value.is_string() {
+			return Err(ApiError::bad_request("local.oneshots_dir must be a string"));
+		}
+		// library.default_category names the library page's initial chip: "all" / "uncategorized" / a category id
+		// in string form; a since-deleted id is pruned client-side, so any positive id stores
+		if key == "library.default_category"
+			&& !value.as_str().is_some_and(|v| {
+				v == "all" || v == "uncategorized" || v.parse::<i64>().is_ok_and(|id| id > 0)
+			})
+		{
+			return Err(ApiError::bad_request(
+				"library.default_category must be \"all\", \"uncategorized\" or a category id",
+			));
+		}
+		if key == "library.show_uncategorized" && !value.is_boolean() {
+			return Err(ApiError::bad_request("library.show_uncategorized must be a boolean"));
+		}
+		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
+		if key.starts_with("user.") {
+			continue;
+		}
+		let stored_key = match USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
+			true => user_setting_key(user.id, key),
+			false => key.clone(),
+		};
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 		)
-		.bind(key)
+		.bind(&stored_key)
 		.bind(serde_json::to_string(value)?)
 		.execute(&mut *tx)
 		.await?;
 	}
 	tx.commit().await?;
-	get_settings(State(state)).await
+	Ok(())
+}
+
+async fn put_settings(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	Json(mut body): Json<Value>,
+) -> ApiResult<Json<server_settings::ServerSettings>> {
+	// The local directories moved to the per-instance source settings (GET/PUT /sources/{id}/settings):
+	// a structured body still carrying the old `local` group fails loudly instead of silently doing nothing
+	if body.as_object().is_some_and(|map| map.contains_key("local")) {
+		return Err(ApiError::bad_request(
+			"local directories are now per-source: use the local source's own settings",
+		));
+	}
+	// readOnly was always server-injected; a stale client's full-object write simply drops it
+	if let Some(map) = body.as_object_mut() {
+		map.remove("readOnly");
+	}
+	let flat = match serde_json::from_value::<server_settings::ServerSettings>(body.clone()) {
+		Ok(settings) => settings.into_flat(),
+		Err(e)
+			if body.as_object().is_some_and(|map| {
+				server_settings::ROOT_GROUPS.iter().any(|key| map.contains_key(*key))
+			}) =>
+		{
+			return Err(ApiError::bad_request(format!("invalid settings body: {e}")));
+		}
+		Err(_) => {
+			// Fallback: accept the legacy flat dotted-key map for backward compatibility.
+			let map: HashMap<String, Value> = serde_json::from_value(body)
+				.map_err(|e| ApiError::bad_request(format!("invalid settings body: {e}")))?;
+			map
+		}
+	};
+	apply_settings(&state, &user, &flat).await?;
+	get_settings(State(state), Extension(user)).await
+}
+
+#[cfg(test)]
+mod tests {
+	use super::chapter_order_by;
+
+	#[test]
+	fn chapter_order_by_keys_and_directions() {
+		assert_eq!(chapter_order_by(None, None).unwrap(), " ORDER BY c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("source"), Some("asc")).unwrap(), " ORDER BY c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("source"), Some("desc")).unwrap(), " ORDER BY c.source_order DESC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("chapter"), None).unwrap(), " ORDER BY c.number DESC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("chapter"), Some("asc")).unwrap(), " ORDER BY c.number ASC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("date"), None).unwrap(), " ORDER BY c.date_uploaded DESC, c.source_order ASC, c.id ASC");
+		assert_eq!(chapter_order_by(Some("date"), Some("asc")).unwrap(), " ORDER BY c.date_uploaded ASC, c.source_order ASC, c.id ASC");
+	}
+
+	#[test]
+	fn chapter_order_by_rejects_unknown_values() {
+		assert!(chapter_order_by(Some("title"), None).is_err());
+		assert!(chapter_order_by(None, Some("up")).is_err());
+	}
 }

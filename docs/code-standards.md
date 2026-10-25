@@ -13,6 +13,12 @@ one; a PR that misses one gets a comment saying which.
 | A test never reaches the network or the real `data/` directory. | Sources and HTTP are served from local fixtures; the database is a temp file. |
 | A test that fails on `main` is a bug to fix now. | "Fails the same on main" is not a baseline. Fix it at its cause in a commit of its own, or file an issue, before shipping on top of it. |
 
+## Database migrations
+
+| Rule | What a reviewer looks at |
+| --- | --- |
+| An applied migration file never changes again — comment edits included. | sqlx checksums the whole file against `_sqlx_migrations` at startup; any byte change refuses to boot every existing deployment. Schema changes are new numbered files only. `db.rs:shipped_migrations_are_immutable` pins the shipped checksums; a PR touching an existing file under `crates/server/migrations/` is a stop. |
+
 ## Acceptance criteria
 
 A change is merged only when it shows each of these. A check that wasn't

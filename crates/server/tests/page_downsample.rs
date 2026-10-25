@@ -1,5 +1,6 @@
-//! 页图降采样契约：?width= 变体（尺寸/256 量化/磁盘缓存/不放大）与无参原图字节不变；
-//! 下载与 CBZ 打包不经过降采样分支，字节与今天一致
+//! Page image downsampling contract: ?width= variants (resizing / 256 quantization / disk cache /
+//! no upscaling) and byte-identical originals without the parameter; downloads and CBZ packing
+//! don't go through the downsampling branch, bytes stay as they are today
 mod common;
 
 use axum::Router;
@@ -14,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 
-// 对齐 issue 的 4K 页量级：3000x4500 RGBA ≈ 54MB
+// matches the issue's 4K page magnitude: 3000x4500 RGBA ≈ 54MB
 const BIG_W: u32 = 3000;
 const BIG_H: u32 = 4500;
 
@@ -126,18 +127,18 @@ async fn downsampled_variant_is_resized_quantized_and_cached() {
 	assert!(bytes.len() < big.len(), "variant must be smaller than original");
 	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
 
-	// 变体落盘：同桶再次请求不再回源
+	// the variant lands on disk: a same-bucket repeat request doesn't go back to the source
 	let (status, _, _) = request_full(&t.app, "GET", &format!("{page_url}?width=1536"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
 
-	// 宽度向上量化到 256 的整数倍：1500 与 1536 共用一个变体
+	// widths quantize up to a multiple of 256: 1500 and 1536 share one variant
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{page_url}?width=1500"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(decode_dims(&bytes), (1536, BIG_H * 1536 / BIG_W));
 	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
 
-	// 不同桶各存各的变体，互不污染
+	// different buckets keep their own variants without polluting each other
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{page_url}?width=256"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(decode_dims(&bytes), (256, BIG_H * 256 / BIG_W));
@@ -149,17 +150,17 @@ async fn original_bytes_untouched_without_width_or_when_narrow() {
 	let (t, chapter_id, upstream, big, small) = url_page_app().await;
 	let page_url = |idx: i64| format!("/api/v1/chapter/{chapter_id}/page/{idx}");
 
-	// 无 width 参数：原图字节逐字节直通
+	// no width parameter: original bytes pass through byte for byte
 	let (status, _, bytes) = request_full(&t.app, "GET", &page_url(0), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
 
-	// 请求宽度不小于原图：不放大，原字节直通
+	// requested width not smaller than the original: no upscaling, original bytes pass through
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=8192", page_url(0)), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
 
-	// 窄于请求宽度的图原样直通，且直通的 Url 页每次回源取新鲜原图
+	// an image narrower than the requested width passes through as-is, and a pass-through Url page refetches the fresh original from the source every time
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(1)), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, small);
@@ -167,6 +168,18 @@ async fn original_bytes_untouched_without_width_or_when_narrow() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, small);
 	assert_eq!(upstream.small_hits.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn svg_original_bytes_and_mime_pass_through() {
+	let (t, chapter_id, _upstream, _big, _small) = url_page_app().await;
+	let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#.to_vec();
+	let (port, _svg_upstream) = common::serve_bytes(vec![("/page.svg", "image/svg+xml", svg.clone())]).await;
+	rewrite_page(&t.db_path, chapter_id, 1, &format!("http://127.0.0.1:{port}/page.svg")).await;
+	let (status, headers, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["content-type"], "image/svg+xml");
+	assert_eq!(bytes, svg);
 }
 
 async fn canvas_app() -> TestApp {
@@ -221,19 +234,19 @@ async fn blob_variant_download_byte_identical_and_refresh_wipes_variants() {
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 物化 blob 换成合成大图（页行已指向 0.png，只换文件内容）
+	// swap the materialized blob for a synthetic big image (the page row already points at 0.png, only the file content changes)
 	let big = gradient_png(BIG_W, BIG_H);
 	let blob_dir = t.tmp.path().join("page-blobs").join(chapter_id.to_string());
 	std::fs::write(blob_dir.join("0.png"), &big).expect("overwrite blob");
 	let small_blob = std::fs::read(blob_dir.join("1.png")).expect("read small blob");
 	let page_url = |idx: i64| format!("/api/v1/chapter/{chapter_id}/page/{idx}");
 
-	// blob 路径降采样
+	// downsampling on the blob path
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(0)), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(decode_dims(&bytes), (1536, BIG_H * 1536 / BIG_W));
 
-	// 无参与窄页仍逐字节直通
+	// the no-parameter and narrow-page cases still pass through byte for byte
 	let (status, _, bytes) = request_full(&t.app, "GET", &page_url(0), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
@@ -241,7 +254,7 @@ async fn blob_variant_download_byte_identical_and_refresh_wipes_variants() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, small_blob);
 
-	// 下载/CBZ 不经过降采样分支：打包字节与 blob 逐字节一致
+	// downloads/CBZ don't go through the downsampling branch: packed bytes are byte-identical to the blob
 	let (status, _) = request(&t.app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(
@@ -280,7 +293,7 @@ async fn blob_variant_download_byte_identical_and_refresh_wipes_variants() {
 	}
 	assert_eq!(packed, big, "cbz page bytes must stay byte-identical");
 
-	// 整章刷新重写 blob 目录时降采样变体一并失效
+	// when a whole-chapter refresh rewrites the blob directory, the downsampled variants are invalidated along with it
 	assert!(blob_dir.join("variants").exists(), "variant cache must exist before refresh");
 	let (status, _) = request(
 		&t.app,

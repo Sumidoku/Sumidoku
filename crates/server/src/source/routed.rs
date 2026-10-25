@@ -1,27 +1,45 @@
 use crate::config::Config;
-use aidoku_wasm::{NetPolicy, NetRoute};
+use aidoku_wasm::{ClearanceReplay, NetPolicy, NetRoute};
 use reqwest::{Client, StatusCode, Url};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const MAX_ATTEMPTS: u32 = 3;
 
-/// NetPolicy 实装：direct > relay(TRAWL) > 已挑战 host(TRAWL) > 全局 proxy > direct。
-/// 直连撞 CF 挑战（403/503 + CF 头）经 trawl_escalation 升级，并把该 host 记为
-/// 「已挑战」——之后一律经 trawl：clearance 与解题浏览器的 UA 绑定，直连回放必被
-/// CF 拒绝，只能让 trawl 自己持有 clearance 与 UA（其 Tier 1 用纯 HTTP 回放，不再起
-/// 浏览器）。引擎（源 net 导入）与服务端直拉（封面/页图/下载）共用同一份路由。
+/// A challenged host stays routed through trawl this long before the next direct
+/// attempt re-solves: a transient solver failure (trawl restart, timeout, 500) must
+/// not pin the host to the proxy for the rest of the process lifetime
+const CHALLENGED_COOLDOWN: Duration = Duration::from_secs(300);
+
+/// NetPolicy implementation: direct > relay(TRAWL) > challenged host(TRAWL) > global proxy > direct.
+/// A direct hit on a CF challenge is first answered by a clearance solve through the trawl scrape
+/// API (net.browser_trawl): the answer's cf_clearance and the solving browser's user agent are
+/// cached per host and replayed on plain direct requests — CF binds the cookie to that UA, so the
+/// pair must travel together (aidoku-cf-relay's with_clearance does the same). Only when no solver
+/// is configured or the solve fails does the host fall back to the trawl MITM proxy and stay
+/// marked "challenged". The engine (source net imports) and server-side direct fetches
+/// (covers/page images/downloads) share this one routing.
 pub struct SumidokuNetPolicy {
 	user_agent: String,
 	direct_domains: Vec<String>,
 	relay_domains: Vec<String>,
 	trawl_proxy: Option<String>,
+	/// trawl session/scrape API address (http://…), from net.browser_trawl; also the clearance solver
+	trawl_api: Option<String>,
 	global_proxy: Option<String>,
 	allow_direct_fallback: bool,
+	browser_headers: bool,
 	ca_pem: Option<Vec<u8>>,
-	/// 撞过 CF 挑战、此后常走 trawl 的 host（进程内记忆，重启后首个请求重学一次）
-	challenged: RwLock<HashSet<String>>,
+	/// Hosts that hit a CF challenge and are routed through trawl; the timestamp (not set
+	/// membership alone) decides, so a host whose solver recovered is released back onto
+	/// direct after the cooldown instead of sticking to the proxy forever
+	challenged: RwLock<HashMap<String, Instant>>,
+	/// Hosts with a solve currently in flight; a concurrent request skips the duplicate
+	/// solve and falls back to the proxy path instead
+	solving: RwLock<HashSet<String>>,
+	/// Solved clearances by host, replayed direct; a refused one is dropped and re-solved
+	clearances: RwLock<HashMap<String, ClearanceReplay>>,
 }
 
 impl SumidokuNetPolicy {
@@ -42,10 +60,14 @@ impl SumidokuNetPolicy {
 			direct_domains: config.net.direct_domains.clone(),
 			relay_domains: config.net.relay_domains.clone(),
 			trawl_proxy: config.net.trawl_proxy.clone(),
+			trawl_api: config.net.browser_trawl.clone(),
 			global_proxy: config.net.proxy.clone(),
 			allow_direct_fallback: config.net.allow_direct_fallback,
+			browser_headers: config.net.browser_headers,
 			ca_pem,
-			challenged: RwLock::new(HashSet::new()),
+			challenged: RwLock::new(HashMap::new()),
+			solving: RwLock::new(HashSet::new()),
+			clearances: RwLock::new(HashMap::new()),
 		})
 	}
 
@@ -53,24 +75,33 @@ impl SumidokuNetPolicy {
 		list.iter().any(|d| host == d || host.ends_with(&format!(".{d}")))
 	}
 
-	/// 该 host 是否撞过 CF 挑战。精确匹配：镜像/子域各自撞一次就各自记一次，
-	/// 不做后缀扩散，免得把没被盾的同域图床也拖进代理。
+	/// Whether this host is currently routed through trawl after a CF challenge. Exact match:
+	/// each mirror/subdomain that hits a challenge is recorded for itself, with no suffix
+	/// spreading, so unshielded image hosts on the same domain are not dragged into the proxy.
+	/// Time-boxed: after the cooldown the host is released back to direct, where the next
+	/// challenge re-solves instead of sticking on the proxy for the process lifetime
 	fn is_challenged(&self, host: &str) -> bool {
-		self.challenged.read().expect("challenged lock").contains(host)
+		self.challenged
+			.read()
+			.expect("challenged lock")
+			.get(host)
+			.is_some_and(|since| since.elapsed() < CHALLENGED_COOLDOWN)
 	}
 
-	/// 记住撞过挑战的 host；只在真有 trawl 可升级时调用
+	/// Remembers a host that hit a challenge; only called when there really is a trawl to escalate to
 	fn mark_challenged(&self, host: &str) {
 		if host.is_empty() {
 			return;
 		}
-		let inserted = self
-			.challenged
-			.write()
-			.expect("challenged lock")
-			.insert(host.to_string());
-		if inserted {
-			tracing::info!(host, "cloudflare challenge seen, routing host through trawl");
+		{
+			let mut challenged = self.challenged.write().expect("challenged lock");
+			let fresh = !challenged.contains_key(host);
+			challenged.insert(host.to_string(), Instant::now());
+			// Released hosts must not linger in the map forever
+			challenged.retain(|_, since| since.elapsed() < CHALLENGED_COOLDOWN);
+			if fresh {
+				tracing::info!(host, "cloudflare challenge seen, routing host through trawl");
+			}
 		}
 	}
 
@@ -86,7 +117,8 @@ impl NetPolicy for SumidokuNetPolicy {
 			return NetRoute::Direct;
 		}
 		if let Some(proxy) = &self.trawl_proxy
-			&& (Self::domain_match(&self.relay_domains, host) || self.is_challenged(host))
+			&& (Self::domain_match(&self.relay_domains, host)
+				|| (self.is_challenged(host) && self.clearance_replay(host).is_none()))
 		{
 			return NetRoute::Proxy(proxy.clone());
 		}
@@ -100,19 +132,67 @@ impl NetPolicy for SumidokuNetPolicy {
 		Some(self.user_agent.clone())
 	}
 
+	fn browser_headers(&self, _url: &Url) -> bool {
+		self.browser_headers
+	}
+
 	fn ca_certificate(&self) -> Option<Vec<u8>> {
 		self.ca_pem.clone()
 	}
 
 	fn trawl_escalation(&self, url: &Url) -> Option<NetRoute> {
 		let host = url.host_str().unwrap_or_default();
-		// direct_domains 是「永不代理」的显式钉死，CF 升级同样让路
+		// direct_domains is an explicit "never proxy" pin; CF escalation yields to it too
 		if Self::domain_match(&self.direct_domains, host) {
 			return None;
 		}
 		let proxy = self.trawl_proxy.clone()?;
 		self.mark_challenged(host);
 		Some(NetRoute::Proxy(proxy))
+	}
+
+	fn clearance_replay(&self, host: &str) -> Option<ClearanceReplay> {
+		self.clearances
+			.read()
+			.expect("clearances lock")
+			.get(host)
+			.cloned()
+	}
+
+	fn solve_clearance(&self, url: &Url) -> Option<ClearanceReplay> {
+		let host = url.host_str().unwrap_or_default();
+		// direct_domains is an explicit "never touch" pin; solving yields to it too
+		if host.is_empty() || Self::domain_match(&self.direct_domains, host) {
+			return None;
+		}
+		let api = self.trawl_api.as_ref()?;
+		{
+			let mut solving = self.solving.write().expect("solving lock");
+			if !solving.insert(host.to_string()) {
+				// Another request is already solving this host; the caller falls back to
+				// the proxy path instead of starting a second browser session
+				tracing::debug!(host, "clearance solve already in flight, skipping");
+				return None;
+			}
+		}
+		let solved = (|| {
+			let replay = aidoku_wasm::browser::trawl::solve_clearance(api, host)?;
+			tracing::info!(host, "cloudflare clearance solved, replaying direct");
+			self.clearances
+				.write()
+				.expect("clearances lock")
+				.insert(host.to_string(), replay.clone());
+			Some(replay)
+		})();
+		self.solving.write().expect("solving lock").remove(host);
+		solved
+	}
+
+	fn clear_clearance(&self, host: &str) {
+		self.clearances
+			.write()
+			.expect("clearances lock")
+			.remove(host);
 	}
 }
 
@@ -131,7 +211,7 @@ impl std::fmt::Display for FetchError {
 	}
 }
 
-/// 服务端 async HTTP：按 policy 路由缓存 client、统一 UA、429/5xx 退避重试。
+/// Server-side async HTTP: policy-routed cached clients, uniform UA, 429/5xx backoff retries.
 pub struct RoutedClients {
 	policy: Arc<SumidokuNetPolicy>,
 	clients: RwLock<HashMap<NetRoute, Client>>,
@@ -157,7 +237,7 @@ impl RoutedClients {
 		if let Some(client) = self.clients.read().expect("clients lock").get(route) {
 			return Ok(client.clone());
 		}
-		let mut builder = Client::builder().use_rustls_tls();
+		let mut builder = base_builder();
 		if let NetRoute::Proxy(proxy_url) = route {
 			let proxy = reqwest::Proxy::all(proxy_url)
 				.map_err(FetchError::Network)?;
@@ -177,14 +257,15 @@ impl RoutedClients {
 		Ok(client)
 	}
 
-	/// 直接构造请求（不含源声明头）：UA/Accept-Language 用全局缺省
+	/// Builds a request directly (no source-declared headers): UA/Accept-Language use the global defaults
 	pub fn request(&self, method: reqwest::Method, url: &Url) -> Result<reqwest::RequestBuilder, FetchError> {
 		self.request_with(method, url, &[], None)
 	}
 
-	/// 带源声明 headers 的请求：源的同名头优先，缺省才补全局 UA 与 Accept-Language。
-	/// reqwest 的 header() 是 append，缺省值先塞会与源值并成两个同名头；CF 只认第一个
-	/// （默认值）→ 403，故一律「先判后补」（同 wasm net host）。
+	/// A request carrying source-declared headers: the source's same-named headers win, and only the missing
+	/// ones get the global UA and Accept-Language. reqwest's header() appends, so inserting the default first
+	/// would pair it with the source value as two same-named headers; CF only honors the first (the default)
+	/// → 403, hence always "check first, fill after" (same as the wasm net host).
 	pub fn request_with(
 		&self,
 		method: reqwest::Method,
@@ -193,21 +274,24 @@ impl RoutedClients {
 		accept_language: Option<&str>,
 	) -> Result<reqwest::RequestBuilder, FetchError> {
 		let client = self.client_for(url)?;
+		let replay = self.policy.clearance_replay(url.host_str().unwrap_or_default());
 		Ok(apply_default_headers(
 			client.request(method, url.clone()),
 			headers,
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
+			replay.as_ref(),
 		))
 	}
 
-	/// 带 429/5xx 退避（尊 Retry-After，上限 3 次）、CF 挑战 trawl 升级与可选直连回退的 GET
+	/// GET with 429/5xx backoff (honors Retry-After, capped at 3 attempts), CF-challenge trawl escalation, and optional direct fallback
 	pub async fn get(&self, url: &Url) -> Result<reqwest::Response, FetchError> {
 		self.get_with(url, None).await
 	}
 
-	/// 同 get，另为请求补 Accept-Language：宿主替 Aidoku 的 URLSession 补的设备 locale，
-	/// 缺失时部分源站 WAF 直接 403
+	/// Same as get, plus an Accept-Language for the request: the host-side substitute for the device locale
+	/// Aidoku's URLSession would add; some source sites' WAFs answer a flat 403 when it is missing
 	pub async fn get_with(
 		&self,
 		url: &Url,
@@ -215,6 +299,7 @@ impl RoutedClients {
 	) -> Result<reqwest::Response, FetchError> {
 		let via_proxy = matches!(self.policy.route_for(url), NetRoute::Proxy(_));
 		let mut attempt = 0;
+		let mut solved = false;
 		loop {
 			attempt += 1;
 			let result = self
@@ -232,13 +317,37 @@ impl RoutedClients {
 				}
 			};
 			let status = response.status();
-			// CF 升级先于退避：503 挑战页不该白烧直连的退避次数
-			if !via_proxy
-				&& aidoku_wasm::is_cf_challenge(status, response.headers())
-				&& let Some(route) = self.policy.trawl_escalation(url)
-			{
-				tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
-				return self.get_via(&route, url, accept_language).await;
+			if !via_proxy && aidoku_wasm::is_cf_challenge(status, response.headers()) {
+				// A cached clearance that still meets a challenge is stale: drop and re-solve
+				// once, replaying direct; the trawl proxy is the fallback when solving fails.
+				// Solving is blocking HTTP, so it runs off the runtime threads
+				if self
+					.policy
+					.clearance_replay(url.host_str().unwrap_or_default())
+					.is_some()
+				{
+					self.policy.clear_clearance(url.host_str().unwrap_or_default());
+				}
+				if !solved {
+					solved = true;
+					let policy = self.policy.clone();
+					let solve_url = url.clone();
+					let fresh = tokio::task::spawn_blocking(move || {
+						policy.solve_clearance(&solve_url)
+					})
+					.await
+					.ok()
+					.flatten();
+					if fresh.is_some() {
+						// The direct replay gets a fresh retry budget, matching the wasm net path
+						attempt = 0;
+						continue;
+					}
+				}
+				if let Some(route) = self.policy.trawl_escalation(url) {
+					tracing::info!(url = %url, status = %status, "cloudflare challenge, retrying via trawl");
+					return self.get_via(&route, url, accept_language).await;
+				}
 			}
 			let retry_after = response
 				.headers()
@@ -263,7 +372,7 @@ impl RoutedClients {
 		}
 	}
 
-	/// 指定路由的单发 GET，供 trawl 升级用：解题本身就是这次请求的重试，循环只会重复解题
+	/// Single-shot GET over a given route, for trawl escalation: the solve itself is this request's retry, so looping would just re-solve
 	async fn get_via(
 		&self,
 		route: &NetRoute,
@@ -276,6 +385,8 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
+			None,
 		)
 		.send()
 		.await
@@ -291,8 +402,7 @@ impl RoutedClients {
 		url: &Url,
 		accept_language: Option<&str>,
 	) -> Result<reqwest::Response, FetchError> {
-		let client = Client::builder()
-			.use_rustls_tls()
+		let client = base_builder()
 			.build()
 			.map_err(FetchError::Network)?;
 		let response = apply_default_headers(
@@ -300,6 +410,8 @@ impl RoutedClients {
 			&[],
 			self.policy.user_agent().unwrap_or_default(),
 			accept_language,
+			self.policy.browser_headers(url),
+			None,
 		)
 		.send()
 		.await
@@ -311,27 +423,81 @@ impl RoutedClients {
 	}
 }
 
-/// 组装默认头：源声明的同名头优先，缺省才补全局 User-Agent 与宿主 Accept-Language。
-/// 关键在「先判后补」——reqwest 的 header() 是 append，缺省值若先塞会与源值并成两个同名头。
+/// Client base shared by direct and proxied routes: rustls pinned in one place, each route only adds its own proxy/CA
+fn base_builder() -> reqwest::ClientBuilder {
+	Client::builder().use_rustls_tls()
+}
+
+/// Assembles the default headers: the source's same-named headers win, and only the missing ones get the
+/// global User-Agent, the browser header suite, and the host-side Accept-Language.
+/// The key is "check first, fill after" — reqwest's header() appends, so inserting a default first would pair it with the source value as two same-named headers.
+/// With a clearance replay the solver browser's UA wins outright (the cookie is bound to it), the
+/// Chrome-only suite headers are dropped and Accept becomes Firefox's navigation value (real
+/// Firefox has no sec-ch-ua and no signed-exchange), and cf_clearance leads the Cookie header.
 fn apply_default_headers(
 	builder: reqwest::RequestBuilder,
 	source_headers: &[(String, String)],
 	global_user_agent: String,
 	accept_language: Option<&str>,
+	browser_headers: bool,
+	replay: Option<&ClearanceReplay>,
 ) -> reqwest::RequestBuilder {
 	let has = |name: &str| {
 		source_headers
 			.iter()
 			.any(|(key, _)| key.eq_ignore_ascii_case(name))
 	};
-	let has_user_agent = has("user-agent");
 	let has_accept_language = has("accept-language");
 	let mut builder = builder;
-	if !has_user_agent {
-		builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+	match replay {
+		Some(replay) => {
+			builder = builder.header(reqwest::header::USER_AGENT, replay.user_agent.clone());
+		}
+		None if !has("user-agent") => {
+			builder = builder.header(reqwest::header::USER_AGENT, global_user_agent);
+		}
+		None => {}
 	}
+	if browser_headers {
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			if replay.is_some() && aidoku_wasm::CHROME_ONLY_HEADERS.contains(&name) {
+				continue;
+			}
+			let value = if replay.is_some() && name == "accept" {
+				aidoku_wasm::FIREFOX_DOCUMENT_ACCEPT
+			} else {
+				value
+			};
+			if !has(name) {
+				builder = builder.header(name, value);
+			}
+		}
+	}
+	let replay_clearance = replay
+		.filter(|r| !r.clearance.is_empty())
+		.map(|r| r.clearance.clone());
 	for (name, value) in source_headers {
+		if replay_clearance.is_some() && name.eq_ignore_ascii_case("cookie") {
+			continue;
+		}
 		builder = builder.header(name, value);
+	}
+	if let Some(clearance) = replay_clearance {
+		let existing = source_headers
+			.iter()
+			.find(|(key, _)| key.eq_ignore_ascii_case("cookie"))
+			.map(|(_, value)| value.as_str())
+			.unwrap_or_default();
+		let mut merged = format!("{}={clearance}", aidoku_wasm::CF_CLEARANCE_COOKIE);
+		for part in existing
+			.split(';')
+			.map(str::trim)
+			.filter(|part| !part.is_empty() && !part.starts_with("cf_clearance="))
+		{
+			merged.push_str("; ");
+			merged.push_str(part);
+		}
+		builder = builder.header(reqwest::header::COOKIE, merged);
 	}
 	if !has_accept_language
 		&& let Some(value) = accept_language.filter(|value| !value.is_empty())
@@ -360,7 +526,7 @@ mod tests {
 			c.net.proxy = Some("http://global:8080".into());
 		});
 		let route = |u: &str| p.route_for(&Url::parse(u).unwrap());
-		// direct 优先于 relay
+		// direct wins over relay
 		assert_eq!(route("https://direct.example.com/x"), NetRoute::Direct);
 		assert_eq!(route("https://cdn.direct.example.com/x"), NetRoute::Direct);
 		assert_eq!(
@@ -398,7 +564,7 @@ mod tests {
 			p.trawl_escalation(&Url::parse("https://cf.example.com/x").unwrap()),
 			Some(NetRoute::Proxy("http://trawl:8192".into()))
 		);
-		// 钉死直连的 host 连 CF 升级也不走代理
+		// A host pinned direct does not go through the proxy even for CF escalation
 		assert_eq!(
 			p.trawl_escalation(&Url::parse("https://pinned.example.com/x").unwrap()),
 			None
@@ -423,12 +589,12 @@ mod tests {
 			p.trawl_escalation(&url),
 			Some(NetRoute::Proxy("http://trawl:8192".into()))
 		);
-		// 升级过即记住：此后同一 host 一律走 trawl
+		// Once escalated it is remembered: the same host goes via trawl from then on
 		assert_eq!(
 			p.route_for(&url),
 			NetRoute::Proxy("http://trawl:8192".into())
 		);
-		// 精确匹配，不扩散到同域其它子域
+		// Exact match, no spreading to sibling subdomains
 		assert_eq!(
 			p.route_for(&Url::parse("https://www.cf.example.com/x").unwrap()),
 			NetRoute::Direct
@@ -460,8 +626,8 @@ mod tests {
 		heads: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 	}
 
-	/// 裸 HTTP/1.1 mock：每连接一个请求（响应带 connection: close），
-	/// handler 收请求头文本、回完整响应。源站与 trawl 代理共用。
+	/// Bare HTTP/1.1 mock: one request per connection (responses carry connection: close);
+	/// the handler receives the request-head text and returns a full response. Shared by the origin site and the trawl proxy.
 	fn mock_server(handler: impl Fn(&str) -> String + Send + 'static) -> MockServer {
 		use std::io::{Read, Write};
 		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
@@ -556,8 +722,8 @@ mod tests {
 		let clients = RoutedClients::new(policy(|_| {}));
 		let url = Url::parse(&format!("http://{}/m1.webp", origin.addr)).unwrap();
 
-		// 源在 get_image_request 里自带的 UA 必须赢过全局值，且只能有一个：
-		// reqwest 的 header() 是 append，CF 只读第一个，重复即 403。
+		// The UA the source itself sends in get_image_request must beat the global value, and there must be exactly one:
+		// reqwest's header() appends, CF only reads the first, and a duplicate means 403.
 		let headers = vec![
 			("User-Agent".to_string(), "NoyAcg/3.0".to_string()),
 			("Referer".to_string(), "https://noymanga.com/".to_string()),
@@ -628,6 +794,74 @@ mod tests {
 			.collect();
 		assert_eq!(al.len(), 1, "源 Accept-Language 不得被追加成两个: {head}");
 		assert_eq!(al[0].trim(), "accept-language: ja-jp", "{head}");
+	}
+
+	#[tokio::test]
+	async fn get_with_sends_browser_header_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/manga/1", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, value) in aidoku_wasm::BROWSER_HEADERS {
+			let expected = format!("{}: {}", name, value.to_ascii_lowercase());
+			assert!(head.contains(&expected), "缺浏览器头 {name}: {head}");
+		}
+	}
+
+	#[tokio::test]
+	async fn request_with_keeps_source_suite_headers() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|_| {}));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		// Suite members the source itself sends (Accept / Sec-Fetch-Site, common on API requests) must beat the
+		// suite defaults, and there must be exactly one: inserting the default first would pair into two same-named headers
+		let headers = vec![
+			("Accept".to_string(), "application/json".to_string()),
+			("Sec-Fetch-Site".to_string(), "same-origin".to_string()),
+		];
+		clients
+			.request_with(reqwest::Method::GET, &url, &headers, None)
+			.expect("build")
+			.send()
+			.await
+			.expect("send");
+
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		let accepts: Vec<&str> = head.lines().filter(|l| l.starts_with("accept:")).collect();
+		assert_eq!(accepts.len(), 1, "Accept 不得被追加成两个: {head}");
+		assert_eq!(accepts[0].trim(), "accept: application/json", "{head}");
+		let sites: Vec<&str> = head
+			.lines()
+			.filter(|l| l.starts_with("sec-fetch-site:"))
+			.collect();
+		assert_eq!(sites.len(), 1, "Sec-Fetch-Site 不得被追加成两个: {head}");
+		assert_eq!(sites[0].trim(), "sec-fetch-site: same-origin", "{head}");
+		// Suite members the source did not set must still be filled in
+		assert!(head.contains("sec-ch-ua:"), "{head}");
+		assert!(head.contains("upgrade-insecure-requests: 1"), "{head}");
+	}
+
+	#[tokio::test]
+	async fn browser_headers_disabled_omits_suite() {
+		let origin = mock_server(|_head| respond("200 OK", &[], "img"));
+		let clients = RoutedClients::new(policy(|c| c.net.browser_headers = false));
+		let url = Url::parse(&format!("http://{}/api/list", origin.addr)).unwrap();
+
+		clients.get(&url).await.expect("get");
+		let head = origin.heads().join("\n").to_ascii_lowercase();
+		for &(name, _) in aidoku_wasm::BROWSER_HEADERS {
+			if name == "accept" {
+				// reqwest itself falls back to accept: */*, so we can only pin the suite value as absent
+				assert!(!head.contains("accept: text/html"), "{head}");
+				continue;
+			}
+			assert!(!head.contains(&format!("{name}:")), "旋钮关掉后不该出现 {name}: {head}");
+		}
+		// The toggle only governs the suite: the global UA is still filled
+		assert!(head.contains("user-agent:"), "{head}");
 	}
 
 	#[tokio::test]
@@ -717,10 +951,277 @@ mod tests {
 		assert_eq!(origin.hits(), 1, "首个请求直连撞挑战后升级");
 		assert_eq!(trawl.hits(), 1);
 
-		// host 已记住：后续请求直接走 trawl，不再直连源站碰挑战
+		// The host is remembered: later requests go straight via trawl instead of hitting the challenge at the origin
 		let second = clients.get(&url).await.expect("second get");
 		assert_eq!(second.text().await.expect("body"), "solved-via-trawl");
 		assert_eq!(origin.hits(), 1, "常走 trawl 后源站不再被直连");
 		assert_eq!(trawl.hits(), 2);
+	}
+
+	#[test]
+	fn solved_clearance_unsticks_the_proxy_route() {
+		let p = policy(|c| {
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		p.trawl_escalation(&url);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into())
+		);
+		p.clearances
+			.write()
+			.expect("clearances lock")
+			.insert(
+				"cf.example.com".into(),
+				ClearanceReplay {
+					user_agent: "ua".into(),
+					clearance: "ok".into(),
+				},
+			);
+		assert_eq!(p.route_for(&url), NetRoute::Direct, "已解题的 host 回直连");
+		p.clear_clearance("cf.example.com");
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into()),
+			"clearance 被丢弃后回到代理"
+		);
+	}
+
+	#[test]
+	fn challenged_host_releases_after_cooldown() {
+		let p = policy(|c| {
+			c.net.trawl_proxy = Some("http://trawl:8192".into());
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		p.trawl_escalation(&url);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Proxy("http://trawl:8192".into()),
+			"刚标记的 host 在冷却期内走代理"
+		);
+		// The solver has recovered meanwhile: a stale challenge mark releases the host back
+		// to direct, where the next CF challenge re-solves instead of sticking on the proxy
+		p.challenged
+			.write()
+			.expect("challenged lock")
+			.insert(
+				"cf.example.com".into(),
+				Instant::now() - CHALLENGED_COOLDOWN - Duration::from_secs(1),
+			);
+		assert_eq!(
+			p.route_for(&url),
+			NetRoute::Direct,
+			"冷却期后回到直连重新解题"
+		);
+	}
+
+	#[test]
+	fn in_flight_solve_is_not_repeated() {
+		let solver = mock_server(|_head| {
+			respond(
+				"200 OK",
+				&["content-type: application/json"],
+				r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
+			)
+		});
+		let p = policy(|c| {
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let url = Url::parse("https://cf.example.com/x").unwrap();
+		// Another request is already solving this host
+		p.solving
+			.write()
+			.expect("solving lock")
+			.insert("cf.example.com".into());
+		assert_eq!(p.solve_clearance(&url), None, "在解时不重复解题");
+		assert_eq!(solver.hits(), 0, "solver 不被重复调用");
+	}
+
+	#[tokio::test]
+	async fn get_solves_clearance_and_replays_direct() {
+		let origin = mock_server(|head| {
+			if head.contains("cf_clearance=ok") {
+				respond("200 OK", &["content-type: image/jpeg"], "img")
+			} else {
+				respond(
+					"403 Forbidden",
+					&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+					"challenged",
+				)
+			}
+		});
+		let solver = mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				// solve_clearance creates the host session before scraping (201 created /
+				// 409 already alive); any other status makes the solve fail
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond(
+					"200 OK",
+					&["content-type: application/json"],
+					r#"{"cookies":[{"name":"cf_clearance","value":"ok"}],"userAgent":"Camoufox/152"}"#,
+				)
+			}
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &[], "unexpected"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients.get(&url).await.expect("get");
+		assert_eq!(response.status(), StatusCode::OK);
+		assert_eq!(response.text().await.expect("body"), "img");
+		assert_eq!(origin.hits(), 2, "挑战一次，解题后直连重放");
+		assert_eq!(solver.hits(), 2, "解题一次：先幂等建会话，再 /scrape 解题");
+		assert_eq!(trawl.hits(), 0, "解题成功就不该落到 trawl 代理");
+		let head = origin.heads()[1].to_ascii_lowercase();
+		assert!(head.contains("user-agent: camoufox/152"), "UA: {head}");
+		assert!(!head.contains("sec-ch-ua:"), "Firefox 不发 sec-ch-ua: {head}");
+		assert!(!head.contains("signed-exchange"), "Firefox 不发 signed-exchange: {head}");
+		assert!(
+			head.contains(&format!("accept: {}", aidoku_wasm::FIREFOX_DOCUMENT_ACCEPT)),
+			"Firefox Accept: {head}"
+		);
+		assert!(head.contains("cookie: cf_clearance=ok"), "cookie: {head}");
+
+		// The clearance is cached: the next request goes straight direct with the replay
+		let second = clients.get(&url).await.expect("second get");
+		assert_eq!(second.status(), StatusCode::OK);
+		assert_eq!(origin.hits(), 3, "缓存命中，不再撞挑战");
+		assert_eq!(solver.hits(), 2, "缓存命中，不重复解题");
+	}
+
+	#[tokio::test]
+	async fn failed_solve_falls_back_to_trawl_proxy() {
+		let origin = mock_server(|_head| {
+			respond(
+				"403 Forbidden",
+				&["cf-ray: 9a1b2c-NRT", "server: cloudflare", "content-type: text/html"],
+				"challenged",
+			)
+		});
+		let solver = mock_server(|head| {
+			if head.starts_with("POST /sessions") {
+				respond(
+					"201 Created",
+					&["content-type: application/json"],
+					r#"{"id":"s","createdAt":0,"expiresAt":0,"busy":false,"keepPage":true}"#,
+				)
+			} else {
+				respond("500 Internal Server Error", &[], "busy")
+			}
+		});
+		let trawl = mock_server(|_head| respond("200 OK", &["content-type: text/html"], "solved-via-trawl"));
+		let policy = policy(|c| {
+			c.net.trawl_proxy = Some(format!("http://{}", trawl.addr));
+			c.net.browser_trawl = Some(format!("http://{}", solver.addr));
+		});
+		let clients = RoutedClients::new(policy);
+		let url = Url::parse(&format!("http://{}/cover.jpg", origin.addr)).unwrap();
+
+		let response = clients.get(&url).await.expect("get");
+		assert_eq!(response.text().await.expect("body"), "solved-via-trawl");
+		assert_eq!(solver.hits(), 2, "先建会话再解题：会话创建成功、解题 500");
+		assert_eq!(trawl.hits(), 1, "解题失败落到 trawl 代理");
+	}
+
+	/// Live smoke test: hits real sites, not part of the fixed suite (run manually with nextest --run-ignored all).
+	/// Pins three things: the protocol echo negotiates h2, passive CF sample sites answer 200 direct without a challenge page, and a normal site shows no regression.
+	#[tokio::test]
+	#[ignore = "打真实站点，只手动跑"]
+	async fn smoke_direct_path_fingerprint() {
+		let clients = RoutedClients::new(policy(|_| {}));
+
+		let peet = Url::parse("https://tls.peet.ws/api/all").unwrap();
+		let response = clients.get(&peet).await.expect("tls.peet.ws");
+		assert_eq!(format!("{:?}", response.version()), "HTTP/2.0", "协议回声应协商 h2");
+		let body = response.text().await.expect("peet body");
+		assert!(body.contains("\"http_version\": \"h2\""), "{body}");
+		println!("tls.peet.ws: negotiated HTTP/2.0");
+
+		for site in ["https://toonily.com/", "https://bakamh.com/"] {
+			let url = Url::parse(site).unwrap();
+			let response = clients.get(&url).await.unwrap_or_else(|e| panic!("{site}: {e}"));
+			assert_eq!(response.status(), StatusCode::OK, "{site}");
+			let body = response.text().await.unwrap_or_else(|e| panic!("{site} body: {e}"));
+			assert!(!body.contains("Just a moment"), "{site} 不应是挑战页");
+			assert!(
+				body.len() > 20_000,
+				"{site} 正文过短（{} 字节），疑似挑战页",
+				body.len()
+			);
+			println!("{site} 200, {} bytes", body.len());
+		}
+
+		let mangadex = Url::parse("https://mangadex.org/").unwrap();
+		let response = clients.get(&mangadex).await.expect("mangadex");
+		assert_eq!(response.status(), StatusCode::OK, "mangadex 无回归");
+		println!("https://mangadex.org/ 200");
+	}
+
+	/// The direct client base (base_builder + test CA) must negotiate HTTP/2 against an h2-only origin:
+	/// the local rustls echo offers only h2 as ALPN — a client without http2 cannot even complete the TLS handshake.
+	#[tokio::test]
+	async fn direct_client_negotiates_http2() {
+		use tokio::io::AsyncReadExt;
+
+		let rcgen::CertifiedKey { cert, key_pair } =
+			rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("self-signed");
+		let cert_der = cert.der().clone();
+		let mut server_config = rustls::ServerConfig::builder()
+			.with_no_client_auth()
+			.with_single_cert(
+				vec![cert_der.clone()],
+				rustls::pki_types::PrivateKeyDer::Pkcs8(
+					rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+				),
+			)
+			.expect("server config");
+		server_config.alpn_protocols = vec![b"h2".to_vec()];
+		let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+		let port = listener.local_addr().expect("local addr").port();
+		let (seen_tx, seen_rx) = tokio::sync::oneshot::channel();
+		tokio::spawn(async move {
+			let (stream, _) = listener.accept().await.expect("accept");
+			let negotiated = match acceptor.accept(stream).await {
+				Ok(mut tls) => {
+					let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+					let mut preface = vec![0u8; 24];
+					let _ = tls.read_exact(&mut preface).await;
+					Some((alpn, preface))
+				}
+				Err(_) => None,
+			};
+			let _ = seen_tx.send(negotiated);
+		});
+
+		let client = base_builder()
+			.add_root_certificate(reqwest::Certificate::from_der(cert_der.as_ref()).expect("cert"))
+			.build()
+			.expect("client");
+		let url = Url::parse(&format!("https://localhost:{port}/")).unwrap();
+		// The echo never answers any request: it closes as soon as the h2 preface arrives, so send's outcome is irrelevant
+		let _ = client.get(url).send().await;
+
+		let negotiated = tokio::time::timeout(Duration::from_secs(10), seen_rx)
+			.await
+			.expect("echo 应收到一次连接")
+			.expect("seen channel");
+		let (alpn, preface) = negotiated.expect("客户端不开 http2 时 ALPN 无交集，TLS 握手会失败");
+		assert_eq!(alpn.as_deref(), Some(b"h2".as_slice()), "ALPN 应选中 h2");
+		assert_eq!(
+			preface,
+			b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".to_vec(),
+			"客户端应发出 h2 client preface"
+		);
 	}
 }

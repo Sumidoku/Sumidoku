@@ -16,7 +16,7 @@ const PAGE_MAX_AGE: u64 = 3600;
 
 #[derive(Deserialize)]
 pub struct PageQuery {
-	/// 请求降采样变体的目标宽度；缺省/0 = 原图字节直通
+	/// Target width for a requested downsampled variant; absent/0 = pass the original bytes through
 	width: Option<u32>,
 }
 
@@ -27,10 +27,10 @@ pub async fn get_page(
 ) -> ApiResult<Response> {
 	let chapter = chapter_row(&state.pool, id).await?;
 	let pages = load_pages(&state, id, false).await?;
-	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
+	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
-	let stored: Value = serde_json::from_str(content)?;
+	let stored: Value = serde_json::from_str(&page.content)?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());
@@ -40,7 +40,7 @@ pub async fn get_page(
 	if let Some(b) = bucket {
 		match read_variant(&state.config.page_blobs_dir(), id, index, b).await {
 			Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
-			// pass 命中 = 该桶不缩（窄图/解不了码），跳变体逻辑走原路径
+			// A pass hit = this bucket does not resize (narrow image/undecodable); skip the variant logic and take the original path
 			Some(VariantHit::PassThrough) => bucket = None,
 			None => {}
 		}
@@ -48,7 +48,7 @@ pub async fn get_page(
 
 	let (bytes, mime) = page_image_bytes(&state, &chapter, &content).await?;
 	if let Some(b) = bucket {
-		// 解码+缩放是 CPU 重活，挪阻塞线程；原字节随闭包带回供直通分支用
+		// Decode+resize is CPU-heavy work, moved to a blocking thread; the original bytes ride the closure back for the pass-through branch
 		let (resized, original) = tokio::task::spawn_blocking(move || {
 			let resized = downsample_png(&bytes, b);
 			(resized, bytes)
@@ -74,13 +74,26 @@ pub async fn get_page(
 	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
 }
 
-/// 三种图像页内容取原图字节（Image 物化 blob / Zip 解包 / Url 回源），与下载路径同源
+/// Fetches the original bytes of an image page's content (Image materialized blob / Local local file / Zip unpack / Url source fetch), sharing the download path's sources
 async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
 	if let Some(name) = content.get("Image").and_then(Value::as_str) {
 		let bytes = page_image_blob(state, chapter.id, name).await?;
 		return Ok((bytes, "image/png".to_string()));
 	}
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	if let Some(entry) = content.get("Local").and_then(Value::as_str) {
+		return crate::local::read_page(
+			&state.local_dirs(manga.source_id).await?,
+			&state.local_zip,
+			&manga.key,
+			&chapter.key,
+			entry,
+		)
+		.await;
+	}
+	if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
+		return crate::opds_source::read_cbz_page(state, &manga, chapter, entry).await;
+	}
 	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
 		let Some(zip_url) = zip.first().and_then(Value::as_str) else {
 			return Err(ApiError::bad_request("invalid zip page content"));

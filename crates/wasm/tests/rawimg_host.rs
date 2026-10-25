@@ -1,12 +1,14 @@
-//! 图像处理器拿原始响应字节的契约测试（issue #116）：
-//! 声明处理器的源，宿主跳过自己的解码，data() 必须是响应原始字节——
-//! 密文（不可解码）逐字节原样交给处理器，明文 PNG 同样原样给。
-//! fixture 源在 tests/fixtures/rawimg-src/（no_std cdylib），重建方式：
+//! Contract tests for the image-processor input (issue #116), aligned with AidokuRunner's
+//! `store(value:)` semantics: ciphertext the host cannot decode enters the processor
+//! byte-for-byte as-is; a decodable response enters the processor as pixels (data() is a
+//! PNG re-encode, width/height/canvas usable — jmcomic's decryption depends on this path).
+//! The fixture source lives in tests/fixtures/rawimg-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
-//! 复制为 tests/fixtures/rawimg/main.wasm。
-//! 内嵌 plain.png（2x2 RGBA 红绿/蓝白）是手写 PNG 块生成的：
-//! IHDR(2,2,bitdepth 8,color 6) + IDAT(zlib(每行 filter 0 + 像素))。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
+//! over tests/fixtures/rawimg/main.wasm.
+//! The embedded plain.png (2x2 RGBA, red-green / blue-white) was generated from
+//! hand-written PNG chunks:
+//! IHDR(2,2,bitdepth 8,color 6) + IDAT(zlib(each row: filter 0 + pixels)).
 use aidoku_wasm::{
 	DirectPolicy, NoopCookieSink, NoopDefaultsSink, ProcessImageInput, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -18,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
-/// 与 rawimg-src/src/lib.rs 对账的同一密钥与明文
+/// The same key and plaintext as in rawimg-src/src/lib.rs, kept in agreement
 const KEY: u8 = 0x5A;
 const PLAIN_PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0,
@@ -43,7 +45,6 @@ async fn spawn_fixture() -> (SourceHandle, aidoku_wasm::SourceFeatures) {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))
@@ -61,7 +62,7 @@ fn input(bytes: Vec<u8>) -> ProcessImageInput {
 	}
 }
 
-/// 处理器输出的 PNG 必须就是 plain.png 的 2x2 像素（解密→建图→重编全链路对账）
+/// Output of the ciphertext branch: decrypt and build the image → plain.png's 2x2 pixels (the full decrypt → build → re-encode chain is reconciled)
 fn assert_plain_pixels(png: &[u8], label: &str) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
@@ -81,7 +82,27 @@ fn assert_plain_pixels(png: &[u8], label: &str) {
 	}
 }
 
-/// 密文（宿主解不出）也必须进处理器：解密建图后输出正常 PNG
+/// Output for a decodable input: the 2x2's two rows swapped via the canvas (red-green/blue-white → blue-white/red-green)
+fn assert_swapped_pixels(png: &[u8], label: &str) {
+	let image = ImageReader::new(Cursor::new(png))
+		.with_guessed_format()
+		.expect("png format")
+		.decode()
+		.expect("png decode")
+		.to_rgba8();
+	assert_eq!(image.dimensions(), (2, 2), "{label} dimensions");
+	for (x, y, px) in image.enumerate_pixels() {
+		let expected = match (x, y) {
+			(0, 0) => [0, 0, 255, 255],
+			(1, 0) => [255, 255, 255, 255],
+			(0, 1) => [255, 0, 0, 255],
+			_ => [0, 255, 0, 255],
+		};
+		assert_eq!(px.0, expected, "{label} pixel ({x},{y})");
+	}
+}
+
+/// Ciphertext (undecodable by the host) must also enter the processor: after decrypting and building the image, the output is a normal PNG
 #[tokio::test]
 async fn processors_receive_undecodable_bytes_raw() {
 	let (handle, features) = spawn_fixture().await;
@@ -101,20 +122,45 @@ async fn processors_receive_undecodable_bytes_raw() {
 	assert_plain_pixels(&cover_png, "cover cipher");
 }
 
-/// 对照组：可解码的响应同样给原始字节（fixture 逐字节比对，重编过的 PNG 对不上）
+/// For a decodable input the host gives pixels: the fixture checks the size imports and
+/// swaps the two rows via the canvas (a miniature of jmcomic's strip reassembly); the
+/// output must be the swapped pixels
 #[tokio::test]
-async fn processors_receive_decodable_bytes_raw_too() {
+async fn processors_receive_decodable_bytes_as_pixels() {
 	let (handle, _) = spawn_fixture().await;
 
 	let page_png = handle
 		.process_page_image(input(PLAIN_PNG.to_vec()), None)
 		.await
 		.expect("process page plain");
-	assert_plain_pixels(&page_png, "page plain");
+	assert_swapped_pixels(&page_png, "page plain");
 
 	let cover_png = handle
 		.process_cover_image(input(PLAIN_PNG.to_vec()))
 		.await
 		.expect("process cover plain");
-	assert_plain_pixels(&cover_png, "cover plain");
+	assert_swapped_pixels(&cover_png, "cover plain");
+}
+
+/// The source passes the input image through unchanged (same as jmcomic's old-chapter/gif
+/// branch): a decodable one yields a pixel PNG, an undecodable one is handed back as the
+/// original bytes (consistent with Aidoku's fallback to the raw data)
+#[tokio::test]
+async fn processor_passthrough_returns_input_unchanged() {
+	let (handle, _) = spawn_fixture().await;
+	let ctx: aidoku::PageContext = [("mode".to_string(), "passthrough".to_string())]
+		.into_iter()
+		.collect();
+
+	let page_png = handle
+		.process_page_image(input(PLAIN_PNG.to_vec()), Some(ctx.clone()))
+		.await
+		.expect("passthrough plain");
+	assert_plain_pixels(&page_png, "passthrough plain");
+
+	let raw = handle
+		.process_page_image(input(cipher()), Some(ctx))
+		.await
+		.expect("passthrough cipher");
+	assert_eq!(raw, cipher(), "undecodable passthrough must return raw bytes");
 }

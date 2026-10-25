@@ -14,8 +14,10 @@ pub enum Error {
 	Source(#[from] aidoku_wasm::Error),
 	#[error("auth: {0}")]
 	Auth(String),
-	#[error("config: {0}")]
-	Config(String),
+	#[error("sync: {0}")]
+	Sync(String),
+	#[error("local: {0}")]
+	Local(String),
 }
 
 #[derive(Debug)]
@@ -38,7 +40,7 @@ impl ApiError {
 		Self::new(StatusCode::NOT_FOUND, "not_found", message)
 	}
 
-	/// 无凭证、坏 token、错密码对外同一形状，不区分原因
+	/// No credential, bad token, and wrong password share one outward shape, with no reason given
 	pub fn unauthorized() -> Self {
 		Self::new(
 			StatusCode::UNAUTHORIZED,
@@ -47,13 +49,12 @@ impl ApiError {
 		)
 	}
 
-	/// 源不支持某动态能力时按端点约定返回 404，但 code 仍是 unsupported
-	pub fn unsupported_404(message: impl Into<String>) -> Self {
-		Self::new(StatusCode::NOT_FOUND, "unsupported", message)
-	}
-
 	pub fn bad_request(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
+	}
+
+	pub fn payload_too_large(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
 	}
 
 	pub fn source_disabled(key: &str) -> Self {
@@ -70,6 +71,15 @@ impl ApiError {
 
 	pub fn no_update(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::CONFLICT, "no_update", message)
+	}
+
+	pub fn resync_required(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, "resync_required", message)
+	}
+
+	/// Generic state conflict for cases with no dedicated constructor (e.g. cancelling a finished task)
+	pub fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+		Self::new(StatusCode::CONFLICT, code, message)
 	}
 
 	pub fn message(&self) -> &str {

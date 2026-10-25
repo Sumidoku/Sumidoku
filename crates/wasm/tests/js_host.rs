@@ -1,8 +1,8 @@
-//! js host 模块 context_* 四函数的端到端测试。
-//! fixture 源在 tests/fixtures/js-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the four context_* functions of the js host module.
+//! The fixture source lives in tests/fixtures/js-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/js-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_js.wasm
-//! 复制为 tests/fixtures/js/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_js.wasm
+//! over tests/fixtures/js/main.wasm.
 use aidoku_wasm::{
 	DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
 };
@@ -26,7 +26,6 @@ async fn js_context_eval_get_and_isolation() {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	let (handle, features) = SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))

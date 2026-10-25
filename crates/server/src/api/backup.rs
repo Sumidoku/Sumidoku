@@ -1,5 +1,5 @@
-//! 全量备份：导出/导入单用户的库、分类、进度、设置与源设置。
-//! BackupDoc 是对外契约（version 字段演进），之后 .aib/.tachibk 导入器也映射到它
+//! Full backup: export/import of the admin's library, categories, progress, settings, and source settings.
+//! BackupDoc is the external contract (evolves via the version field); the .aib/.tachibk importers map onto it too
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{default_value_to_json, json_to_default_value, unix_now};
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 pub const BACKUP_VERSION: i64 = 1;
-/// 大库备份可达几十 MB，放宽该路由的 body 上限
+/// A large-library backup can reach tens of MB, so this route's body cap is raised
 pub const BODY_MAX: usize = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +105,8 @@ pub struct BackupCategory {
 	pub sort_order: i64,
 	#[serde(default)]
 	pub is_default: bool,
+	/// Instance-local category ids are not portable, so `2` carries the exclusion on this named category
+	/// and restore translates it to the target's category id.
 	#[serde(default)]
 	pub include_in_update: i64,
 	#[serde(default)]
@@ -113,7 +115,7 @@ pub struct BackupCategory {
 	pub manga: Vec<BackupMangaRef>,
 }
 
-/// 章节元数据快照：全新实例还没有章节行，恢复进度时按它补行（已存在则不动，源刷新会覆盖）
+/// Chapter metadata snapshot: a fresh instance has no chapter rows yet, so restoring progress creates rows from it (existing rows are untouched; the source refresh overwrites)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupChapter {
@@ -200,13 +202,14 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-/// 导出文档构造：GET handler 与定时备份调度器共用，产出逐字节同构
+/// Export-document construction shared by the GET handler and the scheduler, producing the admin's complete state
 pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
+	let user_id = crate::USER_ID;
 	let source_rows: Vec<(String, String, i64)> =
 		sqlx::query_as("SELECT key, name, version FROM source ORDER BY id")
 			.fetch_all(pool)
 			.await?;
-	// 源归属哪个 repo 没有显式外键，拿缓存 index 里首个含同 key 条目的 repo 顶数
+	// There is no explicit FK for which repo a source belongs to, so use the first repo in the cached index containing the same key
 	let repos: Vec<SourceRepoRow> = repo::list_repos(pool).await?;
 	let mut repo_of: HashMap<String, String> = HashMap::new();
 	for row in &repos {
@@ -230,9 +233,10 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.incognito, mu.sort_key
 		 FROM manga m
 		 JOIN source s ON s.id = m.source_id
-		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 		 ORDER BY m.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let library = manga_rows
@@ -260,18 +264,38 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		})
 		.collect();
 
-	let category_rows: Vec<(i64, String, i64, bool, i64, i64)> = sqlx::query_as(
-		"SELECT id, name, sort_order, is_default, include_in_update, include_in_download
-		 FROM category WHERE user_id = 1 ORDER BY sort_order, id",
+	let excluded_update_categories: HashSet<i64> = crate::update::LibraryUpdateSettings::load(pool, user_id, 0)
+		.await?
+		.excluded_update_categories
+		.into_iter()
+		.collect();
+	let excluded_download_key = format!(
+		"user.{user_id}.{}",
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
+	);
+	let excluded_download_categories: HashSet<i64> =
+		sqlx::query_scalar::<_, String>("SELECT value FROM setting WHERE key = ?")
+			.bind(&excluded_download_key)
+			.fetch_optional(pool)
+			.await?
+			.and_then(|raw| serde_json::from_str::<Vec<i64>>(&raw).ok())
+			.unwrap_or_default()
+			.into_iter()
+			.collect();
+	let category_rows: Vec<(i64, String, i64, bool)> = sqlx::query_as(
+		"SELECT id, name, sort_order, is_default
+		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let member_rows: Vec<(i64, String, String)> = sqlx::query_as(
 		"SELECT cm.category_id, s.key, m.key FROM category_manga cm
 		 JOIN manga m ON m.id = cm.manga_id
 		 JOIN source s ON s.id = m.source_id
-		 WHERE cm.user_id = 1 ORDER BY m.id",
+		 WHERE cm.user_id = ? ORDER BY m.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let mut members: HashMap<i64, Vec<BackupMangaRef>> = HashMap::new();
@@ -283,19 +307,19 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	}
 	let categories = category_rows
 		.into_iter()
-		.map(|(id, name, sort_order, is_default, include_in_update, include_in_download)| {
+		.map(|(id, name, sort_order, is_default)| {
 			BackupCategory {
 				name,
 				sort_order,
 				is_default,
-				include_in_update,
-				include_in_download,
+				include_in_update: if excluded_update_categories.contains(&id) { 2 } else { 0 },
+				include_in_download: if excluded_download_categories.contains(&id) { 2 } else { 0 },
 				manga: members.remove(&id).unwrap_or_default(),
 			}
 		})
 		.collect();
 
-	// 全默认的行不携带任何用户状态，导出去重（is_downloaded 不在备份范围）
+	// All-default rows carry no user state and are deduped out of the export (is_downloaded is out of backup scope)
 	let progress_rows: Vec<ExportProgressRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key AS manga_key, c.key, c.title, c.number, c.volume,
 		 c.scanlators, c.language, c.thumbnail, c.url, c.date_uploaded, c.source_order, c.page_count,
@@ -304,10 +328,11 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		 JOIN chapter c ON c.id = cu.chapter_id
 		 JOIN manga m ON m.id = c.manga_id
 		 JOIN source s ON s.id = m.source_id
-		 WHERE cu.user_id = 1
+		 WHERE cu.user_id = ?
 		 AND (cu.last_page_read != 0 OR cu.is_read != 0 OR cu.is_bookmarked != 0 OR cu.last_read_at IS NOT NULL)
 		 ORDER BY c.id",
 	)
+	.bind(user_id)
 	.fetch_all(pool)
 	.await?;
 	let progress = progress_rows
@@ -340,19 +365,36 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			.fetch_all(pool)
 			.await?;
 	let mut settings = BTreeMap::new();
+	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
-		// 坏行不该让备份整个失败，按原样字符串导出
+		// Legacy owner namespace keys are restored to bare keys, matching the settings API contract
+		let key = if key.starts_with("user.") {
+			match key.strip_prefix(&own_prefix) {
+				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
+				_ => continue,
+			}
+		} else {
+			key
+		};
+		if key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
+			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
+			|| key == "sync.instance_id"
+			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+		{
+			continue;
+		}
+		// A corrupt row must not fail the whole backup; export it as the raw string
 		let value = serde_json::from_str(&raw).unwrap_or(Value::String(raw));
 		settings.insert(key, value);
 	}
 
+	let mut source_settings: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
 	let source_setting_rows: Vec<(String, String, String)> = sqlx::query_as(
 		"SELECT s.key, ss.key, ss.value FROM source_setting ss
 		 JOIN source s ON s.id = ss.source_id ORDER BY s.key, ss.key",
 	)
 	.fetch_all(pool)
 	.await?;
-	let mut source_settings: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
 	for (source_key, key, raw) in source_setting_rows {
 		match serde_json::from_str::<DefaultValue>(&raw) {
 			Ok(value) => {
@@ -378,7 +420,9 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	Ok(doc)
 }
 
-pub async fn export_backup(State(state): State<Arc<AppState>>) -> ApiResult<Response> {
+pub async fn export_backup(
+	State(state): State<Arc<AppState>>,
+) -> ApiResult<Response> {
 	let doc = build_backup_doc(&state.pool).await?;
 	let body = serde_json::to_vec(&doc)?;
 	let date = chrono::Utc::now().format("%Y%m%d");
@@ -398,7 +442,7 @@ pub struct ImportQuery {
 	pub sections: Option<String>,
 }
 
-/// 服务器备份目录里的既有备份，新到旧
+/// Existing backups in the server backup directory, newest first
 pub async fn list_backups(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
 	let dir = crate::backup::backups_dir(&state.pool, &state.config).await?;
 	let files: Vec<Value> = crate::backup::list_backup_files(&dir)
@@ -414,7 +458,7 @@ pub struct RestoreRequest {
 	pub name: String,
 }
 
-/// 从备份目录里已有的文件恢复：服务端读文件，走与上传导入同一条校验+事务路径
+/// Restores from a file already in the backup directory: the server reads the file, taking the same validate+transaction path as an upload import
 pub async fn restore_backup(
 	State(state): State<Arc<AppState>>,
 	Json(body): Json<RestoreRequest>,
@@ -486,12 +530,9 @@ pub async fn import_backup(
 	Ok(Json(result))
 }
 
-/// 校验 + 单事务导入的执行体：POST handler 与「从已有备份恢复」端点共用
-pub async fn import_backup_doc(
-	state: &AppState,
-	sections_query: Option<&str>,
-	body: &[u8],
-) -> ApiResult<Value> {
+/// The validate + single-transaction import executor: shared by upload and restore-from-list endpoints
+pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, body: &[u8]) -> ApiResult<Value> {
+	let user_id = crate::USER_ID;
 	let sections = parse_sections(sections_query)?;
 	let raw: Value = serde_json::from_slice(body)
 		.map_err(|e| ApiError::bad_request(format!("invalid backup document: {e}")))?;
@@ -510,26 +551,37 @@ pub async fn import_backup_doc(
 	let mut warnings: Vec<String> = Vec::new();
 	let mut touched_sources: HashSet<i64> = HashSet::new();
 	{
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		if sections.contains(&Section::Library) {
-			restore_library(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_library(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Categories) {
-			restore_categories(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_categories(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Progress) {
-			restore_progress(&mut tx, &doc, &mut restored, &mut warnings).await?;
+			restore_progress(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Settings) {
-			restore_settings(&mut tx, &doc, &mut restored).await?;
+			restore_settings(&mut tx, user_id, &doc, &mut restored).await?;
 		}
 		if sections.contains(&Section::SourceSettings) {
 			restore_source_settings(&mut tx, &doc, &mut restored, &mut warnings, &mut touched_sources)
 				.await?;
 		}
+		if sections.contains(&Section::Categories)
+			&& doc.categories.iter().any(|category| category.include_in_download == 1)
+		{
+			// Include-only categories have no exclusion-list equivalent, so automatic downloads must stay conservative.
+			sqlx::query(
+				"INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'false')
+				 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+			)
+			.execute(&mut *tx)
+			.await?;
+		}
 		tx.commit().await?;
 	}
-	// 源设置可能换了凭据，热重启在跑的实例；失败不回滚（导入已提交，重启等下次懒加载）
+	// Source settings may have changed credentials, so hot-restart running instances; a failure does not roll back (the import is committed; the restart waits for the next lazy load)
 	for id in touched_sources {
 		if let Err(e) = crate::api::restart_if_loaded(state, id).await {
 			tracing::warn!(source_id = id, "restart after backup import failed: {}", e.message());
@@ -557,6 +609,7 @@ async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> ApiRes
 
 async fn restore_library(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
@@ -610,13 +663,14 @@ async fn restore_library(
 				.await?;
 		sqlx::query(
 			"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, incognito, sort_key)
-			 VALUES (?, 1, ?, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (manga_id, user_id) DO UPDATE SET
 			 in_library = excluded.in_library, in_library_at = excluded.in_library_at,
 			 viewer_flags = excluded.viewer_flags, incognito = excluded.incognito,
 			 sort_key = excluded.sort_key",
 		)
 		.bind(manga_id)
+		.bind(user_id)
 		.bind(entry.in_library)
 		.bind(entry.in_library_at)
 		.bind(entry.viewer_flags)
@@ -638,12 +692,48 @@ fn check_include_in(category: &str, field: &str, value: i64) -> ApiResult<i64> {
 	}
 }
 
+async fn merge_excluded_categories(
+	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
+	setting: &str,
+	migrated: Vec<i64>,
+) -> ApiResult<()> {
+	if migrated.is_empty() {
+		return Ok(());
+	}
+	let key = format!("user.{user_id}.{setting}");
+	let current: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
+		.bind(&key)
+		.fetch_optional(&mut **tx)
+		.await?;
+	let mut existing: Vec<i64> = current
+		.and_then(|(raw,)| serde_json::from_str(&raw).ok())
+		.unwrap_or_default();
+	for id in migrated {
+		if !existing.contains(&id) {
+			existing.push(id);
+		}
+	}
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES (?, ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+	)
+	.bind(&key)
+	.bind(serde_json::to_string(&existing)?)
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 async fn restore_categories(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
 ) -> ApiResult<()> {
+	let mut migrated_update: Vec<i64> = Vec::new();
+	let mut migrated_download: Vec<i64> = Vec::new();
 	for category in &doc.categories {
 		if category.name.trim().is_empty() {
 			return Err(ApiError::bad_request("backup category name must not be empty"));
@@ -651,40 +741,40 @@ async fn restore_categories(
 		check_include_in(&category.name, "includeInUpdate", category.include_in_update)?;
 		check_include_in(&category.name, "includeInDownload", category.include_in_download)?;
 		let existing: Option<(i64,)> =
-			sqlx::query_as("SELECT id FROM category WHERE user_id = 1 AND name = ?")
+			sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
+				.bind(user_id)
 				.bind(&category.name)
 				.fetch_optional(&mut **tx)
 				.await?;
 		let category_id = match existing {
 			Some((id,)) => {
-				sqlx::query(
-					"UPDATE category SET sort_order = ?, is_default = ?, include_in_update = ?,
-					 include_in_download = ? WHERE id = ?",
-				)
-				.bind(category.sort_order)
-				.bind(category.is_default)
-				.bind(category.include_in_update)
-				.bind(category.include_in_download)
-				.bind(id)
-				.execute(&mut **tx)
-				.await?;
+				sqlx::query("UPDATE category SET sort_order = ?, is_default = ? WHERE id = ?")
+					.bind(category.sort_order)
+					.bind(category.is_default)
+					.bind(id)
+					.execute(&mut **tx)
+					.await?;
 				id
 			}
 			None => {
-				let result = sqlx::query(
-					"INSERT INTO category (user_id, name, sort_order, is_default, include_in_update,
-					 include_in_download) VALUES (1, ?, ?, ?, ?, ?)",
+				sqlx::query_scalar(
+					"INSERT INTO category (user_id, name, sort_order, is_default)
+					 VALUES (?, ?, ?, ?) RETURNING id",
 				)
+				.bind(user_id)
 				.bind(&category.name)
 				.bind(category.sort_order)
 				.bind(category.is_default)
-				.bind(category.include_in_update)
-				.bind(category.include_in_download)
-				.execute(&mut **tx)
-				.await?;
-				result.last_insert_rowid()
+				.fetch_one(&mut **tx)
+				.await?
 			}
 		};
+		if category.include_in_update == 2 {
+			migrated_update.push(category_id);
+		}
+		if category.include_in_download == 2 {
+			migrated_download.push(category_id);
+		}
 		for member in &category.manga {
 			let Some(source_id) = source_id_by_key(tx, &member.source_key).await? else {
 				warnings.push(format!(
@@ -708,20 +798,36 @@ async fn restore_categories(
 			};
 			sqlx::query(
 				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, 1)",
+				 VALUES (?, ?, ?)",
 			)
 			.bind(category_id)
 			.bind(manga_id)
+			.bind(user_id)
 			.execute(&mut **tx)
 			.await?;
 		}
 		restored.categories += 1;
 	}
+	merge_excluded_categories(
+		tx,
+		user_id,
+		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES,
+		migrated_update,
+	)
+	.await?;
+	merge_excluded_categories(
+		tx,
+		user_id,
+		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES,
+		migrated_download,
+	)
+	.await?;
 	Ok(())
 }
 
 async fn restore_progress(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 	warnings: &mut Vec<String>,
@@ -752,7 +858,7 @@ async fn restore_progress(
 			));
 			continue;
 		};
-		// fetched_at = 0 标记是备份补的行，等源刷新覆盖；已存在的章节保留更新的元数据
+		// fetched_at = 0 marks a row created by the backup, to be overwritten by the source refresh; existing chapters keep their newer metadata
 		sqlx::query(
 			"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators,
 			 language, thumbnail, url, date_uploaded, source_order, page_count, fetched_at)
@@ -778,15 +884,16 @@ async fn restore_progress(
 				.bind(&entry.chapter.key)
 				.fetch_one(&mut **tx)
 				.await?;
-		// is_downloaded 指向本机文件，备份不携带也不覆盖
+		// is_downloaded points at local files; the backup neither carries nor overwrites it
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
-			 last_read_at) VALUES (?, 1, ?, ?, ?, ?)
+			 last_read_at) VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 			 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
 			 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at",
 		)
 		.bind(chapter_id)
+		.bind(user_id)
 		.bind(entry.last_page_read)
 		.bind(entry.is_read)
 		.bind(entry.is_bookmarked)
@@ -800,15 +907,30 @@ async fn restore_progress(
 
 async fn restore_settings(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
+		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
+		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
+		if key.starts_with("user.")
+			|| key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
+			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
+			|| key == "sync.instance_id"
+			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+		{
+			continue;
+		}
+		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
+			true => crate::api::user_setting_key(user_id, key),
+			false => key.clone(),
+		};
 		sqlx::query(
 			"INSERT INTO setting (key, value) VALUES (?, ?)
 			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
 		)
-		.bind(key)
+		.bind(&stored_key)
 		.bind(serde_json::to_string(value)?)
 		.execute(&mut **tx)
 		.await?;

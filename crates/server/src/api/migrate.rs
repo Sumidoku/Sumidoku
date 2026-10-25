@@ -5,6 +5,7 @@ use crate::model::{SourceRow, unix_now};
 use crate::source::{manga_row, reconcile_chapters, repo, upsert_manga};
 use crate::state::AppState;
 use aidoku::Manga;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
 use serde::Deserialize;
@@ -12,19 +13,23 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 迁移源清单：已装源全量下发（目标组合选择器也要用），mangaCount 是在库条数
-pub async fn migrate_sources(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+/// Source list for migration: all installed sources (the target-side selector needs them too); mangaCount is the requesting user's in-library count
+pub async fn migrate_sources(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let rows: Vec<SourceRow> = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source ORDER BY id",
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source ORDER BY id",
 	)
 	.fetch_all(&state.pool)
 	.await?;
 	let counts: HashMap<i64, i64> = sqlx::query_as(
 		"SELECT m.source_id, COUNT(*) FROM manga m
-		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 AND mu.in_library = 1
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ? AND mu.in_library = 1
 		 GROUP BY m.source_id",
 	)
+	.bind(user.id)
 	.fetch_all(&state.pool)
 	.await?
 	.into_iter()
@@ -55,8 +60,8 @@ pub struct LookupQuery {
 	pub query: Option<String>,
 }
 
-/// 跨源标题搜索：走源的正常搜索路径（含源的限速），候选附已入库的内部 id；
-/// query 缺省用源条目标题，批量行的「手动重搜」靠显式 query
+/// Cross-source title search: goes through the source's normal search path (including its rate limits); candidates
+/// get internal ids when already in library; an absent query uses the source entry's title, and a batch row's "manual re-search" passes an explicit query
 pub async fn migrate_lookup(
 	State(state): State<Arc<AppState>>,
 	Query(query): Query<LookupQuery>,
@@ -69,6 +74,16 @@ pub async fn migrate_lookup(
 		.unwrap_or(origin.title);
 	if title.trim().is_empty() {
 		return Err(ApiError::bad_request("lookup query is empty"));
+	}
+	// An opds target has no wasm instance: take the catalog search arm (OpenSearch/traversal fallback), the degraded flag passed through
+	if crate::source::source_is_opds(&state.pool, query.target_source_id).await? {
+		let outcome = crate::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
+		let candidates = attach_internal_ids(&state, query.target_source_id, outcome.entries).await?;
+		return Ok(Json(json!({
+			"query": title,
+			"candidates": candidates,
+			"degraded": outcome.degraded,
+		})));
 	}
 	let handle = state.get_handle(query.target_source_id).await?;
 	let result = handle
@@ -95,7 +110,7 @@ pub struct MigrateEntry {
 	pub from_manga_id: i64,
 	pub to_source_id: i64,
 	pub to_manga_key: String,
-	/// 客户端手里的候选条目；有它就以它为 get_manga_update 入参（同 register_manga 的语义）
+	/// The candidate entry in the client's hands; when present it becomes the get_manga_update input (same semantics as register_manga)
 	pub to_manga: Option<Manga>,
 }
 
@@ -116,7 +131,7 @@ struct EntryFailure {
 	message: Option<String>,
 }
 
-/// 条目级失败与 500 分开：reason 进逐条结果，数据库类错误照常掀掉整个请求
+/// Entry-level failures are kept apart from 500s: the reason goes into the per-entry result, while database-class errors still blow up the whole request
 enum EntryRun {
 	Ok(EntryOutcome),
 	Failed(EntryFailure),
@@ -136,9 +151,10 @@ fn failed_with(reason: &'static str, message: String) -> EntryRun {
 	})
 }
 
-/// 手动解析 body：axum 的 Json 拒绝是 422，端点约定非法形状/非法 mode 400
+/// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid shapes/invalid mode is 400
 pub async fn migrate_execute(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
 	let body = body.ok_or_else(|| ApiError::bad_request("missing body"))?;
@@ -152,10 +168,10 @@ pub async fn migrate_execute(
 			return Err(ApiError::bad_request("toMangaKey must not be empty"));
 		}
 	}
-	// 批次串行：单条目一个事务，部分失败不回滚已完成条目，逐条给 ok/reason
+	// The batch runs serially: one transaction per entry, a partial failure does not roll back completed entries, each gets ok/reason
 	let mut results = Vec::with_capacity(request.entries.len());
 	for entry in &request.entries {
-		let run = run_entry(&state, request.mode, entry).await?;
+		let run = run_entry(&state, user.id, request.mode, entry).await?;
 		let value = match run {
 			EntryRun::Ok(outcome) => json!({
 				"fromMangaId": entry.from_manga_id,
@@ -177,6 +193,7 @@ pub async fn migrate_execute(
 
 async fn run_entry(
 	state: &Arc<AppState>,
+	user_id: i64,
 	mode: MigrateMode,
 	entry: &MigrateEntry,
 ) -> ApiResult<EntryRun> {
@@ -186,21 +203,22 @@ async fn run_entry(
 	if source_row(state, entry.to_source_id).await.is_err() {
 		return Ok(failed("source_not_found"));
 	}
-	// 同源不同 key 是 breaking-change 的 forceMigrate 回退路径（新 key 另起一行，
-	// 进度按章节号搬）；只有原地搬自己（同 key）会清掉自身进度，必须拒
+	// Same source with a different key is the breaking-change forceMigrate fallback path (the new key starts a fresh row,
+	// progress carried by chapter number); only migrating onto yourself in place (same key) would wipe your own progress, so it must be refused
 	if origin.source_id == entry.to_source_id && origin.key == entry.to_manga_key {
 		return Ok(failed("same_source"));
 	}
 	let origin_user: Option<(bool, Option<i64>)> =
-		sqlx::query_as("SELECT in_library, in_library_at FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_as("SELECT in_library, in_library_at FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_optional(&state.pool)
 			.await?;
 	if !origin_user.map(|(flag, _)| flag).unwrap_or(false) {
 		return Ok(failed("not_in_library"));
 	}
 
-	// 目标已存在且有章节就直接复用；否则回源拉详情顺带初始化章节（事务外，拿不到算条目失败）
+	// If the target already exists with chapters, reuse it directly; otherwise fetch details from the source, initializing chapters along the way (outside the transaction; a failed fetch counts as an entry failure)
 	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(entry.to_source_id)
 		.bind(&entry.to_manga_key)
@@ -220,50 +238,62 @@ async fn run_entry(
 	if to_manga_id.is_none() {
 		let mut initial = entry.to_manga.clone().unwrap_or_default();
 		initial.key = entry.to_manga_key.clone();
-		let handle = state.get_handle(entry.to_source_id).await?;
-		match handle.get_manga_update(initial, true, true).await {
-			Ok(updated) => fetched = Some(updated),
-			Err(e) => return Ok(failed_with("fetch_failed", e.to_string())),
+		// An opds target has no wasm instance: fetching upstream is a catalog feed pull (the url comes with the candidate entry)
+		if crate::source::source_is_opds(&state.pool, entry.to_source_id).await? {
+			match crate::opds_source::manga_update(state, entry.to_source_id, initial).await {
+				Ok(updated) => fetched = Some(updated),
+				Err(e) => return Ok(failed_with("fetch_failed", e.message().to_string())),
+			}
+		} else {
+			let handle = state.get_handle(entry.to_source_id).await?;
+			match handle.get_manga_update(initial, true, true).await {
+				Ok(updated) => fetched = Some(updated),
+				Err(e) => return Ok(failed_with("fetch_failed", e.to_string())),
+			}
 		}
 	}
 
 	let mut warnings = Vec::new();
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let to_manga_id = match (to_manga_id, &fetched) {
 		(Some(id), _) => id,
 		(None, Some(updated)) => {
 			let id = upsert_manga(&mut tx, entry.to_source_id, updated, true, true, true).await?;
-			reconcile_chapters(&mut tx, id, &updated.chapters.clone().unwrap_or_default()).await?;
+			reconcile_chapters(&mut tx, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 			id
 		}
 		(None, None) => unreachable!("fetched is Some when to_manga_id is None"),
 	};
 
-	// 入库态搬运：目标已在库保留它自己的首次入库时间，否则继承源条目的
+	// In-library state carry-over: a target already shelved keeps its own first-shelved time, otherwise it inherits the source entry's
 	let origin_at: Option<i64> =
-		sqlx::query_scalar("SELECT in_library_at FROM manga_user WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT in_library_at FROM manga_user WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_optional(&mut *tx)
 			.await?;
 	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, 1, 1, ?)
+		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
 		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
 	)
 	.bind(to_manga_id)
+	.bind(user_id)
 	.bind(origin_at.unwrap_or_else(unix_now))
 	.execute(&mut *tx)
 	.await?;
 
-	// 分类是并集：目标原有分类保留，源条目的补进来
+	// Categories are a union: the target's existing categories are kept, the source entry's are added in
 	let category_ids: Vec<i64> =
-		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = 1")
+		sqlx::query_scalar("SELECT category_id FROM category_manga WHERE manga_id = ? AND user_id = ?")
 			.bind(origin.id)
+			.bind(user_id)
 			.fetch_all(&mut *tx)
 			.await?;
 	for category_id in &category_ids {
-		sqlx::query("INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
+		sqlx::query("INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, ?)")
 			.bind(category_id)
 			.bind(to_manga_id)
+			.bind(user_id)
 			.execute(&mut *tx)
 			.await?;
 	}
@@ -271,9 +301,10 @@ async fn run_entry(
 	let origin_progress: Vec<OriginProgress> = sqlx::query_as(
 		"SELECT c.key, c.number, c.volume, cu.last_page_read, cu.is_read, cu.is_bookmarked, cu.last_read_at
 		 FROM chapter_user cu JOIN chapter c ON c.id = cu.chapter_id
-		 WHERE cu.user_id = 1 AND c.manga_id = ?
+		 WHERE cu.user_id = ? AND c.manga_id = ?
 		 AND (cu.last_page_read > 0 OR cu.is_read = 1 OR cu.is_bookmarked = 1 OR cu.last_read_at IS NOT NULL)",
 	)
+	.bind(user_id)
 	.bind(origin.id)
 	.fetch_all(&mut *tx)
 	.await?;
@@ -291,10 +322,10 @@ async fn run_entry(
 			));
 			continue;
 		};
-		// 目标已有进度保留较新值：页码取大、已读/书签取或、阅读时间取新
+		// Existing target progress keeps the newer values: page number takes the max, read/bookmarked take OR, read time takes the newer
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at)
-			 VALUES (?, 1, ?, ?, ?, ?)
+			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 			 last_page_read = MAX(last_page_read, excluded.last_page_read),
 			 is_read = MAX(is_read, excluded.is_read),
@@ -305,6 +336,7 @@ async fn run_entry(
 			 ELSE MAX(last_read_at, excluded.last_read_at) END",
 		)
 		.bind(target.id)
+		.bind(user_id)
 		.bind(row.last_page_read)
 		.bind(row.is_read)
 		.bind(row.is_bookmarked)
@@ -317,23 +349,26 @@ async fn run_entry(
 		MigrateMode::Copy => {}
 		MigrateMode::Migrate | MigrateMode::MigrateWithHistory => {
 			sqlx::query(
-				"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, 1, 0)
+				"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
 				 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
 			)
 			.bind(origin.id)
+			.bind(user_id)
 			.execute(&mut *tx)
 			.await?;
-			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = 1")
+			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
 				.bind(origin.id)
+				.bind(user_id)
 				.execute(&mut *tx)
 				.await?;
-			// chapter_user 还背着下载标记，清进度只重置进度字段不删行
+			// chapter_user also carries the download flag, so clearing progress only resets the progress fields without deleting the row
 			if mode == MigrateMode::Migrate {
 				sqlx::query(
 					"UPDATE chapter_user SET last_page_read = 0, is_read = 0, is_bookmarked = 0,
 					 last_read_at = NULL
-					 WHERE user_id = 1 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
+					 WHERE user_id = ? AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 				)
+				.bind(user_id)
 				.bind(origin.id)
 				.execute(&mut *tx)
 				.await?;
@@ -365,8 +400,8 @@ struct TargetChapter {
 	volume: Option<f64>,
 }
 
-/// 章节号精确匹配（重号取源序最小者）；源章节没有章节号才按卷号兜底，
-/// 且只落在目标同样没有章节号的章节上，避免卷号误吞正常章节
+/// Exact chapter-number match (duplicates take the smallest source_order); only when the source chapter has no
+/// chapter number does the volume number serve as fallback, and then only onto a target chapter that likewise has no chapter number, so volumes never swallow normal chapters
 fn match_target<'t>(targets: &'t [TargetChapter], row: &OriginProgress) -> Option<&'t TargetChapter> {
 	if let Some(number) = row.number {
 		return targets.iter().find(|t| t.number == Some(number));

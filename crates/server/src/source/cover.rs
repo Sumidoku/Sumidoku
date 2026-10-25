@@ -4,6 +4,7 @@ use crate::model::manga_from_row;
 use crate::source::{fetch_cover_image, manga_row};
 use crate::state::AppState;
 use axum::Json;
+use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
@@ -16,14 +17,19 @@ use std::sync::Arc;
 const DEFAULT_MIME: &str = "image/jpeg";
 const COVER_MAX_AGE: u64 = 86400;
 
+/// Local-source covers are user-owned files at original resolution (a cover.* sidecar or a chapter's first
+/// page), far larger than any display slot; cap the served width — the cached artifact is the downscaled JPEG
+pub const LOCAL_COVER_MAX_WIDTH: u32 = 600;
+
 #[derive(Debug, Deserialize)]
 pub struct ImageQuery {
 	pub url: String,
 }
 
-/// 源图床的防盗链（Referer 等）只有服务端能按源声明带上，<img> 直连必 403；
-/// 与详情页封面同一条 fetch_cover_image：源声明了 cover 处理器就返回处理后的字节
-/// （加密图床不处理就是浏览器解不出的密文）。不落缓存——浏览/home 封面量大且复用率低
+/// A source image host's hotlink protection (Referer etc.) can only be satisfied by the server per the source's
+/// declaration, so a direct <img> always gets 403; this takes the same fetch_cover_image as the details-page cover:
+/// a source-declared cover processor returns processed bytes (an encrypted image host is otherwise ciphertext the
+/// browser cannot decode). Not cached — browse/home covers are numerous and rarely reused
 pub async fn get_source_image(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -51,11 +57,30 @@ pub async fn get_cover(
 	{
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
-	let Some(url) = manga.cover_url.clone() else {
-		return Err(ApiError::not_found("cover not available"));
+	let (bytes, mime) = if crate::source::source_is_local(&state.pool, manga.source_id).await? {
+		let (bytes, mime) =
+			crate::local::resolve_cover(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key)
+				.await?
+				.ok_or_else(|| ApiError::not_found("cover not available"))?;
+		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); a narrow
+		// or undecodable image passes through at its original bytes, same as the page variants
+		let (resized, original) = tokio::task::spawn_blocking(move || {
+			let resized = crate::source::downsample::downsample_jpeg(&bytes, LOCAL_COVER_MAX_WIDTH);
+			(resized, bytes)
+		})
+		.await
+		.map_err(|e| ApiError::internal(format!("cover downsample task failed: {e}")))?;
+		match resized {
+			Some(jpeg) => (jpeg, "image/jpeg".into()),
+			None => (original, mime),
+		}
+	} else {
+		let Some(url) = manga.cover_url.clone() else {
+			return Err(ApiError::not_found("cover not available"));
+		};
+		let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
+		(bytes, mime.unwrap_or_else(|| DEFAULT_MIME.into()))
 	};
-	let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
-	let mime = mime.unwrap_or_else(|| DEFAULT_MIME.into());
 	match write_cache(&covers_dir, id, &bytes, &mime).await {
 		Ok(()) => enforce_cache_limit(&covers_dir, state.config.cover_cache_max),
 		Err(e) => tracing::warn!(manga_id = id, "cover cache write failed: {e}"),
@@ -72,7 +97,7 @@ pub(crate) fn bytes_response(bytes: Vec<u8>, mime: &str, max_age: u64) -> Respon
 		.expect("bytes response")
 }
 
-/// 备选封面列表：以库里的 manga 为入参调源导出；源没导出按惯例 501
+/// Alternate-cover list: calls the source export with the library manga as input; a source without the export gets the customary 501
 pub async fn get_alternate_covers(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
@@ -91,10 +116,11 @@ pub struct SelectCoverRequest {
 	pub url: String,
 }
 
-/// 选定封面：只写 cover_url 并让磁盘缓存失效。不碰 last_fetched_at（那是源刷新语义）——
-/// 缓存按它判新，不清旧字节的话换完后旧封面继续被 serve，选择永远不生效
+/// Selects a cover: only writes cover_url and invalidates the disk cache. last_fetched_at is untouched (that is
+/// source-refresh semantics) — the cache judges freshness by it, and without clearing the old bytes the old cover would keep being served after the switch, so the selection would never take effect
 pub async fn select_cover(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(body): Json<SelectCoverRequest>,
 ) -> ApiResult<Json<Value>> {
@@ -110,10 +136,10 @@ pub async fn select_cover(
 		.await?;
 	invalidate_cache(&state.config.covers_dir, id).await;
 	let row = manga_row(&state.pool, id).await?;
-	Ok(Json(crate::api::manga_json(&state, &row).await?))
+	Ok(Json(crate::api::manga_json(&state, user.id, &row).await?))
 }
 
-/// 本体与 sidecar 一起删；还没缓存过时缺文件不算错误
+/// Deletes the body and its sidecar together; missing files are not an error when nothing was cached yet
 async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let cache_path = covers_dir.join(id.to_string());
 	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
@@ -124,7 +150,7 @@ fn sidecar_path(cache_path: &FsPath) -> PathBuf {
 	cache_path.with_file_name(format!("{}.content-type", cache_path.file_name().unwrap_or_default().to_string_lossy()))
 }
 
-/// 缓存命中条件：文件存在且 manga 详情没在缓存写入之后重新拉过（last_fetched_at <= mtime）
+/// Cache-hit condition: the file exists and the manga details were not re-fetched after the cache write (last_fetched_at <= mtime)
 async fn read_fresh_cache(cache_path: &FsPath, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
 	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
 	let mtime = metadata
@@ -148,7 +174,7 @@ async fn read_fresh_cache(cache_path: &FsPath, last_fetched_at: Option<i64>) -> 
 	Some((bytes, mime))
 }
 
-/// 先写 tmp 再 rename，避免并发读到写了一半的缓存
+/// Writes tmp first then renames, so a concurrent read never sees a half-written cache
 async fn write_cache(
 	covers_dir: &FsPath,
 	id: i64,
@@ -164,7 +190,7 @@ async fn write_cache(
 	Ok(())
 }
 
-/// LRU：缓存文件数超上限时按 mtime 最旧先删（连同 sidecar）
+/// LRU: when the cache file count exceeds the cap, delete oldest by mtime first (sidecar included)
 fn enforce_cache_limit(covers_dir: &FsPath, max: usize) {
 	let mut entries: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
 	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
@@ -172,7 +198,7 @@ fn enforce_cache_limit(covers_dir: &FsPath, max: usize) {
 	};
 	for entry in read_dir.flatten() {
 		let name = entry.file_name();
-		// 只数封面本体（文件名是纯 manga id），sidecar 与 tmp 随本体连带处理
+		// Only count the cover bodies (file name is a bare manga id); sidecars and tmp files are handled along with their body
 		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
 			continue;
 		}

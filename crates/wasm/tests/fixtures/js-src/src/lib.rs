@@ -1,8 +1,9 @@
 #![no_std]
-//! js host 模块 context_* 四函数的端到端验证源：
-//! get_page_description 把 eval/eval_async/get、context 隔离与错误码路径的
-//! 调用结果拼成确定字符串，由 crates/wasm/tests/js_host.rs 断言全文。
-//! 无效 rid 与 destroy 生命周期走 aidoku 封装之外的裸 FFI 声明验证。
+//! End-to-end verification source for the four context_* functions of the js host module:
+//! get_page_description assembles the call results of eval/eval_async/get, context
+//! isolation, and the error-code paths into a deterministic string, asserted in full by
+//! crates/wasm/tests/js_host.rs. Invalid rids and the destroy lifecycle are verified
+//! through raw FFI declarations beyond the aidoku wrappers.
 use aidoku::{
 	Chapter, FilterValue, Manga, MangaPageResult, Page, PageDescriptionProvider, Result, Source,
 	alloc::{String, Vec},

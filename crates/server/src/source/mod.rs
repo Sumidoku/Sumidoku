@@ -1,12 +1,13 @@
 pub mod cover;
 pub mod downsample;
+pub mod page_dimensions;
 pub mod rekey;
 pub mod repo;
 pub mod routed;
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{
-	ChapterRow, MangaRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
+	ChapterRow, MangaRow, PageRow, chapter_from_row, json_to_default_value, manga_from_row, unix_now,
 };
 use crate::state::{AppState, load_cookies, load_defaults};
 use aidoku::{Chapter, Manga, PageContext};
@@ -25,13 +26,22 @@ pub struct ScanOutcome {
 	pub skipped: Vec<SkippedSource>,
 }
 
+/// What a registration did to the registry: a brand-new source, a version change on an existing
+/// row, or a refresh of an unchanged package (metadata re-stamped; the scan reports nothing for it)
+#[derive(Debug, PartialEq, Eq)]
+pub enum RegisterOutcome {
+	Installed,
+	Updated,
+	Refreshed,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SkippedSource {
 	pub dir: String,
 	pub reason: String,
 }
 
-/// source.key 只允许这组字符（保留前缀 local/komga/kavita/suwayomi）
+/// source.key allows only this character set (reserved prefixes local/komga/kavita/suwayomi)
 pub(crate) fn valid_source_key(key: &str) -> bool {
 	!key.is_empty()
 		&& key
@@ -39,16 +49,33 @@ pub(crate) fn valid_source_key(key: &str) -> bool {
 			.all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
 }
 
-/// 目录挂载扫描：一级子目录（source.json + main.wasm）与 .aix 包（zip，Payload/ 布局）都视为源包
+/// The key a manifest declares; the import endpoint validates it before the key names a file on disk
+pub(crate) fn manifest_key(doc: &serde_json::Value) -> Result<String, String> {
+	let info = doc.get("info").ok_or("missing info")?;
+	let key = info
+		.get("id")
+		.and_then(|v| v.as_str())
+		.ok_or("missing info.id")?
+		.to_string();
+	if !valid_source_key(&key) {
+		return Err(format!("invalid source key {key:?}"));
+	}
+	if key == crate::model::LOCAL_SOURCE_KEY {
+		return Err(format!("source key {key:?} is reserved for the built-in local source"));
+	}
+	Ok(key)
+}
+
+/// Directory-mount scan: first-level subdirectories (source.json + main.wasm) and .aix packages (zip, Payload/ layout) both count as source packages
 pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOutcome> {
-	let mut outcome = ScanOutcome {
+	let mut outcome_report = ScanOutcome {
 		installed: Vec::new(),
 		updated: Vec::new(),
 		skipped: Vec::new(),
 	};
 	let mut read_dir = match tokio::fs::read_dir(dir).await {
 		Ok(read_dir) => read_dir,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(outcome_report),
 		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
 	};
 	let mut candidates = Vec::new();
@@ -78,23 +105,22 @@ pub async fn scan_sources_dir(state: &AppState, dir: &Path) -> ApiResult<ScanOut
 			register_aix(state, &path).await
 		};
 		match result {
-			Ok((key, is_update)) => {
-				if is_update {
-					outcome.updated.push(key);
-				} else {
-					outcome.installed.push(key);
-				}
-			}
-			Err(reason) => outcome.skipped.push(SkippedSource {
+			Ok((key, outcome)) => match outcome {
+				RegisterOutcome::Installed => outcome_report.installed.push(key),
+				RegisterOutcome::Updated => outcome_report.updated.push(key),
+				// unchanged package re-registered: nothing worth reporting
+				RegisterOutcome::Refreshed => {}
+			},
+			Err(reason) => outcome_report.skipped.push(SkippedSource {
 				dir: dir_name,
 				reason,
 			}),
 		}
 	}
-	Ok(outcome)
+	Ok(outcome_report)
 }
 
-/// 清单解析结果与载荷位置；目录源与 .aix 共用同一注册路径
+/// The manifest parse result and the payload location; directory sources and .aix share one registration path
 struct SourcePackage {
 	doc: serde_json::Value,
 	wasm_path: String,
@@ -102,7 +128,7 @@ struct SourcePackage {
 	settings: Option<serde_json::Value>,
 }
 
-async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), String> {
+async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, RegisterOutcome), String> {
 	let json_path = path.join("source.json");
 	let wasm_path = path.join("main.wasm");
 	if !json_path.is_file() || !wasm_path.is_file() {
@@ -130,14 +156,14 @@ async fn scan_one_dir(state: &AppState, path: &Path) -> Result<(String, bool), S
 	.await
 }
 
-/// .aix 注册的统一入口：目录扫描与仓库安装共用；成功返回 (key, 是否更新既有源)
-pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, bool), String> {
+/// The single entry for .aix registration: shared by directory scan and repo install; on success returns (key, the registration outcome)
+pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(String, RegisterOutcome), String> {
 	let path_buf = path.to_path_buf();
-	// zip 解析是同步 IO，丢给 blocking 线程池；包内容只进内存，不落地解压
+	// Zip parsing is synchronous IO, offloaded to the blocking pool; package contents stay in memory, never extracted to disk
 	let (doc, settings, icon) = tokio::task::spawn_blocking(move || read_aix_package(&path_buf))
 		.await
 		.map_err(|e| format!("join: {e}"))??;
-	// 包内嵌图标落盘到包旁，供 /sources/{id}/icon 读取（Aidoku 从解包目录读 icon.png）
+	// The embedded icon lands next to the package for /sources/{id}/icon to read (Aidoku reads icon.png from the unpacked directory)
 	let icon_path = write_aix_icon(path, icon).await;
 	register_source(
 		state,
@@ -151,8 +177,8 @@ pub(crate) async fn register_aix(state: &AppState, path: &Path) -> Result<(Strin
 	.await
 }
 
-/// 把 .aix 的 `Payload/icon.png` 写到包旁的 `<name>.png`；无图标时清掉遗留文件。
-/// 写失败只告警，不阻断注册
+/// Writes the .aix's `Payload/icon.png` to `<name>.png` next to the package; without an icon, removes any leftover file.
+/// A write failure only warns and does not block registration
 async fn write_aix_icon(aix_path: &Path, icon: Option<Vec<u8>>) -> Option<String> {
 	let icon_path = aix_path.with_extension("png");
 	let Some(bytes) = icon else {
@@ -164,6 +190,16 @@ async fn write_aix_icon(aix_path: &Path, icon: Option<Vec<u8>>) -> Option<String
 		return None;
 	}
 	Some(icon_path.display().to_string())
+}
+
+/// Reads only the manifest from an in-memory package: the import endpoint learns the key (and so the
+/// landed file's name) before the upload touches disk; register_aix re-validates the whole package afterwards
+pub(crate) fn read_aix_manifest(bytes: &[u8]) -> Result<serde_json::Value, String> {
+	use aidoku_wasm::package::{JSON_ENTRY_MAX, MANIFEST_ENTRY, read_zip_entry};
+	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+		.map_err(|e| format!("invalid archive: {e}"))?;
+	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX)?;
+	serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))
 }
 
 type AixPackage = (serde_json::Value, Option<serde_json::Value>, Option<Vec<u8>>);
@@ -178,9 +214,9 @@ fn read_aix_package(path: &Path) -> Result<AixPackage, String> {
 	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX)?;
 	let doc: serde_json::Value =
 		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
-	// 载荷必须真实读得出（顺带校验 CRC），扫描不留存字节
+	// The payload must be genuinely readable (CRC checked along the way); the scan does not retain the bytes
 	read_zip_entry(&mut archive, WASM_ENTRY, WASM_PAYLOAD_MAX)?;
-	// 图标可选：老包或纯 wasm 包可能没有
+	// The icon is optional: old packages or bare wasm packages may not have one
 	let icon = read_optional_zip_entry(&mut archive, ICON_ENTRY, ICON_ENTRY_MAX)?;
 	let settings = read_zip_entry(&mut archive, SETTINGS_ENTRY, JSON_ENTRY_MAX)
 		.ok()
@@ -205,32 +241,29 @@ async fn read_dir_settings(path: &Path) -> Option<serde_json::Value> {
 	}
 }
 
-/// 成功返回 (key, 是否更新既有源)
-async fn register_source(state: &AppState, package: SourcePackage) -> Result<(String, bool), String> {
+/// On success returns (key, the registration outcome); an existing row only counts as Updated
+/// when the package version changed — a same-version rescan merely refreshes metadata in place
+async fn register_source(
+	state: &AppState,
+	package: SourcePackage,
+) -> Result<(String, RegisterOutcome), String> {
 	let pool = &state.pool;
 	let doc = &package.doc;
+	let key = manifest_key(doc)?;
 	let info = doc.get("info").ok_or("missing info")?;
-	let key = info
-		.get("id")
-		.and_then(|v| v.as_str())
-		.ok_or("missing info.id")?
-		.to_string();
-	if !valid_source_key(&key) {
-		return Err(format!("invalid source key {key:?}"));
-	}
 	let name = info
 		.get("name")
 		.and_then(|v| v.as_str())
 		.unwrap_or(&key)
 		.to_string();
 	let version = info.get("version").and_then(|v| v.as_i64()).unwrap_or(0);
-	// Aidoku 的 breakingChangeVersion 在 manifest 的 config 节（SourceInfo.Configuration）
+	// Aidoku's breakingChangeVersion lives in the manifest's config section (SourceInfo.Configuration)
 	let breaking_change_version = doc
 		.get("config")
 		.and_then(|c| c.get("breakingChangeVersion"))
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
-	// config 节原文落库：DTO 暴露与 per-source 并发帽都从这里读
+	// The raw config section lands in the DB: the DTO exposure and the per-source concurrency cap both read it
 	let config = doc
 		.get("config")
 		.filter(|c| c.is_object())
@@ -243,9 +276,9 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.get("contentRating")
 		.and_then(|v| v.as_i64())
 		.unwrap_or(0);
-	// languages 允许 {"code","isDefault"} 对象形式，列里只落语言码：消费端全按
-	// [String] 解码，原样落库会让源列表等查询 500；isDefault 由读清单原文的
-	// 合成/播种路径消费
+	// languages allows the {"code","isDefault"} object form, but the column stores only language codes: every
+	// consumer decodes [String], and storing the raw form would 500 the source list and other queries; isDefault is
+	// consumed by the synthesis/seeding paths that read the manifest text
 	let languages = serde_json::json!(source_languages(doc)
 		.into_iter()
 		.map(|(code, _)| code)
@@ -255,19 +288,21 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 	let wasm = package.wasm_path;
 	let now = unix_now();
 
-	let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
+	let existing: Option<(i64, i64)> = sqlx::query_as("SELECT id, version FROM source WHERE key = ?")
 		.bind(&key)
 		.fetch_optional(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-	// 动态值是 base_url 的真相源：落列后合成设置的候选与种子、登录 host 兜底都从行里出
-	let dynamic = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id,)| id), doc).await;
-	let base_url = dynamic.or(base_url);
-	let (id, updated) = if let Some((id,)) = existing {
-		// 老源保留 enabled 与 source_setting，只刷新元数据
+	// The dynamic value is the source of truth for base_url: once stored, the synthesized setting's candidates and seed and the login host fallback all come from the row
+	let (dynamic, features) = resolve_dynamic_base_url(state, &key, &wasm, existing.map(|(id, _)| id), doc)
+		.await
+		.unwrap_or_else(|| (String::new(), "{}".to_string()));
+	let base_url = if dynamic.is_empty() { base_url } else { Some(dynamic) };
+	let (id, outcome) = if let Some((id, old_version)) = existing {
+		// An existing source keeps enabled and source_setting; only the metadata is refreshed
 		sqlx::query(
 			"UPDATE source SET name = ?, version = ?, languages = ?, content_rating = ?,
-			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ? WHERE id = ?",
+			 base_url = ?, breaking_change_version = ?, config = ?, wasm_path = ?, icon_path = ?, updated_at = ?, features = ? WHERE id = ?",
 		)
 		.bind(name)
 		.bind(version)
@@ -279,16 +314,17 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(wasm)
 		.bind(icon_path)
 		.bind(now)
+		.bind(&features)
 		.bind(id)
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		(id, true)
+		(id, if old_version == version { RegisterOutcome::Refreshed } else { RegisterOutcome::Updated })
 	} else {
 		let result = sqlx::query(
 			"INSERT INTO source (key, name, version, languages, content_rating, base_url,
-			 breaking_change_version, config, wasm_path, icon_path, enabled, installed_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+			 breaking_change_version, config, wasm_path, icon_path, enabled, installed_at, updated_at, features)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
 		)
 		.bind(&key)
 		.bind(name)
@@ -302,17 +338,99 @@ async fn register_source(state: &AppState, package: SourcePackage) -> Result<(St
 		.bind(icon_path)
 		.bind(now)
 		.bind(now)
+		.bind(&features)
 		.execute(pool)
 		.await
 		.map_err(|e| format!("db: {e}"))?;
-		(result.last_insert_rowid(), false)
+		(result.last_insert_rowid(), RegisterOutcome::Installed)
 	};
 	seed_source_defaults(pool, id, package.settings.as_ref(), doc).await?;
-	Ok((key, updated))
+	Ok((key, outcome))
 }
 
-/// 对齐 Aidoku 安装源时的 register(defaults:) 语义：播种语言列表与 settings.json 默认值。
-/// 源运行时会 defaults.get 这些键（如 mangadex 的 contentRating），缺了直接报错
+/// Old rows installed before #147/0010 may miss manifest-derived metadata: config (installed before the config
+/// column), features (before the 0010 column), and breaking_change_version (always 0 from old registrations that
+/// never parsed the manifest, which breaks the rekey check on cross-breaking updates). Read each package and stamp
+/// them, COALESCE/MAX filling only the gaps: config/features only fill NULL columns, breaking takes the monotonic
+/// MAX (never regressing an existing value). Runs serially in the background after startup without blocking the
+/// service; a single source's failure (corrupt package/compile failure) leaves NULL, and the DTO treats that as
+/// unknown (the home entry point is not hidden). Newly installed sources are stamped at registration and are not in this pass
+pub async fn backfill_source_metadata(pool: &sqlx::SqlitePool) {
+	let rows: Vec<(i64, String)> = match sqlx::query_as(
+		"SELECT id, wasm_path FROM source WHERE (config IS NULL OR features IS NULL) AND kind = 'aidoku'",
+	)
+	.fetch_all(pool)
+	.await
+	{
+		Ok(rows) => rows,
+		Err(e) => {
+			tracing::warn!("backfill source metadata select failed: {e}");
+			return;
+		}
+	};
+	for (id, wasm_path) in rows {
+		let stamped = tokio::task::spawn_blocking(
+			move || -> Result<(Option<String>, String, i64), String> {
+				let path = std::path::Path::new(&wasm_path);
+				let (config, breaking) = read_manifest_config(path)?;
+				let bytes = aidoku_wasm::package::read_wasm_payload(path).map_err(|e| e.to_string())?;
+				let features = aidoku_wasm::SourceFeatures::from_wasm_bytes(&bytes)?;
+				let features = serde_json::to_string(&features).map_err(|e| e.to_string())?;
+				Ok((config, features, breaking))
+			},
+		)
+		.await;
+		match stamped {
+			Ok(Ok((config, features, breaking))) => {
+				if let Err(e) = sqlx::query(
+					"UPDATE source SET config = COALESCE(config, ?), features = COALESCE(features, ?),
+					 breaking_change_version = MAX(breaking_change_version, ?) WHERE id = ?",
+				)
+				.bind(config)
+				.bind(features)
+				.bind(breaking)
+				.bind(id)
+				.execute(pool)
+				.await
+				{
+					tracing::warn!(source_id = id, "backfill source metadata update failed: {e}");
+				}
+			}
+			Ok(Err(e)) => tracing::warn!(source_id = id, "backfill source metadata failed: {e}"),
+			Err(e) => tracing::warn!(source_id = id, "backfill source metadata join failed: {e}"),
+		}
+	}
+}
+
+/// For backfill: reads the manifest's raw config section from the package (pass-through convention identical to
+/// registration, unknown keys kept) and config.breakingChangeVersion (the rekey check depends on it; old
+/// registrations may never have parsed it). A bare wasm package has no manifest, so return (None, 0) — that row's config stays NULL
+fn read_manifest_config(path: &Path) -> Result<(Option<String>, i64), String> {
+	use aidoku_wasm::package::{JSON_ENTRY_MAX, MANIFEST_ENTRY, read_zip_entry};
+	let is_zip = std::fs::File::open(path)
+		.and_then(|mut f| {
+			let mut magic = [0u8; 2];
+			std::io::Read::read_exact(&mut f, &mut magic).map(|_| magic == *b"PK")
+		})
+		.unwrap_or(false);
+	if !is_zip {
+		return Ok((None, 0));
+	}
+	let file = std::fs::File::open(path).map_err(|e| format!("open: {e}"))?;
+	let mut archive = zip::ZipArchive::new(file).map_err(|e| format!("invalid archive: {e}"))?;
+	let raw = read_zip_entry(&mut archive, MANIFEST_ENTRY, JSON_ENTRY_MAX).map_err(|e| e.to_string())?;
+	let doc: serde_json::Value =
+		serde_json::from_slice(&raw).map_err(|e| format!("parse {MANIFEST_ENTRY}: {e}"))?;
+	let config = doc.get("config").filter(|c| c.is_object());
+	let breaking = config
+		.and_then(|c| c.get("breakingChangeVersion"))
+		.and_then(|v| v.as_i64())
+		.unwrap_or(0);
+	Ok((config.map(|c| c.to_string()), breaking))
+}
+
+/// Mirrors the register(defaults:) semantics of Aidoku installing a source: seeds the language list and settings.json defaults.
+/// The source reads these keys at runtime via defaults.get (e.g. mangadex's contentRating) and fails outright when they are missing
 pub(crate) async fn seed_source_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -323,8 +441,8 @@ pub(crate) async fn seed_source_defaults(
 	if let Some((key, langs)) = default_languages(doc) {
 		seeds.push((key, langs));
 	}
-	// allowsBaseUrlSelect 时 App 会合成 base url 设置，默认候选列表第一个
-	// （动态解析值前置进 info.url + info.urls）；copymanga 等源 defaults.get("url") 必读
+	// With allowsBaseUrlSelect the app synthesizes a base-url setting defaulting to the first candidate
+	// (the dynamically resolved value prepended to info.url + info.urls); sources like copymanga always read defaults.get("url")
 	let allows_select = doc
 		.get("config")
 		.and_then(|c| c.get("allowsBaseUrlSelect"))
@@ -347,8 +465,8 @@ pub(crate) async fn seed_source_defaults(
 	seed_defaults(pool, source_id, seeds).await
 }
 
-/// 成功 `get_settings` 后调：把源在代码里声明的默认值播种进库，对齐 AidokuRunner
-/// 在 getSettings() 里 `register(defaults:)` 的行为
+/// Called after a successful `get_settings`: seeds the defaults the source declares in code into the DB, mirroring
+/// AidokuRunner's `register(defaults:)` inside getSettings()
 pub(crate) async fn seed_dynamic_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -359,9 +477,10 @@ pub(crate) async fn seed_dynamic_defaults(
 	seed_defaults(pool, source_id, seeds).await
 }
 
-/// 播种默认值：行不存在直接种；已存在时仅当现存值仍等于上次播种的默认才写新默认
-/// （UserDefaults register(defaults:) 的物化版——没设过的键永远解析到当前默认），
-/// 用户改过的值保留。迁移前入库的行 seeded_value 为 NULL，一律按用户值保守处理
+/// Seeds defaults: a missing row is seeded directly; an existing row gets the new default only when its current
+/// value still equals the previously seeded one (a materialized UserDefaults register(defaults:) — a key never set
+/// always resolves to the current default); user-changed values are kept. Rows stored before the migration have
+/// seeded_value NULL and are conservatively treated as user values
 async fn seed_defaults(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -387,7 +506,7 @@ async fn seed_defaults(
 	Ok(())
 }
 
-/// 源声明的 base url 列表：info.url 在前，info.urls 按顺序追加（对齐 AidokuRunner 的 urls 组装）
+/// The source-declared base url list: info.url first, then info.urls in order (mirroring AidokuRunner's urls assembly)
 pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
 	let info = doc.get("info");
 	let mut urls: Vec<String> = info
@@ -402,9 +521,10 @@ pub(crate) fn source_urls(doc: &serde_json::Value) -> Vec<String> {
 	urls
 }
 
-/// 合成 base-url 设置的候选列表：持久化的 base_url（动态解析值或包内静态值）按
-/// AidokuRunner 语义前置，已存在于包内列表则不重复。注册时行内 base_url 总是
-/// 当前包的解析结果，设置端点与播种共用同一组装，候选与默认不会分叉
+/// The candidate list for the synthesized base-url setting: the persisted base_url (dynamically resolved value or
+/// the package's static value) is prepended per AidokuRunner semantics, unless already in the package list. At
+/// registration the row's base_url is always the current package's resolution, and the settings endpoint and seeding
+/// share this assembly, so candidates and the default never diverge
 pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -> Vec<String> {
 	let mut urls = source_urls(doc);
 	if let Some(persisted) = persisted
@@ -415,17 +535,18 @@ pub(crate) fn candidate_urls(doc: &serde_json::Value, persisted: Option<&str>) -
 	urls
 }
 
-/// 安装/更新时解析动态 base URL（features.base_url 门控，对齐 AidokuRunner init 的
-/// `try? getBaseUrl()`：导出缺失、调用失败、返回值非法都只告警并回退包内静态值）。
-/// 一次性实例带库内现有 defaults/cookies——Runner 解析时 UserDefaults 已有上次注册值；
-/// 新装源为空
+/// Resolves the dynamic base URL at install/update (gated on features.base_url, mirroring AidokuRunner init's
+/// `try? getBaseUrl()`: a missing export, a failed call, or an invalid return value only warns and falls back to the
+/// package's static value). The one-shot instance carries the DB's current defaults/cookies — Runner resolves with
+/// UserDefaults already holding the last registration's values; a fresh install has none. features is returned too,
+/// so registration can store it for the DTO capability bits (e.g. hasHome)
 async fn resolve_dynamic_base_url(
 	state: &AppState,
 	key: &str,
 	wasm_path: &str,
 	existing_id: Option<i64>,
 	doc: &serde_json::Value,
-) -> Option<String> {
+) -> Option<(String, String)> {
 	let mut config = SourceConfig::new(key, wasm_path);
 	config.limits = state.config.wasm_limits();
 	config.policy = state.policy.clone();
@@ -454,16 +575,21 @@ async fn resolve_dynamic_base_url(
 		None
 	};
 	handle.shutdown().await;
-	resolved.filter(|url| {
+	let resolved = resolved.filter(|url| {
 		let valid = url::Url::parse(url).is_ok();
 		if !valid {
 			tracing::warn!(key, url, "ignore invalid dynamic base url");
 		}
 		valid
-	})
+	});
+	let features = serde_json::to_string(&features).unwrap_or_else(|e| {
+		tracing::warn!(key, "serialize source features failed: {e}");
+		"{}".into()
+	});
+	Some((resolved.unwrap_or_default(), features))
 }
 
-/// 源声明的语言列表：(code, isDefault)，按声明顺序；字符串项无 isDefault 标记
+/// The source-declared language list: (code, isDefault), in declaration order; string entries carry no isDefault mark
 pub(crate) fn source_languages(doc: &serde_json::Value) -> Vec<(String, bool)> {
 	let Some(langs) = doc
 		.get("info")
@@ -495,7 +621,7 @@ pub(crate) fn source_languages(doc: &serde_json::Value) -> Vec<(String, bool)> {
 	codes
 }
 
-/// languageSelectType == "single" 时语言设置是单选（键 language），否则多选（键 languages）
+/// With languageSelectType == "single" the language setting is single-choice (key language), otherwise multi-choice (key languages)
 pub(crate) fn language_select_single(doc: &serde_json::Value) -> bool {
 	doc.get("config")
 		.and_then(|c| c.get("languageSelectType"))
@@ -503,8 +629,8 @@ pub(crate) fn language_select_single(doc: &serde_json::Value) -> bool {
 		== Some("single")
 }
 
-/// 服务端没有设备语言，默认退化为 isDefault 优先，都没有取第一个
-/// （AidokuRunner 按设备语言取交集，差异记录在 docs/architecture.md）
+/// The server has no device language, so the default degrades to isDefault-first, falling back to the first entry
+/// (AidokuRunner intersects with the device language; the difference is recorded in docs/architecture.md)
 pub(crate) fn default_language_pick(langs: &[(String, bool)]) -> Vec<String> {
 	let picked: Vec<String> = langs
 		.iter()
@@ -521,8 +647,8 @@ pub(crate) fn default_language_pick(langs: &[(String, bool)]) -> Vec<String> {
 	}
 }
 
-/// 多语言源的语言设置种子：>1 种语言才存在该设置；键与值类型随 languageSelectType
-/// （multiple → languages: StringArray，single → language: String）。
+/// The language-setting seed for multi-language sources: the setting exists only with >1 language; key and value
+/// type follow languageSelectType (multiple → languages: StringArray, single → language: String).
 fn default_languages(doc: &serde_json::Value) -> Option<(String, DefaultValue)> {
 	let langs = source_languages(doc);
 	if langs.len() < 2 {
@@ -543,15 +669,15 @@ fn collect_setting_defaults(
 	let Some(items) = items.as_array() else { return };
 	for item in items {
 		let ty = item.get("type").and_then(|v| v.as_str());
-		// group 与 page 都是容器：AidokuRunner 的 loadSettingsDefaults 两者都递归
+		// group and page are both containers: AidokuRunner's loadSettingsDefaults recurses into both
 		if matches!(ty, Some("group") | Some("page")) {
 			if let Some(children) = item.get("items") {
 				collect_setting_defaults(children, out);
 			}
 			continue;
 		}
-		// 对齐 AidokuRunner loadSettingsDefaults：显式 default 优先（null 视同缺失）；
-		// 缺失时 select/picker 落第一个候选值，switch 落 false，其余不播种
+		// Mirroring AidokuRunner loadSettingsDefaults: an explicit default wins (null counts as absent);
+		// when absent, select/picker fall to the first candidate, switch to false, the rest are not seeded
 		let default = item
 			.get("default")
 			.filter(|v| !v.is_null())
@@ -570,7 +696,7 @@ fn collect_setting_defaults(
 		else {
 			continue;
 		};
-		// Null 种下后 defaults.get 一样是无效值，不浪费一行
+		// Seeding Null would still be an invalid value for defaults.get, so don't waste a row
 		let value = json_to_default_value(&default);
 		if !matches!(value, DefaultValue::Null) {
 			out.push((key.to_string(), value));
@@ -578,8 +704,8 @@ fn collect_setting_defaults(
 	}
 }
 
-/// 动态设置（`get_settings` 导出的嵌套 shape）的默认值，规则同 `collect_setting_defaults`：
-/// group/page 递归，select/picker 无显式默认落第一个候选值，其余只在有 default 时取
+/// Defaults of dynamic settings (the nested shape exported by `get_settings`), same rules as `collect_setting_defaults`:
+/// group/page recurse, select/picker without an explicit default fall to the first candidate, the rest are taken only when a default exists
 fn collect_dynamic_defaults(
 	items: &[serde_json::Value],
 	out: &mut Vec<(String, DefaultValue)>,
@@ -605,7 +731,7 @@ fn collect_dynamic_defaults(
 	}
 }
 
-/// 一个动态设置项的默认值；无显式默认时 select/picker 退化为第一个候选值
+/// The default of one dynamic setting item; without an explicit default, select/picker degrade to the first candidate
 fn dynamic_default(value: &serde_json::Value) -> Option<serde_json::Value> {
 	let (kind, body) = value.as_object()?.iter().next()?;
 	if let Some(default) = body.get("default").filter(|v| !v.is_null()) {
@@ -621,8 +747,8 @@ fn dynamic_default(value: &serde_json::Value) -> Option<serde_json::Value> {
 	}
 }
 
-/// 按 (source_id, key) upsert 详情字段；时间戳由调用方按需打点。
-/// 收连接而不是连接池：迁移等场景要把 upsert 包进调用方自己的事务
+/// Upserts the detail fields by (source_id, key); timestamps are stamped by the caller as needed.
+/// Takes a connection rather than the pool: migration and similar flows wrap the upsert in their own transaction
 pub async fn upsert_manga(
 	conn: &mut sqlx::SqliteConnection,
 	source_id: i64,
@@ -647,7 +773,10 @@ pub async fn upsert_manga(
 		 cover_url = excluded.cover_url,
 		 url = excluded.url, initialized = excluded.initialized,
 		 update_strategy = excluded.update_strategy,
-		 next_update_time = excluded.next_update_time",
+		 next_update_time = excluded.next_update_time,
+		 next_update_is_fallback = CASE
+		 WHEN manga.next_update_time IS excluded.next_update_time THEN manga.next_update_is_fallback
+		 ELSE 0 END",
 	)
 	.bind(source_id)
 	.bind(&manga.key)
@@ -691,15 +820,42 @@ pub async fn upsert_manga(
 	Ok(id)
 }
 
-/// 章节对账：source_order 取源返回下标；消失的章节有 download 行则锁定保留，否则删除。
-/// 返回本次对账新插入的 chapter id（更新检测据此判定新增章节）
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconcileOutcome {
+	pub new_ids: Vec<i64>,
+	pub previous_latest_chapter_number: Option<f64>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct ExistingChapter {
+	id: i64,
+	key: String,
+	number: Option<f64>,
+	source_order: i64,
+}
+
+/// Chapter reconciliation: source_order takes the index in the source's response; a vanished chapter with a
+/// download row is locked and kept, otherwise deleted. Chapter keys in protected are never treated as vanished
+/// (entries the local source's scan failed to read — kmrs's failed-directory protection); a protected entry also
+/// covers the keys below it, since a container that failed to read was never walked and its chapters cannot enter
+/// the set one by one.
 pub async fn reconcile_chapters(
 	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
 	chapters: &[Chapter],
+	protected: &[String],
 ) -> ApiResult<Vec<i64>> {
+	Ok(reconcile_chapters_detailed(conn, manga_id, chapters, protected).await?.new_ids)
+}
+
+pub async fn reconcile_chapters_detailed(
+	conn: &mut sqlx::SqliteConnection,
+	manga_id: i64,
+	chapters: &[Chapter],
+	protected: &[String],
+) -> ApiResult<ReconcileOutcome> {
 	let now = unix_now();
-	// 源恰好一种语言时给缺语言的章节补上（对齐 AidokuRunner）
+	// When the source has exactly one language, fill it into language-less chapters (mirroring AidokuRunner)
 	let fill_language: Option<String> =
 		sqlx::query_as::<_, (sqlx::types::Json<Vec<String>>,)>(
 			"SELECT s.languages FROM manga m JOIN source s ON s.id = m.source_id WHERE m.id = ?",
@@ -711,18 +867,69 @@ pub async fn reconcile_chapters(
 			[only] => Some(only.clone()),
 			_ => None,
 		});
-	let existing: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM chapter WHERE manga_id = ?")
-		.bind(manga_id)
-		.fetch_all(&mut *conn)
-		.await?;
-	let known: HashSet<&String> = existing.iter().map(|(_, key)| key).collect();
+	let existing: Vec<ExistingChapter> = sqlx::query_as(
+		"SELECT id, key, number, source_order FROM chapter WHERE manga_id = ?",
+	)
+	.bind(manga_id)
+	.fetch_all(&mut *conn)
+	.await?;
+	let previous_latest_chapter_number = existing
+		.iter()
+		.min_by_key(|chapter| (chapter.source_order, chapter.id))
+		.and_then(|chapter| chapter.number);
+	let known: HashSet<String> = existing.iter().map(|chapter| chapter.key.clone()).collect();
+	let incoming: HashSet<String> = chapters.iter().map(|chapter| chapter.key.clone()).collect();
+	let is_protected = |key: &str| {
+		protected
+			.iter()
+			.any(|entry| key == entry || key.starts_with(&format!("{entry}/")))
+	};
 	let mut seen = HashSet::with_capacity(chapters.len());
-	let mut new_keys = Vec::new();
-	for (index, chapter) in chapters.iter().enumerate() {
+	let mut new_chapters = Vec::new();
+	for chapter in chapters {
 		if seen.insert(chapter.key.clone()) && !known.contains(&chapter.key) {
-			new_keys.push(chapter.key.clone());
+			new_chapters.push(chapter);
 		}
+	}
+	let mut rekeyed_ids = HashSet::new();
+	for chapter in &new_chapters {
+		let Some(number) = chapter.chapter_number.map(|n| n as f64) else {
+			continue;
+		};
+		let mut old_matches = existing.iter().filter(|old| {
+			!incoming.contains(&old.key) && !is_protected(&old.key) && old.number == Some(number)
+		});
+		let Some(old) = old_matches.next() else {
+			continue;
+		};
+		if old_matches.next().is_some()
+			|| new_chapters
+				.iter()
+				.filter(|candidate| candidate.chapter_number.map(|n| n as f64) == Some(number))
+				.count() != 1
+		{
+			continue;
+		}
+		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+			.bind(old.id)
+			.execute(&mut *conn)
+			.await?;
+		sqlx::query("UPDATE chapter SET key = ?, page_count = 0 WHERE id = ?")
+			.bind(&chapter.key)
+			.bind(old.id)
+			.execute(&mut *conn)
+			.await?;
+		rekeyed_ids.insert(old.id);
+	}
+	for (index, chapter) in chapters.iter().enumerate() {
 		let scanlators = serde_json::to_string(&chapter.scanlators.clone().unwrap_or_default())?;
+		// whitespace-only titles fold to NULL, matching the Aidoku host's "" -> nil
+		// normalization; the webui treats both as "no title" either way
+		let title = chapter
+			.title
+			.as_ref()
+			.filter(|t| !t.trim().is_empty())
+			.cloned();
 		let language = chapter
 			.language
 			.as_ref()
@@ -738,11 +945,11 @@ pub async fn reconcile_chapters(
 			 scanlators = excluded.scanlators, language = excluded.language,
 			 thumbnail = excluded.thumbnail, url = excluded.url,
 			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
-			 locked = excluded.locked, fetched_at = excluded.fetched_at",
+			 locked = excluded.locked, fetched_at = chapter.fetched_at",
 		)
 		.bind(manga_id)
 		.bind(&chapter.key)
-		.bind(&chapter.title)
+		.bind(title)
 		.bind(chapter.chapter_number.map(|n| n as f64))
 		.bind(chapter.volume_number.map(|n| n as f64))
 		.bind(scanlators)
@@ -756,37 +963,40 @@ pub async fn reconcile_chapters(
 		.execute(&mut *conn)
 		.await?;
 	}
-	for (chapter_id, key) in existing {
-		if seen.contains(&key) {
+	for old in &existing {
+		if seen.contains(&old.key) || rekeyed_ids.contains(&old.id) || is_protected(&old.key) {
 			continue;
 		}
 		let has_download: Option<(i64,)> =
 			sqlx::query_as("SELECT 1 FROM download WHERE chapter_id = ? LIMIT 1")
-				.bind(chapter_id)
+				.bind(old.id)
 				.fetch_optional(&mut *conn)
 				.await?;
 		if has_download.is_some() {
 			sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
-				.bind(chapter_id)
+				.bind(old.id)
 				.execute(&mut *conn)
 				.await?;
 		} else {
 			sqlx::query("DELETE FROM chapter WHERE id = ?")
-				.bind(chapter_id)
+				.bind(old.id)
 				.execute(&mut *conn)
 				.await?;
 		}
 	}
-	let mut new_ids = Vec::with_capacity(new_keys.len());
-	for key in new_keys {
+	let mut new_ids = Vec::with_capacity(new_chapters.len());
+	for chapter in new_chapters {
 		let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
 			.bind(manga_id)
-			.bind(&key)
+			.bind(&chapter.key)
 			.fetch_one(&mut *conn)
 			.await?;
 		new_ids.push(id);
 	}
-	Ok(new_ids)
+	Ok(ReconcileOutcome {
+		new_ids,
+		previous_latest_chapter_number,
+	})
 }
 
 pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
@@ -801,7 +1011,7 @@ pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	row.ok_or_else(|| ApiError::not_found("manga not found"))
 }
 
-/// 列表端点批量取行：一条 IN 查询替代逐行 manga_row
+/// Batch row fetch for list endpoints: one IN query instead of a manga_row per row
 pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<HashMap<i64, MangaRow>> {
 	if ids.is_empty() {
 		return Ok(HashMap::new());
@@ -835,68 +1045,145 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	row.ok_or_else(|| ApiError::not_found("chapter not found"))
 }
 
-/// 读 page 缓存；miss 或 refresh 时从源拉 get_page_list 并整批落缓存
+/// Derives an instance slug from a display name: lowercase alphanumeric runs joined with -; no usable
+/// character at all means no key can be built. Alphanumeric is Unicode-aware — a CJK name like 漫画
+/// slugs to 漫画 rather than failing. Shared by the internal-source registrations (opds/local)
+pub(crate) fn slugify(name: &str) -> Option<String> {
+	let mut slug = String::new();
+	let mut dash = false;
+	for c in name.chars().flat_map(char::to_lowercase) {
+		if c.is_alphanumeric() {
+			if dash && !slug.is_empty() {
+				slug.push('-');
+			}
+			slug.push(c);
+			dash = false;
+		} else {
+			dash = true;
+		}
+	}
+	(!slug.is_empty()).then_some(slug)
+}
+
+/// The built-in local source (kind = local) has no wasm instance; chapters/pages/covers all take the filesystem branch
+pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
+}
+
+/// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
+pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
+	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
+}
+
+async fn source_kind(pool: &SqlitePool, source_id: i64) -> ApiResult<String> {
+	let kind: Option<(String,)> = sqlx::query_as("SELECT kind FROM source WHERE id = ?")
+		.bind(source_id)
+		.fetch_optional(pool)
+		.await?;
+	Ok(kind.map(|(k,)| k).unwrap_or_default())
+}
+
+/// Reads the page cache; on miss or refresh, pulls get_page_list from the source and stores the batch in the cache
 pub async fn load_pages(
 	state: &Arc<AppState>,
 	chapter_id: i64,
 	refresh: bool,
-) -> ApiResult<Vec<(i64, String)>> {
+) -> ApiResult<Vec<PageRow>> {
 	if !refresh {
-		let cached: Vec<(i64, String)> =
-			sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
-				.bind(chapter_id)
-				.fetch_all(&state.pool)
-				.await?;
+		let cached: Vec<PageRow> = sqlx::query_as(
+			"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
+		)
+		.bind(chapter_id)
+		.fetch_all(&state.pool)
+		.await?;
 		if !cached.is_empty() {
 			return Ok(cached);
 		}
 	}
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
-	let handle = state.get_handle(manga.source_id).await?;
-	let mut pages = handle
-		.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
+	if source_is_local(&state.pool, manga.source_id).await? {
+		let (entries, compatible) = crate::local::chapter_pages(
+			&state.local_dirs(manga.source_id).await?,
+			&state.local_zip,
+			&manga.key,
+			&chapter.key,
+		)
 		.await?;
-	fetch_page_descriptions(&handle, &mut pages).await?;
-	let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
-	{
-		let mut tx = state.pool.begin().await?;
-		sqlx::query("DELETE FROM page WHERE chapter_id = ?")
-			.bind(chapter_id)
-			.execute(&mut *tx)
+		// A local chapter has no materialized blobs, but may have downsample variants: invalidate them when the page
+		// rows are rewritten (on the online path, materialize_image_pages' whole-directory removal carries the same duty)
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		let rows: Vec<serde_json::Value> = entries
+			.iter()
+			.map(|entry| crate::local::page_content_json(entry))
+			.collect();
+		store_page_rows(&state.pool, chapter_id, &rows, compatible).await?;
+	} else if source_is_opds(&state.pool, manga.source_id).await? {
+		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
+		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
+		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
+	} else {
+		let handle = state.get_handle(manga.source_id).await?;
+		let mut pages = handle
+			.get_page_list(manga_from_row(&manga), chapter_from_row(&chapter))
 			.await?;
-		for (index, content) in contents.iter().enumerate() {
-			let page = &pages[index];
-			let stored = serde_json::json!({
-				"content": content,
-				"thumbnail": page.thumbnail,
-				"hasDescription": page.has_description,
-				"description": page.description,
-			});
-			sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?)")
-				.bind(chapter_id)
-				.bind(index as i64)
-				.bind(serde_json::to_string(&stored)?)
-				.execute(&mut *tx)
-				.await?;
-		}
-		sqlx::query("UPDATE chapter SET page_count = ? WHERE id = ?")
-			.bind(pages.len() as i64)
-			.bind(chapter_id)
-			.execute(&mut *tx)
-			.await?;
-		tx.commit().await?;
+		fetch_page_descriptions(&handle, &mut pages).await?;
+		let contents = materialize_image_pages(state, &handle, chapter_id, &pages).await?;
+		let rows: Vec<serde_json::Value> = contents
+			.iter()
+			.enumerate()
+			.map(|(index, content)| {
+				let page = &pages[index];
+				serde_json::json!({
+					"content": content,
+					"thumbnail": page.thumbnail,
+					"hasDescription": page.has_description,
+					"description": page.description,
+				})
+			})
+			.collect();
+		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
 	}
-	let stored: Vec<(i64, String)> =
-		sqlx::query_as("SELECT idx, content FROM page WHERE chapter_id = ? ORDER BY idx ASC")
-			.bind(chapter_id)
-			.fetch_all(&state.pool)
-			.await?;
+	let stored: Vec<PageRow> = sqlx::query_as(
+		"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
+	)
+	.bind(chapter_id)
+	.fetch_all(&state.pool)
+	.await?;
 	Ok(stored)
 }
 
-/// has_description 且未内联 description 的页按 Aidoku 语义回源调 get_page_description
-/// 取文本；与 image 物化同一纪律：任一页失败整章失败，下轮整章重写清掉半成品
+/// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count and divina compatibility
+async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json::Value], compatible: Option<bool>) -> ApiResult<()> {
+	let mut tx = crate::db::begin_write(pool).await?;
+	sqlx::query("DELETE FROM page WHERE chapter_id = ?")
+		.bind(chapter_id)
+		.execute(&mut *tx)
+		.await?;
+	for (index, stored) in rows.iter().enumerate() {
+		sqlx::query(
+			"INSERT INTO page (chapter_id, idx, content, width, height, dimensions_checked)
+			 VALUES (?, ?, ?, NULL, NULL, 0)",
+		)
+		.bind(chapter_id)
+		.bind(index as i64)
+		.bind(serde_json::to_string(stored)?)
+		.execute(&mut *tx)
+		.await?;
+	}
+	sqlx::query("UPDATE chapter SET page_count = ?, epub_divina_compatible = ? WHERE id = ?")
+		.bind(rows.len() as i64)
+		.bind(compatible)
+		.bind(chapter_id)
+		.execute(&mut *tx)
+		.await?;
+	tx.commit().await?;
+	Ok(())
+}
+
+/// Pages with has_description but no inlined description call back to the source's get_page_description for the
+/// text, per Aidoku semantics; same discipline as image materialization: any page's failure fails the chapter, and the next wholesale rewrite clears the half-done state
 async fn fetch_page_descriptions(handle: &SourceHandle, pages: &mut [aidoku::Page]) -> ApiResult<()> {
 	for page in pages.iter_mut() {
 		if !page.has_description || page.description.is_some() {
@@ -907,15 +1194,15 @@ async fn fetch_page_descriptions(handle: &SourceHandle, pages: &mut [aidoku::Pag
 	Ok(())
 }
 
-/// Page 不实现 Clone 而宿主调用按值消费：深拷走 JSON 往返（四种 content 变体的
-/// serde 表示对称，Image 的 rid 反序列化回来是 externally_managed 不触发回收）
+/// Page does not implement Clone while host calls consume by value: deep-copy via a JSON round trip (the four
+/// content variants' serde representations are symmetric, and an Image rid deserializes back as externally_managed, triggering no recycling)
 fn clone_page(page: &aidoku::Page) -> ApiResult<aidoku::Page> {
 	Ok(serde_json::from_value(serde_json::to_value(page)?)?)
 }
 
-/// Image 页物化：RID 只在当前 actor 会话里有效，字节落 blob 文件后 JSON 只存
-/// 文件名（{"Image": "<idx>.png"}），这是重启与 actor 重建后仍能取页的唯一形态。
-/// 任一页取字节失败整章失败，blob 目录下轮的整章重写会清掉半成品
+/// Image page materialization: an RID is valid only in the current actor session, so once the bytes land in a blob
+/// file the JSON stores just the file name ({"Image": "<idx>.png"}) — the only form that still resolves after a
+/// restart or actor rebuild. Any page's byte fetch failing fails the whole chapter, and the blob directory's next wholesale rewrite clears the half-done state
 async fn materialize_image_pages(
 	state: &Arc<AppState>,
 	handle: &SourceHandle,
@@ -947,8 +1234,8 @@ async fn materialize_image_pages(
 	Ok(contents)
 }
 
-/// 物化过的 Image 页读字节：blob 文件名只由 load_pages 写入（<idx>.png），
-/// 但仍按文件名基元校验一遍防路径逃逸
+/// Reads the bytes of a materialized Image page: blob file names are only ever written by load_pages (<idx>.png),
+/// but the name is still validated as a single path component against traversal
 pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str) -> ApiResult<Vec<u8>> {
 	if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.') {
 		return Err(ApiError::bad_request("invalid page blob name"));
@@ -963,7 +1250,7 @@ pub async fn page_image_blob(state: &Arc<AppState>, chapter_id: i64, name: &str)
 		.map_err(|_| ApiError::not_found("page blob not found"))
 }
 
-/// 启动清扫：chapter 行没了的 blob 目录整棵删掉（章节对账删除后只剩这里能回收）
+/// Startup sweep: blob directories whose chapter row is gone are removed whole (after chapter reconciliation deletes rows, this is the only place left that can reclaim them)
 pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 	let mut read_dir = match tokio::fs::read_dir(dir).await {
 		Ok(read_dir) => read_dir,
@@ -984,9 +1271,9 @@ pub async fn sweep_page_blobs(pool: &SqlitePool, dir: &Path) {
 	}
 }
 
-/// 有界读响应体：头声明长度超线快败；压缩/无头长度靠流式累计截停（同 repo::fetch_capped
-/// 模式）。max 为 0 不设限
-async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
+/// Bounded response-body read: a header-declared length over the cap fails fast; compressed/unannounced lengths are
+/// stopped by streaming accumulation (the repo::fetch_capped pattern). max = 0 means unlimited
+pub(crate) async fn read_body(response: reqwest::Response, max: u64) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let mime = response
 		.headers()
 		.get(reqwest::header::CONTENT_TYPE)
@@ -1018,13 +1305,18 @@ fn fetch_err(e: crate::source::routed::FetchError) -> ApiError {
 	ApiError::bad_gateway(format!("upstream request failed: {e}"))
 }
 
-/// 裸 GET，不经过源的 image_request 改造。调用方全是 zip 页：整章压缩包是单个
-/// 大 body，走 net_zip_body_max_mb 专用高帽而不是页图帽
+/// A bare GET without the source's image_request transformation. Every caller is a zip page: a whole-chapter
+/// archive is a single large body, so it takes the dedicated higher net_zip_body_max_mb cap instead of the page-image cap
 pub async fn http_get(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let max = state.config.net_zip_body_max_mb * 1024 * 1024;
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, max).await;
+	}
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
 	let handle = state.get_handle(source_id).await?;
 	let accept_language = handle.accept_language();
@@ -1033,10 +1325,10 @@ pub async fn http_get(
 		.get_with(&url, Some(accept_language.as_str()))
 		.await
 		.map_err(fetch_err)?;
-	read_body(response, state.config.net_zip_body_max_mb * 1024 * 1024).await
+	read_body(response, max).await
 }
 
-/// 图像取回的完整结果：字节之外带状态与头，process_*_image 构造 ImageResponse 要用
+/// The complete result of an image fetch: bytes plus status and headers, which process_*_image needs to build the ImageResponse
 pub struct RemoteImage {
 	pub bytes: Vec<u8>,
 	pub mime: Option<String>,
@@ -1055,7 +1347,7 @@ fn flatten_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)
 	flat
 }
 
-/// 按源特性拉图：有 image_request 用源给的 spec 发请求，否则裸 GET
+/// Fetches an image per the source's capabilities: with image_request, send the request from the source-given spec; otherwise a bare GET
 pub async fn fetch_remote(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -1119,16 +1411,21 @@ pub async fn fetch_remote(
 	})
 }
 
-/// 处理器输出统一编码成 PNG（无损且源侧解码链路已有）
+/// Processor output is uniformly encoded as PNG (lossless, and the source-side decode chain already exists)
 const PROCESSED_MIME: &str = "image/png";
 
-/// 页图拉取：fetch_remote 之后源有 page_image_processor 就过一道处理
+/// Page-image fetch: after fetch_remote, run it through the source's page_image_processor when present;
+/// an opds source has neither processor nor instance, so page images take a bare GET with basic credentials
 pub async fn fetch_page_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 	context: Option<PageContext>,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().page_image_processor {
 		let image = fetch_remote(state, source_id, url, context).await?;
@@ -1141,12 +1438,16 @@ pub async fn fetch_page_image(
 	Ok((bytes, Some(PROCESSED_MIME.into())))
 }
 
-/// 封面拉取：同上，走 cover_image_processor
+/// Cover fetch: same as above, through cover_image_processor; opds sources take the page-image arm
 pub async fn fetch_cover_image(
 	state: &Arc<AppState>,
 	source_id: i64,
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
+	if source_is_opds(&state.pool, source_id).await? {
+		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
+	}
 	let handle = state.get_handle(source_id).await?;
 	if !handle.features().cover_image_processor {
 		let image = fetch_remote(state, source_id, url, None).await?;
@@ -1167,172 +1468,6 @@ fn process_input(image: RemoteImage, url: &str) -> aidoku_wasm::ProcessImageInpu
 	}
 }
 
-const COVER_DEFAULT_MIME: &str = "image/jpeg";
-
-/// OPDS 封面取字节：流程同 cover.rs（新鲜磁盘缓存优先，miss 回源拉取并写缓存）
-pub async fn cover_bytes(state: &Arc<AppState>, manga_id: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
-	let manga = manga_row(&state.pool, manga_id).await?;
-	let covers_dir = state.config.covers_dir.clone();
-	let cache_path = covers_dir.join(manga_id.to_string());
-	if let Some((bytes, mime)) = cover_cache_read(&cache_path, manga.last_fetched_at).await {
-		return Ok((bytes, Some(mime)));
-	}
-	let Some(url) = manga.cover_url.clone() else {
-		return Err(ApiError::not_found("cover not available"));
-	};
-	let (bytes, mime) = fetch_cover_image(state, manga.source_id, &url).await?;
-	let mime = mime.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
-	match cover_cache_write(&covers_dir, manga_id, &bytes, &mime).await {
-		Ok(()) => cover_cache_enforce_limit(&covers_dir, state.config.cover_cache_max),
-		Err(e) => tracing::warn!(manga_id, "cover cache write failed: {e}"),
-	}
-	Ok((bytes, Some(mime)))
-}
-
-fn cover_sidecar_path(cache_path: &Path) -> std::path::PathBuf {
-	cache_path.with_file_name(format!(
-		"{}.content-type",
-		cache_path.file_name().unwrap_or_default().to_string_lossy()
-	))
-}
-
-/// 缓存命中条件：文件存在且 manga 详情没在缓存写入之后重新拉过（last_fetched_at <= mtime）
-async fn cover_cache_read(cache_path: &Path, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
-	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
-	let mtime = metadata
-		.modified()
-		.ok()?
-		.duration_since(std::time::UNIX_EPOCH)
-		.ok()?
-		.as_secs() as i64;
-	if let Some(fetched) = last_fetched_at
-		&& fetched > mtime
-	{
-		return None;
-	}
-	let bytes = tokio::fs::read(cache_path).await.ok()?;
-	let mime = tokio::fs::read_to_string(cover_sidecar_path(cache_path))
-		.await
-		.ok()
-		.map(|s| s.trim().to_string())
-		.filter(|s| !s.is_empty())
-		.unwrap_or_else(|| COVER_DEFAULT_MIME.into());
-	Some((bytes, mime))
-}
-
-/// 先写 tmp 再 rename，避免并发读到写了一半的缓存
-async fn cover_cache_write(covers_dir: &Path, id: i64, bytes: &[u8], mime: &str) -> std::io::Result<()> {
-	let tmp = covers_dir.join(format!(".{id}.tmp"));
-	tokio::fs::write(&tmp, bytes).await?;
-	tokio::fs::rename(&tmp, covers_dir.join(id.to_string())).await?;
-	let tmp = covers_dir.join(format!(".{id}.content-type.tmp"));
-	tokio::fs::write(&tmp, mime).await?;
-	tokio::fs::rename(&tmp, covers_dir.join(format!("{id}.content-type"))).await?;
-	Ok(())
-}
-
-/// LRU：缓存文件数超上限时按 mtime 最旧先删（连同 sidecar）
-fn cover_cache_enforce_limit(covers_dir: &Path, max: usize) {
-	let mut entries: Vec<(std::path::PathBuf, std::time::SystemTime)> = Vec::new();
-	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
-		return;
-	};
-	for entry in read_dir.flatten() {
-		let name = entry.file_name();
-		// 只数封面本体（文件名是纯 manga id），sidecar 与 tmp 随本体连带处理
-		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
-			continue;
-		}
-		let Ok(metadata) = entry.metadata() else {
-			continue;
-		};
-		let Ok(mtime) = metadata.modified() else {
-			continue;
-		};
-		entries.push((entry.path(), mtime));
-	}
-	if entries.len() <= max {
-		return;
-	}
-	entries.sort_by_key(|(_, mtime)| *mtime);
-	let excess = entries.len() - max;
-	for (path, _) in entries.into_iter().take(excess) {
-		let _ = std::fs::remove_file(cover_sidecar_path(&path));
-		let _ = std::fs::remove_file(path);
-	}
-}
-
-/// OPDS-PSE 页图取字节：流程同 page.rs（Url 走 fetch_page_image、Zip 解包、Image 读物化 blob）
-pub async fn page_content(state: &Arc<AppState>, chapter_id: i64, index: i64) -> ApiResult<(Vec<u8>, Option<String>)> {
-	let chapter = chapter_row(&state.pool, chapter_id).await?;
-	let pages = load_pages(state, chapter_id, false).await?;
-	let Some((_, content)) = pages.iter().find(|(idx, _)| *idx == index) else {
-		return Err(ApiError::not_found("page not found"));
-	};
-	let stored: serde_json::Value = serde_json::from_str(content)?;
-	let content = stored.get("content").cloned().unwrap_or(serde_json::Value::Null);
-	if content.get("Text").is_some() {
-		return Err(ApiError::bad_request("text page content cannot be streamed as image"));
-	}
-	if let Some(name) = content.get("Image").and_then(serde_json::Value::as_str) {
-		let bytes = page_image_blob(state, chapter_id, name).await?;
-		return Ok((bytes, Some(PROCESSED_MIME.into())));
-	}
-	let manga = manga_row(&state.pool, chapter.manga_id).await?;
-	if let Some(zip) = content.get("Zip").and_then(serde_json::Value::as_array) {
-		let Some(zip_url) = zip.first().and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid zip page content"));
-		};
-		let Some(entry_path) = zip.get(1).and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid zip page content"));
-		};
-		let (zip_bytes, _) = http_get(state, manga.source_id, zip_url).await?;
-		let entry = zip_entry_bytes(&zip_bytes, entry_path)?;
-		return Ok((entry, Some(page_mime_for(entry_path).to_string())));
-	}
-	if let Some(url) = content.get("Url").and_then(serde_json::Value::as_array) {
-		let Some(url_str) = url.first().and_then(serde_json::Value::as_str) else {
-			return Err(ApiError::bad_request("invalid url page content"));
-		};
-		let context: Option<PageContext> = match url.get(1) {
-			Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
-			_ => None,
-		};
-		return fetch_page_image(state, manga.source_id, url_str, context).await;
-	}
-	Err(ApiError::bad_request("unknown page content"))
-}
-
-fn zip_entry_bytes(zip_bytes: &[u8], entry_path: &str) -> ApiResult<Vec<u8>> {
-	use std::io::Read;
-	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(zip_bytes))
-		.map_err(|e| ApiError::bad_gateway(format!("invalid zip archive: {e}")))?;
-	let mut entry = archive
-		.by_name(entry_path)
-		.map_err(|_| ApiError::not_found("zip entry not found"))?;
-	let mut out = Vec::with_capacity(entry.size() as usize);
-	entry
-		.read_to_end(&mut out)
-		.map_err(|e| ApiError::bad_gateway(format!("read zip entry failed: {e}")))?;
-	Ok(out)
-}
-
-fn page_mime_for(path: &str) -> &'static str {
-	let ext = path
-		.rsplit('.')
-		.next()
-		.map(str::to_ascii_lowercase)
-		.unwrap_or_default();
-	match ext.as_str() {
-		"jpg" | "jpeg" => "image/jpeg",
-		"png" => "image/png",
-		"webp" => "image/webp",
-		"gif" => "image/gif",
-		"bmp" => "image/bmp",
-		"avif" => "image/avif",
-		_ => "application/octet-stream",
-	}
-}
 
 #[cfg(test)]
 mod tests {
@@ -1346,7 +1481,7 @@ mod tests {
 			candidate_urls(&doc, Some("https://dyn.example")),
 			vec!["https://dyn.example", "https://a.example", "https://b.example"]
 		);
-		// 持久值已在包内列表不重复（未解析时持久值即 info.url）
+		// A persisted value already in the package list is not duplicated (when unresolved, the persisted value is info.url)
 		assert_eq!(
 			candidate_urls(&doc, Some("https://a.example")),
 			vec!["https://a.example", "https://b.example"]
@@ -1355,14 +1490,14 @@ mod tests {
 			candidate_urls(&doc, None),
 			vec!["https://a.example", "https://b.example"]
 		);
-		// 包内无 url 时持久值单独成候选
+		// With no url in the package, the persisted value alone becomes a candidate
 		let bare = json!({"info": {}});
 		assert_eq!(candidate_urls(&bare, Some("https://dyn.example")), vec!["https://dyn.example"]);
 	}
 
 	#[test]
 	fn clone_page_round_trips_all_content_variants() {
-		// Image 变体只能从 serde 反序列化构造（ImageRef::from 是 vendor 私有的）
+		// The Image variant can only be constructed by serde deserialization (ImageRef::from is private to the vendor crate)
 		let raws = [
 			json!({"content": {"Text": "body"}, "thumbnail": null, "has_description": true, "description": null}),
 			json!({"content": {"Url": ["https://x.test/p.png", null]}, "thumbnail": "https://x.test/t.png",
@@ -1448,8 +1583,8 @@ mod tests {
 		assert!(!m.contains_key("seg"));
 	}
 
-	/// 裸 HTTP/1.1 mock：announce_length=false 时不写 content-length，
-	/// 靠 connection: close 收尾，验流式累计路径
+	/// Bare HTTP/1.1 mock: with announce_length=false it writes no content-length,
+	/// closing the connection instead, to exercise the streaming accumulation path
 	fn body_server(body: Vec<u8>, announce_length: bool) -> String {
 		use std::io::{Read, Write};
 		let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind mock");
@@ -1494,7 +1629,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_at_cap_passes_over_cap_fails() {
-		// 边界钉死：恰好等于帽值通过，超一字节即败
+		// Boundary pinned: exactly the cap passes, one byte over fails
 		let addr = body_server(vec![b'x'; 1024], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 1024).await.expect("恰好在帽内");
 		assert_eq!(bytes.len(), 1024);
@@ -1508,7 +1643,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_unannounced_over_cap_fails() {
-		// 无 content-length：流式累计截停
+		// No content-length: stopped by streaming accumulation
 		let addr = body_server(vec![b'x'; 2048], false);
 		let err = read_body(get_response(&addr).await, 1024)
 			.await
@@ -1518,9 +1653,193 @@ mod tests {
 
 	#[tokio::test]
 	async fn read_body_zero_cap_is_unlimited() {
-		// 0 是显式逃生门：配置面文档化的契约，钉住
+		// 0 is the explicit escape hatch: a contract documented on the config surface, pinned here
 		let addr = body_server(vec![b'x'; 2048], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 0).await.expect("0 不设限");
 		assert_eq!(bytes.len(), 2048);
+	}
+
+	async fn reconcile_db() -> (SqlitePool, i64, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let source_id: i64 = sqlx::query_scalar(
+			"INSERT INTO source (key, name, wasm_path) VALUES ('reconcile-source', 'Source', '') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source row");
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'manga') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.expect("manga row");
+		(pool, manga_id, tmp)
+	}
+
+	fn reconcile_chapter(key: &str, number: Option<f32>, volume: Option<f32>) -> Chapter {
+		Chapter {
+			key: key.into(),
+			chapter_number: number,
+			volume_number: volume,
+			..Chapter::default()
+		}
+	}
+
+	async fn run_reconcile(pool: &SqlitePool, manga_id: i64, chapters: &[Chapter]) -> ReconcileOutcome {
+		let mut tx = crate::db::begin_write(pool).await.expect("write transaction");
+		let outcome = reconcile_chapters_detailed(&mut tx, manga_id, chapters, &[])
+			.await
+			.expect("reconcile");
+		tx.commit().await.expect("commit reconcile");
+		outcome
+	}
+
+	#[tokio::test]
+	async fn rekey_preserves_state_and_fetched_at_while_new_chapters_get_now() {
+		let (pool, manga_id, tmp) = reconcile_db().await;
+		let old_id: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter (manga_id, key, number, volume, source_order, page_count, fetched_at)
+			 VALUES (?, 'old', 1, 2, 0, 4, 123) RETURNING id",
+		)
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("old chapter");
+		sqlx::query(
+			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded)
+			 VALUES (?, 1, 3, 1, 1, 99, 1)",
+		)
+		.bind(old_id)
+		.execute(&pool)
+		.await
+		.expect("progress");
+		sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'cbz', 'old.cbz')")
+			.bind(old_id)
+			.execute(&pool)
+			.await
+			.expect("download");
+		sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, 0, '{\"content\":{\"Text\":\"old\"}}')")
+			.bind(old_id)
+			.execute(&pool)
+			.await
+			.expect("cached page");
+		let artifact = tmp.path().join("old.cbz");
+		std::fs::write(&artifact, b"downloaded").expect("artifact");
+
+		let first = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(2.0))]).await;
+		assert_eq!(first.new_ids, vec![old_id]);
+		assert_eq!(first.previous_latest_chapter_number, Some(1.0));
+		let row: (i64, String, i64, i64) = sqlx::query_as(
+			"SELECT id, key, fetched_at, page_count FROM chapter WHERE id = ?",
+		)
+		.bind(old_id)
+		.fetch_one(&pool)
+		.await
+		.expect("rekeyed chapter");
+		assert_eq!(row, (old_id, "new".into(), 123, 0));
+		let cached_pages: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM page WHERE chapter_id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("cached pages");
+		assert_eq!(cached_pages, 0);
+		assert!(artifact.exists());
+		let progress: (i64, i64, i64, i64, i64) = sqlx::query_as(
+			"SELECT last_page_read, is_read, is_bookmarked, last_read_at, is_downloaded FROM chapter_user WHERE chapter_id = ?",
+		)
+		.bind(old_id)
+		.fetch_one(&pool)
+		.await
+		.expect("preserved progress");
+		assert_eq!(progress, (3, 1, 1, 99, 1));
+		let path: String = sqlx::query_scalar("SELECT path FROM download WHERE chapter_id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("preserved download");
+		assert_eq!(path, "old.cbz");
+
+		let second = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(2.0))]).await;
+		assert!(second.new_ids.is_empty());
+		let fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("same-key timestamp");
+		assert_eq!(fetched_at, 123);
+
+		let third = run_reconcile(
+			&pool,
+			manga_id,
+			&[
+				reconcile_chapter("brand-new", Some(2.0), Some(2.0)),
+				reconcile_chapter("new", Some(1.0), Some(2.0)),
+			],
+		)
+		.await;
+		assert_eq!(third.new_ids.len(), 1);
+		let new_fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(third.new_ids[0])
+			.fetch_one(&pool)
+			.await
+			.expect("new timestamp");
+		assert!(new_fetched_at > 123);
+		let old_fetched_at: i64 = sqlx::query_scalar("SELECT fetched_at FROM chapter WHERE id = ?")
+			.bind(old_id)
+			.fetch_one(&pool)
+			.await
+			.expect("rekey timestamp");
+		assert_eq!(old_fetched_at, 123);
+	}
+
+	#[tokio::test]
+	async fn rekey_matches_number_across_volume_change() {
+		let (pool, manga_id, _tmp) = reconcile_db().await;
+		let old_id: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter (manga_id, key, number, volume, page_count, fetched_at)
+			 VALUES (?, 'old', 1, 2, 4, 123) RETURNING id",
+		)
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("old chapter");
+
+		let outcome = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(3.0))]).await;
+		assert_eq!(outcome.new_ids, vec![old_id]);
+		let row: (String, Option<f64>, i64) =
+			sqlx::query_as("SELECT key, volume, page_count FROM chapter WHERE id = ?")
+				.bind(old_id)
+				.fetch_one(&pool)
+				.await
+				.expect("rekeyed chapter");
+		assert_eq!(row, ("new".into(), Some(3.0), 0));
+	}
+
+	#[tokio::test]
+	async fn rekey_requires_a_unique_vanished_number_match() {
+		let (pool, manga_id, _tmp) = reconcile_db().await;
+		for key in ["old-a", "old-b"] {
+			sqlx::query("INSERT INTO chapter (manga_id, key, number, volume, fetched_at) VALUES (?, ?, 1, 1, 123)")
+				.bind(manga_id)
+				.bind(key)
+				.execute(&pool)
+				.await
+				.expect("old chapter");
+		}
+		let outcome = run_reconcile(&pool, manga_id, &[reconcile_chapter("new", Some(1.0), Some(1.0))]).await;
+		assert_eq!(outcome.new_ids.len(), 1);
+		let old_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE key IN ('old-a', 'old-b')")
+			.fetch_one(&pool)
+			.await
+			.expect("old rows");
+		assert_eq!(old_count, 0);
+		let new_key: String = sqlx::query_scalar("SELECT key FROM chapter WHERE id = ?")
+			.bind(outcome.new_ids[0])
+			.fetch_one(&pool)
+			.await
+			.expect("new row");
+		assert_eq!(new_key, "new");
 	}
 }

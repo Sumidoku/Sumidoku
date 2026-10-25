@@ -1,8 +1,9 @@
-//! MigrationHandler 导出的端到端测试（breaking-change key 迁移的 wasm 侧）。
-//! fixture 源在 tests/fixtures/rekey-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the MigrationHandler export (the wasm side of breaking-change key
+//! migration).
+//! The fixture source lives in tests/fixtures/rekey-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/rekey-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rekey.wasm
-//! 复制为 tests/fixtures/rekey/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rekey.wasm
+//! over tests/fixtures/rekey/main.wasm.
 use aidoku_wasm::{DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +22,6 @@ async fn spawn_fixture() -> (SourceHandle, aidoku_wasm::SourceFeatures) {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))
@@ -46,14 +46,14 @@ async fn key_migration_maps_old_prefix() {
 		.expect("chapter migration");
 	assert_eq!(chapter, "new/manga-1/ch-2");
 
-	// old/broken 一支返回空串：服务端据此把该行留旧 key 并进 warnings
+	// The old/broken branch returns an empty string: the server keeps the row on its old key and puts it into warnings
 	let broken = handle
 		.handle_key_migration(0, "old/broken".into(), None)
 		.await
 		.expect("broken migration");
 	assert_eq!(broken, "");
 
-	// 非 old/ 前缀原样返回：服务端视为 no-op 跳过
+	// Keys without the old/ prefix are returned as-is: the server treats them as no-ops and skips
 	let untouched = handle
 		.handle_key_migration(0, "new/manga-1".into(), None)
 		.await

@@ -1,14 +1,14 @@
-//! 页图降采样变体：reader 按显示宽度取缩小版 PNG，原图字节在无参、不放大或
-//! 解码失败时逐字节直通，下载/OPDS 不经过这里
+//! Downsampled page-image variants: the reader fetches a shrunk PNG at display width; original bytes pass through
+//! verbatim when no parameter is given, when the image would be upscaled, or when decoding fails; downloads never come through here
 use image::ImageReader;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// 请求宽度向上量化到 256 的整数倍：变体数量有界，且窗口微调/不同 DPR 共享同一份缓存
+/// Request widths quantize up to a multiple of 256: the variant count stays bounded, and window nudges/different DPRs share one cache entry
 pub const WIDTH_BUCKET: u32 = 256;
 
-/// 取桶饱和到 u32::MAX：超大请求宽度恒不缩（不放大），等价直通
+/// Bucketing saturates at u32::MAX: an oversized request width never resizes (no upscaling), equivalent to pass-through
 pub fn bucket_width(width: u32) -> u32 {
 	width.checked_next_multiple_of(WIDTH_BUCKET).unwrap_or(u32::MAX)
 }
@@ -25,14 +25,14 @@ fn variant_dir(blobs_dir: &Path, chapter_id: i64, bucket: u32) -> PathBuf {
 		.join(bucket.to_string())
 }
 
-/// 变体生命周期挂靠页图 blob 目录：load_pages 整章重写与启动清扫把变体一并清掉，
-/// 所以这里不做独立失效逻辑
+/// The variant lifecycle hangs on the page-blob directory: load_pages' chapter rewrite and the startup sweep remove
+/// variants along with it, so there is no independent invalidation logic here
 pub async fn read_variant(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> Option<VariantHit> {
 	let dir = variant_dir(blobs_dir, chapter_id, bucket);
 	if let Ok(bytes) = tokio::fs::read(dir.join(format!("{index}.png"))).await {
 		return Some(VariantHit::Png(bytes));
 	}
-	// .pass 记录「该桶不缩」（窄图或解码失败），挡住每次访问重复解码大图
+	// A .pass records "this bucket does not resize" (narrow image or decode failure), stopping every visit from re-decoding the big image
 	if tokio::fs::metadata(dir.join(format!("{index}.pass"))).await.is_ok() {
 		return Some(VariantHit::PassThrough);
 	}
@@ -41,7 +41,7 @@ pub async fn read_variant(blobs_dir: &Path, chapter_id: i64, index: i64, bucket:
 
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
-/// tmp+rename 落盘；并发的同页同桶写入各用各的 tmp 名，最后一个 rename 胜出
+/// Writes via tmp+rename; concurrent writers of the same page and bucket each use their own tmp name, and the last rename wins
 pub async fn write_variant(
 	blobs_dir: &Path,
 	chapter_id: i64,
@@ -61,7 +61,7 @@ pub async fn write_variant(
 	tokio::fs::rename(&tmp, dir.join(&name)).await
 }
 
-/// 缩到目标宽的 PNG 字节；原图不宽于目标（不放大）或解码/编码失败返回 None
+/// PNG bytes resized to the target width; returns None when the source image is no wider than the target (no upscaling) or decode/encode fails
 pub fn downsample_png(bytes: &[u8], target_width: u32) -> Option<Vec<u8>> {
 	let image = ImageReader::new(Cursor::new(bytes))
 		.with_guessed_format()
@@ -73,11 +73,38 @@ pub fn downsample_png(bytes: &[u8], target_width: u32) -> Option<Vec<u8>> {
 		return None;
 	}
 	let target_height = (h as u64 * target_width as u64 / w as u64).max(1) as u32;
-	// Lanczos3：漫画线稿与网点缩小后糊得最少，代价只在变体首请求付一次
+	// Lanczos3: blurs manga line art and halftones the least when shrinking, and the cost is paid only once per variant's first request
 	let resized = image.resize_exact(target_width, target_height, image::imageops::FilterType::Lanczos3);
 	let mut out = Vec::new();
 	resized
 		.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+		.ok()?;
+	Some(out)
+}
+
+/// JPEG bytes resized so the longest edge fits the target: covers are photographic, so JPEG's size beats
+/// PNG's losslessness here; alpha flattens onto RGB (JPEG has no alpha channel). Longest-edge semantics
+/// mirror kmrs's thumbnail resize (a landscape cover is not penalized for its width)
+pub fn downsample_jpeg(bytes: &[u8], target_edge: u32) -> Option<Vec<u8>> {
+	let image = ImageReader::new(Cursor::new(bytes))
+		.with_guessed_format()
+		.ok()?
+		.decode()
+		.ok()?;
+	let (w, h) = (image.width(), image.height());
+	let longest = w.max(h);
+	if longest <= target_edge {
+		return None;
+	}
+	let scale = f64::from(target_edge) / f64::from(longest);
+	let target_w = (f64::from(w) * scale).max(1.0) as u32;
+	let target_h = (f64::from(h) * scale).max(1.0) as u32;
+	// Lanczos3: blurs manga line art and halftones the least when shrinking, and the cost is paid only once per variant's first request
+	let resized = image.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3);
+	let mut out = Vec::new();
+	resized
+		.to_rgb8()
+		.write_to(&mut Cursor::new(&mut out), image::ImageFormat::Jpeg)
 		.ok()?;
 	Some(out)
 }
@@ -125,5 +152,27 @@ mod tests {
 	#[test]
 	fn downsample_rejects_undecodable_bytes() {
 		assert!(downsample_png(b"not an image", 256).is_none());
+	}
+
+	#[test]
+	fn downsample_jpeg_fits_the_longest_edge() {
+		// landscape: the width is the longest edge and binds the fit
+		let out = downsample_jpeg(&solid_png(800, 600), 400).expect("resized");
+		let image = ImageReader::new(Cursor::new(out))
+			.with_guessed_format()
+			.expect("format")
+			.decode()
+			.expect("decode");
+		assert_eq!((image.width(), image.height()), (400, 300));
+		// portrait: the height binds instead
+		let out = downsample_jpeg(&solid_png(600, 800), 400).expect("resized");
+		let image = ImageReader::new(Cursor::new(out))
+			.with_guessed_format()
+			.expect("format")
+			.decode()
+			.expect("decode");
+		assert_eq!((image.width(), image.height()), (300, 400));
+		// already small enough: pass-through
+		assert!(downsample_jpeg(&solid_png(400, 300), 400).is_none());
 	}
 }

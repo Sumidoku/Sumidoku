@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct NetConfig {
 	pub direct_domains: Vec<String>,
 	pub relay_domains: Vec<String>,
@@ -11,18 +11,34 @@ pub struct NetConfig {
 	pub trawl_ca: Option<PathBuf>,
 	pub proxy: Option<String>,
 	pub allow_direct_fallback: bool,
-	/// CDP websocket 地址（ws://…），未配置时 webview 浏览器函数显式不支持
-	pub browser_ws: Option<String>,
-	/// trawl session API 地址（http://…）；与 browser_ws 互斥（build_app 校验）
+	/// Adds the browser header suite (BROWSER_HEADERS) to direct requests: sec-fetch-* navigation semantics
+	/// are mildly inaccurate for API/XHR, so disabling buys semantic honesty; passive bot checks verify the suite's presence, so disabling makes 403 more likely
+	pub browser_headers: bool,
+	/// trawl session API address (http://…); when unset, webview browser functions are explicitly unsupported
 	pub browser_trawl: Option<String>,
+}
+
+impl Default for NetConfig {
+	fn default() -> Self {
+		Self {
+			direct_domains: Vec::new(),
+			relay_domains: Vec::new(),
+			trawl_proxy: None,
+			trawl_ca: None,
+			proxy: None,
+			allow_direct_fallback: false,
+			browser_headers: true,
+			browser_trawl: None,
+		}
+	}
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct AuthConfig {
-	/// 全站密码（web UI 登录、/api/v1、OPDS 共用）；None = 认证关闭
+	/// Built-in admin's login username; None/blank = "admin"
+	pub username: Option<String>,
+	/// Site-wide password (shared by web UI login and /api/v1); None = auth disabled
 	pub password: Option<String>,
-	/// 长期 API key，Bearer 直用；配置面明文、不落库
-	pub api_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,30 +55,37 @@ pub struct Config {
 	pub downloads_dir: PathBuf,
 	pub download_concurrency: usize,
 	pub download_format: String,
+	/// env override (for headless) of the download.move_path setting; Some overrides the setting value
+	pub download_move_path: Option<String>,
 	pub update_interval_hours: u64,
-	/// 源仓库 index 定时刷新周期（小时）；0 = 关闭，只靠手动刷新
+	/// Scheduled refresh interval (hours) for source repo indexes; 0 = off, manual refresh only
 	pub repo_refresh_interval_hours: u64,
 	pub auto_download_new_chapters: bool,
 	pub auto_download_limit: usize,
-	pub opds_lazy_download: bool,
-	/// 源实例空闲逐出阈值（分钟）；<= 0 关闭清扫任务
+	/// Idle-eviction threshold (minutes) for source instances; <= 0 disables the sweeper
 	pub source_idle_evict_minutes: i64,
-	/// 进程 RSS 阈值（MiB）：超过即按最闲优先逐出源实例；0 = 关闭监控
+	/// Process RSS threshold (MiB): above it, source instances are evicted idlest-first; 0 = monitoring off
 	pub rss_threshold_mb: u64,
 	pub wasm_memory_max_mb: u64,
 	pub wasm_fuel: u64,
 	pub wasm_call_timeout_secs: u64,
-	/// 源端点响应体上限（MiB）：wasm net host 与服务端代取（封面/页图）共用；0 = 不设限
+	/// Response body cap (MiB) for source endpoints: shared by the wasm net host and server-side fetches (covers/pages); 0 = unlimited
 	pub net_body_max_mb: u64,
-	/// zip 页整章压缩包的响应体上限（MiB）：一章 N 页打成一个 body，得给页图帽的数倍
+	/// Response body cap (MiB) for whole-chapter zip archives: a chapter packs N pages into one body, so it needs several times the per-image cap
 	pub net_zip_body_max_mb: u64,
-	/// 以下四项是 setting 表 backup.* 的 env 覆盖（headless 用）；Some 时压过 setting 里的值
+	/// The following four are env overrides (for headless) of the backup.* settings; Some overrides the setting values
 	pub backup_enabled: Option<bool>,
 	pub backup_interval_hours: Option<u64>,
 	pub backup_retention_count: Option<u32>,
-	/// 备份落点，允许在 config_dir 外
+	/// Backup destination, allowed outside config_dir
 	pub backup_dir: Option<PathBuf>,
-	/// legacy：auth.password 的兼容别名，只在 auth.password 缺席时生效
+	/// Background task worker count; tasks of one local source still serialize regardless of pool size
+	pub task_pool_size: usize,
+	/// Local manga roots (scan targets of the built-in local source); None = [<config_dir>/local]
+	pub local_dirs: Option<Vec<PathBuf>>,
+	/// Name marking a oneshots directory for the local source; None/blank = the rule is off
+	pub local_oneshots_dir: Option<String>,
+	/// legacy: compatibility alias for auth.password, effective only when auth.password is absent
 	pub basic_password: Option<String>,
 	pub auth: AuthConfig,
 	pub net: NetConfig,
@@ -83,11 +106,11 @@ impl Default for Config {
 			downloads_dir: PathBuf::from("./downloads"),
 			download_concurrency: 3,
 			download_format: "cbz".into(),
+			download_move_path: None,
 			update_interval_hours: 0,
 			repo_refresh_interval_hours: 1,
 			auto_download_new_chapters: false,
 			auto_download_limit: 5,
-			opds_lazy_download: false,
 			source_idle_evict_minutes: 30,
 			rss_threshold_mb: 1024,
 			wasm_memory_max_mb: 128,
@@ -99,6 +122,9 @@ impl Default for Config {
 			backup_interval_hours: None,
 			backup_retention_count: None,
 			backup_dir: None,
+			task_pool_size: 2,
+			local_dirs: None,
+			local_oneshots_dir: None,
 			basic_password: None,
 			auth: AuthConfig::default(),
 			net: NetConfig::default(),
@@ -115,38 +141,69 @@ struct NetConfigFile {
 	trawl_ca: Option<PathBuf>,
 	proxy: Option<String>,
 	allow_direct_fallback: Option<bool>,
-	browser_ws: Option<String>,
+	browser_headers: Option<bool>,
 	browser_trawl: Option<String>,
 }
 
 impl Config {
-	/// db、covers、sources 全部钉在 config_dir 下派生，数据根只有这一个配置项
+	/// db, covers and sources all derive from config_dir, the single data-root knob
 	fn derive_paths(&mut self) {
 		self.database_url = format!("sqlite://{}/sumidoku.db?mode=rwc", self.config_dir.display());
 		self.covers_dir = self.config_dir.join("covers");
 	}
 
-	/// auth.password 优先；缺席时 legacy basic_password 顶上（OPDS 时代的旧配置继续生效）
+	/// Built-in admin's login username: the configured value (blank counts as unset), otherwise "admin"
+	pub fn effective_username(&self) -> &str {
+		self.auth
+			.username
+			.as_deref()
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.unwrap_or("admin")
+	}
+
+	/// auth.password wins; when absent, legacy basic_password fills in so old configs keep working
 	pub fn effective_password(&self) -> Option<&str> {
 		self.auth.password.as_deref().or(self.basic_password.as_deref())
 	}
 
-	/// 源包目录钉死在 config_dir 下，不开放配置
+	/// The source package directory is pinned under config_dir, not configurable
 	pub fn sources_dir(&self) -> PathBuf {
 		self.config_dir.join("sources")
 	}
 
-	/// PageContent::Image 物化出的页图 blob 目录（<chapter_id>/<idx>.png），同样钉死
+	/// Blob directory for page images materialized from PageContent::Image (<chapter_id>/<idx>.png), likewise pinned
 	pub fn page_blobs_dir(&self) -> PathBuf {
 		self.config_dir.join("page-blobs")
 	}
 
-	/// 定时备份的默认落点；backup_dir（env）或 setting 表 backup.dir 都可改
+	/// On-disk cache of OPDS source acquisition archives (named <chapter_id>); invalidated on page-row rewrite, self-healing after cache loss
+	pub fn opds_cbz_dir(&self) -> PathBuf {
+		self.config_dir.join("opds-cbz")
+	}
+
+	/// Default destination for scheduled backups; backup_dir (env) or the backup.dir setting can change it
 	pub fn default_backups_dir(&self) -> PathBuf {
 		self.config_dir.join("backups")
 	}
 
-	/// 组装透传给 wasm 运行时的实例上限；sleep/net/js/browser 各档不开放配置
+	/// Local manga roots: explicit config wins (may live outside config_dir), otherwise pinned under config_dir
+	pub fn local_dirs(&self) -> Vec<PathBuf> {
+		self.local_dirs
+			.clone()
+			.unwrap_or_else(|| vec![self.config_dir.join("local")])
+	}
+
+	/// The oneshots-directory marker for the local source (a directory whose relative path contains it is
+	/// never a manga; its direct archives are); a blank value counts as unset, so the feature stays off
+	pub fn local_oneshots_dir(&self) -> Option<&str> {
+		self.local_oneshots_dir
+			.as_deref()
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+	}
+
+	/// Assembles the instance limits passed to the wasm runtime; the sleep/net/js/browser tiers are not configurable
 	pub fn wasm_limits(&self) -> aidoku_wasm::Limits {
 		aidoku_wasm::Limits {
 			memory_max: self.wasm_memory_max_mb * 1024 * 1024,
@@ -161,14 +218,15 @@ impl Config {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct AuthConfigFile {
+	username: Option<String>,
 	password: Option<String>,
-	api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ConfigFile {
 	addr: Option<String>,
+	/// legacy: no longer effective — the file lives inside the config dir, so it cannot set it; kept only to warn
 	config_dir: Option<PathBuf>,
 	call_concurrency: Option<usize>,
 	log: Option<String>,
@@ -178,11 +236,11 @@ struct ConfigFile {
 	downloads_dir: Option<PathBuf>,
 	download_concurrency: Option<usize>,
 	download_format: Option<String>,
+	download_move_path: Option<String>,
 	update_interval_hours: Option<u64>,
 	repo_refresh_interval_hours: Option<u64>,
 	auto_download_new_chapters: Option<bool>,
 	auto_download_limit: Option<usize>,
-	opds_lazy_download: Option<bool>,
 	source_idle_evict_minutes: Option<i64>,
 	rss_threshold_mb: Option<u64>,
 	wasm_memory_max_mb: Option<u64>,
@@ -194,32 +252,56 @@ struct ConfigFile {
 	backup_interval_hours: Option<u64>,
 	backup_retention_count: Option<u32>,
 	backup_dir: Option<PathBuf>,
+	task_pool_size: Option<usize>,
+	local_dirs: Option<Vec<PathBuf>>,
+	/// legacy: one-item spelling of local_dirs, effective only when local_dirs is absent
+	local_dir: Option<PathBuf>,
+	local_oneshots_dir: Option<String>,
 	basic_password: Option<String>,
 	auth: Option<AuthConfigFile>,
 	net: Option<NetConfigFile>,
 }
 
 impl Config {
-	/// 默认值 ← ./config.toml（可缺省）← 环境变量（SUMIDOKU_ 前缀）
+	/// Defaults ← <config_dir>/config.toml (optional) ← environment variables (SUMIDOKU_ prefix).
+	/// config_dir itself is env-only: the file lives inside it, so the file cannot set it
 	pub fn load() -> Self {
 		let mut config = Self::default();
-		if let Ok(raw) = std::fs::read_to_string("./config.toml") {
-			match toml::from_str::<ConfigFile>(&raw) {
-				Ok(file) => config.apply_file(file),
-				Err(e) => eprintln!("invalid ./config.toml, using defaults: {e}"),
-			}
+		if let Ok(v) = std::env::var("SUMIDOKU_CONFIG_DIR") {
+			config.config_dir = PathBuf::from(v);
+		}
+		if let Some(file) = Self::read_file(&config.config_dir) {
+			config.apply_file(file);
 		}
 		config.apply_env();
 		config.derive_paths();
 		config
 	}
 
+	/// Reads <config_dir>/config.toml: absent or unreadable → None, invalid → None with a warning
+	fn read_file(config_dir: &std::path::Path) -> Option<ConfigFile> {
+		let path = config_dir.join("config.toml");
+		let raw = std::fs::read_to_string(&path).ok()?;
+		match toml::from_str::<ConfigFile>(&raw) {
+			Ok(file) => {
+				if file.config_dir.is_some() {
+					eprintln!(
+						"{}: config_dir is no longer settable here (the file lives inside it); use SUMIDOKU_CONFIG_DIR",
+						path.display()
+					);
+				}
+				Some(file)
+			}
+			Err(e) => {
+				eprintln!("invalid {}, using defaults: {e}", path.display());
+				None
+			}
+		}
+	}
+
 	fn apply_file(&mut self, file: ConfigFile) {
 		if let Some(v) = file.addr {
 			self.addr = v;
-		}
-		if let Some(v) = file.config_dir {
-			self.config_dir = v;
 		}
 		if let Some(v) = file.call_concurrency {
 			self.call_concurrency = v;
@@ -245,6 +327,9 @@ impl Config {
 		if let Some(v) = file.download_format {
 			self.download_format = v;
 		}
+		if file.download_move_path.is_some() {
+			self.download_move_path = file.download_move_path;
+		}
 		if let Some(v) = file.update_interval_hours {
 			self.update_interval_hours = v;
 		}
@@ -256,9 +341,6 @@ impl Config {
 		}
 		if let Some(v) = file.auto_download_limit {
 			self.auto_download_limit = v;
-		}
-		if let Some(v) = file.opds_lazy_download {
-			self.opds_lazy_download = v;
 		}
 		if let Some(v) = file.source_idle_evict_minutes {
 			self.source_idle_evict_minutes = v;
@@ -293,15 +375,26 @@ impl Config {
 		if file.backup_dir.is_some() {
 			self.backup_dir = file.backup_dir;
 		}
+		if let Some(v) = file.task_pool_size {
+			self.task_pool_size = v;
+		}
+		if file.local_dirs.is_some() {
+			self.local_dirs = file.local_dirs;
+		} else if let Some(v) = file.local_dir {
+			self.local_dirs = Some(vec![v]);
+		}
+		if let Some(v) = file.local_oneshots_dir {
+			self.local_oneshots_dir = Some(v);
+		}
 		if let Some(v) = file.basic_password {
 			self.basic_password = Some(v);
 		}
 		if let Some(auth) = file.auth {
+			if auth.username.is_some() {
+				self.auth.username = auth.username;
+			}
 			if auth.password.is_some() {
 				self.auth.password = auth.password;
-			}
-			if let Some(v) = auth.api_keys {
-				self.auth.api_keys = v;
 			}
 		}
 		if let Some(net) = file.net {
@@ -320,14 +413,14 @@ impl Config {
 			if net.proxy.is_some() {
 				self.net.proxy = net.proxy;
 			}
-			if net.browser_ws.is_some() {
-				self.net.browser_ws = net.browser_ws;
-			}
 			if net.browser_trawl.is_some() {
 				self.net.browser_trawl = net.browser_trawl;
 			}
 			if let Some(v) = net.allow_direct_fallback {
 				self.net.allow_direct_fallback = v;
+			}
+			if let Some(v) = net.browser_headers {
+				self.net.browser_headers = v;
 			}
 		}
 	}
@@ -369,6 +462,9 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_FORMAT") {
 			self.download_format = v;
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_DOWNLOAD_MOVE_PATH") {
+			self.download_move_path = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_UPDATE_INTERVAL_HOURS")
 			&& let Ok(n) = v.parse()
 		{
@@ -388,11 +484,6 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.auto_download_limit = n;
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_OPDS_LAZY_DOWNLOAD")
-			&& let Ok(n) = v.parse()
-		{
-			self.opds_lazy_download = n;
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES")
 			&& let Ok(n) = v.parse()
@@ -447,14 +538,39 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_BACKUP_DIR") {
 			self.backup_dir = Some(PathBuf::from(v));
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_TASK_POOL_SIZE")
+			&& let Ok(n) = v.parse()
+		{
+			self.task_pool_size = n;
+		}
+		// ';' is the list separator (paths may contain ','); empty segments are ignored, and a value
+		// parsing to zero paths counts as unset so the single-item fallback still applies
+		let local_dirs = std::env::var("SUMIDOKU_LOCAL_DIRS")
+			.ok()
+			.map(|v| {
+				v.split(';')
+					.map(|s| s.trim())
+					.filter(|s| !s.is_empty())
+					.map(PathBuf::from)
+					.collect::<Vec<_>>()
+			})
+			.filter(|dirs| !dirs.is_empty());
+		if let Some(dirs) = local_dirs {
+			self.local_dirs = Some(dirs);
+		} else if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_DIR") {
+			self.local_dirs = Some(vec![PathBuf::from(v)]);
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_LOCAL_ONESHOTS_DIR") {
+			self.local_oneshots_dir = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_BASIC_PASSWORD") {
 			self.basic_password = Some(v);
 		}
+		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_USERNAME") {
+			self.auth.username = Some(v);
+		}
 		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_PASSWORD") {
 			self.auth.password = Some(v);
-		}
-		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_API_KEYS") {
-			self.auth.api_keys = split_csv(&v);
 		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_DIRECT_DOMAINS") {
 			self.net.direct_domains = split_csv(&v);
@@ -471,9 +587,6 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_PROXY") {
 			self.net.proxy = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_WS") {
-			self.net.browser_ws = Some(v);
-		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_TRAWL") {
 			self.net.browser_trawl = Some(v);
 		}
@@ -481,6 +594,11 @@ impl Config {
 			&& let Ok(n) = v.parse()
 		{
 			self.net.allow_direct_fallback = n;
+		}
+		if let Ok(v) = std::env::var("SUMIDOKU_NET_BROWSER_HEADERS")
+			&& let Ok(n) = v.parse()
+		{
+			self.net.browser_headers = n;
 		}
 	}
 }
@@ -497,22 +615,31 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn browser_ws_from_file() {
+	fn config_file_lives_under_config_dir() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		assert!(Config::read_file(tmp.path()).is_none(), "absent file is fine");
+		std::fs::write(tmp.path().join("config.toml"), "log = \"debug\"\n").expect("write");
+		let file = Config::read_file(tmp.path()).expect("parsed");
 		let mut config = Config::default();
-		assert_eq!(config.net.browser_ws, None);
-		let file: ConfigFile = toml::from_str("[net]\nbrowser_ws = \"ws://browserless:3000\"\n").expect("toml");
 		config.apply_file(file);
-		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://browserless:3000"));
+		assert_eq!(config.log, "debug");
 	}
 
 	#[test]
-	fn browser_ws_from_env() {
-		// nextest 每测试一个进程，改环境变量不串扰
-		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_WS", "ws://127.0.0.1:3000") };
+	fn config_dir_key_in_file_is_ignored() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		std::fs::write(tmp.path().join("config.toml"), "config_dir = \"/elsewhere\"\n").expect("write");
+		let file = Config::read_file(tmp.path()).expect("parsed");
 		let mut config = Config::default();
-		config.apply_env();
-		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_WS") };
-		assert_eq!(config.net.browser_ws.as_deref(), Some("ws://127.0.0.1:3000"));
+		config.apply_file(file);
+		assert_eq!(config.config_dir, PathBuf::from("./data"), "the file cannot relocate its own dir");
+	}
+
+	#[test]
+	fn invalid_config_file_falls_back_to_defaults() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		std::fs::write(tmp.path().join("config.toml"), "log = [not, a, string]\n").expect("write");
+		assert!(Config::read_file(tmp.path()).is_none(), "invalid toml is dropped, not fatal");
 	}
 
 	#[test]
@@ -531,6 +658,54 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_TRAWL") };
 		assert_eq!(config.net.browser_trawl.as_deref(), Some("http://127.0.0.1:8191"));
+	}
+
+	#[test]
+	fn auth_username_defaults_to_admin_and_blank_counts_as_unset() {
+		assert_eq!(Config::default().effective_username(), "admin");
+		let mut config = Config::default();
+		config.auth.username = Some("  ".into());
+		assert_eq!(config.effective_username(), "admin");
+	}
+
+	#[test]
+	fn auth_username_from_file_and_env() {
+		let file: ConfigFile = toml::from_str("[auth]\nusername = \"owner\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.effective_username(), "owner");
+
+		unsafe { std::env::set_var("SUMIDOKU_AUTH_USERNAME", "env-owner") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_AUTH_USERNAME") };
+		assert_eq!(config.effective_username(), "env-owner");
+	}
+
+	#[tokio::test]
+	async fn legacy_config_api_key_is_rejected() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let file: ConfigFile = toml::from_str("[auth]\npassword = \"secret\"\napi_keys = [\"smk_legacy\"]\n").expect("toml");
+		let mut config = Config {
+			addr: "127.0.0.1:0".into(),
+			config_dir: tmp.path().to_path_buf(),
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			covers_dir: tmp.path().join("covers"),
+			downloads_dir: tmp.path().join("downloads"),
+			webui_dir: tmp.path().join("webui"),
+			log: "warn".into(),
+			..Config::default()
+		};
+		config.apply_file(file);
+		let app = crate::build_app(config).await.expect("build app");
+		let request = axum::http::Request::builder()
+			.method("GET")
+			.uri("/api/v1/sources")
+			.header("authorization", "Bearer smk_legacy")
+			.body(axum::body::Body::empty())
+			.expect("request");
+		let response = tower::ServiceExt::oneshot(app, request).await.expect("response");
+		assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
 	}
 
 	#[test]
@@ -621,6 +796,116 @@ mod tests {
 		assert_eq!(limits.fuel, 123);
 		assert_eq!(limits.call_timeout, std::time::Duration::from_secs(7));
 		assert_eq!(limits.net_body_max, 48 * 1024 * 1024);
+	}
+
+	#[test]
+	fn browser_headers_from_file_and_env() {
+		assert!(Config::default().net.browser_headers, "默认开");
+		let file: ConfigFile = toml::from_str("[net]\nbrowser_headers = false\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert!(!config.net.browser_headers);
+
+		unsafe { std::env::set_var("SUMIDOKU_NET_BROWSER_HEADERS", "false") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_NET_BROWSER_HEADERS") };
+		assert!(!config.net.browser_headers);
+	}
+
+	#[test]
+	fn local_dirs_from_file() {
+		assert_eq!(Config::default().local_dirs, None);
+		let file: ConfigFile = toml::from_str("local_dirs = [\"/manga/a\", \"/manga/b\"]\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+
+		// the legacy single-dir key maps to a one-item list when local_dirs is absent
+		let file: ConfigFile = toml::from_str("local_dir = \"/manga/local\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/local")]);
+
+		// local_dirs wins when both spellings are present
+		let file: ConfigFile =
+			toml::from_str("local_dirs = [\"/manga/a\"]\nlocal_dir = \"/manga/local\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/a")]);
+	}
+
+	#[test]
+	fn local_dirs_from_env() {
+		// semicolon-separated, segments trimmed and empty ones ignored
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIRS", "/manga/a; ;/manga/b;") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_DIRS") };
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+
+		// the single-dir variable is the one-item fallback
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIR", "/manga/env-local") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_DIR") };
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/env-local")]);
+
+		// DIRS wins over DIR, and a DIRS value with no real segment counts as unset
+		unsafe {
+			std::env::set_var("SUMIDOKU_LOCAL_DIRS", "/manga/a;/manga/b");
+			std::env::set_var("SUMIDOKU_LOCAL_DIR", "/manga/env-local");
+		}
+		let mut config = Config::default();
+		config.apply_env();
+		assert_eq!(
+			config.local_dirs(),
+			vec![PathBuf::from("/manga/a"), PathBuf::from("/manga/b")]
+		);
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_DIRS", ";;") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe {
+			std::env::remove_var("SUMIDOKU_LOCAL_DIRS");
+			std::env::remove_var("SUMIDOKU_LOCAL_DIR");
+		}
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/manga/env-local")]);
+	}
+
+	#[test]
+	fn local_dirs_default_under_config_dir() {
+		let config = Config {
+			config_dir: PathBuf::from("/data"),
+			..Config::default()
+		};
+		assert_eq!(config.local_dirs(), vec![PathBuf::from("/data/local")]);
+	}
+
+	#[test]
+	fn local_oneshots_dir_from_file_and_env() {
+		assert_eq!(Config::default().local_oneshots_dir(), None);
+		let file: ConfigFile = toml::from_str("local_oneshots_dir = \"oneshots\"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_oneshots_dir(), Some("oneshots"));
+
+		unsafe { std::env::set_var("SUMIDOKU_LOCAL_ONESHOTS_DIR", "OneShot") };
+		let mut config = Config::default();
+		config.apply_env();
+		unsafe { std::env::remove_var("SUMIDOKU_LOCAL_ONESHOTS_DIR") };
+		assert_eq!(config.local_oneshots_dir(), Some("OneShot"));
+
+		// a blank value counts as unset: the feature is opt-in only
+		let file: ConfigFile = toml::from_str("local_oneshots_dir = \"  \"\n").expect("toml");
+		let mut config = Config::default();
+		config.apply_file(file);
+		assert_eq!(config.local_oneshots_dir(), None);
 	}
 
 	#[test]

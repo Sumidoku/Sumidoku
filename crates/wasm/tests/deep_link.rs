@@ -1,8 +1,9 @@
-//! DeepLinkHandler 导出的端到端测试（源 URL 路由到 manga/chapter 的 wasm 侧）。
-//! fixture 源在 tests/fixtures/deeplink-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the DeepLinkHandler export (routing a source URL to the wasm side
+//! of manga/chapter).
+//! The fixture source lives in tests/fixtures/deeplink-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/deeplink-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_deeplink.wasm
-//! 复制为 tests/fixtures/deeplink/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_deeplink.wasm
+//! over tests/fixtures/deeplink/main.wasm.
 use aidoku_wasm::{DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,7 +22,6 @@ async fn spawn_fixture() -> (SourceHandle, aidoku_wasm::SourceFeatures) {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))
@@ -64,7 +64,7 @@ async fn deep_link_maps_fixture_urls() {
 		other => panic!("expected listing result, got {other:?}"),
 	}
 
-	// 深链落到 listing 后前端直接按它取列表：fixture 要真能给条目
+	// Once the deep link lands on a listing, the frontend fetches the list directly by it: the fixture must really yield entries
 	let entries = handle
 		.get_manga_list(
 			aidoku::Listing {

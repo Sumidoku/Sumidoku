@@ -1,14 +1,15 @@
-//! Suwayomi/Mihon 备份导入（.tachibk / .proto.gz）：protobuf wire 兼容 Mihon
-//! backup schema，容器按魔数嗅探——两家实际都写 gzip(proto)（Suwayomi
-//! ProtoBackupExport、Mihon BackupCreator 均过 okio gzip），Mihon 还接受裸
-//! proto；zip 容器是对 fork 的防御性兼容。additive 合并原语见 import_merge。
+//! Suwayomi/Mihon backup import (.tachibk / .proto.gz): protobuf wire compatible with Mihon's
+//! backup schema, container sniffed by magic bytes — both actually write gzip(proto) (Suwayomi's
+//! ProtoBackupExport and Mihon's BackupCreator both go through okio gzip), and Mihon also accepts a bare
+//! proto; the zip container is defensive compatibility for forks. See import_merge for the additive merge primitives.
 //!
-//! prost 消息为手写 wire 契约（字段号出处见 PR）：未声明的字段（tracking、
-//! memo、preferences、suwayomi meta 9000+ 等）prost 解码时跳过
+//! The prost messages are a hand-written wire contract (field-number provenance in the PR): undeclared fields
+//! (tracking, memo, preferences, suwayomi meta 9000+, etc.) are skipped by prost decoding
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
 use crate::state::AppState;
+use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
 use prost::Message;
@@ -23,8 +24,9 @@ use super::import_merge::{
 	ChapterMeta, ImportCounts, MangaMeta, ensure_category, ensure_chapter_row, ensure_manga_row,
 	mark_in_library, merge_chapter_progress,
 };
+use super::key_realign::{RealignCounts, realign_chapter_key, realign_manga_key};
 
-/// 解压/解包后的 proto 上限：与上传 body 上限同档，防 zip/gzip bomb
+/// Cap on the decompressed/unpacked proto: same tier as the upload body cap, guarding against zip/gzip bombs
 const PROTO_MAX: u64 = BODY_MAX as u64;
 
 #[derive(Clone, PartialEq, Message)]
@@ -41,7 +43,7 @@ struct TachiBackup {
 struct TachiManga {
 	#[prost(int64, tag = "1")]
 	source: i64,
-	/// 源内键（1.x 里叫 key），不是可浏览的 URL
+	/// In-source key (called key in 1.x), not a browsable URL
 	#[prost(string, tag = "2")]
 	url: String,
 	#[prost(string, tag = "3")]
@@ -62,10 +64,10 @@ struct TachiManga {
 	date_added: i64,
 	#[prost(message, repeated, tag = "16")]
 	chapters: Vec<TachiChapter>,
-	/// 分类 order 值（Mihon MangaRestorer 按 order 回查），不是数组位置
+	/// Category order values (Mihon's MangaRestorer looks up by order), not array positions
 	#[prost(int64, repeated, tag = "17")]
 	categories: Vec<i64>,
-	/// kotlinx ProtoBuf 省略默认值字段，favorite=true 不上线，缺席即 true
+	/// kotlinx ProtoBuf omits default-valued fields, so favorite=true never goes on the wire; absent means true
 	#[prost(bool, optional, tag = "100")]
 	favorite: Option<bool>,
 	#[prost(message, repeated, tag = "104")]
@@ -126,12 +128,12 @@ pub struct SuwayomiImportQuery {
 	pub source_mapping: Option<String>,
 }
 
-/// 备份时间戳是 epoch 毫秒，0 表示无值（Mihon toInstantOrNull 约定）
+/// Backup timestamps are epoch milliseconds, 0 means no value (Mihon's toInstantOrNull convention)
 fn ms_to_unix(ms: i64) -> Option<i64> {
 	(ms > 0).then_some(ms / 1000)
 }
 
-/// 备份 status 枚举（SManga：1 连载 2 完结 3 授权 4 出版完 5 砍 6 休刊）映射到本体的 1/2/3/4
+/// Maps the backup's status enum (SManga: 1 ongoing 2 completed 3 licensed 4 publishing finished 5 cancelled 6 hiatus) onto our 1/2/3/4
 fn status_from_tachi(status: i32) -> i64 {
 	match status {
 		1 => 1,
@@ -142,7 +144,7 @@ fn status_from_tachi(status: i32) -> i64 {
 	}
 }
 
-/// 归一化只留字母数字并小写（Unicode 感知，CJK 源名不会归一成空串）
+/// Normalizes to lowercase alphanumerics only (Unicode-aware, so CJK source names do not collapse to an empty string)
 fn normalize_source_name(name: &str) -> String {
 	name.chars()
 		.filter(|c| c.is_alphanumeric())
@@ -163,7 +165,7 @@ fn gunzip(bytes: &[u8]) -> ApiResult<Vec<u8>> {
 	Ok(out)
 }
 
-/// zip 容器：取 backup.proto，否则唯一的 .proto 条目；条目本身可能还是 gzip
+/// zip container: take backup.proto, else the sole .proto entry; the entry itself may still be gzip
 fn unzip_proto(bytes: &[u8], depth: u8) -> ApiResult<Vec<u8>> {
 	let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
 		.map_err(|e| ApiError::bad_request(format!("invalid suwayomi backup: {e}")))?;
@@ -202,7 +204,7 @@ fn unpack(bytes: &[u8], depth: u8) -> ApiResult<Vec<u8>> {
 	Ok(bytes.to_vec())
 }
 
-/// 按 Mihon 源 id 分组（保持备份内首次出现顺序，报告稳定）
+/// Groups by Mihon source id (keeping first-seen order within the backup, for a stable report)
 fn group_by_source(doc: &TachiBackup) -> Vec<(i64, Vec<&TachiManga>)> {
 	let mut groups: Vec<(i64, Vec<&TachiManga>)> = Vec::new();
 	let mut index: HashMap<i64, usize> = HashMap::new();
@@ -228,7 +230,7 @@ struct InstalledSource {
 	name: String,
 }
 
-/// 一个 Mihon 源组的归处：显式映射 > 唯一命中自动匹配 > unmatched（多命中绝不猜）
+/// Where a Mihon source group lands: explicit mapping > unique-hit auto match > unmatched (multiple hits are never guessed)
 enum Resolution {
 	Mapped { key: String },
 	Auto { key: String },
@@ -263,7 +265,7 @@ fn resolve_group(
 				.collect()
 		})
 		.unwrap_or_default();
-	// 名字归一化为空（如纯标点）没有匹配资格，唯一命中才自动匹配
+	// A name normalizing to empty (e.g. pure punctuation) has no matching eligibility; only a unique hit auto-matches
 	if !normalized.is_empty() && candidates.len() == 1 {
 		return Resolution::Auto {
 			key: candidates[0].0.clone(),
@@ -290,17 +292,19 @@ fn parse_mapping(raw: Option<&str>) -> ApiResult<HashMap<i64, String>> {
 
 pub async fn import_suwayomi_backup(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Query(query): Query<SuwayomiImportQuery>,
 	body: axum::body::Bytes,
 ) -> ApiResult<Json<Value>> {
 	let mapping = parse_mapping(query.source_mapping.as_deref())?;
-	let result = import_suwayomi_doc(&state, &body, query.dry_run, &mapping).await?;
+	let result = import_suwayomi_doc(&state, user.id, &body, query.dry_run, &mapping).await?;
 	Ok(Json(result))
 }
 
-/// 校验 + 单事务导入；dry-run 走同一执行路径，末尾回滚代替提交，报告与真跑一致
+/// Validation + single-transaction import; dry-run takes the same execution path and rolls back instead of committing at the end, so the report matches a real run
 pub async fn import_suwayomi_doc(
 	state: &AppState,
+	user_id: i64,
 	body: &[u8],
 	dry_run: bool,
 	mapping: &HashMap<i64, String>,
@@ -309,7 +313,7 @@ pub async fn import_suwayomi_doc(
 	let doc = TachiBackup::decode(proto.as_slice())
 		.map_err(|e| ApiError::bad_request(format!("invalid suwayomi backup: {e}")))?;
 
-	// 键是后续一切对账的锚点，空键没法安全落库
+	// Keys are the anchor for all later reconciliation; an empty key cannot land safely in the DB
 	for manga in &doc.manga {
 		if manga.url.is_empty() {
 			return Err(ApiError::bad_request("suwayomi manga entry must have a non-empty url"));
@@ -368,12 +372,14 @@ pub async fn import_suwayomi_doc(
 	let mut imported = ImportCounts::default();
 	let mut skipped: Vec<Value> = Vec::new();
 	let mut seen_categories: HashSet<String> = HashSet::new();
+	let mut realigned: Vec<RealignCounts> = Vec::with_capacity(groups.len());
 	{
-		let mut tx = state.pool.begin().await?;
-		import_categories(&mut tx, &doc, &mut seen_categories).await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
+		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
 		for ((mihon_id, mangas), resolution) in groups.iter().zip(&resolutions) {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let Some(source_key) = resolution.key() else {
+				realigned.push(RealignCounts::default());
 				for manga in mangas {
 					skipped.push(json!({
 						"section": if manga.favorite.unwrap_or(true) { "library" } else { "progress" },
@@ -386,8 +392,21 @@ pub async fn import_suwayomi_doc(
 				continue;
 			};
 			let source_id = installed_id_by_key[source_key];
-			import_group(&mut tx, &doc, source_id, mangas, &mut imported, &mut seen_categories)
-				.await?;
+			let source = installed
+				.iter()
+				.find(|s| s.id == source_id)
+				.expect("resolved key is installed");
+			let counts = import_group(
+				&mut tx,
+				user_id,
+				&doc,
+				source,
+				mangas,
+				&mut imported,
+				&mut seen_categories,
+			)
+			.await?;
+			realigned.push(counts);
 		}
 		imported.categories = seen_categories.len() as i64;
 		if dry_run {
@@ -400,7 +419,8 @@ pub async fn import_suwayomi_doc(
 	let sources_json: Vec<Value> = groups
 		.iter()
 		.zip(&resolutions)
-		.map(|((mihon_id, mangas), resolution)| {
+		.zip(&realigned)
+		.map(|(((mihon_id, mangas), resolution), counts)| {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let (state_label, key) = match resolution {
 				Resolution::Mapped { key } => ("mapped", Some(key.as_str())),
@@ -427,6 +447,9 @@ pub async fn import_suwayomi_doc(
 					value["aidokuSourceName"] = json!(s.name);
 				}
 			}
+			if !counts.is_zero() {
+				value["realignedKeys"] = json!({"manga": counts.manga, "chapter": counts.chapter});
+			}
 			value
 		})
 		.collect();
@@ -443,9 +466,10 @@ pub async fn import_suwayomi_doc(
 	}))
 }
 
-/// 顶层 categories 数组先建行；成员引用按 order 回查这张表
+/// The top-level categories array creates rows first; member references look up this table by order
 async fn import_categories(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &TachiBackup,
 	seen: &mut HashSet<String>,
 ) -> ApiResult<()> {
@@ -454,7 +478,7 @@ async fn import_categories(
 		if name.is_empty() {
 			return Err(ApiError::bad_request("suwayomi category must have a non-empty name"));
 		}
-		ensure_category(tx, name).await?;
+		ensure_category(tx, user_id, name).await?;
 		seen.insert(name.to_string());
 	}
 	Ok(())
@@ -462,18 +486,20 @@ async fn import_categories(
 
 async fn import_group(
 	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
 	doc: &TachiBackup,
-	source_id: i64,
+	source: &InstalledSource,
 	mangas: &[&TachiManga],
 	imported: &mut ImportCounts,
 	seen_categories: &mut HashSet<String>,
-) -> ApiResult<()> {
-	// 分类成员是 order 值回查（Mihon MangaRestorer 的语义），不是数组位置
+) -> ApiResult<RealignCounts> {
+	// Category membership is an order-value lookup (Mihon MangaRestorer semantics), not an array position
 	let category_by_order: HashMap<i64, &str> = doc
 		.categories
 		.iter()
 		.map(|c| (c.order, c.name.as_str()))
 		.collect();
+	let mut realigned = RealignCounts::default();
 	for manga in mangas {
 		let meta = MangaMeta {
 			title: manga.title.as_str(),
@@ -484,13 +510,15 @@ async fn import_group(
 			status: status_from_tachi(manga.status),
 			content_rating: 0,
 			cover_url: manga.thumbnail_url.as_deref(),
-			// url 列是可浏览的源站页面，manga.url 是源内键，不放过去
+			// The url column is a browsable source-site page; manga.url is the in-source key, so it is not carried over
 			url: None,
 		};
-		let manga_id = ensure_manga_row(tx, source_id, &manga.url, Some(&meta)).await?;
+		let (manga_key, manga_changed) = realign_manga_key(source.key.as_str(), &manga.url);
+		realigned.manga += manga_changed as i64;
+		let manga_id = ensure_manga_row(tx, source.id, &manga_key, Some(&meta)).await?;
 		if manga.favorite.unwrap_or(true) {
 			let in_library_at = ms_to_unix(manga.date_added).unwrap_or_else(unix_now);
-			mark_in_library(tx, manga_id, in_library_at).await?;
+			mark_in_library(tx, user_id, manga_id, in_library_at).await?;
 			for order in &manga.categories {
 				let Some(name) = category_by_order.get(order) else {
 					continue;
@@ -499,28 +527,32 @@ async fn import_group(
 				if name.is_empty() {
 					continue;
 				}
-				let category_id = ensure_category(tx, name).await?;
+				let category_id = ensure_category(tx, user_id, name).await?;
 				seen_categories.insert(name.to_string());
 				sqlx::query(
 					"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-					 VALUES (?, ?, 1)",
+					 VALUES (?, ?, ?)",
 				)
 				.bind(category_id)
 				.bind(manga_id)
+				.bind(user_id)
 				.execute(&mut **tx)
 				.await?;
 			}
 			imported.library += 1;
 		}
 
-		let history: HashMap<&str, i64> = manga
+		// Chapter and history keys realign identically, so the two still pair up after the rewrite
+		let history: HashMap<String, i64> = manga
 			.history
 			.iter()
-			.map(|h| (h.url.as_str(), h.last_read))
+			.map(|h| (realign_chapter_key(source.key.as_str(), &h.url).0, h.last_read))
 			.collect();
-		let mut seen_chapters: HashSet<&str> = HashSet::new();
+		let mut seen_chapters: HashSet<String> = HashSet::new();
 		for chapter in &manga.chapters {
-			seen_chapters.insert(chapter.url.as_str());
+			let (chapter_key, changed) = realign_chapter_key(source.key.as_str(), &chapter.url);
+			realigned.chapter += changed as i64;
+			seen_chapters.insert(chapter_key.clone());
 			let meta = ChapterMeta {
 				title: (!chapter.name.is_empty()).then_some(chapter.name.as_str()),
 				number: (chapter.chapter_number != 0.0).then_some(chapter.chapter_number as f64),
@@ -531,12 +563,13 @@ async fn import_group(
 				date_uploaded: ms_to_unix(chapter.date_upload),
 				source_order: chapter.source_order,
 			};
-			let chapter_id = ensure_chapter_row(tx, manga_id, &chapter.url, Some(&meta)).await?;
+			let chapter_id = ensure_chapter_row(tx, manga_id, &chapter_key, Some(&meta)).await?;
 			let last_read_at = history
-				.get(chapter.url.as_str())
+				.get(chapter_key.as_str())
 				.and_then(|ts| ms_to_unix(*ts));
 			merge_chapter_progress(
 				tx,
+				user_id,
 				chapter_id,
 				chapter.last_page_read.max(0),
 				chapter.read,
@@ -545,15 +578,17 @@ async fn import_group(
 			.await?;
 			imported.progress += 1;
 		}
-		// 只在 history 出现的章节（备份勾了 history 没勾 chapters）：裸键补行，只带时间
+		// Chapters appearing only in history (the backup ticked history but not chapters): create bare-key rows carrying just the timestamp
 		for entry in &manga.history {
-			if seen_chapters.contains(entry.url.as_str()) {
+			let (entry_key, changed) = realign_chapter_key(source.key.as_str(), &entry.url);
+			if seen_chapters.contains(entry_key.as_str()) {
 				continue;
 			}
-			let chapter_id = ensure_chapter_row(tx, manga_id, &entry.url, None).await?;
-			merge_chapter_progress(tx, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
+			realigned.chapter += changed as i64;
+			let chapter_id = ensure_chapter_row(tx, manga_id, &entry_key, None).await?;
+			merge_chapter_progress(tx, user_id, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
 			imported.progress += 1;
 		}
 	}
-	Ok(())
+	Ok(realigned)
 }

@@ -20,21 +20,85 @@ enum Cmd {
 	Job(Job),
 }
 
+/// What the per-call log line reports as `entries`; the default is None for results
+/// where a count is meaningless (login, notification, image bytes, URLs)
+trait CallEntries {
+	fn entries(&self) -> Option<usize> {
+		None
+	}
+}
+
+impl CallEntries for MangaPageResult {
+	fn entries(&self) -> Option<usize> {
+		Some(self.entries.len())
+	}
+}
+
+impl CallEntries for Manga {
+	fn entries(&self) -> Option<usize> {
+		self.chapters.as_ref().map(Vec::len)
+	}
+}
+
+impl CallEntries for HomeLayout {
+	fn entries(&self) -> Option<usize> {
+		Some(self.components.len())
+	}
+}
+
+impl CallEntries for Vec<Page> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Filter> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Setting> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<Listing> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<String> {
+	fn entries(&self) -> Option<usize> {
+		Some(self.len())
+	}
+}
+
+impl CallEntries for Vec<u8> {}
+impl CallEntries for String {}
+impl CallEntries for bool {}
+impl CallEntries for () {}
+impl CallEntries for ImageRequestSpec {}
+impl CallEntries for Option<DeepLinkResult> {}
+
 struct Inner {
 	tx: mpsc::Sender<Cmd>,
 	thread_alive: Arc<AtomicBool>,
 }
 
-/// 每源 actor 句柄。所有导出调用经 mpsc 发给独立 OS 线程串行执行，
-/// 源内串行、源间并行；实例长生命周期，restart 即换线程重建。
+/// Per-source actor handle. All export calls go over mpsc to a dedicated OS thread and run
+/// serially — serial within a source, parallel across sources; instances are long-lived and
+/// restart swaps the thread and rebuilds.
 pub struct SourceHandle {
 	key: String,
 	config: Arc<RwLock<SourceConfig>>,
-	// 读写均为短临界区，无跨 await 持锁
+	// Reads and writes are both short critical sections; the lock is never held across an await
 	inner: Arc<RwLock<Inner>>,
 	features: Arc<RwLock<SourceFeatures>>,
 	semaphore: Arc<Semaphore>,
-	/// manifest config.maximumParallelRequests 换算的每源调用准入帽；None 只受全局帽
+	/// Per-source call admission cap derived from the manifest's config.maximumParallelRequests; None means only the global cap applies
 	source_semaphore: Option<Arc<Semaphore>>,
 	call_timeout: Duration,
 }
@@ -75,6 +139,11 @@ impl SourceHandle {
 		let config = config.clone();
 		std::thread::Builder::new()
 			.name(format!("source-{}", config.key))
+			// wasmi expands guest calls into native recursion frames: the default 2 MiB
+			// stack can physically overflow within the recursion limit (1000 frames) and
+			// abort the whole process (#213). 8 MiB is a virtual reservation, lazily
+			// committed — unused memory costs no RSS.
+			.stack_size(8 * 1024 * 1024)
 			.spawn(move || {
 				let mut instance = match SourceInstance::build(&config) {
 					Ok(instance) => {
@@ -90,7 +159,7 @@ impl SourceHandle {
 					match cmd {
 						Cmd::Job(job) => {
 							if catch_unwind(AssertUnwindSafe(|| job(&mut instance))).is_err() {
-								// 宿主 import 恐慌后实例状态不可信，线程退出交给上层重启
+								// After a host import panics, the instance state is untrustworthy; the thread exits and the upper layer restarts
 								break;
 							}
 						}
@@ -110,7 +179,7 @@ impl SourceHandle {
 		&self.key
 	}
 
-	/// 该源的 Accept-Language 默认值（按源语言推导）；服务端直拉封面/页图复用同一值
+	/// This source's default Accept-Language (derived from the source languages); the server's direct cover/page fetches reuse the same value
 	pub fn accept_language(&self) -> String {
 		self.config.read().expect("config lock").accept_language.clone()
 	}
@@ -127,12 +196,14 @@ impl SourceHandle {
 			.load(Ordering::SeqCst)
 	}
 
-	async fn call<T: Send + 'static>(
+	async fn call<T: Send + 'static + CallEntries>(
 		&self,
+		op: &'static str,
 		job: impl FnOnce(&mut SourceInstance) -> Result<T> + Send + 'static,
 	) -> Result<T> {
-		// 先取每源帽再占全局帽：声明了 maximumParallelRequests 的源在入口就被压回，
-		// 不消耗全局许可排队
+		// Take the per-source cap before occupying the global one: a source that declares
+		// maximumParallelRequests is pushed back at the entrance instead of consuming a
+		// global permit while queued
 		let _source_permit = match &self.source_semaphore {
 			Some(sem) => Some(
 				sem.clone()
@@ -150,19 +221,50 @@ impl SourceHandle {
 			.map_err(|_| Error::Instance("call semaphore closed".into()))?;
 		let (reply_tx, reply_rx) = oneshot::channel::<Result<T>>();
 		let tx = self.inner.read().expect("inner lock").tx.clone();
-		tx.send(Cmd::Job(Box::new(move |instance| {
-			let _ = reply_tx.send(job(instance));
-		})))
-		.await
-		.map_err(|_| Error::Instance("actor thread dead".into()))?;
-		match tokio::time::timeout(self.call_timeout, reply_rx).await {
+		let start = std::time::Instant::now();
+		if tx
+			.send(Cmd::Job(Box::new(move |instance| {
+				let _ = reply_tx.send(job(instance));
+			})))
+			.await
+			.is_err()
+		{
+			let result = Err(Error::Instance("actor thread dead".into()));
+			self.log_outcome(op, start.elapsed(), &result);
+			return result;
+		}
+		let result = match tokio::time::timeout(self.call_timeout, reply_rx).await {
 			Ok(Ok(result)) => result,
 			Ok(Err(_closed)) => Err(Error::Trap("source call panicked".into())),
 			Err(_elapsed) => {
-				// 超时熔断：旧线程可能卡在宿主调用里，换线程重建实例
+				let result = Err(Error::Timeout);
+				// Logged before the rebuild so the duration reflects the call itself
+				self.log_outcome(op, start.elapsed(), &result);
+				// Timeout circuit breaker: the old thread may be stuck inside a host call, so swap the thread and rebuild the instance
 				let defaults = self.config.read().expect("config lock").defaults.clone();
 				let _ = self.restart(defaults).await;
-				Err(Error::Timeout)
+				return result;
+			}
+		};
+		self.log_outcome(op, start.elapsed(), &result);
+		result
+	}
+
+	/// One structured line per source call, at the chokepoint every op funnels through;
+	/// errors go through log_safe because guest/reqwest text can carry full URLs
+	fn log_outcome<T: CallEntries>(&self, op: &'static str, dur: Duration, result: &Result<T>) {
+		let dur_ms = dur.as_millis() as u64;
+		match result {
+			Ok(value) => {
+				if let Some(entries) = value.entries() {
+					tracing::info!(source = %self.key, op = %op, dur_ms, entries, "source call");
+				} else {
+					tracing::info!(source = %self.key, op = %op, dur_ms, "source call");
+				}
+			}
+			Err(e) => {
+				let error = e.log_safe();
+				tracing::warn!(source = %self.key, op = %op, dur_ms, error = error.as_str(), "source call");
 			}
 		}
 	}
@@ -172,7 +274,7 @@ impl SourceHandle {
 		self.restart_with(defaults, cookies).await
 	}
 
-	/// 换 defaults 与 cookie jar 重建实例；clear-cache / 设置变更走这里
+	/// Rebuild the instance with new defaults and cookie jar; clear-cache / settings changes go through here
 	pub async fn restart_with(
 		&self,
 		defaults: HashMap<String, DefaultValue>,
@@ -186,7 +288,7 @@ impl SourceHandle {
 		};
 		let (inner, init) = Self::spawn_actor(&config).await?;
 		let features = init?;
-		// 旧 tx 随 Inner 替换而断开，旧线程跑完当前 job（受 fuel 约束）即退出
+		// The old tx disconnects as Inner is swapped out; the old thread exits once it finishes its current job (bounded by fuel)
 		*self.inner.write().expect("inner lock") = inner;
 		*self.features.write().expect("features lock") = features.clone();
 		Ok(features)
@@ -204,7 +306,7 @@ impl SourceHandle {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		self.call(move |i| i.get_search_manga_list(query, page, filters)).await
+		self.call("search", move |i| i.get_search_manga_list(query, page, filters)).await
 	}
 
 	pub async fn get_manga_update(
@@ -213,29 +315,30 @@ impl SourceHandle {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		self.call(move |i| i.get_manga_update(&manga, needs_details, needs_chapters))
+		self.call("manga_update", move |i| i.get_manga_update(&manga, needs_details, needs_chapters))
 			.await
 	}
 
 	pub async fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		self.call(move |i| i.get_page_list(&manga, &chapter)).await
+		self.call("page_list", move |i| i.get_page_list(&manga, &chapter)).await
 	}
 
 	pub async fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		self.call(move |i| i.get_manga_list(&listing, page)).await
+		self.call("listing", move |i| i.get_manga_list(&listing, page)).await
 	}
 
 	pub async fn get_home(&self) -> Result<HomeLayout> {
-		self.call(|i| i.get_home()).await
+		self.call("home", |i| i.get_home()).await
 	}
 
-	/// 流式版 get_home：源在调用中途 send_partial_result 的部分结果按到达顺序
-	/// 推进 partials。接收端掉线（客户端断开）时发送失败静默丢弃，源继续跑完
+	/// Streaming get_home: partial results the source pushes via send_partial_result
+	/// mid-call flow into partials in arrival order. When the receiver is gone (client
+	/// disconnected), send failures are silently dropped and the source runs to completion
 	pub async fn get_home_streaming(
 		&self,
 		partials: mpsc::UnboundedSender<HomePartial>,
 	) -> Result<HomeLayout> {
-		self.call(move |i| {
+		self.call("home", move |i| {
 			let acc = Arc::new(Mutex::new(HomeAccumulator::default()));
 			let sink_acc = acc.clone();
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
@@ -244,7 +347,7 @@ impl SourceHandle {
 						let event = sink_acc.lock().expect("accumulator lock").apply(partial);
 						let _ = partials.send(event);
 					}
-					// 部分结果只是渐进预览，解码失败不值得让整个请求失败
+					// A partial result is only a progressive preview; a decode failure is not worth failing the whole request
 					Err(_) => tracing::warn!("failed to decode home partial result"),
 				}
 			});
@@ -258,7 +361,7 @@ impl SourceHandle {
 		.await
 	}
 
-	/// 流式版 get_search_manga_list：每个 partial 载荷是一条完整 Manga，按到达顺序追加
+	/// Streaming get_search_manga_list: each partial payload is one complete Manga, appended in arrival order
 	pub async fn get_search_manga_list_streaming(
 		&self,
 		query: Option<String>,
@@ -266,7 +369,7 @@ impl SourceHandle {
 		filters: Vec<FilterValue>,
 		partials: mpsc::UnboundedSender<Manga>,
 	) -> Result<MangaPageResult> {
-		self.call(move |i| {
+		self.call("search", move |i| {
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
 				match postcard::from_bytes::<Manga>(bytes) {
 					Ok(manga) => {
@@ -280,9 +383,10 @@ impl SourceHandle {
 		.await
 	}
 
-	/// 流式版 get_manga_update：对齐上游 partialMangaPublisher——每个 partial 是
-	/// 当时的完整 Manga 快照（详情/章节随拉取进度逐渐填充），终态以导出返回为准，
-	/// 不做 home 那样的累积合并
+	/// Streaming get_manga_update: aligned with upstream partialMangaPublisher — each
+	/// partial is a full Manga snapshot of that moment (details/chapters filled in as the
+	/// fetch progresses); the final state follows the export's return, with no home-style
+	/// accumulation merge
 	pub async fn get_manga_update_streaming(
 		&self,
 		manga: Manga,
@@ -290,7 +394,7 @@ impl SourceHandle {
 		needs_chapters: bool,
 		partials: mpsc::UnboundedSender<Manga>,
 	) -> Result<Manga> {
-		self.call(move |i| {
+		self.call("manga_update", move |i| {
 			let sink: crate::runtime::env::PartialSink = Box::new(move |bytes| {
 				match postcard::from_bytes::<Manga>(bytes) {
 					Ok(manga) => {
@@ -305,31 +409,31 @@ impl SourceHandle {
 	}
 
 	pub async fn get_filters(&self) -> Result<Vec<Filter>> {
-		self.call(|i| i.get_filters()).await
+		self.call("filters", |i| i.get_filters()).await
 	}
 
 	pub async fn get_settings(&self) -> Result<Vec<Setting>> {
-		self.call(|i| i.get_settings()).await
+		self.call("settings", |i| i.get_settings()).await
 	}
 
 	pub async fn get_listings(&self) -> Result<Vec<Listing>> {
-		self.call(|i| i.get_listings()).await
+		self.call("listings", |i| i.get_listings()).await
 	}
 
 	pub async fn get_page_description(&self, page: Page) -> Result<String> {
-		self.call(move |i| i.get_page_description(&page)).await
+		self.call("page_description", move |i| i.get_page_description(&page)).await
 	}
 
 	pub async fn get_alternate_covers(&self, manga: Manga) -> Result<Vec<String>> {
-		self.call(move |i| i.get_alternate_covers(&manga)).await
+		self.call("alternate_covers", move |i| i.get_alternate_covers(&manga)).await
 	}
 
 	pub async fn get_base_url(&self) -> Result<String> {
-		self.call(|i| i.get_base_url()).await
+		self.call("base_url", |i| i.get_base_url()).await
 	}
 
 	pub async fn handle_notification(&self, key: String) -> Result<()> {
-		self.call(move |i| i.handle_notification(&key)).await
+		self.call("notification", move |i| i.handle_notification(&key)).await
 	}
 
 	pub async fn handle_basic_login(
@@ -338,16 +442,16 @@ impl SourceHandle {
 		username: String,
 		password: String,
 	) -> Result<bool> {
-		self.call(move |i| i.handle_basic_login(&key, &username, &password))
+		self.call("basic_login", move |i| i.handle_basic_login(&key, &username, &password))
 			.await
 	}
 
 	pub async fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
-		self.call(move |i| i.handle_web_login(&key, &cookies)).await
+		self.call("web_login", move |i| i.handle_web_login(&key, &cookies)).await
 	}
 
 	pub async fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
-		self.call(move |i| i.handle_deep_link(&url)).await
+		self.call("deep_link", move |i| i.handle_deep_link(&url)).await
 	}
 
 	pub async fn handle_key_migration(
@@ -356,8 +460,10 @@ impl SourceHandle {
 		manga_key: String,
 		chapter_key: Option<String>,
 	) -> Result<String> {
-		self.call(move |i| i.handle_key_migration(kind, &manga_key, chapter_key.as_deref()))
-			.await
+		self.call("key_migration", move |i| {
+			i.handle_key_migration(kind, &manga_key, chapter_key.as_deref())
+		})
+		.await
 	}
 
 	pub async fn get_image_request(
@@ -365,12 +471,13 @@ impl SourceHandle {
 		url: String,
 		context: Option<PageContext>,
 	) -> Result<ImageRequestSpec> {
-		self.call(move |i| i.get_image_request(&url, context.as_ref())).await
+		self.call("image_request", move |i| i.get_image_request(&url, context.as_ref()))
+			.await
 	}
 
-	/// 把 PageContent::Image 的源内句柄还原成 PNG 字节并回收 rid
+	/// Resolve the in-source handle of a PageContent::Image back into PNG bytes and reclaim the rid
 	pub async fn take_page_image(&self, rid: i32) -> Result<Vec<u8>> {
-		self.call(move |i| i.take_image_png(rid)).await
+		self.call("take_page_image", move |i| i.take_image_png(rid)).await
 	}
 
 	pub async fn process_page_image(
@@ -378,10 +485,11 @@ impl SourceHandle {
 		input: crate::source::ProcessImageInput,
 		context: Option<PageContext>,
 	) -> Result<Vec<u8>> {
-		self.call(move |i| i.process_page_image(input, context.as_ref())).await
+		self.call("process_page_image", move |i| i.process_page_image(input, context.as_ref()))
+			.await
 	}
 
 	pub async fn process_cover_image(&self, input: crate::source::ProcessImageInput) -> Result<Vec<u8>> {
-		self.call(move |i| i.process_cover_image(input)).await
+		self.call("process_cover_image", move |i| i.process_cover_image(input)).await
 	}
 }

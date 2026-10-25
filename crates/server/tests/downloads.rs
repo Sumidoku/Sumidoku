@@ -2,40 +2,17 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use axum::routing::get;
-use common::{TestApp, base_config, connect_db, fixture_dir, register_example_manga, request, request_full};
+use common::{
+	TestApp, base_config, connect_db, connect_sse, fixture_dir, point_page_at_local, read_sse_data, read_sse_kind,
+	register_example_manga, request, request_full, serve_app, serve_bytes,
+};
+use common::PNG;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
+use sumidoku_server::download::sanitize;
 
-// 1x1 透明 PNG
-const PNG: &[u8] = &[
-	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
-	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
-	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
-];
-
-/// 起个微型静态服务返字节（abort 即关站）
-async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
-	let mut router = Router::new();
-	for (path, mime, bytes) in routes {
-		let handler = move || {
-			let mime = mime.to_string();
-			let bytes = bytes.clone();
-			async move { ([(axum::http::header::CONTENT_TYPE, mime)], bytes) }
-		};
-		router = router.route(path, get(handler));
-	}
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-	let port = listener.local_addr().expect("local addr").port();
-	let handle = tokio::spawn(async move {
-		axum::serve(listener, router).await.expect("serve");
-	});
-	(port, handle)
-}
-
-/// 下载测试需要 downloads_dir 落在 tmp（base_config 不管它，默认 ./downloads 会污染仓库）
 async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -55,22 +32,6 @@ async fn first_chapter_id(app: &Router, manga_id: i64) -> i64 {
 	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	body[0]["id"].as_i64().expect("chapter id")
-}
-
-/// 页落缓存后把第 0 页改指本地图床，worker 走缓存即全离线
-async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port: u16) {
-	let stored = json!({
-		"content": {"Url": [format!("http://127.0.0.1:{port}/img.png"), null]},
-		"thumbnail": null,
-		"hasDescription": false,
-		"description": null,
-	});
-	sqlx::query("UPDATE page SET content = ? WHERE chapter_id = ? AND idx = 0")
-		.bind(stored.to_string())
-		.bind(chapter_id)
-		.execute(pool)
-		.await
-		.expect("rewrite page 0");
 }
 
 async fn wait_download_status(app: &Router, chapter_id: i64, want: &str) -> Value {
@@ -137,6 +98,7 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 
 #[tokio::test]
 async fn download_full_flow() {
+	let (logs, _guard) = common::capture_logs();
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
 	let downloads_dir = t.tmp.path().join("downloads");
@@ -151,6 +113,11 @@ async fn download_full_flow() {
 	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	let pool = connect_db(&t.db_path).await;
 	point_page_at_local(&pool, chapter_id, port).await;
+	sqlx::query("UPDATE chapter SET title = NULL, number = 50 WHERE id = ?")
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("numbered chapter without a separate title");
 	let (manga_key,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
 		.bind(manga_id)
 		.fetch_one(&pool)
@@ -165,17 +132,31 @@ async fn download_full_flow() {
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([chapter_id]));
-	// 重复入队被跳过
+	// a duplicate enqueue is skipped
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([]));
 
 	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let text = common::wait_for_log(&logs, "download finished").await;
+	assert!(text.contains("downloads queued"), "enqueue log missing: {text}");
+	assert!(text.contains("download started"), "start log missing: {text}");
+	let line = text
+		.lines()
+		.find(|line| line.contains("download finished"))
+		.expect("finish log");
+	for field in ["INFO", "pages=2", "attempt=1", "dur_ms=", "source_id="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
+	assert!(line.contains(&format!("chapter_id={chapter_id}")), "chapter id missing: {line}");
 	let rel_path = entry["path"].as_str().expect("download path").to_string();
 	let cbz_path = downloads_dir.join(&rel_path);
 	assert!(cbz_path.is_file(), "cbz should exist at {}", cbz_path.display());
 	assert_eq!(entry["downloaded"], Value::Null);
 	assert_eq!(entry["total"], Value::Null);
+	assert_eq!(entry["chapterTitle"], Value::Null);
+	assert_eq!(entry["chapterNumber"], json!(50.0));
+	assert_eq!(entry["volumeNumber"], Value::Null);
 
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
 	assert_eq!(body[0]["isDownloaded"], true);
@@ -184,7 +165,7 @@ async fn download_full_flow() {
 	let bytes = std::fs::read(&cbz_path).expect("read cbz");
 	assert_cbz(&bytes, "en.example-source", &manga_key, &chapter_key, 2);
 
-	// 删了重下，产物字节完全一致
+	// delete and re-download: the artifact bytes are identical
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(!cbz_path.exists());
@@ -213,6 +194,299 @@ async fn download_full_flow() {
 }
 
 #[tokio::test]
+async fn download_backfills_online_page_dimensions() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let pages_path = format!("/api/v1/chapter/{chapter_id}/pages");
+	let (status, _) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(body[0].get("width").is_none());
+	assert!(body[0].get("height").is_none());
+	assert!(body[1]["content"]["Text"].is_string());
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
+	assert!(body[1].get("width").is_none());
+	assert!(body[1].get("height").is_none());
+	let rows: Vec<(bool, Option<i64>, Option<i64>)> = sqlx::query_as(
+		"SELECT dimensions_checked, width, height FROM page WHERE chapter_id = ? ORDER BY idx",
+	)
+	.bind(chapter_id)
+	.fetch_all(&pool)
+	.await
+	.expect("dimension rows");
+	assert_eq!(rows, [(true, Some(1), Some(1)), (false, None, None)]);
+
+	sqlx::query("UPDATE page SET width = 99, height = 99, dimensions_checked = 1 WHERE chapter_id = ? AND idx = 0")
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("seed stale dimensions");
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let (status, body) = request(&app, "GET", &pages_path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
+}
+
+/// Metadata mirror for rendering expected paths (chapter_display and the author empty fallback follow the server's rules)
+struct ChapterMeta {
+	source: String,
+	title: String,
+	author: String,
+	chapter: String,
+}
+
+async fn chapter_meta(pool: &sqlx::SqlitePool, chapter_id: i64) -> ChapterMeta {
+	let (title, authors, number, chapter_title, chapter_key, source): (
+		String,
+		String,
+		Option<f64>,
+		Option<String>,
+		String,
+		String,
+	) = sqlx::query_as(
+		"SELECT m.title, m.authors, c.number, c.title, c.key, s.name FROM chapter c
+		 JOIN manga m ON m.id = c.manga_id JOIN source s ON s.id = m.source_id WHERE c.id = ?",
+	)
+	.bind(chapter_id)
+	.fetch_one(pool)
+	.await
+	.expect("chapter meta");
+	let authors: Vec<String> = serde_json::from_str(&authors).expect("authors json");
+	let chapter = match (number, chapter_title) {
+		(Some(n), _) => format!("第 {n} 话"),
+		(None, Some(t)) => t,
+		(None, None) => chapter_key,
+	};
+	ChapterMeta {
+		source,
+		title,
+		author: if authors.is_empty() { "Unknown".into() } else { authors.join(", ") },
+		chapter,
+	}
+}
+
+fn default_rel_path(meta: &ChapterMeta) -> String {
+	format!(
+		"{}/{}/{}.cbz",
+		sanitize(&meta.source),
+		sanitize(&meta.title),
+		sanitize(&meta.chapter)
+	)
+}
+
+/// Mirror of a template variable: empty/missing falls back to Unknown, the rest goes through sanitize (same rules as the server's move_var)
+fn template_var(raw: &str) -> String {
+	if raw.trim().is_empty() { "Unknown".into() } else { sanitize(raw) }
+}
+
+#[tokio::test]
+async fn download_move_to_absolute_template_target() {
+	let t = downloads_app(|config| {
+		let root = config.downloads_dir.parent().expect("tmp root").join("library");
+		config.download_move_path = Some(format!("{}/{{author}}/{{manga}}/{{filename}}", root.display()));
+	})
+	.await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	let target = move_root
+		.join(template_var(&meta.author))
+		.join(template_var(&meta.title))
+		.join(format!("{}.cbz", template_var(&meta.chapter)));
+	assert_eq!(stored, target.to_str().expect("utf8 target"), "moved download stores the absolute target");
+	let (db_path,): (String,) = sqlx::query_as("SELECT path FROM download WHERE chapter_id = ?")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("db path");
+	assert_eq!(db_path, stored);
+	assert!(target.is_file(), "product moved to {}", target.display());
+	assert!(
+		!t.tmp.path().join("downloads").join(default_rel_path(&meta)).exists(),
+		"default location must be empty after the move"
+	);
+
+	// file reads use the recorded absolute path verbatim
+	let bytes = std::fs::read(&target).expect("read moved cbz");
+	let (status, _, file_bytes) =
+		request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/file"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(file_bytes, bytes);
+
+	// deletion uses the recorded absolute path
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists());
+}
+
+#[tokio::test]
+async fn download_move_via_setting_and_overwrites_target() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let template = format!("{}/{{manga}}", move_root.display());
+	let (status, body) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"download.move_path": template})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["download"]["movePath"], json!(template));
+
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+	let (manga_key,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("manga key");
+	let (chapter_key,): (String,) = sqlx::query_as("SELECT key FROM chapter WHERE id = ?")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("chapter key");
+
+	// template without {filename} → directory semantics: the default artifact name is appended under it
+	let target = move_root
+		.join(template_var(&meta.title))
+		.join(format!("{}.cbz", template_var(&meta.chapter)));
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	assert_eq!(entry["path"].as_str().expect("path"), target.to_str().expect("utf8 target"));
+	assert!(target.is_file());
+
+	// re-download overwrite: after deleting the row (deletion must remove the recorded absolute-path
+	// artifact), plant a junk file at the target; the re-download must replace it with a real cbz, not leave a duplicate
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists(), "delete must remove the moved product");
+	std::fs::create_dir_all(target.parent().expect("target parent")).expect("mkdir target parent");
+	std::fs::write(&target, b"junk").expect("write junk");
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&app, chapter_id, "finished").await;
+	let bytes = std::fs::read(&target).expect("read replaced cbz");
+	assert_cbz(&bytes, "en.example-source", &manga_key, &chapter_key, 2);
+}
+
+#[tokio::test]
+async fn download_move_failure_keeps_product_in_place() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	// the move target's parent is blocked by a same-named file: mkdir must fail → the artifact stays in place and the download still finishes
+	let blocker = t.tmp.path().join("blocker");
+	std::fs::write(&blocker, b"x").expect("write blocker");
+	let template = format!("{}/sub/{{filename}}", blocker.display());
+	let (status, _) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"download.move_path": template})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	assert!(
+		!std::path::Path::new(&stored).is_absolute(),
+		"failed move keeps the relative path: {stored}"
+	);
+	assert_eq!(stored, default_rel_path(&meta));
+	let product = t.tmp.path().join("downloads").join(&stored);
+	assert!(product.is_file(), "product kept at {}", product.display());
+	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["width"], 1);
+	assert_eq!(body[0]["height"], 1);
+}
+
+#[tokio::test]
+async fn download_move_folder_format_moves_directory() {
+	let t = downloads_app(|config| {
+		config.download_format = "folder".into();
+		let root = config.downloads_dir.parent().expect("tmp root").join("library");
+		config.download_move_path = Some(format!("{}/{{manga}}/{{filename}}", root.display()));
+	})
+	.await;
+	let app = t.app.clone();
+	let move_root = t.tmp.path().join("library");
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let meta = chapter_meta(&pool, chapter_id).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = wait_download_status(&app, chapter_id, "finished").await;
+	let stored = entry["path"].as_str().expect("download path").to_string();
+	let target = move_root.join(template_var(&meta.title)).join(template_var(&meta.chapter));
+	assert_eq!(stored, target.to_str().expect("utf8 target"));
+	assert!(target.is_dir(), "folder product moved to {}", target.display());
+	assert!(target.join("ComicInfo.xml").is_file());
+	assert!(target.join("000.png").is_file());
+
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(!target.exists());
+}
+
+#[tokio::test]
 async fn download_pause_resume() {
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
@@ -224,7 +498,7 @@ async fn download_pause_resume() {
 	let pool = connect_db(&t.db_path).await;
 	point_page_at_local(&pool, chapter_id, port).await;
 
-	// 先停再入队，不与 worker 抢跑；再 stop 一次把新入队的 queued 落成 paused
+	// stop first, then enqueue, avoiding a race with the worker; stop once more so the newly queued row lands as paused
 	let (status, _) = request(&app, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
@@ -260,6 +534,7 @@ async fn wait_update_complete(app: &Router, want_total: i64) {
 
 #[tokio::test]
 async fn update_fetch_reconciles_and_recent() {
+	let (logs, _guard) = common::capture_logs();
 	let t = downloads_app(|_| {}).await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
@@ -273,10 +548,21 @@ async fn update_fetch_reconciles_and_recent() {
 		.rows_affected();
 	assert_eq!(deleted, 1);
 
+	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);
 	wait_update_complete(&app, 1).await;
+	let text = common::wait_for_log(&logs, "library update finished").await;
+	assert!(text.contains("library update started"), "update start log missing: {text}");
+	let line = text
+		.lines()
+		.find(|line| line.contains("library update finished"))
+		.expect("update finish log");
+	for field in ["INFO", "scheduled=false", "total=1", "complete=1", "failed=0", "skipped=0", "dur_ms="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
 
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM chapter WHERE manga_id = ? AND key = '8'")
 		.bind(manga_id)
@@ -291,7 +577,7 @@ async fn update_fetch_reconciles_and_recent() {
 	assert_eq!(body["entries"][0]["chapter"]["key"], "8");
 	assert_eq!(body["entries"][0]["manga"]["id"], manga_id);
 
-	// 未开 auto_download：download 表为空
+	// auto_download off: the download table is empty
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM download")
 		.fetch_one(&pool)
 		.await
@@ -316,111 +602,285 @@ async fn update_auto_download_enqueues_new_chapters() {
 		.expect("delete chapter")
 		.rows_affected();
 	assert_eq!(deleted, 1);
+	let addr = serve_app(app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
 
+	let (status, _) = request(
+		&app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"library.skip_titles": [], "downloads.auto_skip_manga_with_unread": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["started"], true);
-	wait_update_complete(&app, 1).await;
-
-	// 新章自动入下载队（worker 后续成败不影响入队事实）
-	let deadline = Instant::now() + Duration::from_secs(10);
-	loop {
-		let row: Option<(String,)> = sqlx::query_as(
-			"SELECT d.status FROM download d JOIN chapter c ON c.id = d.chapter_id WHERE c.key = '8'",
-		)
-		.fetch_optional(&pool)
+	let queued = read_sse_data(&mut stream, &mut rest, "queued").await;
+	let chapter_key: String = sqlx::query_scalar("SELECT key FROM chapter WHERE id = ?")
+		.bind(queued["chapterId"].as_i64().expect("queued chapter id"))
+		.fetch_one(&pool)
 		.await
-		.expect("query download");
-		if row.is_some() {
-			break;
-		}
-		assert!(Instant::now() < deadline, "auto download did not enqueue chapter 8");
-		tokio::time::sleep(Duration::from_millis(100)).await;
-	}
-}
-
-/// 最小 WS 客户端：读一帧文本帧（服务端帧不掩码）
-async fn read_ws_frame(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Vec<u8> {
-	use tokio::io::AsyncReadExt;
-	async fn fill(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, want: usize) {
-		let mut tmp = [0u8; 4096];
-		while buf.len() < want {
-			let n = stream.read(&mut tmp).await.expect("read frame");
-			assert!(n > 0, "connection closed mid-frame");
-			buf.extend_from_slice(&tmp[..n]);
-		}
-	}
-	fill(stream, buf, 2).await;
-	let (offset, len) = match buf[1] & 0x7f {
-		126 => {
-			fill(stream, buf, 4).await;
-			(4, u16::from_be_bytes([buf[2], buf[3]]) as usize)
-		}
-		127 => {
-			fill(stream, buf, 10).await;
-			(10, u64::from_be_bytes(buf[2..10].try_into().expect("len")) as usize)
-		}
-		n => (2, n as usize),
-	};
-	fill(stream, buf, offset + len).await;
-	let payload = buf[offset..offset + len].to_vec();
-	buf.drain(..offset + len);
-	payload
+		.expect("queued chapter");
+	assert_eq!(chapter_key, "8");
+	let completed = read_sse_kind(&mut stream, &mut rest, "updateComplete").await;
+	assert_eq!(completed["data"]["running"], false);
+	assert_eq!(completed["data"]["total"], 1);
+	assert_eq!(completed["data"]["complete"], 1);
 }
 
 #[tokio::test]
-async fn downloads_ws_pushes_snapshot() {
+async fn legacy_websocket_routes_are_not_registered() {
 	let t = downloads_app(|_| {}).await;
-	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
-	let addr = listener.local_addr().expect("local addr");
-	let app = t.app.clone();
-	tokio::spawn(async move {
-		axum::serve(listener, app.into_make_service()).await.expect("serve");
-	});
-
-	use tokio::io::{AsyncReadExt, AsyncWriteExt};
-	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
-	let handshake = "GET /api/v1/downloads/ws HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-	stream.write_all(handshake.as_bytes()).await.expect("write handshake");
-	let mut received = Vec::new();
-	let mut tmp = [0u8; 4096];
-	loop {
-		let n = stream.read(&mut tmp).await.expect("read handshake");
-		received.extend_from_slice(&tmp[..n]);
-		if received.windows(4).any(|w| w == b"\r\n\r\n") {
-			break;
-		}
+	for path in ["/api/v1/downloads/ws", "/api/v1/update/ws"] {
+		let request = axum::http::Request::get(path)
+			.body(axum::body::Body::empty())
+			.expect("legacy route request");
+		let response = tower::ServiceExt::oneshot(t.app.clone(), request).await.expect("legacy route response");
+		let status = response.status();
+		assert!(
+			status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+			"unexpected legacy WebSocket response for {path}: {status}"
+		);
 	}
-	let head_end = received
-		.windows(4)
-		.position(|w| w == b"\r\n\r\n")
-		.expect("header end");
-	let head = String::from_utf8_lossy(&received[..head_end]);
-	assert!(head.contains("101"), "{head}");
-	let mut rest = received[head_end + 4..].to_vec();
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let value: Value = serde_json::from_slice(&payload).expect("snapshot json");
+}
+
+#[tokio::test]
+async fn downloads_sse_pushes_snapshot() {
+	let t = downloads_app(|_| {}).await;
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let value = read_sse_data(&mut stream, &mut rest, "snapshot").await;
 	assert!(value["type"].is_string(), "{value}");
 	assert_eq!(value["type"], "snapshot");
 	assert!(value["downloads"].is_array(), "{value}");
 	assert_eq!(value["running"], true, "{value}");
 
-	// stop → running 事件帧（chapterId=0 占位，running=false）
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/stop", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let event: Value = serde_json::from_slice(&payload).expect("running event json");
-	assert_eq!(event["type"], "running", "{event}");
-	assert_eq!(event["chapterId"], 0);
-	assert_eq!(event["downloaded"], 0);
-	assert_eq!(event["total"], 0);
-	assert_eq!(event["running"], false);
+	let event = read_sse_kind(&mut stream, &mut rest, "running").await;
+	assert_eq!(event["data"]["running"], false, "{event}");
 
-	// start → running=true
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads/start", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let payload = read_ws_frame(&mut stream, &mut rest).await;
-	let event: Value = serde_json::from_slice(&payload).expect("running event json");
-	assert_eq!(event["type"], "running", "{event}");
-	assert_eq!(event["running"], true);
+	let event = read_sse_kind(&mut stream, &mut rest, "running").await;
+	assert_eq!(event["data"]["running"], true, "{event}");
+}
+
+#[tokio::test]
+async fn downloads_sse_pushes_queued_event() {
+	let t = downloads_app(|_| {}).await;
+	let manga_id = register_example_manga(&t.app).await;
+	let chapter_id = first_chapter_id(&t.app, manga_id).await;
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let event = read_sse_data(&mut stream, &mut rest, "queued").await;
+	assert_eq!(event["chapterId"], chapter_id);
+}
+
+#[tokio::test]
+async fn update_sse_pushes_job_and_completed_summary() {
+	let t = downloads_app(|_| {}).await;
+	let manga_id = register_example_manga(&t.app).await;
+	let (status, _) = request(&t.app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+	assert_eq!(snapshot["updateSummary"]["running"], false);
+
+	let (status, _) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, _) = request(&t.app, "POST", "/api/v1/update/fetch", Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let event = read_sse_data(&mut stream, &mut rest, "job").await;
+	assert_eq!(event["mangaId"], manga_id);
+	let completed = read_sse_kind(&mut stream, &mut rest, "updateComplete").await;
+	assert_eq!(completed["data"]["running"], false);
+	assert_eq!(completed["data"]["total"], 1);
+	assert_eq!(completed["data"]["complete"], 1);
+
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+	assert_eq!(snapshot["updateSummary"]["running"], false);
+	assert_eq!(snapshot["updateSummary"]["total"], 1);
+	assert_eq!(snapshot["updateSummary"]["complete"], 1);
+}
+
+#[tokio::test]
+async fn download_cancel_in_flight_removes_the_row() {
+	let t = downloads_app(|_| {}).await;
+	let manga_id = register_example_manga(&t.app).await;
+	let chapter_id = first_chapter_id(&t.app, manga_id).await;
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let handler = || async {
+		tokio::time::sleep(Duration::from_secs(2)).await;
+		([(axum::http::header::CONTENT_TYPE, "image/png".to_string())], PNG.to_vec())
+	};
+	let router = Router::new().route("/img.png", axum::routing::get(handler));
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let port = listener.local_addr().expect("local addr").port();
+	let _upstream = tokio::spawn(async move {
+		axum::serve(listener, router).await.expect("serve");
+	});
+	let pool = connect_db(&t.db_path).await;
+	point_page_at_local(&pool, chapter_id, port).await;
+
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	wait_download_status(&t.app, chapter_id, "downloading").await;
+	let (status, _) = request(&t.app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&t.app, "GET", "/api/v1/downloads", None).await;
+	assert!(body.as_array().expect("downloads").is_empty());
+	let (_, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(body[0]["isDownloaded"], false);
+}
+
+#[tokio::test]
+async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeue() {
+	let t = downloads_app(|_| {}).await;
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let port = listener.local_addr().expect("local addr").port();
+	let base = format!("http://127.0.0.1:{port}");
+	let feed_url = format!("{base}/feed");
+	let feed = format!(
+		r#"<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Race</title><id>race</id>
+  <entry><title>First</title><id>first</id><updated>2024-03-01T00:00:00Z</updated>
+    <link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/empty.cbz"/>
+  </entry>
+  <entry><title>Probe</title><id>probe</id><updated>2024-03-01T00:00:00Z</updated>
+    <link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/empty.cbz"/>
+  </entry>
+</feed>"#
+	);
+	let release = std::sync::Arc::new(tokio::sync::Notify::new());
+	let first_request = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+	let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+	let feed_release = release.clone();
+	let feed_handler = move || {
+		let release = feed_release.clone();
+		let first_request = first_request.clone();
+		let started_tx = started_tx.clone();
+		let feed = feed.clone();
+		async move {
+			if first_request.swap(false, std::sync::atomic::Ordering::SeqCst) {
+				let _ = started_tx.send(());
+				release.notified().await;
+			}
+			(
+				[(axum::http::header::CONTENT_TYPE, "application/atom+xml;profile=opds-catalog".to_string())],
+				feed,
+			)
+		}
+	};
+	let mut empty = std::io::Cursor::new(Vec::new());
+	zip::ZipWriter::new(&mut empty).finish().expect("empty cbz");
+	let empty = empty.into_inner();
+	let empty_handler = move || {
+		let empty = empty.clone();
+		async move { ([(axum::http::header::CONTENT_TYPE, "application/zip".to_string())], empty) }
+	};
+	let router = Router::new()
+		.route("/feed", axum::routing::get(feed_handler))
+		.route("/empty.cbz", axum::routing::get(empty_handler));
+	let _upstream = tokio::spawn(async move {
+		axum::serve(listener, router).await.expect("serve");
+	});
+
+	let pool = connect_db(&t.db_path).await;
+	let source_id: i64 = sqlx::query_scalar(
+		"INSERT INTO source (key, name, kind, base_url, wasm_path)
+		 VALUES ('opds.race', 'Race OPDS', 'opds', ?, '') RETURNING id",
+	)
+	.bind(&feed_url)
+	.fetch_one(&pool)
+	.await
+	.expect("opds source");
+	let manga_id: i64 = sqlx::query_scalar(
+		"INSERT INTO manga (source_id, key, title, url) VALUES (?, 'race', 'Race Manga', ?) RETURNING id",
+	)
+	.bind(source_id)
+	.bind(&feed_url)
+	.fetch_one(&pool)
+	.await
+	.expect("opds manga");
+	let chapter_id: i64 = sqlx::query_scalar(
+		"INSERT INTO chapter (manga_id, key, title, number, source_order)
+		 VALUES (?, 'first', 'First', 1, 0) RETURNING id",
+	)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("first chapter");
+	let probe_id: i64 = sqlx::query_scalar(
+		"INSERT INTO chapter (manga_id, key, title, number, source_order)
+		 VALUES (?, 'probe', 'Probe', 2, 1) RETURNING id",
+	)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("probe chapter");
+	let meta = chapter_meta(&pool, chapter_id).await;
+	let artifact = t.tmp.path().join("downloads").join(default_rel_path(&meta));
+	let addr = serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["type"], "snapshot");
+
+	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([chapter_id]));
+	tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
+		.await
+		.expect("feed started")
+		.expect("feed start signal");
+	wait_download_status(&t.app, chapter_id, "downloading").await;
+	let (status, _) = request(&t.app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	release.notify_one();
+
+	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [probe_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let finished = read_sse_data(&mut stream, &mut rest, "finished").await;
+	assert_eq!(finished["chapterId"], probe_id, "deleted attempt must not emit finished");
+	let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id = ? AND user_id = 1")
+		.bind(chapter_id)
+		.fetch_optional(&pool)
+		.await
+		.expect("deleted row");
+	assert_eq!(status, None);
+	let downloaded: Option<i64> = sqlx::query_scalar(
+		"SELECT is_downloaded FROM chapter_user WHERE chapter_id = ? AND user_id = 1",
+	)
+	.bind(chapter_id)
+	.fetch_optional(&pool)
+	.await
+	.expect("download flag");
+	assert_eq!(downloaded, Some(0));
+	assert!(!artifact.exists(), "stale worker recreated {}", artifact.display());
+	assert!(!t.tmp.path().join("downloads/.tmp").join(chapter_id.to_string()).exists());
+
+	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([chapter_id]));
+	wait_download_status(&t.app, chapter_id, "finished").await;
+	assert!(artifact.is_file());
 }

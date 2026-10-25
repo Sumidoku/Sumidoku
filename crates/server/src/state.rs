@@ -13,9 +13,9 @@ pub struct SourceEntry {
 	pub handle: Arc<SourceHandle>,
 	pub key: String,
 	pub features: SourceFeatures,
-	/// manifest config.maximumParallelRequests 换算的每源调用准入帽；None 只受全局帽
+	/// Per-source call admission cap derived from manifest config.maximumParallelRequests; None = only the global cap applies
 	pub call_limit: Option<Arc<Semaphore>>,
-	/// 最近一次 get_handle 命中的时刻；空闲逐出的判据
+	/// Time of the last get_handle hit; the criterion for idle eviction
 	last_used: std::sync::Mutex<std::time::Instant>,
 }
 
@@ -54,10 +54,13 @@ pub struct AppState {
 	pub cookie_tx: mpsc::UnboundedSender<CookieWrite>,
 	pub http: RoutedClients,
 	pub policy: Arc<SumidokuNetPolicy>,
-	// build_app 装配时一次性注入，晚于 AppState::new（manager 反过来依赖 state）
+	/// LRU of local-source CBZ handles (pages are extracted on demand; reopening an archive means re-reading the central directory)
+	pub local_zip: Arc<crate::local::ZipCache>,
+	// Injected once during build_app assembly, after AppState::new (the manager depends back on state)
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
-	pub browser_logins: tokio::sync::OnceCell<crate::browser_login::BrowserLoginManager>,
+	pub events: tokio::sync::OnceCell<Arc<crate::events::EventHub>>,
+	pub tasks: tokio::sync::OnceCell<Arc<crate::task::TaskManager>>,
 }
 
 pub struct DefaultsWrite {
@@ -66,7 +69,7 @@ pub struct DefaultsWrite {
 	pub value: DefaultValue,
 }
 
-/// defaults.set 在 actor 线程同步触发，这里只投 channel，持久化由 writer task 批量落库
+/// defaults.set fires synchronously on the actor thread; this only posts to the channel, persistence is batched to the DB by the writer task
 pub struct ChanDefaultsSink {
 	tx: mpsc::UnboundedSender<DefaultsWrite>,
 }
@@ -88,11 +91,11 @@ pub struct CookieWrite {
 	pub source_key: String,
 	pub domain: String,
 	pub name: String,
-	/// None 表示删除该 cookie
+	/// None means delete this cookie
 	pub value: Option<String>,
 }
 
-/// CookieJar 在 actor 线程同步触发，这里只投 channel，持久化由 writer task 批量落库
+/// CookieJar fires synchronously on the actor thread; this only posts to the channel, persistence is batched to the DB by the writer task
 pub struct ChanCookieSink {
 	tx: mpsc::UnboundedSender<CookieWrite>,
 	source_key: String,
@@ -130,7 +133,7 @@ pub async fn load_defaults(pool: &SqlitePool, source_id: i64) -> ApiResult<HashM
 	Ok(defaults)
 }
 
-/// 回填实例 cookie jar：domain → (name → value)
+/// Backfills an instance's cookie jar: domain → (name → value)
 pub async fn load_cookies(
 	pool: &SqlitePool,
 	source_id: i64,
@@ -147,8 +150,15 @@ pub async fn load_cookies(
 	Ok(cookies)
 }
 
-/// source 行里组装实例启动配置所需的列（key, wasm_path, enabled, languages, config）
-type SourceConfigRow = (String, String, bool, sqlx::types::Json<Vec<String>>, Option<String>);
+/// The columns of a source row needed to assemble an instance's startup config (key, wasm_path, kind, enabled, languages, config)
+type SourceConfigRow = (
+	String,
+	String,
+	String,
+	bool,
+	sqlx::types::Json<Vec<String>>,
+	Option<String>,
+);
 
 impl AppState {
 	pub fn new(
@@ -160,7 +170,7 @@ impl AppState {
 		let call_concurrency = config.call_concurrency;
 		let policy = SumidokuNetPolicy::from_config(&config);
 		let http = RoutedClients::new(policy.clone());
-		let auth = crate::auth::AuthState::new(&config.auth.api_keys);
+		let auth = crate::auth::AuthState::new(config.effective_username());
 		Arc::new(Self {
 			pool,
 			config,
@@ -171,13 +181,15 @@ impl AppState {
 			cookie_tx,
 			http,
 			policy,
+			local_zip: Arc::new(crate::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
-			browser_logins: tokio::sync::OnceCell::new(),
+			events: tokio::sync::OnceCell::new(),
+			tasks: tokio::sync::OnceCell::new(),
 		})
 	}
 
-	/// build_app 在路由对外服务前完成装配，此后必然已就位
+	/// build_app finishes assembly before the router serves, so it is necessarily in place by then
 	pub fn downloads(&self) -> Arc<crate::download::DownloadManager> {
 		self.downloads
 			.get()
@@ -185,7 +197,106 @@ impl AppState {
 			.clone()
 	}
 
-	/// 卸载/换包后踢掉注册表里的实例；有在途调用持有 Arc 时让位给引用计数归零后自然退出
+	pub fn events(&self) -> Arc<crate::events::EventHub> {
+		self.events.get().expect("event hub installed").clone()
+	}
+
+	pub fn tasks(&self) -> Arc<crate::task::TaskManager> {
+		self.tasks.get().expect("task manager installed").clone()
+	}
+
+	/// Whether the source is the default local instance: its rows predate per-instance settings, so it
+	/// keeps the legacy global/config fallback layers that other instances never had
+	async fn is_default_local(&self, source_id: i64) -> ApiResult<bool> {
+		let row: Option<(String,)> = sqlx::query_as("SELECT key FROM source WHERE id = ?")
+			.bind(source_id)
+			.fetch_optional(&self.pool)
+			.await?;
+		Ok(row.is_some_and(|(key,)| key == crate::model::LOCAL_SOURCE_KEY))
+	}
+
+	/// Effective scan roots of one local instance: the instance's own `paths` source setting wins; the
+	/// default instance additionally falls back to the legacy global local.dirs setting, then the config
+	/// layer, so pre-multi-instance deployments keep scanning the same roots until the per-instance
+	/// setting is edited. A wrong-shaped stored value counts as unset, same rule as the backup.* settings
+	pub async fn local_dirs(&self, source_id: i64) -> ApiResult<Vec<std::path::PathBuf>> {
+		let row: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'paths'")
+				.bind(source_id)
+				.fetch_optional(&self.pool)
+				.await?;
+		if let Some(dirs) = row
+			.and_then(|(raw,)| serde_json::from_str::<DefaultValue>(&raw).ok())
+			.and_then(|value| match value {
+				DefaultValue::StringArray(dirs) => Some(dirs),
+				_ => None,
+			})
+			.map(|dirs| {
+				dirs.into_iter()
+					.filter(|dir| !dir.trim().is_empty())
+					.map(std::path::PathBuf::from)
+					.collect::<Vec<_>>()
+			})
+			&& !dirs.is_empty()
+		{
+			return Ok(dirs);
+		}
+		if self.is_default_local(source_id).await? {
+			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.dirs'")
+				.fetch_optional(&self.pool)
+				.await?;
+			if let Some(dirs) = row
+				.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
+				.map(|dirs| {
+					dirs.into_iter()
+						.filter(|dir| !dir.trim().is_empty())
+						.map(std::path::PathBuf::from)
+						.collect::<Vec<_>>()
+				})
+				&& !dirs.is_empty()
+			{
+				return Ok(dirs);
+			}
+			return Ok(self.config.local_dirs());
+		}
+		Ok(Vec::new())
+	}
+
+	/// Effective oneshots-directory marker of one local instance: the instance's own `oneshotsDir`
+	/// source setting wins — including an explicit blank, which turns the rule off for that instance —
+	/// and an absent setting falls back to the legacy global local.oneshots_dir (default instance only),
+	/// then the config layer. A blank or wrong-shaped legacy value counts as unset, the pre-existing rule
+	pub async fn local_oneshots_dir(&self, source_id: i64) -> ApiResult<Option<String>> {
+		let row: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'oneshotsDir'")
+				.bind(source_id)
+				.fetch_optional(&self.pool)
+				.await?;
+		if let Some((raw,)) = row {
+			return Ok(match serde_json::from_str::<DefaultValue>(&raw) {
+				Ok(DefaultValue::String(name)) => {
+					let name = name.trim().to_string();
+					(!name.is_empty()).then_some(name)
+				}
+				_ => None,
+			});
+		}
+		if self.is_default_local(source_id).await? {
+			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.oneshots_dir'")
+				.fetch_optional(&self.pool)
+				.await?;
+			if let Some(name) = row
+				.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+				.map(|name| name.trim().to_string())
+				&& !name.is_empty()
+			{
+				return Ok(Some(name));
+			}
+		}
+		Ok(self.config.local_oneshots_dir().map(str::to_string))
+	}
+
+	/// Kicks the instance out of the registry after unload/repackage; while an in-flight call holds an Arc, it exits naturally when the refcount drops to zero
 	pub async fn evict_source(&self, source_id: i64) {
 		let entry = self.sources.write().await.remove(&source_id);
 		if let Some(entry) = entry
@@ -195,8 +306,9 @@ impl AppState {
 		}
 	}
 
-	/// 空闲逐出单趟：last_used 超过 max_idle 的实例移出注册表。写锁内复查空闲才移除
-	/// （get_handle 持读锁 touch，复查必见新值），try_unwrap/shutdown 在锁外
+	/// One pass of idle eviction: removes instances whose last_used exceeds max_idle from the registry. Idleness
+	/// is re-checked under the write lock before removal (get_handle touches under the read lock, so the re-check
+	/// always sees the fresh value); try_unwrap/shutdown happen outside the lock
 	pub async fn evict_idle_sources(&self, max_idle: std::time::Duration) -> usize {
 		let now = std::time::Instant::now();
 		let candidates: Vec<i64> = self
@@ -217,7 +329,7 @@ impl AppState {
 				}
 			};
 			let Some(entry) = entry else { continue };
-			// 与 evict_source 同理：在途调用持 Arc 时等引用计数归零自然退出
+			// Same as evict_source: while an in-flight call holds an Arc, it exits naturally when the refcount drops to zero
 			if let Ok(handle) = Arc::try_unwrap(entry.handle) {
 				handle.shutdown().await;
 			}
@@ -226,10 +338,11 @@ impl AppState {
 		evicted
 	}
 
-	/// 内存压力逐出：按 last_used 从闲到忙逐个逐出，每逐一个复查 RSS，回到阈值内
-	/// 或无可逐实例为止。压力下 idle 阈值视为 0——响应流式/落盘、缓存都在磁盘，
-	/// 常驻 wasmer 实例是唯一可还的内存。在途实例（注册表外还有 Arc 引用）跳过不摘：
-	/// 摘了还不了内存，下次访问还会另起实例，短时反而双份
+	/// Memory-pressure eviction: evicts idlest-first by last_used, re-checking RSS after each one, until back under
+	/// the threshold or nothing evictable remains. Under pressure the idle threshold counts as 0 — responses stream
+	/// to disk and caches live on disk, so resident WASM instances are the only memory that can be returned.
+	/// In-flight instances (Arc references outside the registry) are skipped: evicting them frees nothing, and the
+	/// next access would spawn a fresh instance, briefly doubling the cost
 	pub async fn evict_for_rss_pressure(
 		&self,
 		threshold_bytes: u64,
@@ -249,14 +362,14 @@ impl AppState {
 			let Some(source_id) = candidate else { break };
 			let entry = {
 				let mut registry = self.sources.write().await;
-				// 写锁内复查引用数：读锁检查到摘表之间被 get_handle 命中的实例不摘
+				// Re-check the refcount under the write lock: an instance hit by get_handle between the read-lock check and removal is not removed
 				match registry.get(&source_id) {
 					Some(entry) if Arc::strong_count(&entry.handle) == 1 => registry.remove(&source_id),
 					_ => None,
 				}
 			};
 			let Some(entry) = entry else { continue };
-			// 引用数复查过关后注册表引用已移至此处，try_unwrap 必然成功
+			// Once the refcount re-check passes, the registry reference has moved here, so try_unwrap must succeed
 			if let Ok(handle) = Arc::try_unwrap(entry.handle) {
 				handle.shutdown().await;
 			}
@@ -272,17 +385,21 @@ impl AppState {
 			.clone()
 	}
 
-	/// 从 source 行 + source_setting + source_cookie 组装实例启动配置；
-	/// 顺带把 manifest config.maximumParallelRequests 换算成每源调用准入帽
+	/// Assembles an instance's startup config from the source row + source_setting + source_cookie;
+	/// also converts manifest config.maximumParallelRequests into the per-source call admission cap
 	async fn source_config(&self, source_id: i64) -> ApiResult<(SourceConfig, Option<Arc<Semaphore>>)> {
 		let row: Option<SourceConfigRow> =
-			sqlx::query_as("SELECT key, wasm_path, enabled, languages, config FROM source WHERE id = ?")
+			sqlx::query_as("SELECT key, wasm_path, kind, enabled, languages, config FROM source WHERE id = ?")
 				.bind(source_id)
 				.fetch_optional(&self.pool)
 				.await?;
-		let Some((key, wasm_path, enabled, languages, source_manifest_config)) = row else {
+		let Some((key, wasm_path, kind, enabled, languages, source_manifest_config)) = row else {
 			return Err(ApiError::not_found("source not found"));
 		};
+		// Built-in sources (local/opds) have no wasm payload, so any capability that needs an instance gets 501 unsupported
+		if kind == crate::model::SOURCE_KIND_LOCAL || kind == crate::model::SOURCE_KIND_OPDS {
+			return Err(ApiError::unsupported_501("feature not supported by source"));
+		}
 		if !enabled {
 			return Err(ApiError::source_disabled(&key));
 		}
@@ -297,8 +414,7 @@ impl AppState {
 		config.cookies = cookies;
 		config.policy = self.policy.clone();
 		config.accept_language = accept_language;
-		config.browser_ws = self.config.net.browser_ws.clone();
-	config.browser_trawl = self.config.net.browser_trawl.clone();
+		config.browser_trawl = self.config.net.browser_trawl.clone();
 		config.sink = Arc::new(ChanDefaultsSink {
 			tx: self.defaults_tx.clone(),
 		});
@@ -309,10 +425,10 @@ impl AppState {
 		Ok((config, call_limit.map(Arc::new)))
 	}
 
-	/// 懒加载：注册表没有就从 source 行 + source_setting 拉起实例
+	/// Lazy loading: when the registry has no entry, spin up the instance from the source row + source_setting
 	pub async fn get_handle(self: &Arc<Self>, source_id: i64) -> ApiResult<Arc<SourceHandle>> {
 		if let Some(entry) = self.sources.read().await.get(&source_id) {
-			// 命中即刷新 last_used；持读锁打点，清扫线程的写锁复查必然看到新值
+			// A hit refreshes last_used; stamped under the read lock, so the sweeper's write-lock re-check always sees the fresh value
 			entry.touch();
 			return Ok(entry.handle.clone());
 		}
@@ -325,7 +441,7 @@ impl AppState {
 		let mut registry = self.sources.write().await;
 		match registry.entry(source_id) {
 			std::collections::hash_map::Entry::Occupied(e) => {
-				// 并发懒加载撞车：留先到者，后来的实例直接丢掉（Arc 落下 actor 线程即退出）
+				// Concurrent lazy-load collision: keep the first arrival and drop the later instance outright (dropping the Arc exits the actor thread)
 				Ok(e.get().handle.clone())
 			}
 			std::collections::hash_map::Entry::Vacant(v) => {
@@ -336,18 +452,18 @@ impl AppState {
 	}
 }
 
-/// 空闲清扫的唤醒粒度；阈值默认半小时，分钟级漂移无感
+/// Wake granularity of the idle sweep; thresholds default to half an hour, so minute-level drift is imperceptible
 pub const IDLE_SWEEP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// 周期清扫：把空闲超过 max_idle 的源实例逐出注册表（wasmer 线性内存只涨不消，
-/// 逐出是唯一把实例内存还给 OS 的途径）
+/// Periodic sweep: evicts source instances idle past max_idle from the registry (WASM linear memory only grows,
+/// so eviction is the only way to return an instance's memory to the OS)
 pub async fn run_idle_eviction(
 	state: Arc<AppState>,
 	max_idle: std::time::Duration,
 	sweep_interval: std::time::Duration,
 ) {
 	let mut ticker = tokio::time::interval(sweep_interval);
-	// interval 首 tick 立即完成，首扫等满一个周期
+	// interval's first tick completes immediately; the first sweep waits a full period
 	ticker.tick().await;
 	loop {
 		ticker.tick().await;
@@ -358,8 +474,8 @@ pub async fn run_idle_eviction(
 	}
 }
 
-/// RSS 监控：与空闲清扫同频的独立任务。超阈值按最闲优先逐出，逐完仍超只大声记日志
-/// ——重启进程是运维决定，监控不自动做
+/// RSS monitor: an independent task on the same cadence as the idle sweep. Over threshold it evicts idlest-first;
+/// if still over after eviction it only logs loudly — restarting the process is an operator decision, the monitor never does it
 pub async fn run_rss_monitor(
 	state: Arc<AppState>,
 	threshold_bytes: u64,
@@ -368,7 +484,7 @@ pub async fn run_rss_monitor(
 ) {
 	const MIB: u64 = 1024 * 1024;
 	let mut ticker = tokio::time::interval(sweep_interval);
-	// interval 首 tick 立即完成，首扫等满一个周期
+	// interval's first tick completes immediately; the first sweep waits a full period
 	ticker.tick().await;
 	loop {
 		ticker.tick().await;
@@ -397,7 +513,7 @@ pub async fn run_rss_monitor(
 	}
 }
 
-/// 后台 writer：把 sink 投递的 defaults 变更批量 upsert 进 source_setting
+/// Background writer: batch-upserts defaults changes posted by the sink into source_setting
 pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver<DefaultsWrite>) {
 	while let Some(first) = rx.recv().await {
 		let mut batch = vec![first];
@@ -408,7 +524,7 @@ pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiv
 			}
 		}
 		let result: Result<(), sqlx::Error> = async {
-			let mut tx = pool.begin().await?;
+			let mut tx = crate::db::begin_write(&pool).await?;
 			for write in batch {
 				let source_id: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
 					.bind(&write.source_key)
@@ -439,10 +555,10 @@ pub async fn run_defaults_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiv
 	}
 }
 
-/// Accept-Language 的语言来源：多语言源优先取播种的 `languages`/`language`
-/// 源设置（`source/mod.rs:seed_source_defaults` 建的用户可改项），没有才退回
-/// manifest 的语言列表。Aidoku 用设备 locale，服务端没有设备态，源语言设置
-/// 是最接近的替代。
+/// Language source for Accept-Language: for multi-language sources prefer the seeded `languages`/`language`
+/// source settings (user-editable entries created by `source/mod.rs:seed_source_defaults`); only fall back to
+/// the manifest's language list when absent. Aidoku uses the device locale; the server has no device state,
+/// so the source language setting is the closest substitute.
 fn preferred_languages(
 	defaults: &HashMap<String, DefaultValue>,
 	manifest: &[String],
@@ -460,15 +576,16 @@ fn preferred_languages(
 	manifest.to_vec()
 }
 
-/// maximumParallelRequests 换算每源并发帽：声明即生效、至少 1（Aidoku 取
-/// max(1, min(config, 默认))，与全局帽叠加后下限语义一致）；未声明/非法为 None，只受全局帽
+/// Converts maximumParallelRequests into the per-source concurrency cap: honored when declared, at least 1
+/// (Aidoku takes max(1, min(config, default)), matching the floor semantics after stacking with the global cap);
+/// undeclared/invalid → None, only the global cap applies
 fn source_call_limit(manifest_config: Option<&str>) -> Option<usize> {
 	let value: serde_json::Value = serde_json::from_str(manifest_config?).ok()?;
 	let n = value.get("maximumParallelRequests")?.as_i64()?;
 	Some(n.max(1) as usize)
 }
 
-/// 后台 writer：把 sink 投递的 cookie 变更批量 upsert/delete 进 source_cookie
+/// Background writer: batch-upserts/deletes cookie changes posted by the sink into source_cookie
 pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver<CookieWrite>) {
 	while let Some(first) = rx.recv().await {
 		let mut batch = vec![first];
@@ -479,7 +596,7 @@ pub async fn run_cookie_writer(pool: SqlitePool, mut rx: mpsc::UnboundedReceiver
 			}
 		}
 		let result: Result<(), sqlx::Error> = async {
-			let mut tx = pool.begin().await?;
+			let mut tx = crate::db::begin_write(&pool).await?;
 			for write in batch {
 				let source_id: Option<(i64,)> = sqlx::query_as("SELECT id FROM source WHERE key = ?")
 					.bind(&write.source_key)
@@ -604,7 +721,7 @@ mod tests {
 		(state, ids, tmp)
 	}
 
-	/// 把注册表项的 last_used 拨回过去，免去真实等待
+	/// Shifts a registry entry's last_used into the past, avoiding a real wait
 	async fn make_idle(state: &AppState, source_id: i64, idle: Duration) {
 		let registry = state.sources.read().await;
 		let entry = registry.get(&source_id).expect("entry");
@@ -642,7 +759,7 @@ mod tests {
 		let handle = state.get_handle(source_id).await.expect("handle");
 		drop(handle);
 		make_idle(&state, source_id, Duration::from_secs(40 * 60)).await;
-		// 命中即刷新 last_used，否则这次空闲 40 分钟的实例会被误逐
+		// A hit must refresh last_used, otherwise this instance idle for 40 minutes would be evicted by mistake
 		let handle = state.get_handle(source_id).await.expect("handle");
 		drop(handle);
 		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
@@ -660,7 +777,7 @@ mod tests {
 		let second = state.get_handle(source_id).await.expect("handle");
 		assert!(second.is_alive());
 		assert_eq!(state.sources.read().await.len(), 1);
-		// 重建的实例真能跑，不是只挂进注册表
+		// The rebuilt instance genuinely runs, not just sits in the registry
 		let listings = second.get_listings().await.expect("listings");
 		assert!(!listings.is_empty());
 	}
@@ -673,10 +790,10 @@ mod tests {
 		let evicted = state.evict_idle_sources(Duration::from_secs(30 * 60)).await;
 		assert_eq!(evicted, 1);
 		assert!(state.sources.read().await.is_empty());
-		// 在飞调用持有的实例不被 shutdown，注册表已放手，引用计数归零才退出
+		// The instance held by the in-flight call is not shutdown; the registry let go, and it exits when the refcount drops to zero
 		assert!(in_flight.is_alive());
 		assert_eq!(Arc::strong_count(&in_flight), 1);
-		// 下一次访问另起新实例，不等旧实例退出
+		// The next access spawns a fresh instance without waiting for the old one to exit
 		let second = state.get_handle(source_id).await.expect("handle");
 		assert!(!Arc::ptr_eq(&in_flight, &second));
 	}
@@ -714,7 +831,7 @@ mod tests {
 		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
 		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
 		make_idle(&state, ids[2], Duration::from_secs(10 * 60)).await;
-		// 读数序列：超 → 逐一个 → 回落。只逐一个且必须是最闲的 ids[0]
+		// Reading sequence: over → evict one → recovered. Exactly one eviction, and it must be the idlest ids[0]
 		let mut readings = vec![150_u64, 50].into_iter();
 		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
 		assert_eq!(evicted, 1);
@@ -724,7 +841,7 @@ mod tests {
 			assert!(registry.contains_key(&ids[1]));
 			assert!(registry.contains_key(&ids[2]));
 		}
-		// 被逐源再访问另起新实例
+		// Re-accessing the evicted source spawns a fresh instance
 		let rebuilt = state.get_handle(ids[0]).await.expect("handle");
 		assert!(rebuilt.is_alive());
 	}
@@ -739,7 +856,7 @@ mod tests {
 		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
 		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
 		make_idle(&state, ids[2], Duration::from_secs(10 * 60)).await;
-		// 超 → 超 → 回落：两个最闲的都被逐，最新使用的保留
+		// Over → over → recovered: the two idlest are evicted, the most recently used is kept
 		let mut readings = vec![150_u64, 150, 50].into_iter();
 		let evicted = state.evict_for_rss_pressure(100, &mut || readings.next()).await;
 		assert_eq!(evicted, 2);
@@ -755,7 +872,7 @@ mod tests {
 		let in_flight = state.get_handle(ids[0]).await.expect("handle");
 		let other = state.get_handle(ids[1]).await.expect("handle");
 		drop(other);
-		// 在途的恰好最闲：压力逐出应跳过它去逐次闲的，而不是把它摘出注册表
+		// The in-flight one happens to be idlest: pressure eviction should skip it and evict the next-idlest, not pull it out of the registry
 		make_idle(&state, ids[0], Duration::from_secs(40 * 60)).await;
 		make_idle(&state, ids[1], Duration::from_secs(20 * 60)).await;
 		let mut readings = vec![150_u64, 50].into_iter();
@@ -784,7 +901,7 @@ mod tests {
 	async fn rss_pressure_stops_when_nothing_is_evictable() {
 		let (state, source_id, _tmp) = test_state(Config::default()).await;
 		let in_flight = state.get_handle(source_id).await.expect("handle");
-		// RSS 一直超、唯一实例又在途：必须退出循环而不是空转
+		// RSS stays over and the only instance is in flight: the loop must exit rather than spin
 		let evicted = state.evict_for_rss_pressure(100, &mut || Some(150_u64)).await;
 		assert_eq!(evicted, 0);
 		assert!(in_flight.is_alive());
@@ -803,7 +920,7 @@ mod tests {
 			move || Some(reading.load(Ordering::Relaxed))
 		};
 		let task = tokio::spawn(run_rss_monitor(state.clone(), 100, Duration::from_millis(20), rss));
-		// 阈值内几个周期不动注册表
+		// A few cycles under the threshold must not touch the registry
 		tokio::time::sleep(Duration::from_millis(110)).await;
 		assert_eq!(state.sources.read().await.len(), 1);
 		reading.store(150, Ordering::Relaxed);
@@ -841,7 +958,7 @@ mod tests {
 			source_call_limit(Some(r#"{"maximumParallelRequests": 3}"#)),
 			Some(3)
 		);
-		// 声明 0/负数按 Aidoku 的 max(1, …) 钳到 1
+		// A declared 0/negative is clamped to 1 per Aidoku's max(1, …)
 		assert_eq!(
 			source_call_limit(Some(r#"{"maximumParallelRequests": 0}"#)),
 			Some(1)

@@ -10,11 +10,11 @@ use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// setting 里的有序 pin 列表（source key 数组），顺序即后续跨源迁移的默认优先级，
-/// 对齐 Aidoku Browse.pinnedList；源重装卸载会换内部 id，key 才是稳定身份
+/// Ordered pin list in the settings (an array of source keys); the order is also the default priority for later
+/// cross-source migration, aligned with Aidoku's Browse.pinnedList; reinstalling/uninstalling a source changes its internal id, so the key is the stable identity
 const PINNED_KEY: &str = "browse.pinned_sources";
 
-/// key → pinOrder，source_json 用；形状不合按空列表（setting 通用 PUT 允许任意 JSON）
+/// key → pinOrder, for source_json; a wrong-shaped value reads as an empty list (the generic setting PUT accepts any JSON)
 pub(crate) async fn pinned_map(pool: &SqlitePool) -> ApiResult<HashMap<String, i64>> {
 	let keys = pinned_keys(pool).await?;
 	Ok(keys
@@ -46,7 +46,7 @@ async fn write_pinned(pool: &SqlitePool, keys: &[String]) -> ApiResult<()> {
 	Ok(())
 }
 
-/// 卸载源时剔除 stale key，余者相对顺序不变
+/// Drops stale keys when a source is uninstalled; the survivors' relative order is unchanged
 pub(crate) async fn prune_pinned(pool: &SqlitePool, source_key: &str) -> ApiResult<()> {
 	let keys = pinned_keys(pool).await?;
 	let kept: Vec<String> = keys.iter().filter(|key| *key != source_key).cloned().collect();
@@ -56,20 +56,26 @@ pub(crate) async fn prune_pinned(pool: &SqlitePool, source_key: &str) -> ApiResu
 	Ok(())
 }
 
-/// pin 追加到列表尾、unpin 移除；pinned 缺省为无操作（非法值按端点约定 400 而非 422）
+/// pin appends to the list end, unpin removes; an absent pinned is a no-op.
+/// enabled toggles whether the source can be instantiated; disabling evicts any running instance
+/// so the next capability call observes the new state. Invalid values get the endpoint-convention 400, not 422.
 pub async fn patch_source(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
-	let row = super::source_row(&state, id).await?;
-	let pinned = match body {
-		None => None,
-		Some(Json(value)) => value
-			.get("pinned")
-			.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("pinned must be a boolean")))
-			.transpose()?,
-	};
+	let mut row = super::source_row(&state, id).await?;
+	let value = body.map(|Json(v)| v);
+	let pinned = value
+		.as_ref()
+		.and_then(|v| v.get("pinned"))
+		.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("pinned must be a boolean")))
+		.transpose()?;
+	let enabled = value
+		.as_ref()
+		.and_then(|v| v.get("enabled"))
+		.map(|v| v.as_bool().ok_or_else(|| ApiError::bad_request("enabled must be a boolean")))
+		.transpose()?;
 	if let Some(pinned) = pinned {
 		let mut keys = pinned_keys(&state.pool).await?;
 		let at = keys.iter().position(|key| key == &row.key);
@@ -85,6 +91,19 @@ pub async fn patch_source(
 			_ => {}
 		}
 	}
+	if let Some(enabled) = enabled && enabled != row.enabled {
+		sqlx::query("UPDATE source SET enabled = ? WHERE id = ?")
+			.bind(enabled)
+			.bind(id)
+			.execute(&state.pool)
+			.await?;
+		row.enabled = enabled;
+		if !enabled {
+			// Evict the running instance so the disabled state is enforced immediately;
+			// a later enable respawns from the updated row on next access.
+			state.evict_source(id).await;
+		}
+	}
 	let latest = repo::latest_versions(&state.pool).await?;
 	let pinned = pinned_map(&state.pool).await?;
 	Ok(Json(source_json(&row, &latest, &pinned)))
@@ -95,9 +114,9 @@ pub struct ReorderPinnedRequest {
 	pub ids: Vec<String>,
 }
 
-/// 整体替换顺序：ids 必须与当前 pinned 是同一集合（长度相等且元素相同），
-/// 缺一个或多一个都按 400 挡下——reorder 不许顺带丢 pin；
-/// 手动解析 body 与 manga PATCH 同约定：非法形状 400 而非 axum 的 422
+/// Replaces the whole order: ids must be exactly the current pinned set (same length and same elements);
+/// one missing or one extra is rejected with 400 — a reorder must not drop pins along the way;
+/// the body is parsed by hand, same convention as the manga PATCH: invalid shape gets 400, not axum's 422
 pub async fn reorder_pinned(
 	State(state): State<Arc<AppState>>,
 	body: Option<Json<Value>>,

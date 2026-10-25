@@ -1,14 +1,13 @@
 use crate::download::DownloadManager;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Json, Response};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,9 +17,10 @@ pub struct EnqueueRequest {
 
 pub async fn enqueue_downloads(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<EnqueueRequest>,
 ) -> ApiResult<Json<Value>> {
-	let queued = state.downloads().enqueue(&body.chapter_ids).await;
+	let queued = state.downloads().enqueue(&body.chapter_ids, user.id).await;
 	Ok(Json(json!({ "queued": queued })))
 }
 
@@ -37,25 +37,29 @@ struct DownloadRow {
 	manga_id: i64,
 	manga_title: String,
 	chapter_title: Option<String>,
+	chapter_number: Option<f64>,
+	volume_number: Option<f64>,
 }
 
-async fn download_entries(state: &AppState, manager: &DownloadManager) -> ApiResult<Vec<Value>> {
+pub(crate) async fn download_entries(state: &AppState, manager: &DownloadManager, user_id: i64) -> ApiResult<Vec<Value>> {
 	let rows: Vec<DownloadRow> = sqlx::query_as(
 		"SELECT d.chapter_id, d.status, d.format, d.path, d.error, d.retries,
-		 d.created_at, d.updated_at, m.id AS manga_id, m.title AS manga_title, c.title AS chapter_title
+		 d.created_at, d.updated_at, m.id AS manga_id, m.title AS manga_title, c.title AS chapter_title,
+		 c.number AS chapter_number, c.volume AS volume_number
 		 FROM download d
 		 JOIN chapter c ON c.id = d.chapter_id
 		 JOIN manga m ON m.id = c.manga_id
-		 WHERE d.user_id = 1
+		 WHERE d.user_id = ?
 		 ORDER BY CASE d.status
 		 WHEN 'queued' THEN 0 WHEN 'downloading' THEN 1 WHEN 'paused' THEN 2
 		 WHEN 'error' THEN 3 ELSE 4 END, d.created_at ASC, d.chapter_id ASC",
 	)
+	.bind(user_id)
 	.fetch_all(&state.pool)
 	.await?;
 	let mut entries = Vec::with_capacity(rows.len());
 	for row in rows {
-		// 进行中的 downloaded/total 只在 manager 内存里，其余状态给 null
+		// downloaded/total of an in-flight download lives only in manager memory; other states get null
 		let (downloaded, total) = if row.status == "downloading" {
 			match manager.progress_of(row.chapter_id).await {
 				Some((done, total)) => (json!(done), json!(total)),
@@ -69,6 +73,8 @@ async fn download_entries(state: &AppState, manager: &DownloadManager) -> ApiRes
 			"mangaId": row.manga_id,
 			"mangaTitle": row.manga_title,
 			"chapterTitle": row.chapter_title,
+			"chapterNumber": row.chapter_number,
+			"volumeNumber": row.volume_number,
 			"status": row.status,
 			"format": row.format,
 			"path": row.path,
@@ -83,9 +89,12 @@ async fn download_entries(state: &AppState, manager: &DownloadManager) -> ApiRes
 	Ok(entries)
 }
 
-pub async fn list_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+pub async fn list_downloads(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let manager = state.downloads();
-	Ok(Json(json!(download_entries(&state, &manager).await?)))
+	Ok(Json(json!(download_entries(&state, &manager, user.id).await?)))
 }
 
 pub async fn start_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
@@ -98,88 +107,48 @@ pub async fn stop_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Jso
 	Ok(Json(json!({ "running": false })))
 }
 
-/// 产物可能是 cbz 文件也可能是 folder 目录
-async fn remove_product(downloads_dir: &std::path::Path, rel_path: &str) {
-	let target = downloads_dir.join(rel_path);
-	if target.is_dir() {
-		let _ = tokio::fs::remove_dir_all(&target).await;
-	} else {
-		let _ = tokio::fs::remove_file(&target).await;
-	}
-}
-
-pub async fn clear_downloads(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+pub async fn clear_downloads(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
 	let manager = state.downloads();
-	let rows: Vec<(i64, Option<String>)> =
-		sqlx::query_as("SELECT chapter_id, path FROM download WHERE status IN ('finished', 'error')")
-			.fetch_all(&state.pool)
-			.await?;
+	let rows: Vec<i64> = sqlx::query_scalar(
+		"SELECT chapter_id FROM download WHERE status IN ('finished', 'error') AND user_id = ?",
+	)
+	.bind(user.id)
+	.fetch_all(&state.pool)
+	.await?;
 	let mut cleared = 0i64;
-	for (chapter_id, path) in rows {
-		if let Some(path) = path {
-			remove_product(manager.downloads_dir(), &path).await;
+	for chapter_id in rows {
+		if manager.delete(chapter_id, user.id).await? {
+			cleared += 1;
 		}
-		manager.cleanup_tmp(chapter_id).await;
-		sqlx::query("DELETE FROM download WHERE chapter_id = ?")
-			.bind(chapter_id)
-			.execute(&state.pool)
-			.await?;
-		sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, 1, 0)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
-		)
-		.bind(chapter_id)
-		.execute(&state.pool)
-		.await?;
-		cleared += 1;
 	}
 	Ok(Json(json!({ "cleared": cleared })))
 }
 
 pub async fn delete_download(
 	State(state): State<Arc<AppState>>,
-	Path(chapter_id): Path<i64>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	let manager = state.downloads();
-	let row: Option<(String, Option<String>)> =
-		sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ?")
-			.bind(chapter_id)
-			.fetch_optional(&state.pool)
-			.await?;
-	let Some((status, path)) = row else {
-		return Err(ApiError::not_found("download not found"));
-	};
-	// 在跑的先标记取消，worker 在下一页前看到就停
-	if status == "downloading" {
-		manager.mark_cancel(chapter_id).await;
+	if state.downloads().delete(id, user.id).await? {
+		Ok(StatusCode::NO_CONTENT)
+	} else {
+		Err(ApiError::not_found("download not found"))
 	}
-	manager.remove_from_queue(chapter_id).await;
-	if let Some(path) = path {
-		remove_product(manager.downloads_dir(), &path).await;
-	}
-	manager.cleanup_tmp(chapter_id).await;
-	sqlx::query("DELETE FROM download WHERE chapter_id = ?")
-		.bind(chapter_id)
-		.execute(&state.pool)
-		.await?;
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, 1, 0)
-		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
-	)
-	.bind(chapter_id)
-	.execute(&state.pool)
-	.await?;
-	Ok(StatusCode::NO_CONTENT)
 }
 
 pub async fn get_chapter_file(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Response> {
 	let manager = state.downloads();
 	let row: Option<(String, String, Option<String>)> =
-		sqlx::query_as("SELECT status, format, path FROM download WHERE chapter_id = ?")
+		sqlx::query_as("SELECT status, format, path FROM download WHERE chapter_id = ? AND user_id = ?")
 			.bind(id)
+			.bind(user.id)
 			.fetch_optional(&state.pool)
 			.await?;
 	let Some((status, format, path)) = row else {
@@ -198,7 +167,7 @@ pub async fn get_chapter_file(
 	let Some(path) = path else {
 		return Err(ApiError::not_found("chapter file not found"));
 	};
-	let bytes = match tokio::fs::read(manager.downloads_dir().join(&path)).await {
+	let bytes = match tokio::fs::read(crate::download::product_path(manager.downloads_dir(), &path)).await {
 		Ok(bytes) => bytes,
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 			return Err(ApiError::not_found("chapter file not found"));
@@ -206,44 +175,4 @@ pub async fn get_chapter_file(
 		Err(e) => return Err(ApiError::from(sqlx::Error::Io(e))),
 	};
 	Ok(([(header::CONTENT_TYPE, "application/zip")], bytes).into_response())
-}
-
-pub async fn downloads_ws(State(state): State<Arc<AppState>>, ws: WebSocketUpgrade) -> Response {
-	let manager = state.downloads();
-	ws.on_upgrade(move |mut socket: WebSocket| async move {
-		let snapshot = match download_entries(&state, &manager).await {
-			Ok(entries) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": entries }),
-			Err(_) => json!({ "type": "snapshot", "running": manager.is_running(), "downloads": [] }),
-		};
-		if socket
-			.send(Message::Text(snapshot.to_string().into()))
-			.await
-			.is_err()
-		{
-			return;
-		}
-		let mut rx = manager.subscribe();
-		loop {
-			tokio::select! {
-				event = rx.recv() => {
-					match event {
-						Ok(event) => {
-							let text = serde_json::to_string(&event).unwrap_or_default();
-							if socket.send(Message::Text(text.into())).await.is_err() {
-								return;
-							}
-						}
-						Err(broadcast::error::RecvError::Lagged(_)) => continue,
-						Err(_) => return,
-					}
-				}
-				message = socket.recv() => {
-					match message {
-						Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return,
-						Some(Ok(_)) => {}
-					}
-				}
-			}
-		}
-	})
 }

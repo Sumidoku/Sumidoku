@@ -1,26 +1,216 @@
-//! trawl session API 后端：每 webview rid 一个 keepPage session，
-//! id 取 sumidoku-<源 key 清洗>-<rid>，在 trawl 的 sessions 列表里能认出归属。
-//! HTTP 无持久连接，错误全部按单次失败（transient）处理——没有连接可断，
-//! 下一次操作自然重试：
-//! - 404/410（session 未知/过期、底层浏览器被换、eval 超时被 retire）→ 同 id
-//!   重建后重放一次；重建撞 409 说明并发侧已建好，直接采纳。session 丢失意味着
-//!   浏览器态（含登录 cookie）已不可恢复，重放得到的是全新 session 的诚实结果
-//! - 409 busy / 429 注册表满 / 503 sessions 不可用 → 单次失败交上层记日志
-//! - create 撞 409 → 采纳：Sumidoku 重启后 rid 计数归零，同 id session 可能还活着
+//! trawl session API backend: one keepPage session per webview rid, with id
+//! sumidoku-<sanitized source key>-<rid> so ownership is recognizable in trawl's sessions
+//! list. HTTP has no persistent connection, so every error is treated as a single-op
+//! (transient) failure — there is no connection to drop, and the next operation naturally
+//! retries:
+//! - 404/410 (session unknown/expired, underlying browser swapped, eval retired on timeout)
+//!   → recreate under the same id and replay once; if the recreate hits 409 a concurrent
+//!   side has already built it, so adopt it. A lost session means the browser state
+//!   (including login cookies) is unrecoverable; the replay yields the honest result of a
+//!   brand-new session
+//! - 409 busy / 429 registry full / 503 sessions unavailable → single-op failure, passed
+//!   up for logging
+//! - create hits 409 → adopt: after a Sumidoku restart the rid counter resets to zero and a
+//!   same-id session may still be alive
 //!
-//! eval 值契约（与 Boa 路径的 JS ToString 对齐到可对齐的部分）：string 原样、
-//! number/bool 字面、null（trawl 把 undefined 也映成 null）→ "null"；对象/数组
-//! 给紧凑 JSON——源 eval 是为提标量令牌，JSON 比 "[object Object]" 有用且可再 parse
-use super::{BrowserCookie, BrowserError, CdpClient, CdpConnector};
+//! eval value contract (aligned with the Boa path's JS ToString where alignable): string
+//! as-is, number/bool literal, null (trawl maps undefined to null too) → "null";
+//! objects/arrays get compact JSON — sources eval to extract scalar tokens, and JSON is
+//! more useful than "[object Object]" and can be parsed again
+use super::{BrowserClient, BrowserConnector, BrowserCookie, BrowserError};
 use std::time::Duration;
 
-/// trawl 建 session 服务端最多等 30s 浏览器容量，客户端留出余量
+/// The trawl server waits at most 30s for browser capacity when creating a session; the client leaves extra headroom
 const SESSION_CREATE_TIMEOUT: Duration = Duration::from_secs(40);
-/// cookies/delete 是秒级操作
+/// cookies/delete are second-level operations
 const SESSION_OP_TIMEOUT: Duration = Duration::from_secs(30);
-/// 服务端 maxTimeout 先到期才能回干净错误（超时的 scrape/eval 会 retire session），
-/// 客户端超时必须宽于它，否则拿到的是无信息的中断
+/// The server-side maxTimeout must expire first to return a clean error (a timed-out
+/// scrape/eval retires the session); the client timeout must be wider than it, otherwise
+/// what we get is an uninformative interruption
 const CLIENT_GRACE: Duration = Duration::from_secs(10);
+
+/// Challenge solve budget. A solve runs inside a source call on the wasm actor thread,
+/// so it must stay well under the call timeout (60s default); the async server path has
+/// no such bound but shares the value
+const SOLVE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Challenge solve through the trawl scrape API — the shape aidoku-cf-relay uses: a
+/// plain POST navigating the site's root. The answer carries the cf_clearance cookie and
+/// the solving browser's user agent; CF binds the cookie to that UA, so both come back
+/// together as a ClearanceReplay. The call carries a deterministic host-level session id
+/// (sumidoku-net-<host>): the backend reuses the same session for every solve of this
+/// host, so a later solve (after the challenged cooldown, or after a refused clearance)
+/// rides the already-solved session instead of re-solving Turnstile from scratch.
+/// Blocking: the wasm net host calls this on the actor thread, the async server path
+/// wraps it in spawn_blocking.
+pub fn solve_clearance(api_base: &str, host: &str) -> Option<crate::traits::ClearanceReplay> {
+	#[derive(serde::Deserialize)]
+	struct SolveAnswer {
+		#[serde(default)]
+		cookies: Vec<TrawlCookie>,
+		#[serde(default, rename = "userAgent")]
+		user_agent: Option<String>,
+	}
+	let client = reqwest::blocking::Client::builder()
+		.use_rustls_tls()
+		.timeout(SOLVE_TIMEOUT + CLIENT_GRACE)
+		.build()
+		.ok()?;
+	// Deterministic host-level session id: every solve of the same host reuses the
+	// backend's session and its solved challenge — one Turnstile solve per host, not
+	// per request
+	let session = session_id(
+		"sumidoku-net",
+		&host.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
+	);
+	// The scrape endpoint only ever uses an existing session (use = require): a solve
+	// carrying a sessionId but no created session 404s ("Session not found") and always
+	// falls back to the proxy. Create idempotently first (201 created / 409 a same-id
+	// session is still alive) so the host-level session actually exists and later solves
+	// ride the already-solved session instead of re-solving Turnstile from scratch.
+	if !ensure_session(api_base, &session, &client) {
+		return None;
+	}
+	let body = serde_json::json!({
+		"url": format!("https://{host}/"),
+		"maxTimeout": SOLVE_TIMEOUT.as_millis() as u64,
+		"sessionId": session,
+		// Browser sessions require maxTier >= 3; tier 3 needs no proxy on session creation
+		"maxTier": 3,
+	});
+	let text = client
+		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(body.to_string())
+		.send()
+		.and_then(|r| r.error_for_status())
+		.and_then(|r| r.text())
+		.ok()?;
+	let answer: SolveAnswer = serde_json::from_str(&text).ok()?;
+	let user_agent = answer.user_agent.filter(|ua| !ua.is_empty())?;
+	// No cf_clearance means the site showed no challenge this time; the UA alone is still
+	// a usable replay (aidoku-cf-relay forwards the same way)
+	let clearance = answer
+		.cookies
+		.into_iter()
+		.find(|c| c.name == crate::traits::CF_CLEARANCE_COOKIE)
+		.map(|c| c.value)
+		.unwrap_or_default();
+	Some(crate::traits::ClearanceReplay { user_agent, clearance })
+}
+
+/// Deterministic login-session id for a host. Kept separate from the solve session
+/// (sumidoku-net-<host>): the solve session only carries clearance, the login session
+/// carries the site's own auth cookies — separate lifetimes, no interference.
+pub fn login_session_id(host: &str) -> String {
+	session_id(
+		"sumidoku-login",
+		&host.replace(|c: char| !c.is_ascii_alphanumeric(), "_"),
+	)
+}
+
+/// Create a trawl session idempotently: 201 = created, 409 = a same-id session is still
+/// alive (adopted after a restart; keepPage was likewise set by the old instance). Any
+/// other status or a transport error → false.
+pub fn ensure_session(api_base: &str, id: &str, client: &reqwest::blocking::Client) -> bool {
+	let body = serde_json::json!({"id": id, "keepPage": true});
+	let Ok(response) = client
+		.post(format!("{}/sessions", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(body.to_string())
+		.timeout(SESSION_CREATE_TIMEOUT)
+		.send()
+	else {
+		return false;
+	};
+	matches!(response.status().as_u16(), 201 | 409)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRequestError {
+	Gone,
+	Failed,
+}
+
+/// Outcome of a session-backed request: the page body plus the session's post-navigation
+/// cookies (the site's Set-Cookie lands in the trawl context and comes back here, so the
+/// caller can mirror them into its own jar for later non-browser requests).
+pub struct SessionRequestOutcome {
+	pub status: u16,
+	pub cookies: Vec<BrowserCookie>,
+	pub body: Vec<u8>,
+}
+
+/// Session-backed request with an arbitrary method/body — the shape a login sequence
+/// needs. The session must already exist (ensure_session); the trawl browser context
+/// accumulates cookies across calls in the same session (warm-up GETs, then the POST
+/// login), which plain direct/proxy hops cannot provide. trawl's tier 3 replays POST
+/// bodies via route interception, verified against wenku8's login form.
+/// Blocking: called from the wasm net host on the actor thread.
+pub fn session_request(
+	api_base: &str,
+	session: &str,
+	method: &str,
+	url: &str,
+	headers: &[(String, String)],
+	body: Option<&[u8]>,
+	timeout: Duration,
+) -> Result<SessionRequestOutcome, SessionRequestError> {
+	let client = reqwest::blocking::Client::builder()
+		.use_rustls_tls()
+		.timeout(timeout + CLIENT_GRACE)
+		.build()
+		.map_err(|_| SessionRequestError::Failed)?;
+	let mut req = serde_json::json!({
+		"url": url,
+		"sessionId": session,
+		"method": method.to_uppercase(),
+		"maxTimeout": timeout.as_millis() as u64,
+	});
+	if !headers.is_empty() {
+		let map: serde_json::Map<String, serde_json::Value> = headers
+			.iter()
+			.map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+			.collect();
+		req["headers"] = map.into();
+	}
+	if let Some(bytes) = body {
+		// Login form bodies are percent-encoded GBK, i.e. ASCII, so a lossy UTF-8 read
+		// is exact; anything else non-UTF-8 cannot be carried in trawl's JSON body anyway
+		req["body"] = String::from_utf8_lossy(bytes).into_owned().into();
+	}
+	let response = client
+		.post(format!("{}/scrape", api_base.trim_end_matches('/')))
+		.header(reqwest::header::CONTENT_TYPE, "application/json")
+		.body(req.to_string())
+		.timeout(timeout + CLIENT_GRACE)
+		.send()
+		.map_err(|_| SessionRequestError::Failed)?;
+	let status = response.status().as_u16();
+	if status == 404 || status == 410 {
+		// Session lost (browser swapped / expired): the caller replays through a fresh
+		// ensure_session + this call again
+		return Err(SessionRequestError::Gone);
+	}
+	let text = response.text().map_err(|_| SessionRequestError::Failed)?;
+	let result: ScrapeResult = serde_json::from_str(&text).map_err(|_| SessionRequestError::Failed)?;
+	let body = result
+		.body
+		.and_then(buffer_to_bytes)
+		.or_else(|| result.html.clone().map(String::into_bytes))
+		.unwrap_or_default();
+	Ok(SessionRequestOutcome {
+		status,
+		cookies: result.cookies.into_iter().map(BrowserCookie::from).collect(),
+		body,
+	})
+}
+
+/// Decode trawl's `{type:"Buffer", data:[...]}` body field into raw bytes.
+fn buffer_to_bytes(value: serde_json::Value) -> Option<Vec<u8>> {
+	let data = value.get("data")?.as_array()?;
+	data.iter().map(|v| v.as_u64().map(|n| n as u8)).collect()
+}
 
 pub struct TrawlConnector {
 	base: String,
@@ -36,8 +226,8 @@ impl TrawlConnector {
 	}
 }
 
-impl CdpConnector for TrawlConnector {
-	fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
+impl BrowserConnector for TrawlConnector {
+	fn connect(&self) -> Result<Box<dyn BrowserClient>, BrowserError> {
 		let client = reqwest::blocking::Client::builder()
 			.use_rustls_tls()
 			.build()
@@ -58,8 +248,8 @@ impl CdpConnector for TrawlConnector {
 	}
 }
 
-/// trawl session id 只允许字母/数字/下划线/连字符（1-128），源 key 里的
-/// 点、空格等一律压成连字符
+/// A trawl session id only allows letters/digits/underscore/hyphen (1-128 chars); dots,
+/// spaces etc. in the source key are all squashed to hyphens
 fn sanitize_key(key: &str) -> String {
 	key.chars()
 		.map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '-' })
@@ -72,7 +262,7 @@ fn session_id(id_prefix: &str, label: &str) -> String {
 	id
 }
 
-/// 单次操作的失败：session_gone 触发同 id 重建重放，其余原样上报
+/// Failure of a single operation: session_gone triggers a same-id recreate and replay; anything else is reported as-is
 struct OpError {
 	message: String,
 	session_gone: bool,
@@ -101,7 +291,7 @@ struct TrawlClient {
 }
 
 impl TrawlClient {
-	/// session 丢失类错误（404/410）用同 id 重建并重放一次；重放再失败原样上报
+	/// Session-loss errors (404/410) are recreated under the same id and replayed once; if the replay fails again, report as-is
 	fn with_recreate<T>(&self, session: &str, op: impl Fn(&Self) -> Result<T, OpError>) -> Result<T, OpError> {
 		match op(self) {
 			Err(e) if e.session_gone => {
@@ -123,7 +313,7 @@ impl TrawlClient {
 			.send()
 			.map_err(|e| OpError::other(format!("trawl session create: {e}")))?;
 		match response.status().as_u16() {
-			// 409 = 同 id 旧 session 还活着：重启后幂等采纳（keepPage 同样由旧实例置位）
+			// 409 = an old session with the same id is still alive: adopt idempotently after a restart (keepPage was likewise set by the old instance)
 			201 | 409 => Ok(()),
 			status => Err(OpError::other(format!(
 				"trawl session create failed (http {status}): {}",
@@ -140,7 +330,7 @@ impl TrawlClient {
 			.send()
 			.map_err(|e| OpError::other(format!("trawl session delete: {e}")))?;
 		match response.status().as_u16() {
-			// 404 = 已过期/已丢，与删除同效
+			// 404 = already expired/lost, same effect as a delete
 			200 | 404 => Ok(()),
 			status => Err(OpError::other(format!(
 				"trawl session delete failed (http {status}): {}",
@@ -255,7 +445,7 @@ impl TrawlClient {
 	}
 }
 
-impl CdpClient for TrawlClient {
+impl BrowserClient for TrawlClient {
 	fn create_context(&mut self, label: &str) -> Result<String, BrowserError> {
 		let id = session_id(&self.id_prefix, label);
 		self.create_session(&id)?;
@@ -284,7 +474,7 @@ impl CdpClient for TrawlClient {
 		Ok(self.with_recreate(context, |c| c.session_eval(context, source, timeout))?)
 	}
 
-	// FFI 按 connector 能力位拦截后不会走到这里；直连防御
+	// The FFI intercepts per the connector capability bits and never reaches here; this is direct defense
 	fn delete_cookie(
 		&mut self,
 		_context: &str,
@@ -300,8 +490,9 @@ impl CdpClient for TrawlClient {
 	}
 }
 
-/// trawl 错误体两种形状：原生 {"error": …} 与 FlareSolverr 信封 {"message": …}，
-/// 都认不出来回原文（截断防爆日志）
+/// trawl error bodies come in two shapes: native {"error": …} and the FlareSolverr
+/// envelope {"message": …}; when neither is recognized, return the raw body (truncated to
+/// avoid flooding the log)
 fn error_message(body: &str) -> String {
 	serde_json::from_str::<serde_json::Value>(body)
 		.ok()
@@ -328,11 +519,17 @@ fn value_to_string(value: &serde_json::Value) -> String {
 	}
 }
 
-/// /scrape 响应只消费 cookies：导航后的 context 快照随响应一并回来，省一次往返
+/// Only the cookies of a /scrape response are consumed: the post-navigation context snapshot comes back with the response, saving a round trip
 #[derive(serde::Deserialize)]
 struct ScrapeResult {
 	#[serde(default)]
 	cookies: Vec<TrawlCookie>,
+	/// Page content: trawl returns either the decoded `html` string or the raw `body`
+	/// Buffer (e.g. for binary content); the login path prefers the raw bytes
+	#[serde(default)]
+	html: Option<String>,
+	#[serde(default)]
+	body: Option<serde_json::Value>,
 }
 
 #[derive(serde::Deserialize)]
@@ -383,7 +580,7 @@ mod tests {
 	use std::io::{BufRead, Read, Write};
 	use std::sync::{Arc, Mutex};
 
-	/// 裸 HTTP/1.1 mock：每连接一个请求，记 (method, path, body) 后按 handler 应答
+	/// Bare HTTP/1.1 mock: one request per connection; records (method, path, body) and answers per the handler
 	struct MockTrawl {
 		url: String,
 		requests: Arc<Mutex<Vec<(String, String, String)>>>,
@@ -473,11 +670,59 @@ mod tests {
 		)
 	}
 
+	#[test]
+	fn solve_clearance_pairs_the_cookie_with_the_solver_ua() {
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/sessions") => ok_session(),
+			("POST", "/scrape") => (
+				200,
+				r#"{"cookies":[{"name":"cf_clearance","value":"abc"},{"name":"other","value":"x"}],"userAgent":"Camoufox/152"}"#
+					.to_string(),
+			),
+			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
+		});
+		let replay = solve_clearance(&mock.url, "cf.example").expect("solved");
+		assert_eq!(
+			replay,
+			crate::traits::ClearanceReplay {
+				user_agent: "Camoufox/152".into(),
+				clearance: "abc".into(),
+			}
+		);
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2, "solve creates the host session first, then scrapes");
+		assert_eq!(
+			(requests[0].0.as_str(), requests[0].1.as_str()),
+			("POST", "/sessions"),
+			"the scrape endpoint requires an existing session"
+		);
+		let create = body_json(&requests, 0);
+		assert_eq!(create, serde_json::json!({"id": "sumidoku-net-cf_example", "keepPage": true}));
+		let (_, _, body) = &requests[1];
+		let body: serde_json::Value = serde_json::from_str(body).expect("json");
+		assert_eq!(body["url"], "https://cf.example/");
+		assert_eq!(body["sessionId"], "sumidoku-net-cf_example", "host-level session id is deterministic");
+		assert_eq!(body["maxTier"], 3, "browser sessions require maxTier >= 3");
+		assert!(body["maxTimeout"].is_number());
+	}
+
+	#[test]
+	fn solve_clearance_failures_are_none() {
+		let mock = MockTrawl::new(|_, _, _| (500, r#"{"error":"busy"}"#.to_string()));
+		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
+		// A solve without a user agent is no replay at all
+		let mock = MockTrawl::new(|method, path, _| match (method, path) {
+			("POST", "/sessions") => ok_session(),
+			_ => (200, r#"{"cookies":[{"name":"cf_clearance","value":"abc"}],"userAgent":""}"#.to_string()),
+		});
+		assert_eq!(solve_clearance(&mock.url, "cf.example"), None);
+	}
+
 	fn state_with(mock: &MockTrawl) -> BrowserState {
 		BrowserState::new_trawl("test", &mock.url, Duration::from_secs(5))
 	}
 
-	/// body 断言辅助：JSON 解析后按键对账，字段顺序/空白不影响
+	/// Body assertion helper: parse the JSON and reconcile by key, so field order/whitespace do not matter
 	fn body_json(requests: &[(String, String, String)], idx: usize) -> serde_json::Value {
 		serde_json::from_str(&requests[idx].2).expect("请求体是 JSON")
 	}
@@ -532,7 +777,7 @@ mod tests {
 	#[test]
 	fn create_conflict_adopts_existing_session() {
 		let mock = MockTrawl::new(|method, path, _| match (method, path) {
-			// 重启后 trawl 侧同 id session 还活着：409 采纳，不报错不重建
+			// After a restart, the same-id session is still alive on the trawl side: 409 is adopted, no error, no recreate
 			("POST", "/sessions") => (409, r#"{"error":"duplicate id"}"#.to_string()),
 			("POST", "/scrape") => ok_scrape("[]"),
 			_ => (500, r#"{"error":"unexpected"}"#.to_string()),
@@ -705,7 +950,7 @@ mod tests {
 
 	#[test]
 	fn network_failure_is_transient_and_retried_next_call() {
-		// 绑定后立即释放拿到一个确定没人监听的端口
+		// Bind and immediately release to get a port nobody is listening on
 		let port = std::net::TcpListener::bind("127.0.0.1:0")
 			.expect("bind")
 			.local_addr()

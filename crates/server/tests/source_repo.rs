@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-// ---- 本地 mock 源仓库：index.json 可随时换版，.aix 走 /files/* ----
+// ---- local mock source repo: index.json can be re-versioned at any time, .aix served under /files/* ----
 
 #[derive(Clone, Default)]
 struct MockRepo {
@@ -78,7 +78,7 @@ async fn serve_repo() -> RepoServer {
 	}
 }
 
-/// 绑定后立即放开端口：连接必 refused，扮演不可达 repo
+/// Releases the port right after binding: connections are always refused, playing an unreachable repo
 async fn dead_url() -> String {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 	let addr = listener.local_addr().unwrap();
@@ -92,6 +92,28 @@ fn aix_bytes(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -
 		r#"{{"info": {{"id": "{key}", "name": "{name}", "version": {version}, "languages": [{}], "contentRating": {rating}}}}}"#,
 		langs.join(", ")
 	);
+	aix_package(&manifest, &icon_bytes(key, version))
+}
+
+/// A source package with a config section declared (for the config backfill test)
+fn aix_bytes_with_config(
+	key: &str,
+	name: &str,
+	version: i64,
+	langs: &[&str],
+	rating: i64,
+	config: &str,
+) -> Vec<u8> {
+	let langs: Vec<String> = langs.iter().map(|l| format!("\"{l}\"")).collect();
+	let manifest = format!(
+		r#"{{"info": {{"id": "{key}", "name": "{name}", "version": {version}, "languages": [{}], "contentRating": {rating}}}, "config": {config}}}"#,
+		langs.join(", ")
+	);
+	aix_package(&manifest, &icon_bytes(key, version))
+}
+
+/// Packs an .aix test package from the manifest text
+fn aix_package(manifest: &str, icon: &str) -> Vec<u8> {
 	let wasm = std::fs::read(fixture_dir().join("main.wasm")).expect("fixture wasm");
 	let mut cursor = std::io::Cursor::new(Vec::new());
 	{
@@ -103,13 +125,13 @@ fn aix_bytes(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) -
 		writer.start_file("Payload/main.wasm", options).unwrap();
 		std::io::Write::write_all(&mut writer, &wasm).unwrap();
 		writer.start_file("Payload/icon.png", options).unwrap();
-		std::io::Write::write_all(&mut writer, icon_bytes(key, version).as_bytes()).unwrap();
+		std::io::Write::write_all(&mut writer, icon.as_bytes()).unwrap();
 		writer.finish().unwrap();
 	}
 	cursor.into_inner()
 }
 
-/// 图标内容带版本号，便于断言更新后包旁 .png 被覆盖
+/// The icon content carries the version number, so tests can assert the .png next to the package is overwritten after an update
 fn icon_bytes(key: &str, version: i64) -> String {
 	format!("PNG-{key}-v{version}")
 }
@@ -126,7 +148,7 @@ fn repo_entry(key: &str, name: &str, version: i64, langs: &[&str], rating: i64) 
 	})
 }
 
-/// 三源仓库：en.repo-source（主线装卸对象）、en.other、zh.nsfw（rating 2）
+/// Three-source repo: en.repo-source (the main install/uninstall subject), en.other, zh.nsfw (rating 2)
 fn stage_repo(repo: &RepoServer, repo_version: i64, other_version: i64) {
 	repo.mock.set_index(json!([
 		repo_entry("en.repo-source", "Repo Source", repo_version, &["en"], 0),
@@ -166,11 +188,12 @@ async fn source_by_key(app: &axum::Router, key: &str) -> Value {
 
 #[tokio::test]
 async fn repo_lifecycle_install_and_update() {
+	let (logs, _guard) = common::capture_logs();
 	let app = test_app().await;
 	let repo = serve_repo().await;
 	stage_repo(&repo, 1, 3);
 
-	// 添加 repo：拉 index 落缓存
+	// add repo: fetch the index into the cache
 	let (status, body) = add_repo(&app.app, &repo.url).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let repo_id = body["id"].as_i64().expect("repo id");
@@ -178,14 +201,14 @@ async fn repo_lifecycle_install_and_update() {
 	assert!(body["fetchedAt"].as_i64().unwrap_or(0) > 0, "{body}");
 	assert!(body["fetchError"].is_null(), "{body}");
 
-	// 列表里有它
+	// it's in the list
 	let (status, body) = request(&app.app, "GET", "/api/v1/source-repos", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let repos = body.as_array().expect("repos array");
 	assert_eq!(repos.len(), 1);
 	assert_eq!(repos[0]["sourceCount"], 3, "{repos:?}");
 
-	// 跨 repo 浏览：三项都带安装状态
+	// cross-repo browse: all three entries carry install state
 	let entries = browse(&app.app, "").await;
 	assert_eq!(entries.len(), 3, "{entries:?}");
 	let main_entry = entries.iter().find(|e| e["key"] == "en.repo-source").expect("entry");
@@ -198,7 +221,7 @@ async fn repo_lifecycle_install_and_update() {
 		"iconUrl resolved against repo url: {main_entry}"
 	);
 
-	// 过滤：语言（可多选）/ 名字 / 内容分级（Aidoku 三档）
+	// filters: language (multi-select) / name / content rating (Aidoku's three levels)
 	assert_eq!(browse(&app.app, "?lang=en").await.len(), 2);
 	assert_eq!(browse(&app.app, "?lang=zh").await.len(), 1);
 	assert_eq!(browse(&app.app, "?lang=en,zh").await.len(), 3);
@@ -210,7 +233,7 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(browse(&app.app, "?contentRating=0,1,2").await.len(), 3);
 	assert_eq!(browse(&app.app, "?contentRating=").await.len(), 0);
 
-	// 一键安装：.aix 落 sources 目录并即时可搜
+	// one-click install: the .aix lands in the sources directory and is immediately searchable
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -226,7 +249,7 @@ async fn repo_lifecycle_install_and_update() {
 		app.tmp.path().join("sources/en.repo-source.aix").is_file(),
 		"aix landed in sources dir"
 	);
-	// 包内嵌图标落盘到包旁，图标接口直接可读（此前 .aix 装的源没有图标）
+	// the icon embedded in the package lands on disk next to it, readable through the icon endpoint (previously .aix-installed sources had no icon)
 	let icon_file = app.tmp.path().join("sources/en.repo-source.png");
 	assert_eq!(
 		std::fs::read(&icon_file).expect("icon written next to aix"),
@@ -255,14 +278,14 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(status, StatusCode::OK, "installed source loads: {body}");
 	assert!(!body["entries"].as_array().unwrap().is_empty());
 
-	// 浏览反映已装：installedVersion=1，暂无更新
+	// browse reflects the install: installedVersion=1, no update yet
 	let entries = browse(&app.app, "").await;
 	let main_entry = entries.iter().find(|e| e["key"] == "en.repo-source").expect("entry");
 	assert_eq!(main_entry["installedId"], source_id);
 	assert_eq!(main_entry["installedVersion"], 1);
 	assert!(main_entry["updateVersion"].is_null(), "{main_entry}");
 
-	// repo 侧发布 v2，refresh 后检测到更新
+	// the repo publishes v2; after refresh the update is detected
 	stage_repo(&repo, 2, 3);
 	let (status, body) = request(
 		&app.app,
@@ -278,11 +301,11 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(main_entry["installedVersion"], 1);
 	assert_eq!(main_entry["updateVersion"], 2, "{main_entry}");
 
-	// 已装源列表同样带更新标识
+	// the installed sources list carries the update flag too
 	let installed = source_by_key(&app.app, "en.repo-source").await;
 	assert_eq!(installed["updateVersion"], 2, "{installed}");
 
-	// 单源更新：版本前进且新包即时生效
+	// single-source update: the version advances and the new package takes effect immediately
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -293,7 +316,7 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["version"], 2, "{body}");
 	assert!(body["updateVersion"].is_null(), "{body}");
-	// 更新同时刷新包旁图标
+	// the update also refreshes the icon next to the package
 	assert_eq!(
 		std::fs::read(&icon_file).expect("icon updated"),
 		icon_bytes("en.repo-source", 2).as_bytes()
@@ -307,7 +330,7 @@ async fn repo_lifecycle_install_and_update() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "updated source reloads: {body}");
 
-	// 再更新一次：没有新版本
+	// update again: no newer version
 	let (status, body) = request(
 		&app.app,
 		"POST",
@@ -318,7 +341,7 @@ async fn repo_lifecycle_install_and_update() {
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");
 	assert_eq!(body["error"]["code"], "no_update");
 
-	// update-all：en.other 装 v3 → 发 v4 → 一键全更
+	// update-all: en.other installed at v3 → v4 published → update everything in one go
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -343,6 +366,22 @@ async fn repo_lifecycle_install_and_update() {
 	let other = source_by_key(&app.app, "en.other").await;
 	assert_eq!(other["version"], 4);
 
+	let text = logs.take();
+	for message in [
+		"source repository added",
+		"source repository refreshed",
+		"source package installed",
+		"source update-all finished",
+	] {
+		assert!(text.contains(message), "missing {message:?}: {text}");
+	}
+	let line = text
+		.lines()
+		.find(|line| line.contains("source update-all finished"))
+		.expect("update-all log");
+	for field in ["updated=1", "failed=0", "migration_required=0", "migration_warnings=0"] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
 	repo.serve.abort();
 }
 
@@ -356,7 +395,7 @@ async fn missing_from_repos_flags_sources_dropped_from_index() {
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let repo_id = body["id"].as_i64().expect("repo id");
 
-	// 仓库安装且在仓：不标
+	// repo-installed and still in the repo: not flagged
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -368,7 +407,7 @@ async fn missing_from_repos_flags_sources_dropped_from_index() {
 	let installed = source_by_key(&app.app, "en.repo-source").await;
 	assert_eq!(installed["missingFromRepos"], false, "{installed}");
 
-	// 源从 index 移除并刷新缓存：标 missingFromRepos
+	// the source is removed from the index and the cache refreshed: flagged missingFromRepos
 	repo.mock.set_index(json!([repo_entry("en.other", "Other Source", 3, &["en"], 1)]));
 	let (status, _) = request(
 		&app.app,
@@ -381,7 +420,7 @@ async fn missing_from_repos_flags_sources_dropped_from_index() {
 	let installed = source_by_key(&app.app, "en.repo-source").await;
 	assert_eq!(installed["missingFromRepos"], true, "{installed}");
 
-	// 源回到 index 并刷新缓存：恢复不标
+	// the source returns to the index and the cache is refreshed: back to unflagged
 	stage_repo(&repo, 1, 3);
 	let (status, _) = request(
 		&app.app,
@@ -398,9 +437,91 @@ async fn missing_from_repos_flags_sources_dropped_from_index() {
 }
 
 #[tokio::test]
+async fn backfill_stamps_features_for_legacy_rows() {
+	let app = test_app().await;
+	let repo = serve_repo().await;
+	stage_repo(&repo, 1, 3);
+
+	let (status, body) = add_repo(&app.app, &repo.url).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let repo_id = body["id"].as_i64().unwrap();
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/source-repos/install",
+		Some(json!({"repoId": repo_id, "sourceKey": "en.repo-source"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// simulates old rows from before the 0010 column: features nulled out, the startup backfill task stamps them
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", app.db_path.display()))
+		.await
+		.expect("connect test db");
+	sqlx::query("UPDATE source SET features = NULL")
+		.execute(&pool)
+		.await
+		.expect("null out features");
+	sumidoku_server::source::backfill_source_metadata(&pool).await;
+
+	let installed = source_by_key(&app.app, "en.repo-source").await;
+	assert!(installed["hasHome"].is_boolean(), "{installed}");
+
+	repo.serve.abort();
+}
+
+#[tokio::test]
+async fn backfill_stamps_config_for_legacy_rows() {
+	let app = test_app().await;
+	let repo = serve_repo().await;
+	// a source package whose manifest declares config: simulates existing sources installed before #147 (config persistence) whose rows have NULL config
+	repo.mock.set_index(json!([repo_entry("en.cfg-source", "Config Source", 1, &["en"], 0)]));
+	repo.mock.set_file(
+		"files/en.cfg-source-v1.aix",
+		aix_bytes_with_config(
+			"en.cfg-source",
+			"Config Source",
+			1,
+			&["en"],
+			0,
+			r#"{"supportsTagSearch": true, "hidesFiltersWhileSearching": true, "breakingChangeVersion": 2}"#,
+		),
+	);
+
+	let (status, body) = add_repo(&app.app, &repo.url).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let repo_id = body["id"].as_i64().unwrap();
+	let (status, _) = request(
+		&app.app,
+		"POST",
+		"/api/v1/source-repos/install",
+		Some(json!({"repoId": repo_id, "sourceKey": "en.cfg-source"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	// simulates old rows from before #147: config/breaking cleared, the startup backfill task stamps them from the manifest
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", app.db_path.display()))
+		.await
+		.expect("connect test db");
+	sqlx::query("UPDATE source SET config = NULL, breaking_change_version = 0")
+		.execute(&pool)
+		.await
+		.expect("null out config");
+	sumidoku_server::source::backfill_source_metadata(&pool).await;
+
+	let installed = source_by_key(&app.app, "en.cfg-source").await;
+	assert_eq!(installed["config"]["supportsTagSearch"], true, "{installed}");
+	assert_eq!(installed["config"]["hidesFiltersWhileSearching"], true, "{installed}");
+	assert_eq!(installed["breakingChangeVersion"], 2, "{installed}");
+
+	repo.serve.abort();
+}
+
+#[tokio::test]
 async fn unreachable_repo_keeps_cache_and_installed_list() {
 	let app = test_app().await;
-	// 目录扫描装 example-source，与 repo 装的源并列验证互不影响
+	// example-source installed via directory scan, side by side with repo-installed sources to verify they don't interfere
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let repo = serve_repo().await;
@@ -417,7 +538,7 @@ async fn unreachable_repo_keeps_cache_and_installed_list() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// repo 宕机：refresh 失败但缓存照用、已装源列表照出
+	// repo down: refresh fails but the cache is still used and the installed list still comes out
 	repo.serve.abort();
 	let (status, body) = request(
 		&app.app,
@@ -441,12 +562,12 @@ async fn unreachable_repo_keeps_cache_and_installed_list() {
 	let entries = browse(&app.app, "").await;
 	assert_eq!(entries.len(), 3, "cached index still served: {entries:?}");
 
-	// repo 行的错误状态对外可见
+	// the repo row's error state is visible externally
 	let (status, body) = request(&app.app, "GET", "/api/v1/source-repos", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body[0]["fetchError"].is_string(), "{body}");
 
-	// 添加时即不可达：不入库
+	// unreachable already at add time: not stored
 	let (status, body) = add_repo(&app.app, &dead_url().await).await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
 	let (status, body) = request(&app.app, "GET", "/api/v1/source-repos", None).await;
@@ -462,7 +583,7 @@ async fn bad_index_json_rejected() {
 	let (status, body) = add_repo(&app.app, &repo.url).await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
 
-	// 合法 JSON 但缺 sources 数组同样拒收
+	// valid JSON missing the sources array is likewise rejected
 	repo.mock.set_raw_index(br#"{"name": "empty"}"#);
 	let (status, body) = add_repo(&app.app, &repo.url).await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
@@ -470,7 +591,7 @@ async fn bad_index_json_rejected() {
 	let (status, body) = request(&app.app, "GET", "/api/v1/source-repos", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body.as_array().unwrap().len(), 0, "{body}");
-	// 已装源列表不受影响
+	// the installed sources list is unaffected
 	let (status, _) = request(&app.app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 }
@@ -492,7 +613,7 @@ async fn add_repo_validation() {
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");
 	assert_eq!(body["error"]["code"], "duplicate");
 
-	// 删除后浏览为空；404 删不存在
+	// browse is empty after deletion; deleting a nonexistent one 404s
 	let (status, body) = request(&app.app, "GET", "/api/v1/source-repos", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let repo_id = body[0]["id"].as_i64().unwrap();
@@ -521,7 +642,7 @@ async fn add_repo_validation() {
 async fn legacy_index_fields_resolve() {
 	let app = test_app().await;
 	let repo = serve_repo().await;
-	// Aidoku 旧格式：lang/nsfw 单数 + file/icon 相对路径
+	// Aidoku legacy format: singular lang/nsfw + relative file/icon paths
 	repo.mock.set_index(json!([{
 		"id": "en.legacy",
 		"name": "Legacy Source",

@@ -16,6 +16,6 @@ opt-level = "s"
 strip = true
 lto = true
 
-# 独立于主 workspace：只面向 wasm32-unknown-unknown 构建，
-# 产物手工复制为 ../rekey/main.wasm（见 crates/wasm/tests/rekey_host.rs 顶部说明）
+# Independent of the main workspace: built only for wasm32-unknown-unknown,
+# and the artifact is copied by hand to ../rekey/main.wasm (see the note at the top of crates/wasm/tests/rekey_host.rs)
 [workspace]

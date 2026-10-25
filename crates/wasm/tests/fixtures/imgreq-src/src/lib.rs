@@ -1,6 +1,7 @@
 #![no_std]
-//! 服务端图片代理（/sources/{id}/image）测试的 fixture 源：
-//! ImageRequestProvider 给图片请求加固定 Referer，断言代理走了源声明的请求规格。
+//! Fixture source for testing the server-side image proxy (/sources/{id}/image):
+//! ImageRequestProvider adds a fixed Referer to image requests, asserting the proxy used
+//! the request spec the source declared.
 use aidoku::{
 	FilterValue, ImageRequestProvider, Manga, MangaPageResult, PageContext, Result, Source,
 	alloc::{String, Vec},
@@ -8,7 +9,7 @@ use aidoku::{
 	prelude::*,
 };
 
-/// 断言值与 crates/server/tests/source_image.rs 共享（mock 上游只认它）
+/// The asserted value is shared with crates/server/tests/source_image.rs (the mock upstream only accepts it)
 pub const REFERER: &str = "https://imgreq.fixture";
 
 struct ImgreqFixtureSource;

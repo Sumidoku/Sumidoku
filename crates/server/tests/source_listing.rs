@@ -1,10 +1,10 @@
-//! listing 透传与 source config DTO（issue #138）：
-//! GET /sources/{id}/listings/{listing_id} 把真实 listing（id, name, kind）传给
-//! get_manga_list；已装源 DTO 暴露 manifest config 节。
-//! fixture 源在 crates/wasm/tests/fixtures/listing-src（no_std cdylib），重建方式：
-//! `cd crates/wasm/tests/fixtures/listing-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_listing.wasm
-//! 复制为 crates/wasm/tests/fixtures/listing/main.wasm。
+//! listing pass-through and the source config DTO (issue #138):
+//! GET /sources/{id}/listings/{listing_id} passes the real listing (id, name, kind) to
+//! get_manga_list; the installed-source DTO exposes the manifest config section.
+//! The fixture source lives in crates/wasm/tests/fixtures/listing-src (no_std cdylib); rebuild with
+//! `cd crates/wasm/tests/fixtures/listing-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_listing.wasm
+//! to crates/wasm/tests/fixtures/listing/main.wasm.
 mod common;
 
 use axum::http::StatusCode;
@@ -15,7 +15,7 @@ use common::{
 use serde_json::json;
 use sumidoku_server::build_app;
 
-/// listing 回显源（带 listings 与 config 节）+ baseurl 对照源（无 config 节）双源 app
+/// App with two sources: the listing echo source (with listings and a config section) + the baseurl control source (no config section)
 async fn listing_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let doc = json!({
@@ -57,7 +57,7 @@ async fn install_and_ids(app: &TestApp) -> (i64, i64) {
 	(find("en.listing"), find("en.dynbase"))
 }
 
-/// fixture 把收到的 listing 回显成标题 "{id}|{name}|{kind}"
+/// The fixture echoes the listing it received back as the title "{id}|{name}|{kind}"
 async fn echo_title(app: &TestApp, source_id: i64, listing_id: &str) -> String {
 	let (status, body) = request(
 		&app.app,
@@ -75,15 +75,15 @@ async fn manga_list_receives_the_real_listing() {
 	let app = listing_app().await;
 	let (source_id, _) = install_and_ids(&app).await;
 
-	// 静态带 kind=1：AidokuRunner 按 UInt8 解出 List
+	// static entry with kind=1: AidokuRunner decodes it as UInt8 into List
 	assert_eq!(echo_title(&app, source_id, "hot").await, "hot|Hot Updates|list");
-	// 静态缺 name：Runner 语义回填 id
+	// static entry missing name: Runner semantics backfill the id
 	assert_eq!(echo_title(&app, source_id, "fresh").await, "fresh|fresh|default");
-	// 裸字符串条目：id=name=字符串
+	// bare string entry: id=name=the string
 	assert_eq!(echo_title(&app, source_id, "bare").await, "bare|bare|default");
-	// 动态 get_listings 提供的 listing
+	// listing provided dynamically by get_listings
 	assert_eq!(echo_title(&app, source_id, "dyn").await, "dyn|Dynamic Picks|list");
-	// 未知 id：透传不报错（Aidoku 没有按 id 查找的路径，源自行决定响应）
+	// unknown id: pass-through without error (Aidoku has no lookup-by-id path; the source decides the response itself)
 	assert_eq!(echo_title(&app, source_id, "ghost").await, "ghost||default");
 }
 
@@ -101,8 +101,9 @@ async fn listings_endpoint_normalizes_shape_and_kind() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	let listings = body.as_array().expect("listings array");
-	// 静态 kind 是数值、裸字符串条目没有对象形状，动态导出 kind 是枚举名；
-	// 端点统一归一成 {id, name, kind} 且 kind 为小写 default/list，前端按 "list" 判行式布局
+	// static kind is a number, bare string entries have no object shape, and a dynamically exported
+	// kind is the enum name; the endpoint normalizes them all to {id, name, kind} with kind lowercased
+	// to default/list, and the frontend checks for "list" to decide the row-style layout
 	assert_eq!(
 		json!(listings),
 		json!([
@@ -138,7 +139,7 @@ async fn installed_source_dto_exposes_the_manifest_config() {
 		.expect("plain source")["config"];
 	assert!(plain.is_null(), "{plain}");
 
-	// scan 之外的用户面端点同形：update DTO 也带 config（source_json 统一出口）
+	// user-facing endpoints beyond scan have the same shape: the update DTO also carries config (source_json is the single exit point)
 	let (status, body) = request(
 		&app.app,
 		"PATCH",

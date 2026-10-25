@@ -12,8 +12,9 @@ mod source;
 mod traits;
 mod webview;
 
-pub use error::{Error, Result};
+pub use error::{Error, Result, log_safe_text};
 pub use features::SourceFeatures;
+pub use html_dom::clean_html_text;
 pub use imports::HttpMethod;
 pub use partial::{HomeAccumulator, HomePartial};
 pub use runtime::actor::SourceHandle;
@@ -22,6 +23,7 @@ pub use runtime::limits::Limits;
 pub use runtime::store::{DefaultKind, DefaultValue};
 pub use source::{ImageRequestSpec, ProcessImageInput, SourceConfig};
 pub use traits::{
-	CookieSink, DefaultsSink, DEFAULT_ACCEPT_LANGUAGE, DirectPolicy, HostLogger, NetPolicy, NetRoute,
+	BROWSER_HEADERS, CF_CLEARANCE_COOKIE, CHROME_ONLY_HEADERS, ClearanceReplay, CookieSink, DefaultsSink,
+	DEFAULT_ACCEPT_LANGUAGE, DirectPolicy, FIREFOX_DOCUMENT_ACCEPT, HostLogger, NetPolicy, NetRoute,
 	NoopCookieSink, NoopDefaultsSink, StdoutLogger, default_accept_language, is_cf_challenge,
 };

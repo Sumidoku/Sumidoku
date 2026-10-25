@@ -1,10 +1,11 @@
-//! canvas host 模块与 process_*_image 的端到端测试。
-//! fixture 源在 tests/fixtures/canvas-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the canvas host module and process_*_image.
+//! The fixture source lives in tests/fixtures/canvas-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/canvas-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_canvas.wasm
-//! 复制为 tests/fixtures/canvas/main.wasm。
-//! 源内嵌的 pair.png（8x8 RGBA 左半绿右半黄）是手写 PNG 块生成的：
-//! IHDR(8,8,bitdepth 8,color 6) + IDAT(zlib(每行 filter 0 + 左 4 像素绿右 4 像素黄))。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_canvas.wasm
+//! over tests/fixtures/canvas/main.wasm.
+//! The pair.png embedded in the source (8x8 RGBA, left half green, right half yellow) was
+//! generated from hand-written PNG chunks:
+//! IHDR(8,8,bitdepth 8,color 6) + IDAT(zlib(each row: filter 0 + 4 green pixels then 4 yellow)).
 use aidoku_wasm::{
 	DirectPolicy, NoopCookieSink, NoopDefaultsSink, ProcessImageInput, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -28,7 +29,6 @@ async fn spawn_fixture() -> (SourceHandle, aidoku_wasm::SourceFeatures) {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))
@@ -51,7 +51,7 @@ fn assert_solid(image: &image::RgbaImage, expected: [u8; 4], label: &str) {
 	}
 }
 
-/// 1x1 透明 PNG，处理器入参用
+/// 1x1 transparent PNG, used as processor input
 const ONE_PX_PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
 	31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1, 13, 10, 45, 180,
@@ -82,7 +82,7 @@ async fn canvas_draw_crop_and_text_pages() {
 
 	let mut images = Vec::new();
 	for page in &pages {
-		// ImageRefPriv 字段 pub(crate) 不外露，rid 走序列化形状 {"Image": rid} 取
+		// ImageRefPriv's fields are pub(crate) and not exposed; the rid is taken via the serialized shape {"Image": rid}
 		let content = serde_json::to_value(&page.content).expect("serialize content");
 		let Some(rid) = content.get("Image").and_then(|v| v.as_i64()) else {
 			panic!("page content must be an image: {content}");
@@ -98,8 +98,9 @@ async fn canvas_draw_crop_and_text_pages() {
 	assert_solid(&images[1], [0, 255, 0, 255], "cropped page");
 
 	assert_eq!(images[2].dimensions(), (32, 16));
-	// draw_text 的 y 是文字顶部（AidokuRunner 语义）：「A」无降部，墨迹顶紧挨 y=0；
-	// 「g」的降部把整行墨迹往下推一个降部深度，两个字母的底都不到画布下沿
+	// draw_text's y is the top of the text (AidokuRunner semantics): "A" has no descender,
+	// so its ink top hugs y=0; the descender of "g" pushes the whole line's ink down by one
+	// descender depth, and neither letter's bottom reaches the canvas's lower edge
 	let ink_rows = |x_range: std::ops::Range<u32>| {
 		images[2]
 			.enumerate_pixels()

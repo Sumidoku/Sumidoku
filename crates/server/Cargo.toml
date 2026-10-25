@@ -15,36 +15,43 @@ thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-axum = { version = "0.8", features = ["ws"] }
+axum = { version = "0.8", features = ["ws", "multipart"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "migrate", "macros", "chrono", "json"] }
 chrono = "0.4"
 toml = "1.1"
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["trace", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "http2"] }
 rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
-# suwayomi/mihon 备份解码：prost 由 wasmer 系带入、flate2 由 zip/reqwest 带入，
-# 两个直接依赖不向依赖树新增任何 crate（miniz_oxide 纯 Rust 后端，无交叉风险）
+# suwayomi/mihon backup decoding: flate2 is already pulled in by zip/reqwest, no new crate added to the dependency tree
+# (miniz_oxide pure-Rust backend, no cross-compilation risk)
 prost = "0.14"
 flate2 = "1"
-# axum Body::from_stream 的 Stream trait 出处，无传递依赖
+# where the Stream trait for axum Body::from_stream comes from; no transitive dependencies
 futures-core = "0.3"
-# 登录 host 解析（wasm crate 已依赖，不向依赖树新增 crate）
+# login host parsing (the wasm crate already depends on it, no new crate added to the dependency tree)
 url = "2.5"
-# 密码哈希（纯 Rust，无 C 依赖交叉风险）；token/API key 指纹用 sha2
+# password hashing (pure Rust, no C-dependency cross-compilation risk); sha2 for token/API key fingerprints
 argon2 = "0.5"
 sha2 = "0.11"
-# password-hash 重导出的 rand_core 默认没开 OsRng，直接依赖开 getrandom 统一特性
+# the rand_core re-exported by password-hash doesn't enable OsRng by default; depending on it directly enables getrandom to unify features
 rand_core = { version = "0.6", features = ["getrandom"] }
-# PKCE code_challenge 的 base64url 编码（reqwest 系已带入 0.22，不新增版本）
+# base64url encoding for the PKCE code_challenge (the reqwest family already pulls in 0.22, no new version added)
 base64 = "0.22"
-# 页图降采样（wasm crate 同为 0.25，版本自然对齐）
+# page image downsampling (the wasm crate is also on 0.25, versions align naturally)
 image = "0.25"
+# ComicInfo.xml/OPF parsing; overlapped-lists allows role refinements between creators
+quick-xml = { version = "0.42", features = ["serialize", "overlapped-lists"] }
 
-# RSS 读取（macOS task_info / Linux _SC_PAGESIZE）；libc 由大量依赖传递带入，不新增 crate
+# RSS reading (macOS task_info / Linux _SC_PAGESIZE); libc is pulled in transitively by many dependencies, no new crate
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+# local TLS+ALPN-h2 echo (the h2 negotiation test in routed.rs): rustls uses ring, consistent with
+# the backend reqwest already pulls in, and rcgen keeps only ring; all pure Rust, not in the release binary
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12", "ring"] }

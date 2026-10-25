@@ -1,10 +1,454 @@
-<!-- reviewed-through: fa2a384 (2026-10-19) -->
+<!-- reviewed-through: eb1c2f0 (2026-10-25) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**A deduplication key is not an execution identity; carry a generation through
+completion and publication.** When a finished task can requeue under the same
+id, old and new executions overlap during cleanup even if their handlers never
+overlap. Make finish and cancellation cleanup conditional on that execution,
+and publish the exact transition instead of re-reading the mutable row;
+otherwise old cleanup can disable cancellation for new work and events can
+skip or regress states. Test dispatch-versus-cancel, cross-group requeue, and
+terminal-versus-requeue interleavings.
+- Evidence: 2026-10-24, #394 review forced those interleavings. Pending
+  cancellation returned `running` instead of `cancelled`; cross-group requeue
+  let old cleanup remove the new execution's flag, producing `task_finishing`;
+  terminal requeue emitted `pending → running → pending → pending`, dropping
+  `done`. The probes were removed after reproduction.
+**Commit before anything can move the working tree; a shared checkout is
+not a safe place for uncommitted work.** Another session switching the
+branch under you — or any rebase/checkout/stash you didn't run — can drop
+or strand uncommitted hunks silently, and the damage surfaces far from the
+cause (a struct definition gone while its uses remain). Commit completed
+units as soon as they compile, and after any unexpected branch state,
+inventory `git status` against what you think is uncommitted before
+continuing.
+- Evidence: 2026-10-25, the working tree moved from `task-system` to
+  `feat/local-source` mid-session (the branch was rebased and pushed by a
+  concurrent session); the uncommitted `ChapterMeta` struct and a
+  `comic_info` helper vanished while their call sites stayed, caught only
+  by a targeted re-check of recent edits before the next compile. The same
+  day's `reset HEAD~` churn on `feat/local-source` then dropped this very
+  lesson's commit (59948ef), and it had to be re-applied from the session
+  transcript.
+
+**Migration files must be byte-stable across platforms: force LF in
+.gitattributes.** sqlx embeds each migration's bytes at compile time and
+validates them against `_sqlx_migrations` at boot, so a CRLF checkout
+(Windows autocrlf) embeds different checksums than an LF-built release
+binary — a Windows-local build refuses a Linux-created database, and the
+checksum pin test fails on CRLF hosts while CI stays green.
+`crates/server/migrations/*.sql text eol=lf` settles both.
+- Evidence: 2026-10-25, `db::tests::shipped_migrations_are_immutable`
+  failed on a WSL/Linux run over the Windows checkout: migration 1 hashed
+  F9D6E6… (CRLF) against pin 0A32F7… (LF); the dev database's stored
+  checksum matched CRLF because it was applied by a Windows-compiled
+  binary.
+ (docs: record shared-checkout and migration-eol lessons)
+
+**A missing state row is meaningful: default semantics must be shared by
+every read path.** When absence means unread, counts, sorting and
+include/exclude filters must all apply that rule. Joining only explicit rows
+makes never-opened entries disappear from inclusion and survive exclusion.
+Test both no-row and fully-read states against the same API.
+- Evidence: 2026-10-24, ad-hoc unread filters required `is_read = 0` while the
+  badge counted missing rows as unread. A fresh manga vanished from
+  `filter=unread` and survived `filterExclude=unread`; the regression failed
+  with `left: []`, `right: [1]`. The shared left-join rule fixed the real API,
+  and removing only that fix reproduced the failure.
+
+**Live values need a fixed slot in reading order, not an auto-aligned
+position.** Changing counts and percentages must not push related metadata or
+jump to the opposite edge. Put progress next to the date or label it describes,
+with space reserved for the final value; tri-state labels also need a stable
+icon slot rather than a text prefix that changes their width.
+- Evidence: 2026-10-24, chapter download progress pushed metadata and then sat
+  detached at the far right. The fixed slot now renders
+  `2023-08-18 1 / 2 · 50%` in that order, while include/exclude cycles keep the
+  same label position in chapter, library and source controls. Desktop and
+  mobile browser checks covered live SSE updates and the collapsed sidebar.
+
+**Search drafts, submitted queries and view navigation are separate
+transitions.** Only local data should be searched live; remote source calls and
+the search-view URL belong to explicit submission. If typing drives all three,
+every keystroke costs a request and a navigation, and filters become reachable
+only after the query has already started. Keep the draft separate from the
+submitted query, and make filters available before the first submission.
+- Evidence: 2026-10-24, aggregate and single-source searches fired after 500ms,
+  aggregate filters were hidden until active, and mobile input pushed
+  `view=search`. Moving remote calls and URL activation to submit preserved
+  local live filtering. The filter regression failed with `Rating` missing;
+  browser sabotage reproduced the route jump and early empty results before the
+  fixes were restored.
+- Seen again: 2026-10-24, #401 review found that restoring a non-empty query
+  re-applied stored filters even when the source hides filters while searching,
+  so the restored request could differ from the original. The request boundary
+  must apply the same drop rule on fresh submission and restoration. A temporary
+  aggregate `?q=` regression failed on base and passed on the PR head, but the
+  PR contained no permanent test for it.
+
+**A cached browser session needs a distinct lost-session outcome and a bounded
+recovery path.** A generic transport failure cannot distinguish an expired or
+replaced session from a failed request, so the caller keeps reusing the dead
+id. Preserve that distinction, recreate the session once, and replay the
+original method, headers and body.
+- Evidence: 2026-10-24, basic login cached a trawl session id and a 404 became
+  a generic request error on every later attempt. The regression failed with
+  `recreate the expired session: Request` before the lost-session outcome was
+  separated and one recreate-and-replay was added. A real wenku8 package then
+  logged in again after forced session deletion with a real trawl browser;
+  removing the recovery path made the regression fail again.
+
+**Fallback-bearing settings need three states: absent, explicit blank, and a
+value.** An empty field is not interchangeable with null when absence inherits
+a fallback but blank disables the feature. Preserve that distinction in both
+registration and editors, and test with a non-empty fallback so inheritance and
+off cannot accidentally pass as the same result.
+- Evidence: 2026-10-24, local-source registration discarded blank oneshots and
+  the editor cleared them to null; with config set to `oneshots`, both paths
+  re-enabled the rule instead of turning it off. The regression failed with the
+  fallback string before the fix and passed afterwards; null and reset still
+  restore the fallback.
+- Seen again: 2026-10-24, the Local settings help described blank as falling
+  back to server config even though it disables the rule. Saving blank read
+  back `null`, while reset restored `oneshots`; both translations now
+  distinguish the two operations.
+
+**Query-string navigation needs query-aware current-page state.** React
+Router's `NavLink` derives `isActive` from the pathname, so destinations that
+differ only in their query all become active and receive `aria-current`.
+Compare the parameters that select the content when deriving both, and test a
+non-default section.
+- Evidence: 2026-10-24, the settings sidebar marked all five section links
+  active at `?section=downloads`. The regression returned all five hrefs before
+  the fix and only the downloads href after matching `section`; browser
+  acceptance then showed one highlighted item.
+
+**SSR render tests inherit the machine locale; force the language in the
+test.** The web UI's i18n falls back to `navigator.language` when no stored
+preference exists, so a render-to-static-markup test asserting English aria
+labels fails on a zh-CN host while CI (English) stays green — the suite is
+only red where a contributor's machine disagrees with CI. Call
+`i18n.changeLanguage('en')` right after loading the module, or keep the
+assertions language-independent.
+- Evidence: 2026-10-24, internal-source work (#257): source-card-mobile and
+  sidebar-layout tests failed on a zh-CN workstation with Chinese labels
+  while CI was green; both now force English.
+
+**Event-driven state needs one owner for each transition; a request's success
+continuation must not reapply optimistic state that an event may already have
+superseded.** A mutation accepted by the server is not proof that the work is
+still running when the client continuation resumes. Keep the optimistic state
+only when the same ordering channel can guarantee it is still current, and
+exercise the fast-completion path in a real browser.
+- Evidence: 2026-10-24, global SSE browser acceptance: a 6 ms library update
+  emitted `updateComplete`, then `runUpdate`'s `await` continuation wrote
+  `running: true` and left the page running indefinitely. Removing that write
+  made the summary events the sole owner of running transitions; the regression
+  failed when the write was restored and passed after its removal, and the next
+  browser run returned to the completed state.
+- Seen again: 2026-10-24, manga detail treated any download event as a reason
+  to skip the REST seed, dropping existing queued rows. Only a real snapshot
+  replaces that seed; pending events merge into it. The wiring regression
+  failed on the old guard, and a 15-second delayed response made two queued
+  rows vanish before the merge was restored.
+
+**Dynamic fallbacks must treat an empty string as absent, not only null or
+undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
+suppressing the fallback just as a real title would. Normalize empty values
+before applying overrides and include a blank-content case in browser
+acceptance.
+- Evidence: 2026-10-24, #359's document-title override used `title ?? null`;
+  the example manga detail returned `"title":""`, so the route fallback was
+  suppressed and the tab became plain `Sumidoku`. Normalizing with `title ||
+  null` restored `漫画 · Sumidoku`; sabotaging it failed `blank content titles
+  keep the route fallback`, and the test passed again after restoration.
+
+**Derived state must be invalidated when its producer or input changes;
+fresh fixtures cannot prove an upgrade.** When a parser changes, rows
+written by the old parser need an explicit migration or versioned rebuild,
+and caches holding open files need an identity/version check before every
+hit. Recomputing only new requests leaves old rows and old inode handles
+serving stale data indefinitely. Start regressions with seeded old rows and
+with atomic rename/truncate, not only a clean database or initial open.
+- Evidence: 2026-10-23/24, #349 review found old EPUB page rows bypassing
+  the new detection until migration 0021 invalidated them; its upgrade test
+  failed with two stale rows before the fix. #352 review found ZipCache
+  returning old bytes after atomic rename and a stale central directory
+  after truncation. File-version checks now reopen changed files, and both
+  regressions fail again when invalidation is disabled.
+
+**Type-specific state must come from the entity's actual shape, not its
+filename suffix.** A directory named `.epub` is still an image-directory
+chapter, so deriving `epub_divina_compatible` from `ends_with` marks it true
+on first read even though no EPUB analysis happened. Compute and return the
+flag from the same code path that reads the chapter, and include
+directory-with-suffix fixtures.
+- Evidence: 2026-10-24, #352 review caught `load_pages` turning
+  `chapter.epub/1.png` into `Some(true)`. `chapter_pages` now returns
+  `(pages, Option<bool>)`, with NULL for directories/CBZ and the actual
+  result for EPUB files, and the regression holds NULL after page rebuild.
+
+**Mojibake can enter as valid UTF-8 when a middlebox answers with the
+browser's serialized DOM instead of the wire bytes — capture the upstream
+response before blaming the decoder.** trawl's MITM proxy is byte-faithful on
+its direct tier, but its browser tiers answer HTML requests with
+`page.content()`: the headless browser decodes the original bytes by HTML5
+rules, so a `text/html` fragment with no charset declaration (18mh's
+`/manga/get` chapter list) is read as windows-1252 and every CJK title
+becomes `ç¬¬1è©±`-style mojibake, then re-encoded as clean UTF-8 that no
+host-side `decode_body` heuristic can flag. Full pages survive because their
+`<meta charset>` decodes correctly in the browser, so the signature is
+"only fragment-sourced fields garble" (chapter titles garbled, manga title
+fine, chapter numbers lost because the `第` prefix never survives). The
+decoder was exonerated by fetching the real response with the site's own
+`cf_clearance` + matching UA and finding zero invalid UTF-8 bytes; the
+garble was introduced by the proxy tier in between. The durable fix belongs
+upstream (browser tier should return the navigation body bytes or honor the
+original charset); Sumidoku's own mitigation is to stop feeding hosts to the
+proxy: a challenged host is now solved once through the trawl scrape API and
+the (cf_clearance, solver-UA) pair is replayed direct — byte-faithful and at
+direct-request speed, with the proxy kept only as the solve-failure fallback.
+- Evidence: 2026-10-23, zh.18mh chapter titles on docker 1.2.0 with trawl
+  configured: live `/manga/get?mid=5994&mode=all` verified valid UTF-8 with
+  `Content-Type: text/html` (no charset); trawl `browserCapture.ts` returns
+  `page.content()` and `server.ts:serveViaScrape` documents browser tiers as
+  "the rendered solved DOM"; the host stuck on trawl per
+  `routed.rs:challenged_host_sticks_to_trawl`; trawl's own `/v1` endpoint
+  returned `data-ct="ç¬¬1è©±"` for wire bytes carrying `第1話`. A speculative
+  decode-side fix (sparse-UTF-8 outranking single-byte labels) was validated
+  and then reverted once the real mechanism was found upstream of the decoder.
+
+**Full-object settings writes need presence and ownership rules.** A required
+nullable field must distinguish a missing field (reject) from an explicit null
+(clear). A server-managed field must not be written from a cached full-object
+save, or an old snapshot can erase newer state. Legacy partial writes can keep
+their own clear semantics, but structured full writes must not replay
+scheduler-owned timestamps. Test missing fields, explicit null, and a stale
+cached timestamp.
+- Evidence: 2026-10-22, #315's structured settings accepted a missing
+  `backup.dir` as `None` and could delete the existing override; writing
+  `backup.last_run` from the settings cache could clear a newer backup
+  timestamp. #317 required nullable fields, ignored `lastRun` on structured
+  writes, and added API regressions for missing fields, explicit clears, and
+  preservation. Sabotaging each behavior failed its target assertion before
+  restoration.
+- Seen again: 2026-10-24, `library.last_scheduled_run_at` traveled in the
+  structured `extra` map, so saving a stale snapshot could move the scheduler
+  clock. `scheduled_library_clock_is_server_owned` exposed the key before the
+  guard, and removing only the guard let both write forms replace `456` with
+  `123`. The same key also leaked into backup documents and could be restored;
+  backup export now omits it and import ignores it.
+
+**Changing sync ownership is a versioned migration, not an origin rewrite.**
+Preserve latest tombstones before deleting old origins, then append current
+rows and tombstones as local events with versions strictly above every prior
+event. Update live row and snapshot versions together, preserve sequence
+history, and clear the retry marker in the same transaction. Verify equal-time
+conflicts and old-live/new-tombstone replay, not only that a full pull exists.
+- Evidence: 2026-10-22, #306's review caught reader-originated shared updates
+  and owner-state tombstones being removed by the single-owner migration.
+  Removing the version bump failed `shared.modified_at > 5000`; excluding
+  owner-state tombstones failed `owner_tombstone.deleted`. Both passed after
+  restoration, as did the existing compaction and sync-protocol suites.
+
+**Removing a tenant filter changes reference semantics; it is not a mechanical
+cleanup.** When a query distinguishes the current row from other rows, replace
+tenant exclusion with the actual entity exclusion needed by the operation.
+Deleting a user predicate can make the row being deleted count as its own
+reference, or hide references that still need protection. Exercise the actual
+delete path, not only the shared-artifact happy path.
+- Evidence: 2026-10-22, #306's download cleanup counted the current download
+  row as a reference after its user filter was removed, leaving artifacts on
+  disk. Four download tests failed until the orphan check excluded the current
+  chapter while preserving references from other chapters.
+
+**Bundling a UI library does not make it offline or license-complete.** Check
+runtime defaults for outbound requests and every upstream notice, not only the
+package's top-level license. Disable remote validation, pin the assets, serve
+the notices with the page, and assert those paths in tests.
+- Evidence: 2026-10-22, #301's review found that Swagger UI's default validator
+  would send the spec URL to validator.swagger.io, and two JavaScript notices
+  were missing. `validatorUrl: null` and both notices were added after the new
+  assertions failed with a missing setting and a 404; the release browser then
+  rendered using local assets only.
+
+**Rekeying an entity is a versioned merge, not a row move.** Aliases locate an
+entity but do not decide which state wins. When a stub or target merge changes a
+composite key, compare live and tombstone versions on both sides before applying
+the winning state. If the winning physical row is newer than its latest event,
+write a local event at that same version; otherwise a later intermediate
+tombstone can delete the row while the log says it is older. Keep tombstones at
+their original keys and include them in alias-linked comparisons. Tests must
+continue beyond the rekey with updates on both sides and row-only versions.
+- Evidence: 2026-10-22, #298's review found a v600 stub row resurrected over a
+  v1000 target tombstone, and a v1000 row with only a v600 event later deleted
+  by a v800 tombstone. The regressions failed with `1 != 0` and
+  `None != Some(1000)` before per-relation version merging and derived events;
+  both passed afterward.
+
+**Moving work to the background changes the consumer contract, not just the
+runtime cost.** If the API and UI neither await the result nor subscribe for
+it, the first response can stay empty or stale forever. Eventual persistence
+in the database does not repair that first render, and polling the database in
+tests proves nothing about the API-to-reader path. Background work also needs a
+generation guard for refreshes; otherwise keep the producer synchronous.
+- Evidence: 2026-10-22, #293's background measurement returned no dimensions
+  on the first pages response while the reader had no refetch, and an old task
+  could write into refreshed rows. Restoring synchronous measurement and API
+  assertions made the contract and retry test deterministic again.
+
+**Tenant-isolation claims start with the schema's key scope, not with an
+assumed per-user id.** A row can belong to a user while its id is globally
+unique, making the same id impossible to collide across users. Check the
+primary key before constructing a failure case, then test the actual isolation
+boundary instead of an impossible collision.
+- Evidence: 2026-10-22, #287's earlier review used a shared category id across
+  two users as the collision example. `category.id INTEGER PRIMARY KEY` rules
+  that case out; the corrected coverage verifies independent per-user settings.
+
+**Replacing a persisted flag needs live-database and portable-backup migration
+in the same change.** A new setting can work on fresh installs and still drop
+existing users' state. Convert old flags in an append-only migration, keep
+instance-local ids out of backup payloads, and restore through natural keys.
+Tests must replay an older migration state and restore onto a target whose ids
+differ, not only an empty instance with matching ids.
+- Evidence: 2026-10-22, #287's follow-up found no live migration for legacy
+  exclusions and raw category ids in backups. Breaking the migration returned
+  `[]` instead of `[1, 2]`; breaking the backup marker returned `1` instead of
+  `2`. The fixed round-trip restores the target id when a placeholder already
+  occupies the source id.
+
+**A checked marker belongs to the bytes that were checked, not to the logical
+page.** A fresh download is a new artifact version and must refresh derived
+metadata even when the page row was previously checked. Lazy backfill can stay
+unchecked-only, but the download write path must overwrite stale values;
+otherwise same-URL image replacements keep the old dimensions forever.
+- Evidence: 2026-10-21, #20's review seeded a checked 99x99 value before
+  re-download. The unchecked-only path kept it and the regression test failed
+  with left=99/right=1; the download-specific overwrite path then restored the
+  actual 1x1 dimensions.
+
+**A status and the flags that make it visible are one public transition:
+commit them together and fault-inject the later write.** Separate queries
+let readers observe the status before its dependent flag, and a test that
+waits only for the status becomes flaky. A transaction fixes the production
+race; forcing the flag write to fail proves that no partial status commits,
+without relying on timing or adding retries to the original test.
+- Evidence: 2026-10-21, #281's CI failure read `finished` followed by
+  `isDownloaded = false`. Trigger-injected flag failures left a finished row
+  before the fix; afterwards the update path stayed `downloading` and the
+  shared-artifact upsert left no row.
+
+**An echoed value is not a new value: every upsert path must preserve its
+provenance when the value is unchanged.** A derived timestamp and a
+source-owned timestamp can have identical values but different scheduling
+semantics. Resetting the provenance on every detail upsert lets an ordinary
+echo turn a derived deadline into a source deadline, and later interval
+changes stop affecting it. Preserve the flag on an exact (including NULL)
+echo and reset it only when the value changes; cover both the scheduler's
+write path and ordinary detail refreshes.
+- Evidence: 2026-10-21, #45's review caught the ordinary-refresh path after
+  the scheduler path was fixed. `upsert_echoed_details_preserve_fallback_provenance`
+  failed with `(Some(111), 0)` instead of `(Some(111), 1)` before the shared
+  upsert preserved the flag.
+
+**`DefaultBodyLimit` does not reject an over-limit multipart body at the
+extractor — the limit error bubbles up inside the handler's field reads,
+and a blanket `bad_request` mapping silently turns the 413 into a 400.**
+axum 0.8's `Multipart` calls `req.with_limited_body()`, so the route's
+`DefaultBodyLimit::max` wraps the body stream; the `LengthLimitError`
+only surfaces as a `multer::Error::StreamReadFailed` when the handler
+drives `next_field()`/`field.bytes()`, and axum maps it to
+`StatusCode::PAYLOAD_TOO_LARGE` on the `MultipartError`. A handler that
+converts every multipart error with `ApiError::bad_request(...)` answers
+400 to an oversized upload. Map by `e.status()` (413 keeps 413, the rest
+become 400) on any upload route, and pin it with an over-limit test.
+- Evidence: 2026-10-21, #250's `.aix` import (the first multipart
+  surface): verified in axum-0.8.9's `extract/multipart.rs`
+  (`status_code_from_multer_error`); sabotaging `multipart_err` to always
+  `bad_request` turned `import_body_over_limit_is_413` red with
+  left=400/right=413.
+
+**The raw chapter API returns newest-first (source_order ASC of a
+newest-first source list); never index the raw array as if chapter 1 came
+first, and take selection/navigation semantics from Aidoku's source, not
+from the array's head or tail.** `GET /manga/{id}/chapters` orders by
+`source_order ASC`, and sources (Aidoku wasm and OPDS feeds alike) list
+newest chapters first, so the first element is the latest chapter and
+the last element is chapter 1. The manga detail read button used
+`chapters.find(c => !c.isRead)`, which always returned the newest
+unreadable-adjacent chapter: a fresh manga opened its last chapter, and
+each re-entry after reading it walked one chapter down from the newest
+end. The fix mirrors Aidoku's `MangaManager.getNextChapter` on the
+prefs-sorted+filtered list (resume the most recent unfinished chapter,
+else scan from the reading-order end, which stays the sort-key minimum
+under either display direction), and the 'source' sort branch's
+asc/desc semantics were themselves inverted relative to Aidoku — the
+"newest on top" comment described the opposite of the code. When a
+feature is declared to match Aidoku, open Aidoku's source and transcribe
+the algorithm; do not infer it from local array order.
+- Evidence: 2026-10-21, continue-reading fix (d9395e8): the button's
+  target was wrong for every read state except "exactly one chapter
+  unread" and "all read"; the inverted 'source' asc/desc branch had the
+  detail page defaulting to oldest-first against its own comment.
+
+**Reimplementing an Aidoku host import means matching the reference behavior
+on the exact inputs sources produce, not just the common path — entity
+coverage and charset detection both bite.** Sumidoku's `html.unescape`
+decoded only `&amp;`/`&lt;`/`&gt;` while sources expect SwiftSoup's full
+HTML5 table (`&quot;`, `&#39;`, `&nbsp;` came through as literal text), and
+the net host's body decoding trusted the Content-Type charset ahead of
+UTF-8, so a UTF-8 page served under a lying `iso-8859-1` label decoded as
+windows-1252 — chapter lists showed `ç¬¬1è©±` where Aidoku showed `第1話`.
+The HTML `text()`/`attr()` extraction path was already equivalent
+(html5ever decodes entities at tokenize time), which hid the gap: it only
+surfaces for sources calling `unescape` explicitly or for servers that lie
+about the charset. When a host import reimplements an Aidoku/SwiftSoup
+behavior, compare against the reference on adversarial inputs (full entity
+table, lying or missing charset declarations) before merging.
+- Evidence: 2026-10-21, chapter-title garble report: `ç¬¬1è©±` byte-decodes
+  to `第1話`; `unescape_str` matched 3 entities; the decode-order fix was
+  validated against a lying-header page, a GBK page with its meta past the
+  1024-byte sniff window, and BOM-less declared UTF-16.
+
+**`cargo test` cannot link any test binary that pulls the vendored aidoku
+rlib on the windows-gnu toolchain (pre-existing, unrelated to local
+changes): its `#[link(wasm_import_module)]` externs (`html.text`,
+`std.current_date`, `defaults.get`, …) stay unresolved natively — only
+`std.destroy` has a host stub, and it hits `aidoku-wasm` as well as
+`sumidoku-server` lib tests. `cargo check --all-targets` and clippy still
+type-check everything, release binaries build fine (binaries never
+reference those symbols), and CI's nextest runs on Linux where the link
+succeeds; on Windows, verify behavior-sensitive changes with a scratch
+crate against the same dependency versions, or run the tests under WSL.**
+- Evidence: 2026-10-21, chapter-title fixes: `cargo test -p aidoku-wasm
+  --lib` and `-p sumidoku-server` both failed at link with undefined
+  `text`/`get`/`current_date` on a clean tree (git-stash confirmed); the
+  new `decode_body`/`unescape_str` logic was validated in a scratch crate
+  copied verbatim, and the same sources compiled clean under `cargo
+  check`/`clippy`.
+
+**When research shows an issue diverges from upstream, take the
+divergence back to the issue before implementing — the issue text can
+be wrong.** An implementation merged exactly per the issue text, with
+the deviations from upstream flagged in the PR as deliberate
+(case-insensitive vs exact, union vs single marker, gates dropped
+entirely); the issue author then corrected the issue text itself and
+re-fixed the code. The divergence was known before implementation —
+one comment on the issue would have let the author correct the spec
+before code existed. When the issue author is an active collaborator,
+"the issue says X but upstream does Y" goes on the issue and waits,
+not in a PR footnote after the fact.
+- Evidence: 2026-10-19/20, #183's tap-to-search: research flagged three
+  divergences from AidokuRunner (exact case-sensitive match, `is_genre`
+  only, declared-flag-wins); #187 merged per the issue text, the author
+  corrected the issue description, and #193 reverted all three to the
+  upstream semantics.
 
 **Never edit UTF-8 source files through a legacy Windows shell — it
 re-encodes them as ANSI and silently corrupts every non-ASCII byte, and
@@ -402,6 +846,15 @@ consumed before trusting a "transparent" handoff.
 - Evidence: 2026-10-19, bakamh's managed challenge worked through
   aidoku-cf-relay and Suwayomi but not Sumidoku; `routed.rs:trawl_escalation`
   now marks the host and `route_for` keeps it on trawl.
+- Superseded: 2026-10-23, the proxy-sticky fix traded the UA mismatch for two
+  new failures — trawl's browser tiers answer HTML with the serialized DOM
+  (charset-less fragments arrive as windows-1252 mojibake, see the zh.18mh
+  entry below), and a browser runs per request. The pairing rule itself was
+  right; the conclusion "so trawl must hold the pair" was not. Sumidoku now
+  holds the pair itself: `solve_clearance` takes the solver's userAgent from
+  the scrape answer together with cf_clearance and replays both over direct
+  connections (relay.py's shape), with the proxy kept as the solve-failure
+  fallback.
 
 **A change event's `currentTarget` is dead by the time a deferred state
 updater runs — read the value eagerly.** React nulls `currentTarget` when
@@ -506,3 +959,90 @@ same-day slip.
 - Evidence: 2026-10-19, the first merge attempt on PR #171 was rejected
   for a from-memory sha; the real head (`288121b4dcb…`) fetched via
   `gh pr view` differed and merged.
+- Seen again: 2026-10-19, PR #188 — passed the short sha from the local
+  `git commit` output instead of the full sha in the `gh pr view` result
+  fetched seconds earlier; same GraphQL rejection, retried with the
+  fetched full sha.
+
+**Contract compatibility claims get verified against the upstream
+implementation, never against a second-hand quote.** A behavior copied
+from one doc line can invert the real contract, and a fixture written
+from the same reading then "confirms" the wrong behavior with a green
+test — the strongest kind of false reassurance, since the pinned test
+punishes the later correct fix. When emulating a host's behavior, read
+the upstream host source; treat any fixture born from a quote as
+evidence of nothing.
+- Evidence: 2026-10-20, zh.jmcomic chapter images failed with
+  `invalid image rid -1`: the processor input had been raw bytes since
+  #119, implemented from a one-line doc quote, while AidokuRunner's
+  `store(value:)` decodes when possible (pixels for canvas
+  descrambling) and only falls back to raw bytes when undecodable; the
+  rawimg fixture had pinned the misreading. Fixed in #223 after
+  reading the upstream Swift host; two sabotage cycles confirmed the
+  realigned tests catch each bug.
+
+**A green pipeline that never executes the artifact proves nothing about
+the artifact.** Every gate exercises the source tree — build, clippy,
+tests — while the shipped binary can crash deterministically on a path
+no test drives; only running the artifact on that path catches it. And
+when a deployment reports 502s, read the process state before the app
+logic: restart count, `journalctl` `traps:` lines and coredumps say
+"crash-looping" faster than any handler theory.
+- Evidence: 2026-10-20, linux x86_64 binaries ≤0.17.1 SIGSEGV'd on
+  every async HTTPS fetch (`movaps` #GP in the TLS path) while CI
+  stayed green for two releases; the 502 a user saw was nginx answering
+  during container restart gaps, with four identical-offset cores in
+  the journal. Follow-ups tracked in #234.
+
+**The web UI gate is tsc-only, and by design no formatter ever runs —
+human review is the only style net.** The tree is hand-formatted with
+tabs and formatters are deliberately absent, so a diff that breaks the
+surrounding structure passes green. On web UI reviews, read each
+changed block's indentation against its untouched siblings; a block one
+level off with its continuations at the old depth is the signature.
+- Evidence: 2026-10-20, #237 dedented two JSX blocks in BrowsePage
+  while their continuation lines kept the old depth; the `web` job was
+  green and only eyeballing the diff caught it — fixed on the branch
+  (f0870fd) before merge.
+- Seen again: 2026-10-21, #285 left misindented SourceCard JSX and adjacent
+  conditional blocks at `webui/src/pages/BrowsePage.tsx:562-631` with green
+  web gates.
+
+**A migration file is a shipped artifact, not source text — editing one,
+comments included, breaks every existing deployment at boot.** sqlx
+embeds each migration's SHA-384 at compile time and validates it against
+`_sqlx_migrations` at startup, so a comment translation has the same
+blast radius as a schema change (a `VersionMismatch` panic). Restyling or
+"tidying" an applied migration is a breaking change; schema work lands
+as a new numbered file. The guard lives in
+`db.rs:shipped_migrations_are_immutable`, which pins the embedded
+checksums.
+- Evidence: 2026-10-21, the comment-translation sweep (#236) touched 10
+  applied migrations and 0.19.0 refused to boot on upgraded databases
+  (`Migrate(VersionMismatch(1))`); the restore was verified by matching
+  the restored file's SHA-384 against a pre-sweep database's recorded
+  checksum.
+
+**quick-xml's serde matches elements by local name — the namespace prefix is
+stripped, so `dc:title` must be renamed to the bare `title`, and only
+attributes take the `@` prefix.** A `rename = "dc:title"` never matches
+anything, silently yielding `None`/empty vecs with no error. When parsing
+namespaced XML (OPF, RSS, Atom), rename to the local name and verify with a
+fixture that actually carries the prefix.
+- Evidence: 2026-10-21, #272's OPF metadata parsing: `rename = "dc:title"`
+  would never hit; quick-xml 0.42's `de/key.rs` matches on the local name.
+  The same wrong mental model sits in `comic_info.rs`'s "matches literally"
+  comment (masked by its merge logic).
+
+**When an issue cites a reference implementation, the reference's code is
+the spec — the issue text is only its summary.** "照 X 配" means reading
+X's actual files before designing, not just the paragraphs that mention
+X; edge semantics (field mappings, profile detection, fallback rules)
+live in the reference's source and almost never survive into the issue
+text. The recon checklist for such an issue names the exact files in the
+reference and what each one pins down.
+- Evidence: 2026-10-21, three local-source PRs built from issue scopes
+  (#269 multi-dir, #272 EPUB, #274 metadata) were all reopened the same
+  day with "refer to kmrs for re-improvement" — the kmrs clone sat in
+  `~/src` unread while the implementations guessed at field mappings and
+  profile detection that kmrs already pins down.

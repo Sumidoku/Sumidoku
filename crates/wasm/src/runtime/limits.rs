@@ -1,105 +1,46 @@
-use std::ptr::NonNull;
 use std::time::Duration;
-use wasmer::sys::vm::{MemoryError, VMMemory, VMMemoryDefinition, VMTable, VMTableDefinition};
-use wasmer::sys::{BaseTunables, Tunables};
-use wasmer::{MemoryStyle, MemoryType, Pages, TableStyle, TableType};
 
 #[derive(Debug, Clone)]
 pub struct Limits {
-	/// 单次导出调用的指令数上限（wasmer metering fuel）
+	/// Instruction budget (wasmi fuel) for a single export call: reset before each call,
+	/// traps when exhausted. 10B would kill pathological sources like godamanga on long
+	/// chapter lists (thousands of chapters x a regex compiled per chapter — measured 3875
+	/// chapters of pure compute at ~7s ≈ 50B); the wall-clock call_timeout is the main
+	/// backstop, fuel only guards against instruction-level runaway within the timeout, so 100B
 	pub fuel: u64,
-	/// 调用级 wall-clock 超时，超时熔断重启实例
+	/// Per-call wall-clock timeout; on timeout the circuit breaker restarts the instance
 	pub call_timeout: Duration,
-	/// env.sleep 单次上限
+	/// Cap for a single env.sleep
 	pub sleep_max: Duration,
 	pub net_timeout_default: Duration,
 	pub net_timeout_max: Duration,
-	/// net host 单次响应体上限（解码后字节）；0 = 不设限
+	/// net host cap on a single response body (decoded bytes); 0 = unlimited
 	pub net_body_max: u64,
-	/// 实例线性内存上限，memory.grow 超过即失败
+	/// Instance linear-memory cap (StoreLimits); memory.grow beyond it fails
 	pub memory_max: u64,
-	/// 单次 js eval 的执行上限（脚本入口 wall-clock，budget 让出点检查）
+	/// Execution cap for a single js eval (wall-clock at the script entry, checked at budget yield points)
 	pub js_timeout: Duration,
-	/// js 单循环迭代上限：promise reaction job 内死循环的最后兜底（VM 回边检查）
+	/// js single-loop iteration cap: the last backstop for infinite loops inside promise reaction jobs (VM back-edge check)
 	pub js_loop_max: u64,
-	/// webview 浏览器导航超时；必须低于 call_timeout，否则熔断先于超时生效
+	/// webview browser navigation timeout; must be below call_timeout, otherwise the circuit breaker fires before the timeout
 	pub browser_timeout: Duration,
 }
 
 impl Default for Limits {
 	fn default() -> Self {
 		Self {
-			fuel: 10_000_000_000,
+			fuel: 100_000_000_000,
 			call_timeout: Duration::from_secs(60),
 			sleep_max: Duration::from_secs(10),
 			net_timeout_default: Duration::from_secs(30),
 			net_timeout_max: Duration::from_secs(120),
-			// 生态里最大的合法单体是长条漫整页图（常见几 MiB，极端约 20 MiB），32 MiB 留余量
+			// The largest legitimate single body in the ecosystem is a full-page long-strip manga image (commonly a few MiB, ~20 MiB at the extreme); 32 MiB leaves headroom
 			net_body_max: 32 * 1024 * 1024,
-			// Aidoku 源实测很少超 64 MiB；压太低会让 memory.grow 失败直接打死源
+			// Measured Aidoku sources rarely exceed 64 MiB; setting it too low would make memory.grow fail and kill sources outright
 			memory_max: 128 * 1024 * 1024,
 			js_timeout: Duration::from_secs(10),
 			js_loop_max: 1_000_000_000,
 			browser_timeout: Duration::from_secs(30),
 		}
-	}
-}
-
-/// 按官方 tunables-limit-memory 示例的模式包装 BaseTunables，
-/// 把模块声明的内存上限钳制到 limit_pages。
-#[derive(Clone)]
-pub struct LimitedTunables {
-	base: BaseTunables,
-	limit: Pages,
-}
-
-impl LimitedTunables {
-	pub fn new(memory_max_bytes: u64) -> Self {
-		Self {
-			base: BaseTunables::new(),
-			limit: Pages(memory_max_bytes.div_ceil(64 * 1024) as u32),
-		}
-	}
-
-	fn clamp(&self, ty: &MemoryType) -> MemoryType {
-		let mut adjusted = *ty;
-		adjusted.maximum = Some(adjusted.maximum.map_or(self.limit, |m| m.min(self.limit)));
-		adjusted
-	}
-}
-
-impl Tunables for LimitedTunables {
-	fn memory_style(&self, memory: &MemoryType) -> MemoryStyle {
-		self.base.memory_style(&self.clamp(memory))
-	}
-
-	fn table_style(&self, table: &TableType) -> TableStyle {
-		self.base.table_style(table)
-	}
-
-	fn create_host_memory(&self, ty: &MemoryType, style: &MemoryStyle) -> Result<VMMemory, MemoryError> {
-		self.base.create_host_memory(&self.clamp(ty), style)
-	}
-
-	unsafe fn create_vm_memory(
-		&self,
-		ty: &MemoryType,
-		style: &MemoryStyle,
-		vm_definition_location: NonNull<VMMemoryDefinition>,
-	) -> Result<VMMemory, MemoryError> {
-		unsafe { self.base.create_vm_memory(&self.clamp(ty), style, vm_definition_location) }
-	}
-
-	fn create_host_table(&self, ty: &TableType, style: &TableStyle) -> Result<VMTable, String> {
-		self.base.create_host_table(ty, style)
-	}
-
-	unsafe fn create_vm_table(
-		&self,
-		ty: &TableType,
-		style: &TableStyle,
-		vm_definition_location: NonNull<VMTableDefinition>,
-	) -> Result<VMTable, String> {
-		unsafe { self.base.create_vm_table(ty, style, vm_definition_location) }
 	}
 }

@@ -1,10 +1,13 @@
 #![no_std]
-//! 页描述管线的端到端验证源（issue #134）：
-//! - ch-texts：回源取描述的 Text 页 + 无标志 Text 页 + 内联 description 的页
-//!   （内联时宿主不得再调 get_page_description，本源对内联页的 content 恒 bail）
-//! - ch-url：Url 内容页带 hasDescription，验证取描述与内容类型无关
-//! - ch-fail：get_page_description 对该章页 bail，验证导出失败的错误面
-//! 断言在 crates/server/tests/page_description.rs。
+//! End-to-end verification source for the page-description pipeline (issue #134):
+//! - ch-texts: a Text page whose description is fetched from the source + an unflagged
+//!   Text page + a page with inline description (when inline, the host must not call
+//!   get_page_description again; this source always bails on the inline page's content)
+//! - ch-url: a Url content page carrying hasDescription, verifying description fetching is
+//!   independent of content type
+//! - ch-fail: get_page_description bails on this chapter's pages, verifying the error
+//!   surface of a failing export
+//! Assertions live in crates/server/tests/page_description.rs.
 use aidoku::{
 	Chapter, FilterValue, Manga, MangaPageResult, Page, PageContent, PageDescriptionProvider, Result, Source,
 	alloc::{String, Vec},

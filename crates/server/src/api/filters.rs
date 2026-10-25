@@ -1,28 +1,28 @@
-//! 静态 filters（source.json `filters` 数组与 filters.json）的形状归一。
+//! Shape normalization for static filters (the source.json `filters` array and filters.json).
 //!
-//! 源包的静态筛选是 Aidoku 公开 schema（camelCase，`id` 可缺省），而源导出
-//! `get_filters` 时 aidoku 的 `Filter` 序列化成扁平的 snake_case 形状（必有 id）。
-//! `/sources/{id}/filters` 把静态项归一成后者再与动态项合并，前端才只需处理
-//! 一种形状；动态导出一律不动。
+//! A source package's static filters are Aidoku's public schema (camelCase, `id` optional), while a source
+//! exporting `get_filters` serializes aidoku's `Filter` into a flat snake_case shape (id always present).
+//! `/sources/{id}/filters` normalizes static items into the latter before merging with dynamic ones, so the
+//! frontend handles exactly one shape; dynamic exports are left untouched.
 
 use serde_json::{Map, Value};
 
-/// 扁平静态 schema -> 动态导出同款形状；输入非数组时返回空
+/// Flat static schema -> the dynamic export's own shape; non-array input yields empty
 pub fn normalize_static_filters(raw: &Value) -> Vec<Value> {
 	raw.as_array()
 		.map(|items| items.iter().map(normalize_filter).collect())
 		.unwrap_or_default()
 }
 
-/// 缺失字段一律落 null，交给前端 `??` 兜底
+/// Missing fields always land on null, left to the frontend's `??` fallback
 fn field(item: &Value, key: &str) -> Value {
 	item.get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn normalize_filter(item: &Value) -> Value {
 	let ty = item.get("type").and_then(Value::as_str).unwrap_or_default();
-	// Aidoku 解码静态筛选时 id 缺省落 title 再落 type；无 id 的项若共享空 id，
-	// 前端按 id 索引的状态与 React key 会互相覆盖
+	// Aidoku decoding of static filters falls back from id to title to type; id-less items sharing an empty id
+	// would make the frontend's id-indexed state and React keys clobber each other
 	let id = item
 		.get("id")
 		.and_then(Value::as_str)
@@ -37,8 +37,8 @@ fn normalize_filter(item: &Value) -> Value {
 	Value::Object(out)
 }
 
-/// 变体字段与动态 `Filter` 序列化保持同名同集，camelCase 能力键映射成 snake_case；
-/// 未知类型不带变体字段，前端命中 else 分支展示暂不支持的类型
+/// Variant fields keep the same names and set as the dynamic `Filter` serialization, camelCase capability keys mapped to snake_case;
+/// unknown types carry no variant fields, so the frontend's else branch shows the unsupported type
 fn variant_fields(ty: &str, item: &Value) -> Map<String, Value> {
 	let mut out = Map::new();
 	match ty {
@@ -103,7 +103,7 @@ mod tests {
 		assert_eq!(out[0]["ids"], Value::Null);
 		assert_eq!(out[0]["default"], Value::Null);
 		assert_eq!(out[0]["hide_from_header"], Value::Null);
-		// 两个无 id 筛选各得稳定 id，状态不再互相覆盖
+		// Two id-less filters each get a stable id, so their state no longer clobbers each other
 		assert_eq!(out[1]["id"], "Status");
 		assert_eq!(out[1]["is_genre"], Value::Null);
 	}

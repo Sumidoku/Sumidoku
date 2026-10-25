@@ -1,8 +1,8 @@
-//! Aidoku 式源仓库：index JSON 的拉取/缓存/解析，跨 repo 浏览与 .aix 安装。
-//! schema 对齐上游 Aidoku app（Aidoku/Core/Sources/SourceList/）：index 为
-//! {name, feedbackURL?, sources:[ExternalSourceInfo]}；version 是递增整数，
-//! downloadURL/iconURL 可按 RFC3986 相对 index URL 解析；lang/nsfw/file/icon
-//! 是旧版废弃字段（file→sources/<file>，icon→icons/<icon>），解析时一并兼容
+//! Aidoku-style source repositories: fetching/caching/parsing of index JSON, cross-repo browsing and .aix installs.
+//! The schema mirrors the upstream Aidoku app (Aidoku/Core/Sources/SourceList/): an index is
+//! {name, feedbackURL?, sources:[ExternalSourceInfo]}; version is a monotonically increasing integer;
+//! downloadURL/iconURL resolve per RFC3986 against the index URL; lang/nsfw/file/icon
+//! are legacy deprecated fields (file→sources/<file>, icon→icons/<icon>), accepted for compatibility when parsing
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::{SourceRow, unix_now};
@@ -16,11 +16,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-/// 真实 index 约百 KiB，4 MiB 已留足余量
+/// A real index is about a hundred KiB, so 4 MiB leaves ample headroom
 const INDEX_MAX: u64 = 4 * 1024 * 1024;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 对外归一：拉取/解析失败不区分原因，细节只进日志
+/// Unified outward message: fetch/parse failures are not differentiated; details go to the logs only
 const INDEX_FETCH_MSG: &str = "failed to fetch repository index";
 const PACKAGE_FETCH_MSG: &str = "failed to download source package";
 
@@ -48,7 +48,7 @@ struct IndexSource {
 	id: String,
 	name: Option<String>,
 	version: i64,
-	// Aidoku 的 URL 字段全大写缩写，camelCase 推导不出
+	// Aidoku's URL fields are all-caps abbreviations that camelCase cannot derive
 	#[serde(rename = "iconURL")]
 	icon_url: Option<String>,
 	#[serde(rename = "downloadURL")]
@@ -64,7 +64,7 @@ struct IndexSource {
 	icon: Option<String>,
 }
 
-/// 解析后的仓库源条目：URL 已相对 repo 地址解析成绝对地址
+/// A parsed repo source entry: URLs already resolved to absolute against the repo address
 #[derive(Debug, Clone)]
 pub struct RepoEntry {
 	pub key: String,
@@ -90,7 +90,7 @@ fn resolve_url(base: &Url, raw: Option<&str>, legacy: Option<&str>, legacy_dir: 
 	base.join(&raw).ok().map(|u| u.to_string())
 }
 
-/// 解析并校验 index 原文；URL 相对 base 解析。sources 数组缺失视为坏 index
+/// Parses and validates raw index text; URLs resolve against base. A missing sources array means a bad index
 pub fn parse_index(raw: &[u8], base: &Url) -> Result<ParsedIndex, String> {
 	let index: RepoIndex = serde_json::from_slice(raw).map_err(|e| format!("parse index: {e}"))?;
 	let entries = index
@@ -117,7 +117,7 @@ pub fn parse_index(raw: &[u8], base: &Url) -> Result<ParsedIndex, String> {
 	})
 }
 
-/// repo URL 只许 http/https：self-hosted 用户会指内网地址，不做 IP 判定
+/// Repo URLs allow only http/https: self-hosted users will point at intranet addresses, so there is no IP-based check
 pub fn parse_repo_url(raw: &str) -> ApiResult<Url> {
 	let url = Url::parse(raw).map_err(|_| ApiError::bad_request("invalid repository url"))?;
 	if !matches!(url.scheme(), "http" | "https") {
@@ -126,7 +126,7 @@ pub fn parse_repo_url(raw: &str) -> ApiResult<Url> {
 	Ok(url)
 }
 
-/// 带总超时与大小上限的 GET；错误细节只给日志，对外一律归一
+/// GET with an overall timeout and a size cap; error details go to the logs, outward messages stay unified
 async fn fetch_capped(http: &RoutedClients, url: &Url, max: u64) -> Result<Vec<u8>, String> {
 	let fetch = async {
 		let mut response = http.get(url).await.map_err(|e| format!("request: {e}"))?;
@@ -198,7 +198,9 @@ pub async fn add_repo(state: &Arc<AppState>, url: Url) -> ApiResult<SourceRepoRo
 	.bind(now)
 	.execute(&state.pool)
 	.await?;
-	repo_row(&state.pool, result.last_insert_rowid()).await
+	let id = result.last_insert_rowid();
+	tracing::info!(repo = id, entries = parsed.entries.len(), "source repository added");
+	repo_row(&state.pool, id).await
 }
 
 pub async fn delete_repo(state: &Arc<AppState>, id: i64) -> ApiResult<()> {
@@ -210,7 +212,7 @@ pub async fn delete_repo(state: &Arc<AppState>, id: i64) -> ApiResult<()> {
 	Ok(())
 }
 
-/// 刷新即重拉 index 更新缓存；失败时缓存保留，错误落到 fetch_error 供界面标 stale
+/// Refreshing re-pulls the index and updates the cache; on failure the cache is kept and the error lands in fetch_error for the UI to mark stale
 pub async fn refresh_repo(state: &Arc<AppState>, id: i64) -> ApiResult<SourceRepoRow> {
 	let row = repo_row(&state.pool, id).await?;
 	let url = parse_repo_url(&row.url)?;
@@ -225,7 +227,9 @@ pub async fn refresh_repo(state: &Arc<AppState>, id: i64) -> ApiResult<SourceRep
 			.bind(id)
 			.execute(&state.pool)
 			.await?;
-			repo_row(&state.pool, id).await
+			let row = repo_row(&state.pool, id).await?;
+			tracing::info!(repo = id, entries = parsed.entries.len(), "source repository refreshed");
+			Ok(row)
 		}
 		Err(detail) => {
 			tracing::warn!(url = %row.url, "refresh repository failed: {detail}");
@@ -239,8 +243,8 @@ pub async fn refresh_repo(state: &Arc<AppState>, id: i64) -> ApiResult<SourceRep
 	}
 }
 
-/// 定时入口：逐仓刷新 index。失败的仓保留旧缓存、fetch_error 落库（见 refresh_repo），
-/// 这里只记日志继续刷下一个，互不阻塞
+/// Scheduled entry point: refreshes each repo's index in turn. A failed repo keeps its old cache with fetch_error
+/// recorded (see refresh_repo); here we only log and move to the next, never blocking each other
 pub async fn refresh_all(state: &Arc<AppState>) {
 	for repo in list_repos(&state.pool).await.unwrap_or_default() {
 		if let Err(e) = refresh_repo(state, repo.id).await {
@@ -249,7 +253,7 @@ pub async fn refresh_all(state: &Arc<AppState>) {
 	}
 }
 
-/// 周期刷新任务：interval 首 tick 立即完成，首跑等满一个周期
+/// Periodic refresh task: interval's first tick completes immediately, so the first run waits a full period
 pub async fn run_periodic_refresh(state: Arc<AppState>, interval_hours: u64) {
 	let mut interval = tokio::time::interval(Duration::from_secs(interval_hours * 3600));
 	interval.tick().await;
@@ -259,8 +263,8 @@ pub async fn run_periodic_refresh(state: Arc<AppState>, interval_hours: u64) {
 	}
 }
 
-/// 各 key 在所有 repo 缓存里的最新版本与所在 repo；update 检测的唯一口径
-/// （Aidoku 语义：整数 version 严格大于已装即算有更新）
+/// Each key's newest version across all repo caches and the repo holding it; the single source of truth for update
+/// detection (Aidoku semantics: an integer version strictly greater than installed counts as an update)
 pub async fn latest_versions(pool: &SqlitePool) -> ApiResult<HashMap<String, (i64, i64)>> {
 	let repos = list_repos(pool).await?;
 	let mut latest: HashMap<String, (i64, i64)> = HashMap::new();
@@ -302,11 +306,11 @@ pub fn cached_entries(repo: &SourceRepoRow) -> Vec<RepoEntry> {
 pub struct BrowseFilter {
 	pub lang: Vec<String>,
 	pub query: String,
-	/// 内容分级白名单；None 不过滤，Some(空集) 表示一个分级都不显示
+	/// Content-rating whitelist; None means no filtering, Some(empty set) hides every rating
 	pub content_ratings: Option<Vec<i64>>,
 }
 
-/// Aidoku SourceContentRating 三档白名单匹配；None 不过滤，Some(空集) 全过滤
+/// Aidoku SourceContentRating three-tier whitelist matching; None means no filtering, Some(empty set) filters everything out
 fn content_rating_matches(rating: i64, want: Option<&[i64]>) -> bool {
 	want.is_none_or(|set| set.contains(&rating))
 }
@@ -315,7 +319,7 @@ fn lang_matches(entry_langs: &[String], want: &[String]) -> bool {
 	if want.is_empty() {
 		return true;
 	}
-	// multi/All 源（如 mangadex）按 Aidoku 惯例匹配任意语言过滤
+	// multi/All sources (e.g. mangadex) match any language filter, per Aidoku convention
 	entry_langs.iter().any(|l| {
 		let l = l.to_ascii_lowercase();
 		l == "multi" || l == "all" || want.contains(&l)
@@ -340,7 +344,7 @@ pub struct BrowseItem {
 	pub installed_version: Option<i64>,
 }
 
-/// 跨 repo 浏览：只读缓存，repo 不可达不影响结果；过滤口径与已装源列表一致
+/// Cross-repo browsing: reads the cache only, so an unreachable repo does not affect results; filter conventions match the installed-source list
 pub async fn browse_sources(pool: &SqlitePool, filter: &BrowseFilter) -> ApiResult<Vec<BrowseItem>> {
 	let installed: Vec<(i64, String, i64)> = sqlx::query_as("SELECT id, key, version FROM source")
 		.fetch_all(pool)
@@ -380,7 +384,7 @@ pub async fn browse_sources(pool: &SqlitePool, filter: &BrowseFilter) -> ApiResu
 	Ok(out)
 }
 
-/// 下载 .aix 落 sources 目录并走扫描同款注册路径；失败清理落盘文件，不留残包
+/// Downloads the .aix into the sources directory and takes the same registration path as the scan; failures clean up the landed file, leaving no partial package
 pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -> ApiResult<SourceRow> {
 	let row = repo_row(&state.pool, repo_id).await?;
 	let entry = cached_entries(&row)
@@ -426,33 +430,34 @@ pub async fn install_from_repo(state: &Arc<AppState>, repo_id: i64, key: &str) -
 		}
 	}
 
-	// 标记安装来源仓库（目录扫描侧载保持 NULL），供 missingFromRepos 判定
+	// Marks the repo this install came from (directory-scan sideloads stay NULL), feeding the missingFromRepos check
 	sqlx::query("UPDATE source SET repo_id = ? WHERE key = ?")
 		.bind(repo_id)
 		.bind(key)
 		.execute(&state.pool)
 		.await?;
 	let source: SourceRow = sqlx::query_as(
-		"SELECT id, key, name, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
-		 wasm_path, enabled, installed_at, updated_at, repo_id FROM source WHERE key = ?",
+		"SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
+		 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source WHERE key = ?",
 	)
 	.bind(key)
 	.fetch_one(&state.pool)
 	.await?;
-	// 更新场景下踢掉在跑的实例，下一次调用按新包懒加载
+	// On update, kick out the running instance so the next call lazily loads the new package
 	state.evict_source(source.id).await;
+	tracing::info!(repo = repo_id, key, version = source.version, bytes = bytes.len(), "source package installed");
 	Ok(source)
 }
 
-/// 单源更新的完整结果：新行 + 跨 breaking 的 key 迁移报告
+/// The complete result of a single-source update: the new row + the cross-breaking key migration report
 pub struct SourceUpdate {
 	pub source: SourceRow,
 	pub migration: crate::source::rekey::RekeyReport,
 }
 
-/// 单源更新：取所有 repo 缓存里该 key 的最新版，严格大于已装才动手；
-/// 跨过新包 manifest 的 breakingChangeVersion 时做 key 迁移（见 rekey 模块）
-pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<SourceUpdate> {
+/// Single-source update: takes the key's newest version across all repo caches, acting only when strictly greater
+/// than installed; when crossing the new package manifest's breakingChangeVersion, runs a key migration (see the rekey module)
+pub async fn update_source(state: &Arc<AppState>, source_id: i64, user_id: i64) -> ApiResult<SourceUpdate> {
 	let row: Option<(String, i64)> = sqlx::query_as("SELECT key, version FROM source WHERE id = ?")
 		.bind(source_id)
 		.fetch_optional(&state.pool)
@@ -464,7 +469,7 @@ pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 	match latest.get(&key) {
 		Some(&(new_version, repo_id)) if new_version > version => {
 			let source = install_from_repo(state, repo_id, &key).await?;
-			let migration = crate::source::rekey::migrate_after_update(state, source.id, version).await?;
+			let migration = crate::source::rekey::migrate_after_update(state, source.id, version, user_id).await?;
 			Ok(SourceUpdate { source, migration })
 		}
 		_ => Err(ApiError::no_update(format!("source {key} is up to date"))),
@@ -474,13 +479,13 @@ pub async fn update_source(state: &Arc<AppState>, source_id: i64) -> ApiResult<S
 pub struct UpdateAllOutcome {
 	pub updated: Vec<String>,
 	pub failed: Vec<(String, String)>,
-	/// 跨 breaking 但源无自迁移能力的 key：界面引导走 flow A 同源迁移
+	/// Keys that crossed a breaking change but whose source has no self-migration capability: the UI guides the user through flow A same-source migration
 	pub migration_required: Vec<String>,
-	/// 原地重键里被跳过的行（映射失败/撞键），按源归组
+	/// Rows skipped during in-place rekeying (mapping failed/key collision), grouped by source
 	pub migration_warnings: Vec<(String, String)>,
 }
 
-pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
+pub async fn update_all(state: &Arc<AppState>, user_id: i64) -> ApiResult<UpdateAllOutcome> {
 	let sources: Vec<(String, i64)> = sqlx::query_as("SELECT key, version FROM source")
 		.fetch_all(&state.pool)
 		.await?;
@@ -507,7 +512,7 @@ pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
 			}
 		};
 		outcome.updated.push(key.clone());
-		match crate::source::rekey::migrate_after_update(state, source.id, version).await {
+		match crate::source::rekey::migrate_after_update(state, source.id, version, user_id).await {
 			Ok(report) => {
 				if report.required {
 					outcome.migration_required.push(key.clone());
@@ -516,12 +521,19 @@ pub async fn update_all(state: &Arc<AppState>) -> ApiResult<UpdateAllOutcome> {
 					outcome.migration_warnings.push((key.clone(), warning));
 				}
 			}
-			// 重键失败不回滚已完成的更新，降级为该源的警告
+			// A rekey failure does not roll back the completed update; it degrades to a warning on that source
 			Err(e) => {
 				tracing::warn!(key, "post-update key migration failed: {e:?}");
 				outcome.migration_warnings.push((key.clone(), e.message().to_string()));
 			}
 		}
 	}
+	tracing::info!(
+		updated = outcome.updated.len(),
+		failed = outcome.failed.len(),
+		migration_required = outcome.migration_required.len(),
+		migration_warnings = outcome.migration_warnings.len(),
+		"source update-all finished"
+	);
 	Ok(outcome)
 }

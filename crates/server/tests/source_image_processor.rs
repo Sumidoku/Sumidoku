@@ -1,14 +1,14 @@
-//! 加密（不可解码）封面/页图走图像处理器的端到端回归（issue #116）：
-//! 声明处理器的源拿到原始响应字节，密文不再 502，五条入口链路输出一致的正常 PNG。
-//! fixture 源在 crates/wasm/tests/fixtures/rawimg-src（no_std cdylib），
-//! 重建方式：`cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
-//! 复制为 crates/wasm/tests/fixtures/rawimg/main.wasm。
+//! End-to-end regression for the image processor (issue #116): ciphertext (undecodable) bytes go into
+//! the processor verbatim and come out decrypted as an image; decodable images go in as pixels through
+//! the canvas branch; all four entry paths output the same proper PNG.
+//! The fixture source lives in crates/wasm/tests/fixtures/rawimg-src (no_std cdylib);
+//! rebuild with `cd crates/wasm/tests/fixtures/rawimg-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_rawimg.wasm
+//! to crates/wasm/tests/fixtures/rawimg/main.wasm.
 mod common;
 
 use axum::Router;
-use axum::body::Body;
-use axum::http::{Request, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::routing::get;
 use common::{TestApp, base_config, connect_db, install_fixture_source, rawimg_wasm_path, request, request_full};
 use image::ImageReader;
@@ -16,9 +16,8 @@ use serde_json::json;
 use std::io::Cursor;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
-use tower::ServiceExt;
 
-/// 与 rawimg-src/src/lib.rs 对账的同一密钥与明文（2x2 RGBA 红绿/蓝白）
+/// The same key and plaintext as reconciled with rawimg-src/src/lib.rs (2x2 RGBA red-green/blue-white)
 const KEY: u8 = 0x5A;
 const PLAIN_PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0,
@@ -31,8 +30,17 @@ fn cipher() -> Vec<u8> {
 	PLAIN_PNG.iter().map(|b| b ^ KEY).collect()
 }
 
-/// 处理器输出的 PNG 必须就是 plain.png 的 2x2 像素
+/// The processor's output PNG must be exactly plain.png's 2x2 pixels
 fn assert_plain_pixels(png: &[u8], label: &str) {
+	assert_pixels(png, label, [[255, 0, 0, 255], [0, 255, 0, 255]], [[0, 0, 255, 255], [255, 255, 255, 255]]);
+}
+
+/// The pixels of a decodable input after the canvas swaps the two rows (the rawimg fixture's decodable branch)
+fn assert_swapped_pixels(png: &[u8], label: &str) {
+	assert_pixels(png, label, [[0, 0, 255, 255], [255, 255, 255, 255]], [[255, 0, 0, 255], [0, 255, 0, 255]]);
+}
+
+fn assert_pixels(png: &[u8], label: &str, row0: [[u8; 4]; 2], row1: [[u8; 4]; 2]) {
 	let image = ImageReader::new(Cursor::new(png))
 		.with_guessed_format()
 		.expect("png format")
@@ -41,17 +49,12 @@ fn assert_plain_pixels(png: &[u8], label: &str) {
 		.to_rgba8();
 	assert_eq!(image.dimensions(), (2, 2), "{label} dimensions");
 	for (x, y, px) in image.enumerate_pixels() {
-		let expected = match (x, y) {
-			(0, 0) => [255, 0, 0, 255],
-			(1, 0) => [0, 255, 0, 255],
-			(0, 1) => [0, 0, 255, 255],
-			_ => [255, 255, 255, 255],
-		};
+		let expected = if y == 0 { row0[x as usize] } else { row1[x as usize] };
 		assert_eq!(px.0, expected, "{label} pixel ({x},{y})");
 	}
 }
 
-/// 微型图床：/cipher 回密文（octet-stream，无图像 magic），/plain 回明文 PNG
+/// Minimal image host: /cipher returns ciphertext (octet-stream, no image magic), /plain returns the plaintext PNG
 async fn serve_images() -> (u16, tokio::task::JoinHandle<()>) {
 	let router = Router::new()
 		.route(
@@ -125,7 +128,7 @@ async fn rawimg_source_id(app: &Router) -> i64 {
 		.expect("rawimg source id")
 }
 
-/// 占位 Url 页改写成 mock 图床地址（页内容形状 mirrors canvas_pipeline 的改写）
+/// Rewrites the placeholder Url page to the mock image host address (the page content shape mirrors canvas_pipeline's rewrite)
 async fn rewrite_page_url(t: &TestApp, chapter_id: i64, url: String) {
 	let pool = connect_db(&t.db_path).await;
 	let stored = json!({
@@ -158,7 +161,7 @@ async fn chapter_id_of(app: &Router, manga_id: i64) -> i64 {
 	body[0]["id"].as_i64().expect("chapter id")
 }
 
-/// browse/home 封面代理同样过处理器：密文不再原样透传（#102 入口的关联缺口）
+/// The browse/home cover proxy also goes through the processor: ciphertext decrypts to the original, decodable images take the canvas branch (the related gap at the #102 entry)
 #[tokio::test]
 async fn proxy_image_processes_opaque_and_plain_bytes() {
 	let t = rawimg_app().await;
@@ -176,11 +179,15 @@ async fn proxy_image_processes_opaque_and_plain_bytes() {
 		.await;
 		assert_eq!(status, StatusCode::OK, "proxy {path}");
 		assert_eq!(headers["content-type"], "image/png", "proxy {path}");
-		assert_plain_pixels(&bytes, "proxy {path}");
+		if path == "cipher" {
+			assert_plain_pixels(&bytes, "proxy cipher");
+		} else {
+			assert_swapped_pixels(&bytes, "proxy plain");
+		}
 	}
 }
 
-/// 详情页封面：加密字节过 cover 处理器出 PNG（修复前是 502 source_error）
+/// Detail page cover: encrypted bytes go through the cover processor into a PNG (was 502 source_error before the fix)
 #[tokio::test]
 async fn manga_cover_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -196,7 +203,7 @@ async fn manga_cover_processes_opaque_bytes() {
 	assert_plain_pixels(&bytes, "manga cover");
 }
 
-/// reader 页图：加密字节过 page 处理器出 PNG
+/// Reader page image: encrypted bytes go through the page processor into a PNG
 #[tokio::test]
 async fn reader_page_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -215,7 +222,7 @@ async fn reader_page_processes_opaque_bytes() {
 	assert_plain_pixels(&bytes, "reader page");
 }
 
-/// 下载与 reader 同一条 fetch_page_image：cbz 里是解密后的 PNG
+/// Download shares the reader's fetch_page_image: the cbz holds the decrypted PNG
 #[tokio::test]
 async fn download_processes_opaque_bytes() {
 	let t = rawimg_app().await;
@@ -265,29 +272,4 @@ async fn download_processes_opaque_bytes() {
 		.read_to_end(&mut data)
 		.expect("read page entry");
 	assert_plain_pixels(&data, "download page");
-}
-
-/// OPDS 封面与详情页封面同一条 fetch_cover_image：输出一致
-#[tokio::test]
-async fn opds_cover_processes_opaque_bytes() {
-	let t = rawimg_app().await;
-	let app = t.app.clone();
-	let manga_id = register_rawimg_manga(&app).await;
-	let (port, _upstream) = serve_images().await;
-	set_cover_url(&t, manga_id, format!("http://127.0.0.1:{port}/cipher")).await;
-
-	let request = Request::builder()
-		.method("GET")
-		.uri(format!("/opds/v1.2/cover/{manga_id}"))
-		.header(header::HOST, "opds.test")
-		.header("x-forwarded-proto", "https")
-		.body(Body::empty())
-		.expect("build request");
-	let response = app.clone().oneshot(request).await.expect("response");
-	assert_eq!(response.status(), StatusCode::OK);
-	assert_eq!(response.headers()["content-type"], "image/png");
-	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-		.await
-		.expect("read body");
-	assert_plain_pixels(&bytes, "opds cover");
 }

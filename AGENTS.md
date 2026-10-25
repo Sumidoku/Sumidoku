@@ -31,6 +31,9 @@ blocking stays with the maintainer.
 Docs, lessons, and issue/PR text record mechanisms and numbers, never
 local machine details: no hostnames, absolute paths, internal domains
 or IPs, and no how-or-where a tool was installed on a private machine.
+Do not name or quote the maintainer or relay their private messages in
+public writing. Describe technical decisions directly, without personal
+attribution.
 
 ## Commands
 
@@ -42,9 +45,8 @@ or IPs, and no how-or-where a tool was installed on a private machine.
 
 ## Layout
 
-- `crates/server` — axum HTTP server: REST `/api/v1`, OPDS `/opds/v1.2` and
-  `/opds/v2`, embedded web UI
-- `crates/wasm` — Aidoku WASM source runtime (wasmer)
+- `crates/server` — axum HTTP server: REST `/api/v1` and embedded web UI
+- `crates/wasm` — Aidoku WASM source runtime (wasmi)
 - `vendor/aidoku` — vendored upstream crate; it tracks upstream, do not
   restyle or "fix" it locally
 - `webui` — Vite + React SPA, built to `webui/build`

@@ -29,6 +29,7 @@ jobs:
               - '!webui/**'
             web:
               - 'webui/**'
+              - 'crates/server/assets/api-docs/openapi.json'
 
   lint:
     needs: changes
@@ -49,7 +50,10 @@ jobs:
           # cannot leak across runs
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # --locked turns lock drift into a hard failure: a version bump or
+      # dependency change that forgets to sync Cargo.lock is caught here
+      # (the release pipeline without --locked silently regenerates it)
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
     needs: changes
@@ -72,12 +76,12 @@ jobs:
   build:
     needs: changes
     if: needs.changes.outputs.rust == 'true'
-    # compile-only gate on the platforms the release workflow ships;
-    # tests stay on ubuntu
+    # compile-only gate on the platforms the release workflow ships, plus
+    # windows for local dev builds; tests stay on ubuntu
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
       RUSTC_WRAPPER: sccache
@@ -91,6 +95,12 @@ jobs:
           cache-targets: "false"
       - uses: mozilla-actions/sccache-action@v0.0.11
       - run: cargo build --workspace --all-targets
+        if: matrix.os != 'windows-latest'
+      # windows is check-only: the vendored aidoku crate declares its
+      # source-side imports as bare externs that only resolve on wasm32,
+      # so host executables do not link on MSVC (rlibs compile fine)
+      - run: cargo check --workspace --all-targets
+        if: matrix.os == 'windows-latest'
 
   web:
     needs: changes
@@ -107,6 +117,10 @@ jobs:
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - run: npm ci
+      - run: npm run generate:api
+      - run: git diff --exit-code -- src/api/types.ts
+      - run: test -z "$(git status --porcelain -- src/api/types.ts)"
+      - run: npm test
       - run: npm run check
       - run: npm run build
 
@@ -158,6 +172,8 @@ jobs:
           curl -sf http://localhost:3000/ | grep -q "<title>Sumidoku</title>"
           # the API is up and the database answers
           curl -sf http://localhost:3000/api/v1/settings
+          curl -sf http://localhost:3000/api/openapi.json | jq -e '.openapi and (.paths["/api/v1/sync/changes"] != null)' > /dev/null
+          curl -sf http://localhost:3000/api/docs | grep -q "SwaggerUIBundle"
 
   ci:
     # the single check branch protection pins: a matrix leg skipped by the

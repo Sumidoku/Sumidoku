@@ -1,5 +1,7 @@
-// 各测试二进制只用到部分公共件
+// each test binary uses only part of the shared helpers
 #![allow(dead_code)]
+
+pub mod contract;
 
 use axum::Router;
 use axum::body::Body;
@@ -14,67 +16,67 @@ pub fn fixture_dir() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/example")
 }
 
-/// 无 home 导出能力的 fixture 载荷，用于 unsupported 分支
+/// Fixture payload without a home export, for the unsupported branch
 pub fn mutation_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/mutation/main.wasm")
 }
 
-/// 发 partial 结果的 fixture 载荷，用于流式 NDJSON 分支
+/// Fixture payload that emits partial results, for the streaming NDJSON branch
 pub fn partial_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/partial/main.wasm")
 }
 
-/// canvas 绘制与图像处理器的 fixture 载荷
+/// Fixture payload for canvas drawing and the image processors
 pub fn canvas_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/canvas/main.wasm")
 }
 
-/// 带 MigrationHandler 的 fixture 载荷，用于 breaking-change 原地重键链路
+/// Fixture payload with a MigrationHandler, for the breaking-change in-place rekey path
 pub fn rekey_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/rekey/main.wasm")
 }
 
-/// 实现 ImageRequestProvider 的 fixture 载荷，用于 /sources/{id}/image 代理链路
+/// Fixture payload implementing ImageRequestProvider, for the /sources/{id}/image proxy path
 pub fn imgreq_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/imgreq/main.wasm")
 }
 
-/// 声明 page/cover 图像处理器的 fixture 载荷，用于处理器拿原始响应字节的契约链路
+/// Fixture payload declaring page/cover image processors, for the contract path where processors get raw response bytes
 pub fn rawimg_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/rawimg/main.wasm")
 }
 
-/// 导出 handle_web_login 的 fixture 载荷，用于网页登录链路
+/// Fixture payload exporting handle_web_login, for the web login path
 pub fn weblogin_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin/main.wasm")
 }
 
-/// 导出 handle_notification 与动态设置的 fixture 载荷，用于设置合并与通知送达链路
+/// Fixture payload exporting handle_notification and dynamic settings, for the settings merge and notification delivery path
 pub fn notify_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/notify/main.wasm")
 }
 
-/// 同款登录设置但不导出 handle_web_login 的对照载荷
+/// Control payload with the same login settings but no handle_web_login export
 pub fn weblogin_plain_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/weblogin-plain/main.wasm")
 }
 
-/// OAuth 登录（method: "oauth"）三分支的 fixture 载荷
+/// Fixture payload for the three OAuth login (method: "oauth") branches
 pub fn oauth_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/oauth/main.wasm")
 }
 
-/// 页描述（PageDescriptionProvider）链路的 fixture 载荷
+/// Fixture payload for the page description (PageDescriptionProvider) path
 pub fn pagedesc_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/pagedesc/main.wasm")
 }
 
-/// 备选封面（AlternateCoverProvider）链路的 fixture 载荷
+/// Fixture payload for the alternate covers (AlternateCoverProvider) path
 pub fn altcovers_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/altcovers/main.wasm")
 }
 
-/// 导出 get_base_url 的 fixture 载荷，用于安装/更新时的动态 base URL 解析链路
+/// Fixture payload exporting get_base_url, for the dynamic base URL resolution path at install/update time
 pub fn baseurl_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/baseurl/main.wasm")
 }
@@ -83,17 +85,17 @@ pub fn deeplink_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/deeplink/main.wasm")
 }
 
-/// 回显收到 listing 的 fixture 载荷，用于 listing 透传与 source config DTO 链路
+/// Fixture payload that echoes the listing it received, for the listing pass-through and source config DTO path
 pub fn listing_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/listing/main.wasm")
 }
 
-/// 主页组件字段全设的 fixture 载荷，用于 home 端点透传契约
+/// Fixture payload with every home component field set, for the home endpoint pass-through contract
 pub fn home_wasm_path() -> PathBuf {
 	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/home/main.wasm")
 }
 
-/// 在 sources 目录里登记一个额外 fixture 源（scan 时安装）
+/// Registers an extra fixture source in the sources directory (installed at scan time)
 pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wasm: &std::path::Path) {
 	let doc = serde_json::json!({
 		"info": {"id": key, "name": name, "version": 1, "languages": ["en"]}
@@ -101,7 +103,7 @@ pub fn install_fixture_source(tmp: &tempfile::TempDir, key: &str, name: &str, wa
 	install_fixture_source_with_doc(tmp, &doc, wasm);
 }
 
-/// 带自定义 source.json（listings/config 等节）的 fixture 源登记；info.id 取 doc 里的 id
+/// Registers a fixture source with a custom source.json (listings/config sections, etc.); info.id comes from the doc's id
 pub fn install_fixture_source_with_doc(tmp: &tempfile::TempDir, doc: &Value, wasm: &std::path::Path) {
 	let key = doc["info"]["id"].as_str().expect("fixture info.id");
 	let dir = tmp.path().join("sources").join(key);
@@ -116,12 +118,80 @@ pub struct TestApp {
 	pub db_path: PathBuf,
 }
 
+#[derive(Clone, Default)]
+pub struct LogBuffer {
+	bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl LogBuffer {
+	pub fn take(&self) -> String {
+		let mut guard = self.bytes.lock().expect("log buffer");
+		String::from_utf8(std::mem::take(&mut *guard)).expect("utf8 logs")
+	}
+
+	pub fn snapshot(&self) -> String {
+		String::from_utf8(self.bytes.lock().expect("log buffer").clone()).expect("utf8 logs")
+	}
+}
+
+pub struct LogWriter {
+	bytes: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for LogWriter {
+	fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+		self.bytes.lock().expect("log buffer").extend_from_slice(buf);
+		Ok(buf.len())
+	}
+
+	fn flush(&mut self) -> std::io::Result<()> {
+		Ok(())
+	}
+}
+
+impl tracing_subscriber::fmt::MakeWriter<'_> for LogBuffer {
+	type Writer = LogWriter;
+
+	fn make_writer(&self) -> Self::Writer {
+		LogWriter {
+			bytes: self.bytes.clone(),
+		}
+	}
+}
+
+pub fn capture_logs() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+	let logs = LogBuffer::default();
+	let subscriber = tracing_subscriber::fmt()
+		.with_writer(logs.clone())
+		.with_ansi(false)
+		.with_max_level(tracing::Level::INFO)
+		.finish();
+	let guard = tracing::subscriber::set_default(subscriber);
+	(logs, guard)
+}
+
+pub async fn wait_for_log(logs: &LogBuffer, needle: &str) -> String {
+	let started = std::time::Instant::now();
+	loop {
+		let text = logs.snapshot();
+		if text.contains(needle) {
+			return text;
+		}
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(5),
+			"timed out waiting for log {needle:?}; logs:\n{text}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+	}
+}
+
 pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 	Config {
 		addr: "127.0.0.1:0".into(),
 		config_dir: tmp.path().to_path_buf(),
 		database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
 		covers_dir: tmp.path().join("covers"),
+		downloads_dir: tmp.path().join("downloads"),
 		webui_dir: tmp.path().join("webui"),
 		call_concurrency: 8,
 		log: "warn".into(),
@@ -157,7 +227,7 @@ pub async fn request_full(
 	request_full_accept(app, method, path, body, None).await
 }
 
-/// NDJSON 流式请求：响应体按行解析成事件数组
+/// NDJSON streaming request: the response body is parsed line by line into an event array
 pub async fn request_ndjson(
 	app: &Router,
 	method: &str,
@@ -200,10 +270,12 @@ async fn request_full_accept(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, headers, bytes.to_vec())
 }
 
-/// 二进制 body 请求（.aib 这类上传）：content-type 由调用方指定
+/// Binary body request (uploads like .aib): the caller specifies the content-type
 pub async fn request_bytes(
 	app: &Router,
 	method: &str,
@@ -223,10 +295,12 @@ pub async fn request_bytes(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, headers, bytes.to_vec())
 }
 
-/// 自带请求头的通用请求（认证测试要挂 Authorization）
+/// Generic request with caller-supplied headers (auth tests need to attach Authorization)
 pub async fn request_with_headers(
 	app: &Router,
 	method: &str,
@@ -253,16 +327,29 @@ pub async fn request_with_headers(
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
 		.await
 		.expect("read body");
+	contract::validate_response(method, path, status, &resp_headers, &bytes)
+		.unwrap_or_else(|error| panic!("OpenAPI response contract failed for {method} {path} {status}: {error}"));
 	(status, resp_headers, bytes.to_vec())
 }
 
-/// scan 安装 example-source 并注册第一本搜索结果的漫画，返回内部 manga id
+/// Finds an entry in the sources list by key: the built-in local source is persisted by the migration (smallest id on a fresh DB), so indexing by position is no longer reliable
+pub fn source_by_key<'a>(body: &'a Value, key: &str) -> &'a Value {
+	body.as_array()
+		.expect("sources array")
+		.iter()
+		.find(|s| s["key"] == key)
+		.unwrap_or_else(|| panic!("source {key} not found in {body}"))
+}
+
+/// Installs example-source via scan and registers the manga of the first search result, returning the internal manga id
 pub async fn register_example_manga(app: &Router) -> i64 {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let (status, body) = request(
 		app,
 		"POST",
@@ -289,12 +376,22 @@ pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {
 		.expect("connect db")
 }
 
-/// 全表逻辑 dump：WAL 模式下文件字节不代表逻辑状态，逐表按 rowid 取 quote 文本对账
+pub async fn sync_change_count(db_path: &std::path::Path) -> i64 {
+	let pool = connect_db(db_path).await;
+	let count = sqlx::query_scalar("SELECT COUNT(*) FROM sync_change")
+		.fetch_one(&pool)
+		.await
+		.expect("sync change count");
+	pool.close().await;
+	count
+}
+
+/// Full-table logical dump: in WAL mode the file bytes don't represent logical state, so reconcile per table by rowid using quote() text
 pub async fn db_dump(db_path: &std::path::Path) -> String {
 	const TABLES: &[&str] = &[
 		"user", "source", "source_setting", "manga", "manga_user", "chapter", "chapter_user", "page",
 		"category", "category_manga", "download", "setting", "source_repo", "source_cookie",
-		"auth_credential", "auth_token",
+		"auth_token", "sync_change",
 	];
 	let pool = connect_db(db_path).await;
 	let mut out = String::new();
@@ -324,166 +421,154 @@ pub async fn db_dump(db_path: &std::path::Path) -> String {
 	out
 }
 
-// ---- sidecar 交互登录的 mock CDP：aidoku_wasm 自带 mock 是 cfg(test) 不外露，
-// 这里按端点测试关注点实现同名 trait ----
-pub mod browser_mock {
-	use aidoku_wasm::browser::{
-		BrowserCookie, BrowserError, CdpClient, CdpConnector, FrameSink, KeyInput, MouseInput,
-	};
-	use std::collections::HashMap;
-	use std::sync::{Arc, Mutex};
+// 1x1 transparent PNG
+pub const PNG: &[u8] = &[
+	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
+	13, 10, 45, 180, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+];
 
-	#[derive(Default)]
-	pub struct MockBrowserState {
-		pub connects: usize,
-		pub contexts: Vec<String>,
-		pub disposed: Vec<String>,
-		pub loads: Vec<(String, String)>,
-		pub viewports: Vec<(String, i64, i64)>,
-		pub screencasts: Vec<String>,
-		pub screencast_stopped: Vec<String>,
-		pub cookies: HashMap<String, Vec<BrowserCookie>>,
-		pub local_storage: HashMap<String, String>,
-		pub mouse_inputs: usize,
-		pub key_inputs: usize,
-		pub inserted_text: Vec<String>,
-		pub frames: Vec<String>,
+/// Starts a minimal static server returning bytes (aborting the handle shuts it down)
+pub async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
+	let mut router = Router::new();
+	for (path, mime, bytes) in routes {
+		let handler = move || {
+			let mime = mime.to_string();
+			let bytes = bytes.clone();
+			async move { ([(axum::http::header::CONTENT_TYPE, mime)], bytes) }
+		};
+		router = router.route(path, axum::routing::get(handler));
 	}
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let port = listener.local_addr().expect("local addr").port();
+	let handle = tokio::spawn(async move {
+		axum::serve(listener, router).await.expect("serve");
+	});
+	(port, handle)
+}
 
-	pub fn cookie(name: &str, value: &str, domain: &str) -> BrowserCookie {
-		BrowserCookie {
-			name: name.into(),
-			value: value.into(),
-			domain: domain.into(),
-			path: "/".into(),
-			expires: None,
-			secure: false,
-			http_only: false,
+/// Points page 0 at the local image host after pages are cached, so the worker runs fully offline via the cache
+pub async fn point_page_at_local(pool: &sqlx::SqlitePool, chapter_id: i64, port: u16) {
+	let stored = json!({
+		"content": {"Url": [format!("http://127.0.0.1:{port}/img.png"), null]},
+		"thumbnail": null,
+		"hasDescription": false,
+		"description": null,
+	});
+	sqlx::query("UPDATE page SET content = ? WHERE chapter_id = ? AND idx = 0")
+		.bind(stored.to_string())
+		.bind(chapter_id)
+		.execute(pool)
+		.await
+		.expect("rewrite page 0");
+}
+
+pub async fn serve_app(app: Router) -> std::net::SocketAddr {
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let addr = listener.local_addr().expect("local addr");
+	tokio::spawn(async move {
+		axum::serve(listener, app.into_make_service()).await.expect("serve");
+	});
+	addr
+}
+
+pub async fn connect_sse_response(
+	addr: std::net::SocketAddr,
+	path: &str,
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>, String) {
+	use tokio::io::{AsyncReadExt, AsyncWriteExt};
+	let mut stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+	let last = last_event_id.map(|id| format!("Last-Event-ID: {id}\r\n")).unwrap_or_default();
+	let extra = headers.iter().map(|(name, value)| format!("{name}: {value}\r\n")).collect::<String>();
+	let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{last}{extra}\r\n");
+	stream.write_all(request.as_bytes()).await.expect("write sse request");
+	let mut received = Vec::new();
+	let mut tmp = [0u8; 4096];
+	loop {
+		let n = stream.read(&mut tmp).await.expect("read sse headers");
+		assert!(n > 0, "connection closed during sse handshake");
+		received.extend_from_slice(&tmp[..n]);
+		if received.windows(4).any(|w| w == b"\r\n\r\n") {
+			break;
 		}
 	}
+	let head_end = received.windows(4).position(|w| w == b"\r\n\r\n").expect("header end");
+	let head = String::from_utf8_lossy(&received[..head_end]).into_owned();
+	let rest = received[head_end + 4..].to_vec();
+	(stream, rest, head)
+}
 
-	pub struct MockBrowserConnector(pub Arc<Mutex<MockBrowserState>>);
+pub async fn connect_sse(
+	addr: std::net::SocketAddr,
+	path: &str,
+	last_event_id: Option<i64>,
+	headers: &[(&str, &str)],
+) -> (tokio::net::TcpStream, Vec<u8>) {
+	let (stream, rest, head) = connect_sse_response(addr, path, last_event_id, headers).await;
+	assert!(head.contains("200 OK"), "{head}");
+	(stream, rest)
+}
 
-	impl CdpConnector for MockBrowserConnector {
-		fn connect(&self) -> Result<Box<dyn CdpClient>, BrowserError> {
-			self.0.lock().expect("mock lock").connects += 1;
-			Ok(Box::new(MockBrowserClient(self.0.clone())))
-		}
-	}
-
-	struct MockBrowserClient(Arc<Mutex<MockBrowserState>>);
-
-	impl CdpClient for MockBrowserClient {
-		fn create_context(&mut self, _label: &str) -> Result<String, BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			let id = format!("ctx-{}", state.contexts.len() + 1);
-			state.contexts.push(id.clone());
-			Ok(id)
-		}
-
-		fn dispose_context(&mut self, context: &str) -> Result<(), BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.disposed.push(context.to_string());
-			state.contexts.retain(|c| c != context);
-			Ok(())
-		}
-
-		fn load(
-			&mut self,
-			context: &str,
-			url: &str,
-			_headers: &[(String, String)],
-			_timeout: std::time::Duration,
-		) -> Result<Vec<BrowserCookie>, BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.loads.push((context.to_string(), url.to_string()));
-			Ok(state.cookies.get(context).cloned().unwrap_or_default())
-		}
-
-		fn cookies(&mut self, context: &str) -> Result<Vec<BrowserCookie>, BrowserError> {
-			let state = self.0.lock().expect("mock lock");
-			Ok(state.cookies.get(context).cloned().unwrap_or_default())
-		}
-
-		fn delete_cookie(
-			&mut self,
-			_context: &str,
-			_name: &str,
-			_domain: Option<&str>,
-			_path: Option<&str>,
-		) -> Result<(), BrowserError> {
-			Ok(())
-		}
-
-		fn clear_cookies(&mut self, _context: &str) -> Result<(), BrowserError> {
-			Ok(())
-		}
-
-		fn set_viewport(&mut self, context: &str, width: i64, height: i64) -> Result<(), BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.viewports.push((context.to_string(), width, height));
-			Ok(())
-		}
-
-		fn screencast_start(&mut self, context: &str, sink: FrameSink) -> Result<(), BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.screencasts.push(context.to_string());
-			for frame in state.frames.drain(..) {
-				let _ = sink.send(frame);
+pub async fn read_sse_event(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>) -> Value {
+	use tokio::io::AsyncReadExt;
+	loop {
+		if let Some(pos) = buf.windows(2).position(|w| w == b"\n\n") {
+			let frame = buf.drain(..pos + 2).collect::<Vec<_>>();
+			let text = String::from_utf8_lossy(&frame);
+			if text.starts_with(':') {
+				continue;
 			}
-			Ok(())
+			let mut kind = None;
+			let mut id = None;
+			let mut data = None;
+			for line in text.lines() {
+				if let Some(value) = line.strip_prefix("event:") {
+					kind = Some(value.to_string());
+				} else if let Some(value) = line.strip_prefix("id:") {
+					id = value.parse::<i64>().ok();
+				} else if let Some(value) = line.strip_prefix("data:") {
+					data = Some(value.to_string());
+				}
+			}
+			if kind.is_none() {
+				continue;
+			}
+			let payload = serde_json::from_str(&data.unwrap_or_default()).unwrap_or(Value::Null);
+			return serde_json::json!({ "type": kind, "id": id, "data": payload });
 		}
+		let mut tmp = [0u8; 4096];
+		let n = stream.read(&mut tmp).await.expect("read sse event");
+		assert!(n > 0, "connection closed mid-sse-event");
+		buf.extend_from_slice(&tmp[..n]);
+	}
+}
 
-		fn screencast_stop(&mut self, context: &str) -> Result<(), BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.screencast_stopped.push(context.to_string());
-			Ok(())
-		}
-
-		fn dispatch_mouse(&mut self, _context: &str, _input: &MouseInput) -> Result<(), BrowserError> {
-			self.0.lock().expect("mock lock").mouse_inputs += 1;
-			Ok(())
-		}
-
-		fn dispatch_key(&mut self, _context: &str, _input: &KeyInput) -> Result<(), BrowserError> {
-			self.0.lock().expect("mock lock").key_inputs += 1;
-			Ok(())
-		}
-
-		fn insert_text(&mut self, _context: &str, text: &str) -> Result<(), BrowserError> {
-			let mut state = self.0.lock().expect("mock lock");
-			state.inserted_text.push(text.to_string());
-			Ok(())
-		}
-
-		fn local_storage_values(
-			&mut self,
-			_context: &str,
-			keys: &[String],
-		) -> Result<Vec<(String, String)>, BrowserError> {
-			let state = self.0.lock().expect("mock lock");
-			Ok(keys
-				.iter()
-				.filter_map(|k| state.local_storage.get(k).map(|v| (k.clone(), v.clone())))
-				.collect())
+pub async fn read_sse_kind(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event in time");
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
+			.await
+			.expect("sse read timeout");
+		if frame["type"] == kind {
+			return frame;
 		}
 	}
 }
 
-/// 装配带 mock CDP 连接器的 app：sidecar 交互登录的端点测试驱动
-pub async fn test_app_with_browser(
-	browser: std::sync::Arc<std::sync::Mutex<browser_mock::MockBrowserState>>,
-) -> TestApp {
-	let tmp = tempfile::tempdir().expect("tempdir");
-	let source_dir = tmp.path().join("sources").join("en.example-source");
-	std::fs::create_dir_all(&source_dir).expect("mkdir source dir");
-	for file in ["source.json", "main.wasm"] {
-		std::fs::copy(fixture_dir().join(file), source_dir.join(file)).expect("copy fixture");
+pub async fn read_sse_data(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>, kind: &str) -> Value {
+	let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "no {kind} event data in time");
+		let frame = tokio::time::timeout(remaining, read_sse_event(stream, buf))
+			.await
+			.expect("sse read timeout");
+		if frame["data"]["type"] == kind {
+			return frame["data"].clone();
+		}
 	}
-	let config = base_config(&tmp);
-	let db_path = tmp.path().join("test.db");
-	let app = sumidoku_server::build_app_with(config, Some(Box::new(browser_mock::MockBrowserConnector(browser))))
-		.await
-		.expect("build app");
-	TestApp { app, tmp, db_path }
 }

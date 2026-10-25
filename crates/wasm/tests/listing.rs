@@ -1,8 +1,8 @@
-//! listing 回显 fixture 与 per-source 并发帽（config.maximumParallelRequests，issue #138）。
-//! fixture 源在 crates/wasm/tests/fixtures/listing-src（no_std cdylib），重建方式：
-//! `cd crates/wasm/tests/fixtures/listing-src && cargo build --release --target wasm32-unknown-unknown`，
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_listing.wasm
-//! 复制为 crates/wasm/tests/fixtures/listing/main.wasm。
+//! The listing-echo fixture and the per-source concurrency cap (config.maximumParallelRequests, issue #138).
+//! The fixture source lives in crates/wasm/tests/fixtures/listing-src (no_std cdylib); rebuild with:
+//! `cd crates/wasm/tests/fixtures/listing-src && cargo build --release --target wasm32-unknown-unknown`,
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_listing.wasm
+//! over crates/wasm/tests/fixtures/listing/main.wasm.
 use aidoku_wasm::{
 	DirectPolicy, Limits, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
 };
@@ -28,7 +28,6 @@ fn config() -> SourceConfig {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	}
 }
@@ -53,7 +52,7 @@ async fn get_manga_list_receives_the_full_listing() {
 	assert_eq!(result.entries[0].title, "hot|Hot Updates|list");
 }
 
-/// 并发帽是准入语义：唯一许可被外部占住时调用排队，释放后准入恢复
+/// The concurrency cap is admission semantics: when the sole permit is held externally, calls queue; admission resumes once it is released
 #[tokio::test]
 async fn source_call_limit_gates_admission() {
 	let limit = Arc::new(Semaphore::new(1));

@@ -1,10 +1,10 @@
 mod common;
 
 use axum::http::StatusCode;
-use common::{TestApp, register_example_manga, request, request_full, test_app};
-use serde_json::json;
+use common::{TestApp, register_example_manga, request, request_full, source_by_key, test_app};
+use serde_json::{Value, json};
 
-// 1x1 透明 PNG
+// 1x1 transparent PNG
 const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
 	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
@@ -12,43 +12,82 @@ const PNG: &[u8] = &[
 ];
 
 #[tokio::test]
+async fn http_response_logging_is_info_and_omits_query() {
+	let (logs, _guard) = common::capture_logs();
+	let TestApp { app, .. } = test_app().await;
+	logs.take();
+
+	let (status, _) = request(&app, "GET", "/api/v1/version?token=query-secret", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let text = logs.take();
+	let line = text
+		.lines()
+		.find(|line| line.contains("finished processing request"))
+		.unwrap_or_else(|| panic!("HTTP response log missing at INFO: {text}"));
+	for field in ["INFO", "method=GET", "path=/api/v1/version", "status=200", "latency="] {
+		assert!(line.contains(field), "missing {field:?} in {line}");
+	}
+	assert!(!text.contains("query-secret"), "query leaked into logs: {text}");
+}
+
+#[tokio::test]
 async fn full_flow() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, tmp, .. } = test_app().await;
 
 	// health
 	let (status, body) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["status"], "ok");
 
-	// 未安装时 404
+	// version
+	let (status, body) = request(&app, "GET", "/api/v1/version", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+
+	// 404 when not installed
 	let (status, body) = request(&app, "GET", "/api/v1/manga/999", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
 
-	// scan 安装
+	// scan installs
 	let (status, body) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["installed"], json!(["en.example-source"]));
 	assert_eq!(body["updated"], json!([]));
 	assert_eq!(body["skipped"], json!([]));
 
-	// 再 scan 幂等：老源走 updated
+	// second scan of the unchanged package reports nothing: same version is a silent refresh, not an update
+	let (status, body) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["installed"], json!([]));
+	assert_eq!(body["updated"], json!([]));
+	assert_eq!(body["skipped"], json!([]));
+
+	// a version bump makes the next scan report the source as updated
+	let manifest_path = tmp.path().join("sources/en.example-source/source.json");
+	let mut manifest: Value =
+		serde_json::from_slice(&std::fs::read(&manifest_path).expect("read manifest")).expect("manifest json");
+	manifest["info"]["version"] = json!(2);
+	std::fs::write(&manifest_path, serde_json::to_vec(&manifest).expect("manifest bytes")).expect("write manifest");
 	let (status, body) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["installed"], json!([]));
 	assert_eq!(body["updated"], json!(["en.example-source"]));
 
-	// sources 列表
+	// sources list: the built-in local source is persisted by the migration, and its pinned large id always sorts after user sources
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let sources = body.as_array().expect("sources array");
-	assert_eq!(sources.len(), 1);
-	assert_eq!(sources[0]["key"], "en.example-source");
-	assert_eq!(sources[0]["name"], "Example Source");
-	assert_eq!(sources[0]["enabled"], true);
-	let source_id = sources[0]["id"].as_i64().expect("source id");
+	assert_eq!(sources.len(), 2);
+	assert_eq!(sources[0]["key"], "local.local");
+	assert_eq!(sources[0]["kind"], "local");
+	assert_eq!(sources[1]["key"], "en.example-source");
+	assert_eq!(sources[1]["name"], "Example Source");
+	assert_eq!(sources[1]["enabled"], true);
+	assert_eq!(sources[1]["kind"], "aidoku");
+	let source_id = sources[1]["id"].as_i64().expect("source id");
 
-	// 搜索 20 条
+	// search returns 20 entries
 	let search_path = format!("/api/v1/sources/{source_id}/search");
 	let (status, body) = request(&app, "POST", &search_path, Some(json!({"page": 1}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -58,7 +97,7 @@ async fn full_flow() {
 	assert_eq!(entries[0]["sourceId"], source_id);
 	let manga_key = entries[0]["key"].as_str().expect("manga key").to_string();
 
-	// query 过滤
+	// query filtering
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -76,7 +115,7 @@ async fn full_flow() {
 		"all titles should contain 'Manga 3': {filtered:?}"
 	);
 
-	// 入库
+	// shelve
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -87,7 +126,7 @@ async fn full_flow() {
 	assert_eq!(status, StatusCode::OK);
 	let manga_id = body["id"].as_i64().expect("manga id");
 
-	// 详情
+	// details
 	let manga_path = format!("/api/v1/manga/{manga_id}");
 	let (status, body) = request(&app, "GET", &manga_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -95,7 +134,7 @@ async fn full_flow() {
 	assert_eq!(body["initialized"], true);
 	assert_eq!(body["chapterCount"], 8);
 
-	// 章节：8 章按 source_order
+	// chapters: 8 chapters in source_order
 	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
 	let (status, body) = request(&app, "GET", &chapters_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -105,7 +144,7 @@ async fn full_flow() {
 	assert!(chapters.iter().all(|c| c["id"].is_i64() && c["pageCount"].is_i64()));
 	let chapter_id = chapters[0]["id"].as_i64().expect("chapter id");
 
-	// 页：2 页，Url + Text
+	// pages: 2 pages, Url + Text
 	let pages_path = format!("/api/v1/chapter/{chapter_id}/pages");
 	let (status, body) = request(&app, "GET", &pages_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -124,24 +163,24 @@ async fn full_flow() {
 			.starts_with("# Title")
 	);
 
-	// 第二次走 page 缓存：字段与源路径一致
+	// second time goes through the page cache: fields match the source path
 	let (status, body) = request(&app, "GET", &pages_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	let cached = body.as_array().expect("cached pages");
 	assert_eq!(cached.len(), 2);
 	assert_eq!(cached[0]["hasDescription"], true, "缓存路径应与源路径字段一致");
 
-	// page_count 回写
+	// page_count write-back
 	let (status, body) = request(&app, "GET", &chapters_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body[0]["pageCount"], 2);
 
-	// 裸 ?refresh 标志强制重取
+	// the bare ?refresh flag forces a refetch
 	let (status, body) = request(&app, "GET", &format!("{pages_path}?refresh"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body.as_array().expect("refreshed pages").len(), 2);
 
-	// 设置热重启：setting=true → settings 多出一个 Toggle
+	// settings hot-restart: setting=true → settings gains a Toggle
 	let settings_path = format!("/api/v1/sources/{source_id}/settings");
 	let (status, _) = request(&app, "PUT", &settings_path, Some(json!({"setting": true}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -150,7 +189,7 @@ async fn full_flow() {
 	assert_eq!(body["settings"].as_array().expect("settings array").len(), 2);
 	assert_eq!(body["values"]["setting"], true);
 
-	// setting=false → 只剩一个
+	// setting=false → back to just one
 	let (status, _) = request(&app, "PUT", &settings_path, Some(json!({"setting": false}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "GET", &settings_path, None).await;
@@ -165,14 +204,16 @@ async fn reset_and_clear_source_state() {
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, sources) = request(&app, "GET", "/api/v1/sources", None).await;
-	let source_id = sources[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&sources, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let settings_path = format!("/api/v1/sources/{source_id}/settings");
 
-	// 覆盖一个设置项
+	// override one setting
 	let (status, _) = request(&app, "PUT", &settings_path, Some(json!({"setting": true}))).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// 重置：覆盖值清空；下一次 get_settings 会把源声明的默认值重新补种
+	// reset: overrides are cleared; the next get_settings re-seeds the source-declared defaults
 	let reset_path = format!("/api/v1/sources/{source_id}/settings/reset");
 	let (status, body) = request(&app, "POST", &reset_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -185,13 +226,13 @@ async fn reset_and_clear_source_state() {
 		"重置后应回到源声明的默认值: {body}"
 	);
 
-	// 清缓存：幂等成功
+	// clear cache: idempotent success
 	let clear_path = format!("/api/v1/sources/{source_id}/cache/clear");
 	let (status, body) = request(&app, "POST", &clear_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["ok"], true);
 
-	// 源不支持基本登录 → 501 unsupported
+	// source doesn't support basic login → 501 unsupported
 	let login_path = format!("/api/v1/sources/{source_id}/login/basic");
 	let (status, body) = request(
 		&app,
@@ -210,18 +251,20 @@ async fn source_icon() {
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let icon_path = format!("/api/v1/sources/{source_id}/icon");
 
-	// 源无 icon → 404
+	// source has no icon → 404
 	let (status, body) = request(&app, "GET", &icon_path, None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
-	// 源不存在 → 404
+	// source doesn't exist → 404
 	let (status, _) = request(&app, "GET", "/api/v1/sources/999/icon", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 
-	// 放入 icon.png 重新 scan → 200
+	// drop in icon.png and re-scan → 200
 	std::fs::write(tmp.path().join("sources/en.example-source/icon.png"), PNG).expect("write icon");
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -231,7 +274,7 @@ async fn source_icon() {
 	assert_eq!(headers["cache-control"], "private, max-age=86400");
 	assert_eq!(bytes, PNG);
 
-	// icon_path 还在库里但文件没了 → 404
+	// icon_path is still in the DB but the file is gone → 404
 	std::fs::remove_file(tmp.path().join("sources/en.example-source/icon.png")).expect("remove icon");
 	let (status, _) = request(&app, "GET", &icon_path, None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
@@ -253,7 +296,7 @@ async fn patch_manga_update_strategy() {
 	let (_, body) = request(&app, "GET", &manga_path, None).await;
 	assert_eq!(body["update_strategy"], "Never");
 
-	// {} 与空 body 都是无操作
+	// {} and an empty body are both no-ops
 	let (status, body) = request(&app, "PATCH", &manga_path, Some(json!({}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["update_strategy"], "Never");
@@ -261,7 +304,7 @@ async fn patch_manga_update_strategy() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["update_strategy"], "Never");
 
-	// 非法值 400，且不落库
+	// invalid values 400 and are not persisted
 	for bad in [json!({"updateStrategy": "Sometimes"}), json!({"updateStrategy": 5})] {
 		let (status, body) = request(&app, "PATCH", &manga_path, Some(bad.clone())).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
@@ -286,13 +329,13 @@ async fn manga_api_exposes_stored_viewer_thumbnail_and_override() {
 	let chapters_path = format!("{manga_path}/chapters");
 	let pool = common::connect_db(&app.db_path).await;
 
-	// 源没给 viewer/thumbnail 时响应保持 Unknown/null
+	// when the source provides no viewer/thumbnail, the response stays Unknown/null
 	let (_, body) = request(&app.app, "GET", &manga_path, None).await;
 	assert_eq!(body["viewer"], "Unknown");
 	let (_, body) = request(&app.app, "GET", &chapters_path, None).await;
 	assert!(body[0]["thumbnail"].is_null());
 
-	// 落库的 viewer/thumbnail 要出现在响应里（2 = RightToLeft）
+	// persisted viewer/thumbnail must appear in the response (2 = RightToLeft)
 	sqlx::query("UPDATE manga SET viewer = 2 WHERE id = ?")
 		.bind(manga_id)
 		.execute(&pool)
@@ -310,7 +353,7 @@ async fn manga_api_exposes_stored_viewer_thumbnail_and_override() {
 		assert_eq!(chapter["thumbnail"], "https://img.example/c1.png");
 	}
 
-	// manga_user.viewer_flags 非零即用户覆盖：响应 viewer 用覆盖值（4 = Webtoon），源值保留在库里
+	// a non-zero manga_user.viewer_flags is a user override: the response viewer uses the override (4 = Webtoon), the source value stays in the DB
 	let (status, _) = request(
 		&app.app,
 		"POST",
@@ -326,7 +369,7 @@ async fn manga_api_exposes_stored_viewer_thumbnail_and_override() {
 		.expect("seed viewer override");
 	let (_, body) = request(&app.app, "GET", &manga_path, None).await;
 	assert_eq!(body["viewer"], "Webtoon");
-	// 覆盖只作用于响应，库里的源 viewer 不动
+	// the override only affects the response; the source viewer in the DB is untouched
 	let (stored,): (i64,) = sqlx::query_as("SELECT viewer FROM manga WHERE id = ?")
 		.bind(manga_id)
 		.fetch_one(&pool)

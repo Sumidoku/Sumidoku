@@ -1,0 +1,1 @@
+ALTER TABLE manga ADD COLUMN next_update_is_fallback INTEGER NOT NULL DEFAULT 0;

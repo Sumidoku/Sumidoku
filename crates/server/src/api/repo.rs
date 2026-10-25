@@ -2,6 +2,7 @@ use crate::error::ApiResult;
 use crate::model::SourceRow;
 use crate::source::repo::{self, BrowseFilter, SourceRepoRow};
 use crate::state::AppState;
+use axum::Extension;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
@@ -22,9 +23,9 @@ fn repo_json(row: &SourceRepoRow) -> Value {
 	})
 }
 
-/// 已装源 DTO 统一出口：list/install/update/patch 同形；updateVersion 取各 repo
-/// 缓存里的最新版（严格大于已装才给值），无 repo 或无更新时为 null；
-/// pinOrder 是 browse.pinned_sources 里的下标，未置顶为 null
+/// Single outlet for the installed-source DTO: list/install/update/patch share one shape; updateVersion takes the
+/// newest version across the repo caches (a value only when strictly greater than installed), null when there is no
+/// repo or no update; pinOrder is the index inside browse.pinned_sources, null when not pinned
 pub(crate) fn source_json(
 	row: &SourceRow,
 	latest: &HashMap<String, (i64, i64)>,
@@ -33,8 +34,14 @@ pub(crate) fn source_json(
 	let update = latest
 		.get(&row.key)
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
-	// Aidoku 语义的弃用标识：外部安装（repo_id 非空）且 key 已不在任何仓库 index 里
+	// Aidoku's deprecation semantics: installed externally (repo_id non-null) and the key is no longer in any repo index
 	let missing_from_repos = row.repo_id.is_some() && !latest.contains_key(&row.key);
+	// Home capability bit: stamped at registration; old unstamped rows are null, and consumers treat that as unknown (the entry point is not hidden)
+	let has_home = row
+		.features
+		.as_deref()
+		.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+		.and_then(|v| v.get("home").and_then(|b| b.as_bool()));
 	let config = row
 		.config
 		.as_deref()
@@ -44,6 +51,7 @@ pub(crate) fn source_json(
 		"id": row.id,
 		"key": row.key,
 		"name": row.name,
+		"kind": row.kind,
 		"version": row.version,
 		"languages": row.languages.0,
 		"contentRating": row.content_rating,
@@ -55,6 +63,7 @@ pub(crate) fn source_json(
 		"updatedAt": row.updated_at,
 		"updateVersion": update,
 		"missingFromRepos": missing_from_repos,
+		"hasHome": has_home,
 		"pinned": pinned.contains_key(&row.key),
 		"pinOrder": pinned.get(&row.key),
 	})
@@ -100,7 +109,7 @@ pub async fn refresh_repo(
 pub struct BrowseQuery {
 	pub lang: Option<String>,
 	pub query: Option<String>,
-	/// 逗号分隔的内容分级白名单（Aidoku SourceContentRating 数值）；缺省不过滤
+	/// Comma-separated content-rating whitelist (Aidoku SourceContentRating numbers); absent means no filtering
 	#[serde(rename = "contentRating")]
 	pub content_rating: Option<String>,
 }
@@ -118,7 +127,7 @@ pub async fn browse_sources(
 			.filter(|l| !l.is_empty())
 			.collect(),
 		query: query.query.unwrap_or_default().trim().to_string(),
-		// Some(空串) 表示一个分级都不选：解析成空集，匹配不到任何源
+		// Some(empty string) means no rating selected at all: parses to an empty set, matching no source
 		content_ratings: query
 			.content_rating
 			.map(|s| s.split(',').filter_map(|v| v.trim().parse::<i64>().ok()).collect()),
@@ -168,9 +177,10 @@ pub async fn install_source(
 
 pub async fn update_source(
 	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	let update = repo::update_source(&state, id).await?;
+	let update = repo::update_source(&state, id, user.id).await?;
 	let latest = repo::latest_versions(&state.pool).await?;
 	let pinned = super::pins::pinned_map(&state.pool).await?;
 	let mut value = source_json(&update.source, &latest, &pinned);
@@ -181,8 +191,11 @@ pub async fn update_source(
 	Ok(Json(value))
 }
 
-pub async fn update_all(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let outcome = repo::update_all(&state).await?;
+pub async fn update_all(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	let outcome = repo::update_all(&state, user.id).await?;
 	let failed: Vec<Value> = outcome
 		.failed
 		.iter()

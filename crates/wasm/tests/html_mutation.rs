@@ -1,8 +1,8 @@
-//! html host 模块 9 个 DOM mutation 函数的端到端测试。
-//! fixture 源在 tests/fixtures/mutation-src/（no_std cdylib），重建方式：
+//! End-to-end tests for the 9 DOM mutation functions of the html host module.
+//! The fixture source lives in tests/fixtures/mutation-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/mutation-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_mutation.wasm
-//! 复制为 tests/fixtures/mutation/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_mutation.wasm
+//! over tests/fixtures/mutation/main.wasm.
 use aidoku_wasm::{DirectPolicy, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -28,7 +28,6 @@ async fn dom_mutations_visible_to_reads() {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	let (handle, features) = SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))

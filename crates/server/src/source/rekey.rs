@@ -1,8 +1,8 @@
-//! breaking-change key 迁移：源更新跨过 manifest `config.breakingChangeVersion` 时，
-//! 有自迁移能力的源逐 key 调 `handle_key_migration` 原地重键（行 id 不动，
-//! 进度/分类/下载标记全保留）；无能力的源不碰库行，只标 `migrationRequired`
-//! 让界面引导同源 flow A（对齐 Aidoku AppDelegate.handleSourceMigration 与
-//! SourceManager 的 installedVersion < breakingChangeVersion 检测）
+//! Breaking-change key migration: when a source update crosses the manifest's `config.breakingChangeVersion`,
+//! a self-migrating source rekeys in place via `handle_key_migration` key by key (row ids untouched,
+//! progress/categories/download flags all preserved); an incapable source's rows are not touched, only
+//! `migrationRequired` is marked so the UI can guide the user through same-source flow A (mirroring Aidoku's
+//! AppDelegate.handleSourceMigration and SourceManager's installedVersion < breakingChangeVersion check)
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -11,16 +11,18 @@ use std::sync::Arc;
 
 #[derive(Debug, Default)]
 pub struct RekeyReport {
-	/// 跨 breaking 且源无自迁移能力：需要用户走 flow A 同源迁移
+	/// Crossed a breaking change and the source has no self-migration capability: the user needs flow A same-source migration
 	pub required: bool,
 	pub warnings: Vec<String>,
 }
 
-/// install_from_repo 成功后调用；old_version 是更新前已装版本
+/// Called after install_from_repo succeeds; old_version is the version installed before the update.
+/// Migration guidance is judged by the triggering user's library: entries only in someone else's library are not offered flow A to the current user
 pub async fn migrate_after_update(
 	state: &Arc<AppState>,
 	source_id: i64,
 	old_version: i64,
+	user_id: i64,
 ) -> ApiResult<RekeyReport> {
 	let row: Option<(i64, i64)> =
 		sqlx::query_as("SELECT version, breaking_change_version FROM source WHERE id = ?")
@@ -30,7 +32,7 @@ pub async fn migrate_after_update(
 	let Some((new_version, breaking)) = row else {
 		return Ok(RekeyReport::default());
 	};
-	// Aidoku 只判 old < breaking；breaking <= new_version 防御把版本填乱的 manifest
+	// Aidoku only checks old < breaking; breaking <= new_version defends against manifests with scrambled versions
 	if !(old_version < breaking && breaking <= new_version) {
 		return Ok(RekeyReport::default());
 	}
@@ -44,13 +46,14 @@ pub async fn migrate_after_update(
 	let handle = state.get_handle(source_id).await?;
 	let features = handle.features();
 	if !features.migration {
-		// 对齐 Aidoku forceMigrate：库里没条目就不引导（AppDelegate 里
-		// sourceManga.isEmpty 不弹迁移页）
+		// Mirroring Aidoku forceMigrate: no guidance when the library has no entries (AppDelegate
+		// shows no migration page when sourceManga.isEmpty)
 		let (in_library,): (i64,) = sqlx::query_as(
 			"SELECT COUNT(*) FROM manga m
-			 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = 1 AND mu.in_library = 1
+			 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ? AND mu.in_library = 1
 			 WHERE m.source_id = ?",
 		)
+		.bind(user_id)
 		.bind(source_id)
 		.fetch_one(&state.pool)
 		.await?;
@@ -62,8 +65,8 @@ pub async fn migrate_after_update(
 	rekey_in_place(state, source_id, &handle, features.notification).await
 }
 
-/// 先把全部 key 映射收齐（wasm 调用可能走网络，不进事务），再单事务改写；
-/// chapter 迁移传旧 manga key，与 Aidoku 一致
+/// Collects every key mapping first (wasm calls may hit the network and must stay out of the transaction), then
+/// rewrites in a single transaction; chapter migration passes the old manga key, consistent with Aidoku
 async fn rekey_in_place(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -117,7 +120,7 @@ async fn rekey_in_place(
 		tracing::warn!(source_id, "endMigration notification failed: {e}");
 	}
 
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	apply_rekeys(&mut tx, "manga", manga_map, &mut warnings).await?;
 	apply_rekeys(&mut tx, "chapter", chapter_map, &mut warnings).await?;
 	tx.commit().await?;
@@ -127,8 +130,9 @@ async fn rekey_in_place(
 	})
 }
 
-/// 撞 UNIQUE 的行挂起重试：占位行可能自己也在被重键，fixpoint 收敛后仍撞的
-/// 保留旧 key 进 warnings。SQLite 单语句冲突只回滚该语句，事务继续有效
+/// Rows hitting UNIQUE are deferred and retried: the occupying row may itself be getting rekeyed, and after the
+/// fixpoint converges, still-blocked ones keep their old key and go to warnings. A single SQLite statement conflict
+/// rolls back only that statement; the transaction stays valid
 async fn apply_rekeys(
 	tx: &mut sqlx::SqliteConnection,
 	table: &str,

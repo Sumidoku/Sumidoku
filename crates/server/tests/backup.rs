@@ -2,17 +2,17 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, test_app};
+use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, source_by_key, test_app};
 use serde_json::{Value, json};
 
 const SOURCE_KEY: &str = "en.example-source";
 
-/// 在实例 A 上造满各 section 的数据：入库+分类（含三态与排序）、两条进度、设置、源设置
+/// Fills every section with data on instance A: shelve + ordered categories, two progress entries, settings, source settings
 async fn seed_full(app: &Router) {
 	let manga_id = register_example_manga(app).await;
 	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
-	let source_id = sources[0]["id"].as_i64().expect("source id");
-	assert_eq!(sources[0]["key"], SOURCE_KEY);
+	let example = source_by_key(&sources, SOURCE_KEY);
+	let source_id = example["id"].as_i64().expect("source id");
 
 	let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": "Evening"}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -20,14 +20,6 @@ async fn seed_full(app: &Router) {
 	let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": "Morning"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat_morning = body["id"].as_i64().expect("category id");
-	let (status, _) = request(
-		app,
-		"PATCH",
-		&format!("/api/v1/categories/{cat_evening}"),
-		Some(json!({"includeInUpdate": 1, "includeInDownload": 2})),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(
 		app,
 		"PATCH",
@@ -86,9 +78,9 @@ async fn seed_full(app: &Router) {
 	assert_eq!(status, StatusCode::OK);
 }
 
-/// 导出并校验响应头契约，返回解析后的备份文档
+/// Exports and validates the response header contract, returning the parsed backup document
 async fn export_doc(app: &Router) -> Value {
-	let (status, headers, bytes) = request_full(app, "GET", "/api/v1/backup", None).await;
+	let (status, headers, bytes) = request_full(app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let content_type = headers
 		.get("content-type")
@@ -107,7 +99,7 @@ async fn export_doc(app: &Router) -> Value {
 	serde_json::from_slice(&bytes).expect("backup json")
 }
 
-/// 全新实例 B：fixture 源已就位（scan 入库），其余为空
+/// Fresh instance B: the fixture source is in place (installed via scan), everything else empty
 async fn fresh_target() -> TestApp {
 	let app = test_app().await;
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
@@ -122,7 +114,7 @@ async fn export_import_round_trip() {
 	let (_, a_library) = request(&a.app, "GET", "/api/v1/library", None).await;
 	let a_manga = a_library["entries"][0].clone();
 	let a_manga_id = a_manga["id"].as_i64().expect("manga id");
-	// 源侧 viewer 与章节 thumbnail 也要进备份往返
+	// the source-side viewer and chapter thumbnails must also round-trip through the backup
 	let pool = connect_db(&a.db_path).await;
 	sqlx::query("UPDATE manga SET viewer = 2 WHERE id = ?")
 		.bind(a_manga_id)
@@ -138,11 +130,13 @@ async fn export_import_round_trip() {
 
 	assert_eq!(doc["version"], 1);
 	assert!(doc["createdAt"].is_i64());
-	assert_eq!(doc["sources"][0]["key"], SOURCE_KEY);
-	assert_eq!(doc["sources"][0]["name"], "Example Source");
-	assert!(doc["sources"][0]["repoUrl"].is_null());
+	let doc_source = source_by_key(&doc["sources"], SOURCE_KEY);
+	assert_eq!(doc_source["name"], "Example Source");
+	assert!(doc_source["repoUrl"].is_null());
 	assert_eq!(doc["library"].as_array().expect("library").len(), 1);
 	assert_eq!(doc["library"][0]["sourceKey"], SOURCE_KEY);
+	assert!(doc.get("syncChanges").is_none());
+	assert!(doc["library"][0].get("lastModifiedAt").is_none());
 	assert!(doc["library"][0]["inLibraryAt"].is_i64());
 	assert_eq!(doc["library"][0]["viewer"], 2);
 	assert_eq!(doc["categories"].as_array().expect("categories").len(), 2);
@@ -154,7 +148,7 @@ async fn export_import_round_trip() {
 	);
 
 	let b = fresh_target().await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	assert_eq!(body["warnings"], json!([]));
 	let restored = &body["restored"];
@@ -164,7 +158,7 @@ async fn export_import_round_trip() {
 	assert!(restored["settings"].as_i64().expect("settings count") >= 2);
 	assert!(restored["sourceSettings"].as_i64().expect("source settings count") >= 2);
 
-	// 书库与漫画元数据
+	// library and manga metadata
 	let (_, b_library) = request(&b.app, "GET", "/api/v1/library", None).await;
 	let entries = b_library["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 1);
@@ -174,8 +168,22 @@ async fn export_import_round_trip() {
 	assert_eq!(entries[0]["tags"], a_manga["tags"]);
 	assert_eq!(entries[0]["viewer"], "RightToLeft");
 	assert_eq!(entries[0]["inLibraryAt"], doc["library"][0]["inLibraryAt"]);
+	let b_pool = connect_db(&b.db_path).await;
+	let tracking: (i64, i64) = sqlx::query_as(
+		"SELECT last_modified_at,
+		 (SELECT COUNT(*) FROM sync_change WHERE entity_kind = 'manga_user' AND entity_key = ?)
+		 FROM manga_user WHERE manga_id = ? AND user_id = 1",
+	)
+	.bind(format!("{b_manga_id}:1"))
+	.bind(b_manga_id)
+	.fetch_one(&b_pool)
+	.await
+	.expect("restored tracking");
+	assert!(tracking.0 >= 1_000_000_000_000);
+	assert_eq!(tracking.1, 1);
+	b_pool.close().await;
 
-	// 分类：顺序、三态、成员
+	// categories: order, public shape, membership
 	let (_, body) = request(&b.app, "GET", "/api/v1/categories", None).await;
 	let cats = body.as_array().expect("categories");
 	assert_eq!(cats.len(), 2);
@@ -183,11 +191,11 @@ async fn export_import_round_trip() {
 	assert_eq!(cats[0]["sortOrder"], 0);
 	assert_eq!(cats[0]["mangaCount"], 1);
 	assert_eq!(cats[1]["name"], "Evening");
-	assert_eq!(cats[1]["includeInUpdate"], 1);
-	assert_eq!(cats[1]["includeInDownload"], 2);
+	assert!(!cats[1].as_object().unwrap().contains_key("includeInUpdate"));
+	assert!(!cats[1].as_object().unwrap().contains_key("includeInDownload"));
 	assert_eq!(cats[1]["mangaCount"], 0);
 
-	// 进度按章节 key 挂回（全新实例只有这两条章节行）
+	// progress is reattached by chapter key (the fresh instance has only these two chapter rows)
 	let (_, a_chapters) = request(
 		&a.app,
 		"GET",
@@ -224,12 +232,14 @@ async fn export_import_round_trip() {
 		assert_eq!(b_ch["lastReadAt"], a_ch["lastReadAt"]);
 	}
 
-	// 应用设置与源设置（含凭据）
+	// app settings and source settings (including credentials)
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(settings["backup.test"], "on");
 	assert_eq!(settings["backup.num"], 42);
 	let (_, sources) = request(&b.app, "GET", "/api/v1/sources", None).await;
-	let b_source_id = sources[0]["id"].as_i64().expect("source id");
+	let b_source_id = source_by_key(&sources, SOURCE_KEY)["id"]
+		.as_i64()
+		.expect("source id");
 	let (_, body) = request(
 		&b.app,
 		"GET",
@@ -239,6 +249,11 @@ async fn export_import_round_trip() {
 	.await;
 	assert_eq!(body["values"]["username"], "agent");
 	assert_eq!(body["values"]["password"], "s3cret");
+
+	let before = db_dump(&b.db_path).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc.clone())).await;
+	assert_eq!(status, StatusCode::OK, "identical restore failed: {body}");
+	assert_eq!(db_dump(&b.db_path).await, before);
 }
 
 #[tokio::test]
@@ -249,16 +264,15 @@ async fn import_rolls_back_on_invalid_row() {
 	let b = fresh_target().await;
 	let before = db_dump(&b.db_path).await;
 
-	// 排最后的分类三态越界：写库中途才触发，验证整体回滚
+	// the last category's include-in-download value is out of range: it only trips mid-write, verifying the whole import rolls back
 	doc["categories"].as_array_mut().expect("categories").push(json!({
 		"name": "Broken",
 		"sortOrder": 9,
 		"isDefault": false,
-		"includeInUpdate": 7,
-		"includeInDownload": 0,
+		"includeInDownload": 7,
 		"manga": []
 	}));
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 	assert_eq!(body["error"]["code"], "bad_request");
 	assert_eq!(db_dump(&b.db_path).await, before);
@@ -269,7 +283,7 @@ async fn import_rejects_unknown_version() {
 	let b = fresh_target().await;
 	let before = db_dump(&b.db_path).await;
 	for doc in [json!({"version": 2, "library": []}), json!({"library": []})] {
-		let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+		let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 		assert_eq!(body["error"]["code"], "bad_request");
 	}
@@ -306,7 +320,7 @@ async fn import_skips_missing_sources_with_warnings() {
 		.insert("en.ghost-source".into(), json!({"password": "x"}));
 
 	let b = fresh_target().await;
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup", Some(doc)).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	let warnings: Vec<&str> = body["warnings"]
 		.as_array()
@@ -320,7 +334,7 @@ async fn import_skips_missing_sources_with_warnings() {
 	assert_eq!(body["restored"]["library"], 1);
 	assert_eq!(body["restored"]["progress"], 2);
 
-	// 有效条目照常恢复
+	// valid entries are restored as usual
 	let (_, lib) = request(&b.app, "GET", "/api/v1/library", None).await;
 	assert_eq!(lib["entries"].as_array().expect("entries").len(), 1);
 }
@@ -332,7 +346,7 @@ async fn import_honors_section_selection() {
 	let doc = export_doc(&a.app).await;
 	let b = fresh_target().await;
 
-	let (status, body) = request(&b.app, "POST", "/api/v1/backup?sections=settings", Some(doc.clone())).await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document?sections=settings", Some(doc.clone())).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(body["restored"]["settings"].as_i64().expect("settings count") >= 2);
 	assert_eq!(body["restored"]["library"], 0);
@@ -344,6 +358,240 @@ async fn import_honors_section_selection() {
 	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(settings["backup.test"], "on");
 
-	let (status, _) = request(&b.app, "POST", "/api/v1/backup?sections=bogus", Some(doc)).await;
+	let (status, _) = request(&b.app, "POST", "/api/v1/backups/document?sections=bogus", Some(doc)).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_migrates_legacy_include_in_update_exclude() {
+	let a = test_app().await;
+	let _manga_id = register_example_manga(&a.app).await;
+
+	// Create categories and simulate the legacy include_in_update = 2 flag directly in the DB,
+	// since the API no longer exposes it.
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Excluded"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let excluded_id = body["id"].as_i64().expect("category id");
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Normal"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let _normal_id = body["id"].as_i64().expect("category id");
+
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query("UPDATE category SET include_in_update = 2 WHERE id = ?")
+		.bind(excluded_id)
+		.execute(&pool)
+		.await
+		.expect("set legacy exclude flag");
+
+	// Build a legacy backup document that still carries includeInUpdate.
+	let doc = json!({
+		"version": 1,
+		"createdAt": 1700000000,
+		"sources": [],
+		"library": [],
+		"categories": [
+			{
+				"name": "Excluded",
+				"sortOrder": 0,
+				"isDefault": false,
+				"includeInUpdate": 2,
+				"includeInDownload": 0,
+				"manga": []
+			},
+			{
+				"name": "Normal",
+				"sortOrder": 1,
+				"isDefault": false,
+				"includeInUpdate": 0,
+				"includeInDownload": 0,
+				"manga": []
+			}
+		],
+		"progress": [],
+		"settings": {},
+		"sourceSettings": {}
+	});
+
+	let b = fresh_target().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "import failed: {body}");
+	assert_eq!(body["restored"]["categories"], 2);
+
+	// The Excluded category should be migrated into the per-user excluded_update_categories setting.
+	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	let excluded: Vec<i64> = settings["library"]["excludedUpdateCategories"]
+		.as_array()
+		.expect("excluded categories array")
+		.iter()
+		.map(|v| v.as_i64().expect("category id"))
+		.collect();
+	assert_eq!(excluded, vec![excluded_id]);
+
+	// The restored categories should not expose the deprecated field.
+	let (_, cats) = request(&b.app, "GET", "/api/v1/categories", None).await;
+	let excluded_cat = cats.as_array().unwrap().iter().find(|c| c["name"] == "Excluded").unwrap();
+	assert!(!excluded_cat.as_object().unwrap().contains_key("includeInUpdate"));
+	let normal_cat = cats.as_array().unwrap().iter().find(|c| c["name"] == "Normal").unwrap();
+	assert!(!normal_cat.as_object().unwrap().contains_key("includeInUpdate"));
+}
+
+#[tokio::test]
+async fn import_legacy_download_include_only_disables_auto_download() {
+	let a = test_app().await;
+	let mut doc = export_doc(&a.app).await;
+	doc["categories"] = json!([{
+		"name": "Include only",
+		"sortOrder": 0,
+		"isDefault": false,
+		"includeInUpdate": 0,
+		"includeInDownload": 1,
+		"manga": []
+	}]);
+	doc["settings"]["auto_download_new_chapters"] = json!(true);
+
+	let b = fresh_target().await;
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'true')")
+		.execute(&pool)
+		.await
+		.expect("seed target auto download");
+	pool.close().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let (_, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(settings["download"]["autoDownloadNewChapters"], false);
+}
+
+#[tokio::test]
+async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
+	let a = test_app().await;
+	let (status, body) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Excluded"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let source_excluded_id = body["id"].as_i64().expect("source category id");
+	let (status, _) = request(&a.app, "POST", "/api/v1/categories", Some(json!({"name": "Normal"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let pool = connect_db(&a.db_path).await;
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES
+		 ('user.1.library.excluded_update_categories', ?),
+		 ('user.1.library.excluded_download_categories', ?)",
+	)
+	.bind(format!("[{source_excluded_id}]"))
+	.bind(format!("[{source_excluded_id}]"))
+	.execute(&pool)
+	.await
+	.expect("seed source exclusions");
+	pool.close().await;
+
+	let mut doc = export_doc(&a.app).await;
+	let categories = doc["categories"].as_array().expect("backup categories");
+	let excluded = categories.iter().find(|c| c["name"] == "Excluded").expect("excluded category");
+	assert_eq!(excluded["includeInUpdate"], 2);
+	assert_eq!(excluded["includeInDownload"], 2);
+	let normal = categories.iter().find(|c| c["name"] == "Normal").expect("normal category");
+	assert_eq!(normal["includeInUpdate"], 0);
+	assert_eq!(normal["includeInDownload"], 0);
+	assert!(doc["settings"].get("library.excluded_update_categories").is_none());
+	assert!(doc["settings"].get("library.excluded_download_categories").is_none());
+
+	let b = test_app().await;
+	let (status, body) = request(&b.app, "POST", "/api/v1/categories", Some(json!({"name": "Placeholder"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let placeholder_id = body["id"].as_i64().expect("placeholder category id");
+	assert_eq!(placeholder_id, source_excluded_id);
+	let pool = connect_db(&b.db_path).await;
+	sqlx::query(
+		"INSERT INTO setting (key, value) VALUES
+		 ('user.1.library.excluded_update_categories', ?),
+		 ('user.1.library.excluded_download_categories', ?)",
+	)
+	.bind(format!("[{placeholder_id}]"))
+	.bind(format!("[{placeholder_id}]"))
+	.execute(&pool)
+	.await
+	.expect("seed target exclusions");
+	pool.close().await;
+
+	// Older documents may still carry raw lists; they must not replace mapped ids or existing exclusions.
+	let settings = doc["settings"].as_object_mut().expect("settings object");
+	settings.insert("library.excluded_update_categories".into(), json!([source_excluded_id]));
+	settings.insert("library.excluded_download_categories".into(), json!([source_excluded_id]));
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	let (_, categories) = request(&b.app, "GET", "/api/v1/categories", None).await;
+	let target_excluded_id = categories
+		.as_array()
+		.expect("target categories")
+		.iter()
+		.find(|c| c["name"] == "Excluded")
+		.expect("restored excluded category")["id"]
+		.as_i64()
+		.expect("target category id");
+	assert_ne!(target_excluded_id, source_excluded_id);
+	let pool = connect_db(&b.db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("restored exclusions");
+		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+		assert_eq!(ids, vec![placeholder_id, target_excluded_id], "{key}");
+	}
+	let raw_settings: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM setting WHERE key IN (
+		 'library.excluded_update_categories', 'library.excluded_download_categories')",
+	)
+	.fetch_one(&pool)
+	.await
+	.expect("raw settings are ignored");
+	assert_eq!(raw_settings, 0);
+	let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+		.bind(target_excluded_id)
+		.fetch_one(&pool)
+		.await
+		.expect("legacy download flag");
+	assert_eq!(legacy, 0);
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn sync_instance_id_stays_out_of_public_settings_and_backups() {
+	let a = test_app().await;
+	let mut doc = export_doc(&a.app).await;
+	assert!(doc["settings"].get("sync.instance_id").is_none());
+	doc["settings"]
+		.as_object_mut()
+		.expect("settings object")
+		.insert("sync.instance_id".into(), json!("peer-instance"));
+
+	let b = fresh_target().await;
+	let pool = connect_db(&b.db_path).await;
+	let before: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		.fetch_one(&pool)
+		.await
+		.expect("target instance id");
+	let (status, settings) = request(&b.app, "GET", "/api/v1/settings", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(settings.get("sync.instance_id").is_none());
+	let (status, _) = request(
+		&b.app,
+		"PUT",
+		"/api/v1/settings",
+		Some(json!({"sync.instance_id": "public-overwrite"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let after: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		.fetch_one(&pool)
+		.await
+		.expect("restored instance id");
+	assert_eq!(after, before);
 }

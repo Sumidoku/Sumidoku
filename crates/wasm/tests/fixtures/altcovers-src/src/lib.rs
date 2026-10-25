@@ -1,9 +1,11 @@
 #![no_std]
-//! 备选封面（AlternateCoverProvider）管线的端到端验证源（issue #135）：
-//! 默认返回 3 个固定 https://altcovers.fixture/cover-N.png 供离线断言；
-//! defaults 里给了 coverBase 时改返回 {coverBase}/cover-N.png，端点测试与
-//! 手动冒烟据此把备选指到本地 mock 图床，跑通选完回源取图的全链。
-//! 断言在 crates/server/tests/alternate_covers.rs。
+//! End-to-end verification source for the alternate-cover (AlternateCoverProvider)
+//! pipeline (issue #135): by default it returns 3 fixed
+//! https://altcovers.fixture/cover-N.png for offline assertions; when coverBase is set in
+//! defaults it returns {coverBase}/cover-N.png instead, which the endpoint test and the
+//! manual smoke use to point alternates at a local mock image host and run the full chain
+//! of picking one and fetching it from the source.
+//! Assertions live in crates/server/tests/alternate_covers.rs.
 use aidoku::{
 	AlternateCoverProvider, Chapter, FilterValue, Manga, MangaPageResult, Page, Result, Source,
 	alloc::{String, Vec},

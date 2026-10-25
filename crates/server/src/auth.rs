@@ -5,21 +5,20 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::http::StatusCode;
-use axum::Json;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+use axum::{Extension, Json};
 use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// 会话 token 30 天滚动：剩余不足一半时随用续期
+/// Session tokens roll for 30 days: renewed on use once less than half remains
 const TOKEN_TTL_SECS: i64 = 30 * 24 * 3600;
 const TOKEN_RENEW_BELOW_SECS: i64 = TOKEN_TTL_SECS / 2;
 
-/// web 登录是低频人肉操作，内存参数调低于 RFC 推荐值换延迟（OWASP 下限 m=7MiB/t=3）
+/// Web login is a low-frequency human operation, so the memory parameter is tuned below the RFC recommendation for latency (OWASP floor m=7MiB/t=3)
 fn argon() -> Argon2<'static> {
 	Argon2::new(
 		Algorithm::Argon2id,
@@ -53,69 +52,91 @@ pub fn sha256_hex(raw: &str) -> String {
 	out
 }
 
+/// The login identity resolved from one request; require_auth injects it into request extensions
+#[derive(Debug, Clone)]
+pub struct AuthUser {
+	pub id: i64,
+	pub username: String,
+}
+
 pub struct AuthState {
-	/// argon2 PHC 串；None = 认证关闭（未配置密码，0.2.0 行为）
-	password_hash: RwLock<Option<String>>,
-	/// 配置面 API key 的 sha256 指纹，内存常驻
-	api_key_hashes: HashSet<String>,
-	/// OPDS 每页图一次请求，逐次 argon2 太贵；缓存上一次验证通过的密码指纹
-	basic_cache: RwLock<Option<String>>,
+	/// Built-in admin's login username (config-side; "admin" when unset)
+	admin_username: String,
+	/// In-memory copy of user 1's argon2 PHC string; None = auth disabled (no password configured)
+	admin_password_hash: RwLock<Option<String>>,
 }
 
 impl AuthState {
-	pub fn new(api_keys: &[String]) -> Self {
+	pub fn new(username: &str) -> Self {
 		Self {
-			password_hash: RwLock::new(None),
-			api_key_hashes: api_keys.iter().map(|k| sha256_hex(k)).collect(),
-			basic_cache: RwLock::new(None),
+			admin_username: username.to_string(),
+			admin_password_hash: RwLock::new(None),
 		}
+	}
+
+	/// Built-in admin (user 1): passwordless deployments act as admin
+	pub(crate) fn admin_user(&self) -> AuthUser {
+		AuthUser { id: 1, username: self.admin_username.clone() }
 	}
 
 	pub async fn enabled(&self) -> bool {
-		self.password_hash.read().await.is_some()
+		self.admin_password_hash.read().await.is_some()
 	}
 
-	pub async fn verify_basic(&self, password: &str) -> bool {
-		let fingerprint = sha256_hex(password);
-		if self.basic_cache.read().await.as_deref() == Some(fingerprint.as_str()) {
-			return true;
-		}
-		let guard = self.password_hash.read().await;
-		let Some(hash) = guard.as_deref() else {
-			return false;
-		};
-		if !verify_password(hash, password) {
-			return false;
-		}
-		drop(guard);
-		*self.basic_cache.write().await = Some(fingerprint);
-		true
+	pub(crate) async fn set_admin_password_hash(&self, hash: String) {
+		*self.admin_password_hash.write().await = Some(hash);
 	}
 }
 
-/// 启动时落实密码：config/env 配置面优先（覆盖库内哈希），否则沿用库内已存哈希；
-/// 库内也没有 = 认证关闭。改密码端点只写库，重启遇配置面密码仍以配置面为准
+/// Establishes the admin username and password at startup: the config/env side wins (a configured username is
+/// written onto user 1, a configured password overrides the stored hash), otherwise keeps what is already in
+/// the DB; an empty string in the DB = auth disabled. The change-password endpoint only writes the DB; on
+/// restart a config-side password still wins
 pub async fn init(state: &AppState) -> Result<(), Error> {
+	if state.config.auth.username.is_some() {
+		sqlx::query("UPDATE user SET username = ? WHERE id = 1")
+			.bind(state.config.effective_username())
+			.execute(&state.pool)
+			.await?;
+	}
 	if let Some(password) = state.config.effective_password() {
 		let hash = hash_password(password)?;
-		sqlx::query(
-			"INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)
-			 ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash",
-		)
-		.bind(&hash)
-		.execute(&state.pool)
-		.await?;
-		*state.auth.password_hash.write().await = Some(hash);
+		sqlx::query("UPDATE user SET password_hash = ? WHERE id = 1")
+			.bind(&hash)
+			.execute(&state.pool)
+			.await?;
+		*state.auth.admin_password_hash.write().await = Some(hash);
 		return Ok(());
 	}
-	let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM auth_credential WHERE id = 1")
+	let row: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM user WHERE id = 1")
 		.fetch_optional(&state.pool)
 		.await?;
-	*state.auth.password_hash.write().await = row.map(|(hash,)| hash);
+	*state.auth.admin_password_hash.write().await = row.map(|(hash,)| hash).filter(|hash| !hash.is_empty());
 	Ok(())
 }
 
-/// 从 Authorization: Bearer 或 access_token query 取凭证（<img>/WebSocket 发不了头）
+const SESSION_COOKIE: &str = "sumidoku.session";
+
+fn is_https(uri: &Uri, headers: &HeaderMap) -> bool {
+	uri.scheme_str() == Some("https")
+		|| headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()) == Some("https")
+}
+
+fn session_cookie_value(token: &str, https: bool) -> String {
+	let secure = if https { "; Secure" } else { "" };
+	format!("{SESSION_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Strict{secure}")
+}
+
+fn session_cookie_clear(https: bool) -> String {
+	let secure = if https { "; Secure" } else { "" };
+	format!("{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict{secure}")
+}
+
+fn set_cookie_header(response: &mut Response, value: String) {
+	response.headers_mut().insert(axum::http::header::SET_COOKIE, HeaderValue::from_str(&value).expect("valid cookie"));
+}
+
+/// Takes the credential from Authorization: Bearer or the browser session cookie
 fn presented_token(req: &Request) -> Option<String> {
 	if let Some(value) = req
 		.headers()
@@ -125,27 +146,48 @@ fn presented_token(req: &Request) -> Option<String> {
 	{
 		return Some(value.to_string());
 	}
-	let query = req.uri().query()?;
-	for pair in query.split('&') {
-		if let Some(value) = pair.strip_prefix("access_token=") {
-			return Some(value.to_string());
-		}
-	}
-	None
+	req.headers()
+		.get(axum::http::header::COOKIE)
+		.and_then(|v| v.to_str().ok())
+		.and_then(|v| v.split(';').find_map(|part| part.trim().strip_prefix(SESSION_COOKIE)?.strip_prefix('=')))
+		.map(str::to_string)
 }
 
-/// 会话 token：sha256 指纹查库，顺带滚动续期
-async fn valid_session_token(state: &AppState, fingerprint: &str) -> ApiResult<bool> {
+/// Username+password verification: unknown user and wrong password take the same path, so externally there is only one uniform 401
+async fn verify_user_credentials(
+	pool: &sqlx::SqlitePool,
+	username: &str,
+	password: &str,
+) -> ApiResult<Option<AuthUser>> {
+	let row: Option<(i64, String, String)> =
+		sqlx::query_as("SELECT id, username, password_hash FROM user WHERE id = 1 AND username = ?")
+			.bind(username)
+			.fetch_optional(pool)
+			.await?;
+	let Some((id, username, hash)) = row else {
+		return Ok(None);
+	};
+	if hash.is_empty() || !verify_password(&hash, password) {
+		return Ok(None);
+	}
+	Ok(Some(AuthUser { id, username }))
+}
+
+/// Session token: look up by sha256 fingerprint, JOIN user to verify the owner still exists; renewed on a rolling basis while unexpired
+async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
 	let now = crate::model::unix_now();
-	let row: Option<(i64,)> = sqlx::query_as("SELECT expires_at FROM auth_token WHERE token_hash = ?")
-		.bind(fingerprint)
-		.fetch_optional(&state.pool)
-		.await?;
-	let Some((expires_at,)) = row else {
-		return Ok(false);
+	let row: Option<(i64, i64, String)> = sqlx::query_as(
+		"SELECT t.expires_at, u.id, u.username FROM auth_token t
+		 JOIN user u ON u.id = t.user_id WHERE t.token_hash = ? AND u.id = 1",
+	)
+	.bind(fingerprint)
+	.fetch_optional(&state.pool)
+	.await?;
+	let Some((expires_at, id, username)) = row else {
+		return Ok(None);
 	};
 	if expires_at <= now {
-		return Ok(false);
+		return Ok(None);
 	}
 	if expires_at - now < TOKEN_RENEW_BELOW_SECS {
 		sqlx::query("UPDATE auth_token SET expires_at = ? WHERE token_hash = ?")
@@ -154,30 +196,62 @@ async fn valid_session_token(state: &AppState, fingerprint: &str) -> ApiResult<b
 			.execute(&state.pool)
 			.await?;
 	}
-	Ok(true)
+	Ok(Some(AuthUser { id, username }))
 }
 
-async fn bearer_granted(state: &AppState, token: Option<String>) -> ApiResult<bool> {
+#[cfg(test)]
+const REVOCATION_TEST_FINGERPRINT: &str = "revocation-test";
+#[cfg(test)]
+static REVOCATION_TEST_CHECKED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+#[cfg(test)]
+static REVOCATION_TEST_RESUME: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// UI-managed API key: the atomic update checks existence and refreshes last_used_at without leaving a revocation window
+async fn api_key_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
+	#[cfg(test)]
+	if fingerprint == REVOCATION_TEST_FINGERPRINT {
+		REVOCATION_TEST_CHECKED.notify_one();
+		REVOCATION_TEST_RESUME.notified().await;
+	}
+	let hit: Option<(String,)> = sqlx::query_as("UPDATE api_key SET last_used_at = ? WHERE key_hash = ? RETURNING key_hash")
+		.bind(crate::model::unix_now())
+		.bind(fingerprint)
+		.fetch_optional(&state.pool)
+		.await?;
+	if hit.is_none() {
+		return Ok(None);
+	}
+	let row: Option<(String,)> = sqlx::query_as("SELECT username FROM user WHERE id = 1")
+		.fetch_optional(&state.pool)
+		.await?;
+	Ok(row.map(|(username,)| AuthUser { id: 1, username }))
+}
+
+async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Option<AuthUser>> {
 	let Some(token) = token else {
-		return Ok(false);
+		return Ok(None);
 	};
 	let fingerprint = sha256_hex(&token);
-	if state.auth.api_key_hashes.contains(&fingerprint) {
-		return Ok(true);
+	if let Some(user) = api_key_user(state, &fingerprint).await? {
+		return Ok(Some(user));
 	}
-	valid_session_token(state, &fingerprint).await
+	session_user(state, &fingerprint).await
 }
 
-/// /api/v1 统一认证：认证关闭时放行；凭证无效/缺席一律 401 同形状
-pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
+/// Uniform /api/v1 auth: with auth disabled every request is the built-in admin; invalid/absent credentials always get the same uniform 401
+pub async fn require_auth(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
 	if !state.auth.enabled().await {
+		req.extensions_mut().insert(state.auth.admin_user());
 		return next.run(req).await;
 	}
-	// axum Body 是 UnsyncBoxBody（不 Sync），&Request 不能跨 await 持有，先取走凭证
+	// axum Body is UnsyncBoxBody (not Sync), so &Request cannot be held across await; take the credential first
 	let token = presented_token(&req);
-	match bearer_granted(&state, token).await {
-		Ok(true) => next.run(req).await,
-		Ok(false) => ApiError::unauthorized().into_response(),
+	match bearer_user(&state, token).await {
+		Ok(Some(user)) => {
+			req.extensions_mut().insert(user);
+			next.run(req).await
+		}
+		Ok(None) => ApiError::unauthorized().into_response(),
 		Err(e) => e.into_response(),
 	}
 }
@@ -185,49 +259,73 @@ pub async fn require_auth(State(state): State<Arc<AppState>>, req: Request, next
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginRequest {
+	pub username: String,
 	pub password: String,
 }
 
-pub async fn status(State(state): State<Arc<AppState>>) -> Json<Value> {
-	Json(json!({ "enabled": state.auth.enabled().await }))
+/// Auth switch + current credential identity: after an SPA refresh only the token remains, and this restores the account display; with auth disabled user is always null
+pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResult<Json<Value>> {
+	let enabled = state.auth.enabled().await;
+	let user = match enabled {
+		true => bearer_user(&state, presented_token(&req)).await?,
+		false => None,
+	};
+	let mut body = json!({
+		"enabled": enabled,
+		"user": Value::Null,
+	});
+	if let Some(user) = user {
+		body["username"] = Value::String(user.username.clone());
+		body["user"] = json!({ "id": user.id, "username": user.username });
+	}
+	Ok(Json(body))
 }
 
-pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> ApiResult<Json<Value>> {
-	let hash = state.auth.password_hash.read().await.clone();
-	let Some(hash) = hash else {
+pub async fn login(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Response> {
+	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
-	};
-	if !verify_password(&hash, &body.password) {
-		return Err(ApiError::unauthorized());
 	}
+	let Some(user) = verify_user_credentials(&state.pool, &body.username, &body.password).await? else {
+		return Err(ApiError::unauthorized());
+	};
 	let mut raw = [0u8; 32];
 	OsRng.fill_bytes(&mut raw);
 	let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
 	let now = crate::model::unix_now();
 	let expires_at = now + TOKEN_TTL_SECS;
-	sqlx::query("INSERT INTO auth_token (token_hash, created_at, expires_at) VALUES (?, ?, ?)")
+	sqlx::query("INSERT INTO auth_token (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
 		.bind(sha256_hex(&token))
+		.bind(user.id)
 		.bind(now)
 		.bind(expires_at)
 		.execute(&state.pool)
 		.await?;
-	// 顺手清掉过期 token，表只随活跃会话增长
+	// Also sweep expired tokens along the way, so the table grows only with active sessions
 	sqlx::query("DELETE FROM auth_token WHERE expires_at <= ?")
 		.bind(now)
 		.execute(&state.pool)
 		.await?;
-	Ok(Json(json!({ "token": token, "expiresAt": expires_at })))
+	let mut response = Json(json!({
+		"token": token,
+		"expiresAt": expires_at,
+		"user": { "id": user.id, "username": user.username },
+	}))
+	.into_response();
+	set_cookie_header(&mut response, session_cookie_value(&token, is_https(&uri, &headers)));
+	Ok(response)
 }
 
-/// 吊销呈上来的 bearer；无凭证/未知 token 也 204，不泄露 token 有效性
-pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> StatusCode {
+/// Revokes the presented bearer; missing credential/unknown token also gets 204, not leaking token validity
+pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Response {
 	if let Some(token) = presented_token(&req) {
 		let _ = sqlx::query("DELETE FROM auth_token WHERE token_hash = ?")
 			.bind(sha256_hex(&token))
 			.execute(&state.pool)
 			.await;
 	}
-	StatusCode::NO_CONTENT
+	let mut response = StatusCode::NO_CONTENT.into_response();
+	set_cookie_header(&mut response, session_cookie_clear(is_https(req.uri(), req.headers())));
+	response
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,51 +335,75 @@ pub struct PasswordChangeRequest {
 	pub new_password: String,
 }
 
-/// 改密码：验旧换新，同时吊销全部会话 token（改密即全端下线）
+/// Password change: after verifying the old one and storing the new, revoke every admin session token
 pub async fn change_password(
 	State(state): State<Arc<AppState>>,
+	uri: Uri,
+	headers: HeaderMap,
+	Extension(user): Extension<AuthUser>,
 	Json(body): Json<PasswordChangeRequest>,
-) -> ApiResult<StatusCode> {
+) -> ApiResult<Response> {
 	if body.new_password.is_empty() {
 		return Err(ApiError::bad_request("newPassword must not be empty"));
 	}
-	let hash = state.auth.password_hash.read().await.clone();
-	let Some(hash) = hash else {
+	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
+	}
+	let hash: Option<(String,)> = sqlx::query_as("SELECT password_hash FROM user WHERE id = ?")
+		.bind(user.id)
+		.fetch_optional(&state.pool)
+		.await?;
+	let Some((hash,)) = hash else {
+		return Err(ApiError::unauthorized());
 	};
-	if !verify_password(&hash, &body.current_password) {
+	if hash.is_empty() || !verify_password(&hash, &body.current_password) {
 		return Err(ApiError::unauthorized());
 	}
-	let new_hash = hash_password(&body.new_password)
-		.map_err(|e| ApiError::internal(e.to_string()))?;
-	sqlx::query(
-		"INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)
-		 ON CONFLICT (id) DO UPDATE SET password_hash = excluded.password_hash",
-	)
-	.bind(&new_hash)
-	.execute(&state.pool)
-	.await?;
-	sqlx::query("DELETE FROM auth_token")
+	let new_hash = hash_password(&body.new_password).map_err(|e| ApiError::internal(e.to_string()))?;
+	sqlx::query("UPDATE user SET password_hash = ? WHERE id = ?")
+		.bind(&new_hash)
+		.bind(user.id)
 		.execute(&state.pool)
 		.await?;
-	*state.auth.password_hash.write().await = Some(new_hash);
-	*state.auth.basic_cache.write().await = None;
-	Ok(StatusCode::NO_CONTENT)
+	sqlx::query("DELETE FROM auth_token WHERE user_id = ?")
+		.bind(user.id)
+		.execute(&state.pool)
+		.await?;
+	state.auth.set_admin_password_hash(new_hash).await;
+	let mut response = StatusCode::NO_CONTENT.into_response();
+	set_cookie_header(&mut response, session_cookie_clear(is_https(&uri, &headers)));
+	Ok(response)
 }
 
-/// OPDS Basic 统一验同一密码；用户名任意非空、密码匹配即过（§9 恒 Basic 语义不变）
-pub(crate) async fn basic_granted(state: &AppState, headers: &axum::http::HeaderMap) -> bool {
-	let cred = headers
-		.get(axum::http::header::AUTHORIZATION)
-		.and_then(|v| v.to_str().ok())
-		.and_then(|v| v.strip_prefix("Basic "))
-		.and_then(crate::opds::base64_decode)
-		.and_then(|raw| String::from_utf8(raw).ok());
-	let Some(cred) = cred else {
-		return false;
-	};
-	match cred.split_once(':') {
-		Some((user, password)) => !user.is_empty() && state.auth.verify_basic(password).await,
-		None => false,
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn revocation_before_key_check_is_not_authenticated() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let state = AppState::new(pool, crate::config::Config::default(), defaults_tx, cookie_tx);
+		sqlx::query("INSERT INTO api_key (key_hash, name, created_at) VALUES (?, 'test', 1)")
+			.bind(REVOCATION_TEST_FINGERPRINT)
+			.execute(&state.pool)
+			.await
+			.expect("insert key");
+
+		let lookup_state = state.clone();
+		let lookup = tokio::spawn(async move { api_key_user(&lookup_state, REVOCATION_TEST_FINGERPRINT).await });
+		REVOCATION_TEST_CHECKED.notified().await;
+		sqlx::query("DELETE FROM api_key WHERE key_hash = ?")
+			.bind(REVOCATION_TEST_FINGERPRINT)
+			.execute(&state.pool)
+			.await
+			.expect("revoke key");
+		REVOCATION_TEST_RESUME.notify_one();
+		let user = lookup.await.expect("lookup task").expect("lookup");
+		assert!(user.is_none(), "a key revoked before the check must not authenticate");
 	}
 }

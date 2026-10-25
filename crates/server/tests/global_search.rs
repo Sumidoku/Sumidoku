@@ -49,7 +49,7 @@ async fn aggregate_returns_each_sources_entries_tagged_with_its_id() {
 	assert_eq!(status, StatusCode::OK);
 	let sources = body["sources"].as_array().expect("sources array");
 	assert_eq!(sources.len(), 2);
-	// 结果按请求里的 sourceIds 顺序归位
+	// Results are slotted back in the order of the sourceIds in the request
 	assert_eq!(sources[0]["sourceId"], one);
 	assert_eq!(sources[1]["sourceId"], two);
 	for (entry, id) in sources.iter().zip([one, two]) {
@@ -65,7 +65,7 @@ async fn aggregate_returns_each_sources_entries_tagged_with_its_id() {
 #[tokio::test]
 async fn failing_source_only_marks_itself() {
 	let TestApp { app, tmp, .. } = test_app().await;
-	// mutation fixture 的 get_search_manga_list 固定 bail，充当失败源
+	// the mutation fixture's get_search_manga_list always bails, serving as the failing source
 	install_fixture_source(&tmp, "en.mutation", "Mutation Source", &mutation_wasm_path());
 	let ids = scan_sources(&app).await;
 	let good = source_id_of(&ids, "en.example-source");
@@ -108,7 +108,7 @@ async fn unknown_source_only_marks_itself() {
 	assert_eq!(status, StatusCode::OK);
 	let sources = body["sources"].as_array().expect("sources array");
 	assert_eq!(sources.len(), 2);
-	// handle 解析失败与源调用失败同一条隔离路径
+	// handle resolution failure and source call failure share the same isolation path
 	assert_eq!(sources[0]["sourceId"], 9999);
 	assert_eq!(sources[0]["error"]["code"], "not_found");
 	assert!(sources[1].get("error").is_none());
@@ -136,7 +136,7 @@ async fn ndjson_emits_per_source_events_then_final() {
 		"application/x-ndjson"
 	);
 
-	// 每源完成/失败各一事件（完成序不定），终态一个
+	// one event per source completion/failure (completion order is not fixed), plus one final event
 	assert_eq!(events.len(), 3);
 	assert_eq!(events[2]["type"], "final");
 	let source_event = events[..2]
@@ -152,7 +152,7 @@ async fn ndjson_emits_per_source_events_then_final() {
 	assert_eq!(error_event["sourceId"], bad);
 	assert_eq!(error_event["error"]["code"], "source_error");
 
-	// 终态 payload 与缓冲响应是同一个 JSON 值
+	// the final payload and the buffered response are the same JSON value
 	let (status, buffered) = request(
 		&app,
 		"POST",

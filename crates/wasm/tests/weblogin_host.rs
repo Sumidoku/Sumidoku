@@ -1,8 +1,8 @@
-//! WebLoginHandler 导出的宿主侧端到端测试。
-//! fixture 源在 tests/fixtures/weblogin-src/（no_std cdylib），重建方式：
+//! Host-side end-to-end tests for the WebLoginHandler export.
+//! The fixture source lives in tests/fixtures/weblogin-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/weblogin-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_weblogin.wasm
-//! 复制为 tests/fixtures/weblogin/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_weblogin.wasm
+//! over tests/fixtures/weblogin/main.wasm.
 use aidoku_wasm::{
 	DefaultValue, DefaultsSink, DirectPolicy, Error, NoopCookieSink, SourceConfig, SourceHandle,
 	StdoutLogger,
@@ -42,7 +42,6 @@ async fn spawn(wasm: &str, sink: Arc<RecordingSink>) -> (SourceHandle, aidoku_wa
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	};
 	SourceHandle::spawn(config, Arc::new(Semaphore::new(8)))
@@ -71,7 +70,7 @@ async fn web_login_presets_cookie_defaults_before_the_call() {
 	assert!(ok, "cookies 与预置 keys 都含 session，fixture 应判成功");
 
 	let writes = sink.writes.lock().expect("sink lock");
-	// 预置按 cookie 名排序，server 端 SQL 落库同序，两处写同一值不打架
+	// Presets are sorted by cookie name; the server side's SQL insert uses the same order, so the two writers never conflict over the same value
 	let Some(DefaultValue::StringArray(keys)) = written(&writes, "login.keys") else {
 		panic!("missing login.keys write: {writes:?}")
 	};
@@ -80,18 +79,19 @@ async fn web_login_presets_cookie_defaults_before_the_call() {
 		panic!("missing login.values write: {writes:?}")
 	};
 	assert_eq!(values, strings(&["o1", "s1"]));
-	// fixture 的观测：导出拿到的 key/cookies 参数，以及调用期间从 defaults
-	// 读回的预置 keys（Aidoku 顺序：先存后调，源靠 defaults_get_map 取 cookie）
+	// The fixture's observation: the key/cookies parameters the export received, and the
+	// preset keys read back from defaults during the call (Aidoku order: store first, then
+	// call — the source reads cookies via defaults_get_map)
 	let Some(DefaultValue::StringArray(seen)) = written(&writes, "weblogin.seen") else {
 		panic!("missing weblogin.seen write: {writes:?}")
 	};
 	assert_eq!(seen, strings(&["login", "other=o1,session=s1", "other,session"]));
 
-	// 先存后调的顺序本身也要钉住：预置必须排在 fixture 的观测写之前
+	// The store-first-then-call order itself must also be pinned: presets must be written before the fixture's observation write
 	let pos = |key: &str| writes.iter().position(|(k, _)| k == key).expect(key);
 	assert!(pos("login.keys") < pos("weblogin.seen"));
 	assert!(pos("login.values") < pos("weblogin.seen"));
-	// marker 不在宿主层写：服务端重启前同步落库，异步 sink 会跟重启读库竞态
+	// The marker is not written at the host layer: the server persists it synchronously before restarting — an async sink would race the restart's read of the store
 	assert!(written(&writes, "login").is_none(), "marker 应由服务端写: {writes:?}");
 }
 
@@ -100,7 +100,7 @@ async fn web_login_handler_can_veto_and_accepts_empty() {
 	let sink = Arc::new(RecordingSink::default());
 	let (handle, _) = spawn("weblogin", sink).await;
 
-	// fixture 只认 session：缺它返回 false，服务端据此 502
+	// The fixture only accepts session: without it, it returns false and the server 502s on that basis
 	let cookies = HashMap::from([("other".to_string(), "o1".to_string())]);
 	let ok = handle
 		.handle_web_login("login".into(), cookies)
@@ -108,7 +108,7 @@ async fn web_login_handler_can_veto_and_accepts_empty() {
 		.expect("web login");
 	assert!(!ok);
 
-	// 空 cookies 是登出语义，源确认即可（Aidoku 空 cookies 也照调导出）
+	// Empty cookies are the log-out semantic; the source just acknowledges them (Aidoku also calls the export with empty cookies)
 	let ok = handle
 		.handle_web_login("login".into(), HashMap::new())
 		.await

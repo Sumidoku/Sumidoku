@@ -1,25 +1,25 @@
 services:
   sumidoku:
     image: sumidoku/sumidoku:latest
-    # 本地改从源码构建:先按 Dockerfile 顶部注释摆好 dist/ 布局,再
+    # to build from source locally instead: lay out dist/ per the comment
+    # at the top of the Dockerfile, then
     # docker build -t sumidoku/sumidoku:latest .
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config # 数据库、设置、封面缓存、源包
+      - ./config:/config       # database, settings, cover cache, source packages
       - ./downloads:/downloads
-      - trawl-ca:/trawl-ca:ro # TRAWL 共享 CA
+      - trawl-ca:/trawl-ca:ro  # TRAWL shared CA
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
+      # CF clearance solver + webview browser backend (trawl's API port; requires trawl ≥ v1.9.1,
+      # satisfied by the `latest` image below). Without it, challenged hosts fall back to the proxy.
+      - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
       # - SUMIDOKU_NET_RELAY_DOMAINS=cf.example.com
-      # 源登录用的真浏览器背衬；配合下方 chromium 服务（--profile browser）
-      # - SUMIDOKU_NET_BROWSER_WS=ws://chromium:3000/chromium
-      # 或复用本 compose 的 trawl（≥ v1.9.1）作 webview 后端；与 BROWSER_WS 互斥
-      # - SUMIDOKU_NET_BROWSER_TRAWL=http://trawl:8191
-      # 全站认证（web 界面/REST/OPDS 同一密码）
+      # site-wide auth (web UI and REST API share one password)
+      # - SUMIDOKU_AUTH_USERNAME=admin
       # - SUMIDOKU_AUTH_PASSWORD=
-      # - SUMIDOKU_AUTH_API_KEYS=key1,key2
     depends_on:
       - trawl
 
@@ -31,23 +31,13 @@ services:
       - MITM_PORT=8192
       - MITM_CA_DIR=/data/proxy-ca
       - MITM_MAX_TIER=3
-      # 这套 compose 不带 redis，会话缓存落进程内存
+      - TIER1_TRANSPORT=wreq
+      # this compose ships no redis; the session cache lives in process memory
       - SESSION_CACHE_DRIVER=memory
     volumes:
       - trawl-ca:/data/proxy-ca
       - trawl-data:/data
-    # 不暴露端口，仅 compose 内网可达
-
-  # 可选：webview 真浏览器背衬（源登录流程）。默认不拉起，
-  # docker compose --profile browser up -d 才启动
-  chromium:
-    image: ghcr.io/browserless/chromium:latest
-    profiles: ["browser"]
-    shm_size: 1gb
-    # 交互登录会话最长 10 分钟（server 侧 TTL），默认 30s 的 CONNECTION_TIMEOUT 会中途杀会话
-    environment:
-      - CONNECTION_TIMEOUT=600000
-    # 不暴露端口，仅 compose 内网可达；CDP ws 端点 ws://chromium:3000/chromium
+    # no ports exposed; reachable only on the compose internal network
 
 volumes:
   trawl-ca:

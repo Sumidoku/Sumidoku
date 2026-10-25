@@ -7,7 +7,11 @@ here. Link to symbols rather than copying details that drift.
 ## Server (`crates/server`)
 
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
-Migrations in `crates/server/migrations`.
+Migrations in `crates/server/migrations`. Applied migrations are immutable:
+sqlx embeds each file's SHA-384 at compile time and validates it against
+`_sqlx_migrations` at startup, aborting the boot on any byte change, so a
+schema change is always a new numbered file — never an edit, comments
+included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
 
 - REST API under `/api/v1` (`api/mod.rs`, `api/library.rs`, `api/reader.rs`,
   `api/page.rs`, `api/download.rs`, `api/update.rs`, `api/repo.rs`,
@@ -15,7 +19,7 @@ Migrations in `crates/server/migrations`.
   `GET /api/v1/sources/{id}/home` (`api/mod.rs:get_home`) returns the Aidoku
   `HomeLayout` as-is — an ordered `components` array; the array index is the
   stable key a `send_partial_result` stream patches against. A source
-  without `get_home` answers 404 `unsupported`, same as dynamic filters and
+  without `get_home` answers 501 `unsupported`, same as dynamic filters and
   listings.
   `POST /api/v1/sources/{id}/deep-link` (`api/mod.rs:deep_link`) hands a URL
   to the source's `handle_deep_link`. `Manga`/`Chapter` results are resolved
@@ -26,7 +30,7 @@ Migrations in `crates/server/migrations`.
   page) — so the web UI navigates to `/manga/:id` or `/reader/:chapterId`
   with no second lookup; `Listing` passes through and the source browse page
   switches to that listing, and an unmatched URL answers `{"result": null}`.
-  A source without the export answers 404 `unsupported`, same as `get_home`.
+  A source without the export answers 501 `unsupported`, same as `get_home`.
   `GET /api/v1/sources/{id}/listings` merges the source's declared listings —
   static `source.json` entries first, then the dynamic `get_listings` export —
   into one shape (`api::listings`). Static entries parse with AidokuRunner's
@@ -50,6 +54,85 @@ Migrations in `crates/server/migrations`.
   lookup-failure behavior to mirror, and the source decides how to answer. A
   failed dynamic-listings fetch degrades to the static list rather than
   failing the request.
+- API documentation (`api/docs.rs`, `assets/api-docs/`): `/api/openapi.json`
+  publishes the hand-maintained OpenAPI 3.0.3 document that is the single REST
+  contract for every `/api/v1` route; external OPDS feeds are excluded. `cd webui && npm run
+  generate:api` uses only Node built-ins to regenerate the committed
+  `webui/src/api/types.ts` from the schema graph reachable through ordinary
+  JSON parameters, requests and responses. `npm run build` regenerates first,
+  and CI repeats generation followed by `git diff --exit-code` on the generated
+  file to reject stale output. The test-only validator in
+  `crates/server/tests/common/contract.rs` checks real JSON responses in the
+  shared request helpers against path/method/status/content schemas, including
+  references, required properties, maps, arrays, enums, nullable fields,
+  oneOf/allOf and x-tuple. SSE streams and NDJSON events stay outside
+  generation and response validation; their manually maintained TypeScript
+  protocols live in `webui/src/api/protocol.ts`. Binary content and external
+  OPDS feeds are excluded from generation and response validation as well.
+  `/api/docs` and `/api/docs/` serve Swagger UI 5.34.0 with its JavaScript,
+  CSS, Apache-2.0 license and bundled dependency notices embedded in the
+  binary. `validatorUrl: null` disables external spec validation, so the page
+  needs no external assets. The route drift test reads `api/mod.rs` and
+  compares the complete path/method set with the JSON; update the document in
+  the same PR as route or payload changes. Both Docker smoke tests require the
+  spec and docs page.
+- Unified event stream (`events.rs`, `api/events.rs`): `GET /api/v1/events`
+  is a same-origin SSE endpoint for downloads and library updates. The event
+  hub subscribes to the existing download/update broadcasts and keeps the
+  latest 1024 events in process memory, in id order. A new connection replays
+  retained events after `Last-Event-ID`, sends a current download/update
+  snapshot, then sends live events with duplicate ids suppressed. Ring
+  overflow or a process restart simply makes the snapshot authoritative. A
+  cursor beyond the current maximum id is reset to that snapshot. Snapshot
+  query failures close the stream instead of presenting an empty download
+  list as current. The event names are `snapshot`, `download`, `running`,
+  `update`, `updateSummary` and `updateComplete`. `updateSummary` carries the
+  start and per-item counts, while `updateComplete` carries the final stopped
+  state, so the updates page does not poll. Update jobs and summaries reach
+  the hub through one ordered channel. A lagged client connection ends so
+  native `EventSource` reconnects; a lagged forwarding subscription instead
+  asks each connection for a fresh snapshot. Heartbeat comments are sent every
+  15 seconds. The browser keeps one SSE connection open across route changes;
+  `AppLayout` starts it only when the auth state allows and stops it on logout,
+  password change and unauthorized responses. The manga detail page also seeds
+  active downloads with `GET /downloads` and merges pending events into that
+  response; only a live snapshot replaces the seed. Browser API requests use the
+  login cookie, CLI clients may use bearer authentication, and URL access
+  tokens are not accepted. The former download and update WebSocket endpoints
+  are removed.
+- Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
+  the `task` table is the queue — a persistent row per task whose string id
+  doubles as the deduplication key (e.g. `local_scan:3`). Enqueueing over a
+  live (pending/running) row only bumps its priority — kind, source and
+  payload stay with the execution that owns them — while a terminal row is
+  requeued fresh with the new trigger's identity and priority (kmrs's
+  `ON CONFLICT` upsert; manual 8 > scheduled 4 > derived 1). `TaskManager`
+  dispatches pending rows to a worker pool sized by
+  `task_pool_size` (config file/env `SUMIDOKU_TASK_POOL_SIZE`, default 2) in
+  priority-then-creation order with id as the tie-breaker, keyset-paging past
+  blocked groups and failed kinds without skipping later candidates; tasks
+  of one local source never run concurrently, and a global (source-less)
+  task conflicts with everything (kmrs `GROUP_ID` semantics over `source_id`,
+  0 reserved for the global group). Every transition is a single guarded
+  UPDATE whose RETURNING row is what gets broadcast as the instance-wide
+  `task` event through the SSE hub (`events.rs:forward_tasks`), so events
+  never republish a state a later transition replaced. Enqueue and cancellation
+  share the dispatcher lock from the initial read through the cancel-flag
+  update and publication; cancellation publishes before history trimming,
+  so a terminal requeue cannot overtake it or inherit its cancel flag.
+  `DELETE /api/v1/tasks/{id}` cancels: the row flips
+  to cancelled atomically for pending and running alike, a running handler
+  also gets a flag it checks between items, and the worker's terminal write
+  is guarded on status = 'running' so a mid-flight cancel always wins; a
+  finished task answers 409 `task_finished`. Boot recovery
+  (`TaskManager::recover`, wired in `build_app`) requeues rows left running
+  by the previous process, so handlers must tolerate re-execution. A kind
+  with no registered handler (e.g. a downgrade over a newer database) fails
+  visibly instead of sitting pending. Finished rows are trimmed to the
+  latest 100 on every terminal transition. `GET /api/v1/tasks` lists live
+  work first and accepts `status`/`kind`/`sourceId` filters. This change
+  registers no production task kinds or producers yet; the local
+  scan/analyze/empty_trash handlers land with #256.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
@@ -81,7 +164,9 @@ Migrations in `crates/server/migrations`.
   call semaphore (`state.rs`) still gating source calls globally. Results
   come back in request order as `{"sources": [{sourceId, entries,
   hasNextPage, error?}]}`, entries tagged exactly like the single-source
-  search (owning `sourceId`, plus the internal `id` when registered). A
+  search (owning `sourceId`, plus the internal `id` when registered). The
+  built-in local source answers from the same directory-scan arm as the
+  single-source endpoint (see the local-source bullet). A
   failing source — unknown id, disabled, or a failed source call — only
   marks its own entry (`entries: []`, `hasNextPage: false`,
   `error: {code, message}`) and never fails the request. With
@@ -92,8 +177,8 @@ Migrations in `crates/server/migrations`.
   value as the buffered response. The per-source failure type is
   `sourceError`, not `error`, because the streaming client treats
   `{"type":"error"}` as the terminal failure of the whole request. The
-  web UI's `/search` page (`webui/src/pages/SearchPage.tsx`) renders each
-  arriving section as a horizontal cover scroller and offers tri-state
+  browse page's search view (`webui/src/pages/browse/SearchPanel.tsx`) renders
+  each arriving section as a horizontal cover scroller and offers tri-state
   (include/exclude) content-rating / language / source filters persisted
   to localStorage — filtering is client-side and only decides which
   source ids are sent.
@@ -113,19 +198,49 @@ Migrations in `crates/server/migrations`.
   NULL), and `repo::source_json` reports `missingFromRepos` when a
   repo-installed source's key is absent from every cached index — Aidoku's
   "missing source list" warning, the deprecation signal for external sources.
+- Local `.aix` import (`api/source_import.rs`): `POST /api/v1/sources/import`
+  (admin, multipart with a single file field) is the third install path, for
+  sideloading a package file through the web UI. The route's body cap derives
+  from the package entry caps in `crates/wasm/src/package.rs` (wasm payload +
+  JSON metadata + icon, plus framing slack); an over-limit upload is a 413.
+  The upload's manifest is read in memory first — its key names the landed
+  file — then the bytes land atomically in `sources/` (temp name + rename,
+  the repo-install pattern) and register through the same `register_aix`
+  pipeline, so manifest parsing, settings seeding, feature stamping and icon
+  extraction behave identically to the other two paths; a registration
+  failure cleans up the landed file and the icon sidecar. A same-key import
+  replaces the installed source with repo-update semantics: the response is
+  `source_json` plus `migrationRequired`/`migrationWarnings` like
+  `update_source`, and `source.repo_id` is left untouched (NULL on a fresh
+  import, same as a directory sideload).
 - Breaking-change key migration (`source/rekey.rs`): registration stores the
   manifest's `config.breakingChangeVersion` (Aidoku's
   `SourceInfo.Configuration`) in `source.breaking_change_version`, and
   `source_json` exposes it. Registration also persists the whole manifest
   `config` section verbatim in `source.config` (null when absent), and
   `repo::source_json` exposes it as `config` in the installed-source DTO.
+  Registration also serializes the spawned instance's `SourceFeatures`
+  into `source.features`; the DTO exposes `hasHome` from it. Rows installed
+  before the column existed start NULL and are backfilled once at startup
+  (`source::backfill_source_metadata`): each package's manifest re-stamps
+  a NULL `config` and a stale `breaking_change_version` (MAX, never
+  regressing), and its module is compiled without instantiating to
+  re-stamp a NULL `features` (COALESCE keeps any live value). Rows whose
+  package fails to read or compile stay NULL, and the web UI keeps the
+  home entry visible on unknown rather than hiding it.
   The web UI honors `hidesFiltersWhileSearching` on the source browse page
   (a non-empty search box hides the filter UI and the search request drops
   filter values, mirroring AidokuRunner clearing filters on a non-empty
-  query) and the tag/artist/author search capabilities on the manga detail
-  page (`supportsTagSearch`/`supportsArtistSearch`/`supportsAuthorSearch`
-  make tags and creator names clickable, navigating to the browse page with
-  a `Text` filter value, Aidoku's query-less filter search).
+  query). The manga detail page follows Aidoku's declared-first,
+  derived-fallback tap-to-search (`config?.supportsX ?? …` in
+  AidokuRunner): manifest `supportsTagSearch` submits a `Select` with id
+  `genre` and the raw tag; when undeclared, a tag is clickable only on an
+  exact, case-sensitive option-label match against an `is_genre`
+  multi-select or select (submitted value `ids[i] ?? options[i]`), and a
+  creator name is clickable when the served filter list (`GET
+  /sources/{id}/filters`) has a text filter with id `author`/`artist`,
+  submitted as a `Text` filter value — Aidoku's query-less filter search
+  in both cases.
   `maximumParallelRequests` becomes a per-source call semaphore (see
   `state.rs` below). When an update crosses it
   (`old version < breakingChangeVersion <= new version`, Aidoku checks only
@@ -154,20 +269,212 @@ Migrations in `crates/server/migrations`.
   target key differs from the origin's (identical `(source, key)` still
   reports `same_source`); the new-key row is fetched or reused and progress
   carries by chapter number as usual.
+- Built-in local sources (`local/mod.rs`, migration `0011_source_kind.sql`):
+  `source.kind` is `aidoku` for every installed package and `local` for local
+  instances; `local.local` is the seeded default instance. Registration goes
+  through the shared internal-source endpoint `POST /api/v1/sources/internal`
+  (`api/internal_source.rs`, a tagged-union dispatch — a future built-in kind is
+  one more variant): `{type: "local", name, paths, oneshotsDir?}` validates
+  every path (must exist and is a directory), derives the key as `local.<slug>`
+  with a `-2` collision counter (the opds rule), and never pins — the Browse
+  page groups internal sources into their own Internal sources section, with
+  pinning an opt-in on top. Every local instance is deletable through the
+  ordinary surface — except that deleting `local.local` answers 400 while the
+  deployment config explicitly names local roots (`SUMIDOKU_LOCAL_DIRS` / file),
+  because boot (`local::ensure_default_instance`, wired in `build_app`) would
+  otherwise recreate it empty. Every wasm-capability endpoint (filters,
+  listings, home, deep link, login) answers 501 `unsupported` for local rows.
+  There is no index table: browsing walks the instance's roots recursively in
+  real time — the instance's own `paths` source setting wins; the default
+  instance additionally falls back to the legacy global `local.dirs` setting
+  and then the config layer (config `local_dirs` (`SUMIDOKU_LOCAL_DIRS`,
+  semicolon-separated with empty segments ignored; the single
+  `SUMIDOKU_LOCAL_DIR` / `local_dir` spelling is a one-item fallback, default
+  `[<config_dir>/local]`); `state.rs:local_dirs` resolves the layers, and a
+  wrong-shaped stored value counts as unset) — `POST
+  /sources/{id}/search` (`api/mod.rs:search_source`) branches for
+  `kind = local` to `scan_manga_dirs`, which discovers manga top-down
+  with nearest-qualifying-ancestor absorption: a directory directly
+  holding chapter archives qualifies (the Komga trigger), one with no
+  archive anywhere below qualifies by the backward-compatible relaxed
+  rule (nested levels included), anything else is a pure container and
+  discovery descends; a claimed manga absorbs its subtree, so nested
+  series never appear as manga of their own and a flat single-level
+  library scans byte-identically to the pre-nesting behavior. A
+  configured oneshots name (the instance's `oneshotsDir` source setting —
+  an explicit blank turns the rule off, an absent setting falls back for
+  the default instance to the legacy global `local.oneshots_dir`, then to
+  config `local_oneshots_dir` / `SUMIDOKU_LOCAL_ONESHOTS_DIR`) outranks
+  both passes: a
+  directory whose relative path contains it (case-insensitive
+  substring, kmrs's `ScanOptions::oneshots_dir`) is never claimed —
+  each archive directly inside becomes its own one-chapter manga keyed
+  by the archive path (`oneshots/Foo.cbz`) and titled by the file
+  stem, nothing below the directory is picked up, and the ComicInfo.xml
+  / `series.json` / `cover.*` next to an archive are ignored as series
+  sidecars (archive-internal ComicInfo/OPF metadata still applies, so
+  the file stem is only the fallback title). Such
+  a key names a file, not a directory: chapter listing, page reads and
+  the cover chain treat it as the degenerate form whose only chapter
+  is the archive itself (chapter key = the leaf name, the same shape
+  as a top-level archive chapter), so the cover resolves to that
+  chapter's first page. Keys are
+  paths relative to their root (validated: no `..`, empty segments,
+  absolute or drive-prefixed forms) carrying the root index: a bare
+  path addresses root 0 (the pre-multi-dir form, so rows persisted
+  before multiple roots keep resolving) and `N:<path>` addresses root
+  N ≥ 1; `0:` is rejected so a root-0 manga has exactly one key form,
+  and an out-of-range index answers not found. Browsing unions the
+  roots and deduplicates by relative path: the same path present in
+  several roots lists once, from the lowest-indexed root (first
+  directory wins), while shadowed copies stay addressable by their
+  numbered keys. Titles are the leaf segment of the relative path; the
+  case-insensitive substring filter matches the title (Suwayomi's
+  `contains(query, ignoreCase = true)`), the internal id is attached
+  when the manga is registered, and `hasNextPage` is always false; the
+  response is always buffered (there is no source call to stream), and
+  the aggregate search reuses the same arm so a selected Local yields a
+  section instead of an error entry. A manga persists only when opened
+  or shelved (Suwayomi semantics): `find_or_register_manga` scans the
+  directory, resolves metadata by a first-hit-wins chain (no per-field
+  merge) — top-level `ComicInfo.xml` (authoritative when present, even
+  unparsable) → the first chapter archive carrying one, in chapter
+  order (extracted in-memory) → a `series.json` sidecar (flat schema or
+  Mylar's nested `metadata`: title, role-mapped creators, description,
+  combined genres/tags, status, age rating and `readingDirection`; a broken
+  file warns and falls through) → the first EPUB chapter whose OPF parses
+  (EPUB 3 `belongs-to-collection`, then OPF 2 `calibre:series`/`series`, then
+  the first `dc:title`; role-aware creators, the first HTML-cleaned
+  `dc:description`, normalized/deduplicated `dc:subject` and spine
+  `page-progression-direction`; no status counterpart). JSON arrays and OPF
+  author/artist/tag lists stay structured, so their commas are literal; flat
+  series.json scalars and ComicInfo.xml fields use comma splitting. Mylar
+  `readingDirection` and OPF
+  spine direction set `Manga.viewer`. OPF `series_index` and language stay
+  unmapped rather than leaking the first EPUB's book metadata into every
+  chapter. The result feeds the same
+  `upsert_manga` + `reconcile_chapters` as an online fetch; the scan
+  skips dot entries, `@eaDir` and unreadable items at every level
+  (failed items land in the reconcile protection set by full relative
+  path, a failed container prefix-protecting its unwalked subtree) and
+  dedupes by key. Chapters are `.cbz`/`.zip`/`.epub` archives and
+  image-leaf
+  directories (direct image files) at any depth under the manga, keyed
+  by their path relative to the manga directory, ordered by the number
+  parsed from the name (`第?N话` / `ch.?\s*N` / `vol.?\s*N`) descending
+  with a natural-order tiebreak, unnumbered ones last; pages are a
+  chapter's own direct image files, sorted case-insensitive naturally.
+  A divina-profile EPUB (image-based books; reflowable text is out of
+  scope) instead takes its page list from direct image spine items or
+  XHTML/SVG pages that each resolve to exactly one image (`local/epub.rs`:
+  the `mimetype` entry must be `application/epub+zip`, and the package
+  document is located through `META-INF/container.xml`). Manifest, spine
+  and zip entries must agree, body text must stay within 15 normalized
+  UTF-16 units per page, and invalid or non-divina packages yield no
+  pages. A page's mime is the OPF-declared media type with the extension
+  mapping as fallback. Migration 0021 clears cached local EPUB page rows
+  and counts from older parsers while preserving reading progress; the
+  next open rebuilds them under these rules. Migration 0022 adds
+  `chapter.epub_divina_compatible`: true for divina, false for other
+  EPUBs, and NULL for non-EPUB or unknown. Local scans and page rebuilds
+  refresh the value.
+  `load_pages`
+  (`source/mod.rs`) lists the chapter from the filesystem for local manga
+  and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
+  reads image files directly and extracts single archive entries
+  (`by_name`) through a version-checked 16-handle `ZipArchive` LRU
+  (`local/zip_cache.rs`), so replaced archives are reopened. Page rows,
+  counts, and compatibility are committed together. The downsample pipeline
+  is untouched. Covers reuse the disk cache with
+  the byte source switched to the fallback chain (`local::resolve_cover`):
+  `cover.*` sidecar in the manga directory → first page of the chapter
+  list's last chapter (Suwayomi's `chapters.last()`, the lowest-numbered
+  one) → 404 placeholder.    `?refresh=1` on the chapters endpoint re-scans;
+  the library update scheduler treats the local scan as the source call.
+  Auto-download skips local manga (files are already local), and the web
+  UI hides the download buttons for `kind = local`, shows a manual refresh
+  button on the chapter list, and edits each instance's roots and oneshots
+  marker in its source settings: `GET/PUT /api/v1/sources/{id}/settings`
+  answer a server-synthesized definition for local rows (`paths` as an
+  unknown-to-Aidoku `list` type plus a `oneshotsDir` text) with the
+  effective, fallback-resolved values; PUT validates `paths` against the
+  filesystem and rejects unknown keys, `oneshotsDir: null` clears the
+  override, and reset clears only the oneshots override (the roots have no
+  default). The retired global `local` settings group is rejected on write
+  (400); the legacy flat `local.dirs` / `local.oneshots_dir` keys remain
+  accepted and keep working as the default instance's fallback layer. RAR/CBR, PDF and 7z are
+  out of scope (no mature pure-Rust
+  readers, or an external runtime library).
+- Built-in OPDS source (`opds_source/mod.rs`): `source.kind = opds` turns an
+  OPDS catalog — Komga, Kavita, Calibre-Web — into a first-class source,
+  multi-instance from day one. Both wire formats are accepted, detected per
+  response by Content-Type with a JSON body sniff for mislabeled servers: 1.2
+  (Atom) through `parse_feed`, 2.0 (JSON) through `parse_feed_json`, both
+  filling the same `Feed` model. Registration shares the internal-source
+  endpoint: `POST /api/v1/sources/internal` with `{type: "opds", name, url,
+  username?, password?}` takes
+  name + catalog URL + optional basic credentials; keys are `opds.<slug>`
+  with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
+  land in `source_setting` (`username`/`password`), instances are
+  deletable (cascade) and excluded from repo management and metadata
+  backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint
+  answers 501 `unsupported` exactly like the local source. Capability
+  mapping: search = the catalog's OpenSearch descriptor (`rel="search"`
+  link on the root feed → `{searchTerms}` template) or, on 2.0 catalogs,
+  the templated `rel="search"` link itself (`{?query}` expanded directly,
+  no descriptor), falling back to a
+  bounded BFS traversal (depth 2, 12 feeds) when the descriptor is absent
+  and flagging the response `degraded`; manga = a drill-down entry (Atom
+  `<id>` is the key, its feed link is `manga.url` — the only re-fetch
+  handle); chapters = the series feed's acquisition entries, paginated
+  feeds followed to completion (cap 20); pages = the entry's OPDS-PSE
+  stream link expanded into `Url` pages (`pse:count`, 0-based page
+  numbers — Komga's `books/{id}/pages/{n}` needs no archive download)
+  or, on 2.0, the publication manifest's `readingOrder` enumerated into
+  the same per-page `Url` rows (the book entry's `self` link carries the
+  manifest, and it wins over the acquisition archive when both exist),
+  else the acquisition archive is downloaded once to
+  `config_dir/opds-cbz/<chapter_id>` and image entries are served through
+  the shared `ZipCache` LRU as an `OpdsZip` page-content variant
+  (invalidated on page-row rewrite, self-healing after cache loss);
+  covers = the first book entry's `image`/`thumbnail` link through the
+  existing disk cover cache. All catalog traffic goes out with the
+  instance's basic credentials through `http_get`/`fetch_page_image`/
+  `fetch_cover_image` opds arms; a 401 surfaces as `bad_gateway` with the
+  status in the message. Search, register, refresh, the background
+  updater, aggregate search and migrate all branch to the catalog client
+  the same way they branch for `kind = local`, so migrate between an
+  OPDS instance and any other source works unchanged. The Browse page
+  gets an admin-only internal-source dialog (`BrowsePage.tsx`
+  `InternalSourceModal`, a kind picker over the registration dispatch) and
+  hides the home/settings buttons on opds cards.
+  The 2.0 mapping (`parse_feed_json`): navigation items become drill
+  entries (href doubles as the key), publications become entries
+  (`metadata.identifier/title/author/modified/description` onto the 1.2
+  fields; a feed-typed `self` link is the series drill-down, any other
+  JSON `self` link the book's manifest; `images[0]` is the cover, the
+  rest thumbnails), and groups are flattened — their navigation and
+  publications join the same entry list — so series feeds and search
+  results look identical to 1.2 downstream.
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the
   pin order and seeds the destination priority of cross-source migration.
   `GET /api/v1/sources` items carry `pinned` and `pinOrder` (index in that
   list, null when unpinned) via `repo::source_json`.
-  `PATCH /api/v1/sources/{id}` `{pinned: bool}` pins (appended to the tail)
-  or unpins (removed); `POST /api/v1/sources/reorder-pinned` `{ids: [...]}`
+  `PATCH /api/v1/sources/{id}` takes `{pinned?: bool, enabled?: bool}`;
+  pinned pins (appended to the tail) or unpins (removed), and enabled
+  toggles whether the source can be instantiated. Disabling a source updates
+  the row and evicts any running instance so the next capability call observes
+  the new state; enabling leaves the row as enabled and lets the next access
+  respawn the instance. `POST /api/v1/sources/reorder-pinned` `{ids: [...]}`
   replaces the order wholesale and answers 400 unless ids are exactly the
   current pinned set, so a reorder never silently drops a pin.
   `delete_source` prunes the key. The Browse page shows the pinned sources
   in an ordered section above the full list, with drag-to-reorder
   (`webui/src/pages/BrowsePage.tsx`).
-- Cross-source migration (`api/migrate.rs`): moves library entries between
+- Cross-source migration (`api/migrate.rs`): moves the requesting user's
+  library entries between
   sources, Aidoku-style. `GET /api/v1/migrate/sources` lists installed
   sources with their in-library `mangaCount` (plus pin data from
   `source_json`); `GET /api/v1/migrate/lookup?mangaId=&targetSourceId=[&query=]`
@@ -198,72 +505,297 @@ Migrations in `crates/server/migrations`.
   source-first wizard at `/migrate` (`webui/src/pages/migrate/`) and the
   single-manga flow in the detail page's more-menu
   (`webui/src/pages/manga/MigrateModal.tsx`).
-- Authentication (`auth.rs`): off until a password exists — either seeded
-  from the config (`auth.password`, or the legacy `basic_password` alias)
-  on every boot, or stored in the `auth_credential` table by a previous
-  boot/password change. With a password, `require_auth` guards all of
-  `/api/v1` except `/health`, `auth/status` and `auth/login`: the bearer
-  credential (header, or `access_token` query for `<img>`/WebSocket
-  clients) is checked against the configured `auth.api_keys` (SHA-256
-  fingerprints in memory) and session tokens in `auth_token` (SHA-256 at
-  rest, 30-day rolling expiry). Login/logout/password-change live under
-  `/api/v1/auth/`; changing the password revokes every session token.
-  Failures share one `401 {"error":{"code":"unauthorized"}}` shape. The
-  password is argon2-hashed; the config-set password always re-seeds the
-  stored hash at boot, so it wins over UI-changed passwords after a
-  restart.
-- OPDS catalogs: 1.2 (Atom) at `/opds/v1.2` (`opds/mod.rs`) and 2.0 (Readium
-  Web Publication JSON) at `/opds/v2` (`opds/v2.rs`). The 2.0 feed builds its
-  URLs from the 1.2 cover/file/stream endpoints; the two share auth, paging
-  and query helpers from `opds/mod.rs`. Basic auth applies to the catalogs
-  when authentication is enabled, checking the same site password (any
-  non-empty username) — repeated verifications hit a one-entry cache so
-  per-page image requests don't pay argon2 each time.
+- Authentication (`auth.rs`): only the built-in admin (`USER_ID = 1`) can
+  authenticate; its login identity lives in the `user` table. Login is
+  username + password (`POST /api/v1/auth/login`), answered with an admin
+  session token (`auth_token.user_id`, SHA-256 at rest, 30-day rolling expiry)
+  and the `{id, username}` identity; there is no role field or user management
+  API. The login username defaults to `admin` and can be set in config
+  (`auth.username` / `SUMIDOKU_AUTH_USERNAME`), re-seeded onto the user row on
+  every boot; `/api/v1/auth/status` exposes it as a top-level `username` only
+  with a valid authenticated identity and omits it for anonymous requests.
+  Auth is off until the built-in admin has a password, seeded from config on
+  every boot or stored by a previous password change. With auth off every
+  request acts as the same admin. `require_auth` is the only route gate:
+  bearer credentials resolve against UI-managed keys (SHA-256 fingerprints in
+  the `api_key` table, created and revoked through `/api/v1/auth/api-keys`,
+  plaintext returned once at creation) or an admin session, and handlers
+  continue to bind the legacy `AuthUser.id` storage key (always 1). Password
+  changes revoke every admin session, while the config-set password is
+  re-seeded at boot.
+- Single-owner migration (`0019_single_owner.sql`): non-admin settings and
+  sync origins are deleted explicitly, then non-admin users and their
+  user-owned rows are removed through existing foreign-key cascades. The
+  built-in row is forced back to the admin role, while admin data and sessions
+  remain. Legacy `user_id` columns and `user.1.*` settings keys remain only as
+  storage details; there are no additional accounts, roles or role-dependent
+  product branches. Before those deletions, the migration rehomes each latest
+  admin-owned tombstone that has a non-admin origin and rewrites its identity
+  to the admin. A one-time `sync.single_owner_rebaseline` marker then appends
+  current admin rows and latest tombstones as local events, preserving the
+  existing sequence history. Every appended version is strictly newer than
+  that entity's prior events, so preserved state also wins equal-time conflicts
+  on existing peers. Live row versions and snapshot timestamps move together;
+  the marker is cleared in the same transaction and otherwise retried on the
+  next boot. Ordinary compaction is unchanged. Incoming sync changes with any
+  other `origin_user_id` are rejected so old peers cannot reintroduce reader
+  data.
 - The web UI is served from the binary: release builds embed `webui/build`
   (`webui_assets.rs`, rust-embed); debug builds read it from disk.
-- Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows;
-  `source_order` is the source's own chapter index. `GET /api/v1/library`
-  filters by `search`, `categoryId`, `filter` and the tri-state pairs
+- Library model (`model.rs`, `api/library.rs`): manga → chapter → page rows
+  hold shared content; owner state lives in `manga_user` (library
+  membership, viewer override, incognito, sort key) and `chapter_user`
+  (progress, read/bookmark/download flags, history stamp). Their legacy
+  composite keys include `user_id`, which is always 1, and every REST query
+  and write binds that same admin identity. `source_order` is the source's own chapter
+  index.   `GET /api/v1/manga/{id}/chapters` orders by
+  `sort=source|chapter|date` (the source's listing order, chapter number and
+  upload date respectively) and `order=asc|desc` — absent keeps the key's
+  default: source stays ascending while chapter and date default to
+  newest-first; invalid values answer 400. Numberless chapters count lowest
+  and missing dates sink to the bottom of the default date order.
+  `GET /api/v1/library`
+  filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
+  boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
+  chapter flags) and the tri-state pairs
   `contentRating`/`contentRatingExclude` (comma-separated manga-level
-  ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`) and
+  ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`),
   `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on
-  `manga.source_id`): within one dimension the include set is an OR and the
+  `manga.source_id`) and
+  `category`/`categoryExclude` (comma-separated category ids, EXISTS / NOT
+  EXISTS over the user's `category_manga` rows; id `0` is the
+  uncategorized arm — include means no category rows, exclude means at
+  least one): within one dimension the include set is an OR and the
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
-  treated as absent; invalid tokens answer 400. Chapter reconcile
+  treated as absent; invalid tokens answer 400. The entry payload's
+  `unreadCount`, `sort=unread` and the ad-hoc `filter=unread` all count a
+  chapter with no read `chapter_user` row as unread, including a missing row.
+  `sort=latestChapter` orders by each title's maximum chapter `fetched_at`
+  (the chapter's first-seen time), descending with `manga.id ASC` ties;
+  titles without chapters sort last.
+- Sync change foundation (`sync.rs`, migrations `0017_sync_change_tracking.sql`
+  and `0018_sync_protocol.sql`): local `user_id` and accepted
+  `origin_user_id` values are always 1; user references below are legacy
+  protocol fields for the admin, not additional accounts. Tracked rows have an internal
+  `last_modified_at` integer Unix-millisecond timestamp, default `0` for
+  pre-tracking history. Only sync-relevant value changes stamp it and append a
+  `sync_change` event: identical upserts, ignored inserts and timestamp-only
+  updates stay quiet, as do the manga fetch/scheduler bookkeeping columns and
+  chapter `fetched_at`. Every non-delete event has
+  `modified_at == snapshot.lastModifiedAt`; a delete event instead carries the
+  deletion time while its snapshot retains the deleted row's previous version.
+  Ordinary updates and deletes use `max(now, old + 1)`; a key- or
+  owner-changing UPDATE also includes the NEW key's historical maximum + 1 in
+  the NEW user's namespace. An ordinary insert with timestamp zero uses
+  `max(now, the entity key's historical maximum + 1)`, so recreating a deleted
+  key cannot move its version backwards. Explicit nonzero
+  insert timestamps and changed nonzero update timestamps are preserved for
+  sync apply. Only a changed nonzero UPDATE value is treated as explicit: a
+  value equal to OLD is indistinguishable from leaving the column untouched
+  and follows the ordinary increment rule. The journal has no foreign keys to
+  tracked entities and belongs to users through `user_id ON DELETE CASCADE`;
+  deleting a user removes only that user's events. Its `AUTOINCREMENT`
+  sequence, not a wall-clock time, is the delta cursor. Migration 0017 seeds an
+  ordered baseline of parent manga, user state, categories and memberships at
+  modification time `0`; manga without user state have no per-user baseline.
+  A new user row journals its parent manga first, and user-state or membership
+  changes also journal a parent-manga signal for that user. These signals only
+  allocate a fresh sequence for a composite refresh and keep the shared parent
+  version; child entities carry their own versions.
+  Migration 0018 adds `origin`, `origin_user_id`, `origin_entity_key` and
+  `origin_sequence`. Existing rows are backfilled from the local instance,
+  user, mapped entity key and sequence. `setting.sync.instance_id` is seeded
+  once with 16 random bytes encoded as hex, and the journal insert trigger
+  fills local origin metadata only when `origin_sequence = 0`. `entity_key`
+  remains the local mapped key; the origin fields retain the original event
+  identity. `sync_alias` stores remote-to-local entity mappings separately from
+  event versions, so stale events and compaction cannot change the current
+  version's origin. `sync_origin_state` records the greatest applied origin
+  sequence per origin/origin user/local user/kind/original key, while the
+  singleton `sync_checkpoint` starts at base sequence zero. `changes_since` reads one
+  SQLite snapshot, uses `limit + 1`, and returns the last returned sequence
+  while more of the user's events exist, otherwise the global sequence
+  high-water mark, including other users' sequences; a cursor ahead of that
+  mark is rejected.
+  Chapter and progress baselines are zero-version and ordered parent first.
+  Their audience is the union of users with `manga_user` and `chapter_user`;
+  history-only users receive parent manga/chapter events without gaining
+  library membership. Chapter changes emit a parent-manga signal, and progress
+  changes emit parent manga then parent chapter signals before their own event.
+  `sync_chapter_state` keeps the chapter's local ids, source/manga/chapter
+  natural keys and content snapshot. Chapter snapshots exclude `fetched_at`;
+  progress tracks only page/read/bookmark/history values, not `is_downloaded`,
+  download queue rows, files or page blobs. `chapter_user.last_read_at` remains
+  a reading-history timestamp in seconds, not the millisecond modification
+  version. Rekeying keeps the local entity key and refreshes natural identity.
+  Source, manga and chapter deletion capture chapter/progress snapshots before
+  the parent rows disappear, so their tombstones retain natural identity and
+  the cascades do not duplicate them. REST and backup-v1 shapes are unchanged.
+- Direct instance sync (`api/sync.rs`, `sync/apply.rs`, `sync/compact.rs`):
+  `GET /api/v1/sync/changes?origin=<peer>&since=<cursor>&limit=<1..500>` is
+  authenticated; the peer origin is required, `since` defaults to zero, and
+  the default limit of 100 is capped at 500. One SQLite snapshot returns only
+  the authenticated user's rows after the local cursor whose original origin
+  is not the peer. The response is `{origin, userId, nextCursor, hasMore,
+  changes}` with the local instance id in `origin`. Every change has `origin`,
+  `originUserId`, `originSequence`, `entityKind`, `entityKey`, `deleted`,
+  `modifiedAt`, `identity` and `snapshot`; wire `entityKey` is
+  `origin_entity_key`, never the local mapped id. Local sequences are only
+  delta cursors, while origin and origin sequence identify the original event.
+  `POST /api/v1/sync/changes` accepts `{origin, changes}` in the same shape.
+  The envelope sender must not be the local instance; individual events may
+  retain a third-party origin. The whole batch is validated before writing,
+  then each event gets its own `BEGIN IMMEDIATE` transaction and an
+  `{originSequence, status}` result of `applied`, `duplicate`, `stale` or
+  `skipped` (`reason = source_unavailable`). Exact repeats and older origin
+  sequences are rejected by `sync_origin_state`; applied events, legitimate
+  no-ops and stale events advance it, but an unavailable source rolls the event
+  back without advancing so installing the source and resending works. A stale
+  event leaves the row unchanged but records its origin mapping so a later
+  rekey still updates the same local entity. `sync_alias` owns these
+  remote-to-local mappings independently of event versions; local events also
+  register their own origin so a relay can sync back to the source instance.
+  First matches use source/manga/chapter natural keys and category names; a
+  numeric category id alone never proves a match. Category snapshots always
+  carry numeric `includeInDownload: 0` for older peers that require the field.
+  Apply accepts legacy values but normalizes the journaled snapshot to `0` and
+  never writes the retired column; compaction likewise rewrites reused live and
+  tombstone snapshots to `0`, so legacy history cannot reintroduce old values
+  into a new baseline. Category membership identities
+  carry `categoryOrigin`, `categoryOriginUserId` and `categoryOriginEntityKey`
+  from their current parent event, allowing parent resolution across relay
+  origins in either arrival order. Missing parents become zero-version stubs
+  without fake events or library membership; a later authoritative parent fills
+  them. Ordinary
+  entities compare `(modified_at, origin, origin_sequence)`: newer tombstones
+  delete, newer updates recreate, and deleting an absent entity only advances
+  dedupe. Category membership versions consider the current local key and every
+  historical key linked by `sync_alias`, so a tombstone left by stub merging
+  still orders later relayed updates. Stub coalescing applies each relation's
+  winning live/deleted state; if the winning physical row has a higher version
+  than its latest event, a local event records that version explicitly. Progress
+  comparisons include the actual row's `last_modified_at` even when its current
+  journal event is absent.
+  Progress merges `is_read` with OR, page and history with
+  NULL-safe max, and bookmark by the deterministic version winner. A result
+  equal to current state only advances dedupe; an exact incoming result keeps
+  the incoming origin, while a new merged result gets a local-origin event.
+  Apply captures the starting local sequence, removes only its automatic
+  journal entries, writes the final row version explicitly, then journals the
+  authoritative remote event and locally derived parent/cascade events with
+  their proper origins. Shared manga/chapter fanout is rebuilt for every
+  affected local user, while user-owned state stays with the authenticated
+  user. `sync_chapter_state` is retained except for real deletion.
+  Admin-only `POST /api/v1/sync/compact` compacts in one immediate transaction.
+  It writes current rows and every latest tombstone in manga, manga_user,
+  category, chapter, chapter_user, category_manga order. Baseline rows receive
+  new local cursor sequences and preserve each current entity event's origin;
+  `sync_alias` retains the other remote-to-local mappings. A current stub
+  recreated after a tombstone instead gets a local origin; tombstones keep
+  their own origins. The response `{baseCursor, removed}` records the first new
+  baseline sequence; `sync_alias` and `sync_origin_state` are untouched. A
+  nonzero cursor below
+  that sequence gets 409 `resync_required` and must restart at zero, which
+  returns the complete baseline rather than an empty pseudo-page. Replaying a
+  baseline is idempotent through the same dedupe and merge rules, and later
+  deltas continue from the new high-water mark. Compaction is operator-invoked,
+  never scheduled, and tombstones and origin state survive it.
+- Filter groups (`api/filter_groups.rs`, migration `0013_filter_group.sql`):
+  Aidoku-style saved rule sets. A `filter_group` row belongs to the admin
+  (`unique (user_id, name)` with `user_id = 1`, `sort_order`), its
+  `filter_group_rule` rows cascade with it (`unique (group_id, type, value)`;
+  flag rules carry a NULL value, so the write path — not the index — dedupes
+  them, SQLite treating NULLs as distinct). `GET`/`POST /api/v1/filter-groups`,
+  `PATCH`/`DELETE /api/v1/filter-groups/{id}` (PATCH renames and/or
+  replaces the rule set wholesale) and `PATCH .../reorder` follow the
+  category handlers' shape. Rule types: `downloaded` (EXISTS
+  `chapter_user.is_downloaded`), `started` (EXISTS
+  `chapter_user.last_read_at`), `completed` (`m.status = 2`),
+  `has_unread` (default-unread: EXISTS a chapter with no read
+  `chapter_user` row, including a missing row), and the valued
+  `source` / `content_rating` / `category` (one id per row). Evaluation
+  matches Aidoku's filter loop (`compile_group`): includes OR within one
+  valued dimension, excludes apply per value, dimensions and flag rules
+  AND — "all rules ANDed" holds only across dimensions.
+  `GET /api/v1/library?groupId=` compiles one group into the same WHERE
+  clause, ANDed with the ad-hoc parameters; a nonexistent group 404s like a
+  nonexistent category. The web UI manages groups in Settings →
+  Filter groups and renders them as a single-select chip strip above the
+  category chips; two admin display settings (legacy `user.1.*` keys,
+  next to `incognito.enabled`) steer the page: `library.default_category`
+  (`all` / `uncategorized` / a category id) seeds the initial chip only
+  on the first visit — a stored chip selection (#243's localStorage
+  prefs) always wins afterwards — and `library.show_uncategorized`
+  hides the uncategorized chip.
+  `GET /api/v1/library/source-counts` returns per-source in-library totals
+  (`{sourceId, count}`) for the web UI's source filter dropdown — counts
+  include disabled sources' rows and only in-library manga. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
-  listing when it has download rows, and deletes it otherwise. Manga rows
+  listing when it has download rows, and deletes it otherwise — except keys
+  in the `protected` set (the local source's failed-directory protection,
+  see below), which survive the pass unread. A previously unseen key with one
+  unique vanished number match rekeys that existing row in place rather than
+  deleting and recreating it: the chapter id, reading progress, download rows
+  and artifacts survive, and its `fetched_at` is preserved. Page rows are
+  cleared and `page_count` resets to zero so the next page load fetches the new
+  key. Only truly new chapters receive the current timestamp; rekeyed replacements remain in
+  `new_ids`, leaving update results and notifications intact while the
+  downloads-only re-upload filter decides their candidates. Manga rows
   persist the source `viewer` (aidoku `Viewer` as int) and chapter rows the
   source `thumbnail`; a source declaring exactly one language fills missing
-  chapter languages with it on reconcile. A non-zero
-  `manga_user.viewer_flags` is the user's viewer override: API responses
+  chapter languages with it on reconcile, and a whitespace-only chapter title
+  folds to NULL, matching the Aidoku host's `""` → nil normalization. A non-zero
+  `manga_user.viewer_flags` is the admin's viewer override: API responses
   report it as the manga `viewer` while the source value stays stored.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
-  stamped whenever `lastPageRead` is written; the history page and both OPDS
-  history feeds select rows where it is non-null. The global
-  `incognito.enabled` setting or a per-manga `manga_user.incognito` flag
+  stamped whenever `lastPageRead` is written; the history page selects rows
+  where it is non-null. The admin's
+  `incognito.enabled` setting — stored as the legacy key
+  `user.1.incognito.enabled` and translated to a bare key by
+  `GET`/`PUT /api/v1/settings` — or a per-manga `manga_user.incognito` flag
   (Aidoku's pause-history analogue) pauses the stamp: a progress write still
   saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
-  reads never enter history and existing stamps are kept. `GET`/`PATCH
+  reads never enter history and existing stamps are kept. Marking unread
+  (a bare `isRead: false` — no `lastPageRead` in the same request — on
+  `PATCH /api/v1/chapter/{id}` or the `/chapter/batch` equivalent) is
+  Aidoku's mark-unread, not a plain flag write: it wipes the
+  whole reading trace — `last_page_read`, the resume target and the history
+  stamp all go (explicit user intent, so incognito does not protect the
+  stamp), while the bookmark survives; the detail page's row menu and batch
+  selection share this semantic. A patch carrying `lastPageRead` alongside
+  `isRead: false` is "still reading" and keeps the trace. Marking read never touches the stamp by
+  itself, deliberately diverging from Aidoku's date-refresh. `GET`/`PATCH
   /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
   row, so the flag also works for manga not in the library), and the backup
   document round-trips it, defaulting to off for backups predating the field.
-  The web UI exposes the global toggle in Settings (`SettingsPage.tsx`) and
+  The web UI exposes the admin-wide toggle in Settings (`SettingsPage.tsx`) and
   the per-manga toggle as an icon button in the detail header
   (`MangaDetailPage.tsx`).
-- Backup export/import (`api/backup.rs`): `GET /api/v1/backup` answers one
-  JSON document (a `Content-Disposition` attachment) with the single user's
-  library rows and metadata, categories with membership, reading progress,
-  app settings and source settings, plus source identity (key, name, version
-  and a best-effort repo URL). `POST /api/v1/backup` restores it, optionally
-  limited by `?sections=` to some of `library`, `categories`, `progress`,
-  `settings`, `sourceSettings`. Restore upserts by natural key — source
+- Backup export/import (`api/backup.rs`): `GET /api/v1/backups/document` answers one
+  JSON document (a `Content-Disposition` attachment) with the admin's complete
+  state: library rows and metadata, categories with membership, reading
+  progress, app settings and source settings, plus source identity (key, name,
+  version and a best-effort repo URL). `POST /api/v1/backups/document` restores into the
+  same owner state, optionally limited by `?sections=` to some of `library`,
+  `categories`, `progress`, `settings`, `sourceSettings`. Restore upserts by natural key — source
   key + manga key, chapter key, category name — inside one SQLite
   transaction; an unknown `version` or an invalid row answers 400 with the
   database untouched. Entries naming a source that is not installed are
   skipped and listed in the response `warnings`; the `restored` map counts
-  applied rows per section. Progress entries carry a chapter metadata
-  snapshot so a fresh instance can recreate chapter rows ahead of the
+  applied rows per section. Category update and automatic-download exclusions
+  use the backup-only `includeInUpdate` and `includeInDownload` fields (`2` for
+  excluded categories, `0` for all others). Legacy `includeInDownload: 1` marks
+  include-only categories, which an exclusion list cannot represent. A category
+  restore containing any such entry forces `auto_download_new_chapters` to
+  `false`, even when the target or backup enables it; review and reconfigure
+  category exclusions and automatic downloads before re-enabling them. The raw
+  `library.excluded_update_categories` and `library.excluded_download_categories`
+  settings are omitted from exports and ignored during settings restore;
+  category restoration maps names to target-local ids and merges them into the
+  existing exclusion settings without writing the retired category columns.
+  Progress entries carry a
+  chapter metadata snapshot so a fresh instance can recreate chapter rows ahead of the
   source's first fetch. The document's `version` field (currently `1`) is
   the format contract, and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
@@ -271,11 +803,12 @@ Migrations in `crates/server/migrations`.
   The construction (`build_backup_doc`) and the restore execution
   (`import_backup_doc`) are shared with the scheduler and the
   restore-from-list endpoint below, so a scheduled file is the same
-  document the GET handler serves.
+  document an admin's GET handler serves.
 - Aidoku backup import (`api/aidoku_backup.rs`):
-  `POST /api/v1/import/aidoku` accepts a `.aib` upload — a binary plist of
+  `POST /api/v1/backups/import/aidoku` accepts a `.aib` upload — a binary plist of
   Aidoku's Codable `Backup` struct, decoded with the `plist` crate into
-  tolerant structs that only name the consumed fields. It imports library
+  tolerant structs that only name the consumed fields. It imports into the
+  requesting user's own state: library
   membership (`library` + `manga` metadata), reading progress (`history` +
   `chapters` metadata, creating manga/chapter rows as needed, not in
   library for manga the backup does not list), and categories with
@@ -297,7 +830,7 @@ Migrations in `crates/server/migrations`.
   file answers 400 with no writes. The web UI settings page has the
   upload → dry-run preview → confirm flow under the backup section.
 - Suwayomi/Mihon backup import (`api/suwayomi_backup.rs`):
-  `POST /api/v1/import/suwayomi` accepts a Suwayomi-Server or
+  `POST /api/v1/backups/import/suwayomi` accepts a Suwayomi-Server or
   Mihon/Tachiyomi backup as a binary body. Both apps write the same
   bytes — gzip around one protobuf `Backup` message — whatever the
   extension (`.tachibk`, `.proto.gz`); the endpoint sniffs magic bytes
@@ -306,7 +839,8 @@ Migrations in `crates/server/migrations`.
   against the wire schema (Suwayomi's `backup/proto/models`, Mihon's
   `data/backup/models`), declaring only consumed fields so tracking,
   memos, preferences and Suwayomi's `meta` maps are skipped on decode.
-  The merge reuses the same additive primitives as the Aidoku import
+  The merge lands in the requesting user's own state and reuses the same
+  additive primitives as the Aidoku import
   (`api/import_merge.rs`), with two format-specific twists: a manga is
   in the library only when `favorite` is set (kotlinx ProtoBuf omits
   default-valued scalars, so the wire never carries `favorite=true` —
@@ -327,39 +861,119 @@ Migrations in `crates/server/migrations`.
   the `skipped` list. `?dryRun=true` rolls back the same transaction.
   The web UI walks upload → grouped dry-run preview → per-source
   mapping dropdowns → confirm → result. Tracking, extension settings,
-  saved searches and server preferences are out of scope; the manga
-  `url` is the Mihon source's internal key, which may not line up with
-  the corresponding Aidoku source's manga key — such entries import
-  but a later refresh can miss them.
+  saved searches and server preferences are out of scope. The manga
+  `url` is the Mihon source's internal key, whose shape can differ
+  from the corresponding Aidoku source's (Suwayomi's copymanga
+  extension stores site paths — `/comic/<slug>`,
+  `<slug>/chapter/<uuid>` — where Aidoku's `zh.copymanga` uses the
+  bare `<slug>`/`<uuid>`); a per-source registry (`api/key_realign.rs`)
+  rewrites the known shapes to the target source's native format
+  before any row lands — manga, chapter and history keys alike,
+  idempotently — and the group report counts the rewrites under
+  `realignedKeys`. Keys of sources without a registry entry import
+  as-is, which may not line up with the Aidoku source's — such
+  entries import but a later refresh can miss them.
 - Scheduled backups (`backup/mod.rs`): a `BackupScheduler` task (wired in
   `build_app` like the update scheduler) wakes every 60s, re-reads the
   `backup.*` keys from the `setting` table and, when `backup.enabled` is
   set and the run is overdue — no `backup.last_run` yet, or more than
   `backup.interval_hours` since it — writes
   `sumidoku-backup-<yyyymmdd-HHMMSS>.json` (UTC) to the backup dir through
-  a tmp+rename swap, stamps `backup.last_run`, and prunes. The first tick
-  doubles as the startup overdue check. Pruning keeps the newest
+  a tmp+rename swap, stamps `backup.last_run`, and prunes. The scheduled
+  document is always built as the built-in admin: a server-side full
+  export (global settings and source settings included). The
+  first tick doubles as the startup overdue check. Pruning keeps the newest
   `max(backup.retention_count, 1)` files by name order — the newest file
   is never deleted, even at retention 0 — and ignores files not matching
   the name pattern. Each setting resolves env (`SUMIDOKU_BACKUP_ENABLED` /
   `_INTERVAL_HOURS` / `_RETENTION_COUNT` / `_DIR`) over the `setting`
   table over the built-in defaults (disabled, 24h, keep 10,
-  `<config_dir>/backups`). `GET /api/v1/backups` lists the dir
+  `<config_dir>/backups`). `GET /api/v1/backups/files` lists the dir
   (name/size/createdAt, newest first, plus the effective `dir`);
-  `POST /api/v1/backups/restore` reads a listed file server-side and runs
+  `POST /api/v1/backups/files/restore` reads a listed file server-side and runs
   it through `import_backup_doc`, accepting only names that match the
   backup pattern (everything else, `..` included, is a 400; a
   well-shaped but missing file is a 404).
 - Downloads (`download/mod.rs`): serial within a source, parallel across
-  sources, with a page-level fetch cap inside a chapter.
+  sources, with a page-level fetch cap inside a chapter. Download rows use
+  the legacy `(chapter_id, user_id)` primary key with `user_id = 1`: enqueue,
+  pause, cancel, list and stream events all belong to the admin.
+  `DownloadSettings::load` reads the admin's current settings for enqueue,
+  dispatch, update and reader operations: format and source concurrency are not
+  captured at manager construction, and the update scheduler likewise reloads
+  its behavior toggles. Only `downloads_dir` stays fixed at deployment time.
+  Artifact files stay at deterministic paths and are reused when a chapter is
+  already downloaded. Both normal completion and existing-artifact settlement
+  commit the finished `download` row and the admin's
+  `chapter_user.is_downloaded` flag in one `BEGIN IMMEDIATE` transaction;
+  either write failing rolls both back, and the `finished` event is emitted
+  only after commit. The manga detail seeds its active queue and per-page
+  progress with one download-list request, then follows events; terminal events
+  clear the activity and completion sets `isDownloaded`. Manual batch downloads
+  accept selected chapters or whole-manga unread, newest-N and all rules; the UI
+  skips downloaded chapters and the server deduplicates active rows. Non-text pages are measured from newly fetched bytes on
+  every download, but their page-row updates commit only after packaging
+  succeeds: a failed attempt writes no partial metadata, and the move-failure
+  fallback still commits the measurements with the valid artifact. A row's
+  stored `path` resolves through `download::product_path` — absolute is used
+  as-is, relative joins `downloads_dir` — and every read/delete site
+  (`api/download.rs`) goes through it.
+  `DownloadManager::delete` is the shared removal routine for explicit delete,
+  clear and read-driven deletion: it removes the row, clears `is_downloaded`
+  and deletes the artifact once no other row references it. Manual progress
+  (`isRead: true` without `lastPageRead`) and reader completion
+  (`lastPageRead = pageCount - 1`) have independent `delete_after_manual_read`
+  and `delete_after_read` switches. Read-driven deletion skips bookmarks unless
+  `allow_delete_bookmarked` is enabled; that check does not restrict explicit
+  deletion. `enqueue_reader_ahead` runs after a successful reader page load:
+  `downloads.download_ahead` enables it and `downloads.download_ahead_count`
+  bounds the following unread chapters in source reading order. Existing
+  downloaded/queued/running chapters are skipped, errors may retry, and the
+  ordinary enqueue dedupe prevents repeated page loads from growing the queue;
+  download workers and image requests never recurse into reader-ahead.
+- Download move (`download/mod.rs:move_product`): when
+  `download.move_path` is set (setting table, env
+  `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
+  to the path its template renders to. Variables `{source}`,
+  `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}` and
+  `{filename}` (the default base name, no extension) each pass through
+  `sanitize()`, with empty or unknown variables rendering as `Unknown`.
+  A template containing `{filename}` renders the full file name (`.cbz`
+  is appended when it lacks a known archive extension); anything else
+  renders a directory the default product name is appended under. The
+  move creates parents and renames, falling back to copy+remove on
+  cross-device targets (a mounted share is normally another filesystem);
+  a failed move (mount down, permission, disk full) logs and keeps the
+  product at its default location without failing the download. Moved
+  rows store the absolute target (a relative template target stays
+  relative under `downloads_dir`), so the move target is a shared
+  content area: downloading the same chapter again renders the same
+  absolute file, overwrites it with identical content or settles onto it
+  without repacking, and deletion removes the file only
+  once no row references it (an already-missing file counts as
+  deleted). Metadata edits only steer future downloads — earlier
+  products stay where they were moved.
 - Page blobs (`source/mod.rs:materialize_image_pages`): a
   `PageContent::Image` page holds an actor-local rid, so `load_pages`
   exchanges it for PNG bytes in the same call that fetched the page list
   and stores them under `config_dir/page-blobs/<chapter_id>/<idx>.png`; the
-  page row keeps just the file name. The reader (`api/page.rs`), OPDS-PSE
-  (`source/mod.rs:page_content`) and downloads (`download/mod.rs:
-  page_bytes`) all read the blob; chapter dirs whose chapter row is gone
+  page row keeps just the file name. The reader (`api/page.rs`) and
+  downloads (`download/mod.rs:page_bytes`) read the blob; chapter dirs whose chapter row is gone
   are swept at startup (`source/mod.rs:sweep_page_blobs`).
+- Page image dimensions (`source/page_dimensions.rs`, migration
+  `0015_page_dimensions.sql`): the stored `PageRow` projection carries
+  nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
+  are measured only during downloads (`download/mod.rs:fetch_page`): after the
+  page file is written, the downloader reads only the first 64 KiB head and runs
+  it through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
+  full pixel decoding). If the head is inconclusive and the file is larger than
+  the window, it falls back to a full read; a read failure leaves the row
+  retryable and invalid image bytes become checked with nulls. Page-list loads
+  (`load_pages`) do not fetch or measure images just for metadata. Page-row
+  rewrites reset all three fields so changed images cannot inherit stale
+  dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing content/index
+  shape and adds top-level `width`/`height` only when both are known; text and
+  unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
@@ -370,9 +984,9 @@ Migrations in `crates/server/migrations`.
   startup blob sweep invalidates them for free; a `<idx>.pass` marker
   records "not resized at this bucket" (narrow image or undecodable bytes)
   so repeat hits skip re-decoding. Pages never upscale and any failure
-  falls back to the original bytes, so a request without `width` — and the
-  downloads and OPDS-PSE paths, which never pass one — stays byte-identical
-  to the unmodified pipeline. Decode+resize runs on a blocking thread with
+  falls back to the original bytes, so a request without `width` — and
+  downloads, which never pass one — stays byte-identical to the
+  unmodified pipeline. Decode+resize runs on a blocking thread with
   a Lanczos3 filter (line art survives shrinking better; the cost lands
   only on a variant's first request). The web reader asks for its
   container width times the device pixel ratio
@@ -384,19 +998,22 @@ Migrations in `crates/server/migrations`.
   and stores it in the page row's `description` field. A failed
   description export fails the whole chapter load, same as image
   materialization. The reader renders a flagged page with a description
-  as a text page (`webui/src/pages/ReaderPage.tsx:pageText`); OPDS and
-  downloads keep reading only the page `content`.
+  as a text page (`webui/src/pages/ReaderPage.tsx:pageText`); downloads
+  keep reading only the page `content`.
 - Image processors: when a source exports `process_page_image` /
   `process_cover_image`, `fetch_page_image` / `fetch_cover_image`
   (`source/mod.rs`) pass the fetched response through the actor
   (`SourceHandle::process_page_image`) and replace the bytes with the
-  returned PNG — for the reader, OPDS, downloads and the cover endpoint
-  alike. Per the Aidoku contract the actor hands the processor the raw
-  response body without decoding it first (`ImageRef.data()` returns those
-  raw bytes), so sources with encrypted-at-rest images can decrypt them;
-  width/height imports on that raw image report invalid-image, as Aidoku
-  has no pixels either. Cover caching is unchanged: the processed bytes
-  are what the on-disk cache stores.
+  returned PNG — for the reader, downloads and the cover endpoint alike. The processor input follows AidokuRunner's `store(value:)`
+  semantics: bytes the host can decode arrive as pixels, so width/height
+  and canvas composition work (jmcomic-style descrambling depends on it)
+  and `ImageRef.data()` returns a PNG re-encode; bytes the host cannot
+  decode arrive raw (`ImageRef.data()` returns them byte-for-byte), so
+  sources with encrypted-at-rest images can decrypt them. A source may
+  also return the input image unchanged (jmcomic's unscrambled chapters
+  and GIF pages do); the actor then yields the input pixels, or the raw
+  bytes when they were never decodable. Cover caching is unchanged: the
+  processed bytes are what the on-disk cache stores.
 - Browse/home covers are proxied through
   `GET /api/v1/sources/{id}/image?url=…` (`source/cover.rs:get_source_image`):
   only http/https URLs are accepted and the response goes through
@@ -406,8 +1023,7 @@ Migrations in `crates/server/migrations`.
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
-  file is missing or `last_fetched_at` is newer than its mtime; OPDS reads
-  the same cache via `source/mod.rs:cover_bytes`.
+  file is missing or `last_fetched_at` is newer than its mtime.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
@@ -420,9 +1036,82 @@ Migrations in `crates/server/migrations`.
   (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
-- Library updates (`update/mod.rs`): same scheduling shape as downloads —
-  serial per source, at most 3 sources at once — broadcasting progress as
-  `UpdateEvent`s. Category `include_in_update` is a three-state filter.
+- Library updates (`update/mod.rs`): serial per source, at most 3 sources at
+  once, broadcasting progress as `UpdateEvent`s. The global
+  `library.skip_titles` setting defaults to `hasUnread`, `completed` and
+  `notStarted`; `library.refresh_metadata` defaults to false;
+  `library.update_interval_hours` falls back to config
+  `update_interval_hours` (default 0 = never); and
+  `library.excluded_update_categories` defaults to an empty array of category
+  ids stored in the legacy `user.1.library.excluded_update_categories` key.
+  The admin can read and write all library settings. Migration
+  `0016_excluded_update_categories.sql` originally converted per-user legacy
+  `category.include_in_update = 2` ids; after migration 0019 only the admin's
+  setting remains. Selection keeps `update_strategy = Never` and the admin's
+  exclusion list: a title whose categories overlap that list is skipped. The
+  category API does not expose or consult `include_in_update`;
+  `PATCH /api/v1/categories/{id}` with any `includeInUpdate` field answers 400
+  and names the owner setting instead. The web UI exposes all update controls
+  to the admin. A manual `POST /api/v1/update/fetch`
+  with a `categoryId` ignores that category in the global exclusion list,
+  matching Aidoku's behavior when pulling a specific category. The skip
+  predicates are evaluated against the admin's `chapter_user` rows:
+  `hasUnread` skips when any chapter has no read row (a missing row is
+  unread), `notStarted` skips when the admin has no read chapter (including a
+  title with no chapters), and `completed` skips status 2. A source schedule
+  (`next_update_is_fallback = 0`) skips while its stored `next_update_time`
+  is in the future. A fallback schedule (`= 1`) instead tests
+  `chapters_last_fetched_at + the current effective interval`, so shortening,
+  lengthening or disabling the interval takes effect without rewriting old
+  manga rows; interval 0 is immediately due. The stored next update time is
+  still advanced after success for the next source round trip. Manual fetches
+  and the scheduled run both use the admin's library and auto-download rules.
+  Each update reloads `auto_download_new_chapters`, `auto_download_limit` and
+  the download filters. `library.excluded_download_categories` is the single
+  admin category exclusion list, stored as
+  `user.1.library.excluded_download_categories`; migration
+  `0020_excluded_download_categories.sql` converts only the admin's legacy
+  `include_in_download = 2` ids and preserves an existing new setting. Legacy
+  `include_in_download = 1` include-only categories cannot be represented by an
+  exclusion list, so any such row also forces `auto_download_new_chapters` to
+  `false`; review and reconfigure the exclusions and automatic downloads before
+  re-enabling them. Category REST responses omit `includeInDownload`, a PATCH
+  carrying it answers 400 and names the new setting, and backup remains its only
+  portable tri-state representation. REST and sync deletion remove the id from
+  both owner-scoped exclusion arrays in the same transaction, so a reused id
+  does not inherit the deleted category's exclusions. Exclusions affect only
+  update-driven automatic downloads, never an explicit manual enqueue. With
+  `downloads.auto_skip_manga_with_unread`, the unread query excludes the
+  current `new_ids`, so only pre-existing unread chapters block and a missing
+  progress row counts as unread. `downloads.auto_ignore_reuploads` removes
+  candidates whose number is below the previous latest chapter number; it does
+  not alter `new_ids`, update counts, unread state or notifications.
+  The scheduler checks due every 60s and reloads the interval instead of
+  capturing it at construction, so setting changes need no restart. A scheduled
+  union stamps `library.last_scheduled_run_at` in the settings at start and
+  finish; due uses that persisted timestamp and is immediate when no scheduled
+  batch has run. The key is excluded from structured settings extras, and both
+  settings write forms ignore it because only the scheduler owns it. Backup
+  exports omit it and imports ignore it. Manual batches still stamp the
+  summary's `last_run_at` for reporting, but never the scheduled-only clock, so
+  they cannot postpone the union. Restarting the process does not defer a due
+  union by another interval.
+  Each manga fetch also reloads refresh/interval. WASM receives the refresh
+  flag as `needs_details`; details returned by WASM, local or OPDS are
+  upserted only when it is true. Before that upsert, the write transaction
+  re-reads the current update strategy, so a Never set during a slow fetch is
+  not overwritten by the pre-fetch snapshot. On success, only a returned
+  `Some(at)` different from the pre-fetch value is a new source schedule: it
+  is stored with `next_update_is_fallback = 0`. None or an exact echo of the
+  old value means no new source schedule: a positive interval stores success
+  time + interval hours with the flag 1, while interval 0 stores NULL with
+  the flag 0. Other detail-upsert paths preserve provenance when the
+  timestamp is unchanged and reset it to 0 when the timestamp changes; the
+  update transaction's final write stores the resolved provenance. The same
+  transaction reconciles chapters and stamps `chapters_last_fetched_at`; a
+  failed fetch or persistence pass does not advance either timestamp. Events
+  and the summary carry the fetch's owner. The SSE stream and
+  `GET /api/v1/update/summary` present manual and scheduled updates to the admin.
 - Source instances (`state.rs`): a `SourceHandle` actor spawns lazily on
   first use (`get_handle`) and lives in a registry keyed by source id;
   concurrent spawns for the same source collapse to the first arrival.
@@ -436,7 +1125,7 @@ Migrations in `crates/server/migrations`.
   down outside the lock via the same `Arc::try_unwrap` courtesy as
   `evict_source`: an in-flight call keeps its instance until the last
   reference drops, while a new lookup respawns immediately. The sweep
-  exists because wasmer linear memory only grows — eviction is the one
+  exists because WASM linear memory only grows — eviction is the one
   path that returns an idle instance's memory to the OS, at the price of
   a seconds-long recompile on the next access. Aggregate pressure has
   its own watcher (`run_rss_monitor`, same 60s cadence, spawned only
@@ -468,17 +1157,24 @@ Migrations in `crates/server/migrations`.
   two semaphores reproduces the `min(declared, global)` bound while
   undeclared sources keep the global cap alone.
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
-  direct, per-domain relay, or a global proxy, decided per host. When
-  `net.trawl_proxy` is set, a direct request answered 403/503 with Cloudflare
-  headers retries once through the trawl forward proxy (MITM CA in
-  `net.trawl_ca`), ahead of the 429/5xx backoff — in the source net imports
-  (`crates/wasm/src/imports/net.rs:perform`) and in the server's own fetches
-  alike; the challenged host is then remembered and every later request for it
-  also goes through trawl, because a `cf_clearance` is bound to the user agent
-  that solved it and Sumidoku's own client would replay it with a different one
-  (trawl keeps the clearance and its browser user agent together and replays
-  both over plain HTTP). `net.direct_domains` opts a host out of escalation,
-  `net.relay_domains` routes a host through trawl from the first request.
+  direct, per-domain relay, or a global proxy, decided per host. A direct
+  request answered 403/503 with Cloudflare headers first triggers a clearance
+  solve through the trawl scrape API (`net.browser_trawl`,
+  `browser/trawl.rs:solve_clearance`), ahead of the 429/5xx backoff — in the
+  source net imports (`crates/wasm/src/imports/net.rs:perform`) and in the
+  server's own fetches alike. The answer's `cf_clearance` and the solving
+  browser's user agent are cached per host and replayed on plain direct
+  requests: CF binds the cookie to that UA, so the pair travels together and
+  the replayed request drops the Chrome-only suite members (Firefox has no
+  `sec-ch-ua`) and carries Firefox's navigation `Accept` (no
+  `signed-exchange`). A refused clearance is dropped and re-solved once per
+  request. Only when no solver is configured or the solve fails does the host
+  fall back to the trawl forward proxy (MITM CA in `net.trawl_ca`) and stay
+  marked "challenged" — the proxy's browser tiers answer HTML with the
+  serialized DOM, which mangles fragment responses that declare no charset,
+  so it is the fallback, not the default. `net.direct_domains` opts a host
+  out of solving and escalation, `net.relay_domains` routes a host through
+  trawl from the first request.
   Set-Cookie on the solved response still lands in the source's cookie jar.
   These server-side fetches — covers, page images and zip pages
   (`fetch_remote` / `http_get`) — bypass the wasm net host, so they attach
@@ -488,34 +1184,71 @@ Migrations in `crates/server/migrations`.
   `User-Agent` likewise wins over the global one
   (`RoutedClients::request_with`, insert-only-if-absent) rather than being
   appended as a second value — Cloudflare reads only the first and 403s a
-  duplicated header. Their response bodies are capped as well: covers and
+  duplicated header. The same insert-only-if-absent paths fill the browser
+  header suite (`aidoku_wasm::BROWSER_HEADERS`: the `sec-ch-ua` trio,
+  `accept`, the `sec-fetch-*` quartet and `upgrade-insecure-requests`), and
+  both reqwest builders negotiate HTTP/2 — the user agent claims Chrome,
+  and passive Cloudflare checks exactly that coherence of protocol and
+  header suite rather than the TLS fingerprint. The suite sits behind a
+  per-policy knob (`NetPolicy::browser_headers`, config
+  `net.browser_headers`, default on): `sec-fetch-*`'s navigate semantics
+  are a mild lie for API/XHR requests, so the knob keeps the honest
+  option. The lie also has one hard failure mode, repaired in the source
+  net imports (`crates/wasm/src/imports/net.rs:perform`): Django REST
+  framework negotiates on `Accept`, and the suite's document-class
+  `Accept` turns an API call into DRF's browsable-API HTML page, which
+  breaks the source's JSON parse. When a direct 2xx `text/html` response
+  carries the `Django REST framework` marker
+  (`traits.rs:is_drf_browsable_page` — the marker, never "is HTML", so
+  legitimate page fetches are not double-fetched), the request is resent
+  once with exactly the headers the host injected stripped from it — a
+  source-declared `Accept` stays — which reproduces what AidokuRunner
+  sends, since it injects no headers at all. Their response bodies are
+  capped as well: covers and
   page images share the net host's `net_body_max_mb`, while zip pages —
   a whole chapter packed into one archive — fall under the higher
   `net_zip_body_max_mb` (default 128 MiB).
 
 ## WASM sources (`crates/wasm`)
 
-Aidoku source packages (`.aix`, zip) run in wasmer. One actor per source
+Aidoku source packages (`.aix`, zip) run in wasmi. One actor per source
 (`runtime/actor.rs`) owns the store (`runtime/store.rs`), per-source rate
 limiting (`runtime/rate_limit.rs`), and the host functions sources import
 (`imports/`), including the HTML DOM helper (`html_dom.rs`) and the Boa
 JavaScript engine (`js_engine.rs`) behind the `js` context functions — one
 isolated context per ABI descriptor, time- and loop-limited, with no host
 access beyond what the ABI exposes. Each instance runs under the `Limits`
-from its `SourceConfig` (`runtime/limits.rs`): a metering fuel budget per
+from its `SourceConfig` (`runtime/limits.rs`): a fuel budget per
 export call, a per-call timeout that fuses and restarts the instance, and
-a linear-memory cap enforced through custom wasmer tunables
-(`LimitedTunables`) — the server sets these from its own config when it
+a linear-memory cap enforced through wasmi `StoreLimits` — the server
+sets these from its own config when it
 spawns an instance, defaulting the memory cap to 128 MiB.
+Every export call funnels through the actor's private `call`, which logs
+one structured line per outcome — `source`/`op`/`dur_ms`, plus the entry
+count on success at info or a sanitized error at warn; guest and reqwest
+error text can embed full URLs, so payloads are scrubbed down to the host
+and capped before they reach the log.
+The `abort`, `print`, `sleep` and `send_partial_result` host functions are
+registered under both the legacy `env` module and the newer `std` module
+(`imports/mod.rs`).
 The net host (`imports/net.rs`) aligns request behavior with the
 Aidoku/URLSession host. Response bodies are buffered under a
 configurable cap (`net_body_max_mb`, default 32 MiB, decoded bytes —
 gzip is counted after decompression): a declared content-length over
 the cap fails fast, otherwise streaming reads stop at the cap, and an
 oversized body fails the request with the ABI's generic request error
-while naming the limit in the source log. `html()` decodes the body by BOM, then the
-Content-Type charset, then a `<meta charset>` sniff of the first 1024
-bytes, falling back to UTF-8 with replacement (encoding_rs) — a
+while naming the limit in the source log. `html()` decodes the body by BOM, then
+a declared UTF-16 charset, then strict full-document UTF-8 validation, then the
+Content-Type charset, then a `<meta charset>` sniff of the first 1024 bytes,
+falling back to UTF-8 with replacement (encoding_rs). The UTF-8 validation
+outranks a declared single-byte charset on purpose: servers frequently serve
+UTF-8 pages under a lying label such as `iso-8859-1`, which would otherwise
+decode as windows-1252 mojibake, and the Aidoku host decodes bodies as UTF-8
+outright; genuinely non-UTF-8 pages (GBK/Big5) fail the validation and follow
+the declared or sniffed charset as before. When decoding still leaves U+FFFD
+replacement chars, the document's own charset declaration is recovered from the
+decoded text (ASCII-compatible encodings keep the `<meta>` tag readable) and
+the raw bytes re-decode once — covering declarations past the sniff window; a
 non-UTF-8 page decodes instead of failing the call. gzip, br and deflate
 are negotiated and decoded; a source may still override `Accept-Encoding`
 itself. Stored jar cookies merge in front of a source-set `Cookie` header
@@ -539,29 +1272,21 @@ is logged without failing the load or the scripts after it.
 `webview_eval_async` behave like their `context_*` counterparts under the
 same time and loop limits.
 The navigation and cookie functions — `webview_load`,
-`webview_get_cookies`, `webview_delete_cookie` — have two real-browser
-backends (`browser.rs`, `browser/cdp.rs`, `browser/trawl.rs`), mutually
-exclusive (configuring both fails startup). With neither configured they
+`webview_get_cookies`, `webview_delete_cookie` — run on a trawl browser
+backend (`browser.rs`, `browser/trawl.rs`; trawl is an external HTTP
+sidecar, Sumidoku ships no browser). With `net.browser_trawl` unset they
 return `-1` (`JsError::MissingResult`; the ABI has no "unsupported" code)
 and log the function name and reason, so a source relying on them sees the
 calling operation fail with a diagnosable line in the source log. With
-`net.browser_ws` pointing at a user-supplied Chromium CDP endpoint (e.g. a
-browserless container; Sumidoku ships no browser) they drive that browser:
-`webview_load` navigates a page and waits for the page load event — the
-same completion signal as WKWebView's `didFinish` on iOS — and the cookie
-functions read and edit the cookie store. Every webview rid maps to one
-isolated browser context, created on first use and disposed when the rid
-is destroyed, so sessions never bleed across webviews; a dead connection
-is retried on the next call and the browser-side contexts it orphaned are
-disposed after the reconnect. `webview_eval` keeps the Boa page model on
-this backend.
-With `net.browser_trawl` pointing at a trawl API URL instead, every webview
+`net.browser_trawl` pointing at a trawl API URL, every webview
 rid maps to one keepPage session named `sumidoku-<source>-<rid>`, created
 lazily on first use and deleted (`DELETE /sessions/:id`) eagerly on destroy
 — trawl caps concurrent sessions per instance (`BROWSER_SESSION_MAX_ENTRIES`,
 default 4), so sessions are never pooled. `webview_load` navigates via
-`POST /scrape` (GET only, same as the CDP backend), `webview_get_cookies`
-reads `GET /sessions/:id/cookies` (HttpOnly included), and `webview_eval` /
+`POST /scrape` (GET only) and waits for the page load event — the
+same completion signal as WKWebView's `didFinish` on iOS — and
+`webview_get_cookies` reads `GET /sessions/:id/cookies` (HttpOnly included).
+`webview_eval` /
 `webview_eval_async` both run through `POST /sessions/:id/eval`, which
 evaluates in the kept page's main JS context and awaits returned promises —
 scalar results come back in their JS string form, objects/arrays as compact
@@ -571,18 +1296,18 @@ the session under the same id and retries the operation once; a duplicate
 id on create is adopted (a restarted Sumidoku reuses rid numbers while
 trawl may still hold the old session); 409 busy, 429 (registry full) and
 503 are single-operation failures like a navigation timeout.
-`webview_delete_cookie` has no trawl endpoint and is explicitly unsupported
-on this backend.
+`webview_delete_cookie` has no trawl endpoint and is explicitly
+unsupported.
 Cookies from the browser session flow into
 the source's session jar after every load and on every `get_cookies`,
 keyed by each cookie's own `Domain` attribute — that is what makes
 webview login work: the source loads the login page, the login completes
 in the browser, and the source's plain API requests then carry the
-session cookie. `webview_load` only navigates GET requests (CDP has no
-POST navigation; iOS would load the full URLRequest) and a non-GET
+session cookie. `webview_load` only navigates GET requests (trawl's
+scrape API is GET-only; iOS would load the full URLRequest) and a non-GET
 request fails with `-1` and a log line rather than silently degrading.
-`webview_set_rule_list` (content blocking) stays explicitly unsupported
-in both backends. An invalid
+`webview_set_rule_list` (content blocking) stays explicitly unsupported.
+An invalid
 webview rid maps to `-4` (`InvalidHandler`), and webview and js-context
 rids are not interchangeable.
 `send_partial_result` payloads are decoded per in-flight call and pushed
@@ -640,6 +1365,11 @@ source directories alike; both register the same way, with `wasm_path`
 pointing at the `.aix` or the directory's `main.wasm`. An `.aix` icon is
 written next to the package as `<name>.png` so installed sources serve
 `/sources/{id}/icon` the same way the directory scan's `icon.png` does.
+Uninstall (`DELETE /api/v1/sources/{id}`) removes the on-disk package
+with the database row — the source directory, or the `.aix` plus its
+`<name>.png` sidecar, only ever paths inside `sources/` — so a later
+directory scan cannot re-register a deleted source; OPDS instances have
+no package and only lose the row.
 Registration also resolves the source's dynamic base URL, mirroring the
 `try? await runner.getBaseUrl()` in AidokuRunner's `Source.init`: when the
 payload exports `get_base_url` a throwaway instance answers it (carrying
@@ -658,7 +1388,10 @@ normalized at registration — every consumer (the source DTO,
 from the manifest text by the synthesis/seeding path.
 Static package files (`source.json`, `settings.json`, `filters.json`) are
 read by the same helper: directory sources from next to `main.wasm`, `.aix`
-sources from `Payload/` inside the zip without extracting. Source settings
+sources from `Payload/` inside the zip without extracting. Only declared
+dynamic exports are called: when `get_settings`, `get_filters` or
+`get_listings` is absent, the corresponding merge uses static package data
+without a source call. Source settings
 (`GET/PUT /api/v1/sources/{id}/settings`) merge the static `settings.json`
 with the dynamic `get_settings` export — static first, dynamic appended,
 matching AidokuRunner's `staticSettings + getSettings()` — deduplicated by
@@ -756,43 +1489,6 @@ instance's cookie jar reports changes through a `CookieSink` to a batch
 writer, so a login session survives the restart that follows a settings
 change.
 
-With `net.browser_ws` configured, `method: "web"` logins also have an
-interactive path that needs no devtools (`api/login.rs` browser endpoints +
-`browser_login.rs`). `GET .../settings` reports it as
-`capabilities.browserLogin`, and the web UI then shows "open the login page
-in the browser" next to the paste box. `POST .../login/web/browser`
-validates the setting and host exactly like the paste path, then opens an
-isolated browser context on the sidecar (one CDP connection per session),
-sets a fixed 1280×800 viewport and navigates to the resolved login URL; the
-response is a random session handle plus the URL and expiry. The user
-watches and drives the page inside the web UI itself:
-`GET .../login/web/browser/{session}/stream` relays CDP screencast frames
-(jpeg, latest-wins over a watch channel) out and mouse/keyboard/text input
-back in over one authenticated WebSocket — the sidecar therefore needs no
-UI of its own and stays on the private network; any CDP-capable Chromium
-works (the browserless OSS `/debugger/` is a code workbench whose session
-links open plain DevTools, and its LiveURL is a premium feature, so neither
-is used). Sessions live in memory only, pinned to the resolved host and the
-setting key, and are reaped after 10 minutes (the sidecar's own connection
-timeout must be at least that); a server restart orphans the browser-side
-contexts, which the sidecar reclaims. `POST .../login/web/browser/complete`
-harvests the context's cookies for the login host (sub- and parent-domain
-matches included; cross-domain SSO cookies stay out and keep needing the
-paste path) plus the setting's declared `local_storage_keys` from the live
-page (best-effort), then runs the exact paste pipeline
-(`run_web_login_pipeline`: `<key>.keys/.values` → `handle_web_login` →
-marker → `source_cookie` → restart) and disposes the context; completing
-with no cookie for the host answers 400 instead of marking anything.
-`POST .../login/web/browser/cancel` disposes and is idempotent. Without
-`net.browser_ws` all three POST endpoints answer 501 `unsupported` and the
-capability flag is false — `net.browser_trawl` does not count as a browser
-here: the session API has no screencast or input surface, so interactive
-login stays CDP-only. The interactive machinery (viewport, screencast,
-input dispatch, page localStorage read) extends the same `CdpClient` trait
-the webview backend uses (`crates/wasm/src/browser.rs`), so tests drive it
-with the same kind of mock connector, injected via
-`build_app_with(config, connector)`.
-
 `method: "oauth"` logins (`api/oauth.rs`) reproduce Aidoku's app-layer flow
 with a manual callback step — a browser SPA cannot intercept the
 custom-scheme redirect sources bake into `redirect_uri` /
@@ -819,14 +1515,53 @@ feature. It tracks upstream; local fixes don't belong there.
 
 ## Web UI (`webui`)
 
-Vite 7 + React 19 SPA, TypeScript. `src/pages` are the routes,
+Vite 8 + React 19 SPA, TypeScript. `src/pages` are the routes,
 `src/components` shared pieces, `src/api` the REST client,
 `@tanstack/react-query` for server state. `npm run check` is
-`tsc --noEmit`; there is no test suite. The build lands in `webui/build`
-and the server embeds it (see above). When authentication is on, the
-client (`api/client.ts`) sends the stored session token as a bearer
-header, media/websocket URLs carry it as an `access_token` query
-(`withToken`), and any `401` clears the token and lands on `/login`.
+`tsc --noEmit`, and `npm test` runs the Node test suite. The build lands in
+`webui/build` and the server embeds it (see above). The installable PWA shell
+uses `vite-plugin-pwa`'s `generateSW` strategy. Precaching covers only the built
+JavaScript, CSS and HTML plus the web manifest and install icons; API requests
+and manga media are network-only at the service-worker layer, and `/api` and
+`/opds` navigations bypass the SPA fallback. Both disk and embedded serving
+return `Cache-Control: no-cache` for `/sw.js` and `/manifest.webmanifest`, while
+hashed assets and other responses keep their existing cache policies. The
+Workbox MIT notice is served at `/licenses/workbox.txt`. When a
+new service worker is waiting, the UI offers Reload and Later: Reload activates
+it and reloads the page, while Later only dismisses the prompt; there is no
+automatic reload. This provides installation and an application shell, not
+offline chapters or offline reading progress.
+Typography uses system stacks through `--font-sans`, `--font-display`,
+`--font-brand` and `--font-mono`; brand marks use the rounded brand stack,
+page-header titles use display serif, and content names and controls stay sans.
+Route handles provide translated fallback document titles, and
+`DocumentTitleProvider` appends ` · Sumidoku`. Source, manga and reader pages
+replace the fallback with content names through `useDocumentTitle`; overrides
+are scoped to the current pathname so a previous page cannot overwrite the next
+page's title.
+
+When authentication is on, the
+login page takes the admin username + password with an initially empty username
+field, browser API requests use the login cookie, CLI clients may send a
+bearer header, and any `401` lands on `/login`. Desktop navigation keeps library,
+browse and updates at the top level; activity and settings start collapsed and
+open on an active route. The browse page keeps cross-source search above its
+installed/repository views, with `/search` redirecting to its search view.
+Remote source and cross-source searches run on explicit submission; local-source
+filtering uses a 500ms debounce. Clearing a source's search box resubmits an
+empty query so the unsearched results return without waiting for submission.
+Aggregate rating/language/source filters can be
+changed before the first query, and the search view's URL changes on submission.
+Settings sections are linked from the settings group, while mobile keeps the
+settings page's own tabs. The settings page shows the admin account and
+all management controls; there is no Users page or role-dependent UI. The
+reader uses positive known page dimensions (populated during downloads) as
+image intrinsic dimensions and continuous/webtoon container aspect ratios,
+reserving space before lazy loads; text, unsupported and unknown-dimension
+pages get no forced ratio, and paged mode keeps its fixed viewport.
+Text pages also offer font-family, font-size and line-height controls persisted
+in `sumidoku.reader.typography`; the same style applies to paged and continuous
+rendering, and typography changes recompute paged text columns.
 
 ## Known gaps
 
@@ -869,9 +1604,11 @@ classes are known and accepted rather than chased case by case:
   algorithm exactly, while SwiftSoup follows jsoup's, which resolves some
   of these corners differently.
 - Entity tables: the set of named character references each engine decodes
-  does not line up one to one, and the host `escape` / `unescape`
-  functions cover only `&amp;` / `&lt;` / `&gt;` where SwiftSoup's
-  `Entities` covers the full table.
+  does not line up one to one, and the host `escape` covers only `&amp;` /
+  `&lt;` / `&gt;` where SwiftSoup's `Entities` covers the full table. The host
+  `unescape` is aligned: it decodes the full HTML5 named and numeric reference
+  set (via `html-escape`), matching what aidoku sources expect from
+  `SwiftSoup.Entities.unescape`.
 
 These are class-level differences between two engine families, not bugs
 with a bounded fix list: byte parity would mean reimplementing jsoup's

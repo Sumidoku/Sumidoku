@@ -1,8 +1,7 @@
-use crate::{
-	WasmEnv,
-	runtime::store::{DefaultKind, DefaultValue, FFIResult, Ptr, StoreItem},
+use crate::runtime::{
+	env::Ctx,
+	store::{DefaultKind, DefaultValue, FFIResult, Ptr, StoreItem},
 };
-use wasmer::FunctionEnvMut;
 
 enum Result {
 	Success,
@@ -24,41 +23,42 @@ impl From<Result> for i32 {
 	}
 }
 
-pub fn get(mut env: FunctionEnvMut<WasmEnv>, key_ptr: Ptr, len: u32) -> FFIResult {
-	let Ok(key) = env.data().read_string(&env, key_ptr, len) else {
+pub fn get(ctx: &mut impl Ctx, key_ptr: Ptr, len: u32) -> FFIResult {
+	let Ok(key) = ctx.read_string(key_ptr, len) else {
 		return Result::InvalidKey.into();
 	};
-	let Some(value) = env.data().defaults.get(&key).cloned() else {
+	let Some(value) = ctx.host().defaults.get(&key).cloned() else {
 		return Result::InvalidValue.into();
 	};
 	match value {
-		DefaultValue::Data(data) => env.data_mut().store.store(StoreItem::Encoded(data)),
-		DefaultValue::Bool(v) => env.data_mut().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
-		DefaultValue::Int(v) => env.data_mut().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
-		DefaultValue::Float(v) => env.data_mut().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
-		DefaultValue::String(v) => env.data_mut().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
-		DefaultValue::StringArray(v) => env.data_mut().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
+		DefaultValue::Data(data) => ctx.host().store.store(StoreItem::Encoded(data)),
+		DefaultValue::Bool(v) => ctx.host().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
+		DefaultValue::Int(v) => ctx.host().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
+		DefaultValue::Float(v) => ctx.host().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
+		DefaultValue::String(v) => ctx.host().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
+		DefaultValue::StringArray(v) => ctx.host().store.store_encoded(&v).unwrap_or(Result::FailedEncoding.into()),
 		DefaultValue::Null => Result::InvalidValue.into(),
 	}
 }
 
 pub fn set(
-	mut env: FunctionEnvMut<WasmEnv>,
+	ctx: &mut impl Ctx,
 	key_ptr: Ptr,
 	len: u32,
-	kind: u8,
+	kind: i32,
 	value_ptr: Ptr,
 ) -> FFIResult {
-	let Ok(key) = env.data().read_string(&env, key_ptr, len) else {
+	let Ok(key) = ctx.read_string(key_ptr, len) else {
 		return Result::InvalidKey.into();
 	};
-	if kind > 6 {
+	// wasmi host params have no u8, so the 0..=6 check on kind lives in the function body
+	if !(0..=6).contains(&kind) {
 		return Result::InvalidValue.into();
 	}
-	let Ok(data) = env.data().read_item_bytes(&env, value_ptr) else {
+	let Ok(data) = ctx.read_item_bytes(value_ptr) else {
 		return Result::FailedDecoding.into();
 	};
-	let value = match DefaultKind::from(kind) {
+	let value = match DefaultKind::from(kind as u8) {
 		DefaultKind::Data => Ok(DefaultValue::Data(data)),
 		DefaultKind::Bool => postcard::from_bytes(&data).map(DefaultValue::Bool),
 		DefaultKind::Int => postcard::from_bytes(&data).map(DefaultValue::Int),
@@ -70,6 +70,6 @@ pub fn set(
 	let Ok(value) = value else {
 		return Result::FailedDecoding.into();
 	};
-	env.data_mut().defaults.set(key, value);
+	ctx.host().defaults.set(key, value);
 	Result::Success.into()
 }

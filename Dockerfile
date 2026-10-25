@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
  && rm -rf /var/lib/apt/lists/* \
  && useradd -u 1000 -m sumidoku
 LABEL org.opencontainers.image.source="https://github.com/Sumidoku/Sumidoku" \
-      org.opencontainers.image.description="Self-hosted manga server: Aidoku WASM sources, REST + OPDS" \
+      org.opencontainers.image.description="Self-hosted manga server: Aidoku WASM sources, REST API" \
       org.opencontainers.image.licenses="MIT"
 COPY --chmod=755 "dist/$TARGETARCH/sumidoku-server" /usr/local/bin/sumidoku-server
 # 777 so an arbitrary --user uid:gid can write when nothing is bind-mounted

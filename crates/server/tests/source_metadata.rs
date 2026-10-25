@@ -3,7 +3,7 @@ mod common;
 use aidoku::{Chapter, Manga, MangaStatus, Viewer};
 use axum::Router;
 use axum::http::StatusCode;
-use common::{connect_db, register_example_manga, request, test_app};
+use common::{connect_db, register_example_manga, request, source_by_key, test_app};
 use sumidoku_server::model::{chapter_from_row, manga_from_row};
 use sumidoku_server::source::{chapter_row, manga_row, reconcile_chapters, upsert_manga};
 
@@ -12,7 +12,9 @@ async fn scan_example_source(app: &Router) -> i64 {
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	body[0]["id"].as_i64().expect("source id")
+	source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id")
 }
 
 #[tokio::test]
@@ -45,14 +47,14 @@ async fn upsert_persists_viewer_and_chapter_thumbnail() {
 			..Chapter::default()
 		},
 	];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 
 	let row = manga_row(&pool, manga_id).await.expect("manga row");
 	assert_eq!(manga_from_row(&row).viewer, Viewer::RightToLeft);
 
-	// 重复 upsert 走 ON CONFLICT 分支，viewer 更新同样要落库
+	// A repeated upsert takes the ON CONFLICT branch; the viewer update must still be persisted
 	let updated = Manga {
 		viewer: Viewer::Webtoon,
 		..manga.clone()
@@ -80,7 +82,7 @@ async fn upsert_persists_viewer_and_chapter_thumbnail() {
 
 #[tokio::test]
 async fn single_language_source_fills_missing_chapter_language() {
-	// example fixture 恰好声明一种语言（["en"]）
+	// the example fixture declares exactly one language (["en"])
 	let app = test_app().await;
 	let source_id = scan_example_source(&app.app).await;
 	let pool = connect_db(&app.db_path).await;
@@ -110,7 +112,7 @@ async fn single_language_source_fills_missing_chapter_language() {
 			..Chapter::default()
 		},
 	];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 
@@ -158,7 +160,7 @@ async fn multi_language_source_keeps_chapter_language_missing() {
 		key: "c1".into(),
 		..Chapter::default()
 	}];
-	reconcile_chapters(&mut conn, manga_id, &chapters)
+	reconcile_chapters(&mut conn, manga_id, &chapters, &[])
 		.await
 		.expect("reconcile chapters");
 

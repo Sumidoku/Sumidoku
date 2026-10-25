@@ -1,13 +1,14 @@
 #![no_std]
-//! listing 透传（issue #138）的端到端验证源：get_manga_list 把收到的
-//! listing 回显成标题 "{id}|{name}|{kind}"（kind 为 default/list），
-//! 断言方据此确认端点传来的 id、name、kind 全部真实到达；回显 manga 带
-//! authors/tags，供浏览页行式布局（list kind）冒烟断言 subtitle 与 tags 行。
-//! get_search_manga_list 回显 "{query}|{id=value,…}"，配合浏览 UI 冒烟
-//! 验证 hidesFiltersWhileSearching 时搜索不再携带过滤器值。
-//! get_manga_update 填 authors/artists/tags，供详情页 tag/作者搜索冒烟。
-//! get_dynamic_listings 固定回一条 List 类型的动态 listing。
-//! 断言方在 crates/server/tests/source_listing.rs 与 crates/wasm/tests/listing.rs。
+//! End-to-end verification source for listing pass-through (issue #138): get_manga_list
+//! echoes the received listing as the title "{id}|{name}|{kind}" (kind is default/list),
+//! so the asserting side can confirm the endpoint's id, name, and kind all truly arrived;
+//! the echoed manga carries authors/tags for the browse page's row layout (list kind)
+//! smoke to assert the subtitle and tags row. get_search_manga_list echoes
+//! "{query}|{id=value,…}", which the browse UI smoke uses to verify that with
+//! hidesFiltersWhileSearching, searches no longer carry filter values. get_manga_update
+//! fills authors/artists/tags for the detail page's tag/author search smoke.
+//! get_dynamic_listings always returns one dynamic listing of List kind.
+//! The asserting sides are crates/server/tests/source_listing.rs and crates/wasm/tests/listing.rs.
 use aidoku::{
 	Chapter, DynamicListings, FilterValue, Listing, ListingKind, ListingProvider, Manga,
 	MangaPageResult, Page, Result, Source,

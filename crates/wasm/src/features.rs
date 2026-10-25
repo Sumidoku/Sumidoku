@@ -1,6 +1,6 @@
-use wasmer::Module;
+use wasmi::Module;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SourceFeatures {
 	pub manga_list: bool,
 	pub home: bool,
@@ -21,6 +21,15 @@ pub struct SourceFeatures {
 }
 
 impl SourceFeatures {
+	/// Only translate the module and compute capability bits from export names, without
+	/// building an instance: used by backfill paths outside registration (at startup,
+	/// stamping old rows whose features column is NULL)
+	pub fn from_wasm_bytes(bytes: &[u8]) -> Result<Self, String> {
+		let engine = wasmi::Engine::default();
+		let module = Module::new(&engine, bytes).map_err(|e| format!("translate module: {e}"))?;
+		Ok(Self::from_module(&module))
+	}
+
 	pub fn from_module(module: &Module) -> Self {
 		let has = |name: &str| module.exports().any(|e| e.name() == name);
 		Self {

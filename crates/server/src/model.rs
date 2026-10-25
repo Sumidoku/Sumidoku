@@ -2,25 +2,47 @@ use aidoku::{Chapter, ContentRating, Manga, MangaStatus, UpdateStrategy, Viewer}
 use aidoku_wasm::DefaultValue;
 use serde_json::Value;
 
+/// source.kind: the built-in local source; OPDS catalog instances use SOURCE_KIND_OPDS; everything else is aidoku (migration default)
+pub const SOURCE_KIND_LOCAL: &str = "local";
+
+/// source.kind: a built-in OPDS catalog instance (multiple instances share this kind; registration lives entirely in the DB, no wasm payload)
+pub const SOURCE_KIND_OPDS: &str = "opds";
+
+/// Reserved key of the built-in local source: no wasm package may register it
+pub const LOCAL_SOURCE_KEY: &str = "local.local";
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct SourceRow {
 	pub id: i64,
 	pub key: String,
 	pub name: String,
+	pub kind: String,
 	pub version: i64,
 	pub languages: sqlx::types::Json<Vec<String>>,
 	pub content_rating: i64,
 	pub base_url: Option<String>,
 	pub breaking_change_version: i64,
-	/// manifest config 节原文（JSON），未声明为 NULL
+	/// Raw manifest config section (JSON); NULL when not declared
 	pub config: Option<String>,
 	pub icon_path: Option<String>,
 	pub wasm_path: String,
 	pub enabled: bool,
 	pub installed_at: i64,
 	pub updated_at: i64,
-	/// 安装来源仓库 id，目录扫描侧载为 NULL；不在任何仓库 index 里时据此报 missingFromRepos
+	/// Id of the repo this was installed from; NULL for directory-scan sideloads. When the source is absent from every repo index, this is what reports missingFromRepos
 	pub repo_id: Option<i64>,
+	/// Serialized SourceFeatures stamped at registration; old unstamped rows are NULL (capabilities unknown)
+	pub features: Option<String>,
+}
+
+impl SourceRow {
+	pub fn is_local(&self) -> bool {
+		self.kind == SOURCE_KIND_LOCAL
+	}
+
+	pub fn is_opds(&self) -> bool {
+		self.kind == SOURCE_KIND_OPDS
+	}
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -64,7 +86,16 @@ pub struct ChapterRow {
 	pub fetched_at: i64,
 }
 
-/// 章节 LEFT JOIN chapter_user（user 1）的投影；四列用户字段无行时全 NULL
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct PageRow {
+	pub idx: i64,
+	pub content: String,
+	pub width: Option<i64>,
+	pub height: Option<i64>,
+	pub dimensions_checked: bool,
+}
+
+/// Projection of chapter LEFT JOIN chapter_user (user 1); the four user columns are all NULL when no row matches
 #[derive(Debug, sqlx::FromRow)]
 pub struct ChapterUserRow {
 	#[sqlx(flatten)]
@@ -75,7 +106,7 @@ pub struct ChapterUserRow {
 	pub last_read_at: Option<i64>,
 }
 
-/// 库列表：manga JOIN manga_user 的投影
+/// Library list: projection of manga JOIN manga_user
 #[derive(Debug, sqlx::FromRow)]
 pub struct LibraryEntryRow {
 	#[sqlx(flatten)]
@@ -124,14 +155,15 @@ pub fn viewer_from_int(v: i64) -> Viewer {
 	}
 }
 
-fn update_strategy_from_int(v: i64) -> UpdateStrategy {
+/// Writes update_strategy back on upsert conflict: the caller restores the row's current value first, so a user-set Never is not clobbered
+pub fn update_strategy_from_int(v: i64) -> UpdateStrategy {
 	match v {
 		1 => UpdateStrategy::Never,
 		_ => UpdateStrategy::Always,
 	}
 }
 
-/// 从 DB 行还原源侧 Manga，用于回传 get_manga_update / get_page_list
+/// Rebuilds the source-side Manga from a DB row, to pass back into get_manga_update / get_page_list
 pub fn manga_from_row(row: &MangaRow) -> Manga {
 	Manga {
 		key: row.key.clone(),
@@ -166,7 +198,7 @@ pub fn chapter_from_row(row: &ChapterRow) -> Chapter {
 	}
 }
 
-/// PUT settings 的裸 json → 引擎 DefaultValue；对象/混合数组没有对应类型，存 Data(json bytes)
+/// Bare JSON from PUT settings → engine DefaultValue; objects/mixed arrays have no matching type and are stored as Data(json bytes)
 pub fn json_to_default_value(v: &Value) -> DefaultValue {
 	match v {
 		Value::Bool(b) => DefaultValue::Bool(*b),
@@ -191,7 +223,7 @@ pub fn json_to_default_value(v: &Value) -> DefaultValue {
 	}
 }
 
-/// GET settings 时把 DefaultValue 还原成裸 json，与 PUT 对称
+/// Restores a DefaultValue to bare JSON for GET settings, symmetric with PUT
 pub fn default_value_to_json(v: &DefaultValue) -> Value {
 	match v {
 		DefaultValue::Bool(b) => Value::from(*b),

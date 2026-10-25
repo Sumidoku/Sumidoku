@@ -1,14 +1,14 @@
 mod common;
 
 use axum::Router;
-use axum::http::{StatusCode, header};
+use axum::http::StatusCode;
 use common::*;
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
 const PASSWORD: &str = "secret";
 
-/// 统一凭证模型下 basic_password 是 auth.password 的 legacy 别名，同样开启全站认证
+/// Under the unified credential model basic_password is the legacy alias of auth.password and likewise enables site-wide auth
 async fn password_app() -> (Router, tempfile::TempDir) {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
@@ -17,12 +17,12 @@ async fn password_app() -> (Router, tempfile::TempDir) {
 	(app, tmp)
 }
 
-async fn login(app: &Router, password: &str) -> (StatusCode, Value) {
+async fn login(app: &Router, username: &str, password: &str) -> (StatusCode, Value) {
 	let (status, _, bytes) = request_with_headers(
 		app,
 		"POST",
 		"/api/v1/auth/login",
-		Some(json!({"password": password})),
+		Some(json!({"username": username, "password": password})),
 		&[],
 	)
 	.await;
@@ -36,7 +36,7 @@ async fn auth_disabled_by_default() {
 	let (status, body) = request(&app.app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], false);
-	// 未配置密码时全站开放（兼容契约）
+	// with no password configured the site is fully open (compatibility contract)
 	let (status, _) = request(&app.app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
 }
@@ -50,13 +50,13 @@ async fn requires_credentials() {
 		body,
 		json!({"error": {"code": "unauthorized", "message": "authentication required"}})
 	);
-	// status 端点永远公开，SPA 靠它决定要不要跳登录页
+	// the status endpoint is always public; the SPA relies on it to decide whether to jump to the login page
 	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], true);
 }
 
-/// 安全类报错对外归一：无凭证、坏 token、错密码，客户端看到同一形状
+/// Security errors are unified externally: no credentials, bad token, wrong password, and nonexistent user all look the same to the client
 #[tokio::test]
 async fn uniform_401_shape() {
 	let (app, _tmp) = password_app().await;
@@ -73,25 +73,30 @@ async fn uniform_401_shape() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	let bad_token: Value = serde_json::from_slice(&bytes).expect("json");
 	assert_eq!(no_cred, bad_token);
-	let (status, wrong_login) = login(&app, "wrong").await;
+	let (status, wrong_login) = login(&app, "admin", "wrong").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 	assert_eq!(no_cred, wrong_login);
+	// nonexistent user and wrong password are indistinguishable
+	let (status, no_such_user) = login(&app, "nobody", PASSWORD).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	assert_eq!(no_cred, no_such_user);
 }
 
 #[tokio::test]
 async fn login_token_flow() {
 	let (app, _tmp) = password_app().await;
-	let (status, body) = login(&app, PASSWORD).await;
+	let (status, body) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::OK);
 	let token = body["token"].as_str().expect("token");
 	assert!(!token.is_empty());
 	assert!(body["expiresAt"].as_i64().expect("expiresAt") > 0);
+	assert_eq!(body["user"], json!({"id": 1, "username": "admin"}));
 
 	let auth = format!("Bearer {token}");
 	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// <img>/WebSocket 发不了 Authorization 头，媒体与流端点接受 query 传 token
+	// URL credentials are not accepted.
 	let (status, _) = request(
 		&app,
 		"GET",
@@ -99,13 +104,70 @@ async fn login_token_flow() {
 		None,
 	)
 	.await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn session_cookie_authenticates_api_and_events() {
+	let (app, _tmp) = password_app().await;
+	let (status, headers, bytes) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/login",
+		Some(json!({"username": "admin", "password": PASSWORD})),
+		&[("x-forwarded-proto", "https")],
+	)
+	.await;
 	assert_eq!(status, StatusCode::OK);
+	let set_cookie = headers.get("set-cookie").expect("session cookie").to_str().expect("cookie text");
+	assert!(set_cookie.contains("HttpOnly"));
+	assert!(set_cookie.contains("SameSite=Strict"));
+	assert!(set_cookie.contains("Secure"));
+	let body: Value = serde_json::from_slice(&bytes).expect("login json");
+	let token = body["token"].as_str().expect("token");
+	let cookie = format!("sumidoku.session={token}");
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("cookie", &cookie)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, _, _) = request_with_headers(&app, "POST", "/api/v1/downloads/stop", None, &[("cookie", &cookie)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let addr = serve_app(app.clone()).await;
+	let (_query_stream, _query_rest, query_head) =
+		connect_sse_response(addr, &format!("/api/v1/events?access_token={token}"), None, &[]).await;
+	assert!(query_head.contains("401 Unauthorized"), "{query_head}");
+	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", Some(0), &[("Cookie", &cookie)]).await;
+	let snapshot = read_sse_kind(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["data"]["type"], "snapshot");
+	let auth = format!("Bearer {token}");
+	let (status, _, _) = request_with_headers(&app, "POST", "/api/v1/auth/logout", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, headers, _) = request_with_headers(&app, "POST", "/api/v1/auth/logout", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let cleared = headers.get("set-cookie").expect("clear cookie").to_str().expect("clear text");
+	assert!(cleared.contains("Max-Age=0"));
+}
+
+/// A session token belongs to the logged-in user in the DB
+#[tokio::test]
+async fn token_carries_user_identity() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.password = Some(PASSWORD.into());
+	let app = build_app(config).await.expect("build app");
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let token = body["token"].as_str().expect("token");
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM auth_token WHERE token_hash = ?")
+		.bind(sumidoku_server::auth::sha256_hex(token))
+		.fetch_one(&pool)
+		.await
+		.expect("token row");
+	assert_eq!(user_id, 1);
 }
 
 #[tokio::test]
 async fn logout_revokes_token() {
 	let (app, _tmp) = password_app().await;
-	let (_, body) = login(&app, PASSWORD).await;
+	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let token = body["token"].as_str().expect("token").to_string();
 	let auth = format!("Bearer {token}");
 	let (status, _, _) = request_with_headers(&app, "POST", "/api/v1/auth/logout", None, &[("authorization", &auth)]).await;
@@ -114,14 +176,37 @@ async fn logout_revokes_token() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+/// When a user is deleted, their session tokens are wiped by the foreign-key cascade
+#[tokio::test]
+async fn token_dies_with_its_user() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.password = Some(PASSWORD.into());
+	let app = build_app(config).await.expect("build app");
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let auth = format!("Bearer {}", body["token"].as_str().expect("token"));
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	sqlx::query("DELETE FROM user WHERE id = 1")
+		.execute(&pool)
+		.await
+		.expect("delete user");
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn change_password() {
 	let (app, _tmp) = password_app().await;
-	let (_, body) = login(&app, PASSWORD).await;
+	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let token = body["token"].as_str().expect("token").to_string();
 	let auth = format!("Bearer {token}");
+	// a second session, to tell apart the scope of "revoke all of one's own tokens"
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let other = format!("Bearer {}", body["token"].as_str().expect("token"));
 
-	// 旧密码不对，改密码被拒
+	// wrong old password: the change is rejected
 	let (status, _, _) = request_with_headers(
 		&app,
 		"PUT",
@@ -132,7 +217,7 @@ async fn change_password() {
 	.await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 
-	let (status, _, _) = request_with_headers(
+	let (status, headers, _) = request_with_headers(
 		&app,
 		"PUT",
 		"/api/v1/auth/password",
@@ -141,48 +226,19 @@ async fn change_password() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
+	let cleared = headers.get("set-cookie").expect("clear cookie").to_str().expect("clear text");
+	assert!(cleared.contains("Max-Age=0"));
 
-	// 改密码吊销全部会话 token
-	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// 旧密码失效，新密码可登录
-	let (status, _) = login(&app, PASSWORD).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	let (status, _) = login(&app, "new-secret").await;
-	assert_eq!(status, StatusCode::OK);
-}
-
-#[tokio::test]
-async fn opds_shares_the_same_password() {
-	let (app, _tmp) = password_app().await;
-	let (status, headers, _) = request_with_headers(&app, "GET", "/opds/v1.2/root", None, &[]).await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	assert_eq!(
-		headers[header::WWW_AUTHENTICATE],
-		"Basic realm=\"Sumidoku OPDS\""
-	);
-	// 错误密码（user:wrong）
-	let (status, _, _) = request_with_headers(
-		&app,
-		"GET",
-		"/opds/v1.2/root",
-		None,
-		&[("authorization", "Basic dXNlcjp3cm9uZw==")],
-	)
-	.await;
-	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	// 同一密码（user:secret），v1.2 与 v2 都过
-	for path in ["/opds/v1.2/root", "/opds/v2/root"] {
-		let (status, _, _) = request_with_headers(
-			&app,
-			"GET",
-			path,
-			None,
-			&[("authorization", "Basic dXNlcjpzZWNyZXQ=")],
-		)
-		.await;
-		assert_eq!(status, StatusCode::OK, "{path}");
+	// changing the password revokes all of the user's session tokens
+	for auth in [&auth, &other] {
+		let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", auth)]).await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED);
 	}
+	// the old password is dead, the new one logs in
+	let (status, _) = login(&app, "admin", PASSWORD).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	let (status, _) = login(&app, "admin", "new-secret").await;
+	assert_eq!(status, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -190,7 +246,11 @@ async fn public_surface_stays_open() {
 	let (app, _tmp) = password_app().await;
 	let (status, _) = request(&app, "GET", "/health", None).await;
 	assert_eq!(status, StatusCode::OK);
-	// 静态资源永远公开，SPA 要能加载出登录页
+	// the version string is not sensitive; like /health it skips auth
+	let (status, body) = request(&app, "GET", "/api/v1/version", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["version"], env!("CARGO_PKG_VERSION"));
+	// static assets are always public so the SPA can load the login page
 	let (status, _) = request(&app, "GET", "/", None).await;
 	assert_eq!(status, StatusCode::OK);
 }
@@ -204,7 +264,7 @@ async fn auth_password_config_enables_auth() {
 	let (status, body) = request(&app, "GET", "/api/v1/auth/status", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["enabled"], true);
-	let (status, _) = login(&app, PASSWORD).await;
+	let (status, _) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::OK);
 }
 
@@ -215,11 +275,108 @@ async fn auth_password_wins_over_legacy_alias() {
 	config.auth.password = Some(PASSWORD.into());
 	config.basic_password = Some("legacy-only".into());
 	let app = build_app(config).await.expect("build app");
-	// 两个都配时 legacy 别名不生效
-	let (status, _) = login(&app, "legacy-only").await;
+	// when both are configured, the legacy alias has no effect
+	let (status, _) = login(&app, "admin", "legacy-only").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	let (status, _) = login(&app, PASSWORD).await;
+	let (status, _) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::OK);
+}
+
+/// UI-managed API keys: created with the plaintext shown once, stored as a sha256 fingerprint,
+/// authenticating as the built-in admin, and dead after revocation
+#[tokio::test]
+async fn ui_managed_api_keys() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.password = Some(PASSWORD.into());
+	let app = build_app(config).await.expect("build app");
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let auth = format!("Bearer {}", body["token"].as_str().expect("token"));
+
+	// creating requires an authenticated identity
+	let (status, _) = request(&app, "POST", "/api/v1/auth/api-keys", Some(json!({"name": "cli"}))).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	let (status, _, _) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "  "})),
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (status, _, bytes) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "cli"})),
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let created: Value = serde_json::from_slice(&bytes).expect("created json");
+	let key = created["key"].as_str().expect("plaintext key");
+	assert!(key.starts_with("smk_"), "{key}");
+	assert_eq!(created["name"], "cli");
+	assert_eq!(created["source"], "ui");
+	let key_id = created["id"].as_str().expect("key id").to_string();
+
+	// the DB keeps only the fingerprint, never the plaintext
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	let stored: Option<(String, String)> = sqlx::query_as("SELECT key_hash, name FROM api_key")
+		.fetch_optional(&pool)
+		.await
+		.expect("key row");
+	let (stored_hash, stored_name) = stored.expect("one stored key");
+	assert_eq!(stored_hash, sumidoku_server::auth::sha256_hex(key));
+	assert_ne!(stored_hash, key);
+	assert_eq!(stored_name, "cli");
+
+	// the key authenticates as the built-in admin without a login session
+	let key_auth = format!("Bearer {key}");
+	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
+	let last_used: Option<i64> = sqlx::query_scalar("SELECT last_used_at FROM api_key WHERE key_hash = ?")
+		.bind(&stored_hash)
+		.fetch_one(&pool)
+		.await
+		.expect("last used");
+	assert!(last_used.is_some(), "use refreshes last_used_at");
+
+	// the list contains only the UI-managed key
+	let (status, _, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/api-keys", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let list: Value = serde_json::from_slice(&bytes).expect("list json");
+	let entries = list.as_array().expect("entries array");
+	assert_eq!(entries.len(), 1);
+	let ui_entry = entries.iter().find(|e| e["source"] == "ui").expect("ui entry");
+	assert_eq!(ui_entry["id"], key_id);
+	assert_eq!(ui_entry["name"], "cli");
+
+	let (status, _, _) = request_with_headers(
+		&app,
+		"DELETE",
+		"/api/v1/auth/api-keys/does-not-exist",
+		None,
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	// revocation kills the key immediately
+	let (status, _, _) = request_with_headers(
+		&app,
+		"DELETE",
+		&format!("/api/v1/auth/api-keys/{key_id}"),
+		None,
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	pool.close().await;
 }
 
 #[tokio::test]
@@ -227,17 +384,41 @@ async fn api_keys_authenticate_without_login() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
 	config.auth.password = Some(PASSWORD.into());
-	config.auth.api_keys = vec!["smk_test_key".into()];
 	let app = build_app(config).await.expect("build app");
-	let (status, _, _) = request_with_headers(
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let session_auth = format!("Bearer {}", body["token"].as_str().expect("session token"));
+	let (status, _, bytes) = request_with_headers(
 		&app,
-		"GET",
-		"/api/v1/sources",
-		None,
-		&[("authorization", "Bearer smk_test_key")],
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "cli"})),
+		&[("authorization", &session_auth)],
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
+	let created: Value = serde_json::from_slice(&bytes).expect("created json");
+	let key_auth = format!("Bearer {}", created["key"].as_str().expect("api key"));
+
+	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
+	let (status, headers, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
+	let body: Value = serde_json::from_slice(&bytes).expect("status json");
+	assert_eq!(body["user"], json!({"id": 1, "username": "admin"}));
+
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	sqlx::query("UPDATE user SET username = 'owner' WHERE id = 1")
+		.execute(&pool)
+		.await
+		.expect("rename admin");
+	let (status, _, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let body: Value = serde_json::from_slice(&bytes).expect("status json");
+	assert_eq!(body["user"], json!({"id": 1, "username": "owner"}));
+	pool.close().await;
+
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",
@@ -249,14 +430,14 @@ async fn api_keys_authenticate_without_login() {
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
-/// 配置面密码每次启动覆盖库内哈希：改过的密码遇重启以配置为准（headless 部署语义）
+/// The configured password overwrites the in-DB hash on every startup: a changed password yields to the config on restart (headless deployment semantics)
 #[tokio::test]
 async fn config_password_reseeds_on_restart() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
 	config.auth.password = Some(PASSWORD.into());
 	let app = build_app(config.clone()).await.expect("build app");
-	let (_, body) = login(&app, PASSWORD).await;
+	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let token = body["token"].as_str().expect("token").to_string();
 	let auth = format!("Bearer {token}");
 	let (status, _, _) = request_with_headers(
@@ -271,8 +452,124 @@ async fn config_password_reseeds_on_restart() {
 	drop(app);
 
 	let app = build_app(config).await.expect("rebuild app");
-	let (status, _) = login(&app, "new-secret").await;
+	let (status, _) = login(&app, "admin", "new-secret").await;
 	assert_eq!(status, StatusCode::UNAUTHORIZED);
-	let (status, _) = login(&app, PASSWORD).await;
+	let (status, _) = login(&app, "admin", PASSWORD).await;
 	assert_eq!(status, StatusCode::OK);
+}
+
+/// Old-DB migration: auth_credential's site password becomes the admin password, old token sessions
+/// are kept and assigned to user 1, the incognito key moves into the user.1 namespace, and download
+/// rows are kept with the table gaining a composite primary key
+#[tokio::test]
+async fn migration_from_site_password_era() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let db_url = format!("sqlite://{}/test.db?mode=rwc", tmp.path().display());
+	let pool = sqlx::SqlitePool::connect(&db_url).await.expect("pool");
+	// replay the migrations before 0012 with bookkeeping filled in, so build_app's migrate only runs 0012
+	sqlx::raw_sql(
+		"CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+		 version BIGINT PRIMARY KEY,
+		 description TEXT NOT NULL,
+		 installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		 success BOOLEAN NOT NULL,
+		 checksum BLOB NOT NULL,
+		 execution_time BIGINT NOT NULL
+	 )",
+	)
+	.execute(&pool)
+	.await
+	.expect("migrations table");
+	let migrator = sqlx::migrate!("./migrations");
+	for migration in migrator.iter() {
+		if migration.version > 11 {
+			continue;
+		}
+		sqlx::raw_sql(&migration.sql).execute(&pool).await.expect("replay migration");
+		sqlx::query(
+			"INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+			 VALUES (?, ?, TRUE, ?, 0)",
+		)
+		.bind(migration.version)
+		.bind(migration.description.as_ref())
+		.bind(migration.checksum.as_ref())
+		.execute(&pool)
+		.await
+		.expect("migration bookkeeping");
+	}
+	// old-world relics: the site password, a session token without a user column, the global incognito key, a download table with a single-column primary key
+	let site_hash = sumidoku_server::auth::hash_password(PASSWORD).expect("hash");
+	sqlx::query("INSERT INTO auth_credential (id, password_hash) VALUES (1, ?)")
+		.bind(&site_hash)
+		.execute(&pool)
+		.await
+		.expect("seed credential");
+	let old_token_hash = sumidoku_server::auth::sha256_hex("old-session-token");
+	sqlx::query("INSERT INTO auth_token (token_hash, created_at, expires_at) VALUES (?, 1, 9999999999)")
+		.bind(&old_token_hash)
+		.execute(&pool)
+		.await
+		.expect("seed token");
+	sqlx::query("INSERT INTO setting (key, value) VALUES ('incognito.enabled', 'true')")
+		.execute(&pool)
+		.await
+		.expect("seed incognito");
+	sqlx::query("INSERT INTO source (id, key, name, wasm_path) VALUES (100, 'en.x', 'X', '/x.wasm')")
+		.execute(&pool)
+		.await
+		.expect("seed source");
+	sqlx::query("INSERT INTO manga (id, source_id, key) VALUES (100, 100, 'm')")
+		.execute(&pool)
+		.await
+		.expect("seed manga");
+	sqlx::query("INSERT INTO chapter (id, manga_id, source_order, key) VALUES (100, 100, 1, 'c')")
+		.execute(&pool)
+		.await
+		.expect("seed chapter");
+	sqlx::query("INSERT INTO download (chapter_id, user_id, status) VALUES (100, 1, 'finished')")
+		.execute(&pool)
+		.await
+		.expect("seed download");
+	pool.close().await;
+
+	let config = base_config(&tmp);
+	let app = build_app(config).await.expect("build app");
+
+	// the site password logs in as admin directly
+	let (status, body) = login(&app, "admin", PASSWORD).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["user"]["id"], 1);
+	// the old token still works (the migration backfills user 1, the session is not lost)
+	let (status, _, _) = request_with_headers(
+		&app,
+		"GET",
+		"/api/v1/sources",
+		None,
+		&[("authorization", "Bearer old-session-token")],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	let legacy_keys: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'incognito.enabled'")
+		.fetch_one(&pool)
+		.await
+		.expect("count legacy key");
+	assert_eq!(legacy_keys, 0);
+	let namespaced: Option<(String,)> =
+		sqlx::query_as("SELECT value FROM setting WHERE key = 'user.1.incognito.enabled'")
+			.fetch_optional(&pool)
+			.await
+			.expect("namespaced key");
+	assert_eq!(namespaced.map(|(v,)| v).as_deref(), Some("true"));
+	let download_user: i64 = sqlx::query_scalar("SELECT user_id FROM download WHERE chapter_id = 100")
+		.fetch_one(&pool)
+		.await
+		.expect("download row");
+	assert_eq!(download_user, 1);
+	let credential_cols: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('auth_credential')")
+		.fetch_one(&pool)
+		.await
+		.expect("credential table gone");
+	assert_eq!(credential_cols, 0);
 }

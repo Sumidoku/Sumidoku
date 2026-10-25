@@ -1,8 +1,8 @@
-//! send_partial_result 的端到端测试。
-//! fixture 源在 tests/fixtures/partial-src/（no_std cdylib），重建方式：
+//! End-to-end tests for send_partial_result.
+//! The fixture source lives in tests/fixtures/partial-src/ (no_std cdylib); rebuild with:
 //! `cd tests/fixtures/partial-src && cargo build --release --target wasm32-unknown-unknown`
-//! 再把 target/wasm32-unknown-unknown/release/sumidoku_fixture_partial.wasm
-//! 复制为 tests/fixtures/partial/main.wasm。
+//! then copy target/wasm32-unknown-unknown/release/sumidoku_fixture_partial.wasm
+//! over tests/fixtures/partial/main.wasm.
 use aidoku_wasm::{
 	DirectPolicy, HomePartial, NoopCookieSink, NoopDefaultsSink, SourceConfig, SourceHandle, StdoutLogger,
 };
@@ -23,7 +23,6 @@ fn config() -> SourceConfig {
 		policy: Arc::new(DirectPolicy { user_agent: None }),
 		logger: Arc::new(StdoutLogger),
 		accept_language: aidoku_wasm::DEFAULT_ACCEPT_LANGUAGE.to_string(),
-		browser_ws: None,
 		browser_trawl: None,
 	}
 }
@@ -51,7 +50,7 @@ async fn home_partials_stream_in_order_before_final() {
 	}
 	assert!(rx.recv().await.is_none(), "调用结束后 channel 应关闭");
 
-	// fixture 序列：Layout 占位 → Component A → Component B → Component C（新增）
+	// Fixture sequence: Layout placeholder → Component A → Component B → Component C (new)
 	assert_eq!(events.len(), 4, "partial 事件应按到达顺序全量送达");
 	let HomePartial::Layout(placeholder) = &events[0] else {
 		panic!("事件 0 应为 Layout 快照");
@@ -71,7 +70,7 @@ async fn home_partials_stream_in_order_before_final() {
 		_ => unreachable!(),
 	}), ["a-1"]);
 
-	// 终态以导出返回为准，与 partial 不同：A 组件多一条 a-2
+	// The final state follows the export's return and differs from the partials: component A has one more entry, a-2
 	assert_eq!(layout.components.len(), 3);
 	assert_eq!(scroller_entries(&layout.components[0]), ["a-1", "a-2"]);
 }
@@ -121,7 +120,7 @@ async fn manga_update_partials_are_full_snapshots_before_final() {
 	}
 	assert!(rx.recv().await.is_none(), "调用结束后 channel 应关闭");
 
-	// fixture 序列：详情快照（尚无章节）→ 详情+两章快照；输入 key 原样保留
+	// Fixture sequence: details snapshot (no chapters yet) → details+two-chapters snapshot; the input key is preserved as-is
 	assert_eq!(events.len(), 2, "partial 事件应按到达顺序全量送达");
 	assert_eq!(events[0].key, "manga-1");
 	assert_eq!(events[0].title, "Partial Title");
@@ -130,7 +129,7 @@ async fn manga_update_partials_are_full_snapshots_before_final() {
 	assert_eq!(chapters.len(), 2);
 	assert_eq!(chapters[0].key, "c1");
 
-	// 终态以导出返回为准，与 partial 不同：多一章 c3
+	// The final state follows the export's return and differs from the partials: one more chapter, c3
 	assert_eq!(updated.key, "manga-1");
 	assert_eq!(updated.title, "Partial Title");
 	let chapters = updated.chapters.as_ref().expect("终态章节");
@@ -144,7 +143,7 @@ async fn manga_update_partials_respect_requested_parts() {
 		.await
 		.expect("spawn source");
 
-	// 只要详情：只有详情快照一个 partial
+	// Details only: just one partial, the details snapshot
 	let (tx, mut rx) = mpsc::unbounded_channel();
 	let input = aidoku::Manga {
 		key: "manga-1".into(),
@@ -162,7 +161,7 @@ async fn manga_update_partials_respect_requested_parts() {
 	assert!(events[0].chapters.is_none());
 	assert!(updated.chapters.is_none());
 
-	// 只要章节：只有章节快照一个 partial
+	// Chapters only: just one partial, the chapters snapshot
 	let (tx, mut rx) = mpsc::unbounded_channel();
 	let input = aidoku::Manga {
 		key: "manga-1".into(),
@@ -187,7 +186,7 @@ async fn non_streaming_calls_discard_partials() {
 		.await
 		.expect("spawn source");
 
-	// 无 sink 时 partial 按 ABI 丢弃，调用照常返回终态
+	// With no sink, partials are dropped per the ABI, and the call still returns the final state
 	let layout = handle.get_home().await.expect("home layout");
 	assert_eq!(layout.components.len(), 3);
 	let result = handle

@@ -1,22 +1,25 @@
 #![no_std]
-//! 图像处理器契约（issue #116）的 fixture 源：
-//! 声明 Page/CoverImageProcessor 时宿主必须交给处理器原始响应字节——
-//! 处理器逐字节比对 data() 与期望字节，不符即报错；
-//! 密文（PLAIN_PNG 逐字节异或 KEY，不可解码）异或"解密"后建图返回，
-//! 明文 PNG 对照组直接建图返回（契约不因可解码而改变）。
-//! 断言数值与 crates/wasm/tests/rawimg_host.rs 共享。
+//! Fixture source for the image-processor contract (issue #116), aligned with
+//! AidokuRunner's `store(value:)` semantics:
+//! - Ciphertext the host cannot decode (PLAIN_PNG XOR KEY byte by byte) must reach the
+//!   processor byte-for-byte as-is; it is XOR-"decrypted", built into an image, and returned
+//! - For a decodable input the host has already given pixels: data() is a PNG re-encode
+//!   (no longer byte-equal to the original response), and width/height plus canvas strip
+//!   reassembly (the same pattern as jmcomic decryption) must work
+//! Asserted values are shared with crates/wasm/tests/rawimg_host.rs.
 use aidoku::{
 	CoverImageProcessor, FilterValue, ImageResponse, Manga, MangaPageResult, PageContext,
 	PageImageProcessor, Result, Source,
 	alloc::{String, Vec},
-	imports::canvas::ImageRef,
+	canvas::Rect,
+	imports::canvas::{Canvas, ImageRef},
 	prelude::*,
 };
 
-/// 测试密钥：密文 = PLAIN_PNG 逐字节异或 0x5A（无图像 magic，宿主 image crate 解不出）
+/// Test key: ciphertext = PLAIN_PNG XOR 0x5A byte by byte (no image magic, so the host's image crate cannot decode it)
 pub const KEY: u8 = 0x5A;
 
-/// 2x2 RGBA PNG：红 绿 / 蓝 白（生成方式见 rawimg_host.rs 顶部说明）
+/// 2x2 RGBA PNG: red green / blue white (how it was generated: see the note at the top of rawimg_host.rs)
 pub const PLAIN_PNG: &[u8] = include_bytes!("plain.png");
 
 struct RawimgFixtureSource;
@@ -52,7 +55,7 @@ impl Source for RawimgFixtureSource {
 	}
 
 	fn get_page_list(&self, _manga: Manga, _chapter: aidoku::Chapter) -> Result<Vec<aidoku::Page>> {
-		// 占位 Url 页：服务端测试落库后改写成 mock 图床地址（mirrors canvas 管线测试）
+		// Placeholder Url page: the server-side test rewrites it to the mock image-host address after persisting (mirrors the canvas pipeline test)
 		Ok(Vec::from([aidoku::Page {
 			content: aidoku::PageContent::url(String::from("http://localhost/placeholder")),
 			..aidoku::Page::default()
@@ -60,22 +63,44 @@ impl Source for RawimgFixtureSource {
 	}
 }
 
-/// data() 必须是响应原始字节：密文原样给（宿主跳过自己解不了的码），明文也原样给
 fn process(response: ImageResponse) -> Result<ImageRef> {
 	let data = response.image.data();
-	if data == PLAIN_PNG {
-		return Ok(ImageRef::new(&data));
-	}
 	let cipher: Vec<u8> = PLAIN_PNG.iter().map(|b| b ^ KEY).collect();
 	if data == cipher {
+		// Ciphertext branch: data() must be the response's raw bytes exactly; decrypt and build the image
 		let plain: Vec<u8> = data.iter().map(|b| b ^ KEY).collect();
 		return Ok(ImageRef::new(&plain));
 	}
-	bail!("processor data() is not the raw response body ({} bytes)", data.len())
+	// Decodable branch: the input is pixels. The 2x2's two rows are swapped via the canvas
+	// (a miniature of jmcomic's reverse-order strip assembly); when width/height cannot get
+	// pixels, this fails right here
+	if response.image.width() != 2.0 || response.image.height() != 2.0 {
+		bail!("decodable input must expose 2x2 pixels");
+	}
+	let mut canvas = Canvas::new(2.0, 2.0);
+	canvas.copy_image(
+		&response.image,
+		Rect::new(0.0, 1.0, 2.0, 1.0),
+		Rect::new(0.0, 0.0, 2.0, 1.0),
+	);
+	canvas.copy_image(
+		&response.image,
+		Rect::new(0.0, 0.0, 2.0, 1.0),
+		Rect::new(0.0, 1.0, 2.0, 1.0),
+	);
+	Ok(canvas.get_image())
 }
 
 impl PageImageProcessor for RawimgFixtureSource {
-	fn process_page_image(&self, response: ImageResponse, _context: Option<PageContext>) -> Result<ImageRef> {
+	fn process_page_image(&self, response: ImageResponse, context: Option<PageContext>) -> Result<ImageRef> {
+		// Pass-through mode: same as jmcomic's old-chapter/gif branch — return the input image as-is
+		if context
+			.as_ref()
+			.and_then(|c| c.get("mode"))
+			.is_some_and(|m| m == "passthrough")
+		{
+			return Ok(response.image);
+		}
 		process(response)
 	}
 }

@@ -5,12 +5,12 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use common::{
 	TestApp, base_config, connect_db, fixture_dir, install_fixture_source, register_example_manga,
-	request, request_full, test_app,
+	request, request_full, source_by_key, test_app,
 };
 use serde_json::{Value, json};
 use sumidoku_server::build_app;
 
-// 1x1 透明 PNG
+// 1x1 transparent PNG
 const PNG: &[u8] = &[
 	137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
 	0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 10, 73, 68, 65, 84, 120, 156, 99, 0, 1, 0, 0, 5, 0, 1,
@@ -26,13 +26,13 @@ async fn library_category_progress_history() {
 	} = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 
-	// 入库
+	// shelve
 	let (status, body) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["id"], manga_id);
 	assert_eq!(body["inLibrary"], true);
 
-	// 库列表
+	// library list
 	let (status, body) = request(&app, "GET", "/api/v1/library", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let entries = body["entries"].as_array().expect("library entries");
@@ -42,12 +42,12 @@ async fn library_category_progress_history() {
 	assert!(entries[0]["inLibraryAt"].is_i64());
 	assert_eq!(body["hasNextPage"], false);
 
-	// 未入库即未分类
+	// not shelved means uncategorized
 	let (status, body) = request(&app, "GET", "/api/v1/library?categoryId=0", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["entries"].as_array().expect("entries").len(), 1);
 
-	// 分类
+	// categories
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Action"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat_a = body["id"].as_i64().expect("category id");
@@ -61,7 +61,7 @@ async fn library_category_progress_history() {
 	let cat_b = body["id"].as_i64().expect("category id");
 	assert_eq!(body["sortOrder"], 1);
 
-	// 挂进分类
+	// assign to the category
 	let manga_categories = format!("/api/v1/manga/{manga_id}/categories");
 	let (status, _) = request(&app, "PUT", &manga_categories, Some(json!({"categoryIds": [cat_a]}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -71,7 +71,7 @@ async fn library_category_progress_history() {
 	let (_, body) = request(&app, "GET", "/api/v1/library?categoryId=0", None).await;
 	assert_eq!(body["entries"].as_array().expect("entries").len(), 0);
 
-	// 分类列表带 mangaCount
+	// the category list carries mangaCount
 	let (status, body) = request(&app, "GET", "/api/v1/categories", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let cats = body.as_array().expect("categories");
@@ -80,7 +80,7 @@ async fn library_category_progress_history() {
 	assert_eq!(cats[0]["mangaCount"], 1);
 	assert_eq!(cats[1]["mangaCount"], 0);
 
-	// 重排
+	// reorder
 	let (status, body) = request(
 		&app,
 		"PATCH",
@@ -95,7 +95,7 @@ async fn library_category_progress_history() {
 	assert_eq!(cats[1]["id"], cat_a);
 	assert_eq!(cats[1]["sortOrder"], 1);
 
-	// 改名
+	// rename
 	let (status, body) = request(
 		&app,
 		"PATCH",
@@ -106,7 +106,7 @@ async fn library_category_progress_history() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["name"], "Romance");
 
-	// 章节带默认用户字段
+	// chapters carry default user fields
 	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
 	let (status, body) = request(&app, "GET", &chapters_path, None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -118,7 +118,7 @@ async fn library_category_progress_history() {
 	assert!(chapters[0]["lastReadAt"].is_null());
 	let chapter_id = chapters[0]["id"].as_i64().expect("chapter id");
 
-	// 进度
+	// progress
 	let (status, body) = request(
 		&app,
 		"PATCH",
@@ -133,7 +133,7 @@ async fn library_category_progress_history() {
 	assert_eq!(body["isBookmarked"], false);
 	assert!(body["lastReadAt"].is_i64());
 
-	// 章节回读用户字段：读过的有值，没读过的默认
+	// chapters read back user fields: read ones have values, unread ones defaults
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
 	let chapters = body.as_array().expect("chapters");
 	assert_eq!(chapters[0]["lastPageRead"], 3);
@@ -141,7 +141,7 @@ async fn library_category_progress_history() {
 	assert_eq!(chapters[1]["lastPageRead"], 0);
 	assert!(chapters[1]["lastReadAt"].is_null());
 
-	// 历史
+	// history
 	let (status, body) = request(&app, "GET", "/api/v1/history", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let entries = body["entries"].as_array().expect("history entries");
@@ -154,7 +154,7 @@ async fn library_category_progress_history() {
 	assert!(entries[0]["lastReadAt"].is_i64());
 	assert_eq!(body["hasNextPage"], false);
 
-	// 批量已读
+	// batch mark read
 	let ids: Vec<i64> = chapters.iter().map(|c| c["id"].as_i64().expect("id")).collect();
 	let (status, body) = request(
 		&app,
@@ -173,13 +173,13 @@ async fn library_category_progress_history() {
 			.all(|c| c["isRead"] == true)
 	);
 
-	// 删分类：category_manga 级联清掉，漫画回落未分类
+	// deleting a category: category_manga cascades away, the manga falls back to uncategorized
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/categories/{cat_a}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	let (_, body) = request(&app, "GET", "/api/v1/library?categoryId=0", None).await;
 	assert_eq!(body["entries"].as_array().expect("entries").len(), 1);
 
-	// 出库
+	// unshelve
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{manga_id}"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	let (_, body) = request(&app, "GET", "/api/v1/library", None).await;
@@ -190,7 +190,7 @@ async fn library_category_progress_history() {
 	assert_eq!(status, StatusCode::CONFLICT);
 	assert_eq!(body["error"]["code"], "not_in_library");
 
-	// category_manga 行也清掉
+	// the category_manga rows are wiped too
 	let pool = connect_db(&db_path).await;
 	let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM category_manga WHERE manga_id = ?")
 		.bind(manga_id)
@@ -200,7 +200,77 @@ async fn library_category_progress_history() {
 	assert_eq!(count, 0);
 }
 
-/// 起个微型静态服务返字节；返回端口与句柄（abort 即关站，模拟上游消失）
+/// Marking unread (isRead: false) is Aidoku's mark-unread: the whole reading trace goes -
+/// progress, resume stamp, history entry - while the bookmark survives; the batch endpoint
+/// runs the same wipe, and marking read still never touches the stamp by itself.
+#[tokio::test]
+async fn mark_unread_wipes_the_reading_trace() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		..
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let chapter_id = body[0]["id"].as_i64().expect("chapter id");
+
+	// finish the chapter at page 3 and bookmark it
+	let (status, _) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/chapter/{chapter_id}"),
+		Some(json!({"lastPageRead": 3, "isRead": true, "isBookmarked": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", "/api/v1/history", None).await;
+	assert_eq!(body["entries"].as_array().expect("history entries").len(), 1);
+
+	// single mark-unread: progress, stamp and history entry wiped, bookmark kept, no new stamp
+	let (status, body) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/chapter/{chapter_id}"),
+		Some(json!({"isRead": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["lastPageRead"], 0);
+	assert_eq!(body["isRead"], false);
+	assert_eq!(body["isBookmarked"], true);
+	assert!(body["lastReadAt"].is_null());
+	let (_, body) = request(&app, "GET", "/api/v1/history", None).await;
+	assert_eq!(body["entries"].as_array().expect("history entries").len(), 0);
+
+	// the batch endpoint applies the same wipe; the chapters read-back shows the wiped defaults
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [chapter_id], "isRead": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 1);
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [chapter_id], "isRead": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 1);
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let chapter = &body[0];
+	assert_eq!(chapter["lastPageRead"], 0);
+	assert_eq!(chapter["isRead"], false);
+	assert_eq!(chapter["isBookmarked"], true);
+	assert!(chapter["lastReadAt"].is_null());
+}
+
+/// Starts a minimal static server returning bytes; returns the port and handle (aborting shuts it down, simulating the upstream disappearing)
 async fn serve_bytes(routes: Vec<(&'static str, &'static str, Vec<u8>)>) -> (u16, tokio::task::JoinHandle<()>) {
 	let mut router = Router::new();
 	for (path, mime, bytes) in routes {
@@ -241,7 +311,7 @@ async fn cover_and_page_proxy() {
 	let manga_id = register_example_manga(&app).await;
 	let pool = connect_db(&db_path).await;
 
-	// 封面：上游 PNG → 200 落缓存
+	// cover: upstream PNG → 200 into the cache
 	let (port, upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
 	sqlx::query("UPDATE manga SET cover_url = ? WHERE id = ?")
 		.bind(format!("http://127.0.0.1:{port}/img.png"))
@@ -254,7 +324,7 @@ async fn cover_and_page_proxy() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
 	assert_eq!(headers["cache-control"], "private, max-age=86400");
-	// example fixture 带 process_cover_image 导出，封面恒被处理成 200x300 PNG
+	// the example fixture exports process_cover_image, so the cover is always processed into a 200x300 PNG
 	let cover = image::ImageReader::new(std::io::Cursor::new(&bytes))
 		.with_guessed_format()
 		.expect("cover format")
@@ -262,25 +332,25 @@ async fn cover_and_page_proxy() {
 		.expect("cover decode");
 	assert_eq!((cover.width(), cover.height()), (200, 300));
 
-	// 上游消失后仍 200：走缓存
+	// still 200 after the upstream disappears: served from cache
 	upstream.abort();
 	let (status, _, cached) = request_full(&app, "GET", &cover_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(cached, bytes);
 
-	// ?refresh 绕过缓存 → 上游已死 502
+	// ?refresh bypasses the cache → upstream is dead, 502
 	let (status, body) = request(&app, "GET", &format!("{cover_path}?refresh"), None).await;
 	assert_eq!(status, StatusCode::BAD_GATEWAY);
 	assert_eq!(body["error"]["code"], "bad_gateway");
 
-	// 页图代理：先把 pages 落缓存
+	// page image proxy: cache the pages first
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let chapter_id = body[0]["id"].as_i64().expect("chapter id");
 	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
 
-	// Url 页
+	// Url page
 	let (port, _pages_upstream) = serve_bytes(vec![
 		("/img.png", "image/png", PNG.to_vec()),
 		("/img.zip", "application/zip", make_zip("page/1.jpg", PNG)),
@@ -300,13 +370,13 @@ async fn cover_and_page_proxy() {
 	assert_eq!(headers["cache-control"], "private, max-age=3600");
 	assert_eq!(bytes, PNG);
 
-	// Text 页
+	// Text page
 	update_page_content(&pool, chapter_id, 0, json!({"Text": "# Hi"})).await;
 	let (status, body) = request(&app, "GET", &page_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body, json!({"type": "text", "text": "# Hi"}));
 
-	// Zip 页：内存 zip 解出条目
+	// Zip page: the in-memory zip yields the entry
 	update_page_content(
 		&pool,
 		chapter_id,
@@ -319,7 +389,7 @@ async fn cover_and_page_proxy() {
 	assert_eq!(headers["content-type"], "image/jpeg");
 	assert_eq!(bytes, PNG);
 
-	// Image 页：物化 blob 存在时正常出图；引用不存在的 blob 报 404
+	// Image page: served normally when the materialized blob exists; referencing a nonexistent blob 404s
 	update_page_content(&pool, chapter_id, 0, json!({"Image": "0.png"})).await;
 	let blob_dir = tmp.path().join("page-blobs").join(chapter_id.to_string());
 	std::fs::create_dir_all(&blob_dir).expect("mkdir blob dir");
@@ -334,7 +404,7 @@ async fn cover_and_page_proxy() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
 
-	// 越界 404
+	// out of range 404
 	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/99"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
@@ -361,6 +431,8 @@ async fn static_webui() {
 	std::fs::create_dir_all(webui.join("assets")).expect("mkdir assets");
 	std::fs::write(webui.join("index.html"), "<html><body>sumidoku-webui</body></html>").expect("index");
 	std::fs::write(webui.join("assets/app.js"), "console.log(1)").expect("asset");
+	std::fs::write(webui.join("sw.js"), "// service worker").expect("service worker");
+	std::fs::write(webui.join("manifest.webmanifest"), "{}").expect("manifest");
 	let mut config = base_config(&tmp);
 	config.webui_dir = webui;
 	let app = build_app(config).await.expect("build app");
@@ -373,14 +445,27 @@ async fn static_webui() {
 	assert_eq!(status, StatusCode::OK);
 	assert!(String::from_utf8(bytes).expect("utf8").contains("sumidoku-webui"));
 
-	let (status, _, bytes) = request_full(&app, "GET", "/assets/app.js", None).await;
+	let (status, headers, bytes) = request_full(&app, "GET", "/assets/app.js", None).await;
 	assert_eq!(status, StatusCode::OK);
+	assert!(!headers.contains_key("cache-control"));
 	assert_eq!(bytes, b"console.log(1)");
 
-	// API 不被 SPA 吞掉
+	for (path, expected) in [
+		("/sw.js", b"// service worker".as_slice()),
+		("/manifest.webmanifest", b"{}".as_slice()),
+	] {
+		let (status, headers, bytes) = request_full(&app, "GET", path, None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "no-cache");
+		assert_eq!(bytes.as_slice(), expected);
+	}
+
+	// the API is not swallowed by the SPA; the built-in local source is persisted by the migration, so even an empty DB has one row
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body, json!([]));
+	assert_eq!(body.as_array().expect("sources array").len(), 1);
+	assert_eq!(body[0]["key"], "local.local");
+	assert_eq!(body[0]["kind"], "local");
 	let (status, body) = request(&app, "GET", "/api/v1/nope", None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
 	assert_eq!(body["error"]["code"], "not_found");
@@ -391,82 +476,148 @@ async fn static_webui() {
 }
 
 #[tokio::test]
-async fn category_include_flags_patch() {
+async fn deleting_category_clears_exclusions_before_id_reuse() {
+	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Old"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let category_id = body["id"].as_i64().expect("category id");
+	let pool = connect_db(&db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		sqlx::query("INSERT INTO setting (key, value) VALUES (?, ?)")
+			.bind(key)
+			.bind(format!("[{category_id}, 999]"))
+			.execute(&pool)
+			.await
+			.expect("seed category exclusions");
+	}
+	pool.close().await;
+
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/categories/{category_id}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Replacement"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["id"], category_id);
+
+	let pool = connect_db(&db_path).await;
+	for key in [
+		"user.1.library.excluded_update_categories",
+		"user.1.library.excluded_download_categories",
+	] {
+		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("category exclusions");
+		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
+		assert_eq!(ids, vec![999], "{key}");
+	}
+}
+
+#[tokio::test]
+async fn category_include_in_download_patch_is_rejected() {
+	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
+	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let cat = body["id"].as_i64().expect("category id");
+	assert!(!body.as_object().unwrap().contains_key("includeInUpdate"));
+	assert!(!body.as_object().unwrap().contains_key("includeInDownload"));
+	let cat_path = format!("/api/v1/categories/{cat}");
+	let pool = connect_db(&db_path).await;
+	sqlx::query("UPDATE category SET include_in_download = 1 WHERE id = ?")
+		.bind(cat)
+		.execute(&pool)
+		.await
+		.expect("seed legacy download flag");
+	pool.close().await;
+
+	for patch in [
+		json!({"includeInDownload": 0}),
+		json!({"includeInDownload": 1}),
+		json!({"includeInDownload": 2}),
+		json!({"includeInDownload": null}),
+		json!({"includeInDownload": "x"}),
+		json!({"name": "Changed", "includeInDownload": 2}),
+	] {
+		let (status, body) = request(&app, "PATCH", &cat_path, Some(patch.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{patch}: {body}");
+		assert_eq!(body["error"]["code"], "bad_request");
+		assert!(
+			body["error"]["message"]
+				.as_str()
+				.expect("error message")
+				.contains("library.excluded_download_categories"),
+			"{body}"
+		);
+	}
+
+	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
+	assert_eq!(body[0]["name"], "Flags");
+	assert!(!body[0].as_object().unwrap().contains_key("includeInDownload"));
+	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({"name": "Flags2"}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["name"], "Flags2");
+	assert!(!body.as_object().unwrap().contains_key("includeInDownload"));
+	for body in [Some(json!({})), None] {
+		let (status, response) = request(&app, "PATCH", &cat_path, body).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(response["name"], "Flags2");
+	}
+	let pool = connect_db(&db_path).await;
+	let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
+		.bind(cat)
+		.fetch_one(&pool)
+		.await
+		.expect("legacy flag is untouched");
+	assert_eq!(legacy, 1);
+	pool.close().await;
+
+	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInDownload": 1}))).await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn category_include_in_update_patch_is_rejected() {
 	let TestApp { app, tmp: _tmp, .. } = test_app().await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
-	assert_eq!(body["includeInUpdate"], 0);
-	assert_eq!(body["includeInDownload"], 0);
 	let cat_path = format!("/api/v1/categories/{cat}");
 
-	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({"includeInUpdate": 1}))).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
-	assert_eq!(body["includeInDownload"], 0);
-	assert_eq!(body["name"], "Flags");
-
-	let (status, body) = request(
-		&app,
-		"PATCH",
-		&cat_path,
-		Some(json!({"includeInDownload": 2, "name": "Flags2"})),
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
-	assert_eq!(body["includeInDownload"], 2);
-	assert_eq!(body["name"], "Flags2");
-
-	// 回读确认落库
-	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
-	let cats = body.as_array().expect("categories");
-	let row = cats
-		.iter()
-		.find(|c| c["id"].as_i64() == Some(cat))
-		.expect("category");
-	assert_eq!(row["includeInUpdate"], 1);
-	assert_eq!(row["includeInDownload"], 2);
-
-	// {} 与空 body 都是无操作
-	let (status, body) = request(&app, "PATCH", &cat_path, Some(json!({}))).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInUpdate"], 1);
-	let (status, body) = request(&app, "PATCH", &cat_path, None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(body["includeInDownload"], 2);
-
-	// 非法值 400，且不落库
-	for bad in [
-		json!({"includeInUpdate": 3}),
-		json!({"includeInDownload": -1}),
-		json!({"includeInUpdate": "x"}),
+	for patch in [
+		json!({"includeInUpdate": 0}),
+		json!({"includeInUpdate": 1}),
+		json!({"includeInUpdate": 2}),
+		json!({"includeInUpdate": null}),
+		json!({"name": "Changed", "includeInUpdate": 2}),
 	] {
-		let (status, body) = request(&app, "PATCH", &cat_path, Some(bad.clone())).await;
-		assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+		let (status, body) = request(&app, "PATCH", &cat_path, Some(patch.clone())).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{patch}: {body}");
 		assert_eq!(body["error"]["code"], "bad_request");
+		assert!(
+			body["error"]["message"]
+				.as_str()
+				.expect("error message")
+				.contains("library.excluded_update_categories"),
+			"{body}"
+		);
 	}
-	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
-	let row = body
-		.as_array()
-		.expect("categories")
-		.iter()
-		.find(|c| c["id"].as_i64() == Some(cat))
-		.expect("category")
-		.clone();
-	assert_eq!(row["includeInUpdate"], 1);
-	assert_eq!(row["includeInDownload"], 2);
 
-	let (status, _) = request(&app, "PATCH", "/api/v1/categories/999", Some(json!({"includeInUpdate": 1}))).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
+	let (_, body) = request(&app, "GET", "/api/v1/categories", None).await;
+	assert_eq!(body[0]["name"], "Flags");
+	assert!(!body[0].as_object().unwrap().contains_key("includeInDownload"));
 }
 
-/// 注册前三条搜索结果（带完整条目，标题随注册落库），返回 (id, 标题)
+/// Registers the first three search results (full entries, titles persisted at registration), returning (id, title)
 async fn register_three_manga(app: &Router) -> Vec<(i64, String)> {
 	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, body) = request(app, "GET", "/api/v1/sources", None).await;
-	let source_id = body[0]["id"].as_i64().expect("source id");
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
 	let (_, body) = request(
 		app,
 		"POST",
@@ -534,6 +685,33 @@ fn entry_ids(body: &Value) -> Vec<i64> {
 }
 
 #[tokio::test]
+async fn library_unread_filters_include_missing_chapter_user_rows() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK);
+
+	// No chapter_user row exists yet: unread is the default, not an explicit flag.
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![manga_id]);
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+
+	let pool = connect_db(&db_path).await;
+	for chapter_id in first_chapters(&app, manga_id, usize::MAX).await {
+		put_chapter_user(&pool, chapter_id, true, false, false, None).await;
+	}
+	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![manga_id]);
+}
+
+#[tokio::test]
 async fn library_search_sort_filter() {
 	let TestApp {
 		app,
@@ -543,7 +721,7 @@ async fn library_search_sort_filter() {
 	let ids = register_three_manga(&app).await;
 	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
 	let (ta, tb, tc) = (&ids[0].1, &ids[1].1, &ids[2].1);
-	// 搜索/排序断言都建立在注册落库的标题上，先回读对账
+	// the search/sort assertions all build on the titles persisted at registration, so read them back to reconcile first
 	for (id, title) in [(a, ta), (b, tb), (c, tc)] {
 		let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{id}"), None).await;
 		assert_eq!(&body["title"], title);
@@ -553,7 +731,7 @@ async fn library_search_sort_filter() {
 		assert_eq!(status, StatusCode::OK);
 	}
 	let pool = connect_db(&db_path).await;
-	// added 排序锚点：入库时间显式拉开，避免同秒并列
+	// anchor for added sorting: shelve times explicitly spread apart to avoid same-second ties
 	for (id, at) in [(a, 1000), (b, 1001), (c, 1002)] {
 		sqlx::query("UPDATE manga_user SET in_library_at = ? WHERE manga_id = ?")
 			.bind(at)
@@ -564,18 +742,24 @@ async fn library_search_sort_filter() {
 	}
 	let a_ch = first_chapters(&app, a, 2).await;
 	let b_ch = first_chapters(&app, b, 1).await;
-	let c_ch = first_chapters(&app, c, 1).await;
-	// A：2 未读（其一加书签、读过 @100）；B：1 未读已下载、读过 @300；C：1 已读、无阅读时间
+	// A: 2 unread (one bookmarked, read @100); B: 1 unread downloaded, read @300; C: all read, no read time
 	put_chapter_user(&pool, a_ch[0], false, true, false, Some(100)).await;
 	put_chapter_user(&pool, a_ch[1], false, false, false, None).await;
 	put_chapter_user(&pool, b_ch[0], false, false, true, Some(300)).await;
-	put_chapter_user(&pool, c_ch[0], true, false, false, None).await;
+	for chapter_id in first_chapters(&app, c, usize::MAX).await {
+		put_chapter_user(&pool, chapter_id, true, false, false, None).await;
+	}
 
-	// 默认 added 排序 + unreadCount
+	// default added ordering + unreadCount
 	let (status, body) = request(&app, "GET", "/api/v1/library", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(entry_ids(&body), vec![c, b, a]);
 	assert_eq!(body["hasNextPage"], false);
+	let mut totals = std::collections::HashMap::new();
+	for id in [a, b, c] {
+		let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{id}/chapters"), None).await;
+		totals.insert(id, body.as_array().expect("chapters").len() as i64);
+	}
 	let counts: std::collections::HashMap<i64, i64> = body["entries"]
 		.as_array()
 		.expect("entries")
@@ -587,9 +771,13 @@ async fn library_search_sort_filter() {
 			)
 		})
 		.collect();
-	assert_eq!(counts, std::collections::HashMap::from([(a, 2), (b, 1), (c, 0)]));
+	// chapters with an is_read=1 row: C has all chapters read, A and B none — every other chapter counts as unread
+	assert_eq!(
+		counts,
+		std::collections::HashMap::from([(a, totals[&a]), (b, totals[&b]), (c, 0)])
+	);
 
-	// 搜索：B 的完整标题只命中 B
+	// search: B's full title hits only B
 	let (status, body) = request(
 		&app,
 		"GET",
@@ -599,7 +787,7 @@ async fn library_search_sort_filter() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(entry_ids(&body), vec![b]);
-	// LIKE 通配符按字面量处理：把标题第 2 个字符换成 _ 或 % 后若被当通配符本应命中
+	// LIKE wildcards are treated literally: replacing the title's 2nd character with _ or % would hit if they were treated as wildcards
 	let mut wildcard: String = tb.chars().enumerate().map(|(i, ch)| if i == 1 { '_' } else { ch }).collect();
 	let (_, body) = request(
 		&app,
@@ -618,11 +806,11 @@ async fn library_search_sort_filter() {
 	)
 	.await;
 	assert_eq!(entry_ids(&body), Vec::<i64>::new());
-	// 空 search 视为未传
+	// an empty search counts as not passed
 	let (_, body) = request(&app, "GET", "/api/v1/library?search=", None).await;
 	assert_eq!(entry_ids(&body).len(), 3);
 
-	// 排序
+	// sorting
 	let mut by_title = [(a, ta), (b, tb), (c, tc)];
 	by_title.sort_by_key(|x| x.1.to_lowercase());
 	let title_order: Vec<i64> = by_title.iter().map(|(id, _)| *id).collect();
@@ -630,12 +818,16 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), title_order);
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=lastRead", None).await;
 	assert_eq!(entry_ids(&body), vec![b, a, c]);
+	// the badge's default-unread count desc, ties broken by id asc
+	let mut by_unread = [(a, totals[&a]), (b, totals[&b]), (c, 0)];
+	by_unread.sort_by_key(|&(id, count)| (-count, id));
+	let unread_order: Vec<i64> = by_unread.iter().map(|&(id, _)| id).collect();
 	let (_, body) = request(&app, "GET", "/api/v1/library?sort=unread", None).await;
-	assert_eq!(entry_ids(&body), vec![a, b, c]);
+	assert_eq!(entry_ids(&body), unread_order);
 	let (status, _) = request(&app, "GET", "/api/v1/library?sort=bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 
-	// 过滤（多个为 AND）
+	// filtering (multiple values are ANDed)
 	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread", None).await;
 	assert_eq!(entry_ids(&body), vec![b, a]);
 	let (_, body) = request(&app, "GET", "/api/v1/library?filter=downloaded", None).await;
@@ -647,7 +839,21 @@ async fn library_search_sort_filter() {
 	let (status, _) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 
-	// 组合：搜索 + title 排序
+	// exclusion semantics: excluding unread = everything read; combined with inclusion as an intersection (b is downloaded but has unread, so it's excluded)
+	let (_, body) = request(&app, "GET", "/api/v1/library?filterExclude=unread", None).await;
+	assert_eq!(entry_ids(&body), vec![c]);
+	let (_, body) = request(
+		&app,
+		"GET",
+		"/api/v1/library?filter=downloaded&filterExclude=unread",
+		None,
+	)
+	.await;
+	assert_eq!(entry_ids(&body), Vec::<i64>::new());
+	let (status, _) = request(&app, "GET", "/api/v1/library?filterExclude=bogus", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	// combination: search + title sort
 	let (_, body) = request(
 		&app,
 		"GET",
@@ -658,7 +864,161 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), vec![a]);
 }
 
-/// 库列表 id 集（排序无关断言，先排序再比）
+#[tokio::test]
+async fn library_latest_chapter_sort() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
+	for id in [a, b, c] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	for id in [a, b] {
+		sqlx::query("UPDATE chapter SET fetched_at = 100, date_uploaded = 100 WHERE manga_id = ?")
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("reset chapter timestamps");
+	}
+	let a_chapters = first_chapters(&app, a, 2).await;
+	let b_chapters = first_chapters(&app, b, 2).await;
+	for (chapter_id, fetched_at, date_uploaded) in [
+		(a_chapters[0], 100, 900),
+		(a_chapters[1], 200, 900),
+		(b_chapters[0], 300, 100),
+		(b_chapters[1], 100, 100),
+	] {
+		sqlx::query("UPDATE chapter SET fetched_at = ?, date_uploaded = ? WHERE id = ?")
+			.bind(fetched_at)
+			.bind(date_uploaded)
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.expect("set chapter timestamps");
+	}
+	for (id, last_fetch) in [(a, 900), (b, 100), (c, 1000)] {
+		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+			.bind(last_fetch)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set chapter refresh timestamp");
+	}
+	sqlx::query("DELETE FROM chapter WHERE manga_id = ?")
+		.bind(c)
+		.execute(&pool)
+		.await
+		.expect("remove chapters");
+
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a, c]);
+
+	sqlx::query("UPDATE chapter SET fetched_at = 300 WHERE id = ?")
+		.bind(a_chapters[1])
+		.execute(&pool)
+		.await
+		.expect("tie latest chapter timestamp");
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![a, b, c]);
+}
+
+#[tokio::test]
+async fn library_latest_chapter_refresh_keeps_first_seen_order() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b) = (ids[0].0, ids[1].0);
+	for id in [a, b] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	for (id, fetched_at, last_fetch) in [(a, 100, 1), (b, 200, 200)] {
+		sqlx::query("UPDATE chapter SET fetched_at = ? WHERE manga_id = ?")
+			.bind(fetched_at)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set first-seen timestamps");
+		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
+			.bind(last_fetch)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set refresh timestamps");
+	}
+	let before: Vec<(i64, i64)> = sqlx::query_as("SELECT id, fetched_at FROM chapter WHERE manga_id = ? ORDER BY id")
+		.bind(a)
+		.fetch_all(&pool)
+		.await
+		.expect("chapters before refresh");
+	assert!(!before.is_empty());
+
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a]);
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{a}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body.as_array().expect("chapters").len(), before.len());
+	let after: Vec<(i64, i64)> = sqlx::query_as("SELECT id, fetched_at FROM chapter WHERE manga_id = ? ORDER BY id")
+		.bind(a)
+		.fetch_all(&pool)
+		.await
+		.expect("chapters after refresh");
+	assert_eq!(after, before);
+	let last_fetch: Option<i64> = sqlx::query_scalar("SELECT chapters_last_fetched_at FROM manga WHERE id = ?")
+		.bind(a)
+		.fetch_one(&pool)
+		.await
+		.expect("refresh timestamp");
+	assert!(last_fetch.expect("chapter refresh timestamp") > 200);
+	let (status, body) = request(&app, "GET", "/api/v1/library?sort=latestChapter", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(entry_ids(&body), vec![b, a]);
+}
+
+#[tokio::test]
+async fn library_source_counts() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path: _,
+	} = test_app().await;
+	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(body.as_array().expect("array").len(), 0, "{body}");
+
+	let ids = register_three_manga(&app).await;
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
+	for (id, _) in ids.iter().take(2) {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+
+	let (status, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, json!([{ "sourceId": source_id, "count": 2 }]), "{body}");
+
+	// the count follows after removing one
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{}", ids[0].0), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
+	assert_eq!(body, json!([{ "sourceId": source_id, "count": 1 }]), "{body}");
+}
+
+/// Library id set (order-agnostic assertion: sort before comparing)
 async fn library_ids(app: &Router, qs: &str) -> Vec<i64> {
 	let (status, body) = request(app, "GET", &format!("/api/v1/library?{qs}"), None).await;
 	assert_eq!(status, StatusCode::OK, "{qs}");
@@ -670,7 +1030,7 @@ async fn library_ids(app: &Router, qs: &str) -> Vec<i64> {
 #[tokio::test]
 async fn library_rating_source_filter() {
 	let TestApp { app, tmp, db_path } = test_app().await;
-	// 第二个源用同一 fixture 载荷，key 不同即是另一个源
+	// the second source uses the same fixture payload; a different key makes it another source
 	install_fixture_source(&tmp, "en.example-two", "Example Two", &fixture_dir().join("main.wasm"));
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -687,7 +1047,7 @@ async fn library_rating_source_filter() {
 	let one = source_id_of("en.example-source");
 	let two = source_id_of("en.example-two");
 
-	// 源一注册 3 本、源二注册 1 本，全部入库；分级直接落库控制（fixture 不产出）
+	// register 3 on source one, 1 on source two, all shelved; ratings are set directly in the DB (the fixture doesn't produce them)
 	let mut registered: Vec<(i64, String)> = Vec::new();
 	for (source, take) in [(one, 3), (two, 1)] {
 		let (_, body) = request(
@@ -730,7 +1090,7 @@ async fn library_rating_source_filter() {
 			.expect("set content_rating");
 	}
 
-	// 分级：包含集内 OR、排除集 NOT-OR
+	// rating: OR within the include set, NOT-OR for the exclude set
 	assert_eq!(library_ids(&app, "contentRating=1,2").await, vec![a, b]);
 	assert_eq!(library_ids(&app, "contentRating=3").await, vec![c, d]);
 	assert_eq!(library_ids(&app, "contentRatingExclude=3").await, vec![a, b]);
@@ -738,14 +1098,14 @@ async fn library_rating_source_filter() {
 		library_ids(&app, "contentRating=1,2,3&contentRatingExclude=2").await,
 		vec![a, c, d]
 	);
-	// 源：包含集内 OR、排除集 NOT-OR
+	// source: OR within the include set, NOT-OR for the exclude set
 	assert_eq!(library_ids(&app, &format!("source={one}")).await, vec![a, b, c]);
 	assert_eq!(library_ids(&app, &format!("sourceExclude={one}")).await, vec![d]);
 	assert_eq!(
 		library_ids(&app, &format!("source={one},{two}&sourceExclude={two}")).await,
 		vec![a, b, c]
 	);
-	// 维度间 AND
+	// AND across dimensions
 	assert_eq!(
 		library_ids(&app, &format!("contentRating=3&source={one}")).await,
 		vec![c]
@@ -754,14 +1114,14 @@ async fn library_rating_source_filter() {
 		library_ids(&app, &format!("contentRatingExclude=3&sourceExclude={two}")).await,
 		vec![a, b]
 	);
-	// 空 / 纯空白视为缺席
+	// empty / pure whitespace counts as absent
 	let mut all = vec![a, b, c, d];
 	all.sort_unstable();
 	assert_eq!(library_ids(&app, "contentRating=").await, all);
 	assert_eq!(library_ids(&app, "contentRating=%20").await, all);
 	assert_eq!(library_ids(&app, "source=%20%20").await, all.clone());
 	assert_eq!(library_ids(&app, "sourceExclude=").await, all);
-	// 非法 token 400：越界分级、非整数
+	// illegal tokens 400: out-of-range rating, non-integer
 	for qs in [
 		"contentRating=0",
 		"contentRating=4",
@@ -775,7 +1135,8 @@ async fn library_rating_source_filter() {
 		assert_eq!(body["error"]["code"], "bad_request", "{qs}");
 	}
 
-	// bind 位序对账：search + categoryId + 四个新参数同发，换位即错
+	// bind position reconciliation: search + categoryId + the category/rating/source tri-state parameters
+	// fired together; any swap breaks it
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Fav"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
@@ -788,13 +1149,113 @@ async fn library_rating_source_filter() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	let qs = format!(
-		"search={}&categoryId={cat}&contentRating=2&contentRatingExclude=3&source={one},{two}&sourceExclude={two}",
+		"search={}&categoryId={cat}&category={cat}&contentRating=2&contentRatingExclude=3&source={one},{two}&sourceExclude={two}",
 		urlencoding(&tb)
 	);
 	assert_eq!(library_ids(&app, &qs).await, vec![b]);
 }
 
-/// query 值里的保留字符 percent-encode（测试标题是 ASCII，按字节处理即可）
+/// Category tri-state (`category`/`categoryExclude`, 0 = uncategorized): OR within a set, NOT-OR for the exclude set, AND across
+#[tokio::test]
+async fn library_category_tri_state_filter() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	// the fixture source directory exists but is only registered by an explicit scan
+	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	// four shelved manga: a → cat1, b → cat1+cat2, c → cat2, d → uncategorized
+	let (_, body) = request(&app, "GET", "/api/v1/sources", None).await;
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
+	let (_, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	let entries = body["entries"].as_array().expect("entries").clone();
+	assert!(entries.len() >= 4, "fixture yields at least 4 manga");
+	let mut registered = Vec::new();
+	for entry in entries.iter().take(4) {
+		let (status, body) = request(
+			&app,
+			"POST",
+			"/api/v1/manga",
+			Some(json!({"sourceId": source_id, "manga": entry})),
+		)
+		.await;
+		assert_eq!(status, StatusCode::OK);
+		let id = body["id"].as_i64().expect("manga id");
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+		registered.push(id);
+	}
+	let (a, b, c, d) = (registered[0], registered[1], registered[2], registered[3]);
+	let cat = |name: &str| {
+		let name = name.to_string();
+		let app = &app;
+		async move {
+			let (status, body) = request(app, "POST", "/api/v1/categories", Some(json!({"name": name}))).await;
+			assert_eq!(status, StatusCode::OK);
+			body["id"].as_i64().expect("category id")
+		}
+	};
+	let cat1 = cat("Cat One").await;
+	let cat2 = cat("Cat Two").await;
+	let shelve = |manga: i64, cats: Vec<i64>| {
+		let app = &app;
+		async move {
+			let (status, _) = request(
+				app,
+				"PUT",
+				&format!("/api/v1/manga/{manga}/categories"),
+				Some(json!({"categoryIds": cats})),
+			)
+			.await;
+			assert_eq!(status, StatusCode::OK);
+		}
+	};
+	shelve(a, vec![cat1]).await;
+	shelve(b, vec![cat1, cat2]).await;
+	shelve(c, vec![cat2]).await;
+
+	// include: OR within the set, 0 is the uncategorized arm
+	assert_eq!(library_ids(&app, &format!("category={cat1}")).await, vec![a, b]);
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},{cat2}")).await,
+		vec![a, b, c]
+	);
+	assert_eq!(library_ids(&app, "category=0").await, vec![d]);
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},0")).await,
+		vec![a, b, d]
+	);
+	// exclude: NOT-OR, exclude-0 keeps only categorized manga
+	assert_eq!(
+		library_ids(&app, &format!("categoryExclude={cat1}")).await,
+		vec![c, d]
+	);
+	assert_eq!(library_ids(&app, "categoryExclude=0").await, vec![a, b, c]);
+	// AND across the two sets: b matches the include but lives in an excluded category
+	assert_eq!(
+		library_ids(&app, &format!("category={cat1},{cat2}&categoryExclude={cat2}")).await,
+		vec![a]
+	);
+	// empty / pure whitespace counts as absent
+	let mut all = vec![a, b, c, d];
+	all.sort_unstable();
+	assert_eq!(library_ids(&app, "category=").await, all);
+	assert_eq!(library_ids(&app, "categoryExclude=%20").await, all);
+	// illegal tokens 400: negative and non-integer ids
+	for qs in ["category=-1", "category=x", "categoryExclude=1.5"] {
+		let (status, body) = request(&app, "GET", &format!("/api/v1/library?{qs}"), None).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{qs}");
+		assert_eq!(body["error"]["code"], "bad_request", "{qs}");
+	}
+}
+
+/// Percent-encodes reserved characters in the query value (test titles are ASCII, byte-wise handling suffices)
 fn urlencoding(raw: &str) -> String {
 	let mut out = String::new();
 	for byte in raw.bytes() {
@@ -810,7 +1271,7 @@ fn urlencoding(raw: &str) -> String {
 #[tokio::test]
 async fn embedded_webui() {
 	let TestApp { app, tmp, .. } = test_app().await;
-	// test_app 的 webui_dir 在 tmp 下不存在 → 不走磁盘分支
+	// test_app's webui_dir doesn't exist under tmp → the disk branch is not taken
 	assert!(!tmp.path().join("webui").is_dir());
 	if sumidoku_server::webui_assets::has_index() {
 		let index = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../webui/build/index.html"))
@@ -820,23 +1281,32 @@ async fn embedded_webui() {
 		assert_eq!(headers["cache-control"], "no-cache");
 		assert_eq!(bytes, index);
 
-		// SPA 路由回退 index.html
+		// SPA routes fall back to index.html
 		let (status, headers, bytes) = request_full(&app, "GET", "/some/spa/route", None).await;
 		assert_eq!(status, StatusCode::OK);
 		assert_eq!(headers["cache-control"], "no-cache");
 		assert_eq!(bytes, index);
 
-		// 路径穿越被拒，保持 JSON 404
+		for path in ["/sw.js", "/manifest.webmanifest"] {
+			let (status, headers, _) = request_full(&app, "GET", path, None).await;
+			assert_eq!(status, StatusCode::OK);
+			assert_eq!(headers["cache-control"], "no-cache");
+		}
+		let (status, headers, _) = request_full(&app, "GET", "/icon.svg", None).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(headers["cache-control"], "private, max-age=3600");
+
+		// path traversal is rejected, keeping the JSON 404
 		let (status, body) = request(&app, "GET", "/../../secret", None).await;
 		assert_eq!(status, StatusCode::NOT_FOUND);
 		assert_eq!(body["error"]["code"], "not_found");
 
-		// API 不被 SPA 吞掉
+		// the API is not swallowed by the SPA
 		let (status, body) = request(&app, "GET", "/api/v1/nope", None).await;
 		assert_eq!(status, StatusCode::NOT_FOUND);
 		assert_eq!(body["error"]["code"], "not_found");
 	} else {
-		// 无 webui 产物的环境（CI 干净 checkout）：回「webui not built」文本
+		// environments without webui artifacts (clean CI checkout): respond with the "webui not built" text
 		let (status, _, bytes) = request_full(&app, "GET", "/", None).await;
 		assert_eq!(status, StatusCode::OK);
 		assert!(String::from_utf8(bytes).expect("utf8").contains("webui not built"));

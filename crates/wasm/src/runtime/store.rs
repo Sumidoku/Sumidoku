@@ -7,9 +7,9 @@ pub type Rid = i32;
 pub type FFIResult = i32;
 pub type Ptr = u32;
 
-/// 统一 RGBA8 直色（每像素 4 字节）：canvas 绘制与 net::get_image 共用同一
-/// 像素格式，get_image_data 才能无差别编码。
-/// premultiply/demultiply 只在进出 tiny-skia 时发生
+/// Uniform RGBA8 straight color (4 bytes per pixel): canvas drawing and net::get_image share
+/// one pixel format so get_image_data can encode indiscriminately.
+/// premultiply/demultiply only happens on the way in and out of tiny-skia
 pub struct ImageData {
 	pub data: Vec<u8>,
 	pub width: i32,
@@ -55,9 +55,10 @@ pub enum StoreItem {
 	HtmlNodeList(Vec<HtmlNode>),
 	HtmlElementList(HtmlElementList),
 	Encoded(Vec<u8>),
-	/// 图像处理器入参的原始响应字节：Aidoku 契约里源声明了处理器宿主就跳过解码，
-	/// 加密图床的字节只有源解得开。没解码就没有像素——draw/copy 不认它，
-	/// width/height 落 InvalidImagePointer，只有 get_image_data 把字节原样交还源侧
+	/// Raw response bytes in a processor input that the host could not decode (encrypted
+	/// image hosts — see process_image's decode fallback): no decode means no pixels —
+	/// draw/copy reject it, width/height land InvalidImagePointer, and get_image_data plus
+	/// pass-through image fetch hand the bytes back as-is
 	ImageBytes(Vec<u8>),
 	ImageData(ImageData),
 	Canvas(Box<CanvasState>),
@@ -65,11 +66,6 @@ pub enum StoreItem {
 	JsContext(Box<JsEngine>),
 	WebView(Box<crate::webview::WebView>),
 }
-
-// HtmlDocument/JsContext 等内部类型非 Send，但实例与 store 只活在单个 actor
-// 线程内不跨线程，unsafe 实现只为满足 wasmer FunctionEnv 的 Send/Sync 约束。
-unsafe impl Send for StoreItem {}
-unsafe impl Sync for StoreItem {}
 
 impl StoreItem {
 	pub fn as_string(&self) -> Option<&String> {
@@ -170,8 +166,8 @@ impl GlobalStore {
 		}
 	}
 
-	/// 临时取出条目：draw_image 等同时借用 canvas 与 image 的场合，
-	/// 取出后必须 restore 放回原 rid
+	/// Temporarily take an entry out: for cases like draw_image that borrow both the canvas
+	/// and the image; the entry must be restored to its original rid afterwards
 	pub fn take(&mut self, rid: Rid) -> Option<StoreItem> {
 		self.storage.remove(&rid)
 	}

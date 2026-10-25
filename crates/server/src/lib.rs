@@ -1,20 +1,23 @@
 pub mod api;
 pub mod auth;
 pub mod backup;
-pub mod browser_login;
 pub mod config;
 pub mod db;
 pub mod download;
 pub mod error;
+pub mod events;
+pub mod local;
 pub mod model;
-pub mod opds;
+pub mod opds_source;
 pub mod rss;
 pub mod source;
 pub mod state;
+pub mod sync;
+pub mod task;
 pub mod update;
 pub mod webui_assets;
 
-/// 单用户阶段所有用户态操作恒为内置 admin
+/// Built-in admin (user 1): scheduled backups always build the full export as it (see backup/mod.rs)
 pub(crate) const USER_ID: i64 = 1;
 pub(crate) const PAGE_SIZE: i64 = 50;
 
@@ -26,23 +29,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
 
 pub async fn build_app(config: Config) -> Result<Router, Error> {
-	build_app_with(config, None).await
-}
-
-/// browser_connector 为 Some 时压过 config.net.browser_ws 的组装（测试注入 mock 用）
-pub async fn build_app_with(
-	config: Config,
-	browser_connector: Option<Box<dyn aidoku_wasm::browser::CdpConnector>>,
-) -> Result<Router, Error> {
-	// 两个浏览器后端并存没有合并语义，配置错误要在启动时暴露而不是运行时行为漂移
-	if config.net.browser_ws.is_some() && config.net.browser_trawl.is_some() {
-		return Err(Error::Config(
-			"net.browser_ws and net.browser_trawl are mutually exclusive: configure one browser backend".into(),
-		));
-	}
 	std::fs::create_dir_all(&config.covers_dir)?;
 	std::fs::create_dir_all(&config.downloads_dir)?;
 	std::fs::create_dir_all(config.sources_dir())?;
@@ -52,24 +41,24 @@ pub async fn build_app_with(
 	let (cookie_tx, cookie_rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
-	let connector = browser_connector.map_or_else(
-		|| {
-			state
-				.config
-				.net
-				.browser_ws
-				.as_deref()
-				.map(|ws| aidoku_wasm::browser::ws_connector_ambient(ws, tokio::runtime::Handle::current()))
-		},
-		Some,
-	);
-	let manager = browser_login::BrowserLoginManager::new(connector, browser_login::SESSION_TTL);
-	assert!(state.browser_logins.set(manager).is_ok());
 	auth::init(&state).await?;
+	local::ensure_default_instance(&state)
+		.await
+		.map_err(|e| Error::Local(e.message().to_string()))?;
 	let downloads = download::DownloadManager::new(&state);
 	assert!(state.downloads.set(downloads.clone()).is_ok());
 	let updater = update::UpdateScheduler::new(&state);
 	assert!(state.updater.set(updater.clone()).is_ok());
+	let event_hub = events::EventHub::new();
+	assert!(state.events.set(event_hub.clone()).is_ok());
+	event_hub.forward_downloads(downloads.clone());
+	event_hub.forward_update(updater.clone());
+	let tasks = task::TaskManager::new(&state);
+	assert!(state.tasks.set(tasks.clone()).is_ok());
+	event_hub.forward_tasks(tasks.clone());
+	// A task left running by the previous process goes back to pending before the dispatcher starts
+	tasks.recover().await?;
+	tokio::spawn(tasks.run());
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;
@@ -82,6 +71,11 @@ pub async fn build_app_with(
 			state.config.repo_refresh_interval_hours,
 		));
 	}
+	// Backfill features on old rows: compile and stamp serially in the background without blocking startup
+	{
+		let pool = state.pool.clone();
+		tokio::spawn(async move { source::backfill_source_metadata(&pool).await });
+	}
 	if state.config.source_idle_evict_minutes > 0 {
 		let max_idle =
 			std::time::Duration::from_secs(state.config.source_idle_evict_minutes as u64 * 60);
@@ -92,7 +86,7 @@ pub async fn build_app_with(
 		));
 	}
 	if state.config.rss_threshold_mb > 0 {
-		// 读不出 RSS 的平台（Windows）监控无从谈起，只记一次日志
+		// On platforms where RSS is unreadable (Windows) there is nothing to monitor; log once and move on
 		if rss::current_rss().is_some() {
 			tokio::spawn(state::run_rss_monitor(
 				state.clone(),
@@ -105,10 +99,16 @@ pub async fn build_app_with(
 		}
 	}
 	let app = api::router(state.clone());
-	let app = app
-		.nest("/opds/v1.2", opds::router(state.clone()))
-		.nest("/opds/v2", opds::v2::router(state.clone()));
-	Ok(webui_fallback(app, &state.config.webui_dir).layer(TraceLayer::new_for_http()))
+	let trace = TraceLayer::new_for_http()
+		.make_span_with(|request: &Request| {
+			tracing::info_span!(
+				"http.request",
+				method = %request.method(),
+				path = %request.uri().path(),
+			)
+		})
+		.on_response(DefaultOnResponse::new().level(tracing::Level::INFO));
+	Ok(webui_fallback(app, &state.config.webui_dir).layer(trace))
 }
 
 fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
@@ -121,20 +121,30 @@ fn webui_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 	app.route("/", get(|| async { "Sumidoku API server (webui not built)" }))
 }
 
-/// 磁盘分支：SUMIDOKU_WEBUI_DIR 显式指向真实目录（开发/Docker 挂载）时优先
+/// Disk branch: wins when SUMIDOKU_WEBUI_DIR explicitly points at a real directory (dev/Docker mount)
 fn webui_disk_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
-	// not_found_service 会把响应状态码强制改成 404（给 404 页用的），SPA 要 200，用 fallback
+	// not_found_service forces the response status to 404 (meant for 404 pages); the SPA needs 200, so use fallback
 	let serve = ServeDir::new(webui_dir).fallback(ServeFile::new(webui_dir.join("index.html")));
 	app.fallback(move |req: Request| {
 		let serve = serve.clone();
 		async move {
-			// /api 与 /opds 不许进 SPA fallback，未知 API 路径保持 JSON 404
+			// /api and /opds must not enter the SPA fallback; unknown API paths keep the JSON 404
 			let path = req.uri().path();
 			if path.starts_with("/api") || path.starts_with("/opds") {
 				return ApiError::not_found("route not found").into_response();
 			}
+			let no_cache = matches!(path, "/sw.js" | "/manifest.webmanifest");
 			match serve.oneshot(req).await {
-				Ok(response) => response.into_response(),
+				Ok(response) => {
+					let mut response = response.into_response();
+					if no_cache {
+						response.headers_mut().insert(
+							axum::http::header::CACHE_CONTROL,
+							axum::http::HeaderValue::from_static("no-cache"),
+						);
+					}
+					response
+				}
 				Err(e) => match e {},
 			}
 		}
@@ -142,7 +152,7 @@ fn webui_disk_fallback(app: Router, webui_dir: &std::path::Path) -> Router {
 }
 
 async fn webui_embedded_fallback(req: Request) -> Response {
-	// /api 与 /opds 不许进 SPA fallback，未知 API 路径保持 JSON 404
+	// /api and /opds must not enter the SPA fallback; unknown API paths keep the JSON 404
 	let path = req.uri().path();
 	if path.starts_with("/api") || path.starts_with("/opds") {
 		return ApiError::not_found("route not found").into_response();
@@ -153,7 +163,7 @@ async fn webui_embedded_fallback(req: Request) -> Response {
 	if let Some((mime, body)) = webui_assets::get(&normalized) {
 		return webui_assets::embedded_response(&normalized, mime, body);
 	}
-	// SPA 前端路由：未命中的非 API 路径回退 index.html
+	// SPA client-side routing: unmatched non-API paths fall back to index.html
 	match webui_assets::get("index.html") {
 		Some((mime, body)) => webui_assets::embedded_response("index.html", mime, body),
 		None => ApiError::not_found("route not found").into_response(),
