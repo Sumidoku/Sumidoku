@@ -360,7 +360,7 @@ function ReaderCore({
 
 	function navCh(c: ChapterWithDownload | null) {
 		if (!c) return;
-		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`);
+		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`, { replace: true });
 	}
 
 	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
@@ -886,7 +886,7 @@ function ReaderCore({
 										onClick={() => {
 											setChaptersOpen(false);
 											if (c.id !== chapterId) {
-												navigate(`/reader/${c.id}?manga=${mangaId}`);
+												navigate(`/reader/${c.id}?manga=${mangaId}`, { replace: true });
 											}
 										}}
 									/>
