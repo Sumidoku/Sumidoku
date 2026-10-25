@@ -150,6 +150,8 @@ impl TaskManager {
 		payload: Value,
 		priority: i64,
 	) -> ApiResult<TaskRow> {
+		// Requeues and cancellations publish under the same lock, so an older cancel cannot overtake new work
+		let _inner = self.inner.lock().await;
 		let row: TaskRow = sqlx::query_as(&format!(
 			"INSERT INTO task (id, kind, source_id, payload, priority, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)
@@ -224,6 +226,7 @@ impl TaskManager {
 		if row.is_terminal() {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		}
+		let inner = self.inner.lock().await;
 		let updated: Option<TaskRow> = sqlx::query_as(&format!(
 			"UPDATE task SET status = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('pending', 'running') RETURNING {COLUMNS}"
 		))
@@ -234,19 +237,25 @@ impl TaskManager {
 		let Some(row) = updated else {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		};
+		#[cfg(test)]
+		if row.id == CANCEL_AFTER_UPDATE.id {
+			CANCEL_AFTER_UPDATE.reached.notify_one();
+			CANCEL_AFTER_UPDATE.resume.notified().await;
+		}
 		// A pending→running race can install the flag after the first read, so set whatever is registered now
-		if let Some(flag) = self.inner.lock().await.cancels.get(id) {
+		if let Some(flag) = inner.cancels.get(id) {
 			flag.store(true, Ordering::SeqCst);
 		}
-		// Publish before trimming so a terminal requeue cannot overtake the older cancellation
+		// Requeue uses this lock too, so its events and cancel flag cannot overtake the older cancellation
 		let _ = self.signals.send(row.clone());
 		self.wake.notify_one();
-		self.trim_finished().await?;
+		drop(inner);
 		#[cfg(test)]
 		if row.id == CANCEL_BEFORE_REQUEUE.id {
 			CANCEL_BEFORE_REQUEUE.reached.notify_one();
 			CANCEL_BEFORE_REQUEUE.resume.notified().await;
 		}
+		self.trim_finished().await?;
 		Ok(row)
 	}
 
@@ -289,77 +298,82 @@ impl TaskManager {
 		self: &Arc<Self>,
 		after: Option<(i64, i64, String)>,
 	) -> ApiResult<Option<(TaskRow, Handler, Arc<AtomicBool>)>> {
-		let mut inner = self.inner.lock().await;
-		if inner.active >= self.workers {
-			return Ok(None);
-		}
-		let cursor = after.as_ref();
-		let candidates: Vec<TaskRow> = sqlx::query_as(&format!(
-			"SELECT {COLUMNS} FROM task WHERE status = 'pending'
-			 AND (? IS NULL OR priority < ? OR (priority = ? AND created_at > ?) OR (created_at = ? AND id > ?))
-			 ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?"
-		))
-		.bind(cursor.map(|c| c.0))
-		.bind(cursor.map(|c| c.0))
-		.bind(cursor.map(|c| c.0))
-		.bind(cursor.map(|c| c.1))
-		.bind(cursor.map(|c| c.1))
-		.bind(cursor.map(|c| c.2.clone()))
-		.bind(PICK_PAGE)
-		.fetch_all(&self.pool)
-		.await?;
-		if candidates.is_empty() {
-			return Ok(None);
-		}
-		let next = candidates.last().map(|task| (task.priority, task.created_at, task.id.clone()));
-		for task in candidates {
-			let group = task.source_id.unwrap_or(0);
-			let blocked = if group == 0 {
-				!inner.running_groups.is_empty()
-			} else {
-				inner.running_groups.contains_key(&group) || inner.running_groups.contains_key(&0)
-			};
-			if blocked {
-				continue;
+		let mut after = after;
+		loop {
+			let mut inner = self.inner.lock().await;
+			if inner.active >= self.workers {
+				return Ok(None);
 			}
-			let Some(handler) = inner.handlers.get(&task.kind).cloned() else {
-				// A kind this build does not know (a downgrade over a newer database) must not sit
-				// pending forever: fail it visibly instead
-				let failed: Option<TaskRow> = sqlx::query_as(&format!(
-					"UPDATE task SET status = 'failed', finished_at = ?, error = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
+			let cursor = after.as_ref();
+			let candidates: Vec<TaskRow> = sqlx::query_as(&format!(
+				"SELECT {COLUMNS} FROM task WHERE status = 'pending'
+				 AND (? IS NULL OR priority < ? OR (priority = ? AND created_at > ?) OR (priority = ? AND created_at = ? AND id > ?))
+				 ORDER BY priority DESC, created_at ASC, id ASC LIMIT ?"
+			))
+			.bind(cursor.map(|c| c.0))
+			.bind(cursor.map(|c| c.0))
+			.bind(cursor.map(|c| c.0))
+			.bind(cursor.map(|c| c.0))
+			.bind(cursor.map(|c| c.1))
+			.bind(cursor.map(|c| c.1))
+			.bind(cursor.map(|c| c.2.clone()))
+			.bind(PICK_PAGE)
+			.fetch_all(&self.pool)
+			.await?;
+			if candidates.is_empty() {
+				return Ok(None);
+			}
+			let next = candidates.last().map(|task| (task.priority, task.created_at, task.id.clone()));
+			for task in candidates {
+				let group = task.source_id.unwrap_or(0);
+				let blocked = if group == 0 {
+					!inner.running_groups.is_empty()
+				} else {
+					inner.running_groups.contains_key(&group) || inner.running_groups.contains_key(&0)
+				};
+				if blocked {
+					continue;
+				}
+				let Some(handler) = inner.handlers.get(&task.kind).cloned() else {
+					// A kind this build does not know (a downgrade over a newer database) must not sit
+					// pending forever: fail it visibly instead
+					let failed: Option<TaskRow> = sqlx::query_as(&format!(
+						"UPDATE task SET status = 'failed', finished_at = ?, error = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
+					))
+					.bind(unix_now())
+					.bind(format!("no handler registered for task kind {}", task.kind))
+					.bind(&task.id)
+					.fetch_optional(&self.pool)
+					.await?;
+					if let Some(row) = failed {
+						let _ = self.signals.send(row);
+					}
+					self.trim_finished().await?;
+					continue;
+				};
+				// A cancel can land between the SELECT and this UPDATE; the status guard loses that race safely
+				let started: Option<TaskRow> = sqlx::query_as(&format!(
+					"UPDATE task SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
 				))
 				.bind(unix_now())
-				.bind(format!("no handler registered for task kind {}", task.kind))
 				.bind(&task.id)
 				.fetch_optional(&self.pool)
 				.await?;
-				if let Some(row) = failed {
-					let _ = self.signals.send(row);
-				}
-				self.trim_finished().await?;
-				continue;
-			};
-			// A cancel can land between the SELECT and this UPDATE; the status guard loses that race safely
-			let started: Option<TaskRow> = sqlx::query_as(&format!(
-				"UPDATE task SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
-			))
-			.bind(unix_now())
-			.bind(&task.id)
-			.fetch_optional(&self.pool)
-			.await?;
-			let Some(task) = started else {
-				continue;
-			};
-			inner.active += 1;
-			inner.running_groups.insert(group, task.id.clone());
-			let cancelled = Arc::new(AtomicBool::new(false));
-			inner.cancels.insert(task.id.clone(), cancelled.clone());
-			let _ = self.signals.send(task.clone());
-			return Ok(Some((task, handler, cancelled)));
+				let Some(task) = started else {
+					continue;
+				};
+				inner.active += 1;
+				inner.running_groups.insert(group, task.id.clone());
+				let cancelled = Arc::new(AtomicBool::new(false));
+				inner.cancels.insert(task.id.clone(), cancelled.clone());
+				let _ = self.signals.send(task.clone());
+				return Ok(Some((task, handler, cancelled)));
+			}
+			// A full blocked page must not spin or recurse the dispatcher while it advances the cursor
+			after = next;
+			drop(inner);
+			tokio::task::yield_now().await;
 		}
-		// this page was all blocked or raced away: continue after its last row, including rows failed above
-		drop(inner);
-		Box::pin(self.pick_next(next)).await
 	}
 
 	async fn execute(self: Arc<Self>, task: TaskRow, handler: Handler, cancelled: Arc<AtomicBool>) {
@@ -450,6 +464,12 @@ struct CancelTestGate {
 #[cfg(test)]
 static CANCEL_BEFORE_UPDATE: CancelTestGate = CancelTestGate {
 	id: "cancel-race-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
+#[cfg(test)]
+static CANCEL_AFTER_UPDATE: CancelTestGate = CancelTestGate {
+	id: "cancel-new-execution-test",
 	reached: Notify::const_new(),
 	resume: Notify::const_new(),
 };
@@ -955,6 +975,98 @@ mod tests {
 			statuses.push(event.status);
 		}
 		assert_eq!(statuses, [STATUS_PENDING, STATUS_CANCELLED, STATUS_PENDING]);
+	}
+
+	#[tokio::test]
+	async fn keyset_cursor_covers_priority_when_created_ties() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		manager.register("grouped", ok_handler()).await;
+		manager.inner.lock().await.running_groups.insert(1, "blocker".into());
+		for (id, priority) in [("a", 8), ("b", 1), ("c", 8)] {
+			manager
+				.enqueue(id, "grouped", Some(1), serde_json::json!({}), priority)
+				.await
+				.expect("enqueue");
+		}
+		sqlx::query("UPDATE task SET created_at = 1")
+			.execute(&manager.pool)
+			.await
+			.expect("tie creation times");
+		let next = tokio::time::timeout(
+			std::time::Duration::from_millis(25),
+			manager.pick_next(Some((1, 1, "b".to_string()))),
+		)
+		.await
+		.expect("cursor must not bounce between priorities")
+		.expect("pick next");
+		assert!(next.is_none(), "no runnable candidate follows the cursor");
+	}
+
+	#[tokio::test]
+	async fn cancel_does_not_flag_a_terminal_requeue() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let finished = Arc::new(Notify::new());
+		let saw_cancel = Arc::new(AtomicBool::new(false));
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			let finished = finished.clone();
+			let saw_cancel = saw_cancel.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				let finished = finished.clone();
+				let saw_cancel = saw_cancel.clone();
+				Box::pin(async move {
+					started.notify_one();
+					release.notified().await;
+					saw_cancel.store(run.is_cancelled(), Ordering::SeqCst);
+					finished.notify_one();
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("race", handler).await;
+		manager
+			.enqueue("cancel-new-execution-test", "race", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("enqueue");
+
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel("cancel-new-execution-test").await });
+		CANCEL_AFTER_UPDATE.reached.notified().await;
+		let requeue_done = Arc::new(AtomicBool::new(false));
+		let requeue_manager = manager.clone();
+		let requeue_flag = requeue_done.clone();
+		let requeue = tokio::spawn(async move {
+			requeue_manager
+				.enqueue("cancel-new-execution-test", "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+				.await
+				.expect("requeue");
+			requeue_flag.store(true, Ordering::SeqCst);
+		});
+		let wait_started = std::time::Instant::now();
+		while !requeue_done.load(Ordering::SeqCst) && wait_started.elapsed() < std::time::Duration::from_millis(100) {
+			tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+		}
+		let dispatched_before_resume = requeue_done.load(Ordering::SeqCst);
+		if dispatched_before_resume {
+			manager.dispatch().await;
+		}
+		CANCEL_AFTER_UPDATE.resume.notify_one();
+		cancel.await.expect("cancel task").expect("cancel");
+		requeue.await.expect("requeue task");
+		if !dispatched_before_resume {
+			manager.dispatch().await;
+		}
+		started.notified().await;
+		release.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(5), finished.notified())
+			.await
+			.expect("handler did not finish");
+		assert!(!saw_cancel.load(Ordering::SeqCst), "the old cancel must not cancel the new execution");
 	}
 
 	#[tokio::test]

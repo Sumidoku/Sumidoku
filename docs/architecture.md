@@ -116,8 +116,10 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   0 reserved for the global group). Every transition is a single guarded
   UPDATE whose RETURNING row is what gets broadcast as the instance-wide
   `task` event through the SSE hub (`events.rs:forward_tasks`), so events
-  never republish a state a later transition replaced. Cancellation publishes
-  before history trimming, so a terminal requeue cannot overtake it.
+  never republish a state a later transition replaced. Enqueue and cancellation
+  share the dispatcher lock through the cancel-flag update and publication;
+  cancellation publishes before history trimming, so a terminal requeue
+  cannot overtake it or inherit its cancel flag.
   `DELETE /api/v1/tasks/{id}` cancels: the row flips
   to cancelled atomically for pending and running alike, a running handler
   also gets a flag it checks between items, and the worker's terminal write
