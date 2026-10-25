@@ -283,13 +283,12 @@ async fn auth_password_wins_over_legacy_alias() {
 }
 
 /// UI-managed API keys: created with the plaintext shown once, stored as a sha256 fingerprint,
-/// authenticating as the built-in admin, listed alongside read-only config-side keys, and dead after revocation
+/// authenticating as the built-in admin, and dead after revocation
 #[tokio::test]
 async fn ui_managed_api_keys() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
 	config.auth.password = Some(PASSWORD.into());
-	config.auth.api_keys = vec!["smk_config_key".into()];
 	let app = build_app(config).await.expect("build app");
 	let (_, body) = login(&app, "admin", PASSWORD).await;
 	let auth = format!("Bearer {}", body["token"].as_str().expect("token"));
@@ -345,30 +344,16 @@ async fn ui_managed_api_keys() {
 		.expect("last used");
 	assert!(last_used.is_some(), "use refreshes last_used_at");
 
-	// the list shows the UI-managed key and the read-only config-side key
+	// the list contains only the UI-managed key
 	let (status, _, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/api-keys", None, &[("authorization", &auth)]).await;
 	assert_eq!(status, StatusCode::OK);
 	let list: Value = serde_json::from_slice(&bytes).expect("list json");
 	let entries = list.as_array().expect("entries array");
-	assert_eq!(entries.len(), 2);
+	assert_eq!(entries.len(), 1);
 	let ui_entry = entries.iter().find(|e| e["source"] == "ui").expect("ui entry");
 	assert_eq!(ui_entry["id"], key_id);
 	assert_eq!(ui_entry["name"], "cli");
-	let config_entry = entries.iter().find(|e| e["source"] == "config").expect("config entry");
-	assert_eq!(config_entry["id"], sumidoku_server::auth::sha256_hex("smk_config_key"));
-	assert!(config_entry["name"].is_null());
-	let config_id = config_entry["id"].as_str().expect("config id").to_string();
 
-	// config-side keys cannot be revoked from the API
-	let (status, _, _) = request_with_headers(
-		&app,
-		"DELETE",
-		&format!("/api/v1/auth/api-keys/{config_id}"),
-		None,
-		&[("authorization", &auth)],
-	)
-	.await;
-	assert_eq!(status, StatusCode::BAD_REQUEST);
 	let (status, _, _) = request_with_headers(
 		&app,
 		"DELETE",
@@ -399,28 +384,41 @@ async fn api_keys_authenticate_without_login() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let mut config = base_config(&tmp);
 	config.auth.password = Some(PASSWORD.into());
-	config.auth.api_keys = vec!["smk_test_key".into()];
 	let app = build_app(config).await.expect("build app");
-	let (status, headers, _) = request_with_headers(
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let session_auth = format!("Bearer {}", body["token"].as_str().expect("session token"));
+	let (status, _, bytes) = request_with_headers(
 		&app,
-		"GET",
-		"/api/v1/sources",
-		None,
-		&[("authorization", "Bearer smk_test_key")],
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "cli"})),
+		&[("authorization", &session_auth)],
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(headers.get("set-cookie").is_none());
-	let (status, headers, _) = request_with_headers(
-		&app,
-		"GET",
-		"/api/v1/auth/status",
-		None,
-		&[("authorization", "Bearer smk_test_key")],
-	)
-	.await;
+	let created: Value = serde_json::from_slice(&bytes).expect("created json");
+	let key_auth = format!("Bearer {}", created["key"].as_str().expect("api key"));
+
+	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(headers.get("set-cookie").is_none());
+	let (status, headers, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
+	let body: Value = serde_json::from_slice(&bytes).expect("status json");
+	assert_eq!(body["user"], json!({"id": 1, "username": "admin"}));
+
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	sqlx::query("UPDATE user SET username = 'owner' WHERE id = 1")
+		.execute(&pool)
+		.await
+		.expect("rename admin");
+	let (status, _, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/status", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let body: Value = serde_json::from_slice(&bytes).expect("status json");
+	assert_eq!(body["user"], json!({"id": 1, "username": "owner"}));
+	pool.close().await;
+
 	let (status, _, _) = request_with_headers(
 		&app,
 		"GET",

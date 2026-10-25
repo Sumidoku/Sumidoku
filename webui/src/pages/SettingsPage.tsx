@@ -320,7 +320,7 @@ function ApiKeysSection() {
 
 	async function submitCreate() {
 		const name = newName.trim();
-		if (!name) return;
+		if (create.isPending || !name) return;
 		try {
 			const entry = await create.mutateAsync(name);
 			setNewName('');
@@ -328,6 +328,11 @@ function ApiKeysSection() {
 		} catch (e) {
 			toastError(e);
 		}
+	}
+
+	function dismissCreated() {
+		create.reset();
+		setCreated(null);
 	}
 
 	async function copyCreated() {
@@ -351,22 +356,17 @@ function ApiKeysSection() {
 					{entries.map((entry) => (
 						<div key={entry.id} className="settings-cat">
 							<div className="settings-cat__head">
-								<span className="settings-cat__name">
-									{entry.name ?? t('settings.configManaged')}
-									{entry.source === 'config' && <Badge>{t('settings.configManaged')}</Badge>}
+								<span className="settings-cat__name">{entry.name}</span>
+								<span className="settings-cat__ops">
+									<IconButton
+										label={t('settings.revoke')}
+										size="sm"
+										variant="danger"
+										onClick={() => setRevoking(entry)}
+									>
+										<Trash2 size={15} />
+									</IconButton>
 								</span>
-								{entry.source === 'ui' && (
-									<span className="settings-cat__ops">
-										<IconButton
-											label={t('settings.revoke')}
-											size="sm"
-											variant="danger"
-											onClick={() => setRevoking(entry)}
-										>
-											<Trash2 size={15} />
-										</IconButton>
-									</span>
-								)}
 							</div>
 							{entry.createdAt !== null && (
 								<p className="faint">
@@ -385,6 +385,7 @@ function ApiKeysSection() {
 				<Input
 					placeholder={t('settings.apiKeyNamePlaceholder')}
 					value={newName}
+					disabled={create.isPending}
 					onChange={(e) => setNewName(e.currentTarget.value)}
 					onKeyDown={(e) => {
 						if (e.key === 'Enter') void submitCreate();
@@ -393,7 +394,7 @@ function ApiKeysSection() {
 				<Button
 					variant="primary"
 					loading={create.isPending}
-					disabled={!newName.trim()}
+					disabled={create.isPending || !newName.trim()}
 					onClick={() => void submitCreate()}
 				>
 					{t('settings.createApiKey')}
@@ -403,8 +404,8 @@ function ApiKeysSection() {
 			<Modal
 				open={created !== null}
 				title={t('settings.apiKeyCreatedTitle')}
-				onClose={() => setCreated(null)}
-				footer={<Button variant="primary" onClick={() => setCreated(null)}>{t('settings.done')}</Button>}
+				onClose={dismissCreated}
+				footer={<Button variant="primary" onClick={dismissCreated}>{t('settings.done')}</Button>}
 			>
 				<p className="settings-modal-text">{t('settings.apiKeyCreatedHint')}</p>
 				<div className="settings-cat__create">

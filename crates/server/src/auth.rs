@@ -11,7 +11,6 @@ use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -61,25 +60,21 @@ pub struct AuthUser {
 }
 
 pub struct AuthState {
-	/// Built-in admin's login username (config-side; "admin" when unset); passwordless deployments and
-	/// config-side api_keys display it without a DB lookup
+	/// Built-in admin's login username (config-side; "admin" when unset)
 	admin_username: String,
 	/// In-memory copy of user 1's argon2 PHC string; None = auth disabled (no password configured)
 	admin_password_hash: RwLock<Option<String>>,
-	/// sha256 fingerprints of the config-side API keys, resident in memory
-	api_key_hashes: HashSet<String>,
 }
 
 impl AuthState {
-	pub fn new(api_keys: &[String], username: &str) -> Self {
+	pub fn new(username: &str) -> Self {
 		Self {
 			admin_username: username.to_string(),
 			admin_password_hash: RwLock::new(None),
-			api_key_hashes: api_keys.iter().map(|k| sha256_hex(k)).collect(),
 		}
 	}
 
-	/// Built-in admin (user 1): passwordless deployments and config-side api_keys both act as admin
+	/// Built-in admin (user 1): passwordless deployments act as admin
 	pub(crate) fn admin_user(&self) -> AuthUser {
 		AuthUser { id: 1, username: self.admin_username.clone() }
 	}
@@ -204,21 +199,32 @@ async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<A
 	Ok(Some(AuthUser { id, username }))
 }
 
-/// UI-managed API key: look up by sha256 fingerprint; a hit acts as the built-in admin and refreshes last_used_at
+#[cfg(test)]
+const REVOCATION_TEST_FINGERPRINT: &str = "revocation-test";
+#[cfg(test)]
+static REVOCATION_TEST_CHECKED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+#[cfg(test)]
+static REVOCATION_TEST_RESUME: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// UI-managed API key: the atomic update checks existence and refreshes last_used_at without leaving a revocation window
 async fn api_key_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
-	let hit: Option<(i64,)> = sqlx::query_as("SELECT created_at FROM api_key WHERE key_hash = ?")
+	#[cfg(test)]
+	if fingerprint == REVOCATION_TEST_FINGERPRINT {
+		REVOCATION_TEST_CHECKED.notify_one();
+		REVOCATION_TEST_RESUME.notified().await;
+	}
+	let hit: Option<(String,)> = sqlx::query_as("UPDATE api_key SET last_used_at = ? WHERE key_hash = ? RETURNING key_hash")
+		.bind(crate::model::unix_now())
 		.bind(fingerprint)
 		.fetch_optional(&state.pool)
 		.await?;
 	if hit.is_none() {
 		return Ok(None);
 	}
-	sqlx::query("UPDATE api_key SET last_used_at = ? WHERE key_hash = ?")
-		.bind(crate::model::unix_now())
-		.bind(fingerprint)
-		.execute(&state.pool)
+	let row: Option<(String,)> = sqlx::query_as("SELECT username FROM user WHERE id = 1")
+		.fetch_optional(&state.pool)
 		.await?;
-	Ok(Some(state.auth.admin_user()))
+	Ok(row.map(|(username,)| AuthUser { id: 1, username }))
 }
 
 async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Option<AuthUser>> {
@@ -226,9 +232,6 @@ async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Optio
 		return Ok(None);
 	};
 	let fingerprint = sha256_hex(&token);
-	if state.auth.api_key_hashes.contains(&fingerprint) {
-		return Ok(Some(state.auth.admin_user()));
-	}
 	if let Some(user) = api_key_user(state, &fingerprint).await? {
 		return Ok(Some(user));
 	}
@@ -370,4 +373,37 @@ pub async fn change_password(
 	let mut response = StatusCode::NO_CONTENT.into_response();
 	set_cookie_header(&mut response, session_cookie_clear(is_https(&uri, &headers)));
 	Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn revocation_before_key_check_is_not_authenticated() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let state = AppState::new(pool, crate::config::Config::default(), defaults_tx, cookie_tx);
+		sqlx::query("INSERT INTO api_key (key_hash, name, created_at) VALUES (?, 'test', 1)")
+			.bind(REVOCATION_TEST_FINGERPRINT)
+			.execute(&state.pool)
+			.await
+			.expect("insert key");
+
+		let lookup_state = state.clone();
+		let lookup = tokio::spawn(async move { api_key_user(&lookup_state, REVOCATION_TEST_FINGERPRINT).await });
+		REVOCATION_TEST_CHECKED.notified().await;
+		sqlx::query("DELETE FROM api_key WHERE key_hash = ?")
+			.bind(REVOCATION_TEST_FINGERPRINT)
+			.execute(&state.pool)
+			.await
+			.expect("revoke key");
+		REVOCATION_TEST_RESUME.notify_one();
+		let user = lookup.await.expect("lookup task").expect("lookup");
+		assert!(user.is_none(), "a key revoked before the check must not authenticate");
+	}
 }

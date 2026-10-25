@@ -39,8 +39,6 @@ pub struct AuthConfig {
 	pub username: Option<String>,
 	/// Site-wide password (shared by web UI login and /api/v1); None = auth disabled
 	pub password: Option<String>,
-	/// Long-lived API keys, used directly as Bearer tokens; plaintext in config, never stored in the DB
-	pub api_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -222,7 +220,6 @@ impl Config {
 struct AuthConfigFile {
 	username: Option<String>,
 	password: Option<String>,
-	api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -398,9 +395,6 @@ impl Config {
 			}
 			if auth.password.is_some() {
 				self.auth.password = auth.password;
-			}
-			if let Some(v) = auth.api_keys {
-				self.auth.api_keys = v;
 			}
 		}
 		if let Some(net) = file.net {
@@ -578,9 +572,6 @@ impl Config {
 		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_PASSWORD") {
 			self.auth.password = Some(v);
 		}
-		if let Ok(v) = std::env::var("SUMIDOKU_AUTH_API_KEYS") {
-			self.auth.api_keys = split_csv(&v);
-		}
 		if let Ok(v) = std::env::var("SUMIDOKU_NET_DIRECT_DOMAINS") {
 			self.net.direct_domains = split_csv(&v);
 		}
@@ -689,6 +680,32 @@ mod tests {
 		config.apply_env();
 		unsafe { std::env::remove_var("SUMIDOKU_AUTH_USERNAME") };
 		assert_eq!(config.effective_username(), "env-owner");
+	}
+
+	#[tokio::test]
+	async fn legacy_config_api_key_is_rejected() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let file: ConfigFile = toml::from_str("[auth]\npassword = \"secret\"\napi_keys = [\"smk_legacy\"]\n").expect("toml");
+		let mut config = Config {
+			addr: "127.0.0.1:0".into(),
+			config_dir: tmp.path().to_path_buf(),
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			covers_dir: tmp.path().join("covers"),
+			downloads_dir: tmp.path().join("downloads"),
+			webui_dir: tmp.path().join("webui"),
+			log: "warn".into(),
+			..Config::default()
+		};
+		config.apply_file(file);
+		let app = crate::build_app(config).await.expect("build app");
+		let request = axum::http::Request::builder()
+			.method("GET")
+			.uri("/api/v1/sources")
+			.header("authorization", "Bearer smk_legacy")
+			.body(axum::body::Body::empty())
+			.expect("request");
+		let response = tower::ServiceExt::oneshot(app, request).await.expect("response");
+		assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
 	}
 
 	#[test]

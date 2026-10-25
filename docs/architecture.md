@@ -501,24 +501,24 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
   source-first wizard at `/migrate` (`webui/src/pages/migrate/`) and the
   single-manga flow in the detail page's more-menu
   (`webui/src/pages/manga/MigrateModal.tsx`).
-- Authentication (`auth.rs`): the `user` table is the only credential
-  carrier, and only the built-in admin (`USER_ID = 1`) can authenticate.
-  Login is username + password (`POST /api/v1/auth/login`), answered with an
-  admin session token (`auth_token.user_id`, SHA-256 at rest, 30-day rolling
-  expiry) and the `{id, username}` identity; there is no role field or user
-   management API. The login username defaults to `admin` and can be set in
-   config (`auth.username` / `SUMIDOKU_AUTH_USERNAME`), re-seeded onto the
-   user row on every boot; `/api/v1/auth/status` exposes it as a top-level
-   `username` only with a valid authenticated identity and omits it for
-   anonymous requests. Auth is off until the built-in admin has a password, seeded
-   from config on every boot or stored by a previous password change. With
-   auth off every request acts as the same admin. `require_auth` is the only
-   route gate: bearer credentials resolve against configured API keys,
-   UI-managed keys (SHA-256 fingerprints in the `api_key` table, created and
-   revoked through `/api/v1/auth/api-keys`, plaintext returned once at
-   creation) or an admin session, and handlers continue to bind the legacy
-   `AuthUser.id` storage key (always 1). Password changes revoke every admin
-   session, while the config-set password is re-seeded at boot.
+- Authentication (`auth.rs`): only the built-in admin (`USER_ID = 1`) can
+  authenticate; its login identity lives in the `user` table. Login is
+  username + password (`POST /api/v1/auth/login`), answered with an admin
+  session token (`auth_token.user_id`, SHA-256 at rest, 30-day rolling expiry)
+  and the `{id, username}` identity; there is no role field or user management
+  API. The login username defaults to `admin` and can be set in config
+  (`auth.username` / `SUMIDOKU_AUTH_USERNAME`), re-seeded onto the user row on
+  every boot; `/api/v1/auth/status` exposes it as a top-level `username` only
+  with a valid authenticated identity and omits it for anonymous requests.
+  Auth is off until the built-in admin has a password, seeded from config on
+  every boot or stored by a previous password change. With auth off every
+  request acts as the same admin. `require_auth` is the only route gate:
+  bearer credentials resolve against UI-managed keys (SHA-256 fingerprints in
+  the `api_key` table, created and revoked through `/api/v1/auth/api-keys`,
+  plaintext returned once at creation) or an admin session, and handlers
+  continue to bind the legacy `AuthUser.id` storage key (always 1). Password
+  changes revoke every admin session, while the config-set password is
+  re-seeded at boot.
 - Single-owner migration (`0019_single_owner.sql`): non-admin settings and
   sync origins are deleted explicitly, then non-admin users and their
   user-owned rows are removed through existing foreign-key cascades. The
