@@ -91,7 +91,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 		));
 	}
 	if state.config.rss_threshold_mb > 0 {
-		// On platforms where RSS is unreadable (Windows) there is nothing to monitor; log once and move on
+		// Probe once at startup: a permanently unreadable RSS would leave the monitor spinning on None forever
 		if rss::current_rss().is_some() {
 			tokio::spawn(state::run_rss_monitor(
 				state.clone(),
