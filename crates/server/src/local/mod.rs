@@ -501,6 +501,7 @@ fn discover<'a>(
 pub struct ChapterScan {
 	pub chapters: Vec<LocalChapter>,
 	pub failed: Vec<String>,
+	pub entry_kind: &'static str,
 	pub dir_mtime_ms: i64,
 	pub all_mtime_ms: i64,
 }
@@ -547,6 +548,7 @@ async fn scan_chapters(local_dir: &Path, manga_key: &str, exclusions: &[String])
 				is_archive: true,
 			}],
 			failed: Vec::new(),
+			entry_kind: "archive",
 			dir_mtime_ms: parent_ms,
 			all_mtime_ms: parent_ms.max(mtime_ms),
 		});
@@ -584,6 +586,7 @@ async fn scan_chapters(local_dir: &Path, manga_key: &str, exclusions: &[String])
 	Ok(ChapterScan {
 		chapters,
 		failed,
+		entry_kind: "directory",
 		dir_mtime_ms,
 		all_mtime_ms,
 	})

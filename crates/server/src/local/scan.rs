@@ -55,6 +55,15 @@ struct PersistedManga {
 	key: String,
 	trashed_at: Option<i64>,
 	scan_mtime: Option<i64>,
+	local_entry_kind: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RestoreManga {
+	source_id: i64,
+	key: String,
+	trashed_at: Option<i64>,
+	local_entry_kind: Option<String>,
 }
 
 /// kmrs's is_protected_url: an entry protects itself and everything below it; keyed forms already carry
@@ -143,7 +152,7 @@ pub async fn scan_instance(
 		}));
 	}
 	let persisted: Vec<PersistedManga> = sqlx::query_as(
-		"SELECT id, key, trashed_at, scan_mtime FROM manga WHERE source_id = ?",
+		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ?",
 	)
 	.bind(source_id)
 	.fetch_all(&state.pool)
@@ -254,7 +263,18 @@ pub async fn scan_instance(
 			// the fast path: an untouched, non-trashed subtree skips reconciliation entirely. Trashed rows
 			// are exempt — reappearance must always restore — and a NULL stored mtime (pre-index row) always
 			// reconciles once so the row picks up its stamp
-			Some(row) if row.trashed_at.is_none() && row.scan_mtime == Some(mtime) => {
+			Some(row)
+				if row.trashed_at.is_none()
+					&& row.scan_mtime == Some(mtime)
+					&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind) =>
+			{
+				if row.local_entry_kind.is_none() {
+					sqlx::query("UPDATE manga SET local_entry_kind = ? WHERE id = ? AND local_entry_kind IS NULL")
+						.bind(scan.entry_kind)
+						.bind(row.id)
+						.execute(&state.pool)
+						.await?;
+				}
 				outcome.unchanged += 1;
 			}
 			existing => {
@@ -266,14 +286,16 @@ pub async fn scan_instance(
 						// OUTDATED, the analysis pass re-reads embedded metadata) happens only with the
 						// caller's metadata opt-in — enumeration is not metadata refresh
 						if refresh_metadata {
-							sqlx::query("UPDATE manga SET scan_mtime = ?, trashed_at = NULL, initialized = 0 WHERE id = ?")
+							sqlx::query("UPDATE manga SET scan_mtime = ?, local_entry_kind = ?, trashed_at = NULL, initialized = 0 WHERE id = ?")
 								.bind(mtime)
+								.bind(scan.entry_kind)
 								.bind(row.id)
 								.execute(&mut *tx)
 								.await?;
 						} else {
-							sqlx::query("UPDATE manga SET scan_mtime = ?, trashed_at = NULL WHERE id = ?")
+							sqlx::query("UPDATE manga SET scan_mtime = ?, local_entry_kind = ?, trashed_at = NULL WHERE id = ?")
 								.bind(mtime)
+								.bind(scan.entry_kind)
 								.bind(row.id)
 								.execute(&mut *tx)
 								.await?;
@@ -289,12 +311,13 @@ pub async fn scan_instance(
 						// index-level insert: leaf-name title, no metadata (initialized stays 0 for the
 						// analysis pass / on-open path)
 						let id = sqlx::query(
-							"INSERT INTO manga (source_id, key, title, scan_mtime) VALUES (?, ?, ?, ?)",
+							"INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind) VALUES (?, ?, ?, ?, ?)",
 						)
 						.bind(source_id)
 						.bind(key)
 						.bind(super::title_of(key))
 						.bind(mtime)
+						.bind(scan.entry_kind)
 						.execute(&mut *tx)
 						.await?
 						.last_insert_rowid();
@@ -316,8 +339,9 @@ pub async fn scan_instance(
 
 /// Entry-level scan of one manga (manual refresh / open / library update): directory enumeration only,
 /// never opens an archive — that work belongs to the analysis pass. Returns the manga id, the chapter
-/// reconcile outcome, and whether anything changed. An unchanged subtree (same mtime, not trashed) is a
-/// no-op; a changed or reappearing one reconciles and, with `refresh_metadata`, marks the manga
+/// reconcile outcome, and whether anything changed. An unchanged subtree (same mtime, not trashed) skips
+/// chapter reconciliation because only a missing original kind might need a write; a changed or reappearing
+/// one reconciles and, with `refresh_metadata`, marks the manga
 /// initialized = 0 so the analysis pass re-reads its embedded metadata (kmrs's OUTDATED). `force_reconcile`
 /// bypasses the unchanged fast path: restore uses it because the manga's trash flag was just cleared and
 /// its chapters must be untrashed with it even when the mtime did not move
@@ -335,17 +359,27 @@ pub async fn scan_manga_entry(
 	let scan = super::scan_chapters(dir, rel, &exclusions).await?;
 	let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
 	let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
-	let existing: Option<(i64, Option<i64>, Option<i64>)> =
-		sqlx::query_as("SELECT id, trashed_at, scan_mtime FROM manga WHERE source_id = ? AND key = ?")
-			.bind(source_id)
-			.bind(manga_key)
-			.fetch_optional(&state.pool)
-			.await?;
-	if let Some((id, None, Some(stored))) = existing
-		&& stored == mtime
+	let existing: Option<PersistedManga> = sqlx::query_as(
+		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ? AND key = ?",
+	)
+	.bind(source_id)
+	.bind(manga_key)
+	.fetch_optional(&state.pool)
+	.await?;
+	if let Some(row) = &existing
+		&& row.trashed_at.is_none()
+		&& row.scan_mtime == Some(mtime)
+		&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind)
 		&& !force_reconcile
 	{
-		return Ok((id, crate::source::ReconcileOutcome {
+		if row.local_entry_kind.is_none() {
+			sqlx::query("UPDATE manga SET local_entry_kind = ? WHERE id = ? AND local_entry_kind IS NULL")
+				.bind(scan.entry_kind)
+				.bind(row.id)
+				.execute(&state.pool)
+				.await?;
+		}
+		return Ok((row.id, crate::source::ReconcileOutcome {
 			new_ids: Vec::new(),
 			previous_latest_chapter_number: None,
 			trashed: 0,
@@ -354,28 +388,31 @@ pub async fn scan_manga_entry(
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let manga_id = match existing {
-		Some((id, _, _)) => {
+		Some(row) => {
 			if refresh_metadata {
-				sqlx::query("UPDATE manga SET scan_mtime = ?, trashed_at = NULL, initialized = 0 WHERE id = ?")
+				sqlx::query("UPDATE manga SET scan_mtime = ?, local_entry_kind = ?, trashed_at = NULL, initialized = 0 WHERE id = ?")
 					.bind(mtime)
-					.bind(id)
+					.bind(scan.entry_kind)
+					.bind(row.id)
 					.execute(&mut *tx)
 					.await?;
 			} else {
-				sqlx::query("UPDATE manga SET scan_mtime = ?, trashed_at = NULL WHERE id = ?")
+				sqlx::query("UPDATE manga SET scan_mtime = ?, local_entry_kind = ?, trashed_at = NULL WHERE id = ?")
 					.bind(mtime)
-					.bind(id)
+					.bind(scan.entry_kind)
+					.bind(row.id)
 					.execute(&mut *tx)
 					.await?;
 			}
-			id
+			row.id
 		}
 		None => {
-			sqlx::query("INSERT INTO manga (source_id, key, title, scan_mtime) VALUES (?, ?, ?, ?)")
+			sqlx::query("INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind) VALUES (?, ?, ?, ?, ?)")
 				.bind(source_id)
 				.bind(manga_key)
 				.bind(super::title_of(manga_key))
 				.bind(mtime)
+				.bind(scan.entry_kind)
 				.execute(&mut *tx)
 				.await?
 				.last_insert_rowid()
@@ -633,14 +670,20 @@ pub async fn list_trash(state: &AppState, source_id: Option<i64>) -> ApiResult<V
 
 /// Restores a trashed manga by reconciling it against disk (not by blanket-clearing flags): only entries
 /// actually back on disk untrash — a manga whose ch1 returned while ch2 is still missing keeps ch2 trashed.
-/// The on-disk entry must exist and keep its manga shape (a directory for a dir-keyed row, an archive file
-/// for a oneshot): accepting an arbitrary regular file would manufacture a fake oneshot chapter that later
-/// scans then protect. The untrash itself is a conditional claim on the trashed row, so a purge racing the
+/// The entry must match the original kind recorded by a scan because neither existence nor a filename suffix
+/// can distinguish a replacement. Unknown history cannot prove that match and must be learned by a scan first.
+/// The untrash itself is a conditional claim on the trashed row, so a purge racing the
 /// restore cannot delete the row in between and leave restore reporting success on a row whose progress and
 /// library links have already cascaded away — and scan_manga_entry updates the existing row instead of
 /// re-inserting a new id
 pub async fn restore_manga(state: &Arc<AppState>, manga_id: i64) -> ApiResult<()> {
-	let row = crate::source::manga_row(&state.pool, manga_id).await?;
+	let row: Option<RestoreManga> = sqlx::query_as(
+		"SELECT source_id, key, trashed_at, local_entry_kind FROM manga WHERE id = ?",
+	)
+	.bind(manga_id)
+	.fetch_optional(&state.pool)
+	.await?;
+	let row = row.ok_or_else(|| crate::error::ApiError::not_found("manga not found"))?;
 	if !crate::source::source_is_local(&state.pool, row.source_id).await? {
 		return Err(crate::error::ApiError::bad_request("not a local manga"));
 	}
@@ -653,22 +696,28 @@ pub async fn restore_manga(state: &Arc<AppState>, manga_id: i64) -> ApiResult<()
 		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
 			return Err(crate::error::ApiError::conflict(
 				"gone",
-				"the directory is still missing on disk",
+				"the entry is still missing on disk",
 			));
 		}
 		Err(_) => {
 			return Err(crate::error::ApiError::conflict(
 				"gone",
-				"the directory is not readable on disk",
+				"the entry is not readable on disk",
 			));
 		}
 		Ok(metadata) => {
-			let shape_ok = metadata.is_dir() || (metadata.is_file() && is_archive_name(&row.key));
+			let shape_ok = match row.local_entry_kind.as_deref() {
+				Some("directory") => metadata.is_dir(),
+				Some("archive") => metadata.is_file(),
+				_ => false,
+			};
 			if !shape_ok {
-				return Err(crate::error::ApiError::conflict(
-					"gone",
-					"the on-disk entry is no longer a manga directory or archive",
-				));
+				let message = if row.local_entry_kind.is_none() {
+					"the original entry kind is unknown; run a local scan before restoring"
+				} else {
+					"the on-disk entry no longer matches its original kind"
+				};
+				return Err(crate::error::ApiError::conflict("gone", message));
 			}
 		}
 	}

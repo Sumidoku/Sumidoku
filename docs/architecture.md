@@ -453,7 +453,15 @@ no alias is derived from migration text.
   non-trashed manga skips reconciliation, and a changed one is marked
   `initialized = 0` — only with the caller's metadata-refresh opt-in
   (`refresh_metadata`, kmrs's OUTDATED; enumeration alone never invalidates
-  metadata) — so the analysis pass re-reads its embedded metadata. The post-scan analysis pass (`local_analyze` task, gated by
+  metadata) — so the analysis pass re-reads its embedded metadata. Migration
+  0026 adds `manga.local_entry_kind`: `directory` or `archive`, learned from
+  actual filesystem metadata by full and entry scans, with no suffix-based
+  backfill. Existing or not-yet-observed local rows stay NULL; unchanged fast
+  paths backfill only that missing value without reconciling chapters.
+  Manual restore compares the current entry with the recorded kind, never
+  the filename, and answers 409 for a missing, mismatched or unknown shape.
+  A full or entry scan must learn a NULL kind first; a full scan also
+  restores a discovered trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
   CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
   (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and
@@ -468,7 +476,7 @@ no alias is derived from migration text.
   and the trash API lives at
   `GET/DELETE /api/v1/local/trash` (emptying runs as `empty_trash` tasks),
   `DELETE /api/v1/local/trash/{id}` and `POST .../restore` (409 while the
-  directory is still missing). `POST /api/v1/local/scan` enqueues manual
+  entry is missing or its shape cannot be validated). `POST /api/v1/local/scan` enqueues manual
   scans. All three run as tasks (see the task bullet), per-instance serial.
 - Built-in OPDS source (`opds_source/mod.rs`): `source.kind = opds` turns an
   OPDS catalog — Komga, Kavita, Calibre-Web — into a first-class source,

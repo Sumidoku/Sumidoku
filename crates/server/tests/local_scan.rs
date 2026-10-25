@@ -107,6 +107,14 @@ async fn manga_row(pool: &sqlx::SqlitePool, key: &str) -> Option<(i64, String, b
 		.expect("manga row")
 }
 
+async fn entry_kind(pool: &sqlx::SqlitePool, key: &str) -> Option<String> {
+	sqlx::query_scalar("SELECT local_entry_kind FROM manga WHERE key = ?")
+		.bind(key)
+		.fetch_one(pool)
+		.await
+		.expect("entry kind")
+}
+
 #[tokio::test]
 async fn scan_indexes_then_trashes_restores_and_purges() {
 	// phase A runs with both analysis passes off: scan-level indexing stays uninitialized
@@ -1009,6 +1017,151 @@ async fn restore_rejects_a_wrong_typed_replacement() {
 	assert_eq!(count, 0, "no live pseudo-chapter from a wrong-typed restore");
 	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha still trashed");
 	assert!(trashed.is_some(), "the row stays trashed after the refused restore");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn restore_rejects_an_archive_suffixed_file_replacing_a_directory() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	write_page(&t.tmp.path().join("local/Alpha.cbz/ch 1"), "1.png", b"alpha-1-1");
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha.cbz").await.expect("Alpha.cbz");
+	assert_eq!(entry_kind(&pool, "Alpha.cbz").await.as_deref(), Some("directory"));
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha.cbz")).expect("remove Alpha.cbz");
+	scan_and_settle(&t.app).await;
+	std::fs::write(t.tmp.path().join("local/Alpha.cbz"), b"not a directory").expect("write impostor");
+
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{alpha_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(body["error"]["code"], "gone", "{body}");
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha.cbz").await.expect("Alpha.cbz still trashed");
+	assert!(trashed.is_some());
+	let live: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE manga_id = ? AND trashed_at IS NULL")
+		.bind(alpha_id)
+		.fetch_one(&pool)
+		.await
+		.expect("live chapter count");
+	assert_eq!(live, 0, "no pseudo-oneshot may be restored for the original directory");
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn restore_requires_an_archive_and_restores_a_real_archive() {
+	let t = scan_app_with(|config| {
+		config.local_oneshots_dir = Some("oneshots".into());
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	let archive = t.tmp.path().join("local/oneshots/Solo.cbz");
+	write_cbz(&archive, &[("1.png", b"solo-1")]);
+	scan_and_settle(&t.app).await;
+	let (solo_id, _, _, _, _) = manga_row(&pool, "oneshots/Solo.cbz").await.expect("Solo");
+	assert_eq!(entry_kind(&pool, "oneshots/Solo.cbz").await.as_deref(), Some("archive"));
+	std::fs::remove_file(&archive).expect("remove Solo");
+	scan_and_settle(&t.app).await;
+	std::fs::create_dir_all(&archive).expect("replace Solo with a directory");
+
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{solo_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(body["error"]["code"], "gone", "{body}");
+	let (_, _, _, trashed, _) = manga_row(&pool, "oneshots/Solo.cbz").await.expect("Solo still trashed");
+	assert!(trashed.is_some());
+
+	std::fs::remove_dir_all(&archive).expect("remove directory impostor");
+	write_cbz(&archive, &[("1.png", b"solo-1-back")]);
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{solo_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (_, _, _, trashed, _) = manga_row(&pool, "oneshots/Solo.cbz").await.expect("Solo restored");
+	assert_eq!(trashed, None);
+	let live_chapters: Vec<String> = sqlx::query_scalar("SELECT key FROM chapter WHERE manga_id = ? AND trashed_at IS NULL")
+		.bind(solo_id)
+		.fetch_all(&pool)
+		.await
+		.expect("live chapters");
+	assert_eq!(live_chapters, vec!["Solo.cbz".to_string()]);
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn restore_with_unknown_entry_kind_waits_for_a_scan() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
+	scan_and_settle(&t.app).await;
+	sqlx::query("UPDATE manga SET local_entry_kind = NULL WHERE id = ?")
+		.bind(alpha_id)
+		.execute(&pool)
+		.await
+		.expect("seed unknown history");
+	write_page(&t.tmp.path().join("local/Alpha/ch 1"), "1.png", b"alpha-1-1-back");
+
+	let (status, body) = request(&t.app, "POST", &format!("/api/v1/local/trash/{alpha_id}/restore"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	assert_eq!(body["error"]["code"], "gone", "{body}");
+	assert_eq!(entry_kind(&pool, "Alpha").await, None, "restore must not infer the missing kind");
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha still trashed");
+	assert!(trashed.is_some());
+
+	scan_and_settle(&t.app).await;
+	assert_eq!(entry_kind(&pool, "Alpha").await.as_deref(), Some("directory"));
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha").await.expect("Alpha restored by scan");
+	assert_eq!(trashed, None);
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn scans_backfill_missing_entry_kind_on_unchanged_fast_paths() {
+	let t = scan_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
+	let pool = common::connect_db(&t.db_path).await;
+	scan_and_settle(&t.app).await;
+	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
+	assert_eq!(entry_kind(&pool, "Alpha").await.as_deref(), Some("directory"));
+	sqlx::query("UPDATE manga SET local_entry_kind = NULL, initialized = TRUE WHERE id = ?")
+		.bind(alpha_id)
+		.execute(&pool)
+		.await
+		.expect("seed unknown kind");
+
+	let tasks = scan_and_settle(&t.app).await;
+	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+	assert_eq!(scan_task["result"]["unchanged"], 2, "{scan_task}");
+	let full: (Option<String>, bool) = sqlx::query_as("SELECT local_entry_kind, initialized FROM manga WHERE id = ?")
+		.bind(alpha_id)
+		.fetch_one(&pool)
+		.await
+		.expect("full scan backfill");
+	assert_eq!(full, (Some("directory".to_string()), true), "the fast path must not reconcile metadata");
+
+	sqlx::query("UPDATE manga SET local_entry_kind = NULL WHERE id = ?")
+		.bind(alpha_id)
+		.execute(&pool)
+		.await
+		.expect("reset unknown kind");
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{alpha_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let entry: (Option<String>, bool) = sqlx::query_as("SELECT local_entry_kind, initialized FROM manga WHERE id = ?")
+		.bind(alpha_id)
+		.fetch_one(&pool)
+		.await
+		.expect("entry scan backfill");
+	assert_eq!(entry, (Some("directory".to_string()), true), "the entry fast path must not reconcile metadata");
 	pool.close().await;
 }
 
