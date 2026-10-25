@@ -180,7 +180,8 @@ export type BasicLoginRequest = {
 };
 
 export type BatchProgressRequest = ProgressPatch & {
-	chapterIds: Array<number>;
+	chapterIds?: Array<number>;
+	mangaIds?: Array<number>;
 };
 
 export type BrowseSettings = {
@@ -263,6 +264,14 @@ export type DeepLinkTarget = {
 	chapterId: number | null;
 };
 
+export type DeleteDownloadsRequest = {
+	mangaIds: Array<number>;
+};
+
+export type DeletedResponse = {
+	deleted: number;
+};
+
 export type Download = {
 	chapterId: number;
 	mangaId: number;
@@ -299,7 +308,8 @@ export type DownloadSettings = {
 export type DownloadStatus = "queued" | "downloading" | "paused" | "finished" | "error";
 
 export type EnqueueDownloadsRequest = {
-	chapterIds: Array<number>;
+	chapterIds?: Array<number>;
+	mangaIds?: Array<number>;
 };
 
 export type Error = {
