@@ -1046,12 +1046,13 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 }
 
 /// Derives an instance slug from a display name: lowercase alphanumeric runs joined with -; no usable
-/// character at all means no key can be built. Shared by the internal-source registrations (opds/local)
+/// character at all means no key can be built. Alphanumeric is Unicode-aware — a CJK name like 漫画
+/// slugs to 漫画 rather than failing. Shared by the internal-source registrations (opds/local)
 pub(crate) fn slugify(name: &str) -> Option<String> {
 	let mut slug = String::new();
 	let mut dash = false;
 	for c in name.chars().flat_map(char::to_lowercase) {
-		if c.is_ascii_alphanumeric() {
+		if c.is_alphanumeric() {
 			if dash && !slug.is_empty() {
 				slug.push('-');
 			}
