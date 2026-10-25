@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An authorizing read and the write it authorizes are one atomic transition.**
+A row can be revoked between a SELECT that permits an action and the write
+that performs it. Fold the predicate into the guarded write (for example
+`UPDATE ... WHERE ... RETURNING`) and take the caller's identity from the
+returned row; test the revocation exactly in the check/write window.
+- Evidence: 2026-10-25, #394's cancel flow had the same read-then-write race
+  that #416's regressions now pin. #407 repeated the shape in API-key
+  authentication: a revoked key could authenticate before #408 changed the
+  lookup to an atomic `UPDATE ... RETURNING`. Restoring the old lookup made
+  the deleted key authenticate again, while the fixed identity check returned
+  `owner` rather than the stale `admin`.
+
 **State guards belong before optimized content paths.** A cache, download
 artifact or other fast path must not return content before the endpoint checks
 the entity's current state. Otherwise list and detail routes can disagree, and
