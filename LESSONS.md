@@ -204,6 +204,10 @@ exercise the fast-completion path in a real browser.
   replaces that seed; pending events merge into it. The wiring regression
   failed on the old guard, and a 15-second delayed response made two queued
   rows vanish before the merge was restored.
+- Seen again: 2026-10-25, #425 let a retry response write `queued` back over
+  rows SSE had already advanced. `applyRetrySuccess` now updates only rows
+  still in `error`; removing that guard made the regression flip downloading
+  and finished rows back to queued.
 
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
