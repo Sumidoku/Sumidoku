@@ -47,6 +47,7 @@ import {
 import ReposPanel from './browse/ReposPanel';
 import { SearchPanel } from './browse/SearchPanel';
 import { InternalSourceModal } from './browse/InternalSourceModal';
+import { AddRepoModal } from './browse/AddRepoModal';
 import { SourceSettingsButton, SourceSettingsDialog } from './browse/SourceSettingsModal';
 import { iconColor } from './browse/iconColor';
 
@@ -343,6 +344,7 @@ export default function BrowsePage() {
 	const searching = searchParams.get('view') === 'search';
 	const [pendingDelete, setPendingDelete] = useState<Source | null>(null);
 	const [registeringInternal, setRegisteringInternal] = useState(false);
+	const [addRepoOpen, setAddRepoOpen] = useState(false);
 	const [tab, setTab] = useState<'installed' | 'repos'>('installed');
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -455,28 +457,35 @@ export default function BrowsePage() {
 			<PageHeader
 				title={t('common.nav.browse')}
 				actions={
-					!searching && tab === 'installed' ? (
-						<>
-							<Button onClick={() => navigate('/migrate')}>
-								<ArrowLeftRight size={15} />
-								{t('browse.migrate')}
-							</Button>
-							{updateCount > 0 && (
-								<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
-									<CircleArrowUp size={15} />
-									{t('browse.updateAll', { count: updateCount })}
+					!searching ? (
+						tab === 'installed' ? (
+							<>
+								<Button onClick={() => navigate('/migrate')}>
+									<ArrowLeftRight size={15} />
+									{t('browse.migrate')}
 								</Button>
-							)}
-							<Button onClick={() => setRegisteringInternal(true)}>
+								{updateCount > 0 && (
+									<Button loading={updateAll.isPending} onClick={() => void onUpdateAll()}>
+										<CircleArrowUp size={15} />
+										{t('browse.updateAll', { count: updateCount })}
+									</Button>
+								)}
+								<Button onClick={() => setRegisteringInternal(true)}>
+									<Plus size={15} />
+									{t('browse.addInternal')}
+								</Button>
+								<ImportAixButton />
+								<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
+									<ScanSearch size={15} />
+									{t('browse.scan')}
+								</Button>
+							</>
+						) : (
+							<Button variant="primary" onClick={() => setAddRepoOpen(true)}>
 								<Plus size={15} />
-								{t('browse.addInternal')}
+								{t('reposPanel.addRepo')}
 							</Button>
-							<ImportAixButton />
-							<Button variant="primary" loading={scan.isPending} onClick={() => void onScan()}>
-								<ScanSearch size={15} />
-								{t('browse.scan')}
-							</Button>
-						</>
+						)
 					) : undefined
 				}
 			/>
@@ -624,6 +633,7 @@ export default function BrowsePage() {
 				<p className="muted">{t('browse.deleteHint')}</p>
 			</Modal>
 			<InternalSourceModal open={registeringInternal} onClose={() => setRegisteringInternal(false)} />
+			<AddRepoModal open={addRepoOpen} onClose={() => setAddRepoOpen(false)} />
 		</div>
 	);
 }

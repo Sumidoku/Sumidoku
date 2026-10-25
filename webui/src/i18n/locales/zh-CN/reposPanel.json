@@ -28,6 +28,8 @@
     "noMatchHint": "换个关键词或调整过滤条件试试",
     "selectLanguages": "选择语言",
     "done": "完成",
+    "expandAll": "展开全部（+{{count}}）",
+    "collapse": "收起",
     "deleteRepoTitle": "删除仓库 {{name}}？",
     "deleteHint": "已安装的源不受影响。"
   }

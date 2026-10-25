@@ -30,6 +30,8 @@
     "noMatchHint": "Try a different keyword or adjust the filters",
     "selectLanguages": "Select languages",
     "done": "Done",
+    "expandAll": "Show all (+{{count}})",
+    "collapse": "Collapse",
     "deleteRepoTitle": "Delete repo {{name}}?",
     "deleteHint": "Installed sources are not affected."
   }
