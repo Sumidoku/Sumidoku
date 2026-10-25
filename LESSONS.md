@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A dynamic SQL identifier list is an input-size contract; chunk it below the
+bound-variable cap.** A batch endpoint cannot let the caller's selection size
+become a 500 through one `IN (...)` statement, and the cap depends on the
+SQLite build plus every other bind in the statement. Chunk the ids with room
+to spare and test above the actual cap with ids that need no fixture rows.
+- Evidence: 2026-10-25, #433's manga expansion used one dynamic `IN` list.
+  A 40,000-id selection returned 500 with `too many SQL variables`; 500-id
+  chunks made progress, download enqueue and download deletion answer their
+  documented zero results, and restoring the oversized chunk made all three
+  regressions fail with 500 again.
+
 **An authorizing read and the write it authorizes are one atomic transition.**
 A row can be revoked between a SELECT that permits an action and the write
 that performs it. Fold the predicate into the guarded write (for example
