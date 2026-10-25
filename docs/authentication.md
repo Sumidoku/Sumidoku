@@ -57,11 +57,21 @@ breaking change.
   images and file downloads, use this cookie instead of putting credentials
   in URLs. Logout and password changes clear it; password changes also
   revoke every session token as described above.
-- **API keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
-  `auth.api_keys` in `config.toml`. Long-lived, used directly as
-  `Authorization: Bearer <key>`, never stored in the database, and act
-  with the built-in admin's identity. Bearer session tokens remain available
-  for CLI and other non-browser clients.
+- **API keys** — long-lived bearer credentials used directly as
+  `Authorization: Bearer <key>`; they act with the built-in admin's
+  identity and never create session cookies. Two sources exist:
+  - **Config-side keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
+    `auth.api_keys` in `config.toml`. Plaintext stays in the config, never
+    in the database; the settings page lists them as read-only entries.
+  - **UI-managed keys** — created in Settings → System → API keys
+    (`POST /api/v1/auth/api-keys`). The plaintext key is shown once in the
+    creation response; only its SHA-256 fingerprint is stored (`api_key`
+    table, migration 0024) together with name, creation time and
+    last-used time. Revoking (`DELETE /api/v1/auth/api-keys/{id}`) deletes
+    the fingerprint, so the key dies immediately.
+
+  Bearer session tokens remain available for CLI and other non-browser
+  clients.
 
 ## Notes
 

@@ -282,6 +282,118 @@ async fn auth_password_wins_over_legacy_alias() {
 	assert_eq!(status, StatusCode::OK);
 }
 
+/// UI-managed API keys: created with the plaintext shown once, stored as a sha256 fingerprint,
+/// authenticating as the built-in admin, listed alongside read-only config-side keys, and dead after revocation
+#[tokio::test]
+async fn ui_managed_api_keys() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.password = Some(PASSWORD.into());
+	config.auth.api_keys = vec!["smk_config_key".into()];
+	let app = build_app(config).await.expect("build app");
+	let (_, body) = login(&app, "admin", PASSWORD).await;
+	let auth = format!("Bearer {}", body["token"].as_str().expect("token"));
+
+	// creating requires an authenticated identity
+	let (status, _) = request(&app, "POST", "/api/v1/auth/api-keys", Some(json!({"name": "cli"}))).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	let (status, _, _) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "  "})),
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (status, _, bytes) = request_with_headers(
+		&app,
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "cli"})),
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let created: Value = serde_json::from_slice(&bytes).expect("created json");
+	let key = created["key"].as_str().expect("plaintext key");
+	assert!(key.starts_with("smk_"), "{key}");
+	assert_eq!(created["name"], "cli");
+	assert_eq!(created["source"], "ui");
+	let key_id = created["id"].as_str().expect("key id").to_string();
+
+	// the DB keeps only the fingerprint, never the plaintext
+	let pool = connect_db(&tmp.path().join("test.db")).await;
+	let stored: Option<(String, String)> = sqlx::query_as("SELECT key_hash, name FROM api_key")
+		.fetch_optional(&pool)
+		.await
+		.expect("key row");
+	let (stored_hash, stored_name) = stored.expect("one stored key");
+	assert_eq!(stored_hash, sumidoku_server::auth::sha256_hex(key));
+	assert_ne!(stored_hash, key);
+	assert_eq!(stored_name, "cli");
+
+	// the key authenticates as the built-in admin without a login session
+	let key_auth = format!("Bearer {key}");
+	let (status, headers, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(headers.get("set-cookie").is_none());
+	let last_used: Option<i64> = sqlx::query_scalar("SELECT last_used_at FROM api_key WHERE key_hash = ?")
+		.bind(&stored_hash)
+		.fetch_one(&pool)
+		.await
+		.expect("last used");
+	assert!(last_used.is_some(), "use refreshes last_used_at");
+
+	// the list shows the UI-managed key and the read-only config-side key
+	let (status, _, bytes) = request_with_headers(&app, "GET", "/api/v1/auth/api-keys", None, &[("authorization", &auth)]).await;
+	assert_eq!(status, StatusCode::OK);
+	let list: Value = serde_json::from_slice(&bytes).expect("list json");
+	let entries = list.as_array().expect("entries array");
+	assert_eq!(entries.len(), 2);
+	let ui_entry = entries.iter().find(|e| e["source"] == "ui").expect("ui entry");
+	assert_eq!(ui_entry["id"], key_id);
+	assert_eq!(ui_entry["name"], "cli");
+	let config_entry = entries.iter().find(|e| e["source"] == "config").expect("config entry");
+	assert_eq!(config_entry["id"], sumidoku_server::auth::sha256_hex("smk_config_key"));
+	assert!(config_entry["name"].is_null());
+	let config_id = config_entry["id"].as_str().expect("config id").to_string();
+
+	// config-side keys cannot be revoked from the API
+	let (status, _, _) = request_with_headers(
+		&app,
+		"DELETE",
+		&format!("/api/v1/auth/api-keys/{config_id}"),
+		None,
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (status, _, _) = request_with_headers(
+		&app,
+		"DELETE",
+		"/api/v1/auth/api-keys/does-not-exist",
+		None,
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	// revocation kills the key immediately
+	let (status, _, _) = request_with_headers(
+		&app,
+		"DELETE",
+		&format!("/api/v1/auth/api-keys/{key_id}"),
+		None,
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (status, _, _) = request_with_headers(&app, "GET", "/api/v1/sources", None, &[("authorization", &key_auth)]).await;
+	assert_eq!(status, StatusCode::UNAUTHORIZED);
+	pool.close().await;
+}
+
 #[tokio::test]
 async fn api_keys_authenticate_without_login() {
 	let tmp = tempfile::tempdir().expect("tempdir");

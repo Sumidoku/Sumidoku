@@ -210,6 +210,114 @@
         }
       }
     },
+    "/api/v1/auth/api-keys": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "listApiKeys",
+        "summary": "List API keys: UI-managed entries plus read-only config-side entries",
+        "description": "Config-side keys (from SUMIDOKU_AUTH_API_KEYS / auth.api_keys) appear with source=config and no name or timestamps; they are managed in the server config.",
+        "responses": {
+          "200": {
+            "description": "API keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ApiKeyEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "createApiKey",
+        "summary": "Create an API key",
+        "description": "The plaintext key is returned only in this response; afterwards only its sha256 fingerprint exists. The key acts with the built-in admin's identity.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApiKeyCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Key created; the key field is the only plaintext copy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiKeyCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/api-keys/{id}": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "revokeApiKey",
+        "summary": "Revoke a UI-managed API key",
+        "description": "Revocation deletes the stored fingerprint. Config-side keys cannot be revoked here and return 400.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The entry id (sha256 fingerprint of the key)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/sources": {
       "get": {
         "tags": [
@@ -4429,6 +4537,77 @@
             "type": "string"
           }
         }
+      },
+      "ApiKeyEntry": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "createdAt",
+          "lastUsedAt",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "sha256 fingerprint of the key; revocation targets this id"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true,
+            "description": "Null for config-side keys"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Unix seconds; null for config-side keys."
+          },
+          "lastUsedAt": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true,
+            "description": "Unix seconds of the last authenticated use; null when never used or config-side."
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "ui",
+              "config"
+            ]
+          }
+        }
+      },
+      "ApiKeyCreateRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "ApiKeyCreated": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ApiKeyEntry"
+          },
+          {
+            "type": "object",
+            "required": [
+              "key"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "Plaintext key, present only in the creation response"
+              }
+            }
+          }
+        ]
       },
       "AuthStatus": {
         "type": "object",
