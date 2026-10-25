@@ -19,6 +19,18 @@ terminal-versus-requeue interleavings.
   let old cleanup remove the new execution's flag, producing `task_finishing`;
   terminal requeue emitted `pending → running → pending → pending`, dropping
   `done`. The probes were removed after reproduction.
+
+**A concurrency test must preserve its precondition with explicit gates, not a
+guessed duration.** A fixed sleep lets setup latency consume the state the
+assertion expects to inspect. Hold the blocking execution with a notification,
+release it only after the required competing transition completes, and await
+its cleanup.
+- Evidence: 2026-10-25, `a_blocked_group_never_starves_runnable_work` failed
+  with `left: "done"`, `right: "running"` after the 64 enqueues outlasted its
+  300ms blocker. An explicit gate kept the blocker running until the other
+  group finished; the regression then passed 20 consecutive runs and the full
+  workspace suite passed 916 tests with 2 skipped.
+
 **Commit before anything can move the working tree; a shared checkout is
 not a safe place for uncommitted work.** Another session switching the
 branch under you — or any rebase/checkout/stash you didn't run — can drop
