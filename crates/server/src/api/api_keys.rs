@@ -1,7 +1,6 @@
 //! UI-managed API keys: generated server-side, returned once at creation, stored as
 //! sha256 fingerprints in the api_key table, and revoked by deleting the row. They act
-//! with the built-in admin's identity, same as config-side keys; config-side keys stay
-//! read-only entries in the list (identified by fingerprint, plaintext never leaves config).
+//! with the built-in admin's identity.
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -35,18 +34,7 @@ pub async fn list_keys(State(state): State<Arc<AppState>>) -> ApiResult<Json<Val
 	let rows: Vec<KeyRow> = sqlx::query_as("SELECT key_hash, name, created_at, last_used_at FROM api_key ORDER BY created_at ASC")
 		.fetch_all(&state.pool)
 		.await?;
-	let mut out: Vec<Value> = rows.iter().map(key_json).collect();
-	// Config-side keys are plaintext in config, never in the DB; list them as read-only
-	// entries identified by fingerprint so they can be told apart from UI-managed ones
-	for key in &state.config.auth.api_keys {
-		out.push(json!({
-			"id": crate::auth::sha256_hex(key),
-			"name": Value::Null,
-			"createdAt": Value::Null,
-			"lastUsedAt": Value::Null,
-			"source": "config",
-		}));
-	}
+	let out: Vec<Value> = rows.iter().map(key_json).collect();
 	Ok(Json(json!(out)))
 }
 
@@ -86,11 +74,6 @@ pub async fn create_key(
 }
 
 pub async fn revoke_key(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> ApiResult<StatusCode> {
-	if state.config.auth.api_keys.iter().any(|key| crate::auth::sha256_hex(key) == id) {
-		return Err(ApiError::bad_request(
-			"config-side keys are managed in the server config, not the web UI",
-		));
-	}
 	let deleted = sqlx::query("DELETE FROM api_key WHERE key_hash = ?")
 		.bind(&id)
 		.execute(&state.pool)

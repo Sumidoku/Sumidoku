@@ -216,8 +216,8 @@
           "auth"
         ],
         "operationId": "listApiKeys",
-        "summary": "List API keys: UI-managed entries plus read-only config-side entries",
-        "description": "Config-side keys (from SUMIDOKU_AUTH_API_KEYS / auth.api_keys) appear with source=config and no name or timestamps; they are managed in the server config.",
+        "summary": "List API keys managed in Settings",
+        "description": "Keys are stored as SHA-256 fingerprints in the database; plaintext is returned only at creation.",
         "responses": {
           "200": {
             "description": "API keys",
@@ -4073,7 +4073,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "Session token or configured API key"
+        "bearerFormat": "Session token or UI-managed API key"
       },
       "sessionCookie": {
         "type": "apiKey",
@@ -4554,26 +4554,23 @@
           },
           "name": {
             "type": "string",
-            "nullable": true,
-            "description": "Null for config-side keys"
+            "description": "Display name of the key"
           },
           "createdAt": {
             "type": "integer",
             "format": "int64",
-            "nullable": true,
-            "description": "Unix seconds; null for config-side keys."
+            "description": "Unix seconds when the key was created"
           },
           "lastUsedAt": {
             "type": "integer",
             "format": "int64",
             "nullable": true,
-            "description": "Unix seconds of the last authenticated use; null when never used or config-side."
+            "description": "Unix seconds of the last authenticated use; null when never used."
           },
           "source": {
             "type": "string",
             "enum": [
-              "ui",
-              "config"
+              "ui"
             ]
           }
         }

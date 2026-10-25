@@ -44,10 +44,10 @@ export type ApiKeyCreated = ApiKeyEntry & {
 
 export type ApiKeyEntry = {
 	id: string;
-	name: string | null;
-	createdAt: number | null;
+	name: string;
+	createdAt: number;
 	lastUsedAt: number | null;
-	source: "ui" | "config";
+	source: "ui";
 };
 
 export type AuthStatus = {

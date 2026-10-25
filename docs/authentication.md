@@ -5,7 +5,7 @@ Authentication is off until the built-in admin user has a password
 With a password configured, the web UI shows a login page and `/api/v1`
 requires a session credential. Browser requests use the login cookie; CLI
 and other non-browser clients may use `Authorization: Bearer <token>` (a
-login-issued session token or configured API key). Unauthenticated requests
+login-issued session token or UI-managed API key). Unauthenticated requests
 get a uniform `401` (`{"error":{"code":"unauthorized"}}`).
 
 With auth off, every request acts as the built-in admin — a no-password
@@ -59,16 +59,14 @@ breaking change.
   revoke every session token as described above.
 - **API keys** — long-lived bearer credentials used directly as
   `Authorization: Bearer <key>`; they act with the built-in admin's
-  identity and never create session cookies. Two sources exist:
-  - **Config-side keys** — `SUMIDOKU_AUTH_API_KEYS` (comma-separated) or
-    `auth.api_keys` in `config.toml`. Plaintext stays in the config, never
-    in the database; the settings page lists them as read-only entries.
-  - **UI-managed keys** — created in Settings → System → API keys
-    (`POST /api/v1/auth/api-keys`). The plaintext key is shown once in the
-    creation response; only its SHA-256 fingerprint is stored (`api_key`
-    table, migration 0024) together with name, creation time and
-    last-used time. Revoking (`DELETE /api/v1/auth/api-keys/{id}`) deletes
-    the fingerprint, so the key dies immediately.
+  identity and never create session cookies. Create and revoke them in
+  Settings → System → API keys (`POST /api/v1/auth/api-keys` and
+  `DELETE /api/v1/auth/api-keys/{id}`). The plaintext key is shown once in
+  the creation response; only its SHA-256 fingerprint is stored (`api_key`
+  table, migration 0024) together with name, creation time and last-used
+  time. Revoking deletes the fingerprint, so the key dies immediately.
+  Legacy `SUMIDOKU_AUTH_API_KEYS` and `auth.api_keys` are no longer
+  accepted; recreate any required keys in the UI.
 
   Bearer session tokens remain available for CLI and other non-browser
   clients.
