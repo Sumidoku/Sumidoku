@@ -1,4 +1,4 @@
-<!-- reviewed-through: eb1c2f0 (2026-10-25) -->
+<!-- reviewed-through: e5c7c68 (2026-10-25) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
@@ -1082,20 +1082,6 @@ logic: restart count, `journalctl` `traps:` lines and coredumps say
   stayed green for two releases; the 502 a user saw was nginx answering
   during container restart gaps, with four identical-offset cores in
   the journal. Follow-ups tracked in #234.
-
-**The web UI gate is tsc-only, and by design no formatter ever runs —
-human review is the only style net.** The tree is hand-formatted with
-tabs and formatters are deliberately absent, so a diff that breaks the
-surrounding structure passes green. On web UI reviews, read each
-changed block's indentation against its untouched siblings; a block one
-level off with its continuations at the old depth is the signature.
-- Evidence: 2026-10-20, #237 dedented two JSX blocks in BrowsePage
-  while their continuation lines kept the old depth; the `web` job was
-  green and only eyeballing the diff caught it — fixed on the branch
-  (f0870fd) before merge.
-- Seen again: 2026-10-21, #285 left misindented SourceCard JSX and adjacent
-  conditional blocks at `webui/src/pages/BrowsePage.tsx:562-631` with green
-  web gates.
 
 **A migration file is a shipped artifact, not source text — editing one
 without an explicit compatibility alias breaks existing deployments at boot.**

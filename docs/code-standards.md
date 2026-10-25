@@ -80,6 +80,9 @@ run is listed as not run, never left out.
 ## Reviewing a PR
 
 - Run it. Reading the diff alone isn't a review.
+- Web UI style is reviewed manually because no formatter runs. Compare
+  changed blocks with sibling indentation and watch for glued imports;
+  TypeScript does not catch structure drift.
 - Look for harm first: a PR that touches `.github/`, the Dockerfile,
   dependencies, or anything that sends data somewhere new stops the review
   until the maintainer has looked.
