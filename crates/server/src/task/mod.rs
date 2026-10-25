@@ -217,16 +217,21 @@ impl TaskManager {
 	/// status = 'running' and loses to this row state, so a mid-flight cancel can never be overwritten
 	/// by a late done. Losing the race to a terminal transition re-reads and answers 409
 	pub async fn cancel(&self, id: &str) -> ApiResult<TaskRow> {
-		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
 		#[cfg(test)]
-		if row.id == CANCEL_BEFORE_UPDATE.id {
+		if id == CANCEL_BEFORE_UPDATE.id {
 			CANCEL_BEFORE_UPDATE.reached.notify_one();
 			CANCEL_BEFORE_UPDATE.resume.notified().await;
+		}
+		let inner = self.inner.lock().await;
+		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
+		#[cfg(test)]
+		if row.id == CANCEL_AFTER_READ.id {
+			CANCEL_AFTER_READ.reached.notify_one();
+			CANCEL_AFTER_READ.resume.notified().await;
 		}
 		if row.is_terminal() {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		}
-		let inner = self.inner.lock().await;
 		let updated: Option<TaskRow> = sqlx::query_as(&format!(
 			"UPDATE task SET status = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('pending', 'running') RETURNING {COLUMNS}"
 		))
@@ -464,6 +469,12 @@ struct CancelTestGate {
 #[cfg(test)]
 static CANCEL_BEFORE_UPDATE: CancelTestGate = CancelTestGate {
 	id: "cancel-race-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
+#[cfg(test)]
+static CANCEL_AFTER_READ: CancelTestGate = CancelTestGate {
+	id: "cancel-after-read-test",
 	reached: Notify::const_new(),
 	resume: Notify::const_new(),
 };
@@ -993,7 +1004,7 @@ mod tests {
 			.await
 			.expect("tie creation times");
 		let next = tokio::time::timeout(
-			std::time::Duration::from_millis(25),
+			std::time::Duration::from_millis(250),
 			manager.pick_next(Some((1, 1, "b".to_string()))),
 		)
 		.await
@@ -1002,8 +1013,8 @@ mod tests {
 		assert!(next.is_none(), "no runnable candidate follows the cursor");
 	}
 
-	#[tokio::test]
-	async fn cancel_does_not_flag_a_terminal_requeue() {
+	async fn assert_requeue_does_not_inherit_cancel(gate: &CancelTestGate) {
+		let id = gate.id;
 		let (_state, manager, _tmp) = test_state(1).await;
 		let started = Arc::new(Notify::new());
 		let release = Arc::new(Notify::new());
@@ -1030,19 +1041,19 @@ mod tests {
 		});
 		manager.register("race", handler).await;
 		manager
-			.enqueue("cancel-new-execution-test", "race", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.enqueue(id, "race", None, serde_json::json!({}), PRIORITY_MANUAL)
 			.await
 			.expect("enqueue");
 
 		let cancel_manager = manager.clone();
-		let cancel = tokio::spawn(async move { cancel_manager.cancel("cancel-new-execution-test").await });
-		CANCEL_AFTER_UPDATE.reached.notified().await;
+		let cancel = tokio::spawn(async move { cancel_manager.cancel(id).await });
+		gate.reached.notified().await;
 		let requeue_done = Arc::new(AtomicBool::new(false));
 		let requeue_manager = manager.clone();
 		let requeue_flag = requeue_done.clone();
 		let requeue = tokio::spawn(async move {
 			requeue_manager
-				.enqueue("cancel-new-execution-test", "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+				.enqueue(id, "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
 				.await
 				.expect("requeue");
 			requeue_flag.store(true, Ordering::SeqCst);
@@ -1055,7 +1066,7 @@ mod tests {
 		if dispatched_before_resume {
 			manager.dispatch().await;
 		}
-		CANCEL_AFTER_UPDATE.resume.notify_one();
+		gate.resume.notify_one();
 		cancel.await.expect("cancel task").expect("cancel");
 		requeue.await.expect("requeue task");
 		if !dispatched_before_resume {
@@ -1067,6 +1078,16 @@ mod tests {
 			.await
 			.expect("handler did not finish");
 		assert!(!saw_cancel.load(Ordering::SeqCst), "the old cancel must not cancel the new execution");
+	}
+
+	#[tokio::test]
+	async fn cancel_after_read_does_not_flag_a_terminal_requeue() {
+		assert_requeue_does_not_inherit_cancel(&CANCEL_AFTER_READ).await;
+	}
+
+	#[tokio::test]
+	async fn cancel_after_update_does_not_flag_a_terminal_requeue() {
+		assert_requeue_does_not_inherit_cancel(&CANCEL_AFTER_UPDATE).await;
 	}
 
 	#[tokio::test]
