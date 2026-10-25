@@ -455,7 +455,7 @@ async fn first_browse_uses_pre_kick_snapshot() {
 		"CREATE TRIGGER index_during_enqueue AFTER INSERT ON task
 		 WHEN NEW.kind = 'local_scan'
 		 BEGIN
-		  INSERT INTO manga (source_id, key, title) VALUES (NEW.source_id, 'Triggered', 'Triggered');
+		  INSERT INTO manga (source_id, key, title) VALUES (NEW.source_id, 'Alpha', 'Alpha');
 		 END",
 	)
 	.execute(&pool)
@@ -477,11 +477,11 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 	}
 	let pool = common::connect_db(&db_path).await;
 	sqlx::query(
-		"CREATE TRIGGER exclude_beta_after_insert AFTER INSERT ON manga
-		 WHEN NEW.key = 'Beta'
+		"CREATE TRIGGER exclude_second_after_insert AFTER INSERT ON manga
+		 WHEN NEW.id = 2
 		 BEGIN
-		  INSERT INTO source_setting (source_id, key, value) VALUES (NEW.source_id, 'exclusions', '{\"StringArray\":[\"beta\"]}')
-		  ON CONFLICT (source_id, key) DO UPDATE SET value = excluded.value;
+		  INSERT OR REPLACE INTO source_setting (source_id, key, value)
+		  VALUES (NEW.source_id, 'exclusions', json_object('StringArray', json_array(lower(NEW.key))));
 		 END",
 	)
 	.execute(&pool)
@@ -492,7 +492,7 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 	assert_eq!(status, StatusCode::OK);
 	let tasks = body.as_array().expect("tasks array");
 	let scan = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
-	assert_eq!(scan["result"]["scanned"], 1, "the final pass excludes Beta: {scan}");
+	assert_eq!(scan["result"]["scanned"], 1, "the final pass excludes the second upsert: {scan}");
 	pool.close().await;
 }
 
@@ -1906,6 +1906,8 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 			("OEBPS/images/1.png", b"now-prose"),
 		],
 	);
+	let mut archive_time = std::time::SystemTime::now();
+	archive_time = common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	common::local_scan_and_settle(&t.app, None).await;
@@ -1922,6 +1924,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		Some(("OEBPS/content.opf", &divina)),
 		&[("OEBPS/images/1.png", b"divina-again")],
 	);
+	archive_time = common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	common::local_scan_and_settle(&t.app, None).await;
@@ -1946,6 +1949,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		],
 	);
 	std::fs::rename(&replacement, t.tmp.path().join("local/Types/divina.epub")).expect("replace EPUB atomically");
+	common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	common::local_scan_and_settle(&t.app, None).await;

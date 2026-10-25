@@ -31,6 +31,18 @@ pub const LOCAL_LAST_SCAN_AT: &str = "local.last_scan_at";
 /// this often so a settings write mid-run is observed and the handler reruns on the fresh configuration
 const INPUTS_CHECKPOINT_EVERY: usize = 32;
 
+static SCAN_REQUEST_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Each trigger needs a distinct identity even when its visible settings are unchanged, so a newer request
+/// cannot be mistaken for a duplicate during the terminal write.
+fn next_scan_request_id() -> String {
+	let nanos = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_nanos();
+	format!("{nanos}-{}", SCAN_REQUEST_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+
 #[derive(Debug, Default, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanOutcome {
@@ -370,6 +382,16 @@ pub async fn scan_manga_entry(
 	.bind(manga_key)
 	.fetch_optional(&state.pool)
 	.await?;
+	// Refresh may reclassify a live row, but a trashed row can return only under its recorded shape.
+	if let Some(row) = &existing
+		&& row.trashed_at.is_some()
+		&& row.local_entry_kind.as_deref() != Some(scan.entry_kind)
+	{
+		return Err(crate::error::ApiError::conflict(
+			"gone",
+			"the on-disk entry no longer matches the recorded manga shape",
+		));
+	}
 	if let Some(row) = &existing
 		&& row.trashed_at.is_none()
 		&& row.scan_mtime == Some(mtime)
@@ -537,8 +559,8 @@ pub async fn register_handlers(manager: &crate::task::TaskManager) {
 }
 
 /// Enqueues a scan per local instance (or just the given one); the per-instance dedup id makes a repeat
-/// trigger idempotent — kmrs's "a scheduled scan never stacks up". `refresh_metadata` rides the payload:
-/// manual triggers and settings edits opt into metadata re-reads, scheduled runs follow the library setting
+/// trigger idempotent — kmrs's "a scheduled scan never stacks up". `refresh_metadata` and a unique request id
+/// ride the payload: the terminal write can tell a genuinely newer trigger apart from identical settings.
 pub async fn enqueue_scan(
 	state: &AppState,
 	source_id: Option<i64>,
@@ -558,7 +580,7 @@ pub async fn enqueue_scan(
 					&format!("{KIND_SCAN}:{id}"),
 					KIND_SCAN,
 					Some(id),
-					json!({ "refreshMetadata": refresh_metadata }),
+					json!({ "refreshMetadata": refresh_metadata, "requestId": next_scan_request_id() }),
 					priority,
 				)
 				.await?,

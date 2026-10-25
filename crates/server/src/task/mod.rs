@@ -414,25 +414,50 @@ impl TaskManager {
 				Err(e) => (STATUS_FAILED, None, Some(e.message().to_string())),
 			}
 		};
-		// The terminal write belongs to this execution only: a cancel that landed mid-flight already
-		// wrote and published 'cancelled', and losing this guard means publishing nothing more
-		let updated: Option<TaskRow> = sqlx::query_as(&format!(
-			"UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ? AND status = 'running' RETURNING {COLUMNS}"
-		))
-		.bind(status)
-		.bind(unix_now())
-		.bind(result)
-		.bind(error)
-		.bind(&task.id)
-		.fetch_optional(&self.pool)
-		.await
-		.unwrap_or_else(|e| {
-			tracing::warn!(task = %task.id, "task finish write failed: {e}");
+		// A newer local-scan request can arrive after the handler's last checkpoint. Requeue instead of
+		// completing the older request; an unchanged payload still takes the normal terminal path.
+		let requeued = if task.kind == "local_scan" {
+			sqlx::query_as(&format!(
+				"UPDATE task SET status = 'pending', started_at = NULL, finished_at = NULL, result = NULL, error = NULL
+				 WHERE id = ? AND status = 'running' AND payload <> ? RETURNING {COLUMNS}"
+			))
+			.bind(&task.id)
+			.bind(&task.payload)
+			.fetch_optional(&self.pool)
+			.await
+			.unwrap_or_else(|e| {
+				tracing::warn!(task = %task.id, "task supersession check failed: {e}");
+				None
+			})
+		} else {
 			None
-		});
+		};
+		let is_requeue = requeued.is_some();
+		let updated = if is_requeue {
+			requeued
+		} else {
+			// The terminal write belongs to this execution only: a cancel that landed mid-flight already
+			// wrote and published 'cancelled', and losing this guard means publishing nothing more
+			sqlx::query_as(&format!(
+				"UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ? AND status = 'running' RETURNING {COLUMNS}"
+			))
+			.bind(status)
+			.bind(unix_now())
+			.bind(result)
+			.bind(error)
+			.bind(&task.id)
+			.fetch_optional(&self.pool)
+			.await
+			.unwrap_or_else(|e| {
+				tracing::warn!(task = %task.id, "task finish write failed: {e}");
+				None
+			})
+		};
 		if let Some(row) = updated {
 			let _ = self.signals.send(row);
-			if let Err(e) = self.trim_finished().await {
+			if !is_requeue
+				&& let Err(e) = self.trim_finished().await
+			{
 				tracing::warn!("task history trim failed: {e}");
 			}
 		}
@@ -636,6 +661,48 @@ mod tests {
 		assert_eq!(runs.load(Ordering::SeqCst), 1, "no follow-up run after a mid-run duplicate");
 		let row = manager.get("t:1").await.expect("row").expect("exists");
 		assert_eq!(row.status, STATUS_DONE);
+	}
+
+	#[tokio::test]
+	async fn local_scan_supersession_requeues_before_terminal_write() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let runs = Arc::new(AtomicI64::new(0));
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			let runs = runs.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				let runs = runs.clone();
+				Box::pin(async move {
+					runs.fetch_add(1, Ordering::SeqCst);
+					if run.task.payload == r#"{"requestId":1}"# {
+						started.notify_one();
+						release.notified().await;
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("local_scan", handler).await;
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("t:scan", "local_scan", Some(1), serde_json::json!({"requestId": 1}), PRIORITY_MANUAL)
+			.await
+			.expect("first scan");
+		started.notified().await;
+		manager
+			.enqueue("t:scan", "local_scan", Some(1), serde_json::json!({"requestId": 2}), PRIORITY_MANUAL)
+			.await
+			.expect("superseding scan");
+		release.notify_one();
+		let row = wait_status(&manager, "t:scan", STATUS_DONE).await;
+		assert_eq!(runs.load(Ordering::SeqCst), 2, "the newer request must execute after the older one");
+		let payload: serde_json::Value = serde_json::from_str(&row.payload).expect("latest payload");
+		assert_eq!(payload["requestId"], 2);
 	}
 
 	#[tokio::test]

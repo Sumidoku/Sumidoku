@@ -28,12 +28,6 @@ fn write_cbz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
 	writer.finish().expect("finish cbz");
 }
 
-fn bump_mtime(path: &std::path::Path) {
-	let previous = std::fs::metadata(path).expect("archive metadata").modified().expect("archive mtime");
-	let file = std::fs::OpenOptions::new().write(true).open(path).expect("open archive mtime");
-	file.set_modified(previous + std::time::Duration::from_secs(2)).expect("advance archive mtime");
-}
-
 const COMIC_INFO_SERIES_ONLY: &str = r#"<?xml version="1.0"?>
 <ComicInfo>
   <Series>Indexed Series</Series>
@@ -431,9 +425,10 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 	let pool = common::connect_db(&t.db_path).await;
 	let source_id = local_source_id(&t.app).await;
 	let archive = t.tmp.path().join("local/Beta/ch 1.cbz");
+	let mut archive_time = std::time::SystemTime::now();
 	scan_and_settle(&t.app).await;
 	write_cbz(&archive, &[("1.png", b"beta-1-1-edited")]);
-	bump_mtime(&archive);
+	archive_time = common::advance_mtime(&archive, archive_time);
 	let tasks = scan_and_settle(&t.app).await;
 	let scan_task = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
 	assert_eq!(scan_task["result"]["unchanged"], 2, "in-place edit invisible without the toggle: {scan_task}");
@@ -457,7 +452,7 @@ async fn force_modified_time_catches_in_place_archive_edits() {
 		.expect("beta mtime after toggle");
 	assert!(beta_after > beta_before, "the pending edit must be observed: {beta_before} -> {beta_after}");
 	write_cbz(&archive, &[("1.png", b"beta-1-1-third")]);
-	bump_mtime(&archive);
+	common::advance_mtime(&archive, archive_time);
 	scan_and_settle(&t.app).await;
 	let beta_third: i64 = sqlx::query_scalar("SELECT scan_mtime FROM manga WHERE key = 'Beta'")
 		.fetch_one(&pool)
@@ -1047,6 +1042,11 @@ async fn restore_rejects_an_archive_suffixed_file_replacing_a_directory() {
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");
 	assert_eq!(body["error"]["code"], "gone", "{body}");
 	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha.cbz").await.expect("Alpha.cbz still trashed");
+	assert!(trashed.is_some());
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{alpha_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT, "refresh must enforce the original shape too: {body}");
+	assert_eq!(body["error"]["code"], "gone", "{body}");
+	let (_, _, _, trashed, _) = manga_row(&pool, "Alpha.cbz").await.expect("Alpha.cbz remains trashed after refresh");
 	assert!(trashed.is_some());
 	let live: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE manga_id = ? AND trashed_at IS NULL")
 		.bind(alpha_id)

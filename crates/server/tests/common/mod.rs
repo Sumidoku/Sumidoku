@@ -199,6 +199,13 @@ pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 	}
 }
 
+pub fn advance_mtime(path: &std::path::Path, previous: std::time::SystemTime) -> std::time::SystemTime {
+	let next = previous + std::time::Duration::from_secs(2);
+	let file = std::fs::OpenOptions::new().write(true).open(path).expect("open file mtime");
+	file.set_modified(next).expect("advance file mtime");
+	next
+}
+
 pub async fn test_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");

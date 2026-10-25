@@ -145,8 +145,10 @@ no alias is derived from migration text.
   — plus the one-shot local scan scheduler (`local_scan_secs` /
   `local_scan_on_startup`). Scan inputs are re-read every 32 rows and after
   each pass; the newest `refreshMetadata` payload is reloaded between passes.
-  Completion requires a stable pass, otherwise repeated changes fail with
-  `inputs_changing` instead of being acknowledged unapplied.
+  Every trigger carries a unique `requestId`, and the terminal write requeues
+  when a newer payload arrived instead of finishing the older request. Completion
+  requires a stable pass, otherwise repeated changes fail with `inputs_changing`
+  instead of being acknowledged unapplied.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as
@@ -461,8 +463,9 @@ no alias is derived from migration text.
   actual filesystem metadata by full and entry scans, with no suffix-based
   backfill. Existing or not-yet-observed local rows stay NULL; unchanged fast
   paths backfill only that missing value without reconciling chapters.
-  Manual restore compares the current entry with the recorded kind, never
-  the filename, and answers 409 for a missing, mismatched or unknown shape.
+  Manual restore and entry-level refresh compare the current entry with the
+  recorded kind, never the filename, and answer 409 for a missing, mismatched
+  or unknown shape.
   A full or entry scan must learn a NULL kind first; a full scan also
   restores a discovered trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:

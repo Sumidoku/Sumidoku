@@ -505,7 +505,7 @@ export default function BrowsePage() {
 									{t('browse.scan')}
 								</Button>
 							</>
-						) : tab === 'repos' ? (
+						) : !searching && tab === 'repos' ? (
 							<Button variant="primary" onClick={() => setAddRepoOpen(true)}>
 								<Plus size={15} />
 								{t('reposPanel.addRepo')}
