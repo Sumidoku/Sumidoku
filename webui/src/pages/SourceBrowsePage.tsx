@@ -243,6 +243,8 @@ export default function SourceBrowsePage() {
 		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
 		if (!dropFilters) saveFilterPrefs(sourceId, values);
 		setSubmitted({ query, filters: dropFilters ? [] : values });
+		// Carry the submitted query in the URL (replace, not push) so drilling into an entry and coming back restores the search
+		setSearchParams(query ? { q: query } : {}, { replace: true });
 	}
 
 	// Only local directory filtering is live; remote source requests wait for explicit submission —
@@ -259,9 +261,12 @@ export default function SourceBrowsePage() {
 
 	const isSearch = mode === 'search';
 	const filtersHidden = !!sourceConfig?.hidesFiltersWhileSearching && input.trim() !== '';
+	// hidesFiltersWhileSearching also drops filters at the request boundary: a ?q=-restored submission
+	// initializes submitted.filters from storage and would otherwise re-apply filters the original search dropped
+	const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && submitted.query !== '';
 	const searchQuery = useSourceSearch(
 		sourceId,
-		{ query: submitted.query || undefined, filters: submitted.filters },
+		{ query: submitted.query || undefined, filters: dropFilters ? [] : submitted.filters },
 		isSearch && sourceEnabled
 	);
 	const listingQuery = useListing(sourceId, mode, !isSearch && sourceEnabled);
@@ -276,7 +281,7 @@ export default function SourceBrowsePage() {
 	function switchMode(m: string) {
 		if (m === mode) return;
 		setMode(m);
-		setSearchParams(m === 'search' ? {} : { mode: m }, { replace: true });
+		setSearchParams(m === 'search' ? (submitted.query ? { q: submitted.query } : {}) : { mode: m }, { replace: true });
 	}
 
 	function cycleMulti(f: SourceFilter, i: number) {
