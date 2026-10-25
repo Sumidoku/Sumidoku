@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CircleArrowUp, Download, Globe, Plus, RefreshCw, Search, Trash } from 'lucide-react';
+import { ChevronDown, ChevronUp, CircleArrowUp, Download, Globe, Plus, RefreshCw, Search, Trash } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
-	useAddSourceRepo,
 	useDeleteSourceRepo,
 	useInstallRepoSource,
 	useRefreshSourceRepo,
@@ -13,8 +12,7 @@ import {
 } from '../../api/hooks';
 import type { RepoSource, SourceRepo } from '../../api/types';
 import { relativeTime } from '../../lib/format';
-import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';
-import {
+import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';import {
 	CONTENT_RATING_LEVELS,
 	MULTI_LANGUAGE,
 	compareLanguageLabel,
@@ -35,15 +33,9 @@ import {
 	pushToast
 } from '../../components';
 import { iconColor } from './iconColor';
+import { repoTitle } from './AddRepoModal';
 
-function repoTitle(repo: SourceRepo): string {
-	if (repo.name) return repo.name;
-	try {
-		return new URL(repo.url).host;
-	} catch {
-		return repo.url;
-	}
-}
+const COLLAPSED_COUNT = 3;
 
 function EntryIcon({ entry }: { entry: RepoSource }) {
 	const [failed, setFailed] = useState(false);
@@ -112,14 +104,59 @@ function EntryAction({ entry }: { entry: RepoSource }) {
 	);
 }
 
+function RepoList({
+	repos,
+	onRefresh,
+	onDelete,
+	refreshPending
+}: {
+	repos: SourceRepo[];
+	onRefresh: (r: SourceRepo) => void;
+	onDelete: (r: SourceRepo) => void;
+	refreshPending: boolean;
+}) {
+	const { t } = useTranslation();
+	return (
+		<div className="source-list">
+			{repos.map((r) => (
+				<div key={r.id} className="source-card">
+					<div className="source-card__main">
+						<div className="source-card__name">
+							<span className="source-card__name-text">{repoTitle(r.url, r.name)}</span>
+							{r.fetchError && <Chip color="danger">{t('reposPanel.syncFailed')}</Chip>}
+						</div>
+						<div className="source-card__meta">
+							{r.url} · {t('reposPanel.sourceCount', { count: r.sourceCount })}
+							{r.fetchedAt ? t('reposPanel.fetchedAt', { time: relativeTime(r.fetchedAt) }) : ''}
+						</div>
+					</div>
+					<IconButton
+						label={t('reposPanel.refresh', { name: repoTitle(r.url, r.name) })}
+						onClick={() => onRefresh(r)}
+						disabled={refreshPending}
+					>
+						<RefreshCw size={16} />
+					</IconButton>
+					<IconButton
+						label={t('reposPanel.delete', { name: repoTitle(r.url, r.name) })}
+						variant="danger"
+						onClick={() => onDelete(r)}
+					>
+						<Trash size={17} />
+					</IconButton>
+				</div>
+			))}
+		</div>
+	);
+}
+
 export default function ReposPanel() {
 	const { t } = useTranslation();
 	const repos = useSourceRepos();
-	const addRepo = useAddSourceRepo();
 	const delRepo = useDeleteSourceRepo();
 	const refreshRepo = useRefreshSourceRepo();
-	const [url, setUrl] = useState('');
 	const [pendingDelete, setPendingDelete] = useState<SourceRepo | null>(null);
+	const [expanded, setExpanded] = useState(false);
 
 	const [query, setQuery] = useState('');
 	const [langs, setLangs] = useState<string[]>(loadRepoLangs);
@@ -176,23 +213,10 @@ export default function ReposPanel() {
 		);
 	}
 
-	async function onAdd(e: React.FormEvent) {
-		e.preventDefault();
-		const trimmed = url.trim();
-		if (!trimmed) return;
-		try {
-			const repo = await addRepo.mutateAsync(trimmed);
-			pushToast(t('reposPanel.repoAdded', { name: repoTitle(repo) }), 'info');
-			setUrl('');
-		} catch {
-			// client already popped an error toast
-		}
-	}
-
 	async function onRefresh(repo: SourceRepo) {
 		try {
 			await refreshRepo.mutateAsync(repo.id);
-			pushToast(t('reposPanel.repoRefreshed', { name: repoTitle(repo) }), 'info');
+			pushToast(t('reposPanel.repoRefreshed', { name: repoTitle(repo.url, repo.name) }), 'info');
 		} catch {
 			// On failure the repo row's fetchError is already stored; after the list refetches it carries the stale mark
 		}
@@ -202,7 +226,7 @@ export default function ReposPanel() {
 		if (!pendingDelete) return;
 		try {
 			await delRepo.mutateAsync(pendingDelete.id);
-			pushToast(t('reposPanel.repoDeleted', { name: repoTitle(pendingDelete) }), 'info');
+			pushToast(t('reposPanel.repoDeleted', { name: repoTitle(pendingDelete.url, pendingDelete.name) }), 'info');
 			setPendingDelete(null);
 		} catch {
 			// client already popped an error toast
@@ -211,19 +235,6 @@ export default function ReposPanel() {
 
 	return (
 		<div className="repos">
-			<form className="repos__add" onSubmit={(e) => void onAdd(e)}>
-				<Input
-					type="url"
-					placeholder={t('reposPanel.repoUrlPlaceholder')}
-					value={url}
-					onChange={(e) => setUrl(e.currentTarget.value)}
-				/>
-				<Button variant="primary" type="submit" loading={addRepo.isPending}>
-					<Plus size={15} />
-					{t('reposPanel.addRepo')}
-				</Button>
-			</form>
-
 			{repos.isPending ? (
 				<div className="source-list">
 					{Array.from({ length: 2 }, (_, i) => (
@@ -238,36 +249,31 @@ export default function ReposPanel() {
 				/>
 			) : (
 				<>
-					<div className="source-list">
-						{(repos.data ?? []).map((r) => (
-							<div key={r.id} className="source-card">
-								<div className="source-card__main">
-									<div className="source-card__name">
-										<span className="source-card__name-text">{repoTitle(r)}</span>
-										{r.fetchError && <Chip color="danger">{t('reposPanel.syncFailed')}</Chip>}
-									</div>
-									<div className="source-card__meta">
-										{r.url} · {t('reposPanel.sourceCount', { count: r.sourceCount })}
-										{r.fetchedAt ? t('reposPanel.fetchedAt', { time: relativeTime(r.fetchedAt) }) : ''}
-									</div>
-								</div>
-								<IconButton
-									label={t('reposPanel.refresh', { name: repoTitle(r) })}
-									onClick={() => void onRefresh(r)}
-									disabled={refreshRepo.isPending}
-								>
-									<RefreshCw size={16} />
-								</IconButton>
-								<IconButton
-									label={t('reposPanel.delete', { name: repoTitle(r) })}
-									variant="danger"
-									onClick={() => setPendingDelete(r)}
-								>
-									<Trash size={17} />
-								</IconButton>
-							</div>
-						))}
-					</div>
+					<RepoList
+						repos={(repos.data ?? []).slice(0, expanded ? undefined : COLLAPSED_COUNT)}
+						onRefresh={onRefresh}
+						onDelete={setPendingDelete}
+						refreshPending={refreshRepo.isPending}
+					/>
+					{(repos.data ?? []).length > COLLAPSED_COUNT && (
+						<button
+							type="button"
+							className="repos__expand"
+							onClick={() => setExpanded((v) => !v)}
+						>
+							{expanded ? (
+								<>
+									<ChevronUp size={15} />
+									{t('reposPanel.collapse')}
+								</>
+							) : (
+								<>
+									<ChevronDown size={15} />
+									{t('reposPanel.expandAll', { count: (repos.data ?? []).length - COLLAPSED_COUNT })}
+								</>
+							)}
+						</button>
+					)}
 
 					<div className="repos__filters">
 						<Input
@@ -371,7 +377,7 @@ export default function ReposPanel() {
 
 			<Modal
 				open={pendingDelete !== null}
-				title={t('reposPanel.deleteRepoTitle', { name: pendingDelete ? repoTitle(pendingDelete) : '' })}
+				title={t('reposPanel.deleteRepoTitle', { name: pendingDelete ? repoTitle(pendingDelete.url, pendingDelete.name) : '' })}
 				onClose={() => setPendingDelete(null)}
 				footer={
 					<>

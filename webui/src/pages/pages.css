@@ -271,17 +271,6 @@
 	gap: 10px;
 }
 
-.repos__add {
-	display: flex;
-	gap: 8px;
-	margin-bottom: 14px;
-}
-
-.repos__add .input {
-	flex: 1;
-	min-width: 0;
-}
-
 .repos__filters {
 	display: flex;
 	align-items: center;
@@ -300,6 +289,27 @@
 	align-items: center;
 	gap: 6px;
 	white-space: nowrap;
+}
+
+.repos__expand {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	width: 100%;
+	margin: 8px 0 4px;
+	padding: 8px;
+	background: transparent;
+	border: none;
+	border-radius: var(--r-md);
+	color: var(--text-2);
+	font-size: 13px;
+	cursor: pointer;
+}
+
+.repos__expand:hover {
+	background: var(--bg-2);
+	color: var(--text-1);
 }
 
 .repos__lang-list {
