@@ -139,6 +139,29 @@ async fn register_local_instances_validate() {
 	assert_eq!(body["pinned"], true);
 }
 
+/// A CJK instance name slugs to itself (Unicode-aware), not to a "no usable characters" 400
+#[tokio::test]
+async fn register_local_instance_with_cjk_name() {
+	let t = instance_app().await;
+	let (status, body) = register_local(
+		&t.app.app,
+		json!({"type": "local", "name": "漫画", "paths": root_paths(&[&t.root_a])}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["key"], "local.漫画");
+	assert_eq!(body["name"], "漫画");
+
+	// the same CJK name collides and takes the counter form
+	let (status, second) = register_local(
+		&t.app.app,
+		json!({"type": "local", "name": "漫画", "paths": root_paths(&[&t.root_b])}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{second}");
+	assert_eq!(second["key"], "local.漫画-2");
+}
+
 #[tokio::test]
 async fn instances_scan_their_own_roots() {
 	let t = instance_app().await;

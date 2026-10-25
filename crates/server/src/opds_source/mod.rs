@@ -1192,6 +1192,10 @@ mod tests {
 		assert_eq!(slugify("  spaces  inside  "), Some("spaces-inside".to_string()));
 		assert_eq!(slugify("demo2"), Some("demo2".to_string()));
 		assert_eq!(slugify("!!!"), None);
+		// CJK names slug to themselves instead of failing with "no usable characters"
+		assert_eq!(slugify("漫画"), Some("漫画".to_string()));
+		assert_eq!(slugify("漫画 2024"), Some("漫画-2024".to_string()));
+		assert_eq!(slugify("コミック・H"), Some("コミック-h".to_string()));
 	}
 
 	const V2_FEED: &str = r#"{
