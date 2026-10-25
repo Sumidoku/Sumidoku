@@ -3,7 +3,7 @@ use crate::model::unix_now;
 use crate::state::AppState;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +24,11 @@ const TERMINAL: [&str; 3] = [STATUS_DONE, STATUS_FAILED, STATUS_CANCELLED];
 
 /// Finished rows kept for inspection; older ones are pruned as new tasks finish
 const FINISHED_KEEP: i64 = 100;
-/// Read depth when picking the next task: enough to skip past blocked groups without unbounded fetching
-const PICK_BATCH: i64 = 16;
+/// Page depth when picking the next task: blocked groups are skipped by paging, never by starving
+/// whatever is runnable behind them
+const PICK_PAGE: i64 = 64;
+
+const COLUMNS: &str = "id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TaskRow {
@@ -87,16 +90,19 @@ pub type Handler =
 
 struct Inner {
 	handlers: HashMap<String, Handler>,
-	/// Group keys currently executing: a local source id, or 0 for the global (whole-library) group.
+	/// Group key → owning task id: a local source id, or 0 for the global (whole-library) group.
 	/// A global task conflicts with every running task; a source task conflicts with its own source
-	/// and with the global group (kmrs GROUP_ID semantics, with 0 reserved — real source ids start at 1)
-	running_groups: HashSet<i64>,
+	/// and with the global group (kmrs GROUP_ID semantics, with 0 reserved — real source ids start
+	/// at 1). The owning id lets a finished execution remove only its own registration
+	running_groups: HashMap<i64, String>,
 	cancels: HashMap<String, Arc<AtomicBool>>,
 	active: usize,
 }
 
 /// Persistent task queue: rows in the `task` table are the queue, so pending work survives a restart.
-/// The in-memory side is only the dispatcher state (running groups, cancel flags).
+/// The in-memory side is only the dispatcher state (running groups, cancel flags). Every transition
+/// publishes the row its own write returned (RETURNING), so events never re-read a state a later
+/// transition has already replaced
 pub struct TaskManager {
 	pool: SqlitePool,
 	// Weak prevents a reference cycle: AppState holds this manager through a OnceCell
@@ -116,7 +122,7 @@ impl TaskManager {
 			wake: Notify::new(),
 			inner: Mutex::new(Inner {
 				handlers: HashMap::new(),
-				running_groups: HashSet::new(),
+				running_groups: HashMap::new(),
 				cancels: HashMap::new(),
 				active: 0,
 			}),
@@ -132,8 +138,10 @@ impl TaskManager {
 		self.inner.lock().await.handlers.insert(kind.to_string(), handler);
 	}
 
-	/// Upsert by id: an already queued/running task keeps its slot and only gains priority (a scheduled
-	/// scan arriving behind a manual one never piles up); a finished task is requeued fresh
+	/// Upsert by id. A live (pending/running) task keeps its identity — kind, source and payload stay
+	/// with the execution that owns them — and only gains priority; a terminal row is requeued fresh
+	/// with the new trigger's identity and priority (a manual run must not permanently promote later
+	/// scheduled runs)
 	pub async fn enqueue(
 		&self,
 		id: &str,
@@ -142,43 +150,40 @@ impl TaskManager {
 		payload: Value,
 		priority: i64,
 	) -> ApiResult<TaskRow> {
-		sqlx::query(
+		let row: TaskRow = sqlx::query_as(&format!(
 			"INSERT INTO task (id, kind, source_id, payload, priority, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, 'pending', ?)
 			 ON CONFLICT (id) DO UPDATE SET
-			 	priority = MAX(task.priority, excluded.priority),
-			 	kind = excluded.kind,
-			 	source_id = excluded.source_id,
-			 	status = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN 'pending' ELSE task.status END,
-			 	payload = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.payload ELSE task.payload END,
-			 	created_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.created_at ELSE task.created_at END,
-			 	started_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.started_at END,
-			 	finished_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.finished_at END,
-			 	error = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.error END,
-			 	result = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.result END",
-		)
+				priority = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.priority ELSE MAX(task.priority, excluded.priority) END,
+				kind = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.kind ELSE task.kind END,
+				source_id = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.source_id ELSE task.source_id END,
+				payload = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.payload ELSE task.payload END,
+				status = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN 'pending' ELSE task.status END,
+				created_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.created_at ELSE task.created_at END,
+				started_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.started_at END,
+				finished_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.finished_at END,
+				error = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.error END,
+				result = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.result END
+			 RETURNING {COLUMNS}"
+		))
 		.bind(id)
 		.bind(kind)
 		.bind(source_id)
 		.bind(payload.to_string())
 		.bind(priority)
 		.bind(unix_now())
-		.execute(&self.pool)
+		.fetch_one(&self.pool)
 		.await?;
-		let row = self.get(id).await?.expect("upserted task row");
 		let _ = self.signals.send(row.clone());
 		self.wake.notify_one();
 		Ok(row)
 	}
 
 	pub async fn get(&self, id: &str) -> ApiResult<Option<TaskRow>> {
-		let row = sqlx::query_as(
-			"SELECT id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result
-			 FROM task WHERE id = ?",
-		)
-		.bind(id)
-		.fetch_optional(&self.pool)
-		.await?;
+		let row = sqlx::query_as(&format!("SELECT {COLUMNS} FROM task WHERE id = ?"))
+			.bind(id)
+			.fetch_optional(&self.pool)
+			.await?;
 		Ok(row)
 	}
 
@@ -190,12 +195,11 @@ impl TaskManager {
 		kind: Option<&str>,
 		source_id: Option<i64>,
 	) -> ApiResult<Vec<TaskRow>> {
-		let mut rows: Vec<TaskRow> = sqlx::query_as(
-			"SELECT id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result
-			 FROM task
+		let mut rows: Vec<TaskRow> = sqlx::query_as(&format!(
+			"SELECT {COLUMNS} FROM task
 			 ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
-			 	priority DESC, created_at ASC, finished_at DESC",
-		)
+				priority DESC, created_at ASC, finished_at DESC"
+		))
 		.fetch_all(&self.pool)
 		.await?;
 		rows.retain(|row| {
@@ -206,30 +210,34 @@ impl TaskManager {
 		Ok(rows)
 	}
 
-	/// Pending tasks cancel in place; a running task gets its flag set and the worker records the
-	/// cancelled status when the handler returns
+	/// One atomic transition for pending and running alike: the row goes cancelled and the running
+	/// handler's flag is set so it can stop between items. The worker's terminal write is guarded on
+	/// status = 'running' and loses to this row state, so a mid-flight cancel can never be overwritten
+	/// by a late done. Losing the race to a terminal transition re-reads and answers 409
 	pub async fn cancel(&self, id: &str) -> ApiResult<TaskRow> {
 		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
-		match row.status.as_str() {
-			STATUS_PENDING => {
-				sqlx::query("UPDATE task SET status = 'cancelled', finished_at = ? WHERE id = ? AND status = 'pending'")
-					.bind(unix_now())
-					.bind(id)
-					.execute(&self.pool)
-					.await?;
-			}
-			STATUS_RUNNING => {
-				let flag = self.inner.lock().await.cancels.get(id).cloned();
-				let Some(flag) = flag else {
-					// The row says running but the dispatcher has no flag: it is between finishing and
-					// cleanup, so there is nothing left to cancel
-					return Err(ApiError::conflict("task_finishing", "task is already finishing"));
-				};
+		if row.is_terminal() {
+			return Err(ApiError::conflict("task_finished", "task already finished"));
+		}
+		let was_running = row.status == STATUS_RUNNING;
+		let updated: Option<TaskRow> = sqlx::query_as(&format!(
+			"UPDATE task SET status = 'cancelled', finished_at = ? WHERE id = ? AND status IN ('pending', 'running') RETURNING {COLUMNS}"
+		))
+		.bind(unix_now())
+		.bind(id)
+		.fetch_optional(&self.pool)
+		.await?;
+		let Some(row) = updated else {
+			return Err(ApiError::conflict("task_finished", "task already finished"));
+		};
+		if was_running {
+			// Between the finish write and the worker's cleanup the flag may already be gone: the row
+			// state still wins, so a missing flag only means the handler could not be nudged
+			if let Some(flag) = self.inner.lock().await.cancels.get(id) {
 				flag.store(true, Ordering::SeqCst);
 			}
-			_ => return Err(ApiError::conflict("task_finished", "task already finished")),
 		}
-		let row = self.get(id).await?.expect("cancelled task row");
+		self.trim_finished().await?;
 		let _ = self.signals.send(row.clone());
 		self.wake.notify_one();
 		Ok(row)
@@ -254,7 +262,7 @@ impl TaskManager {
 
 	async fn dispatch(self: &Arc<Self>) {
 		loop {
-			match self.pick_next().await {
+			match self.pick_next(0).await {
 				Ok(Some((task, handler, cancelled))) => {
 					let manager = self.clone();
 					tokio::spawn(async move {
@@ -270,24 +278,27 @@ impl TaskManager {
 		}
 	}
 
-	async fn pick_next(self: &Arc<Self>) -> ApiResult<Option<(TaskRow, Handler, Arc<AtomicBool>)>> {
-		let candidates: Vec<TaskRow> = sqlx::query_as(
-			"SELECT id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result
-			 FROM task WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT ?",
-		)
-		.bind(PICK_BATCH)
-		.fetch_all(&self.pool)
-		.await?;
+	async fn pick_next(self: &Arc<Self>, offset: i64) -> ApiResult<Option<(TaskRow, Handler, Arc<AtomicBool>)>> {
 		let mut inner = self.inner.lock().await;
 		if inner.active >= self.workers {
 			return Ok(None);
 		}
-		for mut task in candidates {
+		let candidates: Vec<TaskRow> = sqlx::query_as(&format!(
+			"SELECT {COLUMNS} FROM task WHERE status = 'pending' ORDER BY priority DESC, created_at ASC LIMIT ? OFFSET ?"
+		))
+		.bind(PICK_PAGE)
+		.bind(offset)
+		.fetch_all(&self.pool)
+		.await?;
+		if candidates.is_empty() {
+			return Ok(None);
+		}
+	for task in candidates {
 			let group = task.source_id.unwrap_or(0);
 			let blocked = if group == 0 {
 				!inner.running_groups.is_empty()
 			} else {
-				inner.running_groups.contains(&group) || inner.running_groups.contains(&0)
+				inner.running_groups.contains_key(&group) || inner.running_groups.contains_key(&0)
 			};
 			if blocked {
 				continue;
@@ -295,36 +306,41 @@ impl TaskManager {
 			let Some(handler) = inner.handlers.get(&task.kind).cloned() else {
 				// A kind this build does not know (a downgrade over a newer database) must not sit
 				// pending forever: fail it visibly instead
-				sqlx::query("UPDATE task SET status = 'failed', finished_at = ?, error = ? WHERE id = ? AND status = 'pending'")
-					.bind(unix_now())
-					.bind(format!("no handler registered for task kind {}", task.kind))
-					.bind(&task.id)
-					.execute(&self.pool)
-					.await?;
-				let row = self.get(&task.id).await?.expect("failed task row");
-				let _ = self.signals.send(row);
+				let failed: Option<TaskRow> = sqlx::query_as(&format!(
+					"UPDATE task SET status = 'failed', finished_at = ?, error = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
+				))
+				.bind(unix_now())
+				.bind(format!("no handler registered for task kind {}", task.kind))
+				.bind(&task.id)
+				.fetch_optional(&self.pool)
+				.await?;
+				if let Some(row) = failed {
+					let _ = self.signals.send(row);
+				}
+				self.trim_finished().await?;
 				continue;
 			};
 			// A cancel can land between the SELECT and this UPDATE; the status guard loses that race safely
-			let started = sqlx::query("UPDATE task SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending'")
-				.bind(unix_now())
-				.bind(&task.id)
-				.execute(&self.pool)
-				.await?
-				.rows_affected();
-			if started == 0 {
+			let started: Option<TaskRow> = sqlx::query_as(&format!(
+				"UPDATE task SET status = 'running', started_at = ? WHERE id = ? AND status = 'pending' RETURNING {COLUMNS}"
+			))
+			.bind(unix_now())
+			.bind(&task.id)
+			.fetch_optional(&self.pool)
+			.await?;
+			let Some(task) = started else {
 				continue;
-			}
-			task.status = STATUS_RUNNING.to_string();
-			task.started_at = Some(unix_now());
+			};
 			inner.active += 1;
-			inner.running_groups.insert(group);
+			inner.running_groups.insert(group, task.id.clone());
 			let cancelled = Arc::new(AtomicBool::new(false));
 			inner.cancels.insert(task.id.clone(), cancelled.clone());
 			let _ = self.signals.send(task.clone());
 			return Ok(Some((task, handler, cancelled)));
 		}
-		Ok(None)
+		// this page was all blocked or raced away: keep paging instead of starving runnable work
+		drop(inner);
+		Box::pin(self.pick_next(offset + PICK_PAGE)).await
 	}
 
 	async fn execute(self: Arc<Self>, task: TaskRow, handler: Handler, cancelled: Arc<AtomicBool>) {
@@ -352,28 +368,41 @@ impl TaskManager {
 				Err(e) => (STATUS_FAILED, None, Some(e.message().to_string())),
 			}
 		};
-		let finished = sqlx::query("UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ?")
-			.bind(status)
-			.bind(unix_now())
-			.bind(result)
-			.bind(error)
-			.bind(&task.id)
-			.execute(&self.pool)
-			.await;
-		if let Err(e) = finished {
+		// The terminal write belongs to this execution only: a cancel that landed mid-flight already
+		// wrote and published 'cancelled', and losing this guard means publishing nothing more
+		let updated: Option<TaskRow> = sqlx::query_as(&format!(
+			"UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ? AND status = 'running' RETURNING {COLUMNS}"
+		))
+		.bind(status)
+		.bind(unix_now())
+		.bind(result)
+		.bind(error)
+		.bind(&task.id)
+		.fetch_optional(&self.pool)
+		.await
+		.unwrap_or_else(|e| {
 			tracing::warn!(task = %task.id, "task finish write failed: {e}");
-		}
-		if let Ok(Some(row)) = self.get(&task.id).await {
+			None
+		});
+		if let Some(row) = updated {
 			let _ = self.signals.send(row);
+			if let Err(e) = self.trim_finished().await {
+				tracing::warn!("task history trim failed: {e}");
+			}
 		}
 		{
 			let mut inner = self.inner.lock().await;
 			inner.active -= 1;
-			inner.running_groups.remove(&group);
-			inner.cancels.remove(&task.id);
-		}
-		if let Err(e) = self.trim_finished().await {
-			tracing::warn!("task history trim failed: {e}");
+			// A terminal requeue can already have dispatched the next execution of this group or id:
+			// remove only the registrations this execution owns
+			if inner.running_groups.get(&group) == Some(&task.id) {
+				inner.running_groups.remove(&group);
+			}
+			if let Some(flag) = inner.cancels.get(&task.id)
+				&& Arc::ptr_eq(flag, &cancelled)
+			{
+				inner.cancels.remove(&task.id);
+			}
 		}
 		self.wake.notify_one();
 	}
@@ -415,6 +444,17 @@ mod tests {
 		(state, manager, tmp)
 	}
 
+	/// task.source_id references source rows: the seeded default local instance is id 1; further ids need rows
+	async fn insert_sources(manager: &TaskManager, count: i64) {
+		for index in 2..=count {
+			sqlx::query("INSERT INTO source (key, name, kind, wasm_path) VALUES (?, 'T', 'local', '')")
+				.bind(format!("local.t{index}"))
+				.execute(&manager.pool)
+				.await
+				.expect("insert source row");
+		}
+	}
+
 	async fn wait_status(manager: &TaskManager, id: &str, status: &str) -> TaskRow {
 		let started = std::time::Instant::now();
 		loop {
@@ -454,30 +494,73 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn finished_task_requeues_fresh() {
+	async fn live_enqueue_keeps_identity_terminal_requeue_resets_it() {
 		let (_state, manager, _tmp) = test_state(1).await;
 		manager.register("noop", ok_handler()).await;
-		tokio::spawn(manager.clone().run());
+		// A live row's identity belongs to the execution that owns it: only the priority moves
 		manager
-			.enqueue("t:1", "noop", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+			.enqueue("t:1", "noop", None, serde_json::json!({"a": 1}), PRIORITY_SCHEDULED)
 			.await
 			.expect("enqueue");
-		let done = wait_status(&manager, "t:1", STATUS_DONE).await;
-		assert_eq!(done.result.as_deref(), Some(r#"{"saw":"t:1"}"#));
 		let row = manager
-			.enqueue("t:1", "noop", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.enqueue("t:1", "other", Some(1), serde_json::json!({"b": 2}), PRIORITY_MANUAL)
 			.await
-			.expect("requeue");
+			.expect("live re-enqueue");
+		assert_eq!((row.kind.as_str(), row.source_id, row.payload.as_str()), ("noop", None, r#"{"a":1}"#));
+		assert_eq!(row.priority, PRIORITY_MANUAL);
+
+		tokio::spawn(manager.clone().run());
+		wait_status(&manager, "t:1", STATUS_DONE).await;
+		// A terminal requeue takes the new trigger's identity AND priority (no permanent promotion)
+		let row = manager
+			.enqueue("t:1", "noop", Some(1), serde_json::json!({"b": 2}), PRIORITY_DERIVED)
+			.await
+			.expect("terminal requeue");
+		assert_eq!(row.priority, PRIORITY_DERIVED);
+		assert_eq!(row.source_id, Some(1));
 		assert_eq!(row.status, STATUS_PENDING);
 		assert_eq!(row.result, None);
 		assert_eq!(row.finished_at, None);
-		let done = wait_status(&manager, "t:1", STATUS_DONE).await;
-		assert!(done.started_at.is_some());
+		wait_status(&manager, "t:1", STATUS_DONE).await;
+	}
+
+	#[tokio::test]
+	async fn enqueue_while_running_queues_no_follow_up() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let runs = Arc::new(AtomicI64::new(0));
+		let handler_runs = runs.clone();
+		let handler: Handler = Arc::new(move |_run| {
+			let runs = handler_runs.clone();
+			Box::pin(async move {
+				tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+				runs.fetch_add(1, Ordering::SeqCst);
+				Ok(serde_json::json!({}))
+			})
+		});
+		manager.register("slow", handler).await;
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("t:1", "slow", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+			.await
+			.expect("enqueue");
+		wait_status(&manager, "t:1", STATUS_RUNNING).await;
+		// The contract (and kmrs's queue): one outstanding execution per id — a duplicate arriving
+		// mid-run bumps priority and queues no follow-up run
+		manager
+			.enqueue("t:1", "slow", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+			.await
+			.expect("re-enqueue while running");
+		wait_status(&manager, "t:1", STATUS_DONE).await;
+		tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+		assert_eq!(runs.load(Ordering::SeqCst), 1, "no follow-up run after a mid-run duplicate");
+		let row = manager.get("t:1").await.expect("row").expect("exists");
+		assert_eq!(row.status, STATUS_DONE);
 	}
 
 	#[tokio::test]
 	async fn same_source_serializes_and_sources_run_in_parallel() {
 		let (_state, manager, _tmp) = test_state(2).await;
+		insert_sources(&manager, 2).await;
 		// Per-group in-flight counters: group peaks prove serialization, the global peak proves parallelism
 		let peak_one = Arc::new(AtomicI64::new(0));
 		let peak_two = Arc::new(AtomicI64::new(0));
@@ -523,11 +606,48 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn a_blocked_group_never_starves_runnable_work() {
+		let (_state, manager, _tmp) = test_state(2).await;
+		insert_sources(&manager, 2).await;
+		let handler: Handler = Arc::new(|run| {
+			Box::pin(async move {
+				if run.task.id == "t:blocker" {
+					tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+				}
+				Ok(serde_json::json!({}))
+			})
+		});
+		manager.register("grouped", handler).await;
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("t:blocker", "grouped", Some(1), serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("blocker");
+		wait_status(&manager, "t:blocker", STATUS_RUNNING).await;
+		// One full page of blocked same-source pendings in front of the runnable one
+		for index in 0..64 {
+			manager
+				.enqueue(&format!("t:same-{index}"), "grouped", Some(1), serde_json::json!({}), PRIORITY_SCHEDULED)
+				.await
+				.expect("enqueue same-source");
+		}
+		manager
+			.enqueue("t:runnable", "grouped", Some(2), serde_json::json!({}), PRIORITY_SCHEDULED)
+			.await
+			.expect("enqueue runnable");
+		// The runnable task finishes while the blocker is still holding its group
+		wait_status(&manager, "t:runnable", STATUS_DONE).await;
+		let blocker = manager.get("t:blocker").await.expect("row").expect("exists");
+		assert_eq!(blocker.status, STATUS_RUNNING, "the blocker outlives the runnable task");
+	}
+
+	#[tokio::test]
 	async fn cancel_pending_never_runs() {
 		let (_state, manager, _tmp) = test_state(1).await;
 		let ran = Arc::new(AtomicBool::new(false));
+		let ran_in_handler = ran.clone();
 		let handler: Handler = Arc::new(move |_run| {
-			let ran = ran.clone();
+			let ran = ran_in_handler.clone();
 			Box::pin(async move {
 				ran.store(true, Ordering::SeqCst);
 				Ok(serde_json::json!({}))
@@ -544,6 +664,7 @@ mod tests {
 		assert!(row.finished_at.is_some());
 		tokio::spawn(manager.clone().run());
 		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+		assert!(!ran.load(Ordering::SeqCst));
 		let row = manager.get("t:1").await.expect("row").expect("exists");
 		assert_eq!(row.status, STATUS_CANCELLED);
 	}
@@ -572,9 +693,11 @@ mod tests {
 			.await
 			.expect("enqueue");
 		wait_status(&manager, "t:1", STATUS_RUNNING).await;
-		manager.cancel("t:1").await.expect("cancel");
-		let row = wait_status(&manager, "t:1", STATUS_CANCELLED).await;
-		assert!(row.finished_at.is_some());
+		let row = manager.cancel("t:1").await.expect("cancel");
+		assert_eq!(row.status, STATUS_CANCELLED, "the row is cancelled the moment cancel lands");
+		tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+		let row = manager.get("t:1").await.expect("row").expect("exists");
+		assert_eq!(row.status, STATUS_CANCELLED, "the worker's finish must not overwrite the cancel");
 		assert!(items_done.load(Ordering::SeqCst) > 0);
 	}
 
@@ -628,6 +751,7 @@ mod tests {
 	#[tokio::test]
 	async fn history_is_trimmed_to_the_latest_finished() {
 		let (_state, manager, _tmp) = test_state(2).await;
+		insert_sources(&manager, 1).await;
 		manager.register("noop", ok_handler()).await;
 		tokio::spawn(manager.clone().run());
 		for index in 0..(FINISHED_KEEP + 10) {
@@ -649,6 +773,24 @@ mod tests {
 			assert!(started.elapsed() < std::time::Duration::from_secs(5), "history not trimmed: {finished}");
 			tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 		}
+	}
+
+	#[tokio::test]
+	async fn pending_cancellation_is_also_trimmed() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		// No run loop: every task is cancelled out of the pending state
+		for index in 0..(FINISHED_KEEP + 10) {
+			manager
+				.enqueue(&format!("t:{index}"), "noop", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+				.await
+				.expect("enqueue");
+			manager.cancel(&format!("t:{index}")).await.expect("cancel");
+		}
+		let finished: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE status = 'cancelled'")
+			.fetch_one(&manager.pool)
+			.await
+			.expect("cancelled count");
+		assert_eq!(finished, FINISHED_KEEP, "pending cancels trim to the same bound");
 	}
 
 	#[tokio::test]
@@ -678,6 +820,7 @@ mod tests {
 	#[tokio::test]
 	async fn list_filters_by_status_kind_and_source() {
 		let (_state, manager, _tmp) = test_state(1).await;
+		insert_sources(&manager, 2).await;
 		manager.register("noop", ok_handler()).await;
 		tokio::spawn(manager.clone().run());
 		manager

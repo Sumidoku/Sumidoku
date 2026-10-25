@@ -4265,7 +4265,8 @@
               "source_error",
               "timeout",
               "internal",
-              "busy"
+              "busy",
+              "task_finished"
             ]
           },
           "message": {
