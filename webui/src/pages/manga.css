@@ -616,34 +616,6 @@ button.manga-menu__row:hover:not(:disabled) {
 	padding-bottom: 74px;
 }
 
-/* ============ Batch action bar ============ */
-
-.manga-batch {
-	position: fixed;
-	left: 50%;
-	transform: translateX(-50%);
-	bottom: 18px;
-	z-index: 80;
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	flex-wrap: wrap;
-	justify-content: center;
-	max-width: calc(100vw - 24px);
-	padding: 10px 14px;
-	border-radius: 999px;
-	background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
-	backdrop-filter: blur(10px);
-	border: 1px solid var(--border);
-	box-shadow: var(--shadow);
-}
-
-.manga-batch__count {
-	font-size: 13px;
-	color: var(--text-dim);
-	font-variant-numeric: tabular-nums;
-}
-
 .manga-download-rules {
 	display: flex;
 	flex-direction: column;
@@ -805,10 +777,5 @@ button.manga-menu__row:hover:not(:disabled) {
 	/* On mobile the batch bar hugs the tab bar and may wrap */
 	.manga-chaps__list--selecting {
 		padding-bottom: 128px;
-	}
-
-	.manga-batch {
-		bottom: calc(66px + env(safe-area-inset-bottom));
-		border-radius: var(--r-lg);
 	}
 }

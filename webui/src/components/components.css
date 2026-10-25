@@ -428,6 +428,32 @@
 	pointer-events: none;
 }
 
+.cover-card__check {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	border-radius: 50%;
+	border: 2px solid #fff;
+	background: rgba(0, 0, 0, 0.35);
+	color: #fff;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.cover-card--selected .cover-card__check {
+	background: var(--accent);
+	border-color: var(--accent);
+}
+
+.cover-card--selected .cover {
+	outline: 3px solid var(--accent);
+	outline-offset: -3px;
+}
+
 /* ============ Modal ============ */
 
 .modal__mask {
@@ -967,4 +993,40 @@ button.menu-row:hover:not(:disabled) {
 
 .menu-row--danger {
 	color: var(--danger);
+}
+
+/* ============ BatchActionBar ============ */
+
+.batch-bar {
+	position: fixed;
+	left: 50%;
+	transform: translateX(-50%);
+	bottom: 18px;
+	z-index: 80;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-wrap: wrap;
+	justify-content: center;
+	max-width: calc(100vw - 24px);
+	padding: 10px 14px;
+	border-radius: 999px;
+	background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+	backdrop-filter: blur(10px);
+	border: 1px solid var(--border);
+	box-shadow: var(--shadow);
+}
+
+.batch-bar__count {
+	font-size: 13px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 767px) {
+	/* The bar hugs the bottom tab bar on mobile and may wrap */
+	.batch-bar {
+		bottom: calc(66px + env(safe-area-inset-bottom));
+		border-radius: var(--r-lg);
+	}
 }

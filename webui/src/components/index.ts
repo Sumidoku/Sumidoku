@@ -1,5 +1,7 @@
 // Single export point for components; pages import only from here, and new components are added here too
 export { Badge } from './Badge';
+export { BatchActionBar } from './BatchActionBar';
+export type { BatchActionBarProps } from './BatchActionBar';
 export { Button } from './Button';
 export type { ButtonProps } from './Button';
 export { Chip } from './Chip';

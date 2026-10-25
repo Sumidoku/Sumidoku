@@ -38,6 +38,7 @@ import {
 } from '../lib/chapterPrefs';
 import type { ChapterPrefs, SortKey, Tri } from '../lib/chapterPrefs';
 import {
+	BatchActionBar,
 	Button,
 	Chip,
 	Cover,
@@ -942,8 +943,7 @@ export default function MangaDetailPage() {
 			</div>
 
 			{selecting && (
-				<div className="manga-batch">
-					<span className="manga-batch__count">{t('mangaDetail.selectedShort', { count: selected.size })}</span>
+				<BatchActionBar count={t('mangaDetail.selectedShort', { count: selected.size })}>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
@@ -982,7 +982,7 @@ export default function MangaDetailPage() {
 							{t('mangaDetail.download')}
 						</Button>
 					)}
-				</div>
+				</BatchActionBar>
 			)}
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}

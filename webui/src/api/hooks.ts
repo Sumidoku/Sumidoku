@@ -440,15 +440,29 @@ export function useUpdateChapter() {
 
 export function useBatchChapters() {
 	return useMutation({
-		mutationFn: (body: { chapterIds: number[] } & ProgressPatch) =>
+		mutationFn: (body: { chapterIds?: number[]; mangaIds?: number[] } & ProgressPatch) =>
 			api<{ updated: number }>('/chapter/batch', { method: 'POST', body })
 	});
 }
 
+export type EnqueueDownloadsInput = number[] | { chapterIds?: number[]; mangaIds?: number[] };
+
 export function useEnqueueDownloads() {
 	return useMutation({
-		mutationFn: (chapterIds: number[]) =>
-			api<QueuedResponse>('/downloads', { method: 'POST', body: { chapterIds } })
+		mutationFn: (input: EnqueueDownloadsInput) =>
+			// the bare-array form predates manga-level enqueue and maps to chapterIds
+			api<QueuedResponse>('/downloads', {
+				method: 'POST',
+				body: Array.isArray(input) ? { chapterIds: input } : input
+			})
+	});
+}
+
+/** Uses the same row/artifact removal as single-chapter delete, including cancellation of active rows */
+export function useDeleteDownloads() {
+	return useMutation({
+		mutationFn: (mangaIds: number[]) =>
+			api<{ deleted: number }>('/downloads/delete', { method: 'POST', body: { mangaIds } })
 	});
 }
 

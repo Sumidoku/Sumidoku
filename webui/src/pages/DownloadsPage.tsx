@@ -14,6 +14,7 @@ import type { DownloadChapterEvent, EventSnapshot } from '../api/protocol';
 import { chapterLabel } from '../lib/format';
 import { applyDownloadEvent, applyRetrySuccess, formatDownloadProgress, mergeDownloadResponse } from '../lib/downloadEvents';
 import {
+	BatchActionBar,
 	Button,
 	Chip,
 	EmptyState,
@@ -406,10 +407,7 @@ export default function DownloadsPage() {
 				</div>
 			)}
 			{selecting && (
-				<div className="downloads-batch">
-					<span className="downloads-batch__count">
-						{t('downloads.selectedShort', { count: selectedItems.length })}
-					</span>
+				<BatchActionBar count={t('downloads.selectedShort', { count: selectedItems.length })}>
 					<Button
 						size="sm"
 						variant="primary"
@@ -428,7 +426,7 @@ export default function DownloadsPage() {
 						<Trash2 size={14} />
 						{t('downloads.delete')}
 					</Button>
-				</div>
+				</BatchActionBar>
 			)}
 		</div>
 	);

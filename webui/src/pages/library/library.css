@@ -203,3 +203,49 @@
 		animation: none;
 	}
 }
+
+.library-sel-count {
+	font-size: 13.5px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The floating batch bar covers the grid's last row, so in select mode the grid is padded by the bar height + 16px */
+.cover-grid--selecting {
+	padding-bottom: 74px;
+}
+
+.library-cats {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.library-cats__item {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 8px 6px;
+	border-radius: var(--r-sm);
+	cursor: pointer;
+}
+
+.library-cats__item:hover {
+	background: var(--bg-hover);
+}
+
+.library-dialog__actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	margin-top: 14px;
+	padding-top: 12px;
+	border-top: 1px solid var(--border);
+}
+
+@media (max-width: 767px) {
+	.cover-grid--selecting {
+		padding-bottom: 128px;
+	}
+}
