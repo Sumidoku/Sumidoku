@@ -1030,12 +1030,15 @@ no alias is derived from migration text.
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
-  file is missing or `last_fetched_at` is newer than its mtime.
+  file is missing or `last_fetched_at` is newer than its mtime. Local covers
+  are downsampled to fit a 600px longest edge; their cache hits also require
+  an `<id>.variant` sidecar matching the current transform, so unversioned
+  original-size artifacts cannot bypass the cap.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
   `PUT /api/v1/manga/{id}/cover` `{url}` persists a pick to
-  `manga.cover_url` and deletes both cache files: the freshness key is
+  `manga.cover_url` and deletes the cache files: the freshness key is
   `last_fetched_at`, which a user pick must not move, so without the
   delete the stale bytes keep serving and the pick never takes effect.
   Because the cover response is `max-age=86400` cacheable, the web UI

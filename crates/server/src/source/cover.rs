@@ -18,8 +18,10 @@ const DEFAULT_MIME: &str = "image/jpeg";
 const COVER_MAX_AGE: u64 = 86400;
 
 /// Local-source covers are user-owned files at original resolution (a cover.* sidecar or a chapter's first
-/// page), far larger than any display slot; cap the served width — the cached artifact is the downscaled JPEG
-pub const LOCAL_COVER_MAX_WIDTH: u32 = 600;
+/// page), far larger than any display slot; cap the longest edge — the cached artifact is the downscaled JPEG
+pub const LOCAL_COVER_MAX_EDGE: u32 = 600;
+/// Freshness alone cannot prove cached bytes came through the local downsample pipeline.
+const LOCAL_COVER_CACHE_VARIANT: &str = "local-longest-edge-600-v1";
 
 #[derive(Debug, Deserialize)]
 pub struct ImageQuery {
@@ -50,22 +52,24 @@ pub async fn get_cover(
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Response> {
 	let manga = manga_row(&state.pool, id).await?;
+	let is_local = crate::source::source_is_local(&state.pool, manga.source_id).await?;
+	let cache_variant = is_local.then_some(LOCAL_COVER_CACHE_VARIANT);
 	let covers_dir = state.config.covers_dir.clone();
 	let cache_path = covers_dir.join(id.to_string());
 	if !wants_refresh(&query)
-		&& let Some((bytes, mime)) = read_fresh_cache(&cache_path, manga.last_fetched_at).await
+		&& let Some((bytes, mime)) = read_fresh_cache(&cache_path, manga.last_fetched_at, cache_variant).await
 	{
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
-	let (bytes, mime) = if crate::source::source_is_local(&state.pool, manga.source_id).await? {
+	let (bytes, mime) = if is_local {
 		let (bytes, mime) =
 			crate::local::resolve_cover(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key)
 				.await?
 				.ok_or_else(|| ApiError::not_found("cover not available"))?;
-		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); a narrow
-		// or undecodable image passes through at its original bytes, same as the page variants
+		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); an image
+		// within the cap or an undecodable image passes through at its original bytes, same as the page variants
 		let (resized, original) = tokio::task::spawn_blocking(move || {
-			let resized = crate::source::downsample::downsample_jpeg(&bytes, LOCAL_COVER_MAX_WIDTH);
+			let resized = crate::source::downsample::downsample_jpeg(&bytes, LOCAL_COVER_MAX_EDGE);
 			(resized, bytes)
 		})
 		.await
@@ -81,7 +85,7 @@ pub async fn get_cover(
 		let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
 		(bytes, mime.unwrap_or_else(|| DEFAULT_MIME.into()))
 	};
-	match write_cache(&covers_dir, id, &bytes, &mime).await {
+	match write_cache(&covers_dir, id, &bytes, &mime, cache_variant).await {
 		Ok(()) => enforce_cache_limit(&covers_dir, state.config.cover_cache_max),
 		Err(e) => tracing::warn!(manga_id = id, "cover cache write failed: {e}"),
 	}
@@ -139,10 +143,11 @@ pub async fn select_cover(
 	Ok(Json(crate::api::manga_json(&state, user.id, &row).await?))
 }
 
-/// Deletes the body and its sidecar together; missing files are not an error when nothing was cached yet
+/// Deletes the body and its sidecars together; missing files are not an error when nothing was cached yet
 async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let cache_path = covers_dir.join(id.to_string());
 	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
+	let _ = tokio::fs::remove_file(variant_path(&cache_path)).await;
 	let _ = tokio::fs::remove_file(cache_path).await;
 }
 
@@ -150,8 +155,16 @@ fn sidecar_path(cache_path: &FsPath) -> PathBuf {
 	cache_path.with_file_name(format!("{}.content-type", cache_path.file_name().unwrap_or_default().to_string_lossy()))
 }
 
+fn variant_path(cache_path: &FsPath) -> PathBuf {
+	cache_path.with_file_name(format!("{}.variant", cache_path.file_name().unwrap_or_default().to_string_lossy()))
+}
+
 /// Cache-hit condition: the file exists and the manga details were not re-fetched after the cache write (last_fetched_at <= mtime)
-async fn read_fresh_cache(cache_path: &FsPath, last_fetched_at: Option<i64>) -> Option<(Vec<u8>, String)> {
+async fn read_fresh_cache(
+	cache_path: &FsPath,
+	last_fetched_at: Option<i64>,
+	required_variant: Option<&str>,
+) -> Option<(Vec<u8>, String)> {
 	let metadata = tokio::fs::metadata(cache_path).await.ok()?;
 	let mtime = metadata
 		.modified()
@@ -163,6 +176,12 @@ async fn read_fresh_cache(cache_path: &FsPath, last_fetched_at: Option<i64>) -> 
 		&& fetched > mtime
 	{
 		return None;
+	}
+	if let Some(expected) = required_variant {
+		let actual = tokio::fs::read_to_string(variant_path(cache_path)).await.ok()?;
+		if actual.trim() != expected {
+			return None;
+		}
 	}
 	let bytes = tokio::fs::read(cache_path).await.ok()?;
 	let mime = tokio::fs::read_to_string(sidecar_path(cache_path))
@@ -180,6 +199,7 @@ async fn write_cache(
 	id: i64,
 	bytes: &[u8],
 	mime: &str,
+	variant: Option<&str>,
 ) -> std::io::Result<()> {
 	let tmp = covers_dir.join(format!(".{id}.tmp"));
 	tokio::fs::write(&tmp, bytes).await?;
@@ -187,6 +207,11 @@ async fn write_cache(
 	let tmp = covers_dir.join(format!(".{id}.content-type.tmp"));
 	tokio::fs::write(&tmp, mime).await?;
 	tokio::fs::rename(&tmp, covers_dir.join(format!("{id}.content-type"))).await?;
+	if let Some(variant) = variant {
+		let tmp = covers_dir.join(format!(".{id}.variant.tmp"));
+		tokio::fs::write(&tmp, variant).await?;
+		tokio::fs::rename(&tmp, covers_dir.join(format!("{id}.variant"))).await?;
+	}
 	Ok(())
 }
 
@@ -217,6 +242,7 @@ fn enforce_cache_limit(covers_dir: &FsPath, max: usize) {
 	let excess = entries.len() - max;
 	for (path, _) in entries.into_iter().take(excess) {
 		let _ = std::fs::remove_file(sidecar_path(&path));
+		let _ = std::fs::remove_file(variant_path(&path));
 		let _ = std::fs::remove_file(path);
 	}
 }
