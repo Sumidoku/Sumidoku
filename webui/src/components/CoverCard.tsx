@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Trash2 } from 'lucide-react';
+import { Check, Trash2 } from 'lucide-react';
 import { Cover } from './Cover';
 import { Spinner } from './Spinner';
 
@@ -18,21 +18,28 @@ export interface CoverCardProps {
 	onClick?: () => void;
 	/** Dimmed while an async navigation triggered by the click is in flight, preventing double clicks */
 	busy?: boolean;
+	/** Selection mode: the card toggles instead of navigating, with a check overlay in the badge's slot */
+	selecting?: boolean;
+	selected?: boolean;
+	onToggle?: () => void;
 }
 
-export function CoverCard({ src, title, subtitle, unreadCount, trashed, to, onClick, busy }: CoverCardProps) {
+export function CoverCard({ src, title, subtitle, unreadCount, trashed, to, onClick, busy, selecting, selected, onToggle }: CoverCardProps) {
 	const { t } = useTranslation();
 	const inner = (
 		<>
 			<div className="cover-card__cover">
 				<Cover src={src} title={title} />
-				{unreadCount != null && unreadCount > 0 && (
+				{!selecting && unreadCount != null && unreadCount > 0 && (
 					<span className="cover-card__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
 				)}
 				{trashed && (
 					<span className="cover-card__trashed" title={t('common.trashed')}>
 						<Trash2 size={12} />
 					</span>
+				)}
+				{selecting && (
+					<span className="cover-card__check">{selected && <Check size={13} strokeWidth={3} />}</span>
 				)}
 				{busy && (
 					<div className="cover-card__busy">
@@ -44,7 +51,21 @@ export function CoverCard({ src, title, subtitle, unreadCount, trashed, to, onCl
 			{subtitle != null && <div className="cover-card__subtitle">{subtitle}</div>}
 		</>
 	);
-	const cls = busy ? 'cover-card cover-card--busy' : 'cover-card';
+	const cls = [
+		'cover-card',
+		selecting ? 'cover-card--selecting' : '',
+		selecting && selected ? 'cover-card--selected' : '',
+		busy ? 'cover-card--busy' : ''
+	]
+		.filter(Boolean)
+		.join(' ');
+	if (selecting) {
+		return (
+			<button type="button" className={cls} aria-pressed={selected ?? false} onClick={onToggle} disabled={busy}>
+				{inner}
+			</button>
+		);
+	}
 	if (to) {
 		return (
 			<Link to={to} className={cls}>

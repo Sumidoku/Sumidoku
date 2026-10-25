@@ -4,7 +4,7 @@ use axum::Router;
 use axum::http::StatusCode;
 use common::{
 	TestApp, base_config, connect_db, connect_sse, fixture_dir, point_page_at_local, read_sse_data, read_sse_kind,
-	register_example_manga, request, request_full, serve_app, serve_bytes,
+	register_example_manga, request, request_full, serve_app, serve_bytes, source_by_key,
 };
 use common::PNG;
 use serde_json::{Value, json};
@@ -883,4 +883,217 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	assert_eq!(body["queued"], json!([chapter_id]));
 	wait_download_status(&t.app, chapter_id, "finished").await;
 	assert!(artifact.is_file());
+}
+
+/// Registers the fixture search entry at `index` (register_example_manga always takes the first)
+async fn register_manga_entry(app: &Router, index: usize) -> i64 {
+	let (status, _) = request(app, "POST", "/api/v1/sources/scan", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(app, "GET", "/api/v1/sources", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
+	let (status, body) = request(
+		app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let manga_key = body["entries"][index]["key"].as_str().expect("manga key").to_string();
+	let (status, body) = request(
+		app,
+		"POST",
+		"/api/v1/manga",
+		Some(json!({"sourceId": source_id, "mangaKey": manga_key})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	body["id"].as_i64().expect("manga id")
+}
+
+/// A mangaIds enqueue expands to the manga's untrashed chapters and skips local sources;
+/// chapterIds merge in and active rows dedupe as usual.
+#[tokio::test]
+async fn enqueue_by_manga_skips_local_trashed_and_duplicates() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	let ids: Vec<i64> = body
+		.as_array()
+		.expect("chapters")
+		.iter()
+		.map(|c| c["id"].as_i64().expect("chapter id"))
+		.collect();
+	assert_eq!(ids.len(), 8);
+	let pool = connect_db(&t.db_path).await;
+	// ids[0] sits in the trash; a second manga lives on the built-in local source
+	sqlx::query("UPDATE chapter SET trashed_at = 1 WHERE id = ?")
+		.bind(ids[0])
+		.execute(&pool)
+		.await
+		.expect("trash chapter");
+	let local_source: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+		.fetch_one(&pool)
+		.await
+		.expect("local source");
+	let local_manga: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key) VALUES (?, 'local-manga') RETURNING id")
+		.bind(local_source)
+		.fetch_one(&pool)
+		.await
+		.expect("local manga");
+	sqlx::query("INSERT INTO chapter (manga_id, key) VALUES (?, 'local-chapter')")
+		.bind(local_manga)
+		.execute(&pool)
+		.await
+		.expect("local chapter");
+
+	// stop the worker so the queued rows stay put for the duplicate check
+	let (status, _) = request(&app, "POST", "/api/v1/downloads/stop", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/downloads",
+		Some(json!({"chapterIds": [ids[1]], "mangaIds": [manga_id, local_manga, 999]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let mut queued: Vec<i64> = body["queued"]
+		.as_array()
+		.expect("queued")
+		.iter()
+		.map(|v| v.as_i64().expect("chapter id"))
+		.collect();
+	queued.sort_unstable();
+	let mut want: Vec<i64> = ids[1..].to_vec();
+	want.sort_unstable();
+	assert_eq!(queued, want);
+
+	// a repeat over the same manga dedupes against the queued rows
+	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"mangaIds": [manga_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([]));
+}
+
+/// Batch delete removes every download of the given manga through the shared removal routine:
+/// rows go, download flags reset, artifacts leave the disk; other manga stay untouched.
+#[tokio::test]
+async fn delete_by_manga_removes_downloads_and_resets_flags() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let other_id = register_manga_entry(&app, 1).await;
+	assert_ne!(manga_id, other_id);
+	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let first = body[0]["id"].as_i64().expect("first chapter id");
+	let second = body[1]["id"].as_i64().expect("second chapter id");
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	for chapter_id in [first, second] {
+		let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+		assert_eq!(status, StatusCode::OK);
+		point_page_at_local(&pool, chapter_id, port).await;
+	}
+
+	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [first, second]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([first, second]));
+	for chapter_id in [first, second] {
+		wait_download_status(&app, chapter_id, "finished").await;
+	}
+	let artifacts: Vec<String> = sqlx::query_scalar("SELECT path FROM download WHERE chapter_id IN (?, ?) AND user_id = 1")
+		.bind(first)
+		.bind(second)
+		.fetch_all(&pool)
+		.await
+		.expect("artifact paths");
+	assert_eq!(artifacts.len(), 2);
+
+	// a queued row of another manga must survive the batch delete
+	let (status, _) = request(&app, "POST", "/api/v1/downloads/stop", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", &format!("/api/v1/manga/{other_id}/chapters"), None).await;
+	let other_chapter = body[0]["id"].as_i64().expect("other chapter id");
+	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [other_chapter]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([other_chapter]));
+
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/downloads/delete",
+		Some(json!({"mangaIds": [manga_id, 999]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["deleted"], 2);
+
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	assert_eq!(body[0]["isDownloaded"], false);
+	assert_eq!(body[1]["isDownloaded"], false);
+	for path in &artifacts {
+		assert!(
+			!t.tmp.path().join("downloads").join(path).exists(),
+			"artifact left behind: {path}"
+		);
+	}
+	let remaining: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM download d JOIN chapter c ON c.id = d.chapter_id WHERE c.manga_id = ?",
+	)
+	.bind(manga_id)
+	.fetch_one(&pool)
+	.await
+	.expect("remaining downloads");
+	assert_eq!(remaining, 0);
+	let surviving: i64 = sqlx::query_scalar(
+		"SELECT COUNT(*) FROM download d JOIN chapter c ON c.id = d.chapter_id WHERE c.manga_id = ?",
+	)
+	.bind(other_id)
+	.fetch_one(&pool)
+	.await
+	.expect("surviving downloads");
+	assert_eq!(surviving, 1);
+
+	// a repeat is a no-op
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/downloads/delete",
+		Some(json!({"mangaIds": [manga_id]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["deleted"], 0);
+}
+
+/// A selection larger than SQLite's variable cap (32766 with the bundled build) is expanded in
+/// chunks: the endpoint answers instead of failing with "too many SQL variables".
+#[tokio::test]
+async fn enqueue_manga_expansion_beyond_sql_variable_limit() {
+	let t = downloads_app(|_| {}).await;
+	let manga_ids: Vec<i64> = (900_001..=940_000).collect();
+	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"mangaIds": manga_ids}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([]));
+}
+
+/// Same chunked expansion for batch delete: a huge selection answers 0 instead of a 500.
+#[tokio::test]
+async fn delete_manga_expansion_beyond_sql_variable_limit() {
+	let t = downloads_app(|_| {}).await;
+	let manga_ids: Vec<i64> = (900_001..=940_000).collect();
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		"/api/v1/downloads/delete",
+		Some(json!({"mangaIds": manga_ids})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["deleted"], 0);
 }

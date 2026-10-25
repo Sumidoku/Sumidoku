@@ -496,12 +496,22 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 	pool.close().await;
 }
 
+fn set_dir_mtime(path: &std::path::Path, at: std::time::SystemTime) {
+	std::fs::File::open(path)
+		.expect("open dir mtime")
+		.set_modified(at)
+		.expect("set dir mtime");
+}
+
 #[tokio::test]
 async fn refresh_rescans_added_and_removed_chapters() {
 	let TestApp { app, tmp, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
+	let alpha = tmp.path().join("local/Alpha");
+	let base = std::time::SystemTime::now();
 
-	write_page(&tmp.path().join("local/Alpha/ch 11"), "1.png", b"alpha-11-1");
+	write_page(&alpha.join("ch 11"), "1.png", b"alpha-11-1");
+	set_dir_mtime(&alpha, base + std::time::Duration::from_secs(2));
 	let (status, _) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let keys: Vec<String> = chapters_of(&app, manga_id)
@@ -511,7 +521,8 @@ async fn refresh_rescans_added_and_removed_chapters() {
 		.collect();
 	assert_eq!(keys[0], "ch 11");
 
-	std::fs::remove_dir_all(tmp.path().join("local/Alpha/ch 2")).expect("remove ch 2");
+	std::fs::remove_dir_all(alpha.join("ch 2")).expect("remove ch 2");
+	set_dir_mtime(&alpha, base + std::time::Duration::from_secs(4));
 	let (status, _) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	// the vanished chapter is trashed, not deleted: the row stays with its progress until purged
@@ -533,7 +544,8 @@ async fn refresh_rescans_added_and_removed_chapters() {
 	assert!(!active.iter().any(|c| c["key"] == "ch 2"));
 
 	// reappearing on disk restores the row in place on the next refresh
-	write_page(&tmp.path().join("local/Alpha/ch 2"), "1.png", b"alpha-2-1-back");
+	write_page(&alpha.join("ch 2"), "1.png", b"alpha-2-1-back");
+	set_dir_mtime(&alpha, base + std::time::Duration::from_secs(6));
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let ch2 = body

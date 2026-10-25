@@ -845,7 +845,13 @@ no alias is derived from migration text.
   whole reading trace — `last_page_read`, the resume target and the history
   stamp all go (explicit user intent, so incognito does not protect the
   stamp), while the bookmark survives; the detail page's row menu and batch
-  selection share this semantic. A patch carrying `lastPageRead` alongside
+  selection share this semantic. The batch endpoint also accepts `mangaIds`,
+  expanded to each manga's untrashed chapters and merged deduplicated with
+  `chapterIds`: a mark-read expansion targets only readable chapters — a
+  locked chapter vanished from the source and can still be read only from
+  its downloaded artifact, so it is skipped until the user has it
+  downloaded — while mark-unread and other patches target every untrashed
+  chapter. A patch carrying `lastPageRead` alongside
   `isRead: false` is "still reading" and keeps the trace. Marking read never touches the stamp by
   itself, deliberately diverging from Aidoku's date-refresh. `GET`/`PATCH
   /api/v1/manga/{id}` carries `incognito` (the PATCH upserts the `manga_user`
@@ -1002,7 +1008,12 @@ no alias is derived from migration text.
   (`api/download.rs`) goes through it.
   `DownloadManager::delete` is the shared removal routine for explicit delete,
   clear and read-driven deletion: it removes the row, clears `is_downloaded`
-  and deletes the artifact once no other row references it. Manual progress
+  and deletes the artifact once no other row references it.
+  `POST /api/v1/downloads/delete` applies it to every download row of the
+  given `mangaIds` and answers `{deleted}`. The enqueue endpoint likewise
+  accepts `mangaIds`, expanded to each manga's untrashed chapters of remote
+  sources (local chapters are already on disk) and merged with `chapterIds`.
+  Manual progress
   (`isRead: true` without `lastPageRead`) and reader completion
   (`lastPageRead = pageCount - 1`) have independent `delete_after_manual_read`
   and `delete_after_read` switches. Read-driven deletion skips bookmarks unless

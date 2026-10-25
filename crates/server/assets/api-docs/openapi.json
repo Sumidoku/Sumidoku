@@ -3052,6 +3052,43 @@
         }
       }
     },
+    "/api/v1/downloads/delete": {
+      "post": {
+        "tags": [
+          "downloads"
+        ],
+        "operationId": "deleteDownloads",
+        "summary": "Delete the downloads of the given manga for the current user",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteDownloadsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Number deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/downloads/{id}": {
       "parameters": [
         {
@@ -4738,6 +4775,18 @@
         ],
         "properties": {
           "cleared": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DeletedResponse": {
+        "type": "object",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
             "type": "integer",
             "format": "int64"
           }
@@ -7006,9 +7055,6 @@
           },
           {
             "type": "object",
-            "required": [
-              "chapterIds"
-            ],
             "properties": {
               "chapterIds": {
                 "type": "array",
@@ -7016,6 +7062,14 @@
                   "type": "integer",
                   "format": "int64"
                 }
+              },
+              "mangaIds": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "description": "Whole-manga selection, expanded to each manga's untrashed chapters and merged with chapterIds. With isRead:true the expansion targets only readable chapters (unlocked or already downloaded); other patches target every untrashed chapter."
               }
             }
           }
@@ -8200,11 +8254,31 @@
       },
       "EnqueueDownloadsRequest": {
         "type": "object",
-        "required": [
-          "chapterIds"
-        ],
         "properties": {
           "chapterIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "mangaIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "Whole-manga selection, expanded to each manga's untrashed chapters of remote sources (local manga are excluded) and merged with chapterIds."
+          }
+        }
+      },
+      "DeleteDownloadsRequest": {
+        "type": "object",
+        "required": [
+          "mangaIds"
+        ],
+        "properties": {
+          "mangaIds": {
             "type": "array",
             "items": {
               "type": "integer",

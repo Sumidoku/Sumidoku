@@ -12,7 +12,30 @@ use std::sync::Arc;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnqueueRequest {
+	#[serde(default)]
 	pub chapter_ids: Vec<i64>,
+	#[serde(default)]
+	pub manga_ids: Vec<i64>,
+}
+
+/// Whole-manga selection expands to the manga's untrashed chapters of remote sources: local
+/// chapters are already on disk, so queueing them would be meaningless (same exclusion as
+/// reader-ahead). Explicit chapter ids are passed through untouched.
+async fn expand_manga_chapters(pool: &sqlx::SqlitePool, manga_ids: &[i64]) -> ApiResult<Vec<i64>> {
+	let mut chapter_ids = Vec::new();
+	for chunk in manga_ids.chunks(crate::api::MANGA_ID_QUERY_CHUNK) {
+		let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+		let sql = format!(
+			"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id JOIN source s ON s.id = m.source_id
+			 WHERE c.manga_id IN ({placeholders}) AND c.trashed_at IS NULL AND s.kind != ?"
+		);
+		let mut query = sqlx::query_scalar::<_, i64>(&sql);
+		for manga_id in chunk {
+			query = query.bind(manga_id);
+		}
+		chapter_ids.extend(query.bind(crate::model::SOURCE_KIND_LOCAL).fetch_all(pool).await?);
+	}
+	Ok(chapter_ids)
 }
 
 pub async fn enqueue_downloads(
@@ -20,7 +43,10 @@ pub async fn enqueue_downloads(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<EnqueueRequest>,
 ) -> ApiResult<Json<Value>> {
-	let queued = state.downloads().enqueue(&body.chapter_ids, user.id).await;
+	let expanded = expand_manga_chapters(&state.pool, &body.manga_ids).await?;
+	// the manager deduplicates within the list and against active rows
+	let chapter_ids: Vec<i64> = body.chapter_ids.iter().chain(expanded.iter()).copied().collect();
+	let queued = state.downloads().enqueue(&chapter_ids, user.id).await;
 	Ok(Json(json!({ "queued": queued })))
 }
 
@@ -125,6 +151,43 @@ pub async fn clear_downloads(
 		}
 	}
 	Ok(Json(json!({ "cleared": cleared })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDownloadsRequest {
+	pub manga_ids: Vec<i64>,
+}
+
+pub async fn delete_downloads(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	Json(body): Json<DeleteDownloadsRequest>,
+) -> ApiResult<Json<Value>> {
+	if body.manga_ids.is_empty() {
+		return Ok(Json(json!({ "deleted": 0 })));
+	}
+	let mut chapter_ids: Vec<i64> = Vec::new();
+	for chunk in body.manga_ids.chunks(crate::api::MANGA_ID_QUERY_CHUNK) {
+		let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+		let sql = format!(
+			"SELECT d.chapter_id FROM download d JOIN chapter c ON c.id = d.chapter_id
+			 WHERE d.user_id = ? AND c.manga_id IN ({placeholders})"
+		);
+		let mut query = sqlx::query_scalar::<_, i64>(&sql).bind(user.id);
+		for manga_id in chunk {
+			query = query.bind(manga_id);
+		}
+		chapter_ids.extend(query.fetch_all(&state.pool).await?);
+	}
+	let manager = state.downloads();
+	let mut deleted = 0i64;
+	for chapter_id in chapter_ids {
+		if manager.delete(chapter_id, user.id).await? {
+			deleted += 1;
+		}
+	}
+	Ok(Json(json!({ "deleted": deleted })))
 }
 
 pub async fn delete_download(
