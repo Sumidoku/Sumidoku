@@ -6,9 +6,9 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./config:/config       # 数据库、设置、封面缓存、源包
+      - ./config:/config # 数据库、设置、封面缓存、源包
       - ./downloads:/downloads
-      - trawl-ca:/trawl-ca:ro  # TRAWL 共享 CA
+      - trawl-ca:/trawl-ca:ro # TRAWL 共享 CA
     environment:
       - SUMIDOKU_NET_TRAWL_PROXY=http://trawl:8192
       - SUMIDOKU_NET_TRAWL_CA=/trawl-ca/ca.crt
