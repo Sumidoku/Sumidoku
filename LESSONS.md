@@ -209,6 +209,12 @@ directory-with-suffix fixtures.
   `chapter.epub/1.png` into `Some(true)`. `chapter_pages` now returns
   `(pages, Option<bool>)`, with NULL for directories/CBZ and the actual
   result for EPUB files, and the regression holds NULL after page rebuild.
+- Seen again: 2026-10-25, #406 review found restore accepting a regular
+  `Alpha.cbz` file after the same-named directory was trashed, recreating a
+  pseudo-oneshot because the suffix stood in for the original shape. Persisting
+  the scanned kind and rejecting unknown history fixed both shape reversals;
+  removing only the original-kind predicate made the regression return 200
+  instead of 409.
 
 **Mojibake can enter as valid UTF-8 when a middlebox answers with the
 browser's serialized DOM instead of the wire bytes — capture the upstream
