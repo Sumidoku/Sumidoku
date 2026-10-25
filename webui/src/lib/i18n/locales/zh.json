@@ -63,7 +63,8 @@
 	},
 	"chapter": {
 		"number": "第 {n} 话",
-		"untitled": "未命名章节"
+		"untitled": "未命名章节",
+		"volume": "第 {n} 卷"
 	},
 	"history": {
 		"toLibrary": "去书库",
@@ -187,7 +188,21 @@
 		"browserLoginInstructions": "，在下方画面里完成登录（含验证码/两步验证），然后点「完成登录」",
 		"remoteScreen": "远程浏览器画面",
 		"sessionEndedShort": "会话已结束",
-		"frameLoading": "画面加载中…"
+		"frameLoading": "画面加载中…",
+		"internalAdded": "已添加 {name}",
+		"addInternal": "添加内部源",
+		"internalTypeOpds": "OPDS 目录",
+		"internalTypeLocal": "本地目录",
+		"opdsNamePlaceholder": "名称（如 My Komga）",
+		"opdsUrlPlaceholder": "目录 URL（如 https://komga.example/opds/v1.2/catalog）",
+		"opdsUsernamePlaceholder": "用户名（公共目录可留空）",
+		"opdsPasswordPlaceholder": "密码",
+		"opdsHint": "Komga / Kavita / Calibre-Web 等自托管站的 OPDS 1.2 目录；凭据只用于读取。",
+		"localOneshotsPlaceholder": "Oneshots 目录名（可选）",
+		"localHint": "直接阅读服务器上的本地目录。每个路径都必须存在；之后也可以在源设置里修改。",
+		"add": "添加",
+		"localDirPlaceholder": "/mnt/manga",
+		"addLocalDir": "添加目录"
 	},
 	"downloads": {
 		"statusQueued": "排队中",
@@ -673,6 +688,27 @@
 		"browserLoginInstructions": "，在下方画面里完成登录（含验证码/两步验证），然后点「完成登录」",
 		"remoteBrowser": "远程浏览器画面",
 		"sessionEndedShort": "会话已结束",
-		"frameLoading": "画面加载中…"
+		"frameLoading": "画面加载中…",
+		"apiKeysTitle": "API 密钥",
+		"apiKeysDesc": "用于脚本和第三方客户端的 Bearer 凭证，以管理员身份生效",
+		"apiKeysEmpty": "暂无 API 密钥",
+		"apiKeysEmptyHint": "新建密钥以便脚本和第三方客户端进行身份验证",
+		"apiKeyNamePlaceholder": "用途备注，如“同步脚本”",
+		"createApiKey": "新建密钥",
+		"apiKeyCreatedTitle": "保存你的 API 密钥",
+		"apiKeyCreatedHint": "此密钥仅显示这一次，请立即复制保存；之后无法再次查看",
+		"copyKey": "复制",
+		"keyCopied": "已复制到剪贴板",
+		"revoke": "吊销",
+		"revokeApiKeyConfirm": "吊销密钥“{name}”？使用它的客户端会立即失效",
+		"apiKeyRevoked": "密钥已吊销",
+		"createdAt": "创建于",
+		"lastUsed": "最近使用"
+	},
+	"pwa": {
+		"updateLabel": "应用更新",
+		"updateAvailable": "新版本可用",
+		"reload": "重新加载",
+		"later": "稍后"
 	}
 }

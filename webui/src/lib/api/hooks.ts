@@ -49,7 +49,10 @@ import type {
 	UpdateAllOutcome,
 	HistoryPage as HistoryPageData,
 	SourceSettings,
-	UpdateRecentPage
+	UpdateRecentPage,
+	ApiKey,
+	ApiKeyCreated,
+	RegisterInternalRequest
 } from './types';
 
 /** 响应式入参用取值函数传入（svelte-query v6 的 options 是函数，内部读取 getter 才会跟随依赖更新） */
@@ -73,7 +76,8 @@ export const qk = {
 	sourceFilters: (sourceId: number) => ['sources', sourceId, 'filters'] as const,
 	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
 	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
-	backups: ['backups'] as const
+	backups: ['backups'] as const,
+	apiKeys: ['api-keys'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -999,5 +1003,37 @@ export function useMigrate() {
 		mutationFn: (body: MigrateRequest) => api<MigrateResponse>('/migrate', { method: 'POST', body }),
 		// 库/进度/历史/分类都可能变，与备份恢复同级全量失效
 		onSuccess: () => queryClient.invalidateQueries()
+	}));
+}
+
+// ---- API 密钥 ----
+
+export function useApiKeys() {
+	return createQuery(() => ({ queryKey: qk.apiKeys, queryFn: () => api<ApiKey[]>('/auth/api-keys') }));
+}
+
+/** silent：失败由调用方转成提示，成功后把一次性明文 key 展示给用户 */
+export function useCreateApiKey() {
+	return createMutation(() => ({
+		mutationFn: (name: string) =>
+			api<ApiKeyCreated>('/auth/api-keys', { method: 'POST', body: { name }, silent: true }),
+		onSuccess: () => void queryClient.invalidateQueries({ queryKey: qk.apiKeys })
+	}));
+}
+
+export function useRevokeApiKey() {
+	return createMutation(() => ({
+		mutationFn: (id: string) => api(`/auth/api-keys/${id}`, { method: 'DELETE', silent: true }),
+		onSuccess: () => void queryClient.invalidateQueries({ queryKey: qk.apiKeys })
+	}));
+}
+
+// ---- 内部源（OPDS / 本地目录）注册 ----
+
+export function useRegisterInternalSource() {
+	return createMutation(() => ({
+		mutationFn: (body: RegisterInternalRequest) =>
+			api<Source>('/sources/internal', { method: 'POST', body }),
+		onSuccess: () => void queryClient.invalidateQueries({ queryKey: qk.sources })
 	}));
 }

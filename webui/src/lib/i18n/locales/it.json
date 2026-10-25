@@ -63,7 +63,8 @@
 	},
 	"chapter": {
 		"number": "Capitolo {n}",
-		"untitled": "Capitolo senza titolo"
+		"untitled": "Capitolo senza titolo",
+		"volume": "Vol. {n}"
 	},
 	"history": {
 		"toLibrary": "Vai alla libreria",
@@ -187,7 +188,21 @@
 		"browserLoginInstructions": ", completa l'accesso qui sotto (captcha/2FA inclusi), poi premi «Completa l'accesso»",
 		"remoteScreen": "Schermo del browser remoto",
 		"sessionEndedShort": "Sessione terminata",
-		"frameLoading": "Caricamento schermo…"
+		"frameLoading": "Caricamento schermo…",
+		"internalAdded": "{name} aggiunto",
+		"addInternal": "Aggiungi sorgente interna",
+		"internalTypeOpds": "Catalogo OPDS",
+		"internalTypeLocal": "Cartella locale",
+		"opdsNamePlaceholder": "Nome (es. My Komga)",
+		"opdsUrlPlaceholder": "URL del catalogo (es. https://komga.example/opds/v1.2/catalog)",
+		"opdsUsernamePlaceholder": "Nome utente (facoltativo per i cataloghi pubblici)",
+		"opdsPasswordPlaceholder": "Password",
+		"opdsHint": "Cataloghi OPDS 1.2 di server self-hosted come Komga / Kavita / Calibre-Web; le credenziali servono solo per la lettura.",
+		"localOneshotsPlaceholder": "Nome della cartella oneshots (facoltativo)",
+		"localHint": "Leggi i manga direttamente dalle cartelle sul server. Ogni percorso deve esistere; possono essere modificati anche in seguito nelle impostazioni della sorgente.",
+		"add": "Aggiungi",
+		"localDirPlaceholder": "/mnt/manga",
+		"addLocalDir": "Aggiungi cartella"
 	},
 	"downloads": {
 		"statusQueued": "In coda",
@@ -673,6 +688,27 @@
 		"browserLoginInstructions": ". Completa l’accesso nella vista qui sotto (captcha/2FA inclusi), poi fai clic su «Completa l’accesso»",
 		"remoteBrowser": "Vista del browser remoto",
 		"sessionEndedShort": "Sessione terminata",
-		"frameLoading": "Caricamento vista…"
+		"frameLoading": "Caricamento vista…",
+		"apiKeysTitle": "Chiavi API",
+		"apiKeysDesc": "Credenziali Bearer per script e client di terze parti, con i privilegi dell’amministratore",
+		"apiKeysEmpty": "Ancora nessuna chiave API",
+		"apiKeysEmptyHint": "Crea una chiave per consentire l’autenticazione a script e client di terze parti",
+		"apiKeyNamePlaceholder": "Una nota, es. «script di sincronizzazione»",
+		"createApiKey": "Crea chiave",
+		"apiKeyCreatedTitle": "Salva la tua chiave API",
+		"apiKeyCreatedHint": "Questa chiave viene mostrata una sola volta; copiala ora, non potrà più essere visualizzata",
+		"copyKey": "Copia",
+		"keyCopied": "Copiato negli appunti",
+		"revoke": "Revoca",
+		"revokeApiKeyConfirm": "Revocare la chiave «{name}»? I client che la usano smetteranno di funzionare immediatamente",
+		"apiKeyRevoked": "Chiave revocata",
+		"createdAt": "Creata il",
+		"lastUsed": "Ultimo utilizzo"
+	},
+	"pwa": {
+		"updateLabel": "Aggiornamento dell'applicazione",
+		"updateAvailable": "È disponibile una nuova versione.",
+		"reload": "Ricarica",
+		"later": "Più tardi"
 	}
 }

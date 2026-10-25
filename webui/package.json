@@ -23,6 +23,7 @@
 		"vite": "^8.3.4"
 	},
 	"dependencies": {
+		"@internationalized/date": "^3.12.4",
 		"@lucide/svelte": "^1.59.0",
 		"@tanstack/svelte-query": "^6.3.5",
 		"bits-ui": "^2.19.5",

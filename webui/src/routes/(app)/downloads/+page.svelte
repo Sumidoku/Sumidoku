@@ -14,8 +14,11 @@
 		useDownloadsStop,
 		useEnqueueDownloads
 	} from '$lib/api/hooks';
-	import type { DownloadItem, DownloadStatus, DownloadWsFrame } from '$lib/api/types';
-	import { subscribeWS } from '$lib/api/ws';
+	import type { DownloadItem, DownloadStatus } from '$lib/api/types';
+	import type { DownloadChapterEvent, EventSnapshot } from '$lib/api/protocol';
+	import { sse } from '$lib/api/sse';
+	import { applyDownloadEvent, formatDownloadProgress, mergeDownloadResponse } from '$lib/downloadEvents';
+	import { chapterLabel } from '$lib/format';
 	import {
 		Button,
 		Chip,
@@ -40,16 +43,6 @@
 		error: { key: 'downloads.statusError', color: 'danger' }
 	};
 
-	// progress 帧也可能先于 started 到达，有进度即在下载
-	const EVENT_STATUS: Record<string, DownloadStatus> = {
-		queued: 'queued',
-		started: 'downloading',
-		progress: 'downloading',
-		paused: 'paused',
-		finished: 'finished',
-		error: 'error'
-	};
-
 	let items = $state<DownloadItem[]>([]);
 	let running = $state(false);
 	let online = $state(false);
@@ -62,78 +55,88 @@
 	const del = useDeleteDownload();
 	const enqueue = useEnqueueDownloads();
 
-	// $state 代理在 WS 回调里读取即是最新值，无需 React 版的 itemsRef
+	// $state 代理在回调里读取即是最新值，无需 React 版的 itemsRef
 	function applyItems(next: DownloadItem[]) {
 		items = next;
 	}
 
-	// 事件只带 chapterId，遇到没见过的任务要整表拉一次补齐标题；并发事件合并成一次
+	// 事件只带 chapterId，遇到没见过的任务要整表拉一次补齐元数据；
+	// 合并期间到达的事件改写最新值而不是被整表覆盖，snapshot 到来则作废本轮补拉
 	let refetching = false;
+	let refreshAgain = false;
+	let snapshotVersion = 0;
+	const pendingEvents = new Map<number, DownloadChapterEvent>();
 	async function refreshMissing() {
-		if (refetching) return;
+		if (refetching) {
+			refreshAgain = true;
+			return;
+		}
 		refetching = true;
 		try {
-			applyItems(await api<DownloadItem[]>('/downloads'));
+			do {
+				refreshAgain = false;
+				const version = snapshotVersion;
+				const response = await api<DownloadItem[]>('/downloads');
+				if (version === snapshotVersion) {
+					applyItems(mergeDownloadResponse(items, response, pendingEvents));
+					pendingEvents.clear();
+				}
+			} while (refreshAgain);
 		} finally {
 			refetching = false;
+			refreshAgain = false;
+			pendingEvents.clear();
 		}
 	}
 
-	function onMessage(msg: unknown) {
-		if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
-		const m = msg as DownloadWsFrame;
-		if (m.type === 'snapshot') {
+	let unsub: Array<() => void> = [];
+	onMount(() => {
+		let receivedEvent = false;
+
+		function onSnapshot(msg: unknown) {
+			const m = msg as EventSnapshot;
+			if (m.type !== 'snapshot') return;
+			receivedEvent = true;
+			snapshotVersion += 1;
+			refreshAgain = false;
+			pendingEvents.clear();
 			applyItems(m.downloads);
 			running = m.running;
 			loading = false;
-			return;
 		}
-		if (m.type === 'running') {
-			running = m.running;
-			return;
-		}
-		const status = EVENT_STATUS[m.type];
-		if (!status) return;
-		if (!items.some((it) => it.chapterId === m.chapterId)) {
-			void refreshMissing();
-			return;
-		}
-		applyItems(
-			items.map((it) => {
-				if (it.chapterId !== m.chapterId) return it;
-				const patch: Partial<DownloadItem> = { status };
-				if (status === 'downloading' || status === 'finished') {
-					patch.downloaded = m.downloaded;
-					patch.total = m.total;
-					if (status === 'finished') {
-						patch.error = null;
-						if (m.total > 0) patch.downloaded = m.total;
-					}
-				} else {
-					patch.downloaded = null;
-					patch.total = null;
-					if (status === 'queued') patch.error = null;
-				}
-				return { ...it, ...patch };
-			})
-		);
-	}
 
-	let unsub: (() => void) | undefined;
-	onMount(() => {
-		unsub = subscribeWS('/api/v1/downloads/ws', {
-			onMessage,
-			onStatus: (o) => (online = o)
-		});
+		function onRunning(msg: unknown) {
+			receivedEvent = true;
+			running = (msg as { running: boolean }).running;
+		}
+
+		function onDownload(msg: unknown) {
+			const m = msg as DownloadChapterEvent;
+			receivedEvent = true;
+			const missing = !items.some((it) => it.chapterId === m.chapterId);
+			if (refetching || missing) pendingEvents.set(m.chapterId, m);
+			if (refetching) refreshAgain = true;
+			applyItems(applyDownloadEvent(items, m));
+			if (missing) void refreshMissing();
+		}
+
+		unsub = [
+			sse.onStatus((o) => (online = o)),
+			sse.on('snapshot', onSnapshot),
+			sse.on('running', onRunning),
+			sse.on('download', onDownload)
+		];
+		// snapshot 一般随连接即到；SSE 慢或不可用时用一次整表拉作兜底，已收到事件则不覆盖
 		void (async () => {
 			try {
-				applyItems(await api<DownloadItem[]>('/downloads'));
+				const initial = await api<DownloadItem[]>('/downloads');
+				if (!receivedEvent) applyItems(initial);
 			} finally {
 				loading = false;
 			}
 		})();
 	});
-	onDestroy(() => unsub?.());
+	onDestroy(() => unsub.forEach((u) => u()));
 
 	const sorted = $derived(
 		[...items].sort(
@@ -206,7 +209,11 @@
 		<div class="downloads-list">
 			{#each sorted as it (it.chapterId)}
 				{@const meta = STATUS_META[it.status]}
-				{@const chapterName = it.chapterTitle?.trim() || $_('downloads.untitledChapter')}
+				{@const chapterName = chapterLabel({
+					volume_number: it.volumeNumber,
+					chapter_number: it.chapterNumber,
+					title: it.chapterTitle
+				})}
 				{@const total = it.total ?? 0}
 				{@const downloaded = it.downloaded ?? 0}
 				<div class="downloads-item card">
@@ -220,7 +227,7 @@
 							<div class="downloads-item__progress">
 								<ProgressBar value={total > 0 ? downloaded / total : null} />
 								<span class="faint downloads-item__pv">
-									{total > 0 ? `${downloaded} / ${total}` : `${downloaded}`}
+									{formatDownloadProgress({ downloaded, total })}
 								</span>
 							</div>
 						{/if}

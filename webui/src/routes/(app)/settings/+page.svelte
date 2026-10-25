@@ -4,6 +4,7 @@
 	import AppearanceSection from './AppearanceSection.svelte';
 	import IncognitoSection from './IncognitoSection.svelte';
 	import SecuritySection from './SecuritySection.svelte';
+	import ApiKeysSection from './ApiKeysSection.svelte';
 	import CategoriesSection from './CategoriesSection.svelte';
 	import ServerSettingsSection from './ServerSettingsSection.svelte';
 	import BackupSection from './BackupSection.svelte';
@@ -17,6 +18,7 @@
 	<AppearanceSection />
 	<IncognitoSection />
 	<SecuritySection />
+	<ApiKeysSection />
 	<CategoriesSection />
 	<ServerSettingsSection />
 	<BackupSection />

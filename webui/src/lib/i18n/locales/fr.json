@@ -63,7 +63,8 @@
 	},
 	"chapter": {
 		"number": "Chapitre {n}",
-		"untitled": "Chapitre sans titre"
+		"untitled": "Chapitre sans titre",
+		"volume": "Vol. {n}"
 	},
 	"history": {
 		"toLibrary": "Aller à la bibliothèque",
@@ -187,7 +188,21 @@
 		"browserLoginInstructions": ", terminez la connexion ci-dessous (y compris captcha/2FA), puis cliquez sur « Terminer la connexion »",
 		"remoteScreen": "Écran du navigateur distant",
 		"sessionEndedShort": "Session terminée",
-		"frameLoading": "Chargement de l'écran…"
+		"frameLoading": "Chargement de l'écran…",
+		"internalAdded": "{name} ajouté",
+		"addInternal": "Ajouter une source interne",
+		"internalTypeOpds": "Catalogue OPDS",
+		"internalTypeLocal": "Répertoire local",
+		"opdsNamePlaceholder": "Nom (p. ex. My Komga)",
+		"opdsUrlPlaceholder": "URL du catalogue (p. ex. https://komga.example/opds/v1.2/catalog)",
+		"opdsUsernamePlaceholder": "Nom d'utilisateur (facultatif pour les catalogues publics)",
+		"opdsPasswordPlaceholder": "Mot de passe",
+		"opdsHint": "Catalogues OPDS 1.2 de serveurs auto-hébergés comme Komga / Kavita / Calibre-Web ; les identifiants ne servent qu'à la lecture.",
+		"localOneshotsPlaceholder": "Nom du répertoire des one-shots (facultatif)",
+		"localHint": "Lire les mangas directement depuis des répertoires sur le serveur. Chaque chemin doit exister ; ils pourront aussi être modifiés plus tard dans les paramètres de la source.",
+		"add": "Ajouter",
+		"localDirPlaceholder": "/mnt/manga",
+		"addLocalDir": "Ajouter un répertoire"
 	},
 	"downloads": {
 		"statusQueued": "En file d'attente",
@@ -673,6 +688,27 @@
 		"browserLoginInstructions": ". Terminez la connexion dans la vue ci-dessous (captcha/2FA inclus), puis cliquez sur « Terminer la connexion »",
 		"remoteBrowser": "Vue du navigateur distant",
 		"sessionEndedShort": "Session terminée",
-		"frameLoading": "Chargement de la vue…"
+		"frameLoading": "Chargement de la vue…",
+		"apiKeysTitle": "Clés API",
+		"apiKeysDesc": "Identifiants Bearer pour les scripts et clients tiers, agissant en tant qu’administrateur",
+		"apiKeysEmpty": "Aucune clé API pour l’instant",
+		"apiKeysEmptyHint": "Créez une clé pour permettre aux scripts et clients tiers de s’authentifier",
+		"apiKeyNamePlaceholder": "Une note, par ex. « script de synchro »",
+		"createApiKey": "Créer une clé",
+		"apiKeyCreatedTitle": "Enregistrez votre clé API",
+		"apiKeyCreatedHint": "Cette clé n’est affichée qu’une seule fois ; copiez-la maintenant, elle ne pourra plus être consultée",
+		"copyKey": "Copier",
+		"keyCopied": "Copié dans le presse-papiers",
+		"revoke": "Révoquer",
+		"revokeApiKeyConfirm": "Révoquer la clé « {name} » ? Les clients qui l’utilisent cesseront de fonctionner immédiatement",
+		"apiKeyRevoked": "Clé révoquée",
+		"createdAt": "Créée le",
+		"lastUsed": "Dernière utilisation"
+	},
+	"pwa": {
+		"updateLabel": "Mise à jour de l'application",
+		"updateAvailable": "Une nouvelle version est disponible.",
+		"reload": "Recharger",
+		"later": "Plus tard"
 	}
 }

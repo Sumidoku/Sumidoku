@@ -52,12 +52,21 @@ export function statusText(s: string | null | undefined): string {
 	return STATUS_KEYS.has(key) ? t(`status.${key}`) : s;
 }
 
-export function chapterLabel(c: { chapter_number: number | null; title: string | null }): string {
+export function chapterLabel(c: {
+	volume_number?: number | null;
+	chapter_number: number | null;
+	title: string | null;
+}): string {
+	const vol =
+		c.volume_number !== null && c.volume_number !== undefined
+			? t('chapter.volume', { n: c.volume_number })
+			: '';
 	const num =
 		c.chapter_number !== null && c.chapter_number !== undefined
 			? t('chapter.number', { n: c.chapter_number })
 			: '';
 	const title = c.title?.trim() ?? '';
-	if (num && title) return `${num} · ${title}`;
-	return num || title || t('chapter.untitled');
+	const parts = [vol, num].filter(Boolean);
+	if (parts.length > 0 && title) return `${parts.join(' · ')} · ${title}`;
+	return parts.join(' · ') || title || t('chapter.untitled');
 }

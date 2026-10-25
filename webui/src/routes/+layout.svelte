@@ -5,6 +5,7 @@
 	import { QueryClientProvider } from '@tanstack/svelte-query';
 	import { queryClient } from '$lib/api/hooks';
 	import { Toaster } from '$lib/components/ui/sonner';
+	import PwaUpdatePrompt from '$lib/components/PwaUpdatePrompt.svelte';
 
 	let { children } = $props();
 </script>
@@ -14,3 +15,4 @@
 </QueryClientProvider>
 
 <Toaster position="top-center" />
+<PwaUpdatePrompt />

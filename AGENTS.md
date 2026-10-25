@@ -49,7 +49,8 @@ attribution.
 - `crates/wasm` — Aidoku WASM source runtime (wasmi)
 - `vendor/aidoku` — vendored upstream crate; it tracks upstream, do not
   restyle or "fix" it locally
-- `webui` — Vite + React SPA, built to `webui/build`
+- `webui` — SvelteKit (Svelte 5) SPA with shadcn-svelte + svelte-i18n
+  (en/zh/fr/it), built to `webui/build`; `npm run check` is `svelte-check`
 - `data/` — local dev database, cover cache and sources; untracked, never commit it
 
 ## Release

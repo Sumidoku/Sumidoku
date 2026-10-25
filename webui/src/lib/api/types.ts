@@ -207,6 +207,8 @@ export interface DownloadItem {
 	mangaId: number;
 	mangaTitle: string;
 	chapterTitle: string | null;
+	chapterNumber: number | null;
+	volumeNumber: number | null;
 	status: DownloadStatus;
 	format: string;
 	path: string | null;
@@ -221,12 +223,8 @@ export interface DownloadItem {
 
 export type DownloadEventKind = 'queued' | 'started' | 'progress' | 'paused' | 'finished' | 'error';
 
-/** /downloads/ws 的帧：连接先给一帧 snapshot，之后逐条推事件 */
-export type DownloadWsFrame =
-	| { type: 'snapshot'; running: boolean; downloads: DownloadItem[] }
-	| { type: DownloadEventKind; chapterId: number; downloaded: number; total: number }
-	// 队列开关变化：chapterId/downloaded/total 固定为 0，只有 running 有效
-	| { type: 'running'; chapterId: 0; downloaded: 0; total: 0; running: boolean };
+/** 章节带下载状态（manga 详情页下载活动合并用） */
+export type ChapterWithDownload = Chapter & { isDownloaded: boolean };
 
 export interface UpdateSummary {
 	running: boolean;
@@ -247,11 +245,6 @@ export interface UpdateJob {
 	sourceId: number;
 	addedChapters: number;
 }
-
-/** /update/ws 的帧：连接先给一帧 summary 快照，之后推 job 事件 */
-export type UpdateWsFrame =
-	| ({ type: 'summary' } & UpdateSummary)
-	| ({ type: 'job' } & UpdateJob);
 
 export interface UpdateRecentEntry {
 	chapter: Chapter;
@@ -683,3 +676,21 @@ export interface MigrateRequest {
 	mode: MigrateMode;
 	entries: MigrateEntryBody[];
 }
+
+export interface ApiKey {
+	id: string;
+	name: string;
+	createdAt: number;
+	lastUsedAt: number | null;
+	source: 'ui';
+}
+
+/** POST /auth/api-keys 的响应：比列表项多一次性明文 key */
+export interface ApiKeyCreated extends ApiKey {
+	key: string;
+}
+
+/** POST /sources/internal 的请求体：按 type 分派内部（非 wasm）源的注册 */
+export type RegisterInternalRequest =
+	| { type: 'opds'; name: string; url: string; username?: string; password?: string }
+	| { type: 'local'; name: string; paths: string[]; oneshotsDir?: string };

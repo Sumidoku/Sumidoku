@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import ArrowLeftRight from '@lucide/svelte/icons/arrow-left-right';
 	import CircleArrowUp from '@lucide/svelte/icons/circle-arrow-up';
+	import FolderPlus from '@lucide/svelte/icons/folder-plus';
 	import PackageOpen from '@lucide/svelte/icons/package-open';
 	import ScanSearch from '@lucide/svelte/icons/scan-search';
 	import type { Source } from '$lib/api/types';
@@ -16,6 +17,7 @@
 	} from '$lib/api/hooks';
 	import { compareSourceName } from '$lib/source';
 	import { Button, EmptyState, Modal, PageHeader, SegmentedControl, Skeleton, pushToast } from '$lib/components';
+	import InternalSourceModal from './InternalSourceModal.svelte';
 	import ReposPanel from './ReposPanel.svelte';
 	import SourceCard from './SourceCard.svelte';
 
@@ -27,6 +29,7 @@
 	const reorderPinned = useReorderPinned();
 
 	let pendingDelete = $state<Source | null>(null);
+	let registeringInternal = $state(false);
 	let tab = $state<'installed' | 'repos'>('installed');
 	let dragIndex = $state<number | null>(null);
 	let overIndex = $state<number | null>(null);
@@ -127,6 +130,10 @@
 			{$_('browse.updateAll', { values: { n: updateCount } })}
 		</Button>
 	{/if}
+	<Button onclick={() => (registeringInternal = true)}>
+		<FolderPlus size={15} />
+		{$_('browse.addInternal')}
+	</Button>
 	<Button variant="primary" loading={scan.isPending} onclick={() => void onScan()}>
 		<ScanSearch size={15} />
 		{$_('browse.scan')}
@@ -228,4 +235,6 @@
 			</Button>
 		{/snippet}
 	</Modal>
+
+	<InternalSourceModal open={registeringInternal} onClose={() => (registeringInternal = false)} />
 </div>

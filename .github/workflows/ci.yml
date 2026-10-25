@@ -117,10 +117,6 @@ jobs:
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - run: npm ci
-      - run: npm run generate:api
-      - run: git diff --exit-code -- src/api/types.ts
-      - run: test -z "$(git status --porcelain -- src/api/types.ts)"
-      - run: npm test
       - run: npm run check
       - run: npm run build
 

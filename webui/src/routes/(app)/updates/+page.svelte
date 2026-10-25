@@ -3,8 +3,9 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { ApiError, api, coverUrl } from '$lib/api/client';
 	import { useCategories, useFetchUpdate, useUpdateRecent } from '$lib/api/hooks';
-	import type { UpdateJob, UpdateJobStatus, UpdateSummary, UpdateWsFrame } from '$lib/api/types';
-	import { subscribeWS } from '$lib/api/ws';
+	import type { UpdateJob, UpdateJobStatus, UpdateSummary } from '$lib/api/types';
+	import type { EventSnapshot, UpdateEvent } from '$lib/api/protocol';
+	import { sse } from '$lib/api/sse';
 	import { chapterLabel, relativeTime } from '$lib/format';
 	import {
 		Badge,
@@ -44,53 +45,61 @@
 	const recent = useUpdateRecent();
 	const recentEntries = $derived(recent.data?.pages.flatMap((p) => p.entries) ?? []);
 
-	function onMessage(msg: unknown) {
-		if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
-		const m = msg as UpdateWsFrame;
-		if (m.type === 'summary') {
-			const { type: _type, ...s } = m;
-			summary = s;
-			summaryLoaded = true;
-			return;
-		}
-		if (m.type !== 'job') return;
-		const { type: _t, ...job } = m;
-		// 同一本漫画的连续事件只留最新一条，动态列表才不被刷屏
-		jobs = [
-			{ ...job, seq: ++jobSeq },
-			...jobs.filter((j) => j.mangaId !== job.mangaId)
-		].slice(0, 50);
-		// 收到 job 事件说明有任务在跑；契约没有整轮结束事件，running 落停靠轮询对账
-		if (summary && !summary.running) summary = { ...summary, running: true };
-	}
-
-	let unsub: (() => void) | undefined;
+	let unsub: Array<() => void> = [];
 	onMount(() => {
-		unsub = subscribeWS('/api/v1/update/ws', { onMessage, onStatus: (o) => (online = o) });
+		let receivedEvent = false;
+
+		// snapshot 的 updateSummary 字段即整份摘要
+		function onSnapshot(msg: unknown) {
+			const m = msg as EventSnapshot;
+			receivedEvent = true;
+			summary = m.updateSummary;
+			summaryLoaded = true;
+		}
+
+		// updateSummary / updateComplete 帧的 payload 就是整份摘要（无 type 字段）
+		function onSummary(msg: unknown) {
+			receivedEvent = true;
+			summary = msg as UpdateSummary;
+			summaryLoaded = true;
+		}
+
+		// 整轮结束：running 落停由该事件拥有，不再靠轮询对账
+		function onComplete(msg: unknown) {
+			receivedEvent = true;
+			summary = { ...(msg as UpdateSummary), running: false };
+			summaryLoaded = true;
+		}
+
+		function onJob(msg: unknown) {
+			const { type: _t, ...job } = msg as UpdateEvent;
+			// 同一本漫画的连续事件只留最新一条，动态列表才不被刷屏
+			jobs = [{ ...job, seq: ++jobSeq }, ...jobs.filter((j) => j.mangaId !== job.mangaId)].slice(
+				0,
+				50
+			);
+		}
+
+		unsub = [
+			sse.onStatus((o) => (online = o)),
+			sse.on('snapshot', onSnapshot),
+			sse.on('updateSummary', onSummary),
+			sse.on('updateComplete', onComplete),
+			sse.on('update', onJob)
+		];
+		// snapshot 一般随连接即到；SSE 慢或不可用时用一次整表拉作兜底，已收到事件则不覆盖
 		void (async () => {
 			try {
-				summary = await api<UpdateSummary>('/update/summary');
+				const initial = await api<UpdateSummary>('/update/summary');
+				if (!receivedEvent) summary = initial;
 			} finally {
 				summaryLoaded = true;
 			}
 		})();
 	});
-	onDestroy(() => unsub?.());
+	onDestroy(() => unsub.forEach((u) => u()));
 
 	const running = $derived(summary?.running === true);
-
-	// 运行中每 4s 拉一次 summary 对账：计数刷新 + running 落停（WS 不推整轮结束事件）
-	$effect(() => {
-		if (!running) return;
-		const t = setInterval(async () => {
-			try {
-				summary = await api<UpdateSummary>('/update/summary', { silent: true });
-			} catch {
-				// 失败等下一轮
-			}
-		}, 4000);
-		return () => clearInterval(t);
-	});
 
 	async function runUpdate(categoryId?: number) {
 		if (updating) return;
@@ -98,7 +107,6 @@
 		try {
 			await fetchUpdate.mutateAsync(categoryId);
 			pushToast($_('updates.started'), 'info');
-			if (summary) summary = { ...summary, running: true };
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 409) pushToast($_('updates.busy'), 'info');
 			else pushToast(e instanceof Error ? e.message : $_('updates.failed'));
