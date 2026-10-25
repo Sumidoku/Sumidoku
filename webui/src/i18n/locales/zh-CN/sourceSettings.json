@@ -18,7 +18,18 @@
     "addLocalDir": "添加目录",
     "localOneshotsDirLabel": "Oneshots 目录",
     "localOneshotsDirPlaceholder": "oneshots",
+
     "localOneshotsDirDesc": "路径中包含该名字的目录（大小写不敏感）本身不会被列出，其中直接放置的压缩档各自成为一部以文件名命名的单章节漫画。留空会关闭该本地源的 oneshots 规则；重置后才回退到服务端配置（SUMIDOKU_LOCAL_ONESHOTS_DIR）",
-    "resetLocalConfirm": "清除该本地源的 oneshots 覆盖设置？目录列表会保留。"
+    "localExclusionsLabel": "排除规则",
+    "localExclusionPlaceholder": "子串，如 @eaDir",
+    "addExclusion": "添加排除",
+    "localExclusionsDesc": "路径包含以下任一子串（大小写不敏感）的条目会在扫描时跳过",
+    "localForceModifiedTime": "强制按修改时间刷新",
+    "localAnalyzePages": "分析页面",
+    "localAnalyzeMetadata": "分析元数据",
+    "localScanFlagsDesc": "这三项覆盖服务端配置的回退值；影响扫描的修改会自动触发重新扫描",
+    "scanNow": "立即扫描",
+    "scanQueued": "已加入扫描队列",
+    "resetLocalConfirm": "清除该本地源的覆盖设置（oneshots、排除规则和扫描开关）？目录列表会保留。"
   }
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, ScrollRestoration } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { Moon, Sun } from 'lucide-react';
 import { IconButton } from '../components';
 import { readSidebarCollapsed, writeSidebarCollapsed } from '../lib/sidebarPrefs';
 import { useResolvedTheme, useTheme } from '../lib/theme';
-import { useWhoami } from '../api/hooks';
+import { subscribeTaskEvents, useWhoami } from '../api/hooks';
 import { sse } from '../api/sse';
 import { authAllowsEvents } from '../lib/auth';
 import { DesktopSidebar } from './DesktopSidebar';
@@ -31,6 +32,7 @@ export function AppLayout() {
 	const { t } = useTranslation();
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
 	const auth = useWhoami();
+	const qc = useQueryClient();
 	useEffect(() => {
 		writeSidebarCollapsed(sidebarCollapsed);
 	}, [sidebarCollapsed]);
@@ -38,6 +40,8 @@ export function AppLayout() {
 		if (authAllowsEvents(auth.data)) sse.start();
 		else sse.stop();
 	}, [auth.data]);
+	// Task-event invalidation lives here (one owner for the whole app); pages only read the query cache
+	useEffect(() => subscribeTaskEvents(qc), [qc]);
 	useEffect(() => () => sse.stop(), []);
 	return (
 		<div className={sidebarCollapsed ? 'app app--sidebar-collapsed' : 'app'}>

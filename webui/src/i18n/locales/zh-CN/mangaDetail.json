@@ -1,6 +1,9 @@
 {
   "mangaDetail": {
     "documentTitle": "漫画",
+    "trashed": "已回收",
+    "trashedHint": "该漫画的目录已消失；可在浏览页的回收站中恢复或清除",
+    "trashedChapter": "该章节已移入回收站，无法阅读",
     "filterUnread": "未读",
     "filterDownloaded": "已下载",
     "filterBookmarked": "书签",

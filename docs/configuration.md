@@ -39,6 +39,26 @@ warning (the file cannot relocate the directory it is read from).
 | `SUMIDOKU_LOCAL_DIRS` | `[<config>/local]` | local manga roots scanned by the built-in Local source, semicolon-separated (empty segments ignored); the roots merge into one shelf, a relative path present in several roots lists the first root's copy, and keys from root N ≥ 1 carry the `N:` prefix. Overridable at runtime by the `local.dirs` setting from the Settings page |
 | `SUMIDOKU_LOCAL_DIR` | — | one-item fallback for `SUMIDOKU_LOCAL_DIRS`, used only when that is unset |
 | `SUMIDOKU_LOCAL_ONESHOTS_DIR` | — | name marking a oneshots directory for the Local source (empty = off): a directory whose relative path contains it (case-insensitive substring) is never listed itself, and every archive directly inside becomes its own one-chapter manga titled by the file stem. Overridable at runtime by the `local.oneshots_dir` setting from the Settings page |
+| `SUMIDOKU_LOCAL_SCAN_SECS` | `0` (off) | interval between scheduled full scans of every local instance; `0` disables only the scheduler — manual, browse-kicked, startup and settings-triggered scans still run |
+| `SUMIDOKU_LOCAL_SCAN_ON_STARTUP` | `false` | enqueue a full scan of every local instance at startup |
+| `SUMIDOKU_LOCAL_SCAN_EXCLUSIONS` | `[]` | semicolon-separated path substrings excluded from local scans (case-insensitive, empty entries ignored). Overridable per instance by the `exclusions` setting from the Settings page |
+| `SUMIDOKU_LOCAL_SCAN_FORCE_MODIFIED_TIME` | `false` | global default for the per-instance `forceModifiedTime` switch: also folds file mtimes into the scan change detector, catching in-place archive edits (overridable from the Settings page) |
+| `SUMIDOKU_LOCAL_ANALYZE_PAGES` | `true` | global default for the `analyzePages` switch: the post-scan analysis pass fills chapter page rows through the reader's own `load_pages` (overridable from the Settings page) |
+| `SUMIDOKU_LOCAL_ANALYZE_METADATA` | `true` | global default for the `analyzeMetadata` switch: the analysis pass fills embedded ComicInfo/OPF metadata and manga-level aggregates (overridable from the Settings page) |
+
+Local scans reconcile the persisted index against the filesystem: newly
+discovered manga and chapters are indexed at enumeration cost, and entries
+that vanished on disk are soft-deleted into the trash bin
+(`GET/DELETE /api/v1/local/trash`), never hard-deleted. Per-instance
+settings from the Settings page — `exclusions`, `forceModifiedTime`,
+`analyzePages`, `analyzeMetadata` — override the config fallbacks above
+(scan-affecting changes re-scan the instance automatically); the
+post-scan analysis pass fills embedded metadata and page rows when the
+`analyze*` switches are on. Existing local libraries are backfilled by
+the first scan after an upgrade: browsing an instance with no rows kicks
+one automatically, while an instance with previously opened/shelved rows
+keeps showing that persisted subset until a scan runs (manual "scan now",
+scheduled, or startup).
 
 ## WASM runtime
 

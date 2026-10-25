@@ -1,6 +1,7 @@
 {
   "chapterRow": {
     "locked": "锁定",
+    "trashed": "已回收",
     "bookmarked": "书签",
     "downloaded": "已下载",
     "unread": "未读",

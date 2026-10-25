@@ -1,4 +1,9 @@
-//! Filesystem side of the built-in local sources: walks one instance's roots live (no index table; rows land in the DB only on open/shelve).
+//! Filesystem side of the built-in local sources. Browsing reads the scan index (rows in the manga table),
+//! never the live filesystem: rows come from two directions — opening/shelving a manga registers it through
+//! manga_update, and the scheduled full scan (`scan.rs`, kmrs-style) indexes every discovered manga/chapter
+//! at enumeration cost and soft-deletes (trashes) what vanished, with failed-directory protection. Post-scan
+//! background analysis (`analyze.rs`) fills metadata and page rows; purge/restore live on the trash endpoints
+//! (`api/local.rs`).
 //!
 //! A local instance (a source row with kind = local, registered through `POST /api/v1/sources/internal`)
 //! has one or more root directories in its own `paths` source setting; the default instance
@@ -52,10 +57,12 @@
 //! subtree that could not be walked; a scan that fails midway errors out outright — reconciling against half a
 //! listing would mistake unscanned chapters for deleted ones.
 
+pub mod analyze;
 pub mod chapter_number;
 pub mod comic_info;
 pub mod epub;
 pub mod natural_sort;
+pub mod scan;
 pub mod series_json;
 pub mod zip_cache;
 
@@ -88,10 +95,22 @@ pub struct LocalChapter {
 	pub is_archive: bool,
 }
 
-/// Result of manga_update: the source-side Manga snapshot, EPUB divina results, and failed paths
+/// Per-chapter metadata extracted from inside the archive (ComicInfo.xml in CBZ/ZIP, the OPF package
+/// in EPUB). scanlators persists the writers (Aidoku's only per-chapter people slot); artists and tags
+/// feed the manga-level aggregation only — the chapter table has no columns for them
+pub struct ChapterMeta {
+	pub title: Option<String>,
+	pub authors: Vec<String>,
+	pub artists: Vec<String>,
+	pub tags: Vec<String>,
+}
+
+/// Result of manga_update: the source-side Manga snapshot, EPUB divina results, per-chapter in-archive
+/// metadata, and failed paths
 pub struct LocalUpdate {
 	pub manga: Manga,
 	pub epub_divina: HashMap<String, bool>,
+	pub chapter_meta: HashMap<String, ChapterMeta>,
 	pub protected: Vec<String>,
 }
 
@@ -241,6 +260,8 @@ struct DirItem {
 	is_archive: bool,
 	is_image: bool,
 	date_uploaded: Option<i64>,
+	/// Millisecond mtime: the scheduled scan's change detector (date_uploaded is a second-precision display field)
+	mtime_ms: Option<i64>,
 }
 
 async fn open_dir(dir: &Path) -> ApiResult<tokio::fs::ReadDir> {
@@ -272,17 +293,19 @@ async fn read_items(read_dir: &mut tokio::fs::ReadDir, rel: &str, failed: &mut V
 				continue;
 			}
 		};
-		let date_uploaded = metadata
+		let mtime = metadata
 			.modified()
 			.ok()
-			.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-			.map(|d| d.as_secs() as i64);
+			.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+		let date_uploaded = mtime.map(|d| d.as_secs() as i64);
+		let mtime_ms = mtime.map(|d| d.as_millis() as i64);
 		out.push(DirItem {
 			is_dir: metadata.is_dir(),
 			is_archive: metadata.is_file() && has_ext(&name, ARCHIVE_EXTS),
 			is_image: metadata.is_file() && has_ext(&name, IMAGE_EXTS),
 			name,
 			date_uploaded,
+			mtime_ms,
 		});
 	}
 	Ok(out)
@@ -292,13 +315,24 @@ async fn read_items(read_dir: &mut tokio::fs::ReadDir, rel: &str, failed: &mut V
 /// unions them into one listing. A relative path found in several roots lists once, from the lowest-indexed
 /// root (first directory wins); keys from root N >= 1 carry the `N:` prefix, root 0 keeps the bare form.
 /// A missing root is an empty contribution, not an error. PR-2's browse/refresh buttons call this layer directly
-pub async fn scan_manga_dirs(local_dirs: &[PathBuf], oneshots: Option<&str>) -> ApiResult<Vec<String>> {
-	// lowercased once here; discover lowercases each candidate relative path before the substring test
-	let oneshots = oneshots.map(str::to_lowercase);
+pub async fn scan_manga_dirs(local_dirs: &[PathBuf], oneshots: Option<&str>, exclusions: &[String]) -> ApiResult<Vec<String>> {
+	Ok(scan_roots_full(local_dirs, oneshots, exclusions).await?.0)
+}
+
+/// The collecting variant for the scheduled scan: the same union as scan_manga_dirs plus every failed entry
+/// with its root's key prefix, so the diff can protect unreadable subtrees instead of trashing them
+pub async fn scan_roots_full(
+	local_dirs: &[PathBuf],
+	oneshots: Option<&str>,
+	exclusions: &[String],
+) -> ApiResult<(Vec<String>, Vec<String>)> {
+	// exclusions arrive lowercased from the resolver (scan_one_dir lowercases oneshots once for both callers)
 	let mut seen = HashSet::new();
 	let mut out = Vec::new();
+	let mut failed_out = Vec::new();
 	for (index, dir) in local_dirs.iter().enumerate() {
-		for rel in scan_one_dir(dir, oneshots.as_deref()).await? {
+		let (keys, failed) = scan_one_dir(dir, oneshots, exclusions, false).await?;
+		for rel in keys {
 			if !seen.insert(rel.clone()) {
 				continue;
 			}
@@ -307,51 +341,81 @@ pub async fn scan_manga_dirs(local_dirs: &[PathBuf], oneshots: Option<&str>) -> 
 				_ => format!("{index}:{rel}"),
 			});
 		}
+		// protection is per root: a failed `Foo` in root 1 protects the `1:Foo` rows, never root 0's `Foo`
+		failed_out.extend(failed.into_iter().map(|rel| match index {
+			0 => rel,
+			_ => format!("{index}:{rel}"),
+		}));
 	}
 	out.sort_by(|a, b| natural_sort::compare(a, b));
-	Ok(out)
+	Ok((out, failed_out))
 }
 
-/// Single-root scan: discovers manga under one root by the module-doc classification contract; a missing
-/// root is an empty listing, not an error
-async fn scan_one_dir(local_dir: &Path, oneshots: Option<&str>) -> ApiResult<Vec<String>> {
+/// Single-root scan: discovers manga under one root by the module-doc classification contract. `strict`
+/// selects the caller's root-missing contract: browse (scan_roots_full) treats a missing root as an empty
+/// listing, while the lifecycle scan (scan_instance) fails outright — a root that disappears between the
+/// instance's precheck and this traversal must not degrade into an empty contribution that trashes the
+/// root's whole index. Failed entries come back alongside, for the reconcile protection set
+async fn scan_one_dir(
+	local_dir: &Path,
+	oneshots: Option<&str>,
+	exclusions: &[String],
+	strict: bool,
+) -> ApiResult<(Vec<String>, Vec<String>)> {
+	// lowercased here so both callers (scan_roots_full and the per-root scan_instance loop) apply the
+	// case-insensitive substring rule the same way; discover lowercases each candidate relative path
+	let oneshots = oneshots.map(str::to_lowercase);
 	let mut read_dir = match tokio::fs::read_dir(local_dir).await {
 		Ok(read_dir) => read_dir,
-		Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+			if strict {
+				return Err(ApiError::conflict(
+					"root_unavailable",
+					format!("local root is not a readable directory: {}", local_dir.display()),
+				));
+			}
+			return Ok((Vec::new(), Vec::new()));
+		}
 		Err(e) => return Err(io_scan_err(&e)),
 	};
-	// browse has no reconcile protection set: failures only narrow the listing
 	let mut failed = Vec::new();
 	let first = read_items(&mut read_dir, "", &mut failed).await?;
 	let mut out = Vec::new();
 	for item in first.iter().filter(|item| item.is_dir) {
-		if let Some(items) = classify_items(local_dir, &item.name).await? {
-			discover(local_dir, item.name.clone(), items, &mut out, oneshots).await?;
+		if let Some(items) = classify_items(local_dir, &item.name, &mut failed).await? {
+			discover(local_dir, item.name.clone(), items, &mut out, oneshots.as_deref(), exclusions, &mut failed).await?;
 		}
 	}
-	Ok(out)
+	Ok((out, failed))
 }
 
 type DiscoverFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = ApiResult<()>> + Send + 'a>>;
 
 /// Lists one directory for classification; a directory that cannot be opened is unclassifiable (None): never
-/// claimed, while the pass-2 predicate keeps its ancestors from absorbing what it may hide
-async fn classify_items(local_dir: &Path, rel: &str) -> ApiResult<Option<Vec<DirItem>>> {
+/// claimed, while the pass-2 predicate keeps its ancestors from absorbing what it may hide. The unreadable
+/// path lands in `failed`, so the scheduled scan's diff protects everything known below it (kmrs's
+/// failed_directories) — browse passes a throwaway vec, narrowing only its listing
+async fn classify_items(local_dir: &Path, rel: &str, failed: &mut Vec<String>) -> ApiResult<Option<Vec<DirItem>>> {
 	let mut read_dir = match tokio::fs::read_dir(local_dir.join(rel)).await {
 		Ok(read_dir) => read_dir,
 		Err(e) => {
 			tracing::warn!(rel, "skip unreadable local directory: {e}");
+			failed.push(rel.to_string());
 			return Ok(None);
 		}
 	};
-	let mut failed = Vec::new();
-	read_items(&mut read_dir, rel, &mut failed).await.map(Some)
+	read_items(&mut read_dir, rel, failed).await.map(Some)
 }
 
 /// Whether any archive exists below the directory holding `items` (the pass-2 trigger). Directories that cannot be
 /// inspected — unreadable or past the depth budget — answer true: a subtree that may hide archives must never be
 /// pass-2-absorbed by an ancestor.
-async fn subtree_has_archive(local_dir: &Path, rel: &str, items: &[DirItem]) -> ApiResult<bool> {
+async fn subtree_has_archive(
+	local_dir: &Path,
+	rel: &str,
+	items: &[DirItem],
+	failed: &mut Vec<String>,
+) -> ApiResult<bool> {
 	let mut stack: Vec<String> = items
 		.iter()
 		.filter(|item| item.is_dir)
@@ -361,7 +425,7 @@ async fn subtree_has_archive(local_dir: &Path, rel: &str, items: &[DirItem]) -> 
 		if rel.matches('/').count() >= MAX_KEY_DEPTH {
 			return Ok(true);
 		}
-		let Some(items) = classify_items(local_dir, &rel).await? else {
+		let Some(items) = classify_items(local_dir, &rel, failed).await? else {
 			return Ok(true);
 		};
 		if items.iter().any(|item| item.is_archive) {
@@ -377,23 +441,31 @@ async fn subtree_has_archive(local_dir: &Path, rel: &str, items: &[DirItem]) -> 
 	Ok(false)
 }
 
-/// Classifies one directory whose listing is `items`: the oneshots rule (the relative path contains the
-/// configured name) emits each direct archive as its own manga and stops; otherwise pass 1 claims the
-/// directory when it directly holds archives, pass 2 when no archive exists anywhere below. A claimed
-/// directory absorbs its subtree, so children are classified only when it qualifies under no rule (a pure
-/// container).
+/// Classifies one directory whose listing is `items`: an exclusion match (case-insensitive substring of the
+/// relative path, kmrs's scan_directory_exclusions) skips the subtree outright — never claimed, never descended,
+/// and not a failure; the oneshots rule (the relative path contains the configured name) emits each direct
+/// archive as its own manga and stops; otherwise pass 1 claims the directory when it directly holds archives,
+/// pass 2 when no archive exists anywhere below. A claimed directory absorbs its subtree, so children are
+/// classified only when it qualifies under no rule (a pure container).
 fn discover<'a>(
 	local_dir: &'a Path,
 	rel: String,
 	items: Vec<DirItem>,
 	out: &'a mut Vec<String>,
 	oneshots: Option<&'a str>,
+	exclusions: &'a [String],
+	failed: &'a mut Vec<String>,
 ) -> DiscoverFuture<'a> {
 	Box::pin(async move {
+		let lowered = rel.to_lowercase();
+		if exclusions.iter().any(|exclusion| lowered.contains(exclusion)) {
+			tracing::debug!(rel, "skip excluded local directory");
+			return Ok(());
+		}
 		// the oneshots rule outranks the archive trigger: the directory itself is never claimed, and
 		// nothing below it is picked up
 		if let Some(name) = oneshots
-			&& rel.to_lowercase().contains(name)
+			&& lowered.contains(name)
 		{
 			out.extend(
 				items
@@ -403,7 +475,7 @@ fn discover<'a>(
 			);
 			return Ok(());
 		}
-		if items.iter().any(|item| item.is_archive) || !subtree_has_archive(local_dir, &rel, &items).await? {
+		if items.iter().any(|item| item.is_archive) || !subtree_has_archive(local_dir, &rel, &items, failed).await? {
 			out.push(rel);
 			return Ok(());
 		}
@@ -413,20 +485,33 @@ fn discover<'a>(
 				tracing::warn!(rel = child, "skip over-deep local directory");
 				continue;
 			}
-			if let Some(child_items) = classify_items(local_dir, &child).await? {
-				discover(local_dir, child, child_items, out, oneshots).await?;
+			if let Some(child_items) = classify_items(local_dir, &child, failed).await? {
+				discover(local_dir, child, child_items, out, oneshots, exclusions, failed).await?;
 			}
 		}
 		Ok(())
 	})
 }
 
+/// Result of scan_chapters: the sorted chapter list, failed entries by manga-relative path, and the mtime
+/// accumulators for the scan's change detector (kmrs's series mtime, generalized for nesting: chapters sit at
+/// any depth, so dir_mtime_ms is the max over the manga directory and every descendant directory — a deep
+/// addition bumps its immediate parent — while all_mtime_ms also folds in file mtimes for the instance's
+/// forceModifiedTime mode, catching in-place archive edits that never bump a directory)
+pub struct ChapterScan {
+	pub chapters: Vec<LocalChapter>,
+	pub failed: Vec<String>,
+	pub entry_kind: &'static str,
+	pub dir_mtime_ms: i64,
+	pub all_mtime_ms: i64,
+}
+
 /// Chapter scan of a single manga: walks the manga's whole subtree — archives and image-leaf directories (direct
 /// image files) at any depth become chapters keyed by their path relative to the manga directory; directories
-/// holding only subdirectories are containers, not chapters. Returns the sorted chapter list plus the failed entries
-/// by full relative path. Sort order matches Suwayomi LocalSource: chapter number descending (unparsed counts as -1
-/// and sinks to the bottom), ties broken by display name in descending natural order
-async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<LocalChapter>, Vec<String>)> {
+/// holding only subdirectories are containers, not chapters. Sort order matches Suwayomi LocalSource: chapter
+/// number descending (unparsed counts as -1 and sinks to the bottom), ties broken by display name in descending
+/// natural order
+async fn scan_chapters(local_dir: &Path, manga_key: &str, exclusions: &[String]) -> ApiResult<ChapterScan> {
 	require_key(manga_key)?;
 	// a key naming a file is a oneshot from the oneshots directory: the manga degenerates to that one
 	// archive chapter, keyed by its leaf name like any top-level archive chapter
@@ -438,50 +523,101 @@ async fn scan_chapters(local_dir: &Path, manga_key: &str) -> ApiResult<(Vec<Loca
 			.rsplit_once('.')
 			.map(|(stem, _)| stem.to_string())
 			.unwrap_or_else(|| name.to_string());
-		let date_uploaded = metadata
+		let mtime_ms = metadata
 			.modified()
 			.ok()
 			.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-			.map(|d| d.as_secs() as i64);
-		return Ok((
-			vec![LocalChapter {
+			.map(|d| d.as_millis() as i64)
+			.unwrap_or(0);
+		let date_uploaded = Some(mtime_ms / 1000);
+		// the oneshot's "directory level" is its containing directory: forceModifiedTime off means an
+		// in-place rewrite is invisible (same rule as ordinary manga); on joins the file mtime
+		let parent_ms = tokio::fs::metadata(local_dir.join(manga_key).parent().map(Path::to_path_buf).unwrap_or_else(|| local_dir.to_path_buf()))
+			.await
+			.ok()
+			.and_then(|metadata| metadata.modified().ok())
+			.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+			.map(|d| d.as_millis() as i64)
+			.unwrap_or(mtime_ms);
+		return Ok(ChapterScan {
+			chapters: vec![LocalChapter {
 				number: chapter_number::parse_chapter_number(&display),
 				key: name.to_string(),
 				name: display,
 				date_uploaded,
 				is_archive: true,
 			}],
-			Vec::new(),
-		));
+			failed: Vec::new(),
+			entry_kind: "archive",
+			dir_mtime_ms: parent_ms,
+			all_mtime_ms: parent_ms.max(mtime_ms),
+		});
 	}
 	let mut chapters = Vec::new();
 	let mut failed = Vec::new();
+	// the manga directory's own mtime heads the dir accumulator: deleting a direct child bumps only it
+	let mut dir_mtime_ms = tokio::fs::metadata(local_dir.join(manga_key))
+		.await
+		.ok()
+		.and_then(|metadata| metadata.modified().ok())
+		.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+		.map(|d| d.as_millis() as i64)
+		.unwrap_or(0);
+	let mut all_mtime_ms = dir_mtime_ms;
 	let mut read_dir = open_dir(&local_dir.join(manga_key)).await?;
 	let first = read_items(&mut read_dir, "", &mut failed).await?;
-	collect_chapters(local_dir, manga_key, first, &mut chapters, &mut failed).await?;
+	collect_chapters(
+		local_dir,
+		manga_key,
+		first,
+		exclusions,
+		&mut chapters,
+		&mut failed,
+		&mut dir_mtime_ms,
+		&mut all_mtime_ms,
+	)
+	.await?;
 	chapters.sort_by(|a, b| {
 		b.number
 			.unwrap_or(-1.0)
 			.total_cmp(&a.number.unwrap_or(-1.0))
 			.then_with(|| natural_sort::compare(&b.name, &a.name))
 	});
-	Ok((chapters, failed))
+	Ok(ChapterScan {
+		chapters,
+		failed,
+		entry_kind: "directory",
+		dir_mtime_ms,
+		all_mtime_ms,
+	})
 }
 
 /// Worklist walk of the manga subtree: every directory is listed once — becoming an image-leaf chapter when it
 /// directly holds image files — and its subdirectories queue for the same treatment. A directory that cannot be
-/// listed degrades into `failed`, where the reconcile prefix rule protects everything known below it.
+/// listed degrades into `failed`, where the reconcile prefix rule protects everything known below it. Excluded
+/// subdirectories (the same substring rule as discovery, matched on the full root-relative path) are skipped
+/// outright. mtimes accumulate per entry: directories into dir_mtime, everything into all_mtime.
+#[allow(clippy::too_many_arguments)]
 async fn collect_chapters(
 	local_dir: &Path,
 	manga_key: &str,
 	first: Vec<DirItem>,
+	exclusions: &[String],
 	chapters: &mut Vec<LocalChapter>,
 	failed: &mut Vec<String>,
+	dir_mtime_ms: &mut i64,
+	all_mtime_ms: &mut i64,
 ) -> ApiResult<()> {
 	let mut stack = vec![(String::new(), first)];
 	while let Some((rel, items)) = stack.pop() {
 		for item in items {
 			let key = join_rel(&rel, &item.name);
+			if let Some(mtime) = item.mtime_ms {
+				*all_mtime_ms = (*all_mtime_ms).max(mtime);
+				if item.is_dir {
+					*dir_mtime_ms = (*dir_mtime_ms).max(mtime);
+				}
+			}
 			if item.is_archive {
 				let display = key
 					.rsplit_once('.')
@@ -497,6 +633,13 @@ async fn collect_chapters(
 				continue;
 			}
 			if !item.is_dir {
+				continue;
+			}
+			let full_rel = join_rel(manga_key, &key).to_lowercase();
+			if exclusions.iter().any(|exclusion| full_rel.contains(exclusion)) {
+				// an excluded subtree is skipped for content purposes, but rows already persisted under it
+				// must not look vanished to the reconcile: record it in the protection set
+				failed.push(key);
 				continue;
 			}
 			let mut child_dir = match open_dir(&local_dir.join(manga_key).join(&key)).await {
@@ -543,22 +686,75 @@ fn to_aidoku_chapter(chapter: &LocalChapter) -> Chapter {
 	}
 }
 
+/// One archive chapter's single-open analysis: everything manga_update needs from inside the file, produced
+/// by one spawn_blocking per archive (the chain's link 2/4, the divina verdict and the chapter-level metadata
+/// all read from this — no archive is opened twice)
+struct ArchiveAnalysis {
+	/// CBZ/ZIP ComicInfo carrier tri-state (chain link 2's authoritative semantics): None = no file,
+	/// Some(None) = present but unparsable, Some(Some) = parsed
+	comic: Option<Option<comic_info::ComicInfo>>,
+	/// EPUB: the OPF package as ComicInfo (a broken package counts as no source, chain link 4 skips it)
+	epub_info: Option<comic_info::ComicInfo>,
+	/// EPUB only: the divina compatibility verdict, false included for a broken package
+	epub_divina: Option<bool>,
+}
+
+fn analyze_archive(zip: &Arc<ZipCache>, path: &Path) -> ArchiveAnalysis {
+	if has_ext(&path.to_string_lossy(), &["epub"]) {
+		return match epub::read_package(zip, path) {
+			Some(package) => {
+				let divina = !package.pages(zip, path).is_empty();
+				ArchiveAnalysis {
+					comic: None,
+					epub_info: Some(package.into_comic_info()),
+					epub_divina: Some(divina),
+				}
+			}
+			None => ArchiveAnalysis {
+				comic: None,
+				epub_info: None,
+				epub_divina: Some(false),
+			},
+		};
+	}
+	let comic = match zip.read_entry(path, comic_info::COMIC_INFO_FILE) {
+		Ok(bytes) => Some(comic_info::parse(&bytes)),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+		Err(e) => {
+			tracing::warn!(path = %path.display(), "read archive ComicInfo.xml failed: {e}");
+			None
+		}
+	};
+	ArchiveAnalysis {
+		comic,
+		epub_info: None,
+		epub_divina: None,
+	}
+}
+
 /// The local counterpart of "fetch details + chapters from the source": scans the manga directory and produces a
 /// Manga snapshot (including chapters) of the same shape as get_manga_update, for upsert_manga + reconcile_chapters to reuse
-pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<LocalUpdate> {
+pub async fn manga_update(
+	local_dirs: &[PathBuf],
+	zip: &Arc<ZipCache>,
+	manga_key: &str,
+	exclusions: &[String],
+) -> ApiResult<LocalUpdate> {
 	let (dir, rel) = resolve_key(local_dirs, manga_key)?;
-	let (chapters, failed) = scan_chapters(dir, rel).await?;
+	let scanned = scan_chapters(dir, rel, exclusions).await?;
+	let chapters = scanned.chapters;
+	let failed = scanned.failed;
 	let oneshot = tokio::fs::metadata(dir.join(rel)).await.is_ok_and(|metadata| metadata.is_file());
-	let mut epub_divina = HashMap::new();
-	for chapter in chapters.iter().filter(|chapter| chapter.is_archive && has_ext(&chapter.key, &["epub"])) {
+	let mut analyses = HashMap::new();
+	for chapter in chapters.iter().filter(|chapter| chapter.is_archive) {
 		let path = chapter_archive_path(dir, rel, &chapter.key, oneshot);
-		let compatible = {
+		let analysis = {
 			let zip = zip.clone();
-			tokio::task::spawn_blocking(move || epub::is_divina(&zip, &path))
+			tokio::task::spawn_blocking(move || analyze_archive(&zip, &path))
 				.await
-				.map_err(|e| ApiError::internal(format!("analyze EPUB compatibility failed: {e}")))?
+				.map_err(|e| ApiError::internal(format!("analyze local archive failed: {e}")))?
 		};
-		epub_divina.insert(chapter.key.clone(), compatible);
+		analyses.insert(chapter.key.clone(), analysis);
 	}
 	// the title is the leaf name (a oneshot drops the archive extension): the full key would repeat the
 	// container path on every nested row; ComicInfo still overrides it below
@@ -567,7 +763,7 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 		title: title_of(manga_key),
 		..Manga::default()
 	};
-	if let Some(info) = read_manga_metadata(dir, zip, rel, &chapters).await {
+	if let Some(info) = read_manga_metadata(dir, rel, &chapters, &analyses).await {
 		if let Some(title) = info.title() {
 			manga.title = title.to_string();
 		}
@@ -586,11 +782,98 @@ pub async fn manga_update(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key
 		};
 	}
 	manga.chapters = Some(chapters.iter().map(to_aidoku_chapter).collect());
+	let mut epub_divina = HashMap::new();
+	let mut chapter_meta = HashMap::new();
+	for chapter in chapters.iter().filter(|chapter| chapter.is_archive) {
+		let Some(analysis) = analyses.get(&chapter.key) else {
+			continue;
+		};
+		if let Some(divina) = analysis.epub_divina {
+			epub_divina.insert(chapter.key.clone(), divina);
+		}
+		let info = analysis.epub_info.as_ref().or(analysis.comic.as_ref().and_then(|carrier| carrier.as_ref()));
+		if let Some(info) = info {
+			// ComicInfo.xml's chapter title is Title (Series is the manga-level field); an EPUB's dc:title
+			// lands in series through into_comic_info and is the chapter's book title
+			let title = if analysis.epub_info.is_some() {
+				info.title()
+			} else {
+				info.chapter_title()
+			};
+			let meta = ChapterMeta {
+				title: title.map(str::to_string),
+				authors: info.authors().unwrap_or_default(),
+				artists: info.artists().unwrap_or_default(),
+				tags: info.tags().unwrap_or_default(),
+			};
+			if meta.title.is_some() || !meta.authors.is_empty() || !meta.artists.is_empty() || !meta.tags.is_empty() {
+				chapter_meta.insert(chapter.key.clone(), meta);
+			}
+		}
+	}
+	// Manga-level authors/artists/tags aggregate from the chapters when the chain found none (Komga's
+	// series-authors union); a chain hit stays authoritative for the fields it produced
+	if manga.authors.is_none() {
+		manga.authors = comic_info::normalized_names(
+			chapters
+				.iter()
+				.filter_map(|chapter| chapter_meta.get(&chapter.key))
+				.flat_map(|meta| meta.authors.iter().cloned())
+				.collect(),
+		);
+	}
+	if manga.artists.is_none() {
+		manga.artists = comic_info::normalized_names(
+			chapters
+				.iter()
+				.filter_map(|chapter| chapter_meta.get(&chapter.key))
+				.flat_map(|meta| meta.artists.iter().cloned())
+				.collect(),
+		);
+	}
+	if manga.tags.is_none() {
+		manga.tags = comic_info::normalized_names(
+			chapters
+				.iter()
+				.filter_map(|chapter| chapter_meta.get(&chapter.key))
+				.flat_map(|meta| meta.tags.iter().cloned())
+				.collect(),
+		);
+	}
 	Ok(LocalUpdate {
 		manga,
 		epub_divina,
+		chapter_meta,
 		protected: failed,
 	})
+}
+
+/// Persists per-chapter metadata after a reconcile (which always rewrites filename-derived titles first):
+/// an extracted title overrides, writers land in scanlators; chapters without metadata are untouched
+pub async fn store_chapter_metadata(
+	conn: &mut sqlx::SqliteConnection,
+	manga_id: i64,
+	values: &HashMap<String, ChapterMeta>,
+) -> ApiResult<()> {
+	for (key, meta) in values {
+		if let Some(title) = meta.title.as_deref() {
+			sqlx::query("UPDATE chapter SET title = ? WHERE manga_id = ? AND key = ?")
+				.bind(title)
+				.bind(manga_id)
+				.bind(key)
+				.execute(&mut *conn)
+				.await?;
+		}
+		if !meta.authors.is_empty() {
+			sqlx::query("UPDATE chapter SET scanlators = ? WHERE manga_id = ? AND key = ?")
+				.bind(serde_json::to_string(&meta.authors)?)
+				.bind(manga_id)
+				.bind(key)
+				.execute(&mut *conn)
+				.await?;
+		}
+	}
+	Ok(())
 }
 
 pub async fn store_epub_divina(
@@ -618,8 +901,8 @@ pub async fn store_epub_divina(
 /// Manga metadata resolution, first hit wins — there is no per-field merge. The chain:
 /// 1. the manga directory's top-level ComicInfo.xml: authoritative when present, so a present-but-unparsable
 ///    file yields no metadata and nothing below is consulted;
-/// 2. the first chapter archive carrying a ComicInfo.xml, in chapter order (parsed in memory only, never
-///    written back to the user's directory);
+/// 2. the first chapter archive carrying a ComicInfo.xml, in chapter order (from the per-archive analyses —
+///    parsed in memory only, never written back to the user's directory);
 /// 3. a series.json sidecar in the manga directory: a broken or unreadable file warns and falls through
 ///    instead of ending the chain;
 /// 4. the first EPUB chapter whose package document parses, in chapter order — a broken EPUB counts as no
@@ -627,7 +910,12 @@ pub async fn store_epub_divina(
 ///
 /// For a oneshot the "directory level" is the oneshots directory, whose ComicInfo.xml/series.json are series
 /// sidecars the oneshots rule ignores: only archive-internal metadata (links 2 and 4) applies.
-async fn read_manga_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter]) -> Option<comic_info::ComicInfo> {
+async fn read_manga_metadata(
+	local_dir: &Path,
+	manga_key: &str,
+	chapters: &[LocalChapter],
+	analyses: &HashMap<String, ArchiveAnalysis>,
+) -> Option<comic_info::ComicInfo> {
 	let oneshot = tokio::fs::metadata(local_dir.join(manga_key))
 		.await
 		.is_ok_and(|metadata| metadata.is_file());
@@ -636,15 +924,25 @@ async fn read_manga_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &
 	{
 		return info;
 	}
-	if let Some(info) = archive_comic_info(local_dir, zip, manga_key, chapters, oneshot).await {
-		return info;
+	// link 2: the first carrier is authoritative even when its file does not parse (Some(None) ends the
+	// chain with no metadata); archives without the file (or with an unreadable one) are skipped
+	for chapter in chapters.iter().filter(|c| c.is_archive) {
+		if let Some(ArchiveAnalysis { comic: Some(carrier), .. }) = analyses.get(&chapter.key) {
+			return carrier.clone();
+		}
 	}
 	if !oneshot
 		&& let Some(info) = series_json_metadata(local_dir, manga_key).await
 	{
 		return Some(info);
 	}
-	epub_opf_metadata(local_dir, zip, manga_key, chapters, oneshot).await
+	// link 4: the first parseable EPUB package in chapter order
+	for chapter in chapters.iter().filter(|c| c.is_archive) {
+		if let Some(ArchiveAnalysis { epub_info: Some(info), .. }) = analyses.get(&chapter.key) {
+			return Some(info.clone());
+		}
+	}
+	None
 }
 
 /// Chain link 1: the manga directory's top-level ComicInfo.xml. Outer Some = the file is present and
@@ -662,32 +960,6 @@ async fn top_level_comic_info(local_dir: &Path, manga_key: &str) -> Option<Optio
 	}
 }
 
-/// Chain link 2: the first archive in chapter order carrying a ComicInfo.xml. Same tri-state as link 1:
-/// the first carrier is authoritative even when its file does not parse; archives without the file (or
-/// with an unreadable one) are skipped.
-async fn archive_comic_info(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter], oneshot: bool) -> Option<Option<comic_info::ComicInfo>> {
-	for chapter in chapters.iter().filter(|c| c.is_archive) {
-		let path = chapter_archive_path(local_dir, manga_key, &chapter.key, oneshot);
-		let read = {
-			let zip = zip.clone();
-			tokio::task::spawn_blocking(move || zip.read_entry(&path, comic_info::COMIC_INFO_FILE)).await
-		};
-		match read {
-			Ok(Ok(bytes)) => return Some(comic_info::parse(&bytes)),
-			Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => continue,
-			Ok(Err(e)) => {
-				tracing::warn!(chapter = %chapter.key, "read archive ComicInfo.xml failed: {e}");
-				continue;
-			}
-			Err(e) => {
-				tracing::warn!(chapter = %chapter.key, "archive ComicInfo.xml task failed: {e}");
-				continue;
-			}
-		}
-	}
-	None
-}
-
 /// Chain link 3: the series.json sidecar in the manga directory. Unlike the ComicInfo links it is not
 /// authoritative: a broken or unreadable file warns and the chain falls through, never failing the scan.
 async fn series_json_metadata(local_dir: &Path, manga_key: &str) -> Option<comic_info::ComicInfo> {
@@ -700,27 +972,6 @@ async fn series_json_metadata(local_dir: &Path, manga_key: &str) -> Option<comic
 			None
 		}
 	}
-}
-
-/// Chain link 4: the first EPUB chapter in chapter order whose package document parses. An EPUB that does
-/// not parse counts as no source (read_package already warned) and the next EPUB is tried.
-async fn epub_opf_metadata(local_dir: &Path, zip: &Arc<ZipCache>, manga_key: &str, chapters: &[LocalChapter], oneshot: bool) -> Option<comic_info::ComicInfo> {
-	for chapter in chapters.iter().filter(|c| c.is_archive && has_ext(&c.key, &["epub"])) {
-		let path = chapter_archive_path(local_dir, manga_key, &chapter.key, oneshot);
-		let package = {
-			let zip = zip.clone();
-			tokio::task::spawn_blocking(move || epub::read_package(&zip, &path)).await
-		};
-		match package {
-			Ok(Some(package)) => return Some(package.into_comic_info()),
-			Ok(None) => continue,
-			Err(e) => {
-				tracing::warn!(chapter = %chapter.key, "epub metadata task failed: {e}");
-				continue;
-			}
-		}
-	}
-	None
 }
 
 /// Archive chapter path on disk: for a oneshot the manga key names the archive itself, otherwise the
@@ -881,7 +1132,12 @@ async fn read_page_impl(
 
 /// Cover fallback chain (Suwayomi semantics): a cover.* sidecar in the manga directory → the first page of the last
 /// chapter in the list (descending by number, so the last is the oldest chapter) → None (the caller answers 404 and the UI shows a placeholder)
-pub async fn resolve_cover(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_key: &str) -> ApiResult<Option<(Vec<u8>, String)>> {
+pub async fn resolve_cover(
+	local_dirs: &[PathBuf],
+	zip: &Arc<ZipCache>,
+	manga_key: &str,
+	exclusions: &[String],
+) -> ApiResult<Option<(Vec<u8>, String)>> {
 	let (root, rel) = resolve_key(local_dirs, manga_key)?;
 	let dir = root.join(rel);
 	// a oneshot key names the archive file: the cover.* next to it is a series sidecar, which the
@@ -920,7 +1176,7 @@ pub async fn resolve_cover(local_dirs: &[PathBuf], zip: &Arc<ZipCache>, manga_ke
 			return Ok(Some((bytes, image_mime(&name).to_string())));
 		}
 	}
-	let (chapters, _) = scan_chapters(root, rel).await?;
+	let chapters = scan_chapters(root, rel, exclusions).await?.chapters;
 	let Some(last) = chapters.last() else {
 		return Ok(None);
 	};

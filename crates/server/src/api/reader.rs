@@ -178,6 +178,10 @@ pub async fn update_chapter(
 	Json(patch): Json<ProgressPatch>,
 ) -> ApiResult<Json<Value>> {
 	let chapter = chapter_row(&state.pool, id).await?;
+	// progress on a trashed chapter is meaningless (its files are gone): refuse the write
+	if chapter.trashed_at.is_some() {
+		return Err(ApiError::not_found("chapter is in the trash"));
+	}
 	if patch.is_empty() {
 		let progress = read_progress(&state.pool, user.id, id).await?;
 		return Ok(Json(progress_json(id, &progress)));
@@ -213,13 +217,20 @@ pub async fn batch_update_chapters(
 	let mut updated = 0;
 	let mut deletions = Vec::new();
 	for chapter_id in &body.chapter_ids {
-		let page_count: Option<(i64,)> = sqlx::query_as("SELECT page_count FROM chapter WHERE id = ?")
-			.bind(chapter_id)
-			.fetch_optional(&mut *tx)
-			.await?;
-		let Some((page_count,)) = page_count else {
+		let page_count: Option<(i64, Option<i64>)> = sqlx::query_as(
+			"SELECT page_count, trashed_at FROM chapter WHERE id = ?",
+		)
+		.bind(chapter_id)
+		.fetch_optional(&mut *tx)
+		.await?;
+		let Some((page_count, trashed_at)) = page_count else {
 			continue;
 		};
+		// progress on a trashed chapter is meaningless (its files are gone): refuse the write the same way
+		// the single-chapter and read paths do, or a batch update would bypass the guard
+		if trashed_at.is_some() {
+			continue;
+		}
 		let progress = body.patch.apply(&mut tx, user.id, *chapter_id).await?;
 		if let Some(deletion) = read_deletion(&body.patch, page_count) {
 			deletions.push((*chapter_id, progress, deletion));

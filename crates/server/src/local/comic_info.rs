@@ -8,11 +8,14 @@ use serde::Deserialize;
 
 pub const COMIC_INFO_FILE: &str = "ComicInfo.xml";
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(default)]
 pub struct ComicInfo {
 	#[serde(rename = "Series")]
 	pub series: Option<String>,
+	/// Chapter-level title (ComicInfo's Title element); manga-level resolution keeps using Series
+	#[serde(rename = "Title")]
+	pub chapter_title: Option<String>,
 	#[serde(rename = "Summary")]
 	pub summary: Option<String>,
 	#[serde(rename = "Writer")]
@@ -107,6 +110,12 @@ fn split_list(parts: &[Option<&str>]) -> Option<Vec<String>> {
 impl ComicInfo {
 	pub fn title(&self) -> Option<&str> {
 		self.series.as_deref().map(str::trim).filter(|s| !s.is_empty())
+	}
+
+	/// ComicInfo's Title element: a chapter-level title; an OPF dc:title lands in `series` instead, so EPUB
+	/// chapter titles read through title()
+	pub fn chapter_title(&self) -> Option<&str> {
+		self.chapter_title.as_deref().map(str::trim).filter(|s| !s.is_empty())
 	}
 
 	pub fn authors(&self) -> Option<Vec<String>> {

@@ -14,7 +14,7 @@ use aidoku::{ContentRating, Viewer};
 use axum::Router;
 use axum::http::StatusCode;
 use common::{TestApp, base_config, request, request_full, source_by_key, test_app};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
@@ -203,7 +203,7 @@ async fn migration_seeds_builtin_local_source() {
 async fn scan_lists_only_real_manga_dirs() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_local_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
@@ -447,6 +447,56 @@ async fn local_cover_rebuilds_unversioned_cache() {
 }
 
 #[tokio::test]
+async fn first_browse_uses_pre_kick_snapshot() {
+	let TestApp { app, tmp: _tmp, db_path } = local_app().await;
+	let source_id = local_source_id(&app).await;
+	let pool = common::connect_db(&db_path).await;
+	sqlx::query(
+		"CREATE TRIGGER index_during_enqueue AFTER INSERT ON task
+		 WHEN NEW.kind = 'local_scan'
+		 BEGIN
+		  INSERT INTO manga (source_id, key, title) VALUES (NEW.source_id, 'Alpha', 'Alpha');
+		 END",
+	)
+	.execute(&pool)
+	.await
+	.expect("create enqueue trigger");
+	let (status, body) = request(&app, "POST", &format!("/api/v1/sources/{source_id}/search"), Some(json!({}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["entries"].as_array().expect("entries").len(), 0, "the first response predates the kicked scan: {body}");
+	sqlx::query("DROP TRIGGER index_during_enqueue").execute(&pool).await.expect("drop enqueue trigger");
+	common::local_scan_and_settle(&app, None).await;
+	pool.close().await;
+}
+
+#[tokio::test]
+async fn scan_checks_inputs_after_the_last_upsert() {
+	let TestApp { app, tmp, db_path } = local_app().await;
+	for name in ["Gamma", "Delta", "Epsilon"] {
+		std::fs::remove_dir_all(tmp.path().join("local").join(name)).expect("remove extra fixture");
+	}
+	let pool = common::connect_db(&db_path).await;
+	sqlx::query(
+		"CREATE TRIGGER exclude_second_after_insert AFTER INSERT ON manga
+		 WHEN NEW.id = 2
+		 BEGIN
+		  INSERT OR REPLACE INTO source_setting (source_id, key, value)
+		  VALUES (NEW.source_id, 'exclusions', json_object('StringArray', json_array(lower(NEW.key))));
+		 END",
+	)
+	.execute(&pool)
+	.await
+	.expect("create upsert trigger");
+	common::local_scan_and_settle(&app, None).await;
+	let (status, body) = request(&app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	let scan = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+	assert_eq!(scan["result"]["scanned"], 1, "the final pass excludes the second upsert: {scan}");
+	pool.close().await;
+}
+
+#[tokio::test]
 async fn refresh_rescans_added_and_removed_chapters() {
 	let TestApp { app, tmp, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
@@ -464,12 +514,35 @@ async fn refresh_rescans_added_and_removed_chapters() {
 	std::fs::remove_dir_all(tmp.path().join("local/Alpha/ch 2")).expect("remove ch 2");
 	let (status, _) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let keys: Vec<String> = chapters_of(&app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
+	// the vanished chapter is trashed, not deleted: the row stays with its progress until purged
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let ch2 = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.find(|c| c["key"] == "ch 2")
+		.expect("ch 2 trashed, not gone");
+	assert_eq!(ch2["trashed"], true);
+	let active: Vec<&Value> = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.filter(|c| c["trashed"] == false)
 		.collect();
-	assert!(!keys.iter().any(|k| k == "ch 2"), "真删除的章节应对账掉: {keys:?}");
+	assert!(!active.iter().any(|c| c["key"] == "ch 2"));
+
+	// reappearing on disk restores the row in place on the next refresh
+	write_page(&tmp.path().join("local/Alpha/ch 2"), "1.png", b"alpha-2-1-back");
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let ch2 = body
+		.as_array()
+		.expect("chapters array")
+		.iter()
+		.find(|c| c["key"] == "ch 2")
+		.expect("ch 2 restored");
+	assert_eq!(ch2["trashed"], false);
 }
 
 #[cfg(unix)]
@@ -526,15 +599,17 @@ async fn unreadable_chapter_entry_never_deletes_rows() {
 
 	// an entry-level failure degrades instead of erroring: refresh still returns OK; protected rows skip
 	// this round's reordering (keeping their old source_order), so assert on the content set, not positions
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	keys.sort();
-	assert_eq!(keys, ["ch 1", "ch 2"], "悬垂 symlink 的章节行必须保留，真删的对账掉: {keys:?}");
+	let chapters = body.as_array().expect("chapters array");
+	assert_eq!(chapters.len(), 3, "trashed rows stay listed: {chapters:?}");
+	// phase 2: the truly deleted ch 3 is trashed, not deleted; the dangling symlink ch 2 is protected
+	let ch3 = chapters.iter().find(|c| c["key"] == "ch 3").expect("ch 3 trashed, not gone");
+	assert_eq!(ch3["trashed"], true);
+	for key in ["ch 1", "ch 2"] {
+		let chapter = chapters.iter().find(|c| c["key"] == key).expect("chapter kept");
+		assert_eq!(chapter["trashed"], false, "{key}");
+	}
 }
 
 #[tokio::test]
@@ -654,11 +729,17 @@ async fn update_scheduler_rescans_local_library() {
 }
 
 #[tokio::test]
-async fn browse_search_scans_dirs_and_filters() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+async fn browse_search_reads_the_index_and_filters() {
+	let TestApp { app, tmp: _tmp, .. } = local_app_with(|config| {
+		config.local_analyze_pages = false;
+		config.local_analyze_metadata = false;
+	})
+	.await;
 	let source_id = local_source_id(&app).await;
+	common::local_scan_and_settle(&app, None).await;
 
-	// empty query (absent or pure whitespace) returns everything: browse = real scan, entries in the online search shape (sourceId attached)
+	// empty query (absent or pure whitespace) returns everything indexed, entries in the online search
+	// shape (sourceId attached); indexed rows always carry the internal id
 	for body in [json!({}), json!({"query": "  "})] {
 		let (status, body) = request(
 			&app,
@@ -675,7 +756,7 @@ async fn browse_search_scans_dirs_and_filters() {
 		for entry in entries {
 			assert_eq!(entry["sourceId"], source_id);
 			assert_eq!(entry["key"], entry["title"]);
-			assert!(entry["id"].is_null(), "未入库的条目不带内部 id: {entry}");
+			assert!(entry["id"].is_i64(), "indexed entries carry their id: {entry}");
 		}
 	}
 
@@ -692,7 +773,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0]["title"], "Alpha");
 
-	// shelved entries carry the internal id, which the browse page uses to jump straight to the detail page
+	// a shelved entry's id is the one the browse page uses to jump straight to the detail page
 	let manga_id = register_local(&app, "Beta").await;
 	let (status, body) = request(
 		&app,
@@ -704,7 +785,7 @@ async fn browse_search_scans_dirs_and_filters() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["entries"][0]["id"], manga_id);
 
-	// a directory name nothing scans to: an empty set is not an error
+	// a name nothing was indexed under: an empty set is not an error
 	let (status, body) = request(
 		&app,
 		"POST",
@@ -720,6 +801,8 @@ async fn browse_search_scans_dirs_and_filters() {
 async fn aggregate_search_includes_local_source() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
+	// the local arm answers from the scan index, so index first
+	common::local_scan_and_settle(&app, None).await;
 
 	// cross-source aggregation with the local source selected yields a result entry, not an unsupported error entry
 	let (status, body) = request(
@@ -836,7 +919,7 @@ async fn nested_app() -> TestApp {
 async fn nested_scan_discovers_series_under_containers() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_nested_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	// the publisher grouping directory itself is never a manga
@@ -847,6 +930,8 @@ async fn nested_scan_discovers_series_under_containers() {
 async fn nested_browse_lists_leaf_titles_and_filters() {
 	let TestApp { app, tmp: _tmp, .. } = nested_app().await;
 	let source_id = local_source_id(&app).await;
+	// browse reads the scan index: index first, then read
+	common::local_scan_and_settle(&app, None).await;
 
 	let (status, body) = request(
 		&app,
@@ -946,7 +1031,7 @@ async fn manga_absorbs_nested_archives() {
 	let t = TestApp { app, tmp, db_path };
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None)
+	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Absorbed"]);
@@ -1101,19 +1186,17 @@ async fn unreadable_nested_entry_never_deletes_rows() {
 	std::fs::remove_dir_all(sigma.join("vol1/ch 1")).expect("remove ch 1");
 
 	// an entry-level failure degrades instead of erroring: assert on the content set, not positions
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	keys.sort();
-	assert_eq!(
-		keys,
-		["vol1/ch 2", "vol2/ch 1"],
-		"chapters under dangling links must be kept, truly deleted ones reconciled: {keys:?}"
-	);
+	let chapters = body.as_array().expect("chapters array");
+	assert_eq!(chapters.len(), 3, "trashed rows stay listed: {chapters:?}");
+	// phase 2: the truly deleted vol1/ch 1 is trashed; both dangling-link chapters are protected
+	let gone = chapters.iter().find(|c| c["key"] == "vol1/ch 1").expect("vol1/ch 1 trashed, not gone");
+	assert_eq!(gone["trashed"], true);
+	for key in ["vol1/ch 2", "vol2/ch 1"] {
+		let chapter = chapters.iter().find(|c| c["key"] == key).expect("dangling-link chapter kept");
+		assert_eq!(chapter["trashed"], false, "{key}");
+	}
 }
 
 #[cfg(unix)]
@@ -1132,7 +1215,7 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 	assert_eq!(chapters_of(&t.app, manga_id).await.len(), 3);
 
 	// an unlistable container degrades the scan instead of erroring; the prefix rule protects its whole
-	// subtree while a truly deleted sibling still reconciles away
+	// subtree while a truly deleted sibling is trashed (phase 2), not deleted
 	let vol1 = tau.join("vol1");
 	let mut perms = std::fs::metadata(&vol1).expect("metadata").permissions();
 	use std::os::unix::fs::PermissionsExt;
@@ -1140,27 +1223,31 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 	std::fs::set_permissions(&vol1, perms).expect("chmod 000");
 	std::fs::remove_dir_all(tau.join("ch 9")).expect("remove ch 9");
 
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let mut keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	keys.sort();
-	assert_eq!(keys, ["vol1/ch 1", "vol1/ch 2"], "{keys:?}");
+	let chapters = body.as_array().expect("chapters array");
+	let ch9 = chapters.iter().find(|c| c["key"] == "ch 9").expect("ch 9 trashed, not gone");
+	assert_eq!(ch9["trashed"], true);
+	for key in ["vol1/ch 1", "vol1/ch 2"] {
+		let chapter = chapters.iter().find(|c| c["key"] == key).expect("protected chapter stays");
+		assert_eq!(chapter["trashed"], false, "{key} protected by the unreadable container");
+	}
 
 	let mut perms = std::fs::metadata(&vol1).expect("metadata").permissions();
 	perms.set_mode(0o755);
 	std::fs::set_permissions(&vol1, perms).expect("chmod 755");
-	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
+	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let keys: Vec<String> = chapters_of(&t.app, manga_id)
-		.await
-		.into_iter()
-		.map(|(_, k, _, _)| k)
-		.collect();
-	assert_eq!(keys, ["vol1/ch 2", "vol1/ch 1"], "ch 9 stays deleted, the subtree scans again: {keys:?}");
+	let chapters = body.as_array().expect("chapters array");
+	assert_eq!(chapters.len(), 3);
+	let ch9 = chapters.iter().find(|c| c["key"] == "ch 9").expect("ch 9 still trashed");
+	assert_eq!(ch9["trashed"], true, "ch 9 stays trashed; the subtree scans again");
+	for key in ["vol1/ch 1", "vol1/ch 2"] {
+		assert_eq!(
+			chapters.iter().find(|c| c["key"] == key).expect("chapter")["trashed"],
+			false
+		);
+	}
 }
 
 // ----- oneshots directory (SUMIDOKU_LOCAL_ONESHOTS_DIR / the local.oneshots_dir setting) -----
@@ -1178,9 +1265,18 @@ fn seed_oneshots_tree(root: &std::path::Path) {
 }
 
 async fn oneshots_app() -> TestApp {
+	oneshots_app_with(|_| {}).await
+}
+
+/// Browse classification is asserted on leaf/stem titles, so the background analysis (which applies
+/// in-archive ComicInfo titles) is off; registration still resolves metadata synchronously
+async fn oneshots_app_with(configure: impl FnOnce(&mut Config)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_oneshots_tree(&tmp.path().join("local"));
-	let config = base_config(&tmp);
+	let mut config = base_config(&tmp);
+	config.local_analyze_pages = false;
+	config.local_analyze_metadata = false;
+	configure(&mut config);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	TestApp { app, tmp, db_path }
@@ -1203,9 +1299,11 @@ async fn enable_oneshots(app: &Router) {
 	assert_eq!(status, StatusCode::OK, "{body}");
 }
 
-/// (key, title) pairs of one local browse, in response order
+/// (key, title) pairs of one local browse, in response order; browse reads the scan index (phase 2), so
+/// scan-and-settle first
 async fn browse_local(app: &Router) -> Vec<(String, String)> {
 	let source_id = local_source_id(app).await;
+	common::local_scan_and_settle(app, Some(source_id)).await;
 	let (status, body) = request(
 		app,
 		"POST",
@@ -1306,7 +1404,9 @@ async fn oneshots_rule_matches_at_any_depth_case_insensitive() {
 	write_cbz(&tmp.path().join("local/pub/oneshots/x.cbz"), &[("p1.png", b"x-p1")]);
 	// the match is a case-insensitive substring of the relative path, same as kmrs's contains_ignore_case
 	write_cbz(&tmp.path().join("local/pub/my-oneshots/y.cbz"), &[("1.png", b"y-1")]);
-	let config = base_config(&tmp);
+	let mut config = base_config(&tmp);
+	config.local_analyze_pages = false;
+	config.local_analyze_metadata = false;
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	let t = TestApp { app, tmp, db_path };
@@ -1364,6 +1464,8 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	seed_oneshots_tree(&tmp.path().join("local"));
 	let mut config = base_config(&tmp);
 	config.local_oneshots_dir = Some("oneshots".into());
+	config.local_analyze_pages = false;
+	config.local_analyze_metadata = false;
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	let t = TestApp { app, tmp, db_path };
@@ -1757,6 +1859,17 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	let app = build_app(config).await.expect("build app");
 	let t = TestApp { app, tmp, db_path };
 	let manga_id = register_local(&t.app, "Types").await;
+	// the test rewrites archives in place: only forceModifiedTime lets the scan's mtime detector see that
+	let source_id = local_source_id(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"forceModifiedTime": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	common::local_scan_and_settle(&t.app, None).await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(true)),
 		("fake.epub".to_string(), None),
@@ -1770,6 +1883,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
 
 	let chapter_id = chapter_id_of(&t.app, manga_id, "divina.epub").await;
+	assert!(!epub_page_entries(&t.app, chapter_id).await.is_empty());
 	let pool = common::connect_db(&t.db_path).await;
 	sqlx::query("UPDATE chapter SET epub_divina_compatible = NULL WHERE id = ?")
 		.bind(chapter_id)
@@ -1777,7 +1891,8 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		.await
 		.expect("reset divina flag");
 	pool.close().await;
-	assert!(!epub_page_entries(&t.app, chapter_id).await.is_empty());
+	let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
 	assert_eq!(divina_flags(&t.db_path, manga_id).await, expected);
 
 	write_epub(
@@ -1791,8 +1906,11 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 			("OEBPS/images/1.png", b"now-prose"),
 		],
 	);
+	let mut archive_time = std::time::SystemTime::now();
+	archive_time = common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
+	common::local_scan_and_settle(&t.app, None).await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(false)),
 		("fake.epub".to_string(), None),
@@ -1806,8 +1924,10 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		Some(("OEBPS/content.opf", &divina)),
 		&[("OEBPS/images/1.png", b"divina-again")],
 	);
+	archive_time = common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
+	common::local_scan_and_settle(&t.app, None).await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(true)),
 		("fake.epub".to_string(), None),
@@ -1829,8 +1949,10 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 		],
 	);
 	std::fs::rename(&replacement, t.tmp.path().join("local/Types/divina.epub")).expect("replace EPUB atomically");
+	common::advance_mtime(&t.tmp.path().join("local/Types/divina.epub"), archive_time);
 	let (status, _) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
+	common::local_scan_and_settle(&t.app, None).await;
 	let expected = vec![
 		("divina.epub".to_string(), Some(false)),
 		("fake.epub".to_string(), None),
@@ -2187,7 +2309,7 @@ async fn mylar_reading_direction_maps_to_aidoku_viewer() {
 		);
 		std::fs::write(dir.join("series.json"), json).expect("write series.json");
 		write_page(&dir.join("ch 1"), "1.png", b"direction-page");
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.viewer);
 	}
 	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
@@ -2224,7 +2346,7 @@ async fn epub_spine_direction_maps_to_aidoku_viewer() {
 			Some(("OEBPS/content.opf", opf.as_bytes())),
 			&[("OEBPS/images/1.png", b"spine-page")],
 		);
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.viewer);
 	}
 	assert_eq!(actual, cases.map(|(_, viewer)| viewer));
@@ -2257,7 +2379,7 @@ async fn mylar_age_ratings_map_to_aidoku_content_ratings() {
 		);
 		std::fs::write(dir.join("series.json"), json).expect("write series.json");
 		write_page(&dir.join("ch 1"), "1.png", b"rating-page");
-		let update = manga_update(&local_dirs, &zip, &key).await.expect("manga update");
+		let update = manga_update(&local_dirs, &zip, &key, &[]).await.expect("manga update");
 		actual.push(update.manga.content_rating);
 	}
 	assert_eq!(actual, cases.map(|(_, rating)| rating));

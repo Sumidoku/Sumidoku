@@ -433,23 +433,83 @@ impl UpdateScheduler {
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
 			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
 			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
-			let (updated, protected, epub_divina) = if is_local {
-				let update = crate::local::manga_update(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key).await?;
-				(update.manga, update.protected, Some(update.epub_divina))
-			} else if is_opds {
-				let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
-				(updated, Vec::new(), None)
-			} else {
-				let handle = state.get_handle(manga.source_id).await?;
-				let updated = handle
-					.get_manga_update(manga_from_row(&manga), settings.refresh_metadata, true)
+			if is_local {
+				if settings.refresh_metadata {
+					// refresh_metadata opts into the archive-opening chain inline (the analysis pass's
+					// equivalent): metadata + trash-mode reconcile + divina + chapter metadata
+					let update = crate::local::manga_update(
+						&state.local_dirs(manga.source_id).await?,
+						&state.local_zip,
+						&manga.key,
+						&state.local_exclusions(manga.source_id).await?,
+					)
 					.await?;
-				(updated, Vec::new(), None)
-			};
-			let mut tx = crate::db::begin_write(&self.pool).await?;
-			let reconciled = persist_success(&mut tx, &manga, &updated, &protected, epub_divina.as_ref(), &settings, unix_now()).await?;
-			tx.commit().await?;
-			Ok(reconciled)
+					let now = unix_now();
+					let mut tx = crate::db::begin_write(&self.pool).await?;
+					let (next_update_time, next_update_is_fallback) =
+						resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
+					// upsert overwrites update_strategy with the source default otherwise: the user's
+					// per-manga choice survives the refresh (persist_success's rule)
+					let mut refreshed = update.manga.clone();
+					// persist_success's rule: re-read inside the write transaction so a Never chosen during
+					// the (slow) fetch survives
+					let update_strategy: i64 = sqlx::query_scalar("SELECT update_strategy FROM manga WHERE id = ?")
+						.bind(manga.id)
+						.fetch_one(&mut *tx)
+						.await?;
+					refreshed.update_strategy = update_strategy_from_int(update_strategy);
+					upsert_manga(&mut tx, manga.source_id, &refreshed, true, true, false).await?;
+					let chapters = update.manga.chapters.clone().unwrap_or_default();
+					let reconciled =
+						reconcile_chapters_detailed(&mut tx, manga.id, &chapters, &update.protected, true).await?;
+					crate::local::store_epub_divina(&mut tx, manga.id, &chapters, &update.epub_divina).await?;
+					crate::local::store_chapter_metadata(&mut tx, manga.id, &update.chapter_meta).await?;
+					sqlx::query(
+						"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
+					)
+					.bind(next_update_time)
+					.bind(next_update_is_fallback)
+					.bind(now)
+					.bind(manga.id)
+					.execute(&mut *tx)
+					.await?;
+					tx.commit().await?;
+					Ok(reconciled)
+				} else {
+					// Library update of a local manga is an entry-level rescan (enumeration only, trash-mode
+					// reconcile inside); embedded metadata belongs to the analysis pass the rescan kicks
+					let (_, reconciled, _) =
+					crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, false, false, None).await?;
+				let now = unix_now();
+				let (next_update_time, next_update_is_fallback) =
+					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
+				sqlx::query(
+					"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
+				)
+				.bind(next_update_time)
+				.bind(next_update_is_fallback)
+				.bind(now)
+				.bind(manga.id)
+				.execute(&state.pool)
+				.await?;
+				Ok(reconciled)
+			}
+			} else {
+				let (updated, protected) = if is_opds {
+					let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+					(updated, Vec::new())
+				} else {
+					let handle = state.get_handle(manga.source_id).await?;
+					let updated = handle
+						.get_manga_update(manga_from_row(&manga), settings.refresh_metadata, true)
+						.await?;
+					(updated, Vec::new())
+				};
+				let mut tx = crate::db::begin_write(&self.pool).await?;
+				let reconciled = persist_success(&mut tx, &manga, &updated, &protected, &settings, unix_now()).await?;
+				tx.commit().await?;
+				Ok(reconciled)
+			}
 		}
 		.await;
 		match outcome {
@@ -583,7 +643,6 @@ async fn persist_success(
 	manga: &MangaRow,
 	updated: &aidoku::Manga,
 	protected: &[String],
-	epub_divina: Option<&HashMap<String, bool>>,
 	settings: &LibraryUpdateSettings,
 	fetched_at: i64,
 ) -> ApiResult<ReconcileOutcome> {
@@ -608,11 +667,9 @@ async fn persist_success(
 		manga.id,
 		updated.chapters.as_deref().unwrap_or(&[]),
 		protected,
+		false,
 	)
 	.await?;
-	if let Some(values) = epub_divina {
-		crate::local::store_epub_divina(conn, manga.id, updated.chapters.as_deref().unwrap_or(&[]), values).await?;
-	}
 	sqlx::query(
 		"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
 	)
@@ -633,9 +690,11 @@ async fn select_manga(
 	category_id: Option<i64>,
 	config_interval_hours: u64,
 ) -> ApiResult<Vec<MangaRow>> {
+	// trashed local manga are gone from disk: refreshing them can only 404, so they sit out update runs
+	// until a scan restores them
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
-	 WHERE mu.in_library = 1 AND m.update_strategy != 1";
+	 WHERE mu.in_library = 1 AND m.update_strategy != 1 AND m.trashed_at IS NULL";
 	let settings = LibraryUpdateSettings::load(pool, user_id, config_interval_hours).await?;
 	let seconds = interval_seconds(settings.update_interval_hours);
 	// When updating from a specific category, Aidoku ignores that category in the global exclusion list
@@ -1257,6 +1316,77 @@ mod tests {
 	}
 
 	#[tokio::test]
+	async fn local_refresh_metadata_false_survives_the_background_analysis_pass() {
+		// The harness above has no TaskManager, so it cannot see the production bypass: with a real manager,
+		// the entry scan's analysis enqueue actually runs. refresh_metadata = false must keep the user's
+		// metadata — the scan reconciles enumeration, it does not invalidate analyzed rows, and the derived
+		// analysis pass only rewrites initialized = 0 manga
+		let (state, _, _tmp) = union_state(Config::default()).await;
+		let tasks = crate::task::TaskManager::new(&state);
+		assert!(state.tasks.set(tasks.clone()).is_ok());
+		crate::local::scan::register_handlers(&tasks).await;
+		tokio::spawn(tasks.run());
+		let root = state.config.config_dir.join("local");
+		let chapter_dir = root.join("Series").join("ch 1");
+		std::fs::create_dir_all(&chapter_dir).expect("create local chapter");
+		std::fs::write(chapter_dir.join("1.png"), b"page").expect("write local page");
+		std::fs::write(
+			root.join("Series").join("series.json"),
+			r#"{"title":"Local Series","description":"fresh metadata"}"#,
+		)
+		.expect("write local metadata");
+		let source_id: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+			.fetch_one(&state.pool)
+			.await
+			.expect("local source");
+		let manga_id = add_manga(&state, source_id, "Series").await;
+		// an already-analyzed manga: initialized = 1, stale scan_mtime forces the entry scan to reconcile
+		sqlx::query(
+			"UPDATE manga SET title = 'Stale', description = 'old', update_strategy = 1, initialized = 1, scan_mtime = 1 WHERE id = ?",
+		)
+		.bind(manga_id)
+		.execute(&state.pool)
+		.await
+		.expect("set initial details");
+
+		// the production call the update scheduler makes for a local manga with refresh_metadata = false
+		crate::local::scan::scan_manga_entry(&state, source_id, "Series", false, false, None)
+			.await
+			.expect("entry scan");
+		// the entry scan enqueued the analysis pass; wait for the queue to settle
+		let started = std::time::Instant::now();
+		loop {
+			let live: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM task WHERE status IN ('pending', 'running')")
+				.fetch_one(&state.pool)
+				.await
+				.expect("live tasks");
+			if live == 0 {
+				break;
+			}
+			assert!(started.elapsed() < std::time::Duration::from_secs(15), "analysis never settled");
+			tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+		}
+		let analyze_done: i64 = sqlx::query_scalar(
+			"SELECT COUNT(*) FROM task WHERE kind = 'local_analyze' AND status = 'done'",
+		)
+		.fetch_one(&state.pool)
+		.await
+		.expect("analysis ran");
+		assert_eq!(analyze_done, 1, "the production analysis pass ran");
+
+		let after: (String, Option<String>) = sqlx::query_as("SELECT title, description FROM manga WHERE id = ?")
+			.bind(manga_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("details after entry scan + analysis");
+		assert_eq!(
+			after,
+			("Stale".into(), Some("old".into())),
+			"refresh_metadata = false keeps the user's metadata through background analysis"
+		);
+	}
+
+	#[tokio::test]
 	async fn failed_fetch_does_not_advance_next_update_time() {
 		let (state, _, _tmp) = union_state(Config::default()).await;
 		std::fs::create_dir_all(state.config.config_dir.join("local")).expect("create local root");
@@ -1569,7 +1699,7 @@ mod tests {
 			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
-		persist_success(&mut tx, &row, &updated, &[], None, &settings, 1000)
+		persist_success(&mut tx, &row, &updated, &[], &settings, 1000)
 			.await
 			.expect("persist successful fetch");
 		tx.commit().await.expect("commit successful fetch");
@@ -1609,7 +1739,7 @@ mod tests {
 			excluded_update_categories: Vec::new(),
 		};
 		let mut tx = crate::db::begin_write(&state.pool).await.expect("write transaction");
-		persist_success(&mut tx, &row, &updated, &[], None, &settings, fetched_at)
+		persist_success(&mut tx, &row, &updated, &[], &settings, fetched_at)
 			.await
 			.expect("persist successful fetch");
 		tx.commit().await.expect("commit successful fetch");

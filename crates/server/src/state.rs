@@ -205,6 +205,12 @@ impl AppState {
 		self.tasks.get().expect("task manager installed").clone()
 	}
 
+	/// Best-effort task kicks (analysis-on-open, rescan-on-settings-change) skip silently in harnesses that
+	/// never installed the manager; the API surface uses tasks() instead, where build_app guarantees it
+	pub fn maybe_tasks(&self) -> Option<Arc<crate::task::TaskManager>> {
+		self.tasks.get().cloned()
+	}
+
 	/// Whether the source is the default local instance: its rows predate per-instance settings, so it
 	/// keeps the legacy global/config fallback layers that other instances never had
 	async fn is_default_local(&self, source_id: i64) -> ApiResult<bool> {
@@ -294,6 +300,66 @@ impl AppState {
 			}
 		}
 		Ok(self.config.local_oneshots_dir().map(str::to_string))
+	}
+
+	/// Effective exclusion substrings of one local instance (kmrs scan_directory_exclusions): the instance's
+	/// own `exclusions` source setting wins — an explicit empty array turns the rule off for that instance —
+	/// and an absent setting falls back to the config layer. A wrong-shaped stored value counts as unset.
+	/// Values are lowercased once here: every consumer matches case-insensitively against a lowered path
+	pub async fn local_exclusions(&self, source_id: i64) -> ApiResult<Vec<String>> {
+		let row: Option<(String,)> =
+			sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = 'exclusions'")
+				.bind(source_id)
+				.fetch_optional(&self.pool)
+				.await?;
+		if let Some((raw,)) = row
+			&& let Ok(DefaultValue::StringArray(exclusions)) = serde_json::from_str::<DefaultValue>(&raw)
+		{
+			return Ok(exclusions
+				.into_iter()
+				.map(|exclusion| exclusion.trim().to_lowercase())
+				.filter(|exclusion| !exclusion.is_empty())
+				.collect());
+		}
+		Ok(self
+			.config
+			.local_scan_exclusions
+			.iter()
+			.map(|exclusion| exclusion.trim().to_lowercase())
+			.filter(|exclusion| !exclusion.is_empty())
+			.collect())
+	}
+
+	/// One boolean instance setting of the local source (forceModifiedTime / analyzePages / analyzeMetadata):
+	/// the instance's own setting wins and an absent one falls back to the config layer. Bool is two-valued,
+	/// so unlike text settings there is no explicit-blank third state: clearing the override is deleting the row
+	async fn local_bool_setting(&self, source_id: i64, key: &str, fallback: bool) -> ApiResult<bool> {
+		let row: Option<(String,)> = sqlx::query_as("SELECT value FROM source_setting WHERE source_id = ? AND key = ?")
+			.bind(source_id)
+			.bind(key)
+			.fetch_optional(&self.pool)
+			.await?;
+		if let Some((raw,)) = row
+			&& let Ok(DefaultValue::Bool(value)) = serde_json::from_str::<DefaultValue>(&raw)
+		{
+			return Ok(value);
+		}
+		Ok(fallback)
+	}
+
+	pub async fn local_force_modified_time(&self, source_id: i64) -> ApiResult<bool> {
+		self.local_bool_setting(source_id, "forceModifiedTime", self.config.local_scan_force_modified_time)
+			.await
+	}
+
+	pub async fn local_analyze_pages(&self, source_id: i64) -> ApiResult<bool> {
+		self.local_bool_setting(source_id, "analyzePages", self.config.local_analyze_pages)
+			.await
+	}
+
+	pub async fn local_analyze_metadata(&self, source_id: i64) -> ApiResult<bool> {
+		self.local_bool_setting(source_id, "analyzeMetadata", self.config.local_analyze_metadata)
+			.await
 	}
 
 	/// Kicks the instance out of the registry after unload/repackage; while an in-flight call holds an Arc, it exits naturally when the refcount drops to zero

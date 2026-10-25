@@ -1584,6 +1584,44 @@
         }
       }
     },
+    "/api/v1/manga/{id}/analyze": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MangaId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "analyzeLocalManga",
+        "summary": "Enqueue the analysis pass for one local manga (metadata + page rows); task events carry progress",
+        "responses": {
+          "200": {
+            "description": "The enqueued analysis task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Task"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/manga/{id}/chapters": {
       "parameters": [
         {
@@ -3248,6 +3286,211 @@
         }
       }
     },
+    "/api/v1/local/scan": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "scanLocalSources",
+        "summary": "Enqueue a full scan of one local instance (sourceId) or every enabled one; the per-instance dedup id makes a repeat trigger idempotent",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sourceId": {
+                    "type": "integer",
+                    "format": "int64",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The enqueued scan tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/local/trash": {
+      "parameters": [
+        {
+          "name": "sourceId",
+          "in": "query",
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      ],
+      "get": {
+        "tags": [
+          "sources"
+        ],
+        "operationId": "listLocalTrash",
+        "summary": "List trashed local manga, oldest trashing first",
+        "responses": {
+          "200": {
+            "description": "Trash entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LocalTrashEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "tasks"
+        ],
+        "operationId": "emptyLocalTrash",
+        "summary": "Purge every trashed manga of one instance (or all), as empty_trash tasks",
+        "responses": {
+          "200": {
+            "description": "The enqueued empty_trash tasks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Task"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/local/trash/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      ],
+      "delete": {
+        "tags": [
+          "sources"
+        ],
+        "operationId": "purgeLocalTrash",
+        "summary": "Purge one trashed manga (cascades chapters, progress, memberships)",
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/local/trash/{id}/restore": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "sources"
+        ],
+        "operationId": "restoreLocalTrash",
+        "summary": "Restore one trashed manga in place; the directory must be back on disk",
+        "responses": {
+          "200": {
+            "description": "Restored",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ok"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/events": {
       "get": {
         "tags": [
@@ -4390,7 +4633,10 @@
               "timeout",
               "internal",
               "busy",
-              "task_finished"
+              "task_finished",
+              "not_trashed",
+              "gone",
+              "root_unavailable"
             ]
           },
           "message": {
@@ -6348,6 +6594,7 @@
               "id",
               "sourceId",
               "initialized",
+              "trashed",
               "chapterCount",
               "inLibrary",
               "incognito",
@@ -6364,6 +6611,10 @@
               },
               "initialized": {
                 "type": "boolean"
+              },
+              "trashed": {
+                "type": "boolean",
+                "description": "Local source only: the manga vanished from disk and sits in the trash bin until restored or purged"
               },
               "chapterCount": {
                 "type": "integer",
@@ -6395,6 +6646,7 @@
             "type": "object",
             "required": [
               "id",
+              "trashed",
               "pageCount",
               "lastPageRead",
               "isRead",
@@ -6405,6 +6657,10 @@
               "id": {
                 "type": "integer",
                 "format": "int64"
+              },
+              "trashed": {
+                "type": "boolean",
+                "description": "Local source only: the chapter entry vanished from disk and sits in the trash bin"
               },
               "pageCount": {
                 "type": "integer",
@@ -8089,6 +8345,49 @@
             "type": "integer",
             "format": "int64",
             "nullable": true
+          }
+        }
+      },
+      "LocalTrashEntry": {
+        "type": "object",
+        "required": [
+          "manga",
+          "trashedAt",
+          "trashedChapters"
+        ],
+        "properties": {
+          "manga": {
+            "type": "object",
+            "required": [
+              "id",
+              "sourceId",
+              "key",
+              "title"
+            ],
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "sourceId": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "key": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "trashedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trashedChapters": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

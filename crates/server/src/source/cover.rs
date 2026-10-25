@@ -62,10 +62,14 @@ pub async fn get_cover(
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
 	let (bytes, mime) = if is_local {
-		let (bytes, mime) =
-			crate::local::resolve_cover(&state.local_dirs(manga.source_id).await?, &state.local_zip, &manga.key)
-				.await?
-				.ok_or_else(|| ApiError::not_found("cover not available"))?;
+		let (bytes, mime) = crate::local::resolve_cover(
+			&state.local_dirs(manga.source_id).await?,
+			&state.local_zip,
+			&manga.key,
+			&state.local_exclusions(manga.source_id).await?,
+		)
+		.await?
+		.ok_or_else(|| ApiError::not_found("cover not available"))?;
 		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); an image
 		// within the cap or an undecodable image passes through at its original bytes, same as the page variants
 		let (resized, original) = tokio::task::spawn_blocking(move || {
@@ -149,6 +153,11 @@ async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
 	let _ = tokio::fs::remove_file(variant_path(&cache_path)).await;
 	let _ = tokio::fs::remove_file(cache_path).await;
+}
+
+/// Purge paths (local trash) drop the derived cover cache with the row
+pub(crate) async fn invalidate_cover(covers_dir: &FsPath, id: i64) {
+	invalidate_cache(covers_dir, id).await;
 }
 
 fn sidecar_path(cache_path: &FsPath) -> PathBuf {

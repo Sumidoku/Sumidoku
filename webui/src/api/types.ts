@@ -30,7 +30,7 @@ export type AidokuSkipped = {
 };
 
 export type ApiError = {
-	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy" | "task_finished";
+	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy" | "task_finished" | "not_trashed" | "gone" | "root_unavailable";
 	message: string;
 };
 
@@ -201,6 +201,7 @@ export type CategoryNameRequest = {
 
 export type Chapter = SourceChapter & {
 	id: number;
+	trashed: boolean;
 	pageCount: number;
 	lastPageRead: number;
 	isRead: boolean;
@@ -513,6 +514,17 @@ export type Listing = {
 	kind: "default" | "list";
 };
 
+export type LocalTrashEntry = {
+	manga: {
+		id: number;
+		sourceId: number;
+		key: string;
+		title: string;
+	};
+	trashedAt: number;
+	trashedChapters: number;
+};
+
 export type LoginRequest = {
 	username: string;
 	password: string;
@@ -528,6 +540,7 @@ export type Manga = SourceManga & {
 	id: number;
 	sourceId: number;
 	initialized: boolean;
+	trashed: boolean;
 	chapterCount: number;
 	inLibrary: boolean;
 	incognito: boolean;

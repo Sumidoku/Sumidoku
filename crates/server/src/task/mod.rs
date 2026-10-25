@@ -83,6 +83,11 @@ impl TaskRun {
 	pub fn is_cancelled(&self) -> bool {
 		self.cancelled.load(Ordering::SeqCst)
 	}
+
+	/// The raw flag for a handler that passes cancellation into a helper's own loop (e.g. scan_instance)
+	pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+		self.cancelled.clone()
+	}
 }
 
 pub type Handler =
@@ -138,10 +143,13 @@ impl TaskManager {
 		self.inner.lock().await.handlers.insert(kind.to_string(), handler);
 	}
 
-	/// Upsert by id. A live (pending/running) task keeps its identity — kind, source and payload stay
+	/// Upsert by id. A live (pending/running) task keeps its identity — kind, source and status stay
 	/// with the execution that owns them — and only gains priority; a terminal row is requeued fresh
 	/// with the new trigger's identity and priority (a manual run must not permanently promote later
-	/// scheduled runs)
+	/// scheduled runs). The payload, however, always reflects the newest trigger: a manual
+	/// `refreshMetadata = true` (or a settings rescan) requested while the same task is live must not
+	/// be acknowledged and then lost — the running handler reloads it when it reruns after its inputs
+	/// checkpoint observed the change (one-outstanding-execution does not discard newer work)
 	pub async fn enqueue(
 		&self,
 		id: &str,
@@ -159,7 +167,7 @@ impl TaskManager {
 				priority = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.priority ELSE MAX(task.priority, excluded.priority) END,
 				kind = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.kind ELSE task.kind END,
 				source_id = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.source_id ELSE task.source_id END,
-				payload = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.payload ELSE task.payload END,
+				payload = excluded.payload,
 				status = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN 'pending' ELSE task.status END,
 				created_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN excluded.created_at ELSE task.created_at END,
 				started_at = CASE WHEN task.status IN ('done', 'failed', 'cancelled') THEN NULL ELSE task.started_at END,
@@ -225,10 +233,14 @@ impl TaskManager {
 		let inner = self.inner.lock().await;
 		let row = self.get(id).await?.ok_or_else(|| ApiError::not_found("task not found"))?;
 		#[cfg(test)]
-		if row.id == CANCEL_AFTER_READ.id {
+		let inner = if row.id == CANCEL_AFTER_READ.id {
 			CANCEL_AFTER_READ.reached.notify_one();
+			drop(inner);
 			CANCEL_AFTER_READ.resume.notified().await;
-		}
+			self.inner.lock().await
+		} else {
+			inner
+		};
 		if row.is_terminal() {
 			return Err(ApiError::conflict("task_finished", "task already finished"));
 		}
@@ -406,42 +418,71 @@ impl TaskManager {
 				Err(e) => (STATUS_FAILED, None, Some(e.message().to_string())),
 			}
 		};
-		// The terminal write belongs to this execution only: a cancel that landed mid-flight already
-		// wrote and published 'cancelled', and losing this guard means publishing nothing more
-		let updated: Option<TaskRow> = sqlx::query_as(&format!(
-			"UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ? AND status = 'running' RETURNING {COLUMNS}"
-		))
-		.bind(status)
-		.bind(unix_now())
-		.bind(result)
-		.bind(error)
-		.bind(&task.id)
-		.fetch_optional(&self.pool)
-		.await
-		.unwrap_or_else(|e| {
-			tracing::warn!(task = %task.id, "task finish write failed: {e}");
+		let mut inner = self.inner.lock().await;
+		// A newer local-scan request can arrive after the handler's last checkpoint. Requeue instead of
+		// completing the older request; an unchanged payload still takes the normal terminal path.
+		let requeued = if task.kind == "local_scan" {
+			sqlx::query_as(&format!(
+				"UPDATE task SET status = 'pending', started_at = NULL, finished_at = NULL, result = NULL, error = NULL
+				 WHERE id = ? AND status = 'running' AND payload <> ? RETURNING {COLUMNS}"
+			))
+			.bind(&task.id)
+			.bind(&task.payload)
+			.fetch_optional(&self.pool)
+			.await
+			.unwrap_or_else(|e| {
+				tracing::warn!(task = %task.id, "task supersession check failed: {e}");
+				None
+			})
+		} else {
 			None
-		});
+		};
+		let is_requeue = requeued.is_some();
+		let updated = if is_requeue {
+			requeued
+		} else {
+			// The terminal write belongs to this execution only: a cancel that landed mid-flight already
+			// wrote and published 'cancelled', and losing this guard means publishing nothing more
+			sqlx::query_as(&format!(
+				"UPDATE task SET status = ?, finished_at = ?, result = ?, error = ? WHERE id = ? AND status = 'running' RETURNING {COLUMNS}"
+			))
+			.bind(status)
+			.bind(unix_now())
+			.bind(result)
+			.bind(error)
+			.bind(&task.id)
+			.fetch_optional(&self.pool)
+			.await
+			.unwrap_or_else(|e| {
+				tracing::warn!(task = %task.id, "task finish write failed: {e}");
+				None
+			})
+		};
+		#[cfg(test)]
+		if is_requeue && task.id == SUPERSEDE_PUBLISH_GATE.id {
+			SUPERSEDE_PUBLISH_GATE.reached.notify_one();
+			SUPERSEDE_PUBLISH_GATE.resume.notified().await;
+		}
 		if let Some(row) = updated {
 			let _ = self.signals.send(row);
-			if let Err(e) = self.trim_finished().await {
+			if !is_requeue
+				&& let Err(e) = self.trim_finished().await
+			{
 				tracing::warn!("task history trim failed: {e}");
 			}
 		}
-		{
-			let mut inner = self.inner.lock().await;
-			inner.active -= 1;
-			// A terminal requeue can already have dispatched the next execution of this group or id:
-			// remove only the registrations this execution owns
-			if inner.running_groups.get(&group) == Some(&task.id) {
-				inner.running_groups.remove(&group);
-			}
-			if let Some(flag) = inner.cancels.get(&task.id)
-				&& Arc::ptr_eq(flag, &cancelled)
-			{
-				inner.cancels.remove(&task.id);
-			}
+		inner.active -= 1;
+		// A terminal requeue can already have dispatched the next execution of this group or id:
+		// remove only the registrations this execution owns
+		if inner.running_groups.get(&group) == Some(&task.id) {
+			inner.running_groups.remove(&group);
 		}
+		if let Some(flag) = inner.cancels.get(&task.id)
+			&& Arc::ptr_eq(flag, &cancelled)
+		{
+			inner.cancels.remove(&task.id);
+		}
+		drop(inner);
 		self.wake.notify_one();
 	}
 
@@ -487,6 +528,12 @@ static CANCEL_AFTER_UPDATE: CancelTestGate = CancelTestGate {
 #[cfg(test)]
 static CANCEL_BEFORE_REQUEUE: CancelTestGate = CancelTestGate {
 	id: "cancel-requeue-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
+#[cfg(test)]
+static SUPERSEDE_PUBLISH_GATE: CancelTestGate = CancelTestGate {
+	id: "supersede-publish-test",
 	reached: Notify::const_new(),
 	resume: Notify::const_new(),
 };
@@ -567,7 +614,10 @@ mod tests {
 	async fn live_enqueue_keeps_identity_terminal_requeue_resets_it() {
 		let (_state, manager, _tmp) = test_state(1).await;
 		manager.register("noop", ok_handler()).await;
-		// A live row's identity belongs to the execution that owns it: only the priority moves
+		// A live row's identity belongs to the execution that owns it (kind/source/status): only priority
+		// moves. The payload, however, tracks the newest trigger — a manual refreshMetadata=true requested
+		// mid-run must not be acknowledged and then lost (the running handler reloads it after its inputs
+		// checkpoint observed the change)
 		manager
 			.enqueue("t:1", "noop", None, serde_json::json!({"a": 1}), PRIORITY_SCHEDULED)
 			.await
@@ -576,7 +626,7 @@ mod tests {
 			.enqueue("t:1", "other", Some(1), serde_json::json!({"b": 2}), PRIORITY_MANUAL)
 			.await
 			.expect("live re-enqueue");
-		assert_eq!((row.kind.as_str(), row.source_id, row.payload.as_str()), ("noop", None, r#"{"a":1}"#));
+		assert_eq!((row.kind.as_str(), row.source_id, row.payload.as_str()), ("noop", None, r#"{"b":2}"#));
 		assert_eq!(row.priority, PRIORITY_MANUAL);
 
 		tokio::spawn(manager.clone().run());
@@ -625,6 +675,106 @@ mod tests {
 		assert_eq!(runs.load(Ordering::SeqCst), 1, "no follow-up run after a mid-run duplicate");
 		let row = manager.get("t:1").await.expect("row").expect("exists");
 		assert_eq!(row.status, STATUS_DONE);
+	}
+
+	#[tokio::test]
+	async fn local_scan_supersession_requeues_before_terminal_write() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let runs = Arc::new(AtomicI64::new(0));
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			let runs = runs.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				let runs = runs.clone();
+				Box::pin(async move {
+					runs.fetch_add(1, Ordering::SeqCst);
+					if run.task.payload == r#"{"requestId":1}"# {
+						started.notify_one();
+						release.notified().await;
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("local_scan", handler).await;
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("t:scan", "local_scan", Some(1), serde_json::json!({"requestId": 1}), PRIORITY_MANUAL)
+			.await
+			.expect("first scan");
+		started.notified().await;
+		manager
+			.enqueue("t:scan", "local_scan", Some(1), serde_json::json!({"requestId": 2}), PRIORITY_MANUAL)
+			.await
+			.expect("superseding scan");
+		release.notify_one();
+		let row = wait_status(&manager, "t:scan", STATUS_DONE).await;
+		assert_eq!(runs.load(Ordering::SeqCst), 2, "the newer request must execute after the older one");
+		let payload: serde_json::Value = serde_json::from_str(&row.payload).expect("latest payload");
+		assert_eq!(payload["requestId"], 2);
+	}
+
+	#[tokio::test]
+	async fn supersession_cannot_publish_pending_after_cancellation() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				Box::pin(async move {
+					if run.task.payload == r#"{"requestId":1}"# {
+						started.notify_one();
+						release.notified().await;
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("local_scan", handler).await;
+		let mut events = manager.subscribe();
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("supersede-publish-test", "local_scan", Some(1), serde_json::json!({"requestId": 1}), PRIORITY_MANUAL)
+			.await
+			.expect("first scan");
+		started.notified().await;
+		manager
+			.enqueue("supersede-publish-test", "local_scan", Some(1), serde_json::json!({"requestId": 2}), PRIORITY_MANUAL)
+			.await
+			.expect("superseding scan");
+		release.notify_one();
+		SUPERSEDE_PUBLISH_GATE.reached.notified().await;
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel("supersede-publish-test").await });
+		SUPERSEDE_PUBLISH_GATE.resume.notify_one();
+		let cancelled = cancel.await.expect("cancel task").expect("cancel");
+		assert_eq!(cancelled.status, STATUS_CANCELLED);
+		// Publication precedes execution cleanup, so idle is the barrier for every final event.
+		tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			loop {
+				if manager.inner.lock().await.active == 0 {
+					break;
+				}
+				tokio::task::yield_now().await;
+			}
+		})
+		.await
+		.expect("execution cleanup");
+		let mut statuses = Vec::new();
+		while let Ok(event) = events.try_recv() {
+			statuses.push(event.status);
+		}
+		assert_eq!(statuses.last().map(String::as_str), Some(STATUS_CANCELLED));
+		assert!(!statuses.windows(2).any(|pair| pair == [STATUS_CANCELLED, STATUS_PENDING]));
 	}
 
 	#[tokio::test]
@@ -1140,31 +1290,18 @@ mod tests {
 		CANCEL_AFTER_READ.reached.notified().await;
 		finish_old.notify_one();
 		wait_status(&manager, CANCEL_AFTER_READ.id, STATUS_DONE).await;
-		let requeue_done = Arc::new(AtomicBool::new(false));
+		CANCEL_AFTER_READ.resume.notify_one();
+		let outcome = cancel.await.expect("cancel task");
+		assert_eq!(outcome.expect_err("after-read cancel must lose to the terminal transition").code(), "task_finished");
 		let requeue_manager = manager.clone();
-		let requeue_flag = requeue_done.clone();
 		let requeue = tokio::spawn(async move {
 			requeue_manager
 				.enqueue(CANCEL_AFTER_READ.id, "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
 				.await
 				.expect("requeue");
-			requeue_flag.store(true, Ordering::SeqCst);
 		});
-		let wait_started = std::time::Instant::now();
-		while !requeue_done.load(Ordering::SeqCst) && wait_started.elapsed() < std::time::Duration::from_millis(100) {
-			tokio::time::sleep(std::time::Duration::from_millis(1)).await;
-		}
-		let dispatched_before_resume = requeue_done.load(Ordering::SeqCst);
-		if dispatched_before_resume {
-			manager.dispatch().await;
-		}
-		CANCEL_AFTER_READ.resume.notify_one();
-		let outcome = cancel.await.expect("cancel task");
-		assert_eq!(outcome.expect_err("after-read cancel must lose to the terminal transition").code(), "task_finished");
 		requeue.await.expect("requeue task");
-		if !dispatched_before_resume {
-			manager.dispatch().await;
-		}
+		manager.dispatch().await;
 		new_started.notified().await;
 		release_new.notify_one();
 		tokio::time::timeout(std::time::Duration::from_secs(5), new_finished.notified())

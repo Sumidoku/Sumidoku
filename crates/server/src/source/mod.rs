@@ -772,6 +772,7 @@ pub async fn upsert_manga(
 		 content_rating = excluded.content_rating, viewer = excluded.viewer,
 		 cover_url = excluded.cover_url,
 		 url = excluded.url, initialized = excluded.initialized,
+		 trashed_at = NULL,
 		 update_strategy = excluded.update_strategy,
 		 next_update_time = excluded.next_update_time,
 		 next_update_is_fallback = CASE
@@ -824,6 +825,10 @@ pub async fn upsert_manga(
 pub struct ReconcileOutcome {
 	pub new_ids: Vec<i64>,
 	pub previous_latest_chapter_number: Option<f64>,
+	/// Trash-mode tallies (0 in delete mode): vanished chapters flagged trashed, and previously trashed
+	/// chapters whose key reappeared (restored in place by the upsert clearing trashed_at)
+	pub trashed: i64,
+	pub restored: i64,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -832,6 +837,7 @@ struct ExistingChapter {
 	key: String,
 	number: Option<f64>,
 	source_order: i64,
+	trashed_at: Option<i64>,
 }
 
 /// Chapter reconciliation: source_order takes the index in the source's response; a vanished chapter with a
@@ -845,14 +851,18 @@ pub async fn reconcile_chapters(
 	chapters: &[Chapter],
 	protected: &[String],
 ) -> ApiResult<Vec<i64>> {
-	Ok(reconcile_chapters_detailed(conn, manga_id, chapters, protected).await?.new_ids)
+	Ok(reconcile_chapters_detailed(conn, manga_id, chapters, protected, false).await?.new_ids)
 }
 
+/// `trash` switches the vanished-chapter handling to the local source's kmrs-style trash bin: instead of
+/// deleting, the row is flagged trashed_at and keeps its page cache and progress until purged; an incoming
+/// key always clears the flag, so a reappearing entry restores in place (a same-dir rename needs no user action)
 pub async fn reconcile_chapters_detailed(
 	conn: &mut sqlx::SqliteConnection,
 	manga_id: i64,
 	chapters: &[Chapter],
 	protected: &[String],
+	trash: bool,
 ) -> ApiResult<ReconcileOutcome> {
 	let now = unix_now();
 	// When the source has exactly one language, fill it into language-less chapters (mirroring AidokuRunner)
@@ -868,7 +878,7 @@ pub async fn reconcile_chapters_detailed(
 			_ => None,
 		});
 	let existing: Vec<ExistingChapter> = sqlx::query_as(
-		"SELECT id, key, number, source_order FROM chapter WHERE manga_id = ?",
+		"SELECT id, key, number, source_order, trashed_at FROM chapter WHERE manga_id = ?",
 	)
 	.bind(manga_id)
 	.fetch_all(&mut *conn)
@@ -914,7 +924,7 @@ pub async fn reconcile_chapters_detailed(
 			.bind(old.id)
 			.execute(&mut *conn)
 			.await?;
-		sqlx::query("UPDATE chapter SET key = ?, page_count = 0 WHERE id = ?")
+		sqlx::query("UPDATE chapter SET key = ?, page_count = 0, trashed_at = NULL WHERE id = ?")
 			.bind(&chapter.key)
 			.bind(old.id)
 			.execute(&mut *conn)
@@ -945,7 +955,7 @@ pub async fn reconcile_chapters_detailed(
 			 scanlators = excluded.scanlators, language = excluded.language,
 			 thumbnail = excluded.thumbnail, url = excluded.url,
 			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
-			 locked = excluded.locked, fetched_at = chapter.fetched_at",
+			 locked = excluded.locked, fetched_at = chapter.fetched_at, trashed_at = NULL",
 		)
 		.bind(manga_id)
 		.bind(&chapter.key)
@@ -963,6 +973,7 @@ pub async fn reconcile_chapters_detailed(
 		.execute(&mut *conn)
 		.await?;
 	}
+	let mut trashed_count = 0;
 	for old in &existing {
 		if seen.contains(&old.key) || rekeyed_ids.contains(&old.id) || is_protected(&old.key) {
 			continue;
@@ -977,6 +988,15 @@ pub async fn reconcile_chapters_detailed(
 				.bind(old.id)
 				.execute(&mut *conn)
 				.await?;
+		} else if trash {
+			// first trashing only: the original trashed_at survives later scans as the "gone since" stamp
+			let changed = sqlx::query("UPDATE chapter SET trashed_at = ? WHERE id = ? AND trashed_at IS NULL")
+				.bind(now)
+				.bind(old.id)
+				.execute(&mut *conn)
+				.await?
+				.rows_affected();
+			trashed_count += changed as i64;
 		} else {
 			sqlx::query("DELETE FROM chapter WHERE id = ?")
 				.bind(old.id)
@@ -984,6 +1004,10 @@ pub async fn reconcile_chapters_detailed(
 				.await?;
 		}
 	}
+	let restored_count = existing
+		.iter()
+		.filter(|old| old.trashed_at.is_some() && (seen.contains(&old.key) || rekeyed_ids.contains(&old.id)))
+		.count() as i64;
 	let mut new_ids = Vec::with_capacity(new_chapters.len());
 	for chapter in new_chapters {
 		let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
@@ -996,6 +1020,8 @@ pub async fn reconcile_chapters_detailed(
 	Ok(ReconcileOutcome {
 		new_ids,
 		previous_latest_chapter_number,
+		trashed: trashed_count,
+		restored: restored_count,
 	})
 }
 
@@ -1003,7 +1029,7 @@ pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	let row: Option<MangaRow> = sqlx::query_as(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id = ?",
+		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime FROM manga WHERE id = ?",
 	)
 	.bind(id)
 	.fetch_optional(pool)
@@ -1020,7 +1046,7 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 	let sql = format!(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at FROM manga WHERE id IN ({placeholders})"
+		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime FROM manga WHERE id IN ({placeholders})"
 	);
 	let mut q = sqlx::query_as::<_, MangaRow>(&sql);
 	for id in ids {
@@ -1037,7 +1063,7 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	let row: Option<ChapterRow> = sqlx::query_as(
 		"SELECT id, manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
-		 date_uploaded, source_order, page_count, locked, fetched_at FROM chapter WHERE id = ?",
+		 date_uploaded, source_order, page_count, locked, fetched_at, trashed_at FROM chapter WHERE id = ?",
 	)
 	.bind(id)
 	.fetch_optional(pool)
@@ -1689,7 +1715,7 @@ mod tests {
 
 	async fn run_reconcile(pool: &SqlitePool, manga_id: i64, chapters: &[Chapter]) -> ReconcileOutcome {
 		let mut tx = crate::db::begin_write(pool).await.expect("write transaction");
-		let outcome = reconcile_chapters_detailed(&mut tx, manga_id, chapters, &[])
+		let outcome = reconcile_chapters_detailed(&mut tx, manga_id, chapters, &[], false)
 			.await
 			.expect("reconcile");
 		tx.commit().await.expect("commit reconcile");

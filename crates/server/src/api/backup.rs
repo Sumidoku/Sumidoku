@@ -380,6 +380,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;
 		}
@@ -586,6 +587,11 @@ pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, b
 		if let Err(e) = crate::api::restart_if_loaded(state, id).await {
 			tracing::warn!(source_id = id, "restart after backup import failed: {}", e.message());
 		}
+	}
+	// Restored local instance settings (roots/oneshots/exclusions) may no longer match the index: converge
+	// with a rescan rather than leaving the old rows authoritative
+	if let Err(e) = crate::local::scan::enqueue_scan(state, None, crate::task::PRIORITY_MANUAL, true).await {
+		tracing::warn!("enqueue rescan after backup import failed: {}", e.message());
 	}
 	Ok(json!({
 		"restored": {
@@ -919,6 +925,7 @@ async fn restore_settings(
 			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;
 		}

@@ -1,4 +1,4 @@
-import { Bookmark, Check, CheckCircle2, Download, FileDown, ListChecks, ListMinus, Lock, MinusCircle } from 'lucide-react';
+import { Bookmark, Check, CheckCircle2, Download, FileDown, ListChecks, ListMinus, Lock, MinusCircle, Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { chapterFileUrl } from '../../api/client';
 import type { ChapterWithDownload } from '../../api/types';
@@ -92,6 +92,11 @@ export function ChapterRow({
 				)}
 			</span>
 			<span className="chapter-row__status">
+				{c.trashed && (
+					<span className="chapter-row__lock" title={t('chapterRow.trashed')}>
+						<Trash2 size={14} />
+					</span>
+				)}
 				{!c.isRead && (
 					<span className="chapter-row__unread" title={t('chapterRow.unread')}>
 						<span className="chapter-row__unread-label">{t('chapterRow.unread')}</span>

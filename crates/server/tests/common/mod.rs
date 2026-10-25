@@ -199,6 +199,13 @@ pub fn base_config(tmp: &tempfile::TempDir) -> Config {
 	}
 }
 
+pub fn advance_mtime(path: &std::path::Path, previous: std::time::SystemTime) -> std::time::SystemTime {
+	let next = previous + std::time::Duration::from_secs(2);
+	let file = std::fs::OpenOptions::new().write(true).open(path).expect("open file mtime");
+	file.set_modified(next).expect("advance file mtime");
+	next
+}
+
 pub async fn test_app() -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
@@ -368,6 +375,32 @@ pub async fn register_example_manga(app: &Router) -> i64 {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	body["id"].as_i64().expect("manga id")
+}
+
+/// Phase-2 browse reads the scan index: tests trigger the scan explicitly and wait for the queued tasks
+/// (scan + derived analysis) to settle
+pub async fn local_scan_and_settle(app: &Router, source_id: Option<i64>) {
+	let body = source_id.map(|id| json!({"sourceId": id}));
+	let (status, body) = request(app, "POST", "/api/v1/local/scan", body).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let started = std::time::Instant::now();
+	loop {
+		let (status, body) = request(app, "GET", "/api/v1/tasks", None).await;
+		assert_eq!(status, StatusCode::OK);
+		let tasks = body.as_array().expect("tasks array");
+		let live = tasks
+			.iter()
+			.filter(|task| task["status"] == "pending" || task["status"] == "running")
+			.count();
+		if live == 0 {
+			return;
+		}
+		assert!(
+			started.elapsed() < std::time::Duration::from_secs(15),
+			"tasks never settled: {body}"
+		);
+		tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+	}
 }
 
 pub async fn connect_db(db_path: &std::path::Path) -> sqlx::SqlitePool {

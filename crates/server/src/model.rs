@@ -65,6 +65,10 @@ pub struct MangaRow {
 	pub next_update_time: Option<i64>,
 	pub last_fetched_at: Option<i64>,
 	pub chapters_last_fetched_at: Option<i64>,
+	/// Local-source trash state (kmrs DELETED_DATE): set = trashed, still restorable until purged
+	pub trashed_at: Option<i64>,
+	/// Local-source scan change detector; NULL for online/OPDS rows and pre-index local rows
+	pub scan_mtime: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -84,6 +88,8 @@ pub struct ChapterRow {
 	pub page_count: i64,
 	pub locked: bool,
 	pub fetched_at: i64,
+	/// Local-source trash state: the chapter's entry vanished from disk; restore clears it in place
+	pub trashed_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

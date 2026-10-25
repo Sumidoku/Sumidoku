@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { Trash2 } from 'lucide-react';
 import { Cover } from './Cover';
 import { Spinner } from './Spinner';
 
@@ -9,6 +11,8 @@ export interface CoverCardProps {
 	subtitle?: ReactNode;
 	/** Show an unread badge at the cover's top-right corner when > 0 */
 	unreadCount?: number;
+	/** Local manga whose directory vanished: a trash chip at the top-left corner */
+	trashed?: boolean;
 	/** Pick one: internal navigation uses `to`, custom behavior (e.g. register-then-navigate) uses onClick */
 	to?: string;
 	onClick?: () => void;
@@ -16,13 +20,19 @@ export interface CoverCardProps {
 	busy?: boolean;
 }
 
-export function CoverCard({ src, title, subtitle, unreadCount, to, onClick, busy }: CoverCardProps) {
+export function CoverCard({ src, title, subtitle, unreadCount, trashed, to, onClick, busy }: CoverCardProps) {
+	const { t } = useTranslation();
 	const inner = (
 		<>
 			<div className="cover-card__cover">
 				<Cover src={src} title={title} />
 				{unreadCount != null && unreadCount > 0 && (
 					<span className="cover-card__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
+				)}
+				{trashed && (
+					<span className="cover-card__trashed" title={t('common.trashed')}>
+						<Trash2 size={12} />
+					</span>
 				)}
 				{busy && (
 					<div className="cover-card__busy">

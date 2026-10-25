@@ -13,6 +13,8 @@
     "timeout": "The source request timed out",
     "bad_gateway": "The upstream request failed",
     "internal": "Internal server error",
+    "gone": "The directory is still missing; restore it on disk first, or purge the entry",
+    "not_trashed": "This entry is not in the trash",
     "network": "Network request failed",
     "http": "Request failed (HTTP {{status}})",
     "stream_parse": "The stream contained an event that could not be parsed",
