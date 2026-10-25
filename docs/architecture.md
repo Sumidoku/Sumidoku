@@ -1621,10 +1621,10 @@ and manga media are network-only at the service-worker layer, and `/api` and
 `/opds` navigations bypass the SPA fallback. Both disk and embedded serving
 return `Cache-Control: no-cache` for `/sw.js` and `/manifest.webmanifest`, while
 hashed assets and other responses keep their existing cache policies. The
-Workbox MIT notice is served at `/licenses/workbox.txt`. When a
-new service worker is waiting, the UI offers Reload and Later: Reload activates
-it and reloads the page, while Later only dismisses the prompt; there is no
-automatic reload. This provides installation and an application shell, not
+Workbox MIT notice is served at `/licenses/workbox.txt`. The worker registers with
+`registerType: 'autoUpdate'`: a new worker skips waiting and claims open clients, so
+a deployed update reloads every open tab on its own, with no confirmation prompt.
+This provides installation and an application shell, not
 offline chapters or offline reading progress.
 Typography uses system stacks through `--font-sans`, `--font-display`,
 `--font-brand` and `--font-mono`; brand marks use the rounded brand stack,

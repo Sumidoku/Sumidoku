@@ -159,3 +159,9 @@ test('service worker precaches only the shell and excludes API and OPDS navigati
 		assert.equal(denied(urlPath), false, `${urlPath} keeps SPA navigation`);
 	}
 });
+
+test('generated worker activates itself and claims clients without a confirmation prompt', async () => {
+	const source = await readFile(path.join(outDir, 'sw.js'), 'utf8');
+	assert.match(source, /skipWaiting\(\)/);
+	assert.match(source, /clientsClaim\(\)/);
+});

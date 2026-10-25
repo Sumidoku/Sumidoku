@@ -23,7 +23,6 @@ export { Modal } from './Modal';
 export type { ModalProps } from './Modal';
 export { MenuButton } from './MenuButton';
 export { PageHeader } from './PageHeader';
-export { PwaUpdatePrompt } from './PwaUpdatePrompt';
 export { ProgressBar } from './ProgressBar';
 export type { ProgressBarProps } from './ProgressBar';
 export { SegmentedControl } from './SegmentedControl';

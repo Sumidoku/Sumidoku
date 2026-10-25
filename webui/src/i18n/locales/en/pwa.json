@@ -1,8 +1,0 @@
-{
-  "pwa": {
-    "updateLabel": "Application update",
-    "updateAvailable": "A new version is available.",
-    "reload": "Reload",
-    "later": "Later"
-  }
-}

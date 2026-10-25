@@ -7,7 +7,7 @@ export default defineConfig(({ mode }) => ({
 		react(),
 		VitePWA({
 			strategies: 'generateSW',
-			registerType: 'prompt',
+			registerType: 'autoUpdate',
 			includeAssets: ['apple-touch-icon.png', 'icon.svg'],
 			manifest: {
 				name: 'Sumidoku',
