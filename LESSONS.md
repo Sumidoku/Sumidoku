@@ -1,10 +1,68 @@
-<!-- reviewed-through: eb1c2f0 (2026-10-25) -->
+<!-- reviewed-through: e5c7c68 (2026-10-25) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**Filesystem-time fixtures must set the exact mtimes they depend on.** A scan
+keyed by directory mtime can pass alone and miss a change under load when
+creation and mutation land in the same timestamp tick. Advance the exact file
+or directory mtime to known values; do not rely on wall-clock progression or
+sleeps.
+- Evidence: 2026-10-25, #433's workspace run failed
+  `refresh_rescans_added_and_removed_chapters` with `Bool(false)` because the
+  refresh could not see the chapter removal. Setting the manga directory to
+  successive +2/+4/+6-second mtimes made add, remove and reappear
+  deterministic, and all 59 local-source tests passed.
+
+**A dynamic SQL identifier list is an input-size contract; chunk it below the
+bound-variable cap.** A batch endpoint cannot let the caller's selection size
+become a 500 through one `IN (...)` statement, and the cap depends on the
+SQLite build plus every other bind in the statement. Chunk the ids with room
+to spare and test above the actual cap with ids that need no fixture rows.
+- Evidence: 2026-10-25, #433's manga expansion used one dynamic `IN` list.
+  A 40,000-id selection returned 500 with `too many SQL variables`; 500-id
+  chunks made progress, download enqueue and download deletion answer their
+  documented zero results, and restoring the oversized chunk made all three
+  regressions fail with 500 again.
+
+**An authorizing read and the write it authorizes are one atomic transition.**
+A row can be revoked between a SELECT that permits an action and the write
+that performs it. Fold the predicate into the guarded write (for example
+`UPDATE ... WHERE ... RETURNING`) and take the caller's identity from the
+returned row; test the revocation exactly in the check/write window.
+- Evidence: 2026-10-25, #394's cancel flow had the same read-then-write race
+  that #416's regressions now pin. #407 repeated the shape in API-key
+  authentication: a revoked key could authenticate before #408 changed the
+  lookup to an atomic `UPDATE ... RETURNING`. Restoring the old lookup made
+  the deleted key authenticate again, while the fixed identity check returned
+  `owner` rather than the stale `admin`.
+
+**State guards belong before optimized content paths.** A cache, download
+artifact or other fast path must not return content before the endpoint checks
+the entity's current state. Otherwise list and detail routes can disagree, and
+the optimized read becomes a bypass around trash, permission or progress
+rules. Seed the fast-path artifact in the forbidden state and prove it returns
+the guarded error.
+- Evidence: 2026-10-25, #424's downloaded-product page read was combined with
+  #406's trashed-chapter guard. The single-page route returned 200 from a
+  finished product before the guard while the page list returned 404; moving
+  the guard first made the regression return the expected `not_found`, and
+  restoring the old order made it 200 again.
+
+**Capture the response model before triggering work that may change it.**
+When an endpoint's contract is to return the pre-trigger state and then start
+background backfill, read the response rows before enqueueing. A fast worker
+can commit between enqueue and the response query, making the first response
+depend on scheduling rather than the contract; test with the worker forced
+through that window.
+- Evidence: 2026-10-25, #406 review found first browse enqueueing a local
+  scan before selecting the response. A probe restored that order and returned
+  the newly indexed `Alpha` in the first response; capturing the snapshot
+  first returned it to the accepted empty response, and the regression passed
+  again.
 
 **A deduplication key is not an execution identity; carry a generation through
 completion and publication.** When a finished task can requeue under the same
@@ -102,6 +160,10 @@ submitted query, and make filters available before the first submission.
   must apply the same drop rule on fresh submission and restoration. A temporary
   aggregate `?q=` regression failed on base and passed on the PR head, but the
   PR contained no permanent test for it.
+- Seen again: 2026-10-25, #400 mapped clearing the input to a resubmission:
+  without that gesture, an old submitted query kept remote results after the
+  box was empty. Remote debounce now skips only non-empty drafts, so blank
+  resubmits and restores the unsearched list; the PR added no permanent test.
 
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
@@ -168,6 +230,10 @@ exercise the fast-completion path in a real browser.
   replaces that seed; pending events merge into it. The wiring regression
   failed on the old guard, and a 15-second delayed response made two queued
   rows vanish before the merge was restored.
+- Seen again: 2026-10-25, #425 let a retry response write `queued` back over
+  rows SSE had already advanced. `applyRetrySuccess` now updates only rows
+  still in `error`; removing that guard made the regression flip downloading
+  and finished rows back to queued.
 
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
@@ -1016,20 +1082,6 @@ logic: restart count, `journalctl` `traps:` lines and coredumps say
   stayed green for two releases; the 502 a user saw was nginx answering
   during container restart gaps, with four identical-offset cores in
   the journal. Follow-ups tracked in #234.
-
-**The web UI gate is tsc-only, and by design no formatter ever runs —
-human review is the only style net.** The tree is hand-formatted with
-tabs and formatters are deliberately absent, so a diff that breaks the
-surrounding structure passes green. On web UI reviews, read each
-changed block's indentation against its untouched siblings; a block one
-level off with its continuations at the old depth is the signature.
-- Evidence: 2026-10-20, #237 dedented two JSX blocks in BrowsePage
-  while their continuation lines kept the old depth; the `web` job was
-  green and only eyeballing the diff caught it — fixed on the branch
-  (f0870fd) before merge.
-- Seen again: 2026-10-21, #285 left misindented SourceCard JSX and adjacent
-  conditional blocks at `webui/src/pages/BrowsePage.tsx:562-631` with green
-  web gates.
 
 **A migration file is a shipped artifact, not source text — editing one
 without an explicit compatibility alias breaks existing deployments at boot.**

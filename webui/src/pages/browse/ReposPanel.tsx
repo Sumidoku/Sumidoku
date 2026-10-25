@@ -12,7 +12,8 @@ import {
 } from '../../api/hooks';
 import type { RepoSource, SourceRepo } from '../../api/types';
 import { relativeTime } from '../../lib/format';
-import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';import {
+import { loadRepoLangs, saveRepoLangs } from '../../lib/repoPrefs';
+import {
 	CONTENT_RATING_LEVELS,
 	MULTI_LANGUAGE,
 	compareLanguageLabel,
