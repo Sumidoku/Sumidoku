@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Capture the response model before triggering work that may change it.**
+When an endpoint's contract is to return the pre-trigger state and then start
+background backfill, read the response rows before enqueueing. A fast worker
+can commit between enqueue and the response query, making the first response
+depend on scheduling rather than the contract; test with the worker forced
+through that window.
+- Evidence: 2026-10-25, #406 review found first browse enqueueing a local
+  scan before selecting the response. A probe restored that order and returned
+  the newly indexed `Alpha` in the first response; capturing the snapshot
+  first returned it to the accepted empty response, and the regression passed
+  again.
+
 **A deduplication key is not an execution identity; carry a generation through
 completion and publication.** When a finished task can requeue under the same
 id, old and new executions overlap during cleanup even if their handlers never
