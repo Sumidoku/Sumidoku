@@ -474,8 +474,7 @@ export default function BrowsePage() {
 			<PageHeader
 				title={t('common.nav.browse')}
 				actions={
-					!searching ? (
-						tab === 'installed' ? (
+					!searching && tab === 'installed' ? (
 							<>
 								<Button onClick={() => navigate('/migrate')}>
 									<ArrowLeftRight size={15} />
@@ -512,7 +511,7 @@ export default function BrowsePage() {
 								{t('reposPanel.addRepo')}
 							</Button>
 						)
-					) : undefined
+					: undefined
 				}
 			/>
 
