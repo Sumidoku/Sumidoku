@@ -25,6 +25,11 @@ pub async fn get_page(
 	Path((id, index)): Path<(i64, i64)>,
 	Query(query): Query<PageQuery>,
 ) -> ApiResult<Response> {
+	let chapter = chapter_row(&state.pool, id).await?;
+	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
+	if chapter.trashed_at.is_some() {
+		return Err(ApiError::not_found("chapter is in the trash"));
+	}
 	// A finished download product is a preferred page source: text entries come from the artifact
 	// with no source access, and image entries are read from it when the materialized blob is
 	// missing, so downloaded chapters stay readable offline. Image entries still prefer the
@@ -84,11 +89,6 @@ pub async fn get_page(
 		}
 	}
 
-	let chapter = chapter_row(&state.pool, id).await?;
-	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
-	if chapter.trashed_at.is_some() {
-		return Err(ApiError::not_found("chapter is in the trash"));
-	}
 	let pages = load_pages(&state, id, false).await?;
 	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
@@ -328,6 +328,25 @@ mod tests {
 		let value: Value = serde_json::from_slice(&body).expect("text json");
 		assert_eq!(value["type"], "text");
 		assert_eq!(value["text"], "chapter one text");
+	}
+
+	#[tokio::test]
+	async fn trashed_chapter_rejects_finished_product_page() {
+		let (state, _manga_id, chapter_id, _tmp) = page_db().await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		write_test_cbz(&dir.join("ch.cbz"), &[("000.txt", b"chapter one text")]);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/ch.cbz").await;
+		sqlx::query("UPDATE chapter SET trashed_at = 1 WHERE id = ?")
+			.bind(chapter_id)
+			.execute(&state.pool)
+			.await
+			.expect("trash chapter");
+
+		let error = get_page(State(state), Path((chapter_id, 0)), Query(PageQuery { width: None }))
+			.await
+			.expect_err("a finished product must not make a trashed chapter readable");
+		assert_eq!(error.code(), "not_found");
 	}
 
 	#[tokio::test]
