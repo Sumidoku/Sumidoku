@@ -1,4 +1,5 @@
 pub mod aidoku_backup;
+pub mod api_keys;
 pub mod backup;
 pub mod docs;
 pub mod download;
@@ -185,6 +186,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 				.route_layer(axum::extract::DefaultBodyLimit::max(backup::BODY_MAX)),
 		)
 		.route("/api/v1/auth/password", put(crate::auth::change_password))
+		.route(
+			"/api/v1/auth/api-keys",
+			get(api_keys::list_keys).post(api_keys::create_key),
+		)
+		.route("/api/v1/auth/api-keys/{id}", delete(api_keys::revoke_key))
 		.merge(admin)
 		.layer(axum::middleware::from_fn_with_state(
 			state.clone(),

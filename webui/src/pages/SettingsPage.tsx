@@ -6,6 +6,7 @@ import type { TFunction } from 'i18next';
 import {
 	ArrowDown,
 	ArrowUp,
+	Copy,
 	Download,
 	ExternalLink,
 	FileUp,
@@ -18,8 +19,10 @@ import { ApiError, api, backupUrl } from '../api/client';
 import {
 	qk,
 	queryClient,
+	useApiKeys,
 	useBackupFiles,
 	useCategories,
+	useCreateApiKey,
 	useCreateCategory,
 	useCreateFilterGroup,
 	useDeleteCategory,
@@ -32,6 +35,7 @@ import {
 	useReorderFilterGroups,
 	useRestoreBackup,
 	useRestoreNamedBackup,
+	useRevokeApiKey,
 	useSaveServerSettings,
 	useServerSettings,
 	mergeServerSettings,
@@ -42,6 +46,8 @@ import {
 import type {
 	AidokuImportResponse,
 	AidokuSkipped,
+	ApiKeyCreated,
+	ApiKeyEntry,
 	AuthStatus,
 	BackupFile,
 	BackupRestoreResponse,
@@ -288,6 +294,158 @@ function SecuritySection() {
 					</div>
 				</>
 			)}
+		</Section>
+	);
+}
+
+function fmtTime(unix: number | null): string {
+	return unix === null ? '' : new Date(unix * 1000).toLocaleString();
+}
+
+function ApiKeysSection() {
+	const { t } = useTranslation();
+	const keys = useApiKeys();
+	const create = useCreateApiKey();
+	const revoke = useRevokeApiKey();
+	const [newName, setNewName] = useState('');
+	const [created, setCreated] = useState<ApiKeyCreated | null>(null);
+	const [revoking, setRevoking] = useState<ApiKeyEntry | null>(null);
+
+	const entries = keys.data ?? [];
+
+	function toastError(e: unknown) {
+		if (e instanceof ApiError) pushToast(translateApiError(e.code, e.message));
+		else pushToast(e instanceof Error ? e.message : t('settings.operationFailed'));
+	}
+
+	async function submitCreate() {
+		const name = newName.trim();
+		if (!name) return;
+		try {
+			const entry = await create.mutateAsync(name);
+			setNewName('');
+			setCreated(entry);
+		} catch (e) {
+			toastError(e);
+		}
+	}
+
+	async function copyCreated() {
+		if (!created) return;
+		try {
+			await navigator.clipboard.writeText(created.key);
+			pushToast(t('settings.keyCopied'), 'info');
+		} catch {
+			pushToast(t('settings.operationFailed'));
+		}
+	}
+
+	return (
+		<Section title={t('settings.apiKeysTitle')} desc={t('settings.apiKeysDesc')}>
+			{keys.isPending ? (
+				<div className="settings-cats">
+					<Skeleton height={48} />
+				</div>
+			) : (
+				<div className="settings-cats">
+					{entries.map((entry) => (
+						<div key={entry.id} className="settings-cat">
+							<div className="settings-cat__head">
+								<span className="settings-cat__name">
+									{entry.name ?? t('settings.configManaged')}
+									{entry.source === 'config' && <Badge>{t('settings.configManaged')}</Badge>}
+								</span>
+								{entry.source === 'ui' && (
+									<span className="settings-cat__ops">
+										<IconButton
+											label={t('settings.revoke')}
+											size="sm"
+											variant="danger"
+											onClick={() => setRevoking(entry)}
+										>
+											<Trash2 size={15} />
+										</IconButton>
+									</span>
+								)}
+							</div>
+							{entry.createdAt !== null && (
+								<p className="faint">
+									{t('settings.createdAt')} {fmtTime(entry.createdAt)}
+									{' · '}
+									{t('settings.lastUsed')}{' '}
+									{entry.lastUsedAt === null ? t('settings.never') : fmtTime(entry.lastUsedAt)}
+								</p>
+							)}
+						</div>
+					))}
+				</div>
+			)}
+
+			<div className="settings-cat__create">
+				<Input
+					placeholder={t('settings.apiKeyNamePlaceholder')}
+					value={newName}
+					onChange={(e) => setNewName(e.currentTarget.value)}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter') void submitCreate();
+					}}
+				/>
+				<Button
+					variant="primary"
+					loading={create.isPending}
+					disabled={!newName.trim()}
+					onClick={() => void submitCreate()}
+				>
+					{t('settings.createApiKey')}
+				</Button>
+			</div>
+
+			<Modal
+				open={created !== null}
+				title={t('settings.apiKeyCreatedTitle')}
+				onClose={() => setCreated(null)}
+				footer={<Button variant="primary" onClick={() => setCreated(null)}>{t('settings.done')}</Button>}
+			>
+				<p className="settings-modal-text">{t('settings.apiKeyCreatedHint')}</p>
+				<div className="settings-cat__create">
+					<Input readOnly value={created?.key ?? ''} onFocus={(e) => e.currentTarget.select()} />
+					<Button onClick={() => void copyCreated()}>
+						<Copy size={15} />
+						{t('settings.copyKey')}
+					</Button>
+				</div>
+			</Modal>
+
+			<Modal
+				open={revoking !== null}
+				title={t('settings.revoke')}
+				onClose={() => setRevoking(null)}
+				footer={
+					<>
+						<Button onClick={() => setRevoking(null)}>{t('common.cancel')}</Button>
+						<Button
+							variant="danger"
+							loading={revoke.isPending}
+							onClick={() => {
+								if (!revoking) return;
+								revoke.mutate(revoking.id, {
+									onSuccess: () => {
+										setRevoking(null);
+										pushToast(t('settings.deleted'), 'info');
+									},
+									onError: toastError
+								});
+							}}
+						>
+							{t('settings.revoke')}
+						</Button>
+					</>
+				}
+			>
+				<p className="settings-modal-text">
+					{t('settings.revokeApiKeyConfirm', { name: revoking?.name })}
+				</p>
+			</Modal>
 		</Section>
 	);
 }
@@ -1956,6 +2114,7 @@ export default function SettingsPage() {
 					system: (
 						<>
 							<SecuritySection />
+							<ApiKeysSection />
 							<AboutSection />
 						</>
 					)

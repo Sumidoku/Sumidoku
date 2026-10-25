@@ -9,6 +9,8 @@ import type { InfiniteData } from '@tanstack/react-query';
 import { ApiError, api, apiStream } from './client';
 import type {
 	AidokuImportResponse,
+	ApiKeyCreated,
+	ApiKeyEntry,
 	AuthStatus,
 	BackupFiles,
 	BackupRestoreResponse,
@@ -83,7 +85,8 @@ export const qk = {
 	sourceListings: (sourceId: number) => ['sources', sourceId, 'listings'] as const,
 	sourceHome: (sourceId: number) => ['sources', sourceId, 'home'] as const,
 	backups: ['backups'] as const,
-	whoami: ['whoami'] as const
+	whoami: ['whoami'] as const,
+	apiKeys: ['api-keys'] as const
 };
 
 const nextPage = (last: { hasNextPage: boolean }, all: { hasNextPage: boolean }[]) =>
@@ -122,6 +125,30 @@ export function useWhoami() {
 	return useQuery({
 		queryKey: qk.whoami,
 		queryFn: () => api<AuthStatus>('/auth/status', { silent: true })
+	});
+}
+
+// ---- API keys ----
+
+export function useApiKeys() {
+	return useQuery({ queryKey: qk.apiKeys, queryFn: () => api<ApiKeyEntry[]>('/auth/api-keys') });
+}
+
+/** silent: the caller turns failures into a toast so the created key can be shown on success */
+export function useCreateApiKey() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (name: string) =>
+			api<ApiKeyCreated>('/auth/api-keys', { method: 'POST', body: { name }, silent: true }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.apiKeys })
+	});
+}
+
+export function useRevokeApiKey() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (id: string) => api(`/auth/api-keys/${id}`, { method: 'DELETE', silent: true }),
+		onSuccess: () => void qc.invalidateQueries({ queryKey: qk.apiKeys })
 	});
 }
 

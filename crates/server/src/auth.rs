@@ -204,6 +204,23 @@ async fn session_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<A
 	Ok(Some(AuthUser { id, username }))
 }
 
+/// UI-managed API key: look up by sha256 fingerprint; a hit acts as the built-in admin and refreshes last_used_at
+async fn api_key_user(state: &AppState, fingerprint: &str) -> ApiResult<Option<AuthUser>> {
+	let hit: Option<(i64,)> = sqlx::query_as("SELECT created_at FROM api_key WHERE key_hash = ?")
+		.bind(fingerprint)
+		.fetch_optional(&state.pool)
+		.await?;
+	if hit.is_none() {
+		return Ok(None);
+	}
+	sqlx::query("UPDATE api_key SET last_used_at = ? WHERE key_hash = ?")
+		.bind(crate::model::unix_now())
+		.bind(fingerprint)
+		.execute(&state.pool)
+		.await?;
+	Ok(Some(state.auth.admin_user()))
+}
+
 async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Option<AuthUser>> {
 	let Some(token) = token else {
 		return Ok(None);
@@ -211,6 +228,9 @@ async fn bearer_user(state: &AppState, token: Option<String>) -> ApiResult<Optio
 	let fingerprint = sha256_hex(&token);
 	if state.auth.api_key_hashes.contains(&fingerprint) {
 		return Ok(Some(state.auth.admin_user()));
+	}
+	if let Some(user) = api_key_user(state, &fingerprint).await? {
+		return Ok(Some(user));
 	}
 	session_user(state, &fingerprint).await
 }

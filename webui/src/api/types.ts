@@ -34,6 +34,22 @@ export type ApiError = {
 	message: string;
 };
 
+export type ApiKeyCreateRequest = {
+	name: string;
+};
+
+export type ApiKeyCreated = ApiKeyEntry & {
+	key: string;
+};
+
+export type ApiKeyEntry = {
+	id: string;
+	name: string | null;
+	createdAt: number | null;
+	lastUsedAt: number | null;
+	source: "ui" | "config";
+};
+
 export type AuthStatus = {
 	enabled: boolean;
 	username?: string;

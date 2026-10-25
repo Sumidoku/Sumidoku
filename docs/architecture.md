@@ -512,11 +512,13 @@ included (`db.rs:shipped_migrations_are_immutable` pins the shipped set).
    `username` only with a valid authenticated identity and omits it for
    anonymous requests. Auth is off until the built-in admin has a password, seeded
    from config on every boot or stored by a previous password change. With
-  auth off every request acts as the same admin. `require_auth` is the only
-  route gate: bearer credentials resolve against configured API keys or an
-  admin session, and handlers continue to bind the legacy `AuthUser.id`
-  storage key (always 1). Password changes revoke every admin session, while
-  the config-set password is re-seeded at boot.
+   auth off every request acts as the same admin. `require_auth` is the only
+   route gate: bearer credentials resolve against configured API keys,
+   UI-managed keys (SHA-256 fingerprints in the `api_key` table, created and
+   revoked through `/api/v1/auth/api-keys`, plaintext returned once at
+   creation) or an admin session, and handlers continue to bind the legacy
+   `AuthUser.id` storage key (always 1). Password changes revoke every admin
+   session, while the config-set password is re-seeded at boot.
 - Single-owner migration (`0019_single_owner.sql`): non-admin settings and
   sync origins are deleted explicitly, then non-admin users and their
   user-owned rows are removed through existing foreign-key cascades. The
