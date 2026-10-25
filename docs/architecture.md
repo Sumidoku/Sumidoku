@@ -1223,9 +1223,9 @@ no alias is derived from migration text.
   exists because WASM linear memory only grows — eviction is the one
   path that returns an idle instance's memory to the OS, at the price of
   a seconds-long recompile on the next access. Aggregate pressure has
-  its own watcher (`run_rss_monitor`, same 60s cadence, spawned only
-  when the platform reports RSS — macOS via mach `task_info`, Linux via
-  `/proc/self/statm`): above `rss_threshold_mb` (default 1024 MiB; `0`
+  its own watcher (`run_rss_monitor`, same 60s cadence, spawned when the
+  startup probe reads the process RSS through `sysinfo`, which covers
+  every supported OS): above `rss_threshold_mb` (default 1024 MiB; `0`
   disables) it evicts most-idle-first, re-reading RSS after each
   eviction until the reading drops under the threshold or nothing
   evictable remains. The pressure pass ignores the idle threshold —
