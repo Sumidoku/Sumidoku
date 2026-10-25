@@ -7,6 +7,8 @@ here. Link to symbols rather than copying details that drift.
 ## Server (`crates/server`)
 
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
+`main` owns graceful shutdown (`Ctrl+C` or the shutdown watch) and startup
+error context.
 Migrations in `crates/server/migrations`. Applied migrations are immutable:
 sqlx embeds each file's SHA-384 at compile time and validates it against
 `_sqlx_migrations` at startup, so a schema change is always a new numbered
