@@ -158,6 +158,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
 		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
+		.route("/api/v1/downloads/delete", post(crate::api::download::delete_downloads))
 		.route(
 			"/api/v1/downloads/{id}",
 			delete(crate::api::download::delete_download),
@@ -1801,6 +1802,11 @@ pub(crate) async fn get_pages(
 	}
 	Ok(Json(json!(out)))
 }
+
+/// SQLite caps bound variables per statement (32766 with the bundled build), so manga selections
+/// are expanded in chunks: 500 leaves ample room for the extra binds (user id, source kind) in
+/// the same statements while a select-all library stays far below the cap.
+pub(crate) const MANGA_ID_QUERY_CHUNK: usize = 500;
 
 /// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
 /// the library.* values reference the admin's category ids. New keys are added on both read and write sides together

@@ -1312,3 +1312,178 @@ async fn embedded_webui() {
 		assert!(String::from_utf8(bytes).expect("utf8").contains("webui not built"));
 	}
 }
+
+/// chapter id → isRead map of a chapters-list response
+fn read_states(body: &Value) -> std::collections::HashMap<i64, bool> {
+	body.as_array()
+		.expect("chapters")
+		.iter()
+		.map(|c| {
+			(
+				c["id"].as_i64().expect("chapter id"),
+				c["isRead"].as_bool().expect("isRead"),
+			)
+		})
+		.collect()
+}
+
+/// A mangaIds mark-read expansion targets only readable chapters: untrashed, and either unlocked
+/// or already downloaded by the user. chapterIds merge in deduplicated.
+#[tokio::test]
+async fn batch_mark_read_by_manga_targets_only_readable_chapters() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let ids: Vec<i64> = body
+		.as_array()
+		.expect("chapters")
+		.iter()
+		.map(|c| c["id"].as_i64().expect("chapter id"))
+		.collect();
+	assert_eq!(ids.len(), 8);
+	let pool = connect_db(&db_path).await;
+	// ids[1]: locked and not downloaded — unreadable; ids[2]: locked but downloaded — readable
+	for chapter_id in [ids[1], ids[2]] {
+		sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.expect("lock chapter");
+	}
+	put_chapter_user(&pool, ids[2], false, false, true, None).await;
+	// ids[3]: in the trash
+	sqlx::query("UPDATE chapter SET trashed_at = 1 WHERE id = ?")
+		.bind(ids[3])
+		.execute(&pool)
+		.await
+		.expect("trash chapter");
+
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"chapterIds": [ids[0]], "mangaIds": [manga_id, 999], "isRead": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 6);
+
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let states = read_states(&body);
+	for (position, chapter_id) in ids.iter().enumerate() {
+		let want = !matches!(position, 1 | 3);
+		assert_eq!(states[chapter_id], want, "chapter at position {position}");
+	}
+
+	// empty selections are a no-op
+	for patch in [
+		json!({"isRead": true}),
+		json!({"mangaIds": [], "isRead": true}),
+		json!({"mangaIds": [999], "isRead": true}),
+	] {
+		let (status, body) = request(&app, "POST", "/api/v1/chapter/batch", Some(patch)).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["updated"], 0, "{body}");
+	}
+}
+
+/// Mark-unread and other patches expand a manga selection to every untrashed chapter: locked
+/// chapters are included there, only the trash is skipped.
+#[tokio::test]
+async fn batch_mark_unread_by_manga_skips_only_trashed() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let manga_id = register_example_manga(&app).await;
+	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let ids: Vec<i64> = body
+		.as_array()
+		.expect("chapters")
+		.iter()
+		.map(|c| c["id"].as_i64().expect("chapter id"))
+		.collect();
+	assert_eq!(ids.len(), 8);
+	let pool = connect_db(&db_path).await;
+	for chapter_id in &ids {
+		put_chapter_user(&pool, *chapter_id, true, false, false, Some(100)).await;
+	}
+	// ids[1]: locked, not downloaded; ids[3]: in the trash
+	sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
+		.bind(ids[1])
+		.execute(&pool)
+		.await
+		.expect("lock chapter");
+	sqlx::query("UPDATE chapter SET trashed_at = 1 WHERE id = ?")
+		.bind(ids[3])
+		.execute(&pool)
+		.await
+		.expect("trash chapter");
+
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"mangaIds": [manga_id], "isRead": false})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 7);
+
+	let (_, body) = request(&app, "GET", &chapters_path, None).await;
+	let states = read_states(&body);
+	for (position, chapter_id) in ids.iter().enumerate() {
+		let want = position == 3;
+		assert_eq!(states[chapter_id], want, "chapter at position {position}");
+	}
+	// the locked chapter's trace is wiped like any other; the trashed one keeps its row untouched
+	let chapter = body
+		.as_array()
+		.expect("chapters")
+		.iter()
+		.find(|c| c["id"] == ids[1])
+		.expect("locked chapter");
+	assert_eq!(chapter["lastPageRead"], 0);
+	assert!(chapter["lastReadAt"].is_null());
+	let chapter = body
+		.as_array()
+		.expect("chapters")
+		.iter()
+		.find(|c| c["id"] == ids[3])
+		.expect("trashed chapter");
+	assert_eq!(chapter["lastReadAt"], 100);
+
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"mangaIds": [manga_id], "isBookmarked": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 7);
+}
+
+/// A selection larger than SQLite's variable cap (32766 with the bundled build) is expanded in
+/// chunks: the endpoint answers instead of failing with "too many SQL variables".
+#[tokio::test]
+async fn batch_manga_expansion_beyond_sql_variable_limit() {
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let manga_ids: Vec<i64> = (900_001..=940_000).collect();
+	let (status, body) = request(
+		&app,
+		"POST",
+		"/api/v1/chapter/batch",
+		Some(json!({"mangaIds": manga_ids, "isRead": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["updated"], 0);
+}

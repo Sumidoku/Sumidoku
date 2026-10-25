@@ -200,9 +200,44 @@ pub async fn update_chapter(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BatchUpdateRequest {
+	#[serde(default)]
 	pub chapter_ids: Vec<i64>,
+	#[serde(default)]
+	pub manga_ids: Vec<i64>,
 	#[serde(flatten)]
 	pub patch: ProgressPatch,
+}
+
+/// Whole-manga selection expands to the manga's untrashed chapters. Marking read additionally
+/// requires a readable chapter: a locked one vanished from the source and can only still be read
+/// from its downloaded artifact, so it is skipped until the user has it downloaded.
+async fn expand_manga_chapters(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	user_id: i64,
+	manga_ids: &[i64],
+	mark_read: bool,
+) -> ApiResult<Vec<i64>> {
+	let readable = if mark_read {
+		" AND (c.locked = 0 OR EXISTS (SELECT 1 FROM chapter_user cu WHERE cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_downloaded = 1))"
+	} else {
+		""
+	};
+	let mut chapter_ids = Vec::new();
+	for chunk in manga_ids.chunks(crate::api::MANGA_ID_QUERY_CHUNK) {
+		let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+		let sql = format!(
+			"SELECT c.id FROM chapter c WHERE c.manga_id IN ({placeholders}) AND c.trashed_at IS NULL{readable}"
+		);
+		let mut query = sqlx::query_scalar::<_, i64>(&sql);
+		for manga_id in chunk {
+			query = query.bind(manga_id);
+		}
+		if mark_read {
+			query = query.bind(user_id);
+		}
+		chapter_ids.extend(query.fetch_all(&mut **tx).await?);
+	}
+	Ok(chapter_ids)
 }
 
 pub async fn batch_update_chapters(
@@ -210,13 +245,23 @@ pub async fn batch_update_chapters(
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(body): Json<BatchUpdateRequest>,
 ) -> ApiResult<Json<Value>> {
-	if body.chapter_ids.is_empty() || body.patch.is_empty() {
+	if body.patch.is_empty() || (body.chapter_ids.is_empty() && body.manga_ids.is_empty()) {
 		return Ok(Json(json!({ "updated": 0 })));
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
+	let expanded = expand_manga_chapters(&mut tx, user.id, &body.manga_ids, body.patch.is_read == Some(true)).await?;
+	// chapter ids keep the single-chapter guard semantics; the manga expansion merges deduplicated
+	let mut seen = std::collections::HashSet::new();
+	let chapter_ids: Vec<i64> = body
+		.chapter_ids
+		.iter()
+		.chain(expanded.iter())
+		.filter(|chapter_id| seen.insert(**chapter_id))
+		.copied()
+		.collect();
 	let mut updated = 0;
 	let mut deletions = Vec::new();
-	for chapter_id in &body.chapter_ids {
+	for chapter_id in &chapter_ids {
 		let page_count: Option<(i64, Option<i64>)> = sqlx::query_as(
 			"SELECT page_count, trashed_at FROM chapter WHERE id = ?",
 		)
