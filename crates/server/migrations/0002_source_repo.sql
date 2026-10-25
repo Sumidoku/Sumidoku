@@ -1,4 +1,4 @@
--- M2 源仓库：index 原文整存，repo 不可达时浏览/更新检测全靠这份缓存
+-- M2 source repos: the index is stored verbatim in full; when a repo is unreachable, browsing and update detection rely entirely on this cache
 CREATE TABLE source_repo (
     id INTEGER PRIMARY KEY,
     url TEXT NOT NULL UNIQUE,

@@ -1,4 +1,4 @@
--- Web UI 管理的 API key：只存 sha256 指纹，明文仅在创建响应里出现一次；吊销即删除行
+-- Web UI-managed API keys: store only the sha256 fingerprint; the plaintext appears only once, in the creation response; revocation deletes the row
 CREATE TABLE api_key (
     key_hash TEXT PRIMARY KEY,
     name TEXT NOT NULL,
