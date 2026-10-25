@@ -642,6 +642,8 @@ export type PageContent = {
 	Local: string;
 } | {
 	OpdsZip: string;
+} | {
+	Downloaded: string;
 };
 
 export type PageIcon = {
