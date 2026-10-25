@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "primaryNav": "Navigation principale",
+    "collapseSidebar": "Replier la barre latérale",
+    "expandSidebar": "Déplier la barre latérale",
+    "toLight": "Passer en mode clair",
+    "toDark": "Passer en mode sombre"
+  }
+}

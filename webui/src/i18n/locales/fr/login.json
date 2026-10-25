@@ -1,0 +1,10 @@
+{
+  "login": {
+    "hint": "Ce serveur exige une connexion. Saisissez votre nom d'utilisateur et votre mot de passe",
+    "username": "Nom d'utilisateur",
+    "password": "Mot de passe",
+    "submit": "Se connecter",
+    "error_invalid": "Nom d'utilisateur ou mot de passe incorrect",
+    "error_generic": "Échec de la connexion. Veuillez réessayer plus tard"
+  }
+}

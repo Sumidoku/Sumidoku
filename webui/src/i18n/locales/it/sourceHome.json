@@ -1,0 +1,17 @@
+{
+  "sourceHome": {
+    "backToBrowse": "Torna a Sfoglia",
+    "backToSource": "Torna a {{name}}",
+    "sourceFallback": "Fonte",
+    "sourceDisabled": "Questa fonte è disabilitata",
+    "sourceDisabledHint": "Reinstallala o abilitala prima di sfogliare",
+    "loadFailed": "Caricamento non riuscito",
+    "retry": "Riprova",
+    "noHome": "Questa fonte non ha una pagina home",
+    "noHomeHint": "La fonte non fornisce contenuti per la home; puoi cercare direttamente o sfogliare per elenco",
+    "goSearch": "Vai alla ricerca",
+    "emptyHome": "La pagina home è vuota",
+    "emptyHomeHint": "La fonte ha restituito un layout home vuoto",
+    "viewAll": "Vedi tutto"
+  }
+}

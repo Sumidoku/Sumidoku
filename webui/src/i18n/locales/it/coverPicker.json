@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "Cambia copertina",
+    "changed": "Copertina cambiata",
+    "unsupported": "Questa fonte non offre copertine alternative",
+    "loadFailed": "Caricamento delle copertine alternative non riuscito",
+    "retry": "Riprova",
+    "empty": "La fonte non ha restituito copertine alternative",
+    "currentTitle": "Copertina attuale",
+    "setAsCover": "Imposta come copertina",
+    "currentBadge": "Attuale"
+  }
+}

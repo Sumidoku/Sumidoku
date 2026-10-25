@@ -141,8 +141,10 @@ function AppearanceSection() {
 					value={i18n.language}
 					onChange={(e) => setLanguage(e.currentTarget.value as Language)}
 				>
-					<option value="zh-CN">中文（简体）</option>
 					<option value="en">English</option>
+					<option value="zh-CN">中文（简体）</option>
+					<option value="fr">Français</option>
+					<option value="it">Italiano</option>
 				</Select>
 			</div>
 			<div className="settings-row">

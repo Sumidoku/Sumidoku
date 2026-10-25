@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "Changer la couverture",
+    "changed": "Couverture modifiée",
+    "unsupported": "Cette source ne propose pas d'autres couvertures",
+    "loadFailed": "Échec du chargement des autres couvertures",
+    "retry": "Réessayer",
+    "empty": "La source n'a renvoyé aucune autre couverture",
+    "currentTitle": "Couverture actuelle",
+    "setAsCover": "Définir comme couverture",
+    "currentBadge": "Actuelle"
+  }
+}

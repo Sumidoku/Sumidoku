@@ -1,0 +1,10 @@
+{
+  "login": {
+    "hint": "Questo server richiede l'accesso. Inserisci nome utente e password",
+    "username": "Nome utente",
+    "password": "Password",
+    "submit": "Accedi",
+    "error_invalid": "Nome utente o password errati",
+    "error_generic": "Accesso non riuscito. Riprova più tardi"
+  }
+}

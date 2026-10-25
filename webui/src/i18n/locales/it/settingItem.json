@@ -1,0 +1,27 @@
+{
+  "settingItem": {
+    "loggedIn": "Accesso effettuato",
+    "email": "Email",
+    "username": "Nome utente",
+    "password": "Password",
+    "login": "Accedi",
+    "relogin": "Accedi di nuovo",
+    "logout": "Esci",
+    "logoutConfirm": "Uscire da questa fonte? Lo stato di accesso e i cookie salvati verranno cancellati.",
+    "clearCookies": "Cancella anche i cookie di accesso",
+    "webLoginHint": "Accedi prima alla fonte dal tuo browser, poi incolla l'intestazione Cookie del sito o un export JSON",
+    "webLoginHintWithUrl": "Accedi prima su <1>{{url}}</1> dal tuo browser, poi incolla l'intestazione Cookie del sito o un export JSON",
+    "cookiePlaceholder": "nome=valore; nome2=valore2\noppure {\"nome\": \"valore\"}",
+    "cookieParseError": "Impossibile analizzare i cookie; usa un'intestazione di richiesta o il formato JSON",
+    "oauthHint": "Tocca \"Accedi\" per aprire la pagina di autorizzazione in una nuova scheda; una volta autorizzato, incolla qui sotto l'URL di reindirizzamento dalla barra degli indirizzi",
+    "oauthPlaceholder": "Incolla l'URL di reindirizzamento, es. myscheme://callback?code=…",
+    "done": "Fine",
+    "buttonNoAction": "Questo pulsante non dichiara alcuna azione",
+    "basicClientOnly": "Questa operazione va fatta in un'app client",
+    "oauthUnsupported": "L'accesso OAuth non è ancora supportato",
+    "selectedCount_one": "{{count}} selezionato",
+    "selectedCount_other": "{{count}} selezionati",
+    "unsupportedType": "{{title}} (tipo non supportato: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

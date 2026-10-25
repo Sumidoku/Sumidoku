@@ -1,0 +1,35 @@
+{
+  "sourceSettings": {
+    "title": "Impostazioni di {{name}}",
+    "loadFailed": "Caricamento delle impostazioni non riuscito",
+    "noSettings": "Questa fonte non ha opzioni configurabili",
+    "saved": "Salvato",
+    "resetDone": "Impostazioni ripristinate ai valori predefiniti",
+    "cacheCleared": "Cache di accesso cancellata",
+    "loginSuccess": "Accesso effettuato",
+    "loggedOut": "Disconnesso",
+    "resetSettings": "Reimposta le impostazioni",
+    "clearLoginCache": "Cancella la cache di accesso",
+    "reset": "Reimposta",
+    "clear": "Cancella",
+    "resetConfirm": "Reimpostare tutte le impostazioni di questa fonte ai valori predefiniti? Le modifiche non salvate vengono scartate e anche le informazioni di accesso vengono cancellate.",
+    "clearConfirm": "Cancellare i cookie di accesso di questa fonte e riavviare la sua istanza? Dovrai accedere di nuovo.",
+    "localDirPlaceholder": "/mnt/manga",
+    "addLocalDir": "Aggiungi directory",
+    "localOneshotsDirLabel": "Directory degli oneshot",
+    "localOneshotsDirPlaceholder": "oneshots",
+
+    "localOneshotsDirDesc": "Una directory il cui percorso contiene questo nome (senza distinzione tra maiuscole e minuscole) non viene mai elencata direttamente; ogni archivio al suo interno diventa un manga di un solo capitolo intitolato come il file. Lasciare il campo vuoto disabilita la regola degli oneshot per questa fonte; il ripristino riporta alla configurazione del server (SUMIDOKU_LOCAL_ONESHOTS_DIR).",
+    "localExclusionsLabel": "Esclusioni",
+    "localExclusionPlaceholder": "Sottostringa, es. @eaDir",
+    "addExclusion": "Aggiungi esclusione",
+    "localExclusionsDesc": "Un percorso contenente una di queste sottostringhe (senza distinzione tra maiuscole e minuscole) viene saltato dalla scansione",
+    "localForceModifiedTime": "Forza l'aggiornamento della data di modifica",
+    "localAnalyzePages": "Analizza le pagine",
+    "localAnalyzeMetadata": "Analizza i metadati",
+    "localScanFlagsDesc": "Questi valori sovrascrivono i predefiniti della configurazione del server per questa istanza; le modifiche che influenzano la scansione avviano automaticamente una nuova scansione",
+    "scanNow": "Scansiona ora",
+    "scanQueued": "Scansione in coda",
+    "resetLocalConfirm": "Cancellare le personalizzazioni di questa fonte locale (oneshot, esclusioni e opzioni di scansione)? La lista delle directory viene mantenuta."
+  }
+}

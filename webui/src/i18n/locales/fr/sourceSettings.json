@@ -1,0 +1,35 @@
+{
+  "sourceSettings": {
+    "title": "Paramètres de {{name}}",
+    "loadFailed": "Échec du chargement des paramètres",
+    "noSettings": "Cette source n'a aucune option configurable",
+    "saved": "Enregistré",
+    "resetDone": "Réinitialisé aux paramètres par défaut",
+    "cacheCleared": "Cache de connexion effacé",
+    "loginSuccess": "Connecté",
+    "loggedOut": "Déconnecté",
+    "resetSettings": "Réinitialiser les paramètres",
+    "clearLoginCache": "Effacer le cache de connexion",
+    "reset": "Réinitialiser",
+    "clear": "Effacer",
+    "resetConfirm": "Réinitialiser tous les paramètres de cette source à leurs valeurs par défaut ? Les modifications non enregistrées sont perdues et les informations de connexion sont également effacées.",
+    "clearConfirm": "Effacer les cookies de connexion de cette source et redémarrer son instance ? Vous devrez vous reconnecter.",
+    "localDirPlaceholder": "/mnt/manga",
+    "addLocalDir": "Ajouter un répertoire",
+    "localOneshotsDirLabel": "Répertoire des oneshots",
+    "localOneshotsDirPlaceholder": "oneshots",
+
+    "localOneshotsDirDesc": "Un répertoire dont le chemin contient ce nom (insensible à la casse) n'est jamais listé lui-même ; chaque archive directement à l'intérieur devient son propre manga d'un chapitre titré par le nom du fichier. Laisser le champ vide désactive la règle des oneshots pour cette source ; réinitialiser restaure la configuration du serveur (SUMIDOKU_LOCAL_ONESHOTS_DIR).",
+    "localExclusionsLabel": "Exclusions",
+    "localExclusionPlaceholder": "Sous-chaîne, p. ex. @eaDir",
+    "addExclusion": "Ajouter une exclusion",
+    "localExclusionsDesc": "Un chemin contenant l'une de ces sous-chaînes (insensible à la casse) est ignoré par l'analyse",
+    "localForceModifiedTime": "Forcer l'actualisation de la date de modification",
+    "localAnalyzePages": "Analyser les pages",
+    "localAnalyzeMetadata": "Analyser les métadonnées",
+    "localScanFlagsDesc": "Ces options surchargent les valeurs de repli de la configuration du serveur pour cette instance ; les changements affectant l'analyse déclenchent automatiquement une nouvelle analyse",
+    "scanNow": "Analyser maintenant",
+    "scanQueued": "Analyse mise en file d'attente",
+    "resetLocalConfirm": "Effacer les surcharges de cette source locale (oneshots, exclusions et les interrupteurs d'analyse) ? La liste des répertoires est conservée."
+  }
+}

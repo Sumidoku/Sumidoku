@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "primaryNav": "Navigazione principale",
+    "collapseSidebar": "Comprimi la barra laterale",
+    "expandSidebar": "Espandi la barra laterale",
+    "toLight": "Passa al tema chiaro",
+    "toDark": "Passa al tema scuro"
+  }
+}

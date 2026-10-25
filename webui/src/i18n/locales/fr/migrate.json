@@ -1,0 +1,56 @@
+{
+  "migrate": {
+    "title": "Migrer",
+    "back": "Retour",
+    "pickSourceHint": "Choisissez la source depuis laquelle migrer (seules les sources avec des entrées en bibliothèque sont listées) :",
+    "inLibrary_one": "{{count}} titre en bibliothèque",
+    "inLibrary_other": "{{count}} titres en bibliothèque",
+    "libraryEmpty": "Votre bibliothèque est vide",
+    "libraryEmptyHint": "Ajoutez d'abord des mangas à la bibliothèque, puis migrez",
+    "selectedCount": "Source : <b>{{source}}</b> · {{selected}} / {{total}} sélectionnés",
+    "clearAll": "Tout désélectionner",
+    "selectAll": "Tout sélectionner",
+    "pickDestinations": "Choisir les cibles",
+    "loadMore": "Charger plus",
+    "startMatch_one": "Lancer la correspondance ({{count}} titre)",
+    "startMatch_other": "Lancer la correspondance ({{count}} titres)",
+    "status": "Cibles : {{dests}} · {{matched}} / {{total}} trouvés{{matching}}{{executed}}",
+    "statusMatching": " · recherche en cours…",
+    "statusExecuted": " · {{done}} migrés",
+    "retryUnmatched": "Réessayer les sans correspondance",
+    "notFound": "Introuvable",
+    "gotoTarget": "Migré — voir la cible →",
+    "confirmTitle_one": "{{mode}} {{count}} titre ?",
+    "confirmTitle_other": "{{mode}} {{count}} titres ?",
+    "confirmAction": "Confirmer « {{mode}} »",
+    "unmatchedUntouched_one": "Le {{count}} titre sans correspondance ne sera pas touché.",
+    "unmatchedUntouched_other": "Les {{count}} titres sans correspondance ne seront pas touchés.",
+    "toastDone_one": "{{count}} titre migré",
+    "toastDone_other": "{{count}} titres migrés",
+    "toastPartial": "{{done}} titres terminés, {{failed}} échoués",
+    "moreActions": "Plus d'actions",
+    "rematch": "Rechercher à nouveau",
+    "skipEntry": "Ignorer cette entrée",
+    "rematchTitle": "Rechercher à nouveau : {{title}}",
+    "rematchHint": "Toutes les sources cibles sont recherchées ; cliquez sur un candidat pour l'utiliser comme correspondance.",
+    "rematchNoHits": "Aucune correspondance. Essayez un autre mot-clé.",
+    "mode": {
+      "copy": "Copier",
+      "migrate": "Migrer",
+      "migrateWithHistory": "Migrer (conserver l'historique)"
+    },
+    "modeHint": {
+      "copy": "Ajoute la cible à la bibliothèque et transfère la progression ; l'entrée source reste intacte",
+      "migrate": "Ajoute la cible à la bibliothèque et transfère la progression ; l'entrée source quitte la bibliothèque et sa progression de lecture est effacée",
+      "migrateWithHistory": "Ajoute la cible à la bibliothèque et transfère la progression ; l'entrée source quitte la bibliothèque mais conserve son historique de lecture"
+    },
+    "reason": {
+      "not_found": "L'entrée source n'existe pas",
+      "not_in_library": "L'entrée source n'est pas dans la bibliothèque",
+      "source_not_found": "La source cible n'existe pas",
+      "same_source": "La cible et la source sont la même entrée",
+      "fetch_failed": "Échec de la récupération des détails de la cible",
+      "fetch_failed_with_message": "Échec de la récupération des détails de la cible : {{message}}"
+    }
+  }
+}

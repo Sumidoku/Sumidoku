@@ -1,0 +1,27 @@
+{
+  "settingItem": {
+    "loggedIn": "Connecté",
+    "email": "E-mail",
+    "username": "Nom d'utilisateur",
+    "password": "Mot de passe",
+    "login": "Se connecter",
+    "relogin": "Se reconnecter",
+    "logout": "Se déconnecter",
+    "logoutConfirm": "Se déconnecter de cette source ? L'état de connexion et les cookies enregistrés seront effacés.",
+    "clearCookies": "Effacer aussi les cookies de connexion",
+    "webLoginHint": "Connectez-vous d'abord à la source dans votre navigateur, puis collez l'en-tête Cookie du site ou un export JSON",
+    "webLoginHintWithUrl": "Connectez-vous d'abord sur <1>{{url}}</1> dans votre navigateur, puis collez l'en-tête Cookie du site ou un export JSON",
+    "cookiePlaceholder": "name=value; name2=value2\nou {\"name\": \"value\"}",
+    "cookieParseError": "Impossible d'analyser les cookies ; un en-tête de requête ou un format JSON est accepté",
+    "oauthHint": "Touchez « Se connecter » pour ouvrir la page d'autorisation dans un nouvel onglet ; une fois autorisé, collez l'URL de redirection de la barre d'adresse ci-dessous",
+    "oauthPlaceholder": "Collez l'URL de redirection, p. ex. myscheme://callback?code=…",
+    "done": "Terminé",
+    "buttonNoAction": "Ce bouton ne déclare aucune action",
+    "basicClientOnly": "Cela doit être fait dans une application cliente",
+    "oauthUnsupported": "La connexion OAuth n'est pas encore prise en charge",
+    "selectedCount_one": "{{count}} sélectionné",
+    "selectedCount_other": "{{count}} sélectionnés",
+    "unsupportedType": "{{title}} (type non pris en charge : {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

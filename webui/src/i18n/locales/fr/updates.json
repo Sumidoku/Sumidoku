@@ -1,0 +1,30 @@
+{
+  "updates": {
+    "jobPending": "En attente",
+    "jobRunning": "Mise à jour en cours",
+    "complete": "Terminée",
+    "failed": "Échouée",
+    "skipped": "Ignorée",
+    "started": "Mise à jour lancée",
+    "alreadyRunning": "Une mise à jour est déjà en cours",
+    "updateFailed": "Échec de la mise à jour",
+    "summaryUnavailable": "Résumé de mise à jour indisponible",
+    "statusRunning": "Mise à jour en cours",
+    "lastRun": "Dernière mise à jour {{time}}",
+    "idle": "Inactif",
+    "total": "Total",
+    "pending": "En attente",
+    "wsOk": "Connexion en direct OK",
+    "wsDown": "Connexion perdue ; nouvelle tentative dans 3 secondes",
+    "runNow": "Mettre à jour maintenant",
+    "selectCategory": "Sélectionner la catégorie",
+    "allCategories": "Toutes",
+    "runByCategory": "Mettre à jour par catégorie",
+    "liveFeed": "Activité en direct",
+    "addedChapters_one": "+{{count}} chapitre",
+    "addedChapters_other": "+{{count}} chapitres",
+    "recentHeading": "Mises à jour récentes",
+    "recentEmpty": "Aucun nouveau chapitre dernièrement",
+    "newChapter": "Nouveau"
+  }
+}
