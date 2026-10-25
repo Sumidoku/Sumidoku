@@ -1082,7 +1082,88 @@ mod tests {
 
 	#[tokio::test]
 	async fn cancel_after_read_does_not_flag_a_terminal_requeue() {
-		assert_requeue_does_not_inherit_cancel(&CANCEL_AFTER_READ).await;
+		let (_state, manager, _tmp) = test_state(1).await;
+		let old_started = Arc::new(Notify::new());
+		let finish_old = Arc::new(Notify::new());
+		let new_started = Arc::new(Notify::new());
+		let release_new = Arc::new(Notify::new());
+		let new_finished = Arc::new(Notify::new());
+		let saw_cancel = Arc::new(AtomicBool::new(false));
+		let executions = Arc::new(AtomicI64::new(0));
+		let handler: Handler = Arc::new({
+			let old_started = old_started.clone();
+			let finish_old = finish_old.clone();
+			let new_started = new_started.clone();
+			let release_new = release_new.clone();
+			let new_finished = new_finished.clone();
+			let saw_cancel = saw_cancel.clone();
+			let executions = executions.clone();
+			move |run| {
+				let old_started = old_started.clone();
+				let finish_old = finish_old.clone();
+				let new_started = new_started.clone();
+				let release_new = release_new.clone();
+				let new_finished = new_finished.clone();
+				let saw_cancel = saw_cancel.clone();
+				let executions = executions.clone();
+				Box::pin(async move {
+					if executions.fetch_add(1, Ordering::SeqCst) == 0 {
+						old_started.notify_one();
+						finish_old.notified().await;
+					} else {
+						new_started.notify_one();
+						release_new.notified().await;
+						saw_cancel.store(run.is_cancelled(), Ordering::SeqCst);
+						new_finished.notify_one();
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("race", handler).await;
+		manager
+			.enqueue(CANCEL_AFTER_READ.id, "race", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("enqueue");
+		manager.dispatch().await;
+		old_started.notified().await;
+
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel(CANCEL_AFTER_READ.id).await });
+		CANCEL_AFTER_READ.reached.notified().await;
+		finish_old.notify_one();
+		wait_status(&manager, CANCEL_AFTER_READ.id, STATUS_DONE).await;
+		let requeue_done = Arc::new(AtomicBool::new(false));
+		let requeue_manager = manager.clone();
+		let requeue_flag = requeue_done.clone();
+		let requeue = tokio::spawn(async move {
+			requeue_manager
+				.enqueue(CANCEL_AFTER_READ.id, "race", None, serde_json::json!({}), PRIORITY_SCHEDULED)
+				.await
+				.expect("requeue");
+			requeue_flag.store(true, Ordering::SeqCst);
+		});
+		let wait_started = std::time::Instant::now();
+		while !requeue_done.load(Ordering::SeqCst) && wait_started.elapsed() < std::time::Duration::from_millis(100) {
+			tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+		}
+		let dispatched_before_resume = requeue_done.load(Ordering::SeqCst);
+		if dispatched_before_resume {
+			manager.dispatch().await;
+		}
+		CANCEL_AFTER_READ.resume.notify_one();
+		let outcome = cancel.await.expect("cancel task");
+		assert_eq!(outcome.expect_err("after-read cancel must lose to the terminal transition").code(), "task_finished");
+		requeue.await.expect("requeue task");
+		if !dispatched_before_resume {
+			manager.dispatch().await;
+		}
+		new_started.notified().await;
+		release_new.notify_one();
+		tokio::time::timeout(std::time::Duration::from_secs(5), new_finished.notified())
+			.await
+			.expect("new handler did not finish");
+		assert!(!saw_cancel.load(Ordering::SeqCst), "the old cancel must not cancel the new execution");
 	}
 
 	#[tokio::test]
