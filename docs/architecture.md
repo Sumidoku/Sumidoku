@@ -110,9 +110,9 @@ no alias is derived from migration text.
 - Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
   the `task` table is the queue — a persistent row per task whose string id
   doubles as the deduplication key (e.g. `local_scan:3`). Enqueueing over a
-  live (pending/running) row only bumps its priority — kind, source and
-  payload stay with the execution that owns them — while a terminal row is
-  requeued fresh with the new trigger's identity and priority (kmrs's
+  live (pending/running) row only bumps its priority — kind and source stay
+  with the execution that owns them, while the payload reflects the newest
+  trigger — while a terminal row is requeued fresh with the new trigger's identity and priority (kmrs's
   `ON CONFLICT` upsert; manual 8 > scheduled 4 > derived 1). `TaskManager`
   dispatches pending rows to a worker pool sized by
   `task_pool_size` (config file/env `SUMIDOKU_TASK_POOL_SIZE`, default 2) in
@@ -123,9 +123,9 @@ no alias is derived from migration text.
   0 reserved for the global group). Every transition is a single guarded
   UPDATE whose RETURNING row is what gets broadcast as the instance-wide
   `task` event through the SSE hub (`events.rs:forward_tasks`), so events
-  never republish a state a later transition replaced. Enqueue and cancellation
-  share the dispatcher lock from the initial read through the cancel-flag
-  update and publication; cancellation publishes before history trimming,
+  never republish a state a later transition replaced. Enqueue, cancellation,
+  supersession and terminal completion share the dispatcher lock through
+  publication; cancellation publishes before history trimming,
   so a terminal requeue cannot overtake it or inherit its cancel flag.
   `DELETE /api/v1/tasks/{id}` cancels: the row flips
   to cancelled atomically for pending and running alike, a running handler
@@ -464,10 +464,11 @@ no alias is derived from migration text.
   backfill. Existing or not-yet-observed local rows stay NULL; unchanged fast
   paths backfill only that missing value without reconciling chapters.
   Manual restore and entry-level refresh compare the current entry with the
-  recorded kind, never the filename, and answer 409 for a missing, mismatched
-  or unknown shape.
-  A full or entry scan must learn a NULL kind first; a full scan also
-  restores a discovered trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
+  recorded kind, never the filename. Manual restore answers 409 for a missing,
+  mismatched or unknown shape; entry refresh can answer 404 for a missing path.
+  Live rows may backfill a missing kind; trashed rows need a full scan to learn
+  it before they can be restored. A full scan also restores a discovered
+  trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
   CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
   (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and

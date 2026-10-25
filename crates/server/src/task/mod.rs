@@ -414,6 +414,7 @@ impl TaskManager {
 				Err(e) => (STATUS_FAILED, None, Some(e.message().to_string())),
 			}
 		};
+		let mut inner = self.inner.lock().await;
 		// A newer local-scan request can arrive after the handler's last checkpoint. Requeue instead of
 		// completing the older request; an unchanged payload still takes the normal terminal path.
 		let requeued = if task.kind == "local_scan" {
@@ -453,6 +454,11 @@ impl TaskManager {
 				None
 			})
 		};
+		#[cfg(test)]
+		if is_requeue && task.id == SUPERSEDE_PUBLISH_GATE.id {
+			SUPERSEDE_PUBLISH_GATE.reached.notify_one();
+			SUPERSEDE_PUBLISH_GATE.resume.notified().await;
+		}
 		if let Some(row) = updated {
 			let _ = self.signals.send(row);
 			if !is_requeue
@@ -461,20 +467,18 @@ impl TaskManager {
 				tracing::warn!("task history trim failed: {e}");
 			}
 		}
-		{
-			let mut inner = self.inner.lock().await;
-			inner.active -= 1;
-			// A terminal requeue can already have dispatched the next execution of this group or id:
-			// remove only the registrations this execution owns
-			if inner.running_groups.get(&group) == Some(&task.id) {
-				inner.running_groups.remove(&group);
-			}
-			if let Some(flag) = inner.cancels.get(&task.id)
-				&& Arc::ptr_eq(flag, &cancelled)
-			{
-				inner.cancels.remove(&task.id);
-			}
+		inner.active -= 1;
+		// A terminal requeue can already have dispatched the next execution of this group or id:
+		// remove only the registrations this execution owns
+		if inner.running_groups.get(&group) == Some(&task.id) {
+			inner.running_groups.remove(&group);
 		}
+		if let Some(flag) = inner.cancels.get(&task.id)
+			&& Arc::ptr_eq(flag, &cancelled)
+		{
+			inner.cancels.remove(&task.id);
+		}
+		drop(inner);
 		self.wake.notify_one();
 	}
 
@@ -520,6 +524,12 @@ static CANCEL_AFTER_UPDATE: CancelTestGate = CancelTestGate {
 #[cfg(test)]
 static CANCEL_BEFORE_REQUEUE: CancelTestGate = CancelTestGate {
 	id: "cancel-requeue-test",
+	reached: Notify::const_new(),
+	resume: Notify::const_new(),
+};
+#[cfg(test)]
+static SUPERSEDE_PUBLISH_GATE: CancelTestGate = CancelTestGate {
+	id: "supersede-publish-test",
 	reached: Notify::const_new(),
 	resume: Notify::const_new(),
 };
@@ -703,6 +713,61 @@ mod tests {
 		assert_eq!(runs.load(Ordering::SeqCst), 2, "the newer request must execute after the older one");
 		let payload: serde_json::Value = serde_json::from_str(&row.payload).expect("latest payload");
 		assert_eq!(payload["requestId"], 2);
+	}
+
+	#[tokio::test]
+	async fn supersession_cannot_publish_pending_after_cancellation() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		let started = Arc::new(Notify::new());
+		let release = Arc::new(Notify::new());
+		let handler: Handler = Arc::new({
+			let started = started.clone();
+			let release = release.clone();
+			move |run| {
+				let started = started.clone();
+				let release = release.clone();
+				Box::pin(async move {
+					if run.task.payload == r#"{"requestId":1}"# {
+						started.notify_one();
+						release.notified().await;
+					}
+					Ok(serde_json::json!({}))
+				})
+			}
+		});
+		manager.register("local_scan", handler).await;
+		let mut events = manager.subscribe();
+		tokio::spawn(manager.clone().run());
+		manager
+			.enqueue("supersede-publish-test", "local_scan", Some(1), serde_json::json!({"requestId": 1}), PRIORITY_MANUAL)
+			.await
+			.expect("first scan");
+		started.notified().await;
+		manager
+			.enqueue("supersede-publish-test", "local_scan", Some(1), serde_json::json!({"requestId": 2}), PRIORITY_MANUAL)
+			.await
+			.expect("superseding scan");
+		release.notify_one();
+		SUPERSEDE_PUBLISH_GATE.reached.notified().await;
+		let cancel_manager = manager.clone();
+		let cancel = tokio::spawn(async move { cancel_manager.cancel("supersede-publish-test").await });
+		SUPERSEDE_PUBLISH_GATE.resume.notify_one();
+		let cancelled = cancel.await.expect("cancel task").expect("cancel");
+		assert_eq!(cancelled.status, STATUS_CANCELLED);
+		let mut statuses = Vec::new();
+		for _ in 0..8 {
+			let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+				.await
+				.expect("task event")
+				.expect("broadcast");
+			let status = event.status;
+			statuses.push(status.clone());
+			if status == STATUS_CANCELLED {
+				break;
+			}
+		}
+		assert_eq!(statuses.last().map(String::as_str), Some(STATUS_CANCELLED));
+		assert!(!statuses.windows(2).any(|pair| pair == [STATUS_CANCELLED, STATUS_PENDING]));
 	}
 
 	#[tokio::test]

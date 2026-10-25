@@ -359,8 +359,8 @@ pub async fn scan_instance(
 /// chapter reconciliation because only a missing original kind might need a write; a changed or reappearing
 /// one reconciles and, with `refresh_metadata`, marks the manga
 /// initialized = 0 so the analysis pass re-reads its embedded metadata (kmrs's OUTDATED). `force_reconcile`
-/// bypasses the unchanged fast path: restore uses it because the manga's trash flag was just cleared and
-/// its chapters must be untrashed with it even when the mtime did not move
+/// bypasses the unchanged fast path: restore uses it to validate the original shape and untrash in one write
+/// transaction, even when the mtime did not move
 pub async fn scan_manga_entry(
 	state: &AppState,
 	source_id: i64,
@@ -375,12 +375,13 @@ pub async fn scan_manga_entry(
 	let scan = super::scan_chapters(dir, rel, &exclusions).await?;
 	let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
 	let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let existing: Option<PersistedManga> = sqlx::query_as(
 		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ? AND key = ?",
 	)
 	.bind(source_id)
 	.bind(manga_key)
-	.fetch_optional(&state.pool)
+	.fetch_optional(&mut *tx)
 	.await?;
 	// Refresh may reclassify a live row, but a trashed row can return only under its recorded shape.
 	if let Some(row) = &existing
@@ -402,9 +403,10 @@ pub async fn scan_manga_entry(
 			sqlx::query("UPDATE manga SET local_entry_kind = ? WHERE id = ? AND local_entry_kind IS NULL")
 				.bind(scan.entry_kind)
 				.bind(row.id)
-				.execute(&state.pool)
+				.execute(&mut *tx)
 				.await?;
 		}
+		tx.commit().await?;
 		return Ok((row.id, crate::source::ReconcileOutcome {
 			new_ids: Vec::new(),
 			previous_latest_chapter_number: None,
@@ -412,7 +414,6 @@ pub async fn scan_manga_entry(
 			restored: 0,
 		}, false));
 	}
-	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let manga_id = match existing {
 		Some(row) => {
 			if refresh_metadata {
@@ -433,6 +434,10 @@ pub async fn scan_manga_entry(
 			row.id
 		}
 		None => {
+			// Restore cannot recreate a purged row with a fresh id and lose the original user state.
+			if force_reconcile {
+				return Err(crate::error::ApiError::conflict("not_trashed", "manga was purged before restore"));
+			}
 			sqlx::query("INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind) VALUES (?, ?, ?, ?, ?)")
 				.bind(source_id)
 				.bind(manga_key)
@@ -747,21 +752,8 @@ pub async fn restore_manga(state: &Arc<AppState>, manga_id: i64) -> ApiResult<()
 			}
 		}
 	}
-	// claim the untrash conditionally: a purge between this check and the rescan must not win, and the row
-	// must not be re-created through the ordinary insert path with a fresh id
-	let untrashed = sqlx::query("UPDATE manga SET trashed_at = NULL WHERE id = ? AND trashed_at IS NOT NULL")
-		.bind(manga_id)
-		.execute(&state.pool)
-		.await?
-		.rows_affected();
-	if untrashed == 0 {
-		return Err(crate::error::ApiError::conflict(
-			"not_trashed",
-			"manga was purged or already restored",
-		));
-	}
-	// entry-level rescan: the row is already untrashed, so force chapter reconciliation — the unchanged
-	// fast path would otherwise leave every chapter trashed when the mtime did not move
+	// The row stays trashed until the entry scan validates its shape and commits, so a failed rescan leaves
+	// the original row and all user state untouched instead of restoring a different entry kind.
 	scan_manga_entry(state, row.source_id, &row.key, true, true).await?;
 	Ok(())
 }
