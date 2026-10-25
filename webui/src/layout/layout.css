@@ -19,6 +19,12 @@
 	border-bottom: 1px solid var(--border);
 }
 
+.app__shell-actions {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
 .app__tabbar {
 	position: fixed;
 	left: 0;
@@ -213,6 +219,10 @@
 	.app__sidebar--collapsed .app__sidebar-foot {
 		flex-direction: column;
 		padding: 8px 0 0;
+	}
+
+	.app__sidebar--collapsed .app__shell-actions {
+		flex-direction: column;
 	}
 
 	.app__topbar,

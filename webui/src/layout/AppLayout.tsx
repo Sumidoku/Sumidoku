@@ -10,6 +10,7 @@ import { subscribeTaskEvents, useWhoami } from '../api/hooks';
 import { sse } from '../api/sse';
 import { authAllowsEvents } from '../lib/auth';
 import { DesktopSidebar } from './DesktopSidebar';
+import { LanguageMenu } from './LanguageMenu';
 import { NAV } from './navigation';
 
 function ThemeToggle() {
@@ -46,7 +47,10 @@ export function AppLayout() {
 	return (
 		<div className={sidebarCollapsed ? 'app app--sidebar-collapsed' : 'app'}>
 			<DesktopSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)}>
-				<ThemeToggle />
+				<div className="app__shell-actions">
+					<LanguageMenu />
+					<ThemeToggle />
+				</div>
 			</DesktopSidebar>
 
 			<header className="app__topbar">
@@ -54,7 +58,10 @@ export function AppLayout() {
 					<img className="app__logo-mark" src="/icon.svg" alt="" />
 					<span className="app__logo-text">Sumidoku</span>
 				</NavLink>
-				<ThemeToggle />
+				<div className="app__shell-actions">
+					<LanguageMenu />
+					<ThemeToggle />
+				</div>
 			</header>
 
 			<main className="app__content">

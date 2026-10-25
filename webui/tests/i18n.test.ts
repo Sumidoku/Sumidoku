@@ -3,6 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 
 const LOCALES = ['en', 'zh-CN', 'fr', 'it'];
@@ -53,6 +55,26 @@ test('all four locales are registered and English is the fallback', async () => 
 		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
 		for (const lang of LOCALES) assert.ok(i18n.hasResourceBundle(lang, 'translation'), lang);
 		assert.deepEqual(i18n.options.fallbackLng, ['en']);
+	} finally {
+		await vite.close();
+	}
+});
+
+test('shell language switcher renders as an accessible icon button', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const { default: i18n } = await vite.ssrLoadModule('/src/i18n');
+		await i18n.changeLanguage('en');
+		const { LanguageMenu } = await vite.ssrLoadModule('/src/layout/LanguageMenu.tsx');
+		const markup = renderToStaticMarkup(createElement(LanguageMenu));
+		assert.match(markup, /aria-label="Language"/);
+		assert.match(markup, /aria-expanded="false"/);
 	} finally {
 		await vite.close();
 	}
