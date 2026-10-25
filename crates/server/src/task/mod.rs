@@ -758,17 +758,20 @@ mod tests {
 		SUPERSEDE_PUBLISH_GATE.resume.notify_one();
 		let cancelled = cancel.await.expect("cancel task").expect("cancel");
 		assert_eq!(cancelled.status, STATUS_CANCELLED);
-		let mut statuses = Vec::new();
-		for _ in 0..8 {
-			let event = tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
-				.await
-				.expect("task event")
-				.expect("broadcast");
-			let status = event.status;
-			statuses.push(status.clone());
-			if status == STATUS_CANCELLED {
-				break;
+		// Publication precedes execution cleanup, so idle is the barrier for every final event.
+		tokio::time::timeout(std::time::Duration::from_secs(5), async {
+			loop {
+				if manager.inner.lock().await.active == 0 {
+					break;
+				}
+				tokio::task::yield_now().await;
 			}
+		})
+		.await
+		.expect("execution cleanup");
+		let mut statuses = Vec::new();
+		while let Ok(event) = events.try_recv() {
+			statuses.push(event.status);
 		}
 		assert_eq!(statuses.last().map(String::as_str), Some(STATUS_CANCELLED));
 		assert!(!statuses.windows(2).any(|pair| pair == [STATUS_CANCELLED, STATUS_PENDING]));

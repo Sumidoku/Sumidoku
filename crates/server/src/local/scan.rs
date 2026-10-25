@@ -857,12 +857,14 @@ mod tests {
 			.await
 			.expect("purge original");
 		let replacement_id: i64 = sqlx::query_scalar(
-			"INSERT INTO manga (source_id, key, title, local_entry_kind) VALUES (?, 'Alpha.cbz', 'Replacement', 'directory') RETURNING id",
+			"INSERT INTO manga (id, source_id, key, title, trashed_at, local_entry_kind) VALUES (?, ?, 'Alpha.cbz', 'Replacement', 1, 'directory') RETURNING id",
 		)
+		.bind(original_id + 1)
 		.bind(source_id)
 		.fetch_one(&state.pool)
 		.await
 		.expect("replacement manga");
+		assert_ne!(replacement_id, original_id, "the fixture must exercise a different row identity");
 
 		let error = scan_manga_entry(&state, source_id, "Alpha.cbz", true, true, Some(original_id))
 			.await
@@ -876,7 +878,7 @@ mod tests {
 				.expect("replacement row");
 		assert_eq!(id, replacement_id);
 		assert_eq!(title, "Replacement");
-		assert_eq!(trashed_at, None);
+		assert_eq!(trashed_at, Some(1));
 	}
 
 	#[tokio::test]
