@@ -472,3 +472,165 @@ impl OAuthManager {
 fn expired(token: &dao::TrackerOAuthToken) -> bool {
 	token.expires_at.is_some_and(|expires_at| expires_at <= now())
 }
+
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use axum::extract::State as AxumState;
+	use axum::http::StatusCode;
+	use axum::{Json, Router};
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	#[derive(Clone)]
+	struct TokenEndpoint {
+		hits: std::sync::Arc<AtomicUsize>,
+		mode: std::sync::Arc<std::sync::Mutex<TokenMode>>,
+	}
+
+	#[derive(Clone, Copy)]
+	enum TokenMode {
+		RefreshNoNewRefreshToken,
+		Rejected,
+		Transient,
+	}
+
+	async fn token_handler(
+		AxumState(endpoint): AxumState<TokenEndpoint>,
+		body: axum::body::Bytes,
+	) -> (StatusCode, Json<serde_json::Value>) {
+		endpoint.hits.fetch_add(1, Ordering::SeqCst);
+		let form: std::collections::HashMap<String, String> =
+			url::form_urlencoded::parse(&body).into_owned().collect();
+		assert_eq!(form["grant_type"], "refresh_token");
+		assert_eq!(form["refresh_token"], "refresh-old");
+		match *endpoint.mode.lock().unwrap() {
+			TokenMode::RefreshNoNewRefreshToken => (
+				StatusCode::OK,
+				Json(serde_json::json!({"access_token": "access-new", "token_type": "Bearer", "expires_in": 3600})),
+			),
+			TokenMode::Rejected => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid_grant"}))),
+			TokenMode::Transient => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({}))),
+		}
+	}
+
+	async fn serve(router: Router) -> String {
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		tokio::spawn(async move {
+			axum::serve(listener, router).await.unwrap();
+		});
+		format!("http://{address}")
+	}
+
+	struct Fixture {
+		oauth: Arc<OAuthManager>,
+		pool: SqlitePool,
+		endpoint: TokenEndpoint,
+		_tmp: tempfile::TempDir,
+	}
+
+	async fn fixture(mode: TokenMode) -> Fixture {
+		let tmp = tempfile::tempdir().unwrap();
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
+		let endpoint = TokenEndpoint {
+			hits: std::sync::Arc::new(AtomicUsize::new(0)),
+			mode: std::sync::Arc::new(std::sync::Mutex::new(mode)),
+		};
+		let origin = serve(Router::new().route("/token", axum::routing::post(token_handler)).with_state(endpoint.clone())).await;
+		let mut app = OAuthApp::for_provider(Provider::Bangumi);
+		app.client_id = Some("id".into());
+		app.client_secret = Some("secret".into());
+		app.token_url = format!("{origin}/token");
+		let oauth = OAuthManager::with_apps(
+			pool.clone(),
+			reqwest::Client::new(),
+			OAUTH_RELAY_ROOT.to_string(),
+			HashMap::from([(Provider::Bangumi, app)]),
+		);
+		Fixture { oauth, pool, endpoint, _tmp: tmp }
+	}
+
+	async fn seed(pool: &SqlitePool, expires_at: Option<i64>, refresh: bool) {
+		dao::upsert_token(
+			pool,
+			Provider::Bangumi,
+			1,
+			&dao::TrackerOAuthToken {
+				access_token: "access-old".into(),
+				refresh_token: refresh.then(|| "refresh-old".to_string()),
+				token_type: Some("Bearer".into()),
+				expires_at,
+				username: Some("alice".into()),
+			},
+		)
+		.await
+		.unwrap();
+	}
+
+	#[tokio::test]
+	async fn access_token_refreshes_lazily_keeping_refresh_and_username() {
+		let fixture = fixture(TokenMode::RefreshNoNewRefreshToken).await;
+		seed(&fixture.pool, Some(now() - 60), true).await;
+
+		let token = fixture.oauth.access_token(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(token.as_deref(), Some("access-new"));
+		assert_eq!(fixture.endpoint.hits.load(Ordering::SeqCst), 1);
+		let stored = dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().unwrap();
+		assert_eq!(stored.access_token, "access-new");
+		// the provider issued no new refresh token: the old one is retained
+		assert_eq!(stored.refresh_token.as_deref(), Some("refresh-old"));
+		assert_eq!(stored.username.as_deref(), Some("alice"));
+
+		// the fresh token is not expired: no second refresh happens
+		let token = fixture.oauth.access_token(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(token.as_deref(), Some("access-new"));
+		assert_eq!(fixture.endpoint.hits.load(Ordering::SeqCst), 1);
+	}
+
+	#[tokio::test]
+	async fn expired_without_refresh_token_logs_out() {
+		let fixture = fixture(TokenMode::RefreshNoNewRefreshToken).await;
+		seed(&fixture.pool, Some(now() - 60), false).await;
+
+		let token = fixture.oauth.access_token(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(token, None);
+		assert!(dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().is_none());
+		assert_eq!(fixture.endpoint.hits.load(Ordering::SeqCst), 0);
+	}
+
+	#[tokio::test]
+	async fn rejected_refresh_logs_out() {
+		let fixture = fixture(TokenMode::Rejected).await;
+		seed(&fixture.pool, Some(now() - 60), true).await;
+
+		let token = fixture.oauth.access_token(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(token, None);
+		assert!(dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().is_none());
+	}
+
+	#[tokio::test]
+	async fn transient_refresh_failure_keeps_the_account() {
+		let fixture = fixture(TokenMode::Transient).await;
+		seed(&fixture.pool, Some(now() - 60), true).await;
+
+		let result = fixture.oauth.access_token(Provider::Bangumi, 1).await;
+		assert!(matches!(result, Err(TrackerError::Upstream { status: StatusCode::INTERNAL_SERVER_ERROR, .. })));
+		assert!(dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().is_some());
+	}
+
+	#[tokio::test]
+	async fn refresh_now_forces_a_refresh_on_every_call() {
+		let fixture = fixture(TokenMode::RefreshNoNewRefreshToken).await;
+		seed(&fixture.pool, Some(now() - 60), true).await;
+
+		// the manual path is "now" on purpose: each call refreshes, and the
+		// seen-token guard only dedups a refresh that lands while a caller is
+		// still waiting on the lock
+		let first = fixture.oauth.refresh_now(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(first.as_deref(), Some("access-new"));
+		let second = fixture.oauth.refresh_now(Provider::Bangumi, 1).await.unwrap();
+		assert_eq!(second.as_deref(), Some("access-new"));
+		assert_eq!(fixture.endpoint.hits.load(Ordering::SeqCst), 2);
+	}
+}
