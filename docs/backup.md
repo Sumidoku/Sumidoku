@@ -6,9 +6,9 @@ transactional and reports what it skipped and why.
 
 ## Full backup (export / import)
 
-`GET /api/v1/backups/document` downloads the built-in admin's complete state —
-library membership and manga metadata, categories, reading progress, app
-settings and source settings — as one JSON document with a `version` field
+`GET /api/v1/backups/document` downloads the built-in admin's portable reader
+state — library membership and manga metadata, categories, reading progress,
+app settings and source settings — as one JSON document with a `version` field
 (currently `1`; unknown versions are rejected with `400`).
 `POST /api/v1/backups/document` imports it into the same owner state, optionally
 limited with `?sections=library,categories,progress,settings,sourceSettings`.
@@ -32,6 +32,13 @@ category columns. The settings
 page of the web UI has
 download and restore buttons. The file contains source settings, which may
 include site passwords — store it accordingly.
+
+Admin authentication is instance-local. Plaintext API keys, their SHA-256
+fingerprints, and login-session token hashes are neither exported nor restored.
+Importing a backup leaves the target's existing keys and sessions untouched, so
+a restore cannot resurrect credentials revoked on the source. After restoring
+to a new instance, authenticate with that instance's admin password and create
+new API keys as needed.
 
 ## Scheduled backups
 

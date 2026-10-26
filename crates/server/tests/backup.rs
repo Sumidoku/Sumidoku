@@ -2,8 +2,12 @@ mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{TestApp, connect_db, db_dump, register_example_manga, request, request_full, source_by_key, test_app};
+use common::{
+	TestApp, base_config, connect_db, db_dump, register_example_manga, request, request_full, request_with_headers,
+	source_by_key, test_app,
+};
 use serde_json::{Value, json};
+use sumidoku_server::build_app;
 
 const SOURCE_KEY: &str = "en.example-source";
 
@@ -105,6 +109,113 @@ async fn fresh_target() -> TestApp {
 	let (status, _) = request(&app.app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	app
+}
+
+async fn authenticated_app(password: &str) -> TestApp {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let mut config = base_config(&tmp);
+	config.auth.password = Some(password.into());
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	TestApp { app, tmp, db_path }
+}
+
+async fn login_token(app: &Router, password: &str) -> String {
+	let (status, body) = request(
+		app,
+		"POST",
+		"/api/v1/auth/login",
+		Some(json!({"username": "admin", "password": password})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	body["token"].as_str().expect("session token").to_string()
+}
+
+async fn create_api_key(app: &Router, session: &str) -> (String, String) {
+	let auth = format!("Bearer {session}");
+	let (status, _, bytes) = request_with_headers(
+		app,
+		"POST",
+		"/api/v1/auth/api-keys",
+		Some(json!({"name": "cli"})),
+		&[("authorization", &auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let body: Value = serde_json::from_slice(&bytes).expect("created key");
+	(
+		body["key"].as_str().expect("plaintext key").to_string(),
+		body["id"].as_str().expect("key fingerprint").to_string(),
+	)
+}
+
+async fn credential_status(app: &Router, credential: &str) -> StatusCode {
+	let auth = format!("Bearer {credential}");
+	let (status, _, _) = request_with_headers(app, "GET", "/api/v1/sources", None, &[("authorization", &auth)]).await;
+	status
+}
+
+#[tokio::test]
+async fn backup_keeps_admin_credentials_instance_local() {
+	let a = authenticated_app("source-password").await;
+	let a_session = login_token(&a.app, "source-password").await;
+	let (a_key, a_key_hash) = create_api_key(&a.app, &a_session).await;
+	assert_eq!(credential_status(&a.app, &a_session).await, StatusCode::OK);
+	assert_eq!(credential_status(&a.app, &a_key).await, StatusCode::OK);
+
+	let a_auth = format!("Bearer {a_session}");
+	let (status, _, bytes) = request_with_headers(
+		&a.app,
+		"GET",
+		"/api/v1/backups/document",
+		None,
+		&[("authorization", &a_auth)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let exported = String::from_utf8(bytes).expect("backup json");
+	let a_session_hash = sumidoku_server::auth::sha256_hex(&a_session);
+	for secret in [a_session.as_str(), a_session_hash.as_str(), a_key.as_str(), a_key_hash.as_str()] {
+		assert!(!exported.contains(secret), "backup contains an admin credential");
+	}
+	let mut doc: Value = serde_json::from_str(&exported).expect("backup document");
+	doc["apiKeys"] = json!([{"id": a_key_hash, "name": "cli", "createdAt": 1, "lastUsedAt": null}]);
+	doc["authTokens"] = json!([{"tokenHash": a_session_hash, "userId": 1, "createdAt": 1, "expiresAt": 9999999999_i64}]);
+
+	let b = authenticated_app("target-password").await;
+	let b_session = login_token(&b.app, "target-password").await;
+	let (b_key, b_key_hash) = create_api_key(&b.app, &b_session).await;
+	let b_auth = format!("Bearer {b_session}");
+	let (status, _, bytes) = request_with_headers(
+		&b.app,
+		"POST",
+		"/api/v1/backups/document",
+		Some(doc),
+		&[("authorization", &b_auth)],
+	)
+	.await;
+	let body: Value = serde_json::from_slice(&bytes).expect("import response");
+	assert_eq!(status, StatusCode::OK, "{body}");
+
+	for credential in [&a_session, &a_key] {
+		assert_eq!(credential_status(&b.app, credential).await, StatusCode::UNAUTHORIZED);
+	}
+	for credential in [&b_session, &b_key] {
+		assert_eq!(credential_status(&b.app, credential).await, StatusCode::OK);
+	}
+	let pool = connect_db(&b.db_path).await;
+	let keys: Vec<String> = sqlx::query_scalar("SELECT key_hash FROM api_key ORDER BY key_hash")
+		.fetch_all(&pool)
+		.await
+		.expect("target API keys");
+	let sessions: Vec<String> = sqlx::query_scalar("SELECT token_hash FROM auth_token ORDER BY token_hash")
+		.fetch_all(&pool)
+		.await
+		.expect("target sessions");
+	assert_eq!(keys, vec![b_key_hash]);
+	assert_eq!(sessions, vec![sumidoku_server::auth::sha256_hex(&b_session)]);
+	pool.close().await;
 }
 
 #[tokio::test]
