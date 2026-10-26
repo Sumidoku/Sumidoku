@@ -15,6 +15,15 @@ capture the value in the handler and pass that value into the updater.
   reported all four old handlers, then passed after they became immediate
   arguments; saving all four fields sent only the edited values.
 
+**Build the Web UI before Rust tests and builds, never concurrently.**
+`rust-embed` and `embedded_webui` both read `webui/build`; Vite replacing
+hashed assets can make the embedded HTML and the on-disk index disagree.
+- Evidence: 2026-10-26, #35 validation ran `npm run build` and `cargo nextest`
+  together. `embedded_webui` failed at `library_reader.rs:1282` because the
+  served HTML and disk index named different hashed JS bundles. The ordered
+  Web UI build → workspace suite → clippy → release build pipeline then passed
+  1060 tests with 2 skipped, clippy with `-D warnings`, and the release build.
+
 **Dropping a test fixture's TempDir unlinks its database file; lazy pool
 connections then fail at a wandering point.** A `let TestApp { app, .. }`
 destructure drops the TempDir immediately: already-open connections keep
