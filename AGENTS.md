@@ -64,11 +64,11 @@ attribution.
 ## Release
 
 - The version lives in the workspace `Cargo.toml`. A push to `main` that
-  touches it runs the release pipeline: four platform archives, Docker Hub
+  touches it runs the release pipeline: five platform archives, Docker Hub
   and ghcr.io tags `latest`/`X.Y.Z`/`<major>.x` (e.g. `0.x`), and the
   GitHub release.
 - Never push a tag or create a release by hand; CI does both.
-- A release counts only when the run is green, the release shows its 4
+- A release counts only when the run is green, the release shows its 5
   assets, and the 3 tags moved on both registries. Verify before
   announcing; the checklist is in
   [docs/code-standards.md](docs/code-standards.md#releases).

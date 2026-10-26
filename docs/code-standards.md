@@ -61,7 +61,7 @@ run is listed as not run, never left out.
   that only bumps `workspace.package.version` — breaking → major,
   features → minor, fixes → patch — and let CI publish on merge.
 - A release counts only when the run is green, `gh release view` shows all
-  4 platform archives, and Docker Hub's and ghcr.io's `latest`, `X.Y.Z` and
+  5 platform archives, and Docker Hub's and ghcr.io's `latest`, `X.Y.Z` and
   `<major>.x` (e.g. `0.x`) tags point at the new multi-arch manifest.
   Verify before naming the version to anyone.
 - A cancelled or failed release run is not a released version. Check
