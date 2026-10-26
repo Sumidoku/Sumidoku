@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**OAuth acceptance must enable authentication and cross the real site boundary.**
+A callback flow tested only with authentication disabled cannot reveal that
+SameSite policy or route guards reject the returning browser. Test the cookie
+contract and the authenticated start/callback, and exercise a real cross-site
+navigation for redirect-based login flows.
+- Evidence: 2026-10-26, #454's auth-disabled tracker flow passed while an
+  authenticated deployment returned 401 because its Strict cookie was absent
+  on the cross-site return. The authenticated regression failed on Strict and
+  passed on Lax; a real cross-site click returned 401 with Strict and reached
+  nonce handling with Lax. Restoring Strict made the regression fail again.
+
 **Acceptance criteria need a requirement source, not just a plan reference.**
 An agent's own staging note is a proposal, not proof that follow-up work is
 required. Before treating an optional idea as a release blocker, trace it to
