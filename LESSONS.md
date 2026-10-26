@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Canonical identity must be derived after canonical normalization.** When
+names are meant to identify the same entity, normalize before lowercasing and
+separator stripping so equivalent spellings collide by design rather than
+receive separate identities.
+- Evidence: 2026-10-26, #414's registration treated NFC `Café` and NFD
+  `Cafe\u0301` as different slugs, returning `local.cafe` instead of the
+  collision key `local.café-2`. Applying NFC before the existing slug loop made
+  the registration and counter regression pass without changing CJK behavior.
+
 **Refreshing remote state must not turn unchanged form values into edits.**
 Keep only explicit user overrides and derive visible values from the latest
 remote state plus those overrides; remove an override when the user restores
