@@ -1,10 +1,21 @@
-<!-- reviewed-through: 3ed5f79 (2026-10-26) -->
+<!-- reviewed-through: acb057b (2026-10-26) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**Shared query code must not erase endpoint-specific response contracts.**
+Home components and listing APIs may read the same rows, but their entry
+shapes, i18n namespaces and pagination are separate contracts. Verify rendered
+labels, unwrapped entries, every query path's page window and tab transitions;
+a correct home response cannot prove the listing endpoints are correct.
+- Evidence: 2026-10-26, #446 emitted `localHome.*` keys the UI did not
+  translate, returned nested home wrappers from listing endpoints, and left
+  `local_search` unpaginated, causing duplicate or stale entries on tab
+  switches. #456 renamed the keys to `sourceHome.*`, unwrapped the entries,
+  paginated both search paths and keyed the entry memo by mode.
 
 **OAuth acceptance must enable authentication and cross the real site boundary.**
 A callback flow tested only with authentication disabled cannot reveal that
