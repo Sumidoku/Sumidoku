@@ -6,6 +6,35 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Refreshing remote state must not turn unchanged form values into edits.**
+Keep only explicit user overrides and derive visible values from the latest
+remote state plus those overrides; remove an override when the user restores
+the remote value. Diffing the whole form against a moving response makes old
+values look like new edits and can regress the remote entry on a binding-only
+save.
+- Evidence: 2026-10-26, #35's review found the form initialized from one
+  response while a background refresh replaced the diff baseline. A save with
+  no remote edits could then POST stale progress. The fresh-response merge
+  regression passes only explicit edits and leaves a binding-only update empty.
+
+**Read a React event's values before creating a deferred state updater.** A
+functional updater may run after the event's `currentTarget` has been cleared;
+capture the value in the handler and pass that value into the updater.
+- Evidence: 2026-10-26, #35's tracker edit form read `event.currentTarget`
+  inside four `setValues` updaters. Changing a remote field crashed the page
+  with `Cannot read properties of null (reading 'value')`. The regression
+  reported all four old handlers, then passed after they became immediate
+  arguments; saving all four fields sent only the edited values.
+
+**Build the Web UI before Rust tests and builds, never concurrently.**
+`rust-embed` and `embedded_webui` both read `webui/build`; Vite replacing
+hashed assets can make the embedded HTML and the on-disk index disagree.
+- Evidence: 2026-10-26, #35 validation ran `npm run build` and `cargo nextest`
+  together. `embedded_webui` failed at `library_reader.rs:1282` because the
+  served HTML and disk index named different hashed JS bundles. The ordered
+  Web UI build → workspace suite → clippy → release build pipeline then passed
+  1060 tests with 2 skipped, clippy with `-D warnings`, and the release build.
+
 **Dropping a test fixture's TempDir unlinks its database file; lazy pool
 connections then fail at a wandering point.** A `let TestApp { app, .. }`
 destructure drops the TempDir immediately: already-open connections keep

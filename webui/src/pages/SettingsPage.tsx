@@ -83,6 +83,7 @@ import {
 import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
 import { SettingsLayout, SETTINGS_GROUPS } from './settings/SettingsLayout';
 import { SkippedItems } from './settings/SkippedItems';
+import { TrackersPanel } from './settings/TrackersPanel';
 import './settings.css';
 
 function Section({
@@ -2102,6 +2103,7 @@ export default function SettingsPage() {
 							<LibraryUpdateSection />
 						</>
 					),
+					trackers: <TrackersPanel />,
 					downloads: (
 						<>
 							<DownloadSection />

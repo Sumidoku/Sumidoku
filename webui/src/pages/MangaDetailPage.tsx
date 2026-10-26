@@ -53,6 +53,7 @@ import {
 	Switch
 } from '../components';
 import type { ChipColor } from '../components';
+import { TrackerSection } from '../components/trackers/TrackerSection';
 import { ChapterRow } from './manga/ChapterRow';
 import type { ChapterDlState } from './manga/ChapterRow';
 import { CoverPickerModal } from './manga/CoverPickerModal';
@@ -759,6 +760,8 @@ export default function MangaDetailPage() {
 					</div>
 				</div>
 			</div>
+
+			<TrackerSection mangaId={mangaId} mangaTitle={manga.title} />
 
 			<div className="manga-chaps">
 				<div className="manga-chaps__head">

@@ -140,8 +140,12 @@ no alias is derived from migration text.
   proxies, and the OAuth handshake (`oauth/{provider}/start|status|logout|
   callback`). A remote route hit without a connected account answers 409
   `tracker_auth` — deliberately distinct from the auth layer's reason-free
-  401, because the web UI must offer the connect flow, not a re-login. Each
-  provider (`tracker/providers/*`) implements one `TrackerService` trait
+  401, because the web UI must offer the connect flow, not a re-login. The
+  `/settings?section=trackers` page manages accounts and current-user bindings;
+  the manga-detail tracker section handles search, linking and edits to the
+  binding and remote entry. Remote searches require explicit submission, and
+  binding-only edits do not issue a remote update. Each provider
+  (`tracker/providers/*`) implements one `TrackerService` trait
   (login check, search, state read, update) over its HTTP contract: AniList
   GraphQL with a per-user score-format cache, MAL v2, Bangumi v0 and
   MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,

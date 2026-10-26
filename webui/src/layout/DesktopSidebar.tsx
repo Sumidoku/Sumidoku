@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Activity, ChevronDown, ChevronRight, Database, Download, Info, Library, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon, SlidersHorizontal } from 'lucide-react';
+import { Activity, ChevronDown, ChevronRight, Database, Download, Info, Library, Link2, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon, SlidersHorizontal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { IconButton } from '../components';
 import { NAV } from './navigation';
@@ -24,6 +24,7 @@ const ACTIVITY_NAV = NAV.filter((item) => ['/history', '/downloads'].includes(it
 const SETTINGS_NAV: readonly NavItemData[] = [
 	{ to: '/settings', labelKey: 'settings.groupGeneral', icon: SlidersHorizontal },
 	{ to: '/settings?section=library', labelKey: 'settings.groupLibrary', icon: Library },
+	{ to: '/settings?section=trackers', labelKey: 'settings.groupTrackers', icon: Link2 },
 	{ to: '/settings?section=downloads', labelKey: 'settings.groupDownloads', icon: Download },
 	{ to: '/settings?section=backups', labelKey: 'settings.groupBackups', icon: Database },
 	{ to: '/settings?section=system', labelKey: 'settings.groupSystem', icon: Info }

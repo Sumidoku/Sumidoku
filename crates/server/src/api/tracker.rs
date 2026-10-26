@@ -286,11 +286,11 @@ pub async fn tracker_oauth_callback(
 ) -> ApiResult<Redirect> {
 	let provider = parse_provider(&provider)?;
 	let target = match oauth_manager(&state)?.handle_callback(provider, &query.code, &query.state).await {
-		Ok(()) => "/settings/trackers?oauth=success".to_string(),
+		Ok(()) => "/settings?section=trackers&oauth=success".to_string(),
 		Err(error) => {
 			tracing::warn!("tracker OAuth callback failed for {provider}: {error}");
 			let message = url::form_urlencoded::byte_serialize(error.to_string().as_bytes()).collect::<String>();
-			format!("/settings/trackers?oauth=error&message={message}")
+			format!("/settings?section=trackers&oauth=error&message={message}")
 		}
 	};
 	Ok(Redirect::to(&target))
@@ -417,7 +417,7 @@ mod tests {
 		let callback = format!("/api/v1/trackers/oauth/anilist/callback?code=ok&state={encoded_state}");
 		let (status, headers, _) = get(&app, &callback, None).await;
 		assert_eq!(status, StatusCode::SEE_OTHER);
-		assert_eq!(headers.get(axum::http::header::LOCATION).unwrap(), "/settings/trackers?oauth=success");
+		assert_eq!(headers.get(axum::http::header::LOCATION).unwrap(), "/settings?section=trackers&oauth=success");
 
 		let (_, _, body) = get(&app, "/api/v1/trackers/oauth/anilist/status", None).await;
 		assert_eq!(body, serde_json::json!({"logged_in": true, "username": "alice"}));
@@ -426,7 +426,7 @@ mod tests {
 		let (status, headers, _) = get(&app, &callback, None).await;
 		assert_eq!(status, StatusCode::SEE_OTHER);
 		let location = headers.get(axum::http::header::LOCATION).unwrap().to_str().unwrap();
-		assert!(location.starts_with("/settings/trackers?oauth=error"), "{location}");
+		assert!(location.starts_with("/settings?section=trackers&oauth=error"), "{location}");
 
 		let request = Request::builder()
 			.method("POST")

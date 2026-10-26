@@ -76,6 +76,7 @@ test('settings deep link opens only the settings group and exposes section links
 	assert.match(markup, /data-nav-group="common.nav.settings"[^>]*aria-expanded="true"/);
 	assert.match(markup, /data-nav-group="common.nav.activity"[^>]*aria-expanded="false"/);
 	assert.match(markup, /href="\/settings\?section=downloads"/);
+	assert.match(markup, /href="\/settings\?section=trackers"/);
 	const activeHrefs = [...markup.matchAll(/<a\b[^>]*>/g)]
 		.filter(([anchor]) => anchor.includes('side-nav__item--active'))
 		.map(([anchor]) => anchor.match(/href="([^"]+)"/)?.[1]);
