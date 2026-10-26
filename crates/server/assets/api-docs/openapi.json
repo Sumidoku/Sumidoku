@@ -6060,6 +6060,27 @@
             "type": "string",
             "nullable": true,
             "description": "Directory-name marker enabling the oneshots rule for this instance; absent falls back to the server config."
+          },
+          "exclusions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "nullable": true,
+            "description": "Path substrings skipped by the scan; absent or empty falls back to the server config."
+          },
+          "forceModifiedTime": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Force directory modified-time refresh on scan; absent falls back to the server config."
+          },
+          "analyzePages": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Run the per-chapter page analysis pass; absent falls back to the server config."
+          },
+          "analyzeMetadata": {
+            "type": "boolean",
+            "nullable": true,
+            "description": "Run the embedded-metadata analysis pass; absent falls back to the server config."
           }
         }
       },

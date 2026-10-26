@@ -24,11 +24,17 @@ pub enum RegisterInternalRequest {
 		password: Option<String>,
 	},
 	/// Local directory instance: name + one or more existing root directories + optional oneshots marker
+	/// and the same per-instance overrides the settings panel exposes (exclusion substrings, scan/analysis
+	/// toggles); absent fields fall back to the server config layer, same as an unset source setting
 	#[serde(rename = "local", rename_all = "camelCase")]
 	Local {
 		name: String,
 		paths: Vec<String>,
 		oneshots_dir: Option<String>,
+		exclusions: Option<Vec<String>>,
+		force_modified_time: Option<bool>,
+		analyze_pages: Option<bool>,
+		analyze_metadata: Option<bool>,
 	},
 }
 
@@ -56,7 +62,23 @@ pub async fn register_internal_source(
 			name,
 			paths,
 			oneshots_dir,
-		} => crate::local::register_instance(&state, &name, &paths, oneshots_dir.as_deref()).await?,
+			exclusions,
+			force_modified_time,
+			analyze_pages,
+			analyze_metadata,
+		} => {
+			crate::local::register_instance(
+				&state,
+				&name,
+				&paths,
+				oneshots_dir.as_deref(),
+				exclusions.as_deref(),
+				force_modified_time,
+				analyze_pages,
+				analyze_metadata,
+			)
+			.await?
+		}
 	};
 	// A new instance is in no repo cache and never pinned at registration: latest/pinned are empty maps
 	Ok(Json(source_json(&row, &Default::default(), &Default::default())))

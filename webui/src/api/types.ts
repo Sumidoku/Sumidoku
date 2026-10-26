@@ -712,6 +712,10 @@ export type RegisterLocalInstance = {
 	name: string;
 	paths: Array<string>;
 	oneshotsDir?: string | null;
+	exclusions?: Array<string> | null;
+	forceModifiedTime?: boolean | null;
+	analyzePages?: boolean | null;
+	analyzeMetadata?: boolean | null;
 };
 
 export type RegisterMangaRequest = {
