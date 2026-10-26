@@ -23,7 +23,7 @@ import { api, pageUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
-import { chapterLabel, formatDate } from '../lib/format';
+import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
@@ -98,7 +98,7 @@ function ReaderChapterItem({
 				className={['chapter-row', c.isRead ? 'chapter-row--read' : ''].filter(Boolean).join(' ')}
 				onClick={onClick}
 			>
-				<span className="chapter-row__num">{c.chapter_number ?? '—'}</span>
+				<span className="chapter-row__num">{hasChapterNumber(c.chapter_number) ? c.chapter_number : ''}</span>
 				<span className="chapter-row__main">
 					<span className="chapter-row__title">{chapterLabel(c)}</span>
 					{(uploaded || scanlator) && (

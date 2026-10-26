@@ -4,7 +4,7 @@ import { chapterFileUrl } from '../../api/client';
 import type { ChapterWithDownload } from '../../api/types';
 import { formatDownloadProgress } from '../../lib/downloadEvents';
 import type { DownloadProgress } from '../../lib/downloadEvents';
-import { chapterLabel, formatDate } from '../../lib/format';
+import { chapterLabel, formatDate, hasChapterNumber } from '../../lib/format';
 import { IconButton, MenuButton, Spinner } from '../../components';
 
 export type ChapterDlState = 'idle' | 'pending' | 'queued' | 'downloading';
@@ -78,7 +78,7 @@ export function ChapterRow({
 					{selected && <Check size={12} strokeWidth={3} />}
 				</span>
 			)}
-			<span className="chapter-row__num">{c.chapter_number ?? '—'}</span>
+			<span className="chapter-row__num">{hasChapterNumber(c.chapter_number) ? c.chapter_number : ''}</span>
 			<span className="chapter-row__main">
 				<span className="chapter-row__title">{chapterLabel(c)}</span>
 				{(uploaded || scanlator || downloadProgress) && (
