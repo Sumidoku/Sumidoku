@@ -113,3 +113,11 @@ test('only HTTP 409 tracker_auth requests account reconnection', () => {
 	assert.equal(trackers.isTrackerAuthError(new ApiError(409, 'bad_request', 'other')), false);
 	assert.equal(trackers.isTrackerAuthError(new Error('tracker_auth')), false);
 });
+
+test('tracker edit state updaters do not defer synthetic event reads', async () => {
+	const source = (await vite.ssrLoadModule('/src/components/trackers/TrackerSection.tsx?raw')).default;
+	const updaters = [...source.matchAll(/setValues\(\s*\(?current\)?\s*=>\s*(\([^)]*\)|\{[^}]*\})/g)].map((match) => match[1]);
+	assert.ok(updaters.length > 0);
+	const deferredEventReads = updaters.filter((updater) => updater.includes('event.currentTarget'));
+	assert.deepEqual(deferredEventReads, [], 'state updaters must capture input values before the event handler returns');
+});

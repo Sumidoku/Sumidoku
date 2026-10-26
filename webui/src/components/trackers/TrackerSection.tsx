@@ -235,6 +235,10 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 	});
 	const saveAuthError = isTrackerAuthError(save.error);
 
+	function updateValue<K extends keyof typeof values>(field: K, value: (typeof values)[K]) {
+		setValues((current) => ({ ...current, [field]: value }));
+	}
+
 	function submit(event: FormEvent) {
 		event.preventDefault();
 		save.mutate();
@@ -280,7 +284,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 								<span>{t('trackers.statusLabel')}</span>
 								<Select
 									value={values.status}
-									onChange={(event) => setValues((current) => ({ ...current, status: event.currentTarget.value as TrackStatus | '' }))}
+									onChange={(event) => updateValue('status', event.currentTarget.value as TrackStatus | '')}
 								>
 									{values.status === '' && <option value="">{t('trackers.statusNone')}</option>}
 									{TRACK_STATUSES.map((status) => (
@@ -297,7 +301,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 									min={0}
 									step={1}
 									value={values.score}
-									onChange={(event) => setValues((current) => ({ ...current, score: event.currentTarget.value }))}
+									onChange={(event) => updateValue('score', event.currentTarget.value)}
 								/>
 							</label>
 							<label className="tracker-field">
@@ -307,7 +311,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 									min={0}
 									step="any"
 									value={values.lastReadChapter}
-									onChange={(event) => setValues((current) => ({ ...current, lastReadChapter: event.currentTarget.value }))}
+									onChange={(event) => updateValue('lastReadChapter', event.currentTarget.value)}
 								/>
 							</label>
 							<label className="tracker-field">
@@ -317,7 +321,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 									min={0}
 									step={1}
 									value={values.lastReadVolume}
-									onChange={(event) => setValues((current) => ({ ...current, lastReadVolume: event.currentTarget.value }))}
+									onChange={(event) => updateValue('lastReadVolume', event.currentTarget.value)}
 								/>
 							</label>
 						</div>
