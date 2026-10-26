@@ -34,6 +34,7 @@ function TrackerAccountCard({ provider }: { provider: TrackerProvider }) {
 		onSuccess: () => {
 			setConfirming(false);
 			void qc.invalidateQueries({ queryKey: trackerKeys.oauth });
+			void qc.invalidateQueries({ queryKey: trackerKeys.states });
 			pushToast(t('trackers.disconnected', { provider: TRACKER_PROVIDER_NAMES[provider] }), 'info');
 		}
 	});

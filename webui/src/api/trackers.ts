@@ -29,6 +29,7 @@ export const trackerKeys = {
 	oauthStatus: (provider: TrackerProvider) => ['trackers', 'oauth', provider] as const,
 	search: (provider: TrackerProvider, name: string, nsfw?: boolean) =>
 		['trackers', 'search', provider, name, nsfw] as const,
+	states: ['trackers', 'state'] as const,
 	state: (provider: TrackerProvider, trackId: string) => ['trackers', 'state', provider, trackId] as const
 };
 
@@ -116,6 +117,10 @@ export function remoteToTrackEdit(state: RemoteState): TrackEditValues {
 		lastReadChapter: state.lastReadChapter == null ? '' : String(state.lastReadChapter),
 		lastReadVolume: state.lastReadVolume == null ? '' : String(state.lastReadVolume)
 	};
+}
+
+export function mergeTrackEditValues(initial: RemoteState | null, edits: Partial<TrackEditValues>): TrackEditValues {
+	return { ...remoteToTrackEdit(initial ?? {}), ...edits };
 }
 
 function editedNumber(value: string) {

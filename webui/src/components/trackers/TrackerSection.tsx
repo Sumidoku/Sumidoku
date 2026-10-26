@@ -11,6 +11,7 @@ import {
 	hasTrackUpdate,
 	isTrackerAuthError,
 	listTrackerLinks,
+	mergeTrackEditValues,
 	oauthStartUrl,
 	oauthStatus,
 	putTrackerLink,
@@ -200,7 +201,8 @@ interface TrackerEditFormProps {
 function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) {
 	const { t } = useTranslation();
 	const qc = useQueryClient();
-	const [values, setValues] = useState(() => remoteToTrackEdit(initialState ?? {}));
+	const [edits, setEdits] = useState<Partial<ReturnType<typeof remoteToTrackEdit>>>({});
+	const values = mergeTrackEditValues(initialState, edits);
 	const [trackMode, setTrackMode] = useState<TrackerLink['trackMode']>(link.trackMode);
 	const [chapterOffset, setChapterOffset] = useState(String(link.chapterOffset));
 	const [confirmUnlink, setConfirmUnlink] = useState(false);
@@ -212,16 +214,14 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 			if (hasTrackUpdate(plan.remoteUpdate)) {
 				await updateTracker(link.provider, { trackId: link.trackId, ...plan.remoteUpdate });
 			}
-			return plan.remoteUpdate;
 		},
-		onSuccess: (remoteUpdate) => {
-			void qc.invalidateQueries({ queryKey: trackerKeys.links });
-			qc.setQueryData<RemoteState>(trackerKeys.state(link.provider, link.trackId), (current) => ({
-				...current,
-				...remoteUpdate
-			}));
+		onSuccess: () => {
 			pushToast(t('trackers.saved'), 'info');
 			onClose();
+		},
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: trackerKeys.links });
+			void qc.invalidateQueries({ queryKey: trackerKeys.state(link.provider, link.trackId) });
 		}
 	});
 	const unlink = useMutation({
@@ -236,7 +236,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 	const saveAuthError = isTrackerAuthError(save.error);
 
 	function updateValue<K extends keyof typeof values>(field: K, value: (typeof values)[K]) {
-		setValues((current) => ({ ...current, [field]: value }));
+		setEdits((current) => ({ ...current, [field]: value }));
 	}
 
 	function submit(event: FormEvent) {
@@ -417,14 +417,15 @@ export function TrackerSection({ mangaId, mangaTitle }: { mangaId: number; manga
 	});
 	const links = linksQuery.data ?? [];
 	const providers = availableTrackerProviders(links);
+	const canAdd = linksQuery.isSuccess && providers.length > 0;
 	return (
 		<section className="tracker-section">
 			<div className="tracker-section__head">
 				<h2>{t('trackers.sectionTitle')}</h2>
 				<Button
 					size="sm"
-					disabled={providers.length === 0}
-					title={providers.length === 0 ? t('trackers.allProvidersBound') : undefined}
+					disabled={!canAdd}
+					title={linksQuery.isSuccess && providers.length === 0 ? t('trackers.allProvidersBound') : undefined}
 					onClick={() => setAdding(true)}
 				>
 					<Plus size={15} />
@@ -444,7 +445,7 @@ export function TrackerSection({ mangaId, mangaTitle }: { mangaId: number; manga
 					))}
 				</div>
 			)}
-			{adding && providers.length > 0 && (
+			{adding && canAdd && (
 				<AddTrackerDialog
 					mangaId={mangaId}
 					mangaTitle={mangaTitle}

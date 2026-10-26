@@ -116,8 +116,45 @@ test('only HTTP 409 tracker_auth requests account reconnection', () => {
 
 test('tracker edit state updaters do not defer synthetic event reads', async () => {
 	const source = (await vite.ssrLoadModule('/src/components/trackers/TrackerSection.tsx?raw')).default;
-	const updaters = [...source.matchAll(/setValues\(\s*\(?current\)?\s*=>\s*(\([^)]*\)|\{[^}]*\})/g)].map((match) => match[1]);
+	const updaters = [...source.matchAll(/set(?:Values|Edits)\(\s*\(?current\)?\s*=>\s*(\([^)]*\)|\{[^}]*\})/g)].map((match) => match[1]);
 	assert.ok(updaters.length > 0);
 	const deferredEventReads = updaters.filter((updater) => updater.includes('event.currentTarget'));
 	assert.deepEqual(deferredEventReads, [], 'state updaters must capture input values before the event handler returns');
+});
+
+test('tracker edit merges fresh remote state with only explicit edits', async () => {
+	const source = (await vite.ssrLoadModule('/src/components/trackers/TrackerSection.tsx?raw')).default;
+	assert.match(source, /mergeTrackEditValues\(initialState, edits\)/);
+	const refreshed = { ...remoteState(), score: 9, lastReadChapter: 20, lastReadVolume: 4 };
+	const merged = trackers.mergeTrackEditValues(refreshed, { score: '7' });
+	assert.deepEqual(merged, { ...trackers.remoteToTrackEdit(refreshed), score: '7' });
+	assert.deepEqual(trackers.buildTrackUpdate(refreshed, merged), { score: 7 });
+	assert.deepEqual(trackers.buildTrackUpdate(refreshed, trackers.mergeTrackEditValues(refreshed, {})), {});
+});
+
+test('tracker add stays disabled while bindings are pending', async () => {
+	const { createElement } = await import('react');
+	const { renderToStaticMarkup } = await import('react-dom/server');
+	const { QueryClient, QueryClientProvider } = await import('@tanstack/react-query');
+	const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+	await i18n.changeLanguage('en');
+	const { TrackerSection } = await vite.ssrLoadModule('/src/components/trackers/TrackerSection.tsx');
+	const markup = renderToStaticMarkup(
+		createElement(QueryClientProvider, { client: new QueryClient() }, createElement(TrackerSection, { mangaId: 1, mangaTitle: 'Demo' }))
+	);
+	const addButton = [...markup.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/g)].find(([button]) => button.includes('Add binding'));
+	assert.ok(addButton);
+	assert.match(addButton[0], /\bdisabled=""/);
+});
+
+test('tracker save re-reads remote state and refreshes links on settled', async () => {
+	const source = (await vite.ssrLoadModule('/src/components/trackers/TrackerSection.tsx?raw')).default;
+	assert.match(source, /onSettled: \(\) => \{/);
+	assert.match(source, /void qc\.invalidateQueries\(\{ queryKey: trackerKeys\.state\(link\.provider, link\.trackId\) \}\);/);
+	assert.doesNotMatch(source, /qc\.setQueryData<RemoteState>/);
+});
+
+test('tracker disconnect invalidates cached remote state', async () => {
+	const source = (await vite.ssrLoadModule('/src/pages/settings/TrackersPanel.tsx?raw')).default;
+	assert.match(source, /void qc\.invalidateQueries\(\{ queryKey: trackerKeys\.states \}\);/);
 });
