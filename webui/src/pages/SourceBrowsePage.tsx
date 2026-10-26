@@ -269,7 +269,7 @@ export default function SourceBrowsePage() {
 	const activeQuery = isSearch ? searchQuery : listingQuery;
 	const entries = useMemo(
 		() => activeQuery.data?.pages.flatMap((p) => p.entries) ?? [],
-		[activeQuery.data]
+		[activeQuery.data, mode, isSearch]
 	);
 	// The server normalizes kind to default/list; search mode and unknown kinds (an undeclared listing from a deep link) stay on the grid
 	const listMode = !isSearch && listings?.find((l) => l.id === mode)?.kind === 'list';
@@ -398,7 +398,7 @@ export default function SourceBrowsePage() {
 							{ value: 'search', label: t('common.search') },
 							...listings.map((l) => ({
 								value: l.id,
-								label: l.name.startsWith('localHome.') ? t(l.name) : l.name
+								label: l.name.startsWith('sourceHome.') ? t(l.name) : l.name
 							}))
 						]}
 						value={mode}
