@@ -28,6 +28,7 @@ import {
 import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
 import { entrySubtitle, formatRangeBound } from '../lib/format';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
+import { sourceSearchOptions } from '../lib/sourceSearch';
 import {
 	Button,
 	Chip,
@@ -262,14 +263,8 @@ export default function SourceBrowsePage() {
 
 	const isSearch = mode === 'search';
 	const filtersHidden = !!sourceConfig?.hidesFiltersWhileSearching && input.trim() !== '';
-	// hidesFiltersWhileSearching also drops filters at the request boundary: a ?q=-restored submission
-	// initializes submitted.filters from storage and would otherwise re-apply filters the original search dropped
-	const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && submitted.query !== '';
-	const searchQuery = useSourceSearch(
-		sourceId,
-		{ query: submitted.query || undefined, filters: dropFilters ? [] : submitted.filters },
-		isSearch && sourceEnabled
-	);
+	const searchOptions = sourceSearchOptions(sourceConfig, submitted, isSearch, sourceEnabled);
+	const searchQuery = useSourceSearch(sourceId, searchOptions.request, searchOptions.enabled);
 	const listingQuery = useListing(sourceId, mode, !isSearch && sourceEnabled);
 	const activeQuery = isSearch ? searchQuery : listingQuery;
 	const entries = useMemo(
