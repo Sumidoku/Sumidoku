@@ -364,8 +364,7 @@ mod tests {
 		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
 		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
 		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
-		let mut config = crate::config::Config::default();
-		config.config_dir = tmp.path().to_path_buf();
+		let config = crate::config::Config { config_dir: tmp.path().to_path_buf(), ..crate::config::Config::default() };
 		let state = AppState::new(pool.clone(), config, defaults_tx, cookie_tx);
 		crate::auth::init(&state).await.unwrap();
 
