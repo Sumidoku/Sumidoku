@@ -124,12 +124,12 @@ fn is_https(uri: &Uri, headers: &HeaderMap) -> bool {
 
 fn session_cookie_value(token: &str, https: bool) -> String {
 	let secure = if https { "; Secure" } else { "" };
-	format!("{SESSION_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Strict{secure}")
+	format!("{SESSION_COOKIE}={token}; Path=/; Max-Age={TOKEN_TTL_SECS}; HttpOnly; SameSite=Lax{secure}")
 }
 
 fn session_cookie_clear(https: bool) -> String {
 	let secure = if https { "; Secure" } else { "" };
-	format!("{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Strict{secure}")
+	format!("{SESSION_COOKIE}=deleted; Path=/; Max-Age=0; HttpOnly; SameSite=Lax{secure}")
 }
 
 fn set_cookie_header(response: &mut Response, value: String) {

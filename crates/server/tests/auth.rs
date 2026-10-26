@@ -121,7 +121,7 @@ async fn session_cookie_authenticates_api_and_events() {
 	assert_eq!(status, StatusCode::OK);
 	let set_cookie = headers.get("set-cookie").expect("session cookie").to_str().expect("cookie text");
 	assert!(set_cookie.contains("HttpOnly"));
-	assert!(set_cookie.contains("SameSite=Strict"));
+	assert!(set_cookie.contains("SameSite=Lax"));
 	assert!(set_cookie.contains("Secure"));
 	let body: Value = serde_json::from_slice(&bytes).expect("login json");
 	let token = body["token"].as_str().expect("token");

@@ -360,11 +360,16 @@ mod tests {
 	}
 
 	async fn test_app(origin: &str) -> (Router, sqlx::SqlitePool, tempfile::TempDir) {
+		test_app_with_password(origin, None).await
+	}
+
+	async fn test_app_with_password(origin: &str, password: Option<&str>) -> (Router, sqlx::SqlitePool, tempfile::TempDir) {
 		let tmp = tempfile::tempdir().unwrap();
 		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
 		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
 		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
-		let config = crate::config::Config { config_dir: tmp.path().to_path_buf(), ..crate::config::Config::default() };
+		let mut config = crate::config::Config { config_dir: tmp.path().to_path_buf(), ..crate::config::Config::default() };
+		config.auth.password = password.map(str::to_string);
 		let state = AppState::new(pool.clone(), config, defaults_tx, cookie_tx);
 		crate::auth::init(&state).await.unwrap();
 
@@ -380,15 +385,43 @@ mod tests {
 	}
 
 	async fn get(app: &Router, path: &str, host: Option<&str>) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
+		get_with_cookie(app, path, host, None).await
+	}
+
+	async fn get_with_cookie(
+		app: &Router,
+		path: &str,
+		host: Option<&str>,
+		session: Option<&str>,
+	) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
 		let mut builder = Request::builder().method("GET").uri(path);
 		if let Some(host) = host {
 			builder = builder.header("host", host);
+		}
+		if let Some(session) = session {
+			builder = builder.header("cookie", format!("sumidoku.session={session}"));
 		}
 		let response = app.clone().oneshot(builder.body(Body::empty()).unwrap()).await.unwrap();
 		let status = response.status();
 		let headers = response.headers().clone();
 		let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
 		(status, headers, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+	}
+
+	async fn login(app: &Router, password: &str) -> (String, String) {
+		let request = Request::builder()
+			.method("POST")
+			.uri("/api/v1/auth/login")
+			.header("content-type", "application/json")
+			.body(Body::from(serde_json::json!({"username": "admin", "password": password}).to_string()))
+			.unwrap();
+		let response = app.clone().oneshot(request).await.unwrap();
+		assert_eq!(response.status(), StatusCode::OK);
+		let headers = response.headers().clone();
+		let set_cookie = headers.get(axum::http::header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+		let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+		let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+		(body["token"].as_str().unwrap().to_string(), set_cookie)
 	}
 
 	#[tokio::test]
@@ -437,6 +470,54 @@ mod tests {
 		assert_eq!(response.status(), StatusCode::NO_CONTENT);
 		let (_, _, body) = get(&app, "/api/v1/trackers/oauth/anilist/status", None).await;
 		assert_eq!(body, serde_json::json!({"logged_in": false, "username": null}));
+	}
+
+	#[tokio::test]
+	async fn oauth_callback_requires_lax_session_and_one_shot_state() {
+		let origin = mock_oauth_server().await;
+		let (app, pool, _tmp) = test_app_with_password(&origin, Some("secret")).await;
+		let (session, set_cookie) = login(&app, "secret").await;
+
+		let (status, _, _) = get(&app, "/api/v1/trackers/oauth/anilist/status", None).await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED);
+		let (status, headers, _) = get_with_cookie(
+			&app,
+			"/api/v1/trackers/oauth/anilist/start",
+			Some("sumidoku.test"),
+			Some(&session),
+		)
+		.await;
+		assert_eq!(status, StatusCode::SEE_OTHER);
+		let location = headers.get(axum::http::header::LOCATION).unwrap().to_str().unwrap();
+		let authorize = url::Url::parse(location).unwrap();
+		let query: HashMap<_, _> = authorize.query_pairs().into_owned().collect();
+		let encoded_state = url::form_urlencoded::byte_serialize(query["state"].as_bytes()).collect::<String>();
+		let callback = format!("/api/v1/trackers/oauth/anilist/callback?code=ok&state={encoded_state}");
+
+		let (status, _, _) = get(&app, &callback, None).await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED);
+		let (status, headers, _) = get_with_cookie(&app, &callback, None, Some(&session)).await;
+		assert_eq!(status, StatusCode::SEE_OTHER);
+		assert_eq!(headers.get(axum::http::header::LOCATION).unwrap(), "/settings?section=trackers&oauth=success");
+		let token = dao::get_token(&pool, Provider::Anilist, 1).await.unwrap().expect("tracker token");
+		assert_eq!(token.access_token, "access-token");
+
+		let (status, headers, _) = get_with_cookie(&app, &callback, None, Some(&session)).await;
+		assert_eq!(status, StatusCode::SEE_OTHER);
+		let location = headers.get(axum::http::header::LOCATION).unwrap().to_str().unwrap();
+		assert!(location.starts_with("/settings?section=trackers&oauth=error"), "{location}");
+
+		let request = Request::builder()
+			.method("POST")
+			.uri("/api/v1/auth/logout")
+			.header("cookie", format!("sumidoku.session={session}"))
+			.body(Body::empty())
+			.unwrap();
+		let response = app.clone().oneshot(request).await.unwrap();
+		assert_eq!(response.status(), StatusCode::NO_CONTENT);
+		let cleared = response.headers().get(axum::http::header::SET_COOKIE).unwrap().to_str().unwrap();
+		assert!(set_cookie.contains("SameSite=Lax"));
+		assert!(cleared.contains("SameSite=Lax"));
 	}
 
 	#[tokio::test]
