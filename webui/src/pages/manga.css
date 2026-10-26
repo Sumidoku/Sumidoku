@@ -412,12 +412,6 @@ button.manga-menu__row:hover:not(:disabled) {
 	}
 }
 
-/* The tri-state chip's excluded state: strikethrough + lowered opacity, distinct from the "include" accent color */
-.chip--exclude {
-	text-decoration: line-through;
-	opacity: 0.75;
-}
-
 .manga-chaps__select-tools {
 	display: flex;
 	align-items: center;

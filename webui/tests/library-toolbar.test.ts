@@ -72,6 +72,40 @@ test('library toolbar groups controls and reveals active advanced filters', asyn
 	}
 });
 
+test('tri-state chips keep the off state compact and use distinct active icons', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const { Chip } = await vite.ssrLoadModule('/src/components/Chip.tsx');
+		const off = renderToStaticMarkup(createElement(Chip, { triState: 0 }, 'Uncategorized'));
+		const included = renderToStaticMarkup(createElement(Chip, { triState: 1 }, 'Uncategorized'));
+		const excluded = renderToStaticMarkup(createElement(Chip, { triState: -1 }, 'Uncategorized'));
+		assert.deepEqual(
+			{
+				offHasMarker: off.includes('chip__tri-state'),
+				includedMarkerBeforeLabel: included.indexOf('chip__tri-state') < included.indexOf('>Uncategorized<'),
+				excludedMarkerBeforeLabel: excluded.indexOf('chip__tri-state') < excluded.indexOf('>Uncategorized<'),
+				excludedHasBan: excluded.includes('lucide-ban'),
+				excludedHasMinus: excluded.includes('lucide-minus')
+			},
+			{
+				offHasMarker: false,
+				includedMarkerBeforeLabel: true,
+				excludedMarkerBeforeLabel: true,
+				excludedHasBan: true,
+				excludedHasMinus: false
+			}
+		);
+	} finally {
+		await vite.close();
+	}
+});
+
 test('advanced filter count excludes search, categories and sorting', async () => {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),

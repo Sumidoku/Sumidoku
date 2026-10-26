@@ -153,6 +153,12 @@
 /* The selected state of clickable chips must be obvious at a glance; the 45% faint ring is not enough */
 .chip--clickable.chip--accent {
 	border-color: var(--accent);
+	color: var(--accent);
+}
+
+.chip--clickable.chip--danger {
+	border-color: var(--danger);
+	color: var(--danger);
 }
 
 /* ============ ChipDropdown ============ */
