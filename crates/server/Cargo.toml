@@ -34,6 +34,8 @@ flate2 = "1"
 futures-core = "0.3"
 # login host parsing (the wasm crate already depends on it, no new crate added to the dependency tree)
 url = "2.5"
+# canonically equivalent instance names share a slug; idna already pulls this version
+unicode-normalization = "0.1.26"
 # password hashing (pure Rust, no C-dependency cross-compilation risk); sha2 for token/API key fingerprints
 argon2 = "0.5"
 sha2 = "0.11"

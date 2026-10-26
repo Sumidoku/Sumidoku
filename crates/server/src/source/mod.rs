@@ -14,6 +14,7 @@ use aidoku::{Chapter, Manga, PageContext};
 use aidoku_wasm::{DefaultValue, SourceConfig, SourceHandle};
 use serde::Serialize;
 use sqlx::SqlitePool;
+use unicode_normalization::UnicodeNormalization;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -1073,11 +1074,12 @@ pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 
 /// Derives an instance slug from a display name: lowercase alphanumeric runs joined with -; no usable
 /// character at all means no key can be built. Alphanumeric is Unicode-aware — a CJK name like 漫画
-/// slugs to 漫画 rather than failing. Shared by the internal-source registrations (opds/local)
+/// slugs to 漫画 rather than failing. Shared by the internal-source registrations (opds/local).
+/// Names are NFC-normalized before lowercasing so canonically equivalent spellings share a slug.
 pub(crate) fn slugify(name: &str) -> Option<String> {
 	let mut slug = String::new();
 	let mut dash = false;
-	for c in name.chars().flat_map(char::to_lowercase) {
+	for c in name.nfc().flat_map(char::to_lowercase) {
 		if c.is_alphanumeric() {
 			if dash && !slug.is_empty() {
 				slug.push('-');

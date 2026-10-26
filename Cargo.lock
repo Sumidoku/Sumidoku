@@ -4086,6 +4086,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "tray-icon",
+ "unicode-normalization",
  "url",
  "windows-sys 0.61.2",
  "zip",
