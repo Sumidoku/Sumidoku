@@ -52,11 +52,14 @@ breaking change.
 - **Session tokens** — the login page exchanges the admin username and
   password for a bearer token (30-day rolling expiry) bound to the built-in
   admin. Login also sets a `sumidoku.session` cookie containing the same
-  token, with `Path=/`, `HttpOnly`, `SameSite=Strict` and a 30-day maximum
+  token, with `Path=/`, `HttpOnly`, `SameSite=Lax` and a 30-day maximum
   age; HTTPS responses add `Secure`. Browser API requests, including SSE,
   images and file downloads, use this cookie instead of putting credentials
   in URLs. Logout and password changes clear it; password changes also
-  revoke every session token as described above.
+  revoke every session token as described above. Tracker OAuth callbacks use
+  the same session cookie plus the one-shot state nonce, so the top-level
+  cross-site return can complete; a callback without a session still answers
+  `401`.
 - **API keys** — long-lived bearer credentials used directly as
   `Authorization: Bearer <key>`; they act with the built-in admin's
   identity and never create session cookies. Create and revoke them in

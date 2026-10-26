@@ -158,7 +158,10 @@ no alias is derived from migration text.
   `Sumidoku/oauth` Pages repository) which bounces the browser to the
   instance callback carried in the OAuth state; the instance validates the
   state nonce against its pending table (one-shot `DELETE ... RETURNING`,
-  ten-minute TTL). Client id/secret pairs are baked at build time from
+  ten-minute TTL). The callback remains inside `require_auth`; the session
+  cookie is `SameSite=Lax` so the top-level cross-site return can carry it,
+  while the nonce binds the code exchange to the pending admin sign-in.
+  Client id/secret pairs are baked at build time from
   `SUMIDOKU_OAUTH_<PROVIDER>_CLIENT_{ID,SECRET}` (`option_env!`), PKCE is
   per-provider (AniList S256, MAL plain, Bangumi none, MangaBaka S256 plus
   scopes). Tokens are plaintext rows by design (the data directory's
