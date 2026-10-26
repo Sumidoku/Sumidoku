@@ -36,6 +36,21 @@ same data root regardless of its working directory. Non-interactive sessions
 (a service, a scheduled task) get no icon and run headless with the same
 configuration channels.
 
+## Tracker OAuth
+
+Tracker sign-ins (AniList, MyAnimeList, Bangumi, MangaBaka) use OAuth apps
+registered to the project, with the redirect URI hosted at
+`https://sumidoku.github.io/oauth` (the `Sumidoku/oauth` Pages site): the
+provider returns there and the relay bounces the browser to the instance
+callback named in the OAuth state. The client credentials are **compile-time**
+values, not runtime configuration: official release binaries bake them in
+(`option_env!`), and a build without them serves tracker browsing normally
+but answers the OAuth start endpoint with an error naming the missing
+variable. Self-builders who want sign-ins set the eight
+`SUMIDOKU_OAUTH_<PROVIDER>_CLIENT_ID` / `_CLIENT_SECRET` pairs in the
+environment when compiling (a `cargo build` with the variables exported is
+enough; cross builds forward them via `Cross.toml`).
+
 ## Server
 
 | Variable | Default | Purpose |

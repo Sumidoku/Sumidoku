@@ -1816,8 +1816,10 @@ its own.
   two linux targets, build both darwin targets on `macos-latest`, and
   build the Windows desktop app on `windows-latest` — there a headless
   smoke run of the exe (health endpoint plus the log file a GUI-subsystem
-  process must write) gates packaging into the portable zip. The pipeline
-  then pushes the same multi-arch image to Docker Hub
+  process must write) gates packaging into the portable zip. The build job
+  supplies tracker OAuth credentials through its environment, and `Cross.toml`
+  forwards them into the Linux build containers. The pipeline then pushes the
+  same multi-arch image to Docker Hub
   (`sumidoku/sumidoku`) and GitHub Container Registry
   (`ghcr.io/sumidoku/sumidoku`), each tagged
   `latest`/`X.Y.Z`/`<major>.x` (e.g. `0.x`), and creates the GitHub release
