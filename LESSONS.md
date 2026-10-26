@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Read a React event's values before creating a deferred state updater.** A
+functional updater may run after the event's `currentTarget` has been cleared;
+capture the value in the handler and pass that value into the updater.
+- Evidence: 2026-10-26, #35's tracker edit form read `event.currentTarget`
+  inside four `setValues` updaters. Changing a remote field crashed the page
+  with `Cannot read properties of null (reading 'value')`. The regression
+  reported all four old handlers, then passed after they became immediate
+  arguments; saving all four fields sent only the edited values.
+
 **Dropping a test fixture's TempDir unlinks its database file; lazy pool
 connections then fail at a wandering point.** A `let TestApp { app, .. }`
 destructure drops the TempDir immediately: already-open connections keep
