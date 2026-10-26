@@ -366,7 +366,8 @@ no alias is derived from migration text.
   (`api/internal_source.rs`, a tagged-union dispatch — a future built-in kind is
   one more variant): `{type: "local", name, paths, oneshotsDir?}` validates
   every path (must exist and is a directory), derives the key as `local.<slug>`
-  with a `-2` collision counter (the opds rule), and never pins — the Browse
+  after NFC normalization so canonically equivalent names share a slug, with a
+  `-2` collision counter (the opds rule), and never pins — the Browse
   page groups internal sources into their own Internal sources section, with
   pinning an opt-in on top. Every local instance is deletable through the
   ordinary surface — except that deleting `local.local` answers 400 while the
@@ -570,7 +571,7 @@ no alias is derived from migration text.
   endpoint: `POST /api/v1/sources/internal` with `{type: "opds", name, url,
   username?, password?}` takes
   name + catalog URL + optional basic credentials; keys are `opds.<slug>`
-  with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
+  after NFC normalization, with a counter on collision (`opds.komga`, `opds.komga-2`), credentials
   land in `source_setting` (`username`/`password`), instances are
   deletable (cascade) and excluded from repo management and metadata
   backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint

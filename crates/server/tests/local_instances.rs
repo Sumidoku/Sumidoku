@@ -165,6 +165,26 @@ async fn register_local_instance_with_cjk_name() {
 }
 
 #[tokio::test]
+async fn register_local_instance_normalizes_canonical_names() {
+	let t = instance_app().await;
+	let (status, first) = register_local(
+		&t.app.app,
+		json!({"type": "local", "name": "Café", "paths": root_paths(&[&t.root_a])}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{first}");
+	assert_eq!(first["key"], "local.café");
+
+	let (status, second) = register_local(
+		&t.app.app,
+		json!({"type": "local", "name": "Cafe\u{301}", "paths": root_paths(&[&t.root_b])}),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{second}");
+	assert_eq!(second["key"], "local.café-2");
+}
+
+#[tokio::test]
 async fn instances_scan_their_own_roots() {
 	let t = instance_app().await;
 	let (_, first) = register_local(

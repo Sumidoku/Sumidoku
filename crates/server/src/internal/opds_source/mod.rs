@@ -1196,6 +1196,7 @@ mod tests {
 		assert_eq!(slugify("漫画"), Some("漫画".to_string()));
 		assert_eq!(slugify("漫画 2024"), Some("漫画-2024".to_string()));
 		assert_eq!(slugify("コミック・H"), Some("コミック-h".to_string()));
+		assert_eq!(slugify("Café"), slugify("Cafe\u{301}"));
 	}
 
 	const V2_FEED: &str = r#"{
