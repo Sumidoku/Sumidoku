@@ -318,7 +318,10 @@ no alias is derived from migration text.
   The web UI honors `hidesFiltersWhileSearching` on the source browse page
   (a non-empty search box hides the filter UI and the search request drops
   filter values, mirroring AidokuRunner clearing filters on a non-empty
-  query). The manga detail page follows Aidoku's declared-first,
+  query). Restored searches wait for the source configuration before their
+  first request, so the same drop rule covers `?q=` deep links; normal sources
+  apply stored or explicit deep-link filters once ready. The manga detail page
+  follows Aidoku's declared-first,
   derived-fallback tap-to-search (`config?.supportsX ?? …` in
   AidokuRunner): manifest `supportsTagSearch` submits a `Select` with id
   `genre` and the raw tag; when undeclared, a tag is clickable only on an
