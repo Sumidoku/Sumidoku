@@ -55,7 +55,7 @@ pub struct AppState {
 	pub http: RoutedClients,
 	pub policy: Arc<SumidokuNetPolicy>,
 	/// LRU of local-source CBZ handles (pages are extracted on demand; reopening an archive means re-reading the central directory)
-	pub local_zip: Arc<crate::local::ZipCache>,
+	pub local_zip: Arc<crate::internal::local::ZipCache>,
 	// Injected once during build_app assembly, after AppState::new (the manager depends back on state)
 	pub downloads: tokio::sync::OnceCell<Arc<crate::download::DownloadManager>>,
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
@@ -183,7 +183,7 @@ impl AppState {
 			cookie_tx,
 			http,
 			policy,
-			local_zip: Arc::new(crate::local::ZipCache::new()),
+			local_zip: Arc::new(crate::internal::local::ZipCache::new()),
 			downloads: tokio::sync::OnceCell::new(),
 			updater: tokio::sync::OnceCell::new(),
 			events: tokio::sync::OnceCell::new(),

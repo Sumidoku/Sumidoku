@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
-use sumidoku_server::local::{ZipCache, manga_update};
+use sumidoku_server::internal::local::{ZipCache, manga_update};
 
 const COMIC_INFO_ALPHA: &str = r#"<?xml version="1.0"?>
 <ComicInfo xmlns:ty="http://www.w3.org/2001/XMLSchema">
@@ -203,7 +203,7 @@ async fn migration_seeds_builtin_local_source() {
 async fn scan_lists_only_real_manga_dirs() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_local_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
+	let dirs = sumidoku_server::internal::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Alpha", "Beta", "Delta", "Epsilon", "Gamma"]);
@@ -938,7 +938,7 @@ async fn nested_app() -> TestApp {
 async fn nested_scan_discovers_series_under_containers() {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	seed_nested_tree(&tmp.path().join("local"));
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
+	let dirs = sumidoku_server::internal::local::scan_manga_dirs(&[tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	// the publisher grouping directory itself is never a manga
@@ -1050,7 +1050,7 @@ async fn manga_absorbs_nested_archives() {
 	let t = TestApp { app, tmp, db_path };
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
-	let dirs = sumidoku_server::local::scan_manga_dirs(&[t.tmp.path().join("local")], None, &[])
+	let dirs = sumidoku_server::internal::local::scan_manga_dirs(&[t.tmp.path().join("local")], None, &[])
 		.await
 		.expect("scan");
 	assert_eq!(dirs, ["Absorbed"]);

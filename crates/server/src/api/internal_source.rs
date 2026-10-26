@@ -49,7 +49,7 @@ pub async fn register_internal_source(
 			username,
 			password,
 		} => {
-			crate::opds_source::register_instance(
+			crate::internal::opds_source::register_instance(
 				&state,
 				&name,
 				&url,
@@ -67,7 +67,7 @@ pub async fn register_internal_source(
 			analyze_pages,
 			analyze_metadata,
 		} => {
-			crate::local::register_instance(
+			crate::internal::local::register_instance(
 				&state,
 				&name,
 				&paths,
