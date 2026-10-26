@@ -123,6 +123,18 @@ export function mergeTrackEditValues(initial: RemoteState | null, edits: Partial
 	return { ...remoteToTrackEdit(initial ?? {}), ...edits };
 }
 
+export function updateTrackEditValue<K extends keyof TrackEditValues>(
+	initial: RemoteState | null,
+	edits: Partial<TrackEditValues>,
+	field: K,
+	value: TrackEditValues[K]
+): Partial<TrackEditValues> {
+	const next = { ...edits };
+	if (remoteToTrackEdit(initial ?? {})[field] === value) delete next[field];
+	else next[field] = value;
+	return next;
+}
+
 function editedNumber(value: string) {
 	if (!value.trim()) return 0;
 	const parsed = Number(value);

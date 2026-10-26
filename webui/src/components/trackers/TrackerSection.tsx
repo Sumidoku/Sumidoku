@@ -20,6 +20,7 @@ import {
 	trackerEntryUrl,
 	trackerKeys,
 	trackerState,
+	updateTrackEditValue,
 	updateTracker
 } from '../../api/trackers';
 import type {
@@ -201,6 +202,7 @@ interface TrackerEditFormProps {
 function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) {
 	const { t } = useTranslation();
 	const qc = useQueryClient();
+	const [currentLink, setCurrentLink] = useState(link);
 	const [edits, setEdits] = useState<Partial<ReturnType<typeof remoteToTrackEdit>>>({});
 	const values = mergeTrackEditValues(initialState, edits);
 	const [trackMode, setTrackMode] = useState<TrackerLink['trackMode']>(link.trackMode);
@@ -209,8 +211,8 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 	const provider = TRACKER_PROVIDER_NAMES[link.provider];
 	const save = useMutation({
 		mutationFn: async () => {
-			const plan = buildTrackerSave(link, trackMode, Number(chapterOffset), initialState, values);
-			if (plan.link) await putTrackerLink(link.mangaId, plan.link);
+			const plan = buildTrackerSave(currentLink, trackMode, Number(chapterOffset), initialState, values);
+			if (plan.link) setCurrentLink(await putTrackerLink(currentLink.mangaId, plan.link));
 			if (hasTrackUpdate(plan.remoteUpdate)) {
 				await updateTracker(link.provider, { trackId: link.trackId, ...plan.remoteUpdate });
 			}
@@ -236,7 +238,7 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 	const saveAuthError = isTrackerAuthError(save.error);
 
 	function updateValue<K extends keyof typeof values>(field: K, value: (typeof values)[K]) {
-		setEdits((current) => ({ ...current, [field]: value }));
+		setEdits((current) => updateTrackEditValue(initialState, current, field, value));
 	}
 
 	function submit(event: FormEvent) {
