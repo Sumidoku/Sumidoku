@@ -119,11 +119,6 @@ fn collection_type(status: TrackStatus) -> i64 {
 }
 
 /// Pasted URLs often lack a scheme, which `Url::parse` rejects outright.
-fn parse_tracker_url(input: &str) -> Option<Url> {
-	let input = input.trim();
-	Url::parse(input).or_else(|_| Url::parse(&format!("https://{input}"))).ok()
-}
-
 impl BangumiTracker {
 	pub fn new(http: reqwest::Client, oauth: Arc<OAuthManager>) -> Self {
 		Self::with_api_origin(http, oauth, API_ORIGIN)
@@ -238,7 +233,7 @@ impl BangumiTracker {
 	}
 
 	fn subject_url_id(query: &str) -> Option<i64> {
-		let url = parse_tracker_url(query)?;
+		let url = super::parse_tracker_url(query)?;
 		let host = url.host_str()?.to_ascii_lowercase();
 		if host != "bgm.tv" && host != "bangumi.tv" && !host.ends_with(".bgm.tv") {
 			return None;

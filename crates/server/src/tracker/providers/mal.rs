@@ -11,11 +11,6 @@ use std::sync::Arc;
 const BASE_URL: &str = "https://api.myanimelist.net/v2";
 const SEARCH_FIELDS: &str = "id,title,synopsis,num_chapters,main_picture,status,media_type,my_list_status";
 
-fn parse_tracker_url(input: &str) -> Option<reqwest::Url> {
-	let input = input.trim();
-	reqwest::Url::parse(input).or_else(|_| reqwest::Url::parse(&format!("https://{input}"))).ok()
-}
-
 pub struct MalTracker {
 	http: reqwest::Client,
 	oauth: Arc<OAuthManager>,
@@ -90,7 +85,7 @@ impl MalTracker {
 	}
 
 	fn manga_url_id(query: &str) -> Option<i64> {
-		let url = parse_tracker_url(query)?;
+		let url = super::parse_tracker_url(query)?;
 		let host = url.host_str()?.to_ascii_lowercase();
 		if host != "myanimelist.net" && !host.ends_with(".myanimelist.net") {
 			return None;

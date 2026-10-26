@@ -89,11 +89,6 @@ mutation (
 }
 "#;
 
-fn parse_tracker_url(input: &str) -> Option<reqwest::Url> {
-	let input = input.trim();
-	reqwest::Url::parse(input).or_else(|_| reqwest::Url::parse(&format!("https://{input}"))).ok()
-}
-
 pub struct AniListTracker {
 	http: reqwest::Client,
 	oauth: Arc<OAuthManager>,
@@ -204,7 +199,7 @@ impl AniListTracker {
 	}
 
 	fn manga_url_id(query: &str) -> Option<i64> {
-		let url = parse_tracker_url(query)?;
+		let url = super::parse_tracker_url(query)?;
 		let host = url.host_str()?.to_ascii_lowercase();
 		if host != "anilist.co" && !host.ends_with(".anilist.co") {
 			return None;

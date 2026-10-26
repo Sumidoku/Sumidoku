@@ -3,6 +3,12 @@ pub mod bangumi;
 pub mod mal;
 pub mod mangabaka;
 
+/// Pasted tracker URLs often lack a scheme, which `Url::parse` rejects outright.
+pub(super) fn parse_tracker_url(input: &str) -> Option<reqwest::Url> {
+	let input = input.trim();
+	reqwest::Url::parse(input).or_else(|_| reqwest::Url::parse(&format!("https://{input}"))).ok()
+}
+
 #[cfg(test)]
 pub(super) mod test_support {
 	use crate::tracker::oauth::{OAuthApp, OAuthManager};
