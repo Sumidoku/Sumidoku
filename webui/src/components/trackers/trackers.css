@@ -1,0 +1,132 @@
+.tracker-logo {
+	width: 32px;
+	height: 32px;
+	flex: none;
+	object-fit: contain;
+	border-radius: var(--r-sm);
+}
+
+.tracker-providers {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 12px;
+}
+
+.tracker-provider {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	min-width: 0;
+	padding: 14px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+}
+
+.tracker-provider__identity {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.tracker-provider__meta {
+	min-width: 0;
+}
+
+.tracker-provider__meta h3 {
+	font-size: 15px;
+}
+
+.tracker-provider__state {
+	margin-top: 3px;
+	overflow: hidden;
+	color: var(--text-dim);
+	font-size: 13px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracker-provider__state--error,
+.tracker-error {
+	color: var(--danger);
+}
+
+.tracker-provider__actions {
+	display: flex;
+	gap: 8px;
+	flex-wrap: wrap;
+}
+
+.tracker-bindings {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.tracker-binding {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--border);
+}
+
+.tracker-binding:last-child {
+	border-bottom: 0;
+}
+
+.tracker-binding__meta {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 3px;
+	min-width: 0;
+}
+
+.tracker-binding__manga {
+	overflow: hidden;
+	font-size: 14px;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracker-binding__remote {
+	overflow: hidden;
+	color: var(--text-dim);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracker-binding__external {
+	display: inline-flex;
+	padding: 6px;
+	color: var(--text-dim);
+}
+
+.tracker-binding__external:hover {
+	color: var(--accent);
+}
+
+@media (max-width: 640px) {
+	.tracker-providers {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.tracker-binding {
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.tracker-binding__meta {
+		flex-basis: calc(100% - 44px);
+	}
+
+	.tracker-binding__external {
+		margin-left: auto;
+	}
+}

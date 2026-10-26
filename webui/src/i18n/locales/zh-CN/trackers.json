@@ -1,0 +1,26 @@
+{
+  "trackers": {
+    "settingsTitle": "追踪器账号",
+    "settingsDesc": "连接追踪器账号以同步阅读进度。",
+    "connected": "已连接",
+    "connectedAs": "已连接：{{username}}",
+    "disconnectedState": "未连接",
+    "connect": "连接",
+    "reconnect": "重新连接",
+    "disconnect": "断开连接",
+    "disconnectTitle": "断开 {{provider}}？",
+    "disconnectConfirm": "将删除已保存的 {{provider}} 账号凭证，但保留漫画绑定。",
+    "disconnected": "已断开 {{provider}}。",
+    "bindingsTitle": "漫画绑定",
+    "bindingsDesc": "绑定属于你的账号，用于确定阅读进度发送到哪个条目。",
+    "noBindings": "还没有追踪器绑定，可在漫画详情页添加。",
+    "unknownManga": "漫画 #{{id}}",
+    "openEntry": "在 {{provider}} 上打开",
+    "unbind": "解除绑定",
+    "unbindTitle": "移除追踪器绑定？",
+    "unbindConfirm": "移除 {{title}} 的 {{provider}} 绑定？远端追踪条目不会被删除。",
+    "unbound": "已移除追踪器绑定。",
+    "oauthSuccess": "追踪器账号已连接。",
+    "oauthError": "无法连接追踪器账号。"
+  }
+}

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 export const SETTINGS_GROUPS = [
 	['general', 'settings.groupGeneral'],
 	['library', 'settings.groupLibrary'],
+	['trackers', 'settings.groupTrackers'],
 	['downloads', 'settings.groupDownloads'],
 	['backups', 'settings.groupBackups'],
 	['system', 'settings.groupSystem']

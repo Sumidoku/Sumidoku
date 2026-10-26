@@ -1,0 +1,26 @@
+{
+  "trackers": {
+    "settingsTitle": "Tracker accounts",
+    "settingsDesc": "Connect tracker accounts to synchronize reading progress.",
+    "connected": "Connected",
+    "connectedAs": "Connected as {{username}}",
+    "disconnectedState": "Not connected",
+    "connect": "Connect",
+    "reconnect": "Reconnect",
+    "disconnect": "Disconnect",
+    "disconnectTitle": "Disconnect {{provider}}?",
+    "disconnectConfirm": "This removes the saved {{provider}} account credentials. Manga bindings are kept.",
+    "disconnected": "{{provider}} disconnected.",
+    "bindingsTitle": "Manga bindings",
+    "bindingsDesc": "Bindings belong to your account and control where reading progress is sent.",
+    "noBindings": "No tracker bindings yet. Add one from a manga detail page.",
+    "unknownManga": "Manga #{{id}}",
+    "openEntry": "Open on {{provider}}",
+    "unbind": "Unbind",
+    "unbindTitle": "Remove tracker binding?",
+    "unbindConfirm": "Remove the {{provider}} binding for {{title}}? The remote tracker entry is not deleted.",
+    "unbound": "Tracker binding removed.",
+    "oauthSuccess": "Tracker account connected.",
+    "oauthError": "Could not connect the tracker account."
+  }
+}
