@@ -156,6 +156,29 @@ export function hasTrackUpdate(update: TrackUpdate) {
 	return Object.keys(update).length > 0;
 }
 
+export function buildTrackerSave(
+	link: TrackerLink,
+	trackMode: TrackerLink['trackMode'],
+	chapterOffset: number,
+	initialState: RemoteState | null,
+	values: TrackEditValues
+) {
+	const linkUpdate =
+		trackMode === link.trackMode && chapterOffset === link.chapterOffset
+			? undefined
+			: {
+					provider: link.provider,
+					trackId: link.trackId,
+					title: link.title,
+					trackMode,
+					chapterOffset
+				};
+	return {
+		link: linkUpdate,
+		remoteUpdate: initialState ? buildTrackUpdate(initialState, values) : {}
+	};
+}
+
 export function readOAuthReturn(search: string) {
 	const params = new URLSearchParams(search);
 	const status = params.get('oauth');

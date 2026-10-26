@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import {
 	TRACKER_PROVIDER_NAMES,
 	availableTrackerProviders,
-	buildTrackUpdate,
+	buildTrackerSave,
 	deleteTrackerLink,
 	hasTrackUpdate,
 	isTrackerAuthError,
@@ -207,21 +207,12 @@ function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) 
 	const provider = TRACKER_PROVIDER_NAMES[link.provider];
 	const save = useMutation({
 		mutationFn: async () => {
-			const remoteUpdate = initialState ? buildTrackUpdate(initialState, values) : {};
-			const offset = Number(chapterOffset);
-			if (trackMode !== link.trackMode || offset !== link.chapterOffset) {
-				await putTrackerLink(link.mangaId, {
-					provider: link.provider,
-					trackId: link.trackId,
-					title: link.title,
-					trackMode,
-					chapterOffset: offset
-				});
+			const plan = buildTrackerSave(link, trackMode, Number(chapterOffset), initialState, values);
+			if (plan.link) await putTrackerLink(link.mangaId, plan.link);
+			if (hasTrackUpdate(plan.remoteUpdate)) {
+				await updateTracker(link.provider, { trackId: link.trackId, ...plan.remoteUpdate });
 			}
-			if (hasTrackUpdate(remoteUpdate)) {
-				await updateTracker(link.provider, { trackId: link.trackId, ...remoteUpdate });
-			}
-			return remoteUpdate;
+			return plan.remoteUpdate;
 		},
 		onSuccess: (remoteUpdate) => {
 			void qc.invalidateQueries({ queryKey: trackerKeys.links });
