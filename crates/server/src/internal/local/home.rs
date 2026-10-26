@@ -6,8 +6,7 @@
 //!
 //! - `continue-reading`  — MangaChapterList (page_size=1), in-progress chapters ordered by last_read_at
 //! - `latest-updates`    — MangaChapterList (page_size=1), newest chapter per manga ordered by date_uploaded
-//! - `recently-added`    — Scroller, newest-indexed manga rows (rowid desc)
-//! - `oneshots`          — Scroller, conditional on the instance configuring a oneshots marker
+//! - `latest-added`     — Scroller, newest-indexed manga rows (rowid desc)
 //! - `recently-read`     — MangaChapterList (page_size=1), finished chapters ordered by last_read_at
 //!
 //! Each section carries a `listing` pointer, so the existing "View all" button on
@@ -34,7 +33,6 @@ pub(crate) const LISTING_ALL: &str = "all";
 pub(crate) const LISTING_CONTINUE_READING: &str = "continue-reading";
 pub(crate) const LISTING_LATEST_UPDATES: &str = "latest-updates";
 pub(crate) const LISTING_LATEST_ADDED: &str = "latest-added";
-pub(crate) const LISTING_ONESHOTS: &str = "oneshots";
 pub(crate) const LISTING_RECENTLY_READ: &str = "recently-read";
 
 /// Section length on the home page and per listing page. Aidoku sources do not expose a
@@ -44,11 +42,11 @@ const SECTION_LIMIT: i64 = 20;
 /// The admin user id; local reading-progress rows live on user 1
 const USER_ID: i64 = 1;
 
-/// The five listings a local source exposes, in browse-page segmented-control order.
+/// The listings a local source exposes, in browse-page segmented-control order.
 /// `kind` is `list` for row-shaped sections (MangaChapterList) and `default` for
 /// cover-grid sections (Scroller), matching how SourceBrowsePage picks the layout.
-pub(crate) fn local_listings(oneshots_dir: Option<&str>) -> Vec<Listing> {
-	let mut v = vec![
+pub(crate) fn local_listings() -> Vec<Listing> {
+	vec![
 		Listing {
 			id: LISTING_ALL.into(),
 			name: "sourceHome.all".into(),
@@ -69,22 +67,12 @@ pub(crate) fn local_listings(oneshots_dir: Option<&str>) -> Vec<Listing> {
 			name: "sourceHome.latestAdded".into(),
 			kind: ListingKind::Default,
 		},
-	];
-	if let Some(dir) = oneshots_dir
-		&& !dir.is_empty()
-	{
-		v.push(Listing {
-			id: LISTING_ONESHOTS.into(),
-			name: "sourceHome.oneshots".into(),
-			kind: ListingKind::Default,
-		});
-	}
-	v.push(Listing {
-		id: LISTING_RECENTLY_READ.into(),
-		name: "sourceHome.recentlyRead".into(),
-		kind: ListingKind::List,
-	});
-	v
+		Listing {
+			id: LISTING_RECENTLY_READ.into(),
+			name: "sourceHome.recentlyRead".into(),
+			kind: ListingKind::List,
+		},
+	]
 }
 
 /// Cover URL served to the web UI: the local manga cover endpoint resolves cover.*
@@ -290,7 +278,7 @@ async fn run_recently_added(
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	// Exclusions and the oneshots marker are pushed into SQL as LIKE clauses so LIMIT/OFFSET
+	// Exclusions and the optional oneshots marker are pushed into SQL as LIKE clauses so LIMIT/OFFSET
 	// paginates correctly (Rust-side filtering would skip rows inside the page window).
 	let mut clauses = String::new();
 	for ex in exclusions {
@@ -482,6 +470,7 @@ async fn run_all_by_title(
 /// Listing-page endpoints return bare Manga objects. The run_* helpers return home-page shapes:
 /// - `{manga: m, chapter: c}` for MangaChapterList sections
 /// - `{title, subtitle, image_url, value: {Manga: m}}` for Scroller sections
+///
 /// Strip the wrapper and project the inner Manga for the listing API.
 fn unwrap_manga_entries(rows: Vec<Value>) -> Vec<Value> {
 	rows.into_iter()
@@ -513,7 +502,6 @@ pub(crate) async fn build_local_home(
 ) -> ApiResult<Value> {
 	let limit = SECTION_LIMIT;
 	let exclusions = state.local_exclusions(source_id).await?;
-	let oneshots_dir = state.local_oneshots_dir(source_id).await?;
 
 	let mut components: Vec<Value> = Vec::new();
 
@@ -557,22 +545,6 @@ pub(crate) async fn build_local_home(
 		}));
 	}
 
-	if let Some(dir) = oneshots_dir.as_deref()
-		&& !dir.is_empty()
-	{
-		let ones = run_recently_added(state, source_id, &exclusions, Some(dir), limit, 0).await?;
-		if !ones.is_empty() {
-			components.push(json!({
-				"title": "sourceHome.oneshots",
-				"subtitle": null,
-				"value": { "Scroller": {
-					"entries": ones,
-					"listing": listing_ref_default(LISTING_ONESHOTS)
-				}}
-			}));
-		}
-	}
-
 	let rr = run_recently_read(state, source_id, &exclusions, limit, 0).await?;
 	if !rr.is_empty() {
 		components.push(json!({
@@ -593,8 +565,8 @@ pub(crate) async fn build_local_home(
 /// Serve one paginated listing for a local source. Returns `{entries, hasNextPage}`.
 ///
 /// Row-shaped listings (continue-reading, latest-updates, recently-read) return
-/// `{manga, chapter}` entries (MangaChapterList shape); grid-shaped listings (recently-added,
-/// oneshots) return `Link` entries (Scroller shape).
+/// `{manga, chapter}` entries (MangaChapterList shape); grid-shaped listings (latest-added)
+/// return `Link` entries (Scroller shape).
 pub(crate) async fn local_listing_page(
 	state: &AppState,
 	source_id: i64,
@@ -604,7 +576,6 @@ pub(crate) async fn local_listing_page(
 	let limit = SECTION_LIMIT;
 	let offset = ((page - 1).max(0) as i64) * limit;
 	let exclusions = state.local_exclusions(source_id).await?;
-	let oneshots_dir = state.local_oneshots_dir(source_id).await?;
 
 	let (entries, has_next) = match listing_id {
 		LISTING_ALL => {
@@ -627,16 +598,6 @@ pub(crate) async fn local_listing_page(
 		}
 		LISTING_LATEST_ADDED => {
 			let mut rows = run_recently_added(state, source_id, &exclusions, None, limit + 1, offset).await?;
-			let has_next = rows.len() as i64 > limit;
-			rows.truncate(limit as usize);
-			(unwrap_manga_entries(rows), has_next)
-		}
-		LISTING_ONESHOTS => {
-			let dir = oneshots_dir.as_deref().unwrap_or("");
-			if dir.is_empty() {
-				return Ok(json!({ "entries": [], "hasNextPage": false }));
-			}
-			let mut rows = run_recently_added(state, source_id, &exclusions, Some(dir), limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)
