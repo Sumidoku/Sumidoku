@@ -53,6 +53,10 @@ The compose file pulls the published `sumidoku/sumidoku:latest` image and mounts
 
 Everything runs with defaults; the full configuration reference (environment variables, `config.toml`, precedence) lives in [docs/configuration.md](docs/configuration.md).
 
+## Windows desktop
+
+The release also ships a portable Windows app: download `sumidoku_<version>_x86_64-pc-windows-msvc.zip` from the [latest release](https://github.com/Sumidoku/Sumidoku/releases/latest), extract it anywhere and run `sumidoku-server.exe`. It listens on http://localhost:3000 only, keeps its data under `%LOCALAPPDATA%\Sumidoku`, and sits in the notification area — a left click (or Open) opens the web UI, and the menu offers the data and log folders, Start with Windows, and Exit. Started as a service or scheduled task it stays headless and takes the same configuration channels as any other install.
+
 ## Installing sources
 
 Drop `.aix` source packages (or extracted source directories) into `./config/sources`, then press the scan button on the web UI's browse page (or `POST /api/v1/sources/scan`). You can also add an Aidoku-compatible source repository from the browse page and install sources from it directly.

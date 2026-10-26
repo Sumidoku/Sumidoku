@@ -87,6 +87,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             builder: cargo
+          # the desktop app (tray, loopback default) ships as a portable zip;
+          # msvc is the toolchain the resource embedding and tray target
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            builder: cargo
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -118,7 +123,39 @@ jobs:
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
           CARGO_INCREMENTAL: "0"
-      - name: Package
+      - name: Smoke test (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          # the zip gets no other runtime validation: the exe must come up
+          # headless (a runner has no interactive session, so no tray) and
+          # answer before it is packaged; file logging is asserted too since
+          # a GUI-subsystem process has no console output to inspect
+          $cfg = "smoke-tmp"
+          $exe = (Resolve-Path "target/${{ matrix.target }}/release/sumidoku-server.exe").Path
+          $proc = Start-Process -FilePath $exe -ArgumentList "--config-dir", $cfg -PassThru
+          try {
+            $up = $false
+            foreach ($i in 1..30) {
+              Start-Sleep -Seconds 1
+              try {
+                Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:3000/health" | Out-Null
+                $up = $true
+                break
+              } catch {}
+            }
+            if (-not $up) {
+              Get-Content "$cfg\logs\*" -ErrorAction SilentlyContinue
+              throw "server did not come up"
+            }
+            if ((Get-ChildItem "$cfg\logs" -File).Count -eq 0) {
+              throw "no log file written under $cfg\logs"
+            }
+          } finally {
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          }
+      - name: Package (Unix)
+        if: "!contains(matrix.target, 'windows')"
         shell: bash
         run: |
           stage="sumidoku_${{ needs.version.outputs.version }}_${{ matrix.target }}"
@@ -126,6 +163,15 @@ jobs:
           cp "target/${{ matrix.target }}/release/sumidoku-server" "$stage/"
           cp README.md "$stage/"
           tar -czf "dist/${stage}.tar.gz" "$stage"
+      - name: Package (Windows)
+        if: contains(matrix.target, 'windows')
+        shell: pwsh
+        run: |
+          $stage = "sumidoku_${{ needs.version.outputs.version }}_${{ matrix.target }}"
+          New-Item -ItemType Directory -Force -Path $stage, dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/sumidoku-server.exe" $stage/
+          Copy-Item README.md, LICENSE $stage/
+          Compress-Archive -Path $stage -DestinationPath "dist/$stage.zip"
       - uses: actions/upload-artifact@v7
         with:
           name: sumidoku-${{ matrix.target }}

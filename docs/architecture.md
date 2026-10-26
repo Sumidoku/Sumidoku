@@ -1772,11 +1772,15 @@ its own.
 - `release.yml`: a push to `main` touching `Cargo.toml` reads the
   workspace version and skips when that release already exists
   (`workflow_dispatch` is the manual fallback). Builds cross-compile the
-  two linux targets and build both darwin targets on `macos-latest`, then
-  push the same multi-arch image to Docker Hub (`sumidoku/sumidoku`) and
-  GitHub Container Registry (`ghcr.io/sumidoku/sumidoku`), each tagged
-  `latest`/`X.Y.Z`/`<major>.x` (e.g. `0.x`), and create the GitHub release
-  with the four archives. The ghcr login uses the run's `GITHUB_TOKEN`, so
+  two linux targets, build both darwin targets on `macos-latest`, and
+  build the Windows desktop app on `windows-latest` — there a headless
+  smoke run of the exe (health endpoint plus the log file a GUI-subsystem
+  process must write) gates packaging into the portable zip. The pipeline
+  then pushes the same multi-arch image to Docker Hub
+  (`sumidoku/sumidoku`) and GitHub Container Registry
+  (`ghcr.io/sumidoku/sumidoku`), each tagged
+  `latest`/`X.Y.Z`/`<major>.x` (e.g. `0.x`), and creates the GitHub release
+  with the five archives. The ghcr login uses the run's `GITHUB_TOKEN`, so
   the job asks for `packages: write`. The ghcr package starts private on
   first push and must be flipped to public in the org's package settings
   once — anonymous pulls fail until then.
