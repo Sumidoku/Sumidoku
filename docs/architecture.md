@@ -9,6 +9,30 @@ here. Link to symbols rather than copying details that drift.
 axum 0.8, SQLite via sqlx. Entry `main.rs`; app wiring `lib.rs:build_app`.
 `main` owns graceful shutdown (`Ctrl+C` or the shutdown watch) and startup
 error context.
+
+Desktop (Windows) contract. Non-Windows defaults and logging stay unchanged;
+the one cross-platform change is the new `--config-dir` flag, with unknown
+arguments now failing startup instead of being ignored:
+release builds link `windows_subsystem = "windows"` (no console window; debug
+builds keep the console), so a terminal launch re-attaches the parent console
+until serving starts (`tray::attach_parent_console` / `tray::detach_console`)
+and a fatal startup error without a console surfaces as a `MessageBoxW`
+pointing at the logs folder (`tray::show_startup_error`). Desktop defaults
+live in `desktop.rs`: Windows binds `127.0.0.1:3000` and roots data at
+`%LOCALAPPDATA%\Sumidoku` (falling back to the USERPROFILE-derived path), and
+`--config-dir <DIR>` — the only CLI argument, winning over
+`SUMIDOKU_CONFIG_DIR` — is what the tray's autostart entry pins. Logging
+(`logging.rs`) tees to a daily rolling file under `<config_dir>/logs` (7 kept)
+plus stdout on Windows, and stays stdout-only elsewhere. The tray (`tray.rs`,
+Windows-only) starts only in interactive sessions — the `OpenInputDesktop`
+probe fails for services and scheduled tasks, which run headless — and runs
+its Win32 message loop on a dedicated thread; left click / Open opens the
+browser at the loopback-mapped listen address, the menu offers the config
+dir, the logs dir, Start with Windows (the
+`HKCU\...\CurrentVersion\Run\Sumidoku` value, checked state read back from
+the registry) and Exit. Exit sends the shutdown watch `main` serves with;
+when serving returns, the tray thread is stopped. A first start (no database
+file yet) with a tray present opens the browser automatically.
 Migrations in `crates/server/migrations`. Applied migrations are immutable:
 sqlx embeds each file's SHA-384 at compile time and validates it against
 `_sqlx_migrations` at startup, so a schema change is always a new numbered

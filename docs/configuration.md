@@ -2,17 +2,19 @@
 
 Everything is optional — a bare `docker compose up -d` works. Precedence,
 lowest to highest: built-in defaults ← `config.toml` in the config dir
-(may be absent) ← `SUMIDOKU_*` environment variables.
+(may be absent) ← `SUMIDOKU_*` environment variables ← `--config-dir`
+(the only CLI flag, highest precedence; every other argument is a startup
+error).
 `config.toml` keys are the snake_case names of the variables below
 (`net.*` and `auth.*` sections for the grouped ones).
 
-The one data root is `SUMIDOKU_CONFIG_DIR`: the database, cover cache,
+The one data root is the config dir: the database, cover cache,
 source packages (`sources/`), materialized page images (`page-blobs/`)
 and the default scheduled-backup destination (`backups/`) all live under
 it and are not separately configurable. `sources/` in particular is
 pinned — drop packages there and scan, no path setting exists.
 `config.toml` is read from this directory too, so the config dir itself
-is environment-only: a `config_dir` key in the file is ignored with a
+is CLI/environment-only: a `config_dir` key in the file is ignored with a
 warning (the file cannot relocate the directory it is read from).
 
 ## Volumes (Docker)
@@ -22,12 +24,24 @@ warning (the file cannot relocate the directory it is read from).
 | `/config` | the config dir: database, settings, cover cache, source packages |
 | `/downloads` | downloaded chapters |
 
+## Windows desktop
+
+The Windows build is a desktop app: it logs to stdout and to a daily rolling
+file under `<config>/logs` (7 files kept), and in an interactive session it
+shows a tray icon with Open / Open config dir / Open logs dir / Start with
+Windows / Exit. Start with Windows writes the
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run\Sumidoku` value as
+`"<exe>" --config-dir "<absolute config dir>"`, so the logon start finds the
+same data root regardless of its working directory. Non-interactive sessions
+(a service, a scheduled task) get no icon and run headless with the same
+configuration channels.
+
 ## Server
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SUMIDOKU_ADDR` | `0.0.0.0:3000` | listen address |
-| `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `./data` otherwise | data root (see above); `config.toml` is read from here |
+| `SUMIDOKU_ADDR` | `0.0.0.0:3000` (`127.0.0.1:3000` on Windows) | listen address; the Windows desktop default binds loopback only, so a desktop install without auth is not exposed to the LAN |
+| `SUMIDOKU_CONFIG_DIR` | `/config` in Docker, `%LOCALAPPDATA%\Sumidoku` on Windows, `./data` otherwise | data root (see above); `config.toml` is read from here |
 | `SUMIDOKU_LOG` | `info` | log level (tracing filter) |
 | `SUMIDOKU_CALL_CONCURRENCY` | `8` | max concurrent calls into a source instance |
 | `SUMIDOKU_TASK_POOL_SIZE` | `2` | background task workers; tasks of one source still serialize regardless of pool size |

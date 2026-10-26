@@ -106,8 +106,8 @@ pub struct Config {
 impl Default for Config {
 	fn default() -> Self {
 		Self {
-			addr: "0.0.0.0:3000".into(),
-			config_dir: PathBuf::from("./data"),
+			addr: crate::desktop::default_addr().into(),
+			config_dir: crate::desktop::default_config_dir(),
 			database_url: "sqlite://data/sumidoku.db?mode=rwc".into(),
 			call_concurrency: 8,
 			log: "info".into(),
@@ -287,17 +287,25 @@ struct ConfigFile {
 }
 
 impl Config {
-	/// Defaults ← <config_dir>/config.toml (optional) ← environment variables (SUMIDOKU_ prefix).
-	/// config_dir itself is env-only: the file lives inside it, so the file cannot set it
-	pub fn load() -> Self {
+	/// Defaults ← <config_dir>/config.toml (optional) ← environment variables (SUMIDOKU_ prefix)
+	/// ← `--config-dir` (highest precedence). config_dir itself is CLI/env-only:
+	/// the file lives inside it, so the file cannot set it
+	pub fn load(cli_config_dir: Option<PathBuf>) -> Self {
 		let mut config = Self::default();
 		if let Ok(v) = std::env::var("SUMIDOKU_CONFIG_DIR") {
 			config.config_dir = PathBuf::from(v);
+		}
+		if let Some(dir) = cli_config_dir.clone() {
+			config.config_dir = dir;
 		}
 		if let Some(file) = Self::read_file(&config.config_dir) {
 			config.apply_file(file);
 		}
 		config.apply_env();
+		// apply_env re-reads SUMIDOKU_CONFIG_DIR; the CLI value must win it back
+		if let Some(dir) = cli_config_dir {
+			config.config_dir = dir;
+		}
 		config.derive_paths();
 		config
 	}
@@ -310,7 +318,7 @@ impl Config {
 			Ok(file) => {
 				if file.config_dir.is_some() {
 					eprintln!(
-						"{}: config_dir is no longer settable here (the file lives inside it); use SUMIDOKU_CONFIG_DIR",
+						"{}: config_dir is no longer settable here (the file lives inside it); use --config-dir or SUMIDOKU_CONFIG_DIR",
 						path.display()
 					);
 				}
@@ -1003,5 +1011,40 @@ mod tests {
 		}
 		assert_eq!(config.net_body_max_mb, 24);
 		assert_eq!(config.net_zip_body_max_mb, 160);
+	}
+
+	#[test]
+	fn default_addr_binds_lan_only_off_windows() {
+		#[cfg(target_os = "windows")]
+		assert_eq!(Config::default().addr, "127.0.0.1:3000");
+		#[cfg(not(target_os = "windows"))]
+		assert_eq!(Config::default().addr, "0.0.0.0:3000");
+	}
+
+	#[test]
+	fn cli_config_dir_wins_over_env() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		let cli_dir = tmp.path().join("cli");
+		let env_dir = tmp.path().join("env");
+		unsafe { std::env::set_var("SUMIDOKU_CONFIG_DIR", &env_dir) };
+		let config = Config::load(Some(cli_dir.clone()));
+		unsafe { std::env::remove_var("SUMIDOKU_CONFIG_DIR") };
+		assert_eq!(config.config_dir, cli_dir);
+		// the data-root derivations follow the CLI dir too
+		assert_eq!(
+			config.database_url,
+			format!("sqlite://{}/sumidoku.db?mode=rwc", cli_dir.display())
+		);
+		assert_eq!(config.covers_dir, cli_dir.join("covers"));
+	}
+
+	#[test]
+	fn env_config_dir_applies_when_cli_absent() {
+		let tmp = tempfile::tempdir().expect("tmp");
+		let env_dir = tmp.path().join("env");
+		unsafe { std::env::set_var("SUMIDOKU_CONFIG_DIR", &env_dir) };
+		let config = Config::load(None);
+		unsafe { std::env::remove_var("SUMIDOKU_CONFIG_DIR") };
+		assert_eq!(config.config_dir, env_dir);
 	}
 }

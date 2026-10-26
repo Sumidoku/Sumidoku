@@ -3,10 +3,12 @@ pub mod auth;
 pub mod backup;
 pub mod config;
 pub mod db;
+pub mod desktop;
 pub mod download;
 pub mod error;
 pub mod events;
 pub mod local;
+pub mod logging;
 pub mod model;
 pub mod opds_source;
 pub mod rss;
@@ -14,6 +16,8 @@ pub mod source;
 pub mod state;
 pub mod sync;
 pub mod task;
+#[cfg(target_os = "windows")]
+pub mod tray;
 pub mod update;
 pub mod webui_assets;
 
