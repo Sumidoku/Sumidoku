@@ -202,7 +202,7 @@ struct ExportProgressRow {
 	last_read_at: Option<i64>,
 }
 
-/// Export-document construction shared by the GET handler and the scheduler, producing the admin's complete state
+/// Export-document construction shared by the GET handler and the scheduler, producing the admin's portable reader state
 pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	let user_id = crate::USER_ID;
 	let source_rows: Vec<(String, String, i64)> =

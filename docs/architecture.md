@@ -936,8 +936,8 @@ no alias is derived from migration text.
   the per-manga toggle as an icon button in the detail header
   (`MangaDetailPage.tsx`).
 - Backup export/import (`api/backup.rs`): `GET /api/v1/backups/document` answers one
-  JSON document (a `Content-Disposition` attachment) with the admin's complete
-  state: library rows and metadata, categories with membership, reading
+  JSON document (a `Content-Disposition` attachment) with the admin's portable
+  reader state: library rows and metadata, categories with membership, reading
   progress, app settings and source settings, plus source identity (key, name,
   version and a best-effort repo URL). `POST /api/v1/backups/document` restores into the
   same owner state, optionally limited by `?sections=` to some of `library`,
@@ -962,7 +962,10 @@ no alias is derived from migration text.
   source's first fetch. The document's `version` field (currently `1`) is
   the format contract, and source setting values round-trip in the same
   bare-JSON form `PUT /sources/{id}/settings` accepts, so a backup can
-  contain source credentials: treat the file as sensitive.
+  contain source credentials: treat the file as sensitive. Plaintext API keys,
+  API-key fingerprints and session-token hashes are neither exported nor
+  restored; imports preserve the target's existing admin credentials, so a new
+  instance requires its own admin password and newly created API keys.
   The construction (`build_backup_doc`) and the restore execution
   (`import_backup_doc`) are shared with the scheduler and the
   restore-from-list endpoint below, so a scheduled file is the same

@@ -70,6 +70,11 @@ breaking change.
 
   Bearer session tokens remain available for CLI and other non-browser
   clients.
+- **JSON backups** — plaintext API keys, their fingerprints, and session-token
+  hashes are not exported or restored. Import leaves existing target keys and
+  sessions untouched; on a new instance, log in with its admin password and
+  create new API keys. Source credentials in source settings are separate and
+  may be included in the sensitive backup document.
 
 ## Notes
 
