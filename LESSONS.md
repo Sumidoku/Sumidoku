@@ -1,4 +1,4 @@
-<!-- reviewed-through: e5c7c68 (2026-10-25) -->
+<!-- reviewed-through: 3ed5f79 (2026-10-26) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
@@ -221,34 +221,6 @@ icon slot rather than a text prefix that changes their width.
   `2023-08-18 1 / 2 · 50%` in that order, while include/exclude cycles keep the
   same label position in chapter, library and source controls. Desktop and
   mobile browser checks covered live SSE updates and the collapsed sidebar.
-
-**Search drafts, submitted queries and view navigation are separate
-transitions.** Only local data should be searched live; remote source calls and
-the search-view URL belong to explicit submission. If typing drives all three,
-every keystroke costs a request and a navigation, and filters become reachable
-only after the query has already started. Keep the draft separate from the
-submitted query, and make filters available before the first submission.
-- Evidence: 2026-10-24, aggregate and single-source searches fired after 500ms,
-  aggregate filters were hidden until active, and mobile input pushed
-  `view=search`. Moving remote calls and URL activation to submit preserved
-  local live filtering. The filter regression failed with `Rating` missing;
-  browser sabotage reproduced the route jump and early empty results before the
-  fixes were restored.
-- Seen again: 2026-10-24, #401 review found that restoring a non-empty query
-  re-applied stored filters even when the source hides filters while searching,
-  so the restored request could differ from the original. The request boundary
-  must apply the same drop rule on fresh submission and restoration. A temporary
-  aggregate `?q=` regression failed on base and passed on the PR head, but the
-  PR contained no permanent test for it.
-- Seen again: 2026-10-25, #400 mapped clearing the input to a resubmission:
-  without that gesture, an old submitted query kept remote results after the
-  box was empty. Remote debounce now skips only non-empty drafts, so blank
-  resubmits and restores the unsearched list; the PR added no permanent test.
-- Seen again: 2026-10-26, #413 let a restored search fire before the source
-  config arrived, re-applying filters on a source that hides them. Readiness
-  belongs to the request contract: no request until the config can decide
-  whether filters are legal. The real-WASM browser check saw the first request
-  only after the config response.
 
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
