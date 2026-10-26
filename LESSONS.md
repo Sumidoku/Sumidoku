@@ -214,6 +214,11 @@ submitted query, and make filters available before the first submission.
   without that gesture, an old submitted query kept remote results after the
   box was empty. Remote debounce now skips only non-empty drafts, so blank
   resubmits and restores the unsearched list; the PR added no permanent test.
+- Seen again: 2026-10-26, #413 let a restored search fire before the source
+  config arrived, re-applying filters on a source that hides them. Readiness
+  belongs to the request contract: no request until the config can decide
+  whether filters are legal. The real-WASM browser check saw the first request
+  only after the config response.
 
 **A cached browser session needs a distinct lost-session outcome and a bounded
 recovery path.** A generic transport failure cannot distinguish an expired or
