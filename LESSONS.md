@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A version bump is incomplete without the lockfile.** `Cargo.lock` records
+every workspace member's version, so bumping only `Cargo.toml` leaves the
+tree inconsistent and CI's `cargo clippy --locked` rejects it. Sync the
+lockfile in the same commit — `cargo metadata` is enough, no build needed.
+- Evidence: 2026-10-26, the 1.11.0 version PR (#440) changed only
+  `Cargo.toml` and lint failed in 22s with `error: cannot update the lock
+  file ... because --locked was passed to prevent this`. Amending with the
+  synced `Cargo.lock` (the two workspace version fields) fixed it; the
+  1.10.0 (#435) and 1.9.0 (#409) bumps both already carried the lock.
+
 **Filesystem-time fixtures must set the exact mtimes they depend on.** A scan
 keyed by directory mtime can pass alone and miss a change under load when
 creation and mutation land in the same timestamp tick. Advance the exact file
