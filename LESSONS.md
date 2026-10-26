@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Acceptance criteria need a requirement source, not just a plan reference.**
+An agent's own staging note is a proposal, not proof that follow-up work is
+required. Before treating an optional idea as a release blocker, trace it to
+the issue's accepted scope or an explicit new request; otherwise drop it.
+- Evidence: 2026-10-26, #35's original tracker scope did not request a
+  configurable OAuth relay root. A later agent-written plan mentioned one, and
+  follow-up work mistook it for a required gap and began implementation. The
+  51 inserted lines were reverted before commit, and the issue was corrected
+  to leave only release-artifact credential verification.
+
 **Canonical identity must be derived after canonical normalization.** When
 names are meant to identify the same entity, normalize before lowercasing and
 separator stripping so equivalent spellings collide by design rather than
