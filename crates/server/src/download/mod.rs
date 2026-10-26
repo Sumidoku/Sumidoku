@@ -1186,7 +1186,7 @@ async fn page_bytes(
 		let manga = manga_row(&state.pool, chapter.manga_id)
 			.await
 			.map_err(|e| format!("{e:?}"))?;
-		let (bytes, mime) = crate::opds_source::read_cbz_page(state, &manga, &chapter, entry)
+		let (bytes, mime) = crate::internal::opds_source::read_cbz_page(state, &manga, &chapter, entry)
 			.await
 			.map_err(|e| format!("{e:?}"))?;
 		return Ok((bytes, ext_for_mime(Some(&mime)).to_string()));

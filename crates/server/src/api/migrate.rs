@@ -77,7 +77,7 @@ pub async fn migrate_lookup(
 	}
 	// An opds target has no wasm instance: take the catalog search arm (OpenSearch/traversal fallback), the degraded flag passed through
 	if crate::source::source_is_opds(&state.pool, query.target_source_id).await? {
-		let outcome = crate::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
+		let outcome = crate::internal::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
 		let candidates = attach_internal_ids(&state, query.target_source_id, outcome.entries).await?;
 		return Ok(Json(json!({
 			"query": title,
@@ -240,7 +240,7 @@ async fn run_entry(
 		initial.key = entry.to_manga_key.clone();
 		// An opds target has no wasm instance: fetching upstream is a catalog feed pull (the url comes with the candidate entry)
 		if crate::source::source_is_opds(&state.pool, entry.to_source_id).await? {
-			match crate::opds_source::manga_update(state, entry.to_source_id, initial).await {
+			match crate::internal::opds_source::manga_update(state, entry.to_source_id, initial).await {
 				Ok(updated) => fetched = Some(updated),
 				Err(e) => return Ok(failed_with("fetch_failed", e.message().to_string())),
 			}

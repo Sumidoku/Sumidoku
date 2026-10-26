@@ -62,7 +62,7 @@ pub async fn get_cover(
 		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
 	}
 	let (bytes, mime) = if is_local {
-		let (bytes, mime) = crate::local::resolve_cover(
+		let (bytes, mime) = crate::internal::local::resolve_cover(
 			&state.local_dirs(manga.source_id).await?,
 			&state.local_zip,
 			&manga.key,

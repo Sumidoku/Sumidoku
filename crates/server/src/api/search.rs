@@ -118,7 +118,7 @@ async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>
 		}
 		// opds sources same as the local arm; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 		if crate::source::source_is_opds(&state.pool, source_id).await? {
-			let outcome = crate::opds_source::search(state, source_id, query.as_deref()).await?;
+			let outcome = crate::internal::opds_source::search(state, source_id, query.as_deref()).await?;
 			let entries = super::attach_internal_ids(state, source_id, outcome.entries).await?;
 			return Ok((entries, false, outcome.degraded));
 		}

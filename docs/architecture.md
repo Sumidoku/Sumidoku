@@ -210,7 +210,7 @@ no alias is derived from migration text.
   latest 100 on every terminal transition. `GET /api/v1/tasks` lists live
   work first and accepts `status`/`kind`/`sourceId` filters. Production
   kinds and producers: the local scan/analyze/empty_trash handlers
-  (`local/scan.rs:register_handlers`, wired in `build_app`) — scheduled and
+  (`internal/local/scan.rs:register_handlers`, wired in `build_app`) — scheduled and
   manual full scans (`local_scan:{id}`, `refreshMetadata` in the payload),
   derived analysis (`local_analyze:{id}`) and trash emptying (`empty_trash`)
   — plus the one-shot local scan scheduler (`local_scan_secs` /
@@ -356,7 +356,7 @@ no alias is derived from migration text.
   target key differs from the origin's (identical `(source, key)` still
   reports `same_source`); the new-key row is fetched or reused and progress
   carries by chapter number as usual.
-- Built-in local sources (`local/mod.rs`, migration `0011_source_kind.sql`):
+- Built-in local sources (`internal/local/mod.rs`, migration `0011_source_kind.sql`):
   `source.kind` is `aidoku` for every installed package and `local` for local
   instances; `local.local` is the seeded default instance. Registration goes
   through the shared internal-source endpoint `POST /api/v1/sources/internal`
@@ -431,7 +431,7 @@ no alias is derived from migration text.
   registers through `find_or_register_manga`'s full `manga_update`
   chain (the one synchronous expensive path); every other online access
   to a persisted row is an entry-level enumeration
-  (`local/scan.rs:scan_manga_entry`) that reconciles chapters in trash
+  (`internal/local/scan.rs:scan_manga_entry`) that reconciles chapters in trash
   mode and kicks the analysis pass. Metadata resolves by a
   first-hit-wins chain (no per-field merge) — top-level `ComicInfo.xml`
   (authoritative when present, even
@@ -463,7 +463,7 @@ no alias is derived from migration text.
   chapter's own direct image files, sorted case-insensitive naturally.
   A divina-profile EPUB (image-based books; reflowable text is out of
   scope) instead takes its page list from direct image spine items or
-  XHTML/SVG pages that each resolve to exactly one image (`local/epub.rs`:
+  XHTML/SVG pages that each resolve to exactly one image (`internal/local/epub.rs`:
   the `mimetype` entry must be `application/epub+zip`, and the package
   document is located through `META-INF/container.xml`). Manifest, spine
   and zip entries must agree, body text must stay within 15 normalized
@@ -480,7 +480,7 @@ no alias is derived from migration text.
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
   reads image files directly and extracts single archive entries
   (`by_name`) through a version-checked 16-handle `ZipArchive` LRU
-  (`local/zip_cache.rs`), so replaced archives are reopened. Page rows,
+  (`internal/local/zip_cache.rs`), so replaced archives are reopened. Page rows,
   counts, and compatibility are committed together. The downsample pipeline
   is untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
@@ -489,7 +489,7 @@ no alias is derived from migration text.
   one) → 404 placeholder, and local covers are served capped at 600px
   wide (the downsample pipeline's Lanczos3 helper; the cache stores the
   downscaled PNG).    `?refresh=1` and the library update scheduler both
-  run the entry-level scan (`local/scan.rs:scan_manga_entry`), never the
+  run the entry-level scan (`internal/local/scan.rs:scan_manga_entry`), never the
   archive-opening chain.
   Auto-download skips local manga (files are already local), and the web
   UI hides the download buttons for `kind = local`, shows a manual refresh
@@ -508,8 +508,8 @@ no alias is derived from migration text.
   accepted and keep working as the default instance's fallback layer. RAR/CBR, PDF and 7z are
   out of scope (no mature pure-Rust
   readers, or an external runtime library).
-  Phase 2 (migration `0025_local_trash.sql`, `local/scan.rs`,
-  `local/analyze.rs`): the scheduled full scan (config `local_scan_secs` /
+  Phase 2 (migration `0025_local_trash.sql`, `internal/local/scan.rs`,
+  `internal/local/analyze.rs`): the scheduled full scan (config `local_scan_secs` /
   `SUMIDOKU_LOCAL_SCAN_SECS`, 0 = off; `local_scan_on_startup` enqueues at
   boot) indexes every discovered manga and chapter at enumeration cost —
   leaf-name title, `initialized = 0`, no archive IO — and diffs persisted
@@ -558,7 +558,7 @@ no alias is derived from migration text.
   `DELETE /api/v1/local/trash/{id}` and `POST .../restore` (409 while the
   entry is missing or its shape cannot be validated). `POST /api/v1/local/scan` enqueues manual
   scans. All three run as tasks (see the task bullet), per-instance serial.
-- Built-in OPDS source (`opds_source/mod.rs`): `source.kind = opds` turns an
+- Built-in OPDS source (`internal/opds_source/mod.rs`): `source.kind = opds` turns an
   OPDS catalog — Komga, Kavita, Calibre-Web — into a first-class source,
   multi-instance from day one. Both wire formats are accepted, detected per
   response by Content-Type with a JSON body sniff for mislabeled servers: 1.2

@@ -181,7 +181,7 @@ impl ServerSettings {
 			"library.refresh_metadata",
 			"library.update_interval_hours",
 			crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT,
-			crate::local::scan::LOCAL_LAST_SCAN_AT,
+			crate::internal::local::scan::LOCAL_LAST_SCAN_AT,
 			"auto_download_new_chapters",
 			"auto_download_limit",
 			"download_format",

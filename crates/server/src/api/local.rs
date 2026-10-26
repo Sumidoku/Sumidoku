@@ -31,7 +31,7 @@ pub async fn scan_now(
 		}
 	}
 	// a manual scan is an explicit refresh: it opts into metadata re-reads
-	let tasks = crate::local::scan::enqueue_scan(&state, source_id, PRIORITY_MANUAL, true).await?;
+	let tasks = crate::internal::local::scan::enqueue_scan(&state, source_id, PRIORITY_MANUAL, true).await?;
 	let tasks: Vec<Value> = tasks.iter().map(|task| task.to_json()).collect();
 	Ok(Json(json!(tasks)))
 }
@@ -46,7 +46,7 @@ pub async fn list_trash(
 	State(state): State<Arc<AppState>>,
 	Query(query): Query<TrashQuery>,
 ) -> ApiResult<Json<Value>> {
-	Ok(Json(json!(crate::local::scan::list_trash(&state, query.source_id).await?)))
+	Ok(Json(json!(crate::internal::local::scan::list_trash(&state, query.source_id).await?)))
 }
 
 /// Manual per-manga analysis (kmrs's per-book reanalyze): enqueues the analysis kind narrowed by a
@@ -55,7 +55,7 @@ pub async fn analyze_manga(
 	State(state): State<Arc<AppState>>,
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	let task = crate::local::analyze::enqueue_manga_analysis(&state, manga_id).await?;
+	let task = crate::internal::local::analyze::enqueue_manga_analysis(&state, manga_id).await?;
 	Ok(Json(task.to_json()))
 }
 
@@ -63,7 +63,7 @@ pub async fn restore_trash(
 	State(state): State<Arc<AppState>>,
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
-	crate::local::scan::restore_manga(&state, manga_id).await?;
+	crate::internal::local::scan::restore_manga(&state, manga_id).await?;
 	Ok(Json(json!({ "ok": true })))
 }
 
@@ -71,7 +71,7 @@ pub async fn purge_trash(
 	State(state): State<Arc<AppState>>,
 	Path(manga_id): Path<i64>,
 ) -> ApiResult<StatusCode> {
-	crate::local::scan::purge_manga(&state, manga_id).await?;
+	crate::internal::local::scan::purge_manga(&state, manga_id).await?;
 	Ok(StatusCode::NO_CONTENT)
 }
 
@@ -100,8 +100,8 @@ pub async fn empty_trash(
 			state
 				.tasks()
 				.enqueue(
-					&format!("{}:{id}", crate::local::scan::KIND_EMPTY_TRASH),
-					crate::local::scan::KIND_EMPTY_TRASH,
+					&format!("{}:{id}", crate::internal::local::scan::KIND_EMPTY_TRASH),
+					crate::internal::local::scan::KIND_EMPTY_TRASH,
 					Some(id),
 					json!({}),
 					PRIORITY_MANUAL,
