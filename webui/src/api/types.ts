@@ -30,7 +30,7 @@ export type AidokuSkipped = {
 };
 
 export type ApiError = {
-	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy" | "task_finished" | "not_trashed" | "gone" | "root_unavailable";
+	code: "bad_request" | "unauthorized" | "not_found" | "unsupported" | "payload_too_large" | "source_disabled" | "duplicate" | "no_update" | "resync_required" | "not_in_library" | "bad_gateway" | "source_error" | "timeout" | "internal" | "busy" | "task_finished" | "not_trashed" | "gone" | "root_unavailable" | "tracker_auth";
 	message: string;
 };
 
@@ -728,6 +728,17 @@ export type RegisterOpdsInstance = {
 	password?: string | null;
 };
 
+export type RemoteState = {
+	score?: number | null;
+	status?: TrackStatus | null;
+	lastReadChapter?: number | null;
+	lastReadVolume?: number | null;
+	totalChapters?: number | null;
+	totalVolumes?: number | null;
+	startReadDate?: string | null;
+	finishReadDate?: string | null;
+};
+
 export type ReorderPinnedRequest = {
 	ids: Array<string>;
 };
@@ -1151,6 +1162,66 @@ export type TextPage = {
 	type: "text";
 	text: string;
 };
+
+export type TrackSearchItem = {
+	id: string;
+	title: string;
+	coverUrl?: string | null;
+	description?: string | null;
+	tracked: boolean;
+	mediaType?: "manga" | "novel";
+	url?: string | null;
+};
+
+export type TrackStatus = "reading" | "planning" | "completed" | "paused" | "dropped" | "rereading";
+
+export type TrackUpdate = {
+	score?: number;
+	status?: TrackStatus;
+	lastReadChapter?: number;
+	lastReadVolume?: number;
+	startReadDate?: string;
+	finishReadDate?: string;
+};
+
+export type TrackerLedgerItem = {
+	provider: TrackerProvider;
+	trackId: string;
+	title?: string | null;
+	url?: string | null;
+	coverUrl?: string | null;
+	updatedAt: number;
+};
+
+export type TrackerLink = {
+	mangaId: number;
+	provider: TrackerProvider;
+	trackId: string;
+	title?: string;
+	trackMode: "auto" | "chapter" | "volume";
+	chapterOffset: number;
+	createdAt: number;
+	updatedAt: number;
+};
+
+export type TrackerLinkUpsert = {
+	provider: TrackerProvider;
+	trackId: string;
+	title?: string;
+	trackMode?: "auto" | "chapter" | "volume";
+	chapterOffset?: number;
+};
+
+export type TrackerOAuthStatus = {
+	logged_in: boolean;
+	username?: string | null;
+};
+
+export type TrackerProvider = "anilist" | "mal" | "bangumi" | "mangabaka";
+
+export type TrackerUpdateRequest = {
+	trackId: string;
+} & TrackUpdate;
 
 export type UpdateAllSourcesResponse = {
 	updated: Array<string>;
