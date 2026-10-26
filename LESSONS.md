@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Dropping a test fixture's TempDir unlinks its database file; lazy pool
+connections then fail at a wandering point.** A `let TestApp { app, .. }`
+destructure drops the TempDir immediately: already-open connections keep
+working off the unlinked file, but the first query that needs a fresh
+connection fails with "unable to open database file" — wherever that happens
+to land. Bind the field (`tmp: _tmp`) so the directory outlives the test.
+- Evidence: 2026-10-26, #35's tracker API tests. The same test failed at
+  three different spots across runs (logout, update, ledger, each a 500) as
+  each fresh connection hit the unlinked file; binding `tmp` made all four
+  pass deterministically.
+
 **A version bump is incomplete without the lockfile.** `Cargo.lock` records
 every workspace member's version, so bumping only `Cargo.toml` leaves the
 tree inconsistent and CI's `cargo clippy --locked` rejects it. Sync the

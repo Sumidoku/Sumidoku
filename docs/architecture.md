@@ -133,6 +133,47 @@ no alias is derived from migration text.
   login cookie, CLI clients may use bearer authentication, and URL access
   tokens are not accepted. The former download and update WebSocket endpoints
   are removed.
+- Tracker integration (`tracker/`, `api/tracker.rs`, migration
+  `0027_tracker.sql`): per-user account links to AniList, MyAnimeList, Bangumi
+  and MangaBaka (#35). REST under `/api/v1/trackers`: binding CRUD
+  (`links`), a recent-entries `ledger`, remote `search`/`state`/`update`
+  proxies, and the OAuth handshake (`oauth/{provider}/start|status|logout|
+  callback`). A remote route hit without a connected account answers 409
+  `tracker_auth` — deliberately distinct from the auth layer's reason-free
+  401, because the web UI must offer the connect flow, not a re-login. Each
+  provider (`tracker/providers/*`) implements one `TrackerService` trait
+  (login check, search, state read, update) over its HTTP contract: AniList
+  GraphQL with a per-user score-format cache, MAL v2, Bangumi v0 and
+  MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,
+  replays the identical request once, and only then conditionally logs out —
+  the delete is guarded on the access token that actually failed
+  (`oauth.rs:logout_if_current`), so a racing re-login never loses its fresh
+  credentials. OAuth needs pre-registered redirect URIs a self-hosted
+  instance cannot have, so authorization codes return through the
+  project-hosted static relay (`https://sumidoku.github.io/oauth`, the
+  `Sumidoku/oauth` Pages repository) which bounces the browser to the
+  instance callback carried in the OAuth state; the instance validates the
+  state nonce against its pending table (one-shot `DELETE ... RETURNING`,
+  ten-minute TTL). Client id/secret pairs are baked at build time from
+  `SUMIDOKU_OAUTH_<PROVIDER>_CLIENT_{ID,SECRET}` (`option_env!`), PKCE is
+  per-provider (AniList S256, MAL plain, Bangumi none, MangaBaka S256 plus
+  scopes). Tokens are plaintext rows by design (the data directory's
+  filesystem permissions are the boundary); refresh is lazy at use time and
+  serialized, a rejected refresh (400/401/403) logs the account out while a
+  transient one keeps it, and every token write is guarded on the seen
+  access token. The push decision is pure (`tracker/core.rs:decide`): progress
+  only moves forward, finishing the total marks completed on that very event,
+  a planning entry starts reading with its start date, reopening a completed
+  entry switches to rereading, and the chapter offset only clamps the
+  overshoot it introduces; `TrackMode::Auto` resolves chapter-first from the
+  chapter table's structured `number`/`volume`, so no filename parsing layer
+  exists. Sync triggers (`api/reader.rs`): both chapter patch paths emit
+  `(manga, user)` after commit when the merged progress is read, over a
+  lossless unbounded channel (`tracker/sync.rs`) — not the SSE ring — that
+  coalesces bursts, serializes each pair for the whole GET → decide → POST
+  (an overlapping sequence could regress the remote value), evicts finished
+  lock slots, and logs failures without ever failing the read that caused
+  them; unread and deletion events do nothing.
 - Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
   the `task` table is the queue — a persistent row per task whose string id
   doubles as the deduplication key (e.g. `local_scan:3`). Enqueueing over a

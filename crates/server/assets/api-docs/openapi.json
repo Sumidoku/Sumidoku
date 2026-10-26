@@ -3622,6 +3622,494 @@
         }
       }
     },
+    "/api/v1/trackers/links": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "listAllTrackerLinks",
+        "summary": "List every tracker binding of the current user",
+        "responses": {
+          "200": {
+            "description": "Bindings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrackerLink"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/links/{id}": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "listTrackerLinks",
+        "summary": "List the tracker bindings of one manga",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MangaId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bindings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrackerLink"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "putTrackerLink",
+        "summary": "Create or replace the binding of one manga to a tracker entry",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MangaId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackerLinkUpsert"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The stored binding",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackerLink"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/links/{id}/{provider}": {
+      "delete": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "deleteTrackerLink",
+        "summary": "Remove one tracker binding; the remote entry is left untouched",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MangaId"
+          },
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/ledger": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerLedger",
+        "summary": "Recently updated tracker entries of the current user, newest first",
+        "responses": {
+          "200": {
+            "description": "Ledger entries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrackerLedgerItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/{provider}/search": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerSearch",
+        "summary": "Search the tracker's catalog for an entry to bind",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nsfw",
+            "in": "query",
+            "schema": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TrackSearchItem"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "No tracker account connected (error code `tracker_auth`); connect one under settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/{provider}/state": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerState",
+        "summary": "Read the current tracking state of one entry on the tracker",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          },
+          {
+            "name": "trackId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Remote state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoteState"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "No tracker account connected (error code `tracker_auth`); connect one under settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/{provider}/update": {
+      "post": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerUpdate",
+        "summary": "Push a sparse update to one tracker entry and record it in the ledger",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackerUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "No tracker account connected (error code `tracker_auth`); connect one under settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/oauth/{provider}/start": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerOauthStart",
+        "summary": "Redirect to the provider's authorization page. The provider returns through the project relay at https://sumidoku.github.io/oauth because instances have no registrable redirect URI; the instance callback travels in the OAuth state. Requires the build-time SUMIDOKU_OAUTH_<PROVIDER>_CLIENT_ID/SECRET.",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to the provider authorization URL"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/oauth/{provider}/status": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerOauthStatus",
+        "summary": "Whether a tracker account is connected, with its display name",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackerOAuthStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/oauth/{provider}/logout": {
+      "post": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerOauthLogout",
+        "summary": "Disconnect the tracker account; bindings remain but stop syncing",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "$ref": "#/components/responses/NoContent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/trackers/oauth/{provider}/callback": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerOauthCallback",
+        "summary": "Instance-side OAuth callback (reached through the relay). Exchanges the code for tokens and redirects to the trackers settings page.",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to /settings/trackers with the outcome"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/settings": {
       "get": {
         "tags": [
@@ -4673,7 +5161,8 @@
               "task_finished",
               "not_trashed",
               "gone",
-              "root_unavailable"
+              "root_unavailable",
+              "tracker_auth"
             ]
           },
           "message": {
@@ -4689,6 +5178,279 @@
         "properties": {
           "error": {
             "$ref": "#/components/schemas/ApiError"
+          }
+        }
+      },
+      "TrackerProvider": {
+        "type": "string",
+        "enum": [
+          "anilist",
+          "mal",
+          "bangumi",
+          "mangabaka"
+        ]
+      },
+      "TrackerLink": {
+        "type": "object",
+        "required": [
+          "mangaId",
+          "provider",
+          "trackId",
+          "trackMode",
+          "chapterOffset",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "mangaId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "provider": {
+            "$ref": "#/components/schemas/TrackerProvider"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "trackMode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "chapter",
+              "volume"
+            ]
+          },
+          "chapterOffset": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TrackerLinkUpsert": {
+        "type": "object",
+        "required": [
+          "provider",
+          "trackId"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/TrackerProvider"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "trackMode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "chapter",
+              "volume"
+            ]
+          },
+          "chapterOffset": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": -10000,
+            "maximum": 10000
+          }
+        }
+      },
+      "TrackerLedgerItem": {
+        "type": "object",
+        "required": [
+          "provider",
+          "trackId",
+          "updatedAt"
+        ],
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/TrackerProvider"
+          },
+          "trackId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TrackSearchItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "tracked"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "tracked": {
+            "type": "boolean"
+          },
+          "mediaType": {
+            "type": "string",
+            "enum": [
+              "manga",
+              "novel"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "TrackStatus": {
+        "type": "string",
+        "enum": [
+          "reading",
+          "planning",
+          "completed",
+          "paused",
+          "dropped",
+          "rereading"
+        ]
+      },
+      "RemoteState": {
+        "type": "object",
+        "properties": {
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrackStatus"
+              }
+            ],
+            "nullable": true
+          },
+          "lastReadChapter": {
+            "type": "number",
+            "nullable": true
+          },
+          "lastReadVolume": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "totalChapters": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "totalVolumes": {
+            "type": "integer",
+            "format": "int32",
+            "nullable": true
+          },
+          "startReadDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "finishReadDate": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "TrackUpdate": {
+        "type": "object",
+        "description": "Sparse push payload: only present fields are changed on the tracker",
+        "properties": {
+          "score": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TrackStatus"
+          },
+          "lastReadChapter": {
+            "type": "number"
+          },
+          "lastReadVolume": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "startReadDate": {
+            "type": "string"
+          },
+          "finishReadDate": {
+            "type": "string"
+          }
+        }
+      },
+      "TrackerUpdateRequest": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "trackId"
+            ],
+            "properties": {
+              "trackId": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/TrackUpdate"
+          }
+        ]
+      },
+      "TrackerOAuthStatus": {
+        "type": "object",
+        "required": [
+          "logged_in"
+        ],
+        "properties": {
+          "logged_in": {
+            "type": "boolean"
+          },
+          "username": {
+            "type": "string",
+            "nullable": true
           }
         }
       },

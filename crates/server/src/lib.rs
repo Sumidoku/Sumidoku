@@ -16,6 +16,7 @@ pub mod source;
 pub mod state;
 pub mod sync;
 pub mod task;
+pub mod tracker;
 #[cfg(target_os = "windows")]
 pub mod tray;
 pub mod update;
@@ -60,6 +61,11 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let tasks = task::TaskManager::new(&state);
 	assert!(state.tasks.set(tasks.clone()).is_ok());
 	event_hub.forward_tasks(tasks.clone());
+	let tracker_services = tracker::TrackerServices::from_db(state.pool.clone());
+	let (tracker_tx, tracker_rx) = tokio::sync::mpsc::unbounded_channel();
+	assert!(state.tracker_tx.set(tracker_tx).is_ok());
+	tracker::sync::consume_events(state.pool.clone(), tracker_services.clone(), tracker_rx);
+	assert!(state.tracker.set(std::sync::Arc::new(tracker_services)).is_ok());
 	// A task left running by the previous process goes back to pending before the dispatcher starts
 	tasks.recover().await?;
 	local::scan::register_handlers(&tasks).await;

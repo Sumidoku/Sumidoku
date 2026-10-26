@@ -206,7 +206,7 @@ pub(crate) async fn run_web_login_pipeline(
 ) -> ApiResult<()> {
 	let mut names: Vec<&String> = cookies.keys().collect();
 	names.sort();
-	let keys: Vec<String> = names.iter().map(|n| (*n).clone()).collect();
+	let keys: Vec<String> = names.iter().map(|n| n.to_string()).collect();
 	let values: Vec<String> = names.iter().map(|n| cookies[*n].clone()).collect();
 	upsert_setting(&state.pool, id, &format!("{key}.keys"), DefaultValue::StringArray(keys)).await?;
 	upsert_setting(&state.pool, id, &format!("{key}.values"), DefaultValue::StringArray(values)).await?;

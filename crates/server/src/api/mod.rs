@@ -27,6 +27,7 @@ pub mod source_import;
 pub mod suwayomi_backup;
 pub mod sync;
 pub mod task;
+pub mod tracker;
 pub mod update;
 
 use crate::error::{ApiError, ApiResult};
@@ -180,6 +181,20 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/update/summary", get(crate::api::update::get_summary))
 		.route("/api/v1/update/recent", get(crate::api::update::get_recent))
 		.route("/api/v1/events", get(crate::api::events::events))
+		.route("/api/v1/trackers/links", get(tracker::list_all_tracker_links))
+		.route(
+			"/api/v1/trackers/links/{id}",
+			get(tracker::list_tracker_links).put(tracker::put_tracker_link),
+		)
+		.route("/api/v1/trackers/links/{id}/{provider}", delete(tracker::delete_tracker_link))
+		.route("/api/v1/trackers/ledger", get(tracker::tracker_ledger))
+		.route("/api/v1/trackers/{provider}/search", get(tracker::tracker_search))
+		.route("/api/v1/trackers/{provider}/state", get(tracker::tracker_state))
+		.route("/api/v1/trackers/{provider}/update", post(tracker::tracker_update))
+		.route("/api/v1/trackers/oauth/{provider}/start", get(tracker::tracker_oauth_start))
+		.route("/api/v1/trackers/oauth/{provider}/status", get(tracker::tracker_oauth_status))
+		.route("/api/v1/trackers/oauth/{provider}/logout", post(tracker::tracker_oauth_logout))
+		.route("/api/v1/trackers/oauth/{provider}/callback", get(tracker::tracker_oauth_callback))
 		.route("/api/v1/settings", get(get_settings).put(put_settings))
 		.route("/api/v1/sync/changes", get(sync::get_changes).post(sync::post_changes))
 		.route(
