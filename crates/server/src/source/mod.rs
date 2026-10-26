@@ -1128,7 +1128,7 @@ pub async fn load_pages(
 	let chapter = chapter_row(&state.pool, chapter_id).await?;
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	if source_is_local(&state.pool, manga.source_id).await? {
-		let (entries, compatible) = crate::local::chapter_pages(
+		let (entries, compatible) = crate::internal::local::chapter_pages(
 			&state.local_dirs(manga.source_id).await?,
 			&state.local_zip,
 			&manga.key,
@@ -1140,14 +1140,14 @@ pub async fn load_pages(
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
 		let rows: Vec<serde_json::Value> = entries
 			.iter()
-			.map(|entry| crate::local::page_content_json(entry))
+			.map(|entry| crate::internal::local::page_content_json(entry))
 			.collect();
 		store_page_rows(&state.pool, chapter_id, &rows, compatible).await?;
 	} else if source_is_opds(&state.pool, manga.source_id).await? {
 		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
-		let _ = tokio::fs::remove_file(crate::opds_source::cbz_path(state, chapter_id)).await;
+		let _ = tokio::fs::remove_file(crate::internal::opds_source::cbz_path(state, chapter_id)).await;
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
-		let rows = crate::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
+		let rows = crate::internal::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
 		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
@@ -1340,7 +1340,7 @@ pub async fn http_get(
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
 	let max = state.config.net_zip_body_max_mb * 1024 * 1024;
 	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		let catalog = crate::internal::opds_source::Catalog::load(state, source_id).await?;
 		return catalog.get_bytes(state, url, max).await;
 	}
 	let url = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid upstream url"))?;
@@ -1449,7 +1449,7 @@ pub async fn fetch_page_image(
 	context: Option<PageContext>,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
 	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		let catalog = crate::internal::opds_source::Catalog::load(state, source_id).await?;
 		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
 	}
 	let handle = state.get_handle(source_id).await?;
@@ -1471,7 +1471,7 @@ pub async fn fetch_cover_image(
 	url: &str,
 ) -> ApiResult<(Vec<u8>, Option<String>)> {
 	if source_is_opds(&state.pool, source_id).await? {
-		let catalog = crate::opds_source::Catalog::load(state, source_id).await?;
+		let catalog = crate::internal::opds_source::Catalog::load(state, source_id).await?;
 		return catalog.get_bytes(state, url, state.config.net_body_max_mb * 1024 * 1024).await;
 	}
 	let handle = state.get_handle(source_id).await?;

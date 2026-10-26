@@ -504,7 +504,7 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 		.await?;
 	if total == 0
 		&& let Err(e) =
-			crate::local::scan::enqueue_scan(state, Some(source_id), crate::task::PRIORITY_MANUAL, false).await
+			crate::internal::local::scan::enqueue_scan(state, Some(source_id), crate::task::PRIORITY_MANUAL, false).await
 	{
 		tracing::warn!(source_id, "enqueue first scan on browse failed: {}", e.message());
 	}
@@ -512,9 +512,9 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 	let bare: HashSet<String> = rows
 		.iter()
 		.map(|(_, key, _)| key.clone())
-		.filter(|key| crate::local::rel_of(key) == key)
+		.filter(|key| crate::internal::local::rel_of(key) == key)
 		.collect();
-	rows.retain(|(_, key, _)| crate::local::rel_of(key) == key || !bare.contains(crate::local::rel_of(key)));
+	rows.retain(|(_, key, _)| crate::internal::local::rel_of(key) == key || !bare.contains(crate::internal::local::rel_of(key)));
 	let needle = query
 		.map(str::trim)
 		.filter(|q| !q.is_empty())
@@ -529,7 +529,7 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 			!exclusions.iter().any(|exclusion| lowered.contains(exclusion))
 		});
 	}
-	rows.sort_by(|a, b| crate::local::natural_sort::compare(&a.1, &b.1));
+	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.1, &b.1));
 	rows.into_iter()
 		.map(|(id, key, title)| {
 			let mut value = serde_json::to_value(Manga {
@@ -568,7 +568,7 @@ async fn search_source(
 	}
 	// opds sources likewise have no source call to stream; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 	if crate::source::source_is_opds(&state.pool, id).await? {
-		let outcome = crate::opds_source::search(&state, id, body.query.as_deref()).await?;
+		let outcome = crate::internal::opds_source::search(&state, id, body.query.as_deref()).await?;
 		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
 		return Ok(Json(json!({
 			"entries": entries,
@@ -609,7 +609,7 @@ async fn get_listings(
 	// (continue-reading / latest-updates / recently-added / oneshots / recently-read)
 	let row = source_row(&state, id).await?;
 	if row.is_local() {
-		let listings = crate::local::home::local_listings();
+		let listings = crate::internal::local::home::local_listings();
 		let out: Vec<Value> = listings.iter().map(crate::api::listings::listing_json).collect();
 		return Ok(Json(Value::Array(out)));
 	}
@@ -683,7 +683,7 @@ async fn get_manga_list(
 	}
 	let row = source_row(&state, id).await?;
 	if row.is_local() {
-		let value = crate::local::home::local_listing_page(&state, id, &listing_id, page).await?;
+		let value = crate::internal::local::home::local_listing_page(&state, id, &listing_id, page).await?;
 		return Ok(Json(value));
 	}
 	let handle = state.get_handle(id).await?;
@@ -717,7 +717,7 @@ async fn get_home(
 	if row.is_local() {
 		// Local home is assembled from SQL in one shot (no WASM streaming); ignore the NDJSON
 		// accept header and answer a buffered HomeLayout, matching the non-streaming branch below.
-		let value = crate::local::home::build_local_home(&state, id).await?;
+		let value = crate::internal::local::home::build_local_home(&state, id).await?;
 		return Ok(Json(value).into_response());
 	}
 	let handle = state.get_handle(id).await?;
@@ -905,7 +905,7 @@ async fn put_source_settings(
 				"paths" => {
 					let paths = serde_json::from_value::<Vec<String>>(value.clone())
 						.map_err(|_| ApiError::bad_request("paths must be an array of directory paths"))?;
-					parsed_paths = Some(crate::local::validate_paths(&paths).await?);
+					parsed_paths = Some(crate::internal::local::validate_paths(&paths).await?);
 					rescan = true;
 				}
 				"oneshotsDir" => {
@@ -979,7 +979,7 @@ async fn put_source_settings(
 		tx.commit().await?;
 		// kmrs's check_library_should_rescan: editing a scan-affecting setting re-scans the instance
 		if rescan
-			&& let Err(e) = crate::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await
+			&& let Err(e) = crate::internal::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await
 		{
 			tracing::warn!(source_id = id, "enqueue rescan on settings change failed: {}", e.message());
 		}
@@ -1082,7 +1082,7 @@ async fn reset_source_settings(
 		.bind(id)
 		.execute(&state.pool)
 		.await?;
-		if let Err(e) = crate::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await {
+		if let Err(e) = crate::internal::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await {
 			tracing::warn!(source_id = id, "enqueue rescan on settings reset failed: {}", e.message());
 		}
 		let values = local_settings_doc(&state, id).await?["values"].clone();
@@ -1244,8 +1244,8 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			&& let Err(e) = state
 				.tasks()
 				.enqueue(
-					&format!("{}:{source_id}", crate::local::scan::KIND_ANALYZE),
-					crate::local::scan::KIND_ANALYZE,
+					&format!("{}:{source_id}", crate::internal::local::scan::KIND_ANALYZE),
+					crate::internal::local::scan::KIND_ANALYZE,
 					Some(source_id),
 					json!({}),
 					crate::task::PRIORITY_MANUAL,
@@ -1260,7 +1260,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 	// synchronous so the detail page opens complete); indexed rows never reach here — the existing-hit fast
 	// path above already returned, and refreshes of persisted rows are entry-level scans
 	if crate::source::source_is_local(&state.pool, source_id).await? {
-		let update = crate::local::manga_update(
+		let update = crate::internal::local::manga_update(
 			&state.local_dirs(source_id).await?,
 			&state.local_zip,
 			&initial.key,
@@ -1277,18 +1277,18 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			true,
 		)
 		.await?;
-		crate::local::store_epub_divina(
+		crate::internal::local::store_epub_divina(
 			&mut conn,
 			manga_id,
 			&update.manga.chapters.clone().unwrap_or_default(),
 			&update.epub_divina,
 		)
 		.await?;
-		crate::local::store_chapter_metadata(&mut conn, manga_id, &update.chapter_meta).await?;
+		crate::internal::local::store_chapter_metadata(&mut conn, manga_id, &update.chapter_meta).await?;
 		return Ok(manga_id);
 	}
 	if crate::source::source_is_opds(&state.pool, source_id).await? {
-		let updated = crate::opds_source::manga_update(state, source_id, initial).await?;
+		let updated = crate::internal::opds_source::manga_update(state, source_id, initial).await?;
 		let mut conn = state.pool.acquire().await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
 		reconcile_chapters(
@@ -1613,13 +1613,13 @@ async fn get_manga(
 		// Local-source refresh = entry-level rescan (enumeration only): chapter changes reconcile here,
 		// embedded metadata belongs to the analysis pass the rescan kicks; no source call to stream
 		if crate::source::source_is_local(&state.pool, row.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, row.source_id, &row.key, true, false, None).await?;
+			crate::internal::local::scan::scan_manga_entry(&state, row.source_id, &row.key, true, false, None).await?;
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
 		// opds-source refresh = re-pull the entry feed; like the local arm, nothing to stream
 		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
-			let mut updated = crate::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
+			let mut updated = crate::internal::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
 			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
 			let mut conn = state.pool.acquire().await?;
 			upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
@@ -1710,7 +1710,7 @@ async fn get_chapters(
 		// into the reconcile protection set, not treated as vanished-and-trashed; metadata/page analysis is
 		// the background pass the rescan kicks
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
-			crate::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false, None).await?;
+			crate::internal::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false, None).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
 				.bind(crate::model::unix_now())
 				.bind(id)
@@ -1720,7 +1720,7 @@ async fn get_chapters(
 		}
 		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
 		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
-			let updated = crate::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
+			let updated = crate::internal::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
 			let mut conn = state.pool.acquire().await?;
 			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
 			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
@@ -1937,7 +1937,7 @@ pub(crate) async fn apply_settings(
 			|| key == "localOneshotsDir"
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
-			|| key == crate::local::scan::LOCAL_LAST_SCAN_AT
+			|| key == crate::internal::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;
 		}

@@ -7,10 +7,9 @@ pub mod desktop;
 pub mod download;
 pub mod error;
 pub mod events;
-pub mod local;
+pub mod internal;
 pub mod logging;
 pub mod model;
-pub mod opds_source;
 pub mod rss;
 pub mod source;
 pub mod state;
@@ -47,7 +46,7 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
 	auth::init(&state).await?;
-	local::ensure_default_instance(&state)
+	internal::local::ensure_default_instance(&state)
 		.await
 		.map_err(|e| Error::Local(e.message().to_string()))?;
 	let downloads = download::DownloadManager::new(&state);
@@ -68,12 +67,12 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	assert!(state.tracker.set(std::sync::Arc::new(tracker_services)).is_ok());
 	// A task left running by the previous process goes back to pending before the dispatcher starts
 	tasks.recover().await?;
-	local::scan::register_handlers(&tasks).await;
+	internal::local::scan::register_handlers(&tasks).await;
 	tokio::spawn(tasks.run());
-	local::scan::enqueue_startup_scan(&state)
+	internal::local::scan::enqueue_startup_scan(&state)
 		.await
 		.map_err(|e| Error::Local(e.message().to_string()))?;
-	tokio::spawn(local::scan::run_scheduler(state.clone()));
+	tokio::spawn(internal::local::scan::run_scheduler(state.clone()));
 	let backups = backup::BackupScheduler::new(state.pool.clone(), state.config.clone());
 	downloads.recover().await;
 	source::sweep_page_blobs(&state.pool, &state.config.page_blobs_dir()).await;

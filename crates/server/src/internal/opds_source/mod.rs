@@ -850,7 +850,7 @@ fn entry_to_chapter(entry: &FeedEntry, feed_url: &str) -> Option<Chapter> {
 	Some(Chapter {
 		key: entry.id.clone(),
 		title: Some(entry.title.clone()),
-		chapter_number: crate::local::chapter_number::parse_chapter_number(&entry.title),
+		chapter_number: crate::internal::local::chapter_number::parse_chapter_number(&entry.title),
 		volume_number: None,
 		date_uploaded: entry.updated,
 		scanlators: None,
@@ -940,7 +940,7 @@ pub async fn read_cbz_page(state: &Arc<AppState>, manga: &MangaRow, chapter: &Ch
 				ApiError::bad_gateway(format!("read opds archive failed: {e}"))
 			}
 		})?;
-	Ok((bytes, crate::local::image_mime(entry_name).to_string()))
+	Ok((bytes, crate::internal::local::image_mime(entry_name).to_string()))
 }
 
 async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow) -> ApiResult<PathBuf> {
@@ -1002,9 +1002,9 @@ async fn list_cbz_pages(state: &Arc<AppState>, path: &std::path::Path) -> ApiRes
 		.map_err(|e| ApiError::bad_gateway(format!("invalid opds archive: {e}")))?;
 	let mut pages: Vec<String> = names
 		.into_iter()
-		.filter(|n| crate::local::is_image_entry(n))
+		.filter(|n| crate::internal::local::is_image_entry(n))
 		.collect();
-	pages.sort_by(|a, b| crate::local::natural_sort::compare(a, b));
+	pages.sort_by(|a, b| crate::internal::local::natural_sort::compare(a, b));
 	Ok(pages)
 }
 
