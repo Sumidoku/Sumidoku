@@ -884,14 +884,21 @@ async fn settings_no_longer_inject_local_dirs() {
 }
 
 #[tokio::test]
-async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+async fn local_listings_answer_synthesized() {
+	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
-	// the local source has no listings concept: same contract as a wasm source lacking the capability, 501 unsupported
+	// local sources synthesize listings server-side (all / continue-reading / latest-updates / ...)
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
-	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-	assert_eq!(body["error"]["code"], "unsupported");
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let ids: Vec<&str> = body.as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap()).collect();
+	assert!(ids.contains(&"all"), "expected 'all' listing in {ids:?}");
+	assert!(ids.contains(&"continue-reading"));
+	assert!(ids.contains(&"latest-updates"));
+	assert!(ids.contains(&"latest-added"));
+	assert!(ids.contains(&"recently-read"));
 
+	// unknown listing id → 404, not 501
 	let (status, body) = request(
 		&app,
 		"GET",
@@ -899,8 +906,8 @@ async fn local_listings_answer_unsupported() {	let TestApp { app, tmp: _tmp, .. 
 		None,
 	)
 	.await;
-	assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-	assert_eq!(body["error"]["code"], "unsupported");
+	assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+	assert_eq!(body["error"]["code"], "not_found");
 }
 
 /// Komga-style nested fixture: two archive series under the pure container `publisher`, and one

@@ -61,6 +61,7 @@ pub mod analyze;
 pub mod chapter_number;
 pub mod comic_info;
 pub mod epub;
+pub mod home;
 pub mod natural_sort;
 pub mod scan;
 pub mod series_json;

@@ -73,9 +73,12 @@ export default function SourceHomePage() {
 		return link.value !== null && 'Manga' in link.value && pendingKey === link.value.Manga.key;
 	}
 
-	/** Only the server can attach the anti-hotlink headers a source declares, so covers all go through the server proxy */
+	/** Only the server can attach the anti-hotlink headers a source declares, so covers all go through the server proxy;
+	 *  local-source home/listings set cover to the manga cover endpoint directly, which needs no further wrapping */
 	function proxyImage(url: string | null): string | null {
-		return url ? sourceImageUrl(sourceId, url) : url;
+		if (!url) return url;
+		if (url.startsWith('/api/v1/manga/')) return url;
+		return sourceImageUrl(sourceId, url);
 	}
 
 	if (source.data && !source.data.enabled) {
@@ -407,7 +410,11 @@ function HomeSection({
 			{(component.title || component.subtitle || listing) && (
 				<header className="home-section__head">
 					<div className="home-section__titles">
-						{component.title && <h2 className="home-section__title">{component.title}</h2>}
+						{component.title && (
+					<h2 className="home-section__title">
+						{component.title.startsWith('localHome.') ? t(component.title) : component.title}
+					</h2>
+				)}
 						{component.subtitle && <p className="home-section__subtitle">{component.subtitle}</p>}
 					</div>
 					{listing && (

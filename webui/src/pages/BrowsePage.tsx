@@ -264,9 +264,8 @@ export function SourceCard({
 						{s.enabled ? <Pause size={17} /> : <Play size={17} />}
 					</IconButton>
 				)}
-				{/* Internal sources (local/opds) have no wasm home; local and aidoku sources have settings,
-					opds credentials are write-once at registration; every source can be uninstalled */}
-				{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
+				{/* Internal sources (opds) have no wasm home; opds sources get no settings, but local synthesizes home server-side; every source can be uninstalled */}
+				{s.kind !== 'opds' && s.hasHome !== false && (
 					<IconButton
 						label={t('browse.home', { name: s.name })}
 						onClick={(e) => {
@@ -309,7 +308,7 @@ export function SourceCard({
 									{s.enabled ? <Pause size={14} /> : <Play size={14} />}
 								</button>
 							)}
-							{s.kind !== 'local' && s.kind !== 'opds' && s.hasHome !== false && (
+							{s.kind !== 'opds' && s.hasHome !== false && (
 								<button type="button" className="menu-row" onClick={() => { close(); navigate(`/browse/${s.id}/home`); }}>
 									<span>{t('browse.homeAction')}</span>
 									<House size={14} />
