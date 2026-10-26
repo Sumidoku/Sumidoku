@@ -486,7 +486,13 @@ pub(crate) async fn attach_internal_ids(
 /// filters by title substring (case-insensitive, same as Suwayomi LocalSource). An instance with no rows at
 /// all gets its first scan kicked at manual priority — the dedup id makes repeated browsing cheap — and the
 /// web UI refreshes on the task SSE event; everything returns in one page, hasNextPage is always false
-pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option<&str>) -> ApiResult<Vec<Value>> {
+pub(crate) async fn local_search(
+	state: &AppState,
+	source_id: i64,
+	query: Option<&str>,
+	page: i64,
+	page_size: i64,
+) -> ApiResult<(Vec<Value>, bool)> {
 	// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one:
 	// once every row sits in the trash, every browse would otherwise re-trigger a full filesystem scan.
 	// The zero-row check and the response snapshot are both captured BEFORE the kick, so an immediately
@@ -530,7 +536,16 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 		});
 	}
 	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.1, &b.1));
-	rows.into_iter()
+	let total_matched = rows.len() as i64;
+	let offset = (page - 1).max(0) * page_size;
+	let page_rows: Vec<(i64, String, String)> = rows
+		.into_iter()
+		.skip(offset as usize)
+		.take(page_size as usize)
+		.collect();
+	let has_next = offset + page_size < total_matched;
+	let entries = page_rows
+		.into_iter()
 		.map(|(id, key, title)| {
 			let mut value = serde_json::to_value(Manga {
 				key,
@@ -544,7 +559,8 @@ pub(crate) async fn local_search(state: &AppState, source_id: i64, query: Option
 			object.insert("id".into(), json!(id));
 			Ok(value)
 		})
-		.collect()
+		.collect::<ApiResult<Vec<_>>>()?;
+	Ok((entries, has_next))
 }
 
 async fn search_source(
@@ -559,10 +575,10 @@ async fn search_source(
 	}
 	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal, same as register's local arm)
 	if crate::source::source_is_local(&state.pool, id).await? {
-		let entries = local_search(&state, id, body.query.as_deref()).await?;
+		let (entries, has_next) = local_search(&state, id, body.query.as_deref(), page as i64, 20).await?;
 		return Ok(Json(json!({
 			"entries": entries,
-			"hasNextPage": false,
+			"hasNextPage": has_next,
 		}))
 		.into_response());
 	}

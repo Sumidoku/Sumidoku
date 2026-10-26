@@ -412,7 +412,7 @@ function HomeSection({
 					<div className="home-section__titles">
 						{component.title && (
 					<h2 className="home-section__title">
-						{component.title.startsWith('localHome.') ? t(component.title) : component.title}
+						{component.title.startsWith('sourceHome.') ? t(component.title) : component.title}
 					</h2>
 				)}
 						{component.subtitle && <p className="home-section__subtitle">{component.subtitle}</p>}

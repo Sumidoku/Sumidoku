@@ -113,8 +113,8 @@ async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>
 	let outcome: ApiResult<(Vec<Value>, bool, bool)> = async {
 		// The local source has no wasm instance; scan the directory on the same arm as the single-source endpoint, without degrading the aggregate into an error entry
 		if crate::source::source_is_local(&state.pool, source_id).await? {
-			let entries = super::local_search(state, source_id, query.as_deref()).await?;
-			return Ok((entries, false, false));
+			let (entries, has_next) = super::local_search(state, source_id, query.as_deref(), page as i64, 20).await?;
+			return Ok((entries, has_next, false));
 		}
 		// opds sources same as the local arm; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 		if crate::source::source_is_opds(&state.pool, source_id).await? {
