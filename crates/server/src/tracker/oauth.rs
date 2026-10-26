@@ -280,7 +280,7 @@ impl OAuthManager {
 
 	/// A logout racing an in-flight callback or refresh must not delete the row
 	/// the other side just created: only the pre-logout token is removed.
-	async fn logout_if_current(&self, provider: Provider, user_id: i64, expected_access_token: &str) -> Result<(), TrackerError> {
+	pub(crate) async fn logout_if_current(&self, provider: Provider, user_id: i64, expected_access_token: &str) -> Result<(), TrackerError> {
 		let deleted = dao::delete_token_if_matches(&self.pool, provider, user_id, expected_access_token).await?;
 		if deleted {
 			dao::delete_pending_for_user(&self.pool, provider, user_id).await?;

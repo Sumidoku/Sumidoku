@@ -190,11 +190,22 @@ pub async fn update_chapter(
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let progress = patch.apply(&mut tx, user.id, id).await?;
 	tx.commit().await?;
+	if progress.is_read {
+		notify_tracker_read(&state, chapter.manga_id, user.id);
+	}
 	if let Some(deletion) = deletion {
 		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
 		delete_after_progress(&state, user.id, id, deletion, &progress, &settings).await?;
 	}
 	Ok(Json(progress_json(id, &progress)))
+}
+
+/// Lossless tap for the tracker sync: it re-reads the current progress anyway,
+/// so the payload is just the pair and a miss only costs one idle round trip.
+fn notify_tracker_read(state: &AppState, manga_id: i64, user_id: i64) {
+	if let Some(tx) = state.tracker_tx.get() {
+		let _ = tx.send(crate::tracker::sync::TrackerSyncEvent::Progress { manga_id, user_id });
+	}
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,6 +272,7 @@ pub async fn batch_update_chapters(
 		.collect();
 	let mut updated = 0;
 	let mut deletions = Vec::new();
+	let mut read_chapter_ids = Vec::new();
 	for chapter_id in &chapter_ids {
 		let page_count: Option<(i64, Option<i64>)> = sqlx::query_as(
 			"SELECT page_count, trashed_at FROM chapter WHERE id = ?",
@@ -280,9 +292,25 @@ pub async fn batch_update_chapters(
 		if let Some(deletion) = read_deletion(&body.patch, page_count) {
 			deletions.push((*chapter_id, progress, deletion));
 		}
+		if progress.is_read {
+			read_chapter_ids.push(*chapter_id);
+		}
 		updated += 1;
 	}
 	tx.commit().await?;
+	if !read_chapter_ids.is_empty() && state.tracker_tx.get().is_some() {
+		for chunk in read_chapter_ids.chunks(crate::api::MANGA_ID_QUERY_CHUNK) {
+			let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+			let sql = format!("SELECT DISTINCT manga_id FROM chapter WHERE id IN ({placeholders})");
+			let mut query = sqlx::query_scalar::<_, i64>(&sql);
+			for chapter_id in chunk {
+				query = query.bind(chapter_id);
+			}
+			for manga_id in query.fetch_all(&state.pool).await? {
+				notify_tracker_read(&state, manga_id, user.id);
+			}
+		}
+	}
 	if !deletions.is_empty() {
 		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
 		for (chapter_id, progress, deletion) in deletions {

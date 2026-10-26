@@ -72,7 +72,7 @@ pub enum TrackerError {
 #[async_trait::async_trait]
 pub trait TrackerService: Send + Sync {
 	fn provider(&self) -> Provider;
-	fn is_logged_in(&self, user_id: i64) -> Result<bool, TrackerError>;
+	async fn is_logged_in(&self, user_id: i64) -> Result<bool, TrackerError>;
 
 	async fn search(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<TrackSearchItem>, TrackerError>;
 
@@ -96,7 +96,12 @@ impl TrackerServices {
 		Self { oauth, services: std::sync::Arc::new(services) }
 	}
 
-	pub fn from_db(pool: sqlx::SqlitePool, http: reqwest::Client) -> Self {
+	pub fn from_db(pool: sqlx::SqlitePool) -> Self {
+		let http = reqwest::Client::builder()
+			.user_agent(concat!("sumidoku/", env!("CARGO_PKG_VERSION")))
+			.timeout(std::time::Duration::from_secs(30))
+			.build()
+			.expect("tracker HTTP client");
 		let oauth = oauth::OAuthManager::new(pool, http.clone());
 		let services: Vec<std::sync::Arc<dyn TrackerService>> = vec![
 			std::sync::Arc::new(providers::anilist::AniListTracker::new(http.clone(), oauth.clone())),
@@ -141,7 +146,7 @@ mod tests {
 			Provider::Anilist
 		}
 
-		fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
+		async fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
 			Ok(true)
 		}
 
@@ -184,7 +189,7 @@ mod tests {
 		assert!(std::sync::Arc::ptr_eq(services.oauth(), &oauth));
 		let cloned = services.clone();
 		let tracker = cloned.get(Provider::Anilist).unwrap();
-		assert!(tracker.is_logged_in(1).unwrap());
+		assert!(tracker.is_logged_in(1).await.unwrap());
 		assert!(tracker.search(1, "title", true).await.unwrap().is_empty());
 		assert_eq!(tracker.get_state(1, "42").await.unwrap(), RemoteState::default());
 		tracker.update(1, "42", &TrackUpdate::default()).await.unwrap();

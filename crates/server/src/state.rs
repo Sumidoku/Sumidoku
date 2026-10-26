@@ -61,6 +61,8 @@ pub struct AppState {
 	pub updater: tokio::sync::OnceCell<Arc<crate::update::UpdateScheduler>>,
 	pub events: tokio::sync::OnceCell<Arc<crate::events::EventHub>>,
 	pub tasks: tokio::sync::OnceCell<Arc<crate::task::TaskManager>>,
+	pub tracker: tokio::sync::OnceCell<Arc<crate::tracker::TrackerServices>>,
+	pub tracker_tx: tokio::sync::OnceCell<crate::tracker::sync::TrackerSyncSender>,
 }
 
 pub struct DefaultsWrite {
@@ -186,6 +188,8 @@ impl AppState {
 			updater: tokio::sync::OnceCell::new(),
 			events: tokio::sync::OnceCell::new(),
 			tasks: tokio::sync::OnceCell::new(),
+			tracker: tokio::sync::OnceCell::new(),
+			tracker_tx: tokio::sync::OnceCell::new(),
 		})
 	}
 

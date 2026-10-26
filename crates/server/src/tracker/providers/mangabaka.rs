@@ -24,7 +24,7 @@ impl TrackerService for MangaBakaTracker {
 		Provider::Mangabaka
 	}
 
-	fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
+	async fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
 		Ok(false)
 	}
 
