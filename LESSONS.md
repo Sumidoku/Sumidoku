@@ -1,10 +1,31 @@
-<!-- reviewed-through: acb057b (2026-10-26) -->
+<!-- reviewed-through: be89fb2 (2026-10-26) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**Heavy CI must be scoped to inputs that can change the shipped artifact.**
+Documentation-only changes should not pay for Rust tests, platform builds or
+Docker. Exclude Markdown while keeping every other non-Web UI path opted in so
+new build inputs cannot silently bypass checks, and gate Docker on server or
+web inputs. Verify a docs-only PR's expanded checks rather than relying on the
+final green `ci`.
+- Evidence: 2026-10-26, docs-only PRs #452, #457 and #458 each ran Rust
+  tests, three platform builds and Docker because the Rust filter accepted
+  every non-Web UI file and Docker was ungated. #459 excluded `**/*.md` and
+  gated Docker on `rust || web`; its full matrix passed, and a docs-only
+  follow-up is the acceptance check for the expanded check list.
+
+**Numeric normalization must be applied at every serialization boundary.**
+Reusing a canonical f32 JSON helper only in sibling endpoints leaves other
+routes free to expose widened values. Exercise the public response with values
+that are inexact in binary, not just the storage conversion.
+- Evidence: 2026-10-26, #461's downloads route returned
+  `3.0999999046325684` for `3.1`. Mapping chapter and volume through
+  `f32_json` fixed it; `download_numbers_serialize_cleanly` failed before the
+  change and passed after it.
 
 **Shared query code must not erase endpoint-specific response contracts.**
 Home components and listing APIs may read the same rows, but their entry
