@@ -605,6 +605,14 @@ async fn get_listings(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 ) -> ApiResult<Json<Value>> {
+	// Local sources have no WASM package; expose the synthesized Aidoku-style listings
+	// (continue-reading / latest-updates / recently-added / oneshots / recently-read)
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		let listings = crate::local::home::local_listings();
+		let out: Vec<Value> = listings.iter().map(crate::api::listings::listing_json).collect();
+		return Ok(Json(Value::Array(out)));
+	}
 	let handle = state.get_handle(id).await?;
 	// Aligned with AidokuRunner: static listings first, dynamic exported results appended;
 	// both sources are normalized to the listing_json shape, where kind is a number for static and an enum name for dynamic
@@ -673,6 +681,11 @@ async fn get_manga_list(
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		let value = crate::local::home::local_listing_page(&state, id, &listing_id, page).await?;
+		return Ok(Json(value));
+	}
 	let handle = state.get_handle(id).await?;
 	// Looks up the real listing by id among the source-declared listings (Aidoku only ever passes objects the source itself gave);
 	// when not found, the id itself is passed through and the source decides how to respond, matching existing behavior
@@ -700,6 +713,13 @@ async fn get_home(
 	Path(id): Path<i64>,
 	headers: HeaderMap,
 ) -> ApiResult<Response> {
+	let row = source_row(&state, id).await?;
+	if row.is_local() {
+		// Local home is assembled from SQL in one shot (no WASM streaming); ignore the NDJSON
+		// accept header and answer a buffered HomeLayout, matching the non-streaming branch below.
+		let value = crate::local::home::build_local_home(&state, id).await?;
+		return Ok(Json(value).into_response());
+	}
 	let handle = state.get_handle(id).await?;
 	if !partial::wants_ndjson(&headers) {
 		let home = handle.get_home().await.map_err(dynamic_capability_error)?;

@@ -12,6 +12,12 @@
     "goSearch": "Vai alla ricerca",
     "emptyHome": "La pagina home è vuota",
     "emptyHomeHint": "La fonte ha restituito un layout home vuoto",
-    "viewAll": "Vedi tutto"
+    "viewAll": "Vedi tutto",
+    "all": "Tutti",
+    "continueReading": "Continua a leggere",
+    "latestUpdates": "Ultimi aggiornamenti",
+    "latestAdded": "Aggiunti di recente",
+    "oneshots": "Oneshot",
+    "recentlyRead": "Letti di recente"
   }
 }
