@@ -16,6 +16,7 @@ pub mod source;
 pub mod state;
 pub mod sync;
 pub mod task;
+pub mod tracker;
 #[cfg(target_os = "windows")]
 pub mod tray;
 pub mod update;
