@@ -21,6 +21,45 @@
     "unbindConfirm": "Rimuovere il collegamento {{provider}} per {{title}}? La voce remota non verrà eliminata.",
     "unbound": "Collegamento di tracciamento rimosso.",
     "oauthSuccess": "Account di tracciamento collegato.",
-    "oauthError": "Impossibile collegare l'account di tracciamento."
+    "oauthError": "Impossibile collegare l'account di tracciamento.",
+    "sectionTitle": "Tracciamento",
+    "addBinding": "Aggiungi collegamento",
+    "allProvidersBound": "Tutti i servizi di tracciamento sono già collegati",
+    "noMangaBindings": "Nessun collegamento di tracciamento per questo manga.",
+    "provider": "Tracciamento",
+    "searching": "Ricerca…",
+    "retry": "Riprova",
+    "noResults": "Nessuna voce di tracciamento trovata.",
+    "media": {
+      "manga": "Manga",
+      "novel": "Romanzo"
+    },
+    "tracked": "Già tracciato",
+    "bind": "Collega",
+    "editBinding": "Modifica collegamento {{provider}}",
+    "authRequired": "Collega un account {{provider}} per cercare e aggiornare questa voce.",
+    "trackMode": "Modalità dei progressi",
+    "modeAuto": "Automatica",
+    "modeChapter": "Capitolo",
+    "modeVolume": "Volume",
+    "chapterOffset": "Scostamento capitolo",
+    "statusLabel": "Stato",
+    "statusNone": "Non impostato",
+    "statusValues": {
+      "reading": "In lettura",
+      "planning": "Pianificato",
+      "completed": "Completato",
+      "paused": "In pausa",
+      "dropped": "Abbandonato",
+      "rereading": "Rilettura"
+    },
+    "score": "Punteggio",
+    "chapterProgress": "Ultimo capitolo letto",
+    "volumeProgress": "Ultimo volume letto",
+    "saved": "Collegamento di tracciamento salvato.",
+    "unlink": "Scollega",
+    "unlinkTitle": "Scollegare questa voce di tracciamento?",
+    "unlinkConfirm": "Rimuovere il collegamento {{provider}} per {{title}}? La voce remota non verrà eliminata.",
+    "unlinked": "Voce di tracciamento scollegata."
   }
 }
