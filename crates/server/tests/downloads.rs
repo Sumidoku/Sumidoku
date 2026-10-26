@@ -97,6 +97,32 @@ fn assert_cbz(bytes: &[u8], source_key: &str, manga_key: &str, chapter_key: &str
 }
 
 #[tokio::test]
+async fn download_numbers_serialize_cleanly() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let chapter_id = first_chapter_id(&app, manga_id).await;
+	let pool = connect_db(&t.db_path).await;
+	sqlx::query("UPDATE chapter SET number = ?, volume = ? WHERE id = ?")
+		.bind(3.1_f32 as f64)
+		.bind(4.2_f32 as f64)
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("fractional chapter numbers");
+
+	let (status, _) = request(&app, "POST", "/api/v1/downloads/stop", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, body) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body["queued"], json!([chapter_id]));
+	let (status, body) = request(&app, "GET", "/api/v1/downloads", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body[0]["chapterNumber"], json!(3.1));
+	assert_eq!(body[0]["volumeNumber"], json!(4.2));
+}
+
+#[tokio::test]
 async fn download_full_flow() {
 	let (logs, _guard) = common::capture_logs();
 	let t = downloads_app(|_| {}).await;
