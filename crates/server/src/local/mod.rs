@@ -1225,12 +1225,19 @@ const SOURCE_ROW_SELECT: &str = "SELECT id, key, name, kind, version, languages,
 
 /// Instance registration: key takes local.<slug>, collisions append a -2/-3 counter (the opds rule;
 /// a name slugging to "local" collides with the reserved default key and takes the counter form).
-/// Paths land in the instance's own source setting; the oneshots marker only when provided
+/// Paths land in the instance's own source setting; the oneshots marker and the other per-instance
+/// overrides (exclusions, scan/analysis toggles) are written only when provided, mirroring the
+/// settings panel so absent values keep the config-layer fallback
+#[allow(clippy::too_many_arguments)]
 pub async fn register_instance(
 	state: &AppState,
 	name: &str,
 	paths: &[String],
 	oneshots_dir: Option<&str>,
+	exclusions: Option<&[String]>,
+	force_modified_time: Option<bool>,
+	analyze_pages: Option<bool>,
+	analyze_metadata: Option<bool>,
 ) -> ApiResult<SourceRow> {
 	let name = name.trim();
 	if name.is_empty() {
@@ -1278,6 +1285,32 @@ pub async fn register_instance(
 			.bind(raw)
 			.execute(&state.pool)
 			.await?;
+	}
+	if let Some(exclusions) = exclusions {
+		let cleaned: Vec<String> = exclusions.iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+		if !cleaned.is_empty() {
+			let raw = serde_json::to_string(&DefaultValue::StringArray(cleaned))?;
+			sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'exclusions', ?)")
+				.bind(source_id)
+				.bind(raw)
+				.execute(&state.pool)
+				.await?;
+		}
+	}
+	for (key, value) in [
+		("forceModifiedTime", force_modified_time),
+		("analyzePages", analyze_pages),
+		("analyzeMetadata", analyze_metadata),
+	] {
+		if let Some(v) = value {
+			let raw = serde_json::to_string(&DefaultValue::Bool(v))?;
+			sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, ?, ?)")
+				.bind(source_id)
+				.bind(key)
+				.bind(raw)
+				.execute(&state.pool)
+				.await?;
+		}
 	}
 	let row: Option<SourceRow> = sqlx::query_as(SOURCE_ROW_SELECT)
 		.bind(source_id)
