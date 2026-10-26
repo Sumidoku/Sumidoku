@@ -25,8 +25,11 @@ jobs:
           predicate-quantifier: 'some-with-excludes'
           filters: |
             rust:
+              # Markdown cannot change the executable or container; every other
+              # non-webui path stays opted in so new build inputs cannot skip the gate.
               - '**'
               - '!webui/**'
+              - '!**/*.md'
             web:
               - 'webui/**'
               - 'crates/server/assets/api-docs/openapi.json'
@@ -119,8 +122,10 @@ jobs:
       - run: npm run build
 
   docker:
-    # not gated on the changes filter: it is the only leg exercising the
-    # embedded web UI end to end
+    needs: changes
+    if: needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+    # the embedded app depends on both server and web inputs; this is its only
+    # end-to-end smoke leg
     runs-on: ubuntu-24.04
     env:
       RUSTC_WRAPPER: sccache
