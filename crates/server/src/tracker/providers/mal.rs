@@ -1,6 +1,6 @@
-//! MyAnimeList provider over the v2 REST API. Search hits carry no list
-//! status, so each one is followed up with a detail fetch; rereading has no
-//! MAL status and degrades to reading on write.
+//! MyAnimeList provider over the v2 REST API. Search requests the same
+//! fields as a detail fetch, list status included, so one bounded request
+//! answers it; rereading has no MAL status and degrades to reading on write.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::oauth::OAuthManager;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 const BASE_URL: &str = "https://api.myanimelist.net/v2";
 const SEARCH_FIELDS: &str = "id,title,synopsis,num_chapters,main_picture,status,media_type,my_list_status";
+const SEARCH_LIMIT: usize = 20;
 
 pub struct MalTracker {
 	http: reqwest::Client,
@@ -126,14 +127,12 @@ impl MalTracker {
 		}
 	}
 
-	fn search_item(id: i64, summary: &Value, details: &Value) -> TrackSearchItem {
-		let detail = |name: &str| details.get(name);
-		let title = detail("title").or_else(|| summary.get("title"));
-		let picture = detail("main_picture").or_else(|| summary.get("main_picture"));
+	fn search_item(id: i64, manga: &Value) -> TrackSearchItem {
+		let detail = |name: &str| manga.get(name);
 		TrackSearchItem {
 			id: id.to_string(),
-			title: title.and_then(Value::as_str).unwrap_or("Unknown Title").to_string(),
-			cover_url: picture.and_then(|picture| picture.get("large")).and_then(Value::as_str).map(str::to_string),
+			title: detail("title").and_then(Value::as_str).unwrap_or("Unknown Title").to_string(),
+			cover_url: detail("main_picture").and_then(|picture| picture.get("large")).and_then(Value::as_str).map(str::to_string),
 			description: detail("synopsis").and_then(Value::as_str).map(str::to_string),
 			tracked: detail("my_list_status").is_some_and(|status| !status.is_null()),
 			media_type: Self::media_type(detail("media_type").and_then(Value::as_str)),
@@ -159,23 +158,25 @@ impl TrackerService for MalTracker {
 	async fn search(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<TrackSearchItem>, TrackerError> {
 		if let Some(id) = Self::manga_url_id(query) {
 			let details = self.get_json(user_id, &format!("{}/manga/{id}?fields={SEARCH_FIELDS}", self.base_url)).await?;
-			return Ok(vec![Self::search_item(id, &details, &details)]);
+			return Ok(vec![Self::search_item(id, &details)]);
 		}
 
 		let query = query.chars().take(64).collect::<String>();
 		let query = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
-		let body = self.get_json(user_id, &format!("{}/manga?q={query}&nsfw={nsfw}", self.base_url)).await?;
-		let nodes = body.get("data").and_then(Value::as_array).cloned().unwrap_or_default();
-		// each hit needs its own detail fetch for the list status; sequential,
-		// so no futures crate is added just to join them
-		let mut items = Vec::with_capacity(nodes.len());
-		for node in nodes {
-			let Some(summary) = node.get("node").cloned() else { continue };
-			let Some(id) = summary.get("id").and_then(Value::as_i64) else { continue };
-			let details = self.get_json(user_id, &format!("{}/manga/{id}?fields={SEARCH_FIELDS}", self.base_url)).await?;
-			items.push(Self::search_item(id, &summary, &details));
-		}
-		Ok(items)
+		let body = self
+			.get_json(user_id, &format!("{}/manga?q={query}&nsfw={nsfw}&limit={SEARCH_LIMIT}&fields={SEARCH_FIELDS}", self.base_url))
+			.await?;
+		Ok(body
+			.get("data")
+			.and_then(Value::as_array)
+			.into_iter()
+			.flatten()
+			.filter_map(|entry| {
+				let manga = entry.get("node")?;
+				let id = manga.get("id")?.as_i64()?;
+				Some(Self::search_item(id, manga))
+			})
+			.collect())
 	}
 
 	async fn get_state(&self, user_id: i64, track_id: &str) -> Result<RemoteState, TrackerError> {
@@ -256,7 +257,7 @@ mod tests {
 	use axum::{Json, Router};
 	use serde_json::json;
 	use sqlx::SqlitePool;
-	use std::collections::{HashMap, HashSet};
+	use std::collections::HashMap;
 	use std::sync::Mutex;
 	use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -265,7 +266,6 @@ mod tests {
 		requests: Arc<Mutex<Vec<CapturedRequest>>>,
 		search_results: Value,
 		details: Arc<HashMap<i64, Value>>,
-		failing_details: HashSet<i64>,
 		unauthorized_once: Arc<AtomicBool>,
 	}
 
@@ -317,11 +317,11 @@ mod tests {
 			Self {
 				requests: Arc::new(Mutex::new(Vec::new())),
 				search_results: json!([
-					{"node": {"id": 1, "title": "Summary One"}},
-					{"node": {"id": 2, "title": "Summary Two"}}
+					{"node": details[&1]},
+					{"node": details[&2]},
+					{"node": {"id": 3}}
 				]),
 				details: Arc::new(details),
-				failing_details: HashSet::new(),
 				unauthorized_once: Arc::new(AtomicBool::new(false)),
 			}
 		}
@@ -354,9 +354,6 @@ mod tests {
 			return Json(json!({})).into_response();
 		}
 		let id = path.strip_prefix("/v2/manga/").and_then(|id| id.parse::<i64>().ok()).unwrap();
-		if mock.failing_details.contains(&id) {
-			return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"message": "detail unavailable"}))).into_response();
-		}
 		Json(mock.details.get(&id).cloned().unwrap_or(Value::Null)).into_response()
 	}
 
@@ -382,19 +379,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn search_propagates_any_detail_failure() {
-		let mut mock = MockMal::new();
-		mock.failing_details.insert(2);
-		let base_url = serve_mock(mock.clone()).await;
-		let (oauth, alice, _tmp) = seeded_oauth(&base_url).await;
-		let tracker = MalTracker::with_base_url(reqwest::Client::new(), oauth, format!("{base_url}/v2"));
-
-		assert!(matches!(tracker.search(alice, "Test", true).await, Err(TrackerError::Provider { provider: Provider::Mal, .. })));
-		assert!(mock.requests().iter().any(|request| request.path == "/v2/manga/2"));
-	}
-
-	#[tokio::test]
-	async fn search_limits_query_and_fetches_each_detail() {
+	async fn search_builds_items_from_one_bounded_request() {
 		let mock = MockMal::new();
 		let base_url = serve_mock(mock.clone()).await;
 		let (oauth, alice, _tmp) = seeded_oauth(&base_url).await;
@@ -404,29 +389,31 @@ mod tests {
 
 		let query = "界".repeat(70);
 		let items = tracker.search(alice, &query, true).await.unwrap();
-		assert_eq!(items.len(), 2);
+		assert_eq!(items.len(), 3);
+		assert_eq!(items[0].id, "1");
 		assert_eq!(items[0].title, "Detail One");
+		assert_eq!(items[0].description.as_deref(), Some("First synopsis"));
+		assert_eq!(items[0].cover_url.as_deref(), Some("https://img.example/one.jpg"));
 		assert_eq!(items[0].media_type, Some(TrackMediaType::Novel));
+		assert_eq!(items[0].url.as_deref(), Some("https://myanimelist.net/manga/1"));
 		assert!(items[0].tracked);
 		assert_eq!(items[1].title, "Detail Two");
+		assert_eq!(items[1].media_type, Some(TrackMediaType::Manga));
 		assert!(!items[1].tracked);
+		assert_eq!(items[2].title, "Unknown Title");
+		assert!(!items[2].tracked);
 		assert!(matches!(tracker.search(alice + 1, "Test", true).await, Err(TrackerError::NotLoggedIn { provider: Provider::Mal })));
 
 		let requests = mock.requests();
-		assert_eq!(requests.len(), 3);
-		let search = requests.iter().find(|request| request.path == "/v2/manga").unwrap();
+		assert_eq!(requests.len(), 1);
+		let search = &requests[0];
+		assert_eq!(search.path, "/v2/manga");
 		let expected_query = query.chars().take(64).collect::<String>();
 		assert_eq!(search.query("q"), Some(expected_query.as_str()));
 		assert_eq!(search.query("nsfw"), Some("true"));
+		assert_eq!(search.query("limit"), Some("20"));
+		assert_eq!(search.query("fields"), Some(SEARCH_FIELDS));
 		assert_eq!(search.authorization.as_deref(), Some("Bearer old-token"));
-		let mut detail_paths =
-			requests.iter().filter(|request| request.path.starts_with("/v2/manga/")).map(|request| request.path.as_str()).collect::<Vec<_>>();
-		detail_paths.sort_unstable();
-		assert_eq!(detail_paths, vec!["/v2/manga/1", "/v2/manga/2"]);
-		for request in requests.iter().filter(|request| request.path == "/v2/manga/1" || request.path == "/v2/manga/2") {
-			assert_eq!(request.query("fields"), Some(SEARCH_FIELDS));
-			assert_eq!(request.authorization.as_deref(), Some("Bearer old-token"));
-		}
 	}
 
 	#[tokio::test]
