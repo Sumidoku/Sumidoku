@@ -274,11 +274,7 @@ export default function MigratePage() {
 
 			{step === 'destinations' && (
 				<>
-					<DestinationPicker
-						selected={destinations}
-						onChange={setDestinations}
-						excludeId={sameSource ? undefined : (sourceId ?? undefined)}
-					/>
+					<DestinationPicker selected={destinations} onChange={setDestinations} />
 					<div className="migrate-toolbar">
 						<Button variant="primary" disabled={destinations.length === 0} onClick={startMatch}>
 							{t('migrate.startMatch', { count: selected.size })}

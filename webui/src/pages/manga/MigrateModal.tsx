@@ -134,7 +134,7 @@ export function MigrateModal({ manga, onClose }: { manga: Manga; onClose: () => 
 				</div>
 			) : (
 				<>
-					<DestinationPicker selected={destinations} onChange={setDestinations} excludeId={manga.sourceId} />
+					<DestinationPicker selected={destinations} onChange={setDestinations} />
 					<div className="migrate-single__bar">
 						<Button
 							size="sm"
