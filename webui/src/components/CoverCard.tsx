@@ -55,10 +55,11 @@ export function CoverCard({
 				)}
 				{!selecting && boundLabel && (
 					<span className="cover-card__trackers" title={boundLabel} aria-label={boundLabel}>
-						{providers.slice(0, 2).map((provider) => (
-							<TrackerLogo key={provider} provider={provider} />
+						{providers.map((provider) => (
+							<span key={provider} className={`cover-card__tracker cover-card__tracker--${provider}`}>
+								<TrackerLogo provider={provider} />
+							</span>
 						))}
-						{providers.length > 2 && <span className="cover-card__trackers-more">+{providers.length - 2}</span>}
 					</span>
 				)}
 				{trashed && (
