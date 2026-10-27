@@ -78,8 +78,8 @@ test('cover card renders compact tracker provider markers', async () => {
 		createElement(CoverCard, { title: 'Series', trackerProviders: ['bangumi', 'anilist', 'mal'] })
 	);
 	assert.match(markup, /cover-card__trackers/);
-	assert.match(markup, /Bangumi/);
-	assert.match(markup, /AniList/);
+	assert.match(markup, /<img class="tracker-logo"[^>]*alt="Bangumi"/);
+	assert.match(markup, /<img class="tracker-logo"[^>]*alt="AniList"/);
 	assert.match(markup, /\+1/);
 });
 
