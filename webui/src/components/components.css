@@ -761,7 +761,12 @@
 .seg__item {
 	position: relative;
 	z-index: 1;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
 	flex: none;
+	/* An icon-only label has no text line; keep it as tall as a text segment */
+	min-height: calc(1lh + 10px);
 	padding: 5px 14px;
 	border-radius: 999px;
 	font-size: 13.5px;
