@@ -187,9 +187,9 @@ async fn migration_seeds_builtin_local_source() {
 	assert_eq!(local["name"], "Local");
 	assert_eq!(local["kind"], "local");
 	assert_eq!(local["hasHome"], true, "local sources synthesize a home page");
-	assert_eq!(local["config"]["supportsAuthorSearch"], false);
-	assert_eq!(local["config"]["supportsArtistSearch"], false);
-	assert_eq!(local["config"]["supportsTagSearch"], false);
+	assert_eq!(local["config"]["supportsAuthorSearch"], true);
+	assert_eq!(local["config"]["supportsArtistSearch"], true);
+	assert_eq!(local["config"]["supportsTagSearch"], true);
 	assert_eq!(local["config"]["allowsBaseUrlSelect"], false);
 	assert_eq!(local["config"]["hidesFiltersWhileSearching"], true);
 	assert_eq!(source_by_key(&body, "en.example-source")["kind"], "aidoku");

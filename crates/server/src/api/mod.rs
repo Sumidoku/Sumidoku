@@ -486,20 +486,79 @@ pub(crate) async fn attach_internal_ids(
 /// filters by title substring (case-insensitive, same as Suwayomi LocalSource). An instance with no rows at
 /// all gets its first scan kicked at manual priority — the dedup id makes repeated browsing cheap — and the
 /// web UI refreshes on the task SSE event; everything returns in one page, hasNextPage is always false
+/// Criteria extracted from Aidoku-style filter values for local-source search.
+/// Author/artist/tag use case-insensitive exact matching against the JSON arrays
+/// stored on the manga row; the free-text query matches title/author/artist/tag as
+/// a substring so the search box stays useful without a dedicated filter panel.
+#[derive(Debug, Default)]
+struct LocalSearchCriteria {
+	pub query: Option<String>,
+	pub author: Option<String>,
+	pub artist: Option<String>,
+	pub tags: Vec<String>,
+}
+
+fn parse_local_search_filters(filters: Option<Vec<FilterValue>>) -> LocalSearchCriteria {
+	let mut criteria = LocalSearchCriteria::default();
+	let Some(filters) = filters else { return criteria };
+	for filter in filters {
+		match filter {
+			FilterValue::Text { id, value } if !value.is_empty() => match id.as_str() {
+				"author" => criteria.author = Some(value),
+				"artist" => criteria.artist = Some(value),
+				_ => {
+					// Unrecognised text filters feed the general substring search.
+					if criteria.query.is_none() {
+						criteria.query = Some(value);
+					}
+				}
+			},
+			FilterValue::Select { id, value } if id == "genre" => criteria.tags.push(value),
+			FilterValue::MultiSelect { id, included, .. } if id == "genre" => {
+				criteria.tags.extend(included.into_iter().filter(|v| !v.is_empty()))
+			}
+			_ => {}
+		}
+	}
+	criteria
+}
+
+fn json_array_contains(list: &sqlx::types::Json<Vec<String>>, needle: &str) -> bool {
+	let lowered = needle.to_lowercase();
+	list.0.iter().any(|v| v.to_lowercase() == lowered)
+}
+
+fn json_array_contains_substring(list: &sqlx::types::Json<Vec<String>>, needle: &str) -> bool {
+	let lowered = needle.to_lowercase();
+	list.0.iter().any(|v| v.to_lowercase().contains(&lowered))
+}
+
 pub(crate) async fn local_search(
 	state: &AppState,
 	source_id: i64,
 	query: Option<&str>,
+	filters: Option<Vec<FilterValue>>,
 	page: i64,
 	page_size: i64,
 ) -> ApiResult<(Vec<Value>, bool)> {
+	let criteria = parse_local_search_filters(filters);
+	let query = query.map(str::trim).filter(|q| !q.is_empty());
+	#[derive(sqlx::FromRow)]
+	struct LocalSearchRow {
+		id: i64,
+		key: String,
+		title: String,
+		authors: sqlx::types::Json<Vec<String>>,
+		artists: sqlx::types::Json<Vec<String>>,
+		tags: sqlx::types::Json<Vec<String>>,
+	}
 	// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one:
 	// once every row sits in the trash, every browse would otherwise re-trigger a full filesystem scan.
 	// The zero-row check and the response snapshot are both captured BEFORE the kick, so an immediately
 	// scheduled worker cannot index rows between enqueue and this SELECT — keeping the accepted
 	// first-browse-empty-response contract (the kicked scan's rows land on the next browse)
-	let mut rows: Vec<(i64, String, String)> = sqlx::query_as(
-		"SELECT id, key, title FROM manga WHERE source_id = ? AND trashed_at IS NULL",
+	let mut rows: Vec<LocalSearchRow> = sqlx::query_as(
+		"SELECT id, key, title, authors, artists, tags FROM manga WHERE source_id = ? AND trashed_at IS NULL",
 	)
 	.bind(source_id)
 	.fetch_all(&state.pool)
@@ -517,46 +576,64 @@ pub(crate) async fn local_search(
 	// first directory wins: a numbered key (N:rel) is shadowed when the bare rel exists in the same instance
 	let bare: HashSet<String> = rows
 		.iter()
-		.map(|(_, key, _)| key.clone())
+		.map(|row| row.key.clone())
 		.filter(|key| crate::internal::local::rel_of(key) == key)
 		.collect();
-	rows.retain(|(_, key, _)| crate::internal::local::rel_of(key) == key || !bare.contains(crate::internal::local::rel_of(key)));
+	rows.retain(|row| crate::internal::local::rel_of(&row.key) == row.key || !bare.contains(crate::internal::local::rel_of(&row.key)));
+	// Apply explicit author/artist/tag filters with case-insensitive exact matching, then the free-text
+	// query as a substring match across title, authors, artists and tags.
+	if let Some(author) = &criteria.author {
+		rows.retain(|row| json_array_contains(&row.authors, author));
+	}
+	if let Some(artist) = &criteria.artist {
+		rows.retain(|row| json_array_contains(&row.artists, artist));
+	}
+	if !criteria.tags.is_empty() {
+		let tags = &criteria.tags;
+		rows.retain(|row| tags.iter().all(|tag| json_array_contains(&row.tags, tag)));
+	}
 	let needle = query
-		.map(str::trim)
-		.filter(|q| !q.is_empty())
+		.or(criteria.query.as_deref())
 		.map(str::to_lowercase);
-	rows.retain(|(_, _, title)| needle.as_ref().is_none_or(|n| title.to_lowercase().contains(n)));
+	if let Some(needle) = needle {
+		rows.retain(|row| {
+			row.title.to_lowercase().contains(&needle)
+				|| json_array_contains_substring(&row.authors, &needle)
+				|| json_array_contains_substring(&row.artists, &needle)
+				|| json_array_contains_substring(&row.tags, &needle)
+		});
+	}
 	// exclusions apply to the read model too: an excluded subtree is hidden, never indexed further, and
 	// (on the scan side) protected from trashing
 	let exclusions = state.local_exclusions(source_id).await?;
 	if !exclusions.is_empty() {
-		rows.retain(|(_, key, _)| {
-			let lowered = key.to_lowercase();
+		rows.retain(|row| {
+			let lowered = row.key.to_lowercase();
 			!exclusions.iter().any(|exclusion| lowered.contains(exclusion))
 		});
 	}
-	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.1, &b.1));
+	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.key, &b.key));
 	let total_matched = rows.len() as i64;
 	let offset = (page - 1).max(0) * page_size;
-	let page_rows: Vec<(i64, String, String)> = rows
+	let page_rows = rows
 		.into_iter()
 		.skip(offset as usize)
 		.take(page_size as usize)
-		.collect();
+		.collect::<Vec<_>>();
 	let has_next = offset + page_size < total_matched;
 	let entries = page_rows
 		.into_iter()
-		.map(|(id, key, title)| {
+		.map(|row| {
 			let mut value = serde_json::to_value(Manga {
-				key,
-				title,
+				key: row.key,
+				title: row.title,
 				..Manga::default()
 			})?;
 			let object = value
 				.as_object_mut()
 				.ok_or_else(|| ApiError::bad_request("unexpected manga shape"))?;
 			object.insert("sourceId".into(), json!(source_id));
-			object.insert("id".into(), json!(id));
+			object.insert("id".into(), json!(row.id));
 			Ok(value)
 		})
 		.collect::<ApiResult<Vec<_>>>()?;
@@ -575,7 +652,7 @@ async fn search_source(
 	}
 	// The local source has no source call to stream: always the buffered path (ndjson clients treat it as a non-streaming terminal, same as register's local arm)
 	if crate::source::source_is_local(&state.pool, id).await? {
-		let (entries, has_next) = local_search(&state, id, body.query.as_deref(), page as i64, 20).await?;
+		let (entries, has_next) = local_search(&state, id, body.query.as_deref(), body.filters.clone(), page as i64, 20).await?;
 		return Ok(Json(json!({
 			"entries": entries,
 			"hasNextPage": has_next,
