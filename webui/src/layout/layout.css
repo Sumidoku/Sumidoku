@@ -211,17 +211,22 @@
 		color: var(--text-faint);
 	}
 
+	/* The toggle keeps one spot across both states so it can be clicked back:
+	   6.5px matches where the collapsed rail centers the 34px button in its 47px
+	   content box (72px less 2 x 12px padding and the 1px border). */
 	.app__sidebar-foot {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: 4px;
-		padding: 8px 4px 0;
+		padding: 8px 4px 0 6.5px;
 		border-top: 1px solid var(--border);
 	}
 
+	/* The toggle renders first; reversing the column stacks the shell actions above it
+	   and leaves it on the bottom row, where the expanded footer has it. */
 	.app__sidebar--collapsed .app__sidebar-foot {
-		flex-direction: column;
+		flex-direction: column-reverse;
 		padding: 8px 0 0;
 	}
 
