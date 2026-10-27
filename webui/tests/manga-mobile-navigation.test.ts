@@ -27,3 +27,16 @@ test('mobile brand is not a home shortcut at the reader back coordinate', () => 
 	assert.doesNotMatch(topbar, /<NavLink/);
 	assert.match(topbar, /<div className="app__logo app__logo--sm">/);
 });
+
+test('detail back rules outrank the shared icon button', () => {
+	// manga.css is bundled before components.css, so an equal-specificity
+	// .icon-btn would win and turn the back control into a dim square.
+	const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+	const selectors = [...rules.matchAll(/([^{}]*\.manga-hero__back[^{}]*)\{/g)].map((m) => m[1].trim());
+	assert.ok(selectors.length >= 3);
+	for (const selector of selectors) {
+		for (const part of selector.split(',')) {
+			assert.match(part.trim(), /\.icon-btn\.manga-hero__back\b/, part.trim());
+		}
+	}
+});
