@@ -203,3 +203,120 @@ async fn request_with_host(app: &axum::Router, path: &str) -> (StatusCode, Value
 	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
 	(status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
 }
+
+#[tokio::test]
+async fn tracker_links_are_paginated_and_scoped() {
+	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let pool = connect_db(&db_path).await;
+	let source_id: i64 = sqlx::query_scalar(
+		"INSERT INTO source (key, name, wasm_path) VALUES ('en.tracker-pagination', 'Tracker Pagination', '') RETURNING id",
+	)
+	.fetch_one(&pool)
+	.await
+	.unwrap();
+	let other_user: i64 = sqlx::query_scalar("INSERT INTO user (username, password_hash) VALUES ('other', 'x') RETURNING id")
+		.fetch_one(&pool)
+		.await
+		.unwrap();
+	let mut manga_ids = Vec::new();
+	for index in 0..51 {
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, ?, ?) RETURNING id")
+			.bind(source_id)
+			.bind(format!("m{index}"))
+			.bind(format!("Series {index}"))
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		manga_ids.push(manga_id);
+		sqlx::query(
+			"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, created_at, updated_at)
+			 VALUES (?, 1, 'anilist', ?, 0, 0)",
+		)
+		.bind(manga_id)
+		.bind(index.to_string())
+		.execute(&pool)
+		.await
+		.unwrap();
+		if index == 0 {
+			sqlx::query(
+				"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, created_at, updated_at)
+				 VALUES (?, ?, 'bangumi', 'other', 0, 0)",
+			)
+			.bind(manga_id)
+			.bind(other_user)
+			.execute(&pool)
+			.await
+			.unwrap();
+		}
+	}
+
+	let (status, first) = request(&app, "GET", "/api/v1/trackers/links", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(first["hasNextPage"], json!(true));
+	let first_entries = first["entries"].as_array().unwrap();
+	assert_eq!(first_entries.len(), 50);
+	assert_eq!(first_entries[0]["mangaId"], json!(manga_ids[0]));
+	assert!(first_entries.iter().all(|entry| entry["provider"] == "anilist"));
+
+	let (status, second) = request(&app, "GET", "/api/v1/trackers/links?page=2", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let second_entries = second["entries"].as_array().unwrap();
+	assert_eq!(second_entries.len(), 1);
+	assert_eq!(second_entries[0]["mangaId"], json!(manga_ids[50]));
+	assert_eq!(second["hasNextPage"], json!(false));
+	let seen: std::collections::HashSet<i64> = first_entries
+		.iter()
+		.chain(second_entries.iter())
+		.map(|entry| entry["mangaId"].as_i64().unwrap())
+		.collect();
+	assert_eq!(seen.len(), 51);
+
+	let (status, _) = request(&app, "GET", "/api/v1/trackers/links?page=0", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn manga_responses_include_only_current_users_tracker_providers() {
+	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let pool = connect_db(&db_path).await;
+	let manga_id = seed_manga(&pool).await;
+	let source_id: i64 = sqlx::query_scalar("SELECT source_id FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.unwrap();
+	let other_manga: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'm2', 'Other') RETURNING id")
+		.bind(source_id)
+		.fetch_one(&pool)
+		.await
+		.unwrap();
+	for id in [manga_id, other_manga] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let other_user: i64 = sqlx::query_scalar("INSERT INTO user (username, password_hash) VALUES ('other', 'x') RETURNING id")
+		.fetch_one(&pool)
+		.await
+		.unwrap();
+	for (user_id, provider) in [(1, "bangumi"), (other_user, "anilist")] {
+		sqlx::query(
+			"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, created_at, updated_at)
+			 VALUES (?, ?, ?, 'remote', 0, 0)",
+		)
+		.bind(manga_id)
+		.bind(user_id)
+		.bind(provider)
+		.execute(&pool)
+		.await
+		.unwrap();
+	}
+
+	let (_, detail) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
+	assert_eq!(detail["trackerProviders"], json!(["bangumi"]));
+	let (_, library) = request(&app, "GET", "/api/v1/library?page=1", None).await;
+	let entries = library["entries"].as_array().unwrap();
+	let linked = entries.iter().find(|entry| entry["id"] == manga_id).unwrap();
+	let unlinked = entries.iter().find(|entry| entry["id"] == other_manga).unwrap();
+	assert_eq!(linked["trackerProviders"], json!(["bangumi"]));
+	assert_eq!(unlinked["trackerProviders"], json!([]));
+}

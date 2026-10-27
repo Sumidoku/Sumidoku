@@ -199,7 +199,7 @@ interface TrackerEditFormProps {
 	onClose: () => void;
 }
 
-function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) {
+export function TrackerEditForm({ link, initialState, onClose }: TrackerEditFormProps) {
 	const { t } = useTranslation();
 	const qc = useQueryClient();
 	const [currentLink, setCurrentLink] = useState(link);
