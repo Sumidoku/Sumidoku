@@ -22,8 +22,10 @@
 	background: linear-gradient(180deg, rgba(12, 14, 18, 0.42), rgba(12, 14, 18, 0.78));
 }
 
-/* Floating back affordance: the detail page is the deepest the deep-links go and has no other in-page way back */
-.manga-hero__back {
+/* Floating back affordance: the detail page is the deepest the deep-links go and has no other in-page way back.
+   Rules are compounded with .icon-btn: manga.css is bundled before components.css, so a plain
+   class selector loses the radius and color to the shared icon button. */
+.icon-btn.manga-hero__back {
 	position: absolute;
 	top: 10px;
 	left: 10px;
@@ -42,9 +44,26 @@
 	color: #f7f8fa;
 }
 
-.manga-hero__back:hover:not(:disabled) {
+.icon-btn.manga-hero__back:hover:not(:disabled) {
 	border-color: rgba(255, 255, 255, 0.35);
 	background: rgba(12, 14, 18, 0.72);
+	color: #fff;
+}
+
+/* On the light hero a dark disc reads as a hole in the page; use light glass with page-colored ink */
+[data-theme='light'] .icon-btn.manga-hero__back {
+	border-color: rgba(0, 0, 0, 0.06);
+	background: rgba(255, 255, 255, 0.72);
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.06),
+		0 4px 14px rgba(0, 0, 0, 0.1);
+	color: var(--text);
+}
+
+[data-theme='light'] .icon-btn.manga-hero__back:hover:not(:disabled) {
+	border-color: rgba(0, 0, 0, 0.1);
+	background: rgba(255, 255, 255, 0.92);
+	color: var(--text);
 }
 
 /* The dark-theme hero sits on a darkened cover, so the foreground stays in the light palette */
@@ -750,7 +769,7 @@ button.manga-menu__row:hover:not(:disabled) {
 
 @media (max-width: 767px) {
 	/* A second tap at the reader's back coordinate must not leave the detail page */
-	.manga-hero__back {
+	.icon-btn.manga-hero__back {
 		left: auto;
 		right: 10px;
 	}
