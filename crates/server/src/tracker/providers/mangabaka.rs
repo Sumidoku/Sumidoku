@@ -12,6 +12,7 @@ const API_ORIGIN: &str = "https://api.mangabaka.org";
 const SITE_ORIGIN: &str = "https://mangabaka.org";
 const DEFAULT_TITLE_LANGUAGE: &str = "en";
 const USER_AGENT: &str = concat!("sumidoku/", env!("CARGO_PKG_VERSION"));
+const SEARCH_LIMIT: usize = 20;
 
 pub struct MangaBakaTracker {
 	http: reqwest::Client,
@@ -350,7 +351,7 @@ impl TrackerService for MangaBakaTracker {
 			let mut url = self.api_url(&["v1", "series", "search"])?;
 			{
 				let mut pairs = url.query_pairs_mut();
-				pairs.append_pair("q", query);
+				pairs.append_pair("q", query).append_pair("limit", &SEARCH_LIMIT.to_string());
 				if !nsfw {
 					pairs.append_pair("not_content_rating", "erotica").append_pair("not_content_rating", "pornographic");
 				}
@@ -534,6 +535,7 @@ mod tests {
 		assert_eq!(search.request.method, Method::GET);
 		assert_eq!(search.request.authorization, None);
 		assert_eq!(query_values(search, "q"), vec!["A title / 検索"]);
+		assert_eq!(query_values(search, "limit"), vec!["20"]);
 		assert_eq!(query_values(search, "not_content_rating"), vec!["erotica", "pornographic"]);
 		let batch = requests.iter().find(|recorded| recorded.request.path == "/v1/my/library/batch").unwrap();
 		assert_eq!(batch.request.authorization.as_deref(), Some("Bearer old-token"));
