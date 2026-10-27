@@ -80,10 +80,11 @@ pub async fn ensure_manga_row(
 		url: None,
 	};
 	let meta = meta.unwrap_or(&empty);
+	let now = crate::model::unix_now();
 	sqlx::query(
 		"INSERT OR IGNORE INTO manga (source_id, key, title, authors, artists, description, tags,
-		 status, content_rating, cover_url, url, initialized, update_strategy)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+		 status, content_rating, cover_url, url, initialized, update_strategy, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
 	)
 	.bind(source_id)
 	.bind(key)
@@ -96,6 +97,7 @@ pub async fn ensure_manga_row(
 	.bind(meta.content_rating)
 	.bind(meta.cover_url)
 	.bind(meta.url)
+	.bind(now)
 	.execute(&mut **tx)
 	.await?;
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
@@ -136,10 +138,11 @@ pub async fn ensure_chapter_row(
 		source_order: 0,
 	};
 	let meta = meta.unwrap_or(&empty);
+	let now = crate::model::unix_now();
 	sqlx::query(
 		"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators, language,
-		 url, date_uploaded, source_order, page_count, fetched_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+		 url, date_uploaded, source_order, page_count, fetched_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
 	)
 	.bind(manga_id)
 	.bind(key)
@@ -151,6 +154,7 @@ pub async fn ensure_chapter_row(
 	.bind(meta.url)
 	.bind(meta.date_uploaded)
 	.bind(meta.source_order)
+	.bind(now)
 	.execute(&mut **tx)
 	.await?;
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")

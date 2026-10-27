@@ -36,17 +36,32 @@ pub(crate) fn source_json(
 		.and_then(|&(version, _)| (version > row.version).then_some(version));
 	// Aidoku's deprecation semantics: installed externally (repo_id non-null) and the key is no longer in any repo index
 	let missing_from_repos = row.repo_id.is_some() && !latest.contains_key(&row.key);
-	// Home capability bit: stamped at registration; old unstamped rows are null, and consumers treat that as unknown (the entry point is not hidden)
-	let has_home = row
-		.features
-		.as_deref()
-		.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-		.and_then(|v| v.get("home").and_then(|b| b.as_bool()));
-	let config = row
-		.config
-		.as_deref()
-		.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-		.unwrap_or(Value::Null);
+	// Home capability bit: stamped at registration; old unstamped rows are null, and consumers treat that as unknown (the entry point is not hidden).
+	// Built-in local sources synthesize their own home page server-side, so they always expose it.
+	let has_home = if row.kind == crate::model::SOURCE_KIND_LOCAL {
+		Some(true)
+	} else {
+		row.features
+			.as_deref()
+			.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+			.and_then(|v| v.get("home").and_then(|b| b.as_bool()))
+	};
+	// Local sources have no package manifest, but the UI still reads capability flags from config.
+	// Synthesize the flags that match the server-side local implementation.
+	let config = if row.kind == crate::model::SOURCE_KIND_LOCAL {
+		json!({
+			"supportsArtistSearch": false,
+			"supportsAuthorSearch": false,
+			"supportsTagSearch": false,
+			"allowsBaseUrlSelect": false,
+			"hidesFiltersWhileSearching": true,
+		})
+	} else {
+		row.config
+			.as_deref()
+			.and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+			.unwrap_or(Value::Null)
+	};
 	json!({
 		"id": row.id,
 		"key": row.key,

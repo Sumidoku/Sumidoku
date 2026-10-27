@@ -186,6 +186,12 @@ async fn migration_seeds_builtin_local_source() {
 	let local = source_by_key(&body, "local.local");
 	assert_eq!(local["name"], "Local");
 	assert_eq!(local["kind"], "local");
+	assert_eq!(local["hasHome"], true, "local sources synthesize a home page");
+	assert_eq!(local["config"]["supportsAuthorSearch"], false);
+	assert_eq!(local["config"]["supportsArtistSearch"], false);
+	assert_eq!(local["config"]["supportsTagSearch"], false);
+	assert_eq!(local["config"]["allowsBaseUrlSelect"], false);
+	assert_eq!(local["config"]["hidesFiltersWhileSearching"], true);
 	assert_eq!(source_by_key(&body, "en.example-source")["kind"], "aidoku");
 	let local_id = local["id"].as_i64().expect("local id");
 
@@ -497,10 +503,12 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 }
 
 fn set_dir_mtime(path: &std::path::Path, at: std::time::SystemTime) {
-	std::fs::File::open(path)
-		.expect("open dir mtime")
-		.set_modified(at)
-		.expect("set dir mtime");
+	let dur = at.duration_since(std::time::UNIX_EPOCH).expect("mtime after epoch");
+	filetime::set_file_mtime(
+		path,
+		filetime::FileTime::from_unix_time(dur.as_secs() as i64, dur.subsec_nanos()),
+	)
+	.expect("set dir mtime");
 }
 
 #[tokio::test]
@@ -891,12 +899,24 @@ async fn local_listings_answer_synthesized() {
 	// local sources synthesize listings server-side (all / continue-reading / latest-updates / ...)
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let ids: Vec<&str> = body.as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap()).collect();
+	let listings: Vec<&serde_json::Value> = body.as_array().unwrap().iter().collect();
+	let ids: Vec<&str> = listings.iter().map(|l| l["id"].as_str().unwrap()).collect();
 	assert!(ids.contains(&"all"), "expected 'all' listing in {ids:?}");
 	assert!(ids.contains(&"continue-reading"));
 	assert!(ids.contains(&"latest-updates"));
 	assert!(ids.contains(&"latest-added"));
 	assert!(ids.contains(&"recently-read"));
+	// Names are plain English labels, not i18n keys, for third-party client compatibility.
+	// All local listings use the same cover-grid (default) kind for consistent card layout.
+	let find = |id: &str| listings.iter().find(|l| l["id"] == id);
+	assert_eq!(find("all").map(|l| l["name"].as_str().unwrap()), Some("All"));
+	assert_eq!(find("continue-reading").map(|l| l["name"].as_str().unwrap()), Some("Continue reading"));
+	assert_eq!(find("latest-updates").map(|l| l["name"].as_str().unwrap()), Some("Latest updates"));
+	assert_eq!(find("latest-added").map(|l| l["name"].as_str().unwrap()), Some("Latest added"));
+	assert_eq!(find("recently-read").map(|l| l["name"].as_str().unwrap()), Some("Recently read"));
+	for l in &listings {
+		assert_eq!(l["kind"], "default", "expected all local listings to use default card layout: {l}");
+	}
 
 	// unknown listing id → 404, not 501
 	let (status, body) = request(
