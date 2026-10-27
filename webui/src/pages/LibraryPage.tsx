@@ -416,6 +416,7 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 								src={coverUrl(m.id, m.cover)}
 								title={m.title}
 								unreadCount={m.unreadCount}
+								trackerProviders={m.trackerProviders}
 								trashed={m.trashed}
 								to={selecting ? undefined : `/manga/${m.id}`}
 								selecting={selecting}

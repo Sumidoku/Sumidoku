@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Search } from 'lucide-react';
+import { ExternalLink, Plus, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
 	TRACKER_PROVIDER_NAMES,
@@ -13,7 +13,6 @@ import {
 	listTrackerLinks,
 	mergeTrackEditValues,
 	oauthStartUrl,
-	oauthStatus,
 	putTrackerLink,
 	remoteToTrackEdit,
 	searchTracker,
@@ -30,10 +29,16 @@ import type {
 	TrackerLink,
 	TrackerProvider
 } from '../../api/types';
-import { Badge, Button, Cover, Input, Modal, Select, Skeleton, Spinner, pushToast } from '..';
+import { Badge, Button, Cover, Input, Modal, SegmentedControl, Skeleton, Spinner, pushToast } from '..';
 import { TrackerLogo } from './TrackerLogo';
 import './trackers.css';
 
+const TRACK_MODES = ['auto', 'chapter', 'volume'] as const satisfies readonly TrackerLink['trackMode'][];
+const TRACK_MODE_LABELS: Record<TrackerLink['trackMode'], string> = {
+	auto: 'modeAuto',
+	chapter: 'modeChapter',
+	volume: 'modeVolume'
+};
 const TRACK_STATUSES = ['reading', 'planning', 'completed', 'paused', 'dropped', 'rereading'] as const satisfies readonly TrackStatus[];
 
 function TrackerAuthNotice({ provider, reconnect = false }: { provider: TrackerProvider; reconnect?: boolean }) {
@@ -51,25 +56,28 @@ function TrackerAuthNotice({ provider, reconnect = false }: { provider: TrackerP
 
 function TrackerPill({ link, onClick }: { link: TrackerLink; onClick: () => void }) {
 	const { t } = useTranslation();
-	const accountQuery = useQuery({
-		queryKey: trackerKeys.oauthStatus(link.provider),
-		queryFn: () => oauthStatus(link.provider)
+	const stateQuery = useQuery({
+		queryKey: trackerKeys.state(link.provider, link.trackId),
+		queryFn: () => trackerState(link.provider, link.trackId),
+		retry: false,
+		refetchOnWindowFocus: false
 	});
-	const disconnected = accountQuery.data?.logged_in === false;
+	const disconnected = isTrackerAuthError(stateQuery.error);
 	const provider = TRACKER_PROVIDER_NAMES[link.provider];
+	const status = stateQuery.data?.status;
 	return (
 		<button
 			type="button"
 			className={disconnected ? 'tracker-pill tracker-pill--disconnected' : 'tracker-pill'}
 			onClick={onClick}
-			title={disconnected ? t('trackers.authRequired', { provider }) : link.title}
+			title={disconnected ? t('trackers.authRequired', { provider }) : undefined}
 		>
 			<TrackerLogo provider={link.provider} />
-			<span className="tracker-pill__label">
-				<span className="tracker-pill__provider">{provider}</span>
-				<span className="tracker-pill__title">{link.title ?? link.trackId}</span>
-			</span>
-			{disconnected && <span className="tracker-pill__auth">{t('trackers.reconnect')}</span>}
+			<span className="tracker-pill__provider">{provider}</span>
+			{!stateQuery.isPending && !disconnected && status && (
+				<span className="tracker-pill__status">{t(`trackers.statusValues.${status}`)}</span>
+			)}
+			{disconnected && <span className="tracker-pill__auth" aria-label={t('trackers.authRequired', { provider })} />}
 		</button>
 	);
 }
@@ -117,24 +125,26 @@ function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: 
 	return (
 		<Modal open title={t('trackers.addBinding')} onClose={onClose} panelClassName="modal__panel--wide">
 			<div className="tracker-add">
-				<label className="tracker-field">
-					<span>{t('trackers.provider')}</span>
-					<Select
+				<div className="tracker-add__providers">
+					<SegmentedControl
 						value={provider}
 						disabled={bind.isPending}
-						onChange={(event) => {
-							setProvider(event.currentTarget.value as TrackerProvider);
+						options={providers.map((item) => ({
+							value: item,
+							label: (
+								<span className="tracker-seg__option">
+									<TrackerLogo provider={item} />
+									<span>{TRACKER_PROVIDER_NAMES[item]}</span>
+								</span>
+							)
+						}))}
+						onChange={(item) => {
+							setProvider(item);
 							setDraft(mangaTitle);
 							setSubmitted('');
 						}}
-					>
-						{providers.map((item) => (
-							<option key={item} value={item}>
-								{TRACKER_PROVIDER_NAMES[item]}
-							</option>
-						))}
-					</Select>
-				</label>
+					/>
+				</div>
 				<form className="tracker-search" onSubmit={submitSearch}>
 					<Input
 						icon={<Search size={15} />}
@@ -257,78 +267,91 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 							{save.error.message}
 						</p>
 					))}
-				<div className="tracker-edit__grid">
-					<label className="tracker-field">
-						<span>{t('trackers.trackMode')}</span>
-						<Select value={trackMode} onChange={(event) => setTrackMode(event.currentTarget.value as TrackerLink['trackMode'])}>
-							<option value="auto">{t('trackers.modeAuto')}</option>
-							<option value="chapter">{t('trackers.modeChapter')}</option>
-							<option value="volume">{t('trackers.modeVolume')}</option>
-						</Select>
-					</label>
-					<label className="tracker-field">
-						<span>{t('trackers.chapterOffset')}</span>
-						<Input
-							type="number"
-							min={-10000}
-							max={10000}
-							step={1}
-							required
-							value={chapterOffset}
-							onChange={(event) => setChapterOffset(event.currentTarget.value)}
-						/>
-					</label>
+				<div className="tracker-edit__mode">
+					<SegmentedControl
+						options={TRACK_MODES.map((mode) => ({ value: mode, label: t(`trackers.${TRACK_MODE_LABELS[mode]}`) }))}
+						value={trackMode}
+						onChange={setTrackMode}
+					/>
 				</div>
-				{initialState && (
-					<div className="tracker-edit__remote">
-						<div className="tracker-edit__grid">
-							<label className="tracker-field">
-								<span>{t('trackers.statusLabel')}</span>
-								<Select
-									value={values.status}
-									onChange={(event) => updateValue('status', event.currentTarget.value as TrackStatus | '')}
-								>
-									{values.status === '' && <option value="">{t('trackers.statusNone')}</option>}
-									{TRACK_STATUSES.map((status) => (
-										<option key={status} value={status}>
-											{t(`trackers.statusValues.${status}`)}
-										</option>
-									))}
-								</Select>
-							</label>
-							<label className="tracker-field">
-								<span>{t('trackers.score')}</span>
-								<Input
-									type="number"
-									min={0}
-									step={1}
-									value={values.score}
-									onChange={(event) => updateValue('score', event.currentTarget.value)}
-								/>
-							</label>
-							<label className="tracker-field">
-								<span>{t('trackers.chapterProgress')}</span>
-								<Input
-									type="number"
-									min={0}
-									step="any"
-									value={values.lastReadChapter}
-									onChange={(event) => updateValue('lastReadChapter', event.currentTarget.value)}
-								/>
-							</label>
-							<label className="tracker-field">
-								<span>{t('trackers.volumeProgress')}</span>
-								<Input
-									type="number"
-									min={0}
-									step={1}
-									value={values.lastReadVolume}
-									onChange={(event) => updateValue('lastReadVolume', event.currentTarget.value)}
-								/>
-							</label>
+				<label className="tracker-field">
+					<span>{t('trackers.chapterOffset')}</span>
+					<Input
+						type="number"
+						min={-10000}
+						max={10000}
+						step={1}
+						required
+						value={chapterOffset}
+						onChange={(event) => setChapterOffset(event.currentTarget.value)}
+					/>
+					<span className="tracker-field__hint">{t('trackers.chapterOffsetHint')}</span>
+				</label>
+				<div className="tracker-edit__remote">
+					<div className="tracker-edit__remote-head">
+						<div className="tracker-edit__remote-id">
+							<span>{t('trackers.remoteEntry')}</span>
+							<span className="tracker-edit__track-id">#{link.trackId}</span>
 						</div>
+						<a
+							className="tracker-edit__external"
+							href={trackerEntryUrl(link.provider, link.trackId)}
+							target="_blank"
+							rel="noreferrer"
+						>
+							{t('trackers.openEntry', { provider })}
+							<ExternalLink size={14} />
+						</a>
 					</div>
-				)}
+					{initialState && (
+						<div className="tracker-edit__remote-fields">
+							<div className="tracker-edit__status">
+								<SegmentedControl
+									options={TRACK_STATUSES.map((status) => ({
+										value: status as TrackStatus | '',
+										label: t(`trackers.statusValues.${status}`)
+									}))}
+									value={values.status}
+									onChange={(status) => {
+										if (status) updateValue('status', status);
+									}}
+								/>
+							</div>
+							<div className="tracker-edit__progress">
+								<label className="tracker-field">
+									<span>{t('trackers.score')}</span>
+									<Input
+										type="number"
+										min={0}
+										step={1}
+										value={values.score}
+										onChange={(event) => updateValue('score', event.currentTarget.value)}
+									/>
+								</label>
+								<label className="tracker-field">
+									<span>{t('trackers.chapterProgress')}</span>
+									<Input
+										type="number"
+										min={0}
+										step="any"
+										value={values.lastReadChapter}
+										onChange={(event) => updateValue('lastReadChapter', event.currentTarget.value)}
+									/>
+								</label>
+								<label className="tracker-field">
+									<span>{t('trackers.volumeProgress')}</span>
+									<Input
+										type="number"
+										min={0}
+										step={1}
+										value={values.lastReadVolume}
+										onChange={(event) => updateValue('lastReadVolume', event.currentTarget.value)}
+									/>
+								</label>
+							</div>
+						</div>
+					)}
+				</div>
 				<div className="tracker-edit__actions">
 					<Button variant="danger" onClick={() => setConfirmUnlink(true)}>
 						{t('trackers.unlink')}
@@ -376,14 +399,6 @@ function EditTrackerDialog({ link, onClose }: { link: TrackerLink; onClose: () =
 			onClose={onClose}
 			panelClassName="modal__panel--wide"
 		>
-			<a
-				className="tracker-edit__external"
-				href={trackerEntryUrl(link.provider, link.trackId)}
-				target="_blank"
-				rel="noreferrer"
-			>
-				{link.title ?? link.trackId}
-			</a>
 			{remoteQuery.isPending ? (
 				<div className="tracker-dialog-state">
 					<Spinner />

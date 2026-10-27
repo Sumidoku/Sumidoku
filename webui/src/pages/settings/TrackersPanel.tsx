@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -17,7 +17,7 @@ import {
 	trackerKeys
 } from '../../api/trackers';
 import type { TrackerLink, TrackerProvider } from '../../api/types';
-import { Button, Modal, Skeleton, pushToast } from '../../components';
+import { Button, InfiniteList, Modal, Skeleton, pushToast } from '../../components';
 import { TrackerLogo } from '../../components/trackers/TrackerLogo';
 import '../../components/trackers/trackers.css';
 
@@ -139,7 +139,13 @@ export function TrackersPanel() {
 	const [pendingUnbind, setPendingUnbind] = useState<TrackerLink | null>(null);
 	const handledOAuth = useRef<string | null>(null);
 	const search = searchParams.toString();
-	const linksQuery = useQuery({ queryKey: trackerKeys.links, queryFn: listAllTrackerLinks });
+	const linksQuery = useInfiniteQuery({
+		queryKey: trackerKeys.links,
+		queryFn: ({ pageParam }) => listAllTrackerLinks(pageParam),
+		initialPageParam: 1,
+		getNextPageParam: (last, all) => (last.hasNextPage ? all.length + 1 : undefined)
+	});
+	const links = linksQuery.data?.pages.flatMap((page) => page.entries) ?? [];
 	const unbind = useMutation({
 		mutationFn: (link: TrackerLink) => deleteTrackerLink(link.mangaId, link.provider),
 		onSuccess: () => {
@@ -188,18 +194,24 @@ export function TrackersPanel() {
 						</div>
 					) : linksQuery.isError ? (
 						<p className="tracker-error">{linksQuery.error.message}</p>
-					) : linksQuery.data.length === 0 ? (
+					) : links.length === 0 ? (
 						<p className="muted">{t('trackers.noBindings')}</p>
 					) : (
-						<ul className="tracker-bindings">
-							{linksQuery.data.map((link) => (
-								<TrackerBindingRow
-									key={`${link.mangaId}:${link.provider}`}
-									link={link}
-									onUnbind={setPendingUnbind}
-								/>
-							))}
-						</ul>
+						<InfiniteList
+							hasNextPage={linksQuery.hasNextPage}
+							isFetching={linksQuery.isFetching}
+							onLoadMore={() => void linksQuery.fetchNextPage()}
+						>
+							<ul className="tracker-bindings">
+								{links.map((link) => (
+									<TrackerBindingRow
+										key={`${link.mangaId}:${link.provider}`}
+										link={link}
+										onUnbind={setPendingUnbind}
+									/>
+								))}
+							</ul>
+						</InfiniteList>
 					)}
 				</div>
 			</section>

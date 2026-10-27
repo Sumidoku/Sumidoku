@@ -6,6 +6,7 @@ import type {
 	TrackUpdate,
 	TrackerLedgerItem,
 	TrackerLink,
+	TrackerLinkPage,
 	TrackerLinkUpsert,
 	TrackerOAuthStatus,
 	TrackerProvider,
@@ -33,8 +34,8 @@ export const trackerKeys = {
 	state: (provider: TrackerProvider, trackId: string) => ['trackers', 'state', provider, trackId] as const
 };
 
-export function listAllTrackerLinks() {
-	return api<TrackerLink[]>('/trackers/links');
+export function listAllTrackerLinks(page: number) {
+	return api<TrackerLinkPage>(`/trackers/links?page=${page}`);
 }
 
 export function listTrackerLinks(mangaId: number) {
