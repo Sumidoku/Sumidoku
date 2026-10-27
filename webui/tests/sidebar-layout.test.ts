@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -106,4 +107,20 @@ test('sidebar preference round-trips and rejects unknown values', () => {
 		if (original) Object.defineProperty(globalThis, 'localStorage', original);
 		else Reflect.deleteProperty(globalThis, 'localStorage');
 	}
+});
+
+test('collapsing keeps the sidebar toggle at the same spot', async () => {
+	const css = readFileSync(new URL('../src/layout/layout.css', import.meta.url), 'utf8');
+	const rule = (selector: string) =>
+		css.match(new RegExp(`${selector.replace(/[.]/g, '\\.')}\\s*\\{([^}]*)\\}`))?.[1] ?? '';
+	// The toggle renders first, so a reversed column stacks the shell actions above it
+	// and leaves it on the bottom row it occupies when expanded.
+	const markup = await renderSidebar(true);
+	const foot = markup.slice(markup.indexOf('app__sidebar-foot'));
+	assert.ok(foot.indexOf('app__sidebar-toggle') >= 0);
+	assert.ok(foot.indexOf('app__sidebar-toggle') < foot.indexOf('<span>Theme</span>'));
+	assert.match(rule('.app__sidebar--collapsed .app__sidebar-foot'), /flex-direction:\s*column-reverse;/);
+	// Collapsed, the 34px toggle centers in the 72px rail's 47px content box at 6.5px;
+	// the expanded footer starts it at the same 6.5px so it does not shift sideways.
+	assert.match(rule('.app__sidebar-foot'), /padding:\s*8px 4px 0 6\.5px;/);
 });
