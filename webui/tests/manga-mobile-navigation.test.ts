@@ -4,13 +4,17 @@ import test from 'node:test';
 
 const css = readFileSync(new URL('../src/pages/manga.css', import.meta.url), 'utf8');
 
-test('mobile detail back does not reuse the reader back position', () => {
-	const mobile = css.match(/@media \(max-width: 767px\) \{([\s\S]*)\}\s*$/)?.[1];
-	assert.ok(mobile);
-	const back = mobile.match(/\.manga-hero__back\s*\{([^}]*)\}/);
-	assert.ok(back);
-	assert.match(back[1], /\bleft:\s*auto;/);
-	assert.match(back[1], /\bright:\s*10px;/);
+test('mobile detail back stays at the conventional top-left', () => {
+	// The reader-back tap-through landed on the mobile topbar brand, not on this button,
+	// which sits below the topbar; the brand test below pins the actual fix.
+	const rules = css.replace(/\/\*[\s\S]*?\*\//g, '');
+	for (const media of rules.matchAll(/@media[^{]*\{([\s\S]*?)\n\}/g)) {
+		const back = media[1].match(/\.manga-hero__back\s*\{([^}]*)\}/);
+		if (back) {
+			assert.doesNotMatch(back[1], /\bright:/);
+			assert.doesNotMatch(back[1], /\bleft:\s*auto/);
+		}
+	}
 });
 
 test('desktop detail back keeps its position', () => {

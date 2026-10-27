@@ -768,12 +768,6 @@ button.manga-menu__row:hover:not(:disabled) {
 }
 
 @media (max-width: 767px) {
-	/* A second tap at the reader's back coordinate must not leave the detail page */
-	.icon-btn.manga-hero__back {
-		left: auto;
-		right: 10px;
-	}
-
 	.manga-hero__body {
 		gap: 14px;
 		padding: 16px;
