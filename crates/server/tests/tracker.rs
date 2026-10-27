@@ -70,7 +70,8 @@ async fn tracker_links_crud() {
 	assert_eq!(links[0]["trackId"], "43");
 
 	let (_, body) = request(&app, "GET", "/api/v1/trackers/links", None).await;
-	assert_eq!(body.as_array().unwrap().len(), 2);
+	assert_eq!(body["entries"].as_array().unwrap().len(), 2);
+	assert_eq!(body["hasNextPage"], json!(false));
 
 	let (status, _) = request(&app, "DELETE", &format!("/api/v1/trackers/links/{manga_id}/anilist"), None).await;
 	assert_eq!(status, StatusCode::NO_CONTENT);

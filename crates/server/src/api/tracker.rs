@@ -97,12 +97,30 @@ pub struct TrackerLinkUpsertDto {
 	pub chapter_offset: Option<i32>,
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerLinkPageDto {
+	pub entries: Vec<TrackerLinkDto>,
+	pub has_next_page: bool,
+}
+
 pub async fn list_all_tracker_links(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-) -> ApiResult<Json<Vec<TrackerLinkDto>>> {
-	let links = dao::list_links_by_user(&state.pool, user.id).await?;
-	Ok(Json(links.into_iter().map(TrackerLinkDto::from).collect()))
+	Query(query): Query<super::PageQuery>,
+) -> ApiResult<Json<TrackerLinkPageDto>> {
+	let page = query.page.unwrap_or(1);
+	if page < 1 {
+		return Err(ApiError::bad_request("page must be >= 1"));
+	}
+	let offset = (i64::from(page) - 1) * crate::PAGE_SIZE;
+	let mut links = dao::list_links_by_user_page(&state.pool, user.id, crate::PAGE_SIZE + 1, offset).await?;
+	let has_next_page = links.len() as i64 > crate::PAGE_SIZE;
+	links.truncate(crate::PAGE_SIZE as usize);
+	Ok(Json(TrackerLinkPageDto {
+		entries: links.into_iter().map(TrackerLinkDto::from).collect(),
+		has_next_page,
+	}))
 }
 
 pub async fn list_tracker_links(
