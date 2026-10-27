@@ -54,10 +54,10 @@ export function AppLayout() {
 			</DesktopSidebar>
 
 			<header className="app__topbar">
-				<NavLink to="/library" className="app__logo app__logo--sm">
+				<div className="app__logo app__logo--sm">
 					<img className="app__logo-mark" src="/icon.svg" alt="" />
 					<span className="app__logo-text">Sumidoku</span>
-				</NavLink>
+				</div>
 				<div className="app__shell-actions">
 					<LanguageMenu />
 					<ThemeToggle />
