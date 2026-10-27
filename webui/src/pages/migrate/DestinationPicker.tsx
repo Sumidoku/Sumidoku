@@ -23,21 +23,19 @@ export interface DestinationPickerProps {
 	/** Selected target source ids; the order is the priority */
 	selected: number[];
 	onChange: (ids: number[]) => void;
-	/** The source of the entry being migrated; excluded from the destination set */
-	excludeId?: number;
 }
 
 /**
  * Migration destination-set picker: SELECTED is ordered (drag to reorder, removable), AVAILABLE appends
  * on click, and "select all pinned" batch-adds in pin order. Shared by the single-entry and batch entries.
  */
-export function DestinationPicker({ selected, onChange, excludeId }: DestinationPickerProps) {
+export function DestinationPicker({ selected, onChange }: DestinationPickerProps) {
 	const { t } = useTranslation();
 	const sources = useSources();
 	const [dragIndex, setDragIndex] = useState<number | null>(null);
 	const [overIndex, setOverIndex] = useState<number | null>(null);
 
-	const all = (sources.data ?? []).filter((s) => s.id !== excludeId);
+	const all = sources.data ?? [];
 	const byId = new Map(all.map((s) => [s.id, s]));
 	const chosen = selected.map((id) => byId.get(id)).filter((s): s is Source => s !== undefined);
 	const chosenIds = new Set(chosen.map((s) => s.id));
