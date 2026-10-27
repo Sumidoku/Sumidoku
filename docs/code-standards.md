@@ -38,8 +38,8 @@ run is listed as not run, never left out.
 - The body records what was run. A large change with no body can't be
   reviewed afterwards.
 - One commit, one goal. Unrelated refactors go in a PR of their own.
-- A squash merge's message is written, not GitHub's default:
-  `gh pr merge --squash --subject --body-file`.
+- A squash merge's message is written, not GitHub's default, and carries
+  no `Co-Authored-By` trailers: `gh pr merge --squash --subject --body-file`.
 - Merge with `--match-head-commit <reviewed sha>`: a push during review
   stops the merge instead of shipping code nobody ran.
 - Take a fresh look right before merging — as its own step, never
