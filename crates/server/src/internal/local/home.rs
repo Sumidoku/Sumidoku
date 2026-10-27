@@ -58,10 +58,10 @@ fn listing_name(id: &str) -> &str {
 }
 
 /// The listings a local source exposes, in browse-page segmented-control order.
-/// `kind` is `list` for row-shaped sections (MangaChapterList) and `default` for
-/// cover-grid sections (Scroller), matching how SourceBrowsePage picks the layout.
-/// Names are plain English labels rather than i18n keys so third-party clients can
-/// display them without parsing a source-prefixed translation namespace.
+/// All local listings return plain manga entries, so they all use the same cover-grid
+/// (`default`) layout for a consistent card display across third-party clients.
+/// Names are plain English labels rather than i18n keys so those clients can display
+/// them without parsing a source-prefixed translation namespace.
 pub(crate) fn local_listings() -> Vec<Listing> {
 	vec![
 		Listing {
@@ -72,12 +72,12 @@ pub(crate) fn local_listings() -> Vec<Listing> {
 		Listing {
 			id: LISTING_CONTINUE_READING.into(),
 			name: listing_name(LISTING_CONTINUE_READING).into(),
-			kind: ListingKind::List,
+			kind: ListingKind::Default,
 		},
 		Listing {
 			id: LISTING_LATEST_UPDATES.into(),
 			name: listing_name(LISTING_LATEST_UPDATES).into(),
-			kind: ListingKind::List,
+			kind: ListingKind::Default,
 		},
 		Listing {
 			id: LISTING_LATEST_ADDED.into(),
@@ -87,7 +87,7 @@ pub(crate) fn local_listings() -> Vec<Listing> {
 		Listing {
 			id: LISTING_RECENTLY_READ.into(),
 			name: listing_name(LISTING_RECENTLY_READ).into(),
-			kind: ListingKind::List,
+			kind: ListingKind::Default,
 		},
 	]
 }
@@ -514,7 +514,7 @@ fn unwrap_manga_entries(rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn listing_ref(id: &str) -> Value {
-	json!({ "id": id, "name": listing_name(id), "kind": "List" })
+	json!({ "id": id, "name": listing_name(id), "kind": "Default" })
 }
 
 fn listing_ref_default(id: &str) -> Value {
@@ -590,10 +590,8 @@ pub(crate) async fn build_local_home(
 }
 
 /// Serve one paginated listing for a local source. Returns `{entries, hasNextPage}`.
-///
-/// Row-shaped listings (continue-reading, latest-updates, recently-read) return
-/// `{manga, chapter}` entries (MangaChapterList shape); grid-shaped listings (latest-added)
-/// return `Link` entries (Scroller shape).
+/// Every listing returns plain manga entries and is exposed with `kind: default`, so the
+/// listing page renders them all in the same cover-grid card layout.
 pub(crate) async fn local_listing_page(
 	state: &AppState,
 	source_id: i64,

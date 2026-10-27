@@ -907,12 +907,16 @@ async fn local_listings_answer_synthesized() {
 	assert!(ids.contains(&"latest-added"));
 	assert!(ids.contains(&"recently-read"));
 	// Names are plain English labels, not i18n keys, for third-party client compatibility.
-	let name = |id: &str| listings.iter().find(|l| l["id"] == id).map(|l| l["name"].as_str().unwrap());
-	assert_eq!(name("all"), Some("All"));
-	assert_eq!(name("continue-reading"), Some("Continue reading"));
-	assert_eq!(name("latest-updates"), Some("Latest updates"));
-	assert_eq!(name("latest-added"), Some("Latest added"));
-	assert_eq!(name("recently-read"), Some("Recently read"));
+	// All local listings use the same cover-grid (default) kind for consistent card layout.
+	let find = |id: &str| listings.iter().find(|l| l["id"] == id);
+	assert_eq!(find("all").map(|l| l["name"].as_str().unwrap()), Some("All"));
+	assert_eq!(find("continue-reading").map(|l| l["name"].as_str().unwrap()), Some("Continue reading"));
+	assert_eq!(find("latest-updates").map(|l| l["name"].as_str().unwrap()), Some("Latest updates"));
+	assert_eq!(find("latest-added").map(|l| l["name"].as_str().unwrap()), Some("Latest added"));
+	assert_eq!(find("recently-read").map(|l| l["name"].as_str().unwrap()), Some("Recently read"));
+	for l in &listings {
+		assert_eq!(l["kind"], "default", "expected all local listings to use default card layout: {l}");
+	}
 
 	// unknown listing id → 404, not 501
 	let (status, body) = request(
