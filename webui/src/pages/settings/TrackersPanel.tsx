@@ -9,6 +9,7 @@ import {
 	TRACKER_PROVIDERS,
 	listAllTrackerLinks,
 	deleteTrackerLink,
+	invalidateTrackerLinks,
 	logoutTracker,
 	oauthStartUrl,
 	oauthStatus,
@@ -148,9 +149,9 @@ export function TrackersPanel() {
 	const links = linksQuery.data?.pages.flatMap((page) => page.entries) ?? [];
 	const unbind = useMutation({
 		mutationFn: (link: TrackerLink) => deleteTrackerLink(link.mangaId, link.provider),
-		onSuccess: () => {
+		onSuccess: (_, link) => {
 			setPendingUnbind(null);
-			void qc.invalidateQueries({ queryKey: trackerKeys.links });
+			invalidateTrackerLinks(qc, link.mangaId);
 			pushToast(t('trackers.unbound'), 'info');
 		}
 	});

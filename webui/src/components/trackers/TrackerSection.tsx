@@ -9,6 +9,7 @@ import {
 	buildTrackerSave,
 	deleteTrackerLink,
 	hasTrackUpdate,
+	invalidateTrackerLinks,
 	isTrackerAuthError,
 	listTrackerLinks,
 	mergeTrackEditValues,
@@ -106,7 +107,7 @@ function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: 
 		mutationFn: (item: TrackSearchItem) =>
 			putTrackerLink(mangaId, { provider, trackId: item.id, title: item.title }),
 		onSuccess: (link) => {
-			void qc.invalidateQueries({ queryKey: trackerKeys.links });
+			invalidateTrackerLinks(qc, mangaId);
 			onBound(link);
 		}
 	});
@@ -232,14 +233,14 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 			onClose();
 		},
 		onSettled: () => {
-			void qc.invalidateQueries({ queryKey: trackerKeys.links });
+			invalidateTrackerLinks(qc, link.mangaId);
 			void qc.invalidateQueries({ queryKey: trackerKeys.state(link.provider, link.trackId) });
 		}
 	});
 	const unlink = useMutation({
 		mutationFn: () => deleteTrackerLink(link.mangaId, link.provider),
 		onSuccess: () => {
-			void qc.invalidateQueries({ queryKey: trackerKeys.links });
+			invalidateTrackerLinks(qc, link.mangaId);
 			setConfirmUnlink(false);
 			pushToast(t('trackers.unlinked'), 'info');
 			onClose();

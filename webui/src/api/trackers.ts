@@ -1,4 +1,6 @@
 import { ApiError, api } from './client';
+import { qk } from './hooks';
+import type { QueryClient } from '@tanstack/react-query';
 import type {
 	RemoteState,
 	TrackSearchItem,
@@ -33,6 +35,12 @@ export const trackerKeys = {
 	states: ['trackers', 'state'] as const,
 	state: (provider: TrackerProvider, trackId: string) => ['trackers', 'state', provider, trackId] as const
 };
+
+export function invalidateTrackerLinks(qc: QueryClient, mangaId: number) {
+	void qc.invalidateQueries({ queryKey: trackerKeys.links });
+	void qc.invalidateQueries({ queryKey: qk.library });
+	void qc.invalidateQueries({ queryKey: qk.manga(mangaId) });
+}
 
 export function listAllTrackerLinks(page: number) {
 	return api<TrackerLinkPage>(`/trackers/links?page=${page}`);
