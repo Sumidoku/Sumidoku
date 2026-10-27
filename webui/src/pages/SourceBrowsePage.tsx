@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import {
 	ArrowLeft,
 	Check,
@@ -46,6 +47,23 @@ import {
 	Switch,
 	pushToast
 } from '../components';
+
+function localListingName(id: string, t: TFunction): string {
+	switch (id) {
+		case 'all':
+			return t('sourceHome.all');
+		case 'continue-reading':
+			return t('sourceHome.continueReading');
+		case 'latest-updates':
+			return t('sourceHome.latestUpdates');
+		case 'latest-added':
+			return t('sourceHome.latestAdded');
+		case 'recently-read':
+			return t('sourceHome.recentlyRead');
+		default:
+			return id;
+	}
+}
 
 type CheckVal = 0 | 1 | -1;
 
@@ -398,7 +416,11 @@ export default function SourceBrowsePage() {
 							{ value: 'search', label: t('common.search') },
 							...listings.map((l) => ({
 								value: l.id,
-								label: l.name.startsWith('sourceHome.') ? t(l.name) : l.name
+								label: l.name.startsWith('sourceHome.')
+									? t(l.name)
+									: isLocal
+										? localListingName(l.id, t)
+										: l.name
 							}))
 						]}
 						value={mode}

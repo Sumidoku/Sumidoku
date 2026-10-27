@@ -46,34 +46,47 @@ const SECTION_LIMIT: i64 = 20;
 /// The admin user id; local reading-progress rows live on user 1
 const USER_ID: i64 = 1;
 
+fn listing_name(id: &str) -> &str {
+	match id {
+		LISTING_ALL => "All",
+		LISTING_CONTINUE_READING => "Continue reading",
+		LISTING_LATEST_UPDATES => "Latest updates",
+		LISTING_LATEST_ADDED => "Latest added",
+		LISTING_RECENTLY_READ => "Recently read",
+		_ => id,
+	}
+}
+
 /// The listings a local source exposes, in browse-page segmented-control order.
 /// `kind` is `list` for row-shaped sections (MangaChapterList) and `default` for
 /// cover-grid sections (Scroller), matching how SourceBrowsePage picks the layout.
+/// Names are plain English labels rather than i18n keys so third-party clients can
+/// display them without parsing a source-prefixed translation namespace.
 pub(crate) fn local_listings() -> Vec<Listing> {
 	vec![
 		Listing {
 			id: LISTING_ALL.into(),
-			name: "sourceHome.all".into(),
+			name: listing_name(LISTING_ALL).into(),
 			kind: ListingKind::Default,
 		},
 		Listing {
 			id: LISTING_CONTINUE_READING.into(),
-			name: "sourceHome.continueReading".into(),
+			name: listing_name(LISTING_CONTINUE_READING).into(),
 			kind: ListingKind::List,
 		},
 		Listing {
 			id: LISTING_LATEST_UPDATES.into(),
-			name: "sourceHome.latestUpdates".into(),
+			name: listing_name(LISTING_LATEST_UPDATES).into(),
 			kind: ListingKind::List,
 		},
 		Listing {
 			id: LISTING_LATEST_ADDED.into(),
-			name: "sourceHome.latestAdded".into(),
+			name: listing_name(LISTING_LATEST_ADDED).into(),
 			kind: ListingKind::Default,
 		},
 		Listing {
 			id: LISTING_RECENTLY_READ.into(),
-			name: "sourceHome.recentlyRead".into(),
+			name: listing_name(LISTING_RECENTLY_READ).into(),
 			kind: ListingKind::List,
 		},
 	]
@@ -501,11 +514,11 @@ fn unwrap_manga_entries(rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn listing_ref(id: &str) -> Value {
-	json!({ "id": id, "name": format!("sourceHome.{id}"), "kind": "List" })
+	json!({ "id": id, "name": listing_name(id), "kind": "List" })
 }
 
 fn listing_ref_default(id: &str) -> Value {
-	json!({ "id": id, "name": format!("sourceHome.{id}"), "kind": "Default" })
+	json!({ "id": id, "name": listing_name(id), "kind": "Default" })
 }
 
 /// Build the full HomeLayout for a local source. Empty sections are omitted (a source with

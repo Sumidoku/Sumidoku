@@ -899,12 +899,20 @@ async fn local_listings_answer_synthesized() {
 	// local sources synthesize listings server-side (all / continue-reading / latest-updates / ...)
 	let (status, body) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let ids: Vec<&str> = body.as_array().unwrap().iter().map(|l| l["id"].as_str().unwrap()).collect();
+	let listings: Vec<&serde_json::Value> = body.as_array().unwrap().iter().collect();
+	let ids: Vec<&str> = listings.iter().map(|l| l["id"].as_str().unwrap()).collect();
 	assert!(ids.contains(&"all"), "expected 'all' listing in {ids:?}");
 	assert!(ids.contains(&"continue-reading"));
 	assert!(ids.contains(&"latest-updates"));
 	assert!(ids.contains(&"latest-added"));
 	assert!(ids.contains(&"recently-read"));
+	// Names are plain English labels, not i18n keys, for third-party client compatibility.
+	let name = |id: &str| listings.iter().find(|l| l["id"] == id).map(|l| l["name"].as_str().unwrap());
+	assert_eq!(name("all"), Some("All"));
+	assert_eq!(name("continue-reading"), Some("Continue reading"));
+	assert_eq!(name("latest-updates"), Some("Latest updates"));
+	assert_eq!(name("latest-added"), Some("Latest added"));
+	assert_eq!(name("recently-read"), Some("Recently read"));
 
 	// unknown listing id → 404, not 501
 	let (status, body) = request(
