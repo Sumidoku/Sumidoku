@@ -186,6 +186,12 @@ async fn migration_seeds_builtin_local_source() {
 	let local = source_by_key(&body, "local.local");
 	assert_eq!(local["name"], "Local");
 	assert_eq!(local["kind"], "local");
+	assert_eq!(local["hasHome"], true, "local sources synthesize a home page");
+	assert_eq!(local["config"]["supportsAuthorSearch"], false);
+	assert_eq!(local["config"]["supportsArtistSearch"], false);
+	assert_eq!(local["config"]["supportsTagSearch"], false);
+	assert_eq!(local["config"]["allowsBaseUrlSelect"], false);
+	assert_eq!(local["config"]["hidesFiltersWhileSearching"], true);
 	assert_eq!(source_by_key(&body, "en.example-source")["kind"], "aidoku");
 	let local_id = local["id"].as_i64().expect("local id");
 
