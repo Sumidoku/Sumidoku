@@ -75,12 +75,13 @@ test('tracker pill renders remote status instead of the binding title', async ()
 test('cover card renders compact tracker provider markers', async () => {
 	const { CoverCard } = await vite.ssrLoadModule('/src/components/CoverCard.tsx');
 	const markup = renderToStaticMarkup(
-		createElement(CoverCard, { title: 'Series', trackerProviders: ['bangumi', 'anilist', 'mal'] })
+		createElement(CoverCard, { title: 'Series', trackerProviders: ['bangumi', 'anilist', 'mal', 'mangabaka'] })
 	);
 	assert.match(markup, /cover-card__trackers/);
-	assert.match(markup, /<img class="tracker-logo"[^>]*alt="Bangumi"/);
-	assert.match(markup, /<img class="tracker-logo"[^>]*alt="AniList"/);
-	assert.match(markup, /\+1/);
+	for (const name of ['Bangumi', 'AniList', 'MyAnimeList', 'MangaBaka']) {
+		assert.match(markup, new RegExp(`<img class="tracker-logo"[^>]*alt="${name}"`));
+	}
+	assert.doesNotMatch(markup, />\+\d/);
 });
 
 test('tracker edit uses segmented controls instead of native pickers', async () => {
