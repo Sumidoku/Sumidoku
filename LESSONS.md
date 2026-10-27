@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A repository's commit rules override an agent tool's default attribution,
+on every commit a PR carries.** The `Co-Authored-By` ban in
+docs/code-standards.md names the squash message, but a branch commit is
+also part of what is reviewed, and a harness that appends a trailer by
+default will add one to each commit unless the message is written without
+it. Write branch commit messages without the trailer and read the commit
+body back (`git log -1 --format=%B`) before pushing.
+- Evidence: 2026-10-27, release PR #473's branch commit `ec0512a` carried a
+  `Co-Authored-By` trailer hours after #472 recorded the rule. It was flagged
+  in review, amended to `b56c9b3` with `--force-with-lease`, and the squash
+  merge `18dd265` landed with no trailer; every other commit merged to `main`
+  that day carried none.
+
 **Directory mtimes in tests must be set through a cross-platform crate, not
 `std::fs::File::set_modified`.** Opening a directory as a `File` and calling
 `set_modified` works on Unix but returns `PermissionDenied` on Windows, so a
