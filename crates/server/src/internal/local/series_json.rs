@@ -20,6 +20,7 @@ struct SeriesJson {
 	artists: Option<Names>,
 	description: Option<String>,
 	genres: Option<Names>,
+	tags: Option<Names>,
 	status: Option<String>,
 	metadata: Option<MylarMetadata>,
 }
@@ -98,7 +99,16 @@ impl SeriesJson {
 			author_names: cleaned_flat(self.authors.or(self.author)),
 			artist_names: cleaned_flat(self.artists.or(self.artist)),
 			summary: self.description,
-			tag_names: cleaned_flat(self.genres),
+			tag_names: {
+				let mut combined = Vec::new();
+				if let Some(g) = self.genres {
+					combined.extend(g.into_flat_vec());
+				}
+				if let Some(t) = self.tags {
+					combined.extend(t.into_flat_vec());
+				}
+				cleaned_flat(Some(Names::Many(combined)))
+			},
 			// mapped through the Tachiyomi spellings so ComicInfo::status() yields the aidoku number
 			status: self
 				.status
@@ -292,6 +302,13 @@ mod tests {
 		assert_eq!(info.description().as_deref(), Some("flat desc"));
 		assert_eq!(info.tags().expect("tags"), vec!["Action", "Drama"]);
 		assert_eq!(info.status(), 1);
+	}
+
+	#[test]
+	fn flat_tags_combine_with_genres() {
+		let json = r#"{"title":"Flat Tags","genres":["Action"],"tags":["Drama","Adventure"]}"#;
+		let info = parse(json.as_bytes()).expect("parse");
+		assert_eq!(info.tags().expect("tags"), vec!["Action", "Drama", "Adventure"]);
 	}
 
 	#[test]

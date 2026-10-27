@@ -50,9 +50,9 @@ pub(crate) fn source_json(
 	// Synthesize the flags that match the server-side local implementation.
 	let config = if row.kind == crate::model::SOURCE_KIND_LOCAL {
 		json!({
-			"supportsArtistSearch": false,
-			"supportsAuthorSearch": false,
-			"supportsTagSearch": false,
+			"supportsArtistSearch": true,
+			"supportsAuthorSearch": true,
+			"supportsTagSearch": true,
 			"allowsBaseUrlSelect": false,
 			"hidesFiltersWhileSearching": true,
 		})

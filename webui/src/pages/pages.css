@@ -425,6 +425,13 @@
 	margin-bottom: 12px;
 }
 
+.source-page__local-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
 .source-page__search .input {
 	flex: 1;
 	min-width: 0;

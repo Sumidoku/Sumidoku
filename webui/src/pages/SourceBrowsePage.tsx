@@ -65,6 +65,17 @@ function localListingName(id: string, t: TFunction): string {
 	}
 }
 
+function localFilterChipLabel(filter: FilterValue, t: TFunction): string | null {
+	if ('Text' in filter) {
+		if (filter.Text.id === 'author') return `${t('mangaDetail.author')}: ${filter.Text.value}`;
+		if (filter.Text.id === 'artist') return `${t('mangaDetail.artist')}: ${filter.Text.value}`;
+	}
+	if ('Select' in filter && filter.Select.id === 'genre') {
+		return `${t('mangaDetail.tag')}: ${filter.Select.value}`;
+	}
+	return null;
+}
+
 type CheckVal = 0 | 1 | -1;
 
 type SortVal = { index: number | null; ascending: boolean };
@@ -258,13 +269,25 @@ export default function SourceBrowsePage() {
 
 	function runSearch(nextStates?: FilterStates) {
 		const query = input.trim();
-		// Draft values are always persisted; for sources with hidden filters, a keyword search neither submits them nor overwrites the stored ones
-		const values = buildFilterValues(nextStates ?? states);
-		const dropFilters = !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
-		if (!dropFilters) saveFilterPrefs(sourceId, values);
+		// Local sources have no filter panel; deep-link filters (author/tag taps) stay active while the user types.
+		const values = isLocal ? submitted.filters : buildFilterValues(nextStates ?? states);
+		const dropFilters = !isLocal && !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
+		if (!dropFilters && !isLocal) saveFilterPrefs(sourceId, values);
 		setSubmitted({ query, filters: dropFilters ? [] : values });
-		// Carry the submitted query in the URL (replace, not push) so drilling into an entry and coming back restores the search
-		setSearchParams(query ? { q: query } : {}, { replace: true });
+		// Carry the submitted query and local filters in the URL (replace, not push) so drilling into an entry and coming back restores the search
+		const nextParams: Record<string, string> = {};
+		if (query) nextParams.q = query;
+		if (isLocal && values.length > 0) nextParams.filters = encodeURIComponent(JSON.stringify(values));
+		setSearchParams(nextParams, { replace: true });
+	}
+
+	function removeLocalFilter(index: number) {
+		const next = submitted.filters.filter((_, i) => i !== index);
+		setSubmitted((prev) => ({ ...prev, filters: next }));
+		const nextParams: Record<string, string> = {};
+		if (submitted.query) nextParams.q = submitted.query;
+		if (next.length > 0) nextParams.filters = encodeURIComponent(JSON.stringify(next));
+		setSearchParams(nextParams, { replace: true });
 	}
 
 	// Only local directory filtering is live; remote source requests wait for explicit submission —
@@ -482,6 +505,20 @@ export default function SourceBrowsePage() {
 						</div>
 					)}
 				</>
+			)}
+
+			{isLocal && isSearch && submitted.filters.length > 0 && (
+				<div className="source-page__local-filters">
+					{submitted.filters.map((f, i) => {
+						const label = localFilterChipLabel(f, t);
+						if (!label) return null;
+						return (
+							<Chip key={i} onClick={() => removeLocalFilter(i)}>
+								{label} ×
+							</Chip>
+						);
+					})}
+				</div>
 			)}
 
 			{/* During a streaming search partials already land in the list: skeletons are only for when there is nothing at all, then entries append edge-to-edge */}
