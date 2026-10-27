@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Directory mtimes in tests must be set through a cross-platform crate, not
+`std::fs::File::set_modified`.** Opening a directory as a `File` and calling
+`set_modified` works on Unix but returns `PermissionDenied` on Windows, so a
+passing Linux CI hides a local-only failure. Use `filetime::set_file_mtime`
+for paths that may be directories.
+- Evidence: 2026-10-27, local-source home work added tests that needed
+  directory mtimes on Windows. `refresh_rescans_added_and_removed_chapters`
+  failed with `PermissionDenied` because it used `File::open(path).set_modified(at)`;
+  switching to `filetime` made the test pass on Windows and kept Linux CI green.
+
 **Heavy CI must be scoped to inputs that can change the shipped artifact.**
 Documentation-only changes should not pay for Rust tests, platform builds or
 Docker. Exclude Markdown while keeping every other non-Web UI path opted in so

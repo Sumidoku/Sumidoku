@@ -4,10 +4,12 @@
 //! were 501 for it. This module builds the same section-based home page a WASM source would
 //! from the local scan index (`manga` / `chapter` / `chapter_user`), so a local library gets:
 //!
-//! - `continue-reading`  — MangaChapterList (page_size=1), in-progress chapters ordered by last_read_at
-//! - `latest-updates`    — MangaChapterList (page_size=1), newest chapter per manga ordered by date_uploaded
-//! - `latest-added`     — Scroller, newest-indexed manga rows (rowid desc)
-//! - `recently-read`     — MangaChapterList (page_size=1), finished chapters ordered by last_read_at
+//! - `continue-reading` — MangaChapterList (page_size=1), in-progress chapters ordered by last_read_at
+//! - `latest-updates` — MangaChapterList (page_size=1), manga whose content changed after first
+//!   indexing (`manga.updated_at IS NOT NULL`), ordered by `manga.updated_at`; the displayed chapter
+//!   is the newest by `chapter.created_at` and its subtitle time is `manga.updated_at`
+//! - `latest-added` — Scroller, manga ordered by first-indexed time (`manga.created_at`)
+//! - `recently-read` — MangaChapterList (page_size=1), finished chapters ordered by last_read_at
 //!
 //! Each section carries a `listing` pointer, so the existing "View all" button on
 //! SourceHomePage routes to `/browse/{id}?mode={listingId}`; the listings endpoints below
@@ -19,6 +21,8 @@
 //! `chapterLabel(chapter) · relativeTime(chapter.date_uploaded)`, so for the reading-history
 //! sections we stuff `chapter_user.last_read_at` into `chapter.date_uploaded` — the row
 //! then reads "Ch.12 · 3 hours ago" with the time being the reading time, not the upload time.
+//! For `latest-updates` we stuff `manga.updated_at` in instead, so the time reflects when the
+//! series was last updated.
 
 use aidoku::{Chapter, Listing, ListingKind, Manga};
 use serde_json::{Value, json};
@@ -138,6 +142,8 @@ fn row_to_joined(row: &sqlx::sqlite::SqliteRow) -> sqlx::Result<JoinedRow> {
 		chapters_last_fetched_at: row.try_get("chapters_last_fetched_at")?,
 		trashed_at: row.try_get("trashed_at")?,
 		scan_mtime: row.try_get("scan_mtime")?,
+		created_at: row.try_get("created_at")?,
+		updated_at: row.try_get("updated_at")?,
 	};
 	let chapter = crate::model::ChapterRow {
 		id: row.try_get("cid")?,
@@ -155,6 +161,7 @@ fn row_to_joined(row: &sqlx::sqlite::SqliteRow) -> sqlx::Result<JoinedRow> {
 		page_count: row.try_get("cpage_count")?,
 		locked: row.try_get("clocked")?,
 		fetched_at: row.try_get("cfetched_at")?,
+		created_at: row.try_get("ccreated_at")?,
 		trashed_at: row.try_get("ctrashed_at")?,
 	};
 	let last_read_at: Option<i64> = row.try_get("last_read_at").unwrap_or(None);
@@ -179,13 +186,13 @@ async fn run_continue_reading(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime,
+		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at,
 		        c.id AS cid, c.manga_id AS cmanga_id, c.key AS ckey, c.title AS ctitle,
 		        c.number AS cnumber, c.volume AS cvolume, c.scanlators AS cscanlators,
 		        c.language AS clanguage, c.thumbnail AS cthumbnail, c.url AS curl,
 		        c.date_uploaded AS cdate_uploaded, c.source_order AS csource_order,
 		        c.page_count AS cpage_count, c.locked AS clocked, c.fetched_at AS cfetched_at,
-		        c.trashed_at AS ctrashed_at,
+		        c.created_at AS ccreated_at, c.trashed_at AS ctrashed_at,
 		        cu.last_read_at
 		 FROM chapter_user cu
 		 JOIN chapter c ON c.id = cu.chapter_id
@@ -213,7 +220,9 @@ async fn run_continue_reading(
 	Ok(out)
 }
 
-/// Latest chapter per manga, ordered by that chapter's upload time desc.
+/// Latest chapter per manga, ordered by the manga's last content update time desc.
+/// Only manga whose content changed after they were first indexed appear here; newly added manga
+/// with no subsequent changes live in the latest-added listing.
 async fn run_latest_updates(
 	state: &AppState,
 	source_id: i64,
@@ -221,7 +230,7 @@ async fn run_latest_updates(
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	// For each manga, pick its newest chapter by (date_uploaded DESC, source_order DESC, id DESC).
+	// For each manga, pick its newest chapter by (created_at DESC, source_order DESC, id DESC).
 	// SQLite lacks DISTINCT ON, so we use a correlated subquery against the latest chapter id.
 	let mut clauses = String::new();
 	for ex in exclusions {
@@ -233,22 +242,22 @@ async fn run_latest_updates(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime,
+		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at,
 		        c.id AS cid, c.manga_id AS cmanga_id, c.key AS ckey, c.title AS ctitle,
 		        c.number AS cnumber, c.volume AS cvolume, c.scanlators AS cscanlators,
 		        c.language AS clanguage, c.thumbnail AS cthumbnail, c.url AS curl,
 		        c.date_uploaded AS cdate_uploaded, c.source_order AS csource_order,
 		        c.page_count AS cpage_count, c.locked AS clocked, c.fetched_at AS cfetched_at,
-		        c.trashed_at AS ctrashed_at
+		        c.created_at AS ccreated_at, c.trashed_at AS ctrashed_at
 		 FROM manga m
 		 JOIN chapter c ON c.id = (
 		     SELECT id FROM chapter
 		     WHERE manga_id = m.id AND trashed_at IS NULL
-		     ORDER BY date_uploaded DESC, source_order DESC, id DESC
+		     ORDER BY created_at DESC, source_order DESC, id DESC
 		     LIMIT 1
 		 )
-		 WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
-		 ORDER BY c.date_uploaded DESC, m.rowid DESC
+		 WHERE m.source_id = ? AND m.trashed_at IS NULL AND m.updated_at IS NOT NULL{clauses}
+		 ORDER BY m.updated_at DESC, m.id DESC
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
@@ -261,15 +270,16 @@ async fn run_latest_updates(
 	let mut out = Vec::new();
 	for row in &rows {
 		let joined = row_to_joined(row)?;
-		// Subtitle shows the chapter's real upload time
+		// Subtitle reads "Ch.12 · 3 hours ago" where the time is the manga's last content update,
+		// so the row reflects when the series was updated rather than the chapter's file mtime.
 		let m = manga_to_json(&joined.manga)?;
-		let c = chapter_to_json(&joined.chapter, None)?;
+		let c = chapter_to_json(&joined.chapter, joined.manga.updated_at)?;
 		out.push(json!({ "manga": m, "chapter": c }));
 	}
 	Ok(out)
 }
 
-/// Recently-added manga rows, by rowid desc (scan discovery order).
+/// Recently-added manga rows, by first-indexed time desc.
 async fn run_recently_added(
 	state: &AppState,
 	source_id: i64,
@@ -296,10 +306,10 @@ async fn run_recently_added(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime
+		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at
 		 FROM manga m
 		 WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
-		 ORDER BY m.rowid DESC
+		 ORDER BY m.created_at DESC, m.id DESC
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
@@ -337,6 +347,8 @@ async fn run_recently_added(
 			chapters_last_fetched_at: row.try_get("chapters_last_fetched_at")?,
 			trashed_at: row.try_get("trashed_at")?,
 			scan_mtime: row.try_get("scan_mtime")?,
+			created_at: row.try_get("created_at")?,
+			updated_at: row.try_get("updated_at")?,
 		};
 		let m = manga_to_json(&manga)?;
 		out.push(json!({
@@ -367,13 +379,13 @@ async fn run_recently_read(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime,
+		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at,
 		        c.id AS cid, c.manga_id AS cmanga_id, c.key AS ckey, c.title AS ctitle,
 		        c.number AS cnumber, c.volume AS cvolume, c.scanlators AS cscanlators,
 		        c.language AS clanguage, c.thumbnail AS cthumbnail, c.url AS curl,
 		        c.date_uploaded AS cdate_uploaded, c.source_order AS csource_order,
 		        c.page_count AS cpage_count, c.locked AS clocked, c.fetched_at AS cfetched_at,
-		        c.trashed_at AS ctrashed_at,
+		        c.created_at AS ccreated_at, c.trashed_at AS ctrashed_at,
 		        cu.last_read_at
 		 FROM chapter_user cu
 		 JOIN chapter c ON c.id = cu.chapter_id
@@ -419,7 +431,7 @@ async fn run_all_by_title(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime
+		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at
 		 FROM manga m
 		 WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
 		 ORDER BY m.title COLLATE NOCASE ASC, m.rowid ASC
@@ -455,6 +467,8 @@ async fn run_all_by_title(
 			chapters_last_fetched_at: row.try_get("chapters_last_fetched_at")?,
 			trashed_at: row.try_get("trashed_at")?,
 			scan_mtime: row.try_get("scan_mtime")?,
+			created_at: row.try_get("created_at")?,
+			updated_at: row.try_get("updated_at")?,
 		};
 		let m = manga_to_json(&manga)?;
 		out.push(json!({

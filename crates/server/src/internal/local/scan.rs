@@ -292,6 +292,7 @@ pub async fn scan_instance(
 			existing => {
 				let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
 				let mut tx = crate::db::begin_write(&state.pool).await?;
+				let now = crate::model::unix_now();
 				let manga_id = match existing {
 					Some(row) => {
 						// A changed subtree (or a restored row) reconciles; marking initialized = 0 (kmrs's
@@ -321,15 +322,17 @@ pub async fn scan_instance(
 					}
 					None => {
 						// index-level insert: leaf-name title, no metadata (initialized stays 0 for the
-						// analysis pass / on-open path)
+						// analysis pass / on-open path). updated_at stays NULL so the manga appears in
+						// latest-added but not latest-updates until a content change sets it.
 						let id = sqlx::query(
-							"INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind) VALUES (?, ?, ?, ?, ?)",
+							"INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL)",
 						)
 						.bind(source_id)
 						.bind(key)
 						.bind(super::title_of(key))
 						.bind(mtime)
 						.bind(scan.entry_kind)
+						.bind(now)
 						.execute(&mut *tx)
 						.await?
 						.last_insert_rowid();
@@ -341,9 +344,23 @@ pub async fn scan_instance(
 					reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
 				outcome.chapters_trashed += reconciled.trashed;
 				outcome.chapters_restored += reconciled.restored;
-				tx.commit().await?;
+			// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of
+			// its initial indexing and should keep updated_at NULL so it appears in latest-added only.
+			let is_existing = existing.is_some();
+			let content_changed = is_existing
+				&& (!reconciled.new_ids.is_empty()
+					|| reconciled.trashed > 0
+					|| reconciled.restored > 0);
+			if content_changed {
+				sqlx::query("UPDATE manga SET updated_at = ? WHERE id = ?")
+					.bind(now)
+					.bind(manga_id)
+					.execute(&mut *tx)
+					.await?;
 			}
+			tx.commit().await?;
 		}
+	}
 	}
 	}
 	// No later per-key checkpoint can catch a settings write made during the final upsert batch.
@@ -422,6 +439,8 @@ pub async fn scan_manga_entry(
 			restored: 0,
 		}, false));
 	}
+	let now = crate::model::unix_now();
+	let is_existing = existing.is_some();
 	let manga_id = match existing {
 		Some(row) => {
 			if refresh_metadata {
@@ -446,18 +465,30 @@ pub async fn scan_manga_entry(
 			if force_reconcile {
 				return Err(crate::error::ApiError::conflict("not_trashed", "manga was purged before restore"));
 			}
-			sqlx::query("INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind) VALUES (?, ?, ?, ?, ?)")
+			sqlx::query("INSERT INTO manga (source_id, key, title, scan_mtime, local_entry_kind, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL)")
 				.bind(source_id)
 				.bind(manga_key)
 				.bind(super::title_of(manga_key))
 				.bind(mtime)
 				.bind(scan.entry_kind)
+				.bind(now)
 				.execute(&mut *tx)
 				.await?
 				.last_insert_rowid()
 		}
 	};
 	let reconciled = reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
+	let content_changed = is_existing
+		&& (!reconciled.new_ids.is_empty()
+			|| reconciled.trashed > 0
+			|| reconciled.restored > 0);
+	if content_changed {
+		sqlx::query("UPDATE manga SET updated_at = ? WHERE id = ?")
+			.bind(now)
+			.bind(manga_id)
+			.execute(&mut *tx)
+			.await?;
+	}
 	tx.commit().await?;
 	// The analysis pass owns archive-opening work; opening or refreshing an unanalyzed manga kicks it at
 	// manual priority (the per-instance dedup id makes repeats free); harnesses without the manager skip

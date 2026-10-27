@@ -765,8 +765,8 @@ pub async fn upsert_manga(
 	sqlx::query(
 		"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 last_fetched_at, chapters_last_fetched_at, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (source_id, key) DO UPDATE SET
 		 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
 		 description = excluded.description, tags = excluded.tags, status = excluded.status,
@@ -778,7 +778,8 @@ pub async fn upsert_manga(
 		 next_update_time = excluded.next_update_time,
 		 next_update_is_fallback = CASE
 		 WHEN manga.next_update_time IS excluded.next_update_time THEN manga.next_update_is_fallback
-		 ELSE 0 END",
+		 ELSE 0 END,
+		 created_at = manga.created_at",
 	)
 	.bind(source_id)
 	.bind(&manga.key)
@@ -797,6 +798,7 @@ pub async fn upsert_manga(
 	.bind(manga.next_update_time)
 	.bind(if fetched_details { Some(now) } else { None })
 	.bind(if fetched_chapters { Some(now) } else { None })
+	.bind(now)
 	.execute(&mut *conn)
 	.await?;
 
@@ -949,14 +951,15 @@ pub async fn reconcile_chapters_detailed(
 			.or_else(|| fill_language.clone());
 		sqlx::query(
 			"INSERT INTO chapter (manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
-			 date_uploaded, source_order, locked, fetched_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 date_uploaded, source_order, locked, fetched_at, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT (manga_id, key) DO UPDATE SET
 			 title = excluded.title, number = excluded.number, volume = excluded.volume,
 			 scanlators = excluded.scanlators, language = excluded.language,
 			 thumbnail = excluded.thumbnail, url = excluded.url,
 			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
-			 locked = excluded.locked, fetched_at = chapter.fetched_at, trashed_at = NULL",
+			 locked = excluded.locked, fetched_at = chapter.fetched_at, created_at = chapter.created_at,
+			 trashed_at = NULL",
 		)
 		.bind(manga_id)
 		.bind(&chapter.key)
@@ -970,6 +973,7 @@ pub async fn reconcile_chapters_detailed(
 		.bind(chapter.date_uploaded)
 		.bind(index as i64)
 		.bind(chapter.locked)
+		.bind(now)
 		.bind(now)
 		.execute(&mut *conn)
 		.await?;
@@ -1030,7 +1034,8 @@ pub async fn manga_row(pool: &SqlitePool, id: i64) -> ApiResult<MangaRow> {
 	let row: Option<MangaRow> = sqlx::query_as(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime FROM manga WHERE id = ?",
+		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime, created_at, updated_at
+		 FROM manga WHERE id = ?",
 	)
 	.bind(id)
 	.fetch_optional(pool)
@@ -1047,7 +1052,8 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 	let sql = format!(
 		"SELECT id, source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime FROM manga WHERE id IN ({placeholders})"
+		 last_fetched_at, chapters_last_fetched_at, trashed_at, scan_mtime, created_at, updated_at
+		 FROM manga WHERE id IN ({placeholders})"
 	);
 	let mut q = sqlx::query_as::<_, MangaRow>(&sql);
 	for id in ids {
@@ -1064,7 +1070,8 @@ pub async fn manga_rows_by_ids(pool: &SqlitePool, ids: &[i64]) -> ApiResult<Hash
 pub async fn chapter_row(pool: &SqlitePool, id: i64) -> ApiResult<ChapterRow> {
 	let row: Option<ChapterRow> = sqlx::query_as(
 		"SELECT id, manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
-		 date_uploaded, source_order, page_count, locked, fetched_at, trashed_at FROM chapter WHERE id = ?",
+		 date_uploaded, source_order, page_count, locked, fetched_at, created_at, trashed_at
+		 FROM chapter WHERE id = ?",
 	)
 	.bind(id)
 	.fetch_optional(pool)

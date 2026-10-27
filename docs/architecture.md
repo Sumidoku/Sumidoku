@@ -436,7 +436,13 @@ no alias is derived from migration text.
   the response is always buffered (there is no source call to stream),
   an instance with no rows gets its first scan kicked at manual
   priority, and the aggregate search reuses the same arm so a selected
-  Local yields a section instead of an error entry. A manga persists
+  Local yields a section instead of an error entry. The local source
+  synthesizes its own Aidoku-style home page (`internal/local/home.rs`):
+  `continue-reading`, `latest-updates`, `latest-added`, and
+  `recently-read`. `latest-updates` lists manga whose content changed
+  after first indexing (`manga.updated_at IS NOT NULL`) ordered by
+  `manga.updated_at`; `latest-added` lists manga ordered by first-indexed
+  time (`manga.created_at`). A manga persists
   when opened, shelved, or indexed by a scan: a never-indexed open
   registers through `find_or_register_manga`'s full `manga_update`
   chain (the one synchronous expensive path); every other online access

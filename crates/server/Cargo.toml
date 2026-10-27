@@ -72,6 +72,8 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 tempfile = "3"
+# test fixtures need cross-platform directory mtime manipulation (Windows rejects File::set_modified on dirs)
+filetime = "0.2"
 # local TLS+ALPN-h2 echo (the h2 negotiation test in routed.rs): rustls uses ring, consistent with
 # the backend reqwest already pulls in, and rcgen keeps only ring; all pure Rust, not in the release binary
 rcgen = { version = "0.13", default-features = false, features = ["ring"] }

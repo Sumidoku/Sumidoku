@@ -497,10 +497,12 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 }
 
 fn set_dir_mtime(path: &std::path::Path, at: std::time::SystemTime) {
-	std::fs::File::open(path)
-		.expect("open dir mtime")
-		.set_modified(at)
-		.expect("set dir mtime");
+	let dur = at.duration_since(std::time::UNIX_EPOCH).expect("mtime after epoch");
+	filetime::set_file_mtime(
+		path,
+		filetime::FileTime::from_unix_time(dur.as_secs() as i64, dur.subsec_nanos()),
+	)
+	.expect("set dir mtime");
 }
 
 #[tokio::test]

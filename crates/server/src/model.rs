@@ -69,6 +69,10 @@ pub struct MangaRow {
 	pub trashed_at: Option<i64>,
 	/// Local-source scan change detector; NULL for online/OPDS rows and pre-index local rows
 	pub scan_mtime: Option<i64>,
+	/// First time this manga row was indexed (seconds since epoch); independent of sync's last_modified_at
+	pub created_at: Option<i64>,
+	/// Last time this manga's content changed, e.g. new/trashed/restored chapters (seconds since epoch)
+	pub updated_at: Option<i64>,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -88,6 +92,8 @@ pub struct ChapterRow {
 	pub page_count: i64,
 	pub locked: bool,
 	pub fetched_at: i64,
+	/// First time this chapter row was indexed (seconds since epoch); independent of sync's last_modified_at
+	pub created_at: Option<i64>,
 	/// Local-source trash state: the chapter's entry vanished from disk; restore clears it in place
 	pub trashed_at: Option<i64>,
 }
