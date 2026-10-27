@@ -1481,6 +1481,12 @@ pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -
 			.fetch_all(&state.pool)
 			.await?;
 	object.insert("categoryIds".into(), json!(category_ids));
+	let tracker_providers: Vec<String> = crate::tracker::dao::list_links_by_manga_and_user(&state.pool, row.id, user_id)
+		.await?
+		.into_iter()
+		.map(|link| link.provider)
+		.collect();
+	object.insert("trackerProviders".into(), json!(tracker_providers));
 	Ok(value)
 }
 
@@ -1492,7 +1498,7 @@ fn apply_viewer_override(object: &mut serde_json::Map<String, Value>, viewer_fla
 	Ok(())
 }
 
-/// Batch manga_json for list endpoints: three IN queries instead of three queries per row, output in input order;
+/// Batch manga_json for list endpoints: four IN queries instead of four queries per row, output in input order;
 /// missing rows are filled with the single-fetch defaults (0 / false / empty array)
 pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&MangaRow]) -> ApiResult<Vec<Value>> {
 	if rows.is_empty() {
@@ -1531,6 +1537,17 @@ pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&Ma
 	for (manga_id, category_id) in q.fetch_all(&state.pool).await? {
 		category_ids.entry(manga_id).or_default().push(category_id);
 	}
+	let tracker_sql = format!(
+		"SELECT manga_id, provider FROM tracker_link WHERE user_id = ? AND manga_id IN ({placeholders}) ORDER BY manga_id, provider"
+	);
+	let mut q = sqlx::query_as::<_, (i64, String)>(&tracker_sql).bind(user_id);
+	for row in rows {
+		q = q.bind(row.id);
+	}
+	let mut tracker_providers: HashMap<i64, Vec<String>> = HashMap::new();
+	for (manga_id, provider) in q.fetch_all(&state.pool).await? {
+		tracker_providers.entry(manga_id).or_default().push(provider);
+	}
 	let mut out = Vec::with_capacity(rows.len());
 	for row in rows {
 		let mut value = serde_json::to_value(manga_from_row(row))?;
@@ -1559,6 +1576,10 @@ pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&Ma
 		object.insert(
 			"categoryIds".into(),
 			json!(category_ids.get(&row.id).cloned().unwrap_or_default()),
+		);
+		object.insert(
+			"trackerProviders".into(),
+			json!(tracker_providers.get(&row.id).cloned().unwrap_or_default()),
 		);
 		out.push(value);
 	}

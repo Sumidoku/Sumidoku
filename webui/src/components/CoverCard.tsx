@@ -2,8 +2,11 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Trash2 } from 'lucide-react';
+import type { TrackerProvider } from '../api/types';
+import { TRACKER_PROVIDER_NAMES } from '../api/trackers';
 import { Cover } from './Cover';
 import { Spinner } from './Spinner';
+import { TrackerLogo } from './trackers/TrackerLogo';
 
 export interface CoverCardProps {
 	src?: string | null;
@@ -11,6 +14,7 @@ export interface CoverCardProps {
 	subtitle?: ReactNode;
 	/** Show an unread badge at the cover's top-right corner when > 0 */
 	unreadCount?: number;
+	trackerProviders?: TrackerProvider[];
 	/** Local manga whose directory vanished: a trash chip at the top-left corner */
 	trashed?: boolean;
 	/** Pick one: internal navigation uses `to`, custom behavior (e.g. register-then-navigate) uses onClick */
@@ -24,14 +28,38 @@ export interface CoverCardProps {
 	onToggle?: () => void;
 }
 
-export function CoverCard({ src, title, subtitle, unreadCount, trashed, to, onClick, busy, selecting, selected, onToggle }: CoverCardProps) {
+export function CoverCard({
+	src,
+	title,
+	subtitle,
+	unreadCount,
+	trackerProviders,
+	trashed,
+	to,
+	onClick,
+	busy,
+	selecting,
+	selected,
+	onToggle
+}: CoverCardProps) {
 	const { t } = useTranslation();
+	const providers = trackerProviders ?? [];
+	const providerNames = providers.map((provider) => TRACKER_PROVIDER_NAMES[provider]);
+	const boundLabel = providers.length > 0 ? t('trackers.coverBound', { providers: providerNames.join(', ') }) : undefined;
 	const inner = (
 		<>
 			<div className="cover-card__cover">
 				<Cover src={src} title={title} />
 				{!selecting && unreadCount != null && unreadCount > 0 && (
 					<span className="cover-card__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
+				)}
+				{!selecting && boundLabel && (
+					<span className="cover-card__trackers" title={boundLabel} aria-label={boundLabel}>
+						{providers.slice(0, 2).map((provider) => (
+							<TrackerLogo key={provider} provider={provider} />
+						))}
+						{providers.length > 2 && <span className="cover-card__trackers-more">+{providers.length - 2}</span>}
+					</span>
 				)}
 				{trashed && (
 					<span className="cover-card__trashed" title={t('common.trashed')}>

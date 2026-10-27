@@ -16,6 +16,8 @@
     "noBindings": "No tracker bindings yet. Add one from a manga detail page.",
     "unknownManga": "Manga #{{id}}",
     "openEntry": "Open on {{provider}}",
+    "remoteEntry": "Remote entry",
+    "coverBound": "Bound to {{providers}}",
     "unbind": "Unbind",
     "unbindTitle": "Remove tracker binding?",
     "unbindConfirm": "Remove the {{provider}} binding for {{title}}? The remote tracker entry is not deleted.",
@@ -43,6 +45,7 @@
     "modeChapter": "Chapter",
     "modeVolume": "Volume",
     "chapterOffset": "Chapter offset",
+    "chapterOffsetHint": "Added to the chapter number sent to the tracker. Volume progress is unaffected.",
     "statusLabel": "Status",
     "statusNone": "Not set",
     "statusValues": {

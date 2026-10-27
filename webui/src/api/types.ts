@@ -555,6 +555,7 @@ export type Manga = SourceManga & {
 	inLibrary: boolean;
 	incognito: boolean;
 	categoryIds: Array<number>;
+	trackerProviders: Array<TrackerProvider>;
 };
 
 export type MangaInput = {
@@ -1206,6 +1207,11 @@ export type TrackerLink = {
 	chapterOffset: number;
 	createdAt: number;
 	updatedAt: number;
+};
+
+export type TrackerLinkPage = {
+	entries: Array<TrackerLink>;
+	hasNextPage: boolean;
 };
 
 export type TrackerLinkUpsert = {

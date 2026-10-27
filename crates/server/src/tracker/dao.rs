@@ -300,11 +300,18 @@ pub async fn list_links_by_manga_and_user(
 	.map(|rows| rows.into_iter().map(row_to_link).collect())
 }
 
-pub async fn list_links_by_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<TrackerLink>, sqlx::Error> {
+pub async fn list_links_by_user_page(
+	pool: &SqlitePool,
+	user_id: i64,
+	limit: i64,
+	offset: i64,
+) -> Result<Vec<TrackerLink>, sqlx::Error> {
 	sqlx::query_as::<_, (i64, i64, String, String, Option<String>, String, i32, i64, i64)>(&format!(
-		"SELECT {LINK_COLUMNS} FROM tracker_link WHERE user_id = ? ORDER BY manga_id, provider"
+		"SELECT {LINK_COLUMNS} FROM tracker_link WHERE user_id = ? ORDER BY manga_id, provider LIMIT ? OFFSET ?"
 	))
 	.bind(user_id)
+	.bind(limit)
+	.bind(offset)
 	.fetch_all(pool)
 	.await
 	.map(|rows| rows.into_iter().map(row_to_link).collect())
@@ -484,7 +491,7 @@ mod tests {
 		assert_eq!(list_links_by_manga_and_user(&pool, manga_id, user_id + 1).await.unwrap().len(), 0);
 
 		delete_link(&pool, manga_id, user_id, Provider::Anilist).await.unwrap();
-		assert!(list_links_by_user(&pool, user_id).await.unwrap().is_empty());
+		assert!(list_links_by_user_page(&pool, user_id, 50, 0).await.unwrap().is_empty());
 	}
 
 	#[tokio::test]

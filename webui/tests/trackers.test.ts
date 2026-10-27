@@ -187,3 +187,16 @@ test('tracker disconnect invalidates cached remote state', async () => {
 	const source = (await vite.ssrLoadModule('/src/pages/settings/TrackersPanel.tsx?raw')).default;
 	assert.match(source, /void qc\.invalidateQueries\(\{ queryKey: trackerKeys\.states \}\);/);
 });
+
+test('binding mutations invalidate manga and library projections', async () => {
+	assert.equal(typeof trackers.invalidateTrackerLinks, 'function');
+	const { QueryClient } = await import('@tanstack/react-query');
+	const client = new QueryClient();
+	const calls: unknown[] = [];
+	client.invalidateQueries = ((filters: { queryKey: unknown }) => {
+		calls.push(filters.queryKey);
+		return Promise.resolve();
+	}) as QueryClient['invalidateQueries'];
+	trackers.invalidateTrackerLinks(client, 7);
+	assert.deepEqual(calls, [trackers.trackerKeys.links, ['library'], ['manga', 7]]);
+});

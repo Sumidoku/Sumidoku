@@ -16,6 +16,8 @@
     "noBindings": "Aucune association de suivi. Ajoutez-en une depuis la page d'un manga.",
     "unknownManga": "Manga n° {{id}}",
     "openEntry": "Ouvrir sur {{provider}}",
+    "remoteEntry": "Entrée distante",
+    "coverBound": "Associé à {{providers}}",
     "unbind": "Dissocier",
     "unbindTitle": "Supprimer l'association de suivi ?",
     "unbindConfirm": "Supprimer l'association {{provider}} de {{title}} ? L'entrée distante ne sera pas supprimée.",
@@ -43,6 +45,7 @@
     "modeChapter": "Chapitre",
     "modeVolume": "Tome",
     "chapterOffset": "Décalage de chapitre",
+    "chapterOffsetHint": "Ajouté au numéro de chapitre envoyé au suivi. La progression des tomes n’est pas affectée.",
     "statusLabel": "Statut",
     "statusNone": "Non défini",
     "statusValues": {

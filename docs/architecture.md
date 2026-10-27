@@ -138,7 +138,10 @@ no alias is derived from migration text.
   and MangaBaka (#35). REST under `/api/v1/trackers`: binding CRUD
   (`links`), a recent-entries `ledger`, remote `search`/`state`/`update`
   proxies, and the OAuth handshake (`oauth/{provider}/start|status|logout|
-  callback`). A remote route hit without a connected account answers 409
+  callback`). The all-user binding list uses the standard paged response
+  envelope. Manga responses carry `trackerProviders` from local bindings only;
+  list endpoints derive them with one page-scoped batch query and never call a
+  provider. A remote route hit without a connected account answers 409
   `tracker_auth` — deliberately distinct from the auth layer's reason-free
   401, because the web UI must offer the connect flow, not a re-login. The
   `/settings?section=trackers` page manages accounts and current-user bindings;

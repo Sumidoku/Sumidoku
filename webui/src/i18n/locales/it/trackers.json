@@ -16,6 +16,8 @@
     "noBindings": "Nessun collegamento di tracciamento. Aggiungine uno dalla pagina di un manga.",
     "unknownManga": "Manga n. {{id}}",
     "openEntry": "Apri su {{provider}}",
+    "remoteEntry": "Voce remota",
+    "coverBound": "Collegato a {{providers}}",
     "unbind": "Scollega",
     "unbindTitle": "Rimuovere il collegamento di tracciamento?",
     "unbindConfirm": "Rimuovere il collegamento {{provider}} per {{title}}? La voce remota non verrà eliminata.",
@@ -43,6 +45,7 @@
     "modeChapter": "Capitolo",
     "modeVolume": "Volume",
     "chapterOffset": "Scostamento capitolo",
+    "chapterOffsetHint": "Aggiunto al numero del capitolo inviato al tracker. Il progresso dei volumi non cambia.",
     "statusLabel": "Stato",
     "statusNone": "Non impostato",
     "statusValues": {

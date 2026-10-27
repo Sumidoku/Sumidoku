@@ -3628,17 +3628,19 @@
           "trackers"
         ],
         "operationId": "listAllTrackerLinks",
-        "summary": "List every tracker binding of the current user",
+        "summary": "List one page of tracker bindings of the current user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Page"
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Bindings",
+            "description": "One page of bindings",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/TrackerLink"
-                  }
+                  "$ref": "#/components/schemas/TrackerLinkPage"
                 }
               }
             }
@@ -5234,6 +5236,24 @@
           "updatedAt": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "TrackerLinkPage": {
+        "type": "object",
+        "required": [
+          "entries",
+          "hasNextPage"
+        ],
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TrackerLink"
+            }
+          },
+          "hasNextPage": {
+            "type": "boolean"
           }
         }
       },
@@ -7430,7 +7450,8 @@
               "chapterCount",
               "inLibrary",
               "incognito",
-              "categoryIds"
+              "categoryIds",
+              "trackerProviders"
             ],
             "properties": {
               "id": {
@@ -7463,6 +7484,12 @@
                 "items": {
                   "type": "integer",
                   "format": "int64"
+                }
+              },
+              "trackerProviders": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TrackerProvider"
                 }
               }
             }
