@@ -750,11 +750,16 @@ no alias is derived from migration text.
   `contentRating`/`contentRatingExclude` (comma-separated manga-level
   ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`),
   `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on
-  `manga.source_id`) and
+  `manga.source_id`),
   `category`/`categoryExclude` (comma-separated category ids, EXISTS / NOT
   EXISTS over the user's `category_manga` rows; id `0` is the
   uncategorized arm — include means no category rows, exclude means at
-  least one): within one dimension the include set is an OR and the
+  least one) and
+  `author`/`authorExclude`/`tag`/`tagExclude` (comma-separated names,
+  exact case-insensitive membership in the manga's `authors`/`tags` JSON
+  arrays via `json_each`; a name containing a comma cannot be expressed —
+  the comma is the separator — and a manga with empty arrays never matches
+  an include): within one dimension the include set is an OR and the
   exclude set a NOT-OR, dimensions combine with the other filters via AND
   (Aidoku's library filter semantics). Empty or whitespace-only values are
   treated as absent; invalid tokens answer 400. The entry payload's
@@ -902,8 +907,11 @@ no alias is derived from migration text.
   `chapter_user.is_downloaded`), `started` (EXISTS
   `chapter_user.last_read_at`), `completed` (`m.status = 2`),
   `has_unread` (default-unread: EXISTS a chapter with no read
-  `chapter_user` row, including a missing row), and the valued
-  `source` / `content_rating` / `category` (one id per row). Evaluation
+  `chapter_user` row, including a missing row), the valued
+  `source` / `content_rating` / `category` (one id per row) and the
+  text-valued `author` / `tag` (one name per row, exact case-insensitive
+  membership in the manga's `authors`/`tags` JSON arrays, mirroring the
+  ad-hoc library params). Evaluation
   matches Aidoku's filter loop (`compile_group`): includes OR within one
   valued dimension, excludes apply per value, dimensions and flag rules
   AND — "all rules ANDed" holds only across dimensions.
@@ -919,7 +927,12 @@ no alias is derived from migration text.
   hides the uncategorized chip.
   `GET /api/v1/library/source-counts` returns per-source in-library totals
   (`{sourceId, count}`) for the web UI's source filter dropdown — counts
-  include disabled sources' rows and only in-library manga. Chapter reconcile
+  include disabled sources' rows and only in-library manga.
+  `GET /api/v1/library/authors` and `/api/v1/library/tags` return the
+  distinct names across the caller's in-library manga with entry counts
+  (`{name, count}`, case variants collapse into one entry, sorted
+  case-insensitively) — the option lists behind the author/tag filter
+  dropdowns. Chapter reconcile
   (`source/mod.rs:reconcile_chapters`) keeps a chapter the source stopped
   listing when it has download rows, and deletes it otherwise — except keys
   in the `protected` set (the local source's failed-directory protection,

@@ -129,6 +129,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/chapter/{id}/page/{index}", get(page::get_page))
 		.route("/api/v1/library", get(library::list_library).post(library::add_to_library))
 		.route("/api/v1/library/source-counts", get(library::source_counts))
+		.route("/api/v1/library/authors", get(library::author_counts))
+		.route("/api/v1/library/tags", get(library::tag_counts))
 		.route("/api/v1/library/{id}", delete(library::remove_from_library))
 		.route("/api/v1/migrate/sources", get(migrate::migrate_sources))
 		.route("/api/v1/migrate/lookup", get(migrate::migrate_lookup))

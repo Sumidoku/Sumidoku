@@ -32,6 +32,8 @@ test('library search, sort and filters round-trip through local storage', () => 
 			ratings: { 2: 1 },
 			sources: { 4: -1 },
 			categories: { 0: 1 },
+			authors: { 'Jane Doe': 1 },
+			tags: { romance: -1 },
 			group: 7
 		};
 		saveLibraryFilters(prefs);
@@ -50,9 +52,11 @@ test('legacy and malformed library prefs get safe defaults', () => {
 			ratings: {},
 			sources: {},
 			categories: {},
+			authors: {},
+			tags: {},
 			group: null
 		});
-		values.set(KEY, JSON.stringify({ search: 42, sort: 'random', filters: { unread: 0, bookmarked: -1 }, group: '7' }));
+		values.set(KEY, JSON.stringify({ search: 42, sort: 'random', filters: { unread: 0, bookmarked: -1 }, authors: { 'Jane Doe': 2 }, group: '7' }));
 		assert.deepEqual(loadLibraryFilters(), {
 			search: '',
 			sort: 'added',
@@ -60,6 +64,8 @@ test('legacy and malformed library prefs get safe defaults', () => {
 			ratings: {},
 			sources: {},
 			categories: {},
+			authors: {},
+			tags: {},
 			group: null
 		});
 	});

@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**`webui/src/api/types.ts` is generated; hand edits to it are silently
+overwritten by `npm run generate:api`.** The script runs as part of
+`npm run build`, so a hand-edited type survives a local `npm run check` but
+vanishes in the next build, and any later `tsc` (CI's, for one) fails on the
+regenerated file. Change the source of truth
+(`crates/server/assets/api-docs/openapi.json`) and regenerate instead; after
+touching webui types, diff `types.ts` against the regenerated output.
+- Evidence: 2026-10-28, PR #490 widened `FilterRule.value` to
+  `number | string | null` by hand for the author/tag group rules. Local
+  `npm run check` passed, the following `npm run build` regenerated `types.ts`
+  from openapi.json and reverted it, and CI's check failed with TS2322 in
+  SettingsPage.tsx. Fixed by widening `FilterRule.value` in openapi.json
+  (oneOf integer/string, nullable) and regenerating.
+
 **A component modifier must out-specify the shared class it overrides;
 stylesheet bundle order is not a contract.** Two single-class selectors
 tie on specificity, so whichever file the bundler emits later wins, and a

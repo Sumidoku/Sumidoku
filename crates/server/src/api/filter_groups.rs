@@ -17,8 +17,11 @@ use std::sync::Arc;
 /// Value-less rule types: at most one row per group (include or exclude), so the
 /// tri-state editor maps to exactly one row
 const FLAG_RULE_TYPES: [&str; 4] = ["downloaded", "has_unread", "started", "completed"];
-/// One value per row; same-type includes are OR'd, excludes apply per value, types AND
+/// One integer value per row; same-type includes are OR'd, excludes apply per value, types AND
 const VALUED_RULE_TYPES: [&str; 3] = ["source", "content_rating", "category"];
+/// One string value per row, matched exactly (case-insensitive) against the manga's JSON array
+/// column; same OR/AND semantics as the valued types
+const TEXT_RULE_TYPES: [&str; 2] = ["author", "tag"];
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct StoredRule {
@@ -27,10 +30,11 @@ pub struct StoredRule {
 	pub exclude: bool,
 }
 
-/// A validated rule: flag types carry no value, valued types carry their parsed id/rating
+/// A validated rule: flag types carry no value, valued types their parsed id/rating as canonical
+/// digits, text types the trimmed name
 struct Rule {
 	r#type: String,
-	value: Option<i64>,
+	value: Option<String>,
 	exclude: bool,
 }
 
@@ -45,12 +49,17 @@ pub struct RuleInput {
 }
 
 fn rule_json(rule: &StoredRule) -> Value {
-	// Valued rules round-trip as JSON numbers; flag rules always serialize null
-	let value = rule
-		.value
-		.as_deref()
-		.and_then(|v| v.parse::<i64>().ok())
-		.map_or(Value::Null, |v| json!(v));
+	// Numeric valued rules round-trip as JSON numbers, text rules as strings;
+	// flag rules always serialize null
+	let value = if TEXT_RULE_TYPES.contains(&rule.r#type.as_str()) {
+		rule.value.as_deref().map_or(Value::Null, |v| json!(v))
+	} else {
+		rule
+			.value
+			.as_deref()
+			.and_then(|v| v.parse::<i64>().ok())
+			.map_or(Value::Null, |v| json!(v))
+	};
 	json!({
 		"type": rule.r#type,
 		"value": value,
@@ -94,7 +103,25 @@ fn validate_rule(input: &RuleInput) -> ApiResult<Rule> {
 		}
 		return Ok(Rule {
 			r#type: input.r#type.clone(),
-			value: Some(value),
+			value: Some(value.to_string()),
+			exclude: input.exclude,
+		});
+	}
+	if TEXT_RULE_TYPES.contains(&input.r#type.as_str()) {
+		let raw = input
+			.value
+			.as_ref()
+			.ok_or_else(|| ApiError::bad_request(format!("rule {} requires a value", input.r#type)))?;
+		let name = match raw {
+			Value::String(s) => s.trim(),
+			_ => return Err(ApiError::bad_request(format!("invalid rule value: {raw}"))),
+		};
+		if name.is_empty() {
+			return Err(ApiError::bad_request(format!("rule {} value must not be empty", input.r#type)));
+		}
+		return Ok(Rule {
+			r#type: input.r#type.clone(),
+			value: Some(name.to_string()),
 			exclude: input.exclude,
 		});
 	}
@@ -104,11 +131,11 @@ fn validate_rule(input: &RuleInput) -> ApiResult<Rule> {
 /// A (type, value) pair may appear once per group — including both arms at once is a
 /// contradiction; the DB's unique index doesn't see NULL flag values, so dedupe in code
 fn validate_rules(inputs: &[RuleInput]) -> ApiResult<Vec<Rule>> {
-	let mut seen: HashSet<(String, Option<i64>)> = HashSet::new();
+	let mut seen: HashSet<(String, Option<String>)> = HashSet::new();
 	let mut out = Vec::with_capacity(inputs.len());
 	for input in inputs {
 		let rule = validate_rule(input)?;
-		if !seen.insert((rule.r#type.clone(), rule.value)) {
+		if !seen.insert((rule.r#type.clone(), rule.value.clone())) {
 			return Err(ApiError::bad_request(format!(
 				"duplicate rule: {} {:?}",
 				rule.r#type, rule.value
@@ -177,10 +204,12 @@ pub async fn rules_for_library(pool: &SqlitePool, user_id: i64, group_id: i64) -
 	rules_of(pool, group_id).await
 }
 
-/// One bind in compiled-fragment order: User is the request's user id, Id a rule value
+/// One bind in compiled-fragment order: User is the request's user id, Id a numeric rule value,
+/// Text an author/tag rule value
 pub enum GroupBind {
 	User,
 	Id(i64),
+	Text(String),
 }
 
 /// Compiles a group's rules into AND-ed WHERE fragments (with leading " AND " each) and
@@ -210,6 +239,8 @@ pub fn compile_group(rules: &[StoredRule]) -> ApiResult<(String, Vec<GroupBind>)
 	push_valued(&mut sql, &mut binds, rules, "source", "m.source_id")?;
 	push_valued(&mut sql, &mut binds, rules, "content_rating", "m.content_rating")?;
 	push_category(&mut sql, &mut binds, rules)?;
+	push_text(&mut sql, &mut binds, rules, "author", "m.authors")?;
+	push_text(&mut sql, &mut binds, rules, "tag", "m.tags")?;
 	Ok((sql, binds))
 }
 
@@ -277,6 +308,43 @@ fn push_category(sql: &mut String, binds: &mut Vec<GroupBind>, rules: &[StoredRu
 	Ok(())
 }
 
+/// Text-valued rules: exact case-insensitive membership in the manga's JSON array column
+/// (authors/tags) via json_each, mirroring the ad-hoc library params
+fn push_text(sql: &mut String, binds: &mut Vec<GroupBind>, rules: &[StoredRule], r#type: &str, column: &str) -> ApiResult<()> {
+	let includes = parse_text_values(rules, r#type, false)?;
+	let excludes = parse_text_values(rules, r#type, true)?;
+	if !includes.is_empty() {
+		sql.push_str(&text_arm(column, includes.len(), false));
+		binds.extend(includes.into_iter().map(GroupBind::Text));
+	}
+	if !excludes.is_empty() {
+		sql.push_str(&text_arm(column, excludes.len(), true));
+		binds.extend(excludes.into_iter().map(GroupBind::Text));
+	}
+	Ok(())
+}
+
+fn text_arm(column: &str, len: usize, exclude: bool) -> String {
+	let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
+	format!(
+		"{head} (SELECT 1 FROM json_each({column}) je WHERE je.value COLLATE NOCASE IN ({}))",
+		vec!["?"; len].join(",")
+	)
+}
+
+/// Rule values were validated as non-empty strings on write; a null one means a hand-corrupted row
+fn parse_text_values(rules: &[StoredRule], r#type: &str, exclude: bool) -> ApiResult<Vec<String>> {
+	rules
+		.iter()
+		.filter(|r| r.r#type == r#type && r.exclude == exclude)
+		.map(|r| {
+			r.value
+				.clone()
+				.ok_or_else(|| ApiError::internal(format!("corrupt {type} rule value")))
+		})
+		.collect()
+}
+
 pub async fn list_groups(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -320,7 +388,7 @@ async fn insert_rules(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, group_id: i6
 		sqlx::query("INSERT INTO filter_group_rule (group_id, type, value, exclude) VALUES (?, ?, ?, ?)")
 			.bind(group_id)
 			.bind(&rule.r#type)
-			.bind(rule.value.map(|v| v.to_string()))
+			.bind(&rule.value)
 			.bind(rule.exclude)
 			.execute(&mut **tx)
 			.await?;

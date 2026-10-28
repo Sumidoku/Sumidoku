@@ -44,28 +44,38 @@ test('library toolbar groups controls and reveals active advanced filters', asyn
 				ratings: {},
 				sourceTri: {},
 				categoryTri: { '3': 1 },
+				authorTri: { 'Jane Doe': 1 },
+				tagTri: {},
 				groupId: 7,
 				groups: [{ id: 7, name: 'Unread only', sortOrder: 0, rules: [] }],
 				categories: [{ id: 3, name: 'Reading', mangaCount: 12, isDefault: false, sortOrder: 0 }],
 				sourceOptions: [],
+				authorOptions: [{ key: 'Jane Doe', label: 'Jane Doe（4）' }],
+				tagOptions: [{ key: 'romance', label: 'romance（9）' }],
 				showUncategorized: true,
 				onFilterCycle: () => {},
 				onRatingCycle: () => {},
 				onSourceCycle: () => {},
 				onCategoryCycle: () => {},
+				onAuthorCycle: () => {},
+				onTagCycle: () => {},
 				onGroupChange: () => {},
 				onResetRatings: () => {},
 				onResetSources: () => {},
+				onResetAuthors: () => {},
+				onResetTags: () => {},
 				onClearFilters: () => {}
 			})
 		);
 		assert.match(activeMarkup, /aria-expanded="true"/);
-		assert.match(activeMarkup, /class="library__filter-count">2</);
+		assert.match(activeMarkup, /class="library__filter-count">3</);
 		assert.match(activeMarkup, /class="library__filter-panel"/);
 		assert.match(activeMarkup, />Status</);
 		assert.match(activeMarkup, />More filters</);
 		assert.match(activeMarkup, />Filter groups</);
 		assert.match(activeMarkup, /Reading（12）/);
+		assert.match(activeMarkup, /Author（1）/);
+		assert.match(activeMarkup, />Tag</);
 		assert.match(activeMarkup, />Clear filters</);
 	} finally {
 		await vite.close();
@@ -116,8 +126,9 @@ test('advanced filter count excludes search, categories and sorting', async () =
 	});
 	try {
 		const { advancedFilterCount } = await vite.ssrLoadModule('/src/pages/library/LibraryToolbar.tsx');
-		assert.equal(advancedFilterCount({}, {}, {}, null), 0);
-		assert.equal(advancedFilterCount({ unread: 1, downloaded: -1 }, { '1': 1 }, { '2': 1, '3': -1 }, 7), 6);
+		assert.equal(advancedFilterCount({}, {}, {}, {}, {}, null), 0);
+		assert.equal(advancedFilterCount({ unread: 1, downloaded: -1 }, { '1': 1 }, { '2': 1, '3': -1 }, {}, {}, 7), 6);
+		assert.equal(advancedFilterCount({}, {}, {}, { 'Jane Doe': 1 }, { romance: -1 }, null), 2);
 	} finally {
 		await vite.close();
 	}

@@ -12,7 +12,9 @@ import {
 	useEnqueueDownloads,
 	useFilterGroups,
 	useLibrary,
+	useLibraryAuthors,
 	useLibrarySourceCounts,
+	useLibraryTags,
 	useServerSettings,
 	useSources
 } from '../api/hooks';
@@ -70,6 +72,8 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 	const [ratings, setRatings] = useState<TriStateSelection>(initialPrefs.ratings);
 	const [sourceTri, setSourceTri] = useState<TriStateSelection>(initialPrefs.sources);
 	const [categoryTri, setCategoryTri] = useState<TriStateSelection>(initialPrefs.categories);
+	const [authorTri, setAuthorTri] = useState<TriStateSelection>(initialPrefs.authors);
+	const [tagTri, setTagTri] = useState<TriStateSelection>(initialPrefs.tags);
 	const [groupId, setGroupId] = useState<number | null>(initialPrefs.group);
 	// library.default_category only seeds the very first visit: once any chip state exists in
 	// localStorage the user's own selection always wins (#243), and a manual chip change before the
@@ -88,12 +92,16 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		ratings,
 		sources: sourceTri,
 		categories: categoryTri,
+		authors: authorTri,
+		tags: tagTri,
 		groupId: groupId ?? undefined
 	});
 	const categories = useCategories();
 	const filterGroups = useFilterGroups();
 	const sourcesQuery = useSources();
 	const countsQuery = useLibrarySourceCounts();
+	const authorsQuery = useLibraryAuthors();
+	const tagsQuery = useLibraryTags();
 	const serverSettings = useServerSettings();
 	const showUncategorized = serverSettings.data?.library.showUncategorized !== false;
 
@@ -109,8 +117,18 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 
 	// Persist all library controls across sessions (the clear-filters button and chip clicks flow through the same setters)
 	useEffect(() => {
-		saveLibraryFilters({ search: searchInput, sort, filters: filterTri, ratings, sources: sourceTri, categories: categoryTri, group: groupId });
-	}, [searchInput, sort, filterTri, ratings, sourceTri, categoryTri, groupId]);
+		saveLibraryFilters({
+			search: searchInput,
+			sort,
+			filters: filterTri,
+			ratings,
+			sources: sourceTri,
+			categories: categoryTri,
+			authors: authorTri,
+			tags: tagTri,
+			group: groupId
+		});
+	}, [searchInput, sort, filterTri, ratings, sourceTri, categoryTri, authorTri, tagTri, groupId]);
 
 	// Restored ids may belong to since-deleted categories or uninstalled sources: a stale include id
 	// would filter the library down to nothing with no chip showing why, so drop unknown ids once
@@ -126,6 +144,16 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		);
 		setSourceTri((cur) => pruneSelection(cur, new Set(sourcesQuery.data?.map((s) => String(s.id)))));
 	}, [categories.data, sourcesQuery.data, showUncategorized]);
+	// Same staleness rule for restored author/tag names: a name no longer present in the library
+	// would filter invisibly, so prune each selection once its name list has loaded
+	useEffect(() => {
+		if (authorsQuery.data) {
+			setAuthorTri((cur) => pruneSelection(cur, new Set(authorsQuery.data.map((a) => a.name))));
+		}
+		if (tagsQuery.data) {
+			setTagTri((cur) => pruneSelection(cur, new Set(tagsQuery.data.map((t) => t.name))));
+		}
+	}, [authorsQuery.data, tagsQuery.data]);
 	// A selected group that was since deleted must not keep filtering invisibly
 	useEffect(() => {
 		if (filterGroups.data && groupId !== null && !filterGroups.data.some((g) => g.id === groupId)) {
@@ -151,6 +179,16 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 			key: String(s.id),
 			label: counted ? `${s.name}（${counts.get(s.id) ?? 0}）` : s.name
 		}));
+	// The author/tag endpoints return the entry counts directly and arrive pre-sorted case-insensitively,
+	// so the labels can always carry the same `name（count）` shape the source dropdown uses once counted
+	const authorOptions = useMemo(
+		() => (authorsQuery.data ?? []).map((a) => ({ key: a.name, label: `${a.name}（${a.count}）` })),
+		[authorsQuery.data]
+	);
+	const tagOptions = useMemo(
+		() => (tagsQuery.data ?? []).map((tag) => ({ key: tag.name, label: `${tag.name}（${tag.count}）` })),
+		[tagsQuery.data]
+	);
 
 	const entries = useMemo(
 		() => query.data?.pages.flatMap((p) => p.entries) ?? [],
@@ -306,7 +344,9 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		Object.keys(filterTri).length > 0 ||
 		Object.keys(ratings).length > 0 ||
 		Object.keys(sourceTri).length > 0 ||
-		Object.keys(categoryTri).length > 0;
+		Object.keys(categoryTri).length > 0 ||
+		Object.keys(authorTri).length > 0 ||
+		Object.keys(tagTri).length > 0;
 
 	function clearFilters() {
 		setSearchInput('');
@@ -315,6 +355,8 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		setRatings({});
 		setSourceTri({});
 		setCategoryTri({});
+		setAuthorTri({});
+		setTagTri({});
 		setGroupId(null);
 	}
 
@@ -358,18 +400,26 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 					ratings={ratings}
 					sourceTri={sourceTri}
 					categoryTri={categoryTri}
+					authorTri={authorTri}
+					tagTri={tagTri}
 					groupId={groupId}
 					groups={filterGroups.data ?? []}
 					categories={categories.data ?? []}
 					sourceOptions={triOptions}
+					authorOptions={authorOptions}
+					tagOptions={tagOptions}
 					showUncategorized={showUncategorized}
 					onFilterCycle={(key) => setFilterTri((cur) => cycled(cur, key))}
 					onRatingCycle={(key) => setRatings((cur) => cycled(cur, key))}
 					onSourceCycle={(key) => setSourceTri((cur) => cycled(cur, key))}
 					onCategoryCycle={cycleCategory}
+					onAuthorCycle={(key) => setAuthorTri((cur) => cycled(cur, key))}
+					onTagCycle={(key) => setTagTri((cur) => cycled(cur, key))}
 					onGroupChange={setGroupId}
 					onResetRatings={() => setRatings({})}
 					onResetSources={() => setSourceTri({})}
+					onResetAuthors={() => setAuthorTri({})}
+					onResetTags={() => setTagTri({})}
 					onClearFilters={clearFilters}
 				/>
 			)}

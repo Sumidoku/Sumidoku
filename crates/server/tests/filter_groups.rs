@@ -422,6 +422,79 @@ async fn library_group_composes_with_adhoc_filters() {
 	assert_eq!(entry_set(&body), [f.a].into());
 }
 
+/// Text-valued rules (author/tag): a string value matched exactly, case-insensitively, against
+/// the manga's JSON array column; validated on write, echoing back as a JSON string
+#[tokio::test]
+async fn library_group_text_rules() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_three_shelved(&app).await;
+	let (a, b, c) = (ids[0], ids[1], ids[2]);
+	let pool = connect_db(&db_path).await;
+	for (id, authors, tags) in [
+		(a, r#"["Asanagi"]"#, r#"["action","romance"]"#),
+		(b, r#"["Asanagi","Murasaki"]"#, r#"["Action"]"#),
+		(c, r#"["Murasaki"]"#, r#"[]"#),
+	] {
+		sqlx::query("UPDATE manga SET authors = ?, tags = ? WHERE id = ?")
+			.bind(authors)
+			.bind(tags)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("set authors/tags");
+	}
+
+	// rule validation: a text rule without a value, with a blank one, with a non-string one,
+	// and a duplicated (type, value) pair all 400
+	for rules in [
+		json!([{"type": "author"}]),
+		json!([{"type": "author", "value": ""}]),
+		json!([{"type": "tag", "value": "  "}]),
+		json!([{"type": "author", "value": 1}]),
+		json!([{"type": "tag", "value": "action"}, {"type": "tag", "value": "action", "exclude": true}]),
+	] {
+		let (status, body) = create_group(&app, "bad-text", rules).await;
+		assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+	}
+
+	// the value echoes back as a JSON string, unlike the numeric valued rules
+	let (status, body) = create_group(
+		&app,
+		"authors",
+		json!([{"type": "author", "value": "asanagi"}]),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["rules"][0], json!({"type": "author", "value": "asanagi", "exclude": false}));
+
+	// include matches exactly but case-insensitively; OR within the type
+	let group = body["id"].as_i64().expect("group id");
+	assert_eq!(group_library_set(&app, group).await, [a, b].into());
+	let group = must_group(
+		&app,
+		"authors-or",
+		json!([{"type": "author", "value": "Team X"}, {"type": "author", "value": "Murasaki"}]),
+	)
+	.await;
+	assert_eq!(group_library_set(&app, group).await, [b, c].into());
+	// exclude per value; tag include; the two dimensions AND
+	let group = must_group(&app, "tagx", json!([{"type": "tag", "value": "Action"}])).await;
+	assert_eq!(group_library_set(&app, group).await, [a, b].into());
+	let group = must_group(
+		&app,
+		"authorx",
+		json!([{"type": "author", "value": "Asanagi"}, {"type": "tag", "value": "romance"}]),
+	)
+	.await;
+	assert_eq!(group_library_set(&app, group).await, [a].into());
+	let group = must_group(&app, "murasakix", json!([{"type": "author", "value": "Murasaki", "exclude": true}])).await;
+	assert_eq!(group_library_set(&app, group).await, [a].into());
+}
+
 fn urlencoding(raw: &str) -> String {
 	let mut out = String::new();
 	for byte in raw.bytes() {

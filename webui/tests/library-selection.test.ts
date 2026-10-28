@@ -94,6 +94,8 @@ async function renderLibrary(
 		ratings: {},
 		sources: {},
 		categories: {},
+		authors: {},
+		tags: {},
 		groupId: undefined
 	};
 	qc.setQueryData([...qk.library, browse], {

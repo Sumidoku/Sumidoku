@@ -33,9 +33,18 @@ export function advancedFilterCount(
 	filterTri: TriStateSelection,
 	ratings: TriStateSelection,
 	sourceTri: TriStateSelection,
+	authorTri: TriStateSelection,
+	tagTri: TriStateSelection,
 	groupId: number | null
 ): number {
-	return Object.keys(filterTri).length + Object.keys(ratings).length + Object.keys(sourceTri).length + (groupId === null ? 0 : 1);
+	return (
+		Object.keys(filterTri).length +
+		Object.keys(ratings).length +
+		Object.keys(sourceTri).length +
+		Object.keys(authorTri).length +
+		Object.keys(tagTri).length +
+		(groupId === null ? 0 : 1)
+	);
 }
 
 export interface LibraryToolbarProps {
@@ -47,18 +56,26 @@ export interface LibraryToolbarProps {
 	ratings: TriStateSelection;
 	sourceTri: TriStateSelection;
 	categoryTri: TriStateSelection;
+	authorTri: TriStateSelection;
+	tagTri: TriStateSelection;
 	groupId: number | null;
 	groups: FilterGroup[];
 	categories: Category[];
 	sourceOptions: { key: string; label: string }[];
+	authorOptions: { key: string; label: string }[];
+	tagOptions: { key: string; label: string }[];
 	showUncategorized: boolean;
 	onFilterCycle: (key: string) => void;
 	onRatingCycle: (key: string) => void;
 	onSourceCycle: (key: string) => void;
 	onCategoryCycle: (key: string) => void;
+	onAuthorCycle: (key: string) => void;
+	onTagCycle: (key: string) => void;
 	onGroupChange: (id: number | null) => void;
 	onResetRatings: () => void;
 	onResetSources: () => void;
+	onResetAuthors: () => void;
+	onResetTags: () => void;
 	onClearFilters: () => void;
 }
 
@@ -71,22 +88,30 @@ export function LibraryToolbar({
 	ratings,
 	sourceTri,
 	categoryTri,
+	authorTri,
+	tagTri,
 	groupId,
 	groups,
 	categories,
 	sourceOptions,
+	authorOptions,
+	tagOptions,
 	showUncategorized,
 	onFilterCycle,
 	onRatingCycle,
 	onSourceCycle,
 	onCategoryCycle,
+	onAuthorCycle,
+	onTagCycle,
 	onGroupChange,
 	onResetRatings,
 	onResetSources,
+	onResetAuthors,
+	onResetTags,
 	onClearFilters
 }: LibraryToolbarProps) {
 	const { t } = useTranslation();
-	const activeCount = advancedFilterCount(filterTri, ratings, sourceTri, groupId);
+	const activeCount = advancedFilterCount(filterTri, ratings, sourceTri, authorTri, tagTri, groupId);
 	const [filtersOpen, setFiltersOpen] = useState(activeCount > 0);
 	const canClear = searchInput.trim() !== '' || activeCount > 0 || Object.keys(categoryTri).length > 0;
 
@@ -190,6 +215,26 @@ export function LibraryToolbar({
 								onCycle={onSourceCycle}
 								onReset={onResetSources}
 							/>
+							{/* With nothing selected and no names in the library the dropdown would open an empty menu; hide it.
+							 * A restored selection still renders until the lists load and the page prunes stale names. */}
+							{(authorOptions.length > 0 || Object.keys(authorTri).length > 0) && (
+								<TriStateDropdown
+									label={t('library.author')}
+									options={authorOptions}
+									states={authorTri}
+									onCycle={onAuthorCycle}
+									onReset={onResetAuthors}
+								/>
+							)}
+							{(tagOptions.length > 0 || Object.keys(tagTri).length > 0) && (
+								<TriStateDropdown
+									label={t('library.tag')}
+									options={tagOptions}
+									states={tagTri}
+									onCycle={onTagCycle}
+									onReset={onResetTags}
+								/>
+							)}
 						</div>
 					</section>
 
