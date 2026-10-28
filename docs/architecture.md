@@ -340,7 +340,13 @@ no alias is derived from migration text.
   filter values, mirroring AidokuRunner clearing filters on a non-empty
   query). Restored searches wait for the source configuration before their
   first request, so the same drop rule covers `?q=` deep links; normal sources
-  apply stored or explicit deep-link filters once ready. The manga detail page
+  apply stored or explicit deep-link filters once ready. Named filter groups
+  (Aidoku saved searches) live in `webui/src/lib/sourceSavedFilters.ts`:
+  localStorage `sumidoku.sourceSavedFilters.{id}` holds, per source, an array
+  of `{name, query, filters}`; applying a group refills the query box and the
+  panel draft through the same `applyFilterValues` restore (stale filter ids
+  drop silently) and submits at once; an empty list removes the key, and a
+  duplicate or blank name is refused with a toast. The manga detail page
   follows Aidoku's declared-first,
   derived-fallback tap-to-search (`config?.supportsX ?? …` in
   AidokuRunner): manifest `supportsTagSearch` submits a `Select` with id
