@@ -2233,6 +2233,36 @@
             }
           },
           {
+            "name": "author",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated author names; exact case-insensitive match against the manga's authors. OR within the set."
+          },
+          {
+            "name": "authorExclude",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Comma-separated tag names; same matching rules as author."
+          },
+          {
+            "name": "tagExclude",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "groupId",
             "in": "query",
             "schema": {
@@ -2324,6 +2354,68 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/SourceCount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/library/authors": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "getLibraryAuthors",
+        "summary": "Distinct authors across the library with entry counts",
+        "description": "Case variants of a name collapse into one entry; sorted case-insensitively.",
+        "responses": {
+          "200": {
+            "description": "Counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NameCount"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/library/tags": {
+      "get": {
+        "tags": [
+          "library"
+        ],
+        "operationId": "getLibraryTags",
+        "summary": "Distinct tags across the library with entry counts",
+        "description": "Case variants of a name collapse into one entry; sorted case-insensitively.",
+        "responses": {
+          "200": {
+            "description": "Counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NameCount"
                   }
                 }
               }
@@ -8627,6 +8719,22 @@
           }
         }
       },
+      "NameCount": {
+        "type": "object",
+        "required": [
+          "name",
+          "count"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "SourceCount": {
         "type": "object",
         "required": [
@@ -8735,7 +8843,9 @@
           "completed",
           "source",
           "content_rating",
-          "category"
+          "category",
+          "author",
+          "tag"
         ]
       },
       "FilterRule": {
@@ -8750,10 +8860,17 @@
             "$ref": "#/components/schemas/FilterRuleType"
           },
           "value": {
-            "type": "integer",
-            "format": "int64",
+            "oneOf": [
+              {
+                "type": "integer",
+                "format": "int64"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "nullable": true,
-            "description": "Null for flag rules; an integer for valued rules."
+            "description": "Null for flag rules; an integer for valued rules; a string for author/tag rules."
           },
           "exclude": {
             "type": "boolean"
@@ -8770,7 +8887,7 @@
             "$ref": "#/components/schemas/FilterRuleType"
           },
           "value": {
-            "description": "Omit or use null for flag rules; valued rules require an integer or numeric string.",
+            "description": "Omit or use null for flag rules; source/content_rating/category require an integer or numeric string; author/tag require a non-empty string.",
             "oneOf": [
               {
                 "type": "integer",

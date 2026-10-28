@@ -1255,6 +1255,193 @@ async fn library_category_tri_state_filter() {
 	}
 }
 
+/// Author/tag tri-state (`author`/`authorExclude`/`tag`/`tagExclude`): exact case-insensitive
+/// match against the manga's JSON arrays, OR within a set, NOT-OR for the exclude set, AND across
+#[tokio::test]
+async fn library_author_tag_filter() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let ids = register_four_shelved(&app).await;
+	let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
+	let pool = connect_db(&db_path).await;
+	// the fixture doesn't produce authors/tags; b deliberately varies the case to prove NOCASE
+	set_manga_lists(
+		&pool,
+		&[
+			(a, r#"["Asanagi","Team X"]"#, r#"["action","romance"]"#),
+			(b, r#"["asanagi"]"#, r#"["Action"]"#),
+			(c, r#"["Murasaki"]"#, r#"["drama"]"#),
+			// d stays uninitialized: empty arrays, the way a manga without metadata looks
+		],
+	)
+	.await;
+	let mut all = vec![a, b, c, d];
+	all.sort_unstable();
+
+	// include: OR within the set, exact but case-insensitive; names with spaces pass percent-encoded
+	assert_eq!(library_ids(&app, "author=Asanagi").await, vec![a, b]);
+	assert_eq!(library_ids(&app, "author=asanagi").await, vec![a, b]);
+	assert_eq!(library_ids(&app, "author=Team%20X").await, vec![a]);
+	assert_eq!(library_ids(&app, "author=Asanagi,Murasaki").await, vec![a, b, c]);
+	assert_eq!(library_ids(&app, "author=Nobody").await, Vec::<i64>::new());
+	assert_eq!(library_ids(&app, "tag=action").await, vec![a, b]);
+	assert_eq!(library_ids(&app, "tag=romance,drama").await, vec![a, c]);
+	// exclude: NOT-OR; the uninitialized d has nothing to match, so excludes keep it
+	assert_eq!(library_ids(&app, "authorExclude=Asanagi").await, vec![c, d]);
+	assert_eq!(library_ids(&app, "tagExclude=drama").await, vec![a, b, d]);
+	assert_eq!(
+		library_ids(&app, "author=Asanagi,Murasaki&authorExclude=Murasaki").await,
+		vec![a, b]
+	);
+	// AND across dimensions: include never matches the uninitialized d
+	assert_eq!(library_ids(&app, "author=Asanagi&tag=action").await, vec![a, b]);
+	assert_eq!(library_ids(&app, "author=Asanagi&tag=romance").await, vec![a]);
+	assert_eq!(library_ids(&app, "tagExclude=action,romance,drama").await, vec![d]);
+	// empty / pure whitespace counts as absent
+	assert_eq!(library_ids(&app, "author=").await, all);
+	assert_eq!(library_ids(&app, "author=%20").await, all);
+	assert_eq!(library_ids(&app, "tag=,,").await, all);
+	assert_eq!(library_ids(&app, "tagExclude=%20%20").await, all);
+}
+
+/// Distinct author/tag lists behind the filter dropdowns: case variants collapse into one entry,
+/// counts follow library membership
+#[tokio::test]
+async fn library_author_tag_counts() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	for path in ["/api/v1/library/authors", "/api/v1/library/tags"] {
+		let (status, body) = request(&app, "GET", path, None).await;
+		assert_eq!(status, StatusCode::OK, "{path}");
+		assert_eq!(body.as_array().expect("array").len(), 0, "{body}");
+	}
+
+	let ids = register_four_shelved(&app).await;
+	let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
+	let pool = connect_db(&db_path).await;
+	set_manga_lists(
+		&pool,
+		&[
+			(a, r#"["Asanagi","Team X"]"#, r#"["action","romance"]"#),
+			(b, r#"["asanagi"]"#, r#"["Action"]"#),
+			(c, r#"["Murasaki"]"#, r#"["drama"]"#),
+			// the fixture registers entry 3 with its own author/tag metadata;
+			// zero d out so it stands in for a manga with empty lists
+			(d, "[]", "[]"),
+		],
+	)
+	.await;
+
+	// NOCASE grouping collapses the Asanagi/asanagi pair into one entry with count 2; the
+	// emptied d contributes nothing
+	let name_counts = |body: &Value| -> Vec<(String, i64)> {
+		body.as_array()
+			.expect("array")
+			.iter()
+			.map(|e| {
+				(
+					e["name"].as_str().expect("name").to_lowercase(),
+					e["count"].as_i64().expect("count"),
+				)
+			})
+			.collect()
+	};
+	let (status, body) = request(&app, "GET", "/api/v1/library/authors", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		name_counts(&body),
+		vec![
+			("asanagi".to_string(), 2),
+			("murasaki".to_string(), 1),
+			("team x".to_string(), 1)
+		],
+		"{body}"
+	);
+	let (_, body) = request(&app, "GET", "/api/v1/library/tags", None).await;
+	assert_eq!(
+		name_counts(&body),
+		vec![
+			("action".to_string(), 2),
+			("drama".to_string(), 1),
+			("romance".to_string(), 1)
+		],
+		"{body}"
+	);
+
+	// removing a from the library drops its names and counts; unshelving d changes nothing
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{a}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&app, "GET", "/api/v1/library/authors", None).await;
+	assert_eq!(
+		name_counts(&body),
+		vec![("asanagi".to_string(), 1), ("murasaki".to_string(), 1)],
+		"{body}"
+	);
+	let (status, _) = request(&app, "DELETE", &format!("/api/v1/library/{d}"), None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&app, "GET", "/api/v1/library/authors", None).await;
+	assert_eq!(
+		name_counts(&body),
+		vec![("asanagi".to_string(), 1), ("murasaki".to_string(), 1)],
+		"{body}"
+	);
+}
+
+/// Registers four search results, shelves them all, returns their ids
+async fn register_four_shelved(app: &Router) -> Vec<i64> {
+	// register_three_manga registers but does not shelve; the fixture yields at least 4 entries,
+	// so register and shelve the 4th the same way
+	let manga = register_three_manga(app).await;
+	let (_, body) = request(app, "GET", "/api/v1/sources", None).await;
+	let source_id = source_by_key(&body, "en.example-source")["id"]
+		.as_i64()
+		.expect("source id");
+	let (_, body) = request(
+		app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"page": 1})),
+	)
+	.await;
+	let entry = &body["entries"].as_array().expect("entries")[3];
+	let (status, body) = request(
+		app,
+		"POST",
+		"/api/v1/manga",
+		Some(json!({"sourceId": source_id, "manga": entry})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let fourth = body["id"].as_i64().expect("manga id");
+	let mut ids: Vec<i64> = manga.iter().map(|(id, _)| *id).collect();
+	ids.push(fourth);
+	for id in &ids {
+		let (status, _) = request(app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	ids
+}
+
+/// Writes the authors/tags JSON array columns directly so the test does not
+/// depend on whatever metadata the fixture's search entries carry
+async fn set_manga_lists(pool: &sqlx::SqlitePool, rows: &[(i64, &str, &str)]) {
+	for (id, authors, tags) in rows {
+		sqlx::query("UPDATE manga SET authors = ?, tags = ? WHERE id = ?")
+			.bind(authors)
+			.bind(tags)
+			.bind(id)
+			.execute(pool)
+			.await
+			.expect("set authors/tags");
+	}
+}
+
 /// Percent-encodes reserved characters in the query value (test titles are ASCII, byte-wise handling suffices)
 fn urlencoding(raw: &str) -> String {
 	let mut out = String::new();

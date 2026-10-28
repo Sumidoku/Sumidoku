@@ -39,6 +39,13 @@ pub struct LibraryQuery {
 	/// Comma-separated category ids, inclusion set; 0 means uncategorized (no category rows of the user's own)
 	pub category: Option<String>,
 	pub category_exclude: Option<String>,
+	/// Comma-separated author names, exact case-insensitive match against the manga's authors array;
+	/// names containing a comma cannot be expressed (the comma is the separator)
+	pub author: Option<String>,
+	pub author_exclude: Option<String>,
+	/// Comma-separated tag names, same matching rules as author
+	pub tag: Option<String>,
+	pub tag_exclude: Option<String>,
 	/// A persisted filter group whose rules compile into the same WHERE clause, ANDed with the ad-hoc filters
 	pub group_id: Option<i64>,
 }
@@ -115,8 +122,28 @@ fn parse_int_list(raw: &str, param: &str, valid: impl Fn(i64) -> bool) -> ApiRes
 	Ok(out)
 }
 
+/// Comma-separated string list: blank segments count as absent, the rest pass through trimmed.
+/// Unlike parse_int_list there is no invalid value — any non-blank name is a candidate match
+fn parse_str_list(raw: &str) -> Vec<String> {
+	raw.split(',')
+		.map(str::trim)
+		.filter(|t| !t.is_empty())
+		.map(str::to_string)
+		.collect()
+}
+
 fn in_placeholders(len: usize) -> String {
 	vec!["?"; len].join(",")
+}
+
+/// Exact, case-insensitive membership in a JSON text array column (manga.authors / manga.tags).
+/// Includes OR within the set; the exclude arm negates the whole membership test
+fn json_array_arm(column: &str, values: &[String], exclude: bool) -> String {
+	let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
+	format!(
+		"{head} (SELECT 1 FROM json_each({column}) je WHERE je.value COLLATE NOCASE IN ({}))",
+		in_placeholders(values.len())
+	)
 }
 
 pub async fn list_library(
@@ -131,8 +158,9 @@ pub async fn list_library(
 	let (order_by, order_user_bind) = library_order_by(query.sort.as_deref())?;
 	let search = query.search.filter(|s| !s.is_empty());
 	// bind order follows the SQL clauses: user → search → categoryId → category include → category exclude →
-	// rating include → rating exclude → source include → source exclude → sourceId → one user per filter clause →
-	// the group's binds in compiled order → user for the ORDER BY clause
+	// rating include → rating exclude → source include → source exclude → sourceId → author include → author
+	// exclude → tag include → tag exclude → one user per filter clause → the group's binds in compiled order →
+	// user for the ORDER BY clause
 	let group_rules = match query.group_id {
 		None => Vec::new(),
 		Some(group_id) => crate::api::filter_groups::rules_for_library(&state.pool, user.id, group_id).await?,
@@ -162,6 +190,10 @@ pub async fn list_library(
 		Some(raw) => parse_int_list(raw, "categoryExclude", |v| v >= 0)?,
 		None => Vec::new(),
 	};
+	let author_in = query.author.as_deref().map(parse_str_list).unwrap_or_default();
+	let author_ex = query.author_exclude.as_deref().map(parse_str_list).unwrap_or_default();
+	let tag_in = query.tag.as_deref().map(parse_str_list).unwrap_or_default();
+	let tag_ex = query.tag_exclude.as_deref().map(parse_str_list).unwrap_or_default();
 	// category sets split into real ids (IN / NOT IN over the user's category rows) and the 0 arm
 	// (uncategorized): include-0 is NOT EXISTS, exclude-0 is EXISTS
 	let cat_in_links: Vec<i64> = cat_in.iter().copied().filter(|&id| id != 0).collect();
@@ -244,6 +276,20 @@ pub async fn list_library(
 	if query.source_id.is_some() {
 		sql.push_str(" AND m.source_id = ?");
 	}
+	// Uninitialized manga have empty authors/tags arrays, so these arms silently exclude them —
+	// there is no metadata to match against yet
+	if !author_in.is_empty() {
+		sql.push_str(&json_array_arm("m.authors", &author_in, false));
+	}
+	if !author_ex.is_empty() {
+		sql.push_str(&json_array_arm("m.authors", &author_ex, true));
+	}
+	if !tag_in.is_empty() {
+		sql.push_str(&json_array_arm("m.tags", &tag_in, false));
+	}
+	if !tag_ex.is_empty() {
+		sql.push_str(&json_array_arm("m.tags", &tag_ex, true));
+	}
 	let mut filter_user_binds = 0usize;
 	if let Some(raw) = &query.filter {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
@@ -302,6 +348,18 @@ pub async fn list_library(
 	if let Some(source_id) = query.source_id {
 		q = q.bind(source_id);
 	}
+	for v in author_in {
+		q = q.bind(v);
+	}
+	for v in author_ex {
+		q = q.bind(v);
+	}
+	for v in tag_in {
+		q = q.bind(v);
+	}
+	for v in tag_ex {
+		q = q.bind(v);
+	}
 	for _ in 0..filter_user_binds {
 		q = q.bind(user.id);
 	}
@@ -309,6 +367,7 @@ pub async fn list_library(
 		q = match bind {
 			crate::api::filter_groups::GroupBind::User => q.bind(user.id),
 			crate::api::filter_groups::GroupBind::Id(v) => q.bind(*v),
+			crate::api::filter_groups::GroupBind::Text(v) => q.bind(v.as_str()),
 		};
 	}
 	if order_user_bind {
@@ -500,6 +559,41 @@ pub async fn source_counts(
 		.map(|(source_id, count)| json!({ "sourceId": source_id, "count": count }))
 		.collect();
 	Ok(Json(json!(out)))
+}
+
+/// Distinct values of a JSON text array column (manga.authors / manga.tags) across the user's
+/// in-library manga, with entry counts — the filter dropdowns' option lists. Case variants of a
+/// name collapse into one entry; which spelling is returned is unspecified
+async fn name_counts(state: &AppState, user_id: i64, column: &str) -> ApiResult<Vec<Value>> {
+	let rows: Vec<(String, i64)> = sqlx::query_as(&format!(
+		"SELECT je.value, COUNT(DISTINCT m.id) FROM manga m
+		 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
+		 JOIN json_each(m.{column}) je
+		 WHERE mu.in_library = 1
+		 GROUP BY je.value COLLATE NOCASE
+		 ORDER BY je.value COLLATE NOCASE"
+	))
+	.bind(user_id)
+	.fetch_all(&state.pool)
+	.await?;
+	Ok(rows
+		.into_iter()
+		.map(|(name, count)| json!({ "name": name, "count": count }))
+		.collect())
+}
+
+pub async fn author_counts(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	Ok(Json(json!(name_counts(&state, user.id, "authors").await?)))
+}
+
+pub async fn tag_counts(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+) -> ApiResult<Json<Value>> {
+	Ok(Json(json!(name_counts(&state, user.id, "tags").await?)))
 }
 
 pub async fn list_categories(
