@@ -98,6 +98,16 @@ async fn scan_listed_entry(
 		.ok()
 }
 
+/// A reconcile means the manga's subtree changed on disk: a chapter analysed to zero pages (an empty
+/// directory, a broken archive) may hold pages now, so it becomes eligible for the analysis pass again
+async fn clear_zero_page_stamps(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, manga_id: i64) -> ApiResult<()> {
+	sqlx::query("UPDATE chapter SET pages_analyzed_at = NULL WHERE manga_id = ? AND pages_analyzed_at IS NOT NULL")
+		.bind(manga_id)
+		.execute(&mut **tx)
+		.await?;
+	Ok(())
+}
+
 fn is_protected(key: &str, failed: &[String]) -> bool {
 	failed
 		.iter()
@@ -370,6 +380,7 @@ pub async fn scan_instance(
 				};
 				let reconciled =
 					reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
+				clear_zero_page_stamps(&mut tx, manga_id).await?;
 				outcome.chapters_trashed += reconciled.trashed;
 				outcome.chapters_restored += reconciled.restored;
 			// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of
@@ -506,6 +517,7 @@ pub async fn scan_manga_entry(
 		}
 	};
 	let reconciled = reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
+	clear_zero_page_stamps(&mut tx, manga_id).await?;
 	let content_changed = is_existing
 		&& (!reconciled.new_ids.is_empty()
 			|| reconciled.trashed > 0

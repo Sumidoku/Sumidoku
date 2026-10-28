@@ -287,6 +287,42 @@ async fn full_scan_keeps_a_trashed_row_whose_key_now_holds_another_shape() {
 	assert_eq!(entry_kind(&pool, "Specials/Gamma.cbz").await.as_deref(), Some("directory"));
 }
 
+/// A chapter analysed to zero pages (here an archive without images) is not reopened by every later pass;
+/// once a scan sees its manga change, it is analysed again and picks up the pages it now has
+#[tokio::test]
+async fn zero_page_chapters_are_not_reanalysed_until_their_manga_changes() {
+	let t = scan_app().await;
+	let manga_dir = t.tmp.path().join("local/Zero");
+	write_cbz(&manga_dir.join("ch 1.cbz"), &[("notes.txt", b"no images")]);
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", t.db_path.display())).await.expect("connect");
+	scan_and_settle(&t.app).await;
+	let page_count = || async {
+		sqlx::query_scalar::<_, i64>(
+			"SELECT c.page_count FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.key = 'Zero'",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("Zero chapter")
+	};
+	assert_eq!(page_count().await, 0);
+
+	let tasks = scan_and_settle(&t.app).await;
+	let analysis = tasks.iter().find(|task| task["kind"] == "local_analyze").expect("analysis task");
+	assert_eq!(analysis["status"], "done", "{analysis}");
+	assert_eq!(
+		(&analysis["result"]["pagesAnalyzed"], &analysis["result"]["failed"]),
+		(&json!(0), &json!(0)),
+		"an unchanged zero-page chapter must not be reopened: {analysis}"
+	);
+
+	write_cbz(&manga_dir.join("ch 1.cbz"), &[("1.png", b"zero-1-1")]);
+	let later = filetime::FileTime::from_unix_time(4_000_000_000, 0);
+	filetime::set_file_mtime(manga_dir.join("ch 1.cbz"), later).expect("archive mtime");
+	filetime::set_file_mtime(&manga_dir, later).expect("manga mtime");
+	scan_and_settle(&t.app).await;
+	assert_eq!(page_count().await, 1, "a changed manga gets its zero-page chapters analysed again");
+}
+
 #[tokio::test]
 async fn manual_restore_brings_back_a_trashed_manga() {
 	let t = scan_app().await;

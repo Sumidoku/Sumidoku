@@ -10,8 +10,9 @@
 //! A failure on one item is logged and counted, never fails the pass; cancellation is checked between
 //! items.
 //!
-//! "Needs analysis" is derivable from the rows themselves (initialized = 0 / page_count = 0), so a
-//! restart simply re-enqueues the kind and the pass resumes where the rows say it stopped.
+//! "Needs analysis" is derivable from the rows themselves (initialized = 0 / page_count = 0 with no
+//! pages_analyzed_at stamp), so a restart simply re-enqueues the kind and the pass resumes where the rows say
+//! it stopped.
 
 use crate::error::ApiResult;
 use crate::state::AppState;
@@ -61,7 +62,8 @@ pub async fn analyze_instance(run: &crate::task::TaskRun, source_id: i64) -> Api
 		let pending: Vec<i64> = match manga_id {
 			Some(id) => sqlx::query_scalar(
 				"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id
-				 WHERE c.manga_id = ? AND c.page_count = 0 AND c.trashed_at IS NULL AND m.trashed_at IS NULL
+				 WHERE c.manga_id = ? AND c.page_count = 0 AND c.pages_analyzed_at IS NULL
+				   AND c.trashed_at IS NULL AND m.trashed_at IS NULL
 				 ORDER BY c.id",
 			)
 			.bind(id)
@@ -69,7 +71,8 @@ pub async fn analyze_instance(run: &crate::task::TaskRun, source_id: i64) -> Api
 			.await?,
 			None => sqlx::query_scalar(
 				"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id
-				 WHERE m.source_id = ? AND c.page_count = 0 AND c.trashed_at IS NULL AND m.trashed_at IS NULL
+				 WHERE m.source_id = ? AND c.page_count = 0 AND c.pages_analyzed_at IS NULL
+				   AND c.trashed_at IS NULL AND m.trashed_at IS NULL
 				 ORDER BY c.id",
 			)
 			.bind(source_id)
@@ -89,6 +92,13 @@ pub async fn analyze_instance(run: &crate::task::TaskRun, source_id: i64) -> Api
 					failed += 1;
 				}
 			}
+			// a chapter still at zero pages (no images, an unreadable archive) is settled until a scan sees its
+			// manga change; without the stamp every pass would reopen it
+			sqlx::query("UPDATE chapter SET pages_analyzed_at = ? WHERE id = ? AND page_count = 0")
+				.bind(crate::model::unix_now())
+				.bind(chapter_id)
+				.execute(&state.pool)
+				.await?;
 		}
 	}
 

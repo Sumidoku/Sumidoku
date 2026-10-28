@@ -587,7 +587,10 @@ no alias is derived from migration text.
   (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and
   manga-level authors/artists/tags aggregated from chapters when the chain
   found none — and page rows through the reader's own `load_pages` write
-  path. Opening an indexed-but-unanalyzed manga stays cheap and kicks the
+  path. A chapter the page pass leaves at zero pages (no images, an
+  unreadable archive) gets `chapter.pages_analyzed_at` (migration 0029)
+  and is skipped by later passes until a scan reconciles its manga, which
+  clears the stamp. Opening an indexed-but-unanalyzed manga stays cheap and kicks the
   analysis task; only a never-indexed open pays the synchronous chain.
   Trashed rows stay visible: manga/chapter JSON carry a `trashed` boolean —
   an additive field in every source's response schema (online and OPDS
