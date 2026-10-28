@@ -4,9 +4,9 @@ import { SegmentedControl, Select } from '../../components';
 import { FONT_SIZE_LIMITS, LINE_HEIGHT_LIMITS } from './typography';
 import type { ReaderFont, ReaderTypography } from './typography';
 import { pageText } from './pageText';
+import type { Dir } from './direction';
 
 export type Mode = 'paged' | 'continuous' | 'webtoon';
-export type Dir = 'ltr' | 'rtl';
 
 interface ReaderSettingsProps {
 	mode: Mode;

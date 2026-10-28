@@ -29,7 +29,11 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
-import type { Mode, Dir } from './reader/ReaderSettings';
+import type { Mode } from './reader/ReaderSettings';
+import { zoneMovesForward } from './reader/direction';
+import type { Dir } from './reader/direction';
+import { ReaderPager } from './reader/ReaderPager';
+import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
 import type { ReaderTypography } from './reader/typography';
 import './reader.css';
@@ -391,7 +395,7 @@ function ReaderCore({
 	}
 
 	function onZone(which: 'left' | 'right') {
-		turn(dir === 'ltr' ? which === 'right' : which === 'left');
+		turn(zoneMovesForward(dir, which));
 	}
 
 	function goBack() {
@@ -691,18 +695,14 @@ function ReaderCore({
 					>
 						{curPage &&
 							(curText !== null ? (
-								<div className="reader__text-paged">
-									<div
-										className="reader-text reader-text--cols"
-										ref={textColsRef}
-										style={{
-											...textStyle,
-											columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
-											transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
-										}}
-										dangerouslySetInnerHTML={{ __html: md(curText) }}
-									/>
-								</div>
+								<TextColumns
+									dir={dir}
+									html={md(curText)}
+									textStyle={textStyle}
+									layout={textLayout}
+									col={col}
+									innerRef={textColsRef}
+								/>
 							) : isUnsupported(curPage) ? (
 								<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 							) : (
@@ -719,7 +719,7 @@ function ReaderCore({
 					<button
 						type="button"
 						className="reader__zone reader__zone--left"
-						aria-label={t('reader.prevPage')}
+						aria-label={t(zoneMovesForward(dir, 'left') ? 'reader.nextPage' : 'reader.prevPage')}
 						onClick={(e) => {
 							e.stopPropagation();
 							onPagedClick('left');
@@ -728,7 +728,7 @@ function ReaderCore({
 					<button
 						type="button"
 						className="reader__zone reader__zone--right"
-						aria-label={t('reader.nextPage')}
+						aria-label={t(zoneMovesForward(dir, 'right') ? 'reader.nextPage' : 'reader.prevPage')}
 						onClick={(e) => {
 							e.stopPropagation();
 							onPagedClick('right');
@@ -899,27 +899,16 @@ function ReaderCore({
 				</>
 			)}
 
-			<div className={barCls('reader__bar reader__bar--bottom')}>
-				<Button size="sm" disabled={!prevCh} onClick={() => navCh(prevCh)}>
-					{t('reader.prevChapter')}
-				</Button>
-				<div className="reader__pager">
-					<input
-						type="range"
-						min={1}
-						max={navTotal}
-						value={Math.min(navPos + 1, navTotal)}
-						onChange={onSlider}
-						aria-label={t('reader.jumpToPage')}
-					/>
-					<span className="reader__page-num">
-						{Math.min(navPos + 1, navTotal)}/{navTotal}
-					</span>
-				</div>
-				<Button size="sm" disabled={!nextCh} onClick={() => navCh(nextCh)}>
-					{t('reader.nextChapter')}
-				</Button>
-			</div>
+			<ReaderPager
+				dir={dir}
+				hidden={!overlay}
+				navPos={navPos}
+				navTotal={navTotal}
+				prevCh={prevCh}
+				nextCh={nextCh}
+				onSlider={onSlider}
+				onNavChapter={navCh}
+			/>
 		</div>
 	);
 }

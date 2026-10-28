@@ -1757,7 +1757,11 @@ reserving space before lazy loads; text, unsupported and unknown-dimension
 pages get no forced ratio, and paged mode keeps its fixed viewport.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
-rendering, and typography changes recompute paged text columns.
+rendering, and typography changes recompute paged text columns. Reading direction
+(`sumidoku.reader.dir`, paged mode only) is a reading-order contract, not just a
+tap mapping: it swaps which tap zone, arrow key and bottom-bar side moves forward,
+flows paged text columns right-to-left with a matching transform sign
+(`reader/direction.ts`), and mirrors the page slider so page 1 sits on the right.
 
 ## Known gaps
 
