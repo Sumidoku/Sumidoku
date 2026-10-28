@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Translate server-sent labels by a stable id, never by their display text.**
+A label the server sends is copy that can be reworded at any time; a UI
+that maps it back to a translation by matching that text (or by expecting
+the server to send catalog keys) loses the translation silently whenever
+the two sides drift. Key the translation table by the entity's id, keep
+the server text only as the fallback, and test with a reworded label.
+- Evidence: 2026-10-26, #446 emitted `localHome.*` keys the UI catalog did
+  not carry, so raw keys rendered until #456 renamed them.
+- Seen again: 2026-10-28, #481 switched local home titles to plain English
+  and translated them with `case 'Latest updates'` matches, so any server
+  rewording would fall back to English. #482 keys home titles and browse
+  labels by listing id through one table; its regression feeds the
+  reworded `Recently added` on `latest-added` and expects the Chinese
+  label, failed when the text match was restored, and passed again after.
+
 **A repository's commit rules override an agent tool's default attribution,
 on every commit a PR carries.** The `Co-Authored-By` ban in
 docs/code-standards.md names the squash message, but a branch commit is
