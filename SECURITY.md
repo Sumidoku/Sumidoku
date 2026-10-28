@@ -20,6 +20,9 @@ escaping the WASM sandbox, SSRF beyond what a configured source can
 already do, and credential or database exposure. Out of scope: what a
 malicious *source package* does with the network access sources are
 expected to have — sources are user-installed trust, like browser
-extensions.
+extensions. That access has no destination filter: a source can reach
+loopback and private network addresses, including this server's own API
+(see the network trust boundary in
+[docs/architecture.md](docs/architecture.md)).
 
 Only the latest release is supported.
