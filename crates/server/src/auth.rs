@@ -36,10 +36,39 @@ pub fn hash_password(password: &str) -> Result<String, Error> {
 }
 
 fn verify_password(hash: &str, password: &str) -> bool {
+	#[cfg(test)]
+	ARGON_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 	let Ok(parsed) = PasswordHash::new(hash) else {
 		return false;
 	};
 	argon().verify_password(password.as_bytes(), &parsed).is_ok()
+}
+
+#[cfg(test)]
+static ARGON_VERIFICATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A real PHC string with the production parameters: verifying against it when there is no usable hash makes an
+/// unknown username cost the same argon2 run as a wrong password, so response time cannot enumerate usernames
+static DUMMY_HASH: std::sync::LazyLock<String> =
+	std::sync::LazyLock::new(|| hash_password("sumidoku-no-such-user").expect("dummy argon2 hash"));
+
+/// argon2 is deliberately slow CPU work: it runs off the async workers, and a small permit pool keeps a flood of
+/// login attempts from occupying every blocking thread and core
+static ARGON_PERMITS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+/// `None` verifies against the dummy hash and always fails, at the same cost as a real mismatch
+async fn verify_password_blocking(hash: Option<String>, password: &str) -> bool {
+	let _permit = ARGON_PERMITS.acquire().await.expect("argon2 permits never close");
+	let password = password.to_string();
+	tokio::task::spawn_blocking(move || match hash {
+		Some(hash) => verify_password(&hash, &password),
+		None => {
+			verify_password(&DUMMY_HASH, &password);
+			false
+		}
+	})
+	.await
+	.unwrap_or(false)
 }
 
 pub fn sha256_hex(raw: &str) -> String {
@@ -164,10 +193,11 @@ async fn verify_user_credentials(
 			.bind(username)
 			.fetch_optional(pool)
 			.await?;
-	let Some((id, username, hash)) = row else {
+	let Some((id, username, hash)) = row.filter(|(_, _, hash)| !hash.is_empty()) else {
+		verify_password_blocking(None, password).await;
 		return Ok(None);
 	};
-	if hash.is_empty() || !verify_password(&hash, password) {
+	if !verify_password_blocking(Some(hash), password).await {
 		return Ok(None);
 	}
 	Ok(Some(AuthUser { id, username }))
@@ -356,7 +386,7 @@ pub async fn change_password(
 	let Some((hash,)) = hash else {
 		return Err(ApiError::unauthorized());
 	};
-	if hash.is_empty() || !verify_password(&hash, &body.current_password) {
+	if hash.is_empty() || !verify_password_blocking(Some(hash), &body.current_password).await {
 		return Err(ApiError::unauthorized());
 	}
 	let new_hash = hash_password(&body.new_password).map_err(|e| ApiError::internal(e.to_string()))?;
@@ -378,6 +408,29 @@ pub async fn change_password(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// An unknown username must pay the same argon2 verification as a wrong password, or response time
+	/// tells an attacker which usernames exist
+	#[tokio::test]
+	async fn unknown_username_costs_an_argon2_verification() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let hash = hash_password("right").expect("hash");
+		sqlx::query("UPDATE user SET username = 'admin', password_hash = ? WHERE id = 1")
+			.bind(&hash)
+			.execute(&pool)
+			.await
+			.expect("seed admin");
+		let before = ARGON_VERIFICATIONS.load(std::sync::atomic::Ordering::SeqCst);
+		assert!(verify_user_credentials(&pool, "nobody", "wrong").await.expect("verify").is_none());
+		let unknown = ARGON_VERIFICATIONS.load(std::sync::atomic::Ordering::SeqCst) - before;
+		assert!(verify_user_credentials(&pool, "admin", "wrong").await.expect("verify").is_none());
+		let wrong = ARGON_VERIFICATIONS.load(std::sync::atomic::Ordering::SeqCst) - before - unknown;
+		assert_eq!((unknown, wrong), (1, 1), "unknown user and wrong password must both run argon2");
+		assert!(verify_user_credentials(&pool, "admin", "right").await.expect("verify").is_some());
+	}
 
 	#[tokio::test]
 	async fn revocation_before_key_check_is_not_authenticated() {
