@@ -12,6 +12,7 @@ import type {
 	TrackerLinkUpsert,
 	TrackerOAuthStatus,
 	TrackerProvider,
+	TrackerSyncResult,
 	TrackerUpdateRequest
 } from './types';
 
@@ -56,6 +57,17 @@ export function putTrackerLink(mangaId: number, body: TrackerLinkUpsert) {
 
 export function deleteTrackerLink(mangaId: number, provider: TrackerProvider) {
 	return api<void>(`/trackers/links/${mangaId}/${provider}`, { method: 'DELETE' });
+}
+
+/// Aidoku's "Sync Local History": pull the tracker's progress onto the local
+/// history. `preview` only computes the plan; applying marks the chapters
+/// read and pushes the new progress to the manga's other bindings.
+export function syncTrackerLink(mangaId: number, provider: TrackerProvider, preview = false) {
+	return api<TrackerSyncResult>(`/trackers/links/${mangaId}/${provider}/sync`, {
+		method: 'POST',
+		body: { preview },
+		silent: true
+	});
 }
 
 export function trackerLedger() {

@@ -1229,6 +1229,16 @@ export type TrackerOAuthStatus = {
 
 export type TrackerProvider = "anilist" | "mal" | "bangumi" | "mangabaka";
 
+export type TrackerSyncRequest = {
+	preview?: boolean;
+};
+
+export type TrackerSyncResult = {
+	progress: number;
+	marked: number;
+	chapterIds: Array<number>;
+};
+
 export type TrackerUpdateRequest = {
 	trackId: string;
 } & TrackUpdate;

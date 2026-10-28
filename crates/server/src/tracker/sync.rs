@@ -13,10 +13,12 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 
 /// A read path marked chapters read: re-evaluate the manga's bindings.
-/// Coalesced per manga, so the payload is just the pair.
+/// Coalesced per manga, so the payload is just the pair plus an optional
+/// provider to skip: a pull sync marks chapters from tracker A and the
+/// resulting push must not echo back to A (Aidoku's skipTracker).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrackerSyncEvent {
-	Progress { manga_id: i64, user_id: i64 },
+	Progress { manga_id: i64, user_id: i64, skip: Option<Provider> },
 }
 
 pub type TrackerSyncSender = tokio::sync::mpsc::UnboundedSender<TrackerSyncEvent>;
@@ -68,17 +70,27 @@ pub fn consume_events(
 			let Some(event) = events.recv().await else {
 				break;
 			};
-			let mut pairs = std::collections::BTreeSet::new();
-			let TrackerSyncEvent::Progress { manga_id, user_id } = event;
-			pairs.insert((manga_id, user_id));
-			while let Ok(TrackerSyncEvent::Progress { manga_id, user_id }) = events.try_recv() {
-				pairs.insert((manga_id, user_id));
+			// `None` means "push to every bound tracker"; merging two events
+			// keeps a skip only when both agree on it, since each event's
+			// intent is "push everywhere but here"
+			let mut pairs = std::collections::BTreeMap::new();
+			let TrackerSyncEvent::Progress { manga_id, user_id, skip } = event;
+			pairs.insert((manga_id, user_id), skip);
+			while let Ok(TrackerSyncEvent::Progress { manga_id, user_id, skip }) = events.try_recv() {
+				pairs
+					.entry((manga_id, user_id))
+					.and_modify(|existing| {
+						if *existing != skip {
+							*existing = None;
+						}
+					})
+					.or_insert(skip);
 			}
-			for (manga_id, user_id) in pairs {
+			for ((manga_id, user_id), skip) in pairs {
 				let pool = pool.clone();
 				let services = services.clone();
 				tokio::spawn(async move {
-					run_serialized(&(manga_id, user_id), sync_manga(&pool, &services, manga_id, user_id)).await;
+					run_serialized(&(manga_id, user_id), sync_manga(&pool, &services, manga_id, user_id, skip)).await;
 				});
 			}
 		}
@@ -111,8 +123,10 @@ async fn gather(pool: &SqlitePool, manga_id: i64, user_id: i64) -> Result<Option
 	Ok(Some((links, chapters)))
 }
 
-/// Syncs every tracker binding of one (manga, user) pair.
-async fn sync_manga(pool: &SqlitePool, services: &TrackerServices, manga_id: i64, user_id: i64) {
+/// Syncs every tracker binding of one (manga, user) pair, except the provider
+/// a pull sync just read from: pushing its own progress back could advance the
+/// remote entry (floored local numbers round up past the tracker value).
+async fn sync_manga(pool: &SqlitePool, services: &TrackerServices, manga_id: i64, user_id: i64, skip: Option<Provider>) {
 	let (links, chapters) = match gather(pool, manga_id, user_id).await {
 		Ok(Some(snapshot)) => snapshot,
 		Ok(None) => return,
@@ -123,6 +137,9 @@ async fn sync_manga(pool: &SqlitePool, services: &TrackerServices, manga_id: i64
 	};
 	let today = chrono::Local::now().date_naive();
 	for link in &links {
+		if skip.is_some_and(|provider| provider.as_str() == link.provider) {
+			continue;
+		}
 		if let Err(e) = push_link(services, link, &chapters, today).await {
 			tracing::warn!("tracker sync: {}:{} for user {} failed: {e}", link.provider, link.track_id, link.user_id);
 		}
@@ -220,15 +237,18 @@ mod tests {
 		assert!(!locks.contains_key(&key));
 	}
 
+	type UpdateLog = Arc<StdMutex<Vec<(i64, String, TrackUpdate)>>>;
+
 	struct StubTracker {
+		provider: Provider,
 		remote: RemoteState,
-		updates: Arc<StdMutex<Vec<(i64, String, TrackUpdate)>>>,
+		updates: UpdateLog,
 	}
 
 	#[async_trait::async_trait]
 	impl TrackerService for StubTracker {
 		fn provider(&self) -> Provider {
-			Provider::Anilist
+			self.provider
 		}
 
 		async fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
@@ -257,6 +277,7 @@ mod tests {
 		let services = TrackerServices::new(
 			crate::tracker::oauth::OAuthManager::new(pool, reqwest::Client::new()),
 			vec![Arc::new(StubTracker {
+				provider: Provider::Anilist,
 				remote: RemoteState {
 					status: Some(TrackStatus::Reading),
 					last_read_chapter: Some(10.0),
@@ -286,5 +307,80 @@ mod tests {
 		assert_eq!(updates[0].1, "42");
 		assert_eq!(updates[0].2.last_read_chapter, Some(11.0));
 		assert_eq!(updates[0].2.status, None);
+	}
+
+	/// A pull sync marks chapters read from one tracker and then pushes the new
+	/// progress to the manga's other bindings: the source provider is skipped
+	/// (Aidoku's skipTracker), or the echo would advance the remote entry past
+	/// the value it just reported (floored local numbers round up).
+	#[tokio::test]
+	async fn sync_manga_skip_excludes_the_source_tracker() {
+		let updates = Arc::new(StdMutex::new(Vec::new()));
+		let tmp = tempfile::tempdir().unwrap();
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
+		let make = |provider: Provider, updates: &UpdateLog| {
+			Arc::new(StubTracker {
+				provider,
+				remote: RemoteState { status: Some(TrackStatus::Reading), last_read_chapter: Some(10.0), ..RemoteState::default() },
+				updates: updates.clone(),
+			})
+		};
+		let services = TrackerServices::new(
+			crate::tracker::oauth::OAuthManager::new(pool.clone(), reqwest::Client::new()),
+			vec![make(Provider::Anilist, &updates), make(Provider::Mal, &updates)],
+		);
+		let source_id: i64 = sqlx::query_scalar("INSERT INTO source (key, name, wasm_path) VALUES ('en.test', 'Test', '') RETURNING id")
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'm', 'M') RETURNING id")
+			.bind(source_id)
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		let chapter_id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key, number) VALUES (?, 'ch11', 11) RETURNING id")
+			.bind(manga_id)
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		sqlx::query("INSERT INTO chapter_user (chapter_id, user_id, is_read) VALUES (?, 1, 1)")
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.unwrap();
+		for provider in ["anilist", "mal"] {
+			dao::upsert_link(
+				&pool,
+				&dao::NewTrackerLink {
+					manga_id,
+					user_id: 1,
+					provider,
+					track_id: "42",
+					title: None,
+					track_mode: TrackMode::Auto,
+					chapter_offset: 0,
+				},
+			)
+			.await
+			.unwrap();
+		}
+
+		sync_manga(&pool, &services, manga_id, 1, Some(Provider::Anilist)).await;
+
+		{
+			let pushed = updates.lock().unwrap();
+			// only the mal binding is pushed; the anilist stub still exists in
+			// the registry, so a missing skip would produce two updates
+			assert_eq!(pushed.len(), 1);
+			// both trackers read progress 10 and local is at 11, so the
+			// surviving push carries the new chapter
+			assert_eq!(pushed[0].2.last_read_chapter, Some(11.0));
+		}
+
+		// without a skip both bindings are pushed (the first push advanced
+		// neither remote past 11, so both decide again)
+		sync_manga(&pool, &services, manga_id, 1, None).await;
+		let pushed = updates.lock().unwrap();
+		assert_eq!(pushed.len(), 3);
 	}
 }

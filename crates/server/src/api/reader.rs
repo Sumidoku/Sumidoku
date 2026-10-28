@@ -31,7 +31,7 @@ impl ProgressPatch {
 	/// target and the history stamp all go; the bookmark is untouched. The wipe is explicit user intent
 	/// and applies even under incognito. A patch carrying both lastPageRead and isRead:false is a plain
 	/// progress write and keeps the merge semantics.
-	async fn apply(
+	pub(crate) async fn apply(
 		&self,
 		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 		user_id: i64,
@@ -191,7 +191,7 @@ pub async fn update_chapter(
 	let progress = patch.apply(&mut tx, user.id, id).await?;
 	tx.commit().await?;
 	if progress.is_read {
-		notify_tracker_read(&state, chapter.manga_id, user.id);
+		notify_tracker_read(&state, chapter.manga_id, user.id, None);
 	}
 	if let Some(deletion) = deletion {
 		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
@@ -202,9 +202,11 @@ pub async fn update_chapter(
 
 /// Lossless tap for the tracker sync: it re-reads the current progress anyway,
 /// so the payload is just the pair and a miss only costs one idle round trip.
-fn notify_tracker_read(state: &AppState, manga_id: i64, user_id: i64) {
+/// `skip` excludes one provider from the push (a pull sync must not echo back
+/// to the tracker it just read from; Aidoku's skipTracker).
+pub(crate) fn notify_tracker_read(state: &AppState, manga_id: i64, user_id: i64, skip: Option<crate::tracker::Provider>) {
 	if let Some(tx) = state.tracker_tx.get() {
-		let _ = tx.send(crate::tracker::sync::TrackerSyncEvent::Progress { manga_id, user_id });
+		let _ = tx.send(crate::tracker::sync::TrackerSyncEvent::Progress { manga_id, user_id, skip });
 	}
 }
 
@@ -307,7 +309,7 @@ pub async fn batch_update_chapters(
 				query = query.bind(chapter_id);
 			}
 			for manga_id in query.fetch_all(&state.pool).await? {
-				notify_tracker_read(&state, manga_id, user.id);
+				notify_tracker_read(&state, manga_id, user.id, None);
 			}
 		}
 	}

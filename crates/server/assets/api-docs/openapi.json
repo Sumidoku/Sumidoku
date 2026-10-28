@@ -3768,6 +3768,69 @@
         }
       }
     },
+    "/api/v1/trackers/links/{id}/{provider}/sync": {
+      "post": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "syncTrackerLink",
+        "summary": "Pull the tracker's progress onto the local history (Aidoku's Sync Local History): every unread chapter up to the remote progress is marked read, then the new progress is pushed to the manga's other bindings, skipping the tracker it came from",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MangaId"
+          },
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackerSyncRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The chapters that were (preview: would be) marked read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackerSyncResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "No tracker account connected (error code `tracker_auth`); connect one under settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/trackers/ledger": {
       "get": {
         "tags": [
@@ -5286,6 +5349,42 @@
             "format": "int32",
             "minimum": -10000,
             "maximum": 10000
+          }
+        }
+      },
+      "TrackerSyncRequest": {
+        "type": "object",
+        "properties": {
+          "preview": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only compute the plan; nothing is written and no push runs"
+          }
+        }
+      },
+      "TrackerSyncResult": {
+        "type": "object",
+        "required": [
+          "progress",
+          "marked",
+          "chapterIds"
+        ],
+        "properties": {
+          "progress": {
+            "type": "number",
+            "description": "The tracker progress the chapters were matched against (0 when the tracker has no readable progress)"
+          },
+          "marked": {
+            "type": "integer",
+            "description": "How many previously unread chapters are (preview: would be) marked read"
+          },
+          "chapterIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "description": "The ids of those chapters, oldest first"
           }
         }
       },

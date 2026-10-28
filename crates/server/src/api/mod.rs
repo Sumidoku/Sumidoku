@@ -187,6 +187,7 @@ pub fn router(state: Arc<AppState>) -> Router {
 			get(tracker::list_tracker_links).put(tracker::put_tracker_link),
 		)
 		.route("/api/v1/trackers/links/{id}/{provider}", delete(tracker::delete_tracker_link))
+		.route("/api/v1/trackers/links/{id}/{provider}/sync", post(tracker::sync_tracker_link))
 		.route("/api/v1/trackers/ledger", get(tracker::tracker_ledger))
 		.route("/api/v1/trackers/{provider}/search", get(tracker::tracker_search))
 		.route("/api/v1/trackers/{provider}/state", get(tracker::tracker_state))

@@ -138,7 +138,11 @@ no alias is derived from migration text.
   and MangaBaka (#35). REST under `/api/v1/trackers`: binding CRUD
   (`links`), a recent-entries `ledger`, remote `search`/`state`/`update`
   proxies, and the OAuth handshake (`oauth/{provider}/start|status|logout|
-  callback`). The all-user binding list uses the standard paged response
+  callback`). `POST /links/{id}/{provider}/sync` pulls a binding's
+   remote progress onto the local reading history (Aidoku's "Sync Local
+   History"); its `preview` body flag only computes the plan — no chapter
+   rows are touched — so the web UI can show what would be marked before
+   the user confirms. The all-user binding list uses the standard paged response
   envelope. Manga responses carry `trackerProviders` from local bindings only;
   list endpoints derive them with one page-scoped batch query and never call a
   provider. A remote route hit without a connected account answers 409
@@ -183,7 +187,17 @@ no alias is derived from migration text.
   coalesces bursts, serializes each pair for the whole GET → decide → POST
   (an overlapping sequence could regress the remote value), evicts finished
   lock slots, and logs failures without ever failing the read that caused
-  them; unread and deletion events do nothing.
+  them; unread and deletion events do nothing. The pull direction is the
+   mirror image (`tracker/core.rs:plan_pull`, mirroring Aidoku's
+   `getChaptersToSyncProgressFromTracker`): the remote progress is adjusted
+   by subtracting the binding's chapter offset (clamped to [0, total]),
+   only moves local history forward — never marks unread — and the plan
+   covers every chapter whose value fits the binding's track mode, locked
+   chapters included. Applying runs the plain `ProgressPatch` semantics in
+   one write transaction (no `last_read_at` stamp, no download deletion)
+   and re-emits the sync event with the source provider as `skip`, so the
+   just-marked progress pushes to the manga's other bindings without
+   echoing a rounded value back to the tracker it came from.
 - Background tasks (`task/mod.rs`, `api/task.rs`, migration `0023_task.sql`):
   the `task` table is the queue — a persistent row per task whose string id
   doubles as the deduplication key (e.g. `local_scan:3`). Enqueueing over a

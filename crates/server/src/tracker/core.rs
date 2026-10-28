@@ -279,6 +279,155 @@ fn apply_chapter_offset(chapter: f64, offset: i32, total: Option<i32>) -> f64 {
 	}
 }
 
+/// One chapter's contribution to a pull plan. `id` identifies the chapter row;
+/// the numbering fields mirror `ChapterTrackInput`.
+#[derive(Clone, Copy)]
+pub struct ChapterPullInput {
+	pub id: i64,
+	pub number: Option<f64>,
+	pub volume: Option<f64>,
+	pub read: bool,
+}
+
+/// What pulling one binding's tracker progress into the library would mark
+/// read. Mirrors Aidoku's `getChaptersToSyncProgressFromTracker`
+/// (TrackerManager.swift): forward-only, chapter-first with a volume fallback,
+/// the binding's chapter offset subtracted, and chapters without a number
+/// skipped in auto mode. Regressions never unmark anything.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PullPlan {
+	/// The offset-adjusted tracker progress in the binding's mode, for display
+	/// (0 when the tracker reports no progress).
+	pub progress: f64,
+	/// Local chapters at or below the tracker progress, already-read ones
+	/// included (marking is idempotent; callers skip the read ones).
+	pub chapter_ids: Vec<i64>,
+}
+
+pub fn plan_pull(mode: TrackMode, chapter_offset: i32, remote: &RemoteState, chapters: &[ChapterPullInput]) -> PullPlan {
+	let last_chapter = remote.last_read_chapter.map(f64::from);
+	let last_volume = remote.last_read_volume;
+	if last_chapter.unwrap_or(0.0) <= 0.0 && last_volume.unwrap_or(0) <= 0 {
+		return PullPlan::default();
+	}
+	if chapters.is_empty() {
+		return PullPlan::default();
+	}
+
+	let plan = match mode {
+		TrackMode::Chapter => {
+			// forced chapter mode: chapterNumber ?? volumeNumber ?? 0
+			let mut plan = PullPlan::default();
+			if let Some(last) = last_chapter {
+				let progress = pull_progress(last, chapter_offset, remote.total_chapters);
+				if progress > highest_read_chapter_mode(chapters) {
+					plan.progress = progress;
+					plan.chapter_ids = chapters
+						.iter()
+						.filter(|c| c.number.or(c.volume).unwrap_or(0.0) <= progress)
+						.map(|c| c.id)
+						.collect();
+				}
+			}
+			plan
+		}
+		TrackMode::Volume => {
+			// forced volume mode: volumeNumber ?? chapterNumber ?? 0, no offset on volumes
+			let mut plan = PullPlan::default();
+			if let Some(volume) = last_volume {
+				let progress = f64::from(volume);
+				if volume > 0 && progress > highest_read_volume_mode(chapters) {
+					plan.progress = progress;
+					plan.chapter_ids = chapters
+						.iter()
+						.filter(|c| c.volume.or(c.number).unwrap_or(0.0) <= progress)
+						.map(|c| c.id)
+						.collect();
+				}
+			}
+			plan
+		}
+		TrackMode::Auto => {
+			let mut plan = PullPlan::default();
+			let mut checked_chapters = false;
+			if let Some(last) = last_chapter {
+				let progress = pull_progress(last, chapter_offset, remote.total_chapters);
+				if progress > highest_read_auto(chapters) {
+					// floor the local number so partial chapters are marked (tracker at
+					// 10 marks 10.1/10.2); numberless chapters are skipped in auto mode
+					plan.progress = progress;
+					plan.chapter_ids = chapters
+						.iter()
+						.filter(|c| c.number.is_some_and(|n| n.floor() <= progress))
+						.map(|c| c.id)
+						.collect();
+					checked_chapters = true;
+				}
+			}
+			// volume fallback: chapter progress missing, or it ran but matched nothing
+			// (Aidoku #753: a skipped chapter check does not trigger the fallback)
+			if let Some(volume) = last_volume
+				&& volume > 0
+				&& (last_chapter.is_none() || (checked_chapters && plan.chapter_ids.is_empty()))
+			{
+				let progress = f64::from(volume);
+				plan.progress = progress;
+				plan.chapter_ids = chapters
+					.iter()
+					.filter(|c| c.volume.is_some_and(|v| v <= progress))
+					.map(|c| c.id)
+					.collect();
+			}
+			plan
+		}
+	};
+	if plan.chapter_ids.is_empty() { PullPlan::default() } else { plan }
+}
+
+/// Aidoku's `TrackerManager.applyChapterOffset` for the pull direction: the
+/// binding offset is subtracted (tracker numbering maps back to local
+/// numbering) and the result clamps to `[0, total]`.
+fn pull_progress(chapter: f64, offset: i32, total: Option<i32>) -> f64 {
+	let adjusted = (chapter - f64::from(offset)).max(0.0);
+	match total {
+		Some(total) => adjusted.min(f64::from(total)),
+		None => adjusted,
+	}
+}
+
+/// Aidoku's mode-aware `getHighestReadNumber`, default mode: the highest
+/// chapter number among read chapters (numberless rows contribute nothing).
+fn highest_read_auto(chapters: &[ChapterPullInput]) -> f64 {
+	chapters.iter().filter(|c| c.read).filter_map(|c| c.number).fold(0.0, f64::max)
+}
+
+/// Forced chapter mode: the top read row by chapter number wins; when its
+/// number is missing or not positive Aidoku falls back to that row's volume.
+fn highest_read_chapter_mode(chapters: &[ChapterPullInput]) -> f64 {
+	highest_read_mode(chapters, |c| c.number, |c| c.volume)
+}
+
+/// Forced volume mode: the mirror image of `highest_read_chapter_mode`.
+fn highest_read_volume_mode(chapters: &[ChapterPullInput]) -> f64 {
+	highest_read_mode(chapters, |c| c.volume, |c| c.number)
+}
+
+fn highest_read_mode(
+	chapters: &[ChapterPullInput],
+	primary: fn(&ChapterPullInput) -> Option<f64>,
+	fallback: fn(&ChapterPullInput) -> Option<f64>,
+) -> f64 {
+	let read = chapters.iter().filter(|c| c.read);
+	let top = read.filter(|c| primary(c).is_some()).max_by(|a, b| primary(a).partial_cmp(&primary(b)).unwrap());
+	match top {
+		Some(c) if primary(c).is_some_and(|v| v > 0.0) => primary(c).unwrap_or(0.0),
+		Some(c) => fallback(c).unwrap_or(0.0),
+		// every read row lacks the primary signal: Aidoku's top row is arbitrary
+		// there, so take the max fallback deterministically
+		None => chapters.iter().filter(|c| c.read).filter_map(fallback).fold(0.0, f64::max),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -501,5 +650,142 @@ mod tests {
 		let update = decide(TrackMode::Volume, 0, &remote, &chapters, day()).unwrap();
 		assert_eq!(update.last_read_volume, Some(3));
 		assert_eq!(update.status, None); // 3 != 5, still reading
+	}
+
+	fn pull_chapter(id: i64, number: Option<f64>, volume: Option<f64>, read: bool) -> ChapterPullInput {
+		ChapterPullInput { id, number, volume, read }
+	}
+
+	fn pull_ids(plan: &PullPlan) -> Vec<i64> {
+		let mut ids = plan.chapter_ids.clone();
+		ids.sort_unstable();
+		ids
+	}
+
+	#[test]
+	fn pull_marks_chapters_up_to_tracker_progress() {
+		// Aidoku TrackerSyncTests.testChapterNumbers: tracker at 5, chapters 1-10 → 5 marked
+		let remote = RemoteState { last_read_chapter: Some(5.0), ..empty_remote() };
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, Some(n as f64), None, false)).collect();
+		let plan = plan_pull(TrackMode::Auto, 0, &remote, &chapters);
+		assert_eq!(plan.progress, 5.0);
+		assert_eq!(pull_ids(&plan), vec![1, 2, 3, 4, 5]);
+	}
+
+	#[test]
+	fn pull_floors_partial_local_chapters_but_not_the_next_one() {
+		// Aidoku floors the LOCAL number: tracker at 10 marks 10.1/10.2 but not 11
+		let remote = RemoteState { last_read_chapter: Some(10.0), ..empty_remote() };
+		let chapters = vec![
+			pull_chapter(1, Some(10.0), None, false),
+			pull_chapter(2, Some(10.1), None, false),
+			pull_chapter(3, Some(10.2), None, false),
+			pull_chapter(4, Some(11.0), None, false),
+		];
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 2, 3]);
+	}
+
+	#[test]
+	fn pull_is_forward_only_and_never_unmarks() {
+		// tracker behind the local highest read: nothing to do (Aidoku #753 direction)
+		let remote = RemoteState { last_read_chapter: Some(3.0), ..empty_remote() };
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, Some(n as f64), None, n <= 8)).collect();
+		assert_eq!(plan_pull(TrackMode::Auto, 0, &remote, &chapters), PullPlan::default());
+	}
+
+	#[test]
+	fn pull_returns_all_matching_chapters_even_when_most_are_read() {
+		// Aidoku TrackerSyncTests.testChapterNumbersWithHistory: highest read 4,
+		// tracker 5 → all 5 returned (the caller marks only the unread ones)
+		let remote = RemoteState { last_read_chapter: Some(5.0), ..empty_remote() };
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, Some(n as f64), None, n <= 4)).collect();
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 2, 3, 4, 5]);
+		// highest read 5, tracker 5 → nothing
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, Some(n as f64), None, n <= 5)).collect();
+		assert_eq!(plan_pull(TrackMode::Auto, 0, &remote, &chapters), PullPlan::default());
+	}
+
+	#[test]
+	fn pull_subtracts_the_chapter_offset_and_clamps_to_the_tracker_total() {
+		// Aidoku applyChapterOffset with the negated offset: local = tracker - offset
+		let remote = RemoteState { last_read_chapter: Some(9.0), ..empty_remote() };
+		let chapters: Vec<_> = (1..=12).map(|n| pull_chapter(n, Some(n as f64), None, false)).collect();
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 2, &remote, &chapters)), vec![1, 2, 3, 4, 5, 6, 7]);
+
+		// negative offset raises the local target but clamps to the tracker total
+		let remote = RemoteState { last_read_chapter: Some(9.0), total_chapters: Some(10), ..empty_remote() };
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, -5, &remote, &chapters)), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+		// a large positive offset floors at 0, which can no longer advance chapter 0.5
+		let chapters = vec![pull_chapter(1, Some(0.5), None, false)];
+		assert_eq!(plan_pull(TrackMode::Auto, 10, &RemoteState { last_read_chapter: Some(4.0), ..empty_remote() }, &chapters), PullPlan::default());
+	}
+
+	#[test]
+	fn pull_prefers_chapter_progress_and_falls_back_to_volume() {
+		// Aidoku TrackerSyncTests.testVolumeNumbers: chapter progress (2) wins over
+		// volume progress (1); no chapter progress → the volume filter runs
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, Some(n as f64), Some((n as f64) / 5.0), false)).collect();
+		let remote = RemoteState { last_read_chapter: Some(2.0), last_read_volume: Some(1), ..empty_remote() };
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 2]);
+
+		let remote = RemoteState { last_read_volume: Some(1), ..empty_remote() };
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 2, 3, 4, 5]);
+	}
+
+	#[test]
+	fn pull_volume_fallback_also_runs_when_no_chapter_matched() {
+		// chapter progress exists but no local chapter has a number (foundNoChapters)
+		let remote = RemoteState { last_read_chapter: Some(2.0), last_read_volume: Some(1), ..empty_remote() };
+		let chapters: Vec<_> = (1..=10).map(|n| pull_chapter(n, None, Some((n as f64) / 5.0), false)).collect();
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 2, 3, 4, 5]);
+	}
+
+	#[test]
+	fn pull_auto_mode_skips_numberless_chapters() {
+		// Aidoku default mode only marks chapters carrying a chapter number
+		let remote = RemoteState { last_read_chapter: Some(5.0), ..empty_remote() };
+		let chapters = vec![
+			pull_chapter(1, Some(1.0), None, false),
+			pull_chapter(2, None, Some(1.0), false), // oneshot-style, skipped
+			pull_chapter(3, None, None, false),      // no numbering at all, skipped
+			pull_chapter(4, Some(5.0), None, false),
+		];
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Auto, 0, &remote, &chapters)), vec![1, 4]);
+	}
+
+	#[test]
+	fn pull_chapter_mode_falls_back_to_volume_numbers() {
+		// forced chapter mode: chapterNumber ?? volumeNumber ?? 0
+		let remote = RemoteState { last_read_chapter: Some(2.0), ..empty_remote() };
+		let chapters = vec![
+			pull_chapter(1, Some(1.0), None, false),
+			pull_chapter(2, None, Some(2.0), false), // volume 2 counts as chapter 2
+			pull_chapter(3, None, Some(3.0), false), // volume 3 stays unread
+		];
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Chapter, 0, &remote, &chapters)), vec![1, 2]);
+	}
+
+	#[test]
+	fn pull_volume_mode_uses_volume_progress_without_offset() {
+		// forced volume mode: volumeNumber ?? chapterNumber ?? 0, offset untouched
+		let remote = RemoteState { last_read_volume: Some(2), ..empty_remote() };
+		let chapters = vec![
+			pull_chapter(1, None, Some(1.0), false),
+			pull_chapter(2, Some(2.0), None, false), // chapter 2 counts as volume 2
+			pull_chapter(3, None, Some(3.0), false),
+		];
+		assert_eq!(pull_ids(&plan_pull(TrackMode::Volume, 10, &remote, &chapters)), vec![1, 2]);
+
+		// volume progress must exceed the mode-aware highest read (volume signal)
+		let chapters = vec![pull_chapter(1, None, Some(3.0), true), pull_chapter(2, None, Some(2.0), false)];
+		assert_eq!(plan_pull(TrackMode::Volume, 0, &remote, &chapters), PullPlan::default());
+	}
+
+	#[test]
+	fn pull_ignores_trackers_without_progress() {
+		let chapters = vec![pull_chapter(1, Some(1.0), None, false)];
+		assert_eq!(plan_pull(TrackMode::Auto, 0, &empty_remote(), &chapters), PullPlan::default());
+		assert_eq!(plan_pull(TrackMode::Chapter, 0, &RemoteState { last_read_volume: Some(2), ..empty_remote() }, &chapters), PullPlan::default());
 	}
 }
