@@ -219,6 +219,59 @@ async fn download_full_flow() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
+/// Two chapters with the same display number (other group, language or volume) used to package to the same
+/// path: the second download overwrote the first while the first row still pointed at it
+#[tokio::test]
+async fn same_numbered_chapters_get_distinct_artifacts() {
+	let t = downloads_app(|_| {}).await;
+	let app = t.app.clone();
+	let downloads_dir = t.tmp.path().join("downloads");
+	let manga_id = register_example_manga(&app).await;
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let ids: Vec<i64> = body.as_array().expect("chapters").iter().map(|c| c["id"].as_i64().expect("id")).collect();
+	let (first, second) = (ids[0], ids[1]);
+	let (port, _upstream) = serve_bytes(vec![("/img.png", "image/png", PNG.to_vec())]).await;
+	let pool = connect_db(&t.db_path).await;
+	let (manga_key,): (String,) = sqlx::query_as("SELECT key FROM manga WHERE id = ?")
+		.bind(manga_id)
+		.fetch_one(&pool)
+		.await
+		.expect("manga key");
+	let mut keys = Vec::new();
+	for chapter_id in [first, second] {
+		let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+		assert_eq!(status, StatusCode::OK);
+		point_page_at_local(&pool, chapter_id, port).await;
+		sqlx::query("UPDATE chapter SET title = NULL, number = 7 WHERE id = ?")
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.expect("same display number");
+		let (key,): (String,) = sqlx::query_as("SELECT key FROM chapter WHERE id = ?")
+			.bind(chapter_id)
+			.fetch_one(&pool)
+			.await
+			.expect("chapter key");
+		keys.push(key);
+	}
+
+	let mut paths = Vec::new();
+	for chapter_id in [first, second] {
+		let (status, _) =
+			request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+		assert_eq!(status, StatusCode::OK);
+		let entry = wait_download_status(&app, chapter_id, "finished").await;
+		paths.push(entry["path"].as_str().expect("download path").to_string());
+	}
+	assert_ne!(paths[0], paths[1], "each chapter needs its own artifact");
+	assert!(paths[1].contains(&format!("[{second}]")), "the later chapter is disambiguated: {}", paths[1]);
+	for (path, key) in paths.iter().zip(&keys) {
+		let bytes = std::fs::read(downloads_dir.join(path)).expect("read cbz");
+		assert_cbz(&bytes, "en.example-source", &manga_key, key, 2);
+	}
+}
+
 #[tokio::test]
 async fn download_backfills_online_page_dimensions() {
 	let t = downloads_app(|_| {}).await;

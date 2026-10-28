@@ -182,6 +182,9 @@ pub struct DownloadManager {
 	active_sources: Mutex<HashSet<i64>>,
 	progress: Mutex<HashMap<i64, (i64, i64)>>,
 	cancel: Mutex<HashSet<i64>>,
+	/// Artifact paths held by in-flight downloads, keyed to the owning chapter: two sources can run at once, so a
+	/// finished row alone cannot tell a running download that another chapter is about to package the same path
+	claimed_paths: Mutex<HashMap<String, i64>>,
 	downloads_dir: PathBuf,
 }
 
@@ -262,6 +265,7 @@ impl DownloadManager {
 			active_sources: Mutex::new(HashSet::new()),
 			progress: Mutex::new(HashMap::new()),
 			cancel: Mutex::new(HashSet::new()),
+			claimed_paths: Mutex::new(HashMap::new()),
 			downloads_dir: state.config.downloads_dir.clone(),
 		})
 	}
@@ -705,12 +709,15 @@ impl DownloadManager {
 				active.insert(source_id);
 			}
 			let manager = self.clone();
+			let chapter_id = entry.chapter_id;
 			tokio::spawn(async move {
 				let worker = manager.clone();
 				// Cleanup must run even if the inner task panics, otherwise the source holds its active slot forever
 				let inner =
 					tokio::spawn(async move { worker.run_chapter(entry.chapter_id, entry.user_id, source_id).await });
 				let _ = inner.await;
+				// The row now records the path (or the attempt failed), so the in-memory claim is no longer needed
+				manager.claimed_paths.lock().await.retain(|_, owner| *owner != chapter_id);
 				manager.active_sources.lock().await.remove(&source_id);
 				manager.notify.notify_one();
 			});
@@ -944,6 +951,33 @@ impl DownloadManager {
 		}
 	}
 
+	/// Claims the artifact paths for chapter_id unless another chapter holds one of them, in a finished or
+	/// in-flight download; `force` claims regardless (the chapter-id-suffixed fallback cannot belong to anyone else)
+	async fn claim_paths(&self, chapter_id: i64, rel_path: &str, stored: Option<&str>, force: bool) -> Result<bool, String> {
+		let paths: Vec<&str> = std::iter::once(rel_path).chain(stored).collect();
+		let mut claimed = self.claimed_paths.lock().await;
+		if !force {
+			for path in &paths {
+				if claimed.get(*path).is_some_and(|owner| *owner != chapter_id) {
+					return Ok(false);
+				}
+				let taken = sqlx::query_scalar::<_, i64>("SELECT 1 FROM download WHERE path = ? AND chapter_id <> ? LIMIT 1")
+					.bind(*path)
+					.bind(chapter_id)
+					.fetch_optional(&self.pool)
+					.await
+					.map_err(|e| format!("check artifact path: {e}"))?;
+				if taken.is_some() {
+					return Ok(false);
+				}
+			}
+		}
+		for path in paths {
+			claimed.insert(path.to_string(), chapter_id);
+		}
+		Ok(true)
+	}
+
 	/// A single chapter-download attempt: pages accumulate in the tmp dir and get packaged; the caller counts retries on error
 	async fn try_chapter(
 		self: &Arc<Self>,
@@ -1042,36 +1076,49 @@ impl DownloadManager {
 		let comic_info = comic_info_xml(&source_key, &manga, &chapter, total);
 		let rel_dir = format!("{}/{}", sanitize(&source_name), sanitize(&manga.title));
 		let chapter_name = chapter_display(&chapter);
-		let base = sanitize(&chapter_name);
-		let product_name = if format == "folder" {
-			base.clone()
-		} else {
-			format!("{base}.cbz")
+		let template = move_template(&self.pool, &state.config).await;
+		let plan = |base: String| {
+			let product_name = if format == "folder" {
+				base.clone()
+			} else {
+				format!("{base}.cbz")
+			};
+			let rel_path = format!("{rel_dir}/{product_name}");
+			let moved = template.as_deref().map(|template| {
+				let vars = MoveVars {
+					source: &source_name,
+					title: &manga.title,
+					authors: &manga.authors.0,
+					artists: &manga.artists.0,
+					chapter: &chapter_name,
+					filename: &base,
+				};
+				let rendered = move_target(template, &vars, &format, &product_name);
+				match rendered.is_absolute() {
+					true => (rendered.clone(), rendered.to_string_lossy().into_owned()),
+					// A relative template joins under downloads_dir; the row still stores the relative path, so the read-side resolution convention is unchanged
+					false => (
+						self.downloads_dir.join(&rendered),
+						rendered.to_string_lossy().into_owned(),
+					),
+				}
+			});
+			(rel_path, moved)
 		};
-		let rel_path = format!("{rel_dir}/{product_name}");
+		let base = sanitize(&chapter_name);
+		let (mut rel_path, mut moved) = plan(base.clone());
+		// The name carries only the display number/title, so another chapter (other group, language or volume,
+		// or a same-titled manga) can map to the same path; the chapter id keeps this one from overwriting it
+		if !self.claim_paths(chapter_id, &rel_path, moved.as_ref().map(|(_, stored)| stored.as_str()), false).await? {
+			(rel_path, moved) = plan(format!("{base} [{chapter_id}]"));
+			self.claim_paths(chapter_id, &rel_path, moved.as_ref().map(|(_, stored)| stored.as_str()), true).await?;
+		}
 		package(&self.downloads_dir, &tmp_dir, &rel_path, &format, &files, &comic_info).await?;
 		persist_page_dimensions(&self.pool, chapter_id, &dimension_updates)
 			.await
 			.map_err(|e| format!("store page dimensions: {e:?}"))?;
-		let Some(template) = move_template(&self.pool, &state.config).await else {
+		let Some((dest, stored)) = moved else {
 			return Ok((total, rel_path));
-		};
-		let vars = MoveVars {
-			source: &source_name,
-			title: &manga.title,
-			authors: &manga.authors.0,
-			artists: &manga.artists.0,
-			chapter: &chapter_name,
-			filename: &base,
-		};
-		let rendered = move_target(&template, &vars, &format, &product_name);
-		let (dest, stored) = match rendered.is_absolute() {
-			true => (rendered.clone(), rendered.to_string_lossy().into_owned()),
-			// A relative template joins under downloads_dir; the row still stores the relative path, so the read-side resolution convention is unchanged
-			false => (
-				self.downloads_dir.join(&rendered),
-				rendered.to_string_lossy().into_owned(),
-			),
 		};
 		match move_product(&self.downloads_dir.join(&rel_path), &dest).await {
 			Ok(()) => Ok((total, stored)),

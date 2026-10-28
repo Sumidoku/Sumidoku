@@ -1150,7 +1150,13 @@ no alias is derived from migration text.
   fallback still commits the measurements with the valid artifact. A row's
   stored `path` resolves through `download::product_path` — absolute is used
   as-is, relative joins `downloads_dir` — and every read/delete site
-  (`api/download.rs`) goes through it.
+  (`api/download.rs`) goes through it. The default product path is
+  `<source>/<manga title>/<chapter display name>`, which other chapters can
+  share (same number from another group, language or volume, or a
+  same-titled manga). Before packaging, `claim_paths` checks the default
+  path and its move target against other chapters' rows and the in-flight
+  claims of concurrent downloads; on a clash the base name gains
+  ` [<chapter id>]`. Claims are released when the chapter's worker exits.
   `DownloadManager::delete` is the shared removal routine for explicit delete,
   clear and read-driven deletion: it removes the row, clears `is_downloaded`
   and deletes the artifact once no other row references it.
