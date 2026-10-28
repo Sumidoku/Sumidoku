@@ -1225,6 +1225,15 @@ pub async fn validate_paths(paths: &[String]) -> ApiResult<Vec<String>> {
 const SOURCE_ROW_SELECT: &str = "SELECT id, key, name, kind, version, languages, content_rating, base_url, breaking_change_version, config, icon_path,
 	 wasm_path, enabled, installed_at, updated_at, repo_id, features FROM source WHERE id = ?";
 
+#[cfg(test)]
+const REGISTER_RACE_TEST_NAME: &str = "Registration Race";
+#[cfg(test)]
+static REGISTER_RACE_TEST_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+static REGISTER_RACE_TEST_CHOSEN: tokio::sync::Notify = tokio::sync::Notify::const_new();
+#[cfg(test)]
+static REGISTER_RACE_TEST_RESUME: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
 /// Instance registration: key takes local.<slug>, collisions append a -2/-3 counter (the opds rule;
 /// a name slugging to "local" collides with the reserved default key and takes the counter form).
 /// Paths land in the instance's own source setting; the oneshots marker and the other per-instance
@@ -1247,18 +1256,27 @@ pub async fn register_instance(
 	}
 	let dirs = validate_paths(paths).await?;
 	let slug = crate::source::slugify(name).ok_or_else(|| ApiError::bad_request("name has no usable characters"))?;
+	// the key probe and every insert share one write transaction: two registrations of the same name
+	// serialise on the write lock instead of both picking the free key, and a failed insert leaves no
+	// instance without its paths
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let mut key = format!("local.{slug}");
 	let mut counter = 2;
 	loop {
 		let exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM source WHERE key = ?")
 			.bind(&key)
-			.fetch_optional(&state.pool)
+			.fetch_optional(&mut *tx)
 			.await?;
 		if exists.is_none() {
 			break;
 		}
 		key = format!("local.{slug}-{counter}");
 		counter += 1;
+	}
+	#[cfg(test)]
+	if name == REGISTER_RACE_TEST_NAME && !REGISTER_RACE_TEST_PAUSED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+		REGISTER_RACE_TEST_CHOSEN.notify_one();
+		REGISTER_RACE_TEST_RESUME.notified().await;
 	}
 	let now = crate::model::unix_now();
 	let result = sqlx::query(
@@ -1271,21 +1289,21 @@ pub async fn register_instance(
 	.bind(crate::model::SOURCE_KIND_LOCAL)
 	.bind(now)
 	.bind(now)
-	.execute(&state.pool)
+	.execute(&mut *tx)
 	.await?;
 	let source_id = result.last_insert_rowid();
 	let raw = serde_json::to_string(&DefaultValue::StringArray(dirs))?;
 	sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)")
 		.bind(source_id)
 		.bind(raw)
-		.execute(&state.pool)
+		.execute(&mut *tx)
 		.await?;
 	if let Some(oneshots) = oneshots_dir.map(str::trim) {
 		let raw = serde_json::to_string(&DefaultValue::String(oneshots.to_string()))?;
 		sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'oneshotsDir', ?)")
 			.bind(source_id)
 			.bind(raw)
-			.execute(&state.pool)
+			.execute(&mut *tx)
 			.await?;
 	}
 	if let Some(exclusions) = exclusions {
@@ -1295,7 +1313,7 @@ pub async fn register_instance(
 			sqlx::query("INSERT INTO source_setting (source_id, key, value) VALUES (?, 'exclusions', ?)")
 				.bind(source_id)
 				.bind(raw)
-				.execute(&state.pool)
+				.execute(&mut *tx)
 				.await?;
 		}
 	}
@@ -1310,14 +1328,15 @@ pub async fn register_instance(
 				.bind(source_id)
 				.bind(key)
 				.bind(raw)
-				.execute(&state.pool)
+				.execute(&mut *tx)
 				.await?;
 		}
 	}
 	let row: Option<SourceRow> = sqlx::query_as(SOURCE_ROW_SELECT)
 		.bind(source_id)
-		.fetch_optional(&state.pool)
+		.fetch_optional(&mut *tx)
 		.await?;
+	tx.commit().await?;
 	row.ok_or_else(|| ApiError::internal("registered local source missing"))
 }
 
@@ -1347,4 +1366,47 @@ pub async fn ensure_default_instance(state: &AppState) -> ApiResult<()> {
 	.execute(&state.pool)
 	.await?;
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	/// The first registration pauses right after choosing its key; a second one with the same name then
+	/// runs. It must not slip in the same key (a UNIQUE 500 for the first) but wait and take the -2 key
+	#[tokio::test]
+	async fn concurrent_same_name_registrations_get_distinct_keys() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()))
+			.await
+			.expect("pool");
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let state = AppState::new(pool, crate::config::Config::default(), defaults_tx, cookie_tx);
+		let paths = vec![tmp.path().display().to_string()];
+		let register = |state: Arc<AppState>, paths: Vec<String>| async move {
+			register_instance(&state, REGISTER_RACE_TEST_NAME, &paths, None, None, None, None, None).await
+		};
+		let first = tokio::spawn(register(state.clone(), paths.clone()));
+		REGISTER_RACE_TEST_CHOSEN.notified().await;
+		let second = tokio::spawn(register(state.clone(), paths.clone()));
+		// without the shared transaction the second registration completes here; with it, it waits on the
+		// write lock until the first commits, so the bound only decides when the first is let go
+		let mut second = Box::pin(second);
+		let early = tokio::time::timeout(std::time::Duration::from_millis(500), &mut second).await;
+		REGISTER_RACE_TEST_RESUME.notify_one();
+		let first = first.await.expect("first task").map(|row| row.key);
+		let second = match early {
+			Ok(done) => done,
+			Err(_) => second.await,
+		}
+		.expect("second task")
+		.map(|row| row.key);
+		let mut keys = vec![
+			first.unwrap_or_else(|e| panic!("first registration failed: {}", e.message())),
+			second.unwrap_or_else(|e| panic!("second registration failed: {}", e.message())),
+		];
+		keys.sort();
+		assert_eq!(keys, ["local.registration-race", "local.registration-race-2"]);
+	}
 }
