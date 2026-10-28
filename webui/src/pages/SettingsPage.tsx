@@ -1329,7 +1329,12 @@ function AidokuImportResultView({ result }: { result: AidokuImportResponse }) {
 }
 
 function suwayomiSkippedLabel(t: TFunction, s: SuwayomiSkipped): string {
-	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
+	const what =
+		s.section === 'library'
+			? t('settings.libraryEntry')
+			: s.section === 'trackers'
+				? t('settings.trackerEntry')
+				: t('settings.progressEntry');
 	const name = s.mihonSourceName || t('settings.sourceId', { id: s.mihonSourceId });
 	return `${what} ${name}/${s.mangaKey}`;
 }
@@ -1374,10 +1379,11 @@ function SuwayomiImportResultView({ result }: { result: SuwayomiImportResponse }
 	return (
 		<div className="settings-backup__result">
 			<p className="settings-modal-text">
-				{t('settings.imported', {
+				{t('settings.importedWithTrackers', {
 					library: result.imported.library,
 					categories: result.imported.categories,
-					progress: result.imported.progress
+					progress: result.imported.progress,
+					trackers: result.imported.trackers
 				})}
 			</p>
 			<p className="settings-modal-text">
@@ -1604,10 +1610,11 @@ function BackupSection() {
 					sw && (
 						<>
 							<p className="settings-modal-text">
-								{t('settings.willImport', {
+								{t('settings.willImportWithTrackers', {
 									library: sw.preview.imported.library,
 									categories: sw.preview.imported.categories,
-									progress: sw.preview.imported.progress
+									progress: sw.preview.imported.progress,
+									trackers: sw.preview.imported.trackers
 								})}
 							</p>
 							<p className="settings-modal-text">{t('settings.sourceMapping')}</p>

@@ -102,9 +102,22 @@ def history(url, last_read):
     return f_str(1, url) + f_varint(2, last_read)
 
 
+def tracking(sync_id, media_id_int=0, title="", media_id=0):
+    """BackupTracking: remote id lives in tag 3 (legacy int, what Suwayomi-
+    Server writes) or tag 100 (long, Mihon); kotlinx omits zero values."""
+    out = f_varint(1, sync_id)
+    if media_id_int:
+        out += f_varint(3, media_id_int)
+    if title:
+        out += f_str(5, title)
+    if media_id:
+        out += f_varint(100, media_id)
+    return out
+
+
 def manga(source, url, title, artist=None, author=None, desc=None, genre=(),
           status=0, cover=None, date_added=0, categories=(), packed=True,
-          favorite=True, chapters=(), histories=()):
+          favorite=True, chapters=(), histories=(), tracks=()):
     out = f_varint(1, source) + f_str(2, url) + f_str(3, title)
     if artist is not None:
         out += f_str(4, artist)
@@ -128,9 +141,8 @@ def manga(source, url, title, artist=None, author=None, desc=None, genre=(),
     else:
         for c in categories:
             out += f_varint(17, c)
-    # tracking (18): declared in the schema, never consumed by the importer —
-    # present to prove unknown messages are skipped
-    out += f_msg(18, f_varint(1, 1) + f_str(2, "track:example"))
+    for t in tracks:
+        out += f_msg(18, t)
     if not favorite:
         out += f_bool(100, False)
     for h in histories:
@@ -176,6 +188,8 @@ MANGA1 = manga(
         history("3", ms("2024-02-01 10:00:00")),  # unix 1706781600
         history("7", ms("2024-02-02 10:00:00")),  # unix 1706868000
     ],
+    # AniList (syncId 2) with the remote id in the modern tag 100
+    tracks=[tracking(2, title="Tachibk Title One", media_id=12345)],
 )
 
 MANGA2 = manga(
@@ -185,6 +199,8 @@ MANGA2 = manga(
     categories=[1, 2], packed=False,  # Reading, Favorites; unpacked encoding
     chapters=[chapter("1", "Ch 1", number=1.0, last_page=2, source_order=1)],
     histories=[history("1", ms("2024-02-03 10:00:00"))],  # unix 1706954400
+    # MAL (syncId 1) with the remote id in the legacy tag 3 (Suwayomi's shape)
+    tracks=[tracking(1, media_id_int=678, title="Second Manga (MAL)")],
 )
 
 GHOST = manga(
@@ -192,14 +208,23 @@ GHOST = manga(
     categories=[0],
     chapters=[chapter("9", "Ch 9", read=True, last_page=3)],
     histories=[history("9", ms("2024-02-04 10:00:00"))],
+    # Bangumi (syncId 5): the unmatched source group skips wholesale, so this
+    # binding never lands and needs no skip entry of its own
+    tracks=[tracking(5, media_id=999, title="Ghost Bangumi")],
 )
 
 # not favorite (Mihon "read entries" option): never enters the library, but
-# its history still lands; chapter 5 exists only in history, not chapters
+# its history still lands; chapter 5 exists only in history, not chapters.
+# Its tracker rows exercise both skip reasons: Kitsu (3) has no local
+# provider, and a track never synced upstream has no remote id.
 HISTORY_ONLY = manga(
     SOURCE_EXAMPLE, "3", "",
     favorite=False,
     histories=[history("5", ms("2024-02-05 10:00:00"))],  # unix 1707127200
+    tracks=[
+        tracking(3, media_id=555, title="Kitsu Title"),
+        tracking(2, title="Unsynced AniList"),
+    ],
 )
 
 

@@ -104,8 +104,8 @@ Mihon/Tachiyomi backup (`.tachibk`, `.proto.gz` — both are gzip around one
 protobuf `Backup` message; raw proto and zip containers are sniffed too)
 into the library: library manga (`favorite` entries), chapter read history
 (read state, last page read and the history timeline; chapters present
-only in history are kept), and categories with membership. The merge is
-additive, same as the Aidoku import.
+only in history are kept), categories with membership, and tracker
+bindings. The merge is additive, same as the Aidoku import.
 
 Backups reference Mihon extension sources by id and name, not Aidoku
 source keys, so every backup source group is resolved first: it
@@ -121,5 +121,14 @@ that walks upload → grouped preview → per-source mapping → confirm.
 One caveat: a backup's manga `url` is the Mihon source's internal key,
 which does not always match the corresponding Aidoku source's manga key;
 such entries import with their progress but a later source refresh may not
-resolve them. Tracking, extension settings, saved searches and server
-preferences are out of scope.
+resolve them. Tracker bindings restore from each manga's nested tracking
+entries: the `syncId` maps onto a local provider (1 MAL, 2 AniList,
+5 Bangumi, 11 MangaBaka — Mihon only), the remote entry id is
+`mediaIdInt` when set (what Suwayomi-Server writes) and `mediaId`
+otherwise, and a tracker without a local provider (Kitsu, Shikimori,
+Komga, MangaUpdates, Kavita, Suwayomi, Hikka, Comick) or an entry never
+synced upstream is skipped with a stated reason. The format carries
+neither a track mode nor a chapter offset, so restored bindings start as
+auto/0, and an existing binding for the same manga and provider always
+wins. Extension settings, saved searches and server preferences are out
+of scope.

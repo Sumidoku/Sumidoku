@@ -10233,28 +10233,6 @@
         "required": [
           "library",
           "categories",
-          "progress"
-        ],
-        "properties": {
-          "library": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "categories": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "progress": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "AidokuImportCounts": {
-        "type": "object",
-        "required": [
-          "library",
-          "categories",
           "progress",
           "trackers"
         ],
@@ -10315,7 +10293,7 @@
             "type": "boolean"
           },
           "imported": {
-            "$ref": "#/components/schemas/AidokuImportCounts"
+            "$ref": "#/components/schemas/ImportCounts"
           },
           "skipped": {
             "type": "array",
