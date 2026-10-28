@@ -568,3 +568,39 @@ async fn migrate_from_local_to_opds_registers_and_shelves() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes.as_slice(), PSE_PAGE_1);
 }
+
+/// The catalog's basic credentials go only to its own origin, never to a host the image proxy caller picks
+#[tokio::test]
+async fn image_proxy_does_not_forward_catalog_credentials() {
+	let (port, _catalog) = mock_catalog(true, false).await;
+	let t = opds_app().await;
+	let url = format!("http://127.0.0.1:{port}/opds/catalog");
+	let source = register_instance(&t.app, "Private", &url, Some(("user", "pass"))).await;
+	let source_id = source["id"].as_i64().expect("id");
+	// a second, unrelated host records what it receives
+	let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+	let other = listener.local_addr().unwrap().port();
+	let record = seen.clone();
+	let app = Router::new().route(
+		"/x.png",
+		get(move |headers: axum::http::HeaderMap| {
+			let record = record.clone();
+			async move {
+				*record.lock().unwrap() = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).map(str::to_string);
+				binary(b"img", "image/png")
+			}
+		}),
+	);
+	tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+	let (status, _, _) = request_full(
+		&t.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/image?url=http://127.0.0.1:{other}/x.png"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let leaked = seen.lock().unwrap().clone();
+	assert_eq!(leaked, None, "catalog credentials were sent to an unrelated host: {leaked:?}");
+}

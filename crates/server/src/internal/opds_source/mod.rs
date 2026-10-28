@@ -70,9 +70,15 @@ impl Catalog {
 			.request_with(reqwest::Method::GET, &url, &[], None)
 			.map_err(|e| ApiError::bad_gateway(format!("upstream request failed: {e}")))?;
 		Ok(match &self.auth {
-			Some((user, pass)) => builder.basic_auth(user, Some(pass)),
-			None => builder,
+			Some((user, pass)) if self.same_origin(&url) => builder.basic_auth(user, Some(pass)),
+			_ => builder,
 		})
+	}
+
+	/// Credentials belong to the catalog's origin only: image proxy URLs are caller-chosen and feed hrefs may point
+	/// at any host, so sending them elsewhere would hand the catalog password to a third party
+	fn same_origin(&self, url: &reqwest::Url) -> bool {
+		reqwest::Url::parse(&self.base_url).is_ok_and(|base| base.origin() == url.origin())
 	}
 
 	/// Bounded authed GET; non-2xx surfaces the status code (401 is the visible face of wrong credentials)
