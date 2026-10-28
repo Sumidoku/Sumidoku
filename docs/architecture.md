@@ -1045,8 +1045,8 @@ no alias is derived from migration text.
   and also accepts a raw proto (as Mihon's decoder does) and, defensively,
   a zip holding a `.proto` entry. The prost messages are hand-written
   against the wire schema (Suwayomi's `backup/proto/models`, Mihon's
-  `data/backup/models`), declaring only consumed fields so tracking,
-  memos, preferences and Suwayomi's `meta` maps are skipped on decode.
+  `data/backup/models`), declaring only consumed fields so memos,
+  preferences and Suwayomi's `meta` maps are skipped on decode.
   The merge lands in the requesting user's own state and reuses the same
   additive primitives as the Aidoku import
   (`api/import_merge.rs`), with two format-specific twists: a manga is
@@ -1068,8 +1068,20 @@ no alias is derived from migration text.
   groups explicitly; unmatched-and-unmapped groups skip wholesale into
   the `skipped` list. `?dryRun=true` rolls back the same transaction.
   The web UI walks upload → grouped dry-run preview → per-source
-  mapping dropdowns → confirm → result. Tracking, extension settings,
-  saved searches and server preferences are out of scope. The manga
+  mapping dropdowns → confirm → result. Tracker bindings ride inside
+  each manga entry (`BackupManga` tag 18) and restore onto the same
+  manga row: the `syncId` maps onto a local provider (1 MAL, 2
+  AniList, 5 Bangumi, 11 MangaBaka — Mihon only), the remote entry id
+  comes from `mediaIdInt` (tag 3, what Suwayomi-Server writes) when
+  set and `mediaId` (tag 100, Mihon) otherwise, and the binding lands
+  as `auto`/0 because the format carries neither a track mode nor a
+  chapter offset. An existing binding for the same (manga, user,
+  provider) wins; trackers without a local provider (Kitsu, Shikimori,
+  Komga, MangaUpdates, Kavita, Suwayomi, Hikka, Comick) and entries
+  never synced upstream (no media id) skip with a stated reason, and
+  bindings inside an unmatched source group skip wholesale with it.
+  Extension settings, saved searches and server preferences are out of
+  scope. The manga
   `url` is the Mihon source's internal key, whose shape can differ
   from the corresponding Aidoku source's (Suwayomi's copymanga
   extension stores site paths — `/comic/<slug>`,

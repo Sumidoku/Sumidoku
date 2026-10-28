@@ -71,6 +71,13 @@ fn source_group<'a>(body: &'a Value, mihon_id: &str) -> &'a Value {
 		.unwrap_or_else(|| panic!("source group {mihon_id}: {body}"))
 }
 
+/// The manga's tracker bindings through the REST surface the web UI reads
+async fn tracker_links(app: &Router, manga_id: i64) -> Vec<Value> {
+	let (status, links) = request(app, "GET", &format!("/api/v1/trackers/links/{manga_id}"), None).await;
+	assert_eq!(status, StatusCode::OK, "links: {links}");
+	links.as_array().expect("links").clone()
+}
+
 #[tokio::test]
 async fn import_suwayomi_merges_with_existing_state() {
 	let app = test_app().await;
@@ -125,14 +132,32 @@ async fn import_suwayomi_merges_with_existing_state() {
 	assert_eq!(body["imported"]["library"], 2);
 	assert_eq!(body["imported"]["categories"], 3);
 	assert_eq!(body["imported"]["progress"], 4);
+	assert_eq!(body["imported"]["trackers"], 2);
 
 	let skipped = body["skipped"].as_array().expect("skipped");
-	assert_eq!(skipped.len(), 1, "skipped: {skipped:?}");
-	assert_eq!(skipped[0]["section"], "library");
-	assert_eq!(skipped[0]["mihonSourceId"], "222");
-	assert_eq!(skipped[0]["mihonSourceName"], "Ghost Source");
-	assert_eq!(skipped[0]["mangaKey"], "ghost-1");
-	assert_eq!(skipped[0]["reason"], "no source mapping");
+	assert_eq!(skipped.len(), 3, "skipped: {skipped:?}");
+	let library_skip = skipped
+		.iter()
+		.find(|s| s["section"] == "library")
+		.expect("library skip");
+	assert_eq!(library_skip["mihonSourceId"], "222");
+	assert_eq!(library_skip["mihonSourceName"], "Ghost Source");
+	assert_eq!(library_skip["mangaKey"], "ghost-1");
+	assert_eq!(library_skip["reason"], "no source mapping");
+	// manga 3's tracker rows: Kitsu has no local provider, the unsynced AniList entry has no remote id
+	let tracker_skips: Vec<&Value> = skipped.iter().filter(|s| s["section"] == "trackers").collect();
+	assert_eq!(tracker_skips.len(), 2, "tracker skips: {tracker_skips:?}");
+	assert!(
+		tracker_skips
+			.iter()
+			.all(|s| s["mihonSourceId"] == "111" && s["mangaKey"] == "3")
+	);
+	assert!(tracker_skips.iter().any(|s| s["reason"] == "tracker not supported"));
+	assert!(
+		tracker_skips
+			.iter()
+			.any(|s| s["reason"] == "tracker entry has no remote id")
+	);
 
 	// source-grouped report: 111 has a unique hit → auto-matched, 222 has no candidates → unmatched
 	let auto = source_group(&body, "111");
@@ -237,6 +262,76 @@ async fn import_suwayomi_merges_with_existing_state() {
 	assert_eq!(db_dump(&app.db_path).await, before);
 }
 
+/// The tracker half of the import: sync ids are mapped onto this server's providers, the remote entry id
+/// comes from the modern tag-100 long (Mihon) or the legacy tag-3 int (Suwayomi), and with no track mode
+/// or offset in the format the bindings land as auto/0
+#[tokio::test]
+async fn import_suwayomi_restores_tracker_bindings() {
+	let app = test_app().await;
+	scan(&app.app).await;
+	let manga_id = register_example_manga(&app.app).await;
+
+	let (status, body) = post_backup(&app.app, "", TACHIBK).await;
+	assert_eq!(status, StatusCode::OK, "import failed: {body}");
+	assert_eq!(body["imported"]["trackers"], 2);
+
+	let links = tracker_links(&app.app, manga_id).await;
+	assert_eq!(links.len(), 1, "links: {links:?}");
+	assert_eq!(links[0]["provider"], "anilist");
+	assert_eq!(links[0]["trackId"], "12345");
+	assert_eq!(links[0]["title"], "Tachibk Title One");
+	assert_eq!(links[0]["trackMode"], "auto");
+	assert_eq!(links[0]["chapterOffset"], 0);
+
+	let manga2_id = {
+		let (_, lib) = request(&app.app, "GET", "/api/v1/library", None).await;
+		lib["entries"]
+			.as_array()
+			.expect("entries")
+			.iter()
+			.find(|e| e["title"] == "Second Manga")
+			.expect("manga 2 entry")["id"]
+			.as_i64()
+			.expect("manga 2 id")
+	};
+	let links = tracker_links(&app.app, manga2_id).await;
+	assert_eq!(links.len(), 1, "links: {links:?}");
+	assert_eq!(links[0]["provider"], "mal");
+	assert_eq!(links[0]["trackId"], "678");
+	assert_eq!(links[0]["title"], "Second Manga (MAL)");
+	assert_eq!(links[0]["trackMode"], "auto");
+	assert_eq!(links[0]["chapterOffset"], 0);
+}
+
+/// The import is additive: a binding made in this app wins over the backup's for the same manga and provider
+#[tokio::test]
+async fn import_suwayomi_keeps_an_existing_tracker_binding() {
+	let app = test_app().await;
+	scan(&app.app).await;
+	let manga_id = register_example_manga(&app.app).await;
+	let (status, _) = request(
+		&app.app,
+		"PUT",
+		&format!("/api/v1/trackers/links/{manga_id}"),
+		Some(json!({
+			"provider": "anilist",
+			"trackId": "local-1",
+			"title": "Local",
+			"trackMode": "volume",
+			"chapterOffset": 3
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let before = tracker_links(&app.app, manga_id).await;
+
+	let (status, body) = post_backup(&app.app, "", TACHIBK).await;
+	assert_eq!(status, StatusCode::OK, "import failed: {body}");
+	// kept bindings still count toward the report, so trackers stays 2
+	assert_eq!(body["imported"]["trackers"], 2);
+	assert_eq!(tracker_links(&app.app, manga_id).await, before);
+}
+
 /// Pinpoint assertions for the three directions max / OR / newer: changing the override semantics turns this red
 #[tokio::test]
 async fn import_suwayomi_progress_takes_max_or_newer() {
@@ -305,6 +400,7 @@ async fn import_suwayomi_ambiguous_name_never_guesses() {
 
 	let skipped = body["skipped"].as_array().expect("skipped");
 	assert_eq!(skipped.len(), 4, "skipped: {skipped:?}");
+	// the unmatched groups skip their manga wholesale, so no tracker entries appear on top
 	assert!(skipped.iter().all(|s| s["reason"] == "no source mapping"));
 	assert!(skipped.iter().any(|s| s["section"] == "progress" && s["mangaKey"] == "3"));
 
@@ -324,7 +420,15 @@ async fn import_suwayomi_explicit_mapping() {
 	assert_eq!(status, StatusCode::OK, "import failed: {body}");
 	assert_eq!(body["imported"]["library"], 3);
 	assert_eq!(body["imported"]["progress"], 5);
-	assert_eq!(body["skipped"].as_array().expect("skipped").len(), 0);
+	// ghost's Bangumi binding lands now that its group is mapped; manga 3's two tracker rows still skip
+	assert_eq!(body["imported"]["trackers"], 3);
+	let skipped = body["skipped"].as_array().expect("skipped");
+	assert_eq!(skipped.len(), 2, "skipped: {skipped:?}");
+	assert!(
+		skipped
+			.iter()
+			.all(|s| s["section"] == "trackers" && s["mangaKey"] == "3")
+	);
 	assert_eq!(source_group(&body, "111")["match"], "mapped");
 	assert_eq!(source_group(&body, "111")["aidokuSourceKey"], "en.example-dup");
 	assert_eq!(source_group(&body, "222")["match"], "mapped");
@@ -371,7 +475,8 @@ async fn import_suwayomi_dry_run_reports_without_writing() {
 	assert_eq!(body["imported"]["library"], 2);
 	assert_eq!(body["imported"]["categories"], 3);
 	assert_eq!(body["imported"]["progress"], 4);
-	assert_eq!(body["skipped"].as_array().expect("skipped").len(), 1);
+	assert_eq!(body["imported"]["trackers"], 2);
+	assert_eq!(body["skipped"].as_array().expect("skipped").len(), 3);
 	assert_eq!(source_group(&body, "111")["match"], "auto");
 	assert_eq!(db_dump(&app.db_path).await, before);
 
@@ -389,7 +494,8 @@ async fn import_suwayomi_accepts_raw_proto_and_zip_container() {
 		assert_eq!(status, StatusCode::OK, "{label}: {body}");
 		assert_eq!(body["imported"]["library"], 2, "{label}");
 		assert_eq!(body["imported"]["progress"], 4, "{label}");
-		assert_eq!(body["skipped"].as_array().expect("skipped").len(), 1, "{label}");
+		assert_eq!(body["imported"]["trackers"], 2, "{label}");
+		assert_eq!(body["skipped"].as_array().expect("skipped").len(), 3, "{label}");
 
 		let (_, lib) = request(&app.app, "GET", "/api/v1/library", None).await;
 		let entries = lib["entries"].as_array().expect("entries");

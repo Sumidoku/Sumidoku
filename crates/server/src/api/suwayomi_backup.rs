@@ -4,11 +4,13 @@
 //! proto; the zip container is defensive compatibility for forks. See import_merge for the additive merge primitives.
 //!
 //! The prost messages are a hand-written wire contract (field-number provenance in the PR): undeclared fields
-//! (tracking, memo, preferences, suwayomi meta 9000+, etc.) are skipped by prost decoding
+//! (memo, preferences, suwayomi meta 9000+, etc.) are skipped by prost decoding
 
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
 use crate::state::AppState;
+use crate::tracker::core::TrackMode;
+use crate::tracker::{Provider, dao};
 use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
@@ -67,6 +69,9 @@ struct TachiManga {
 	/// Category order values (Mihon's MangaRestorer looks up by order), not array positions
 	#[prost(int64, repeated, tag = "17")]
 	categories: Vec<i64>,
+	/// Tracker bindings (Mihon BackupManga tag 18); TachiTracking declares only the fields the import consumes
+	#[prost(message, repeated, tag = "18")]
+	tracking: Vec<TachiTracking>,
 	/// kotlinx ProtoBuf omits default-valued fields, so favorite=true never goes on the wire; absent means true
 	#[prost(bool, optional, tag = "100")]
 	favorite: Option<bool>,
@@ -118,6 +123,23 @@ struct TachiHistory {
 	last_read: i64,
 }
 
+/// Tracker binding nested in each manga. The remote entry id moved from mediaIdInt (tag 3, what
+/// Suwayomi-Server still writes) to mediaId (tag 100, Mihon); Mihon's getTrackImpl keeps the int
+/// when it is non-zero, so both are declared with the same precedence. Tags 2/4 and 6-12 (library
+/// id, tracking URL and the tracker-side progress/score/status/dates) carry nothing the local
+/// binding stores.
+#[derive(Clone, PartialEq, Message)]
+struct TachiTracking {
+	#[prost(int32, tag = "1")]
+	sync_id: i32,
+	#[prost(int32, tag = "3")]
+	media_id_int: i32,
+	#[prost(string, tag = "5")]
+	title: String,
+	#[prost(int64, tag = "100")]
+	media_id: i64,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SuwayomiImportQuery {
@@ -141,6 +163,20 @@ fn status_from_tachi(status: i32) -> i64 {
 		5 => 3,
 		6 => 4,
 		_ => 0,
+	}
+}
+
+/// Mihon/Suwayomi tracker ids (TrackerManager constants; both agree on 1-9, Suwayomi-Server only
+/// implements 1-5 and 7): only ids with a local provider land, the rest (Kitsu 3, Shikimori 4,
+/// Komga 6, MangaUpdates 7, Kavita 8, Suwayomi 9, Hikka 10, Comick 12) are reported as unsupported.
+/// MangaBaka (11) exists only in Mihon.
+fn tachi_tracker_provider(sync_id: i32) -> Option<Provider> {
+	match sync_id {
+		1 => Some(Provider::Mal),
+		2 => Some(Provider::Anilist),
+		5 => Some(Provider::Bangumi),
+		11 => Some(Provider::Mangabaka),
+		_ => None,
 	}
 }
 
@@ -369,19 +405,17 @@ pub async fn import_suwayomi_doc(
 		})
 		.collect();
 
-	let mut imported = ImportCounts::default();
-	let mut skipped: Vec<Value> = Vec::new();
-	let mut seen_categories: HashSet<String> = HashSet::new();
+	let mut import = ImportState::default();
 	let mut realigned: Vec<RealignCounts> = Vec::with_capacity(groups.len());
 	{
 		let mut tx = crate::db::begin_write(&state.pool).await?;
-		import_categories(&mut tx, user_id, &doc, &mut seen_categories).await?;
+		import_categories(&mut tx, user_id, &doc, &mut import.seen_categories).await?;
 		for ((mihon_id, mangas), resolution) in groups.iter().zip(&resolutions) {
 			let name = source_names.get(mihon_id).copied().unwrap_or("");
 			let Some(source_key) = resolution.key() else {
 				realigned.push(RealignCounts::default());
 				for manga in mangas {
-					skipped.push(json!({
+					import.skipped.push(json!({
 						"section": if manga.favorite.unwrap_or(true) { "library" } else { "progress" },
 						"mihonSourceId": mihon_id.to_string(),
 						"mihonSourceName": name,
@@ -396,19 +430,15 @@ pub async fn import_suwayomi_doc(
 				.iter()
 				.find(|s| s.id == source_id)
 				.expect("resolved key is installed");
-			let counts = import_group(
-				&mut tx,
-				user_id,
-				&doc,
+			let group = GroupImport {
+				mihon_id: *mihon_id,
+				mihon_name: name,
 				source,
-				mangas,
-				&mut imported,
-				&mut seen_categories,
-			)
-			.await?;
+			};
+			let counts = import_group(&mut tx, user_id, &doc, &group, mangas, &mut import).await?;
 			realigned.push(counts);
 		}
-		imported.categories = seen_categories.len() as i64;
+		import.counts.categories = import.seen_categories.len() as i64;
 		if dry_run {
 			tx.rollback().await?;
 		} else {
@@ -457,11 +487,12 @@ pub async fn import_suwayomi_doc(
 	Ok(json!({
 		"dryRun": dry_run,
 		"imported": {
-			"library": imported.library,
-			"categories": imported.categories,
-			"progress": imported.progress,
+			"library": import.counts.library,
+			"categories": import.counts.categories,
+			"progress": import.counts.progress,
+			"trackers": import.counts.trackers,
 		},
-		"skipped": skipped,
+		"skipped": import.skipped,
 		"sources": sources_json,
 	}))
 }
@@ -484,14 +515,28 @@ async fn import_categories(
 	Ok(())
 }
 
+/// One resolved backup source group: the Mihon identity used in skip reports plus the resolved install target.
+struct GroupImport<'a> {
+	mihon_id: i64,
+	mihon_name: &'a str,
+	source: &'a InstalledSource,
+}
+
+/// Mutable accumulators threaded through the import: section counts, created categories and the skip report.
+#[derive(Default)]
+struct ImportState {
+	counts: ImportCounts,
+	seen_categories: HashSet<String>,
+	skipped: Vec<Value>,
+}
+
 async fn import_group(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
 	doc: &TachiBackup,
-	source: &InstalledSource,
+	group: &GroupImport<'_>,
 	mangas: &[&TachiManga],
-	imported: &mut ImportCounts,
-	seen_categories: &mut HashSet<String>,
+	import: &mut ImportState,
 ) -> ApiResult<RealignCounts> {
 	// Category membership is an order-value lookup (Mihon MangaRestorer semantics), not an array position
 	let category_by_order: HashMap<i64, &str> = doc
@@ -513,9 +558,10 @@ async fn import_group(
 			// The url column is a browsable source-site page; manga.url is the in-source key, so it is not carried over
 			url: None,
 		};
-		let (manga_key, manga_changed) = realign_manga_key(source.key.as_str(), &manga.url);
+		let (manga_key, manga_changed) = realign_manga_key(group.source.key.as_str(), &manga.url);
 		realigned.manga += manga_changed as i64;
-		let manga_id = ensure_manga_row(tx, source.id, &manga_key, Some(&meta)).await?;
+		let manga_id = ensure_manga_row(tx, group.source.id, &manga_key, Some(&meta)).await?;
+		import_tracking(tx, user_id, group, manga, manga_id, import).await?;
 		if manga.favorite.unwrap_or(true) {
 			let in_library_at = ms_to_unix(manga.date_added).unwrap_or_else(unix_now);
 			mark_in_library(tx, user_id, manga_id, in_library_at).await?;
@@ -528,7 +574,7 @@ async fn import_group(
 					continue;
 				}
 				let category_id = ensure_category(tx, user_id, name).await?;
-				seen_categories.insert(name.to_string());
+				import.seen_categories.insert(name.to_string());
 				sqlx::query(
 					"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
 					 VALUES (?, ?, ?)",
@@ -539,18 +585,18 @@ async fn import_group(
 				.execute(&mut **tx)
 				.await?;
 			}
-			imported.library += 1;
+			import.counts.library += 1;
 		}
 
 		// Chapter and history keys realign identically, so the two still pair up after the rewrite
 		let history: HashMap<String, i64> = manga
 			.history
 			.iter()
-			.map(|h| (realign_chapter_key(source.key.as_str(), &h.url).0, h.last_read))
+			.map(|h| (realign_chapter_key(group.source.key.as_str(), &h.url).0, h.last_read))
 			.collect();
 		let mut seen_chapters: HashSet<String> = HashSet::new();
 		for chapter in &manga.chapters {
-			let (chapter_key, changed) = realign_chapter_key(source.key.as_str(), &chapter.url);
+			let (chapter_key, changed) = realign_chapter_key(group.source.key.as_str(), &chapter.url);
 			realigned.chapter += changed as i64;
 			seen_chapters.insert(chapter_key.clone());
 			let meta = ChapterMeta {
@@ -576,19 +622,74 @@ async fn import_group(
 				last_read_at,
 			)
 			.await?;
-			imported.progress += 1;
+			import.counts.progress += 1;
 		}
 		// Chapters appearing only in history (the backup ticked history but not chapters): create bare-key rows carrying just the timestamp
 		for entry in &manga.history {
-			let (entry_key, changed) = realign_chapter_key(source.key.as_str(), &entry.url);
+			let (entry_key, changed) = realign_chapter_key(group.source.key.as_str(), &entry.url);
 			if seen_chapters.contains(entry_key.as_str()) {
 				continue;
 			}
 			realigned.chapter += changed as i64;
 			let chapter_id = ensure_chapter_row(tx, manga_id, &entry_key, None).await?;
 			merge_chapter_progress(tx, user_id, chapter_id, 0, false, ms_to_unix(entry.last_read)).await?;
-			imported.progress += 1;
+			import.counts.progress += 1;
 		}
 	}
 	Ok(realigned)
+}
+
+/// Restores the tracker bindings nested in a manga entry: an existing binding for the same
+/// (manga, user, provider) wins, and unsupported trackers or entries never synced to the remote
+/// (no media id) are reported rather than dropped silently. The backup format has no track mode
+/// or chapter offset, so bindings land as auto/0.
+async fn import_tracking(
+	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
+	group: &GroupImport<'_>,
+	manga: &TachiManga,
+	manga_id: i64,
+	import: &mut ImportState,
+) -> ApiResult<()> {
+	for track in &manga.tracking {
+		let mut skip = |reason: &str| {
+			import.skipped.push(json!({
+				"section": "trackers",
+				"mihonSourceId": group.mihon_id.to_string(),
+				"mihonSourceName": group.mihon_name,
+				"mangaKey": manga.url,
+				"reason": reason,
+			}));
+		};
+		let Some(provider) = tachi_tracker_provider(track.sync_id) else {
+			skip("tracker not supported");
+			continue;
+		};
+		// Mihon getTrackImpl precedence: the legacy int id wins when set, else the long id
+		let remote_id = if track.media_id_int != 0 {
+			track.media_id_int as i64
+		} else {
+			track.media_id
+		};
+		if remote_id <= 0 {
+			skip("tracker entry has no remote id");
+			continue;
+		}
+		let track_id = remote_id.to_string();
+		dao::insert_link_if_absent(
+			tx,
+			&dao::NewTrackerLink {
+				manga_id,
+				user_id,
+				provider: provider.as_str(),
+				track_id: &track_id,
+				title: Some(track.title.trim()).filter(|t| !t.is_empty()),
+				track_mode: TrackMode::Auto,
+				chapter_offset: 0,
+			},
+		)
+		.await?;
+		import.counts.trackers += 1;
+	}
+	Ok(())
 }

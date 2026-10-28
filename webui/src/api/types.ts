@@ -9,16 +9,9 @@ export type AddToLibraryRequest = {
 	categoryIds?: Array<number> | null;
 };
 
-export type AidokuImportCounts = {
-	library: number;
-	categories: number;
-	progress: number;
-	trackers: number;
-};
-
 export type AidokuImportResponse = {
 	dryRun: boolean;
-	imported: AidokuImportCounts;
+	imported: ImportCounts;
 	skipped: Array<AidokuSkipped>;
 };
 
@@ -473,6 +466,7 @@ export type ImportCounts = {
 	library: number;
 	categories: number;
 	progress: number;
+	trackers: number;
 };
 
 export type IncognitoSettings = {
