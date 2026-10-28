@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
 	ArrowLeft,
+	Bookmark,
 	Check,
 	House,
 	Link2,
@@ -12,6 +13,7 @@ import {
 	RotateCcw,
 	Search,
 	SearchX,
+	Trash2,
 	TriangleAlert,
 	X
 } from 'lucide-react';
@@ -30,6 +32,12 @@ import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
 import { entrySubtitle, formatRangeBound } from '../lib/format';
 import { localListingLabel } from '../lib/localListings';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
+import {
+	addSavedFilter,
+	loadSavedFilters,
+	removeSavedFilter
+} from '../lib/sourceSavedFilters';
+import type { SavedFilterGroup } from '../lib/sourceSavedFilters';
 import { sourceSearchOptions } from '../lib/sourceSearch';
 import {
 	Button,
@@ -195,6 +203,10 @@ export default function SourceBrowsePage() {
 	const [mode, setMode] = useState<string>(() => searchParams.get('mode') ?? 'search');
 	const [input, setInput] = useState(initialQuery);
 	const [showFilters, setShowFilters] = useState(false);
+	// Saved filter groups (Aidoku saved searches): named query + filter values, kept per source
+	const [savedGroups, setSavedGroups] = useState<SavedFilterGroup[]>(() => loadSavedFilters(sourceId));
+	const [saveOpen, setSaveOpen] = useState(false);
+	const [saveName, setSaveName] = useState('');
 	const [states, setStates] = useState<FilterStates | null>(null);
 	const [submitted, setSubmitted] = useState<{ query: string; filters: FilterValue[] }>({
 		query: initialQuery,
@@ -208,6 +220,14 @@ export default function SourceBrowsePage() {
 		initedFor.current = sourceId;
 		setStates(applyFilterValues(initFilterStates(filters), initialFilters));
 	}, [filters, sourceId, initialFilters]);
+
+	// Saved groups belong to one source; navigating to another source route reloads them (the initializer only covers the first mount)
+	const savedFor = useRef<number | null>(null);
+	useEffect(() => {
+		if (savedFor.current === sourceId) return;
+		savedFor.current = sourceId;
+		setSavedGroups(loadSavedFilters(sourceId));
+	}, [sourceId]);
 
 	function buildFilterValues(draft: FilterStates | null): FilterValue[] {
 		const out: FilterValue[] = [];
@@ -251,8 +271,8 @@ export default function SourceBrowsePage() {
 		return out;
 	}
 
-	function runSearch(nextStates?: FilterStates) {
-		const query = input.trim();
+	function runSearch(nextStates?: FilterStates, queryOverride?: string) {
+		const query = (queryOverride ?? input).trim();
 		// Local sources have no filter panel; deep-link filters (author/tag taps) stay active while the user types.
 		const values = isLocal ? submitted.filters : buildFilterValues(nextStates ?? states);
 		const dropFilters = !isLocal && !!sourceConfig?.hidesFiltersWhileSearching && query !== '';
@@ -272,6 +292,30 @@ export default function SourceBrowsePage() {
 		if (submitted.query) nextParams.q = submitted.query;
 		if (next.length > 0) nextParams.filters = encodeURIComponent(JSON.stringify(next));
 		setSearchParams(nextParams, { replace: true });
+	}
+
+	// Aidoku's saved search: tapping one refills the query box and the panel draft, submits at once, and dismisses the filter sheet
+	function applySavedFilter(group: SavedFilterGroup) {
+		const nextStates = states ? applyFilterValues(states, group.filters) : undefined;
+		if (nextStates) setStates(nextStates);
+		setInput(group.query ?? '');
+		setSaveOpen(false);
+		setShowFilters(false);
+		runSearch(nextStates, group.query ?? '');
+	}
+
+	// Saving captures the draft (not the submitted values) plus the current query; an empty or duplicate name is refused
+	function submitSave() {
+		const name = saveName.trim();
+		if (!name) return;
+		const result = addSavedFilter(sourceId, name, input.trim(), buildFilterValues(states));
+		setSavedGroups(result.groups);
+		if (!result.ok) {
+			pushToast(t('sourceBrowse.saveFiltersDuplicate'), 'info');
+			return;
+		}
+		setSaveName('');
+		setSaveOpen(false);
 	}
 
 	// Only local directory filtering is live; remote source requests wait for explicit submission —
@@ -468,6 +512,33 @@ export default function SourceBrowsePage() {
 
 					{filters && !filtersHidden && showFilters && states && (
 						<div className="card filter-panel">
+							{/* Same as Aidoku's FilterListSheetView saved-searches section: name rows apply, trash deletes */}
+							{savedGroups.length > 0 && (
+								<div className="filter-panel__saved">
+									<span className="filter-item__title">{t('sourceBrowse.savedFilters')}</span>
+									{savedGroups.map((g) => (
+										<div key={g.name} className="filter-panel__saved-row">
+											<button
+												type="button"
+												className="filter-panel__saved-apply"
+												onClick={() => applySavedFilter(g)}
+											>
+												<Bookmark size={14} />
+												<span className="filter-panel__saved-name">{g.name}</span>
+												{g.query && <span className="filter-panel__saved-query">{g.query}</span>}
+											</button>
+											<IconButton
+												label={t('sourceBrowse.deleteSavedFilter')}
+												variant="danger"
+												size="sm"
+												onClick={() => setSavedGroups(removeSavedFilter(sourceId, g.name))}
+											>
+												<Trash2 size={14} />
+											</IconButton>
+										</div>
+									))}
+								</div>
+							)}
 							{filters.map((f) => (
 								<FilterItem
 									key={f.id}
@@ -481,7 +552,34 @@ export default function SourceBrowsePage() {
 								<Button variant="primary" onClick={() => runSearch()}>
 									{t('sourceBrowse.applyFilters')}
 								</Button>
+								<Button
+									onClick={() => {
+										setSaveOpen((v) => !v);
+										setSaveName('');
+									}}
+								>
+									{t('sourceBrowse.saveFilters')}
+								</Button>
 							</div>
+							{saveOpen && (
+								<form
+									className="filter-panel__save"
+									onSubmit={(e) => {
+										e.preventDefault();
+										submitSave();
+									}}
+								>
+									<Input
+										autoFocus
+										placeholder={t('sourceBrowse.saveFiltersPlaceholder')}
+										value={saveName}
+										onChange={(e) => setSaveName(e.currentTarget.value)}
+									/>
+									<Button type="submit" variant="primary" disabled={!saveName.trim()}>
+										{t('sourceBrowse.save')}
+									</Button>
+								</form>
+							)}
 						</div>
 					)}
 				</>
