@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A component modifier must out-specify the shared class it overrides;
+stylesheet bundle order is not a contract.** Two single-class selectors
+tie on specificity, so whichever file the bundler emits later wins, and a
+page stylesheet that loads before the components stylesheet silently
+loses every override. Compound the override with the shared class (or
+raise its specificity otherwise) and test the selector, not the bundle
+order.
+- Evidence: 2026-10-27, #476: `manga.css` is bundled before
+  `components.css`, so `.manga-hero__back` tied `.icon-btn` and lost; the
+  round back button rendered as a small square with a dim icon. Compounding
+  every back-button rule with `.icon-btn` fixed it, and the new
+  manga-mobile-navigation test failed on the old selectors.
+
 **Translate server-sent labels by a stable id, never by their display text.**
 A label the server sends is copy that can be reworded at any time; a UI
 that maps it back to a translation by matching that text (or by expecting
