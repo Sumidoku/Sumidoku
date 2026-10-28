@@ -1127,7 +1127,7 @@ async fn same_name_dirs_at_different_depths_do_not_collide() {
 async fn path_guard_rejects_traversal_absolute_and_drive() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
-	for key in ["../escape", "a/../b", "a/./b", "a//b", "a/b/", "/abs", "a\\b", "C:/x", "c:/y"] {
+	for key in ["../escape", "a/../b", "a/./b", "a//b", "a/b/", "/abs", "a\\b", "C:/x", "c:/y", "C:foo", "c:foo/x", "2:C:foo"] {
 		let (status, body) = request(
 			&app,
 			"POST",
@@ -1138,7 +1138,7 @@ async fn path_guard_rejects_traversal_absolute_and_drive() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{key}: {body}");
 	}
 	// well-formed relative paths pass the guard and fail only on the filesystem lookup
-	for key in ["a/b", "a/b/c"] {
+	for key in ["a/b", "a/b/c", "Note: 1", "AB:c"] {
 		let (status, body) = request(
 			&app,
 			"POST",
