@@ -1,10 +1,38 @@
-<!-- reviewed-through: be89fb2 (2026-10-26) -->
+<!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
+
+**A component modifier must out-specify the shared class it overrides;
+stylesheet bundle order is not a contract.** Two single-class selectors
+tie on specificity, so whichever file the bundler emits later wins, and a
+page stylesheet that loads before the components stylesheet silently
+loses every override. Compound the override with the shared class (or
+raise its specificity otherwise) and test the selector, not the bundle
+order.
+- Evidence: 2026-10-27, #476: `manga.css` is bundled before
+  `components.css`, so `.manga-hero__back` tied `.icon-btn` and lost; the
+  round back button rendered as a small square with a dim icon. Compounding
+  every back-button rule with `.icon-btn` fixed it, and the new
+  manga-mobile-navigation test failed on the old selectors.
+
+**Translate server-sent labels by a stable id, never by their display text.**
+A label the server sends is copy that can be reworded at any time; a UI
+that maps it back to a translation by matching that text (or by expecting
+the server to send catalog keys) loses the translation silently whenever
+the two sides drift. Key the translation table by the entity's id, keep
+the server text only as the fallback, and test with a reworded label.
+- Evidence: 2026-10-26, #446 emitted `localHome.*` keys the UI catalog did
+  not carry, so raw keys rendered until #456 renamed them.
+- Seen again: 2026-10-28, #481 switched local home titles to plain English
+  and translated them with `case 'Latest updates'` matches, so any server
+  rewording would fall back to English. #482 keys home titles and browse
+  labels by listing id through one table; its regression feeds the
+  reworded `Recently added` on `latest-added` and expects the Chinese
+  label, failed when the text match was restored, and passed again after.
 
 **A repository's commit rules override an agent tool's default attribution,
 on every commit a PR carries.** The `Co-Authored-By` ban in
