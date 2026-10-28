@@ -1293,7 +1293,12 @@ function BackupResultView({ result }: { result: BackupRestoreResponse }) {
 }
 
 function aidokuSkippedLabel(t: TFunction, s: AidokuSkipped): string {
-	const what = s.section === 'library' ? t('settings.libraryEntry') : t('settings.progressEntry');
+	const what =
+		s.section === 'library'
+			? t('settings.libraryEntry')
+			: s.section === 'trackers'
+				? t('settings.trackerEntry')
+				: t('settings.progressEntry');
 	const chapter = s.chapterKey ? t('settings.chapterSuffix', { key: s.chapterKey }) : '';
 	return `${what} ${s.sourceKey}/${s.mangaKey}${chapter}`;
 }
@@ -1303,10 +1308,11 @@ function AidokuImportResultView({ result }: { result: AidokuImportResponse }) {
 	return (
 		<div className="settings-backup__result">
 			<p className="settings-modal-text">
-				{t('settings.imported', {
+				{t('settings.importedWithTrackers', {
 					library: result.imported.library,
 					categories: result.imported.categories,
-					progress: result.imported.progress
+					progress: result.imported.progress,
+					trackers: result.imported.trackers
 				})}
 			</p>
 			{result.skipped.length === 0 ? (
@@ -1661,10 +1667,11 @@ function BackupSection() {
 					aib && (
 						<>
 							<p className="settings-modal-text">
-								{t('settings.willImport', {
+								{t('settings.willImportWithTrackers', {
 									library: aib.preview.imported.library,
 									categories: aib.preview.imported.categories,
-									progress: aib.preview.imported.progress
+									progress: aib.preview.imported.progress,
+									trackers: aib.preview.imported.trackers
 								})}
 							</p>
 							<SkippedItems

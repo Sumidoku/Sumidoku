@@ -1011,8 +1011,9 @@ no alias is derived from migration text.
   `chapters` metadata, creating manga/chapter rows as needed, not in
   library for manga the backup does not list), and categories with
   membership (top-level `categories`, accepting both the bare-string and
-  object plist shapes). Aidoku's `mangaId`/`chapterId` are the same
-  source-ecosystem keys as Sumidoku's `manga.key`/`chapter.key`, so rows
+  object plist shapes), and tracker bindings (top-level `trackItems`).
+  Aidoku's `mangaId`/`chapterId` are the same source-ecosystem keys as
+  Sumidoku's `manga.key`/`chapter.key`, so rows
   reconcile by (source key, manga key[, chapter key]) with no URL
   translation; Aidoku's `nsfw` stores ContentRating raw value minus one,
   so it maps 1→2 (suggestive) and 2→3 (NSFW) with 0 read as unknown.
@@ -1020,6 +1021,15 @@ no alias is derived from migration text.
   library entries and categories keep their state (only `in_library` is
   raised and membership added), and progress merges
   `max(last_page_read)`, OR-ed `is_read` and the newer `last_read_at`.
+  Tracker rows become `tracker_link` bindings: Aidoku's tracker ids map
+  `anilist`/`bangumi`/`mangabaka` directly and `myanimelist` to `mal`, while
+  a tracker with no provider here is skipped as `tracker not supported`
+  rather than guessed at; the row's `id` becomes the binding's `track_id`,
+  `chapterOffset` carries over, and the track mode follows the backup's
+  `Manga.chapterDisplayMode.<sourceKey>.<mangaKey>` setting (1 → chapter,
+  2 → volume, absent → auto). A binding that already exists for the same
+  (manga, provider) is kept untouched, so re-importing the same backup
+  changes nothing.
   Entries whose source is not installed are skipped and reported in the
   response `skipped` list with a reason; the `imported` map counts
   processed entries per section. `?dryRun=true` runs the same single

@@ -9,9 +9,16 @@ export type AddToLibraryRequest = {
 	categoryIds?: Array<number> | null;
 };
 
+export type AidokuImportCounts = {
+	library: number;
+	categories: number;
+	progress: number;
+	trackers: number;
+};
+
 export type AidokuImportResponse = {
 	dryRun: boolean;
-	imported: ImportCounts;
+	imported: AidokuImportCounts;
 	skipped: Array<AidokuSkipped>;
 };
 

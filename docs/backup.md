@@ -75,19 +75,27 @@ settings page lists them with a restore action.
 
 `POST /api/v1/backups/import/aidoku` imports an Aidoku app backup (`.aib`, a
 binary plist) into the library: library manga, reading progress (chapter
-read state and last page read) and categories with membership. Aidoku and
-Sumidoku share the same source ecosystem, so entries match on source key
-and manga/chapter key; entries whose source is not installed are skipped
-and reported with a reason in the response `skipped` list, never
-half-imported silently. The import is additive — existing library entries
-and categories keep their current state, and progress merges by taking the
-larger last-page-read, OR-ing the read flag and keeping the newer read
-timestamp. `POST /api/v1/backups/import/aidoku?dryRun=true` runs the same
-transaction and rolls it back, returning the would-import report
-(per-section counts plus the skipped list) without writing anything. The
-web UI's settings page has an "从 Aidoku 导入" button under the backup
-section that walks upload → dry-run preview → confirm. Aidoku settings,
-source configs and trackers are out of scope.
+read state and last page read), categories with membership, and tracker
+bindings. Aidoku and Sumidoku share the same source ecosystem, so entries
+match on source key and manga/chapter key; entries whose source is not
+installed are skipped and reported with a reason in the response `skipped`
+list, never half-imported silently. Tracker bindings come from the backup's
+`trackItems` rows, keyed by tracker id: `anilist`, `myanimelist` (this
+server's `mal`), `bangumi` and `mangabaka` map onto local providers, and a
+tracker without one (Shikimori, Komga, Kavita, Suwayomi) is skipped with
+`tracker not supported` instead of being guessed at. A binding's track id is
+the tracker's own entry id, its offset is carried across, and its track mode
+follows the manga's Aidoku chapter display mode in the backup's settings dump
+(chapter → chapter, volume → volume, default → auto). The import is additive
+— existing library entries, categories and tracker bindings keep their
+current state, and progress merges by taking the larger last-page-read,
+OR-ing the read flag and keeping the newer read timestamp.
+`POST /api/v1/backups/import/aidoku?dryRun=true` runs the same transaction
+and rolls it back, returning the would-import report (per-section counts
+plus the skipped list) without writing anything. The web UI's settings page
+has an "从 Aidoku 导入" button under the backup section that walks upload →
+dry-run preview → confirm. Aidoku settings and source configs are out of
+scope.
 
 ## Importing from Suwayomi/Mihon
 
