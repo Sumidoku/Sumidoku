@@ -353,3 +353,58 @@ async fn batch_manga_json_matches_single_item_output() {
 		assert_eq!(entry["manga"], singles[&a]);
 	}
 }
+
+/// update/recent must not treat chapters already present at first library add as new updates
+#[tokio::test]
+async fn recent_updates_excludes_pre_library_chapters() {
+	let TestApp {
+		app,
+		tmp: _tmp,
+		db_path,
+	} = test_app().await;
+	let pool = connect_db(&db_path).await;
+	let source_id = seed_source(&pool).await;
+
+	// Manga A: chapters fetched before the manga entered the library
+	let (a, _a_chapters) = seed_manga(&pool, source_id, "a", 2, 100).await;
+	put_in_library(&pool, a, true, 200).await;
+
+	// Manga B: added to the library first, then chapters were fetched later
+	let (b, b_chapters) = seed_manga(&pool, source_id, "b", 2, 300).await;
+	put_in_library(&pool, b, true, 200).await;
+
+	let (status, body) = request(&app, "GET", "/api/v1/update/recent", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let entries = body["entries"].as_array().expect("entries");
+	assert_eq!(entries.len(), 2, "pre-library chapters should not appear as updates");
+	for entry in entries {
+		assert_eq!(entry["manga"]["id"], json!(b));
+	}
+
+	// A new chapter for A fetched after it was added should appear
+	sqlx::query(
+		"INSERT INTO chapter (manga_id, key, source_order, page_count, fetched_at)
+		 VALUES (?, 'a-ch2', 2, 10, 500)",
+	)
+	.bind(a)
+	.execute(&pool)
+	.await
+	.expect("insert later chapter");
+
+	let (status, body) = request(&app, "GET", "/api/v1/update/recent", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let entries = body["entries"].as_array().expect("entries");
+	assert_eq!(entries.len(), 3);
+	let new_chapter_id: i64 = sqlx::query_scalar("SELECT id FROM chapter WHERE key = 'a-ch2'")
+		.fetch_one(&pool)
+		.await
+		.expect("new chapter id");
+	assert!(entries.iter().any(|e| e["chapter"]["id"] == json!(new_chapter_id)));
+	for entry in entries {
+		let cid = entry["chapter"]["id"].as_i64().expect("chapter id");
+		assert!(
+			cid == new_chapter_id || b_chapters.contains(&cid),
+			"unexpected chapter {cid} in updates"
+		);
+	}
+}
