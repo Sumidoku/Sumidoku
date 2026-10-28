@@ -1,21 +1,39 @@
 //! LRU of open CBZ handles: reopening an archive re-reads the whole central directory, so extracting a chapter page by page would pay that per page.
-//! Capacity pinned at 16 (same as kmrs); one global lock, each hold extracts a single entry, so contention cost is negligible.
+//! Capacity pinned at 16 (same as kmrs). The cache lock covers only the lookup; each archive has its own lock held
+//! while one entry is extracted, so reads of different archives (and archive opens) run in parallel on slow disks.
+//! A panic while extracting drops that archive from the cache instead of poisoning every later read.
 //! Cached handles are reopened when the file version changes, so atomic replacement cannot leave stale bytes.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 pub const ZIP_CACHE_CAPACITY: usize = 16;
+/// The entry's declared size is untrusted header data: it only hints the first allocation, never sizes it
+const ENTRY_CAPACITY_HINT_MAX: u64 = 32 * 1024 * 1024;
+
+type Archive = zip::ZipArchive<std::fs::File>;
 
 pub struct ZipCache {
-	inner: std::sync::Mutex<ZipCacheInner>,
+	inner: Mutex<ZipCacheInner>,
 }
 
 struct ZipCacheInner {
-	archives: HashMap<PathBuf, zip::ZipArchive<std::fs::File>>,
-	versions: HashMap<PathBuf, FileVersion>,
+	archives: HashMap<PathBuf, (Arc<Mutex<Archive>>, FileVersion)>,
 	/// Oldest at the front, newest at the back; a hit moves to the back, a full cache evicts the front
 	recency: VecDeque<PathBuf>,
+}
+
+impl ZipCacheInner {
+	fn forget(&mut self, path: &Path) {
+		self.archives.remove(path);
+		self.recency.retain(|p| p != path);
+	}
+
+	fn touch(&mut self, path: &Path) {
+		self.recency.retain(|p| p != path);
+		self.recency.push_back(path.to_path_buf());
+	}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -51,9 +69,8 @@ impl Default for ZipCache {
 impl ZipCache {
 	pub fn new() -> Self {
 		Self {
-			inner: std::sync::Mutex::new(ZipCacheInner {
+			inner: Mutex::new(ZipCacheInner {
 				archives: HashMap::new(),
-				versions: HashMap::new(),
 				recency: VecDeque::new(),
 			}),
 		}
@@ -76,51 +93,74 @@ impl ZipCache {
 			let mut entry = archive
 				.by_name(name)
 				.map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "zip entry not found"))?;
-			let mut out = Vec::with_capacity(entry.size() as usize);
+			let mut out = Vec::with_capacity(entry.size().min(ENTRY_CAPACITY_HINT_MAX) as usize);
 			std::io::Read::read_to_end(&mut entry, &mut out)?;
 			Ok(out)
 		})
 	}
 
-	fn with_archive<T>(
-		&self,
-		path: &Path,
-		f: impl FnOnce(&mut zip::ZipArchive<std::fs::File>) -> std::io::Result<T>,
-	) -> std::io::Result<T> {
-		let mut inner = self.inner.lock().expect("zip cache lock");
-		let version = FileVersion::current(path)?;
-		if inner.versions.get(path).is_some_and(|cached| *cached != version) {
-			inner.archives.remove(path);
-			inner.versions.remove(path);
-			inner.recency.retain(|p| p != path);
-		}
-		if !inner.archives.contains_key(path) {
-			if inner.archives.len() >= ZIP_CACHE_CAPACITY
-				&& let Some(old) = inner.recency.pop_front()
-			{
-				inner.archives.remove(&old);
-				inner.versions.remove(&old);
+	/// The cache map holds no invariant a panic could break mid-update, so a poisoned lock is still usable
+	fn lock(&self) -> MutexGuard<'_, ZipCacheInner> {
+		self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+	}
+
+	fn with_archive<T>(&self, path: &Path, f: impl FnOnce(&mut Archive) -> std::io::Result<T>) -> std::io::Result<T> {
+		let handle = self.handle(path)?;
+		let mut archive = match handle.lock() {
+			Ok(archive) => archive,
+			// A panic mid-extraction left this reader in an unknown position: drop it and read through a fresh open
+			Err(_) => {
+				let mut inner = self.lock();
+				if inner.archives.get(path).is_some_and(|(cached, _)| Arc::ptr_eq(cached, &handle)) {
+					inner.forget(path);
+				}
+				drop(inner);
+				let fresh = self.handle(path)?;
+				let mut archive = fresh.lock().unwrap_or_else(PoisonError::into_inner);
+				return f(&mut archive);
 			}
-			let file = std::fs::File::open(path)?;
-			let archive = zip::ZipArchive::new(file)
-				.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-			inner.archives.insert(path.to_path_buf(), archive);
+		};
+		f(&mut archive)
+	}
+
+	fn handle(&self, path: &Path) -> std::io::Result<Arc<Mutex<Archive>>> {
+		let version = FileVersion::current(path)?;
+		{
+			let mut inner = self.lock();
+			match inner.archives.get(path) {
+				Some((archive, cached)) if *cached == version => {
+					let archive = archive.clone();
+					inner.touch(path);
+					return Ok(archive);
+				}
+				Some(_) => inner.forget(path),
+				None => {}
+			}
 		}
-		inner.versions.insert(path.to_path_buf(), version);
-		inner.recency.retain(|p| p != path);
-		inner.recency.push_back(path.to_path_buf());
-		let archive = inner.archives.get_mut(path).expect("archive inserted");
-		f(archive)
+		// Opening reads the central directory: done outside the cache lock so a slow archive blocks no other reads
+		let file = std::fs::File::open(path)?;
+		let archive = zip::ZipArchive::new(file).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+		let archive = Arc::new(Mutex::new(archive));
+		let mut inner = self.lock();
+		if !inner.archives.contains_key(path)
+			&& inner.archives.len() >= ZIP_CACHE_CAPACITY
+			&& let Some(old) = inner.recency.pop_front()
+		{
+			inner.archives.remove(&old);
+		}
+		inner.archives.insert(path.to_path_buf(), (archive.clone(), version));
+		inner.touch(path);
+		Ok(archive)
 	}
 
 	#[cfg(test)]
 	fn cached_len(&self) -> usize {
-		self.inner.lock().expect("zip cache lock").archives.len()
+		self.lock().archives.len()
 	}
 
 	#[cfg(test)]
 	fn is_cached(&self, path: &Path) -> bool {
-		self.inner.lock().expect("zip cache lock").archives.contains_key(path)
+		self.lock().archives.contains_key(path)
 	}
 }
 
@@ -210,5 +250,52 @@ mod tests {
 		let err = cache.read_entry(&path, "p.png").expect_err("must fail");
 		assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 		assert_eq!(cache.cached_len(), 0, "打不开的包不进缓存");
+	}
+
+	#[test]
+	fn a_panic_while_extracting_does_not_break_later_reads() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let path = tmp.path().join("a.cbz");
+		make_zip(&path, &[("p.png", b"x")]);
+		let cache = ZipCache::new();
+		let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+			let _ = cache.with_archive(&path, |_| -> std::io::Result<()> { panic!("extraction failed") });
+		}));
+		assert!(panicked.is_err());
+		assert_eq!(cache.read_entry(&path, "p.png").expect("read after panic"), b"x");
+	}
+
+	#[test]
+	fn a_held_archive_does_not_block_reads_of_another() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let (slow, fast) = (tmp.path().join("slow.cbz"), tmp.path().join("fast.cbz"));
+		make_zip(&slow, &[("p.png", b"s")]);
+		make_zip(&fast, &[("p.png", b"f")]);
+		let cache = Arc::new(ZipCache::new());
+		let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+		let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+		let holder = {
+			let cache = cache.clone();
+			std::thread::spawn(move || {
+				cache
+					.with_archive(&slow, |_| {
+						entered_tx.send(()).expect("signal entered");
+						release_rx.recv().expect("wait for release");
+						Ok(())
+					})
+					.expect("held read");
+			})
+		};
+		entered_rx.recv().expect("holder entered");
+		let (done_tx, done_rx) = std::sync::mpsc::channel();
+		let reader = {
+			let cache = cache.clone();
+			std::thread::spawn(move || done_tx.send(cache.read_entry(&fast, "p.png").expect("read fast")))
+		};
+		let read = done_rx.recv_timeout(std::time::Duration::from_secs(5));
+		release_tx.send(()).expect("release holder");
+		holder.join().expect("holder thread");
+		reader.join().expect("reader thread").expect("report read");
+		assert_eq!(read.expect("another archive must not wait for the held one"), b"f");
 	}
 }
