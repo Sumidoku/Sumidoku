@@ -580,7 +580,8 @@ no alias is derived from migration text.
   is still trashed, so a late request cannot claim a same-key replacement or
   restore the same row twice. Live rows may backfill a missing kind; trashed
   rows need a full scan to learn it before they can be restored. A full scan also restores a discovered
-  trashed row in place. The post-scan analysis pass (`local_analyze` task, gated by
+  trashed row in place when its recorded kind matches (or is still unknown);
+  a trashed row whose key now holds the other kind stays trashed. The post-scan analysis pass (`local_analyze` task, gated by
   `analyzeMetadata`/`analyzePages`) fills metadata — one open per archive:
   CBZ ComicInfo.xml / EPUB OPF drive the manga chain, per-chapter titles
   (ComicInfo `Title`, OPF `dc:title`), writers into `scanlators`, and

@@ -255,6 +255,38 @@ async fn scan_indexes_then_trashes_restores_and_purges() {
 	pool.close().await;
 }
 
+/// A trashed directory manga must not come back as an archive that later appears at the same key: manual
+/// restore answers 409 gone for that, and the full scan has to agree instead of restoring it
+#[tokio::test]
+async fn full_scan_keeps_a_trashed_row_whose_key_now_holds_another_shape() {
+	let t = scan_app().await;
+	let root = t.tmp.path().join("local");
+	write_cbz(&root.join("Specials/Gamma.cbz/ch1.cbz"), &[("1.png", b"dir-version")]);
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", t.db_path.display())).await.expect("connect");
+	scan_and_settle(&t.app).await;
+	assert_eq!(entry_kind(&pool, "Specials/Gamma.cbz").await.as_deref(), Some("directory"));
+	let (manga_id, ..) = manga_row(&pool, "Specials/Gamma.cbz").await.expect("indexed directory manga");
+	std::fs::remove_dir_all(root.join("Specials/Gamma.cbz")).expect("remove directory");
+	scan_and_settle(&t.app).await;
+	assert!(manga_row(&pool, "Specials/Gamma.cbz").await.expect("row").3.is_some(), "removal trashes");
+	// an unrelated archive now sits at the same relative path, claimed by the oneshots rule
+	write_cbz(&root.join("Specials/Gamma.cbz"), &[("1.png", b"archive-version")]);
+	let source_id = local_source_id(&t.app).await;
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"oneshotsDir": "Specials"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	scan_and_settle(&t.app).await;
+	let (id, _, _, trashed, _) = manga_row(&pool, "Specials/Gamma.cbz").await.expect("row");
+	assert_eq!(id, manga_id);
+	assert!(trashed.is_some(), "the full scan restored the trashed directory row as an archive");
+	assert_eq!(entry_kind(&pool, "Specials/Gamma.cbz").await.as_deref(), Some("directory"));
+}
+
 #[tokio::test]
 async fn manual_restore_brings_back_a_trashed_manga() {
 	let t = scan_app().await;
