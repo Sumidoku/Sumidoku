@@ -1,4 +1,4 @@
-<!-- reviewed-through: be89fb2 (2026-10-26) -->
+<!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
