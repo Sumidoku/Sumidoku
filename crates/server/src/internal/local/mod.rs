@@ -165,6 +165,42 @@ fn valid_key(key: &str) -> bool {
 	true
 }
 
+/// The read-model visibility rule, shared by search and every home listing so they cannot disagree:
+/// - exclusions: a key whose Unicode-lowercased text contains an exclusion is hidden (the same literal
+///   substring rule discovery and the scan apply; `_` and `%` are plain characters)
+/// - multi-root shadowing: the same relative path under several roots lists once, from the lowest root
+///
+/// Returns the ids to hide among the given (id, key) rows
+pub fn hidden_ids(rows: &[(i64, String)], exclusions: &[String]) -> Vec<i64> {
+	let split = |key: &str| dir_prefix(key).unwrap_or((0, key)).0;
+	let mut lowest: HashMap<&str, usize> = HashMap::new();
+	for (_, key) in rows {
+		let index = split(key);
+		lowest
+			.entry(rel_of(key))
+			.and_modify(|best| *best = (*best).min(index))
+			.or_insert(index);
+	}
+	rows.iter()
+		.filter(|(_, key)| {
+			let lowered = key.to_lowercase();
+			exclusions.iter().any(|exclusion| lowered.contains(exclusion.as_str()))
+				|| lowest.get(rel_of(key)).is_some_and(|best| *best != split(key))
+		})
+		.map(|(id, _)| *id)
+		.collect()
+}
+
+/// `hidden_ids` for one instance's live rows, as a JSON array for `json_each(?)`
+pub async fn hidden_manga_ids_json(state: &AppState, source_id: i64) -> ApiResult<String> {
+	let exclusions = state.local_exclusions(source_id).await?;
+	let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, key FROM manga WHERE source_id = ? AND trashed_at IS NULL")
+		.bind(source_id)
+		.fetch_all(&state.pool)
+		.await?;
+	Ok(serde_json::to_string(&hidden_ids(&rows, &exclusions))?)
+}
+
 fn require_key(key: &str) -> ApiResult<()> {
 	if valid_key(key) {
 		Ok(())
