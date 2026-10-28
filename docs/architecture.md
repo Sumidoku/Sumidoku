@@ -1762,6 +1762,11 @@ rendering, and typography changes recompute paged text columns. Reading directio
 tap mapping: it swaps which tap zone, arrow key and bottom-bar side moves forward,
 flows paged text columns right-to-left with a matching transform sign
 (`reader/direction.ts`), and mirrors the page slider so page 1 sits on the right.
+The direction defaults to the manga's metadata `viewer` (source-supplied, or from
+local EPUB spine / ComicInfo / series.json, with the per-user `viewer_flags`
+override already folded into the API response); a reader toggle writes a per-manga
+override in `sumidoku.reader.dir.<id>` (cleared when it matches the metadata), and
+the global setting is the fallback for manga without a horizontal viewer.
 
 ## Known gaps
 

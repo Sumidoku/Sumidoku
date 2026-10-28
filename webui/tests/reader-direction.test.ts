@@ -31,6 +31,28 @@ test('the forward tap zone follows the reading direction', async () => {
 	});
 });
 
+test('manga metadata maps to a direction only when it carries one', async () => {
+	await withVite(async (vite) => {
+		const { dirFromViewer } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		assert.equal(dirFromViewer('RightToLeft'), 'rtl');
+		assert.equal(dirFromViewer('LeftToRight'), 'ltr');
+		assert.equal(dirFromViewer('Vertical'), null);
+		assert.equal(dirFromViewer('Webtoon'), null);
+		assert.equal(dirFromViewer('Unknown'), null);
+		assert.equal(dirFromViewer(undefined), null);
+	});
+});
+
+test('direction resolves override over metadata over global default', async () => {
+	await withVite(async (vite) => {
+		const { resolveDir } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		assert.equal(resolveDir('ltr', 'rtl', 'ltr'), 'ltr');
+		assert.equal(resolveDir(null, 'rtl', 'ltr'), 'rtl');
+		assert.equal(resolveDir(null, null, 'rtl'), 'rtl');
+		assert.equal(resolveDir(null, null, 'ltr'), 'ltr');
+	});
+});
+
 test('paged text columns translate with the reading direction', async () => {
 	await withVite(async (vite) => {
 		const { textColumnOffset } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');

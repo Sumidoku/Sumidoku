@@ -1,4 +1,25 @@
+import type { Viewer } from '../../api/types';
+
 export type Dir = 'ltr' | 'rtl';
+
+/**
+ * Horizontal reading direction carried by manga metadata (Aidoku viewer, filled from the
+ * source or from local EPUB spine / ComicInfo / series.json). Vertical and Webtoon say
+ * nothing about horizontal direction, so they map to no preference.
+ */
+export function dirFromViewer(viewer: Viewer | null | undefined): Dir | null {
+	if (viewer === 'RightToLeft') return 'rtl';
+	if (viewer === 'LeftToRight') return 'ltr';
+	return null;
+}
+
+/**
+ * Effective direction: an explicit per-manga override beats the manga's metadata,
+ * which beats the stored global default.
+ */
+export function resolveDir(override: Dir | null, meta: Dir | null, fallback: Dir): Dir {
+	return override ?? meta ?? fallback;
+}
 
 /**
  * In rtl the leading edge is the left side, so the left tap zone and ArrowLeft move

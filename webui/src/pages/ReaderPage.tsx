@@ -30,7 +30,7 @@ import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
 import type { Mode } from './reader/ReaderSettings';
-import { zoneMovesForward } from './reader/direction';
+import { dirFromViewer, resolveDir, zoneMovesForward } from './reader/direction';
 import type { Dir } from './reader/direction';
 import { ReaderPager } from './reader/ReaderPager';
 import { TextColumns } from './reader/TextColumns';
@@ -65,6 +65,22 @@ function readDir(): Dir {
 		// Same as above
 	}
 	return 'ltr';
+}
+
+// Per-manga override of the metadata/default direction, keyed by manga id
+function dirOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.dir.${mangaId}`;
+}
+
+function readDirOverride(mangaId: number | null): Dir | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(dirOverrideKey(mangaId));
+		if (v === 'ltr' || v === 'rtl') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
 }
 
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
@@ -193,7 +209,11 @@ function ReaderCore({
 	const navChapters = useMemo(() => (asc ? [...chapters].reverse() : chapters), [chapters, asc]);
 
 	const [mode, setModeState] = useState<Mode>(readMode);
-	const [dir, setDirState] = useState<Dir>(readDir);
+	const [globalDir] = useState<Dir>(readDir);
+	const [dirOverride, setDirOverride] = useState<Dir | null>(() => readDirOverride(mangaId));
+	// Per-manga override > manga metadata (viewer) > global default
+	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
+	const dir = resolveDir(dirOverride, metaDir, globalDir);
 	const [overlay, setOverlay] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
@@ -453,12 +473,19 @@ function ReaderCore({
 	}
 
 	function setDir(d: Dir) {
-		setDirState(d);
 		try {
-			localStorage.setItem('sumidoku.reader.dir', d);
+			if (mangaId !== null) {
+				// Toggling back to the metadata direction drops the override so future metadata edits apply
+				if (d === metaDir) localStorage.removeItem(dirOverrideKey(mangaId));
+				else localStorage.setItem(dirOverrideKey(mangaId), d);
+			} else {
+				// Without a manga in scope there is no metadata to respect: write the global default
+				localStorage.setItem('sumidoku.reader.dir', d);
+			}
 		} catch {
-			// Same as above
+			// Private mode blocks persistence but the direction still switches
 		}
+		setDirOverride(mangaId !== null && d !== metaDir ? d : null);
 	}
 
 	function toggleAsc() {
