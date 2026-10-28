@@ -10250,6 +10250,33 @@
           }
         }
       },
+      "AidokuImportCounts": {
+        "type": "object",
+        "required": [
+          "library",
+          "categories",
+          "progress",
+          "trackers"
+        ],
+        "properties": {
+          "library": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "categories": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "progress": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "trackers": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "AidokuSkipped": {
         "type": "object",
         "required": [
@@ -10288,7 +10315,7 @@
             "type": "boolean"
           },
           "imported": {
-            "$ref": "#/components/schemas/ImportCounts"
+            "$ref": "#/components/schemas/AidokuImportCounts"
           },
           "skipped": {
             "type": "array",

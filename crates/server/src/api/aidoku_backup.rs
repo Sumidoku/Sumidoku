@@ -4,6 +4,8 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
 use crate::state::AppState;
+use crate::tracker::core::TrackMode;
+use crate::tracker::{Provider, dao};
 use axum::Extension;
 use axum::extract::{Query, State};
 use axum::response::Json;
@@ -40,6 +42,26 @@ struct AibBackup {
 	// Aidoku writes either a bare string or a {title,sort,group,data} object, so take the title from a Value by hand
 	#[serde(default)]
 	categories: Vec<plist::Value>,
+	#[serde(default)]
+	track_items: Vec<AibTrackItem>,
+	// Aidoku exports its whole UserDefaults dump here; only the per-manga chapter display mode is read (it is also the
+	// tracking mode), everything else is left alone rather than imported
+	#[serde(default)]
+	settings: HashMap<String, plist::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AibTrackItem {
+	// Aidoku's track id on the tracker's side; the binding's remote entry id
+	id: String,
+	tracker_id: String,
+	manga_id: String,
+	source_id: String,
+	#[serde(default)]
+	title: Option<String>,
+	#[serde(default)]
+	chapter_offset: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,6 +202,30 @@ fn aib_chapter_meta(c: &AibChapter) -> ApiResult<ChapterMeta<'_>> {
 	})
 }
 
+/// Aidoku's tracker ids (`AniListTracker.id` and friends) mapped onto this server's providers; a tracker without a
+/// provider here (Shikimori, Komga, Kavita, Suwayomi) is reported as skipped instead of being guessed at
+fn aidoku_tracker_provider(tracker_id: &str) -> Option<Provider> {
+	match tracker_id {
+		"anilist" => Some(Provider::Anilist),
+		"myanimelist" => Some(Provider::Mal),
+		"bangumi" => Some(Provider::Bangumi),
+		"mangabaka" => Some(Provider::Mangabaka),
+		_ => None,
+	}
+}
+
+/// Aidoku's per-manga chapter display mode is also its tracking mode (ChapterTitleDisplayMode: 0 default, 1 chapter,
+/// 2 volume, stored under `Manga.chapterDisplayMode.<sourceKey>.<mangaKey>`): the volume mode pushed only the volume,
+/// which is exactly TrackMode::Volume. Absent or unknown maps to auto, which decides chapter-first.
+fn track_mode_from_settings(settings: &HashMap<String, plist::Value>, source_key: &str, manga_key: &str) -> TrackMode {
+	let key = format!("Manga.chapterDisplayMode.{source_key}.{manga_key}");
+	match settings.get(&key).and_then(plist::Value::as_signed_integer) {
+		Some(1) => TrackMode::Chapter,
+		Some(2) => TrackMode::Volume,
+		_ => TrackMode::Auto,
+	}
+}
+
 pub async fn import_aidoku_backup(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
@@ -216,6 +262,7 @@ pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_
 			.await?;
 		import_progress(&mut tx, user_id, &doc, &manga_meta, &chapter_meta, &mut imported, &mut skipped)
 			.await?;
+		import_trackers(&mut tx, user_id, &doc, &manga_meta, &mut imported, &mut skipped).await?;
 		imported.categories = seen_categories.len() as i64;
 		if dry_run {
 			tx.rollback().await?;
@@ -244,6 +291,7 @@ pub async fn import_aidoku_doc(state: &AppState, user_id: i64, body: &[u8], dry_
 			"library": imported.library,
 			"categories": imported.categories,
 			"progress": imported.progress,
+			"trackers": imported.trackers,
 		},
 		"skipped": skipped_json,
 	}))
@@ -364,6 +412,68 @@ async fn import_progress(
 		let last_read_at = entry.date_read.map(date_to_unix);
 		merge_chapter_progress(tx, user_id, chapter_id, last_page_read, entry.completed, last_read_at).await?;
 		imported.progress += 1;
+	}
+	Ok(())
+}
+
+/// Restores tracker bindings: Aidoku's TrackObject rows carry the tracker's own entry id, so each one becomes a local
+/// binding; an existing binding for the same (manga, provider) is kept as is, and unsupported trackers are reported
+/// rather than dropped silently. The manga row is created from the backup's metadata when the entry is not in the library.
+async fn import_trackers(
+	tx: &mut Transaction<'_, Sqlite>,
+	user_id: i64,
+	doc: &AibBackup,
+	manga_meta: &HashMap<(&str, &str), &AibManga>,
+	imported: &mut ImportCounts,
+	skipped: &mut Vec<Skipped>,
+) -> ApiResult<()> {
+	for entry in &doc.track_items {
+		if entry.source_id.is_empty() || entry.manga_id.is_empty() || entry.id.is_empty() {
+			return Err(ApiError::bad_request(
+				"aidoku track entry must have non-empty sourceId, mangaId and id",
+			));
+		}
+		let Some(source_id) = source_id_by_key(tx, &entry.source_id).await? else {
+			skipped.push(Skipped {
+				section: "trackers",
+				source_key: entry.source_id.clone(),
+				manga_key: entry.manga_id.clone(),
+				chapter_key: None,
+				reason: "source not installed",
+			});
+			continue;
+		};
+		let Some(provider) = aidoku_tracker_provider(&entry.tracker_id) else {
+			skipped.push(Skipped {
+				section: "trackers",
+				source_key: entry.source_id.clone(),
+				manga_key: entry.manga_id.clone(),
+				chapter_key: None,
+				reason: "tracker not supported",
+			});
+			continue;
+		};
+		let meta = manga_meta
+			.get(&(entry.source_id.as_str(), entry.manga_id.as_str()))
+			.map(|m| aib_manga_meta(m))
+			.transpose()?;
+		let manga_id = ensure_manga_row(tx, source_id, &entry.manga_id, meta.as_ref()).await?;
+		// The binding's offset is added to local chapter numbers before pushing; the API's own bounds apply here too
+		let chapter_offset = entry.chapter_offset.unwrap_or(0).clamp(-10_000, 10_000) as i32;
+		dao::insert_link_if_absent(
+			tx,
+			&dao::NewTrackerLink {
+				manga_id,
+				user_id,
+				provider: provider.as_str(),
+				track_id: &entry.id,
+				title: entry.title.as_deref().map(str::trim).filter(|t| !t.is_empty()),
+				track_mode: track_mode_from_settings(&doc.settings, &entry.source_id, &entry.manga_id),
+				chapter_offset,
+			},
+		)
+		.await?;
+		imported.trackers += 1;
 	}
 	Ok(())
 }

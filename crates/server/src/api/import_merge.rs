@@ -1,6 +1,7 @@
 //! Additive merge primitives shared by external-app backup imports (.aib / .tachibk):
 //! existing library entries win (metadata not overwritten, in-library time kept), progress takes max(last_page_read),
-//! is_read takes OR, last_read_at takes the newer NULL-safely; is_bookmarked is neither carried nor overwritten
+//! is_read takes OR, last_read_at takes the newer NULL-safely; is_bookmarked is neither carried nor overwritten;
+//! an existing tracker binding for the same (manga, user, provider) is kept
 
 use crate::error::ApiResult;
 use sqlx::{Sqlite, Transaction};
@@ -10,6 +11,7 @@ pub struct ImportCounts {
 	pub library: i64,
 	pub categories: i64,
 	pub progress: i64,
+	pub trackers: i64,
 }
 
 /// A same-named existing category keeps its sort order; new categories append at the end

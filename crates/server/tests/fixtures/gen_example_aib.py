@@ -8,6 +8,9 @@ naive datetimes as UTC. Field references:
 - library:  BackupLibraryManga  (mangaId/sourceId are the source-ecosystem keys)
 - history:  BackupHistory       (progress = last page, -1 when completed)
 - manga/chapters: metadata dictionaries keyed by (id, sourceId[, mangaId])
+- trackItems: BackupTrackItem   (id = the tracker's own entry id, trackerId = Aidoku's tracker id)
+- settings: the exported UserDefaults dump; the import reads only
+  Manga.chapterDisplayMode.<sourceKey>.<mangaKey> (0 default, 1 chapter, 2 volume)
 - categories: plain strings or {title, sort, group} objects — both are valid
 
 Run: python3 gen_example_aib.py   (writes example.aib next to this script)
@@ -158,6 +161,47 @@ BACKUP = {
             "dateRead": d("2024-02-04 10:00:00"),
         },
     ],
+    # tracker bindings: manga 1 is chapter-only and manga 2 volume-only in Aidoku's per-manga
+    # chapter display mode (the settings dump below), which is also its tracking mode
+    "trackItems": [
+        {
+            "id": "101",
+            "trackerId": "anilist",
+            "mangaId": "1",
+            "sourceId": "en.example-source",
+            "title": "Example Manga",
+            "chapterOffset": 0,
+        },
+        # myanimelist is this server's "mal"; the positive offset survives the import
+        {
+            "id": "202",
+            "trackerId": "myanimelist",
+            "mangaId": "2",
+            "sourceId": "en.example-source",
+            "title": "Second Manga",
+            "chapterOffset": 1,
+        },
+        # tracker without a provider on this server -> skipped
+        {
+            "id": "303",
+            "trackerId": "shikimori",
+            "mangaId": "1",
+            "sourceId": "en.example-source",
+        },
+        # source not installed -> skipped
+        {
+            "id": "404",
+            "trackerId": "anilist",
+            "mangaId": "ghost-1",
+            "sourceId": "en.ghost-source",
+        },
+    ],
+    "settings": {
+        "Manga.chapterDisplayMode.en.example-source.1": 1,
+        "Manga.chapterDisplayMode.en.example-source.2": 2,
+        # unrelated settings are outside the import's scope
+        "General.incognito": True,
+    },
     # both plist shapes Aidoku emits: bare string and object
     "categories": ["Evening", {"title": "Reading", "sort": 3, "group": False}],
 }

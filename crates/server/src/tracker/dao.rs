@@ -3,7 +3,7 @@
 
 use super::Provider;
 use super::core::TrackLedgerItem;
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackerOAuthToken {
@@ -266,6 +266,35 @@ pub async fn upsert_link(pool: &SqlitePool, link: &NewTrackerLink<'_>) -> Result
 	.execute(pool)
 	.await?;
 	Ok(())
+}
+
+/// Additive merge used by the external-app imports: a binding that already
+/// exists for (manga, user, provider) wins, so importing a backup never
+/// rewrites a link the user made here; returns whether a row was inserted, so
+/// a repeated import of the same file writes nothing at all.
+pub async fn insert_link_if_absent(
+	tx: &mut Transaction<'_, Sqlite>,
+	link: &NewTrackerLink<'_>,
+) -> Result<bool, sqlx::Error> {
+	let now = now();
+	let result = sqlx::query(
+		"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, title, track_mode, chapter_offset,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (manga_id, user_id, provider) DO NOTHING",
+	)
+	.bind(link.manga_id)
+	.bind(link.user_id)
+	.bind(link.provider)
+	.bind(link.track_id)
+	.bind(link.title)
+	.bind(link.track_mode.as_str())
+	.bind(link.chapter_offset)
+	.bind(now)
+	.bind(now)
+	.execute(&mut **tx)
+	.await?;
+	Ok(result.rows_affected() == 1)
 }
 
 fn row_to_link(row: (i64, i64, String, String, Option<String>, String, i32, i64, i64)) -> TrackerLink {
