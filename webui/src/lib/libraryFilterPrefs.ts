@@ -18,6 +18,10 @@ export interface LibraryFilterPrefs {
 	sources: Record<string, TriState>;
 	/** Category id, "0" = uncategorized (string) → state */
 	categories: Record<string, TriState>;
+	/** Author name → state */
+	authors: Record<string, TriState>;
+	/** Tag name → state */
+	tags: Record<string, TriState>;
 	/** The active filter group id; null = no group selected */
 	group: number | null;
 }
@@ -31,6 +35,8 @@ const EMPTY: LibraryFilterPrefs = {
 	ratings: {},
 	sources: {},
 	categories: {},
+	authors: {},
+	tags: {},
 	group: null
 };
 
@@ -57,6 +63,8 @@ export function loadLibraryFilters(): LibraryFilterPrefs {
 			ratings: clean(p.ratings),
 			sources: clean(p.sources),
 			categories: clean(p.categories),
+			authors: clean(p.authors),
+			tags: clean(p.tags),
 			group: typeof p.group === 'number' ? p.group : null
 		};
 	} catch {

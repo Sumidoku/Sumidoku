@@ -329,7 +329,7 @@ export type FilterGroup = {
 
 export type FilterRule = {
 	type: FilterRuleType;
-	value: number | null;
+	value: number | string | null;
 	exclude: boolean;
 };
 
@@ -339,7 +339,7 @@ export type FilterRuleInput = {
 	exclude?: boolean;
 };
 
-export type FilterRuleType = "downloaded" | "has_unread" | "started" | "completed" | "source" | "content_rating" | "category";
+export type FilterRuleType = "downloaded" | "has_unread" | "started" | "completed" | "source" | "content_rating" | "category" | "author" | "tag";
 
 export type FilterValue = {
 	Text: {
@@ -624,6 +624,11 @@ export type MigrationLookupResponse = {
 
 export type MigrationSource = Source & {
 	mangaCount: number;
+};
+
+export type NameCount = {
+	name: string;
+	count: number;
 };
 
 export type NotifyRequest = {

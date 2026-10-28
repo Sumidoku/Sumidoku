@@ -36,6 +36,7 @@ import type {
 	MigrateRequest,
 	MigrateResponse,
 	MigrationSource,
+	NameCount,
 	Page,
 	ProgressPatch,
 	QueuedResponse,
@@ -179,6 +180,10 @@ export interface LibraryBrowse {
 	sources?: TriStateSelection;
 	/** Category tri-state (category id, "0" = uncategorized → 1 include / -1 exclude) */
 	categories?: TriStateSelection;
+	/** Author tri-state (author name → 1 include / -1 exclude); exact, case-insensitive server-side */
+	authors?: TriStateSelection;
+	/** Tag tri-state (tag name → 1 include / -1 exclude); exact, case-insensitive server-side */
+	tags?: TriStateSelection;
 	/** The active filter group; its rules compile server-side and AND with the ad-hoc filters */
 	groupId?: number;
 }
@@ -196,13 +201,15 @@ function triParams(sel: TriStateSelection | undefined): [string?, string?] {
 }
 
 export function useLibrary(browse: LibraryBrowse = {}) {
-	const { search, sort, filters, sourceId, ratings, sources, categories, groupId } = browse;
+	const { search, sort, filters, sourceId, ratings, sources, categories, authors, tags, groupId } = browse;
 	const [filterInc, filterExc] = triParams(filters);
 	const [ratingInc, ratingExc] = triParams(ratings);
 	const [sourceInc, sourceExc] = triParams(sources);
 	const [categoryInc, categoryExc] = triParams(categories);
+	const [authorInc, authorExc] = triParams(authors);
+	const [tagInc, tagExc] = triParams(tags);
 	return useInfiniteQuery({
-		queryKey: [...qk.library, { search, sort, filters, sourceId, ratings, sources, categories, groupId }],
+		queryKey: [...qk.library, { search, sort, filters, sourceId, ratings, sources, categories, authors, tags, groupId }],
 		queryFn: ({ pageParam }) => {
 			const qs = new URLSearchParams({ page: String(pageParam) });
 			if (sourceId !== undefined) qs.set('sourceId', String(sourceId));
@@ -216,6 +223,10 @@ export function useLibrary(browse: LibraryBrowse = {}) {
 			if (sourceExc) qs.set('sourceExclude', sourceExc);
 			if (categoryInc) qs.set('category', categoryInc);
 			if (categoryExc) qs.set('categoryExclude', categoryExc);
+			if (authorInc) qs.set('author', authorInc);
+			if (authorExc) qs.set('authorExclude', authorExc);
+			if (tagInc) qs.set('tag', tagInc);
+			if (tagExc) qs.set('tagExclude', tagExc);
 			if (groupId !== undefined) qs.set('groupId', String(groupId));
 			return api<LibraryPage>(`/library?${qs}`);
 		},
@@ -233,6 +244,24 @@ export function useLibrarySourceCounts(enabled = true) {
 	return useQuery({
 		queryKey: [...qk.library, 'source-counts'],
 		queryFn: () => api<SourceCount[]>('/library/source-counts'),
+		enabled
+	});
+}
+
+/** Distinct authors across the user's library with entry counts; hangs under qk.library so library invalidations refetch it */
+export function useLibraryAuthors(enabled = true) {
+	return useQuery({
+		queryKey: [...qk.library, 'authors'],
+		queryFn: () => api<NameCount[]>('/library/authors'),
+		enabled
+	});
+}
+
+/** Distinct tags across the user's library with entry counts; hangs under qk.library so library invalidations refetch it */
+export function useLibraryTags(enabled = true) {
+	return useQuery({
+		queryKey: [...qk.library, 'tags'],
+		queryFn: () => api<NameCount[]>('/library/tags'),
 		enabled
 	});
 }

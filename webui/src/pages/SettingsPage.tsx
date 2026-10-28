@@ -30,6 +30,8 @@ import {
 	useFilterGroups,
 	useImportAidoku,
 	useImportSuwayomi,
+	useLibraryAuthors,
+	useLibraryTags,
 	useRenameCategory,
 	useReorderCategories,
 	useReorderFilterGroups,
@@ -939,13 +941,15 @@ const FLAG_RULE_TYPES: { type: FlagRuleType; labelKey: string }[] = [
 	{ type: 'completed', labelKey: 'settings.ruleCompleted' }
 ];
 
-/** Editor state of one group: per-flag tri-states plus the three valued dimensions' tri-state selections */
+/** Editor state of one group: per-flag tri-states plus the valued dimensions' tri-state selections */
 interface GroupDraft {
 	name: string;
 	flags: Record<FlagRuleType, 0 | 1 | -1>;
 	sources: TriStateSelection;
 	ratings: TriStateSelection;
 	categories: TriStateSelection;
+	authors: TriStateSelection;
+	tags: TriStateSelection;
 }
 
 const EMPTY_DRAFT: GroupDraft = {
@@ -953,7 +957,9 @@ const EMPTY_DRAFT: GroupDraft = {
 	flags: { downloaded: 0, has_unread: 0, started: 0, completed: 0 },
 	sources: {},
 	ratings: {},
-	categories: {}
+	categories: {},
+	authors: {},
+	tags: {}
 };
 
 /** Same tri-state cycle as the library page's chips: unselected → include → exclude → unselected */
@@ -962,13 +968,26 @@ function nextGroupTri(cur: 1 | -1 | 0): 1 | -1 | 0 {
 }
 
 function draftOf(group: FilterGroup): GroupDraft {
-	const draft: GroupDraft = { ...EMPTY_DRAFT, name: group.name, flags: { ...EMPTY_DRAFT.flags } };
+	// Every dimension needs a fresh object: a shallow copy would leave draft.sources et al. aliasing
+	// EMPTY_DRAFT's, so filling the draft would pollute the next "new group" draft
+	const draft: GroupDraft = {
+		...EMPTY_DRAFT,
+		name: group.name,
+		flags: { ...EMPTY_DRAFT.flags },
+		sources: {},
+		ratings: {},
+		categories: {},
+		authors: {},
+		tags: {}
+	};
 	for (const rule of group.rules) {
 		const state = rule.exclude ? -1 : 1;
 		if (rule.value === null) draft.flags[rule.type as FlagRuleType] = state;
 		else if (rule.type === 'source') draft.sources[String(rule.value)] = state;
 		else if (rule.type === 'content_rating') draft.ratings[String(rule.value)] = state;
 		else if (rule.type === 'category') draft.categories[String(rule.value)] = state;
+		else if (rule.type === 'author') draft.authors[String(rule.value)] = state;
+		else if (rule.type === 'tag') draft.tags[String(rule.value)] = state;
 	}
 	return draft;
 }
@@ -984,9 +1003,17 @@ function rulesOf(draft: GroupDraft): FilterRule[] {
 			rules.push({ type, value: Number(key), exclude: state === -1 });
 		}
 	};
+	// author/tag rules match by name, so the value stays the string instead of a numeric id
+	const pushNames = (type: FilterRuleType, sel: TriStateSelection) => {
+		for (const [key, state] of Object.entries(sel)) {
+			rules.push({ type, value: key, exclude: state === -1 });
+		}
+	};
 	push('source', draft.sources);
 	push('content_rating', draft.ratings);
 	push('category', draft.categories);
+	pushNames('author', draft.authors);
+	pushNames('tag', draft.tags);
 	return rules;
 }
 
@@ -995,6 +1022,8 @@ function FilterGroupsSection() {
 	const groups = useFilterGroups();
 	const categories = useCategories();
 	const sourcesQuery = useSources();
+	const authorsQuery = useLibraryAuthors();
+	const tagsQuery = useLibraryTags();
 	const create = useCreateFilterGroup();
 	const update = useUpdateFilterGroup();
 	const del = useDeleteFilterGroup();
@@ -1037,7 +1066,7 @@ function FilterGroupsSection() {
 		reorder.mutate(ids);
 	}
 
-	function cycleTri(dim: 'sources' | 'ratings' | 'categories', key: string) {
+	function cycleTri(dim: 'sources' | 'ratings' | 'categories' | 'authors' | 'tags', key: string) {
 		setEditing((cur) => {
 			if (!cur) return cur;
 			const sel = { ...cur.draft[dim] };
@@ -1186,6 +1215,26 @@ function FilterGroupsSection() {
 								states={editing.draft.categories}
 								onCycle={(k) => cycleTri('categories', k)}
 								onReset={() => setEditing({ ...editing, draft: { ...editing.draft, categories: {} } })}
+							/>
+						</div>
+						<div className="settings-cat__field">
+							<span className="settings-cat__label">{t('library.author')}</span>
+							<TriStateDropdown
+								label={t('library.author')}
+								options={(authorsQuery.data ?? []).map((a) => ({ key: a.name, label: a.name }))}
+								states={editing.draft.authors}
+								onCycle={(k) => cycleTri('authors', k)}
+								onReset={() => setEditing({ ...editing, draft: { ...editing.draft, authors: {} } })}
+							/>
+						</div>
+						<div className="settings-cat__field">
+							<span className="settings-cat__label">{t('library.tag')}</span>
+							<TriStateDropdown
+								label={t('library.tag')}
+								options={(tagsQuery.data ?? []).map((tag) => ({ key: tag.name, label: tag.name }))}
+								states={editing.draft.tags}
+								onCycle={(k) => cycleTri('tags', k)}
+								onReset={() => setEditing({ ...editing, draft: { ...editing.draft, tags: {} } })}
 							/>
 						</div>
 					</div>
