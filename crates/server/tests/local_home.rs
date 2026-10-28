@@ -88,12 +88,12 @@ async fn newly_added_manga_appears_in_latest_added_not_latest_updates() {
 
 	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let latest_added = home_section_titles(&home, "sourceHome.latestAdded");
+	let latest_added = home_section_titles(&home, "Latest added");
 	assert_eq!(latest_added.len(), 2, "both new manga appear in latest-added");
 	assert!(latest_added.contains(&"Alpha".into()));
 	assert!(latest_added.contains(&"Beta".into()));
 
-	let latest_updates = home_section_titles(&home, "sourceHome.latestUpdates");
+	let latest_updates = home_section_titles(&home, "Latest updates");
 	assert!(
 		latest_updates.is_empty(),
 		"newly added manga with no content changes must not appear in latest-updates: {latest_updates:?}"
@@ -141,7 +141,7 @@ async fn adding_a_chapter_bumps_manga_to_latest_updates() {
 
 	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let latest_updates = home_section_titles(&home, "sourceHome.latestUpdates");
+	let latest_updates = home_section_titles(&home, "Latest updates");
 	assert_eq!(latest_updates, vec!["Alpha"]);
 
 	let (status, listing) = request(
@@ -176,7 +176,7 @@ async fn removing_a_chapter_bumps_manga_to_latest_updates() {
 
 	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let latest_updates = home_section_titles(&home, "sourceHome.latestUpdates");
+	let latest_updates = home_section_titles(&home, "Latest updates");
 	assert_eq!(latest_updates, vec!["Alpha"]);
 }
 
@@ -196,7 +196,7 @@ async fn unchanged_manga_stays_out_of_latest_updates() {
 
 	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	let latest_updates = home_section_titles(&home, "sourceHome.latestUpdates");
+	let latest_updates = home_section_titles(&home, "Latest updates");
 	assert!(
 		latest_updates.is_empty(),
 		"unchanged manga must not appear in latest-updates after a no-op scan"

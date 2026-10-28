@@ -16,8 +16,8 @@
 //! serve the full paginated list for that mode.
 //!
 //! The wire shape mirrors what WASM sources return: `HomeComponent.title`/`subtitle` and
-//! the listing `name` are dotted i18n keys (`sourceHome.*`) that the web UI resolves through
-//! its translation layer. The MangaChapterList subtitle is hardcoded on the frontend to
+//! the listing `name` are plain English labels so third-party clients can display them without
+//! parsing a source-prefixed translation namespace. The MangaChapterList subtitle is hardcoded on the frontend to
 //! `chapterLabel(chapter) · relativeTime(chapter.date_uploaded)`, so for the reading-history
 //! sections we stuff `chapter_user.last_read_at` into `chapter.date_uploaded` — the row
 //! then reads "Ch.12 · 3 hours ago" with the time being the reading time, not the upload time.
@@ -535,7 +535,7 @@ pub(crate) async fn build_local_home(
 	let cr = run_continue_reading(state, source_id, &exclusions, limit, 0).await?;
 	if !cr.is_empty() {
 		components.push(json!({
-			"title": "sourceHome.continueReading",
+			"title": listing_name(LISTING_CONTINUE_READING),
 			"subtitle": null,
 			"value": { "MangaChapterList": {
 				"ranking": false,
@@ -549,7 +549,7 @@ pub(crate) async fn build_local_home(
 	let lu = run_latest_updates(state, source_id, &exclusions, limit, 0).await?;
 	if !lu.is_empty() {
 		components.push(json!({
-			"title": "sourceHome.latestUpdates",
+			"title": listing_name(LISTING_LATEST_UPDATES),
 			"subtitle": null,
 			"value": { "MangaChapterList": {
 				"ranking": false,
@@ -563,7 +563,7 @@ pub(crate) async fn build_local_home(
 	let ra = run_recently_added(state, source_id, &exclusions, None, limit, 0).await?;
 	if !ra.is_empty() {
 		components.push(json!({
-			"title": "sourceHome.latestAdded",
+			"title": listing_name(LISTING_LATEST_ADDED),
 			"subtitle": null,
 			"value": { "Scroller": {
 				"entries": ra,
@@ -575,7 +575,7 @@ pub(crate) async fn build_local_home(
 	let rr = run_recently_read(state, source_id, &exclusions, limit, 0).await?;
 	if !rr.is_empty() {
 		components.push(json!({
-			"title": "sourceHome.recentlyRead",
+			"title": listing_name(LISTING_RECENTLY_READ),
 			"subtitle": null,
 			"value": { "MangaChapterList": {
 				"ranking": false,
