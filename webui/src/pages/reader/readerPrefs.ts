@@ -1,6 +1,7 @@
 import type { Viewer } from '../../api/types';
 
 export type Dir = 'ltr' | 'rtl';
+export type Mode = 'paged' | 'continuous' | 'webtoon';
 
 /**
  * Horizontal reading direction carried by manga metadata (Aidoku viewer, filled from the
@@ -18,6 +19,22 @@ export function dirFromViewer(viewer: Viewer | null | undefined): Dir | null {
  * which beats the stored global default.
  */
 export function resolveDir(override: Dir | null, meta: Dir | null, fallback: Dir): Dir {
+	return override ?? meta ?? fallback;
+}
+
+/**
+ * Reading mode implied by manga metadata. Aidoku's Webtoon is the gapless vertical
+ * strip; Vertical is vertical paged, for which continuous is the closest local mode.
+ * The horizontal viewers say nothing about which mode to use.
+ */
+export function modeFromViewer(viewer: Viewer | null | undefined): Mode | null {
+	if (viewer === 'Webtoon') return 'webtoon';
+	if (viewer === 'Vertical') return 'continuous';
+	return null;
+}
+
+/** Same resolution order as resolveDir: per-manga override > metadata > global default */
+export function resolveMode(override: Mode | null, meta: Mode | null, fallback: Mode): Mode {
 	return override ?? meta ?? fallback;
 }
 

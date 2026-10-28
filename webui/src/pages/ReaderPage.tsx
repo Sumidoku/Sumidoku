@@ -29,9 +29,8 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
-import type { Mode } from './reader/ReaderSettings';
-import { dirFromViewer, resolveDir, zoneMovesForward } from './reader/direction';
-import type { Dir } from './reader/direction';
+import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
+import type { Dir, Mode } from './reader/readerPrefs';
 import { ReaderPager } from './reader/ReaderPager';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -77,6 +76,22 @@ function readDirOverride(mangaId: number | null): Dir | null {
 	try {
 		const v = localStorage.getItem(dirOverrideKey(mangaId));
 		if (v === 'ltr' || v === 'rtl') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Per-manga override of the metadata/default reading mode, keyed by manga id
+function modeOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.mode.${mangaId}`;
+}
+
+function readModeOverride(mangaId: number | null): Mode | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(modeOverrideKey(mangaId));
+		if (v === 'paged' || v === 'continuous' || v === 'webtoon') return v;
 	} catch {
 		// Same as above
 	}
@@ -208,11 +223,14 @@ function ReaderCore({
 	const chapters = useMemo(() => applyPrefs(rawChapters, { ...prefs, asc }).filter((c) => !c.trashed), [rawChapters, prefs, asc]);
 	const navChapters = useMemo(() => (asc ? [...chapters].reverse() : chapters), [chapters, asc]);
 
-	const [mode, setModeState] = useState<Mode>(readMode);
+	const [globalMode] = useState<Mode>(readMode);
+	const [modeOverride, setModeOverride] = useState<Mode | null>(() => readModeOverride(mangaId));
 	const [globalDir] = useState<Dir>(readDir);
 	const [dirOverride, setDirOverride] = useState<Dir | null>(() => readDirOverride(mangaId));
-	// Per-manga override > manga metadata (viewer) > global default
+	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
+	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
+	const mode = resolveMode(modeOverride, metaMode, globalMode);
 	const dir = resolveDir(dirOverride, metaDir, globalDir);
 	const [overlay, setOverlay] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
@@ -464,12 +482,19 @@ function ReaderCore({
 
 	function setMode(m: Mode) {
 		if (m === mode) return;
-		setModeState(m);
 		try {
-			localStorage.setItem('sumidoku.reader.mode', m);
+			if (mangaId !== null) {
+				// Switching back to the metadata mode drops the override so future metadata edits apply
+				if (m === metaMode) localStorage.removeItem(modeOverrideKey(mangaId));
+				else localStorage.setItem(modeOverrideKey(mangaId), m);
+			} else {
+				// Without a manga in scope there is no metadata to respect: write the global default
+				localStorage.setItem('sumidoku.reader.mode', m);
+			}
 		} catch {
 			// Private mode blocks persistence but the mode still switches
 		}
+		setModeOverride(mangaId !== null && m !== metaMode ? m : null);
 	}
 
 	function setDir(d: Dir) {
@@ -500,8 +525,9 @@ function ReaderCore({
 			?.scrollIntoView({ block: 'start', behavior: 'instant' });
 	}
 
-	// Start page: ?page > chapter reading progress > 0; don't move before chapter navigation data is in place, to avoid landing on the wrong progress
-	const navReady = !navEnabled || chaptersQuery.isFetched;
+	// Start page: ?page > chapter reading progress > 0; don't move before chapter navigation data and the
+	// manga's viewer metadata are in place, to avoid landing on the wrong progress or in the wrong mode
+	const navReady = !navEnabled || (chaptersQuery.isFetched && mangaQuery.isFetched);
 	useLayoutEffect(() => {
 		if (!pages || !navReady || initedRef.current) return;
 		initedRef.current = true;

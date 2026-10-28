@@ -1761,12 +1761,15 @@ rendering, and typography changes recompute paged text columns. Reading directio
 (`sumidoku.reader.dir`, paged mode only) is a reading-order contract, not just a
 tap mapping: it swaps which tap zone, arrow key and bottom-bar side moves forward,
 flows paged text columns right-to-left with a matching transform sign
-(`reader/direction.ts`), and mirrors the page slider so page 1 sits on the right.
-The direction defaults to the manga's metadata `viewer` (source-supplied, or from
-local EPUB spine / ComicInfo / series.json, with the per-user `viewer_flags`
-override already folded into the API response); a reader toggle writes a per-manga
-override in `sumidoku.reader.dir.<id>` (cleared when it matches the metadata), and
-the global setting is the fallback for manga without a horizontal viewer.
+(`reader/readerPrefs.ts`), and mirrors the page slider so page 1 sits on the right.
+Direction and reading mode both default to the manga's metadata `viewer`
+(source-supplied, or from local EPUB spine / ComicInfo / series.json, with the
+per-user `viewer_flags` override already folded into the API response):
+RightToLeft/LeftToRight set the direction, Webtoon selects webtoon mode and
+Vertical continuous mode. Reader toggles write per-manga overrides in
+`sumidoku.reader.dir.<id>` / `sumidoku.reader.mode.<id>` (cleared when they match
+the metadata), and the global settings are the fallback for manga whose viewer
+carries no corresponding preference.
 
 ## Known gaps
 

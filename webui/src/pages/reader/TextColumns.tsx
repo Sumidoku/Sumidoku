@@ -1,6 +1,6 @@
 import type { CSSProperties, RefObject } from 'react';
-import { textColumnOffset } from './direction';
-import type { Dir } from './direction';
+import { textColumnOffset } from './readerPrefs';
+import type { Dir } from './readerPrefs';
 
 export interface TextLayout {
 	w: number;

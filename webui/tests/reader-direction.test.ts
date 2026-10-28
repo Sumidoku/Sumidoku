@@ -23,7 +23,7 @@ async function withVite<T>(run: (vite: ViteDevServer) => Promise<T>): Promise<T>
 
 test('the forward tap zone follows the reading direction', async () => {
 	await withVite(async (vite) => {
-		const { zoneMovesForward } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		const { zoneMovesForward } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
 		assert.equal(zoneMovesForward('ltr', 'right'), true);
 		assert.equal(zoneMovesForward('ltr', 'left'), false);
 		assert.equal(zoneMovesForward('rtl', 'left'), true);
@@ -33,7 +33,7 @@ test('the forward tap zone follows the reading direction', async () => {
 
 test('manga metadata maps to a direction only when it carries one', async () => {
 	await withVite(async (vite) => {
-		const { dirFromViewer } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		const { dirFromViewer } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
 		assert.equal(dirFromViewer('RightToLeft'), 'rtl');
 		assert.equal(dirFromViewer('LeftToRight'), 'ltr');
 		assert.equal(dirFromViewer('Vertical'), null);
@@ -45,7 +45,7 @@ test('manga metadata maps to a direction only when it carries one', async () => 
 
 test('direction resolves override over metadata over global default', async () => {
 	await withVite(async (vite) => {
-		const { resolveDir } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		const { resolveDir } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
 		assert.equal(resolveDir('ltr', 'rtl', 'ltr'), 'ltr');
 		assert.equal(resolveDir(null, 'rtl', 'ltr'), 'rtl');
 		assert.equal(resolveDir(null, null, 'rtl'), 'rtl');
@@ -53,9 +53,30 @@ test('direction resolves override over metadata over global default', async () =
 	});
 });
 
+test('manga metadata maps webtoon and vertical viewers to reading modes', async () => {
+	await withVite(async (vite) => {
+		const { modeFromViewer } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
+		assert.equal(modeFromViewer('Webtoon'), 'webtoon');
+		assert.equal(modeFromViewer('Vertical'), 'continuous');
+		assert.equal(modeFromViewer('LeftToRight'), null);
+		assert.equal(modeFromViewer('RightToLeft'), null);
+		assert.equal(modeFromViewer('Unknown'), null);
+		assert.equal(modeFromViewer(undefined), null);
+	});
+});
+
+test('mode resolves override over metadata over global default', async () => {
+	await withVite(async (vite) => {
+		const { resolveMode } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
+		assert.equal(resolveMode('paged', 'webtoon', 'continuous'), 'paged');
+		assert.equal(resolveMode(null, 'webtoon', 'paged'), 'webtoon');
+		assert.equal(resolveMode(null, null, 'continuous'), 'continuous');
+	});
+});
+
 test('paged text columns translate with the reading direction', async () => {
 	await withVite(async (vite) => {
-		const { textColumnOffset } = await vite.ssrLoadModule('/src/pages/reader/direction.ts');
+		const { textColumnOffset } = await vite.ssrLoadModule('/src/pages/reader/readerPrefs.ts');
 		assert.equal(textColumnOffset('ltr', 0, 500, 20), 0);
 		assert.equal(textColumnOffset('ltr', 2, 500, 20), -1040);
 		assert.equal(textColumnOffset('rtl', 0, 500, 20), 0);

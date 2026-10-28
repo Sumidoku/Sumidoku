@@ -2,7 +2,7 @@ import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ChapterWithDownload } from '../../api/types';
 import { Button } from '../../components';
-import type { Dir } from './direction';
+import type { Dir } from './readerPrefs';
 
 interface ReaderPagerProps {
 	dir: Dir;
