@@ -28,6 +28,7 @@ import {
 } from '../api/hooks';
 import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
 import { entrySubtitle, formatRangeBound } from '../lib/format';
+import { localListingLabel } from '../lib/localListings';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import { sourceSearchOptions } from '../lib/sourceSearch';
 import {
@@ -47,23 +48,6 @@ import {
 	Switch,
 	pushToast
 } from '../components';
-
-function localListingName(id: string, t: TFunction): string {
-	switch (id) {
-		case 'all':
-			return t('sourceHome.all');
-		case 'continue-reading':
-			return t('sourceHome.continueReading');
-		case 'latest-updates':
-			return t('sourceHome.latestUpdates');
-		case 'latest-added':
-			return t('sourceHome.latestAdded');
-		case 'recently-read':
-			return t('sourceHome.recentlyRead');
-		default:
-			return id;
-	}
-}
 
 function localFilterChipLabel(filter: FilterValue, t: TFunction): string | null {
 	if ('Text' in filter) {
@@ -439,11 +423,7 @@ export default function SourceBrowsePage() {
 							{ value: 'search', label: t('common.search') },
 							...listings.map((l) => ({
 								value: l.id,
-								label: l.name.startsWith('sourceHome.')
-									? t(l.name)
-									: isLocal
-										? localListingName(l.id, t)
-										: l.name
+								label: isLocal ? localListingLabel(l.id, l.name, t) : l.name
 							}))
 						]}
 						value={mode}

@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { ArrowLeft, ChevronRight, House, Search, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
@@ -18,24 +17,8 @@ import type {
 	SourceManga
 } from '../api/types';
 import { chapterLabel, relativeTime } from '../lib/format';
+import { homeSectionTitle } from '../lib/localListings';
 import { Button, Chip, Cover, CoverCard, EmptyState, IconButton, Skeleton } from '../components';
-
-function localHomeTitle(title: string, t: TFunction): string {
-	switch (title) {
-		case 'All':
-			return t('sourceHome.all');
-		case 'Continue reading':
-			return t('sourceHome.continueReading');
-		case 'Latest updates':
-			return t('sourceHome.latestUpdates');
-		case 'Latest added':
-			return t('sourceHome.latestAdded');
-		case 'Recently read':
-			return t('sourceHome.recentlyRead');
-		default:
-			return title;
-	}
-}
 
 export default function SourceHomePage() {
 	const { t } = useTranslation();
@@ -175,15 +158,15 @@ export default function SourceHomePage() {
 			) : home.components.length === 0 ? (
 				<EmptyState icon={House} title={t('sourceHome.emptyHome')} hint={t('sourceHome.emptyHomeHint')} />
 			) : (
-					home.components.map((c, i) => (
-						<HomeSection
-							key={i}
-							isLocal={isLocal}
-							component={c}
-							onOpenListing={openListing}
-							renderBody={() => (streaming && isPendingComponent(c) ? <PendingBody c={c} /> : renderBody(c))}
-						/>
-					))
+				home.components.map((c, i) => (
+					<HomeSection
+						key={i}
+						isLocal={isLocal}
+						component={c}
+						onOpenListing={openListing}
+						renderBody={() => (streaming && isPendingComponent(c) ? <PendingBody c={c} /> : renderBody(c))}
+					/>
+				))
 			)}
 		</div>
 	);
@@ -432,15 +415,11 @@ function HomeSection({
 			{(component.title || component.subtitle || listing) && (
 				<header className="home-section__head">
 					<div className="home-section__titles">
-					{component.title && (
-				<h2 className="home-section__title">
-					{component.title.startsWith('sourceHome.')
-						? t(component.title)
-						: isLocal
-							? localHomeTitle(component.title, t)
-							: component.title}
-				</h2>
-			)}
+						{component.title && (
+							<h2 className="home-section__title">
+								{homeSectionTitle(component.title, listing?.id ?? null, isLocal, t)}
+							</h2>
+						)}
 						{component.subtitle && <p className="home-section__subtitle">{component.subtitle}</p>}
 					</div>
 					{listing && (
