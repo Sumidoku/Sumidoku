@@ -516,7 +516,10 @@ no alias is derived from migration text.
   and stores `{"Local": entry}` page rows; the reader (`api/page.rs`)
   reads image files directly and extracts single archive entries
   (`by_name`) through a version-checked 16-handle `ZipArchive` LRU
-  (`internal/local/zip_cache.rs`), so replaced archives are reopened. Page rows,
+  (`internal/local/zip_cache.rs`), so replaced archives are reopened. The
+  cache lock covers only the lookup; each archive has its own lock while one
+  entry is extracted, archives open outside the cache lock, and a panic
+  during extraction drops that handle instead of poisoning later reads. Page rows,
   counts, and compatibility are committed together. The downsample pipeline
   is untouched. Covers reuse the disk cache with
   the byte source switched to the fallback chain (`local::resolve_cover`):
