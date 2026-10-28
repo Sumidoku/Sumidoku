@@ -291,6 +291,14 @@ pub async fn scan_instance(
 			continue;
 		};
 		let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
+		// a trashed row returns only under its recorded shape (manual restore answers 409 gone otherwise): an
+		// entry of another kind now at the key is a different thing. An unknown kind is learned here instead
+		if known.get(key.as_str()).is_some_and(|row| {
+			row.trashed_at.is_some() && row.local_entry_kind.as_deref().is_some_and(|kind| kind != scan.entry_kind)
+		}) {
+			outcome.protected += 1;
+			continue;
+		}
 		match known.get(key.as_str()) {
 			// the fast path: an untouched, non-trashed subtree skips reconciliation entirely. Trashed rows
 			// are exempt — reappearance must always restore — and a NULL stored mtime (pre-index row) always
