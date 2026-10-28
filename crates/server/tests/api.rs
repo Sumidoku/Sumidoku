@@ -30,6 +30,21 @@ async fn http_response_logging_is_info_and_omits_query() {
 	assert!(!text.contains("query-secret"), "query leaked into logs: {text}");
 }
 
+/// A database failure answers a generic 500: the SQLite text (SQL, table names, paths) goes to the log only
+#[tokio::test]
+async fn database_errors_do_not_leak_into_responses() {
+	let (logs, _guard) = common::capture_logs();
+	let TestApp { app, db_path, tmp: _tmp } = test_app().await;
+	let pool = common::connect_db(&db_path).await;
+	sqlx::query("DROP TABLE download").execute(&pool).await.expect("drop table");
+	let (status, body) = request(&app, "GET", "/api/v1/downloads", None).await;
+	assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+	assert_eq!(body["error"]["code"], "internal");
+	assert_eq!(body["error"]["message"], "internal server error", "{body}");
+	let text = common::wait_for_log(&logs, "request failed").await;
+	assert!(text.contains("no such table: download"), "the cause must reach the log: {text}");
+}
+
 #[tokio::test]
 async fn full_flow() {
 	let TestApp { app, tmp, .. } = test_app().await;
