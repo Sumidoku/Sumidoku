@@ -25,6 +25,9 @@ pub struct ApiError {
 	status: StatusCode,
 	code: &'static str,
 	message: String,
+	/// Server-side cause kept out of the response: database and serialization error text can carry SQL,
+	/// schema names and file paths, so the client gets the generic message and the log gets this
+	detail: Option<String>,
 }
 
 impl ApiError {
@@ -33,6 +36,14 @@ impl ApiError {
 			status,
 			code,
 			message: message.into(),
+			detail: None,
+		}
+	}
+
+	fn hidden(detail: String) -> Self {
+		Self {
+			detail: Some(detail),
+			..Self::internal("internal server error")
 		}
 	}
 
@@ -82,8 +93,9 @@ impl ApiError {
 		Self::new(StatusCode::CONFLICT, code, message)
 	}
 
+	/// The full cause for server-side logs and task results; the response carries only the public message
 	pub fn message(&self) -> &str {
-		&self.message
+		self.detail.as_deref().unwrap_or(&self.message)
 	}
 
 	pub fn code(&self) -> &'static str {
@@ -128,18 +140,21 @@ impl From<aidoku_wasm::Error> for ApiError {
 
 impl From<sqlx::Error> for ApiError {
 	fn from(e: sqlx::Error) -> Self {
-		Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+		Self::hidden(format!("database: {e}"))
 	}
 }
 
 impl From<serde_json::Error> for ApiError {
 	fn from(e: serde_json::Error) -> Self {
-		Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", e.to_string())
+		Self::hidden(format!("json: {e}"))
 	}
 }
 
 impl IntoResponse for ApiError {
 	fn into_response(self) -> Response {
+		if let Some(detail) = &self.detail {
+			tracing::error!(status = self.status.as_u16(), "request failed: {detail}");
+		}
 		(
 			self.status,
 			Json(serde_json::json!({
