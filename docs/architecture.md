@@ -1417,6 +1417,17 @@ no alias is derived from migration text.
   `max(1, min(config, default))` to page-download groups; stacking the
   two semaphores reproduces the `min(declared, global)` bound while
   undeclared sources keep the global cap alone.
+- Network trust boundary: a source's net imports and the server-side
+  fetches made for it (covers, page images, the
+  `GET /api/v1/sources/{id}/image?url=` proxy) apply no destination
+  filter. Loopback, link-local and private ranges — this server's own
+  `/api` included — are reachable like any public host. Installing a
+  source is the trust decision (like a browser extension), and the image
+  proxy's caller-chosen URL is guarded only by API authentication, so a
+  deployment with authentication disabled must only be reachable by
+  trusted clients. Source credentials stay scoped to their own origin:
+  an OPDS catalog's basic auth is attached only to URLs with the
+  catalog's origin (`internal/opds_source/mod.rs:Catalog::request`).
 - Outbound requests pass a `NetPolicy` (`source/routed.rs:SumidokuNetPolicy`):
   direct, per-domain relay, or a global proxy, decided per host. A direct
   request answered 403/503 with Cloudflare headers first triggers a clearance
