@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink, Plus, Search } from 'lucide-react';
+import { ExternalLink, Plus, RefreshCw, Search } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
 	TRACKER_PROVIDER_NAMES,
@@ -17,18 +17,21 @@ import {
 	putTrackerLink,
 	remoteToTrackEdit,
 	searchTracker,
+	syncTrackerLink,
 	trackerEntryUrl,
 	trackerKeys,
 	trackerState,
 	updateTrackEditValue,
 	updateTracker
 } from '../../api/trackers';
+import { qk } from '../../api/hooks';
 import type {
 	RemoteState,
 	TrackSearchItem,
 	TrackStatus,
 	TrackerLink,
-	TrackerProvider
+	TrackerProvider,
+	TrackerSyncResult
 } from '../../api/types';
 import { Badge, Button, Cover, Input, Modal, SegmentedControl, Skeleton, Spinner, pushToast } from '..';
 import { TrackerLogo } from './TrackerLogo';
@@ -246,6 +249,30 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 			onClose();
 		}
 	});
+	// Aidoku's "Sync Local History": preview what a pull from this tracker
+	// would mark read, ask, then apply. Applying pushes the new progress to
+	// the manga's other bindings server-side (the source tracker is skipped).
+	const [syncPreview, setSyncPreview] = useState<TrackerSyncResult | null>(null);
+	const applySync = useMutation({
+		mutationFn: () => syncTrackerLink(currentLink.mangaId, currentLink.provider),
+		onSuccess: (result) => {
+			pushToast(t('trackers.syncDone', { count: result.marked }), 'info');
+			setSyncPreview(null);
+			onClose();
+		},
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: qk.chapters(currentLink.mangaId) });
+			void qc.invalidateQueries({ queryKey: trackerKeys.state(link.provider, link.trackId) });
+			invalidateTrackerLinks(qc, link.mangaId);
+		}
+	});
+	const previewSync = useMutation({
+		mutationFn: () => syncTrackerLink(currentLink.mangaId, currentLink.provider, true),
+		onSuccess: (plan) => {
+			applySync.reset();
+			setSyncPreview(plan);
+		}
+	});
 	const saveAuthError = isTrackerAuthError(save.error);
 
 	function updateValue<K extends keyof typeof values>(field: K, value: (typeof values)[K]) {
@@ -353,11 +380,23 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 						</div>
 					)}
 				</div>
+				{previewSync.isError &&
+					(isTrackerAuthError(previewSync.error) ? (
+						<TrackerAuthNotice provider={link.provider} reconnect />
+					) : (
+						<p className="tracker-error" role="alert">
+							{previewSync.error.message}
+						</p>
+					))}
 				<div className="tracker-edit__actions">
 					<Button variant="danger" onClick={() => setConfirmUnlink(true)}>
 						{t('trackers.unlink')}
 					</Button>
 					<div className="tracker-edit__save">
+						<Button onClick={() => previewSync.mutate()} loading={previewSync.isPending}>
+							<RefreshCw size={14} />
+							{t('trackers.syncFromTracker')}
+						</Button>
 						<Button onClick={onClose}>{t('common.cancel')}</Button>
 						<Button type="submit" variant="primary" loading={save.isPending}>
 							{t('common.save')}
@@ -365,6 +404,37 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 					</div>
 				</div>
 			</form>
+			<Modal
+				open={syncPreview !== null}
+				title={t('trackers.syncTitle')}
+				onClose={() => setSyncPreview(null)}
+				footer={
+					syncPreview !== null && syncPreview.marked > 0 ? (
+						<>
+							<Button onClick={() => setSyncPreview(null)}>{t('common.cancel')}</Button>
+							<Button variant="primary" loading={applySync.isPending} onClick={() => applySync.mutate()}>
+								{t('trackers.syncFromTracker')}
+							</Button>
+						</>
+					) : (
+						<Button variant="primary" onClick={() => setSyncPreview(null)}>
+							{t('common.cancel')}
+						</Button>
+					)
+				}
+			>
+				{syncPreview !== null &&
+					(syncPreview.marked > 0 ? (
+						<p>{t('trackers.syncConfirm', { count: syncPreview.marked, provider, progress: syncPreview.progress })}</p>
+					) : (
+						<p>{t('trackers.syncUpToDate', { provider })}</p>
+					))}
+				{applySync.isError && (
+					<p className="tracker-error" role="alert">
+						{applySync.error.message}
+					</p>
+				)}
+			</Modal>
 			<Modal
 				open={confirmUnlink}
 				title={t('trackers.unlinkTitle')}

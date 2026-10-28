@@ -5,7 +5,7 @@
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use crate::tracker::core::{RemoteState, TrackLedgerItem, TrackMode, TrackSearchItem, TrackUpdate};
+use crate::tracker::core::{self, ChapterPullInput, RemoteState, TrackLedgerItem, TrackMode, TrackSearchItem, TrackUpdate};
 use crate::tracker::oauth::OAuthStatus;
 use crate::tracker::{Provider, TrackerError, TrackerService, dao};
 use axum::extract::{Path, Query, State};
@@ -179,6 +179,76 @@ pub async fn delete_tracker_link(
 	let provider = parse_provider(&provider)?;
 	dao::delete_link(&state.pool, manga_id, user.id, provider).await?;
 	Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerSyncRequestDto {
+	/// A preview only computes the plan; nothing is written and no push runs.
+	#[serde(default)]
+	pub preview: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerSyncResultDto {
+	/// The tracker progress the chapters were matched against (0 when the
+	/// tracker has no readable progress).
+	pub progress: f64,
+	/// How many previously unread chapters are (preview: would be) marked read.
+	pub marked: usize,
+	/// The ids of those chapters, oldest first.
+	pub chapter_ids: Vec<i64>,
+}
+
+/// Aidoku's "Sync Local History": pull the tracker's progress onto the local
+/// history of one manga. The algorithm lives in `tracker::core::plan_pull`;
+/// applying it marks every matching unread chapter read (locked or not, like
+/// Aidoku, unlike the batch endpoint) and then pushes the new progress to the
+/// manga's other bindings, skipping the tracker it came from.
+pub async fn sync_tracker_link(
+	State(state): State<Arc<AppState>>,
+	Extension(user): Extension<crate::auth::AuthUser>,
+	Path((manga_id, provider)): Path<(i64, String)>,
+	Json(body): Json<TrackerSyncRequestDto>,
+) -> ApiResult<Json<TrackerSyncResultDto>> {
+	let provider = parse_provider(&provider)?;
+	let service = tracker_for(&state, provider)?;
+	require_login(&service, provider, user.id).await?;
+	let links = dao::list_links_by_manga_and_user(&state.pool, manga_id, user.id).await?;
+	let link = links
+		.into_iter()
+		.find(|link| link.provider == provider.as_str())
+		.ok_or_else(|| ApiError::not_found("no tracker binding for this manga"))?;
+	let remote = service.get_state(user.id, &link.track_id).await.map_err(tracker_error)?;
+	let chapters = sqlx::query_as::<_, (i64, Option<f64>, Option<f64>, i64)>(
+		"SELECT c.id, c.number, c.volume, COALESCE(cu.is_read, 0)
+		 FROM chapter c
+		 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
+		 WHERE c.manga_id = ? AND c.trashed_at IS NULL",
+	)
+	.bind(user.id)
+	.bind(manga_id)
+	.fetch_all(&state.pool)
+	.await?;
+	let inputs: Vec<ChapterPullInput> = chapters
+		.iter()
+		.map(|&(id, number, volume, read)| ChapterPullInput { id, number, volume, read: read != 0 })
+		.collect();
+	let plan = core::plan_pull(link.track_mode, link.chapter_offset, &remote, &inputs);
+	let planned: std::collections::HashSet<i64> = plan.chapter_ids.into_iter().collect();
+	let mut to_mark: Vec<i64> = inputs.iter().filter(|c| !c.read && planned.contains(&c.id)).map(|c| c.id).collect();
+	to_mark.sort_unstable();
+	if !body.preview && !to_mark.is_empty() {
+		let patch = super::reader::ProgressPatch { is_read: Some(true), ..Default::default() };
+		let mut tx = state.pool.begin().await?;
+		for chapter_id in &to_mark {
+			patch.apply(&mut tx, user.id, *chapter_id).await?;
+		}
+		tx.commit().await?;
+		super::reader::notify_tracker_read(&state, manga_id, user.id, Some(provider));
+	}
+	Ok(Json(TrackerSyncResultDto { progress: plan.progress, marked: to_mark.len(), chapter_ids: to_mark }))
 }
 
 pub async fn tracker_ledger(
@@ -440,6 +510,180 @@ mod tests {
 		let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
 		let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 		(body["token"].as_str().unwrap().to_string(), set_cookie)
+	}
+
+	struct FixedTracker {
+		remote: RemoteState,
+	}
+
+	#[async_trait::async_trait]
+	impl TrackerService for FixedTracker {
+		fn provider(&self) -> Provider {
+			Provider::Anilist
+		}
+
+		async fn is_logged_in(&self, _user_id: i64) -> Result<bool, TrackerError> {
+			Ok(true)
+		}
+
+		async fn search(&self, _user_id: i64, _query: &str, _nsfw: bool) -> Result<Vec<TrackSearchItem>, TrackerError> {
+			Ok(Vec::new())
+		}
+
+		async fn get_state(&self, _user_id: i64, _track_id: &str) -> Result<RemoteState, TrackerError> {
+			Ok(self.remote.clone())
+		}
+
+		async fn update(&self, _user_id: i64, _track_id: &str, _update: &TrackUpdate) -> Result<(), TrackerError> {
+			Ok(())
+		}
+	}
+
+	async fn test_app_with_tracker(remote: RemoteState) -> (Router, sqlx::SqlitePool, tempfile::TempDir) {
+		let tmp = tempfile::tempdir().unwrap();
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
+		let (defaults_tx, _defaults_rx) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = tokio::sync::mpsc::unbounded_channel();
+		let config = crate::config::Config { config_dir: tmp.path().to_path_buf(), ..crate::config::Config::default() };
+		let state = AppState::new(pool.clone(), config, defaults_tx, cookie_tx);
+		crate::auth::init(&state).await.unwrap();
+		let oauth = OAuthManager::new(pool.clone(), reqwest::Client::new());
+		let services = TrackerServices::new(oauth, vec![Arc::new(FixedTracker { remote })]);
+		assert!(state.tracker.set(Arc::new(services)).is_ok());
+		(crate::api::router(state.clone()), state.pool.clone(), tmp)
+	}
+
+	async fn seed_manga_with_chapters(pool: &sqlx::SqlitePool, numbers: &[Option<f64>]) -> (i64, Vec<i64>) {
+		let source_id: i64 = sqlx::query_scalar("INSERT INTO source (key, name, wasm_path) VALUES ('en.test', 'Test', '') RETURNING id")
+			.fetch_one(pool)
+			.await
+			.unwrap();
+		let manga_id: i64 = sqlx::query_scalar("INSERT INTO manga (source_id, key, title) VALUES (?, 'm', 'M') RETURNING id")
+			.bind(source_id)
+			.fetch_one(pool)
+			.await
+			.unwrap();
+		let mut ids = Vec::new();
+		for (index, number) in numbers.iter().enumerate() {
+			let id: i64 = sqlx::query_scalar("INSERT INTO chapter (manga_id, key, number) VALUES (?, ?, ?) RETURNING id")
+				.bind(manga_id)
+				.bind(format!("ch-{index}"))
+				.bind(number)
+				.fetch_one(pool)
+				.await
+				.unwrap();
+			ids.push(id);
+		}
+		(manga_id, ids)
+	}
+
+	async fn post_json(app: &Router, path: &str, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+		let request = Request::builder()
+			.method("POST")
+			.uri(path)
+			.header("content-type", "application/json")
+			.body(Body::from(body.to_string()))
+			.unwrap();
+		let response = app.clone().oneshot(request).await.unwrap();
+		let status = response.status();
+		let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+		(status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+	}
+
+	/// Aidoku's "Sync Local History": the tracker is ahead, so applying marks
+	/// every chapter up to its progress read (locked state does not matter),
+	/// while a preview computes the same plan without writing.
+	#[tokio::test]
+	async fn sync_pull_marks_chapters_read_and_preview_stays_read_only() {
+		let remote = RemoteState {
+			status: Some(core::TrackStatus::Reading),
+			last_read_chapter: Some(2.0),
+			total_chapters: Some(3),
+			..RemoteState::default()
+		};
+		let (app, pool, _tmp) = test_app_with_tracker(remote).await;
+		let (manga_id, ids) = seed_manga_with_chapters(&pool, &[Some(1.0), Some(2.0), Some(3.0)]).await;
+		dao::upsert_link(
+			&pool,
+			&dao::NewTrackerLink {
+				manga_id,
+				user_id: 1,
+				provider: "anilist",
+				track_id: "42",
+				title: None,
+				track_mode: TrackMode::Auto,
+				chapter_offset: 0,
+			},
+		)
+		.await
+		.unwrap();
+
+		let path = format!("/api/v1/trackers/links/{manga_id}/anilist/sync");
+		let (status, body) = post_json(&app, &path, serde_json::json!({"preview": true})).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["marked"], serde_json::json!(2));
+		assert_eq!(body["chapterIds"], serde_json::json!([ids[0], ids[1]]));
+		let read: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter_user WHERE is_read = 1").fetch_one(&pool).await.unwrap();
+		assert_eq!(read, 0, "preview must not write");
+
+		let (status, body) = post_json(&app, &path, serde_json::json!({})).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["marked"], serde_json::json!(2));
+		assert_eq!(body["chapterIds"], serde_json::json!([ids[0], ids[1]]));
+		let rows: Vec<(i64, i64)> = sqlx::query_as("SELECT chapter_id, is_read FROM chapter_user WHERE user_id = 1 ORDER BY chapter_id")
+			.fetch_all(&pool)
+			.await
+			.unwrap();
+		assert_eq!(rows, vec![(ids[0], 1), (ids[1], 1)]);
+		// a bare is_read:true does not stamp last_read_at (batch mark semantics)
+		let stamped: i64 =
+			sqlx::query_scalar("SELECT COUNT(*) FROM chapter_user WHERE last_read_at IS NOT NULL").fetch_one(&pool).await.unwrap();
+		assert_eq!(stamped, 0);
+
+		// local caught up, so the pull is forward-only and becomes a no-op
+		let (status, body) = post_json(&app, &path, serde_json::json!({})).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["marked"], serde_json::json!(0));
+		assert_eq!(body["progress"], serde_json::json!(0.0));
+	}
+
+	/// Without a binding there is nothing to sync from, and an unknown provider
+	/// name is rejected before any remote call.
+	#[tokio::test]
+	async fn sync_pull_requires_a_binding_and_a_known_provider() {
+		let (app, pool, _tmp) = test_app_with_tracker(RemoteState::default()).await;
+		let (manga_id, _) = seed_manga_with_chapters(&pool, &[Some(1.0)]).await;
+		let (status, _) = post_json(&app, &format!("/api/v1/trackers/links/{manga_id}/anilist/sync"), serde_json::json!({})).await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+		let (status, _) = post_json(&app, &format!("/api/v1/trackers/links/{manga_id}/unknown/sync"), serde_json::json!({})).await;
+		assert_eq!(status, StatusCode::NOT_FOUND);
+	}
+
+	/// A tracker with no readable progress plans nothing.
+	#[tokio::test]
+	async fn sync_pull_without_remote_progress_is_a_noop() {
+		let (app, pool, _tmp) = test_app_with_tracker(RemoteState::default()).await;
+		let (manga_id, _) = seed_manga_with_chapters(&pool, &[Some(1.0), Some(2.0)]).await;
+		dao::upsert_link(
+			&pool,
+			&dao::NewTrackerLink {
+				manga_id,
+				user_id: 1,
+				provider: "anilist",
+				track_id: "42",
+				title: None,
+				track_mode: TrackMode::Auto,
+				chapter_offset: 0,
+			},
+		)
+		.await
+		.unwrap();
+		let (status, body) =
+			post_json(&app, &format!("/api/v1/trackers/links/{manga_id}/anilist/sync"), serde_json::json!({})).await;
+		assert_eq!(status, StatusCode::OK);
+		assert_eq!(body["marked"], serde_json::json!(0));
+		let read: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter_user WHERE is_read = 1").fetch_one(&pool).await.unwrap();
+		assert_eq!(read, 0);
 	}
 
 	#[tokio::test]
