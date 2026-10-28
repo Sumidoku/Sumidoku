@@ -137,7 +137,7 @@ fn dir_prefix(key: &str) -> Option<(usize, &str)> {
 
 /// Manga/chapter keys are relative paths: API input can be anything, and without this guard it would escape
 /// the local roots. Every '/'-separated segment must be a real component (non-empty, not . or ..); backslash,
-/// a leading / (empty first segment) and the drive-letter form (C:) are rejected so the key can never
+/// a leading / (empty first segment) and any drive-letter head (C:, C:foo) are rejected so the key can never
 /// re-anchor the path. The first segment may carry the directory-index prefix (`N:<path>`, canonical form
 /// only), with the path after it held to the same rules.
 fn valid_key(key: &str) -> bool {
@@ -155,8 +155,9 @@ fn valid_key(key: &str) -> bool {
 				// the digits-colon slot is reserved for the directory prefix: only the canonical form passes
 				return dir_prefix(key).is_some_and(|(_, rel)| valid_key(rel));
 			}
+			// any drive-letter head, not only a bare `C:`: Windows joins `C:foo` drive-relative, replacing the root
 			let bytes = segment.as_bytes();
-			if bytes.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+			if bytes[1..].starts_with(b":") && bytes[0].is_ascii_alphabetic() {
 				return false;
 			}
 		}
