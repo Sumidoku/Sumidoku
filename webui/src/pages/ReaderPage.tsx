@@ -29,7 +29,10 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
-import type { Mode, Dir } from './reader/ReaderSettings';
+import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
+import type { Dir, Mode } from './reader/readerPrefs';
+import { ReaderPager } from './reader/ReaderPager';
+import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
 import type { ReaderTypography } from './reader/typography';
 import './reader.css';
@@ -61,6 +64,38 @@ function readDir(): Dir {
 		// Same as above
 	}
 	return 'ltr';
+}
+
+// Per-manga override of the metadata/default direction, keyed by manga id
+function dirOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.dir.${mangaId}`;
+}
+
+function readDirOverride(mangaId: number | null): Dir | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(dirOverrideKey(mangaId));
+		if (v === 'ltr' || v === 'rtl') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Per-manga override of the metadata/default reading mode, keyed by manga id
+function modeOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.mode.${mangaId}`;
+}
+
+function readModeOverride(mangaId: number | null): Mode | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(modeOverrideKey(mangaId));
+		if (v === 'paged' || v === 'continuous' || v === 'webtoon') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
 }
 
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
@@ -188,8 +223,15 @@ function ReaderCore({
 	const chapters = useMemo(() => applyPrefs(rawChapters, { ...prefs, asc }).filter((c) => !c.trashed), [rawChapters, prefs, asc]);
 	const navChapters = useMemo(() => (asc ? [...chapters].reverse() : chapters), [chapters, asc]);
 
-	const [mode, setModeState] = useState<Mode>(readMode);
-	const [dir, setDirState] = useState<Dir>(readDir);
+	const [globalMode] = useState<Mode>(readMode);
+	const [modeOverride, setModeOverride] = useState<Mode | null>(() => readModeOverride(mangaId));
+	const [globalDir] = useState<Dir>(readDir);
+	const [dirOverride, setDirOverride] = useState<Dir | null>(() => readDirOverride(mangaId));
+	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
+	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
+	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
+	const mode = resolveMode(modeOverride, metaMode, globalMode);
+	const dir = resolveDir(dirOverride, metaDir, globalDir);
 	const [overlay, setOverlay] = useState(true);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
@@ -391,7 +433,7 @@ function ReaderCore({
 	}
 
 	function onZone(which: 'left' | 'right') {
-		turn(dir === 'ltr' ? which === 'right' : which === 'left');
+		turn(zoneMovesForward(dir, which));
 	}
 
 	function goBack() {
@@ -440,21 +482,35 @@ function ReaderCore({
 
 	function setMode(m: Mode) {
 		if (m === mode) return;
-		setModeState(m);
 		try {
-			localStorage.setItem('sumidoku.reader.mode', m);
+			if (mangaId !== null) {
+				// Switching back to the metadata mode drops the override so future metadata edits apply
+				if (m === metaMode) localStorage.removeItem(modeOverrideKey(mangaId));
+				else localStorage.setItem(modeOverrideKey(mangaId), m);
+			} else {
+				// Without a manga in scope there is no metadata to respect: write the global default
+				localStorage.setItem('sumidoku.reader.mode', m);
+			}
 		} catch {
 			// Private mode blocks persistence but the mode still switches
 		}
+		setModeOverride(mangaId !== null && m !== metaMode ? m : null);
 	}
 
 	function setDir(d: Dir) {
-		setDirState(d);
 		try {
-			localStorage.setItem('sumidoku.reader.dir', d);
+			if (mangaId !== null) {
+				// Toggling back to the metadata direction drops the override so future metadata edits apply
+				if (d === metaDir) localStorage.removeItem(dirOverrideKey(mangaId));
+				else localStorage.setItem(dirOverrideKey(mangaId), d);
+			} else {
+				// Without a manga in scope there is no metadata to respect: write the global default
+				localStorage.setItem('sumidoku.reader.dir', d);
+			}
 		} catch {
-			// Same as above
+			// Private mode blocks persistence but the direction still switches
 		}
+		setDirOverride(mangaId !== null && d !== metaDir ? d : null);
 	}
 
 	function toggleAsc() {
@@ -469,8 +525,9 @@ function ReaderCore({
 			?.scrollIntoView({ block: 'start', behavior: 'instant' });
 	}
 
-	// Start page: ?page > chapter reading progress > 0; don't move before chapter navigation data is in place, to avoid landing on the wrong progress
-	const navReady = !navEnabled || chaptersQuery.isFetched;
+	// Start page: ?page > chapter reading progress > 0; don't move before chapter navigation data and the
+	// manga's viewer metadata are in place, to avoid landing on the wrong progress or in the wrong mode
+	const navReady = !navEnabled || (chaptersQuery.isFetched && mangaQuery.isFetched);
 	useLayoutEffect(() => {
 		if (!pages || !navReady || initedRef.current) return;
 		initedRef.current = true;
@@ -691,18 +748,14 @@ function ReaderCore({
 					>
 						{curPage &&
 							(curText !== null ? (
-								<div className="reader__text-paged">
-									<div
-										className="reader-text reader-text--cols"
-										ref={textColsRef}
-										style={{
-											...textStyle,
-											columnWidth: textLayout.w > 0 ? `${textLayout.w}px` : undefined,
-											transform: `translateX(${-col * (textLayout.w + textLayout.gap)}px)`
-										}}
-										dangerouslySetInnerHTML={{ __html: md(curText) }}
-									/>
-								</div>
+								<TextColumns
+									dir={dir}
+									html={md(curText)}
+									textStyle={textStyle}
+									layout={textLayout}
+									col={col}
+									innerRef={textColsRef}
+								/>
 							) : isUnsupported(curPage) ? (
 								<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 							) : (
@@ -719,7 +772,7 @@ function ReaderCore({
 					<button
 						type="button"
 						className="reader__zone reader__zone--left"
-						aria-label={t('reader.prevPage')}
+						aria-label={t(zoneMovesForward(dir, 'left') ? 'reader.nextPage' : 'reader.prevPage')}
 						onClick={(e) => {
 							e.stopPropagation();
 							onPagedClick('left');
@@ -728,7 +781,7 @@ function ReaderCore({
 					<button
 						type="button"
 						className="reader__zone reader__zone--right"
-						aria-label={t('reader.nextPage')}
+						aria-label={t(zoneMovesForward(dir, 'right') ? 'reader.nextPage' : 'reader.prevPage')}
 						onClick={(e) => {
 							e.stopPropagation();
 							onPagedClick('right');
@@ -899,27 +952,16 @@ function ReaderCore({
 				</>
 			)}
 
-			<div className={barCls('reader__bar reader__bar--bottom')}>
-				<Button size="sm" disabled={!prevCh} onClick={() => navCh(prevCh)}>
-					{t('reader.prevChapter')}
-				</Button>
-				<div className="reader__pager">
-					<input
-						type="range"
-						min={1}
-						max={navTotal}
-						value={Math.min(navPos + 1, navTotal)}
-						onChange={onSlider}
-						aria-label={t('reader.jumpToPage')}
-					/>
-					<span className="reader__page-num">
-						{Math.min(navPos + 1, navTotal)}/{navTotal}
-					</span>
-				</div>
-				<Button size="sm" disabled={!nextCh} onClick={() => navCh(nextCh)}>
-					{t('reader.nextChapter')}
-				</Button>
-			</div>
+			<ReaderPager
+				dir={dir}
+				hidden={!overlay}
+				navPos={navPos}
+				navTotal={navTotal}
+				prevCh={prevCh}
+				nextCh={nextCh}
+				onSlider={onSlider}
+				onNavChapter={navCh}
+			/>
 		</div>
 	);
 }
