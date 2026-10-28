@@ -80,6 +80,24 @@ struct RestoreManga {
 
 /// kmrs's is_protected_url: an entry protects itself and everything below it; keyed forms already carry
 /// their root prefix, and a sibling like seriesAB must not match seriesA
+/// Reads one discovered entry's chapters for the upsert pass. Discovery and this read are separate passes, so
+/// an entry can vanish or turn unreadable in between (a library being reorganised): that entry is skipped with
+/// a warning instead of failing the whole scan, and its row already stayed out of the trash pass by being listed
+async fn scan_listed_entry(
+	source_id: i64,
+	roots: &[std::path::PathBuf],
+	key: &str,
+	exclusions: &[String],
+) -> Option<super::ChapterScan> {
+	let scanned = match super::resolve_key(roots, key) {
+		Ok((dir, rel)) => super::scan_chapters(dir, rel, exclusions).await,
+		Err(e) => Err(e),
+	};
+	scanned
+		.inspect_err(|e| tracing::warn!(source_id, key, "local scan skipped an entry it could not read: {e:?}"))
+		.ok()
+}
+
 fn is_protected(key: &str, failed: &[String]) -> bool {
 	failed
 		.iter()
@@ -268,8 +286,10 @@ pub async fn scan_instance(
 				outcome.inputs_changed = true;
 				break;
 			}
-		let (dir, rel) = super::resolve_key(&roots, key)?;
-		let scan = super::scan_chapters(dir, rel, &exclusions).await?;
+		let Some(scan) = scan_listed_entry(source_id, &roots, key, &exclusions).await else {
+			outcome.protected += 1;
+			continue;
+		};
 		let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
 		match known.get(key.as_str()) {
 			// the fast path: an untouched, non-trashed subtree skips reconciliation entirely. Trashed rows
@@ -847,6 +867,21 @@ mod tests {
 	use super::*;
 	use crate::config::Config;
 	use tokio::sync::mpsc;
+
+	#[tokio::test]
+	async fn an_entry_gone_after_discovery_is_skipped_not_fatal() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let root = tmp.path().join("local");
+		std::fs::create_dir_all(root.join("Alpha/ch 1")).expect("chapter directory");
+		std::fs::write(root.join("Alpha/ch 1/1.png"), b"page").expect("page");
+		let roots = vec![root];
+		assert!(scan_listed_entry(1, &roots, "Alpha", &[]).await.is_some());
+		// listed by discovery, then removed before the upsert pass reads it
+		std::fs::remove_dir_all(roots[0].join("Alpha")).expect("remove entry");
+		assert!(scan_listed_entry(1, &roots, "Alpha", &[]).await.is_none());
+		// a key past the configured roots cannot resolve either
+		assert!(scan_listed_entry(1, &roots, "3:Alpha", &[]).await.is_none());
+	}
 
 	async fn local_state() -> (Arc<AppState>, i64, tempfile::TempDir) {
 		let tmp = tempfile::tempdir().expect("tempdir");
