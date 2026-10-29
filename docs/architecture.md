@@ -1294,14 +1294,20 @@ no alias is derived from migration text.
   only http/https URLs are accepted and the response goes through
   `fetch_cover_image` (so a declared cover processor runs) without a disk
   cache, so a hotlink-protected host sees the source's `get_image_request`
-  headers exactly as on the detail and reader paths.
+  headers exactly as on the detail and reader paths. The response is
+  browser-cacheable for 7 days (the URL addresses the image) and carries an
+  ETag, so an expired entry revalidates with a 304.
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
   file is missing or `last_fetched_at` is newer than its mtime. Local covers
   are downsampled to fit a 600px longest edge; their cache hits also require
   an `<id>.variant` sidecar matching the current transform, so unversioned
-  original-size artifacts cannot bypass the cap.
+  original-size artifacts cannot bypass the cap. The cache is an LRU over
+  mtime: a hit touches the file (the new mtime stays at or after
+  `last_fetched_at`, so freshness is unchanged), and past
+  `SUMIDOKU_COVER_CACHE_MAX` covers of manga outside the library are evicted
+  before any library cover, least recently served first.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
@@ -1309,9 +1315,12 @@ no alias is derived from migration text.
   `manga.cover_url` and deletes the cache files: the freshness key is
   `last_fetched_at`, which a user pick must not move, so without the
   delete the stale bytes keep serving and the pick never takes effect.
-  Because the cover response is `max-age=86400` cacheable, the web UI
-  versions cover `<img>` URLs with the manga's `cover` string
-  (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
+  The web UI versions cover `<img>` URLs with the manga's `cover` string
+  (`webui/src/api/client.ts:coverUrl`), so a changed cover is a new URL: a
+  `?v=` request is cacheable for 30 days, an unversioned one or any local
+  cover (whose file can change under the same `cover` value) for 1 day.
+  Every cover response carries a strong ETag over the served bytes and
+  answers a matching `If-None-Match` with 304. The detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
 - Library updates (`update/mod.rs`): serial per source, at most 3 sources at

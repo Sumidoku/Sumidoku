@@ -61,7 +61,7 @@ enough; cross builds forward them via `Cross.toml`).
 | `SUMIDOKU_CALL_CONCURRENCY` | `8` | max concurrent calls into a source instance |
 | `SUMIDOKU_TASK_POOL_SIZE` | `2` | background task workers; tasks of one source still serialize regardless of pool size |
 | `SUMIDOKU_USER_AGENT` | a Chrome desktop UA | global User-Agent for source fetches |
-| `SUMIDOKU_COVER_CACHE_MAX` | `512` | max cached cover files on disk |
+| `SUMIDOKU_COVER_CACHE_MAX` | `2048` | max cached cover files on disk; least recently served go first, covers of manga outside the library before library covers |
 | `SUMIDOKU_WEBUI_DIR` | `./webui/build` | serve the web UI from this directory instead of the embedded build |
 | `SUMIDOKU_SOURCE_IDLE_EVICT_MINUTES` | `30` | evict source instances idle longer than this; `0` or negative disables the sweep |
 | `SUMIDOKU_RSS_THRESHOLD_MB` | `1024` | process RSS threshold; above it the monitor evicts source instances most-idle first (in-flight calls are never touched). `0` disables the monitor |

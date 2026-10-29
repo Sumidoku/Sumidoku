@@ -112,7 +112,7 @@ impl Default for Config {
 			call_concurrency: 8,
 			log: "info".into(),
 			covers_dir: PathBuf::from("./data/covers"),
-			cover_cache_max: 512,
+			cover_cache_max: 2048,
 			webui_dir: PathBuf::from("./webui/build"),
 			user_agent: DEFAULT_USER_AGENT.into(),
 			downloads_dir: PathBuf::from("./downloads"),
