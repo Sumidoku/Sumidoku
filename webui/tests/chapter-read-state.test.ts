@@ -24,7 +24,8 @@ function chapter(isRead: boolean) {
 		isRead,
 		isBookmarked: false,
 		lastReadAt: null,
-		isDownloaded: false
+		isDownloaded: false,
+		hasFinishedDownload: false
 	};
 }
 

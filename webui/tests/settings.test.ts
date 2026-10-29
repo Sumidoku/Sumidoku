@@ -26,6 +26,7 @@ test('structured settings merge preserves extra keys and nested values', async (
 		download: { movePath: null },
 		backup: { enabled: false, intervalHours: 24, retentionCount: 10, lastRun: null, dir: 'backups' },
 		browse: { pinnedSources: [] },
+		cache: { chapterLruEnabled: false, chapterMaxBytes: 1024 },
 		'custom.option': { keep: true }
 	};
 	const merged = mergeServerSettings(current, {
@@ -37,4 +38,5 @@ test('structured settings merge preserves extra keys and nested values', async (
 	assert.deepEqual(merged.library.skipTitles, ['hasUnread']);
 	assert.equal(merged.backup.dir, null);
 	assert.equal(merged.backup.intervalHours, 24);
+	assert.deepEqual(merged.cache, { chapterLruEnabled: false, chapterMaxBytes: 1024 });
 });

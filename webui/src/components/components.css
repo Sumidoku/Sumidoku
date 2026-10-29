@@ -1094,6 +1094,10 @@ button.menu-row:hover:not(:disabled) {
 	font-variant-numeric: tabular-nums;
 }
 
+.batch-bar__action {
+	margin-left: auto;
+}
+
 @media (max-width: 767px) {
 	/* The bar hugs the bottom tab bar on mobile and may wrap */
 	.batch-bar {

@@ -125,6 +125,8 @@ export default function DownloadsPage() {
 		const unsubSnapshot = sse.on('snapshot', onSnapshot);
 		const unsubRunning = sse.on('running', onRunning);
 		const unsubDownload = sse.on('download', onDownload);
+		const onDownloadsInvalidated = () => void refreshMissing();
+		window.addEventListener('sumidoku:downloads-invalidated', onDownloadsInvalidated);
 		void (async () => {
 			try {
 				const initial = await api<Download[]>('/downloads');
@@ -138,6 +140,7 @@ export default function DownloadsPage() {
 			unsubSnapshot();
 			unsubRunning();
 			unsubDownload();
+			window.removeEventListener('sumidoku:downloads-invalidated', onDownloadsInvalidated);
 		};
 		// applyItems/refreshMissing only touch refs and setState, so the first-render closure is fine; subscribe once
 	}, []);
@@ -150,7 +153,7 @@ export default function DownloadsPage() {
 		[items]
 	);
 
-	// The server's clear deletes error entries along with finished ones; the button is disabled when nothing is clearable
+	// Clearing hides terminal entries from this list while retaining downloaded files for offline reading.
 	const hasClearable = items.some((it) => it.status === 'finished' || it.status === 'error');
 
 	// Selection is derived against the live list, so rows removed by events never linger in the count
@@ -177,9 +180,8 @@ export default function DownloadsPage() {
 	async function clearFinished() {
 		setBusy(true);
 		try {
-			// The server's clear deletes error entries along with finished ones; keep the local list in step
 			const res = await clear.mutateAsync();
-			applyItems((cur) => cur.filter((it) => it.status !== 'finished' && it.status !== 'error'));
+			await refreshMissing();
 			pushToast(t('downloads.cleared', { count: res.cleared }), 'info');
 		} finally {
 			setBusy(false);
@@ -283,6 +285,7 @@ export default function DownloadsPage() {
 					)
 				}
 			/>
+			<p className="faint downloads-clear-hint">{t('downloads.clearFinishedHint')}</p>
 
 			{loading ? (
 				<div className="downloads-list">

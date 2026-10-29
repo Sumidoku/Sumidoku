@@ -113,7 +113,7 @@ export function markChapterDownloaded(
 	chapterId: number
 ): ChapterWithDownload[] | undefined {
 	return chapters?.map((chapter) =>
-		chapter.id === chapterId ? { ...chapter, isDownloaded: true } : chapter
+		chapter.id === chapterId ? { ...chapter, isDownloaded: true, hasFinishedDownload: true } : chapter
 	);
 }
 

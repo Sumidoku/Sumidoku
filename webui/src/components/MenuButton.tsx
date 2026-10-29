@@ -6,6 +6,7 @@ import { IconButton } from './IconButton';
 
 interface MenuButtonProps {
 	label: string;
+	disabled?: boolean;
 	/** Entries render through a close callback so an action can dismiss the popover */
 	children: (close: () => void) => ReactNode;
 }
@@ -17,7 +18,7 @@ export function handleMenuToggle(event: { stopPropagation: () => void }, toggle:
 
 // Anchored dropdown for row-level action menus (chapter rows, list items). The popover goes through a
 // portal because row containers commonly clip absolute positioning; same pattern as the manga page's MoreMenu.
-export function MenuButton({ label, children }: MenuButtonProps) {
+export function MenuButton({ label, disabled = false, children }: MenuButtonProps) {
 	const [open, setOpen] = useState(false);
 	const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
 	const btnRef = useRef<HTMLDivElement>(null);
@@ -51,7 +52,7 @@ export function MenuButton({ label, children }: MenuButtonProps) {
 
 	return (
 		<div className="menu-anchor" ref={btnRef}>
-			<IconButton label={label} onClick={(event) => handleMenuToggle(event, toggle)}>
+			<IconButton label={label} disabled={disabled} onClick={(event) => handleMenuToggle(event, toggle)}>
 				<MoreVertical size={16} />
 			</IconButton>
 			{open &&

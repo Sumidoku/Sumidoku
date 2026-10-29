@@ -1842,8 +1842,17 @@ changed before the first query, and the search view's URL changes on submission.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
-reader uses positive known page dimensions (populated during downloads) as
-image intrinsic dimensions and continuous/webtoon container aspect ratios,
+System section exposes the chapter-page cache's automatic LRU toggle, MiB
+limit, usage and last error, plus a confirmed whole-cache clear. The reader
+appends each page's `cacheRevision` to visible image and preload URLs, and
+revalidates the page list on chapter entry so a cache clear cannot leave the
+reader pointing at stale image bytes. The downloads page clears finished and
+failed entries from its list by refetching the server snapshot; the downloaded
+product and offline reading remain available. Manga chapter actions can
+explicitly remove only chapters whose download is finished, individually or
+from the batch action menu, and confirm that their server files will be
+removed. The reader uses positive known page dimensions (populated during
+downloads) as image intrinsic dimensions and continuous/webtoon container aspect ratios,
 reserving space before lazy loads; text, unsupported and unknown-dimension
 pages get no forced ratio, and paged mode keeps its fixed viewport.
 Text pages also offer font-family, font-size and line-height controls persisted

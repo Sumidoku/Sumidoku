@@ -23,6 +23,7 @@ function chapter(id: number, overrides: Partial<ChapterWithDownload> = {}): Chap
 		isBookmarked: false,
 		lastReadAt: null,
 		isDownloaded: false,
+		hasFinishedDownload: false,
 		...overrides
 	};
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, RefreshCw, Search, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, RefreshCw, Search, Trash2, TriangleAlert } from 'lucide-react';
 import { api, coverUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import {
@@ -11,6 +11,7 @@ import {
 	useBatchChapters,
 	useCategories,
 	useEnqueueDownloads,
+	useDeleteFinishedDownloads,
 	useManga,
 	useMangaChapters,
 	usePatchManga,
@@ -46,6 +47,7 @@ import {
 	IconButton,
 	Input,
 	Modal,
+	MenuButton,
 	pushToast,
 	Select,
 	Skeleton,
@@ -152,6 +154,8 @@ export default function MangaDetailPage() {
 	const [loadedId, setLoadedId] = useState(mangaId);
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
+	const [deleteTargets, setDeleteTargets] = useState<number[] | null>(null);
+	const deleteFinished = useDeleteFinishedDownloads();
 
 	const [dlActivity, setDlActivity] = useState<Map<number, MangaDownloadActivity>>(new Map());
 	const [dlPending, setDlPending] = useState<Set<number>>(new Set());
@@ -275,6 +279,7 @@ export default function MangaDetailPage() {
 
 	const allSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
 	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
+	const selectedFinishedIds = visible.filter((c) => selected.has(c.id) && c.hasFinishedDownload).map((c) => c.id);
 
 	function triTitle(label: string, tri: Tri): string {
 		if (tri === 1) return t('mangaDetail.triOnly', { label });
@@ -315,6 +320,23 @@ export default function MangaDetailPage() {
 
 	function toggleAll() {
 		setSelected(allSelected ? new Set() : new Set(visible.filter((c) => c.id > 0).map((c) => c.id)));
+	}
+
+	function openRemoveDownload(chapterIds: number[]) {
+		setDeleteTargets([...chapterIds]);
+	}
+
+	async function confirmRemoveDownloads() {
+		const ids = deleteTargets;
+		if (!ids?.length || deleteFinished.isPending) return;
+		try {
+			const result = await deleteFinished.mutateAsync(ids);
+			pushToast(t('mangaDetail.downloadsRemoved', { count: result.deleted }), 'info');
+			setDeleteTargets(null);
+			if (selecting) exitSelect();
+		} catch (error) {
+			pushToast(error instanceof Error ? error.message : t('mangaDetail.downloadRemoveFailed'), 'error');
+		}
 	}
 
 	function openCats() {
@@ -938,6 +960,7 @@ export default function MangaDetailPage() {
 							onMarkUnread={() => markUnread(c)}
 							onMarkPreviousRead={i < visible.length - 1 ? () => markPrevious(c, true) : undefined}
 							onMarkPreviousUnread={i < visible.length - 1 ? () => markPrevious(c, false) : undefined}
+							onRemoveDownload={c.hasFinishedDownload ? () => openRemoveDownload([c.id]) : undefined}
 							markPending={batchChapters.isPending}
 						/>
 					))}
@@ -946,7 +969,29 @@ export default function MangaDetailPage() {
 			</div>
 
 			{selecting && (
-				<BatchActionBar count={t('mangaDetail.selectedShort', { count: selected.size })}>
+				<BatchActionBar
+					count={t('mangaDetail.selectedShort', { count: selected.size })}
+					action={
+						<MenuButton
+							label={t('chapterRow.chapterActions')}
+							disabled={selectedFinishedIds.length === 0 || deleteFinished.isPending}
+						>
+							{(close) => (
+								<button
+									type="button"
+									className="menu-row menu-row--danger"
+									onClick={() => {
+										close();
+										openRemoveDownload(selectedFinishedIds);
+									}}
+								>
+									<span>{t('chapterRow.removeDownloadCount', { count: selectedFinishedIds.length })}</span>
+									<Trash2 size={14} />
+								</button>
+							)}
+						</MenuButton>
+					}
+				>
 					<Button
 						size="sm"
 						disabled={selected.size === 0 || batchBusy}
@@ -987,6 +1032,26 @@ export default function MangaDetailPage() {
 					)}
 				</BatchActionBar>
 			)}
+
+			<Modal
+				open={deleteTargets !== null}
+				title={t('chapterRow.removeDownload')}
+				onClose={() => {
+					if (!deleteFinished.isPending) setDeleteTargets(null);
+				}}
+				footer={
+					<>
+						<Button disabled={deleteFinished.isPending} onClick={() => setDeleteTargets(null)}>
+							{t('common.cancel')}
+						</Button>
+						<Button variant="danger" loading={deleteFinished.isPending} onClick={() => void confirmRemoveDownloads()}>
+							{t('chapterRow.removeDownload')}
+						</Button>
+					</>
+				}
+			>
+				<p className="settings-modal-text">{t('chapterRow.removeDownloadConfirm', { count: deleteTargets?.length ?? 1 })}</p>
+			</Modal>
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
 

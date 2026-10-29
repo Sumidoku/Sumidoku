@@ -16,6 +16,9 @@
     "markRead": "标记已读",
     "markUnread": "标记未读",
     "markPreviousRead": "标记下方所有章节为已读",
-    "markPreviousUnread": "标记下方所有章节为未读"
+    "markPreviousUnread": "标记下方所有章节为未读",
+    "removeDownload": "移除下载文件",
+    "removeDownloadCount_other": "移除 {{count}} 个已完成的下载",
+    "removeDownloadConfirm_other": "移除 {{count}} 个已完成的下载及其服务器文件？"
   }
 }

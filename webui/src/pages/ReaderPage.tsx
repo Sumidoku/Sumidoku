@@ -388,7 +388,7 @@ function ReaderCore({
 			const p = pages[center + d];
 			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
-			im.src = pageUrl(chapterId, p.index, imgWidth);
+			im.src = pageUrl(chapterId, p.index, imgWidth, p.cacheRevision);
 		}
 	}
 
@@ -761,7 +761,7 @@ function ReaderCore({
 							) : (
 								<img
 									className="reader__img"
-									src={pageUrl(chapterId, curPage.index, imgWidth)}
+									src={pageUrl(chapterId, curPage.index, imgWidth, curPage.cacheRevision)}
 									alt={t('reader.pageAlt', { page: idx + 1 })}
 									width={curDimensions?.width}
 									height={curDimensions?.height}
@@ -833,7 +833,7 @@ function ReaderCore({
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
 											<img
-												src={pageUrl(chapterId, p.index, imgWidth)}
+												src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
 												width={dimensions?.width}
 												height={dimensions?.height}

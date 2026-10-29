@@ -28,6 +28,7 @@ interface ChapterRowProps {
 	/** Mark-previous targets the rows below this one in the visible list, so it hides on the last row (Aidoku: !last) */
 	onMarkPreviousRead?: () => void;
 	onMarkPreviousUnread?: () => void;
+	onRemoveDownload?: () => void;
 	markPending?: boolean;
 }
 
@@ -46,6 +47,7 @@ export function ChapterRow({
 	onMarkUnread,
 	onMarkPreviousRead,
 	onMarkPreviousUnread,
+	onRemoveDownload,
 	markPending
 }: ChapterRowProps) {
 	const { t } = useTranslation();
@@ -161,7 +163,7 @@ export function ChapterRow({
 					>
 						<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
 					</IconButton>
-					{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
+					{(onMarkRead || onMarkUnread || onMarkPreviousRead || (c.hasFinishedDownload && onRemoveDownload)) && (
 						<MenuButton label={t('chapterRow.chapterActions')}>
 							{(close) => (
 								<>
@@ -222,6 +224,19 @@ export function ChapterRow({
 										>
 											<span>{t('chapterRow.markPreviousUnread')}</span>
 											<ListMinus size={14} />
+										</button>
+									)}
+									{c.hasFinishedDownload && onRemoveDownload && (
+										<button
+											type="button"
+											className="menu-row menu-row--danger"
+											onClick={() => {
+												close();
+												onRemoveDownload();
+											}}
+										>
+											<span>{t('chapterRow.removeDownload')}</span>
+											<Trash2 size={14} />
 										</button>
 									)}
 								</>

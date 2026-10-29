@@ -15,6 +15,8 @@ import type {
 	BackupFiles,
 	BackupRestoreResponse,
 	Category,
+	ChapterCacheClearResponse,
+	ChapterCacheStats,
 	ChapterProgress,
 	ChapterWithDownload,
 	DeepLinkResponse,
@@ -91,6 +93,7 @@ export const qk = {
 	backups: ['backups'] as const,
 	whoami: ['whoami'] as const,
 	apiKeys: ['api-keys'] as const,
+	chapterCache: ['chapter-cache'] as const,
 	tasks: ['tasks'] as const,
 	localTrash: ['local-trash'] as const
 };
@@ -788,12 +791,11 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 	});
 }
 
-/** A chapter's pages don't change within a session, so never refetch */
+/** Pages are revalidated on entry because cache clearing may replace the backing image revision. */
 export function useChapterPages(chapterId: number) {
 	return useQuery({
 		queryKey: ['chapter', chapterId, 'pages'],
-		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`),
-		staleTime: Infinity
+		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`)
 	});
 }
 
@@ -855,7 +857,8 @@ export function useRefreshChapters() {
 						isRead: false,
 						isBookmarked: false,
 						lastReadAt: null,
-						isDownloaded: false
+						isDownloaded: false,
+						hasFinishedDownload: false
 					}));
 					qc.setQueryData(qk.chapters(mangaId), partial);
 				}
@@ -909,6 +912,24 @@ export function useDeleteDownload() {
 	});
 }
 
+export function useDeleteFinishedDownloads() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (chapterIds: number[]) =>
+			api<{ deleted: number }>('/downloads/delete', {
+				method: 'POST',
+				body: { chapterIds, finishedOnly: true }
+			}),
+		onSuccess: () => {
+			if (typeof window !== 'undefined') window.dispatchEvent(new Event('sumidoku:downloads-invalidated'));
+			void qc.invalidateQueries({ queryKey: ['downloads'] });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['chapter'] });
+		}
+	});
+}
+
 // 409 busy is turned into a hint by the page; silent keeps the client from popping another error
 export function useFetchUpdate() {
 	return useMutation({
@@ -927,6 +948,27 @@ export function useServerSettings() {
 	return useQuery({
 		queryKey: ['server-settings'],
 		queryFn: () => api<ServerSettings>('/settings')
+	});
+}
+
+export function useChapterCacheStats() {
+	return useQuery({
+		queryKey: qk.chapterCache,
+		queryFn: () => api<ChapterCacheStats>('/cache/chapters')
+	});
+}
+
+export function useClearChapterCache() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () => api<ChapterCacheClearResponse>('/cache/chapters/clear', { method: 'POST' }),
+		onSuccess: (result) => {
+			qc.setQueryData(qk.chapterCache, (current: ChapterCacheStats | undefined) => current
+				? { ...current, usedBytes: result.usedBytes, chapterCount: result.chapterCount, cacheRevision: result.cacheRevision }
+				: current);
+			void qc.invalidateQueries({ queryKey: ['chapter'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
 	});
 }
 
@@ -953,7 +995,8 @@ export function mergeServerSettings(
 		library: { ...current?.library, ...patch.library },
 		download: { ...current?.download, ...patch.download },
 		backup: { ...current?.backup, ...patch.backup },
-		browse: { ...current?.browse, ...patch.browse }
+		browse: { ...current?.browse, ...patch.browse },
+		cache: { ...current?.cache, ...patch.cache }
 	} as ServerSettings;
 }
 

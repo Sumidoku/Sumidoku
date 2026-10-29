@@ -210,6 +210,27 @@ export type Chapter = SourceChapter & {
 	lastReadAt: number | null;
 };
 
+export type ChapterCacheClearResponse = {
+	clearedBytes: number;
+	usedBytes: number;
+	chapterCount: number;
+	cacheRevision: number;
+};
+
+export type ChapterCacheSettings = {
+	chapterLruEnabled: boolean;
+	chapterMaxBytes: number;
+};
+
+export type ChapterCacheStats = {
+	enabled: boolean;
+	maxBytes: number;
+	usedBytes: number;
+	chapterCount: number;
+	lastError: string | null;
+	cacheRevision: number;
+};
+
 export type ChapterInput = {
 	key: string;
 	title?: string | null;
@@ -235,6 +256,7 @@ export type ChapterSort = "source" | "chapter" | "date";
 
 export type ChapterWithDownload = Chapter & {
 	isDownloaded: boolean;
+	hasFinishedDownload: boolean;
 };
 
 export type ClearedResponse = {
@@ -265,7 +287,9 @@ export type DeepLinkTarget = {
 };
 
 export type DeleteDownloadsRequest = {
-	mangaIds: Array<number>;
+	chapterIds?: Array<number>;
+	mangaIds?: Array<number>;
+	finishedOnly?: boolean;
 };
 
 export type DeletedResponse = {
@@ -656,6 +680,7 @@ export type Page = {
 	index: number;
 	width?: number;
 	height?: number;
+	cacheRevision: number;
 };
 
 export type PageContent = {
@@ -808,6 +833,7 @@ export type ServerSettings = {
 	download: DownloadSettings;
 	backup: BackupSettings;
 	browse: BrowseSettings;
+	cache?: ChapterCacheSettings;
 	[key: string]: JsonValue;
 };
 

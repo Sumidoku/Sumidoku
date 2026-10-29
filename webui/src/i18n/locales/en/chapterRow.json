@@ -16,6 +16,11 @@
     "markRead": "Mark as read",
     "markUnread": "Mark as unread",
     "markPreviousRead": "Mark all chapters below as read",
-    "markPreviousUnread": "Mark all chapters below as unread"
+    "markPreviousUnread": "Mark all chapters below as unread",
+    "removeDownload": "Remove download",
+    "removeDownloadCount_one": "Remove {{count}} finished download",
+    "removeDownloadCount_other": "Remove {{count}} finished downloads",
+    "removeDownloadConfirm_one": "Remove this finished download and its server files?",
+    "removeDownloadConfirm_other": "Remove these {{count}} finished downloads and their server files?"
   }
 }
