@@ -1878,10 +1878,24 @@ override-over-global resolution but no metadata counterpart. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
-toolbar, and keys aimed at form controls never reach the reader. In paged mode
-the wheel also turns pages (`reader/wheelTurn.ts`): deltas accumulate past a
-threshold into one turn per gesture, locked until 200ms of wheel quiet so
-trackpad inertia cannot flip multiple pages.
+toolbar, f toggles fullscreen, and keys aimed at form controls never reach the
+reader. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
+deltas accumulate past a threshold into one turn per gesture, locked until
+200ms of wheel quiet so trackpad inertia cannot flip multiple pages. The paged
+tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
+`sumidoku.reader.tapzones(.<id>)`, paged mode only): `lr`/`rl` keep the default
+28/44/28 geometry and only swap which side moves forward, `edge` shrinks the
+turn zones to 15%, `kindle` makes the menu a full-width top strip above a
+75/25 prev/next split, and `off` removes the zone buttons so every tap falls
+back to toggling the toolbar. The hit-test helper and the CSS geometry are the
+single source of truth and must change together. The reader canvas background
+(`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
+`dark` is the classless default, `gray` matches the app chrome, and `light`
+also lifts the dim page-counter and unsupported-page text that assumes a dark
+canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
+toolbar and settings card move into the fullscreen subtree; the toggle hides
+when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
+reader's own Esc chain.
 
 ## Known gaps
 
