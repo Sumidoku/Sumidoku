@@ -5561,6 +5561,10 @@
               "novel"
             ]
           },
+          "series": {
+            "type": "boolean",
+            "description": "The entry is a whole series rather than a single volume; only Bangumi sets it"
+          },
           "url": {
             "type": "string",
             "nullable": true

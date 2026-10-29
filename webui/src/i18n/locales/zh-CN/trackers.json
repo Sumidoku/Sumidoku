@@ -36,6 +36,11 @@
       "manga": "漫画",
       "novel": "小说"
     },
+    "mediaSeries": {
+      "manga": "漫画系列",
+      "novel": "小说系列",
+      "other": "系列"
+    },
     "tracked": "已追踪",
     "bind": "绑定",
     "editBinding": "编辑 {{provider}} 绑定",

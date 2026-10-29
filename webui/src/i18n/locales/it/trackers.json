@@ -36,6 +36,11 @@
       "manga": "Manga",
       "novel": "Romanzo"
     },
+    "mediaSeries": {
+      "manga": "Serie manga",
+      "novel": "Serie di romanzi",
+      "other": "Serie"
+    },
     "tracked": "Già tracciato",
     "bind": "Collega",
     "editBinding": "Modifica collegamento {{provider}}",

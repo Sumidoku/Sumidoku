@@ -20,6 +20,7 @@ import {
 	syncTrackerLink,
 	trackerEntryUrl,
 	trackerKeys,
+	trackerMediaLabelKey,
 	trackerState,
 	updateTrackEditValue,
 	updateTracker
@@ -190,7 +191,7 @@ function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: 
 									<div className="tracker-result__meta">
 										<h4>{item.title}</h4>
 										<div className="tracker-result__badges">
-											{item.mediaType && <Badge>{t(`trackers.media.${item.mediaType}`)}</Badge>}
+											<MediaBadge item={item} />
 											{item.tracked && <Badge>{t('trackers.tracked')}</Badge>}
 										</div>
 									</div>
@@ -548,4 +549,10 @@ export function TrackerSection({ mangaId, mangaTitle }: { mangaId: number; manga
 			{editing && <EditTrackerDialog key={`${editing.provider}:${editing.trackId}`} link={editing} onClose={() => setEditing(null)} />}
 		</section>
 	);
+}
+
+function MediaBadge({ item }: { item: TrackSearchItem }) {
+	const { t } = useTranslation();
+	const key = trackerMediaLabelKey(item);
+	return key ? <Badge>{t(key)}</Badge> : null;
 }

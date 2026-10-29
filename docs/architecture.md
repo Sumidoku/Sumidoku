@@ -154,8 +154,10 @@ no alias is derived from migration text.
   binding-only edits do not issue a remote update. Each provider
   (`tracker/providers/*`) implements one `TrackerService` trait
   (login check, search, state read, update) over its HTTP contract: AniList
-  GraphQL with a per-user score-format cache, MAL v2, Bangumi v0 and
-  MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,
+  GraphQL with a per-user score-format cache, MAL v2, Bangumi Next `/p1`
+  (search and subject detail embed the caller's collection, so a search is
+  one request; status/rating go through `PUT` and progress through `PATCH`)
+  and MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,
   replays the identical request once, and only then conditionally logs out —
   the delete is guarded on the access token that actually failed
   (`oauth.rs:logout_if_current`), so a racing re-login never loses its fresh

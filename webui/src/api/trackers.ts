@@ -115,6 +115,12 @@ export function trackerEntryUrl(provider: TrackerProvider, trackId: string) {
 	}
 }
 
+/** i18n key for a search result's media badge: a series names its medium, and a series with none gets the generic label */
+export function trackerMediaLabelKey(item: Pick<TrackSearchItem, 'mediaType' | 'series'>): string | null {
+	if (item.series) return `trackers.mediaSeries.${item.mediaType ?? 'other'}`;
+	return item.mediaType ? `trackers.media.${item.mediaType}` : null;
+}
+
 export function isTrackerAuthError(error: unknown): error is ApiError {
 	return error instanceof ApiError && error.status === 409 && error.code === 'tracker_auth';
 }

@@ -200,3 +200,11 @@ test('binding mutations invalidate manga and library projections', async () => {
 	trackers.invalidateTrackerLinks(client, 7);
 	assert.deepEqual(calls, [trackers.trackerKeys.links, ['library'], ['manga', 7]]);
 });
+
+test('search results label series by medium and fall back to a generic series label', () => {
+	assert.equal(trackers.trackerMediaLabelKey({ mediaType: 'manga', series: true }), 'trackers.mediaSeries.manga');
+	assert.equal(trackers.trackerMediaLabelKey({ series: true }), 'trackers.mediaSeries.other');
+	assert.equal(trackers.trackerMediaLabelKey({ mediaType: 'novel', series: false }), 'trackers.media.novel');
+	assert.equal(trackers.trackerMediaLabelKey({ mediaType: 'manga' }), 'trackers.media.manga');
+	assert.equal(trackers.trackerMediaLabelKey({}), null);
+});
