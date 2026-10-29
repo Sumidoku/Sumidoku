@@ -16,6 +16,10 @@ export function handleMenuToggle(event: { stopPropagation: () => void }, toggle:
 	toggle();
 }
 
+export function isMenuPopupVisible(open: boolean, disabled: boolean): boolean {
+	return open && !disabled;
+}
+
 // Anchored dropdown for row-level action menus (chapter rows, list items). The popover goes through a
 // portal because row containers commonly clip absolute positioning; same pattern as the manga page's MoreMenu.
 export function MenuButton({ label, disabled = false, children }: MenuButtonProps) {
@@ -25,12 +29,17 @@ export function MenuButton({ label, disabled = false, children }: MenuButtonProp
 	const popRef = useRef<HTMLDivElement>(null);
 
 	function toggle() {
+		if (disabled) return;
 		if (!open && btnRef.current) {
 			const r = btnRef.current.getBoundingClientRect();
 			setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
 		}
 		setOpen((v) => !v);
 	}
+
+	useEffect(() => {
+		if (disabled) setOpen(false);
+	}, [disabled]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -55,7 +64,7 @@ export function MenuButton({ label, disabled = false, children }: MenuButtonProp
 			<IconButton label={label} disabled={disabled} onClick={(event) => handleMenuToggle(event, toggle)}>
 				<MoreVertical size={16} />
 			</IconButton>
-			{open &&
+			{isMenuPopupVisible(open, disabled) &&
 				pos &&
 				createPortal(
 					<div className="menu-pop card" ref={popRef} style={{ top: pos.top, right: pos.right }} onClick={(event) => event.stopPropagation()}>

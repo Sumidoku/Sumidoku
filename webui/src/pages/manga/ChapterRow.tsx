@@ -9,6 +9,17 @@ import { IconButton, MenuButton, Spinner } from '../../components';
 
 export type ChapterDlState = 'idle' | 'pending' | 'queued' | 'downloading';
 
+export function RemoveFinishedDownloadAction({ available, onRemove }: { available: boolean; onRemove: () => void }) {
+	const { t } = useTranslation();
+	if (!available) return null;
+	return (
+		<button type="button" className="menu-row menu-row--danger" onClick={onRemove}>
+			<span>{t('chapterRow.removeDownload')}</span>
+			<Trash2 size={14} />
+		</button>
+	);
+}
+
 interface ChapterRowProps {
 	chapter: ChapterWithDownload;
 	selecting: boolean;
@@ -226,19 +237,13 @@ export function ChapterRow({
 											<ListMinus size={14} />
 										</button>
 									)}
-									{c.hasFinishedDownload && onRemoveDownload && (
-										<button
-											type="button"
-											className="menu-row menu-row--danger"
-											onClick={() => {
-												close();
-												onRemoveDownload();
-											}}
-										>
-											<span>{t('chapterRow.removeDownload')}</span>
-											<Trash2 size={14} />
-										</button>
-									)}
+									<RemoveFinishedDownloadAction
+										available={c.hasFinishedDownload && !!onRemoveDownload}
+										onRemove={() => {
+											close();
+											onRemoveDownload?.();
+										}}
+									/>
 								</>
 							)}
 						</MenuButton>

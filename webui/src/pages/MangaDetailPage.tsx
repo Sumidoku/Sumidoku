@@ -30,7 +30,7 @@ import { createMangaDownloadEventHandlers, downloadActivitySnapshot, mergeDownlo
 import type { MangaDownloadActivity } from '../lib/downloadEvents';
 import { selectDownloadChapterIds } from '../lib/downloadRules';
 import type { DownloadRule } from '../lib/downloadRules';
-import { statusText } from '../lib/format';
+import { chapterLabel, statusText } from '../lib/format';
 import {
 	applyPrefs,
 	loadPrefs,
@@ -154,7 +154,7 @@ export default function MangaDetailPage() {
 	const [loadedId, setLoadedId] = useState(mangaId);
 	const [selecting, setSelecting] = useState(false);
 	const [selected, setSelected] = useState<Set<number>>(new Set());
-	const [deleteTargets, setDeleteTargets] = useState<number[] | null>(null);
+	const [deleteTargets, setDeleteTargets] = useState<{ ids: number[]; labels: string[] } | null>(null);
 	const deleteFinished = useDeleteFinishedDownloads();
 
 	const [dlActivity, setDlActivity] = useState<Map<number, MangaDownloadActivity>>(new Map());
@@ -278,8 +278,8 @@ export default function MangaDetailPage() {
 	}, [visible, prefs.asc]);
 
 	const allSelected = visible.length > 0 && visible.every((c) => selected.has(c.id));
-	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending;
-	const selectedFinishedIds = visible.filter((c) => selected.has(c.id) && c.hasFinishedDownload).map((c) => c.id);
+	const batchBusy = batchChapters.isPending || enqueueDownloads.isPending || deleteFinished.isPending;
+	const selectedFinishedIds = chapters.filter((c) => selected.has(c.id) && c.hasFinishedDownload).map((c) => c.id);
 
 	function triTitle(label: string, tri: Tri): string {
 		if (tri === 1) return t('mangaDetail.triOnly', { label });
@@ -323,19 +323,26 @@ export default function MangaDetailPage() {
 	}
 
 	function openRemoveDownload(chapterIds: number[]) {
-		setDeleteTargets([...chapterIds]);
+		const chaptersById = new Map(chapters.map((chapter) => [chapter.id, chapter]));
+		setDeleteTargets({
+			ids: [...chapterIds],
+			labels: chapterIds.map((id) => {
+				const chapter = chaptersById.get(id);
+				return chapter ? chapterLabel(chapter) : String(id);
+			})
+		});
 	}
 
 	async function confirmRemoveDownloads() {
-		const ids = deleteTargets;
-		if (!ids?.length || deleteFinished.isPending) return;
+		const targets = deleteTargets;
+		if (!targets?.ids.length || deleteFinished.isPending) return;
 		try {
-			const result = await deleteFinished.mutateAsync(ids);
+			const result = await deleteFinished.mutateAsync(targets.ids);
 			pushToast(t('mangaDetail.downloadsRemoved', { count: result.deleted }), 'info');
 			setDeleteTargets(null);
 			if (selecting) exitSelect();
-		} catch (error) {
-			pushToast(error instanceof Error ? error.message : t('mangaDetail.downloadRemoveFailed'), 'error');
+		} catch {
+			// The API client already reports the failure; keep the modal and selection for retry.
 		}
 	}
 
@@ -974,7 +981,7 @@ export default function MangaDetailPage() {
 					action={
 						<MenuButton
 							label={t('chapterRow.chapterActions')}
-							disabled={selectedFinishedIds.length === 0 || deleteFinished.isPending}
+							disabled={selectedFinishedIds.length === 0 || batchBusy}
 						>
 							{(close) => (
 								<button
@@ -1050,7 +1057,11 @@ export default function MangaDetailPage() {
 					</>
 				}
 			>
-				<p className="settings-modal-text">{t('chapterRow.removeDownloadConfirm', { count: deleteTargets?.length ?? 1 })}</p>
+				<p className="settings-modal-text">
+					{deleteTargets?.ids.length === 1
+						? t('chapterRow.removeDownloadConfirmSingle', { name: deleteTargets.labels[0] })
+						: t('chapterRow.removeDownloadConfirm', { count: deleteTargets?.ids.length ?? 0 })}
+				</p>
 			</Modal>
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}

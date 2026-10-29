@@ -254,8 +254,7 @@ function ChapterCacheSection() {
 					cache: { chapterLruEnabled: enabled, chapterMaxBytes: value * 1024 ** 2 }
 				})
 			);
-		} catch (error) {
-			pushToast(error instanceof Error ? error.message : t('settings.operationFailed'), 'error');
+		} catch {
 			setMaxMiB(String(Math.round(maxBytes / 1024 ** 2)));
 		}
 	}
@@ -268,8 +267,8 @@ function ChapterCacheSection() {
 					cache: { chapterLruEnabled: on, chapterMaxBytes: maxBytes }
 				})
 			);
-		} catch (error) {
-			pushToast(error instanceof Error ? error.message : t('settings.operationFailed'), 'error');
+		} catch {
+			// The API client already reports the error; server settings remain unchanged.
 		}
 	}
 
@@ -278,8 +277,8 @@ function ChapterCacheSection() {
 			const result = await clear.mutateAsync();
 			pushToast(t('settings.chapterCacheCleared', { size: formatBytes(result.clearedBytes) }), 'info');
 			setClearConfirm(false);
-		} catch (error) {
-			pushToast(error instanceof Error ? error.message : t('settings.operationFailed'), 'error');
+		} catch {
+			// The API client already reports the error; keep the confirmation open for retry.
 		}
 	}
 
@@ -287,6 +286,20 @@ function ChapterCacheSection() {
 		<Section title={t('settings.chapterCacheTitle')} desc={t('settings.chapterCacheDesc')}>
 			{settings.isPending || stats.isPending ? (
 				<Skeleton height={48} />
+			) : settings.isError || stats.isError || !settings.data || !stats.data ? (
+				<div>
+					<p className="settings-backup__warn">{t('settings.chapterCacheLoadFailed')}</p>
+					<Button
+						disabled={settings.isFetching || stats.isFetching}
+						loading={settings.isFetching || stats.isFetching}
+						onClick={() => {
+							void settings.refetch();
+							void stats.refetch();
+						}}
+					>
+						{t('settings.retry')}
+					</Button>
+				</div>
 			) : (
 				<>
 					<label className="settings-backup__section">

@@ -33,6 +33,8 @@
     "clearChapterCache": "Clear chapter cache",
     "clearChapterCacheConfirm": "Clear all cached chapter page data? Downloaded chapter files are not affected.",
     "chapterCacheCleared": "Cleared {{size}} of cached chapter data",
+    "chapterCacheLoadFailed": "Could not load chapter cache settings or usage",
+    "retry": "Retry",
     "securityTitle": "Security",
     "securityDesc": "The web UI and REST API share the same username and password",
     "passwordChanged": "Password changed; please log in again",

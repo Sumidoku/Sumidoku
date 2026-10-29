@@ -793,10 +793,16 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 
 /** Pages are revalidated on entry because cache clearing may replace the backing image revision. */
 export function useChapterPages(chapterId: number) {
-	return useQuery({
+	return useQuery(chapterPagesQueryOptions(chapterId));
+}
+
+export function chapterPagesQueryOptions(chapterId: number) {
+	return {
 		queryKey: ['chapter', chapterId, 'pages'],
-		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`)
-	});
+		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`),
+		staleTime: 0,
+		refetchOnMount: 'always' as const
+	};
 }
 
 // ?refresh pulls from the source with unbounded latency, so it goes through a mutation for the pending state; on success the cache is written directly, saving a refetch
@@ -920,7 +926,7 @@ export function useDeleteFinishedDownloads() {
 				method: 'POST',
 				body: { chapterIds, finishedOnly: true }
 			}),
-		onSuccess: () => {
+		onSettled: () => {
 			if (typeof window !== 'undefined') window.dispatchEvent(new Event('sumidoku:downloads-invalidated'));
 			void qc.invalidateQueries({ queryKey: ['downloads'] });
 			void qc.invalidateQueries({ queryKey: ['manga'] });
@@ -966,6 +972,8 @@ export function useClearChapterCache() {
 			qc.setQueryData(qk.chapterCache, (current: ChapterCacheStats | undefined) => current
 				? { ...current, usedBytes: result.usedBytes, chapterCount: result.chapterCount, cacheRevision: result.cacheRevision }
 				: current);
+		},
+		onSettled: () => {
 			void qc.invalidateQueries({ queryKey: ['chapter'] });
 			void qc.invalidateQueries({ queryKey: qk.chapterCache });
 		}
@@ -976,7 +984,10 @@ export function useSaveServerSettings() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: ServerSettings) => api<ServerSettings>('/settings', { method: 'PUT', body }),
-		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved)
+		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved),
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
 	});
 }
 

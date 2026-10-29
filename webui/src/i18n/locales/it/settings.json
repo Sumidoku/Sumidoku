@@ -33,6 +33,8 @@
     "clearChapterCache": "Svuota la cache dei capitoli",
     "clearChapterCacheConfirm": "Svuotare tutti i dati delle pagine in cache? I file dei capitoli scaricati non vengono modificati.",
     "chapterCacheCleared": "Cancellati {{size}} di dati della cache dei capitoli",
+    "chapterCacheLoadFailed": "Impossibile caricare le impostazioni o l'utilizzo della cache dei capitoli",
+    "retry": "Riprova",
     "securityTitle": "Sicurezza",
     "securityDesc": "L'interfaccia web e la REST API condividono lo stesso nome utente e la stessa password",
     "passwordChanged": "Password cambiata; accedi di nuovo",

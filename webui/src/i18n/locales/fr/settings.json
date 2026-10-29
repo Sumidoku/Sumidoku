@@ -33,6 +33,8 @@
     "clearChapterCache": "Vider le cache des chapitres",
     "clearChapterCacheConfirm": "Vider toutes les données de pages en cache ? Les fichiers de chapitres téléchargés ne sont pas concernés.",
     "chapterCacheCleared": "{{size}} de données de cache de chapitre effacées",
+    "chapterCacheLoadFailed": "Impossible de charger les paramètres ou l'utilisation du cache des chapitres",
+    "retry": "Réessayer",
     "securityTitle": "Sécurité",
     "securityDesc": "L'interface web et l'API REST partagent le même nom d'utilisateur et le même mot de passe",
     "passwordChanged": "Mot de passe modifié ; veuillez vous reconnecter",

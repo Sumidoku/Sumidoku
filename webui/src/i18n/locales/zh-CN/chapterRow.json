@@ -19,6 +19,7 @@
     "markPreviousUnread": "标记下方所有章节为未读",
     "removeDownload": "移除下载文件",
     "removeDownloadCount_other": "移除 {{count}} 个已完成的下载",
-    "removeDownloadConfirm_other": "移除 {{count}} 个已完成的下载及其服务器文件？"
+    "removeDownloadConfirm_other": "移除 {{count}} 个已完成的下载及其服务器文件？",
+    "removeDownloadConfirmSingle": "移除“{{name}}”的已完成下载及其服务器文件？"
   }
 }
