@@ -1181,7 +1181,13 @@ pub async fn load_pages_under_lease(
 		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
 		let previous = blob_dir.with_extension("previous");
 		let _ = tokio::fs::remove_dir_all(&previous).await;
-		let had_previous = tokio::fs::rename(&blob_dir, &previous).await.is_ok();
+		let had_previous = match tokio::fs::rename(&blob_dir, &previous).await {
+			Ok(()) => true,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+			Err(error) => {
+				return Err(ApiError::internal(format!("stage old local page blobs: {error}")));
+			}
+		};
 		let rows: Vec<serde_json::Value> = entries
 			.iter()
 			.map(|entry| crate::internal::local::page_content_json(entry))
@@ -1203,6 +1209,7 @@ pub async fn load_pages_under_lease(
 		let rows = match crate::internal::opds_source::chapter_page_rows(state, &manga, &chapter).await {
 			Ok(rows) => rows,
 			Err(error) => {
+				let _ = tokio::fs::remove_file(&cbz).await;
 				if had_previous { let _ = tokio::fs::rename(&previous, &cbz).await; }
 				return Err(error);
 			}

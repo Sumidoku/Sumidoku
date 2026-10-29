@@ -366,10 +366,13 @@ async fn clear_inner(
 	fail_on: Option<&Path>,
 ) -> ApiResult<(i64, i64, i64)> {
 	let current = stats(pool, blobs, opds, true, DEFAULT_MAX_BYTES).await?;
-	let ids: Vec<i64> =
-        sqlx::query_scalar("SELECT id FROM chapter WHERE pages_analyzed_at IS NOT NULL UNION SELECT chapter_id FROM chapter_cache_state WHERE bytes > 0 OR last_error IS NOT NULL UNION SELECT chapter_id FROM page")
-            .fetch_all(pool)
-            .await?;
+	let ids: Vec<i64> = sqlx::query_scalar(
+		"SELECT id FROM chapter WHERE pages_analyzed_at IS NOT NULL
+		 UNION SELECT chapter_id FROM chapter_cache_state
+		 UNION SELECT chapter_id FROM page",
+	)
+	.fetch_all(pool)
+	.await?;
 	let mut failures = Vec::<(i64, String)>::new();
 	for id in &ids {
 		for suffix in ["", ".previous", ".staging"] {
@@ -705,6 +708,51 @@ mod tests {
 		);
 		assert!(!blobs.join(chapter.to_string()).exists());
 		assert!(!opds.join(chapter.to_string()).exists());
+	}
+
+	#[tokio::test]
+	async fn clear_removes_zero_byte_variant_markers_and_advances_revision() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		let source: i64 = sqlx::query_scalar(
+			"INSERT INTO source(key,name,wasm_path) VALUES ('marker-source','Source','') RETURNING id",
+		)
+		.fetch_one(&state.pool)
+		.await
+		.expect("source");
+		let manga: i64 = sqlx::query_scalar(
+			"INSERT INTO manga(source_id,key) VALUES (?, 'marker-manga') RETURNING id",
+		)
+		.bind(source)
+		.fetch_one(&state.pool)
+		.await
+		.expect("manga");
+		let chapter: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter(manga_id,key) VALUES (?, 'marker-chapter') RETURNING id",
+		)
+		.bind(manga)
+		.fetch_one(&state.pool)
+		.await
+		.expect("chapter");
+		touch(&state.pool, chapter).await.expect("touch cache");
+		let blobs = state.config.page_blobs_dir();
+		let opds = state.config.config_dir.join("opds-cbz");
+		let marker = blobs
+			.join(chapter.to_string())
+			.join("variants/512/0.pass");
+		std::fs::create_dir_all(marker.parent().expect("marker parent"))
+			.expect("variant dir");
+		std::fs::write(&marker, []).expect("zero-byte pass marker");
+		let before = chapter_revision(&state.pool, chapter).await.expect("before revision");
+		assert!(marker.exists());
+
+		clear(&state.pool, &blobs, &opds).await.expect("clear marker");
+
+		assert!(!blobs.join(chapter.to_string()).exists());
+		assert!(
+			chapter_revision(&state.pool, chapter).await.expect("after revision") > before,
+			"manual clear advances the revision for zero-byte cache assets"
+		);
 	}
 
 	#[tokio::test]
