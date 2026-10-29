@@ -2,6 +2,7 @@
   "settings": {
     "groupNav": "设置分组",
     "groupGeneral": "通用",
+    "groupReader": "阅读器",
     "groupLibrary": "书库",
     "groupTrackers": "追踪器",
     "groupDownloads": "下载",
@@ -9,7 +10,9 @@
     "groupSystem": "系统",
     "language": "语言",
     "appearanceTitle": "外观",
-    "appearanceDesc": "主题和默认阅读方式，仅保存在当前浏览器",
+    "appearanceDesc": "语言和主题，仅保存在当前浏览器",
+    "readerSectionTitle": "阅读器",
+    "readerSectionDesc": "默认阅读偏好，仅保存在当前浏览器；单个漫画可在阅读器中覆盖",
     "theme": "主题",
     "themeSystem": "跟随系统",
     "themeDark": "暗色",

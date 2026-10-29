@@ -2,6 +2,7 @@
   "settings": {
     "groupNav": "Sections des paramètres",
     "groupGeneral": "Général",
+    "groupReader": "Lecteur",
     "groupLibrary": "Bibliothèque",
     "groupTrackers": "Suivis",
     "groupDownloads": "Téléchargements",
@@ -9,7 +10,9 @@
     "groupSystem": "Système",
     "language": "Langue",
     "appearanceTitle": "Apparence",
-    "appearanceDesc": "Thème et mode de lecture par défaut, stockés uniquement dans ce navigateur",
+    "appearanceDesc": "Langue et thème, stockés uniquement dans ce navigateur",
+    "readerSectionTitle": "Lecteur",
+    "readerSectionDesc": "Préférences de lecture par défaut, stockées uniquement dans ce navigateur ; chaque manga peut les remplacer depuis le lecteur",
     "theme": "Thème",
     "themeSystem": "Système",
     "themeDark": "Sombre",

@@ -125,6 +125,38 @@ function stored(key: string, fallback: string): string {
 function AppearanceSection() {
 	const { t, i18n } = useTranslation();
 	const [theme, setTheme] = useTheme();
+	return (
+		<Section title={t('settings.appearanceTitle')} desc={t('settings.appearanceDesc')}>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.language')}</span>
+				<Select
+					value={i18n.language}
+					onChange={(e) => setLanguage(e.currentTarget.value as Language)}
+				>
+					<option value="en">English</option>
+					<option value="zh-CN">中文（简体）</option>
+					<option value="fr">Français</option>
+					<option value="it">Italiano</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.theme')}</span>
+				<SegmentedControl<Theme>
+					options={[
+						{ value: 'system', label: t('settings.themeSystem') },
+						{ value: 'dark', label: t('settings.themeDark') },
+						{ value: 'light', label: t('settings.themeLight') }
+					]}
+					value={theme}
+					onChange={setTheme}
+				/>
+			</div>
+		</Section>
+	);
+}
+
+function ReaderSection() {
+	const { t } = useTranslation();
 	// The old settings page stored "scroll" as vertical, while the reader only knows continuous; normalize on read
 	const [mode, setMode] = useState(() => {
 		const m = stored(READER_MODE_KEY, 'paged');
@@ -163,31 +195,7 @@ function AppearanceSection() {
 	}
 
 	return (
-		<Section title={t('settings.appearanceTitle')} desc={t('settings.appearanceDesc')}>
-			<div className="settings-row">
-				<span className="settings-row__label">{t('settings.language')}</span>
-				<Select
-					value={i18n.language}
-					onChange={(e) => setLanguage(e.currentTarget.value as Language)}
-				>
-					<option value="en">English</option>
-					<option value="zh-CN">中文（简体）</option>
-					<option value="fr">Français</option>
-					<option value="it">Italiano</option>
-				</Select>
-			</div>
-			<div className="settings-row">
-				<span className="settings-row__label">{t('settings.theme')}</span>
-				<SegmentedControl<Theme>
-					options={[
-						{ value: 'system', label: t('settings.themeSystem') },
-						{ value: 'dark', label: t('settings.themeDark') },
-						{ value: 'light', label: t('settings.themeLight') }
-					]}
-					value={theme}
-					onChange={setTheme}
-				/>
-			</div>
+		<Section title={t('settings.readerSectionTitle')} desc={t('settings.readerSectionDesc')}>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerMode')}</span>
 				<Select
@@ -2230,6 +2238,7 @@ export default function SettingsPage() {
 							<IncognitoSection />
 						</>
 					),
+					reader: <ReaderSection />,
 					library: (
 						<>
 							<CategoriesSection />
