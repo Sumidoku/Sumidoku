@@ -1896,6 +1896,18 @@ canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
 toolbar and settings card move into the fullscreen subtree; the toggle hides
 when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
 reader's own Esc chain.
+Paged page scale (`sumidoku.reader.scale` + `.scale.<id>`, after Suwayomi's
+ReaderPageScaleMode) is a `data-scale` variant on the paged container: `screen`
+contain-fits (the default), `width` fills the width, `widthShrink` only shrinks
+to the width without upscaling, `height` fills the height, and `original`
+shows natural pixels. The scrollable modes (width/widthShrink/original) make
+the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
+their fixed-height columns) and trade the fixed viewport for native scrolling;
+the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
+changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
+`.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
+screen scale via a full-size object-fit: contain box. The c hotkey cycles the
+scale modes (`reader/readerPrefs.ts:SCALE_CYCLE`).
 
 ## Known gaps
 
