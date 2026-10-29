@@ -576,13 +576,11 @@ pub(crate) async fn local_search(
 	{
 		tracing::warn!(source_id, "enqueue first scan on browse failed: {}", e.message());
 	}
-	// first directory wins: a numbered key (N:rel) is shadowed when the bare rel exists in the same instance
-	let bare: HashSet<String> = rows
-		.iter()
-		.map(|row| row.key.clone())
-		.filter(|key| crate::internal::local::rel_of(key) == key)
-		.collect();
-	rows.retain(|row| crate::internal::local::rel_of(&row.key) == row.key || !bare.contains(crate::internal::local::rel_of(&row.key)));
+	// the shared visibility rule (exclusions and lowest-root-wins shadowing), the same one every home listing applies
+	let exclusions = state.local_exclusions(source_id).await?;
+	let keyed: Vec<(i64, String)> = rows.iter().map(|row| (row.id, row.key.clone())).collect();
+	let hidden: HashSet<i64> = crate::internal::local::hidden_ids(&keyed, &exclusions).into_iter().collect();
+	rows.retain(|row| !hidden.contains(&row.id));
 	// Apply explicit author/artist/tag filters with case-insensitive exact matching, then the free-text
 	// query as a substring match across title, authors, artists and tags.
 	if let Some(author) = &criteria.author {
@@ -604,15 +602,6 @@ pub(crate) async fn local_search(
 				|| json_array_contains_substring(&row.authors, &needle)
 				|| json_array_contains_substring(&row.artists, &needle)
 				|| json_array_contains_substring(&row.tags, &needle)
-		});
-	}
-	// exclusions apply to the read model too: an excluded subtree is hidden, never indexed further, and
-	// (on the scan side) protected from trashing
-	let exclusions = state.local_exclusions(source_id).await?;
-	if !exclusions.is_empty() {
-		rows.retain(|row| {
-			let lowered = row.key.to_lowercase();
-			!exclusions.iter().any(|exclusion| lowered.contains(exclusion))
 		});
 	}
 	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.key, &b.key));

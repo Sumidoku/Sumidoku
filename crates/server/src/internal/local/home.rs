@@ -181,20 +181,19 @@ fn row_to_joined(row: &sqlx::sqlite::SqliteRow) -> sqlx::Result<JoinedRow> {
 	Ok(JoinedRow { manga, chapter, last_read_at })
 }
 
+/// Every listing hides what search hides: one visibility rule (exclusions and multi-root shadowing) computed
+/// by `hidden_manga_ids_json` and bound as a JSON array, so the id list never meets the bound-variable cap
+const HIDDEN_CLAUSE: &str = " AND m.id NOT IN (SELECT value FROM json_each(?))";
+
 /// Continue-reading: chapters the user has started but not finished, newest progress first.
 async fn run_continue_reading(
 	state: &AppState,
 	source_id: i64,
-	exclusions: &[String],
+	hidden: &str,
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	let mut clauses = String::new();
-	for ex in exclusions {
-		if !ex.is_empty() {
-			clauses.push_str(" AND lower(m.key) NOT LIKE '%' || lower(?) || '%'");
-		}
-	}
+	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -216,11 +215,7 @@ async fn run_continue_reading(
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
-	for ex in exclusions {
-		if !ex.is_empty() {
-			query = query.bind(ex);
-		}
-	}
+	query = query.bind(hidden);
 	let rows = query.bind(USER_ID).bind(limit).bind(offset).fetch_all(&state.pool).await?;
 	let mut out = Vec::new();
 	for row in &rows {
@@ -239,18 +234,13 @@ async fn run_continue_reading(
 async fn run_latest_updates(
 	state: &AppState,
 	source_id: i64,
-	exclusions: &[String],
+	hidden: &str,
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
 	// For each manga, pick its newest chapter by (created_at DESC, source_order DESC, id DESC).
 	// SQLite lacks DISTINCT ON, so we use a correlated subquery against the latest chapter id.
-	let mut clauses = String::new();
-	for ex in exclusions {
-		if !ex.is_empty() {
-			clauses.push_str(" AND lower(m.key) NOT LIKE '%' || lower(?) || '%'");
-		}
-	}
+	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -274,11 +264,7 @@ async fn run_latest_updates(
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
-	for ex in exclusions {
-		if !ex.is_empty() {
-			query = query.bind(ex);
-		}
-	}
+	query = query.bind(hidden);
 	let rows = query.bind(limit).bind(offset).fetch_all(&state.pool).await?;
 	let mut out = Vec::new();
 	for row in &rows {
@@ -296,25 +282,13 @@ async fn run_latest_updates(
 async fn run_recently_added(
 	state: &AppState,
 	source_id: i64,
-	exclusions: &[String],
-	oneshots_dir: Option<&str>,
+	hidden: &str,
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	// Exclusions and the optional oneshots marker are pushed into SQL as LIKE clauses so LIMIT/OFFSET
-	// paginates correctly (Rust-side filtering would skip rows inside the page window).
-	let mut clauses = String::new();
-	for ex in exclusions {
-		if ex.is_empty() {
-			continue;
-		}
-		clauses.push_str(" AND lower(m.key) NOT LIKE '%' || lower(?) || '%'");
-	}
-	if let Some(dir) = oneshots_dir
-		&& !dir.is_empty()
-	{
-		clauses.push_str(" AND lower(m.key) LIKE '%' || lower(?) || '%'");
-	}
+	// visibility is applied in SQL so LIMIT/OFFSET paginates correctly (Rust-side filtering would skip
+	// rows inside the page window)
+	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -326,16 +300,7 @@ async fn run_recently_added(
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
-	for ex in exclusions {
-		if !ex.is_empty() {
-			query = query.bind(ex);
-		}
-	}
-	if let Some(dir) = oneshots_dir
-		&& !dir.is_empty()
-	{
-		query = query.bind(dir);
-	}
+	query = query.bind(hidden);
 	let rows = query.bind(limit).bind(offset).fetch_all(&state.pool).await?;
 	let mut out = Vec::new();
 	for row in &rows {
@@ -378,16 +343,11 @@ async fn run_recently_added(
 async fn run_recently_read(
 	state: &AppState,
 	source_id: i64,
-	exclusions: &[String],
+	hidden: &str,
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	let mut clauses = String::new();
-	for ex in exclusions {
-		if !ex.is_empty() {
-			clauses.push_str(" AND lower(m.key) NOT LIKE '%' || lower(?) || '%'");
-		}
-	}
+	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -409,11 +369,7 @@ async fn run_recently_read(
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
-	for ex in exclusions {
-		if !ex.is_empty() {
-			query = query.bind(ex);
-		}
-	}
+	query = query.bind(hidden);
 	let rows = query.bind(USER_ID).bind(limit).bind(offset).fetch_all(&state.pool).await?;
 	let mut out = Vec::new();
 	for row in &rows {
@@ -430,16 +386,11 @@ async fn run_recently_read(
 async fn run_all_by_title(
 	state: &AppState,
 	source_id: i64,
-	exclusions: &[String],
+	hidden: &str,
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	let mut clauses = String::new();
-	for ex in exclusions {
-		if !ex.is_empty() {
-			clauses.push_str(" AND lower(m.key) NOT LIKE '%' || lower(?) || '%'");
-		}
-	}
+	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -451,11 +402,7 @@ async fn run_all_by_title(
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
-	for ex in exclusions {
-		if !ex.is_empty() {
-			query = query.bind(ex);
-		}
-	}
+	query = query.bind(hidden);
 	let rows = query.bind(limit).bind(offset).fetch_all(&state.pool).await?;
 	let mut out = Vec::new();
 	for row in &rows {
@@ -528,11 +475,11 @@ pub(crate) async fn build_local_home(
 	source_id: i64,
 ) -> ApiResult<Value> {
 	let limit = SECTION_LIMIT;
-	let exclusions = state.local_exclusions(source_id).await?;
+	let hidden = super::hidden_manga_ids_json(state, source_id).await?;
 
 	let mut components: Vec<Value> = Vec::new();
 
-	let cr = run_continue_reading(state, source_id, &exclusions, limit, 0).await?;
+	let cr = run_continue_reading(state, source_id, &hidden, limit, 0).await?;
 	if !cr.is_empty() {
 		components.push(json!({
 			"title": listing_name(LISTING_CONTINUE_READING),
@@ -546,7 +493,7 @@ pub(crate) async fn build_local_home(
 		}));
 	}
 
-	let lu = run_latest_updates(state, source_id, &exclusions, limit, 0).await?;
+	let lu = run_latest_updates(state, source_id, &hidden, limit, 0).await?;
 	if !lu.is_empty() {
 		components.push(json!({
 			"title": listing_name(LISTING_LATEST_UPDATES),
@@ -560,7 +507,7 @@ pub(crate) async fn build_local_home(
 		}));
 	}
 
-	let ra = run_recently_added(state, source_id, &exclusions, None, limit, 0).await?;
+	let ra = run_recently_added(state, source_id, &hidden, limit, 0).await?;
 	if !ra.is_empty() {
 		components.push(json!({
 			"title": listing_name(LISTING_LATEST_ADDED),
@@ -572,7 +519,7 @@ pub(crate) async fn build_local_home(
 		}));
 	}
 
-	let rr = run_recently_read(state, source_id, &exclusions, limit, 0).await?;
+	let rr = run_recently_read(state, source_id, &hidden, limit, 0).await?;
 	if !rr.is_empty() {
 		components.push(json!({
 			"title": listing_name(LISTING_RECENTLY_READ),
@@ -600,35 +547,35 @@ pub(crate) async fn local_listing_page(
 ) -> ApiResult<Value> {
 	let limit = SECTION_LIMIT;
 	let offset = ((page - 1).max(0) as i64) * limit;
-	let exclusions = state.local_exclusions(source_id).await?;
+	let hidden = super::hidden_manga_ids_json(state, source_id).await?;
 
 	let (entries, has_next) = match listing_id {
 		LISTING_ALL => {
-			let mut rows = run_all_by_title(state, source_id, &exclusions, limit + 1, offset).await?;
+			let mut rows = run_all_by_title(state, source_id, &hidden, limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)
 		}
 		LISTING_CONTINUE_READING => {
-			let mut rows = run_continue_reading(state, source_id, &exclusions, limit + 1, offset).await?;
+			let mut rows = run_continue_reading(state, source_id, &hidden, limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)
 		}
 		LISTING_LATEST_UPDATES => {
-			let mut rows = run_latest_updates(state, source_id, &exclusions, limit + 1, offset).await?;
+			let mut rows = run_latest_updates(state, source_id, &hidden, limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)
 		}
 		LISTING_LATEST_ADDED => {
-			let mut rows = run_recently_added(state, source_id, &exclusions, None, limit + 1, offset).await?;
+			let mut rows = run_recently_added(state, source_id, &hidden, limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)
 		}
 		LISTING_RECENTLY_READ => {
-			let mut rows = run_recently_read(state, source_id, &exclusions, limit + 1, offset).await?;
+			let mut rows = run_recently_read(state, source_id, &hidden, limit + 1, offset).await?;
 			let has_next = rows.len() as i64 > limit;
 			rows.truncate(limit as usize);
 			(unwrap_manga_entries(rows), has_next)

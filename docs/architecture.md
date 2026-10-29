@@ -447,8 +447,13 @@ no alias is derived from migration text.
   roots and deduplicates by relative path: the same path present in
   several roots lists once, from the lowest-indexed root (first
   directory wins), while shadowed copies stay addressable by their
-  numbered keys; the index read repeats the rule (a numbered key is
-  shadowed when its bare form exists) and hides trashed rows. Titles are
+  numbered keys. The index read hides trashed rows and applies one
+  visibility rule shared by search and every home listing
+  (`internal/local/mod.rs:hidden_ids`): a key whose Unicode-lowercased
+  text contains an exclusion is hidden (a literal substring, as in
+  discovery), and a relative path present under several roots shows
+  only its lowest-root row. Home listings bind the hidden ids as one
+  JSON array (`json_each`) so paging stays in SQL. Titles are
   the leaf segment of the relative path (analysis later replaces them
   with metadata titles); the case-insensitive substring filter matches
   the title (Suwayomi's `contains(query, ignoreCase = true)`), every
