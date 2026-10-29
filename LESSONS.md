@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Every issue a PR closes needs its own closing keyword; check the linked
+list before merging.** GitHub binds `Closes` only to the reference right
+after it, so `Closes #495 and #496` links #495 and leaves #496 open after
+the merge while the PR body reads as if both were handled. Write
+`Closes #495, closes #496` and confirm `closingIssuesReferences` names
+every issue in the pre-merge re-read.
+- Evidence: 2026-10-29, #516's body said "Closes #495 and #496";
+  `closingIssuesReferences` listed only 495, and #496 stayed open after
+  the merge `ee9a673` until it was closed by hand.
+
 **`webui/src/api/types.ts` is generated; hand edits to it are silently
 overwritten by `npm run generate:api`.** The script runs as part of
 `npm run build`, so a hand-edited type survives a local `npm run check` but
