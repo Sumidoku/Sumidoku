@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
+import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -47,6 +47,7 @@ import {
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
 import { buildSpreads, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
+import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
@@ -244,6 +245,31 @@ function readStretchOverride(mangaId: number | null): boolean | null {
 	return null;
 }
 
+// Same storage convention as stretch: only "1" is on
+function readSplit(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.split') === '1';
+	} catch {
+		return false;
+	}
+}
+
+function splitOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.split.${mangaId}`;
+}
+
+function readSplitOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(splitOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -388,6 +414,9 @@ function ReaderCore({
 	const [globalStretch] = useState<boolean>(readStretch);
 	const [stretchOverride, setStretchOverride] = useState<boolean | null>(() => readStretchOverride(mangaId));
 	const stretch = stretchOverride ?? globalStretch;
+	const [globalSplit] = useState<boolean>(readSplit);
+	const [splitOverride, setSplitOverride] = useState<boolean | null>(() => readSplitOverride(mangaId));
+	const split = splitOverride ?? globalSplit;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -438,6 +467,9 @@ function ReaderCore({
 	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
 	const colRef = useRef(0);
 	const [col, setColState] = useState(0);
+	// Reading-order half of a split page (0 = first); ignored when splitOn is off or the page is not landscape
+	const halfRef = useRef<0 | 1>(0);
+	const [half, setHalfState] = useState<0 | 1>(0);
 	const [textLayout, setTextLayout] = useState({ w: 0, gap: 0, cols: 1 });
 	const textLayoutRef = useRef(textLayout);
 	textLayoutRef.current = textLayout;
@@ -485,13 +517,20 @@ function ReaderCore({
 		);
 	}, [mode, pages, layout, measuredDims]);
 	const curSpread = spreads ? spreads[spreadIndexOf(spreads, idx)] : null;
+	// Wide-page splitting is a paged-mode, single-layout navigation overlay: the
+	// current page keeps its real index while a landscape page takes two turns
+	const splitOn = mode === 'paged' && layout === 'single' && split;
+	function landscapeOf(arrayIndex: number): boolean {
+		const d = dimsOf(arrayIndex);
+		return d !== null && d.width > d.height;
+	}
 	// Composition of the visible spread; a re-pair resets stale pinch pan offsets
 	const curSpreadKey = curSpread ? curSpread.map((s) => (s === null ? 'b' : s)).join('-') : '';
 	// Layout changes leave stale pan offsets behind; curSpreadKey catches a measured
 	// re-pair of the visible spread without resetting zoom over distant prefetches
 	useLayoutEffect(() => {
 		resetPinch();
-	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, scale, stretch, resetPinch]);
+	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, scale, stretch, half, split, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -500,6 +539,11 @@ function ReaderCore({
 	const prevCh = pos >= 0 && pos < navChapters.length - 1 ? navChapters[pos + 1] : null;
 	const nextCh = pos > 0 ? navChapters[pos - 1] : null;
 	const shown = mode === 'paged' ? idx : cur;
+	// A split page renders one half of the same image; the box carries the (w/2):h
+	// ratio so object-fit: cover overflows by exactly the other half. Unknown-dim
+	// pages render whole until recordMeasured proves them landscape
+	const splitDims = splitOn && curPage && curText === null && !isUnsupported(curPage) ? dimsOf(idx) : null;
+	const splitActive = splitDims !== null && isSplittable(splitDims) ? splitDims : null;
 	// The pagination unit of a text-only chapter is the column; everything else's is the page
 	const navTotal = textOnly ? textLayout.cols : total;
 	const navPos = textOnly ? col : shown;
@@ -528,6 +572,11 @@ function ReaderCore({
 	function setCol(c: number) {
 		colRef.current = c;
 		setColState(c);
+	}
+
+	function setHalf(h: 0 | 1) {
+		halfRef.current = h;
+		setHalfState(h);
 	}
 
 	// After a window resize, refetch variants at the new width; debounced so dragging the window doesn't refetch images repeatedly
@@ -609,8 +658,10 @@ function ReaderCore({
 		if (clamped === idxRef.current && pages) return;
 		setIdx(clamped);
 		setCol(0);
+		setHalf(0);
 		if (clamped > furthestRef.current) setFurthest(clamped);
-		scheduleProgress(clamped, clamped >= total - 1);
+		// Landing on a split final page is not the chapter end yet — its second half is
+		scheduleProgress(clamped, clamped >= total - 1 && !(splitOn && landscapeOf(clamped)));
 		prefetch(clamped);
 	}
 
@@ -622,9 +673,25 @@ function ReaderCore({
 	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
 	// Text pages turn column by column first; only when the columns run out does the page/chapter boundary apply
 	// Double-page layouts turn spread by spread, landing on each spread's leading page in reading order
+	// Split navigation steps through half-pages; text pages keep their column flow
 	function turn(forward: boolean) {
 		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
+		if (splitOn && !textPage) {
+			const next = turnSplit({ page: idxRef.current, half: halfRef.current }, total, landscapeOf, forward);
+			if (next === null) {
+				navCh(forward ? nextCh : prevCh);
+				return;
+			}
+			if (next.page === idxRef.current) {
+				setHalf(next.half);
+				scheduleProgress(next.page, splitEndReached(next.page, next.half, total, landscapeOf));
+			} else {
+				gotoPage(next.page);
+				if (next.half === 1) setHalf(1);
+			}
+			return;
+		}
 		if (forward) {
 			if (textPage && colRef.current < cols - 1) {
 				const nextCol = colRef.current + 1;
@@ -874,6 +941,18 @@ function ReaderCore({
 			// Private mode blocks persistence but the stretch still switches
 		}
 		setStretchOverride(mangaId !== null ? v : null);
+	}
+
+	function setSplit(v: boolean) {
+		if (v === split) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(splitOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.setItem('sumidoku.reader.split', '1');
+			else localStorage.removeItem('sumidoku.reader.split');
+		} catch {
+			// Private mode blocks persistence but the split still switches
+		}
+		setSplitOverride(mangaId !== null ? v : null);
 	}
 
 	function toggleAsc() {
@@ -1129,6 +1208,31 @@ function ReaderCore({
 									col={col}
 									innerRef={textColsRef}
 								/>
+							) : splitActive ? (
+								<div
+									className="reader__split"
+									style={
+										{
+											aspectRatio: `${splitActive.width / 2} / ${splitActive.height}`,
+											'--split-ratio': `${(splitActive.width / 2) / splitActive.height}`,
+											'--split-natural-w': `${splitActive.width / 2}px`
+										} as CSSProperties
+									}
+								>
+									{/* The half renders the image at twice the box width, so the
+									    downsample request doubles to stay sharp */}
+									<img
+										key={curPage.index}
+										className="reader__img"
+										src={pageUrl(chapterId, curPage.index, imgWidth * 2)}
+										alt={t('reader.pageAlt', { page: idx + 1 })}
+										style={{ objectPosition: `${splitSides(dir)[half]} center` }}
+										draggable={false}
+										onLoad={(e) =>
+											reportDims(idx, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+										}
+									/>
+								</div>
 							) : (
 								// Slots are in reading order; the flex row's direction puts the first
 								// slot on the leading side (right under rtl)
@@ -1329,6 +1433,8 @@ function ReaderCore({
 					onBgChange={setBackground}
 					scale={scale}
 					onScaleChange={setScale}
+					split={split}
+					onSplitChange={setSplit}
 					stretch={stretch}
 					onStretchChange={setStretch}
 					currentPage={curPage}

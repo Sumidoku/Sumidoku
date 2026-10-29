@@ -38,6 +38,8 @@ async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continu
 					onBgChange: () => {},
 					scale: 'screen',
 					onScaleChange: () => {},
+					split: false,
+					onSplitChange: () => {},
 					stretch: false,
 					onStretchChange: () => {},
 					currentPage,
@@ -109,4 +111,15 @@ test('continuous mode marks page scale and stretch as paged-only', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
 	assert.match(markup, /Page scale \(paged mode only\)/);
 	assert.match(markup, /Stretch small pages \(paged mode only\)/);
+});
+
+test('the wide-page split toggle renders unmarked in paged single layout', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /Split wide pages/);
+	assert.doesNotMatch(markup, /Split wide pages \(/);
+});
+
+test('continuous mode marks the split toggle as paged-only', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
+	assert.match(markup, /Split wide pages \(paged mode only\)/);
 });
