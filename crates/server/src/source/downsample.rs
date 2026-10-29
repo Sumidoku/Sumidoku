@@ -25,6 +25,14 @@ fn variant_dir(blobs_dir: &Path, chapter_id: i64, bucket: u32) -> PathBuf {
 		.join(bucket.to_string())
 }
 
+pub fn variant_paths(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> [PathBuf; 2] {
+    let dir = variant_dir(blobs_dir, chapter_id, bucket);
+    [
+        dir.join(format!("{index}.png")),
+        dir.join(format!("{index}.pass")),
+    ]
+}
+
 /// The variant lifecycle hangs on the page-blob directory: load_pages' chapter rewrite and the startup sweep remove
 /// variants along with it, so there is no independent invalidation logic here
 pub async fn read_variant(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> Option<VariantHit> {

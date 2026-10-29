@@ -1,7 +1,7 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, MangaRow, PageRow, unix_now};
 use crate::source::page_dimensions::{DIMENSION_HEAD_BYTES, PageDimensionUpdate, measure_with_fallback, persist_downloaded as persist_page_dimensions};
-use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row};
+use crate::source::{chapter_row, fetch_page_image, http_get, manga_row};
 use crate::state::AppState;
 use aidoku::PageContext;
 use serde::Serialize;
@@ -206,7 +206,7 @@ async fn persist_finished(
 	let applied = match mode {
 		FinishMode::Update(attempt_id) => {
 			sqlx::query(
-				"UPDATE download SET status = 'finished', path = ?, error = NULL, updated_at = ?
+				"UPDATE download SET status = 'finished', path = ?, error = NULL, dismissed_at = NULL, updated_at = ?
 				 WHERE chapter_id = ? AND user_id = ? AND status = 'downloading' AND updated_at = ?",
 			)
 			.bind(path)
@@ -220,11 +220,11 @@ async fn persist_finished(
 		}
 		FinishMode::Upsert => {
 			sqlx::query(
-				"INSERT INTO download (chapter_id, user_id, status, format, path, created_at, updated_at)
-				 VALUES (?, ?, 'finished', ?, ?, ?, ?)
+				"INSERT INTO download (chapter_id, user_id, status, format, path, created_at, updated_at, dismissed_at)
+				 VALUES (?, ?, 'finished', ?, ?, ?, ?, NULL)
 				 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
 				 status = 'finished', format = excluded.format, path = excluded.path,
-				 error = NULL, retries = 0, updated_at = excluded.updated_at",
+				 error = NULL, retries = 0, dismissed_at = NULL, updated_at = excluded.updated_at",
 			)
 			.bind(chapter_id)
 			.bind(user_id)
@@ -386,7 +386,7 @@ impl DownloadManager {
 				}
 				Some(_) => {
 					let result = sqlx::query(
-						"UPDATE download SET status = 'queued', error = NULL, retries = 0,
+						"UPDATE download SET status = 'queued', error = NULL, retries = 0, dismissed_at = NULL,
 						 format = ?, updated_at = ? WHERE chapter_id = ? AND user_id = ?",
 					)
 					.bind(format)
@@ -547,6 +547,17 @@ impl DownloadManager {
 	}
 
 	pub async fn delete(&self, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
+        self.delete_guarded(chapter_id, user_id, false).await
+    }
+
+    /// Delete a product, optionally only while its row is still finished. The state test and
+    /// deletion share one SQLite write transaction, so finishedOnly cannot race a requeue.
+    pub async fn delete_guarded(
+        &self,
+        chapter_id: i64,
+        user_id: i64,
+        finished_only: bool,
+    ) -> ApiResult<bool> {
 		let mut tx = crate::db::begin_write(&self.pool).await?;
 		let row: Option<(String, Option<String>)> =
 			sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
@@ -558,6 +569,10 @@ impl DownloadManager {
 			tx.rollback().await?;
 			return Ok(false);
 		};
+        if finished_only && status != "finished" {
+            tx.rollback().await?;
+            return Ok(false);
+        }
 		if status == "downloading" {
 			self.mark_cancel(chapter_id).await;
 		}
@@ -990,6 +1005,9 @@ impl DownloadManager {
 			.state
 			.upgrade()
 			.ok_or_else(|| "server is shutting down".to_string())?;
+        let _cache_lease = state.chapter_cache_gate.read().await;
+        let cache_lock = state.chapter_cache_lock(chapter_id).await;
+        let _chapter_cache = cache_lock.read().await;
 		let chapter = chapter_row(&self.pool, chapter_id)
 			.await
 			.map_err(|e| format!("load chapter: {e:?}"))?;
@@ -1014,7 +1032,7 @@ impl DownloadManager {
 				.map_err(|e| format!("load download format: {e:?}"))?;
 		let format = format.map(|(f,)| f).unwrap_or_else(|| "cbz".into());
 
-		let pages = load_pages(&state, chapter_id, false)
+		let pages = crate::source::load_pages_under_lease(&state, chapter_id, false)
 			.await
 			.map_err(|e| format!("load pages: {e:?}"))?;
 		let total = pages.len() as i64;

@@ -37,7 +37,7 @@ use crate::model::{
 };
 use crate::source::cover;
 use crate::source::{
-	chapter_row, load_pages, manga_row, manga_rows_by_ids, reconcile_chapters, scan_sources_dir,
+	chapter_row, manga_row, manga_rows_by_ids, reconcile_chapters, scan_sources_dir,
 	upsert_manga,
 };
 use crate::state::{AppState, load_cookies, load_defaults};
@@ -161,6 +161,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
 		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
+        .route("/api/v1/cache/chapters", get(chapter_cache_stats))
+        .route("/api/v1/cache/chapters/clear", post(clear_chapter_cache))
 		.route("/api/v1/downloads/delete", post(crate::api::download::delete_downloads))
 		.route(
 			"/api/v1/downloads/{id}",
@@ -1020,7 +1022,7 @@ async fn put_source_settings(
 					write_keys.push((key.as_str(), match value {
 						Value::Null => None,
 						Value::Bool(_) => Some(value.clone()),
-						_ => return Err(ApiError::bad_request(format!("{key} must be a boolean or null"))),
+		_ => return Err(ApiError::bad_request(format!("{key} must be a boolean or null"))),
 					}));
 				}
 				_ => return Err(ApiError::bad_request(format!("unknown local source setting: {key}"))),
@@ -1892,16 +1894,58 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: 
 	.await?
 	.into_iter()
 	.collect();
+    let finished: HashSet<i64> = sqlx::query_scalar(
+        "SELECT chapter_id FROM download WHERE user_id = ? AND status = 'finished'
+		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
+	)
+	.bind(user_id)
+	.bind(manga_id)
+	.fetch_all(&state.pool)
+	.await?
+	.into_iter()
+	.collect();
 	let mut chapters = Vec::with_capacity(rows.len());
 	for row in &rows {
 		let mut value = chapter_json(&row.chapter, progress_of(row).as_ref())?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
-		object.insert("isDownloaded".into(), json!(downloaded.contains(&row.chapter.id)));
+		object.insert("isDownloaded".into(), json!(downloaded.contains(&row.chapter.id)),
+        );
+        object.insert(
+            "hasFinishedDownload".into(),
+            json!(finished.contains(&row.chapter.id)),);
 		chapters.push(value);
 	}
 	Ok(json!(chapters))
+}
+
+async fn chapter_cache_stats(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+    let stats = crate::cache::stats(
+        &state.pool,
+        &state.config.page_blobs_dir(),
+        &state.config.config_dir.join("opds-cbz"),
+        enabled,
+        max_bytes,
+    )
+    .await?;
+    Ok(Json(serde_json::to_value(stats)?))
+}
+
+async fn clear_chapter_cache(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+    let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+    let (cleared_bytes, used_bytes, chapter_count) = crate::cache::clear_state(&state).await?;
+    let stats = crate::cache::stats(
+        &state.pool,
+        &state.config.page_blobs_dir(),
+        &state.config.config_dir.join("opds-cbz"),
+        enabled,
+        max_bytes,
+    )
+    .await?;
+    Ok(Json(
+        json!({"clearedBytes": cleared_bytes, "usedBytes": used_bytes, "chapterCount": chapter_count, "cacheRevision": stats.cache_revision}),))
 }
 
 pub(crate) async fn get_pages(
@@ -1910,31 +1954,46 @@ pub(crate) async fn get_pages(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
+    let _cache_lease = state.chapter_cache_gate.read().await;
+    let cache_lock = state.chapter_cache_lock(id).await;
+    let _chapter_cache_read = if wants_refresh(&query) {
+        None
+    } else {
+        Some(cache_lock.read().await)
+    };
+    let _chapter_cache_write = if wants_refresh(&query) {
+        Some(cache_lock.write().await)
+    } else {
+        None
+    };
 	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
 	let row = chapter_row(&state.pool, id).await?;
 	if row.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
+	crate::cache::touch(&state.pool, id).await?;
 	// A finished download product is the preferred page list: entries are derived from the artifact
 	// with no source access, so downloaded chapters stay readable offline. An explicit refresh still
 	// pulls from the source; without a product the page cache/source path is unchanged.
 	let pages = if wants_refresh(&query) {
-		load_pages(&state, id, true).await?
+        crate::source::load_pages_under_lease(&state, id, true).await?
 	} else if let Some(pages) = crate::download::pages_from_product(&state, id).await? {
 		pages
 	} else {
-		load_pages(&state, id, false).await?
+        crate::source::load_pages_under_lease(&state, id, false).await?
 	};
 	if let Err(e) = state.downloads().enqueue_reader_ahead(id, user.id).await {
 		tracing::warn!(chapter_id = id, "reader-ahead enqueue failed: {}", e.message());
 	}
 	let mut out = Vec::with_capacity(pages.len());
+    let cache_revision = crate::cache::chapter_revision(&state.pool, id).await?;
 	for page in pages {
 		let mut value = serde_json::from_str::<Value>(&page.content)?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
 		object.insert("index".into(), json!(page.idx));
+        object.insert("cacheRevision".into(), json!(cache_revision));
 		if let (Some(width), Some(height)) = (page.width, page.height) {
 			object.insert("width".into(), json!(width));
 			object.insert("height".into(), json!(height));
@@ -2019,12 +2078,26 @@ async fn get_settings(
 /// Validate and write a flat settings map. Shared by GET /settings and the backward-compatible
 /// flat-map variant of PUT /settings.
 pub(crate) async fn apply_settings(
-	state: &AppState,
+	state: &Arc<AppState>,
 	user: &crate::auth::AuthUser,
 	body: &HashMap<String, Value>,
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in body {
+        if key == "cache.chapterLruEnabled" && !value.is_boolean() {
+            return Err(ApiError::bad_request(
+                "cache.chapterLruEnabled must be a boolean",
+            ));
+        }
+        if key == "cache.chapterMaxBytes"
+            && !value
+                .as_u64()
+                .is_some_and(|n| n >= crate::cache::MIN_MAX_BYTES as u64 && n <= i64::MAX as u64)
+        {
+            return Err(ApiError::bad_request(
+                "cache.chapterMaxBytes must be between 268435456 and 9223372036854775807",
+            ));
+        }
 		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
 			sqlx::query("DELETE FROM setting WHERE key = ?")
 				.bind(key)
@@ -2052,7 +2125,8 @@ pub(crate) async fn apply_settings(
 		if key == "local.dirs"
 			&& !value
 				.as_array()
-				.is_some_and(|dirs| dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty())))
+				.is_some_and(|dirs| { dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty()))
+            })
 		{
 			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
 		}
@@ -2092,6 +2166,9 @@ pub(crate) async fn apply_settings(
 		.await?;
 	}
 	tx.commit().await?;
+    if body.contains_key("cache.chapterLruEnabled") || body.contains_key("cache.chapterMaxBytes") {
+        crate::cache::enforce_limit(state).await?;
+    }
 	Ok(())
 }
 
@@ -2133,7 +2210,7 @@ async fn put_settings(
 
 #[cfg(test)]
 mod tests {
-	use super::chapter_order_by;
+	use super::{chapter_order_by, chapters_json};
 
 	#[test]
 	fn chapter_order_by_keys_and_directions() {
@@ -2150,5 +2227,50 @@ mod tests {
 	fn chapter_order_by_rejects_unknown_values() {
 		assert!(chapter_order_by(Some("title"), None).is_err());
 		assert!(chapter_order_by(None, Some("up")).is_err());
+	}
+
+	#[tokio::test]
+	async fn dismissed_finished_download_still_sets_has_finished_download() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let config = crate::config::Config {
+			config_dir: tmp.path().to_path_buf(),
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			..crate::config::Config::default()
+		};
+		let pool = crate::db::create_pool(&config.database_url).await.expect("pool");
+		let source: i64 = sqlx::query_scalar(
+			"INSERT INTO source(key,name,wasm_path) VALUES ('source','Source','') RETURNING id",
+		)
+		.fetch_one(&pool)
+		.await
+		.expect("source");
+		let manga: i64 = sqlx::query_scalar(
+			"INSERT INTO manga(source_id,key,title) VALUES (?, 'manga','Manga') RETURNING id",
+		)
+		.bind(source)
+		.fetch_one(&pool)
+		.await
+		.expect("manga");
+		let chapter: i64 = sqlx::query_scalar(
+			"INSERT INTO chapter(manga_id,key) VALUES (?, 'chapter') RETURNING id",
+		)
+		.bind(manga)
+		.fetch_one(&pool)
+		.await
+		.expect("chapter");
+		sqlx::query(
+			"INSERT INTO download(chapter_id,user_id,status,dismissed_at) VALUES (?,1,'finished',1)",
+		)
+		.bind(chapter)
+		.execute(&pool)
+		.await
+		.expect("dismissed finished row");
+		let (defaults_tx, _) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _) = tokio::sync::mpsc::unbounded_channel();
+		let state = crate::state::AppState::new(pool, config, defaults_tx, cookie_tx);
+		let chapters = chapters_json(&state, 1, manga, " ORDER BY c.id ASC")
+			.await
+			.expect("chapters");
+		assert_eq!(chapters[0]["hasFinishedDownload"], true);
 	}
 }

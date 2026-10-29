@@ -5008,6 +5008,60 @@
           }
         }
       }
+    },
+    "/api/v1/cache/chapters": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "operationId": "chapterCacheStats",
+        "summary": "Get chapter page cache usage and limits",
+        "responses": {
+          "200": {
+            "description": "Current chapter cache accounting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChapterCacheStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/cache/chapters/clear": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "operationId": "clearChapterCache",
+        "summary": "Clear cached chapter page metadata and image assets",
+        "responses": {
+          "200": {
+            "description": "Cache cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChapterCacheClearResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -6291,7 +6345,9 @@
           },
           "exclusions": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "nullable": true,
             "description": "Path substrings skipped by the scan; absent or empty falls back to the server config."
           },
@@ -7760,11 +7816,16 @@
           {
             "type": "object",
             "required": [
-              "isDownloaded"
+              "isDownloaded",
+              "hasFinishedDownload"
             ],
             "properties": {
               "isDownloaded": {
                 "type": "boolean"
+              },
+              "hasFinishedDownload": {
+                "type": "boolean",
+                "description": "A finished download row exists, including when its list entry is dismissed."
               }
             }
           }
@@ -8243,7 +8304,8 @@
           "thumbnail",
           "hasDescription",
           "description",
-          "index"
+          "index",
+          "cacheRevision"
         ],
         "properties": {
           "content": {
@@ -8272,6 +8334,11 @@
             "type": "integer",
             "format": "int64",
             "description": "width and height are present together when dimensions are known."
+          },
+          "cacheRevision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Changes when this chapter page cache is cleared or rebuilt."
           }
         }
       },
@@ -9317,16 +9384,26 @@
       },
       "DeleteDownloadsRequest": {
         "type": "object",
-        "required": [
-          "mangaIds"
-        ],
         "properties": {
+          "chapterIds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "default": []
+          },
           "mangaIds": {
             "type": "array",
             "items": {
               "type": "integer",
               "format": "int64"
-            }
+            },
+            "default": []
+          },
+          "finishedOnly": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -10783,6 +10860,9 @@
           },
           "browse": {
             "$ref": "#/components/schemas/BrowseSettings"
+          },
+          "cache": {
+            "$ref": "#/components/schemas/ChapterCacheSettings"
           }
         },
         "additionalProperties": {
@@ -10958,6 +11038,92 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "ChapterCacheStats": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "maxBytes",
+          "usedBytes",
+          "chapterCount",
+          "lastError",
+          "cacheRevision"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "maxBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 268435456,
+            "default": 2147483648
+          },
+          "usedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "chapterCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "lastError": {
+            "type": "string",
+            "nullable": true
+          },
+          "cacheRevision": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ChapterCacheClearResponse": {
+        "type": "object",
+        "required": [
+          "clearedBytes",
+          "usedBytes",
+          "chapterCount",
+          "cacheRevision"
+        ],
+        "properties": {
+          "clearedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "usedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "chapterCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cacheRevision": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ChapterCacheSettings": {
+        "type": "object",
+        "required": [
+          "chapterLruEnabled",
+          "chapterMaxBytes"
+        ],
+        "properties": {
+          "chapterLruEnabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "chapterMaxBytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 268435456,
+            "maximum": 9223372036854775807,
+            "default": 2147483648
           }
         }
       }

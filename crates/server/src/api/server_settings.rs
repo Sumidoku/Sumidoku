@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 
-pub(crate) const ROOT_GROUPS: [&str; 7] = [
+pub(crate) const ROOT_GROUPS: [&str; 8] = [
 	"incognito",
 	"library",
 	"local",
@@ -16,6 +16,7 @@ pub(crate) const ROOT_GROUPS: [&str; 7] = [
 	"backup",
 	"browse",
 	"readOnly",
+    "cache",
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,10 +27,19 @@ pub struct ServerSettings {
 	pub download: DownloadSettings,
 	pub backup: BackupSettings,
 	pub browse: BrowseSettings,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<ChapterCacheSettings>,
 	/// Any settings keys the server does not yet model as typed fields. Preserved round-trip so that
 	/// backups, custom settings, or future keys are not lost when writing the structured view back.
 	#[serde(flatten)]
 	pub extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterCacheSettings {
+    pub chapter_lru_enabled: bool,
+    pub chapter_max_bytes: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -139,7 +149,7 @@ impl ServerSettings {
 			excluded_update_categories: get_i64_array(map, "library.excluded_update_categories").unwrap_or_default(),
 			excluded_download_categories: get_i64_array(map, "library.excluded_download_categories").unwrap_or_default(),
 			skip_titles: get_string_array(map, "library.skip_titles")
-				.unwrap_or_else(|| crate::update::SKIP_TITLE_RULES.iter().map(|s| (*s).into()).collect()),
+			.unwrap_or_else(|| crate::update::SKIP_TITLE_RULES.iter().map(|s| (*s).into()).collect()),
 			refresh_metadata: get_bool(map, "library.refresh_metadata").unwrap_or(false),
 			update_interval_hours: get_u64(map, "library.update_interval_hours").unwrap_or(0),
 		};
@@ -172,6 +182,8 @@ impl ServerSettings {
 		// The legacy global local.* rows keep working as the default local instance's fallback layer
 		// (state.local_dirs), so they stay stored but are no longer exposed in the structured view.
 		let known: HashSet<&str> = [
+            "cache.chapterLruEnabled",
+            "cache.chapterMaxBytes",
 			"incognito.enabled",
 			"library.default_category",
 			"library.show_uncategorized",
@@ -215,7 +227,15 @@ impl ServerSettings {
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();
 
-		Ok(Self { incognito, library, download, backup, browse, extra })
+        let cache = Some(ChapterCacheSettings {
+            chapter_lru_enabled: get_bool(map, "cache.chapterLruEnabled").unwrap_or(true),
+            chapter_max_bytes: get_u64(map, "cache.chapterMaxBytes")
+                .unwrap_or(crate::cache::DEFAULT_MAX_BYTES as u64)
+                .max(crate::cache::MIN_MAX_BYTES as u64),
+        });
+
+		Ok(Self { incognito, library, download, backup, browse,
+            cache, extra })
 	}
 
 	/// Convert the structured request body into the legacy flat map understood by `apply_settings`.
@@ -262,6 +282,16 @@ impl ServerSettings {
 		// The backup schedule owns last_run; a full settings write must not replay a stale timestamp.
 		map.insert("backup.dir".into(), json!(self.backup.dir));
 		map.insert("browse.pinned_sources".into(), json!(self.browse.pinned_sources));
+        if let Some(cache) = self.cache {
+            map.insert(
+                "cache.chapterLruEnabled".into(),
+                json!(cache.chapter_lru_enabled),
+            );
+            map.insert(
+                "cache.chapterMaxBytes".into(),
+                json!(cache.chapter_max_bytes),
+            );
+        }
 		map.extend(self.extra);
 		map
 	}

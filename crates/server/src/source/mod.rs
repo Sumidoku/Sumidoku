@@ -1123,6 +1123,28 @@ pub async fn load_pages(
 	chapter_id: i64,
 	refresh: bool,
 ) -> ApiResult<Vec<PageRow>> {
+    let _lease = state.chapter_cache_gate.read().await;
+    let lock = state.chapter_cache_lock(chapter_id).await;
+    let _chapter_read = if refresh {
+        None
+    } else {
+        Some(lock.read().await)
+    };
+    let _chapter_write = if refresh {
+        Some(lock.write().await)
+    } else {
+        None
+    };
+    load_pages_under_lease(state, chapter_id, refresh).await
+}
+
+/// Caller holds `chapter_cache_gate` for reading. Use from a request or whole-download operation
+/// that already owns the lease, avoiding a second read-lock acquisition behind a waiting clearer.
+pub async fn load_pages_under_lease(
+    state: &Arc<AppState>,
+    chapter_id: i64,
+    refresh: bool,
+) -> ApiResult<Vec<PageRow>> {
 	if !refresh {
 		let cached: Vec<PageRow> = sqlx::query_as(
 			"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
@@ -1131,6 +1153,17 @@ pub async fn load_pages(
 		.fetch_all(&state.pool)
 		.await?;
 		if !cached.is_empty() {
+            crate::cache::touch(&state.pool, chapter_id).await?;
+            return Ok(cached);
+        }
+    }
+    let build_lock = state.chapter_cache_build_lock(chapter_id).await;
+    let _build = build_lock.lock().await;
+    if !refresh {
+        let cached: Vec<PageRow> = sqlx::query_as("SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC")
+			.bind(chapter_id).fetch_all(&state.pool).await?;
+        if !cached.is_empty() {
+            crate::cache::touch(&state.pool, chapter_id).await?;
 			return Ok(cached);
 		}
 	}
@@ -1144,20 +1177,43 @@ pub async fn load_pages(
 			&chapter.key,
 		)
 		.await?;
-		// A local chapter has no materialized blobs, but may have downsample variants: invalidate them when the page
-		// rows are rewritten (on the online path, materialize_image_pages' whole-directory removal carries the same duty)
-		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
+		// A local chapter has no materialized blobs, but may have variants from its prior generation.
+		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+		let previous = blob_dir.with_extension("previous");
+		let _ = tokio::fs::remove_dir_all(&previous).await;
+		let had_previous = tokio::fs::rename(&blob_dir, &previous).await.is_ok();
 		let rows: Vec<serde_json::Value> = entries
 			.iter()
 			.map(|entry| crate::internal::local::page_content_json(entry))
 			.collect();
-		store_page_rows(&state.pool, chapter_id, &rows, compatible).await?;
+		if let Err(error) = store_page_rows(&state.pool, chapter_id, &rows, compatible).await {
+			if had_previous { let _ = tokio::fs::rename(&previous, &blob_dir).await; }
+			return Err(error);
+		}
+		let _ = tokio::fs::remove_dir_all(previous).await;
 	} else if source_is_opds(&state.pool, manga.source_id).await? {
-		// The CBZ fallback's on-disk cache is invalidated when the page rows are rewritten, same discipline as the blob dir; delete before pulling so a refresh gets the new archive
-		let _ = tokio::fs::remove_file(crate::internal::opds_source::cbz_path(state, chapter_id)).await;
+		let cbz = crate::internal::opds_source::cbz_path(state, chapter_id);
+		let previous = cbz.with_extension("previous");
+		let _ = tokio::fs::remove_file(&previous).await;
+		let had_previous = match tokio::fs::rename(&cbz, &previous).await {
+			Ok(()) => true,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+			Err(error) => return Err(ApiError::internal(format!("stage old OPDS CBZ: {error}"))),
+		};
+		let rows = match crate::internal::opds_source::chapter_page_rows(state, &manga, &chapter).await {
+			Ok(rows) => rows,
+			Err(error) => {
+				if had_previous { let _ = tokio::fs::rename(&previous, &cbz).await; }
+				return Err(error);
+			}
+		};
+		if let Err(error) = store_page_rows(&state.pool, chapter_id, &rows, None).await {
+			let _ = tokio::fs::remove_file(&cbz).await;
+			if had_previous { let _ = tokio::fs::rename(&previous, &cbz).await; }
+			return Err(error);
+		}
 		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string())).await;
-		let rows = crate::internal::opds_source::chapter_page_rows(state, &manga, &chapter).await?;
-		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
+		let _ = tokio::fs::remove_file(previous).await;
 	} else {
 		let handle = state.get_handle(manga.source_id).await?;
 		let mut pages = handle
@@ -1178,7 +1234,14 @@ pub async fn load_pages(
 				})
 			})
 			.collect();
-		store_page_rows(&state.pool, chapter_id, &rows, None).await?;
+		if let Err(error) = store_page_rows(&state.pool, chapter_id, &rows, None).await {
+			let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+			let previous = blob_dir.with_extension("previous");
+			let _ = tokio::fs::remove_dir_all(&blob_dir).await;
+			let _ = tokio::fs::rename(previous, blob_dir).await;
+			return Err(error);
+		}
+		let _ = tokio::fs::remove_dir_all(state.config.page_blobs_dir().join(chapter_id.to_string()).with_extension("previous")).await;
 	}
 	let stored: Vec<PageRow> = sqlx::query_as(
 		"SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC",
@@ -1186,6 +1249,14 @@ pub async fn load_pages(
 	.bind(chapter_id)
 	.fetch_all(&state.pool)
 	.await?;
+	crate::cache::publish_chapter(
+		&state.pool,
+		&state.config.page_blobs_dir(),
+		&state.config.config_dir.join("opds-cbz"),
+		chapter_id,
+	)
+	.await?;
+	let _ = crate::cache::enforce_limit(state).await;
 	Ok(stored)
 }
 
@@ -1245,26 +1316,37 @@ async fn materialize_image_pages(
 	pages: &[aidoku::Page],
 ) -> ApiResult<Vec<serde_json::Value>> {
 	let dir = state.config.page_blobs_dir().join(chapter_id.to_string());
-	let _ = tokio::fs::remove_dir_all(&dir).await;
-	let mut contents = Vec::with_capacity(pages.len());
-	let mut dir_ready = false;
-	for (index, page) in pages.iter().enumerate() {
-		let mut content = serde_json::to_value(&page.content)?;
-		if let Some(rid) = content.get("Image").and_then(serde_json::Value::as_i64) {
-			let bytes = handle.take_page_image(rid as i32).await?;
-			if !dir_ready {
-				tokio::fs::create_dir_all(&dir)
-					.await
-					.map_err(|e| ApiError::internal(format!("create page blob dir: {e}")))?;
-				dir_ready = true;
+	let staging = dir.with_extension("staging");
+	let previous = dir.with_extension("previous");
+	let _ = tokio::fs::remove_dir_all(&staging).await;
+	let _ = tokio::fs::remove_dir_all(&previous).await;
+	tokio::fs::create_dir_all(&staging).await
+		.map_err(|e| ApiError::internal(format!("create staged page blob dir: {e}")))?;
+	let built = async {
+		let mut contents = Vec::with_capacity(pages.len());
+		for (index, page) in pages.iter().enumerate() {
+			let mut content = serde_json::to_value(&page.content)?;
+			if let Some(rid) = content.get("Image").and_then(serde_json::Value::as_i64) {
+				let bytes = handle.take_page_image(rid as i32).await?;
+				let name = format!("{index}.png");
+				tokio::fs::write(staging.join(&name), &bytes).await
+					.map_err(|e| ApiError::internal(format!("write page blob: {e}")))?;
+				content = serde_json::json!({"Image": name});
 			}
-			let name = format!("{index}.png");
-			tokio::fs::write(dir.join(&name), &bytes)
-				.await
-				.map_err(|e| ApiError::internal(format!("write page blob: {e}")))?;
-			content = serde_json::json!({"Image": name});
+			contents.push(content);
 		}
-		contents.push(content);
+		Ok::<_, ApiError>(contents)
+	}.await;
+	let contents = match built {
+		Ok(contents) => contents,
+		Err(error) => { let _ = tokio::fs::remove_dir_all(&staging).await; return Err(error); }
+	};
+	let had_previous = tokio::fs::try_exists(&dir).await.unwrap_or(false);
+	if had_previous { tokio::fs::rename(&dir, &previous).await.map_err(|e| ApiError::internal(format!("stage old page blobs: {e}")))?; }
+	if let Err(error) = tokio::fs::rename(&staging, &dir).await {
+		if had_previous { let _ = tokio::fs::rename(&previous, &dir).await; }
+		let _ = tokio::fs::remove_dir_all(&staging).await;
+		return Err(ApiError::internal(format!("publish page blobs: {error}")));
 	}
 	Ok(contents)
 }

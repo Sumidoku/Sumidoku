@@ -1,8 +1,8 @@
 use crate::source::cover::bytes_response;
 use crate::error::{ApiError, ApiResult};
 use crate::model::ChapterRow;
-use crate::source::downsample::{VariantHit, bucket_width, downsample_png, read_variant, write_variant};
-use crate::source::{chapter_row, fetch_page_image, http_get, load_pages, manga_row, page_image_blob};
+use crate::source::downsample::{VariantHit, bucket_width, downsample_png, read_variant};
+use crate::source::{chapter_row, fetch_page_image, http_get, manga_row, page_image_blob};
 use crate::state::AppState;
 use aidoku::PageContext;
 use axum::extract::{Path, Query, State};
@@ -25,11 +25,15 @@ pub async fn get_page(
 	Path((id, index)): Path<(i64, i64)>,
 	Query(query): Query<PageQuery>,
 ) -> ApiResult<Response> {
+	let _cache_lease = state.chapter_cache_gate.read().await;
+    let cache_lock = state.chapter_cache_lock(id).await;
+    let _chapter_cache = cache_lock.read().await;
 	let chapter = chapter_row(&state.pool, id).await?;
 	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
 	if chapter.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
+    crate::cache::touch(&state.pool, id).await?;
 	// A finished download product is a preferred page source: text entries come from the artifact
 	// with no source access, and image entries are read from it when the materialized blob is
 	// missing, so downloaded chapters stay readable offline. Image entries still prefer the
@@ -69,18 +73,19 @@ pub async fn get_page(
 				})
 				.await
 				.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
-				let blobs_dir = state.config.page_blobs_dir();
 				return match resized {
 					Some(png) => {
-						if let Err(e) = write_variant(&blobs_dir, id, index, b, Some(&png)).await {
-							tracing::warn!(chapter_id = id, index, "page variant write failed: {e}");
+						if let Err(e) = crate::cache::write_variant(&state, id, index, b, Some(&png)).await {
+							tracing::warn!(chapter_id = id, index, "page variant write failed: {}", e.message());
 						}
+                        let _ = crate::cache::enforce_limit(&state).await;
 						Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
 					}
 					None => {
-						if let Err(e) = write_variant(&blobs_dir, id, index, b, None).await {
-							tracing::warn!(chapter_id = id, index, "page variant marker write failed: {e}");
+						if let Err(e) = crate::cache::write_variant(&state, id, index, b, None).await {
+							tracing::warn!(chapter_id = id, index, "page variant marker write failed: {}", e.message());
 						}
+                        let _ = crate::cache::enforce_limit(&state).await;
 						Ok(bytes_response(original, mime_for(&entry), PAGE_MAX_AGE))
 					}
 				};
@@ -89,7 +94,7 @@ pub async fn get_page(
 		}
 	}
 
-	let pages = load_pages(&state, id, false).await?;
+	let pages = crate::source::load_pages_under_lease(&state, id, false).await?;
 	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
@@ -118,18 +123,19 @@ pub async fn get_page(
 		})
 		.await
 		.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
-		let blobs_dir = state.config.page_blobs_dir();
 		return match resized {
 			Some(png) => {
-				if let Err(e) = write_variant(&blobs_dir, id, index, b, Some(&png)).await {
-					tracing::warn!(chapter_id = id, index, "page variant write failed: {e}");
+				if let Err(e) = crate::cache::write_variant(&state, id, index, b, Some(&png)).await {
+					tracing::warn!(chapter_id = id, index, "page variant write failed: {}", e.message());
 				}
+				let _ = crate::cache::enforce_limit(&state).await;
 				Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
 			}
 			None => {
-				if let Err(e) = write_variant(&blobs_dir, id, index, b, None).await {
-					tracing::warn!(chapter_id = id, index, "page variant marker write failed: {e}");
+				if let Err(e) = crate::cache::write_variant(&state, id, index, b, None).await {
+					tracing::warn!(chapter_id = id, index, "page variant marker write failed: {}", e.message());
 				}
+				let _ = crate::cache::enforce_limit(&state).await;
 				Ok(bytes_response(original, &mime, PAGE_MAX_AGE))
 			}
 		};

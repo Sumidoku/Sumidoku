@@ -1176,11 +1176,16 @@ no alias is derived from migration text.
   path and its move target against other chapters' rows and the in-flight
   claims of concurrent downloads; on a clash the base name gains
   ` [<chapter id>]`. Claims are released when the chapter's worker exits.
-  `DownloadManager::delete` is the shared removal routine for explicit delete,
-  clear and read-driven deletion: it removes the row, clears `is_downloaded`
-  and deletes the artifact once no other row references it.
-  `POST /api/v1/downloads/delete` applies it to every download row of the
-  given `mangaIds` and answers `{deleted}`. The enqueue endpoint likewise
+  `DownloadManager::delete` is the shared removal routine for explicit and
+  read-driven deletion: it removes the row, clears `is_downloaded` and deletes
+  the artifact once no other row references it. `POST /api/v1/downloads/clear`
+  only sets `dismissed_at` on terminal finished/error rows; shared list and SSE
+  snapshots hide dismissed rows, while the row, path, artifact and downloaded
+  flag remain available to offline reading, CBZ export and path claims. A new
+  execution clears dismissal. Explicit deletion can still remove a dismissed
+  product. `POST /api/v1/downloads/delete` accepts deduplicated `chapterIds`
+  and `mangaIds`, optionally guarded by `finishedOnly` in the deletion
+  transaction, and answers `{deleted}`. The enqueue endpoint likewise
   accepts `mangaIds`, expanded to each manga's untrashed chapters of remote
   sources (local chapters are already on disk) and merged with `chapterIds`.
   Manual progress
@@ -1194,6 +1199,20 @@ no alias is derived from migration text.
   downloaded/queued/running chapters are skipped, errors may retry, and the
   ordinary enqueue dedupe prevents repeated page loads from growing the queue;
   download workers and image requests never recurse into reader-ahead.
+- Chapter page cache (`cache.rs`, `source/mod.rs`): page JSON rows, materialized
+  image blobs and variants, and OPDS acquisition CBZ files share a persistent
+  per-chapter LRU budget. `cache.chapterLruEnabled` defaults true and
+  `cache.chapterMaxBytes` defaults to 2 GiB with a 256 MiB minimum. Startup
+  reconciles existing rows and files and removes orphan cache files; a
+  60-second sweep evicts least-recently-used chapters above the soft limit,
+  allowing a five-minute grace period. Page reads and whole-download packaging
+  hold a global read lease and per-chapter read lease; refresh takes that
+  chapter's write lease, and manual clear takes the global write lease before
+  removing page rows and derived assets. Clearing preserves page count and
+  reading progress, resets `pages_analyzed_at`, and advances each affected
+  chapter's `cacheRevision`, returned with `GET /api/v1/chapter/{id}/pages`.
+  `GET /api/v1/cache/chapters` reports usage and errors; the matching POST clear
+  endpoint reports actual post-clear usage.
 - Download move (`download/mod.rs:move_product`): when
   `download.move_path` is set (setting table, env
   `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
