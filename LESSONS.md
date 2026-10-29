@@ -1,6 +1,17 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+**Clearing a download list must not delete the downloaded product.** A
+"clear" action that only dismisses completed entries should update their
+visibility state while retaining the download row, artifact path and chapter
+download flag. Those records back offline reading and export, and explicit
+deletion remains a separate action.
+- Evidence: 2026-10-29, review of the chapter cache and download management
+  work found `/downloads/clear` calling the product deletion routine, which
+  removed the file and offline flag along with the list entry. The fix uses a
+  transactional dismissal state and tests that the hidden artifact still
+  serves offline pages and CBZ export and can still be explicitly removed.
+
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
