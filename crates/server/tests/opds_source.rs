@@ -9,7 +9,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use common::{TestApp, base_config, request, request_full, source_by_key};
+use common::{TestApp, base_config, request, request_full, request_with_headers, source_by_key};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use sumidoku_server::build_app;
@@ -400,6 +400,28 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 		assert_eq!(headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()), Some("image/jpeg"));
 		assert_eq!(bytes.as_slice(), ALPHA_COVER);
 	}
+
+	// a versioned cover URL is cacheable for 30 days, and an expired entry revalidates with a body-less 304
+	let (status, headers, _) =
+		request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover?v=cover-1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers[header::CACHE_CONTROL], "private, max-age=2592000");
+	let tag = headers[header::ETAG].to_str().expect("etag").to_string();
+	let (status, headers, bytes) = request_with_headers(
+		&t.app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/cover?v=cover-1"),
+		None,
+		&[("if-none-match", &tag)],
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_MODIFIED);
+	assert!(bytes.is_empty());
+	assert_eq!(headers[header::ETAG].to_str().unwrap(), tag);
+	let (status, headers, _) =
+		request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers[header::CACHE_CONTROL], "private, max-age=86400", "an unversioned URL keeps the short lifetime");
 }
 
 #[tokio::test]
