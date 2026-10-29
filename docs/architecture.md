@@ -1909,6 +1909,23 @@ changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
 screen scale via a full-size object-fit: contain box. The c hotkey cycles the
 scale modes (`reader/readerPrefs.ts:SCALE_CYCLE`).
 
+Wide-page splitting (`sumidoku.reader.split` + `.split.<id>`, `1`/`0`, paged
+mode + single layout only, after Tachiyomi/Mihon's "split double pages") turns
+a landscape page into two half-pages in reading order. The split is pure client
+navigation: the half-box carries the page's (w/2):h aspect ratio and the same
+image renders with `object-fit: cover` + `object-position` to crop each side
+(`splitSides` orders halves right-to-left under rtl), so the slider, page
+numbers, saved progress and restore all stay in real page indexes
+(`reader/splitWide.ts:turnSplit` walks half-steps inside landscape pages).
+Mark-read deliberately waits for the LAST half of a split final page
+(`splitWide.ts:splitEndReached`), otherwise the first half would already fire
+tracker sync and read-chapter download cleanup. Splitting shares the spread
+builder's wide-page rule (strictly wider than tall) and the same measured-dims
+pipeline, so unknown-dimension pages render whole until `recordMeasured` proves
+them landscape and the halves appear without moving the current page; the
+half-page doubles its `?width=` downsample request because it shows the image
+at twice the box width.
+
 ## Known gaps
 
 ### Source login: OAuth callback capture

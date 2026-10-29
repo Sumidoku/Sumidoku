@@ -19,6 +19,8 @@ interface ReaderSettingsProps {
 	onBgChange: (bg: ReaderBackground) => void;
 	scale: PageScale;
 	onScaleChange: (scale: PageScale) => void;
+	split: boolean;
+	onSplitChange: (split: boolean) => void;
 	stretch: boolean;
 	onStretchChange: (stretch: boolean) => void;
 	currentPage: Page | null;
@@ -38,6 +40,8 @@ export function ReaderSettings({
 	onBgChange,
 	scale,
 	onScaleChange,
+	split,
+	onSplitChange,
 	stretch,
 	onStretchChange,
 	currentPage,
@@ -106,6 +110,22 @@ export function ReaderSettings({
 					<option value="height">{t('reader.scaleHeight')}</option>
 					<option value="original">{t('reader.scaleOriginal')}</option>
 				</Select>
+			</div>
+			<div className={mode !== 'paged' || layout !== 'single' ? 'reader__settings-dir--off' : undefined}>
+				<label className="reader__stretch">
+					<input
+						type="checkbox"
+						checked={split}
+						onChange={(e) => onSplitChange(e.currentTarget.checked)}
+					/>
+					<span>
+						{mode !== 'paged'
+							? t('reader.splitWidePagedOnly')
+							: layout !== 'single'
+								? t('reader.splitWideSingleOnly')
+								: t('reader.splitWide')}
+					</span>
+				</label>
 			</div>
 			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
 				<label className="reader__stretch">

@@ -113,6 +113,7 @@ const READER_TAPZONES_KEY = 'sumidoku.reader.tapzones';
 const READER_BG_KEY = 'sumidoku.reader.bg';
 const READER_SCALE_KEY = 'sumidoku.reader.scale';
 const READER_STRETCH_KEY = 'sumidoku.reader.stretch';
+const READER_SPLIT_KEY = 'sumidoku.reader.split';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -184,6 +185,7 @@ function ReaderSection() {
 		return s === 'width' || s === 'widthShrink' || s === 'height' || s === 'original' ? s : 'screen';
 	});
 	const [stretch, setStretch] = useState(() => stored(READER_STRETCH_KEY, '0') === '1');
+	const [split, setSplit] = useState(() => stored(READER_SPLIT_KEY, '0') === '1');
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
 		apply(value);
@@ -255,6 +257,16 @@ function ReaderSection() {
 				<Select
 					value={stretch ? '1' : '0'}
 					onChange={(e) => persist(READER_STRETCH_KEY, e.currentTarget.value, (v) => setStretch(v === '1'))}
+				>
+					<option value="0">{t('settings.stretchOff')}</option>
+					<option value="1">{t('settings.stretchOn')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerSplitWide')}</span>
+				<Select
+					value={split ? '1' : '0'}
+					onChange={(e) => persist(READER_SPLIT_KEY, e.currentTarget.value, (v) => setSplit(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>
