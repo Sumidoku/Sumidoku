@@ -109,6 +109,8 @@ function Section({
 const READER_MODE_KEY = 'sumidoku.reader.mode';
 const READER_DIR_KEY = 'sumidoku.reader.dir';
 const READER_LAYOUT_KEY = 'sumidoku.reader.layout';
+const READER_TAPZONES_KEY = 'sumidoku.reader.tapzones';
+const READER_BG_KEY = 'sumidoku.reader.bg';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -131,6 +133,16 @@ function AppearanceSection() {
 		// Same whitelist as the reader's readLayout: unknown values fall back to single
 		const l = stored(READER_LAYOUT_KEY, 'single');
 		return l === 'double' || l === 'doubleNoCover' ? l : 'single';
+	});
+	const [tapZones, setTapZones] = useState(() => {
+		// Same whitelist as the reader's parseTapZones: unknown values fall back to lr
+		const z = stored(READER_TAPZONES_KEY, 'lr');
+		return z === 'rl' || z === 'edge' || z === 'kindle' || z === 'off' ? z : 'lr';
+	});
+	const [bg, setBg] = useState(() => {
+		// Same whitelist as the reader's parseBackground: unknown values fall back to dark
+		const b = stored(READER_BG_KEY, 'dark');
+		return b === 'gray' || b === 'light' ? b : 'dark';
 	});
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
@@ -192,6 +204,24 @@ function AppearanceSection() {
 					<option value="single">{t('settings.layoutSingle')}</option>
 					<option value="double">{t('settings.layoutDouble')}</option>
 					<option value="doubleNoCover">{t('settings.layoutDoubleNoCover')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerTapZones')}</span>
+				<Select value={tapZones} onChange={(e) => persist(READER_TAPZONES_KEY, e.currentTarget.value, setTapZones)}>
+					<option value="lr">{t('settings.tzLr')}</option>
+					<option value="rl">{t('settings.tzRl')}</option>
+					<option value="edge">{t('settings.tzEdge')}</option>
+					<option value="kindle">{t('settings.tzKindle')}</option>
+					<option value="off">{t('settings.tzOff')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerBackground')}</span>
+				<Select value={bg} onChange={(e) => persist(READER_BG_KEY, e.currentTarget.value, setBg)}>
+					<option value="dark">{t('settings.bgDark')}</option>
+					<option value="gray">{t('settings.bgGray')}</option>
+					<option value="light">{t('settings.bgLight')}</option>
 				</Select>
 			</div>
 		</Section>

@@ -5,6 +5,25 @@
 	background: #000;
 }
 
+/* Canvas background variants (the dark default needs no class). The light variant
+   also lifts the dim reader chrome text that assumes a dark canvas */
+.reader--bg-gray {
+	background: #161618;
+}
+
+.reader--bg-light {
+	background: #fff;
+}
+
+.reader--bg-light .reader__page-num,
+.reader--bg-light .reader__unsupported {
+	color: #5b616e;
+}
+
+.reader--bg-light .reader__blank {
+	background: #fff;
+}
+
 .reader--msg {
 	display: flex;
 	align-items: center;
@@ -106,6 +125,39 @@
 .reader__zone--mid {
 	left: 28%;
 	width: 44%;
+}
+
+/* Tap-zone layouts (see zoneWidths/zoneAt in reader/readerPrefs.ts — the geometry
+   must match). `rl` only swaps the action mapping, so it reuses the default sizes */
+.reader__paged[data-tz='edge'] .reader__zone--left {
+	width: 15%;
+}
+
+.reader__paged[data-tz='edge'] .reader__zone--right {
+	width: 15%;
+}
+
+.reader__paged[data-tz='edge'] .reader__zone--mid {
+	left: 15%;
+	width: 70%;
+}
+
+/* kindle: the menu is a full-width top strip, prev gets the large lower-left area */
+.reader__paged[data-tz='kindle'] .reader__zone--mid {
+	left: 0;
+	width: 100%;
+	height: 25%;
+	bottom: auto;
+}
+
+.reader__paged[data-tz='kindle'] .reader__zone--left {
+	top: 25%;
+	width: 75%;
+}
+
+.reader__paged[data-tz='kindle'] .reader__zone--right {
+	top: 25%;
+	width: 25%;
 }
 
 /* ---------- Continuous / webtoon mode ---------- */
@@ -283,6 +335,10 @@
 .reader__settings-dir--off {
 	opacity: 0.45;
 	pointer-events: none;
+}
+
+.reader__settings .select {
+	width: 100%;
 }
 
 .reader__typography {

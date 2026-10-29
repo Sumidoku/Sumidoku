@@ -13,6 +13,8 @@ import {
 	CheckCircle2,
 	List,
 	Lock,
+	Maximize,
+	Minimize,
 	Settings,
 	StretchVertical,
 	TriangleAlert,
@@ -29,8 +31,18 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
-import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
-import type { Dir, Mode } from './reader/readerPrefs';
+import {
+	dirFromViewer,
+	modeFromViewer,
+	parseBackground,
+	parseTapZones,
+	resolveDir,
+	resolveMode,
+	zoneAction,
+	zoneAt,
+	zoneMovesForward
+} from './reader/readerPrefs';
+import type { Dir, Mode, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
 import { buildSpreads, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { readerKeyAction } from './reader/hotkeys';
@@ -123,6 +135,56 @@ function readLayoutOverride(mangaId: number | null): SpreadLayout | null {
 	try {
 		const v = localStorage.getItem(layoutOverrideKey(mangaId));
 		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Tap-zone layout and canvas background follow the page layout's persistence
+// shape: a global default plus a per-manga override, no metadata layer
+function readTapZones(): TapZoneLayout {
+	try {
+		const v = parseTapZones(localStorage.getItem('sumidoku.reader.tapzones'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'lr';
+}
+
+function tapZonesOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.tapzones.${mangaId}`;
+}
+
+function readTapZonesOverride(mangaId: number | null): TapZoneLayout | null {
+	if (mangaId === null) return null;
+	try {
+		return parseTapZones(localStorage.getItem(tapZonesOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+function readBackground(): ReaderBackground {
+	try {
+		const v = parseBackground(localStorage.getItem('sumidoku.reader.bg'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'dark';
+}
+
+function backgroundOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.bg.${mangaId}`;
+}
+
+function readBackgroundOverride(mangaId: number | null): ReaderBackground | null {
+	if (mangaId === null) return null;
+	try {
+		return parseBackground(localStorage.getItem(backgroundOverrideKey(mangaId)));
 	} catch {
 		// Same as above
 	}
@@ -261,6 +323,12 @@ function ReaderCore({
 	const [globalLayout] = useState<SpreadLayout>(readLayout);
 	const [layoutOverride, setLayoutOverride] = useState<SpreadLayout | null>(() => readLayoutOverride(mangaId));
 	const layout = layoutOverride ?? globalLayout;
+	const [globalTapZones] = useState<TapZoneLayout>(readTapZones);
+	const [tapZonesOverride, setTapZonesOverride] = useState<TapZoneLayout | null>(() => readTapZonesOverride(mangaId));
+	const tapZones = tapZonesOverride ?? globalTapZones;
+	const [globalBg] = useState<ReaderBackground>(readBackground);
+	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
+	const bg = bgOverride ?? globalBg;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -270,6 +338,23 @@ function ReaderCore({
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
+	// Fullscreen targets the reader root so the toolbars (fixed) stay visible inside it
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [isFullscreen, setIsFullscreen] = useState(false);
+	const fullscreenEnabled = typeof document !== 'undefined' && !!document.fullscreenEnabled;
+	useEffect(() => {
+		const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+		document.addEventListener('fullscreenchange', onFsChange);
+		return () => document.removeEventListener('fullscreenchange', onFsChange);
+	}, []);
+	function toggleFullscreen() {
+		try {
+			if (document.fullscreenElement) void document.exitFullscreen();
+			else void rootRef.current?.requestFullscreen();
+		} catch {
+			// Fullscreen can be denied (permissions policy); the toggle just stays off
+		}
+	}
 	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
 	const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
 	const textStyle = typographyStyle(typography);
@@ -533,6 +618,12 @@ function ReaderCore({
 	const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
 	keyRef.current = (e) => {
 		if (e.key === 'Escape') {
+			// The browser usually consumes the Escape that leaves fullscreen before the
+			// page sees it; if it does arrive, leaving fullscreen beats closing panels
+			if (document.fullscreenElement) {
+				void document.exitFullscreen();
+				return;
+			}
 			if (chaptersOpen) {
 				setChaptersOpen(false);
 				return;
@@ -578,6 +669,9 @@ function ReaderCore({
 				break;
 			case 'toggleOverlay':
 				setOverlay((v) => !v);
+				break;
+			case 'toggleFullscreen':
+				toggleFullscreen();
 				break;
 		}
 	};
@@ -671,6 +765,28 @@ function ReaderCore({
 			// Private mode blocks persistence but the layout still switches
 		}
 		setLayoutOverride(mangaId !== null ? l : null);
+	}
+
+	function setTapZones(z: TapZoneLayout) {
+		if (z === tapZones) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(tapZonesOverrideKey(mangaId), z);
+			else localStorage.setItem('sumidoku.reader.tapzones', z);
+		} catch {
+			// Private mode blocks persistence but the layout still switches
+		}
+		setTapZonesOverride(mangaId !== null ? z : null);
+	}
+
+	function setBackground(b: ReaderBackground) {
+		if (b === bg) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(backgroundOverrideKey(mangaId), b);
+			else localStorage.setItem('sumidoku.reader.bg', b);
+		} catch {
+			// Private mode blocks persistence but the background still switches
+		}
+		setBgOverride(mangaId !== null ? b : null);
 	}
 
 	function toggleAsc() {
@@ -797,21 +913,26 @@ function ReaderCore({
 		};
 	}, [mode, pages, navReady]);
 
-	// A light tap in the middle summons the toolbar; swipes don't trigger it
+	// A light tap fires the tap-zone layout's action for its zone; swipes don't
+	// trigger it, and while zoomed any tap just toggles the toolbar
 	const downRef = useRef({ x: 0, y: 0 });
-	function onPagedClick(which: 'left' | 'right' | 'mid') {
+	function onPagedZoneClick(which: 'left' | 'right' | 'mid') {
 		if (consumeClick()) return;
-		if (zoomed || which === 'mid') {
+		if (zoomed) {
 			setOverlay((v) => !v);
 			return;
 		}
-		onZone(which);
+		const action = zoneAction(dir, tapZones, which);
+		if (action === 'menu') setOverlay((v) => !v);
+		else if (action === 'next') turn(true);
+		else if (action === 'prev') turn(false);
 	}
 	function onPagedContainerClick(e: RMouseEvent<HTMLDivElement>) {
 		if (e.target !== e.currentTarget) return;
 		const rect = e.currentTarget.getBoundingClientRect();
-		const ratio = (e.clientX - rect.left) / rect.width;
-		onPagedClick(ratio < 0.28 ? 'left' : ratio > 0.72 ? 'right' : 'mid');
+		onPagedZoneClick(
+			zoneAt(tapZones, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height)
+		);
 	}
 	function onContinuousPointerDown(e: RPointerEvent<HTMLDivElement>) {
 		downRef.current = { x: e.clientX, y: e.clientY };
@@ -851,17 +972,20 @@ function ReaderCore({
 	}
 
 	const barCls = (base: string) => (overlay ? base : `${base} reader__bar--hidden`);
+	// Canvas background variants: dark stays the unclassed default
+	const rootCls = (extra?: string) =>
+		['reader', bg === 'dark' ? '' : `reader--bg-${bg}`, extra ?? ''].filter(Boolean).join(' ');
 
 	if (pagesQuery.isPending) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<Spinner />
 			</div>
 		);
 	}
 	if (pagesQuery.isError) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<EmptyState
 					icon={TriangleAlert}
 					title={t('reader.loadFailed')}
@@ -877,7 +1001,7 @@ function ReaderCore({
 	}
 	if (!pages || pages.length === 0) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<EmptyState
 					icon={BookOpen}
 					title={t('reader.noPages')}
@@ -888,10 +1012,11 @@ function ReaderCore({
 	}
 
 	return (
-		<div className="reader">
+		<div className={rootCls()} ref={rootRef}>
 			{mode === 'paged' ? (
 				<div
 					className="reader__paged"
+					data-tz={tapZones}
 					ref={pagedRef}
 					style={{ touchAction }}
 					onClick={onPagedContainerClick}
@@ -965,33 +1090,37 @@ function ReaderCore({
 								</div>
 							))}
 					</div>
-					<button
-						type="button"
-						className="reader__zone reader__zone--left"
-						aria-label={t(zoneMovesForward(dir, 'left') ? 'reader.nextPage' : 'reader.prevPage')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('left');
-						}}
-					/>
-					<button
-						type="button"
-						className="reader__zone reader__zone--right"
-						aria-label={t(zoneMovesForward(dir, 'right') ? 'reader.nextPage' : 'reader.prevPage')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('right');
-						}}
-					/>
-					<button
-						type="button"
-						className="reader__zone reader__zone--mid"
-						aria-label={t('reader.toggleToolbar')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('mid');
-						}}
-					/>
+					{tapZones !== 'off' && (
+						<>
+							<button
+								type="button"
+								className="reader__zone reader__zone--left"
+								aria-label={t(zoneAction(dir, tapZones, 'left') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('left');
+								}}
+							/>
+							<button
+								type="button"
+								className="reader__zone reader__zone--right"
+								aria-label={t(zoneAction(dir, tapZones, 'right') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('right');
+								}}
+							/>
+							<button
+								type="button"
+								className="reader__zone reader__zone--mid"
+								aria-label={t('reader.toggleToolbar')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('mid');
+								}}
+							/>
+						</>
+					)}
 				</div>
 			) : (
 				<div
@@ -1080,6 +1209,15 @@ function ReaderCore({
 						<List size={17} />
 					</IconButton>
 				)}
+				{fullscreenEnabled && (
+					<IconButton
+						label={isFullscreen ? t('reader.exitFullscreen') : t('reader.enterFullscreen')}
+						className={isFullscreen ? 'reader__icon--on' : undefined}
+						onClick={toggleFullscreen}
+					>
+						{isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+					</IconButton>
+				)}
 				<IconButton
 					label={t('reader.settings')}
 					className={settingsOpen ? 'reader__icon--on' : undefined}
@@ -1096,6 +1234,10 @@ function ReaderCore({
 					onDirChange={setDir}
 					layout={layout}
 					onLayoutChange={setLayout}
+					tapZones={tapZones}
+					onTapZonesChange={setTapZones}
+					bg={bg}
+					onBgChange={setBackground}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

@@ -4,7 +4,7 @@ import { SegmentedControl, Select } from '../../components';
 import { FONT_SIZE_LIMITS, LINE_HEIGHT_LIMITS } from './typography';
 import type { ReaderFont, ReaderTypography } from './typography';
 import { pageText } from './pageText';
-import type { Dir, Mode } from './readerPrefs';
+import type { Dir, Mode, ReaderBackground, TapZoneLayout } from './readerPrefs';
 import type { SpreadLayout } from './spreads';
 
 interface ReaderSettingsProps {
@@ -13,6 +13,10 @@ interface ReaderSettingsProps {
 	onDirChange: (dir: Dir) => void;
 	layout: SpreadLayout;
 	onLayoutChange: (layout: SpreadLayout) => void;
+	tapZones: TapZoneLayout;
+	onTapZonesChange: (layout: TapZoneLayout) => void;
+	bg: ReaderBackground;
+	onBgChange: (bg: ReaderBackground) => void;
 	currentPage: Page | null;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
@@ -24,6 +28,10 @@ export function ReaderSettings({
 	onDirChange,
 	layout,
 	onLayoutChange,
+	tapZones,
+	onTapZonesChange,
+	bg,
+	onBgChange,
 	currentPage,
 	typography,
 	onTypographyChange
@@ -59,6 +67,32 @@ export function ReaderSettings({
 					onChange={onLayoutChange}
 				/>
 			</div>
+			<div className="reader__settings-title">
+				{mode !== 'paged' ? t('reader.tapZonesPagedOnly') : t('reader.tapZones')}
+			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<Select
+					aria-label={t('reader.tapZones')}
+					value={tapZones}
+					onChange={(e) => onTapZonesChange(e.currentTarget.value as TapZoneLayout)}
+				>
+					<option value="lr">{t('reader.tzLr')}</option>
+					<option value="rl">{t('reader.tzRl')}</option>
+					<option value="edge">{t('reader.tzEdge')}</option>
+					<option value="kindle">{t('reader.tzKindle')}</option>
+					<option value="off">{t('reader.tzOff')}</option>
+				</Select>
+			</div>
+			<div className="reader__settings-title">{t('reader.background')}</div>
+			<SegmentedControl
+				options={[
+					{ value: 'dark', label: t('reader.bgDark') },
+					{ value: 'gray', label: t('reader.bgGray') },
+					{ value: 'light', label: t('reader.bgLight') }
+				]}
+				value={bg}
+				onChange={onBgChange}
+			/>
 			{showTypography && (
 				<>
 					<div className="reader__settings-title">{t('reader.typography')}</div>

@@ -57,6 +57,8 @@ test('page, home/end and space keys page in paged mode and scroll in continuous 
 		assert.equal(readerKeyAction(key(' '), 'webtoon'), 'scrollForward');
 		assert.equal(readerKeyAction(key(' ', { shiftKey: true }), 'continuous'), 'scrollBack');
 		assert.equal(readerKeyAction(key('m'), 'paged'), 'toggleOverlay');
+		assert.equal(readerKeyAction(key('f'), 'paged'), 'toggleFullscreen');
+		assert.equal(readerKeyAction(key('f'), 'webtoon'), 'toggleFullscreen');
 		assert.equal(readerKeyAction(key('x'), 'paged'), null);
 	});
 });

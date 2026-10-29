@@ -16,7 +16,8 @@ export type ReaderKeyAction =
 	| 'scrollForward'
 	| 'first'
 	| 'last'
-	| 'toggleOverlay';
+	| 'toggleOverlay'
+	| 'toggleFullscreen';
 
 export interface KeyLike {
 	key: string;
@@ -67,6 +68,8 @@ export function readerKeyAction(e: KeyLike, mode: Mode): ReaderKeyAction | null 
 			return e.shiftKey ? 'scrollBack' : 'scrollForward';
 		case 'm':
 			return 'toggleOverlay';
+		case 'f':
+			return 'toggleFullscreen';
 		default:
 			return null;
 	}
