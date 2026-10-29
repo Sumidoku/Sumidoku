@@ -40,7 +40,13 @@ export default function LoginPage() {
 			navigate('/', { replace: true });
 		} catch (e) {
 			// The 401 shape is uniform to the outside, not distinguishing "user does not exist" from "wrong password"
-			setError(e instanceof ApiError && e.status === 401 ? t('login.error_invalid') : t('login.error_generic'));
+			setError(
+				e instanceof ApiError && e.status === 401
+					? t('login.error_invalid')
+					: e instanceof ApiError && e.status === 429
+						? t('login.error_throttled')
+						: t('login.error_generic')
+			);
 		} finally {
 			setPending(false);
 		}

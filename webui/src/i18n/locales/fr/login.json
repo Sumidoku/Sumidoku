@@ -5,6 +5,7 @@
     "password": "Mot de passe",
     "submit": "Se connecter",
     "error_invalid": "Nom d'utilisateur ou mot de passe incorrect",
-    "error_generic": "Échec de la connexion. Veuillez réessayer plus tard"
+    "error_generic": "Échec de la connexion. Veuillez réessayer plus tard",
+    "error_throttled": "Trop de tentatives de connexion échouées. Patientez un instant puis réessayez"
   }
 }

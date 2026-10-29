@@ -723,7 +723,14 @@ no alias is derived from migration text.
   plaintext returned once at creation) or an admin session, and handlers
   continue to bind the legacy `AuthUser.id` storage key (always 1). Password
   changes revoke every admin session, while the config-set password is
-  re-seeded at boot.
+  re-seeded at boot. Login runs argon2 for unknown usernames too (against a
+  fixed dummy hash), so timing does not reveal which usernames exist, and
+  backs off per client: after five failed attempts each further one must
+  wait 1, 2, 4… seconds (capped at 60) or gets 429 with `Retry-After`; a
+  success clears the client, and its failures are forgotten after 15 quiet
+  minutes. The client is the TCP peer address (an IPv6 peer by its /64).
+  `X-Forwarded-For` is not trusted, so behind a reverse proxy all clients
+  share the proxy's backoff.
 - Single-owner migration (`0019_single_owner.sql`): non-admin settings and
   sync origins are deleted explicitly, then non-admin users and their
   user-owned rows are removed through existing foreign-key cascades. The

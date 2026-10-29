@@ -5,6 +5,7 @@
     "password": "Password",
     "submit": "Accedi",
     "error_invalid": "Nome utente o password errati",
-    "error_generic": "Accesso non riuscito. Riprova più tardi"
+    "error_generic": "Accesso non riuscito. Riprova più tardi",
+    "error_throttled": "Troppi tentativi di accesso non riusciti. Attendi un momento e riprova"
   }
 }

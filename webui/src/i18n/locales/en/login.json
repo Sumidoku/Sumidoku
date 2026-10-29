@@ -5,6 +5,7 @@
     "password": "Password",
     "submit": "Sign in",
     "error_invalid": "Incorrect username or password",
-    "error_generic": "Sign-in failed. Please try again later"
+    "error_generic": "Sign-in failed. Please try again later",
+    "error_throttled": "Too many failed sign-in attempts. Please wait a moment and try again"
   }
 }
