@@ -982,6 +982,7 @@ export default function MangaDetailPage() {
 						<MenuButton
 							label={t('chapterRow.chapterActions')}
 							disabled={selectedFinishedIds.length === 0 || batchBusy}
+							placement="top"
 						>
 							{(close) => (
 								<button

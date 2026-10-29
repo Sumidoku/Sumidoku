@@ -789,6 +789,6 @@ button.manga-menu__row:hover:not(:disabled) {
 
 	/* On mobile the batch bar hugs the tab bar and may wrap */
 	.manga-chaps__list--selecting {
-		padding-bottom: 128px;
+		padding-bottom: 190px;
 	}
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -85,6 +86,35 @@ test('finished downloads expose chapter actions, while a disabled menu remains k
 			onRemoveDownload: () => {}
 		})));
 		assert.match(row, /aria-label="Chapter actions"/);
+	} finally {
+		await vite.close();
+	}
+});
+
+test('batch bar keeps a content width constrained by the viewport and selection lists pad past its wrapped height', () => {
+	const components = readFileSync(new URL('../src/components/components.css', import.meta.url), 'utf8');
+	const manga = readFileSync(new URL('../src/pages/manga.css', import.meta.url), 'utf8');
+	const batchBar = components.match(/\.batch-bar\s*\{([^}]*)\}/)?.[1];
+	assert.ok(batchBar);
+	assert.match(batchBar, /width:\s*max-content;/);
+	assert.match(batchBar, /max-width:\s*calc\(100vw - 24px\);/);
+	assert.match(manga, /\.manga-chaps__list--selecting\s*\{\s*padding-bottom:\s*190px;/);
+});
+
+test('top placed batch menus open above the anchor and stay inside the viewport', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const { menuPosition } = await vite.ssrLoadModule('/src/components/MenuButton.tsx');
+		const position = menuPosition({ top: 770, bottom: 810, right: 370 }, 'top', 844, 390);
+		assert.deepEqual(position, { bottom: 80, right: 20 });
+		assert.ok(844 - position.bottom <= 770);
+		assert.ok(844 - position.bottom <= 844);
 	} finally {
 		await vite.close();
 	}

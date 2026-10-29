@@ -7,6 +7,7 @@ import { IconButton } from './IconButton';
 interface MenuButtonProps {
 	label: string;
 	disabled?: boolean;
+	placement?: 'bottom' | 'top';
 	/** Entries render through a close callback so an action can dismiss the popover */
 	children: (close: () => void) => ReactNode;
 }
@@ -20,11 +21,23 @@ export function isMenuPopupVisible(open: boolean, disabled: boolean): boolean {
 	return open && !disabled;
 }
 
+export function menuPosition(
+	anchor: Pick<DOMRect, 'top' | 'bottom' | 'right'>,
+	placement: 'bottom' | 'top',
+	viewportHeight: number,
+	viewportWidth: number
+): { top: number; right: number } | { bottom: number; right: number } {
+	const right = viewportWidth - anchor.right;
+	return placement === 'top'
+		? { bottom: viewportHeight - anchor.top + 6, right }
+		: { top: anchor.bottom + 6, right };
+}
+
 // Anchored dropdown for row-level action menus (chapter rows, list items). The popover goes through a
 // portal because row containers commonly clip absolute positioning; same pattern as the manga page's MoreMenu.
-export function MenuButton({ label, disabled = false, children }: MenuButtonProps) {
+export function MenuButton({ label, disabled = false, placement = 'bottom', children }: MenuButtonProps) {
 	const [open, setOpen] = useState(false);
-	const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+	const [pos, setPos] = useState<{ top: number; right: number } | { bottom: number; right: number } | null>(null);
 	const btnRef = useRef<HTMLDivElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 
@@ -32,7 +45,7 @@ export function MenuButton({ label, disabled = false, children }: MenuButtonProp
 		if (disabled) return;
 		if (!open && btnRef.current) {
 			const r = btnRef.current.getBoundingClientRect();
-			setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+			setPos(menuPosition(r, placement, window.innerHeight, window.innerWidth));
 		}
 		setOpen((v) => !v);
 	}
@@ -67,7 +80,7 @@ export function MenuButton({ label, disabled = false, children }: MenuButtonProp
 			{isMenuPopupVisible(open, disabled) &&
 				pos &&
 				createPortal(
-					<div className="menu-pop card" ref={popRef} style={{ top: pos.top, right: pos.right }} onClick={(event) => event.stopPropagation()}>
+					<div className="menu-pop card" ref={popRef} style={pos} onClick={(event) => event.stopPropagation()}>
 						{children(() => setOpen(false))}
 					</div>,
 					document.body
