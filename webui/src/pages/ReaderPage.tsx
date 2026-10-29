@@ -31,6 +31,8 @@ import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
 import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
 import type { Dir, Mode } from './reader/readerPrefs';
+import { buildSpreads, spreadIndexOf, spreadLeadPage } from './reader/spreads';
+import type { SpreadLayout } from './reader/spreads';
 import { ReaderPager } from './reader/ReaderPager';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -92,6 +94,33 @@ function readModeOverride(mangaId: number | null): Mode | null {
 	try {
 		const v = localStorage.getItem(modeOverrideKey(mangaId));
 		if (v === 'paged' || v === 'continuous' || v === 'webtoon') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Page layout (single/double spread) has no manga-metadata counterpart, so the
+// resolution is just per-manga override over the global default
+function readLayout(): SpreadLayout {
+	try {
+		const v = localStorage.getItem('sumidoku.reader.layout');
+		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
+	} catch {
+		// Same as above
+	}
+	return 'single';
+}
+
+function layoutOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.layout.${mangaId}`;
+}
+
+function readLayoutOverride(mangaId: number | null): SpreadLayout | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(layoutOverrideKey(mangaId));
+		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
 	} catch {
 		// Same as above
 	}
@@ -227,6 +256,9 @@ function ReaderCore({
 	const [modeOverride, setModeOverride] = useState<Mode | null>(() => readModeOverride(mangaId));
 	const [globalDir] = useState<Dir>(readDir);
 	const [dirOverride, setDirOverride] = useState<Dir | null>(() => readDirOverride(mangaId));
+	const [globalLayout] = useState<SpreadLayout>(readLayout);
+	const [layoutOverride, setLayoutOverride] = useState<SpreadLayout | null>(() => readLayoutOverride(mangaId));
+	const layout = layoutOverride ?? globalLayout;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -278,11 +310,25 @@ function ReaderCore({
 	// Layout changes leave stale pan offsets behind
 	useLayoutEffect(() => {
 		resetPinch();
-	}, [mode, idx, col, dir, imgWidth, resetPinch]);
+	}, [mode, idx, col, dir, layout, imgWidth, resetPinch]);
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
 	const curText = pageText(curPage);
+	// Spreads only exist in paged mode; slots carry page indexes so progress and the
+	// slider stay page-based regardless of the layout
+	const spreads = useMemo(() => {
+		if (mode !== 'paged' || !pages) return null;
+		return buildSpreads(
+			pages.length,
+			(i) => {
+				const d = pageDimensions(pages[i]);
+				return d !== null && d.width > d.height;
+			},
+			layout
+		);
+	}, [mode, pages, layout]);
+	const curSpread = spreads ? spreads[spreadIndexOf(spreads, idx)] : null;
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -409,6 +455,7 @@ function ReaderCore({
 
 	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
 	// Text pages turn column by column first; only when the columns run out does the page/chapter boundary apply
+	// Double-page layouts turn spread by spread, landing on each spread's leading page in reading order
 	function turn(forward: boolean) {
 		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
@@ -419,12 +466,24 @@ function ReaderCore({
 				scheduleProgress(idxRef.current, idxRef.current >= total - 1 && nextCol >= cols - 1);
 				return;
 			}
+			if (spreads) {
+				const si = spreadIndexOf(spreads, idxRef.current);
+				if (si >= spreads.length - 1) navCh(nextCh);
+				else gotoPage(spreadLeadPage(spreads[si + 1]));
+				return;
+			}
 			if (idxRef.current >= total - 1) navCh(nextCh);
 			else gotoPage(idxRef.current + 1);
 		} else {
 			if (textPage && colRef.current > 0) {
 				setCol(colRef.current - 1);
 				scheduleProgress(idxRef.current, false);
+				return;
+			}
+			if (spreads) {
+				const si = spreadIndexOf(spreads, idxRef.current);
+				if (si <= 0) navCh(prevCh);
+				else gotoPage(spreadLeadPage(spreads[si - 1]));
 				return;
 			}
 			if (idxRef.current <= 0) navCh(prevCh);
@@ -511,6 +570,17 @@ function ReaderCore({
 			// Private mode blocks persistence but the direction still switches
 		}
 		setDirOverride(mangaId !== null && d !== metaDir ? d : null);
+	}
+
+	function setLayout(l: SpreadLayout) {
+		if (l === layout) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(layoutOverrideKey(mangaId), l);
+			else localStorage.setItem('sumidoku.reader.layout', l);
+		} catch {
+			// Private mode blocks persistence but the layout still switches
+		}
+		setLayoutOverride(mangaId !== null ? l : null);
 	}
 
 	function toggleAsc() {
@@ -727,8 +797,6 @@ function ReaderCore({
 		);
 	}
 
-	const curDimensions = pageDimensions(curPage);
-
 	return (
 		<div className="reader">
 			{mode === 'paged' ? (
@@ -756,17 +824,51 @@ function ReaderCore({
 									col={col}
 									innerRef={textColsRef}
 								/>
-							) : isUnsupported(curPage) ? (
-								<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 							) : (
-								<img
-									className="reader__img"
-									src={pageUrl(chapterId, curPage.index, imgWidth)}
-									alt={t('reader.pageAlt', { page: idx + 1 })}
-									width={curDimensions?.width}
-									height={curDimensions?.height}
-									draggable={false}
-								/>
+								// Slots are in reading order; the flex row's direction puts the first
+								// slot on the leading side (right under rtl)
+								<div
+									className="reader__spread"
+									style={{ direction: dir }}
+									data-slots={(curSpread ?? [idx]).length}
+								>
+									{(curSpread ?? [idx]).map((slot, si) => {
+										if (slot === null || !pages?.[slot]) {
+											return <div key={`blank-${si}`} className="reader__blank" />;
+										}
+										const p = pages[slot];
+										const slotText = pageText(p);
+										const dims = pageDimensions(p);
+										if (slotText !== null) {
+											return (
+												<div
+													key={p.index}
+													className="reader-text reader__spread-text"
+													style={textStyle}
+													dangerouslySetInnerHTML={{ __html: md(slotText) }}
+												/>
+											);
+										}
+										if (isUnsupported(p)) {
+											return (
+												<div key={p.index} className="reader__unsupported">
+													{t('reader.unsupportedPage')}
+												</div>
+											);
+										}
+										return (
+											<img
+												key={p.index}
+												className="reader__img"
+												src={pageUrl(chapterId, p.index, imgWidth)}
+												alt={t('reader.pageAlt', { page: slot + 1 })}
+												width={dims?.width}
+												height={dims?.height}
+												draggable={false}
+											/>
+										);
+									})}
+								</div>
 							))}
 					</div>
 					<button
@@ -895,6 +997,8 @@ function ReaderCore({
 					mode={mode}
 					dir={dir}
 					onDirChange={setDir}
+					layout={layout}
+					onLayoutChange={setLayout}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

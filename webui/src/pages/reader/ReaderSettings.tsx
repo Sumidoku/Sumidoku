@@ -5,17 +5,29 @@ import { FONT_SIZE_LIMITS, LINE_HEIGHT_LIMITS } from './typography';
 import type { ReaderFont, ReaderTypography } from './typography';
 import { pageText } from './pageText';
 import type { Dir, Mode } from './readerPrefs';
+import type { SpreadLayout } from './spreads';
 
 interface ReaderSettingsProps {
 	mode: Mode;
 	dir: Dir;
 	onDirChange: (dir: Dir) => void;
+	layout: SpreadLayout;
+	onLayoutChange: (layout: SpreadLayout) => void;
 	currentPage: Page | null;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
 }
 
-export function ReaderSettings({ mode, dir, onDirChange, currentPage, typography, onTypographyChange }: ReaderSettingsProps) {
+export function ReaderSettings({
+	mode,
+	dir,
+	onDirChange,
+	layout,
+	onLayoutChange,
+	currentPage,
+	typography,
+	onTypographyChange
+}: ReaderSettingsProps) {
 	const { t } = useTranslation();
 	const showTypography = pageText(currentPage) !== null;
 	return (
@@ -31,6 +43,20 @@ export function ReaderSettings({ mode, dir, onDirChange, currentPage, typography
 					]}
 					value={dir}
 					onChange={onDirChange}
+				/>
+			</div>
+			<div className="reader__settings-title">
+				{mode !== 'paged' ? t('reader.layoutPagedOnly') : t('reader.layout')}
+			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<SegmentedControl
+					options={[
+						{ value: 'single', label: t('reader.layoutSingle') },
+						{ value: 'double', label: t('reader.layoutDouble') },
+						{ value: 'doubleNoCover', label: t('reader.layoutDoubleNoCover') }
+					]}
+					value={layout}
+					onChange={onLayoutChange}
 				/>
 			</div>
 			{showTypography && (

@@ -44,6 +44,34 @@
 	object-fit: contain;
 }
 
+/* ---------- Paged spreads (single/double page layout) ---------- */
+
+.reader__spread {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+}
+
+/* Two-slot spreads halve each slot's width so both pages contain-fit side by side */
+.reader__spread[data-slots='2'] .reader__img {
+	max-width: 50%;
+}
+
+.reader__blank {
+	width: 50%;
+	height: 100%;
+	flex: none;
+}
+
+/* A text page sharing a spread with an image scrolls inside its half */
+.reader__spread-text {
+	max-width: 50%;
+	max-height: 100%;
+	overflow-y: auto;
+}
+
 .reader__text-paged {
 	width: 100%;
 	max-width: 60rem;
