@@ -1846,8 +1846,14 @@ settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
 reader uses positive known page dimensions (populated during downloads) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,
-reserving space before lazy loads; text, unsupported and unknown-dimension
-pages get no forced ratio, and paged mode keeps its fixed viewport.
+reserving space before lazy loads; text and unsupported pages get no forced
+ratio, and paged mode keeps its fixed viewport. Pages the server has not
+measured (remote chapters never downloaded) start without a ratio and get one
+from the image's own `onLoad`: the spread `<img>`, the continuous-mode `<img>`
+and the prefetch probe report natural dimensions through `recordMeasured`,
+which only fills gaps (server values win, unchanged values keep the map
+identity), so double-page spreads re-pair when a loaded image turns out
+landscape without moving the current page.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction
@@ -1862,7 +1868,46 @@ RightToLeft/LeftToRight set the direction, Webtoon selects webtoon mode and
 Vertical continuous mode. Reader toggles write per-manga overrides in
 `sumidoku.reader.dir.<id>` / `sumidoku.reader.mode.<id>` (cleared when they match
 the metadata), and the global settings are the fallback for manga whose viewer
-carries no corresponding preference.
+carries no corresponding preference. The paged mode also offers a page layout
+(`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
+pages into spreads in reading order, giving the cover and closing page a blank
+mate and always showing landscape pages solo. Spreads carry page indexes, so
+progress reporting and the page slider stay page-based while turning moves by
+spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
+override-over-global resolution but no metadata counterpart. Keyboard shortcuts
+are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
+pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
+a screen in the continuous modes, Home/End jump to the ends, m toggles the
+toolbar, f toggles fullscreen, and keys aimed at form controls never reach the
+reader. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
+deltas accumulate past a threshold into one turn per gesture, locked until
+200ms of wheel quiet so trackpad inertia cannot flip multiple pages. The paged
+tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
+`sumidoku.reader.tapzones(.<id>)`, paged mode only): `lr`/`rl` keep the default
+28/44/28 geometry and only swap which side moves forward, `edge` shrinks the
+turn zones to 15%, `kindle` makes the menu a full-width top strip above a
+75/25 prev/next split, and `off` removes the zone buttons so every tap falls
+back to toggling the toolbar. The hit-test helper and the CSS geometry are the
+single source of truth and must change together. The reader canvas background
+(`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
+`dark` is the classless default, `gray` matches the app chrome, and `light`
+also lifts the dim page-counter and unsupported-page text that assumes a dark
+canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
+toolbar and settings card move into the fullscreen subtree; the toggle hides
+when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
+reader's own Esc chain.
+Paged page scale (`sumidoku.reader.scale` + `.scale.<id>`, after Suwayomi's
+ReaderPageScaleMode) is a `data-scale` variant on the paged container: `screen`
+contain-fits (the default), `width` fills the width, `widthShrink` only shrinks
+to the width without upscaling, `height` fills the height, and `original`
+shows natural pixels. The scrollable modes (width/widthShrink/original) make
+the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
+their fixed-height columns) and trade the fixed viewport for native scrolling;
+the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
+changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
+`.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
+screen scale via a full-size object-fit: contain box. The c hotkey cycles the
+scale modes (`reader/readerPrefs.ts:SCALE_CYCLE`).
 
 ## Known gaps
 

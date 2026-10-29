@@ -5,6 +5,25 @@
 	background: #000;
 }
 
+/* Canvas background variants (the dark default needs no class). The light variant
+   also lifts the dim reader chrome text that assumes a dark canvas */
+.reader--bg-gray {
+	background: #161618;
+}
+
+.reader--bg-light {
+	background: #fff;
+}
+
+.reader--bg-light .reader__page-num,
+.reader--bg-light .reader__unsupported {
+	color: #5b616e;
+}
+
+.reader--bg-light .reader__blank {
+	background: #fff;
+}
+
 .reader--msg {
 	display: flex;
 	align-items: center;
@@ -44,6 +63,113 @@
 	object-fit: contain;
 }
 
+/* ---------- Paged spreads (single/double page layout) ---------- */
+
+.reader__spread {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+}
+
+/* Two-slot spreads halve each slot's width so both pages contain-fit side by side */
+.reader__spread[data-slots='2'] .reader__img {
+	max-width: 50%;
+}
+
+.reader__blank {
+	width: 50%;
+	height: 100%;
+	flex: none;
+}
+
+/* A text page sharing a spread with an image scrolls inside its half */
+.reader__spread-text {
+	max-width: 50%;
+	max-height: 100%;
+	overflow-y: auto;
+}
+
+/* ---------- Page scale modes (paged; data-scale on .reader__paged) ---------- */
+
+/* Scrollable scale modes trade the fixed viewport for native scrolling */
+.reader__paged[data-scale='width'],
+.reader__paged[data-scale='widthShrink'],
+.reader__paged[data-scale='original'] {
+	overflow-y: auto;
+}
+
+.reader__paged[data-scale='original'] {
+	overflow-x: auto;
+}
+
+/* The zoom wrapper and spread become content-sized so tall pages grow the
+   scroll height; auto margins keep short pages centered without the flex
+   centering top-clip. Text pages keep the fixed-height column layout (:has) */
+.reader__paged[data-scale='width'] .reader__zoom:has(.reader__spread),
+.reader__paged[data-scale='widthShrink'] .reader__zoom:has(.reader__spread),
+.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
+	height: auto;
+	min-height: 100%;
+	margin-top: auto;
+	margin-bottom: auto;
+}
+
+.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
+	width: auto;
+	min-width: 100%;
+	margin-left: auto;
+	margin-right: auto;
+}
+
+.reader__paged[data-scale='width'] .reader__zoom .reader__spread,
+.reader__paged[data-scale='widthShrink'] .reader__zoom .reader__spread,
+.reader__paged[data-scale='original'] .reader__zoom .reader__spread {
+	height: auto;
+	min-height: 100%;
+}
+
+/* width: fill the container width (halved per slot in two-page spreads) */
+.reader__paged[data-scale='width'] .reader__img {
+	width: 100%;
+	max-width: none;
+	max-height: none;
+}
+
+.reader__paged[data-scale='width'] .reader__spread[data-slots='2'] .reader__img {
+	width: 50%;
+}
+
+/* widthShrink: fit the width but never upscale past natural size */
+.reader__paged[data-scale='widthShrink'] .reader__img {
+	max-height: none;
+}
+
+/* height: fill the container height */
+.reader__paged[data-scale='height'] .reader__img {
+	height: 100%;
+	max-width: none;
+	max-height: none;
+}
+
+/* original: natural pixels, both axes free */
+.reader__paged[data-scale='original'] .reader__img {
+	max-width: none;
+	max-height: none;
+}
+
+/* stretch upscales pages smaller than the viewport; screen scale only, so the
+   object-fit: contain on .reader__img keeps the aspect while the box fills */
+.reader__paged[data-scale='screen'][data-stretch='true'] .reader__img {
+	width: 100%;
+	height: 100%;
+}
+
+.reader__paged[data-scale='screen'][data-stretch='true'] .reader__spread[data-slots='2'] .reader__img {
+	width: 50%;
+}
+
 .reader__text-paged {
 	width: 100%;
 	max-width: 60rem;
@@ -78,6 +204,39 @@
 .reader__zone--mid {
 	left: 28%;
 	width: 44%;
+}
+
+/* Tap-zone layouts (see zoneWidths/zoneAt in reader/readerPrefs.ts — the geometry
+   must match). `rl` only swaps the action mapping, so it reuses the default sizes */
+.reader__paged[data-tz='edge'] .reader__zone--left {
+	width: 15%;
+}
+
+.reader__paged[data-tz='edge'] .reader__zone--right {
+	width: 15%;
+}
+
+.reader__paged[data-tz='edge'] .reader__zone--mid {
+	left: 15%;
+	width: 70%;
+}
+
+/* kindle: the menu is a full-width top strip, prev gets the large lower-left area */
+.reader__paged[data-tz='kindle'] .reader__zone--mid {
+	left: 0;
+	width: 100%;
+	height: 25%;
+	bottom: auto;
+}
+
+.reader__paged[data-tz='kindle'] .reader__zone--left {
+	top: 25%;
+	width: 75%;
+}
+
+.reader__paged[data-tz='kindle'] .reader__zone--right {
+	top: 25%;
+	width: 25%;
 }
 
 /* ---------- Continuous / webtoon mode ---------- */
@@ -255,6 +414,17 @@
 .reader__settings-dir--off {
 	opacity: 0.45;
 	pointer-events: none;
+}
+
+.reader__settings .select {
+	width: 100%;
+}
+
+.reader__stretch {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
 }
 
 .reader__typography {

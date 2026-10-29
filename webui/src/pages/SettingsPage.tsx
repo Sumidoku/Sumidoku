@@ -108,6 +108,11 @@ function Section({
 
 const READER_MODE_KEY = 'sumidoku.reader.mode';
 const READER_DIR_KEY = 'sumidoku.reader.dir';
+const READER_LAYOUT_KEY = 'sumidoku.reader.layout';
+const READER_TAPZONES_KEY = 'sumidoku.reader.tapzones';
+const READER_BG_KEY = 'sumidoku.reader.bg';
+const READER_SCALE_KEY = 'sumidoku.reader.scale';
+const READER_STRETCH_KEY = 'sumidoku.reader.stretch';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -120,22 +125,6 @@ function stored(key: string, fallback: string): string {
 function AppearanceSection() {
 	const { t, i18n } = useTranslation();
 	const [theme, setTheme] = useTheme();
-	// The old settings page stored "scroll" as vertical, while the reader only knows continuous; normalize on read
-	const [mode, setMode] = useState(() => {
-		const m = stored(READER_MODE_KEY, 'paged');
-		return m === 'vertical' ? 'continuous' : m;
-	});
-	const [dir, setDir] = useState(() => stored(READER_DIR_KEY, 'ltr'));
-
-	function persist(key: string, value: string, apply: (v: string) => void) {
-		apply(value);
-		try {
-			localStorage.setItem(key, value);
-		} catch {
-			// Private mode blocks the write but the setting still switches, just without persisting
-		}
-	}
-
 	return (
 		<Section title={t('settings.appearanceTitle')} desc={t('settings.appearanceDesc')}>
 			<div className="settings-row">
@@ -162,6 +151,51 @@ function AppearanceSection() {
 					onChange={setTheme}
 				/>
 			</div>
+		</Section>
+	);
+}
+
+function ReaderSection() {
+	const { t } = useTranslation();
+	// The old settings page stored "scroll" as vertical, while the reader only knows continuous; normalize on read
+	const [mode, setMode] = useState(() => {
+		const m = stored(READER_MODE_KEY, 'paged');
+		return m === 'vertical' ? 'continuous' : m;
+	});
+	const [dir, setDir] = useState(() => stored(READER_DIR_KEY, 'ltr'));
+	const [layout, setLayout] = useState(() => {
+		// Same whitelist as the reader's readLayout: unknown values fall back to single
+		const l = stored(READER_LAYOUT_KEY, 'single');
+		return l === 'double' || l === 'doubleNoCover' ? l : 'single';
+	});
+	const [tapZones, setTapZones] = useState(() => {
+		// Same whitelist as the reader's parseTapZones: unknown values fall back to lr
+		const z = stored(READER_TAPZONES_KEY, 'lr');
+		return z === 'rl' || z === 'edge' || z === 'kindle' || z === 'off' ? z : 'lr';
+	});
+	const [bg, setBg] = useState(() => {
+		// Same whitelist as the reader's parseBackground: unknown values fall back to dark
+		const b = stored(READER_BG_KEY, 'dark');
+		return b === 'gray' || b === 'light' ? b : 'dark';
+	});
+	const [scale, setScale] = useState(() => {
+		// Same whitelist as the reader's parseScale: unknown values fall back to screen
+		const s = stored(READER_SCALE_KEY, 'screen');
+		return s === 'width' || s === 'widthShrink' || s === 'height' || s === 'original' ? s : 'screen';
+	});
+	const [stretch, setStretch] = useState(() => stored(READER_STRETCH_KEY, '0') === '1');
+
+	function persist(key: string, value: string, apply: (v: string) => void) {
+		apply(value);
+		try {
+			localStorage.setItem(key, value);
+		} catch {
+			// Private mode blocks the write but the setting still switches, just without persisting
+		}
+	}
+
+	return (
+		<Section title={t('settings.readerSectionTitle')} desc={t('settings.readerSectionDesc')}>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerMode')}</span>
 				<Select
@@ -178,6 +212,52 @@ function AppearanceSection() {
 				<Select value={dir} onChange={(e) => persist(READER_DIR_KEY, e.currentTarget.value, setDir)}>
 					<option value="ltr">{t('settings.dirLtr')}</option>
 					<option value="rtl">{t('settings.dirRtl')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerLayout')}</span>
+				<Select value={layout} onChange={(e) => persist(READER_LAYOUT_KEY, e.currentTarget.value, setLayout)}>
+					<option value="single">{t('settings.layoutSingle')}</option>
+					<option value="double">{t('settings.layoutDouble')}</option>
+					<option value="doubleNoCover">{t('settings.layoutDoubleNoCover')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerTapZones')}</span>
+				<Select value={tapZones} onChange={(e) => persist(READER_TAPZONES_KEY, e.currentTarget.value, setTapZones)}>
+					<option value="lr">{t('settings.tzLr')}</option>
+					<option value="rl">{t('settings.tzRl')}</option>
+					<option value="edge">{t('settings.tzEdge')}</option>
+					<option value="kindle">{t('settings.tzKindle')}</option>
+					<option value="off">{t('settings.tzOff')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerBackground')}</span>
+				<Select value={bg} onChange={(e) => persist(READER_BG_KEY, e.currentTarget.value, setBg)}>
+					<option value="dark">{t('settings.bgDark')}</option>
+					<option value="gray">{t('settings.bgGray')}</option>
+					<option value="light">{t('settings.bgLight')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerPageScale')}</span>
+				<Select value={scale} onChange={(e) => persist(READER_SCALE_KEY, e.currentTarget.value, setScale)}>
+					<option value="screen">{t('settings.scaleScreen')}</option>
+					<option value="width">{t('settings.scaleWidth')}</option>
+					<option value="widthShrink">{t('settings.scaleWidthShrink')}</option>
+					<option value="height">{t('settings.scaleHeight')}</option>
+					<option value="original">{t('settings.scaleOriginal')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerStretch')}</span>
+				<Select
+					value={stretch ? '1' : '0'}
+					onChange={(e) => persist(READER_STRETCH_KEY, e.currentTarget.value, (v) => setStretch(v === '1'))}
+				>
+					<option value="0">{t('settings.stretchOff')}</option>
+					<option value="1">{t('settings.stretchOn')}</option>
 				</Select>
 			</div>
 		</Section>
@@ -2158,6 +2238,7 @@ export default function SettingsPage() {
 							<IncognitoSection />
 						</>
 					),
+					reader: <ReaderSection />,
 					library: (
 						<>
 							<CategoriesSection />
