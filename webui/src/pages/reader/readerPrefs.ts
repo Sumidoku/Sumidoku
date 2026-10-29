@@ -127,3 +127,27 @@ export function parseTapZones(v: string | null): TapZoneLayout | null {
 export function parseBackground(v: string | null): ReaderBackground | null {
 	return v === 'dark' || v === 'gray' || v === 'light' ? v : null;
 }
+
+/**
+ * Page scale modes of the paged reader, after Suwayomi's ReaderPageScaleMode.
+ * `screen` contain-fits the viewport (the default), `width` fills the width and
+ * lets tall pages scroll, `widthShrink` only shrinks to the width without
+ * upscaling, `height` fills the height, and `original` shows natural pixels
+ * with free scrolling.
+ */
+export type PageScale = 'screen' | 'width' | 'widthShrink' | 'height' | 'original';
+
+/** Scale modes in cycle order, for the c hotkey. */
+export const SCALE_CYCLE: readonly PageScale[] = ['screen', 'width', 'widthShrink', 'height', 'original'];
+
+export function nextScale(scale: PageScale): PageScale {
+	const i = SCALE_CYCLE.indexOf(scale);
+	return SCALE_CYCLE[(i + 1) % SCALE_CYCLE.length];
+}
+
+/** Whitelisted parse of a stored scale value; unknown values read as absent. */
+export function parseScale(v: string | null): PageScale | null {
+	return v === 'screen' || v === 'width' || v === 'widthShrink' || v === 'height' || v === 'original'
+		? v
+		: null;
+}

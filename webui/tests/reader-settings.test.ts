@@ -36,6 +36,10 @@ async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continu
 					onTapZonesChange: () => {},
 					bg: 'dark',
 					onBgChange: () => {},
+					scale: 'screen',
+					onScaleChange: () => {},
+					stretch: false,
+					onStretchChange: () => {},
 					currentPage,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {}
@@ -90,4 +94,19 @@ test('continuous mode marks direction, layout and tap zones as paged-only', asyn
 	assert.match(markup, /Tap zones \(paged mode only\)/);
 	// The background applies to every mode, so its title stays unmarked
 	assert.doesNotMatch(markup, /Background \(paged mode only\)/);
+});
+
+test('page-scale select and stretch toggle render in paged mode', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /aria-label="Page scale"/);
+	assert.match(markup, />Fit width \(shrink only\)</);
+	assert.match(markup, />Original size</);
+	assert.match(markup, /<input type="checkbox"/);
+	assert.match(markup, /Stretch small pages/);
+});
+
+test('continuous mode marks page scale and stretch as paged-only', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
+	assert.match(markup, /Page scale \(paged mode only\)/);
+	assert.match(markup, /Stretch small pages \(paged mode only\)/);
 });

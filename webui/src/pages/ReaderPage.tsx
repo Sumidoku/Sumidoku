@@ -34,7 +34,9 @@ import { ReaderSettings } from './reader/ReaderSettings';
 import {
 	dirFromViewer,
 	modeFromViewer,
+	nextScale,
 	parseBackground,
+	parseScale,
 	parseTapZones,
 	resolveDir,
 	resolveMode,
@@ -42,7 +44,7 @@ import {
 	zoneAt,
 	zoneMovesForward
 } from './reader/readerPrefs';
-import type { Dir, Mode, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
+import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
 import { buildSpreads, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { readerKeyAction } from './reader/hotkeys';
@@ -191,6 +193,57 @@ function readBackgroundOverride(mangaId: number | null): ReaderBackground | null
 	return null;
 }
 
+// Page scale and small-page stretching share the same persistence shape: a
+// global default plus a per-manga override, no metadata layer
+function readScale(): PageScale {
+	try {
+		const v = parseScale(localStorage.getItem('sumidoku.reader.scale'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'screen';
+}
+
+function scaleOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.scale.${mangaId}`;
+}
+
+function readScaleOverride(mangaId: number | null): PageScale | null {
+	if (mangaId === null) return null;
+	try {
+		return parseScale(localStorage.getItem(scaleOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// The stretch flag stores only "on"; anything else (including absence) is off
+function readStretch(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.stretch') === '1';
+	} catch {
+		return false;
+	}
+}
+
+function stretchOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.stretch.${mangaId}`;
+}
+
+function readStretchOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(stretchOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -329,6 +382,12 @@ function ReaderCore({
 	const [globalBg] = useState<ReaderBackground>(readBackground);
 	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
 	const bg = bgOverride ?? globalBg;
+	const [globalScale] = useState<PageScale>(readScale);
+	const [scaleOverride, setScaleOverride] = useState<PageScale | null>(() => readScaleOverride(mangaId));
+	const scale = scaleOverride ?? globalScale;
+	const [globalStretch] = useState<boolean>(readStretch);
+	const [stretchOverride, setStretchOverride] = useState<boolean | null>(() => readStretchOverride(mangaId));
+	const stretch = stretchOverride ?? globalStretch;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -432,7 +491,7 @@ function ReaderCore({
 	// re-pair of the visible spread without resetting zoom over distant prefetches
 	useLayoutEffect(() => {
 		resetPinch();
-	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, resetPinch]);
+	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, scale, stretch, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -673,6 +732,9 @@ function ReaderCore({
 			case 'toggleFullscreen':
 				toggleFullscreen();
 				break;
+			case 'cycleScale':
+				setScale(nextScale(scale));
+				break;
 		}
 	};
 	useEffect(() => {
@@ -696,6 +758,8 @@ function ReaderCore({
 	const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
 	wheelRef.current = (e) => {
 		if (mode !== 'paged' || chaptersOpen) return;
+		// Scrollable scale modes (width/widthShrink/original) keep the wheel for native scrolling
+		if (scale === 'width' || scale === 'widthShrink' || scale === 'original') return;
 		// Browser zoom chords and an active pinch zoom keep the wheel to themselves
 		if (e.ctrlKey || e.metaKey || zoomed) return;
 		// Horizontal gestures (trackpad pans) are not page turns
@@ -787,6 +851,29 @@ function ReaderCore({
 			// Private mode blocks persistence but the background still switches
 		}
 		setBgOverride(mangaId !== null ? b : null);
+	}
+
+	function setScale(s: PageScale) {
+		if (s === scale) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(scaleOverrideKey(mangaId), s);
+			else localStorage.setItem('sumidoku.reader.scale', s);
+		} catch {
+			// Private mode blocks persistence but the scale still switches
+		}
+		setScaleOverride(mangaId !== null ? s : null);
+	}
+
+	function setStretch(v: boolean) {
+		if (v === stretch) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(stretchOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.setItem('sumidoku.reader.stretch', '1');
+			else localStorage.removeItem('sumidoku.reader.stretch');
+		} catch {
+			// Private mode blocks persistence but the stretch still switches
+		}
+		setStretchOverride(mangaId !== null ? v : null);
 	}
 
 	function toggleAsc() {
@@ -1017,6 +1104,8 @@ function ReaderCore({
 				<div
 					className="reader__paged"
 					data-tz={tapZones}
+					data-scale={scale}
+					data-stretch={stretch}
 					ref={pagedRef}
 					style={{ touchAction }}
 					onClick={onPagedContainerClick}
@@ -1238,6 +1327,10 @@ function ReaderCore({
 					onTapZonesChange={setTapZones}
 					bg={bg}
 					onBgChange={setBackground}
+					scale={scale}
+					onScaleChange={setScale}
+					stretch={stretch}
+					onStretchChange={setStretch}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

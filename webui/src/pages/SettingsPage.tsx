@@ -111,6 +111,8 @@ const READER_DIR_KEY = 'sumidoku.reader.dir';
 const READER_LAYOUT_KEY = 'sumidoku.reader.layout';
 const READER_TAPZONES_KEY = 'sumidoku.reader.tapzones';
 const READER_BG_KEY = 'sumidoku.reader.bg';
+const READER_SCALE_KEY = 'sumidoku.reader.scale';
+const READER_STRETCH_KEY = 'sumidoku.reader.stretch';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -144,6 +146,12 @@ function AppearanceSection() {
 		const b = stored(READER_BG_KEY, 'dark');
 		return b === 'gray' || b === 'light' ? b : 'dark';
 	});
+	const [scale, setScale] = useState(() => {
+		// Same whitelist as the reader's parseScale: unknown values fall back to screen
+		const s = stored(READER_SCALE_KEY, 'screen');
+		return s === 'width' || s === 'widthShrink' || s === 'height' || s === 'original' ? s : 'screen';
+	});
+	const [stretch, setStretch] = useState(() => stored(READER_STRETCH_KEY, '0') === '1');
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
 		apply(value);
@@ -222,6 +230,26 @@ function AppearanceSection() {
 					<option value="dark">{t('settings.bgDark')}</option>
 					<option value="gray">{t('settings.bgGray')}</option>
 					<option value="light">{t('settings.bgLight')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerPageScale')}</span>
+				<Select value={scale} onChange={(e) => persist(READER_SCALE_KEY, e.currentTarget.value, setScale)}>
+					<option value="screen">{t('settings.scaleScreen')}</option>
+					<option value="width">{t('settings.scaleWidth')}</option>
+					<option value="widthShrink">{t('settings.scaleWidthShrink')}</option>
+					<option value="height">{t('settings.scaleHeight')}</option>
+					<option value="original">{t('settings.scaleOriginal')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerStretch')}</span>
+				<Select
+					value={stretch ? '1' : '0'}
+					onChange={(e) => persist(READER_STRETCH_KEY, e.currentTarget.value, (v) => setStretch(v === '1'))}
+				>
+					<option value="0">{t('settings.stretchOff')}</option>
+					<option value="1">{t('settings.stretchOn')}</option>
 				</Select>
 			</div>
 		</Section>
