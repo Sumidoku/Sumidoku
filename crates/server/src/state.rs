@@ -9,6 +9,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore, mpsc};
 
+type ChapterVariantKey = (i64, i64, u32);
+type ChapterVariantLocks =
+	HashMap<ChapterVariantKey, std::sync::Weak<tokio::sync::Mutex<()>>>;
+
 pub struct SourceEntry {
 	pub handle: Arc<SourceHandle>,
 	pub key: String,
@@ -71,7 +75,7 @@ pub struct AppState {
     chapter_cache_builds: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 	/// Only one LRU collector may make decisions against the persistent byte total at a time.
 	chapter_cache_collect: tokio::sync::Mutex<()>,
-	chapter_variant_locks: tokio::sync::Mutex<HashMap<(i64, i64, u32), std::sync::Weak<tokio::sync::Mutex<()>>>>,
+	chapter_variant_locks: tokio::sync::Mutex<ChapterVariantLocks>,
 }
 
 pub struct DefaultsWrite {
