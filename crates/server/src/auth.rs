@@ -11,7 +11,10 @@ use rand_core::{OsRng, RngCore};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 /// Session tokens roll for 30 days: renewed on use once less than half remains
@@ -93,6 +96,78 @@ pub struct AuthState {
 	admin_username: String,
 	/// In-memory copy of user 1's argon2 PHC string; None = auth disabled (no password configured)
 	admin_password_hash: RwLock<Option<String>>,
+	login_throttle: LoginThrottle,
+}
+
+/// Failed logins a client may make before each further attempt has to wait
+const LOGIN_FREE_FAILURES: u32 = 5;
+/// The wait doubles per failure past the free ones and stops here, so a guesser is held to about one try a minute
+/// while an admin who mistyped is never locked out for long
+const LOGIN_BACKOFF_MAX: Duration = Duration::from_secs(60);
+/// A client's failures are forgotten this long after its last attempt
+const LOGIN_FAILURE_RESET: Duration = Duration::from_secs(15 * 60);
+/// Bounds the table an address-rotating client could otherwise grow
+const LOGIN_CLIENTS_MAX: usize = 4096;
+
+/// Per-client login backoff. The client is the TCP peer address: forwarded headers are not trusted, since without a
+/// configured proxy anyone can set them, so behind a reverse proxy every client shares the proxy's entry
+#[derive(Default)]
+struct LoginThrottle {
+	clients: Mutex<HashMap<Option<IpAddr>, LoginFailures>>,
+}
+
+struct LoginFailures {
+	count: u32,
+	last: Instant,
+}
+
+impl LoginThrottle {
+	fn backoff(count: u32) -> Option<Duration> {
+		let over = count.checked_sub(LOGIN_FREE_FAILURES)?;
+		Some(Duration::from_secs(1u64 << over.min(16)).min(LOGIN_BACKOFF_MAX))
+	}
+
+	/// Counts the attempt as a failure up front, in the same step as the check, so concurrent attempts cannot all
+	/// pass before the first one is recorded; `Err` carries the seconds left to wait
+	fn begin(&self, client: Option<IpAddr>, now: Instant) -> Result<(), u64> {
+		let mut clients = self.clients.lock().unwrap_or_else(PoisonError::into_inner);
+		if let Some(failures) = clients.get(&client) {
+			let elapsed = now.saturating_duration_since(failures.last);
+			if elapsed < LOGIN_FAILURE_RESET
+				&& let Some(backoff) = Self::backoff(failures.count)
+				&& elapsed < backoff
+			{
+				return Err((backoff - elapsed).as_secs_f64().ceil() as u64);
+			}
+		}
+		if !clients.contains_key(&client) && clients.len() >= LOGIN_CLIENTS_MAX {
+			clients.retain(|_, failures| now.saturating_duration_since(failures.last) < LOGIN_FAILURE_RESET);
+			if clients.len() >= LOGIN_CLIENTS_MAX
+				&& let Some(oldest) = clients.iter().min_by_key(|(_, failures)| failures.last).map(|(key, _)| *key)
+			{
+				clients.remove(&oldest);
+			}
+		}
+		let failures = clients.entry(client).or_insert(LoginFailures { count: 0, last: now });
+		if now.saturating_duration_since(failures.last) >= LOGIN_FAILURE_RESET {
+			failures.count = 0;
+		}
+		failures.count += 1;
+		failures.last = now;
+		Ok(())
+	}
+
+	fn succeeded(&self, client: Option<IpAddr>) {
+		self.clients.lock().unwrap_or_else(PoisonError::into_inner).remove(&client);
+	}
+}
+
+/// An IPv6 client usually holds a whole /64, so the backoff keys on that prefix rather than the single address
+fn login_client(peer: Option<SocketAddr>) -> Option<IpAddr> {
+	Some(match peer?.ip().to_canonical() {
+		IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !u128::from(u64::MAX)).into()),
+		v4 => v4,
+	})
 }
 
 impl AuthState {
@@ -100,6 +175,7 @@ impl AuthState {
 		Self {
 			admin_username: username.to_string(),
 			admin_password_hash: RwLock::new(None),
+			login_throttle: LoginThrottle::default(),
 		}
 	}
 
@@ -311,13 +387,26 @@ pub async fn status(State(state): State<Arc<AppState>>, req: Request) -> ApiResu
 	Ok(Json(body))
 }
 
-pub async fn login(State(state): State<Arc<AppState>>, uri: Uri, headers: HeaderMap, Json(body): Json<LoginRequest>) -> ApiResult<Response> {
+pub async fn login(
+	State(state): State<Arc<AppState>>,
+	peer: Option<Extension<axum::extract::ConnectInfo<SocketAddr>>>,
+	uri: Uri,
+	headers: HeaderMap,
+	Json(body): Json<LoginRequest>,
+) -> ApiResult<Response> {
 	if !state.auth.enabled().await {
 		return Err(ApiError::bad_request("authentication is not enabled"));
+	}
+	let client = login_client(peer.map(|Extension(axum::extract::ConnectInfo(addr))| addr));
+	if let Err(wait) = state.auth.login_throttle.begin(client, Instant::now()) {
+		let mut response = ApiError::too_many_requests("too many failed logins; try again later").into_response();
+		response.headers_mut().insert(axum::http::header::RETRY_AFTER, HeaderValue::from(wait));
+		return Ok(response);
 	}
 	let Some(user) = verify_user_credentials(&state.pool, &body.username, &body.password).await? else {
 		return Err(ApiError::unauthorized());
 	};
+	state.auth.login_throttle.succeeded(client);
 	let mut raw = [0u8; 32];
 	OsRng.fill_bytes(&mut raw);
 	let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
@@ -430,6 +519,57 @@ mod tests {
 		let wrong = ARGON_VERIFICATIONS.load(std::sync::atomic::Ordering::SeqCst) - before - unknown;
 		assert_eq!((unknown, wrong), (1, 1), "unknown user and wrong password must both run argon2");
 		assert!(verify_user_credentials(&pool, "admin", "right").await.expect("verify").is_some());
+	}
+
+	#[test]
+	fn login_backoff_starts_after_the_free_failures_and_is_capped() {
+		let throttle = LoginThrottle::default();
+		let client = Some(IpAddr::from([192, 0, 2, 1]));
+		let start = Instant::now();
+		for _ in 0..LOGIN_FREE_FAILURES {
+			assert_eq!(throttle.begin(client, start), Ok(()));
+		}
+		assert_eq!(throttle.begin(client, start), Err(1), "the attempt past the free failures waits a second");
+		assert_eq!(throttle.begin(Some(IpAddr::from([192, 0, 2, 2])), start), Ok(()), "other clients are not held");
+		let mut now = start;
+		for _ in 0..12 {
+			now += LOGIN_BACKOFF_MAX;
+			assert_eq!(throttle.begin(client, now), Ok(()));
+		}
+		assert_eq!(throttle.begin(client, now), Err(LOGIN_BACKOFF_MAX.as_secs()));
+		assert_eq!(throttle.begin(client, now + LOGIN_FAILURE_RESET), Ok(()), "old failures are forgotten");
+		assert_eq!(throttle.begin(client, now + LOGIN_FAILURE_RESET), Ok(()));
+	}
+
+	#[test]
+	fn a_successful_login_clears_the_backoff() {
+		let throttle = LoginThrottle::default();
+		let client = Some(IpAddr::from([192, 0, 2, 1]));
+		let now = Instant::now();
+		for _ in 0..LOGIN_FREE_FAILURES {
+			throttle.begin(client, now).expect("free attempt");
+		}
+		throttle.succeeded(client);
+		assert_eq!(throttle.begin(client, now), Ok(()));
+	}
+
+	#[test]
+	fn the_client_table_stays_bounded() {
+		let throttle = LoginThrottle::default();
+		let now = Instant::now();
+		for i in 0..LOGIN_CLIENTS_MAX as u32 + 10 {
+			throttle.begin(Some(IpAddr::from(i.to_be_bytes())), now).expect("first attempt");
+		}
+		assert_eq!(throttle.clients.lock().expect("lock").len(), LOGIN_CLIENTS_MAX);
+	}
+
+	#[test]
+	fn ipv6_clients_share_their_64_prefix() {
+		let a: SocketAddr = "[2001:db8::1]:1000".parse().expect("addr");
+		let b: SocketAddr = "[2001:db8::ffff:2]:2000".parse().expect("addr");
+		let mapped: SocketAddr = "[::ffff:192.0.2.1]:3000".parse().expect("addr");
+		assert_eq!(login_client(Some(a)), login_client(Some(b)));
+		assert_eq!(login_client(Some(mapped)), Some(IpAddr::from([192, 0, 2, 1])));
 	}
 
 	#[tokio::test]

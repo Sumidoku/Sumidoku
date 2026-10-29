@@ -64,6 +64,10 @@ impl ApiError {
 		Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
 	}
 
+	pub fn too_many_requests(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
+	}
+
 	pub fn payload_too_large(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
 	}

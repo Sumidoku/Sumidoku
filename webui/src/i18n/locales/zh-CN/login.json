@@ -5,6 +5,7 @@
     "password": "密码",
     "submit": "登录",
     "error_invalid": "用户名或密码错误",
-    "error_generic": "登录失败，请稍后重试"
+    "error_generic": "登录失败，请稍后重试",
+    "error_throttled": "登录失败次数过多，请稍等片刻再试"
   }
 }

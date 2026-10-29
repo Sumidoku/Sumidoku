@@ -61,7 +61,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 	// binding the sender (not `_`) keeps the channel open when no tray took the
 	// clone — a dropped sender reads as a shutdown request
 	let _keep_open = shutdown_tx;
-	let serve_result = axum::serve(listener, app)
+	let serve_result = axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
 		.with_graceful_shutdown(shutdown_signal(shutdown_rx))
 		.await;
 	// the tray stands for a serving server: it goes as soon as serving ends, on

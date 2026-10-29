@@ -573,3 +573,50 @@ async fn migration_from_site_password_era() {
 		.expect("credential table gone");
 	assert_eq!(credential_cols, 0);
 }
+
+async fn login_from(app: &Router, peer: Option<&str>, password: &str) -> (StatusCode, axum::http::HeaderMap, Value) {
+	use tower::ServiceExt;
+	let mut request = axum::http::Request::builder()
+		.method("POST")
+		.uri("/api/v1/auth/login")
+		.header("content-type", "application/json")
+		.body(axum::body::Body::from(
+			serde_json::to_vec(&json!({"username": "admin", "password": password})).expect("body"),
+		))
+		.expect("request");
+	if let Some(peer) = peer {
+		let addr: std::net::SocketAddr = peer.parse().expect("peer addr");
+		request.extensions_mut().insert(axum::extract::ConnectInfo(addr));
+	}
+	let response = app.clone().oneshot(request).await.expect("response");
+	let (status, headers) = (response.status(), response.headers().clone());
+	let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body bytes");
+	(status, headers, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+}
+
+/// Password guessing is held back per client: after five failures even the right password waits, other
+/// clients are unaffected, and a success clears the client's record
+#[tokio::test]
+async fn repeated_failed_logins_are_throttled_per_client() {
+	let (app, _tmp) = password_app().await;
+	let guesser = Some("198.51.100.7:40000");
+	for _ in 0..5 {
+		let (status, _, _) = login_from(&app, guesser, "wrong").await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED);
+	}
+	let (status, headers, body) = login_from(&app, guesser, PASSWORD).await;
+	assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+	assert_eq!(body["error"]["code"], "too_many_requests");
+	assert_eq!(headers.get("retry-after").and_then(|v| v.to_str().ok()), Some("1"));
+
+	let (status, _, body) = login_from(&app, Some("203.0.113.9:40000"), PASSWORD).await;
+	assert_eq!(status, StatusCode::OK, "another client logs in normally: {body}");
+
+	tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+	let (status, _, body) = login_from(&app, guesser, PASSWORD).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	for _ in 0..5 {
+		let (status, _, _) = login_from(&app, guesser, "wrong").await;
+		assert_eq!(status, StatusCode::UNAUTHORIZED, "the success cleared the earlier failures");
+	}
+}
