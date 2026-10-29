@@ -1846,8 +1846,14 @@ settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
 reader uses positive known page dimensions (populated during downloads) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,
-reserving space before lazy loads; text, unsupported and unknown-dimension
-pages get no forced ratio, and paged mode keeps its fixed viewport.
+reserving space before lazy loads; text and unsupported pages get no forced
+ratio, and paged mode keeps its fixed viewport. Pages the server has not
+measured (remote chapters never downloaded) start without a ratio and get one
+from the image's own `onLoad`: the spread `<img>`, the continuous-mode `<img>`
+and the prefetch probe report natural dimensions through `recordMeasured`,
+which only fills gaps (server values win, unchanged values keep the map
+identity), so double-page spreads re-pair when a loaded image turns out
+landscape without moving the current page.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction
