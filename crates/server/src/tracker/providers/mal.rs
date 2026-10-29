@@ -136,6 +136,7 @@ impl MalTracker {
 			description: detail("synopsis").and_then(Value::as_str).map(str::to_string),
 			tracked: detail("my_list_status").is_some_and(|status| !status.is_null()),
 			media_type: Self::media_type(detail("media_type").and_then(Value::as_str)),
+			series: false,
 			url: Some(format!("https://myanimelist.net/manga/{id}")),
 		}
 	}

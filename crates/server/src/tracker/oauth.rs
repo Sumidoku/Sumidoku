@@ -90,7 +90,7 @@ impl OAuthApp {
 				client_secret: env_value(option_env!("SUMIDOKU_OAUTH_BANGUMI_CLIENT_SECRET")),
 				authorize_url: "https://bgm.tv/oauth/authorize".into(),
 				token_url: "https://bgm.tv/oauth/access_token".into(),
-				userinfo_url: "https://api.bgm.tv/v0/me".into(),
+				userinfo_url: "https://next.bgm.tv/p1/me".into(),
 				pkce: PkceMethod::None,
 				scope: None,
 				refresh_with_redirect: true,

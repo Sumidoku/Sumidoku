@@ -1181,6 +1181,7 @@ export type TrackSearchItem = {
 	description?: string | null;
 	tracked: boolean;
 	mediaType?: "manga" | "novel";
+	series?: boolean;
 	url?: string | null;
 };
 
