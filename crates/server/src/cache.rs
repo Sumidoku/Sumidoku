@@ -909,7 +909,7 @@ mod tests {
 		reconcile_all(&state.pool, &blobs, &opds)
 			.await
 			.expect("startup reconciliation");
-		let expected = content.as_bytes().len() as i64
+		let expected = content.len() as i64
 			+ b"original".len() as i64
 			+ b"variant".len() as i64
 			+ b"cbz".len() as i64;
