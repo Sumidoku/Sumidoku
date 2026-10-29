@@ -108,6 +108,7 @@ function Section({
 
 const READER_MODE_KEY = 'sumidoku.reader.mode';
 const READER_DIR_KEY = 'sumidoku.reader.dir';
+const READER_LAYOUT_KEY = 'sumidoku.reader.layout';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -126,6 +127,11 @@ function AppearanceSection() {
 		return m === 'vertical' ? 'continuous' : m;
 	});
 	const [dir, setDir] = useState(() => stored(READER_DIR_KEY, 'ltr'));
+	const [layout, setLayout] = useState(() => {
+		// Same whitelist as the reader's readLayout: unknown values fall back to single
+		const l = stored(READER_LAYOUT_KEY, 'single');
+		return l === 'double' || l === 'doubleNoCover' ? l : 'single';
+	});
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
 		apply(value);
@@ -178,6 +184,14 @@ function AppearanceSection() {
 				<Select value={dir} onChange={(e) => persist(READER_DIR_KEY, e.currentTarget.value, setDir)}>
 					<option value="ltr">{t('settings.dirLtr')}</option>
 					<option value="rtl">{t('settings.dirRtl')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerLayout')}</span>
+				<Select value={layout} onChange={(e) => persist(READER_LAYOUT_KEY, e.currentTarget.value, setLayout)}>
+					<option value="single">{t('settings.layoutSingle')}</option>
+					<option value="double">{t('settings.layoutDouble')}</option>
+					<option value="doubleNoCover">{t('settings.layoutDoubleNoCover')}</option>
 				</Select>
 			</div>
 		</Section>
