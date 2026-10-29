@@ -1862,7 +1862,20 @@ RightToLeft/LeftToRight set the direction, Webtoon selects webtoon mode and
 Vertical continuous mode. Reader toggles write per-manga overrides in
 `sumidoku.reader.dir.<id>` / `sumidoku.reader.mode.<id>` (cleared when they match
 the metadata), and the global settings are the fallback for manga whose viewer
-carries no corresponding preference.
+carries no corresponding preference. The paged mode also offers a page layout
+(`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
+pages into spreads in reading order, giving the cover and closing page a blank
+mate and always showing landscape pages solo. Spreads carry page indexes, so
+progress reporting and the page slider stay page-based while turning moves by
+spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
+override-over-global resolution but no metadata counterpart. Keyboard shortcuts
+are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
+pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
+a screen in the continuous modes, Home/End jump to the ends, m toggles the
+toolbar, and keys aimed at form controls never reach the reader. In paged mode
+the wheel also turns pages (`reader/wheelTurn.ts`): deltas accumulate past a
+threshold into one turn per gesture, locked until 200ms of wheel quiet so
+trackpad inertia cannot flip multiple pages.
 
 ## Known gaps
 
