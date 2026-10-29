@@ -33,6 +33,8 @@ import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForwar
 import type { Dir, Mode } from './reader/readerPrefs';
 import { buildSpreads, spreadIndexOf, spreadLeadPage } from './reader/spreads';
 import type { SpreadLayout } from './reader/spreads';
+import { readerKeyAction } from './reader/hotkeys';
+import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -286,6 +288,7 @@ function ReaderCore({
 	const [cur, setCurState] = useState(0);
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
+	const pagedRef = useRef<HTMLDivElement>(null);
 	const contentResizeRef = useRef<() => void>(() => {});
 
 	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
@@ -503,6 +506,11 @@ function ReaderCore({
 		else navigate('/library');
 	}
 
+	function scrollByScreen(sign: 1 | -1) {
+		const el = contRef.current;
+		if (el) el.scrollBy({ top: sign * el.clientHeight * 0.9, behavior: 'smooth' });
+	}
+
 	const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
 	keyRef.current = (e) => {
 		if (e.key === 'Escape') {
@@ -518,15 +526,78 @@ function ReaderCore({
 			return;
 		}
 		if (chaptersOpen) return;
-		if (mode !== 'paged') return;
-		if (e.key === 'ArrowLeft') onZone('left');
-		else if (e.key === 'ArrowRight') onZone('right');
+		const action = readerKeyAction(e, mode);
+		if (action === null) return;
+		// The key is ours: keep Space and the arrows from scrolling the page natively
+		e.preventDefault();
+		switch (action) {
+			case 'left':
+				onZone('left');
+				break;
+			case 'right':
+				onZone('right');
+				break;
+			case 'pageBack':
+				turn(false);
+				break;
+			case 'pageForward':
+				turn(true);
+				break;
+			case 'scrollBack':
+				scrollByScreen(-1);
+				break;
+			case 'scrollForward':
+				scrollByScreen(1);
+				break;
+			case 'first':
+				if (mode === 'paged') gotoPage(0);
+				else scrollToPage(0);
+				break;
+			case 'last':
+				if (mode === 'paged') gotoPage(total - 1);
+				else scrollToPage(total - 1);
+				break;
+			case 'toggleOverlay':
+				setOverlay((v) => !v);
+				break;
+		}
 	};
 	useEffect(() => {
 		const h = (e: KeyboardEvent) => keyRef.current(e);
 		window.addEventListener('keydown', h);
 		return () => window.removeEventListener('keydown', h);
 	}, []);
+
+	// Wheel page turning (paged mode): the controller accumulates deltas, emits one
+	// turn per gesture and locks until the wheel goes quiet (trackpad inertia guard)
+	const turnRef = useRef(turn);
+	turnRef.current = turn;
+	const wheelCtlRef = useRef<WheelTurnController | null>(null);
+	if (wheelCtlRef.current === null) {
+		wheelCtlRef.current = new WheelTurnController({
+			setTimeout: (cb, ms) => window.setTimeout(cb, ms),
+			clearTimeout: (h) => window.clearTimeout(h as number),
+			onTurn: (forward) => turnRef.current(forward)
+		});
+	}
+	const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
+	wheelRef.current = (e) => {
+		if (mode !== 'paged' || chaptersOpen) return;
+		// Browser zoom chords and an active pinch zoom keep the wheel to themselves
+		if (e.ctrlKey || e.metaKey || zoomed) return;
+		// Horizontal gestures (trackpad pans) are not page turns
+		if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+		e.preventDefault();
+		wheelCtlRef.current?.feed(e.deltaY, e.deltaMode, window.innerHeight);
+	};
+	useEffect(() => {
+		const el = pagedRef.current;
+		if (!el) return;
+		const h = (e: WheelEvent) => wheelRef.current(e);
+		el.addEventListener('wheel', h, { passive: false });
+		return () => el.removeEventListener('wheel', h);
+	}, [mode, pages]);
+	useEffect(() => () => wheelCtlRef.current?.dispose(), []);
 
 	useEffect(() => {
 		if (!chaptersOpen) return;
@@ -802,6 +873,7 @@ function ReaderCore({
 			{mode === 'paged' ? (
 				<div
 					className="reader__paged"
+					ref={pagedRef}
 					style={{ touchAction }}
 					onClick={onPagedContainerClick}
 					onPointerDown={pinchPointerDown}
