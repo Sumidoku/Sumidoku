@@ -62,6 +62,31 @@ export function buildSpreads(
 	return spreads;
 }
 
+export interface PageDims {
+	width: number;
+	height: number;
+}
+
+/**
+ * Records dimensions measured from a loaded image. Server-reported dimensions win:
+ * a measured value only fills a gap, never overrides. Invalid or identical values
+ * return the previous map unchanged so React skips the re-render.
+ */
+export function recordMeasured(
+	prev: Record<number, PageDims>,
+	index: number,
+	dims: PageDims,
+	serverDims: PageDims | null
+): Record<number, PageDims> {
+	if (serverDims) return prev;
+	if (!Number.isFinite(dims.width) || !Number.isFinite(dims.height) || dims.width <= 0 || dims.height <= 0) {
+		return prev;
+	}
+	const old = prev[index];
+	if (old && old.width === dims.width && old.height === dims.height) return prev;
+	return { ...prev, [index]: dims };
+}
+
 /** Index of the spread containing the page (0 when absent, which cannot happen for built spreads). */
 export function spreadIndexOf(spreads: Spread[], page: number): number {
 	for (let i = 0; i < spreads.length; i++) {

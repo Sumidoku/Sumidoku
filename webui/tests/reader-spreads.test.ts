@@ -71,3 +71,33 @@ test('spread lookup finds the containing spread and skips blank slots', async ()
 		assert.equal(spreadLeadPage(spreads[3]), 4);
 	});
 });
+
+test('measured dimensions only fill gaps the server left', async () => {
+	await withVite(async (vite) => {
+		const { recordMeasured } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		const wide = { width: 2000, height: 1000 };
+		// Server-known pages are never overridden by a measurement
+		const withServer = recordMeasured({}, 0, wide, { width: 800, height: 1200 });
+		assert.deepEqual(withServer, {});
+		// Invalid measurements are rejected
+		assert.deepEqual(recordMeasured({}, 0, { width: 0, height: 100 }, null), {});
+		assert.deepEqual(recordMeasured({}, 0, { width: Number.NaN, height: 100 }, null), {});
+		// A genuine gap is filled, and re-measuring the same value keeps the map identity
+		const filled = recordMeasured({}, 1, wide, null);
+		assert.deepEqual(filled, { 1: wide });
+		assert.equal(recordMeasured(filled, 1, { ...wide }, null), filled);
+	});
+});
+
+test('a measured landscape page re-pairs its spread', async () => {
+	await withVite(async (vite) => {
+		const { buildSpreads } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		// Three pages without known dimensions pair up as all-portrait…
+		const unknown = () => false;
+		assert.deepEqual(buildSpreads(3, unknown, 'doubleNoCover'), [[0, 1], [2, null]]);
+		// …until a load measurement reveals page 1 as landscape, which then stands
+		// alone and pushes page 0 onto a blank
+		const measured = (i: number) => i === 1;
+		assert.deepEqual(buildSpreads(3, measured, 'doubleNoCover'), [[0, null], [1], [2, null]]);
+	});
+});

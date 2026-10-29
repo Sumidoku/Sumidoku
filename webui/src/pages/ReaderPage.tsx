@@ -31,8 +31,8 @@ import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
 import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
 import type { Dir, Mode } from './reader/readerPrefs';
-import { buildSpreads, spreadIndexOf, spreadLeadPage } from './reader/spreads';
-import type { SpreadLayout } from './reader/spreads';
+import { buildSpreads, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
+import type { PageDims, SpreadLayout } from './reader/spreads';
 import { readerKeyAction } from './reader/hotkeys';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
@@ -310,14 +310,23 @@ function ReaderCore({
 		consumeClick,
 		reset: resetPinch
 	} = usePinchZoom({ zoomedTouchAction: mode === 'paged' ? 'none' : 'pan-y' });
-	// Layout changes leave stale pan offsets behind
-	useLayoutEffect(() => {
-		resetPinch();
-	}, [mode, idx, col, dir, layout, imgWidth, resetPinch]);
+
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
 	const curText = pageText(curPage);
+	// Dimensions measured from loaded images fill the gaps the server left (remote
+	// chapters carry no dimensions until downloaded). Rebuilding spreads off them
+	// keeps idx page-based, so the current page stays put when a mate re-pairs
+	const [measuredDims, setMeasuredDims] = useState<Record<number, PageDims>>({});
+	function reportDims(arrayIndex: number, width: number, height: number) {
+		setMeasuredDims((prev) =>
+			recordMeasured(prev, arrayIndex, { width, height }, pageDimensions(pages?.[arrayIndex]))
+		);
+	}
+	function dimsOf(arrayIndex: number): PageDims | null {
+		return pageDimensions(pages?.[arrayIndex]) ?? measuredDims[arrayIndex] ?? null;
+	}
 	// Spreads only exist in paged mode; slots carry page indexes so progress and the
 	// slider stay page-based regardless of the layout
 	const spreads = useMemo(() => {
@@ -325,13 +334,20 @@ function ReaderCore({
 		return buildSpreads(
 			pages.length,
 			(i) => {
-				const d = pageDimensions(pages[i]);
+				const d = pageDimensions(pages[i]) ?? measuredDims[i] ?? null;
 				return d !== null && d.width > d.height;
 			},
 			layout
 		);
-	}, [mode, pages, layout]);
+	}, [mode, pages, layout, measuredDims]);
 	const curSpread = spreads ? spreads[spreadIndexOf(spreads, idx)] : null;
+	// Composition of the visible spread; a re-pair resets stale pinch pan offsets
+	const curSpreadKey = curSpread ? curSpread.map((s) => (s === null ? 'b' : s)).join('-') : '';
+	// Layout changes leave stale pan offsets behind; curSpreadKey catches a measured
+	// re-pair of the visible spread without resetting zoom over distant prefetches
+	useLayoutEffect(() => {
+		resetPinch();
+	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -437,6 +453,9 @@ function ReaderCore({
 			const p = pages[center + d];
 			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
+			// The prefetched image doubles as a dimension probe for pages the server
+			// has not measured yet, so approaching pages settle their spread early
+			im.onload = () => reportDims(center + d, im.naturalWidth, im.naturalHeight);
 			im.src = pageUrl(chapterId, p.index, imgWidth);
 		}
 	}
@@ -910,7 +929,7 @@ function ReaderCore({
 										}
 										const p = pages[slot];
 										const slotText = pageText(p);
-										const dims = pageDimensions(p);
+										const dims = dimsOf(slot);
 										if (slotText !== null) {
 											return (
 												<div
@@ -937,6 +956,9 @@ function ReaderCore({
 												width={dims?.width}
 												height={dims?.height}
 												draggable={false}
+												onLoad={(e) =>
+													reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+												}
 											/>
 										);
 									})}
@@ -990,10 +1012,10 @@ function ReaderCore({
 							className={mode === 'webtoon' ? 'reader__cont reader__cont--webtoon' : 'reader__cont'}
 							ref={contRef}
 						>
-							{pages.map((p) => {
+							{pages.map((p, arrayIndex) => {
 								const text = pageText(p);
 								const unsupported = isUnsupported(p);
-								const dimensions = text === null && !unsupported ? pageDimensions(p) : null;
+								const dimensions = text === null && !unsupported ? dimsOf(arrayIndex) : null;
 								return (
 									<div
 										className="reader__pg"
@@ -1012,7 +1034,10 @@ function ReaderCore({
 												width={dimensions?.width}
 												height={dimensions?.height}
 												loading="lazy"
-												onLoad={() => contentResizeRef.current()}
+												onLoad={(e) => {
+													contentResizeRef.current();
+													reportDims(arrayIndex, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
+												}}
 												draggable={false}
 											/>
 										)}
