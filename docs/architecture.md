@@ -1230,8 +1230,11 @@ no alias is derived from migration text.
   and artifact, removes page originals, materialized blobs, variants and OPDS
   acquisition files, reconciles actual bytes, and advances `cacheRevision`
   before broadcasting completion. Source page rows, dimensions, page count and
-  reading state remain. Explicit product deletion serializes on the same
+  reading state remain. Deleting a finished product serializes on the same
   chapter lease, removes product-derived variants and advances the revision.
+  Deleting a nonfinished row removes its row and downloaded flag transactionally
+  without waiting for an active upstream call; the worker cleans its temporary
+  and output files after that call drains, while source page cache assets remain.
   If the product is later missing, a reader encountering a missing materialized
   `Image` blob refreshes source page rows under the chapter write lease.
 - Download move (`download/mod.rs:move_product`): when

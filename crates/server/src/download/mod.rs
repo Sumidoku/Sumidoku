@@ -182,6 +182,9 @@ pub struct DownloadManager {
 	active_sources: Mutex<HashSet<i64>>,
 	progress: Mutex<HashMap<i64, (i64, i64)>>,
 	cancel: Mutex<HashSet<i64>>,
+	/// An orphaned old artifact path from an active deletion is removed by its
+	/// worker's dispatch owner after the attempt exits, never during packaging.
+	cancelled_paths: Mutex<HashMap<i64, String>>,
 	/// Artifact paths held by in-flight downloads, keyed to the owning chapter: two sources can run at once, so a
 	/// finished row alone cannot tell a running download that another chapter is about to package the same path
 	claimed_paths: Mutex<HashMap<String, i64>>,
@@ -265,6 +268,7 @@ impl DownloadManager {
 			active_sources: Mutex::new(HashSet::new()),
 			progress: Mutex::new(HashMap::new()),
 			cancel: Mutex::new(HashSet::new()),
+			cancelled_paths: Mutex::new(HashMap::new()),
 			claimed_paths: Mutex::new(HashMap::new()),
 			downloads_dir: state.config.downloads_dir.clone(),
 		})
@@ -391,8 +395,10 @@ impl DownloadManager {
 				Err(error) => Err(error),
 				}
 			};
-			if let Err(error) = removal {
-				if error.kind() != std::io::ErrorKind::NotFound { failures.push(format!("{}: {error}", path.display())); }
+			if let Err(error) = removal
+				&& error.kind() != std::io::ErrorKind::NotFound
+			{
+				failures.push(format!("{}: {error}", path.display()));
 			}
 		}
 		let publish = crate::cache::publish_chapter(&state, chapter_id).await;
@@ -589,6 +595,24 @@ impl DownloadManager {
 				.await;
 	}
 
+	/// Remove an old orphan artifact only after the active worker has exited. The
+	/// chapter lease protects a concurrent finished-product read; references are
+	/// rechecked after acquiring it, with no database transaction held while waiting.
+	async fn cleanup_cancelled_artifact(&self, chapter_id: i64) {
+		let Some(path) = self.cancelled_paths.lock().await.remove(&chapter_id) else { return; };
+		let state = self.state.upgrade();
+		let _cache_lease = if let Some(state) = &state { Some(state.chapter_cache_gate.read().await) } else { None };
+		let chapter_lock = if let Some(state) = &state { Some(state.chapter_cache_lock(chapter_id).await) } else { None };
+		let _chapter = if let Some(lock) = &chapter_lock { Some(lock.write().await) } else { None };
+		let referenced = sqlx::query_scalar::<_, i64>("SELECT 1 FROM download WHERE path = ? LIMIT 1")
+			.bind(&path).fetch_optional(&self.pool).await;
+		match referenced {
+			Ok(None) => { let _ = remove_path(&product_path(&self.downloads_dir, &path)).await; }
+			Ok(Some(_)) => {}
+			Err(error) => tracing::warn!(chapter_id, "active-delete artifact reference check failed: {error}"),
+		}
+	}
+
 	async fn cleanup_attempt(&self, chapter_id: i64, path: Option<&str>) {
 		self.progress.lock().await.remove(&chapter_id);
 		self.cancel.lock().await.remove(&chapter_id);
@@ -619,80 +643,157 @@ impl DownloadManager {
         user_id: i64,
         finished_only: bool,
     ) -> ApiResult<bool> {
-		// Signal an active attempt before waiting for its chapter read lease to drain.
-		let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=?")
-			.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
-		if finished_only && status.as_deref() != Some("finished") { return Ok(false); }
-		if !finished_only && status.as_deref() == Some("downloading") { self.mark_cancel(chapter_id).await; }
-		let state = self.state.upgrade();
-		let _cache_lease = if let Some(state) = &state { Some(state.chapter_cache_gate.read().await) } else { None };
-		let chapter_lock = if let Some(state) = &state { Some(state.chapter_cache_lock(chapter_id).await) } else { None };
-		let _chapter = if let Some(lock) = &chapter_lock { Some(lock.write().await) } else { None };
-		let mut tx = crate::db::begin_write(&self.pool).await?;
-		let row: Option<(String, Option<String>)> =
-			sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
-				.bind(chapter_id)
-				.bind(user_id)
-				.fetch_optional(&mut *tx)
-				.await?;
-		let Some((status, path)) = row else {
-			tx.rollback().await?;
-			return Ok(false);
-		};
-        if finished_only && status != "finished" {
-            tx.rollback().await?;
-            return Ok(false);
-        }
-		if status == "downloading" {
-			self.mark_cancel(chapter_id).await;
+		loop {
+			let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=?")
+				.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
+			let Some(status) = status else { return Ok(false); };
+			if finished_only && status != "finished" { return Ok(false); }
+			if status != "finished" {
+				match self.delete_nonfinished_row(chapter_id, user_id).await? {
+					Some(deleted) => return Ok(deleted),
+					None => continue,
+				}
+			}
+
+			// Only a finished product is authoritative for readers and needs exclusive
+			// filesystem/cache removal. Never hold a DB transaction while waiting.
+			let state = self.state.upgrade();
+			let _cache_lease = if let Some(state) = &state {
+				let mut read = Box::pin(state.chapter_cache_gate.read());
+				tokio::select! {
+					biased;
+					guard = &mut read => Some(guard),
+					_ = tokio::task::yield_now() => {
+						let current: Option<String> = sqlx::query_scalar(
+							"SELECT status FROM download WHERE chapter_id=? AND user_id=?",
+						)
+						.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
+						if current.as_deref() != Some("finished") {
+							drop(read);
+							if finished_only { return Ok(false); }
+							continue;
+						}
+						Some(read.await)
+					}
+				}
+			} else { None };
+			let chapter_lock = if let Some(state) = &state { Some(state.chapter_cache_lock(chapter_id).await) } else { None };
+			let _chapter = if let Some(lock) = &chapter_lock {
+				let mut write = Box::pin(lock.clone().write_owned());
+				tokio::select! {
+					biased;
+					guard = &mut write => Some(guard),
+					_ = tokio::task::yield_now() => {
+						// The writer is now queued. Recheck state without holding a DB
+						// transaction; fair writer ordering prevents a new worker read lease
+						// from slipping in after this check.
+						let current: Option<String> = sqlx::query_scalar(
+							"SELECT status FROM download WHERE chapter_id=? AND user_id=?",
+						)
+						.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
+						if current.as_deref() != Some("finished") {
+							drop(write);
+							if finished_only { return Ok(false); }
+							continue;
+						}
+						Some(write.await)
+					}
+				}
+			} else { None };
+			let mut tx = crate::db::begin_write(&self.pool).await?;
+			let row: Option<(String, Option<String>)> =
+				sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
+					.bind(chapter_id).bind(user_id).fetch_optional(&mut *tx).await?;
+			let Some((status, path)) = row else { tx.rollback().await?; return Ok(false); };
+			if finished_only && status != "finished" { tx.rollback().await?; return Ok(false); }
+			if status != "finished" {
+				tx.rollback().await?;
+				if finished_only { return Ok(false); }
+				continue;
+			}
+			let orphaned = Self::delete_row_in_transaction(&mut tx, chapter_id, user_id, path.as_deref()).await?;
+			tx.commit().await?;
+			self.remove_from_queue(chapter_id, user_id).await;
+			self.progress.lock().await.remove(&chapter_id);
+			self.cleanup_tmp(chapter_id).await;
+			if let Some(path) = path && orphaned { let _ = remove_path(&product_path(&self.downloads_dir, &path)).await; }
+			if let Some(state) = &state {
+				let variants = state.config.page_blobs_dir().join(chapter_id.to_string()).join("variants");
+				let invalidation = match tokio::fs::remove_dir_all(&variants).await {
+					Ok(()) => None,
+					Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+					Err(error) => Some(format!("invalidate page variants: {error}")),
+				};
+				if let Err(error) = crate::cache::publish_chapter(state, chapter_id).await {
+					let message = error.message().to_string();
+					tracing::warn!(chapter_id, "download deletion cache revision update failed: {message}");
+				} else if let Some(message) = invalidation {
+					tracing::warn!(chapter_id, "{message}");
+					let _ = sqlx::query("UPDATE chapter_cache_state SET last_error=? WHERE chapter_id=?").bind(message).bind(chapter_id).execute(&self.pool).await;
+				}
+			}
+			return Ok(true);
 		}
+	}
+
+	/// Nonfinished rows are not a reader source. Delete them in a short write
+	/// transaction without waiting on a chapter lease that an active source call holds.
+	/// Returns `None` only when the row became finished and needs the exclusive path.
+	async fn delete_nonfinished_row(&self, chapter_id: i64, user_id: i64) -> ApiResult<Option<bool>> {
+		let mut tx = crate::db::begin_write(&self.pool).await?;
+		let row: Option<(String, Option<String>)> = sqlx::query_as(
+			"SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?",
+		)
+		.bind(chapter_id).bind(user_id).fetch_optional(&mut *tx).await?;
+		let Some((status, path)) = row else { tx.rollback().await?; return Ok(Some(false)); };
+		if status == "finished" { tx.rollback().await?; return Ok(None); }
+		let orphaned = Self::delete_row_in_transaction(&mut tx, chapter_id, user_id, path.as_deref()).await?;
+		let active = status == "downloading";
+		let mut recorded_path = if active && orphaned && path.is_some() {
+			Some(self.cancelled_paths.lock().await)
+		} else { None };
+		if active {
+			// Cancellation is observed after the in-flight source/page operation returns.
+			// Do not wait for that operation's chapter read lease here.
+			if let (Some(paths), Some(path)) = (&mut recorded_path, path.as_ref()) {
+				paths.insert(chapter_id, path.clone());
+			}
+			self.mark_cancel(chapter_id).await;
+		} else {
+			self.cleanup_tmp(chapter_id).await;
+			if let Some(path) = &path && orphaned {
+				let _ = remove_path(&product_path(&self.downloads_dir, path)).await;
+			}
+		}
+		if let Err(error) = tx.commit().await {
+			if active { self.cancel.lock().await.remove(&chapter_id); }
+			if let Some(paths) = &mut recorded_path { paths.remove(&chapter_id); }
+			return Err(error.into());
+		}
+		drop(recorded_path);
 		self.remove_from_queue(chapter_id, user_id).await;
+		self.progress.lock().await.remove(&chapter_id);
+		Ok(Some(true))
+	}
+
+	async fn delete_row_in_transaction(
+		tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+		chapter_id: i64,
+		user_id: i64,
+		path: Option<&str>,
+	) -> Result<bool, sqlx::Error> {
 		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
-			.bind(chapter_id)
-			.bind(user_id)
-			.execute(&mut *tx)
-			.await?;
+			.bind(chapter_id).bind(user_id).execute(&mut **tx).await?;
 		sqlx::query(
 			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
 			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
 		)
-		.bind(chapter_id)
-		.bind(user_id)
-		.execute(&mut *tx)
-		.await?;
-		let orphaned = if let Some(path) = &path {
+		.bind(chapter_id).bind(user_id).execute(&mut **tx).await?;
+		if let Some(path) = path {
 			let referenced: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM download WHERE path = ? LIMIT 1")
-				.bind(path)
-				.fetch_optional(&mut *tx)
-				.await?;
-			referenced.is_none()
-		} else {
-			false
-		};
-		tx.commit().await?;
-		self.progress.lock().await.remove(&chapter_id);
-		self.cleanup_tmp(chapter_id).await;
-		if let Some(path) = path
-			&& orphaned
-		{
-			let _ = remove_path(&product_path(&self.downloads_dir, &path)).await;
-		}
-		if let Some(state) = &state {
-			let variants = state.config.page_blobs_dir().join(chapter_id.to_string()).join("variants");
-			let invalidation = match tokio::fs::remove_dir_all(&variants).await {
-				Ok(()) => None,
-				Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-				Err(error) => Some(format!("invalidate page variants: {error}")),
-			};
-			if let Err(error) = crate::cache::publish_chapter(&state, chapter_id).await {
-				let message = error.message().to_string();
-				tracing::warn!(chapter_id, "download deletion cache revision update failed: {message}");
-			} else if let Some(message) = invalidation {
-				tracing::warn!(chapter_id, "{message}");
-				let _ = sqlx::query("UPDATE chapter_cache_state SET last_error=? WHERE chapter_id=?").bind(message).bind(chapter_id).execute(&self.pool).await;
-			}
-		}
-		Ok(true)
+				.bind(path).fetch_optional(&mut **tx).await?;
+			Ok(referenced.is_none())
+		} else { Ok(false) }
 	}
 
 	pub async fn enqueue_reader_ahead(self: &Arc<Self>, chapter_id: i64, user_id: i64) -> ApiResult<Vec<i64>> {
@@ -816,6 +917,8 @@ impl DownloadManager {
 				let inner =
 					tokio::spawn(async move { worker.run_chapter(entry.chapter_id, entry.user_id, source_id).await });
 				let _ = inner.await;
+				manager.cleanup_cancelled_artifact(chapter_id).await;
+				manager.cancel.lock().await.remove(&chapter_id);
 				// The row now records the path (or the attempt failed), so the in-memory claim is no longer needed
 				manager.claimed_paths.lock().await.retain(|_, owner| *owner != chapter_id);
 				manager.active_sources.lock().await.remove(&source_id);

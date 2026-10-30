@@ -13,14 +13,16 @@ type ChapterVariantKey = (i64, i64, u32);
 type ChapterVariantLocks =
 	HashMap<ChapterVariantKey, std::sync::Weak<tokio::sync::Mutex<()>>>;
 type ChapterOriginalKey = (i64, i64);
+type OriginalPageResponse = Arc<(Vec<u8>, String)>;
+type OriginalPageFlightResult = Option<(Vec<u8>, OriginalPageResponse)>;
 
 pub struct OriginalPageFlight {
 	pub lock: tokio::sync::Mutex<()>,
-	result: std::sync::Mutex<Option<(Vec<u8>, Arc<(Vec<u8>, String)>)>>,
+	result: std::sync::Mutex<OriginalPageFlightResult>,
 }
 
 impl OriginalPageFlight {
-	pub fn cached(&self, identity: &[u8]) -> Option<Arc<(Vec<u8>, String)>> {
+	pub fn cached(&self, identity: &[u8]) -> Option<OriginalPageResponse> {
 		self.result.lock().ok()?.as_ref().filter(|(key, _)| key.as_slice() == identity).map(|(_, value)| value.clone())
 	}
 	pub fn publish(&self, identity: Vec<u8>, bytes: Vec<u8>, mime: String) {

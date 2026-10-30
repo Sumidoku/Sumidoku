@@ -909,6 +909,9 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	.fetch_one(&pool)
 	.await
 	.expect("first chapter");
+	let source_variant = t.tmp.path().join("page-blobs").join(chapter_id.to_string()).join("variants/256/0.png");
+	std::fs::create_dir_all(source_variant.parent().expect("variant parent")).expect("variant dir");
+	std::fs::write(&source_variant, b"source variant").expect("source variant");
 	let probe_id: i64 = sqlx::query_scalar(
 		"INSERT INTO chapter (manga_id, key, title, number, source_order)
 		 VALUES (?, 'probe', 'Probe', 2, 1) RETURNING id",
@@ -919,6 +922,8 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	.expect("probe chapter");
 	let meta = chapter_meta(&pool, chapter_id).await;
 	let artifact = t.tmp.path().join("downloads").join(default_rel_path(&meta));
+	std::fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact dir");
+	std::fs::write(&artifact, b"orphaned prior artifact").expect("prior artifact");
 	let addr = serve_app(t.app.clone()).await;
 	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
 	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;
@@ -927,13 +932,26 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	let (status, body) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["queued"], json!([chapter_id]));
+	sqlx::query("UPDATE download SET path = ? WHERE chapter_id = ? AND user_id = 1")
+		.bind(default_rel_path(&meta))
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("attach old artifact path to active row");
 	tokio::time::timeout(Duration::from_secs(10), started_rx.recv())
 		.await
 		.expect("feed started")
 		.expect("feed start signal");
 	wait_download_status(&t.app, chapter_id, "downloading").await;
-	let (status, _) = request(&t.app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+	let (status, _) = tokio::time::timeout(
+		Duration::from_secs(10),
+		request(&t.app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None),
+	)
+	.await
+	.expect("active download deletion must not wait for blocked upstream I/O");
 	assert_eq!(status, StatusCode::NO_CONTENT);
+	assert!(artifact.exists(), "the active worker must finish before its old artifact is removed");
+	assert!(source_variant.exists(), "canceling an active attempt preserves source page variants");
 	release.notify_one();
 
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [probe_id]}))).await;

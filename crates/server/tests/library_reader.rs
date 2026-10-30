@@ -347,8 +347,16 @@ async fn cover_and_page_proxy() {
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	let chapter_id = body[0]["id"].as_i64().expect("chapter id");
-	let (status, _) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	let (status, _source_pages) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
 	assert_eq!(status, StatusCode::OK);
+	let source_content: String = sqlx::query_scalar("SELECT content FROM page WHERE chapter_id = ? AND idx = 0")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("source page content");
+	let page_path = format!("/api/v1/chapter/{chapter_id}/page/0");
+	let (status, _, source_bytes) = request_full(&app, "GET", &page_path, None).await;
+	assert_eq!(status, StatusCode::OK, "fixture page should be readable");
 
 	// Url page
 	let (port, _pages_upstream) = serve_bytes(vec![
@@ -363,7 +371,6 @@ async fn cover_and_page_proxy() {
 		json!({"Url": [format!("http://127.0.0.1:{port}/img.png"), null]}),
 	)
 	.await;
-	let page_path = format!("/api/v1/chapter/{chapter_id}/page/0");
 	let (status, headers, bytes) = request_full(&app, "GET", &page_path, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
@@ -389,7 +396,7 @@ async fn cover_and_page_proxy() {
 	assert_eq!(headers["content-type"], "image/jpeg");
 	assert_eq!(bytes, PNG);
 
-	// Image page: served normally when the materialized blob exists; referencing a nonexistent blob 404s
+	// Image page: a missing materialized file triggers source page rematerialization.
 	update_page_content(&pool, chapter_id, 0, json!({"Image": "0.png"})).await;
 	let blob_dir = tmp.path().join("page-blobs").join(chapter_id.to_string());
 	std::fs::create_dir_all(&blob_dir).expect("mkdir blob dir");
@@ -400,9 +407,15 @@ async fn cover_and_page_proxy() {
 	assert_eq!(bytes, PNG);
 
 	update_page_content(&pool, chapter_id, 0, json!({"Image": "9.png"})).await;
-	let (status, body) = request(&app, "GET", &page_path, None).await;
-	assert_eq!(status, StatusCode::NOT_FOUND);
-	assert_eq!(body["error"]["code"], "not_found");
+	let (status, _, rebuilt_bytes) = request_full(&app, "GET", &page_path, None).await;
+	assert_eq!(status, StatusCode::OK, "missing Image blobs are rebuilt from the source");
+	assert_eq!(rebuilt_bytes, source_bytes, "the refreshed page serves actual source bytes");
+	let rebuilt_content: String = sqlx::query_scalar("SELECT content FROM page WHERE chapter_id = ? AND idx = 0")
+		.bind(chapter_id)
+		.fetch_one(&pool)
+		.await
+		.expect("rebuilt page content");
+	assert_eq!(rebuilt_content, source_content, "source page metadata is restored");
 
 	// out of range 404
 	let (status, body) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/99"), None).await;
