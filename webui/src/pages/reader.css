@@ -89,9 +89,14 @@
 	height: auto;
 }
 
+/* Blank slots mirror their mate page's box: contain-fit of the mate's aspect
+   ratio inside the same 50%-wide half, so the joined pair is centred exactly
+   like a real pair. The inline aspect-ratio comes from ReaderPage (2/3
+   fallback while the mate's size is unknown). */
 .reader__blank {
-	width: 50%;
 	height: 100%;
+	width: auto;
+	max-width: 50%;
 	flex: none;
 }
 
