@@ -78,6 +78,17 @@
 	max-width: 50%;
 }
 
+/* The img width/height attributes (from measured dims) act as explicit sizes, so
+   max-width/max-height would clamp each axis independently and object-fit would
+   letterbox the page inside a distorted box, leaving a gap between spread slots.
+   Auto sizes reduce the attributes to an aspect-ratio hint, restoring the
+   ratio-preserving clamp: each page hugs its content and the two pages join in
+   the middle, the way KMReader renders spreads */
+.reader__spread .reader__img {
+	width: auto;
+	height: auto;
+}
+
 .reader__blank {
 	width: 50%;
 	height: 100%;

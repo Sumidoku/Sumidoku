@@ -1891,7 +1891,11 @@ the metadata), and the global settings are the fallback for manga whose viewer
 carries no corresponding preference. The paged mode also offers a page layout
 (`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
 pages into spreads in reading order, giving the cover and closing page a blank
-mate and always showing landscape pages solo. Spreads carry page indexes, so
+mate and always showing landscape pages solo. Inside a spread the images size
+with `width: auto; height: auto` (`reader.css`): the measured width/height
+attributes then act only as an aspect-ratio hint, so each page hugs its content
+and a two-page spread joins in the middle — explicit sizes would clamp each
+axis independently and letterbox a gap between the slots. Spreads carry page indexes, so
 progress reporting and the page slider stay page-based while turning moves by
 spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
 override-over-global resolution but no metadata counterpart. Keyboard shortcuts
