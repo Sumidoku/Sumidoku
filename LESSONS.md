@@ -53,6 +53,10 @@ order.
   round back button rendered as a small square with a dim icon. Compounding
   every back-button rule with `.icon-btn` fixed it, and the new
   manga-mobile-navigation test failed on the old selectors.
+- Seen again: 2026-10-30, `.manga-hero__actions .btn:hover:not(:disabled)`
+  out-specified `.btn--primary:hover`, so the light-theme hover painted white
+  text on a white fill and hid the Continue reading label. Compound hover rules
+  for the primary modifier now restore its fill in both themes.
 
 **Translate server-sent labels by a stable id, never by their display text.**
 A label the server sends is copy that can be reworded at any time; a UI
