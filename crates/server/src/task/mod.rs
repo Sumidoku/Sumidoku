@@ -793,6 +793,7 @@ mod tests {
 		let counter_two = counter(peak_two.clone());
 		let global_current = Arc::new(AtomicI64::new(0));
 		let peak_seen = global_peak.clone();
+		let rendezvous = Arc::new(tokio::sync::Barrier::new(2));
 		let handler: Handler = Arc::new(move |run| {
 			let (current, peak) = match run.task.source_id {
 				Some(1) => counter_one(),
@@ -800,23 +801,26 @@ mod tests {
 			};
 			let global_current = global_current.clone();
 			let global_peak = global_peak.clone();
+			let rendezvous = rendezvous.clone();
 			Box::pin(async move {
 				peak.fetch_max(current.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
 				global_peak.fetch_max(global_current.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
-				tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+				// Hold each wave until both workers enter: setup or CPU load cannot
+				// consume an arbitrary overlap window before the other source starts.
+				rendezvous.wait().await;
 				current.fetch_sub(1, Ordering::SeqCst);
 				global_current.fetch_sub(1, Ordering::SeqCst);
 				Ok(serde_json::json!({}))
 			})
 		});
 		manager.register("grouped", handler).await;
-		tokio::spawn(manager.clone().run());
 		for (id, source) in [("a", Some(1)), ("b", Some(1)), ("c", Some(2)), ("d", Some(2))] {
 			manager
 				.enqueue(id, "grouped", source, serde_json::json!({}), PRIORITY_MANUAL)
 				.await
 				.expect("enqueue");
 		}
+		tokio::spawn(manager.clone().run());
 		for id in ["a", "b", "c", "d"] {
 			wait_status(&manager, id, STATUS_DONE).await;
 		}
