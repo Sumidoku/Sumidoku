@@ -1245,7 +1245,22 @@ function ReaderCore({
 								>
 									{(curSpread ?? [idx]).map((slot, si) => {
 										if (slot === null || !pages?.[slot]) {
-											return <div key={`blank-${si}`} className="reader__blank" />;
+											// A blank takes its mate page's aspect ratio (KMReader convention:
+											// blankOf copies width/height), so the visible page sits exactly
+											// where the joined pair would place it. Fall back to the typical
+											// manga page ratio when the mate's size is still unknown.
+											const mate = (curSpread ?? [idx])[si === 0 ? 1 : 0];
+											const mateDims = mate !== null && mate !== undefined ? dimsOf(mate) : null;
+											const ratio = mateDims
+												? `${mateDims.width} / ${mateDims.height}`
+												: '2 / 3';
+											return (
+												<div
+													key={`blank-${si}`}
+													className="reader__blank"
+													style={{ aspectRatio: ratio }}
+												/>
+											);
 										}
 										const p = pages[slot];
 										const slotText = pageText(p);
