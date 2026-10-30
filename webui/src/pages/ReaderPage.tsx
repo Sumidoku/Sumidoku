@@ -1243,7 +1243,6 @@ function ReaderCore({
 						style={{ transformOrigin: '0 0', willChange: zoomed ? 'transform' : undefined }}
 					>
 						{spreads && (
-						{spreads && (
 							// Spreads form one sliding track: a turn translates the track by a
 							// whole viewport instead of swapping the current page in place
 							<div
