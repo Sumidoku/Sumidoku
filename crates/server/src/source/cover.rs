@@ -277,7 +277,7 @@ async fn write_cache(
 /// used first (sidecars included). Library covers are what the library page shows on every visit, so covers of
 /// manga outside the library go first and a library cover is evicted only when the library alone exceeds the cap
 async fn enforce_cache_limit(pool: &sqlx::SqlitePool, covers_dir: &FsPath, max: usize) {
-	let library: std::collections::HashSet<i64> = match sqlx::query_scalar::<_, i64>("SELECT id FROM manga WHERE in_library = 1")
+	let library: std::collections::HashSet<i64> = match sqlx::query_scalar::<_, i64>("SELECT DISTINCT manga_id FROM manga_user WHERE in_library = 1")
 		.fetch_all(pool)
 		.await
 	{
@@ -369,6 +369,39 @@ mod tests {
 		// a library larger than the cap still loses its least recently used covers, after every browsed one
 		evict_over_cap(tmp.path(), 1, &library);
 		assert_eq!(cached(tmp.path()), [2]);
+	}
+
+	#[tokio::test]
+	async fn eviction_reads_library_membership_from_the_real_schema() {
+		let tmp = tempfile::tempdir().unwrap();
+		let pool = crate::db::create_pool(&format!("sqlite://{}/test.db?mode=rwc", tmp.path().display())).await.unwrap();
+		let covers = tmp.path().join("covers");
+		std::fs::create_dir(&covers).unwrap();
+		let user: i64 = sqlx::query_scalar("INSERT INTO user (username, password_hash) VALUES ('reader', 'x') RETURNING id")
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		let source: i64 = sqlx::query_scalar("INSERT INTO source (key, name, wasm_path) VALUES ('en.test', 'Test', '') RETURNING id")
+			.fetch_one(&pool)
+			.await
+			.unwrap();
+		for id in [1_i64, 2, 3] {
+			sqlx::query("INSERT INTO manga (id, source_id, key, title) VALUES (?, ?, ?, 'Title')")
+				.bind(id)
+				.bind(source)
+				.bind(id.to_string())
+				.execute(&pool)
+				.await
+				.unwrap();
+		}
+		sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (1, ?, 1)").bind(user).execute(&pool).await.unwrap();
+		sqlx::query("INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (2, ?, 0)").bind(user).execute(&pool).await.unwrap();
+		// The library cover is the oldest, so only the membership query can save it
+		for (id, age) in [(1, 300), (2, 200), (3, 100)] {
+			seed(&covers, id, age);
+		}
+		enforce_cache_limit(&pool, &covers, 2).await;
+		assert_eq!(cached(&covers), [1, 3]);
 	}
 
 	#[tokio::test]
