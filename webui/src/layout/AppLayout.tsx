@@ -6,8 +6,8 @@ import { Moon, Sun } from 'lucide-react';
 import { IconButton } from '../components';
 import { readSidebarCollapsed, writeSidebarCollapsed } from '../lib/sidebarPrefs';
 import { useResolvedTheme, useTheme } from '../lib/theme';
-import { subscribeTaskEvents, useWhoami } from '../api/hooks';
-import { sse } from '../api/sse';
+import { subscribeChapterCacheEvents, subscribeTaskEvents, useWhoami } from '../api/hooks';
+import { acquireSseConnection } from '../api/sse';
 import { authAllowsEvents } from '../lib/auth';
 import { DesktopSidebar } from './DesktopSidebar';
 import { LanguageMenu } from './LanguageMenu';
@@ -34,16 +34,16 @@ export function AppLayout() {
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
 	const auth = useWhoami();
 	const qc = useQueryClient();
+	const eventsAllowed = authAllowsEvents(auth.data);
 	useEffect(() => {
 		writeSidebarCollapsed(sidebarCollapsed);
 	}, [sidebarCollapsed]);
 	useEffect(() => {
-		if (authAllowsEvents(auth.data)) sse.start();
-		else sse.stop();
-	}, [auth.data]);
+		return acquireSseConnection(eventsAllowed);
+	}, [eventsAllowed, auth.data?.user?.id]);
 	// Task-event invalidation lives here (one owner for the whole app); pages only read the query cache
-	useEffect(() => subscribeTaskEvents(qc), [qc]);
-	useEffect(() => () => sse.stop(), []);
+	useEffect(() => eventsAllowed ? subscribeTaskEvents(qc) : undefined, [eventsAllowed, qc]);
+	useEffect(() => eventsAllowed ? subscribeChapterCacheEvents(qc) : undefined, [eventsAllowed, qc]);
 	return (
 		<div className={sidebarCollapsed ? 'app app--sidebar-collapsed' : 'app'}>
 			<DesktopSidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed((current) => !current)}>

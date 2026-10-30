@@ -21,8 +21,10 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
-import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
+import { qk, subscribeChapterCacheEvents, useChapterPages, useManga, useMangaChapters, useWhoami } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
+import { acquireSseConnection } from '../api/sse';
+import { authAllowsEvents } from '../lib/auth';
 import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
@@ -207,6 +209,10 @@ function ReaderCore({
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { t } = useTranslation();
+	const auth = useWhoami();
+	const eventsAllowed = authAllowsEvents(auth.data);
+	useEffect(() => acquireSseConnection(eventsAllowed), [eventsAllowed, auth.data?.user?.id]);
+	useEffect(() => eventsAllowed ? subscribeChapterCacheEvents(qc) : undefined, [eventsAllowed, qc]);
 
 	const pagesQuery = useChapterPages(chapterId);
 	const pages = useMemo(() => pagesQuery.data ?? null, [pagesQuery.data]);

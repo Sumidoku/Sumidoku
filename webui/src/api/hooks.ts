@@ -62,7 +62,8 @@ import type {
 	GlobalSearchStreamEvent,
 	HomeStreamEvent,
 	MangaUpdateStreamEvent,
-	SearchStreamEvent
+	SearchStreamEvent,
+	DownloadChapterEvent
 } from './protocol';
 import { sse } from './sse';
 import type { TriStateSelection } from '../lib/triState';
@@ -661,6 +662,31 @@ export function subscribeTaskEvents(qc: QueryClient): () => void {
 	});
 }
 
+/** Refresh cache revisions when a download finishes or an SSE snapshot/reconnect may have skipped it. */
+export function subscribeChapterCacheEvents(qc: QueryClient): () => void {
+	const revalidateCacheState = () => {
+		void qc.invalidateQueries({ queryKey: ['chapter'] });
+		void qc.invalidateQueries({ queryKey: qk.chapterCache });
+	};
+	const unsubscribeDownload = sse.on('download', (data) => {
+		const event = data as Partial<DownloadChapterEvent>;
+		if (event.type !== 'finished' || !Number.isSafeInteger(event.chapterId)) return;
+		void qc.invalidateQueries({ queryKey: ['chapter', event.chapterId, 'pages'] });
+		void qc.invalidateQueries({ queryKey: qk.chapterCache });
+	});
+	const unsubscribeSnapshot = sse.on('snapshot', revalidateCacheState);
+	let wasOnline = false;
+	const unsubscribeStatus = sse.onStatus((online) => {
+		if (online && !wasOnline) revalidateCacheState();
+		wasOnline = online;
+	});
+	return () => {
+		unsubscribeDownload();
+		unsubscribeSnapshot();
+		unsubscribeStatus();
+	};
+}
+
 // ---- Source repos ----
 
 export interface RepoBrowseFilter {
@@ -913,8 +939,17 @@ export function useDownloadsClear() {
 }
 
 export function useDeleteDownload() {
+	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (chapterId: number) => api(`/downloads/${chapterId}`, { method: 'DELETE' })
+		mutationFn: (chapterId: number) => api(`/downloads/${chapterId}`, { method: 'DELETE' }),
+		onSettled: (_result, _error, chapterId) => {
+			if (typeof window !== 'undefined') window.dispatchEvent(new Event('sumidoku:downloads-invalidated'));
+			void qc.invalidateQueries({ queryKey: ['downloads'] });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['chapter', chapterId, 'pages'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
 	});
 }
 
@@ -932,6 +967,7 @@ export function useDeleteFinishedDownloads() {
 			void qc.invalidateQueries({ queryKey: ['manga'] });
 			void qc.invalidateQueries({ queryKey: qk.library });
 			void qc.invalidateQueries({ queryKey: ['chapter'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
 		}
 	});
 }
