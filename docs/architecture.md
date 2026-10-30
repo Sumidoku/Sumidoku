@@ -1931,6 +1931,11 @@ to the width without upscaling, `height` fills the height, and `original`
 shows natural pixels. The scrollable modes (width/widthShrink/original) make
 the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
 their fixed-height columns) and trade the fixed viewport for native scrolling;
+`height` also scrolls horizontally when a spread (or a single landscape page)
+is wider than the viewport — the wrapper and spread size to their content with
+flex-shrink disabled (KMReader's hugContent behaviour). In the horizontally
+scrollable modes (height/original) the tap zones anchor to the viewport with
+`position: fixed` so they do not scroll away with the content;
 the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
 changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
 `.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
