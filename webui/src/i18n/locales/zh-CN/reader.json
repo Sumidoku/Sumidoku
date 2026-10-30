@@ -47,6 +47,7 @@
     "bgDark": "黑色",
     "bgGray": "灰色",
     "bgLight": "白色",
+    "bgAuto": "跟随系统",
     "pageScale": "页面缩放",
     "scalePagedOnly": "页面缩放（仅翻页模式）",
     "scaleScreen": "适应屏幕",

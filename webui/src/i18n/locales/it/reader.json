@@ -47,6 +47,7 @@
     "bgDark": "Nero",
     "bgGray": "Grigio",
     "bgLight": "Bianco",
+    "bgAuto": "Segui il sistema",
     "pageScale": "Scala pagina",
     "scalePagedOnly": "Scala pagina (solo modalità pagine)",
     "scaleScreen": "Adatta allo schermo",

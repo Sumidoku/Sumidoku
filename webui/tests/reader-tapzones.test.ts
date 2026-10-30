@@ -70,7 +70,8 @@ test('stored tap-zone and background values parse against a whitelist', async ()
 		assert.equal(parseTapZones('LEFT_RIGHT'), null);
 		assert.equal(parseTapZones(null), null);
 		assert.equal(parseBackground('gray'), 'gray');
-		assert.equal(parseBackground('auto'), null);
+		// "auto" follows the app theme's resolved brightness
+		assert.equal(parseBackground('auto'), 'auto');
 		assert.equal(parseBackground(null), null);
 	});
 });

@@ -47,6 +47,7 @@
     "bgDark": "Black",
     "bgGray": "Gray",
     "bgLight": "White",
+    "bgAuto": "Follow system",
     "pageScale": "Page scale",
     "scalePagedOnly": "Page scale (paged mode only)",
     "scaleScreen": "Fit screen",

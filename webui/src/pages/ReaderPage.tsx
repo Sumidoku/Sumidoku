@@ -27,6 +27,7 @@ import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
 import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
+import { useResolvedTheme } from '../lib/theme';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
@@ -408,6 +409,9 @@ function ReaderCore({
 	const [globalBg] = useState<ReaderBackground>(readBackground);
 	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
 	const bg = bgOverride ?? globalBg;
+	// 'auto' follows the app theme: a light app theme reads on a white canvas
+	const resolvedTheme = useResolvedTheme();
+	const effectiveBg = bg === 'auto' ? (resolvedTheme === 'light' ? 'light' : 'dark') : bg;
 	const [globalScale] = useState<PageScale>(readScale);
 	const [scaleOverride, setScaleOverride] = useState<PageScale | null>(() => readScaleOverride(mangaId));
 	const scale = scaleOverride ?? globalScale;
@@ -1142,7 +1146,7 @@ function ReaderCore({
 	const barCls = (base: string) => (overlay ? base : `${base} reader__bar--hidden`);
 	// Canvas background variants: dark stays the unclassed default
 	const rootCls = (extra?: string) =>
-		['reader', bg === 'dark' ? '' : `reader--bg-${bg}`, extra ?? ''].filter(Boolean).join(' ');
+		['reader', effectiveBg === 'dark' ? '' : `reader--bg-${effectiveBg}`, extra ?? ''].filter(Boolean).join(' ');
 
 	if (pagesQuery.isPending) {
 		return (

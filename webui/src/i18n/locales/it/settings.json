@@ -38,6 +38,7 @@
     "bgDark": "Nero",
     "bgGray": "Grigio",
     "bgLight": "Bianco",
+    "bgAuto": "Segui il sistema",
     "readerPageScale": "Scala pagina predefinita",
     "scaleScreen": "Adatta allo schermo",
     "scaleWidth": "Adatta alla larghezza",
