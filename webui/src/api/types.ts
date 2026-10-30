@@ -1178,6 +1178,7 @@ export type TrackSearchItem = {
 	id: string;
 	title: string;
 	coverUrl?: string | null;
+	info?: string | null;
 	description?: string | null;
 	tracked: boolean;
 	mediaType?: "manga" | "novel";

@@ -9,6 +9,7 @@ publish = false
 aidoku-wasm = { path = "../wasm" }
 aidoku.workspace = true
 plist.workspace = true
+scraper = { version = "0.27", features = ["atomic"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

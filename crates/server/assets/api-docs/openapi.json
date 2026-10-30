@@ -5594,6 +5594,11 @@
             "type": "string",
             "nullable": true
           },
+          "info": {
+            "type": "string",
+            "nullable": true,
+            "description": "One line of publication facts (year, authors) that tells same-named entries apart"
+          },
           "description": {
             "type": "string",
             "nullable": true

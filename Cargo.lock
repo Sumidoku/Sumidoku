@@ -4081,6 +4081,7 @@ dependencies = [
  "reqwest",
  "rust-embed",
  "rustls",
+ "scraper",
  "serde",
  "serde_json",
  "sha2 0.11.1",
