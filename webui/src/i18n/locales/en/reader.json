@@ -9,6 +9,7 @@
     "documentTitle": "{{title}} · Reading",
     "documentTitleEmpty": "Reading",
     "loadFailed": "Failed to load chapter",
+    "pageFailed": "Failed to load this page",
     "retry": "Retry",
     "noPages": "This chapter has no pages",
     "back": "Back",
