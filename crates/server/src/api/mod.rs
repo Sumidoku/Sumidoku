@@ -1921,12 +1921,11 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: 
 }
 
 async fn chapter_cache_stats(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+	let (_, max_bytes) = crate::cache::settings(&state.pool).await?;
 	let stats = crate::cache::stats(
 		&state.pool,
 		&state.config.page_blobs_dir(),
 		&state.config.config_dir.join("opds-cbz"),
-		enabled,
 		max_bytes,
 	)
 	.await?;
@@ -1934,13 +1933,12 @@ async fn chapter_cache_stats(State(state): State<Arc<AppState>>) -> ApiResult<Js
 }
 
 async fn clear_chapter_cache(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-	let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+	let (_, max_bytes) = crate::cache::settings(&state.pool).await?;
 	let (cleared_bytes, used_bytes, chapter_count) = crate::cache::clear_state(&state).await?;
 	let stats = crate::cache::stats(
 		&state.pool,
 		&state.config.page_blobs_dir(),
 		&state.config.config_dir.join("opds-cbz"),
-		enabled,
 		max_bytes,
 	)
 	.await?;
@@ -2083,18 +2081,15 @@ pub(crate) async fn apply_settings(
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in body {
-		if key == "cache.chapterLruEnabled" && !value.is_boolean() {
-			return Err(ApiError::bad_request(
-				"cache.chapterLruEnabled must be a boolean",
-			));
-		}
+		// Removed experimental switch: older clients/backups must not disable collection.
+		if key == "cache.chapterLruEnabled" { continue; }
 		if key == "cache.chapterMaxBytes"
 			&& !value
 				.as_u64()
-				.is_some_and(|n| n >= crate::cache::MIN_MAX_BYTES as u64 && n <= i64::MAX as u64)
+				.is_some_and(|n| n <= i64::MAX as u64)
 		{
 			return Err(ApiError::bad_request(
-				"cache.chapterMaxBytes must be between 268435456 and 9223372036854775807",
+				"cache.chapterMaxBytes must be between 0 and 9223372036854775807",
 			));
 		}
 		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
@@ -2165,7 +2160,7 @@ pub(crate) async fn apply_settings(
 		.await?;
 	}
 	tx.commit().await?;
-	if body.contains_key("cache.chapterLruEnabled") || body.contains_key("cache.chapterMaxBytes") {
+	if body.contains_key("cache.chapterMaxBytes") {
 		crate::cache::enforce_limit(state).await?;
 	}
 	Ok(())

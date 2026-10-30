@@ -1203,8 +1203,15 @@ no alias is derived from migration text.
   download workers and image requests never recurse into reader-ahead.
 - Chapter page cache (`cache.rs`, `source/mod.rs`): page JSON rows, materialized
   image blobs, validated remote URL/Zip original responses and variants, and OPDS acquisition CBZ files share a persistent
-  per-chapter LRU budget. `cache.chapterLruEnabled` defaults true and
-  `cache.chapterMaxBytes` defaults to 2 GiB with a 256 MiB minimum. Startup
+  per-chapter LRU budget. `cache.chapterMaxBytes` defaults to 2 GiB and accepts
+  nonnegative integer byte budgets. Collection is always enabled; the former
+  `cache.chapterLruEnabled` setting is ignored and omitted from settings responses.
+  A zero budget bypasses remote original and resized-variant cache reads and writes,
+  while downsampling still runs on demand. Page rows, materialized Image blobs and
+  OPDS working archives retain their existing read lifecycle and can be reused
+  between requests. Zero also remains a collection target: active leases and the
+  five-minute recent-use grace still protect working data, so usage need not drop
+  to zero immediately. Cache stats `enabled` means the budget is positive. Startup
   reconciles existing rows and files and removes orphan cache files; a
   60-second sweep evicts least-recently-used chapters above the soft limit,
   allowing a five-minute grace period. Page reads and whole-download packaging
@@ -1222,8 +1229,8 @@ no alias is derived from migration text.
   identity and a SHA-256 digest; incomplete entries, changed page identities,
   and byte corruption are cache misses. A weakly indexed per-page flight shares
   overlapping reader/download fetches without retaining an in-memory image
-  cache. Reader misses persist exact originals; download-only misses fetch into
-  the product without adding cache files. Local, Image, and OpdsZip page kinds
+  cache. With a positive budget, reader misses persist exact originals;
+  download-only misses fetch into the product without adding cache files. Local, Image, and OpdsZip page kinds
   keep their existing storage.
 - Finished download cache cleanup (`download/mod.rs`): after the product row
   commits, the server takes the chapter write lease, rechecks the finished row
@@ -1275,8 +1282,9 @@ no alias is derived from migration text.
   `ZipCache` (version-checked, so atomic re-downloads never serve stale bytes); folder
   products read page files directly. The derived rows are live, never written to the page
   table, so a deleted/moved product falls back to the page cache/source path unchanged.
-  A usable finished product remains authoritative when `refresh` is requested; refresh
-  rebuilds source page rows only when no usable product exists.
+  A usable finished product remains authoritative when `refresh` is requested:
+  explicit refresh does not change the downloaded chapter's displayed pages or
+  images. Refresh rebuilds source page rows only when no usable product exists.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
@@ -1304,7 +1312,17 @@ no alias is derived from migration text.
   `page-blobs/<chapter_id>/variants/<bucket>/<idx>.png`, so buckets never
   share bytes; each variant manifest records the backing page identity and a
   digest of the resized bytes, so product bytes cannot reuse source variants.
-  A chapter reload (`materialize_image_pages`' wipe) or the
+  URL/Zip variants use the stored original `identity` and `sha256`, read under the
+  single-page flight lock: a warm PNG hit does not read or hash original bytes.
+  Original reads still validate their complete payload; repair at an unchanged URL
+  changes the digest and rejects earlier variants. Materialized Image identities
+  include the source, page content and chapter cache revision. Local, OpdsZip and
+  finished-product identities retain byte validation; identity hashes are only
+  computed for variant requests. Manifests carry original dimensions so a PNG hit
+  can backfill an unchecked page without reading the original or storing resized
+  dimensions. Missing metadata takes the normal original path. Recency writes on
+  image and page-list read paths are best effort and log failures without failing
+  the response. A chapter reload (`materialize_image_pages`' wipe) or the
   startup blob sweep invalidates them for free; a `<idx>.pass` marker
   records "not resized at this bucket" (narrow image or undecodable bytes)
   so repeat hits skip re-decoding. Pages never upscale and any failure

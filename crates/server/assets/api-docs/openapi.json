@@ -11106,12 +11106,13 @@
         "properties": {
           "enabled": {
             "type": "boolean",
-            "default": true
+            "default": true,
+            "description": "Whether original and resized image caching is enabled (maxBytes > 0). LRU collection always runs, including at zero budget."
           },
           "maxBytes": {
             "type": "integer",
             "format": "int64",
-            "minimum": 268435456,
+            "minimum": 0,
             "default": 2147483648
           },
           "usedBytes": {
@@ -11162,20 +11163,16 @@
       "ChapterCacheSettings": {
         "type": "object",
         "required": [
-          "chapterLruEnabled",
           "chapterMaxBytes"
         ],
         "properties": {
-          "chapterLruEnabled": {
-            "type": "boolean",
-            "default": true
-          },
           "chapterMaxBytes": {
             "type": "integer",
             "format": "int64",
-            "minimum": 268435456,
+            "minimum": 0,
             "maximum": 9223372036854775807,
-            "default": 2147483648
+            "default": 2147483648,
+            "description": "Cache budget in bytes. Zero bypasses original and resized image caches; required page data remains protected while active or recently used, then is reclaimed by the always-running LRU."
           }
         }
       }

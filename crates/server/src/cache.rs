@@ -7,7 +7,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 
 pub const DEFAULT_MAX_BYTES: i64 = 2 * 1024 * 1024 * 1024;
-pub const MIN_MAX_BYTES: i64 = 256 * 1024 * 1024;
+pub const MIN_MAX_BYTES: i64 = 0;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,27 +120,13 @@ async fn chapter_disk_bytes(
 		})
 }
 
-/// Reconcile indexed cache sizes at startup and before management responses. The durable rows
-/// retain LRU order and revisions; file sizes are refreshed to account for partial writes/orphans.
+/// Cache persistence is enabled only with a positive budget; LRU collection always runs.
 pub async fn settings(pool: &SqlitePool) -> ApiResult<(bool, i64)> {
-	let rows: Vec<(String, String)> = sqlx::query_as(
-		"SELECT key, value FROM setting WHERE key IN ('cache.chapterLruEnabled','cache.chapterMaxBytes')",
-	)
-	.fetch_all(pool)
-	.await?;
-	let mut enabled = true;
-	let mut max_bytes = DEFAULT_MAX_BYTES;
-	for (key, raw) in rows {
-		if key == "cache.chapterLruEnabled" {
-			enabled = serde_json::from_str(&raw).unwrap_or(true);
-		}
-		if key == "cache.chapterMaxBytes" {
-			max_bytes = serde_json::from_str::<i64>(&raw)
-				.unwrap_or(DEFAULT_MAX_BYTES)
-				.max(MIN_MAX_BYTES);
-		}
-	}
-	Ok((enabled, max_bytes))
+	let raw: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key='cache.chapterMaxBytes'")
+		.fetch_optional(pool).await?;
+	let max_bytes = raw.and_then(|raw| serde_json::from_str::<i64>(&raw).ok())
+		.filter(|value| *value >= 0).unwrap_or(DEFAULT_MAX_BYTES);
+	Ok((max_bytes > 0, max_bytes))
 }
 
 pub async fn touch(pool: &SqlitePool, chapter_id: i64) -> ApiResult<()> {
@@ -163,16 +149,18 @@ pub async fn write_variant(
 	bucket: u32,
 	png: Option<&[u8]>,
 	identity: &str,
+	dimensions: Option<(i64, i64)>,
 ) -> ApiResult<()> {
 	let lock = state.chapter_variant_lock(chapter_id, index, bucket).await;
 	let _write = lock.lock().await;
 	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
 	let _accounting = accounting_lock.lock().await;
+	if !settings(&state.pool).await?.0 { return Ok(()); }
 	let blobs = state.config.page_blobs_dir();
 	let paths = crate::source::downsample::variant_paths(&blobs, chapter_id, index, bucket);
 	let before = file_paths_bytes(paths.to_vec()).await?;
 	let intact = crate::source::downsample::variant_entry_is_intact(&blobs, chapter_id, index, bucket).await;
-	let result = crate::source::downsample::write_variant(&blobs, chapter_id, index, bucket, png, identity).await;
+	let result = crate::source::downsample::write_variant(&blobs, chapter_id, index, bucket, png, identity, dimensions).await;
 	if intact || before == 0 {
 		let after = file_paths_bytes(paths.to_vec()).await?;
 		update_byte_delta(state, chapter_id, after - before).await?;
@@ -206,6 +194,31 @@ pub fn source_variant_identity(source_id: i64, content: &serde_json::Value, byte
 	Ok(format!("source:{}", original_digest(bytes, "", &identity)))
 }
 
+/// The digest includes source identity, response MIME and exact processed/extracted bytes.
+pub fn original_variant_identity(source_id: i64, content: &serde_json::Value, bytes: &[u8], mime: &str) -> ApiResult<String> {
+	Ok(format!("source:original:{}", original_digest(bytes, mime, &original_identity(source_id, content)?)))
+}
+
+pub fn image_variant_identity(source_id: i64, content: &serde_json::Value, revision: i64) -> ApiResult<String> {
+	Ok(format!("source:image:{revision}:{}", original_digest(&[], "", &original_identity(source_id, content)?)))
+}
+
+/// Inspect only published original metadata. The single-page lock excludes staged replacement;
+/// original bytes are validated when used, while a variant validates its own payload separately.
+pub async fn cached_original_variant_identity(
+	state: &std::sync::Arc<crate::state::AppState>, chapter_id: i64, index: i64,
+	source_id: i64, content: &serde_json::Value,
+) -> Option<String> {
+	let flight = state.chapter_original_lock(chapter_id, index).await;
+	let _guard = flight.lock.lock().await;
+	let dir = original_dir(state, chapter_id, index);
+	let identity = tokio::fs::read(dir.join("identity")).await.ok()?;
+	if identity != original_identity(source_id, content).ok()? { return None; }
+	let digest = tokio::fs::read_to_string(dir.join("sha256")).await.ok()?;
+	if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) { return None; }
+	Some(format!("source:original:{digest}"))
+}
+
 pub fn product_variant_identity(entry: &str, bytes: &[u8]) -> String {
 	format!("product:{entry}:{}", original_digest(bytes, entry, entry.as_bytes()))
 }
@@ -229,9 +242,10 @@ where
 	let identity = original_identity(source_id, content)?;
 	let flight = state.chapter_original_lock(chapter_id, index).await;
 	let _guard = flight.lock.lock().await;
+	let enabled = settings(&state.pool).await?.0;
 	if let Some(value) = flight.cached(&identity) {
 		let value = (value.0.clone(), value.1.clone());
-		if persist && read_page_original(state, chapter_id, index, source_id, content).await.is_none() {
+		if enabled && persist && read_page_original(state, chapter_id, index, source_id, content).await.is_none() {
 			if let Err(error) = write_page_original(state, chapter_id, index, source_id, content, &value.0, &value.1).await {
 				tracing::warn!(chapter_id, index, "page original cache write failed: {}", error.message());
 			} else {
@@ -240,12 +254,12 @@ where
 		}
 		return Ok(value);
 	}
-	if let Some(value) = read_page_original(state, chapter_id, index, source_id, content).await {
+	if let Some(value) = if enabled { read_page_original(state, chapter_id, index, source_id, content).await } else { None } {
 		flight.publish(identity, value.0.clone(), value.1.clone());
 		return Ok(value);
 	}
 	let value = fetch.await?;
-	if persist {
+	if persist && enabled {
 		if let Err(error) = write_page_original(state, chapter_id, index, source_id, content, &value.0, &value.1).await {
 			tracing::warn!(chapter_id, index, "page original cache write failed: {}", error.message());
 		} else {
@@ -292,6 +306,7 @@ pub async fn write_page_original(
 	let staging = parent.join(format!(".{index}.staging"));
 	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
 	let _accounting = accounting_lock.lock().await;
+	if !settings(&state.pool).await?.0 { return Ok(()); }
 	let before = original_tree_bytes(dir.clone()).await?.saturating_add(original_tree_bytes(staging.clone()).await?);
 	let intact = original_entry_is_intact(&dir).await;
 	let identity = original_identity(source_id, content)?;
@@ -382,7 +397,6 @@ pub async fn stats(
 	pool: &SqlitePool,
 	_blobs: &Path,
 	_opds: &Path,
-	enabled: bool,
 	max_bytes: i64,
 ) -> ApiResult<ChapterCacheStats> {
 	let (used, count, last_error): (i64, i64, Option<String>) = sqlx::query_as(
@@ -392,7 +406,7 @@ pub async fn stats(
 		.fetch_one(pool)
 		.await?;
 	Ok(ChapterCacheStats {
-		enabled,
+		enabled: max_bytes > 0,
 		max_bytes: max_bytes.max(MIN_MAX_BYTES),
 		used_bytes: used,
 		chapter_count: count,
@@ -558,7 +572,7 @@ async fn clear_inner(
 	opds: &Path,
 	fail_on: Option<&Path>,
 ) -> ApiResult<(i64, i64, i64)> {
-	let current = stats(pool, blobs, opds, true, DEFAULT_MAX_BYTES).await?;
+	let current = stats(pool, blobs, opds, DEFAULT_MAX_BYTES).await?;
 	let ids: Vec<i64> = sqlx::query_scalar(
 		"SELECT id FROM chapter WHERE pages_analyzed_at IS NOT NULL
 		 UNION SELECT chapter_id FROM chapter_cache_state
@@ -630,7 +644,7 @@ async fn clear_inner(
 			"chapter cache clear incomplete: {message}"
 		)));
 	}
-	let after = stats(pool, blobs, opds, true, DEFAULT_MAX_BYTES).await?;
+	let after = stats(pool, blobs, opds, DEFAULT_MAX_BYTES).await?;
 	Ok((
 		current.used_bytes.saturating_sub(after.used_bytes),
 		after.used_bytes,
@@ -653,18 +667,14 @@ pub async fn clear_state(
 /// Enforce the configured soft limit oldest-first. The global read lease excludes a manual clear;
 /// a per-chapter write lease skips only assets currently used by a reader or download.
 pub async fn enforce_limit(state: &std::sync::Arc<crate::state::AppState>) -> ApiResult<()> {
-	let (enabled, max_bytes) = settings(&state.pool).await?;
-	enforce_limit_with_budget(state, enabled, max_bytes).await
+	let (_, max_bytes) = settings(&state.pool).await?;
+	enforce_limit_with_budget(state, max_bytes).await
 }
 
 async fn enforce_limit_with_budget(
 	state: &std::sync::Arc<crate::state::AppState>,
-	enabled: bool,
 	max_bytes: i64,
 ) -> ApiResult<()> {
-	if !enabled {
-		return Ok(());
-	}
 	let Some(_collector) = state.try_chapter_cache_collect() else {
 		return Ok(());
 	};
@@ -777,6 +787,7 @@ mod tests {
 		let config = crate::config::Config {
 			config_dir: tmp.path().to_path_buf(),
 			database_url: format!("sqlite://{}/gate.db?mode=rwc", tmp.path().display()),
+			downloads_dir: tmp.path().join("downloads"),
 			..crate::config::Config::default()
 		};
 		let pool = crate::db::create_pool(&config.database_url)
@@ -967,7 +978,7 @@ mod tests {
 		reconcile_chapter(&pool, &blobs, &opds, chapter)
 			.await
 			.expect("reconcile");
-		let before = stats(&pool, &blobs, &opds, true, DEFAULT_MAX_BYTES)
+		let before = stats(&pool, &blobs, &opds, DEFAULT_MAX_BYTES)
 			.await
 			.expect("stats");
 		assert!(before.used_bytes > 0);
@@ -1071,7 +1082,7 @@ mod tests {
 		let active = cached_chapter(&state, "active", 20, unix_now() - 800).await;
 		let active_lock = state.chapter_cache_lock(active).await;
 		let _active = active_lock.read().await;
-		enforce_limit_with_budget(&state, true, 20)
+		enforce_limit_with_budget(&state, 20)
 			.await
 			.expect("evict");
 		let old_pages: i64 = sqlx::query_scalar("SELECT count(*) FROM page WHERE chapter_id=?")
@@ -1089,25 +1100,13 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn lru_touch_disabled_setting_and_recent_grace_are_respected() {
+	async fn lru_touch_and_recent_grace_are_respected_at_zero_budget() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let state = app_state(&tmp).await;
 		let touched = cached_chapter(&state, "touched", 10, unix_now() - 900).await;
 		let older = cached_chapter(&state, "older", 10, unix_now() - 800).await;
 		touch(&state.pool, touched).await.expect("touch");
-		enforce_limit_with_budget(&state, false, 0)
-			.await
-			.expect("disabled");
-		assert_eq!(
-			sqlx::query_scalar::<_, i64>("SELECT count(*) FROM page WHERE chapter_id IN (?,?)")
-				.bind(touched)
-				.bind(older)
-				.fetch_one(&state.pool)
-				.await
-				.expect("rows"),
-			2
-		);
-		enforce_limit_with_budget(&state, true, 10)
+		enforce_limit_with_budget(&state, 10)
 			.await
 			.expect("evict");
 		assert_eq!(
@@ -1129,7 +1128,7 @@ mod tests {
 
 		let recent_a = cached_chapter(&state, "recent-a", 10, unix_now()).await;
 		let recent_b = cached_chapter(&state, "recent-b", 10, unix_now()).await;
-		enforce_limit_with_budget(&state, true, 0)
+		enforce_limit_with_budget(&state, 0)
 			.await
 			.expect("recent grace");
 		assert_eq!(
@@ -1196,7 +1195,7 @@ mod tests {
 			+ b"original".len() as i64
 			+ b"variant".len() as i64
 			+ b"cbz".len() as i64;
-		let stats = stats(&state.pool, &blobs, &opds, true, DEFAULT_MAX_BYTES)
+		let stats = stats(&state.pool, &blobs, &opds, DEFAULT_MAX_BYTES)
 			.await
 			.expect("stats");
 		assert_eq!(stats.used_bytes, expected);
@@ -1237,7 +1236,6 @@ mod tests {
 			&state.pool,
 			&state.config.page_blobs_dir(),
 			&opds,
-			true,
 			DEFAULT_MAX_BYTES,
 		)
 		.await
@@ -1254,7 +1252,6 @@ mod tests {
 				&state.pool,
 				&state.config.page_blobs_dir(),
 				&opds,
-				true,
 				DEFAULT_MAX_BYTES
 			)
 			.await
@@ -1263,4 +1260,38 @@ mod tests {
 			None
 		);
 	}
+	#[tokio::test]
+	async fn zero_budget_collects_idle_working_data_despite_legacy_disabled_switch() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		sqlx::query("INSERT INTO setting(key,value) VALUES ('cache.chapterMaxBytes','0'),('cache.chapterLruEnabled','false')")
+			.execute(&state.pool).await.expect("zero budget with legacy false");
+		let idle = cached_chapter(&state, "idle-zero", 10, unix_now() - 900).await;
+		let recent = cached_chapter(&state, "recent-zero", 10, unix_now()).await;
+		let active = cached_chapter(&state, "active-zero", 10, unix_now() - 900).await;
+		let active_lock = state.chapter_cache_lock(active).await;
+		let lease = active_lock.read().await;
+		let opds = state.config.opds_cbz_dir();
+		std::fs::create_dir_all(&opds).expect("opds dir");
+		std::fs::write(opds.join(idle.to_string()), b"archive").expect("working archive");
+		let product = state.config.downloads_dir.join("kept.cbz");
+		assert!(product.starts_with(tmp.path()), "test artifacts must stay under their TempDir");
+		std::fs::create_dir_all(&state.config.downloads_dir).expect("downloads dir");
+		std::fs::write(&product, b"finished product").expect("finished product");
+		sqlx::query("INSERT INTO download(chapter_id,user_id,status,format,path) VALUES (?,1,'finished','cbz','kept.cbz')")
+			.bind(idle).execute(&state.pool).await.expect("finished row");
+		enforce_limit(&state).await.expect("zero budget collector");
+		let pages: Vec<i64> = sqlx::query_scalar("SELECT DISTINCT chapter_id FROM page ORDER BY chapter_id")
+			.fetch_all(&state.pool).await.expect("remaining pages");
+		assert!(!pages.contains(&idle), "zero budget must evict idle page records");
+		assert!(pages.contains(&recent), "recent working data retains its grace period");
+		assert!(pages.contains(&active), "an active operation retains its working data");
+		assert!(!opds.join(idle.to_string()).exists(), "idle OPDS working archives are reclaimed");
+		assert!(product.exists(), "finished downloads are outside the cache budget");
+		drop(lease);
+		enforce_limit(&state).await.expect("collect released chapter");
+		assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM page WHERE chapter_id=?")
+			.bind(active).fetch_one(&state.pool).await.expect("active pages"), 0);
+	}
+
 }

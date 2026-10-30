@@ -84,6 +84,7 @@ import {
 	TriStateDropdown,
 	pushToast
 } from '../components';
+import { chapterCacheLimitBytes } from './settings/chapterCache';
 import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
 import { SettingsLayout, SETTINGS_GROUPS } from './settings/SettingsLayout';
 import { SkippedItems } from './settings/SkippedItems';
@@ -328,39 +329,25 @@ function ChapterCacheSection() {
 	const clear = useClearChapterCache();
 	const [clearConfirm, setClearConfirm] = useState(false);
 	const cacheSettings = settings.data?.cache;
-	const enabled = cacheSettings?.chapterLruEnabled ?? true;
 	const maxBytes = cacheSettings?.chapterMaxBytes ?? 2 * 1024 ** 3;
-	const [maxMiB, setMaxMiB] = useState(String(Math.round(maxBytes / 1024 ** 2)));
-	useEffect(() => setMaxMiB(String(Math.round(maxBytes / 1024 ** 2))), [maxBytes]);
+	const [maxMiB, setMaxMiB] = useState(String(maxBytes / 1024 ** 2));
+	useEffect(() => setMaxMiB(String(maxBytes / 1024 ** 2)), [maxBytes]);
 
 	async function saveLimit() {
-		const value = Number(maxMiB);
-		if (!Number.isFinite(value) || value < 256 || value % 256 !== 0) {
-			setMaxMiB(String(Math.round(maxBytes / 1024 ** 2)));
+		const value = chapterCacheLimitBytes(maxMiB);
+		if (value === null) {
+			setMaxMiB(String(maxBytes / 1024 ** 2));
 			return;
 		}
-		if (value === maxBytes / 1024 ** 2 || !settings.data) return;
+		if (value === maxBytes || !settings.data) return;
 		try {
 			await save.mutateAsync(
 				mergeServerSettings(settings.data, {
-					cache: { chapterLruEnabled: enabled, chapterMaxBytes: value * 1024 ** 2 }
+					cache: { chapterMaxBytes: value }
 				})
 			);
 		} catch {
-			setMaxMiB(String(Math.round(maxBytes / 1024 ** 2)));
-		}
-	}
-
-	async function toggleEnabled(on: boolean) {
-		if (!settings.data) return;
-		try {
-			await save.mutateAsync(
-				mergeServerSettings(settings.data, {
-					cache: { chapterLruEnabled: on, chapterMaxBytes: maxBytes }
-				})
-			);
-		} catch {
-			// The API client already reports the error; server settings remain unchanged.
+			setMaxMiB(String(maxBytes / 1024 ** 2));
 		}
 	}
 
@@ -394,15 +381,6 @@ function ChapterCacheSection() {
 				</div>
 			) : (
 				<>
-					<label className="settings-backup__section">
-						<Switch
-							checked={enabled}
-							disabled={save.isPending}
-							onChange={(on) => void toggleEnabled(on)}
-							label={t('settings.chapterCacheEnabled')}
-						/>
-						{t('settings.chapterCacheEnabled')}
-					</label>
 					<div className="settings-row">
 						<label className="settings-row__label" htmlFor="chapter-cache-limit">
 							{t('settings.chapterCacheLimit')}
@@ -410,8 +388,8 @@ function ChapterCacheSection() {
 						<Input
 							id="chapter-cache-limit"
 							type="number"
-							min={256}
-							step={256}
+							min={0}
+							step={1}
 							value={maxMiB}
 							disabled={save.isPending}
 							onChange={(event) => setMaxMiB(event.currentTarget.value)}

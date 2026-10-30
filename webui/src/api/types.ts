@@ -218,7 +218,6 @@ export type ChapterCacheClearResponse = {
 };
 
 export type ChapterCacheSettings = {
-	chapterLruEnabled: boolean;
 	chapterMaxBytes: number;
 };
 

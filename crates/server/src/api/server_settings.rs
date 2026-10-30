@@ -38,7 +38,6 @@ pub struct ServerSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterCacheSettings {
-	pub chapter_lru_enabled: bool,
 	pub chapter_max_bytes: u64,
 }
 
@@ -228,10 +227,8 @@ impl ServerSettings {
 			.collect();
 
 		let cache = Some(ChapterCacheSettings {
-			chapter_lru_enabled: get_bool(map, "cache.chapterLruEnabled").unwrap_or(true),
 			chapter_max_bytes: get_u64(map, "cache.chapterMaxBytes")
-				.unwrap_or(crate::cache::DEFAULT_MAX_BYTES as u64)
-				.max(crate::cache::MIN_MAX_BYTES as u64),
+				.unwrap_or(crate::cache::DEFAULT_MAX_BYTES as u64),
 		});
 
 		Ok(Self { incognito, library, download, backup, browse,
@@ -284,15 +281,11 @@ impl ServerSettings {
 		map.insert("browse.pinned_sources".into(), json!(self.browse.pinned_sources));
 		if let Some(cache) = self.cache {
 			map.insert(
-				"cache.chapterLruEnabled".into(),
-				json!(cache.chapter_lru_enabled),
-			);
-			map.insert(
 				"cache.chapterMaxBytes".into(),
 				json!(cache.chapter_max_bytes),
 			);
 		}
-		map.extend(self.extra);
+		map.extend(self.extra.into_iter().filter(|(key, _)| key != "cache.chapterLruEnabled"));
 		map
 	}
 }

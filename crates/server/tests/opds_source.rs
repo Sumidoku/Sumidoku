@@ -626,3 +626,27 @@ async fn image_proxy_does_not_forward_catalog_credentials() {
 	let leaked = seen.lock().unwrap().clone();
 	assert_eq!(leaked, None, "catalog credentials were sent to an unrelated host: {leaked:?}");
 }
+
+#[tokio::test]
+async fn zero_budget_reuses_required_opds_archive_between_page_requests() {
+	let t = opds_app().await;
+	let (port, server) = mock_catalog(false, true).await;
+	assert_eq!(request(&t.app, "PUT", "/api/v1/settings", Some(json!({"cache.chapterMaxBytes": 0}))).await.0, StatusCode::OK);
+	let source = register_instance(&t.app, "Zero budget", &format!("http://127.0.0.1:{port}/opds/catalog"), None).await;
+	let (manga_id, _) = register_alpha_manga(&t.app, source["id"].as_i64().expect("source")).await;
+	let chapters = chapter_ids(&t.app, manga_id).await;
+	let chapter_id = chapters[1].0;
+	let pages_url = format!("/api/v1/chapter/{chapter_id}/pages");
+	assert_eq!(request(&t.app, "GET", &pages_url, None).await.0, StatusCode::OK);
+	server.abort();
+	for _ in 0..2 {
+		assert_eq!(request(&t.app, "GET", &pages_url, None).await.0, StatusCode::OK);
+		for (index, expected) in [CBZ_PAGE_1, CBZ_PAGE_2].iter().enumerate() {
+			let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}?width=256"), None).await;
+			assert_eq!(status, StatusCode::OK, "working archive must not be downloaded for every page");
+			assert_eq!(&bytes, expected);
+		}
+	}
+	assert!(t.tmp.path().join("opds-cbz").join(chapter_id.to_string()).exists());
+	assert!(!t.tmp.path().join("page-blobs").join(chapter_id.to_string()).join("variants").exists());
+}

@@ -320,3 +320,28 @@ async fn blob_variant_download_byte_identical_and_refresh_uses_product() {
 	assert_eq!(decode_dims(&bytes), (BIG_W, BIG_H), "finished product stays authoritative after refresh");
 	assert_eq!(bytes, big);
 }
+
+#[tokio::test]
+async fn refreshing_image_pages_rejects_same_filename_variant() {
+	let t = canvas_app().await;
+	let manga_id = register_canvas_manga(&t.app).await;
+	let (_, chapters) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
+	let chapter_id = chapters[0]["id"].as_i64().expect("chapter");
+	let pages_url = format!("/api/v1/chapter/{chapter_id}/pages");
+	let (_, first_pages) = request(&t.app, "GET", &pages_url, None).await;
+	let first_revision = first_pages[0]["cacheRevision"].as_i64().expect("revision");
+	let blob = t.tmp.path().join(format!("page-blobs/{chapter_id}/0.png"));
+	std::fs::write(&blob, gradient_png(640, 480)).expect("wide image fixture");
+	let image_url = format!("/api/v1/chapter/{chapter_id}/page/0?width=256");
+	let (status, _, previous_variant) = request_full(&t.app, "GET", &image_url, None).await;
+	assert_eq!(status, StatusCode::OK);
+	let (status, refreshed) = request(&t.app, "GET", &format!("{pages_url}?refresh=true"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert!(refreshed[0]["cacheRevision"].as_i64().expect("new revision") > first_revision);
+	let fresh_original = std::fs::read(&blob).expect("fresh Image under same filename");
+	let expected = sumidoku_server::source::downsample::downsample_png(&fresh_original, 256).unwrap_or(fresh_original);
+	let (status, _, bytes) = request_full(&t.app, "GET", &image_url, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, expected, "an explicit source refresh must show the new Image generation when there is no finished product");
+	assert_ne!(bytes, previous_variant);
+}
