@@ -57,6 +57,8 @@
     "scaleOriginal": "Dimensioni originali",
     "stretch": "Allunga le pagine piccole",
     "stretchPagedOnly": "Allunga le pagine piccole (solo modalità pagine)",
+    "animations": "Animazione cambio pagina",
+    "animationsPagedOnly": "Animazione cambio pagina (solo modalità pagine)",
     "splitWide": "Dividi le pagine larghe",
     "splitWidePagedOnly": "Dividi le pagine larghe (solo modalità pagine)",
     "splitWideSingleOnly": "Dividi le pagine larghe (solo layout pagina singola)",

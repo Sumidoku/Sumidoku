@@ -46,7 +46,7 @@ import {
 	zoneMovesForward
 } from './reader/readerPrefs';
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
-import { buildSpreads, measureWhenKnown, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
+import { buildSpreads, measureWhenKnown, recordMeasured, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
@@ -271,6 +271,31 @@ function readSplitOverride(mangaId: number | null): boolean | null {
 	return null;
 }
 
+// The turn animation defaults to on, so only "0" is stored; overrides keep "1"/"0"
+function readAnim(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.anim') !== '0';
+	} catch {
+		return true;
+	}
+}
+
+function animOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.anim.${mangaId}`;
+}
+
+function readAnimOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(animOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -421,6 +446,9 @@ function ReaderCore({
 	const [globalSplit] = useState<boolean>(readSplit);
 	const [splitOverride, setSplitOverride] = useState<boolean | null>(() => readSplitOverride(mangaId));
 	const split = splitOverride ?? globalSplit;
+	const [globalAnim] = useState<boolean>(readAnim);
+	const [animOverride, setAnimOverride] = useState<boolean | null>(() => readAnimOverride(mangaId));
+	const anim = animOverride ?? globalAnim;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -520,7 +548,8 @@ function ReaderCore({
 			layout
 		);
 	}, [mode, pages, layout, measuredDims]);
-	const curSpread = spreads ? spreads[spreadIndexOf(spreads, idx)] : null;
+	const curSpreadIdx = spreads ? spreadIndexOf(spreads, idx) : 0;
+	const curSpread = spreads ? spreads[curSpreadIdx] : null;
 	// Wide-page splitting is a paged-mode, single-layout navigation overlay: the
 	// current page keeps its real index while a landscape page takes two turns
 	const splitOn = mode === 'paged' && layout === 'single' && split;
@@ -961,6 +990,18 @@ function ReaderCore({
 		setSplitOverride(mangaId !== null ? v : null);
 	}
 
+	function setAnim(v: boolean) {
+		if (v === anim) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(animOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.removeItem('sumidoku.reader.anim');
+			else localStorage.setItem('sumidoku.reader.anim', '0');
+		} catch {
+			// Private mode blocks persistence but the animation still switches
+		}
+		setAnimOverride(mangaId !== null ? v : null);
+	}
+
 	function toggleAsc() {
 		const next = !asc;
 		setAsc(next);
@@ -1191,6 +1232,7 @@ function ReaderCore({
 					data-tz={tapZones}
 					data-scale={scale}
 					data-stretch={stretch}
+					data-anim={anim}
 					ref={pagedRef}
 					style={{ touchAction }}
 					onClick={onPagedContainerClick}
@@ -1204,105 +1246,148 @@ function ReaderCore({
 						ref={zoomRef}
 						style={{ transformOrigin: '0 0', willChange: zoomed ? 'transform' : undefined }}
 					>
-						{curPage &&
-							(curText !== null ? (
-								<TextColumns
-									dir={dir}
-									html={md(curText)}
-									textStyle={textStyle}
-									layout={textLayout}
-									col={col}
-									innerRef={textColsRef}
-								/>
-							) : splitActive ? (
-								<div
-									className="reader__split"
-									style={
-										{
-											aspectRatio: `${splitActive.width / 2} / ${splitActive.height}`,
-											'--split-ratio': `${(splitActive.width / 2) / splitActive.height}`,
-											'--split-natural-w': `${splitActive.width / 2}px`
-										} as CSSProperties
-									}
-								>
-									{/* The half renders the image at twice the box width, so the
-									    downsample request doubles to stay sharp */}
-									<img
-										key={curPage.index}
-										className="reader__img"
-										src={pageUrl(chapterId, curPage.index, imgWidth * 2)}
-										alt={t('reader.pageAlt', { page: idx + 1 })}
-										style={{ objectPosition: `${splitSides(dir)[half]} center` }}
-										draggable={false}
-										onLoad={(e) =>
-											reportDims(idx, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
-										}
-									/>
-								</div>
-							) : (
-								// Slots are in reading order; the flex row's direction puts the first
-								// slot on the leading side (right under rtl)
-								<div
-									className="reader__spread"
-									style={{ direction: dir }}
-									data-slots={(curSpread ?? [idx]).length}
-								>
-									{(curSpread ?? [idx]).map((slot, si) => {
-										if (slot === null || !pages?.[slot]) {
-											// A blank takes its mate page's aspect ratio (KMReader convention:
-											// blankOf copies width/height), so the visible page sits exactly
-											// where the joined pair would place it. Fall back to the typical
-											// manga page ratio when the mate's size is still unknown.
-											const mate = (curSpread ?? [idx])[si === 0 ? 1 : 0];
-											const mateDims = mate !== null && mate !== undefined ? dimsOf(mate) : null;
-											const ratio = mateDims
-												? `${mateDims.width} / ${mateDims.height}`
-												: '2 / 3';
-											return (
-												<div
-													key={`blank-${si}`}
-													className="reader__blank"
-													style={{ aspectRatio: ratio }}
-												/>
-											);
-										}
-										const p = pages[slot];
-										const slotText = pageText(p);
-										const dims = dimsOf(slot);
-										if (slotText !== null) {
-											return (
-												<div
-													key={p.index}
-													className="reader-text reader__spread-text"
-													style={textStyle}
-													dangerouslySetInnerHTML={{ __html: md(slotText) }}
-												/>
-											);
-										}
-										if (isUnsupported(p)) {
-											return (
-												<div key={p.index} className="reader__unsupported">
-													{t('reader.unsupportedPage')}
+						{spreads && (
+							// Spreads form one sliding track: a turn translates the track by a
+							// whole viewport instead of swapping the current page in place
+							<div
+								className="reader__track"
+								style={{ direction: dir, transform: `translateX(${trackOffsetPercent(dir, curSpreadIdx)}%)` }}
+							>
+								{spreads.map((spread, si) => {
+									const isCur = si === curSpreadIdx;
+									// The ±2 window keeps both ends of a turn animation mounted; distant
+									// spreads render aspect-ratio placeholders instead of the images
+									const near = Math.abs(si - curSpreadIdx) <= 2;
+									const slotTexts = spread.map((s) => (s !== null && pages?.[s] ? pageText(pages[s]) : null));
+									const isTextSpread =
+										spread.some((s, k) => s !== null && slotTexts[k] !== null) &&
+										spread.every((s, k) => s === null || slotTexts[k] !== null);
+									return (
+										<div key={si} className="reader__spread" data-slots={spread.length}>
+											{isCur && curText !== null ? (
+												<div className="reader__spread-inner reader__spread-inner--text">
+													<TextColumns
+														dir={dir}
+														html={md(curText)}
+														textStyle={textStyle}
+														layout={textLayout}
+														col={col}
+														innerRef={textColsRef}
+													/>
 												</div>
-											);
-										}
-										return (
-											<img
-												key={p.index}
-												className="reader__img"
-												src={pageUrl(chapterId, p.index, imgWidth)}
-												alt={t('reader.pageAlt', { page: slot + 1 })}
-												width={dims?.width}
-												height={dims?.height}
-												draggable={false}
-												onLoad={(e) =>
-													reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
-												}
-											/>
-										);
-									})}
-								</div>
-							))}
+											) : isTextSpread ? (
+												// Neighbouring text spreads show their first column statically; all
+												// spreads share the viewport width, so the measured layout applies
+												<div className="reader__spread-inner reader__spread-inner--text">
+													<TextColumns
+														dir={dir}
+														html={md(slotTexts.find((txt) => txt !== null) ?? '')}
+														textStyle={textStyle}
+														layout={textLayout}
+														col={0}
+													/>
+												</div>
+											) : isCur && splitActive ? (
+												<div className="reader__spread-inner">
+													<div
+														className="reader__split"
+														style={
+															{
+																aspectRatio: `${splitActive.width / 2} / ${splitActive.height}`,
+																'--split-ratio': `${splitActive.width / 2 / splitActive.height}`,
+																'--split-natural-w': `${splitActive.width / 2}px`
+															} as CSSProperties
+														}
+													>
+														{/* The half renders the image at twice the box width, so the
+														    downsample request doubles to stay sharp */}
+														<img
+															key={curPage?.index}
+															className="reader__img"
+															src={pageUrl(chapterId, idx, imgWidth * 2)}
+															alt={t('reader.pageAlt', { page: idx + 1 })}
+															style={{ objectPosition: `${splitSides(dir)[half]} center` }}
+															draggable={false}
+															onLoad={(e) =>
+																reportDims(idx, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+															}
+														/>
+													</div>
+												</div>
+											) : (
+												// Slots are in reading order; the row's direction puts the first
+												// slot on the leading side (right under rtl)
+												<div className="reader__spread-inner">
+													{spread.map((slot, k) => {
+														if (slot === null || !pages?.[slot]) {
+															// A blank takes its mate page's aspect ratio (KMReader's
+															// blankOf convention), so the visible page sits exactly
+															// where the joined pair would place it
+															const mate = spread[k === 0 ? 1 : 0];
+															const mateDims = mate !== null && mate !== undefined ? dimsOf(mate) : null;
+															const ratio = mateDims
+																? `${mateDims.width} / ${mateDims.height}`
+																: '2 / 3';
+															return (
+																<div
+																	key={`blank-${k}`}
+																	className="reader__blank"
+																	style={{ aspectRatio: ratio }}
+																/>
+															);
+														}
+														const p = pages[slot];
+														const slotText = pageText(p);
+														const dims = dimsOf(slot);
+														if (slotText !== null) {
+															return (
+																<div
+																	key={p.index}
+																	className="reader-text reader__spread-text"
+																	style={textStyle}
+																	dangerouslySetInnerHTML={{ __html: md(slotText) }}
+																/>
+															);
+														}
+														if (isUnsupported(p)) {
+															return (
+																<div key={p.index} className="reader__unsupported">
+																	{t('reader.unsupportedPage')}
+																</div>
+															);
+														}
+														if (!near) {
+															return (
+																<div
+																	key={p.index}
+																	className="reader__img"
+																	style={dims ? { aspectRatio: `${dims.width} / ${dims.height}`, width: '100%' } : undefined}
+																	aria-hidden
+																/>
+															);
+														}
+														return (
+															<img
+																key={p.index}
+																className="reader__img"
+																src={pageUrl(chapterId, p.index, imgWidth)}
+																alt={t('reader.pageAlt', { page: slot + 1 })}
+																width={dims?.width}
+																height={dims?.height}
+																draggable={false}
+																onLoad={(e) =>
+																	reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+																}
+															/>
+														);
+													})}
+												</div>
+											)}
+										</div>
+									);
+								})}
+							</div>
+						)}
 					</div>
 					{tapZones !== 'off' && (
 						<>
@@ -1458,6 +1543,8 @@ function ReaderCore({
 					onSplitChange={setSplit}
 					stretch={stretch}
 					onStretchChange={setStretch}
+					anim={anim}
+					onAnimChange={setAnim}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

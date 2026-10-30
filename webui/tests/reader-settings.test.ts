@@ -42,6 +42,8 @@ async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continu
 					onSplitChange: () => {},
 					stretch: false,
 					onStretchChange: () => {},
+					anim: true,
+					onAnimChange: () => {},
 					currentPage,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {}
@@ -123,4 +125,15 @@ test('the wide-page split toggle renders unmarked in paged single layout', async
 test('continuous mode marks the split toggle as paged-only', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
 	assert.match(markup, /Split wide pages \(paged mode only\)/);
+});
+
+test('the animation toggle renders unmarked in paged mode', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /Page turn animation/);
+	assert.doesNotMatch(markup, /Page turn animation \(/);
+});
+
+test('continuous mode marks the animation toggle as paged-only', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
+	assert.match(markup, /Page turn animation \(paged mode only\)/);
 });

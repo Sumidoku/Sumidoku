@@ -23,6 +23,8 @@ interface ReaderSettingsProps {
 	onSplitChange: (split: boolean) => void;
 	stretch: boolean;
 	onStretchChange: (stretch: boolean) => void;
+	anim: boolean;
+	onAnimChange: (anim: boolean) => void;
 	currentPage: Page | null;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
@@ -44,6 +46,8 @@ export function ReaderSettings({
 	onSplitChange,
 	stretch,
 	onStretchChange,
+	anim,
+	onAnimChange,
 	currentPage,
 	typography,
 	onTypographyChange
@@ -135,6 +139,16 @@ export function ReaderSettings({
 						onChange={(e) => onStretchChange(e.currentTarget.checked)}
 					/>
 					<span>{mode !== 'paged' ? t('reader.stretchPagedOnly') : t('reader.stretch')}</span>
+				</label>
+			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<label className="reader__stretch">
+					<input
+						type="checkbox"
+						checked={anim}
+						onChange={(e) => onAnimChange(e.currentTarget.checked)}
+					/>
+					<span>{mode !== 'paged' ? t('reader.animationsPagedOnly') : t('reader.animations')}</span>
 				</label>
 			</div>
 			<div className="reader__settings-title">{t('reader.background')}</div>

@@ -57,6 +57,8 @@
     "scaleOriginal": "原始尺寸",
     "stretch": "拉伸小页面",
     "stretchPagedOnly": "拉伸小页面（仅翻页模式）",
+    "animations": "翻页动画",
+    "animationsPagedOnly": "翻页动画（仅翻页模式）",
     "splitWide": "切割宽页面",
     "splitWidePagedOnly": "切割宽页面（仅翻页模式）",
     "splitWideSingleOnly": "切割宽页面（仅单页布局）",

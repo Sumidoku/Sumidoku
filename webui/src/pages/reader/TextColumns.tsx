@@ -14,7 +14,8 @@ interface TextColumnsProps {
 	textStyle: CSSProperties;
 	layout: TextLayout;
 	col: number;
-	innerRef: RefObject<HTMLDivElement | null>;
+	// Only the current spread's columns carry the measurement ref; neighbours omit it
+	innerRef?: RefObject<HTMLDivElement | null>;
 }
 
 // Paged text page split into viewport-wide columns; the column flow and the track's

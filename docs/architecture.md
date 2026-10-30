@@ -1902,7 +1902,19 @@ and a two-page spread joins in the middle — explicit sizes would clamp each
 axis independently and letterbox a gap between the slots. Spreads carry page indexes, so
 progress reporting and the page slider stay page-based while turning moves by
 spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
-override-over-global resolution but no metadata counterpart. Keyboard shortcuts
+override-over-global resolution but no metadata counterpart. Paged spreads are
+laid out as one sliding track (after KMReader's PagedReader): the track is a flex
+row of viewport-sized spreads inside the zoom wrapper, and a page turn translates
+it by a whole spread width (`spreads.ts:trackOffsetPercent`, sign-flipped under
+rtl) with a 300ms ease-out transition instead of swapping the content in place.
+Each spread is its own scroll container holding a margin-auto inner box, and only
+spreads within two of the current one mount their images — distant spreads render
+aspect-ratio placeholders, which keeps the track cheap while guaranteeing both
+ends of a turn animation are live. Text spreads render their column layout
+statically on neighbouring spreads (column 0) and live on the current one. The
+animation can be switched off (`sumidoku.reader.anim` + `.anim.<id>`, default on,
+`0` disables) and `prefers-reduced-motion` always disables it; text pages slide
+between columns with the same transition. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
@@ -1930,15 +1942,13 @@ Paged page scale (`sumidoku.reader.scale` + `.scale.<id>`, after Suwayomi's
 ReaderPageScaleMode) is a `data-scale` variant on the paged container: `screen`
 contain-fits (the default), `width` fills the width, `widthShrink` only shrinks
 to the width without upscaling, `height` fills the height, and `original`
-shows natural pixels. The scrollable modes (width/widthShrink/original) make
-the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
-their fixed-height columns) and trade the fixed viewport for native scrolling;
-`height` also scrolls horizontally when a spread (or a single landscape page)
-is wider than the viewport — the wrapper and spread size to their content with
-flex-shrink disabled (KMReader's hugContent behaviour). In the horizontally
-scrollable modes (height/original) the tap zones anchor to the viewport with
-`position: fixed` so they do not scroll away with the content;
-the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
+shows natural pixels. The scrollable modes (width/widthShrink/original) grow the
+spread's inner content box past the viewport and let the spread itself scroll —
+the zoom wrapper and track stay viewport-sized — while the hugContent modes
+(height/original) let an overwide pair scroll sideways the same way; text pages
+keep their fixed-height column layout under every scale. The wheel page-turner
+leaves the wheel to the scrollable modes, and pinch zoom resets on scale
+changes like any layout change.
 changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
 `.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
 screen scale via a full-size object-fit: contain box. The c hotkey cycles the
