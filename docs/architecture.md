@@ -1891,7 +1891,11 @@ the metadata), and the global settings are the fallback for manga whose viewer
 carries no corresponding preference. The paged mode also offers a page layout
 (`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
 pages into spreads in reading order, giving the cover and closing page a blank
-mate and always showing landscape pages solo. Inside a spread the images size
+mate and always showing landscape pages solo. Blank slots copy their mate's
+aspect ratio (KMReader's `blankOf` convention, with a 2:3 fallback while the
+mate's size is unknown) and contain-fit inside their half, so the visible page
+sits exactly where the joined pair would place it. Inside a spread the images
+size
 with `width: auto; height: auto` (`reader.css`): the measured width/height
 attributes then act only as an aspect-ratio hint, so each page hugs its content
 and a two-page spread joins in the middle — explicit sizes would clamp each
