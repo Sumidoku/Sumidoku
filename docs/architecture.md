@@ -1238,17 +1238,22 @@ no alias is derived from migration text.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
-  are measured only during downloads (`download/mod.rs:fetch_page`): after the
-  page file is written, the downloader reads only the first 64 KiB head and runs
-  it through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
-  full pixel decoding). If the head is inconclusive and the file is larger than
-  the window, it falls back to a full read; a read failure leaves the row
-  retryable and invalid image bytes become checked with nulls. Page-list loads
-  (`load_pages`) do not fetch or measure images just for metadata. Page-row
-  rewrites reset all three fields so changed images cannot inherit stale
-  dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing content/index
-  shape and adds top-level `width`/`height` only when both are known; text and
-  unknown pages omit the pair.
+  are measured on two paths, both through image 0.25's
+  `ImageReader::into_dimensions` (decoder metadata, not full pixel decoding).
+  During downloads (`download/mod.rs:fetch_page`), after the page file is
+  written, the downloader reads only the first 64 KiB head; if the head is
+  inconclusive and the file is larger than the window, it falls back to a full
+  read, a read failure leaves the row retryable, and invalid image bytes become
+  checked with nulls. During reading (`api/page.rs:get_page`), any page served
+  from bytes already in memory is measured and backfilled when its row is still
+  unchecked (`persist_measured` adds a `dimensions_checked = 0` guard, so a
+  read-path probe never overwrites the download path's authoritative values;
+  undecodable bytes stay unchecked and retryable rather than pinned as nulls).
+  Page-list loads (`load_pages`) do not fetch or measure images just for
+  metadata. Page-row rewrites reset all three fields so changed images cannot
+  inherit stale dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing
+  content/index shape and adds top-level `width`/`height` only when both are
+  known; text and unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
@@ -1853,16 +1858,22 @@ changed before the first query, and the search view's URL changes on submission.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
-reader uses positive known page dimensions (populated during downloads) as
+reader uses positive known page dimensions (populated during downloads and by the
+read-path backfill in `get_page`, so a remote chapter reports dimensions from its
+second open onward) as
 image intrinsic dimensions and continuous/webtoon container aspect ratios,
 reserving space before lazy loads; text and unsupported pages get no forced
 ratio, and paged mode keeps its fixed viewport. Pages the server has not
 measured (remote chapters never downloaded) start without a ratio and get one
-from the image's own `onLoad`: the spread `<img>`, the continuous-mode `<img>`
-and the prefetch probe report natural dimensions through `recordMeasured`,
-which only fills gaps (server values win, unchanged values keep the map
-identity), so double-page spreads re-pair when a loaded image turns out
-landscape without moving the current page.
+from the image itself: the prefetch probe polls `naturalWidth` past the header
+parse (`reader/spreads.ts:measureWhenKnown`, capped at 600 frames and probing
+the current page too — the browser coalesces its duplicate request with the
+rendered image), so pairing and wide-page splitting settle before the image
+finishes loading, while the spread `<img>`, the continuous-mode `<img>` and the
+probe `onload` still report through `recordMeasured` as the fallback, which only
+fills gaps (server values win, unchanged values keep the map identity), so
+double-page spreads re-pair when a loaded image turns out landscape without
+moving the current page.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction
