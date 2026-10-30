@@ -339,11 +339,72 @@ impl DownloadManager {
 	/// Settles a row reusing a shared artifact: no repackaging, the row goes straight to finished and gets the download flag
 	async fn settle_finished(&self, chapter_id: i64, user_id: i64, path: &str, format: &str) {
 		let result = persist_finished(&self.pool, chapter_id, user_id, path, format, FinishMode::Upsert).await;
-		if let Err(e) = result {
-			tracing::warn!(chapter_id, "download shared-artifact settle failed: {e}");
-			return;
+		if let Err(e) = result { tracing::warn!(chapter_id, "download shared-artifact settle failed: {e}"); return; }
+		self.cleanup_page_cache_after_finish(chapter_id, 0, 0, user_id).await;
+	}
+
+	/// A committed product supersedes derived/source page assets. Recheck under the chapter write
+	/// lease so a concurrent removal or requeue cannot clean files for a stale completion.
+	async fn cleanup_page_cache_after_finish(&self, chapter_id: i64, done: i64, total: i64, user_id: i64) -> bool {
+		self.cleanup_page_cache_after_finish_with_failure(chapter_id, done, total, user_id, None).await
+	}
+
+	async fn cleanup_page_cache_after_finish_with_failure(
+		&self,
+		chapter_id: i64,
+		done: i64,
+		total: i64,
+		user_id: i64,
+		fail_on: Option<PathBuf>,
+	) -> bool {
+		let Some(state) = self.state.upgrade() else { return false; };
+		let _cache_lease = state.chapter_cache_gate.read().await;
+		let chapter_lock = state.chapter_cache_lock(chapter_id).await;
+		let _chapter = chapter_lock.write().await;
+		let product = match crate::download::finished_product(&state, chapter_id).await {
+			Ok(Some(product)) => product,
+			Ok(None) => return false,
+			Err(error) => { tracing::warn!(chapter_id, "finished download recheck failed: {}", error.message()); return false; }
+		};
+		if let Err(error) = crate::download::product_entry_names(&state, &product).await {
+			tracing::warn!(chapter_id, "finished download artifact is not usable; page cache retained: {}", error.message());
+			return false;
 		}
-		self.emit("finished", chapter_id, 0, 0, user_id);
+		let mut failures = Vec::new();
+		for path in [
+			state.config.page_blobs_dir().join(chapter_id.to_string()),
+			state.config.page_blobs_dir().join(format!("{chapter_id}.previous")),
+			state.config.page_blobs_dir().join(format!("{chapter_id}.staging")),
+			state.config.opds_cbz_dir().join(chapter_id.to_string()),
+			state.config.opds_cbz_dir().join(format!("{chapter_id}.previous")),
+			state.config.opds_cbz_dir().join(format!("{chapter_id}.staging")),
+		] {
+			let removal = if fail_on.as_deref() == Some(path.as_path()) {
+				Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "injected cache cleanup failure"))
+			} else {
+				match tokio::fs::symlink_metadata(&path).await {
+				Ok(meta) if meta.is_dir() && !meta.file_type().is_symlink() => {
+					tokio::fs::remove_dir_all(&path).await
+				}
+				Ok(_) => tokio::fs::remove_file(&path).await,
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+				Err(error) => Err(error),
+				}
+			};
+			if let Err(error) = removal {
+				if error.kind() != std::io::ErrorKind::NotFound { failures.push(format!("{}: {error}", path.display())); }
+			}
+		}
+		let publish = crate::cache::publish_chapter(&state, chapter_id).await;
+		let message = if let Err(error) = publish { Some(error.message().to_string()) }
+			else if failures.is_empty() { None }
+			else { Some(format!("download cache cleanup incomplete: {}", failures.join("; "))) };
+		if let Some(message) = message {
+			tracing::warn!(chapter_id, error = %message, "finished download cache cleanup failed");
+			let _ = sqlx::query("UPDATE chapter_cache_state SET last_error=? WHERE chapter_id=?").bind(message).bind(chapter_id).execute(&self.pool).await;
+		}
+		self.emit("finished", chapter_id, done, total, user_id);
+		true
 	}
 
 	/// Enqueues the deduped chapter list; rows belong to user_id, already finished/queued/running ones are skipped, error rows are reset and requeued
@@ -558,6 +619,15 @@ impl DownloadManager {
         user_id: i64,
         finished_only: bool,
     ) -> ApiResult<bool> {
+		// Signal an active attempt before waiting for its chapter read lease to drain.
+		let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=?")
+			.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
+		if finished_only && status.as_deref() != Some("finished") { return Ok(false); }
+		if !finished_only && status.as_deref() == Some("downloading") { self.mark_cancel(chapter_id).await; }
+		let state = self.state.upgrade();
+		let _cache_lease = if let Some(state) = &state { Some(state.chapter_cache_gate.read().await) } else { None };
+		let chapter_lock = if let Some(state) = &state { Some(state.chapter_cache_lock(chapter_id).await) } else { None };
+		let _chapter = if let Some(lock) = &chapter_lock { Some(lock.write().await) } else { None };
 		let mut tx = crate::db::begin_write(&self.pool).await?;
 		let row: Option<(String, Option<String>)> =
 			sqlx::query_as("SELECT status, path FROM download WHERE chapter_id = ? AND user_id = ?")
@@ -606,6 +676,21 @@ impl DownloadManager {
 			&& orphaned
 		{
 			let _ = remove_path(&product_path(&self.downloads_dir, &path)).await;
+		}
+		if let Some(state) = &state {
+			let variants = state.config.page_blobs_dir().join(chapter_id.to_string()).join("variants");
+			let invalidation = match tokio::fs::remove_dir_all(&variants).await {
+				Ok(()) => None,
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+				Err(error) => Some(format!("invalidate page variants: {error}")),
+			};
+			if let Err(error) = crate::cache::publish_chapter(&state, chapter_id).await {
+				let message = error.message().to_string();
+				tracing::warn!(chapter_id, "download deletion cache revision update failed: {message}");
+			} else if let Some(message) = invalidation {
+				tracing::warn!(chapter_id, "{message}");
+				let _ = sqlx::query("UPDATE chapter_cache_state SET last_error=? WHERE chapter_id=?").bind(message).bind(chapter_id).execute(&self.pool).await;
+			}
 		}
 		Ok(true)
 	}
@@ -939,7 +1024,7 @@ impl DownloadManager {
 								path = %path,
 								"download finished"
 							);
-							self.emit("finished", chapter_id, total, total, user_id);
+							self.cleanup_page_cache_after_finish(chapter_id, total, total, user_id).await;
 							self.cleanup_tmp(chapter_id).await;
 						}
 						Ok(false) => self.cleanup_attempt(chapter_id, Some(&path)).await,
@@ -1007,7 +1092,7 @@ impl DownloadManager {
 			.ok_or_else(|| "server is shutting down".to_string())?;
         let _cache_lease = state.chapter_cache_gate.read().await;
         let cache_lock = state.chapter_cache_lock(chapter_id).await;
-        let _chapter_cache = cache_lock.read().await;
+        let chapter_cache = cache_lock.read().await;
 		let chapter = chapter_row(&self.pool, chapter_id)
 			.await
 			.map_err(|e| format!("load chapter: {e:?}"))?;
@@ -1032,9 +1117,26 @@ impl DownloadManager {
 				.map_err(|e| format!("load download format: {e:?}"))?;
 		let format = format.map(|(f,)| f).unwrap_or_else(|| "cbz".into());
 
-		let pages = crate::source::load_pages_under_lease(&state, chapter_id, false)
+		let mut pages = crate::source::load_pages_under_lease(&state, chapter_id, false)
 			.await
 			.map_err(|e| format!("load pages: {e:?}"))?;
+		let stale_materialized = crate::source::has_missing_materialized_page(&state, chapter_id, &pages)
+			.await.map_err(|e| format!("check materialized pages: {e:?}"))?;
+		let _chapter_cache = if stale_materialized {
+			drop(chapter_cache);
+			let chapter_write = cache_lock.write().await;
+			pages = crate::source::load_pages_under_lease(&state, chapter_id, false)
+				.await.map_err(|e| format!("reload pages: {e:?}"))?;
+			if crate::source::has_missing_materialized_page(&state, chapter_id, &pages)
+				.await.map_err(|e| format!("check materialized pages: {e:?}"))? {
+				crate::source::load_pages_under_lease(&state, chapter_id, true)
+					.await.map_err(|e| format!("refresh pages: {e:?}"))?;
+			}
+			let chapter_read = tokio::sync::RwLockWriteGuard::downgrade(chapter_write);
+			pages = crate::source::load_pages_under_lease(&state, chapter_id, false)
+				.await.map_err(|e| format!("reload refreshed pages: {e:?}"))?;
+			chapter_read
+		} else { chapter_cache };
 		let total = pages.len() as i64;
 		self.progress.lock().await.insert(chapter_id, (0, total));
 		if first_attempt {
@@ -1163,7 +1265,7 @@ async fn fetch_page(
 		serde_json::from_str(&page.content).map_err(|e| format!("parse page {idx}: {e}"))?;
 	let content = stored.get("content").cloned().unwrap_or(Value::Null);
 	let is_text = content.get("Text").is_some();
-	let (bytes, ext) = page_bytes(state, source_id, chapter_id, &content)
+	let (bytes, ext) = page_bytes(state, source_id, chapter_id, idx, &content)
 		.await
 		.map_err(|e| format!("page {idx}: {e}"))?;
 	let name = format!("{idx:03}.{ext}");
@@ -1203,6 +1305,7 @@ async fn page_bytes(
 	state: &Arc<AppState>,
 	source_id: i64,
 	chapter_id: i64,
+	index: i64,
 	content: &Value,
 ) -> Result<(Vec<u8>, String), String> {
 	if let Some(text) = content.get("Text").and_then(Value::as_str) {
@@ -1214,35 +1317,41 @@ async fn page_bytes(
 			.map_err(|e| format!("{e:?}"))?;
 		return Ok((bytes, "png".into()));
 	}
-	if let Some(url) = content.get("Url").and_then(Value::as_array) {
-		let url_str = url
-			.first()
-			.and_then(Value::as_str)
-			.ok_or("invalid url page content")?;
-		let context: Option<PageContext> = match url.get(1) {
-			Some(value) if !value.is_null() => serde_json::from_value(value.clone())
-				.map_err(|e| format!("invalid page context: {e}"))?,
-			_ => None,
-		};
-		let (bytes, mime) = fetch_page_image(state, source_id, url_str, context)
-			.await
-			.map_err(|e| format!("{e:?}"))?;
-		return Ok((bytes, ext_for_mime(mime.as_deref()).to_string()));
-	}
-	if let Some(zip) = content.get("Zip").and_then(Value::as_array) {
-		let zip_url = zip
-			.first()
-			.and_then(Value::as_str)
-			.ok_or("invalid zip page content")?;
-		let entry_path = zip
-			.get(1)
-			.and_then(Value::as_str)
-			.ok_or("invalid zip page content")?;
-		let (zip_bytes, _) = http_get(state, source_id, zip_url)
-			.await
-			.map_err(|e| format!("{e:?}"))?;
-		let entry = extract_zip_entry(&zip_bytes, entry_path)?;
-		return Ok((entry, ext_for_path(entry_path)));
+	if content.get("Url").is_some() || content.get("Zip").is_some() {
+		let (bytes, mime) = crate::cache::page_original(
+			state,
+			chapter_id,
+			index,
+			source_id,
+			content,
+			false,
+			async {
+				if let Some(url) = content.get("Url").and_then(Value::as_array) {
+					let url_str = url.first().and_then(Value::as_str).ok_or_else(|| crate::error::ApiError::bad_request("invalid url page content"))?;
+					let context: Option<PageContext> = match url.get(1) {
+						Some(value) if !value.is_null() => Some(serde_json::from_value(value.clone())?),
+						_ => None,
+					};
+					let (bytes, mime) = fetch_page_image(state, source_id, url_str, context).await?;
+					Ok((bytes, mime.unwrap_or_else(|| "application/octet-stream".into())))
+				} else {
+					let zip = content.get("Zip").and_then(Value::as_array).ok_or_else(|| crate::error::ApiError::bad_request("invalid zip page content"))?;
+					let zip_url = zip.first().and_then(Value::as_str).ok_or_else(|| crate::error::ApiError::bad_request("invalid zip page content"))?;
+					let entry_path = zip.get(1).and_then(Value::as_str).ok_or_else(|| crate::error::ApiError::bad_request("invalid zip page content"))?;
+					let (zip_bytes, _) = http_get(state, source_id, zip_url).await?;
+					let entry = extract_zip_entry(&zip_bytes, entry_path).map_err(crate::error::ApiError::bad_request)?;
+					let mime = match ext_for_path(entry_path).as_str() {
+						"jpg" | "jpeg" => "image/jpeg", "png" => "image/png", "webp" => "image/webp",
+						"gif" => "image/gif", "bmp" => "image/bmp", "avif" => "image/avif",
+						_ => "application/octet-stream",
+					}.to_string();
+					Ok((entry, mime))
+				}
+			},
+		)
+		.await
+		.map_err(|e| format!("{e:?}"))?;
+		return Ok((bytes, ext_for_mime(Some(&mime)).to_string()));
 	}
 	if let Some(entry) = content.get("OpdsZip").and_then(Value::as_str) {
 		let chapter = chapter_row(&state.pool, chapter_id)
@@ -1396,7 +1505,8 @@ async fn finished_product(state: &Arc<AppState>, chapter_id: i64) -> ApiResult<O
 	let path = product_path(&state.config.downloads_dir, &path);
 	let meta = match tokio::fs::metadata(&path).await {
 		Ok(meta) => meta,
-		Err(_) => return Ok(None),
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(error) => return Err(ApiError::internal(format!("inspect finished download artifact: {error}"))),
 	};
 	if (format == "folder" && !meta.is_dir()) || (format != "folder" && !meta.is_file()) {
 		return Ok(None);
@@ -2275,6 +2385,110 @@ mod tests {
 		assert_eq!(entry, "000.png");
 		assert_eq!(bytes, b"zero");
 		assert!(read_product_page(&state, chapter_id, 3).await.expect("oob").is_none());
+	}
+
+	#[tokio::test]
+	async fn finished_event_follows_page_cache_cleanup_and_revision_update() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		write_test_cbz(&dir.join("done.cbz"), &[("000.png", b"product-page")]);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/done.cbz").await;
+		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+		std::fs::create_dir_all(blob_dir.join("variants/256")).expect("blob dirs");
+		std::fs::write(blob_dir.join("0.png"), b"materialized").expect("materialized page");
+		std::fs::write(blob_dir.join("variants/256/0.png"), b"variant").expect("variant");
+		sqlx::query("INSERT INTO page(chapter_id,idx,content,width,height,dimensions_checked) VALUES (?,0,'{\"content\":{\"Image\":\"0.png\"}}',640,480,1)")
+			.bind(chapter_id).execute(&state.pool).await.expect("page metadata");
+		let old_revision = crate::cache::chapter_revision(&state.pool, chapter_id).await.expect("old revision");
+		let manager = state.downloads();
+		let mut events = manager.subscribe();
+		let chapter_lock = state.chapter_cache_lock(chapter_id).await;
+		let chapter_reader = chapter_lock.read().await;
+		let cleanup_manager = manager.clone();
+		let cleanup = tokio::spawn(async move { cleanup_manager.cleanup_page_cache_after_finish(chapter_id, 1, 1, 1).await });
+		while chapter_lock.try_read().is_ok() {
+			assert!(!cleanup.is_finished(), "completion cleanup must queue behind the chapter reader");
+			tokio::task::yield_now().await;
+		}
+		assert!(!cleanup.is_finished(), "completion cleanup waits for the chapter reader");
+		drop(chapter_reader);
+		assert!(cleanup.await.expect("cleanup task"));
+		assert!(!blob_dir.exists(), "all source-derived page assets are removed");
+		let row: (i64, Option<i64>, Option<i64>, Option<i64>) = sqlx::query_as(
+			"SELECT count(*), max(width), max(height), max(dimensions_checked) FROM page WHERE chapter_id=?",
+		)
+		.bind(chapter_id).fetch_one(&state.pool).await.expect("page row");
+		assert_eq!(row, (1, Some(640), Some(480), Some(1)), "cleanup preserves page metadata");
+		assert!(crate::cache::chapter_revision(&state.pool, chapter_id).await.expect("new revision") > old_revision);
+		let event = events.try_recv().expect("finished event after cleanup");
+		assert_eq!(event.kind, "finished");
+		assert_eq!(event.chapter_id, chapter_id);
+	}
+
+	#[tokio::test]
+	async fn failed_page_cache_cleanup_keeps_product_and_reports_actual_usage_before_event() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		let artifact = dir.join("done.cbz");
+		write_test_cbz(&artifact, &[("000.png", b"finished-page")]);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/done.cbz").await;
+		let page_json = r#"{"content":{"Image":"0.png"},"thumbnail":null,"hasDescription":false,"description":null}"#;
+		sqlx::query("INSERT INTO page(chapter_id,idx,content) VALUES (?,0,?)")
+			.bind(chapter_id).bind(page_json).execute(&state.pool).await.expect("page row");
+		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+		std::fs::create_dir_all(blob_dir.join("originals/0")).expect("original dir");
+		std::fs::write(blob_dir.join("originals/0/bytes"), b"source-page-bytes").expect("original bytes");
+		crate::cache::reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), chapter_id).await.expect("initial accounting");
+		let manager = state.downloads();
+		let mut events = manager.subscribe();
+		assert!(manager.cleanup_page_cache_after_finish_with_failure(chapter_id, 1, 1, 1, Some(blob_dir.clone())).await);
+		assert!(artifact.exists(), "cache cleanup failure never removes the committed product");
+		assert!(blob_dir.join("originals/0/bytes").exists(), "injected cleanup failure leaves the cache files");
+		let status: String = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=1")
+			.bind(chapter_id).fetch_one(&state.pool).await.expect("download status");
+		assert_eq!(status, "finished");
+		let (accounted, last_error): (i64, Option<String>) = sqlx::query_as("SELECT bytes,last_error FROM chapter_cache_state WHERE chapter_id=?")
+			.bind(chapter_id).fetch_one(&state.pool).await.expect("cache state");
+		let page_bytes: i64 = sqlx::query_scalar("SELECT coalesce(sum(length(CAST(content AS BLOB))),0) FROM page WHERE chapter_id=?")
+			.bind(chapter_id).fetch_one(&state.pool).await.expect("page bytes");
+		let disk_bytes = crate::cache::chapter_disk_bytes_blocking(&state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), chapter_id).expect("disk usage");
+		assert_eq!(accounted, page_bytes + disk_bytes, "failed cleanup reports actual remaining usage");
+		assert!(last_error.is_some_and(|error| error.contains("injected cache cleanup failure")));
+		let event = events.try_recv().expect("finished event follows attempted cleanup and accounting");
+		assert_eq!(event.kind, "finished");
+	}
+
+	#[tokio::test]
+	async fn stale_cleanup_after_delete_preserves_cache_and_emits_no_finished_event() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let dir = state.config.downloads_dir.join("Source/Manga");
+		std::fs::create_dir_all(&dir).expect("product dir");
+		write_test_cbz(&dir.join("gone.cbz"), &[("000.png", b"page")]);
+		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/gone.cbz").await;
+		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+		std::fs::create_dir_all(blob_dir.join("originals/0")).expect("original cache dir");
+		std::fs::write(blob_dir.join("originals/0/bytes"), b"source page").expect("cached bytes");
+		let manager = state.downloads();
+		let mut events = manager.subscribe();
+		assert!(manager.delete_guarded(chapter_id, 1, false).await.expect("delete product"));
+		assert!(!manager.cleanup_page_cache_after_finish(chapter_id, 1, 1, 1).await, "late completion recheck sees the deleted row");
+		assert!(blob_dir.join("originals/0/bytes").exists(), "stale cleanup cannot remove page cache after deletion");
+		assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
+	}
+
+	#[tokio::test]
+	async fn finished_only_delete_does_not_cancel_an_active_download() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		sqlx::query("INSERT INTO download(chapter_id,user_id,status) VALUES (?,1,'downloading')")
+			.bind(chapter_id).execute(&state.pool).await.expect("downloading row");
+		let manager = state.downloads();
+		assert!(!manager.delete_guarded(chapter_id, 1, true).await.expect("finished-only delete"));
+		assert!(!manager.cancel.lock().await.contains(&chapter_id), "finished-only action leaves active cancellation state alone");
+		let status: String = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=1")
+			.bind(chapter_id).fetch_one(&state.pool).await.expect("download status");
+		assert_eq!(status, "downloading");
 	}
 
 	async fn set_setting(state: &AppState, key: &str, value: serde_json::Value) {

@@ -18,6 +18,24 @@ pub enum VariantHit {
 	PassThrough,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+struct VariantManifest { identity: String, digest: String }
+
+fn bytes_digest(bytes: &[u8]) -> String {
+	use sha2::Digest;
+	sha2::Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub async fn variant_entry_is_intact(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> bool {
+	let dir = variant_dir(blobs_dir, chapter_id, bucket);
+	let Ok(manifest) = tokio::fs::read(dir.join(format!("{index}.identity"))).await else { return false; };
+	let Ok(manifest) = serde_json::from_slice::<VariantManifest>(&manifest) else { return false; };
+	if let Ok(bytes) = tokio::fs::read(dir.join(format!("{index}.png"))).await {
+		return bytes_digest(&bytes) == manifest.digest;
+	}
+	tokio::fs::metadata(dir.join(format!("{index}.pass"))).await.is_ok() && bytes_digest(&[]) == manifest.digest
+}
+
 fn variant_dir(blobs_dir: &Path, chapter_id: i64, bucket: u32) -> PathBuf {
 	blobs_dir
 		.join(chapter_id.to_string())
@@ -25,23 +43,26 @@ fn variant_dir(blobs_dir: &Path, chapter_id: i64, bucket: u32) -> PathBuf {
 		.join(bucket.to_string())
 }
 
-pub fn variant_paths(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> [PathBuf; 2] {
+pub fn variant_paths(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> [PathBuf; 3] {
     let dir = variant_dir(blobs_dir, chapter_id, bucket);
     [
         dir.join(format!("{index}.png")),
         dir.join(format!("{index}.pass")),
+        dir.join(format!("{index}.identity")),
     ]
 }
 
 /// The variant lifecycle hangs on the page-blob directory: load_pages' chapter rewrite and the startup sweep remove
 /// variants along with it, so there is no independent invalidation logic here
-pub async fn read_variant(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> Option<VariantHit> {
+pub async fn read_variant(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32, identity: &str) -> Option<VariantHit> {
 	let dir = variant_dir(blobs_dir, chapter_id, bucket);
+	let manifest: VariantManifest = serde_json::from_slice(&tokio::fs::read(dir.join(format!("{index}.identity"))).await.ok()?).ok()?;
+	if manifest.identity != identity { return None; }
 	if let Ok(bytes) = tokio::fs::read(dir.join(format!("{index}.png"))).await {
-		return Some(VariantHit::Png(bytes));
+		return (bytes_digest(&bytes) == manifest.digest).then_some(VariantHit::Png(bytes));
 	}
 	// A .pass records "this bucket does not resize" (narrow image or decode failure), stopping every visit from re-decoding the big image
-	if tokio::fs::metadata(dir.join(format!("{index}.pass"))).await.is_ok() {
+	if tokio::fs::metadata(dir.join(format!("{index}.pass"))).await.is_ok() && bytes_digest(&[]) == manifest.digest {
 		return Some(VariantHit::PassThrough);
 	}
 	None
@@ -56,6 +77,7 @@ pub async fn write_variant(
 	index: i64,
 	bucket: u32,
 	png: Option<&[u8]>,
+	identity: &str,
 ) -> std::io::Result<()> {
 	let dir = variant_dir(blobs_dir, chapter_id, bucket);
 	tokio::fs::create_dir_all(&dir).await?;
@@ -65,8 +87,28 @@ pub async fn write_variant(
 	};
 	let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
 	let tmp = dir.join(format!(".{name}.{seq}.tmp"));
-	tokio::fs::write(&tmp, data).await?;
-	tokio::fs::rename(&tmp, dir.join(&name)).await
+	if let Err(error) = tokio::fs::write(&tmp, data).await {
+		let _ = tokio::fs::remove_file(&tmp).await;
+		return Err(error);
+	}
+	if let Err(error) = tokio::fs::rename(&tmp, dir.join(&name)).await {
+		let _ = tokio::fs::remove_file(&tmp).await;
+		return Err(error);
+	}
+	let other = dir.join(if png.is_some() { format!("{index}.pass") } else { format!("{index}.png") });
+	let _ = tokio::fs::remove_file(other).await;
+	let identity_tmp = dir.join(format!(".{index}.identity.{seq}.tmp"));
+	let manifest = serde_json::to_vec(&VariantManifest { identity: identity.to_string(), digest: bytes_digest(data) })
+		.map_err(std::io::Error::other)?;
+	if let Err(error) = tokio::fs::write(&identity_tmp, manifest).await {
+		let _ = tokio::fs::remove_file(&identity_tmp).await;
+		return Err(error);
+	}
+	if let Err(error) = tokio::fs::rename(&identity_tmp, dir.join(format!("{index}.identity"))).await {
+		let _ = tokio::fs::remove_file(&identity_tmp).await;
+		return Err(error);
+	}
+	Ok(())
 }
 
 /// PNG bytes resized to the target width; returns None when the source image is no wider than the target (no upscaling) or decode/encode fails
@@ -136,6 +178,17 @@ mod tests {
 		assert_eq!(bucket_width(1500), 1536);
 		assert_eq!(bucket_width(1536), 1536);
 		assert_eq!(bucket_width(u32::MAX), u32::MAX);
+	}
+
+	#[tokio::test]
+	async fn variants_require_matching_identity_and_payload_digest() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		write_variant(tmp.path(), 7, 0, 256, Some(b"product-resize"), "product:artifact-a")
+			.await.expect("write variant");
+		assert!(matches!(read_variant(tmp.path(), 7, 0, 256, "product:artifact-a").await, Some(VariantHit::Png(bytes)) if bytes == b"product-resize"));
+		assert!(read_variant(tmp.path(), 7, 0, 256, "source:url-page").await.is_none());
+		std::fs::write(variant_dir(tmp.path(), 7, 256).join("0.png"), b"corrupted resize").expect("corrupt variant");
+		assert!(read_variant(tmp.path(), 7, 0, 256, "product:artifact-a").await.is_none());
 	}
 
 	#[test]

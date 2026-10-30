@@ -1972,13 +1972,12 @@ pub(crate) async fn get_pages(
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
 	crate::cache::touch(&state.pool, id).await?;
-	// A finished download product is the preferred page list: entries are derived from the artifact
-	// with no source access, so downloaded chapters stay readable offline. An explicit refresh still
-	// pulls from the source; without a product the page cache/source path is unchanged.
-	let pages = if wants_refresh(&query) {
-        crate::source::load_pages_under_lease(&state, id, true).await?
-	} else if let Some(pages) = crate::download::pages_from_product(&state, id).await? {
+	// A usable finished product is authoritative even on force refresh; refresh only rebuilds
+	// source page rows when there is no product to keep the chapter usable offline.
+	let pages = if let Some(pages) = crate::download::pages_from_product(&state, id).await? {
 		pages
+	} else if wants_refresh(&query) {
+		crate::source::load_pages_under_lease(&state, id, true).await?
 	} else {
         crate::source::load_pages_under_lease(&state, id, false).await?
 	};

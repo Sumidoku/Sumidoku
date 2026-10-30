@@ -38,20 +38,19 @@ pub async fn chapter_revision(pool: &SqlitePool, chapter_id: i64) -> ApiResult<i
 	}
 }
 
-pub async fn publish_chapter(
-	pool: &SqlitePool,
-	blobs: &Path,
-	opds: &Path,
-	chapter_id: i64,
-) -> ApiResult<()> {
+pub async fn publish_chapter(state: &std::sync::Arc<crate::state::AppState>, chapter_id: i64) -> ApiResult<()> {
+	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
+	let _accounting = accounting_lock.lock().await;
+	let pool = &state.pool;
+	let blobs = state.config.page_blobs_dir();
+	let opds = state.config.opds_cbz_dir();
 	let pages: i64 = sqlx::query_scalar(
 		"SELECT coalesce(sum(length(CAST(content AS BLOB))),0) FROM page WHERE chapter_id=?",
 	)
 	.bind(chapter_id)
 	.fetch_one(pool)
 	.await?;
-	let disk_bytes =
-		chapter_disk_bytes(blobs.to_path_buf(), opds.to_path_buf(), chapter_id).await?;
+	let disk_bytes = chapter_disk_bytes(blobs.clone(), opds.clone(), chapter_id).await?;
 	let mut tx = crate::db::begin_write(pool).await?;
 	let revision: i64 = sqlx::query_scalar(
 		"UPDATE chapter_cache_meta SET revision=revision+1 WHERE id=1 RETURNING revision",
@@ -93,7 +92,7 @@ fn tree_bytes(path: &Path) -> std::io::Result<i64> {
 	Ok(bytes)
 }
 
-fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) -> std::io::Result<i64> {
+pub(crate) fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) -> std::io::Result<i64> {
 	let blob_bytes = tree_bytes(&blobs.join(id.to_string()))?;
 	let path = opds.join(id.to_string());
 	let archive_bytes = match std::fs::symlink_metadata(&path) {
@@ -156,41 +155,195 @@ pub async fn write_variant(
 	index: i64,
 	bucket: u32,
 	png: Option<&[u8]>,
+	identity: &str,
 ) -> ApiResult<()> {
 	let lock = state.chapter_variant_lock(chapter_id, index, bucket).await;
 	let _write = lock.lock().await;
+	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
+	let _accounting = accounting_lock.lock().await;
 	let blobs = state.config.page_blobs_dir();
 	let paths = crate::source::downsample::variant_paths(&blobs, chapter_id, index, bucket);
-	let mut before = 0i64;
-	for path in &paths {
-		if let Ok(meta) = tokio::fs::symlink_metadata(path).await
-			&& meta.file_type().is_file()
-		{
-			before = before.saturating_add(meta.len().min(i64::MAX as u64) as i64);
+	let before = file_paths_bytes(paths.to_vec()).await?;
+	let intact = crate::source::downsample::variant_entry_is_intact(&blobs, chapter_id, index, bucket).await;
+	let result = crate::source::downsample::write_variant(&blobs, chapter_id, index, bucket, png, identity).await;
+	if intact || before == 0 {
+		let after = file_paths_bytes(paths.to_vec()).await?;
+		update_byte_delta(state, chapter_id, after - before).await?;
+	} else {
+		reconcile_chapter(&state.pool, &blobs, &state.config.opds_cbz_dir(), chapter_id).await?;
+	}
+	result.map_err(|error| crate::error::ApiError::internal(format!("write page variant failed: {error}")))
+}
+
+fn original_dir(state: &crate::state::AppState, chapter_id: i64, index: i64) -> std::path::PathBuf {
+	state.config.page_blobs_dir().join(chapter_id.to_string()).join("originals").join(index.to_string())
+}
+
+pub fn original_identity(source_id: i64, content: &serde_json::Value) -> ApiResult<Vec<u8>> {
+	serde_json::to_vec(&(source_id, content)).map_err(Into::into)
+}
+
+fn original_digest(bytes: &[u8], mime: &str, identity: &[u8]) -> String {
+	use sha2::Digest;
+	let mut hasher = sha2::Sha256::new();
+	hasher.update(identity);
+	hasher.update([0]);
+	hasher.update(mime.as_bytes());
+	hasher.update([0]);
+	hasher.update(bytes);
+	hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub fn source_variant_identity(source_id: i64, content: &serde_json::Value, bytes: &[u8]) -> ApiResult<String> {
+	let identity = original_identity(source_id, content)?;
+	Ok(format!("source:{}", original_digest(bytes, "", &identity)))
+}
+
+pub fn product_variant_identity(entry: &str, bytes: &[u8]) -> String {
+	format!("product:{entry}:{}", original_digest(bytes, entry, entry.as_bytes()))
+}
+
+/// Serializes concurrent reader/download misses for one page. Download callers pass `persist`
+/// false: they can reuse an overlapping reader's persistent/fetched result without creating cache
+/// files of their own. Successful in-flight bytes live only while callers hold the weakly-indexed
+/// flight Arc.
+pub async fn page_original<F>(
+	state: &std::sync::Arc<crate::state::AppState>,
+	chapter_id: i64,
+	index: i64,
+	source_id: i64,
+	content: &serde_json::Value,
+	persist: bool,
+	fetch: F,
+) -> ApiResult<(Vec<u8>, String)>
+where
+	F: std::future::Future<Output = ApiResult<(Vec<u8>, String)>>,
+{
+	let identity = original_identity(source_id, content)?;
+	let flight = state.chapter_original_lock(chapter_id, index).await;
+	let _guard = flight.lock.lock().await;
+	if let Some(value) = flight.cached(&identity) {
+		let value = (value.0.clone(), value.1.clone());
+		if persist && read_page_original(state, chapter_id, index, source_id, content).await.is_none() {
+			if let Err(error) = write_page_original(state, chapter_id, index, source_id, content, &value.0, &value.1).await {
+				tracing::warn!(chapter_id, index, "page original cache write failed: {}", error.message());
+			} else {
+				let _ = enforce_limit(state).await;
+			}
+		}
+		return Ok(value);
+	}
+	if let Some(value) = read_page_original(state, chapter_id, index, source_id, content).await {
+		flight.publish(identity, value.0.clone(), value.1.clone());
+		return Ok(value);
+	}
+	let value = fetch.await?;
+	if persist {
+		if let Err(error) = write_page_original(state, chapter_id, index, source_id, content, &value.0, &value.1).await {
+			tracing::warn!(chapter_id, index, "page original cache write failed: {}", error.message());
+		} else {
+			let _ = enforce_limit(state).await;
 		}
 	}
-	crate::source::downsample::write_variant(&blobs, chapter_id, index, bucket, png)
-		.await
-		.map_err(|error| {
-			crate::error::ApiError::internal(format!("write page variant failed: {error}"))
-		})?;
-	let mut after = 0i64;
-	for path in &paths {
-		if let Ok(meta) = tokio::fs::symlink_metadata(path).await
-			&& meta.file_type().is_file()
-		{
-			after = after.saturating_add(meta.len().min(i64::MAX as u64) as i64);
-		}
+	flight.publish(identity, value.0.clone(), value.1.clone());
+	Ok(value)
+}
+
+/// Returns a validated exact upstream response. The caller holds the per-page original lock.
+pub async fn read_page_original(
+	state: &crate::state::AppState,
+	chapter_id: i64,
+	index: i64,
+	source_id: i64,
+	content: &serde_json::Value,
+) -> Option<(Vec<u8>, String)> {
+	let dir = original_dir(state, chapter_id, index);
+	let bytes = tokio::fs::read(dir.join("bytes")).await.ok()?;
+	let mime = tokio::fs::read_to_string(dir.join("mime")).await.ok()?;
+	let identity = tokio::fs::read(dir.join("identity")).await.ok()?;
+	let digest = tokio::fs::read_to_string(dir.join("sha256")).await.ok()?;
+	if mime.is_empty() || original_identity(source_id, content).ok()?.as_slice() != identity {
+		return None;
 	}
-	let _ = sqlx::query(
-		"UPDATE chapter_cache_state SET bytes=max(0,bytes+?),accessed_at=? WHERE chapter_id=?",
-	)
-	.bind(after - before)
-	.bind(unix_now())
-	.bind(chapter_id)
-	.execute(&state.pool)
-	.await?;
+	let actual = original_digest(&bytes, &mime, &identity);
+	(actual == digest).then_some((bytes, mime))
+}
+
+/// Stores an exact remote page response as a staged directory. The caller holds the per-page
+/// original lock and chapter cache read lease, so readers and clear/refresh cannot see partial data.
+pub async fn write_page_original(
+	state: &std::sync::Arc<crate::state::AppState>,
+	chapter_id: i64,
+	index: i64,
+	source_id: i64,
+	content: &serde_json::Value,
+	bytes: &[u8],
+	mime: &str,
+) -> ApiResult<()> {
+	let dir = original_dir(state, chapter_id, index);
+	let parent = dir.parent().expect("originals parent");
+	let staging = parent.join(format!(".{index}.staging"));
+	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
+	let _accounting = accounting_lock.lock().await;
+	let before = original_tree_bytes(dir.clone()).await?.saturating_add(original_tree_bytes(staging.clone()).await?);
+	let intact = original_entry_is_intact(&dir).await;
+	let identity = original_identity(source_id, content)?;
+	let digest = original_digest(bytes, mime, &identity);
+	let result = async {
+		tokio::fs::create_dir_all(parent).await?;
+		let _ = tokio::fs::remove_dir_all(&staging).await;
+		tokio::fs::create_dir(&staging).await?;
+		tokio::fs::write(staging.join("bytes"), bytes).await?;
+		tokio::fs::write(staging.join("mime"), mime).await?;
+		tokio::fs::write(staging.join("identity"), &identity).await?;
+		tokio::fs::write(staging.join("sha256"), digest).await?;
+		let _ = tokio::fs::remove_dir_all(&dir).await;
+		tokio::fs::rename(&staging, &dir).await?;
+		Ok::<(), std::io::Error>(())
+	}.await;
+	if result.is_err() {
+		let _ = tokio::fs::remove_dir_all(&staging).await;
+	}
+	if intact || before == 0 {
+		let after = original_tree_bytes(dir).await?.saturating_add(original_tree_bytes(staging).await?);
+		update_byte_delta(state, chapter_id, after - before).await?;
+	} else {
+		reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), chapter_id).await?;
+	}
+	result.map_err(|error| crate::error::ApiError::internal(format!("write page original cache: {error}")))
+}
+
+async fn update_byte_delta(state: &crate::state::AppState, chapter_id: i64, delta: i64) -> ApiResult<()> {
+	sqlx::query("UPDATE chapter_cache_state SET bytes=max(0,bytes+?),accessed_at=? WHERE chapter_id=?")
+		.bind(delta).bind(unix_now()).bind(chapter_id).execute(&state.pool).await?;
 	Ok(())
+}
+
+async fn original_tree_bytes(path: std::path::PathBuf) -> ApiResult<i64> {
+	tokio::task::spawn_blocking(move || tree_bytes(&path)).await
+		.map_err(|error| crate::error::ApiError::internal(format!("page original accounting task failed: {error}")))?
+		.map_err(|error| crate::error::ApiError::internal(format!("inspect page original cache: {error}")))
+}
+
+async fn file_paths_bytes(paths: Vec<std::path::PathBuf>) -> ApiResult<i64> {
+	tokio::task::spawn_blocking(move || {
+		paths.into_iter().try_fold(0i64, |sum, path| match std::fs::symlink_metadata(path) {
+			Ok(meta) if meta.file_type().is_symlink() => Ok(sum),
+			Ok(meta) if meta.is_file() => Ok(sum.saturating_add(meta.len().min(i64::MAX as u64) as i64)),
+			Ok(_) => Ok(sum),
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(sum),
+			Err(error) => Err(error),
+		})
+	}).await.map_err(|error| crate::error::ApiError::internal(format!("page cache accounting task failed: {error}")))?
+		.map_err(|error| crate::error::ApiError::internal(format!("inspect page cache files: {error}")))
+}
+
+async fn original_entry_is_intact(dir: &Path) -> bool {
+	let Ok(bytes) = tokio::fs::read(dir.join("bytes")).await else { return false; };
+	let Ok(mime) = tokio::fs::read_to_string(dir.join("mime")).await else { return false; };
+	let Ok(identity) = tokio::fs::read(dir.join("identity")).await else { return false; };
+	let Ok(digest) = tokio::fs::read_to_string(dir.join("sha256")).await else { return false; };
+	!mime.is_empty() && original_digest(&bytes, &mime, &identity) == digest
 }
 
 pub async fn reconcile_chapter(
@@ -210,6 +363,12 @@ pub async fn reconcile_chapter(
 	let _ = sqlx::query("INSERT INTO chapter_cache_state(chapter_id, bytes, accessed_at) VALUES (?, ?, ?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes")
 		.bind(id).bind(bytes).bind(unix_now()).execute(pool).await?;
 	Ok(())
+}
+
+pub async fn reconcile_chapter_accounted(state: &std::sync::Arc<crate::state::AppState>, id: i64) -> ApiResult<()> {
+	let lock = state.chapter_accounting_lock(id).await;
+	let _guard = lock.lock().await;
+	reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), id).await
 }
 
 pub async fn stats(
@@ -259,6 +418,11 @@ pub async fn reconcile_all(pool: &SqlitePool, blobs: &Path, opds: &Path) -> ApiR
 				"chapter cache reconciliation failed: {error}"
 			))
 		})?;
+	let staging_root = blobs.clone();
+	tokio::task::spawn_blocking(move || remove_nested_staging(&staging_root))
+		.await
+		.map_err(|error| crate::error::ApiError::internal(format!("chapter cache staging cleanup failed: {error}")))?
+		.map_err(|error| crate::error::ApiError::internal(format!("chapter cache staging cleanup failed: {error}")))?;
 	for id in &known {
 		reconcile_chapter(pool, &blobs, &opds, *id).await?;
 	}
@@ -330,6 +494,28 @@ fn remove_orphans(
 					std::fs::remove_file(item.path())?;
 				}
 			}
+		}
+	}
+	Ok(())
+}
+
+fn remove_nested_staging(path: &Path) -> std::io::Result<()> {
+	let meta = match std::fs::symlink_metadata(path) {
+		Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => return Ok(()),
+		Ok(meta) => meta,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+		Err(error) => return Err(error),
+	};
+	let _ = meta;
+	for entry in std::fs::read_dir(path)? {
+		let entry = entry?;
+		let kind = entry.file_type()?;
+		if kind.is_symlink() { continue; }
+		let child = entry.path();
+		if kind.is_dir() && entry.file_name().to_string_lossy().ends_with(".staging") {
+			std::fs::remove_dir_all(child)?;
+		} else if kind.is_dir() {
+			remove_nested_staging(&child)?;
 		}
 	}
 	Ok(())
@@ -578,6 +764,7 @@ async fn enforce_limit_with_budget(
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::sync::Arc;
 
 	async fn app_state(tmp: &tempfile::TempDir) -> std::sync::Arc<crate::state::AppState> {
 		let config = crate::config::Config {
@@ -639,6 +826,95 @@ mod tests {
 		std::fs::create_dir_all(&blob).expect("blob dir");
 		std::fs::write(blob.join("0.png"), vec![b'x'; bytes as usize]).expect("blob");
 		chapter
+	}
+
+	#[tokio::test]
+	async fn overlapping_download_miss_and_reader_share_fetch_and_reader_persists_it() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		let chapter = cached_chapter(&state, "flight", 0, unix_now()).await;
+		let source: i64 = sqlx::query_scalar("SELECT m.source_id FROM manga m JOIN chapter c ON c.manga_id=m.id WHERE c.id=?")
+			.bind(chapter).fetch_one(&state.pool).await.expect("source id");
+		let content = serde_json::json!({"Url": ["http://fixture.invalid/page.jpg", null]});
+		let count = Arc::new(AtomicUsize::new(0));
+		let started = Arc::new(tokio::sync::Notify::new());
+		let release = Arc::new(tokio::sync::Notify::new());
+		let download_state = state.clone();
+		let download_count = count.clone();
+		let download_started = started.clone();
+		let download_release = release.clone();
+		let download_content = content.clone();
+		let download = tokio::spawn(async move {
+			page_original(&download_state, chapter, 0, source, &download_content, false, async move {
+				download_count.fetch_add(1, Ordering::SeqCst);
+				download_started.notify_one();
+				download_release.notified().await;
+				Ok((b"upstream-image".to_vec(), "image/jpeg".to_string()))
+			}).await
+		});
+		started.notified().await;
+		let flight = state.chapter_original_lock(chapter, 0).await;
+		let reader_state = state.clone();
+		let reader_count = count.clone();
+		let reader_content = content.clone();
+		let reader = tokio::spawn(async move {
+			page_original(&reader_state, chapter, 0, source, &reader_content, true, async move {
+				reader_count.fetch_add(1, Ordering::SeqCst);
+				Ok((b"unexpected-refetch".to_vec(), "image/jpeg".to_string()))
+			}).await
+		});
+		while Arc::strong_count(&flight) < 3 { tokio::task::yield_now().await; }
+		drop(flight);
+		release.notify_one();
+		assert_eq!(download.await.expect("download task").expect("download bytes").0, b"upstream-image");
+		assert_eq!(reader.await.expect("reader task").expect("reader bytes").0, b"upstream-image");
+		assert_eq!(count.load(Ordering::SeqCst), 1);
+		assert_eq!(read_page_original(&state, chapter, 0, source, &content).await.expect("reader persisted original"), (b"upstream-image".to_vec(), "image/jpeg".to_string()));
+	}
+
+	#[tokio::test]
+	async fn corrupt_original_is_a_miss_and_write_failure_still_serves_fetched_bytes() {
+		use std::sync::atomic::{AtomicUsize, Ordering};
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		let chapter = cached_chapter(&state, "integrity", 0, unix_now()).await;
+		let source: i64 = sqlx::query_scalar("SELECT m.source_id FROM manga m JOIN chapter c ON c.manga_id=m.id WHERE c.id=?")
+			.bind(chapter).fetch_one(&state.pool).await.expect("source id");
+		let content = serde_json::json!({"Zip": ["http://fixture.invalid/book.cbz", "page.png"]});
+		crate::cache::reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), chapter).await.expect("initial accounting");
+		page_original(&state, chapter, 0, source, &content, true, async { Ok((b"original".to_vec(), "image/png".to_string())) }).await.expect("cache original");
+		let original_dir = state.config.page_blobs_dir().join(chapter.to_string()).join("originals/0");
+		std::fs::write(original_dir.join("bytes"), b"corrupt").expect("corrupt bytes");
+		assert!(read_page_original(&state, chapter, 0, source, &content).await.is_none());
+		let count = Arc::new(AtomicUsize::new(0));
+		let fetch_count = count.clone();
+		let repaired = page_original(&state, chapter, 0, source, &content, true, async move {
+			fetch_count.fetch_add(1, Ordering::SeqCst);
+			Ok((b"repaired".to_vec(), "image/png".to_string()))
+		}).await.expect("repair serves bytes");
+		assert_eq!(repaired.0, b"repaired");
+		assert_eq!(count.load(Ordering::SeqCst), 1);
+		assert_eq!(read_page_original(&state, chapter, 0, source, &content).await.expect("valid replacement").0, b"repaired");
+		let page_bytes: i64 = sqlx::query_scalar("SELECT coalesce(sum(length(CAST(content AS BLOB))),0) FROM page WHERE chapter_id=?")
+			.bind(chapter).fetch_one(&state.pool).await.expect("page bytes");
+		let disk_bytes = chapter_disk_bytes_blocking(&state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), chapter).expect("disk bytes");
+		let accounted: i64 = sqlx::query_scalar("SELECT bytes FROM chapter_cache_state WHERE chapter_id=?")
+			.bind(chapter).fetch_one(&state.pool).await.expect("accounted bytes");
+		assert_eq!(accounted, page_bytes + disk_bytes, "corrupt-entry repair reconciles actual bytes without double charging");
+
+		let blocked_chapter = cached_chapter(&state, "write-failure", 0, unix_now()).await;
+		let blocked_source: i64 = sqlx::query_scalar("SELECT m.source_id FROM manga m JOIN chapter c ON c.manga_id=m.id WHERE c.id=?")
+			.bind(blocked_chapter).fetch_one(&state.pool).await.expect("source id");
+		let blocked_content = serde_json::json!({"Url": ["http://fixture.invalid/blocked.png", null]});
+		let chapter_dir = state.config.page_blobs_dir().join(blocked_chapter.to_string());
+		std::fs::create_dir_all(&chapter_dir).expect("chapter dir");
+		std::fs::write(chapter_dir.join("originals"), b"not a directory").expect("block originals dir");
+		let served = page_original(&state, blocked_chapter, 0, blocked_source, &blocked_content, true, async {
+			Ok((b"still-served".to_vec(), "image/png".to_string()))
+		}).await.expect("cache write failure does not fail image response");
+		assert_eq!(served.0, b"still-served");
+		assert!(read_page_original(&state, blocked_chapter, 0, blocked_source, &blocked_content).await.is_none());
 	}
 
 	#[tokio::test]

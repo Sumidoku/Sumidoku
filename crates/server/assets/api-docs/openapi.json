@@ -1976,6 +1976,7 @@
         ],
         "operationId": "getChapterPages",
         "summary": "List chapter pages",
+        "description": "A usable finished download supplies the page list even when refresh is requested, keeping offline reading on the downloaded artifact. Refresh rebuilds source page rows only when no usable finished product exists.",
         "responses": {
           "200": {
             "description": "Pages",
@@ -2023,7 +2024,7 @@
         ],
         "operationId": "getChapterPage",
         "summary": "Get page text or image bytes",
-        "description": "Text pages return JSON {type:text,text}. Image pages return original or downsampled bytes; a positive width requests a bounded PNG variant when resizing is possible.",
+        "description": "Text pages return JSON {type:text,text}. Image pages return original or downsampled bytes; a positive width requests a bounded PNG variant when resizing is possible. Finished products take precedence for reading. Remote URL and Zip page originals are cached with their MIME type and validated against the page source identity; successful downloads may reuse overlapping in-flight/cache reads.",
         "responses": {
           "200": {
             "description": "Text JSON or image bytes",

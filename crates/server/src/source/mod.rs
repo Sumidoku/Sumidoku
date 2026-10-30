@@ -1256,15 +1256,26 @@ pub async fn load_pages_under_lease(
 	.bind(chapter_id)
 	.fetch_all(&state.pool)
 	.await?;
-	crate::cache::publish_chapter(
-		&state.pool,
-		&state.config.page_blobs_dir(),
-		&state.config.config_dir.join("opds-cbz"),
-		chapter_id,
-	)
-	.await?;
+	crate::cache::publish_chapter(state, chapter_id).await?;
 	let _ = crate::cache::enforce_limit(state).await;
 	Ok(stored)
+}
+
+/// Detects cached actor-materialized pages whose bytes were intentionally discarded after a
+/// finished download. Callers must hold the chapter read lease, then upgrade to its write lease
+/// and recheck before refreshing.
+pub async fn has_missing_materialized_page(state: &Arc<AppState>, chapter_id: i64, pages: &[PageRow]) -> ApiResult<bool> {
+	for page in pages {
+		let stored: serde_json::Value = serde_json::from_str(&page.content)?;
+		let Some(name) = stored.get("content").and_then(|content| content.get("Image")).and_then(serde_json::Value::as_str) else { continue; };
+		let path = state.config.page_blobs_dir().join(chapter_id.to_string()).join(name);
+		match tokio::fs::try_exists(path).await {
+			Ok(false) => return Ok(true),
+			Ok(true) => {},
+			Err(error) => return Err(ApiError::internal(format!("check materialized page: {error}"))),
+		}
+	}
+	Ok(false)
 }
 
 /// Rewrites a chapter's page rows wholesale: delete and re-insert, writing back page_count and divina compatibility
@@ -1781,6 +1792,30 @@ mod tests {
 		let addr = body_server(vec![b'x'; 2048], true);
 		let (bytes, _) = read_body(get_response(&addr).await, 0).await.expect("0 不设限");
 		assert_eq!(bytes.len(), 2048);
+	}
+
+	#[tokio::test]
+	async fn missing_materialized_image_is_detected_but_remote_and_local_pages_are_not() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let config = crate::config::Config {
+			config_dir: tmp.path().to_path_buf(),
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			..crate::config::Config::default()
+		};
+		let pool = crate::db::create_pool(&config.database_url).await.expect("pool");
+		let (defaults_tx, _) = tokio::sync::mpsc::unbounded_channel();
+		let (cookie_tx, _) = tokio::sync::mpsc::unbounded_channel();
+		let state = crate::state::AppState::new(pool, config, defaults_tx, cookie_tx);
+		let chapter_id = 81;
+		let image = PageRow { idx: 0, content: r#"{"content":{"Image":"0.png"}}"#.into(), width: None, height: None, dimensions_checked: false };
+		assert!(has_missing_materialized_page(&state, chapter_id, std::slice::from_ref(&image)).await.expect("check missing image"));
+		let path = state.config.page_blobs_dir().join(chapter_id.to_string()).join("0.png");
+		tokio::fs::create_dir_all(path.parent().expect("blob parent")).await.expect("blob dir");
+		tokio::fs::write(&path, b"page bytes").await.expect("blob bytes");
+		assert!(!has_missing_materialized_page(&state, chapter_id, std::slice::from_ref(&image)).await.expect("check available image"));
+		let remote = PageRow { idx: 1, content: r#"{"content":{"Url":["https://example.invalid/page.jpg",null]}}"#.into(), width: None, height: None, dimensions_checked: false };
+		let local = PageRow { idx: 2, content: r#"{"content":{"Local":"page.jpg"}}"#.into(), width: None, height: None, dimensions_checked: false };
+		assert!(!has_missing_materialized_page(&state, chapter_id, &[remote, local]).await.expect("nonmaterialized pages"));
 	}
 
 	async fn reconcile_db() -> (SqlitePool, i64, tempfile::TempDir) {

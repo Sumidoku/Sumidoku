@@ -1200,7 +1200,7 @@ no alias is derived from migration text.
   ordinary enqueue dedupe prevents repeated page loads from growing the queue;
   download workers and image requests never recurse into reader-ahead.
 - Chapter page cache (`cache.rs`, `source/mod.rs`): page JSON rows, materialized
-  image blobs and variants, and OPDS acquisition CBZ files share a persistent
+  image blobs, validated remote URL/Zip original responses and variants, and OPDS acquisition CBZ files share a persistent
   per-chapter LRU budget. `cache.chapterLruEnabled` defaults true and
   `cache.chapterMaxBytes` defaults to 2 GiB with a 256 MiB minimum. Startup
   reconciles existing rows and files and removes orphan cache files; a
@@ -1213,6 +1213,25 @@ no alias is derived from migration text.
   chapter's `cacheRevision`, returned with `GET /api/v1/chapter/{id}/pages`.
   `GET /api/v1/cache/chapters` reports usage and errors; the matching POST clear
   endpoint reports actual post-clear usage.
+- Remote page originals (`cache.rs`, `api/page.rs`, `download/mod.rs`): URL and
+  Zip page bytes after source image processing (or Zip extraction), with the
+  response MIME, are stored as a staged entry under
+  `page-blobs/<chapter_id>/originals/<index>/`. The entry records the source
+  identity and a SHA-256 digest; incomplete entries, changed page identities,
+  and byte corruption are cache misses. A weakly indexed per-page flight shares
+  overlapping reader/download fetches without retaining an in-memory image
+  cache. Reader misses persist exact originals; download-only misses fetch into
+  the product without adding cache files. Local, Image, and OpdsZip page kinds
+  keep their existing storage.
+- Finished download cache cleanup (`download/mod.rs`): after the product row
+  commits, the server takes the chapter write lease, rechecks the finished row
+  and artifact, removes page originals, materialized blobs, variants and OPDS
+  acquisition files, reconciles actual bytes, and advances `cacheRevision`
+  before broadcasting completion. Source page rows, dimensions, page count and
+  reading state remain. Explicit product deletion serializes on the same
+  chapter lease, removes product-derived variants and advances the revision.
+  If the product is later missing, a reader encountering a missing materialized
+  `Image` blob refreshes source page rows under the chapter write lease.
 - Download move (`download/mod.rs:move_product`): when
   `download.move_path` is set (setting table, env
   `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
@@ -1250,8 +1269,9 @@ no alias is derived from migration text.
   access, so downloaded chapters stay readable offline. CBZ handles go through the shared
   `ZipCache` (version-checked, so atomic re-downloads never serve stale bytes); folder
   products read page files directly. The derived rows are live, never written to the page
-  table, so a deleted/moved product falls back to the page cache/source path unchanged;
-  an explicit `refresh` on the pages endpoint still pulls from the source.
+  table, so a deleted/moved product falls back to the page cache/source path unchanged.
+  A usable finished product remains authoritative when `refresh` is requested; refresh
+  rebuilds source page rows only when no usable product exists.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
@@ -1272,7 +1292,9 @@ no alias is derived from migration text.
   server-side counterpart of Aidoku's `Reader.downsampleImages`. The width
   is quantized up to a multiple of 256 and variants are stored as PNG under
   `page-blobs/<chapter_id>/variants/<bucket>/<idx>.png`, so buckets never
-  share bytes and a chapter reload (`materialize_image_pages`' wipe) or the
+  share bytes; each variant manifest records the backing page identity and a
+  digest of the resized bytes, so product bytes cannot reuse source variants.
+  A chapter reload (`materialize_image_pages`' wipe) or the
   startup blob sweep invalidates them for free; a `<idx>.pass` marker
   records "not resized at this bucket" (narrow image or undecodable bytes)
   so repeat hits skip re-decoding. Pages never upscale and any failure
@@ -1874,6 +1896,13 @@ removed. The reader uses positive known page dimensions (populated during
 downloads) as image intrinsic dimensions and continuous/webtoon container aspect ratios,
 reserving space before lazy loads; text, unsupported and unknown-dimension
 pages get no forced ratio, and paged mode keeps its fixed viewport.
+The authenticated SSE connection uses route-owned leases: `AppLayout` owns it
+for normal pages, while `ReaderCore` owns it for the full-screen reader outside
+that layout. Both routes subscribe to cache invalidation; a finished download
+invalidates that chapter's page query and cache-usage stats, while an SSE
+snapshot or reconnect invalidates all chapter page queries and cache stats so
+resumed image/preload URLs receive current `cacheRevision`. Progress events do
+not refetch page queries.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction

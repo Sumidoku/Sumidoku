@@ -220,6 +220,30 @@ async fn reader_page_processes_opaque_bytes() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
 	assert_plain_pixels(&bytes, "reader page");
+	let cached = std::fs::read(
+		t.tmp
+			.path()
+			.join("page-blobs")
+			.join(chapter_id.to_string())
+			.join("originals/0/bytes"),
+	)
+	.expect("processed reader original cache");
+	assert_eq!(cached, bytes, "cache stores the processor output, not opaque upstream input");
+	assert_eq!(
+		std::fs::read(
+			t.tmp
+				.path()
+				.join("page-blobs")
+				.join(chapter_id.to_string())
+				.join("originals/0/mime"),
+		)
+		.expect("cached MIME"),
+		b"image/png"
+	);
+	let (status, _, repeated) =
+		request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(repeated, bytes, "repeat reader request reuses the exact processed bytes");
 }
 
 /// Download shares the reader's fetch_page_image: the cbz holds the decrypted PNG

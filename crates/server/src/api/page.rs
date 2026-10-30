@@ -27,74 +27,35 @@ pub async fn get_page(
 ) -> ApiResult<Response> {
 	let _cache_lease = state.chapter_cache_gate.read().await;
     let cache_lock = state.chapter_cache_lock(id).await;
-    let _chapter_cache = cache_lock.read().await;
+	let chapter_cache = cache_lock.read().await;
 	let chapter = chapter_row(&state.pool, id).await?;
 	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
 	if chapter.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
     crate::cache::touch(&state.pool, id).await?;
-	// A finished download product is a preferred page source: text entries come from the artifact
-	// with no source access, and image entries are read from it when the materialized blob is
-	// missing, so downloaded chapters stay readable offline. Image entries still prefer the
-	// materialized blob when it exists: a whole-chapter refresh rewrites the blob directory and
-	// those fresh bytes must win over the older product. Falls back to the page cache/source path
-	// when there is no usable product (or the entry read fails).
+	// A finished download product remains the reader source even after page metadata is refreshed.
+	// Missing products fall back to source pages; actual product read errors propagate.
 	if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
-		if crate::download::is_text_entry(&entry) {
-			return Ok(Json(json!({ "type": "text", "text": String::from_utf8_lossy(&bytes) })).into_response());
-		}
-		let blob_missing = !tokio::fs::try_exists(
-			state
-				.config
-				.page_blobs_dir()
-				.join(id.to_string())
-				.join(format!("{index}.png")),
-		)
-		.await
-		.unwrap_or(false);
-		if !blob_missing {
-			// The blob wins: fall through to the page cache/source path below.
-		} else {
-			let mut bucket = query.width.filter(|w| *w > 0).map(bucket_width);
-			if let Some(b) = bucket {
-				match read_variant(&state.config.page_blobs_dir(), id, index, b).await {
-					Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
-					// A pass hit = this bucket does not resize (narrow image/undecodable); skip the variant logic and take the original path
-					Some(VariantHit::PassThrough) => bucket = None,
-					None => {}
-				}
-			}
-			if let Some(b) = bucket {
-				// Decode+resize is CPU-heavy work, moved to a blocking thread; the original bytes ride the closure back for the pass-through branch
-				let (resized, original) = tokio::task::spawn_blocking(move || {
-					let resized = downsample_png(&bytes, b);
-					(resized, bytes)
-				})
-				.await
-				.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
-				return match resized {
-					Some(png) => {
-						if let Err(e) = crate::cache::write_variant(&state, id, index, b, Some(&png)).await {
-							tracing::warn!(chapter_id = id, index, "page variant write failed: {}", e.message());
-						}
-                        let _ = crate::cache::enforce_limit(&state).await;
-						Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
-					}
-					None => {
-						if let Err(e) = crate::cache::write_variant(&state, id, index, b, None).await {
-							tracing::warn!(chapter_id = id, index, "page variant marker write failed: {}", e.message());
-						}
-                        let _ = crate::cache::enforce_limit(&state).await;
-						Ok(bytes_response(original, mime_for(&entry), PAGE_MAX_AGE))
-					}
-				};
-			}
-			return Ok(bytes_response(bytes, mime_for(&entry), PAGE_MAX_AGE));
-		}
+		return product_page_response(&state, id, index, query.width, bytes, entry).await;
 	}
 
-	let pages = crate::source::load_pages_under_lease(&state, id, false).await?;
+	let mut pages = crate::source::load_pages_under_lease(&state, id, false).await?;
+	let stale_materialized = crate::source::has_missing_materialized_page(&state, id, &pages).await?;
+	let _chapter_cache = if stale_materialized {
+		drop(chapter_cache);
+		let chapter_write = cache_lock.write().await;
+		if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
+			return product_page_response(&state, id, index, query.width, bytes, entry).await;
+		}
+		pages = crate::source::load_pages_under_lease(&state, id, false).await?;
+		if crate::source::has_missing_materialized_page(&state, id, &pages).await? {
+			crate::source::load_pages_under_lease(&state, id, true).await?;
+		}
+		let read = tokio::sync::RwLockWriteGuard::downgrade(chapter_write);
+		pages = crate::source::load_pages_under_lease(&state, id, false).await?;
+		read
+	} else { chapter_cache };
 	let Some(page) = pages.iter().find(|page| page.idx == index) else {
 		return Err(ApiError::not_found("page not found"));
 	};
@@ -104,9 +65,12 @@ pub async fn get_page(
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());
 	}
 
+	let manga = manga_row(&state.pool, chapter.manga_id).await?;
+	let (bytes, mime) = page_image_bytes(&state, &chapter, index, &content).await?;
+	let identity = crate::cache::source_variant_identity(manga.source_id, &content, &bytes)?;
 	let mut bucket = query.width.filter(|w| *w > 0).map(bucket_width);
 	if let Some(b) = bucket {
-		match read_variant(&state.config.page_blobs_dir(), id, index, b).await {
+		match read_variant_for(&state, id, index, b, &identity).await {
 			Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
 			// A pass hit = this bucket does not resize (narrow image/undecodable); skip the variant logic and take the original path
 			Some(VariantHit::PassThrough) => bucket = None,
@@ -114,7 +78,6 @@ pub async fn get_page(
 		}
 	}
 
-	let (bytes, mime) = page_image_bytes(&state, &chapter, &content).await?;
 	if let Some(b) = bucket {
 		// Decode+resize is CPU-heavy work, moved to a blocking thread; the original bytes ride the closure back for the pass-through branch
 		let (resized, original) = tokio::task::spawn_blocking(move || {
@@ -125,14 +88,14 @@ pub async fn get_page(
 		.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
 		return match resized {
 			Some(png) => {
-				if let Err(e) = crate::cache::write_variant(&state, id, index, b, Some(&png)).await {
+				if let Err(e) = crate::cache::write_variant(&state, id, index, b, Some(&png), &identity).await {
 					tracing::warn!(chapter_id = id, index, "page variant write failed: {}", e.message());
 				}
 				let _ = crate::cache::enforce_limit(&state).await;
 				Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
 			}
 			None => {
-				if let Err(e) = crate::cache::write_variant(&state, id, index, b, None).await {
+				if let Err(e) = crate::cache::write_variant(&state, id, index, b, None, &identity).await {
 					tracing::warn!(chapter_id = id, index, "page variant marker write failed: {}", e.message());
 				}
 				let _ = crate::cache::enforce_limit(&state).await;
@@ -143,8 +106,62 @@ pub async fn get_page(
 	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
 }
 
-/// Fetches the original bytes of an image page's content (Image materialized blob / Local local file / Zip unpack / Url source fetch), sharing the download path's sources
-async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
+async fn product_page_response(state: &Arc<AppState>, id: i64, index: i64, width: Option<u32>, bytes: Vec<u8>, entry: String) -> ApiResult<Response> {
+	if crate::download::is_text_entry(&entry) {
+		return Ok(Json(json!({ "type": "text", "text": String::from_utf8_lossy(&bytes) })).into_response());
+	}
+	let identity = crate::cache::product_variant_identity(&entry, &bytes);
+	let mut bucket = width.filter(|w| *w > 0).map(bucket_width);
+	if let Some(b) = bucket {
+		match read_variant_for(state, id, index, b, &identity).await {
+			Some(VariantHit::Png(bytes)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
+			Some(VariantHit::PassThrough) => bucket = None,
+			None => {}
+		}
+	}
+	if let Some(b) = bucket {
+		let (resized, original) = tokio::task::spawn_blocking(move || {
+			let resized = downsample_png(&bytes, b);
+			(resized, bytes)
+		}).await.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
+		return match resized {
+			Some(png) => {
+				if let Err(error) = crate::cache::write_variant(state, id, index, b, Some(&png), &identity).await {
+					tracing::warn!(chapter_id = id, index, "page variant write failed: {}", error.message());
+				}
+			let _ = crate::cache::enforce_limit(state).await;
+			Ok(bytes_response(png, "image/png", PAGE_MAX_AGE))
+			}
+			None => {
+				if let Err(error) = crate::cache::write_variant(state, id, index, b, None, &identity).await {
+					tracing::warn!(chapter_id = id, index, "page variant marker write failed: {}", error.message());
+				}
+			let _ = crate::cache::enforce_limit(state).await;
+			Ok(bytes_response(original, mime_for(&entry), PAGE_MAX_AGE))
+			}
+		};
+	}
+	Ok(bytes_response(bytes, mime_for(&entry), PAGE_MAX_AGE))
+}
+
+async fn read_variant_for(state: &Arc<AppState>, id: i64, index: i64, bucket: u32, identity: &str) -> Option<VariantHit> {
+	let lock = state.chapter_variant_lock(id, index, bucket).await;
+	let _guard = lock.lock().await;
+	read_variant(&state.config.page_blobs_dir(), id, index, bucket, identity).await
+}
+
+/// Remote URL and Zip pages are cached as an exact response pair. Local and already-materialized
+/// page kinds retain their existing storage and lifecycle.
+async fn page_image_bytes(state: &Arc<AppState>, chapter: &ChapterRow, index: i64, content: &Value) -> ApiResult<(Vec<u8>, String)> {
+	if content.get("Url").is_some() || content.get("Zip").is_some() {
+		let manga = manga_row(&state.pool, chapter.manga_id).await?;
+		return crate::cache::page_original(state, chapter.id, index, manga.source_id, content, true,
+			page_image_bytes_uncached(state, chapter, content)).await;
+	}
+	page_image_bytes_uncached(state, chapter, content).await
+}
+
+async fn page_image_bytes_uncached(state: &Arc<AppState>, chapter: &ChapterRow, content: &Value) -> ApiResult<(Vec<u8>, String)> {
 	if let Some(name) = content.get("Image").and_then(Value::as_str) {
 		let bytes = page_image_blob(state, chapter.id, name).await?;
 		return Ok((bytes, "image/png".to_string()));
