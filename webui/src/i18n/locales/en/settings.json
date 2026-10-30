@@ -38,6 +38,7 @@
     "bgDark": "Black",
     "bgGray": "Gray",
     "bgLight": "White",
+    "bgAuto": "Follow system",
     "readerPageScale": "Default page scale",
     "scaleScreen": "Fit screen",
     "scaleWidth": "Fit width",

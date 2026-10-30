@@ -177,7 +177,7 @@ function ReaderSection() {
 	const [bg, setBg] = useState(() => {
 		// Same whitelist as the reader's parseBackground: unknown values fall back to dark
 		const b = stored(READER_BG_KEY, 'dark');
-		return b === 'gray' || b === 'light' ? b : 'dark';
+		return b === 'gray' || b === 'light' || b === 'auto' ? b : 'dark';
 	});
 	const [scale, setScale] = useState(() => {
 		// Same whitelist as the reader's parseScale: unknown values fall back to screen
@@ -240,6 +240,7 @@ function ReaderSection() {
 					<option value="dark">{t('settings.bgDark')}</option>
 					<option value="gray">{t('settings.bgGray')}</option>
 					<option value="light">{t('settings.bgLight')}</option>
+					<option value="auto">{t('settings.bgAuto')}</option>
 				</Select>
 			</div>
 			<div className="settings-row">

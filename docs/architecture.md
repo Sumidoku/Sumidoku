@@ -1920,7 +1920,9 @@ single source of truth and must change together. The reader canvas background
 (`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
-canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
+canvas. `auto` is not a class: it resolves through `useResolvedTheme()` so the
+canvas follows the app theme (dark under a dark theme, white under light),
+reacting live to theme and system preference changes. Fullscreen uses the Fullscreen API on the reader root so the fixed
 toolbar and settings card move into the fullscreen subtree; the toggle hides
 when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
 reader's own Esc chain.

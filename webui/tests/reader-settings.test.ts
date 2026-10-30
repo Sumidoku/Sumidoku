@@ -87,6 +87,7 @@ test('tap-zone and background controls render in paged mode', async () => {
 	assert.match(markup, />Black</);
 	assert.match(markup, />Gray</);
 	assert.match(markup, />White</);
+	assert.match(markup, />Follow system</);
 });
 
 test('continuous mode marks direction, layout and tap zones as paged-only', async () => {

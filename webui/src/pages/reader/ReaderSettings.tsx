@@ -142,7 +142,8 @@ export function ReaderSettings({
 				options={[
 					{ value: 'dark', label: t('reader.bgDark') },
 					{ value: 'gray', label: t('reader.bgGray') },
-					{ value: 'light', label: t('reader.bgLight') }
+					{ value: 'light', label: t('reader.bgLight') },
+					{ value: 'auto', label: t('reader.bgAuto') }
 				]}
 				value={bg}
 				onChange={onBgChange}
