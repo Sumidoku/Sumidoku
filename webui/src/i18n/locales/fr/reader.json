@@ -56,6 +56,8 @@
     "scaleOriginal": "Taille d'origine",
     "stretch": "Étirer les petites pages",
     "stretchPagedOnly": "Étirer les petites pages (mode page par page uniquement)",
+    "animations": "Animation de changement de page",
+    "animationsPagedOnly": "Animation de changement de page (mode page par page uniquement)",
     "splitWide": "Découper les pages larges",
     "splitWidePagedOnly": "Découper les pages larges (mode page par page uniquement)",
     "splitWideSingleOnly": "Découper les pages larges (mise en page une page uniquement)",

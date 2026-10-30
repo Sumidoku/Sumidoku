@@ -65,12 +65,51 @@
 
 /* ---------- Paged spreads (single/double page layout) ---------- */
 
+/* The track is one row of viewport-sized spreads; a turn slides it by a whole
+   spread width (trackOffsetPercent) instead of swapping the content in place */
+.reader__track {
+	display: flex;
+	width: 100%;
+	height: 100%;
+}
+
+/* Each spread is its own scroll container, so scrollable scale modes scroll the
+   page inside the viewport instead of growing the container; the track stays put */
 .reader__spread {
+	flex: none;
+	width: 100%;
+	height: 100%;
+	overflow: auto;
+	display: flex;
+}
+
+/* margin auto centers the content while it fits and start-aligns it once it
+   outgrows the spread (auto margins clamp to zero), so tall pages never top-clip */
+.reader__spread-inner {
+	margin: auto;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	width: 100%;
 	height: 100%;
+}
+
+/* Turn animation: slide the track one spread per turn. The anim flag and
+   prefers-reduced-motion both gate it; without the flag turns are instant */
+.reader__paged[data-anim='true'] .reader__track {
+	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Text pages slide between columns with the same motion */
+.reader__paged[data-anim='true'] .reader-text--cols {
+	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.reader__paged .reader__track,
+	.reader__paged .reader-text--cols {
+		transition: none;
+	}
 }
 
 /* Two-slot spreads halve each slot's width so both pages contain-fit side by side */
@@ -109,41 +148,31 @@
 
 /* ---------- Page scale modes (paged; data-scale on .reader__paged) ---------- */
 
-/* Scrollable scale modes trade the fixed viewport for native scrolling */
-.reader__paged[data-scale='width'],
-.reader__paged[data-scale='widthShrink'],
-.reader__paged[data-scale='original'] {
-	overflow-y: auto;
-}
-
-.reader__paged[data-scale='original'] {
-	overflow-x: auto;
-}
-
-/* The zoom wrapper and spread become content-sized so tall pages grow the
-   scroll height; auto margins keep short pages centered without the flex
-   centering top-clip. Text pages keep the fixed-height column layout (:has) */
-.reader__paged[data-scale='width'] .reader__zoom:has(.reader__spread),
-.reader__paged[data-scale='widthShrink'] .reader__zoom:has(.reader__spread),
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
+/* Scrollable scale modes grow the spread's inner content past the viewport and
+   the spread itself scrolls; top-align so a tall page's start is not clipped */
+.reader__paged[data-scale='width'] .reader__spread-inner,
+.reader__paged[data-scale='widthShrink'] .reader__spread-inner,
+.reader__paged[data-scale='original'] .reader__spread-inner {
 	height: auto;
 	min-height: 100%;
-	margin-top: auto;
-	margin-bottom: auto;
+	align-items: flex-start;
 }
 
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
-	width: auto;
+/* hugContent modes let the content outgrow the spread horizontally so an
+   overwide pair scrolls sideways inside the spread */
+.reader__paged[data-scale='height'] .reader__spread-inner,
+.reader__paged[data-scale='original'] .reader__spread-inner {
+	width: max-content;
 	min-width: 100%;
-	margin-left: auto;
-	margin-right: auto;
 }
 
-.reader__paged[data-scale='width'] .reader__zoom .reader__spread,
-.reader__paged[data-scale='widthShrink'] .reader__zoom .reader__spread,
-.reader__paged[data-scale='original'] .reader__zoom .reader__spread {
-	height: auto;
-	min-height: 100%;
+/* Text pages always paginate by fixed-height columns and ignore page scale */
+.reader__paged[data-scale] .reader__spread-inner--text {
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	align-items: center;
 }
 
 /* width: fill the container width (halved per slot in two-page spreads) */
@@ -167,39 +196,6 @@
 	height: 100%;
 	max-width: none;
 	max-height: none;
-}
-
-/* height: a spread (or single landscape page) wider than the viewport scrolls
-   horizontally instead of shrinking its pages or clipping them — KMReader's
-   hugContent behaviour. The zoom wrapper and spread size to their content and
-   the pages must not flex-shrink; auto margins keep narrow pages centered */
-.reader__paged[data-scale='height'] {
-	overflow-x: auto;
-}
-
-.reader__paged[data-scale='height'] .reader__zoom:has(.reader__spread) {
-	width: auto;
-	min-width: 100%;
-	margin-left: auto;
-	margin-right: auto;
-}
-
-.reader__paged[data-scale='height'] .reader__zoom .reader__spread {
-	width: auto;
-	min-width: 100%;
-}
-
-.reader__paged[data-scale='height'] .reader__spread .reader__img {
-	flex-shrink: 0;
-}
-
-/* Tap zones are positioned inside the scroll container, so they would scroll
-   away with the content in the horizontally scrollable scale modes; anchor
-   them to the viewport instead (the container is full-viewport, so the zone
-   geometry is unchanged) */
-.reader__paged[data-scale='height'] .reader__zone,
-.reader__paged[data-scale='original'] .reader__zone {
-	position: fixed;
 }
 
 /* original: natural pixels, both axes free */
@@ -241,23 +237,6 @@
 	max-width: 100%;
 	max-height: 100%;
 	object-fit: cover;
-}
-
-/* Scrollable scale modes grow the half-box like they grow spreads */
-.reader__paged[data-scale='width'] .reader__zoom:has(.reader__split),
-.reader__paged[data-scale='widthShrink'] .reader__zoom:has(.reader__split),
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__split) {
-	height: auto;
-	min-height: 100%;
-	margin-top: auto;
-	margin-bottom: auto;
-}
-
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__split) {
-	width: auto;
-	min-width: 100%;
-	margin-left: auto;
-	margin-right: auto;
 }
 
 .reader__paged[data-scale='width'] .reader__split {

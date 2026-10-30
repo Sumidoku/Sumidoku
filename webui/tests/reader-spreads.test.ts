@@ -101,3 +101,14 @@ test('a measured landscape page re-pairs its spread', async () => {
 		assert.deepEqual(buildSpreads(3, measured, 'doubleNoCover'), [[0, null], [1], [2, null]]);
 	});
 });
+
+test('trackOffsetPercent slides one spread per index and flips the sign under rtl', async () => {
+	await withVite(async (vite) => {
+		const { trackOffsetPercent } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		assert.equal(trackOffsetPercent('ltr', 0), 0);
+		assert.equal(trackOffsetPercent('ltr', 3), -300);
+		assert.equal(trackOffsetPercent('rtl', 0), 0);
+		// Under rtl the track row is reversed, so a later spread slides in from the left
+		assert.equal(trackOffsetPercent('rtl', 3), 300);
+	});
+});

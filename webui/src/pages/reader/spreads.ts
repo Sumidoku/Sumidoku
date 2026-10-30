@@ -133,3 +133,14 @@ export function spreadLeadPage(spread: Spread): number {
 	}
 	return 0;
 }
+
+/**
+ * Track translation in percent for the turn animation. The track lays spreads in
+ * reading order; in rtl the flex row runs right to left, so the sign flips to
+ * keep the current spread sliding in from the correct side.
+ */
+export function trackOffsetPercent(dir: 'ltr' | 'rtl', spreadIndex: number): number {
+	// Zero must not become -0, or React renders a different style string on the first spread
+	if (spreadIndex === 0) return 0;
+	return (dir === 'rtl' ? 1 : -1) * spreadIndex * 100;
+}
