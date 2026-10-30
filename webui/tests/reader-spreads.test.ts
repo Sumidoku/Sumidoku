@@ -102,6 +102,17 @@ test('a measured landscape page re-pairs its spread', async () => {
 	});
 });
 
+test('slotAspectRatio reserves a 2:3 box until the real dimensions arrive', async () => {
+	await withVite(async (vite) => {
+		const { slotAspectRatio } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		// Unknown dimensions fall back to the 2:3 box so an unloaded page stays in its half
+		assert.equal(slotAspectRatio(null), '2 / 3');
+		assert.equal(slotAspectRatio(undefined), '2 / 3');
+		// Measured or server-reported dimensions take over the box
+		assert.equal(slotAspectRatio({ width: 1400, height: 2100 }), '1400 / 2100');
+	});
+});
+
 test('trackOffsetPercent slides one spread per index and flips the sign under rtl', async () => {
 	await withVite(async (vite) => {
 		const { trackOffsetPercent } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
