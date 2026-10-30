@@ -135,6 +135,18 @@ export function spreadLeadPage(spread: Spread): number {
 }
 
 /**
+ * The aspect-ratio box a spread slot reserves before its page's dimensions are
+ * known. Manga pages are close to 2:3 (KMReader's blankOf uses the same
+ * fallback), so an unloaded page already occupies the correct half of the
+ * spread instead of collapsing to a zero-size box — which is what used to let
+ * the loaded mate sit in the middle and then jump to its side once the second
+ * page's size arrived.
+ */
+export function slotAspectRatio(dims: PageDims | null | undefined): string {
+	return dims ? `${dims.width} / ${dims.height}` : '2 / 3';
+}
+
+/**
  * Track translation in percent for the turn animation. The track lays spreads in
  * reading order; in rtl the flex row runs right to left, so the sign flips to
  * keep the current spread sliding in from the correct side.

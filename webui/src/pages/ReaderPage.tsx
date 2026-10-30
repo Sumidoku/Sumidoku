@@ -47,7 +47,7 @@ import {
 	zoneMovesForward
 } from './reader/readerPrefs';
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
-import { buildSpreads, measureWhenKnown, recordMeasured, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
+import { buildSpreads, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
@@ -1397,9 +1397,7 @@ function ReaderCore({
 															// where the joined pair would place it
 															const mate = spread[k === 0 ? 1 : 0];
 															const mateDims = mate !== null && mate !== undefined ? dimsOf(mate) : null;
-															const ratio = mateDims
-																? `${mateDims.width} / ${mateDims.height}`
-																: '2 / 3';
+															const ratio = slotAspectRatio(mateDims);
 															return (
 																<div
 																	key={`blank-${k}`}
@@ -1433,7 +1431,7 @@ function ReaderCore({
 																<div
 																	key={p.index}
 																	className="reader__img"
-																	style={dims ? { aspectRatio: `${dims.width} / ${dims.height}`, width: '100%' } : undefined}
+																	style={{ aspectRatio: slotAspectRatio(dims), width: '100%' }}
 																	aria-hidden
 																/>
 															);
@@ -1444,8 +1442,11 @@ function ReaderCore({
 																className="reader__img"
 																src={pageUrl(chapterId, p.index, imgWidth)}
 																alt={t('reader.pageAlt', { page: slot + 1 })}
-																width={dims?.width}
-																height={dims?.height}
+																// The slot keeps an aspect-ratio box even before dims are
+																// known (2:3 fallback), so an unloaded page stays in its own
+																// half instead of collapsing to zero size and letting the
+																// loaded mate sit in the middle of the spread
+																style={{ aspectRatio: slotAspectRatio(dims) }}
 																draggable={false}
 																onLoad={(e) =>
 																	reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)

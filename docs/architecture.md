@@ -1894,12 +1894,15 @@ pages into spreads in reading order, giving the cover and closing page a blank
 mate and always showing landscape pages solo. Blank slots copy their mate's
 aspect ratio (KMReader's `blankOf` convention, with a 2:3 fallback while the
 mate's size is unknown) and contain-fit inside their half, so the visible page
-sits exactly where the joined pair would place it. Inside a spread the images
-size
-with `width: auto; height: auto` (`reader.css`): the measured width/height
-attributes then act only as an aspect-ratio hint, so each page hugs its content
-and a two-page spread joins in the middle — explicit sizes would clamp each
-axis independently and letterbox a gap between the slots. Spreads carry page indexes, so
+sits exactly where the joined pair would place it. Inside a spread every image
+slot carries an inline aspect-ratio box (`spreads.ts:slotAspectRatio`): the
+real dims once measured, the same 2:3 fallback before, so an unloaded page
+already occupies its own half instead of collapsing to a zero-size box and
+letting the loaded mate sit in the middle until its size arrives. The images
+size with `width: auto; height: auto` (`reader.css`), so the box clamps
+ratio-preserving and each page hugs its content — a two-page spread joins in
+the middle, where explicit sizes would clamp each axis independently and
+letterbox a gap between the slots. Spreads carry page indexes, so
 progress reporting and the page slider stay page-based while turning moves by
 spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
 override-over-global resolution but no metadata counterpart. Paged spreads are
