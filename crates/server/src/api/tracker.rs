@@ -13,6 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::Redirect;
 use axum::{Extension, Json};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 fn parse_provider(name: &str) -> ApiResult<Provider> {
@@ -99,27 +100,72 @@ pub struct TrackerLinkUpsertDto {
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TrackerLinkPageDto {
-	pub entries: Vec<TrackerLinkDto>,
-	pub has_next_page: bool,
+pub struct TrackerBindingDto {
+	#[serde(flatten)]
+	pub link: TrackerLinkDto,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub manga_title: Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub manga_cover: Option<String>,
 }
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerBindingCountsDto {
+	pub manga: i64,
+	pub providers: HashMap<String, i64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerLinkPageDto {
+	pub entries: Vec<TrackerBindingDto>,
+	pub has_next_page: bool,
+	pub total_pages: i64,
+	/// Always unfiltered, so the provider filter keeps showing every option
+	pub counts: TrackerBindingCountsDto,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrackerLinkPageQuery {
+	pub page: Option<i32>,
+	pub provider: Option<String>,
+}
+
+// One manga can span several rows, so a page is shorter than the 50-row list default
+const BINDINGS_PAGE_SIZE: i64 = 20;
 
 pub async fn list_all_tracker_links(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
-	Query(query): Query<super::PageQuery>,
+	Query(query): Query<TrackerLinkPageQuery>,
 ) -> ApiResult<Json<TrackerLinkPageDto>> {
-	let page = query.page.unwrap_or(1);
+	let page = i64::from(query.page.unwrap_or(1));
 	if page < 1 {
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
-	let offset = (i64::from(page) - 1) * crate::PAGE_SIZE;
-	let mut links = dao::list_links_by_user_page(&state.pool, user.id, crate::PAGE_SIZE + 1, offset).await?;
-	let has_next_page = links.len() as i64 > crate::PAGE_SIZE;
-	links.truncate(crate::PAGE_SIZE as usize);
+	let provider = query
+		.provider
+		.as_deref()
+		.map(|name| Provider::parse(name).ok_or_else(|| ApiError::bad_request(format!("tracker provider '{name}' is not supported"))))
+		.transpose()?;
+	let bindings = dao::list_bindings_page(&state.pool, user.id, provider, BINDINGS_PAGE_SIZE, (page - 1) * BINDINGS_PAGE_SIZE).await?;
+	let (manga, providers) = dao::binding_counts(&state.pool, user.id).await?;
+	let providers: HashMap<String, i64> = providers.into_iter().collect();
+	let matching = provider.map_or(manga, |provider| providers.get(provider.as_str()).copied().unwrap_or(0));
+	let total_pages = (matching + BINDINGS_PAGE_SIZE - 1) / BINDINGS_PAGE_SIZE;
 	Ok(Json(TrackerLinkPageDto {
-		entries: links.into_iter().map(TrackerLinkDto::from).collect(),
-		has_next_page,
+		entries: bindings
+			.into_iter()
+			.map(|binding| TrackerBindingDto {
+				link: binding.link.into(),
+				manga_title: binding.manga_title,
+				manga_cover: binding.manga_cover,
+			})
+			.collect(),
+		has_next_page: page < total_pages,
+		total_pages,
+		counts: TrackerBindingCountsDto { manga, providers },
 	}))
 }
 

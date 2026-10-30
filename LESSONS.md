@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A runtime SQL string needs a test on the migrated schema, above all when its
+failure only logs and skips.** `sqlx::query` strings are not checked at compile
+time, and a warn-and-return path turns a wrong column into a feature that quietly
+stops working while every request still succeeds. A pure-function test that
+hands the result in cannot see it; run the query against a migrated database.
+- Evidence: 2026-10-30, #524's cover eviction selected `manga.in_library`, which
+  lives on `manga_user`, so every cover write logged a warning and skipped
+  eviction through 1.16.1 while `evict_over_cap` stayed green with an injected
+  set. `eviction_reads_library_membership_from_the_real_schema` failed with the
+  old query and passed with the fix.
+
 **Every issue a PR closes needs its own closing keyword; check the linked
 list before merging.** GitHub binds `Closes` only to the reference right
 after it, so `Closes #495 and #496` links #495 and leaves #496 open after
@@ -42,6 +53,10 @@ order.
   round back button rendered as a small square with a dim icon. Compounding
   every back-button rule with `.icon-btn` fixed it, and the new
   manga-mobile-navigation test failed on the old selectors.
+- Seen again: 2026-10-30, `.manga-hero__actions .btn:hover:not(:disabled)`
+  out-specified `.btn--primary:hover`, so the light-theme hover painted white
+  text on a white fill and hid the Continue reading label. Compound hover rules
+  for the primary modifier now restore its fill in both themes.
 
 **Translate server-sent labels by a stable id, never by their display text.**
 A label the server sends is copy that can be reworded at any time; a UI

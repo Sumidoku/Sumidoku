@@ -8,6 +8,7 @@ import type {
 	TrackUpdate,
 	TrackerLedgerItem,
 	TrackerLink,
+	TrackerBinding,
 	TrackerLinkPage,
 	TrackerLinkUpsert,
 	TrackerOAuthStatus,
@@ -27,6 +28,7 @@ export const TRACKER_PROVIDER_NAMES: Record<TrackerProvider, string> = {
 
 export const trackerKeys = {
 	links: ['trackers', 'links'] as const,
+	bindingsPage: (page: number, provider?: TrackerProvider) => ['trackers', 'links', 'page', page, provider] as const,
 	mangaLinks: (mangaId: number) => ['trackers', 'links', mangaId] as const,
 	ledger: ['trackers', 'ledger'] as const,
 	oauth: ['trackers', 'oauth'] as const,
@@ -43,8 +45,20 @@ export function invalidateTrackerLinks(qc: QueryClient, mangaId: number) {
 	void qc.invalidateQueries({ queryKey: qk.manga(mangaId) });
 }
 
-export function listAllTrackerLinks(page: number) {
-	return api<TrackerLinkPage>(`/trackers/links?page=${page}`);
+export function listAllTrackerLinks(page: number, provider?: TrackerProvider) {
+	const filter = provider ? `&provider=${provider}` : '';
+	return api<TrackerLinkPage>(`/trackers/links?page=${page}${filter}`);
+}
+
+/** The page's links, in order, gathered per manga; the server keeps a manga's links adjacent */
+export function groupBindings(entries: TrackerBinding[]): TrackerBinding[][] {
+	const groups: TrackerBinding[][] = [];
+	for (const entry of entries) {
+		const last = groups[groups.length - 1];
+		if (last?.[0].mangaId === entry.mangaId) last.push(entry);
+		else groups.push([entry]);
+	}
+	return groups;
 }
 
 export function listTrackerLinks(mangaId: number) {

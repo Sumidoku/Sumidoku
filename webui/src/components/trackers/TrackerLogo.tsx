@@ -15,7 +15,7 @@ const LOGOS: Record<TrackerProvider, string> = {
 export function TrackerLogo({ provider, className }: { provider: TrackerProvider; className?: string }) {
 	return (
 		<img
-			className={className ? `tracker-logo ${className}` : 'tracker-logo'}
+			className={[`tracker-logo tracker-logo--${provider}`, className].filter(Boolean).join(' ')}
 			src={LOGOS[provider]}
 			alt={TRACKER_PROVIDER_NAMES[provider]}
 		/>

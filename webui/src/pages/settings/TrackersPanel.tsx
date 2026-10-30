@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ExternalLink } from 'lucide-react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useManga } from '../../api/hooks';
+import { coverUrl } from '../../api/client';
 import {
 	TRACKER_PROVIDER_NAMES,
 	TRACKER_PROVIDERS,
+	groupBindings,
 	listAllTrackerLinks,
 	deleteTrackerLink,
 	invalidateTrackerLinks,
@@ -17,8 +18,8 @@ import {
 	trackerEntryUrl,
 	trackerKeys
 } from '../../api/trackers';
-import type { TrackerLink, TrackerProvider } from '../../api/types';
-import { Button, InfiniteList, Modal, Skeleton, pushToast } from '../../components';
+import type { TrackerBinding, TrackerLink, TrackerProvider } from '../../api/types';
+import { Button, Cover, IconButton, Modal, SegmentedControl, Skeleton, pushToast } from '../../components';
 import { TrackerLogo } from '../../components/trackers/TrackerLogo';
 import '../../components/trackers/trackers.css';
 
@@ -97,38 +98,42 @@ function TrackerAccountCard({ provider }: { provider: TrackerProvider }) {
 	);
 }
 
-function TrackerBindingRow({ link, onUnbind }: { link: TrackerLink; onUnbind: (link: TrackerLink) => void }) {
+function TrackerBindingRow({ group, onUnbind }: { group: TrackerBinding[]; onUnbind: (link: TrackerLink) => void }) {
 	const { t } = useTranslation();
-	const mangaQuery = useManga(link.mangaId, { silent: true });
-	const mangaTitle = mangaQuery.data?.title;
-	const provider = TRACKER_PROVIDER_NAMES[link.provider];
+	const { mangaId, mangaTitle, mangaCover } = group[0];
+	const title = mangaTitle || t('trackers.unknownManga', { id: mangaId });
 	return (
 		<li className="tracker-binding">
-			<TrackerLogo provider={link.provider} />
+			<Link className="tracker-binding__cover" to={`/manga/${mangaId}`} aria-label={title}>
+				<Cover src={coverUrl(mangaId, mangaCover)} title={title} />
+			</Link>
 			<div className="tracker-binding__meta">
-				{mangaTitle ? (
-					<Link className="tracker-binding__manga" to={`/manga/${link.mangaId}`}>
-						{mangaTitle}
-					</Link>
-				) : (
-					<span className="tracker-binding__manga">{t('trackers.unknownManga', { id: link.mangaId })}</span>
-				)}
-				<span className="tracker-binding__remote">
-					{provider} · {link.title ?? link.trackId}
-				</span>
+				<Link className="tracker-binding__manga" to={`/manga/${mangaId}`}>
+					{title}
+				</Link>
+				<ul className="tracker-binding__links">
+					{group.map((link) => {
+						const provider = TRACKER_PROVIDER_NAMES[link.provider];
+						return (
+							<li className="tracker-binding__link" key={link.provider}>
+								<TrackerLogo provider={link.provider} />
+								<a
+									className="tracker-binding__remote"
+									href={trackerEntryUrl(link.provider, link.trackId)}
+									target="_blank"
+									rel="noreferrer"
+									title={t('trackers.openEntry', { provider })}
+								>
+									{link.title ?? link.trackId}
+								</a>
+								<IconButton size="sm" label={`${t('trackers.unbind')} ${provider}`} onClick={() => onUnbind(link)}>
+									<Trash2 size={14} />
+								</IconButton>
+							</li>
+						);
+					})}
+				</ul>
 			</div>
-			<a
-				className="tracker-binding__external"
-				href={trackerEntryUrl(link.provider, link.trackId)}
-				target="_blank"
-				rel="noreferrer"
-				aria-label={t('trackers.openEntry', { provider })}
-			>
-				<ExternalLink size={16} />
-			</a>
-			<Button size="sm" onClick={() => onUnbind(link)}>
-				{t('trackers.unbind')}
-			</Button>
 		</li>
 	);
 }
@@ -140,13 +145,20 @@ export function TrackersPanel() {
 	const [pendingUnbind, setPendingUnbind] = useState<TrackerLink | null>(null);
 	const handledOAuth = useRef<string | null>(null);
 	const search = searchParams.toString();
-	const linksQuery = useInfiniteQuery({
-		queryKey: trackerKeys.links,
-		queryFn: ({ pageParam }) => listAllTrackerLinks(pageParam),
-		initialPageParam: 1,
-		getNextPageParam: (last, all) => (last.hasNextPage ? all.length + 1 : undefined)
+	const [filter, setFilter] = useState<TrackerProvider | 'all'>('all');
+	const [page, setPage] = useState(1);
+	const provider = filter === 'all' ? undefined : filter;
+	const linksQuery = useQuery({
+		queryKey: trackerKeys.bindingsPage(page, provider),
+		queryFn: () => listAllTrackerLinks(page, provider),
+		placeholderData: keepPreviousData
 	});
-	const links = linksQuery.data?.pages.flatMap((page) => page.entries) ?? [];
+	const data = linksQuery.data;
+	const groups = groupBindings(data?.entries ?? []);
+	const totalPages = data?.totalPages ?? 0;
+	const counts = data?.counts;
+	// Unbinding the last manga of the last page leaves the current page past the end
+	if (!linksQuery.isPlaceholderData && page > 1 && page > totalPages) setPage(Math.max(1, totalPages));
 	const unbind = useMutation({
 		mutationFn: (link: TrackerLink) => deleteTrackerLink(link.mangaId, link.provider),
 		onSuccess: (_, link) => {
@@ -195,24 +207,63 @@ export function TrackersPanel() {
 						</div>
 					) : linksQuery.isError ? (
 						<p className="tracker-error">{linksQuery.error.message}</p>
-					) : links.length === 0 ? (
+					) : !counts?.manga ? (
 						<p className="muted">{t('trackers.noBindings')}</p>
 					) : (
-						<InfiniteList
-							hasNextPage={linksQuery.hasNextPage}
-							isFetching={linksQuery.isFetching}
-							onLoadMore={() => void linksQuery.fetchNextPage()}
-						>
+						<>
+							<div className="tracker-bindings__filter">
+								<SegmentedControl<TrackerProvider | 'all'>
+									value={filter}
+									options={[
+										{
+											value: 'all',
+											label: (
+												<span className="tracker-seg__option">
+													<span>{t('trackers.filterAll')}</span>
+													<span className="tracker-seg__count">{counts.manga}</span>
+												</span>
+											)
+										},
+										...TRACKER_PROVIDERS.filter((item) => counts.providers[item] || item === filter).map((item) => ({
+											value: item,
+											label: (
+												<span className="tracker-seg__option">
+													<TrackerLogo provider={item} />
+													<span>{TRACKER_PROVIDER_NAMES[item]}</span>
+													<span className="tracker-seg__count">{counts.providers[item] ?? 0}</span>
+												</span>
+											)
+										}))
+									]}
+									onChange={(next) => {
+										setFilter(next);
+										setPage(1);
+									}}
+								/>
+							</div>
 							<ul className="tracker-bindings">
-								{links.map((link) => (
-									<TrackerBindingRow
-										key={`${link.mangaId}:${link.provider}`}
-										link={link}
-										onUnbind={setPendingUnbind}
-									/>
+								{groups.map((group) => (
+									<TrackerBindingRow key={group[0].mangaId} group={group} onUnbind={setPendingUnbind} />
 								))}
 							</ul>
-						</InfiniteList>
+							{totalPages > 1 && (
+								<div className="tracker-bindings__pager">
+									<span className="muted">{t('trackers.pageInfo', { page, pages: totalPages })}</span>
+									<div className="tracker-bindings__pager-actions">
+										<Button size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>
+											{t('trackers.previousPage')}
+										</Button>
+										<Button
+											size="sm"
+											disabled={!data?.hasNextPage || linksQuery.isPlaceholderData}
+											onClick={() => setPage(page + 1)}
+										>
+											{t('trackers.nextPage')}
+										</Button>
+									</div>
+								</div>
+							)}
+						</>
 					)}
 				</div>
 			</section>
