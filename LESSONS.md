@@ -16,13 +16,20 @@ Remove a nonfinished download row and signal cancellation in a short transaction
 the worker performs attempt cleanup after the in-flight source call returns.
 Reserve the exclusive chapter lease for finished-product removal, and never hold
 a database transaction while waiting for that lease. Recheck row state inside the
-transaction so a queued-to-downloading transition follows the active path.
+transaction so a queued-to-downloading transition follows the active path. Remove
+queue and progress state before committing the row deletion: commit makes the id
+available to a concurrent enqueue, whose new queue entry must not be removed by
+the older delete.
 - Evidence: 2026-10-30, the OPDS feed in
   `download_delete_while_worker_finishes_cleans_artifact_and_allows_requeue`
   was gated while the worker held a chapter read lease. Deletion waited forever
   for the write lease, even though it had only set a cancellation flag. The
   bounded 10-second delete assertion now passes, and the test confirms active
-  cancellation preserves source page variants until the worker drains.
+  cancellation preserves source page variants until the worker drains. Review of
+  the follow-up found that moving queue removal after commit could erase a new
+  enqueue's queue entry; `c0d387d` restores the pre-commit ordering. Existing
+  gated-delete/requeue regressions pass, but do not deterministically schedule
+  that specific queue race; the full workspace run is still pending.
 
 **Check build-space headroom before switching validation scope or profiles.**
 Focused package builds and workspace builds can use different feature-unified
