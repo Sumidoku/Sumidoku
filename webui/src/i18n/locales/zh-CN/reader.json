@@ -70,6 +70,16 @@
     "chapters": "章节列表",
     "noChapters": "暂无章节",
     "ascending": "升序",
+    "transition": "章节过渡页",
+    "transitionPagedOnly": "章节过渡页（仅翻页模式）",
+    "transitionTitle": "章节过渡",
+    "transitionFinished": "本章已读完",
+    "transitionAtStart": "已到本章开头",
+    "transitionNext": "下一章",
+    "transitionPrev": "上一章",
+    "transitionContinue": "进入下一章",
+    "transitionContinuePrev": "回到上一章",
+    "transitionStay": "留在本页",
     "descending": "降序"
   }
 }

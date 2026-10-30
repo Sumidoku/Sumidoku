@@ -25,6 +25,8 @@ interface ReaderSettingsProps {
 	onStretchChange: (stretch: boolean) => void;
 	anim: boolean;
 	onAnimChange: (anim: boolean) => void;
+	transition: boolean;
+	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
@@ -48,6 +50,8 @@ export function ReaderSettings({
 	onStretchChange,
 	anim,
 	onAnimChange,
+	transition,
+	onTransitionChange,
 	currentPage,
 	typography,
 	onTypographyChange
@@ -149,6 +153,16 @@ export function ReaderSettings({
 						onChange={(e) => onAnimChange(e.currentTarget.checked)}
 					/>
 					<span>{mode !== 'paged' ? t('reader.animationsPagedOnly') : t('reader.animations')}</span>
+				</label>
+			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<label className="reader__stretch">
+					<input
+						type="checkbox"
+						checked={transition}
+						onChange={(e) => onTransitionChange(e.currentTarget.checked)}
+					/>
+					<span>{mode !== 'paged' ? t('reader.transitionPagedOnly') : t('reader.transition')}</span>
 				</label>
 			</div>
 			<div className="reader__settings-title">{t('reader.background')}</div>

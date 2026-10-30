@@ -32,6 +32,7 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
+import { TransitionPage } from './reader/TransitionPage';
 import {
 	dirFromViewer,
 	modeFromViewer,
@@ -296,6 +297,31 @@ function readAnimOverride(mangaId: number | null): boolean | null {
 	return null;
 }
 
+// The chapter transition page defaults to on, so only "0" disables it
+function readTransition(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.transition') !== '0';
+	} catch {
+		return true;
+	}
+}
+
+function transitionOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.transition.${mangaId}`;
+}
+
+function readTransitionOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(transitionOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -449,6 +475,12 @@ function ReaderCore({
 	const [globalAnim] = useState<boolean>(readAnim);
 	const [animOverride, setAnimOverride] = useState<boolean | null>(() => readAnimOverride(mangaId));
 	const anim = animOverride ?? globalAnim;
+	const [globalTransition] = useState<boolean>(readTransition);
+	const [transitionOverride, setTransitionOverride] = useState<boolean | null>(() => readTransitionOverride(mangaId));
+	const transition = transitionOverride ?? globalTransition;
+	// A boundary turn with a target chapter first parks on the transition page; a
+	// second turn in the same direction (or the page's own continue) jumps
+	const [pendingTurn, setPendingTurn] = useState<'next' | 'prev' | null>(null);
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -691,6 +723,8 @@ function ReaderCore({
 	function gotoPage(i: number) {
 		const clamped = Math.min(Math.max(i, 0), Math.max(total - 1, 0));
 		if (clamped === idxRef.current && pages) return;
+		// Moving within the chapter abandons a pending boundary jump
+		setPendingTurn(null);
 		setIdx(clamped);
 		setCol(0);
 		setHalf(0);
@@ -702,7 +736,28 @@ function ReaderCore({
 
 	function navCh(c: ChapterWithDownload | null) {
 		if (!c) return;
+		setPendingTurn(null);
 		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`, { replace: true });
+	}
+
+	// A boundary turn parks on the transition page when a target chapter exists and
+	// the preference is on; the same boundary turn again (or the page's continue
+	// action) confirms the jump, and an opposite turn cancels the pending jump
+	function boundaryNav(c: ChapterWithDownload | null, direction: 'next' | 'prev') {
+		if (!c) return;
+		if (pendingTurn === direction) {
+			navCh(c);
+			return;
+		}
+		if (pendingTurn !== null) {
+			setPendingTurn(null);
+			return;
+		}
+		if (transition) {
+			setPendingTurn(direction);
+			return;
+		}
+		navCh(c);
 	}
 
 	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
@@ -715,7 +770,7 @@ function ReaderCore({
 		if (splitOn && !textPage) {
 			const next = turnSplit({ page: idxRef.current, half: halfRef.current }, total, landscapeOf, forward);
 			if (next === null) {
-				navCh(forward ? nextCh : prevCh);
+				boundaryNav(forward ? nextCh : prevCh, forward ? 'next' : 'prev');
 				return;
 			}
 			if (next.page === idxRef.current) {
@@ -736,11 +791,11 @@ function ReaderCore({
 			}
 			if (spreads) {
 				const si = spreadIndexOf(spreads, idxRef.current);
-				if (si >= spreads.length - 1) navCh(nextCh);
+				if (si >= spreads.length - 1) boundaryNav(nextCh, 'next');
 				else gotoPage(spreadLeadPage(spreads[si + 1]));
 				return;
 			}
-			if (idxRef.current >= total - 1) navCh(nextCh);
+			if (idxRef.current >= total - 1) boundaryNav(nextCh, 'next');
 			else gotoPage(idxRef.current + 1);
 		} else {
 			if (textPage && colRef.current > 0) {
@@ -750,11 +805,11 @@ function ReaderCore({
 			}
 			if (spreads) {
 				const si = spreadIndexOf(spreads, idxRef.current);
-				if (si <= 0) navCh(prevCh);
+				if (si <= 0) boundaryNav(prevCh, 'prev');
 				else gotoPage(spreadLeadPage(spreads[si - 1]));
 				return;
 			}
-			if (idxRef.current <= 0) navCh(prevCh);
+			if (idxRef.current <= 0) boundaryNav(prevCh, 'prev');
 			else gotoPage(idxRef.current - 1);
 		}
 	}
@@ -791,6 +846,11 @@ function ReaderCore({
 			}
 			if (settingsOpen) {
 				setSettingsOpen(false);
+				return;
+			}
+			// A pending chapter jump cancels ahead of leaving the reader
+			if (pendingTurn) {
+				setPendingTurn(null);
 				return;
 			}
 			goBack();
@@ -1000,6 +1060,18 @@ function ReaderCore({
 			// Private mode blocks persistence but the animation still switches
 		}
 		setAnimOverride(mangaId !== null ? v : null);
+	}
+
+	function setTransition(v: boolean) {
+		if (v === transition) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(transitionOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.removeItem('sumidoku.reader.transition');
+			else localStorage.setItem('sumidoku.reader.transition', '0');
+		} catch {
+			// Private mode blocks persistence but the transition still switches
+		}
+		setTransitionOverride(mangaId !== null ? v : null);
 	}
 
 	function toggleAsc() {
@@ -1420,6 +1492,19 @@ function ReaderCore({
 							/>
 						</>
 					)}
+					{pendingTurn && (
+						<TransitionPage
+							direction={pendingTurn}
+							currentLabel={curChapter ? chapterLabel(curChapter) : mangaTitle}
+							target={pendingTurn === 'next' ? nextCh : prevCh}
+							onContinue={() => {
+								const target = pendingTurn === 'next' ? nextCh : prevCh;
+								setPendingTurn(null);
+								navCh(target);
+							}}
+							onCancel={() => setPendingTurn(null)}
+						/>
+					)}
 				</div>
 			) : (
 				<div
@@ -1545,6 +1630,8 @@ function ReaderCore({
 					onStretchChange={setStretch}
 					anim={anim}
 					onAnimChange={setAnim}
+					transition={transition}
+					onTransitionChange={setTransition}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

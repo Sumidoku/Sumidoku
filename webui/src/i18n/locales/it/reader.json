@@ -70,6 +70,16 @@
     "chapters": "Capitoli",
     "noChapters": "Nessun capitolo",
     "ascending": "Crescente",
+    "transition": "Pagina di transizione del capitolo",
+    "transitionPagedOnly": "Pagina di transizione del capitolo (solo modalità pagine)",
+    "transitionTitle": "Transizione capitolo",
+    "transitionFinished": "Capitolo completato",
+    "transitionAtStart": "Inizio del capitolo",
+    "transitionNext": "Capitolo successivo",
+    "transitionPrev": "Capitolo precedente",
+    "transitionContinue": "Vai al capitolo successivo",
+    "transitionContinuePrev": "Torna al capitolo precedente",
+    "transitionStay": "Rimani su questa pagina",
     "descending": "Decrescente"
   }
 }

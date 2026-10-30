@@ -44,6 +44,8 @@ async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continu
 					onStretchChange: () => {},
 					anim: true,
 					onAnimChange: () => {},
+					transition: true,
+					onTransitionChange: () => {},
 					currentPage,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {}
@@ -136,4 +138,15 @@ test('the animation toggle renders unmarked in paged mode', async () => {
 test('continuous mode marks the animation toggle as paged-only', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
 	assert.match(markup, /Page turn animation \(paged mode only\)/);
+});
+
+test('the transition toggle renders unmarked in paged mode', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /Chapter transition page/);
+	assert.doesNotMatch(markup, /Chapter transition page \(/);
+});
+
+test('continuous mode marks the transition toggle as paged-only', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
+	assert.match(markup, /Chapter transition page \(paged mode only\)/);
 });

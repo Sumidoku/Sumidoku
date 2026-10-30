@@ -70,6 +70,16 @@
     "chapters": "Chapters",
     "noChapters": "No chapters",
     "ascending": "Ascending",
+    "transition": "Chapter transition page",
+    "transitionPagedOnly": "Chapter transition page (paged mode only)",
+    "transitionTitle": "Chapter transition",
+    "transitionFinished": "Chapter finished",
+    "transitionAtStart": "At the chapter start",
+    "transitionNext": "Next chapter",
+    "transitionPrev": "Previous chapter",
+    "transitionContinue": "Continue to next chapter",
+    "transitionContinuePrev": "Continue to previous chapter",
+    "transitionStay": "Stay on this page",
     "descending": "Descending"
   }
 }

@@ -1914,7 +1914,14 @@ ends of a turn animation are live. Text spreads render their column layout
 statically on neighbouring spreads (column 0) and live on the current one. The
 animation can be switched off (`sumidoku.reader.anim` + `.anim.<id>`, default on,
 `0` disables) and `prefers-reduced-motion` always disables it; text pages slide
-between columns with the same transition. Keyboard shortcuts
+between columns with the same transition. A boundary turn does not switch
+chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
+direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
+current and target chapter with its scanlator; a second boundary turn in the
+same direction or the page's own continue button commits the jump, an opposite
+turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. The page
+is on by default and disabled by `sumidoku.reader.transition` +
+`.transition.<id>` storing `0`. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
