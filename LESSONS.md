@@ -29,7 +29,8 @@ the older delete.
   the follow-up found that moving queue removal after commit could erase a new
   enqueue's queue entry; `c0d387d` restores the pre-commit ordering. Existing
   gated-delete/requeue regressions pass, but do not deterministically schedule
-  that specific queue race; the full workspace run is still pending.
+  that specific queue race. The completed workspace run passed 1,154 tests, with
+  two manual real-site probes skipped.
 
 **Cache acceptance tests must request the actual image bytes, not count page
 metadata.** A page list can be cached while every reader request still fetches
