@@ -1203,6 +1203,7 @@ export type TrackSearchItem = {
 	id: string;
 	title: string;
 	coverUrl?: string | null;
+	info?: string | null;
 	description?: string | null;
 	tracked: boolean;
 	mediaType?: "manga" | "novel";
@@ -1219,6 +1220,11 @@ export type TrackUpdate = {
 	lastReadVolume?: number;
 	startReadDate?: string;
 	finishReadDate?: string;
+};
+
+export type TrackerBinding = TrackerLink & {
+	mangaTitle?: string;
+	mangaCover?: string;
 };
 
 export type TrackerLedgerItem = {
@@ -1242,8 +1248,15 @@ export type TrackerLink = {
 };
 
 export type TrackerLinkPage = {
-	entries: Array<TrackerLink>;
+	entries: Array<TrackerBinding>;
 	hasNextPage: boolean;
+	totalPages: number;
+	counts: {
+		manga: number;
+		providers: {
+			[key: string]: number;
+		};
+	};
 };
 
 export type TrackerLinkUpsert = {

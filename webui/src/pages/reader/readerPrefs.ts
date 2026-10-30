@@ -115,8 +115,8 @@ export function zoneAt(layout: TapZoneLayout, xRatio: number, yRatio: number): '
 	return 'mid';
 }
 
-/** Reader canvas background behind the pages. */
-export type ReaderBackground = 'dark' | 'gray' | 'light';
+/** Reader canvas background behind the pages. `auto` follows the app theme's resolved brightness. */
+export type ReaderBackground = 'dark' | 'gray' | 'light' | 'auto';
 
 /** Whitelisted parse of a stored tap-zone value; unknown values read as absent. */
 export function parseTapZones(v: string | null): TapZoneLayout | null {
@@ -125,7 +125,7 @@ export function parseTapZones(v: string | null): TapZoneLayout | null {
 
 /** Whitelisted parse of a stored background value; unknown values read as absent. */
 export function parseBackground(v: string | null): ReaderBackground | null {
-	return v === 'dark' || v === 'gray' || v === 'light' ? v : null;
+	return v === 'dark' || v === 'gray' || v === 'light' || v === 'auto' ? v : null;
 }
 
 /**

@@ -23,6 +23,10 @@ interface ReaderSettingsProps {
 	onSplitChange: (split: boolean) => void;
 	stretch: boolean;
 	onStretchChange: (stretch: boolean) => void;
+	anim: boolean;
+	onAnimChange: (anim: boolean) => void;
+	transition: boolean;
+	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
@@ -44,6 +48,10 @@ export function ReaderSettings({
 	onSplitChange,
 	stretch,
 	onStretchChange,
+	anim,
+	onAnimChange,
+	transition,
+	onTransitionChange,
 	currentPage,
 	typography,
 	onTypographyChange
@@ -137,12 +145,33 @@ export function ReaderSettings({
 					<span>{mode !== 'paged' ? t('reader.stretchPagedOnly') : t('reader.stretch')}</span>
 				</label>
 			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<label className="reader__stretch">
+					<input
+						type="checkbox"
+						checked={anim}
+						onChange={(e) => onAnimChange(e.currentTarget.checked)}
+					/>
+					<span>{mode !== 'paged' ? t('reader.animationsPagedOnly') : t('reader.animations')}</span>
+				</label>
+			</div>
+			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+				<label className="reader__stretch">
+					<input
+						type="checkbox"
+						checked={transition}
+						onChange={(e) => onTransitionChange(e.currentTarget.checked)}
+					/>
+					<span>{mode !== 'paged' ? t('reader.transitionPagedOnly') : t('reader.transition')}</span>
+				</label>
+			</div>
 			<div className="reader__settings-title">{t('reader.background')}</div>
 			<SegmentedControl
 				options={[
 					{ value: 'dark', label: t('reader.bgDark') },
 					{ value: 'gray', label: t('reader.bgGray') },
-					{ value: 'light', label: t('reader.bgLight') }
+					{ value: 'light', label: t('reader.bgLight') },
+					{ value: 'auto', label: t('reader.bgAuto') }
 				]}
 				value={bg}
 				onChange={onBgChange}

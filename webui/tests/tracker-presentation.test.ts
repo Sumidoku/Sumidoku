@@ -79,7 +79,7 @@ test('cover card renders compact tracker provider markers', async () => {
 	);
 	assert.match(markup, /cover-card__trackers/);
 	for (const name of ['Bangumi', 'AniList', 'MyAnimeList', 'MangaBaka']) {
-		assert.match(markup, new RegExp(`<img class="tracker-logo"[^>]*alt="${name}"`));
+		assert.match(markup, new RegExp(`<img class="tracker-logo[^"]*"[^>]*alt="${name}"`));
 	}
 	assert.doesNotMatch(markup, />\+\d/);
 });
@@ -105,23 +105,32 @@ test('tracker edit exposes a dedicated remote entry link', async () => {
 	assert.match(markup, /Open on AniList/);
 });
 
-test('settings renders every loaded tracker link page', async () => {
+test('settings groups a manga page under one cover with a provider filter and pager', async () => {
 	const client = new QueryClient();
-	client.setQueryData(trackers.trackerKeys.links, {
-		pages: [
-			{ entries: [link({ title: 'First page remote' })], hasNextPage: true },
+	client.setQueryData(trackers.trackerKeys.bindingsPage(1, undefined), {
+		entries: [
+			{ ...link({ title: 'AniList remote' }), mangaTitle: 'Local title', mangaCover: 'cover-v2' },
 			{
-				entries: [link({ mangaId: 8, provider: 'bangumi', trackId: '456', title: 'Second page remote' })],
-				hasNextPage: false
-			}
+				...link({ provider: 'bangumi', trackId: '456', title: 'Bangumi remote' }),
+				mangaTitle: 'Local title',
+				mangaCover: 'cover-v2'
+			},
+			link({ mangaId: 8, provider: 'bangumi', trackId: '789', title: 'Unknown remote' })
 		],
-		pageParams: [1, 2]
+		hasNextPage: true,
+		totalPages: 3,
+		counts: { manga: 45, providers: { anilist: 1, bangumi: 44 } }
 	});
 	const { TrackersPanel } = await vite.ssrLoadModule('/src/pages/settings/TrackersPanel.tsx');
 	let markup = '';
 	assert.doesNotThrow(() => {
 		markup = renderWithClient(client, createElement(MemoryRouter, null, createElement(TrackersPanel)));
 	});
-	assert.match(markup, /First page remote/);
-	assert.match(markup, /Second page remote/);
+	assert.equal(markup.match(/class="tracker-binding__cover"/g)?.length, 2);
+	assert.equal(markup.match(/class="tracker-binding__link"/g)?.length, 3);
+	assert.match(markup, /cover-v2/);
+	assert.match(markup, /Manga #8/);
+	assert.match(markup, /Page 1 of 3/);
+	assert.match(markup, /tracker-bindings__filter/);
+	assert.doesNotMatch(markup, /MangaBaka<\/span><span class="tracker-seg__count"/);
 });

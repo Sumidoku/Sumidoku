@@ -224,6 +224,12 @@
 	color: #fff;
 }
 
+/* The ghost hover above out-specifies .btn--primary:hover and leaves white text on its fill */
+.manga-hero__actions .btn--primary:hover:not(:disabled) {
+	background: var(--accent-solid-hover);
+	border-color: var(--accent-solid-hover);
+}
+
 .manga-hero__actions .btn--danger {
 	color: #ff8a80;
 	border-color: rgba(229, 83, 75, 0.55);
@@ -276,6 +282,11 @@
 	background: var(--accent-solid);
 	border-color: var(--accent-solid);
 	color: #fff;
+}
+
+[data-theme='light'] .manga-hero__actions .btn--primary:hover:not(:disabled) {
+	background: var(--accent-solid-hover);
+	border-color: var(--accent-solid-hover);
 }
 
 [data-theme='light'] .manga-hero__actions .btn--danger {

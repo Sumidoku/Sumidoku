@@ -16,7 +16,8 @@
 }
 
 .reader--bg-light .reader__page-num,
-.reader--bg-light .reader__unsupported {
+.reader--bg-light .reader__unsupported,
+.reader--bg-light .reader__img-failed {
 	color: #5b616e;
 }
 
@@ -65,7 +66,28 @@
 
 /* ---------- Paged spreads (single/double page layout) ---------- */
 
+/* The track is one row of viewport-sized spreads; a turn slides it by a whole
+   spread width (trackOffsetPercent) instead of swapping the content in place */
+.reader__track {
+	display: flex;
+	width: 100%;
+	height: 100%;
+}
+
+/* Each spread is its own scroll container, so scrollable scale modes scroll the
+   page inside the viewport instead of growing the container; the track stays put */
 .reader__spread {
+	flex: none;
+	width: 100%;
+	height: 100%;
+	overflow: auto;
+	display: flex;
+}
+
+/* margin auto centers the content while it fits and start-aligns it once it
+   outgrows the spread (auto margins clamp to zero), so tall pages never top-clip */
+.reader__spread-inner {
+	margin: auto;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -73,14 +95,51 @@
 	height: 100%;
 }
 
+/* Turn animation: slide the track one spread per turn. The anim flag and
+   prefers-reduced-motion both gate it; without the flag turns are instant */
+.reader__paged[data-anim='true'] .reader__track {
+	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Text pages slide between columns with the same motion */
+.reader__paged[data-anim='true'] .reader-text--cols {
+	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.reader__paged .reader__track,
+	.reader__paged .reader-text--cols {
+		transition: none;
+	}
+}
+
 /* Two-slot spreads halve each slot's width so both pages contain-fit side by side */
 .reader__spread[data-slots='2'] .reader__img {
 	max-width: 50%;
 }
 
+/* The slot keeps an inline aspect-ratio box (real dims once measured, a 2:3
+   fallback before, see slotAspectRatio in spreads.ts), and auto width/height
+   let max-width/max-height clamp the box ratio-preserving: each page hugs its
+   content and the two slots join in the middle, the way KMReader renders
+   spreads. Explicit sizes would instead clamp each axis independently and
+   object-fit would letterbox the page inside a distorted box, leaving a gap
+   between spread slots. The fallback box also keeps an unloaded page in its
+   own half — without it the slot collapses to zero size and the loaded mate
+   sits in the middle until the second page's size arrives */
+.reader__spread .reader__img {
+	width: auto;
+	height: auto;
+}
+
+/* Blank slots mirror their mate page's box: contain-fit of the mate's aspect
+   ratio inside the same 50%-wide half, so the joined pair is centred exactly
+   like a real pair. The inline aspect-ratio comes from ReaderPage (2/3
+   fallback while the mate's size is unknown). */
 .reader__blank {
-	width: 50%;
 	height: 100%;
+	width: auto;
+	max-width: 50%;
 	flex: none;
 }
 
@@ -93,41 +152,31 @@
 
 /* ---------- Page scale modes (paged; data-scale on .reader__paged) ---------- */
 
-/* Scrollable scale modes trade the fixed viewport for native scrolling */
-.reader__paged[data-scale='width'],
-.reader__paged[data-scale='widthShrink'],
-.reader__paged[data-scale='original'] {
-	overflow-y: auto;
-}
-
-.reader__paged[data-scale='original'] {
-	overflow-x: auto;
-}
-
-/* The zoom wrapper and spread become content-sized so tall pages grow the
-   scroll height; auto margins keep short pages centered without the flex
-   centering top-clip. Text pages keep the fixed-height column layout (:has) */
-.reader__paged[data-scale='width'] .reader__zoom:has(.reader__spread),
-.reader__paged[data-scale='widthShrink'] .reader__zoom:has(.reader__spread),
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
+/* Scrollable scale modes grow the spread's inner content past the viewport and
+   the spread itself scrolls; top-align so a tall page's start is not clipped */
+.reader__paged[data-scale='width'] .reader__spread-inner,
+.reader__paged[data-scale='widthShrink'] .reader__spread-inner,
+.reader__paged[data-scale='original'] .reader__spread-inner {
 	height: auto;
 	min-height: 100%;
-	margin-top: auto;
-	margin-bottom: auto;
+	align-items: flex-start;
 }
 
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__spread) {
-	width: auto;
+/* hugContent modes let the content outgrow the spread horizontally so an
+   overwide pair scrolls sideways inside the spread */
+.reader__paged[data-scale='height'] .reader__spread-inner,
+.reader__paged[data-scale='original'] .reader__spread-inner {
+	width: max-content;
 	min-width: 100%;
-	margin-left: auto;
-	margin-right: auto;
 }
 
-.reader__paged[data-scale='width'] .reader__zoom .reader__spread,
-.reader__paged[data-scale='widthShrink'] .reader__zoom .reader__spread,
-.reader__paged[data-scale='original'] .reader__zoom .reader__spread {
-	height: auto;
-	min-height: 100%;
+/* Text pages always paginate by fixed-height columns and ignore page scale */
+.reader__paged[data-scale] .reader__spread-inner--text {
+	width: 100%;
+	height: 100%;
+	min-width: 0;
+	min-height: 0;
+	align-items: center;
 }
 
 /* width: fill the container width (halved per slot in two-page spreads) */
@@ -194,23 +243,6 @@
 	object-fit: cover;
 }
 
-/* Scrollable scale modes grow the half-box like they grow spreads */
-.reader__paged[data-scale='width'] .reader__zoom:has(.reader__split),
-.reader__paged[data-scale='widthShrink'] .reader__zoom:has(.reader__split),
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__split) {
-	height: auto;
-	min-height: 100%;
-	margin-top: auto;
-	margin-bottom: auto;
-}
-
-.reader__paged[data-scale='original'] .reader__zoom:has(.reader__split) {
-	width: auto;
-	min-width: 100%;
-	margin-left: auto;
-	margin-right: auto;
-}
-
 .reader__paged[data-scale='width'] .reader__split {
 	width: 100%;
 	max-height: none;
@@ -242,6 +274,74 @@
 	overflow: hidden;
 	padding: 32px 24px;
 	box-sizing: border-box;
+}
+
+/* ---------- Chapter transition page ---------- */
+
+/* Overlay above the pages and tap zones; click anywhere outside the card to stay */
+.reader__transition {
+	position: fixed;
+	inset: 0;
+	z-index: 65;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	animation: fade-in 0.2s ease-out;
+}
+
+.reader__transition-card {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	max-width: min(360px, calc(100vw - 48px));
+	padding: 20px 22px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow);
+	text-align: center;
+}
+
+.reader__transition-state {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.reader__transition-current {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.reader__transition-target {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 12px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+}
+
+.reader__transition-target-label {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.reader__transition-target-title {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.reader__transition-target-scan {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.reader__transition-actions {
+	display: flex;
+	justify-content: center;
+	gap: 10px;
 }
 
 .reader__zone {
@@ -393,6 +493,31 @@
 	width: 100%;
 	color: #6b7280;
 	font-size: 14px;
+}
+
+/* A page whose load and automatic retry both failed keeps its slot's box (the
+   inline aspect-ratio) and offers a manual retry inside it. The positive
+   z-index lifts the placeholder above the absolutely positioned tap-zone
+   buttons, which would otherwise swallow clicks meant for the retry button */
+.reader__img-failed {
+	position: relative;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	overflow: hidden;
+	color: #6b7280;
+	font-size: 14px;
+	text-align: center;
+}
+
+/* Continuous mode: a page whose size was never measured has no aspect-ratio
+   box, so the failure placeholder reserves its own height */
+.reader__pg .reader__img-failed {
+	width: 100%;
+	min-height: 40vh;
 }
 
 /* ---------- Toolbar (always mounted in the DOM, shown/hidden via opacity for a 200ms fade) ---------- */

@@ -101,3 +101,25 @@ test('a measured landscape page re-pairs its spread', async () => {
 		assert.deepEqual(buildSpreads(3, measured, 'doubleNoCover'), [[0, null], [1], [2, null]]);
 	});
 });
+
+test('slotAspectRatio reserves a 2:3 box until the real dimensions arrive', async () => {
+	await withVite(async (vite) => {
+		const { slotAspectRatio } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		// Unknown dimensions fall back to the 2:3 box so an unloaded page stays in its half
+		assert.equal(slotAspectRatio(null), '2 / 3');
+		assert.equal(slotAspectRatio(undefined), '2 / 3');
+		// Measured or server-reported dimensions take over the box
+		assert.equal(slotAspectRatio({ width: 1400, height: 2100 }), '1400 / 2100');
+	});
+});
+
+test('trackOffsetPercent slides one spread per index and flips the sign under rtl', async () => {
+	await withVite(async (vite) => {
+		const { trackOffsetPercent } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');
+		assert.equal(trackOffsetPercent('ltr', 0), 0);
+		assert.equal(trackOffsetPercent('ltr', 3), -300);
+		assert.equal(trackOffsetPercent('rtl', 0), 0);
+		// Under rtl the track row is reversed, so a later spread slides in from the left
+		assert.equal(trackOffsetPercent('rtl', 3), 300);
+	});
+});

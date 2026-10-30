@@ -254,23 +254,41 @@ async fn tracker_links_are_paginated_and_scoped() {
 	let (status, first) = request(&app, "GET", "/api/v1/trackers/links", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(first["hasNextPage"], json!(true));
+	assert_eq!(first["totalPages"], json!(3));
+	assert_eq!(first["counts"]["manga"], json!(51));
+	assert_eq!(first["counts"]["providers"]["anilist"], json!(51));
 	let first_entries = first["entries"].as_array().unwrap();
-	assert_eq!(first_entries.len(), 50);
+	assert_eq!(first_entries.len(), 20);
+	assert_eq!(first_entries[0]["mangaTitle"], json!(format!("Series {}", 0)));
 	assert_eq!(first_entries[0]["mangaId"], json!(manga_ids[0]));
 	assert!(first_entries.iter().all(|entry| entry["provider"] == "anilist"));
 
 	let (status, second) = request(&app, "GET", "/api/v1/trackers/links?page=2", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let second_entries = second["entries"].as_array().unwrap();
-	assert_eq!(second_entries.len(), 1);
-	assert_eq!(second_entries[0]["mangaId"], json!(manga_ids[50]));
-	assert_eq!(second["hasNextPage"], json!(false));
+	assert_eq!(second_entries.len(), 20);
+	assert_eq!(second["hasNextPage"], json!(true));
+	let (status, third) = request(&app, "GET", "/api/v1/trackers/links?page=3", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let third_entries = third["entries"].as_array().unwrap();
+	assert_eq!(third_entries.len(), 11);
+	assert_eq!(third_entries[10]["mangaId"], json!(manga_ids[50]));
+	assert_eq!(third["hasNextPage"], json!(false));
 	let seen: std::collections::HashSet<i64> = first_entries
 		.iter()
 		.chain(second_entries.iter())
+		.chain(third_entries.iter())
 		.map(|entry| entry["mangaId"].as_i64().unwrap())
 		.collect();
 	assert_eq!(seen.len(), 51);
+
+	let (status, filtered) = request(&app, "GET", "/api/v1/trackers/links?provider=bangumi", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(filtered["entries"].as_array().unwrap().len(), 0);
+	assert_eq!(filtered["totalPages"], json!(0));
+	assert_eq!(filtered["counts"]["manga"], json!(51));
+	let (status, _) = request(&app, "GET", "/api/v1/trackers/links?provider=unknown", None).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
 
 	let (status, _) = request(&app, "GET", "/api/v1/trackers/links?page=0", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);

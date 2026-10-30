@@ -117,6 +117,8 @@ const READER_BG_KEY = 'sumidoku.reader.bg';
 const READER_SCALE_KEY = 'sumidoku.reader.scale';
 const READER_STRETCH_KEY = 'sumidoku.reader.stretch';
 const READER_SPLIT_KEY = 'sumidoku.reader.split';
+const READER_ANIM_KEY = 'sumidoku.reader.anim';
+const READER_TRANSITION_KEY = 'sumidoku.reader.transition';
 
 function stored(key: string, fallback: string): string {
 	try {
@@ -180,7 +182,7 @@ function ReaderSection() {
 	const [bg, setBg] = useState(() => {
 		// Same whitelist as the reader's parseBackground: unknown values fall back to dark
 		const b = stored(READER_BG_KEY, 'dark');
-		return b === 'gray' || b === 'light' ? b : 'dark';
+		return b === 'gray' || b === 'light' || b === 'auto' ? b : 'dark';
 	});
 	const [scale, setScale] = useState(() => {
 		// Same whitelist as the reader's parseScale: unknown values fall back to screen
@@ -189,6 +191,10 @@ function ReaderSection() {
 	});
 	const [stretch, setStretch] = useState(() => stored(READER_STRETCH_KEY, '0') === '1');
 	const [split, setSplit] = useState(() => stored(READER_SPLIT_KEY, '0') === '1');
+	// The animation defaults to on, so only "0" disables it
+	const [anim, setAnim] = useState(() => stored(READER_ANIM_KEY, '1') !== '0');
+	// The chapter transition page also defaults to on, so only "0" disables it
+	const [transition, setTransition] = useState(() => stored(READER_TRANSITION_KEY, '1') !== '0');
 
 	function persist(key: string, value: string, apply: (v: string) => void) {
 		apply(value);
@@ -243,6 +249,7 @@ function ReaderSection() {
 					<option value="dark">{t('settings.bgDark')}</option>
 					<option value="gray">{t('settings.bgGray')}</option>
 					<option value="light">{t('settings.bgLight')}</option>
+					<option value="auto">{t('settings.bgAuto')}</option>
 				</Select>
 			</div>
 			<div className="settings-row">
@@ -270,6 +277,26 @@ function ReaderSection() {
 				<Select
 					value={split ? '1' : '0'}
 					onChange={(e) => persist(READER_SPLIT_KEY, e.currentTarget.value, (v) => setSplit(v === '1'))}
+				>
+					<option value="0">{t('settings.stretchOff')}</option>
+					<option value="1">{t('settings.stretchOn')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerAnimations')}</span>
+				<Select
+					value={anim ? '1' : '0'}
+					onChange={(e) => persist(READER_ANIM_KEY, e.currentTarget.value, (v) => setAnim(v === '1'))}
+				>
+					<option value="0">{t('settings.stretchOff')}</option>
+					<option value="1">{t('settings.stretchOn')}</option>
+				</Select>
+			</div>
+			<div className="settings-row">
+				<span className="settings-row__label">{t('settings.readerTransition')}</span>
+				<Select
+					value={transition ? '1' : '0'}
+					onChange={(e) => persist(READER_TRANSITION_KEY, e.currentTarget.value, (v) => setTransition(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>

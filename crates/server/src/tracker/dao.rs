@@ -329,21 +329,63 @@ pub async fn list_links_by_manga_and_user(
 	.map(|rows| rows.into_iter().map(row_to_link).collect())
 }
 
-pub async fn list_links_by_user_page(
+/// A link with the local manga fields the bindings list displays, so the list needs no per-row manga request
+#[derive(Debug, Clone)]
+pub struct TrackerBinding {
+	pub link: TrackerLink,
+	pub manga_title: Option<String>,
+	pub manga_cover: Option<String>,
+}
+
+/// Pages by manga rather than by link, so a manga's providers never split across two pages
+pub async fn list_bindings_page(
 	pool: &SqlitePool,
 	user_id: i64,
+	provider: Option<Provider>,
 	limit: i64,
 	offset: i64,
-) -> Result<Vec<TrackerLink>, sqlx::Error> {
-	sqlx::query_as::<_, (i64, i64, String, String, Option<String>, String, i32, i64, i64)>(&format!(
-		"SELECT {LINK_COLUMNS} FROM tracker_link WHERE user_id = ? ORDER BY manga_id, provider LIMIT ? OFFSET ?"
-	))
+) -> Result<Vec<TrackerBinding>, sqlx::Error> {
+	type Row = (i64, i64, String, String, Option<String>, String, i32, i64, i64, Option<String>, Option<String>);
+	let provider = provider.map(Provider::as_str);
+	let rows = sqlx::query_as::<_, Row>(
+		"SELECT tl.manga_id, tl.user_id, tl.provider, tl.track_id, tl.title, tl.track_mode, tl.chapter_offset,
+		        tl.created_at, tl.updated_at, m.title, m.cover_url
+		 FROM tracker_link tl
+		 LEFT JOIN manga m ON m.id = tl.manga_id
+		 WHERE tl.user_id = ?1 AND (?2 IS NULL OR tl.provider = ?2)
+		   AND tl.manga_id IN (
+		     SELECT manga_id FROM tracker_link
+		     WHERE user_id = ?1 AND (?2 IS NULL OR provider = ?2)
+		     GROUP BY manga_id ORDER BY manga_id LIMIT ?3 OFFSET ?4
+		   )
+		 ORDER BY tl.manga_id, tl.provider",
+	)
 	.bind(user_id)
+	.bind(provider)
 	.bind(limit)
 	.bind(offset)
 	.fetch_all(pool)
-	.await
-	.map(|rows| rows.into_iter().map(row_to_link).collect())
+	.await?;
+	Ok(rows
+		.into_iter()
+		.map(|(manga_id, user_id, provider, track_id, title, track_mode, chapter_offset, created_at, updated_at, manga_title, manga_cover)| {
+			TrackerBinding {
+				link: row_to_link((manga_id, user_id, provider, track_id, title, track_mode, chapter_offset, created_at, updated_at)),
+				manga_title,
+				manga_cover,
+			}
+		})
+		.collect())
+}
+
+/// Bound manga in total and per provider; a manga has at most one link per provider, so rows count manga
+pub async fn binding_counts(pool: &SqlitePool, user_id: i64) -> Result<(i64, Vec<(String, i64)>), sqlx::Error> {
+	let manga = sqlx::query_scalar("SELECT COUNT(DISTINCT manga_id) FROM tracker_link WHERE user_id = ?").bind(user_id).fetch_one(pool).await?;
+	let providers = sqlx::query_as("SELECT provider, COUNT(*) FROM tracker_link WHERE user_id = ? GROUP BY provider ORDER BY provider")
+		.bind(user_id)
+		.fetch_all(pool)
+		.await?;
+	Ok((manga, providers))
 }
 
 pub async fn delete_link(pool: &SqlitePool, manga_id: i64, user_id: i64, provider: Provider) -> Result<(), sqlx::Error> {
@@ -520,7 +562,7 @@ mod tests {
 		assert_eq!(list_links_by_manga_and_user(&pool, manga_id, user_id + 1).await.unwrap().len(), 0);
 
 		delete_link(&pool, manga_id, user_id, Provider::Anilist).await.unwrap();
-		assert!(list_links_by_user_page(&pool, user_id, 50, 0).await.unwrap().is_empty());
+		assert!(list_bindings_page(&pool, user_id, None, 50, 0).await.unwrap().is_empty());
 	}
 
 	#[tokio::test]

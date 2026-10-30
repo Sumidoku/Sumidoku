@@ -11,6 +11,36 @@ use std::sync::{Arc, RwLock};
 
 const GRAPHQL_URL: &str = "https://graphql.anilist.co";
 
+// AniList descriptions carry <br>, <i> and <a> markup plus HTML entities, while
+// the other providers return plain text
+fn plain_description(html: &str) -> String {
+	let fragment = scraper::Html::parse_fragment(html);
+	let mut text = String::with_capacity(html.len());
+	for node in fragment.root_element().descendants() {
+		match node.value() {
+			scraper::Node::Text(chunk) => text.push_str(chunk),
+			scraper::Node::Element(element) if element.name() == "br" => text.push('\n'),
+			_ => {}
+		}
+	}
+	// <br> usually sits next to a literal newline, so blank-line runs collapse
+	// to one paragraph break
+	let mut plain = String::with_capacity(text.len());
+	let mut blank = false;
+	for line in text.lines().map(str::trim) {
+		if line.is_empty() {
+			blank = !plain.is_empty();
+			continue;
+		}
+		if !plain.is_empty() {
+			plain.push_str(if blank { "\n\n" } else { "\n" });
+		}
+		plain.push_str(line);
+		blank = false;
+	}
+	plain
+}
+
 const SEARCH_SFW: &str = r#"
 query ($search: String) {
   Page(perPage: 20) {
@@ -18,6 +48,8 @@ query ($search: String) {
       id
       title { userPreferred }
       description
+      startDate { year }
+      staff(perPage: 2, sort: RELEVANCE) { nodes { name { full } } }
       format
       coverImage { medium }
       mediaListEntry { id }
@@ -33,6 +65,8 @@ query ($search: String) {
       id
       title { userPreferred }
       description
+      startDate { year }
+      staff(perPage: 2, sort: RELEVANCE) { nodes { name { full } } }
       format
       coverImage { medium }
       mediaListEntry { id }
@@ -47,6 +81,8 @@ query ($id: Int) {
     id
     title { userPreferred }
     description
+    startDate { year }
+    staff(perPage: 2, sort: RELEVANCE) { nodes { name { full } } }
     format
     coverImage { medium }
     mediaListEntry { id }
@@ -264,7 +300,17 @@ impl AniListTracker {
 			id: id.to_string(),
 			title: media.pointer("/title/userPreferred").and_then(Value::as_str).unwrap_or("Unknown Title").to_string(),
 			cover_url: media.pointer("/coverImage/medium").and_then(Value::as_str).map(str::to_string),
-			description: media.get("description").and_then(Value::as_str).map(str::to_string),
+			info: super::search_info(
+				media.pointer("/startDate/year").and_then(Value::as_i64),
+				media
+					.pointer("/staff/nodes")
+					.and_then(Value::as_array)
+					.into_iter()
+					.flatten()
+					.filter_map(|staff| staff.pointer("/name/full").and_then(Value::as_str))
+					.map(str::to_string),
+			),
+			description: media.get("description").and_then(Value::as_str).map(plain_description),
 			tracked: media.get("mediaListEntry").is_some_and(|entry| !entry.is_null()),
 			media_type,
 			series: false,
@@ -429,7 +475,9 @@ mod tests {
 		json!({
 			"id": 42,
 			"title": {"userPreferred": "Test Manga"},
-			"description": "Description",
+			"description": "Guts&rsquo; <i>story</i>.<br>\n<br>\n(Source: Dark Horse)",
+			"startDate": {"year": 1989},
+			"staff": {"nodes": [{"name": {"full": "Kentarou Miura"}}, {"name": {"full": "Studio Gaga"}}]},
 			"format": "NOVEL",
 			"coverImage": {"medium": "https://img.example/cover.jpg"},
 			"chapters": 120,
@@ -486,6 +534,8 @@ mod tests {
 		assert_eq!(items.len(), 1);
 		assert_eq!(items[0].id, "42");
 		assert_eq!(items[0].title, "Test Manga");
+		assert_eq!(items[0].info.as_deref(), Some("1989 / Kentarou Miura / Studio Gaga"));
+		assert_eq!(items[0].description.as_deref(), Some("Guts\u{2019} story.\n\n(Source: Dark Horse)"));
 		assert_eq!(items[0].media_type, Some(TrackMediaType::Novel));
 		assert!(items[0].tracked);
 		assert_eq!(items[0].url.as_deref(), Some("https://anilist.co/manga/42"));

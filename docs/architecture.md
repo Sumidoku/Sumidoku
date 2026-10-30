@@ -149,6 +149,9 @@ no alias is derived from migration text.
   `tracker_auth` — deliberately distinct from the auth layer's reason-free
   401, because the web UI must offer the connect flow, not a re-login. The
   `/settings?section=trackers` page manages accounts and current-user bindings;
+  `GET /trackers/links` pages by bound manga, so one manga's providers never
+  split across pages, and carries the local title and cover plus unfiltered
+  counts for the provider filter;
   the manga-detail tracker section handles search, linking and edits to the
   binding and remote entry. Remote searches require explicit submission, and
   binding-only edits do not issue a remote update. Each provider
@@ -1955,7 +1958,12 @@ finishes loading, while the spread `<img>`, the continuous-mode `<img>` and the
 probe `onload` still report through `recordMeasured` as the fallback, which only
 fills gaps (server values win, unchanged values keep the map identity), so
 double-page spreads re-pair when a loaded image turns out landscape without
-moving the current page.
+moving the current page. A page image that fails to load retries once
+automatically with an `r=N` cache-buster the server ignores (`api/page.rs`'s
+`PageQuery` deserializes `width` only), and latches into a failed placeholder
+that keeps the slot's aspect-ratio box and offers a manual retry button
+(`reader/PageImage.tsx`, state machine in `reader/pageRetry.ts`, keyed by src
+so a component reused for another page cannot inherit a stale failure).
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction
@@ -1973,10 +1981,40 @@ the metadata), and the global settings are the fallback for manga whose viewer
 carries no corresponding preference. The paged mode also offers a page layout
 (`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
 pages into spreads in reading order, giving the cover and closing page a blank
-mate and always showing landscape pages solo. Spreads carry page indexes, so
+mate and always showing landscape pages solo. Blank slots copy their mate's
+aspect ratio (KMReader's `blankOf` convention, with a 2:3 fallback while the
+mate's size is unknown) and contain-fit inside their half, so the visible page
+sits exactly where the joined pair would place it. Inside a spread every image
+slot carries an inline aspect-ratio box (`spreads.ts:slotAspectRatio`): the
+real dims once measured, the same 2:3 fallback before, so an unloaded page
+already occupies its own half instead of collapsing to a zero-size box and
+letting the loaded mate sit in the middle until its size arrives. The images
+size with `width: auto; height: auto` (`reader.css`), so the box clamps
+ratio-preserving and each page hugs its content — a two-page spread joins in
+the middle, where explicit sizes would clamp each axis independently and
+letterbox a gap between the slots. Spreads carry page indexes, so
 progress reporting and the page slider stay page-based while turning moves by
 spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
-override-over-global resolution but no metadata counterpart. Keyboard shortcuts
+override-over-global resolution but no metadata counterpart. Paged spreads are
+laid out as one sliding track (after KMReader's PagedReader): the track is a flex
+row of viewport-sized spreads inside the zoom wrapper, and a page turn translates
+it by a whole spread width (`spreads.ts:trackOffsetPercent`, sign-flipped under
+rtl) with a 300ms ease-out transition instead of swapping the content in place.
+Each spread is its own scroll container holding a margin-auto inner box, and only
+spreads within two of the current one mount their images — distant spreads render
+aspect-ratio placeholders, which keeps the track cheap while guaranteeing both
+ends of a turn animation are live. Text spreads render their column layout
+statically on neighbouring spreads (column 0) and live on the current one. The
+animation can be switched off (`sumidoku.reader.anim` + `.anim.<id>`, default on,
+`0` disables) and `prefers-reduced-motion` always disables it; text pages slide
+between columns with the same transition. A boundary turn does not switch
+chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
+direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
+current and target chapter with its scanlator; a second boundary turn in the
+same direction or the page's own continue button commits the jump, an opposite
+turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. The page
+is on by default and disabled by `sumidoku.reader.transition` +
+`.transition.<id>` storing `0`. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
@@ -1994,7 +2032,9 @@ single source of truth and must change together. The reader canvas background
 (`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
-canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
+canvas. `auto` is not a class: it resolves through `useResolvedTheme()` so the
+canvas follows the app theme (dark under a dark theme, white under light),
+reacting live to theme and system preference changes. Fullscreen uses the Fullscreen API on the reader root so the fixed
 toolbar and settings card move into the fullscreen subtree; the toggle hides
 when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
 reader's own Esc chain.
@@ -2002,10 +2042,13 @@ Paged page scale (`sumidoku.reader.scale` + `.scale.<id>`, after Suwayomi's
 ReaderPageScaleMode) is a `data-scale` variant on the paged container: `screen`
 contain-fits (the default), `width` fills the width, `widthShrink` only shrinks
 to the width without upscaling, `height` fills the height, and `original`
-shows natural pixels. The scrollable modes (width/widthShrink/original) make
-the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
-their fixed-height columns) and trade the fixed viewport for native scrolling;
-the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
+shows natural pixels. The scrollable modes (width/widthShrink/original) grow the
+spread's inner content box past the viewport and let the spread itself scroll —
+the zoom wrapper and track stay viewport-sized — while the hugContent modes
+(height/original) let an overwide pair scroll sideways the same way; text pages
+keep their fixed-height column layout under every scale. The wheel page-turner
+leaves the wheel to the scrollable modes, and pinch zoom resets on scale
+changes like any layout change.
 changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
 `.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
 screen scale via a full-size object-fit: contain box. The c hotkey cycles the
