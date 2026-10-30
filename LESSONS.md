@@ -1,6 +1,11 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+Sumidoku's code is written, reviewed and released by agent sessions. What
+went wrong is kept here as a rule, then why, then the evidence. Read this
+before changing code. A lesson seen again on a later day moves into
+[docs/code-standards.md](docs/code-standards.md).
+
 **Artifact cleanup must coordinate with in-flight path claims as well as database references.**
 A producer can claim a destination before its finished row commits, so an empty
 database reference query does not prove that a path is unused. Hold the shared
@@ -60,11 +65,6 @@ deletion remains a separate action.
   removed the file and offline flag along with the list entry. The fix uses a
   transactional dismissal state and tests that the hidden artifact still
   serves offline pages and CBZ export and can still be explicitly removed.
-
-Sumidoku's code is written, reviewed and released by agent sessions. What
-went wrong is kept here as a rule, then why, then the evidence. Read this
-before changing code. A lesson seen again on a later day moves into
-[docs/code-standards.md](docs/code-standards.md).
 
 **Every issue a PR closes needs its own closing keyword; check the linked
 list before merging.** GitHub binds `Closes` only to the reference right
