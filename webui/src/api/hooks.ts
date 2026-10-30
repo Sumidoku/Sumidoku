@@ -789,10 +789,11 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 }
 
 /** A chapter's pages don't change within a session, so never refetch */
-export function useChapterPages(chapterId: number) {
+export function useChapterPages(chapterId: number, opts: { enabled?: boolean; silent?: boolean } = {}) {
 	return useQuery({
 		queryKey: ['chapter', chapterId, 'pages'],
-		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`),
+		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`, { silent: opts.silent }),
+		enabled: opts.enabled ?? true,
 		staleTime: Infinity
 	});
 }

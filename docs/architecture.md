@@ -1873,7 +1873,12 @@ finishes loading, while the spread `<img>`, the continuous-mode `<img>` and the
 probe `onload` still report through `recordMeasured` as the fallback, which only
 fills gaps (server values win, unchanged values keep the map identity), so
 double-page spreads re-pair when a loaded image turns out landscape without
-moving the current page.
+moving the current page. The reader also warms the next chapter once the
+current one is nearly done: within the last `PREFETCH_REMAINING` pages
+(`reader/chapterPrefetch.ts`) it fetches the next chapter's page list into the
+React Query cache (`staleTime: Infinity`, so the transition renders instantly)
+and probes its first `PREFETCH_PAGE_COUNT` probeable images into the HTTP
+cache — text and unsupported pages are skipped.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction

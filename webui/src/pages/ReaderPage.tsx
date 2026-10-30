@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
+import { pickProbePages, PREFETCH_REMAINING } from './reader/chapterPrefetch';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
@@ -572,6 +573,19 @@ function ReaderCore({
 	const prevCh = pos >= 0 && pos < navChapters.length - 1 ? navChapters[pos + 1] : null;
 	const nextCh = pos > 0 ? navChapters[pos - 1] : null;
 	const shown = mode === 'paged' ? idx : cur;
+	// Near the chapter end, warm the next chapter: fetch its page list into the
+	// React Query cache (staleTime: Infinity, so the transition renders instantly)
+	// and probe its first images into the HTTP cache
+	const nearEnd = total > 0 && shown >= total - PREFETCH_REMAINING;
+	const nextPagesQuery = useChapterPages(nextCh?.id ?? 0, { enabled: nextCh !== null && nearEnd, silent: true });
+	const nextPages = nextPagesQuery.data ?? null;
+	useEffect(() => {
+		if (!nextCh || !nextPages) return;
+		for (const p of pickProbePages(nextPages)) {
+			const im = new Image();
+			im.src = pageUrl(nextCh.id, p.index, imgWidth);
+		}
+	}, [nextCh, nextPages, imgWidth]);
 	// A split page renders one half of the same image; the box carries the (w/2):h
 	// ratio so object-fit: cover overflows by exactly the other half. Unknown-dim
 	// pages render whole until recordMeasured proves them landscape
