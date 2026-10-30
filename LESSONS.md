@@ -1,6 +1,19 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+**Active-download cancellation must not wait for a chapter lease held across source I/O.**
+Remove a nonfinished download row and signal cancellation in a short transaction;
+the worker performs attempt cleanup after the in-flight source call returns.
+Reserve the exclusive chapter lease for finished-product removal, and never hold
+a database transaction while waiting for that lease. Recheck row state inside the
+transaction so a queued-to-downloading transition follows the active path.
+- Evidence: 2026-10-30, the OPDS feed in
+  `download_delete_while_worker_finishes_cleans_artifact_and_allows_requeue`
+  was gated while the worker held a chapter read lease. Deletion waited forever
+  for the write lease, even though it had only set a cancellation flag. The
+  bounded 10-second delete assertion now passes, and the test confirms active
+  cancellation preserves source page variants until the worker drains.
+
 **Check build-space headroom before switching validation scope or profiles.**
 Focused package builds and workspace builds can use different feature-unified
 dependency graphs and retain duplicate large test binaries. Before changing
