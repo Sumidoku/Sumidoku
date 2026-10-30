@@ -636,17 +636,17 @@ impl DownloadManager {
 	}
 
 	pub async fn delete(&self, chapter_id: i64, user_id: i64) -> ApiResult<bool> {
-        self.delete_guarded(chapter_id, user_id, false).await
-    }
+		self.delete_guarded(chapter_id, user_id, false).await
+	}
 
-    /// Delete a product, optionally only while its row is still finished. The state test and
-    /// deletion share one SQLite write transaction, so finishedOnly cannot race a requeue.
-    pub async fn delete_guarded(
-        &self,
-        chapter_id: i64,
-        user_id: i64,
-        finished_only: bool,
-    ) -> ApiResult<bool> {
+	/// Delete a product, optionally only while its row is still finished. The state test and
+	/// deletion share one SQLite write transaction, so finishedOnly cannot race a requeue.
+	pub async fn delete_guarded(
+		&self,
+		chapter_id: i64,
+		user_id: i64,
+		finished_only: bool,
+	) -> ApiResult<bool> {
 		loop {
 			let status: Option<String> = sqlx::query_scalar("SELECT status FROM download WHERE chapter_id=? AND user_id=?")
 				.bind(chapter_id).bind(user_id).fetch_optional(&self.pool).await?;
@@ -1197,9 +1197,9 @@ impl DownloadManager {
 			.state
 			.upgrade()
 			.ok_or_else(|| "server is shutting down".to_string())?;
-        let _cache_lease = state.chapter_cache_gate.read().await;
-        let cache_lock = state.chapter_cache_lock(chapter_id).await;
-        let chapter_cache = cache_lock.read().await;
+		let _cache_lease = state.chapter_cache_gate.read().await;
+		let cache_lock = state.chapter_cache_lock(chapter_id).await;
+		let chapter_cache = cache_lock.read().await;
 		let chapter = chapter_row(&self.pool, chapter_id)
 			.await
 			.map_err(|e| format!("load chapter: {e:?}"))?;
