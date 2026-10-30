@@ -9,6 +9,7 @@
     "documentTitle": "{{title}} · 阅读",
     "documentTitleEmpty": "阅读",
     "loadFailed": "章节加载失败",
+    "pageFailed": "页面加载失败",
     "retry": "重试",
     "noPages": "本章没有页面",
     "back": "返回",

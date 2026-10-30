@@ -9,6 +9,7 @@
     "documentTitle": "{{title}} · Lecture",
     "documentTitleEmpty": "Lecture",
     "loadFailed": "Échec du chargement du chapitre",
+    "pageFailed": "Échec du chargement de cette page",
     "retry": "Réessayer",
     "noPages": "Ce chapitre n'a aucune page",
     "back": "Retour",

@@ -9,6 +9,7 @@
     "documentTitle": "{{title}} · In lettura",
     "documentTitleEmpty": "In lettura",
     "loadFailed": "Caricamento del capitolo non riuscito",
+    "pageFailed": "Caricamento di questa pagina non riuscito",
     "retry": "Riprova",
     "noPages": "Questo capitolo non ha pagine",
     "back": "Indietro",

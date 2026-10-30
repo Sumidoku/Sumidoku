@@ -53,6 +53,7 @@ import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/s
 import { readerKeyAction } from './reader/hotkeys';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
+import { PageImage } from './reader/PageImage';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
 import type { ReaderTypography } from './reader/typography';
@@ -1373,16 +1374,13 @@ function ReaderCore({
 													>
 														{/* The half renders the image at twice the box width, so the
 														    downsample request doubles to stay sharp */}
-														<img
+														<PageImage
 															key={curPage?.index}
 															className="reader__img"
 															src={pageUrl(chapterId, idx, imgWidth * 2)}
 															alt={t('reader.pageAlt', { page: idx + 1 })}
 															style={{ objectPosition: `${splitSides(dir)[half]} center` }}
-															draggable={false}
-															onLoad={(e) =>
-																reportDims(idx, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
-															}
+															onLoad={(w, h) => reportDims(idx, w, h)}
 														/>
 													</div>
 												</div>
@@ -1437,20 +1435,17 @@ function ReaderCore({
 															);
 														}
 														return (
-															<img
+															<PageImage
 																key={p.index}
 																className="reader__img"
 																src={pageUrl(chapterId, p.index, imgWidth)}
 																alt={t('reader.pageAlt', { page: slot + 1 })}
 																// The slot keeps an aspect-ratio box even before dims are
-																// known (2:3 fallback), so an unloaded page stays in its own
-																// half instead of collapsing to zero size and letting the
-																// loaded mate sit in the middle of the spread
+																// known (2:3 fallback), so an unloaded or failed page stays
+																// in its own half instead of collapsing to zero size and
+																// letting the loaded mate sit in the middle of the spread
 																style={{ aspectRatio: slotAspectRatio(dims) }}
-																draggable={false}
-																onLoad={(e) =>
-																	reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
-																}
+																onLoad={(w, h) => reportDims(slot, w, h)}
 															/>
 														);
 													})}
@@ -1542,17 +1537,16 @@ function ReaderCore({
 										) : unsupported ? (
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
-											<img
+											<PageImage
 												src={pageUrl(chapterId, p.index, imgWidth)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
 												width={dimensions?.width}
 												height={dimensions?.height}
-												loading="lazy"
-												onLoad={(e) => {
+												lazy
+												onLoad={(w, h) => {
 													contentResizeRef.current();
-													reportDims(arrayIndex, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
+													reportDims(arrayIndex, w, h);
 												}}
-												draggable={false}
 											/>
 										)}
 									</div>
