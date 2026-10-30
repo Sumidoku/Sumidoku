@@ -242,6 +242,10 @@ hashed assets can make the embedded HTML and the on-disk index disagree.
   served HTML and disk index named different hashed JS bundles. The ordered
   Web UI build → workspace suite → clippy → release build pipeline then passed
   1060 tests with 2 skipped, clippy with `-D warnings`, and the release build.
+- Seen again: 2026-10-30, #527 follow-up validation overlapped a final Vite
+  rebuild with the workspace run. `embedded_webui` again found different served
+  and on-disk index bytes; it passed after the Web UI build finished and the
+  Rust target rebuilt. Keep the complete validation pipeline ordered.
 
 **Dropping a test fixture's TempDir unlinks its database file; lazy pool
 connections then fail at a wandering point.** A `let TestApp { app, .. }`
