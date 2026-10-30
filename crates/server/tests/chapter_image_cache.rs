@@ -186,12 +186,12 @@ async fn rewrite_urls(db_path: &Path, chapter_id: i64, port: u16) {
 		),
 	] {
 		sqlx::query("INSERT INTO page (chapter_id, idx, content) VALUES (?, ?, ?) ON CONFLICT(chapter_id, idx) DO UPDATE SET content = excluded.content")
-            .bind(chapter_id)
-            .bind(index)
-            .bind(json!({"content": content, "thumbnail": null, "hasDescription": false, "description": null}).to_string())
-            .execute(&pool)
-            .await
-            .expect("rewrite URL page");
+			.bind(chapter_id)
+			.bind(index)
+			.bind(json!({"content": content, "thumbnail": null, "hasDescription": false, "description": null}).to_string())
+			.execute(&pool)
+			.await
+			.expect("rewrite URL page");
 	}
 }
 
@@ -581,10 +581,10 @@ async fn hidden_folder_product_stays_offline_and_wins_force_refresh() {
 	std::fs::write(folder.join("001.png"), &upstream.second).expect("folder page 1");
 	let pool = connect_db(&t.db_path).await;
 	sqlx::query("INSERT INTO download (chapter_id, user_id, status, format, path) VALUES (?, 1, 'finished', 'folder', 'offline-folder')")
-        .bind(chapter_id)
-        .execute(&pool)
-        .await
-        .expect("finished folder product");
+		.bind(chapter_id)
+		.execute(&pool)
+		.await
+		.expect("finished folder product");
 
 	let (status, body) = request(&t.app, "POST", "/api/v1/downloads/clear", None).await;
 	assert_eq!(status, StatusCode::OK);
