@@ -1971,7 +1971,7 @@ pub(crate) async fn get_pages(
 	if row.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
-	crate::cache::touch(&state.pool, id).await?;
+	crate::cache::touch_best_effort(&state.pool, id).await;
 	// A usable finished product is authoritative even on force refresh; refresh only rebuilds
 	// source page rows when there is no product to keep the chapter usable offline.
 	let pages = if let Some(pages) = crate::download::pages_from_product(&state, id).await? {

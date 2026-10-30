@@ -34,7 +34,7 @@ pub async fn get_page(
 	if chapter.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
-	crate::cache::touch(&state.pool, id).await?;
+	crate::cache::touch_best_effort(&state.pool, id).await;
 	// A finished download product remains the reader source even after page metadata is refreshed.
 	// Missing products fall back to source pages; actual product read errors propagate.
 	if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
@@ -564,4 +564,18 @@ mod tests {
 		assert_eq!(list[0]["content"]["Downloaded"], "000.png");
 		assert_eq!(list[1]["content"]["Downloaded"], "001.png");
 	}
+	#[tokio::test]
+	async fn image_get_and_page_list_survive_recency_write_failure() {
+		let (state, _, chapter_id, _tmp) = page_db().await;
+		let png = test_png(37, 61);
+		insert_blob_page(&state, chapter_id, &png, false).await;
+		sqlx::query("CREATE TRIGGER fail_recency BEFORE INSERT ON chapter_cache_state BEGIN SELECT RAISE(FAIL, 'injected recency failure'); END")
+			.execute(&state.pool).await.expect("recency failure trigger");
+		let (_, _, body) = get_page_bytes(&state, chapter_id, 0).await;
+		assert_eq!(body, png, "recency failure must not fail an image read through the cached page loader");
+		let pages = get_pages(State(state.clone()), Extension(state.auth.admin_user()), Path(chapter_id), Query(RefreshQuery { refresh: None }))
+			.await.expect("page list survives recency failure");
+		assert_eq!(pages.0.as_array().expect("pages").len(), 1);
+	}
+
 }

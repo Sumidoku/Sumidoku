@@ -1153,7 +1153,7 @@ pub async fn load_pages_under_lease(
 		.fetch_all(&state.pool)
 		.await?;
 		if !cached.is_empty() {
-			crate::cache::touch(&state.pool, chapter_id).await?;
+			crate::cache::touch_best_effort(&state.pool, chapter_id).await;
 			return Ok(cached);
 		}
 	}
@@ -1163,7 +1163,7 @@ pub async fn load_pages_under_lease(
 		let cached: Vec<PageRow> = sqlx::query_as("SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC")
 			.bind(chapter_id).fetch_all(&state.pool).await?;
 		if !cached.is_empty() {
-			crate::cache::touch(&state.pool, chapter_id).await?;
+			crate::cache::touch_best_effort(&state.pool, chapter_id).await;
 			return Ok(cached);
 		}
 	}

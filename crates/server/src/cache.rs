@@ -149,6 +149,13 @@ pub async fn touch(pool: &SqlitePool, chapter_id: i64) -> ApiResult<()> {
 	Ok(())
 }
 
+/// Recency is advisory and must never make a readable chapter fail.
+pub async fn touch_best_effort(pool: &SqlitePool, chapter_id: i64) {
+	if let Err(error) = touch(pool, chapter_id).await {
+		tracing::warn!(chapter_id, "chapter cache recency update failed: {}", error.message());
+	}
+}
+
 pub async fn write_variant(
 	state: &std::sync::Arc<crate::state::AppState>,
 	chapter_id: i64,
