@@ -272,6 +272,74 @@
 	box-sizing: border-box;
 }
 
+/* ---------- Chapter transition page ---------- */
+
+/* Overlay above the pages and tap zones; click anywhere outside the card to stay */
+.reader__transition {
+	position: fixed;
+	inset: 0;
+	z-index: 65;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.55);
+	animation: fade-in 0.2s ease-out;
+}
+
+.reader__transition-card {
+	display: flex;
+	flex-direction: column;
+	gap: 14px;
+	max-width: min(360px, calc(100vw - 48px));
+	padding: 20px 22px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--shadow);
+	text-align: center;
+}
+
+.reader__transition-state {
+	font-size: 13px;
+	color: var(--text-dim);
+}
+
+.reader__transition-current {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.reader__transition-target {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 10px 12px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+}
+
+.reader__transition-target-label {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.reader__transition-target-title {
+	font-size: 14px;
+	font-weight: 600;
+}
+
+.reader__transition-target-scan {
+	font-size: 12px;
+	color: var(--text-dim);
+}
+
+.reader__transition-actions {
+	display: flex;
+	justify-content: center;
+	gap: 10px;
+}
+
 .reader__zone {
 	position: absolute;
 	top: 0;
