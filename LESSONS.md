@@ -1,6 +1,15 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+**Cache acceptance tests must request the actual image bytes, not count page
+metadata.** A page list can be cached while every reader request still fetches
+the upstream image; verify byte-for-byte responses, upstream hit counts and
+disk usage across repeat reads, clear and restart.
+- Evidence: 2026-10-30, a chapter with one 300 KiB remote page reported only
+  7.4 KiB of cache use because the page row was persistent but the image was
+  fetched on every read. The revised regression checks the image response,
+  upstream request count and exact cache accounting.
+
 **Clearing a download list must not delete the downloaded product.** A
 "clear" action that only dismisses completed entries should update their
 visibility state while retaining the download row, artifact path and chapter
