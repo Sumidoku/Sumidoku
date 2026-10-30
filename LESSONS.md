@@ -350,6 +350,11 @@ its cleanup.
   300ms blocker. An explicit gate kept the blocker running until the other
   group finished; the regression then passed 20 consecutive runs and the full
   workspace suite passed 916 tests with 2 skipped.
+- Seen again: 2026-10-30, the full workspace run found global peak 1 rather
+  than 2 in `same_source_serializes_and_sources_run_in_parallel`: its 100 ms
+  handlers could finish before the other source was ready. Enqueueing before
+  dispatch and holding each wave at a two-worker barrier passed 20 consecutive
+  runs without a duration-based overlap assumption.
 
 **Commit before anything can move the working tree; a shared checkout is
 not a safe place for uncommitted work.** Another session switching the
