@@ -604,6 +604,10 @@ impl DownloadManager {
 		let _cache_lease = if let Some(state) = &state { Some(state.chapter_cache_gate.read().await) } else { None };
 		let chapter_lock = if let Some(state) = &state { Some(state.chapter_cache_lock(chapter_id).await) } else { None };
 		let _chapter = if let Some(lock) = &chapter_lock { Some(lock.write().await) } else { None };
+		let claimed = self.claimed_paths.lock().await;
+		if claimed.get(&path).is_some_and(|owner| *owner != chapter_id) {
+			return;
+		}
 		let referenced = sqlx::query_scalar::<_, i64>("SELECT 1 FROM download WHERE path = ? LIMIT 1")
 			.bind(&path).fetch_optional(&self.pool).await;
 		match referenced {
@@ -2401,6 +2405,22 @@ mod tests {
 		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
 		assert!(state.downloads.set(DownloadManager::new(&state)).is_ok());
 		(state, manga_id, chapter_id, tmp)
+	}
+
+	#[tokio::test]
+	async fn cancelled_artifact_cleanup_preserves_another_chapters_claim() {
+		let (state, _manga_id, chapter_id, _tmp) = manager_db(crate::config::Config::default()).await;
+		let path = "Source/Manga/shared.cbz";
+		let artifact = state.config.downloads_dir.join(path);
+		std::fs::create_dir_all(artifact.parent().expect("artifact parent")).expect("artifact dir");
+		std::fs::write(&artifact, b"claimed artifact").expect("artifact bytes");
+		let manager = state.downloads();
+		manager.cancelled_paths.lock().await.insert(chapter_id, path.into());
+		manager.claimed_paths.lock().await.insert(path.into(), chapter_id + 1);
+
+		manager.cleanup_cancelled_artifact(chapter_id).await;
+
+		assert!(artifact.exists(), "cleanup must preserve a path claimed by another chapter");
 	}
 
 	/// Writes a CBZ-style archive (ComicInfo.xml first, then the given pages) with the same layout
