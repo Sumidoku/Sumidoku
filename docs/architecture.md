@@ -149,6 +149,9 @@ no alias is derived from migration text.
   `tracker_auth` — deliberately distinct from the auth layer's reason-free
   401, because the web UI must offer the connect flow, not a re-login. The
   `/settings?section=trackers` page manages accounts and current-user bindings;
+  `GET /trackers/links` pages by bound manga, so one manga's providers never
+  split across pages, and carries the local title and cover plus unfiltered
+  counts for the provider filter;
   the manga-detail tracker section handles search, linking and edits to the
   binding and remote entry. Remote searches require explicit submission, and
   binding-only edits do not issue a remote update. Each provider

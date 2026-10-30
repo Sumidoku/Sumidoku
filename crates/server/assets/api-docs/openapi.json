@@ -3765,6 +3765,14 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/Page"
+          },
+          {
+            "name": "provider",
+            "in": "query",
+            "description": "Only list links of this provider",
+            "schema": {
+              "$ref": "#/components/schemas/TrackerProvider"
+            }
           }
         ],
         "responses": {
@@ -5458,21 +5466,67 @@
           }
         }
       },
+      "TrackerBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/TrackerLink"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "mangaTitle": {
+                "type": "string"
+              },
+              "mangaCover": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "TrackerLinkPage": {
         "type": "object",
         "required": [
           "entries",
-          "hasNextPage"
+          "hasNextPage",
+          "totalPages",
+          "counts"
         ],
         "properties": {
           "entries": {
             "type": "array",
+            "description": "Links of one page of bound manga; a manga's links are adjacent and never split across pages",
             "items": {
-              "$ref": "#/components/schemas/TrackerLink"
+              "$ref": "#/components/schemas/TrackerBinding"
             }
           },
           "hasNextPage": {
             "type": "boolean"
+          },
+          "totalPages": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "counts": {
+            "type": "object",
+            "description": "Unfiltered bound-manga counts, in total and per provider",
+            "required": [
+              "manga",
+              "providers"
+            ],
+            "properties": {
+              "manga": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "providers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
           }
         }
       },

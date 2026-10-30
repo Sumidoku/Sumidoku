@@ -1197,6 +1197,11 @@ export type TrackUpdate = {
 	finishReadDate?: string;
 };
 
+export type TrackerBinding = TrackerLink & {
+	mangaTitle?: string;
+	mangaCover?: string;
+};
+
 export type TrackerLedgerItem = {
 	provider: TrackerProvider;
 	trackId: string;
@@ -1218,8 +1223,15 @@ export type TrackerLink = {
 };
 
 export type TrackerLinkPage = {
-	entries: Array<TrackerLink>;
+	entries: Array<TrackerBinding>;
 	hasNextPage: boolean;
+	totalPages: number;
+	counts: {
+		manga: number;
+		providers: {
+			[key: string]: number;
+		};
+	};
 };
 
 export type TrackerLinkUpsert = {

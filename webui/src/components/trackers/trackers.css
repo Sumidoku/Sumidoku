@@ -66,12 +66,34 @@
 	list-style: none;
 }
 
+.tracker-bindings__filter {
+	margin-bottom: 12px;
+}
+
+.tracker-bindings__pager {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	margin-top: 12px;
+}
+
+.tracker-bindings__pager-actions {
+	display: flex;
+	gap: 8px;
+}
+
 .tracker-binding {
 	display: flex;
 	align-items: center;
 	gap: 12px;
 	padding: 10px 0;
 	border-bottom: 1px solid var(--border);
+}
+
+.tracker-binding__cover {
+	width: 42px;
+	flex: none;
 }
 
 .tracker-binding:last-child {
@@ -94,6 +116,31 @@
 	white-space: nowrap;
 }
 
+.tracker-binding__links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.tracker-binding__link {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+	max-width: 100%;
+	padding: 2px 2px 2px 8px;
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+}
+
+.tracker-binding__link .tracker-logo {
+	width: 16px;
+	height: 16px;
+}
+
 .tracker-binding__remote {
 	overflow: hidden;
 	color: var(--text-dim);
@@ -102,13 +149,7 @@
 	white-space: nowrap;
 }
 
-.tracker-binding__external {
-	display: inline-flex;
-	padding: 6px;
-	color: var(--text-dim);
-}
-
-.tracker-binding__external:hover {
+.tracker-binding__remote:hover {
 	color: var(--accent);
 }
 
@@ -208,6 +249,20 @@
 .tracker-seg__option .tracker-logo {
 	width: 14px;
 	height: 14px;
+}
+
+/* Bangumi ships a pink line icon on transparency, which vanishes on the accent
+   fill of the active segment; a white tile keeps its own colors */
+.tracker-seg__option .tracker-logo--bangumi {
+	padding: 1px;
+	border-radius: 3px;
+	background: #fff;
+}
+
+.tracker-seg__count {
+	font-size: 11px;
+	font-weight: 400;
+	opacity: 0.75;
 }
 
 .tracker-add,
@@ -420,13 +475,8 @@
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.tracker-binding {
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-
 	.tracker-binding__meta {
-		flex-basis: calc(100% - 44px);
+		flex-basis: 0;
 	}
 
 	.tracker-binding__external {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import test, { after, before } from 'node:test';
 import { createServer } from 'vite';
 import type { ViteDevServer } from 'vite';
@@ -207,4 +208,22 @@ test('search results label series by medium and fall back to a generic series la
 	assert.equal(trackers.trackerMediaLabelKey({ mediaType: 'novel', series: false }), 'trackers.media.novel');
 	assert.equal(trackers.trackerMediaLabelKey({ mediaType: 'manga' }), 'trackers.media.manga');
 	assert.equal(trackers.trackerMediaLabelKey({}), null);
+});
+
+test('bindings gather per manga in page order', () => {
+	const entry = (mangaId: number, provider: 'anilist' | 'bangumi') => ({ ...link(), mangaId, provider });
+	const groups = trackers.groupBindings([entry(1, 'anilist'), entry(1, 'bangumi'), entry(2, 'bangumi')]);
+	assert.deepEqual(
+		groups.map((group) => group.map((item) => `${item.mangaId}:${item.provider}`)),
+		[['1:anilist', '1:bangumi'], ['2:bangumi']]
+	);
+	assert.deepEqual(trackers.groupBindings([]), []);
+});
+
+test('the hero primary button keeps its fill on hover in both themes', () => {
+	const css = readFileSync(new URL('../src/pages/manga.css', import.meta.url), 'utf8').replaceAll('\r\n', '\n');
+	for (const prefix of ['', "[data-theme='light'] "]) {
+		const rule = `${prefix}.manga-hero__actions .btn--primary:hover:not(:disabled) {\n\tbackground: var(--accent-solid-hover);`;
+		assert.ok(css.includes(rule), `missing: ${rule}`);
+	}
 });
