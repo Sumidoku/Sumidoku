@@ -71,17 +71,6 @@ deletion remains a separate action.
   transactional dismissal state and tests that the hidden artifact still
   serves offline pages and CBZ export and can still be explicitly removed.
 
-**Scope Rust formatting to changed files and inspect its diff immediately.**
-Formatting from a crate root follows module declarations, and workspace
-formatting traverses every crate, including vendored code. Run rustfmt only on
-the files being changed and restore unrelated formatting before continuing.
-- Evidence: 2026-10-29, a workspace formatting run changed 207 unrelated files
-  with 86,000 inserted lines, including the vendored Aidoku crate. The churn
-  was restored before implementation continued.
-- Seen again: 2026-10-30, formatting a new test module followed its `mod`
-  declaration into `tests/common/mod.rs` and changed unrelated contract tests.
-  Restore child changes and format the new module with child traversal disabled.
-
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
