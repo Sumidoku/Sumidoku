@@ -1,4 +1,4 @@
-<!-- reviewed-through: 31c4c7a (2026-10-28) -->
+<!-- reviewed-through: f4f4a3d (2026-10-30) -->
 # Lessons from merged work
 
 Sumidoku's code is written, reviewed and released by agent sessions. What
@@ -376,28 +376,6 @@ assertions language-independent.
 - Evidence: 2026-10-24, internal-source work (#257): source-card-mobile and
   sidebar-layout tests failed on a zh-CN workstation with Chinese labels
   while CI was green; both now force English.
-
-**Event-driven state needs one owner for each transition; a request's success
-continuation must not reapply optimistic state that an event may already have
-superseded.** A mutation accepted by the server is not proof that the work is
-still running when the client continuation resumes. Keep the optimistic state
-only when the same ordering channel can guarantee it is still current, and
-exercise the fast-completion path in a real browser.
-- Evidence: 2026-10-24, global SSE browser acceptance: a 6 ms library update
-  emitted `updateComplete`, then `runUpdate`'s `await` continuation wrote
-  `running: true` and left the page running indefinitely. Removing that write
-  made the summary events the sole owner of running transitions; the regression
-  failed when the write was restored and passed after its removal, and the next
-  browser run returned to the completed state.
-- Seen again: 2026-10-24, manga detail treated any download event as a reason
-  to skip the REST seed, dropping existing queued rows. Only a real snapshot
-  replaces that seed; pending events merge into it. The wiring regression
-  failed on the old guard, and a 15-second delayed response made two queued
-  rows vanish before the merge was restored.
-- Seen again: 2026-10-25, #425 let a retry response write `queued` back over
-  rows SSE had already advanced. `applyRetrySuccess` now updates only rows
-  still in `error`; removing that guard made the regression flip downloading
-  and finished rows back to queued.
 
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
@@ -936,6 +914,9 @@ tag nor release.
 cancelled run. Read the per-job conclusion before deciding what happened.
 - Evidence: the run-1 watcher exited 1 while four of five build legs were
   green; the queued macos-13 leg's cancellation was the only red.
+- Seen again: 2026-10-30, #532's CI run ended red with `red legs: docker` while
+  the docker job never left `queued`. Tests, builds and the same commit's
+  Release docker job had passed, and rerunning the failed job turned it green.
 
 **Write every GitHub body to a file; never inline it.**
 Backticks inside a double-quoted `--body`/`--comment` string are command
