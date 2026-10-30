@@ -10,6 +10,15 @@ disk usage across repeat reads, clear and restart.
   fetched on every read. The revised regression checks the image response,
   upstream request count and exact cache accounting.
 
+**Repairing a cache entry must reconcile the actual damaged size before
+applying a replacement delta.** A delta from the bytes currently on disk is
+wrong when storage changed after the prior total was charged; serialize cache
+writers and reconcile corrupted entries against page rows and disk contents.
+- Evidence: 2026-10-30, `corrupt_original_is_a_miss_and_write_failure_still_serves_fetched_bytes`
+  replaced an 8-byte entry after it had been truncated to 7 bytes. Adding the
+  apparent 1-byte delta to the old 8-byte charge overstated usage; a locked
+  reconciliation now matches the page JSON plus the actual cache tree.
+
 **Clearing a download list must not delete the downloaded product.** A
 "clear" action that only dismisses completed entries should update their
 visibility state while retaining the download row, artifact path and chapter
