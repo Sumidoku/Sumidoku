@@ -716,9 +716,9 @@ impl DownloadManager {
 				continue;
 			}
 			let orphaned = Self::delete_row_in_transaction(&mut tx, chapter_id, user_id, path.as_deref()).await?;
-			tx.commit().await?;
 			self.remove_from_queue(chapter_id, user_id).await;
 			self.progress.lock().await.remove(&chapter_id);
+			tx.commit().await?;
 			self.cleanup_tmp(chapter_id).await;
 			if let Some(path) = path && orphaned { let _ = remove_path(&product_path(&self.downloads_dir, &path)).await; }
 			if let Some(state) = &state {
@@ -769,14 +769,14 @@ impl DownloadManager {
 				let _ = remove_path(&product_path(&self.downloads_dir, path)).await;
 			}
 		}
+		self.remove_from_queue(chapter_id, user_id).await;
+		self.progress.lock().await.remove(&chapter_id);
 		if let Err(error) = tx.commit().await {
 			if active { self.cancel.lock().await.remove(&chapter_id); }
 			if let Some(paths) = &mut recorded_path { paths.remove(&chapter_id); }
 			return Err(error.into());
 		}
 		drop(recorded_path);
-		self.remove_from_queue(chapter_id, user_id).await;
-		self.progress.lock().await.remove(&chapter_id);
 		Ok(Some(true))
 	}
 
