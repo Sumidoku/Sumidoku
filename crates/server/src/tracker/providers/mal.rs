@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::sync::Arc;
 
 const BASE_URL: &str = "https://api.myanimelist.net/v2";
-const SEARCH_FIELDS: &str = "id,title,synopsis,num_chapters,main_picture,status,media_type,my_list_status";
+const SEARCH_FIELDS: &str = "id,title,synopsis,num_chapters,main_picture,status,media_type,my_list_status,start_date,authors{first_name,last_name}";
 const SEARCH_LIMIT: usize = 20;
 
 pub struct MalTracker {
@@ -133,6 +133,13 @@ impl MalTracker {
 			id: id.to_string(),
 			title: detail("title").and_then(Value::as_str).unwrap_or("Unknown Title").to_string(),
 			cover_url: detail("main_picture").and_then(|picture| picture.get("large")).and_then(Value::as_str).map(str::to_string),
+			info: super::search_info(
+				detail("start_date").and_then(Value::as_str).and_then(|date| date.get(..4)).and_then(|year| year.parse().ok()),
+				detail("authors").and_then(Value::as_array).into_iter().flatten().filter_map(|author| author.get("node")).map(|person| {
+					let name = |key| person.get(key).and_then(Value::as_str).unwrap_or("");
+					format!("{} {}", name("first_name"), name("last_name"))
+				}),
+			),
 			description: detail("synopsis").and_then(Value::as_str).map(str::to_string),
 			tracked: detail("my_list_status").is_some_and(|status| !status.is_null()),
 			media_type: Self::media_type(detail("media_type").and_then(Value::as_str)),
@@ -279,6 +286,8 @@ mod tests {
 						"id": 1,
 						"title": "Detail One",
 						"synopsis": "First synopsis",
+						"start_date": "1989-08-25",
+						"authors": [{"node": {"id": 1868, "first_name": "Kentarou", "last_name": "Miura"}, "role": "Story & Art"}],
 						"main_picture": {"large": "https://img.example/one.jpg"},
 						"media_type": "light_novel",
 						"my_list_status": {"status": "reading"}
@@ -394,6 +403,7 @@ mod tests {
 		assert_eq!(items[0].id, "1");
 		assert_eq!(items[0].title, "Detail One");
 		assert_eq!(items[0].description.as_deref(), Some("First synopsis"));
+		assert_eq!(items[0].info.as_deref(), Some("1989 / Kentarou Miura"));
 		assert_eq!(items[0].cover_url.as_deref(), Some("https://img.example/one.jpg"));
 		assert_eq!(items[0].media_type, Some(TrackMediaType::Novel));
 		assert_eq!(items[0].url.as_deref(), Some("https://myanimelist.net/manga/1"));

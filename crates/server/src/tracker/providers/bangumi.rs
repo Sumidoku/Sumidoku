@@ -218,8 +218,9 @@ impl BangumiTracker {
 			id: subject.id.to_string(),
 			title: if title.is_empty() { "Unknown Title" } else { title }.into(),
 			cover_url,
+			info: subject.info.filter(|info| !info.is_empty()),
 			// search results carry the infobox line only; subject detail carries the summary
-			description: subject.summary.or(subject.info),
+			description: subject.summary.filter(|summary| !summary.is_empty()),
 			tracked: subject.interest.is_some(),
 			media_type,
 			series: subject.series,
@@ -425,7 +426,8 @@ mod tests {
 		assert!(results[0].tracked);
 		assert!(results[0].series);
 		assert_eq!(results[0].media_type, Some(TrackMediaType::Manga));
-		assert_eq!(results[0].description.as_deref(), Some("Info 101"));
+		assert_eq!(results[0].info.as_deref(), Some("Info 101"));
+		assert_eq!(results[0].description, None);
 		assert_eq!(results[1].id, "102");
 		assert!(!results[1].tracked);
 		assert!(!results[1].series);

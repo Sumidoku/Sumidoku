@@ -115,6 +115,8 @@ pub struct TrackSearchItem {
 	pub id: String,
 	pub title: String,
 	pub cover_url: Option<String>,
+	/// One line of publication facts (year, authors, ...) that tells same-named entries apart
+	pub info: Option<String>,
 	pub description: Option<String>,
 	pub tracked: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
@@ -472,6 +474,7 @@ mod tests {
 			id: "42".into(),
 			title: "Title".into(),
 			cover_url: None,
+			info: None,
 			description: None,
 			tracked: true,
 			media_type: Some(TrackMediaType::Novel),

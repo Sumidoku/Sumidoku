@@ -190,6 +190,12 @@ function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: 
 									</div>
 									<div className="tracker-result__meta">
 										<h4>{item.title}</h4>
+										{item.info && <p className="tracker-result__info">{item.info}</p>}
+										{item.description && (
+											<p className="tracker-result__description" title={item.description}>
+												{item.description}
+											</p>
+										)}
 										<div className="tracker-result__badges">
 											<MediaBadge item={item} />
 											{item.tracked && <Badge>{t('trackers.tracked')}</Badge>}

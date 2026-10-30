@@ -9,6 +9,32 @@ pub(super) fn parse_tracker_url(input: &str) -> Option<reqwest::Url> {
 	reqwest::Url::parse(input).or_else(|_| reqwest::Url::parse(&format!("https://{input}"))).ok()
 }
 
+// Two names tell entries apart and keep the line short; the separator matches
+// the info line Bangumi returns ready-made
+const INFO_AUTHORS: usize = 2;
+
+pub(super) fn search_info(year: Option<i64>, authors: impl IntoIterator<Item = String>) -> Option<String> {
+	let parts: Vec<String> = year
+		.filter(|year| *year > 0)
+		.map(|year| year.to_string())
+		.into_iter()
+		.chain(authors.into_iter().map(|author| author.trim().to_string()).filter(|author| !author.is_empty()).take(INFO_AUTHORS))
+		.collect();
+	(!parts.is_empty()).then(|| parts.join(" / "))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::search_info;
+
+	#[test]
+	fn search_info_joins_year_and_first_authors() {
+		assert_eq!(search_info(Some(1989), ["A".into(), " ".into(), "B".into(), "C".into()]).as_deref(), Some("1989 / A / B"));
+		assert_eq!(search_info(Some(0), ["A".into()]).as_deref(), Some("A"));
+		assert_eq!(search_info(None, Vec::new()), None);
+	}
+}
+
 #[cfg(test)]
 pub(super) mod test_support {
 	use crate::tracker::oauth::{OAuthApp, OAuthManager};

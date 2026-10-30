@@ -289,6 +289,25 @@
 	white-space: nowrap;
 }
 
+.tracker-result__info {
+	margin: 2px 0 0;
+	overflow: hidden;
+	color: var(--text-dim);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.tracker-result__description {
+	display: -webkit-box;
+	margin: 4px 0 0;
+	overflow: hidden;
+	color: var(--text-dim);
+	font-size: 12px;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+}
+
 .tracker-result__badges {
 	display: flex;
 	gap: 5px;
