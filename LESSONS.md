@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A temporary database does not isolate a test's other writable paths.**
+A fixture built from `Config::default()` must also pin every artifact directory
+it writes into its `TempDir`; setting only `config_dir` leaves independent
+relative defaults, including `downloads_dir`, pointing outside the fixture.
+Assert the artifact path is beneath the temporary root before writing it.
+- Evidence: 2026-10-30, the zero-budget LRU regression created an untracked
+  `crates/server/downloads/kept.cbz` because the shared cache fixture only
+  overrode the database and configuration directory. The fixture now assigns
+  its download directory beneath `TempDir` and asserts that boundary; the
+  unintended product was removed.
+
 **Artifact cleanup must coordinate with in-flight path claims as well as database references.**
 A producer can claim a destination before its finished row commits, so an empty
 database reference query does not prove that a path is unused. Hold the shared
