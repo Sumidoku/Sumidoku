@@ -76,13 +76,22 @@ where
 }
 
 pub async fn persist_downloaded(pool: &SqlitePool, chapter_id: i64, updates: &[PageDimensionUpdate]) -> ApiResult<()> {
-	persist_with_guard(pool, chapter_id, updates).await
+	persist_with_guard(pool, chapter_id, updates, false).await
+}
+
+/// Read-path counterpart of persist_downloaded: the reader's page endpoint already holds the
+/// image bytes, so it backfills dimensions for rows never measured before. The
+/// dimensions_checked = 0 guard keeps a reader-side probe from ever overwriting the download
+/// path's authoritative values.
+pub async fn persist_measured(pool: &SqlitePool, chapter_id: i64, updates: &[PageDimensionUpdate]) -> ApiResult<()> {
+	persist_with_guard(pool, chapter_id, updates, true).await
 }
 
 async fn persist_with_guard(
 	pool: &SqlitePool,
 	chapter_id: i64,
 	updates: &[PageDimensionUpdate],
+	only_unchecked: bool,
 ) -> ApiResult<()> {
 	if updates.is_empty() {
 		return Ok(());
@@ -91,17 +100,21 @@ async fn persist_with_guard(
 	for update in updates {
 		// A refresh can replace a row while its old bytes are being read; the content guard keeps the old measurement off the new page.
 		// The download path overwrites stale checked values, so it does not require dimensions_checked = 0.
-		sqlx::query(
+		let sql = if only_unchecked {
 			"UPDATE page SET width = ?, height = ?, dimensions_checked = 1
-			 WHERE chapter_id = ? AND idx = ? AND content = ?",
-		)
-		.bind(update.width)
-		.bind(update.height)
-		.bind(chapter_id)
-		.bind(update.idx)
-		.bind(&update.content)
-		.execute(&mut *tx)
-		.await?;
+			 WHERE chapter_id = ? AND idx = ? AND content = ? AND dimensions_checked = 0"
+		} else {
+			"UPDATE page SET width = ?, height = ?, dimensions_checked = 1
+			 WHERE chapter_id = ? AND idx = ? AND content = ?"
+		};
+		sqlx::query(sql)
+			.bind(update.width)
+			.bind(update.height)
+			.bind(chapter_id)
+			.bind(update.idx)
+			.bind(&update.content)
+			.execute(&mut *tx)
+			.await?;
 	}
 	tx.commit().await?;
 	Ok(())

@@ -45,7 +45,7 @@ import {
 	zoneMovesForward
 } from './reader/readerPrefs';
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
-import { buildSpreads, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
+import { buildSpreads, measureWhenKnown, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
@@ -642,13 +642,15 @@ function ReaderCore({
 	function prefetch(center: number) {
 		if (!pages) return;
 		for (let d = -3; d <= 3; d++) {
-			if (d === 0) continue;
 			const p = pages[center + d];
 			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
-			// The prefetched image doubles as a dimension probe for pages the server
-			// has not measured yet, so approaching pages settle their spread early
+			// The prefetched image doubles as a dimension probe for pages the server has
+			// not measured yet. Polling catches the header parse long before load, so
+			// even the current page's pairing settles early; the center probe coalesces
+			// with the rendered image's request, and onload stays the fallback.
 			im.onload = () => reportDims(center + d, im.naturalWidth, im.naturalHeight);
+			measureWhenKnown(im, (w, h) => reportDims(center + d, w, h));
 			im.src = pageUrl(chapterId, p.index, imgWidth);
 		}
 	}

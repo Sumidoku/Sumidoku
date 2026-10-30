@@ -67,6 +67,37 @@ export interface PageDims {
 	height: number;
 }
 
+export interface MeasurableImage {
+	naturalWidth: number;
+	naturalHeight: number;
+	complete: boolean;
+}
+
+/**
+ * The natural size settles as soon as the browser has parsed the image header,
+ * long before the load event, so polling reports dimensions early enough to fix
+ * spread pairing (and wide-page splitting) before the page finishes loading.
+ * The poll is capped so a stalled load cannot spin forever; the load handler
+ * remains the fallback and recordMeasured deduplicates the double report.
+ * The scheduler is injectable so the polling loop is testable without a DOM.
+ */
+export function measureWhenKnown(
+	img: MeasurableImage,
+	report: (width: number, height: number) => void,
+	schedule: (cb: () => void) => void = (cb) => requestAnimationFrame(() => cb()),
+	maxFrames = 600
+): void {
+	let frames = 0;
+	const poll = () => {
+		if (img.naturalWidth > 0 && img.naturalHeight > 0) {
+			report(img.naturalWidth, img.naturalHeight);
+			return;
+		}
+		if (!img.complete && ++frames < maxFrames) schedule(poll);
+	};
+	schedule(poll);
+}
+
 /**
  * Records dimensions measured from a loaded image. Server-reported dimensions win:
  * a measured value only fills a gap, never overrides. Invalid or identical values
