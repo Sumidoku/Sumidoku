@@ -1,6 +1,17 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+**Check build-space headroom before switching validation scope or profiles.**
+Focused package builds and workspace builds can use different feature-unified
+dependency graphs and retain duplicate large test binaries. Before changing
+validation scope, inspect available disk space; when cleanup is needed, remove
+only generated artifacts for the relevant target package and profile.
+- Evidence: 2026-10-30, switching from focused server builds to the workspace
+  exhausted disk space during compilation with `rustc-LLVM ERROR: IO failure
+  on output stream: No space left on device`. Cleaning generated server dev
+  artifacts removed 785 files totaling 16.2 GiB and restored build space; the
+  workspace rerun was still in progress when this lesson was recorded.
+
 **Cache acceptance tests must request the actual image bytes, not count page
 metadata.** A page list can be cached while every reader request still fetches
 the upstream image; verify byte-for-byte responses, upstream hit counts and
