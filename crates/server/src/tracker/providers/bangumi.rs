@@ -1,6 +1,8 @@
-//! Bangumi provider (bgm.tv v0 API). Collections have no rereading type and
-//! carry no start/finish dates, so rereading pushes as reading and the
-//! TrackUpdate date fields are dropped on update.
+//! Bangumi provider (bgm.tv Next `/p1` API). Search and subject detail embed
+//! the caller's collection (`interest`), so neither needs a separate
+//! collection lookup. Collections have no rereading type and carry no
+//! start/finish dates, so rereading pushes as reading and the TrackUpdate date
+//! fields are dropped on update.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::oauth::OAuthManager;
@@ -9,12 +11,10 @@ use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use std::collections::HashSet;
 use std::sync::Arc;
 
-const API_ORIGIN: &str = "https://api.bgm.tv";
+const API_ORIGIN: &str = "https://next.bgm.tv";
 const SITE_ORIGIN: &str = "https://bgm.tv";
-const COLLECTION_PAGE_SIZE: usize = 100;
 const USER_AGENT: &str = concat!("sumidoku/", env!("CARGO_PKG_VERSION"));
 
 pub struct BangumiTracker {
@@ -28,20 +28,42 @@ struct Subject {
 	id: i64,
 	#[serde(default)]
 	name: String,
-	#[serde(default)]
+	#[serde(default, rename = "nameCN")]
 	name_cn: Option<String>,
+	#[serde(default)]
+	info: Option<String>,
 	#[serde(default)]
 	summary: Option<String>,
 	#[serde(default)]
 	images: Option<Images>,
 	#[serde(default)]
-	platform: Option<String>,
+	platform: Option<SubjectPlatform>,
+	#[serde(default)]
+	series: bool,
 	#[serde(default)]
 	eps: Option<i32>,
 	#[serde(default)]
-	total_episodes: Option<i32>,
-	#[serde(default)]
 	volumes: Option<i32>,
+	#[serde(default)]
+	interest: Option<SubjectInterest>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubjectPlatform {
+	#[serde(default, rename = "typeCN")]
+	type_cn: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SubjectInterest {
+	#[serde(default, rename = "type")]
+	collection_type: Option<i64>,
+	#[serde(default)]
+	rate: Option<i32>,
+	#[serde(default, rename = "epStatus")]
+	ep_status: Option<i64>,
+	#[serde(default, rename = "volStatus")]
+	vol_status: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,33 +78,6 @@ struct Images {
 struct SearchPage {
 	#[serde(default)]
 	data: Vec<Subject>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Me {
-	username: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CollectionPage {
-	#[serde(default)]
-	data: Vec<Collection>,
-	#[serde(default)]
-	total: Option<u64>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct Collection {
-	#[serde(default)]
-	subject_id: Option<i64>,
-	#[serde(default, rename = "type")]
-	collection_type: Option<i64>,
-	#[serde(default)]
-	rate: Option<i32>,
-	#[serde(default)]
-	ep_status: Option<i64>,
-	#[serde(default)]
-	vol_status: Option<i32>,
 }
 
 fn provider_error(message: impl Into<String>) -> TrackerError {
@@ -118,7 +113,6 @@ fn collection_type(status: TrackStatus) -> i64 {
 	}
 }
 
-/// Pasted URLs often lack a scheme, which `Url::parse` rejects outright.
 impl BangumiTracker {
 	pub fn new(http: reqwest::Client, oauth: Arc<OAuthManager>) -> Self {
 		Self::with_api_origin(http, oauth, API_ORIGIN)
@@ -194,42 +188,9 @@ impl BangumiTracker {
 		Err(provider_error(format!("{action} returned {status}: {body}")))
 	}
 
-	async fn get_json<T: DeserializeOwned>(&self, user_id: i64, url: Url, action: &str) -> Result<T, TrackerError> {
-		let response = self.send_authed(user_id, Method::GET, url, None, action).await?;
-		Self::decode_json(response, action).await
-	}
-
-	async fn me(&self, user_id: i64) -> Result<String, TrackerError> {
-		let me: Me = self.get_json(user_id, self.api_url(&["v0", "me"])?, "Bangumi /me").await?;
-		me.username.filter(|username| !username.is_empty()).ok_or_else(|| provider_error("Bangumi /me response has no username"))
-	}
-
-	async fn tracked_subject_ids(&self, user_id: i64, username: &str) -> Result<HashSet<i64>, TrackerError> {
-		let mut tracked = HashSet::new();
-		let mut offset = 0_u64;
-		loop {
-			let mut url = self.api_url(&["v0", "users", username, "collections"])?;
-			url.query_pairs_mut()
-				.append_pair("subject_type", "1")
-				.append_pair("limit", &COLLECTION_PAGE_SIZE.to_string())
-				.append_pair("offset", &offset.to_string());
-			let page: CollectionPage = self.get_json(user_id, url, "Bangumi collection list").await?;
-			let received = page.data.len();
-			if received == 0 {
-				break;
-			}
-			tracked.extend(page.data.iter().filter_map(|entry| entry.subject_id));
-			offset += received as u64;
-			if received < COLLECTION_PAGE_SIZE || page.total.is_some_and(|total| offset >= total) {
-				break;
-			}
-		}
-		Ok(tracked)
-	}
-
-	async fn current_tracked_ids(&self, user_id: i64) -> Result<HashSet<i64>, TrackerError> {
-		let username = self.me(user_id).await?;
-		self.tracked_subject_ids(user_id, &username).await
+	async fn send_ok(&self, user_id: i64, method: Method, url: Url, body: &Value, action: &str) -> Result<(), TrackerError> {
+		let response = self.send_authed(user_id, method, url, Some(body), action).await?;
+		Self::ensure_success(response, action).await
 	}
 
 	fn subject_url_id(query: &str) -> Option<i64> {
@@ -245,9 +206,9 @@ impl BangumiTracker {
 		segments.next()?.parse().ok()
 	}
 
-	fn search_item(subject: Subject, tracked: &HashSet<i64>) -> TrackSearchItem {
+	fn search_item(subject: Subject) -> TrackSearchItem {
 		let title = subject.name_cn.as_deref().filter(|title| !title.is_empty()).unwrap_or(&subject.name);
-		let media_type = match subject.platform.as_deref() {
+		let media_type = match subject.platform.as_ref().and_then(|platform| platform.type_cn.as_deref()) {
 			Some(platform) if platform.contains("小说") => Some(TrackMediaType::Novel),
 			Some(platform) if platform.contains("漫画") => Some(TrackMediaType::Manga),
 			_ => None,
@@ -257,15 +218,17 @@ impl BangumiTracker {
 			id: subject.id.to_string(),
 			title: if title.is_empty() { "Unknown Title" } else { title }.into(),
 			cover_url,
-			description: subject.summary,
-			tracked: tracked.contains(&subject.id),
+			// search results carry the infobox line only; subject detail carries the summary
+			description: subject.summary.or(subject.info),
+			tracked: subject.interest.is_some(),
 			media_type,
+			series: subject.series,
 			url: Some(format!("{SITE_ORIGIN}/subject/{}", subject.id)),
 		}
 	}
 
-	async fn search_v0(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<Subject>, TrackerError> {
-		let mut url = self.api_url(&["v0", "search", "subjects"])?;
+	async fn search_subjects(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<Subject>, TrackerError> {
+		let mut url = self.api_url(&["p1", "search", "subjects"])?;
 		url.query_pairs_mut().append_pair("limit", "20");
 		let body = json!({
 			"keyword": query,
@@ -278,12 +241,9 @@ impl BangumiTracker {
 	}
 
 	async fn subject(&self, user_id: i64, id: i64) -> Result<Subject, TrackerError> {
-		self.get_json(user_id, self.api_url(&["v0", "subjects", &id.to_string()])?, "Bangumi subject detail").await
-	}
-
-	async fn subject_totals(&self, user_id: i64, id: i64) -> Result<(Option<i32>, Option<i32>), TrackerError> {
-		let subject = self.subject(user_id, id).await?;
-		Ok((subject.eps.or(subject.total_episodes), subject.volumes))
+		let url = self.api_url(&["p1", "subjects", &id.to_string()])?;
+		let response = self.send_authed(user_id, Method::GET, url, None, "Bangumi subject detail").await?;
+		Self::decode_json(response, "Bangumi subject detail").await
 	}
 }
 
@@ -298,37 +258,23 @@ impl TrackerService for BangumiTracker {
 	}
 
 	async fn search(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<TrackSearchItem>, TrackerError> {
-		let tracked = self.current_tracked_ids(user_id).await?;
 		if let Some(id) = Self::subject_url_id(query) {
-			let subject = self.subject(user_id, id).await?;
-			return Ok(vec![Self::search_item(subject, &tracked)]);
+			return Ok(vec![Self::search_item(self.subject(user_id, id).await?)]);
 		}
-		let subjects = self.search_v0(user_id, query, nsfw).await?;
-		Ok(subjects.into_iter().map(|subject| Self::search_item(subject, &tracked)).collect())
+		let subjects = self.search_subjects(user_id, query, nsfw).await?;
+		Ok(subjects.into_iter().map(Self::search_item).collect())
 	}
 
 	async fn get_state(&self, user_id: i64, track_id: &str) -> Result<RemoteState, TrackerError> {
-		let id = subject_id(track_id)?;
-		let username = self.me(user_id).await?;
-		let url = self.api_url(&["v0", "users", &username, "collections", &id.to_string()])?;
-		let response = self.send_authed(user_id, Method::GET, url, None, "Bangumi collection").await?;
-		if response.status() == StatusCode::NOT_FOUND {
-			let (total_chapters, total_volumes) = self.subject_totals(user_id, id).await?;
-			return Ok(RemoteState { total_chapters, total_volumes, ..RemoteState::default() });
-		}
-		let collection: Collection = Self::decode_json(response, "Bangumi collection").await?;
-		if collection.collection_type.is_none() {
-			let (total_chapters, total_volumes) = self.subject_totals(user_id, id).await?;
-			return Ok(RemoteState { total_chapters, total_volumes, ..RemoteState::default() });
-		}
-		let (total_chapters, total_volumes) = self.subject_totals(user_id, id).await?;
+		let subject = self.subject(user_id, subject_id(track_id)?).await?;
+		let interest = subject.interest.unwrap_or_default();
 		Ok(RemoteState {
-			score: collection.rate,
-			status: collection_status(collection.collection_type),
-			last_read_chapter: collection.ep_status.map(|value| value as f32),
-			last_read_volume: collection.vol_status,
-			total_chapters,
-			total_volumes,
+			score: interest.rate,
+			status: collection_status(interest.collection_type),
+			last_read_chapter: interest.ep_status.map(|value| value as f32),
+			last_read_volume: interest.vol_status,
+			total_chapters: subject.eps,
+			total_volumes: subject.volumes,
 			start_read_date: None,
 			finish_read_date: None,
 		})
@@ -336,26 +282,39 @@ impl TrackerService for BangumiTracker {
 
 	async fn update(&self, user_id: i64, track_id: &str, update: &TrackUpdate) -> Result<(), TrackerError> {
 		let id = subject_id(track_id)?;
-		let mut body = serde_json::Map::new();
-		if let Some(status) = update.status {
-			body.insert("type".into(), json!(collection_type(status)));
-		}
-		if let Some(score) = update.score {
-			body.insert("rate".into(), json!(score));
-		}
+		let mut progress = serde_json::Map::new();
 		if let Some(chapter) = update.last_read_chapter {
-			body.insert("ep_status".into(), json!(chapter.floor() as i64));
+			progress.insert("epStatus".into(), json!(chapter.floor() as i64));
 		}
 		if let Some(volume) = update.last_read_volume {
-			body.insert("vol_status".into(), json!(volume));
+			progress.insert("volStatus".into(), json!(volume));
 		}
-		if body.is_empty() {
+		let has_collection = update.status.is_some() || update.score.is_some();
+		if !has_collection && progress.is_empty() {
 			return Ok(());
 		}
-		let response = self
-			.send_authed(user_id, Method::POST, self.api_url(&["v0", "users", "-", "collections", &id.to_string()])?, Some(&Value::Object(body)), "Bangumi collection update")
-			.await?;
-		Self::ensure_success(response, "Bangumi collection update").await
+		let url = self.api_url(&["p1", "collections", "subjects", &id.to_string()])?;
+		if has_collection {
+			// PUT replaces both type and rate, so a partial update re-sends the other's current value
+			let current = match (update.status, update.score) {
+				(Some(_), Some(_)) => SubjectInterest::default(),
+				_ => self.subject(user_id, id).await?.interest.unwrap_or_default(),
+			};
+			let collection_type = update.status.map(collection_type).or(current.collection_type).unwrap_or(3);
+			let rate = update.score.or(current.rate).unwrap_or(0);
+			self.send_ok(user_id, Method::PUT, url.clone(), &json!({"type": collection_type, "rate": rate}), "Bangumi collection update").await?;
+		}
+		if progress.is_empty() {
+			return Ok(());
+		}
+		let progress = Value::Object(progress);
+		let response = self.send_authed(user_id, Method::PATCH, url.clone(), Some(&progress), "Bangumi progress update").await?;
+		if response.status() == StatusCode::NOT_FOUND && !has_collection {
+			// progress can only be patched onto an existing collection: create one as reading, then retry
+			self.send_ok(user_id, Method::PUT, url.clone(), &json!({"type": 3, "rate": 0}), "Bangumi collection update").await?;
+			return self.send_ok(user_id, Method::PATCH, url, &progress, "Bangumi progress update").await;
+		}
+		Self::ensure_success(response, "Bangumi progress update").await
 	}
 }
 
@@ -415,26 +374,43 @@ mod tests {
 		json!({
 			"id": id,
 			"name": name,
-			"name_cn": "",
+			"nameCN": "",
 			"images": {"large": format!("https://img.test/{id}.jpg")},
+			"info": format!("Info {id}"),
 			"summary": format!("Summary {id}"),
-			"platform": "漫画"
+			"platform": {"typeCN": "漫画"},
+			"eps": 30,
+			"volumes": 6,
+			"interest": null
+		})
+	}
+
+	// search results carry no summary, eps or volumes
+	fn slim_subject(id: i64, name: &str) -> Value {
+		json!({
+			"id": id,
+			"name": name,
+			"nameCN": "",
+			"images": {"large": format!("https://img.test/{id}.jpg")},
+			"info": format!("Info {id}"),
+			"type": 1,
+			"platform": {"typeCN": "漫画"},
+			"interest": null
 		})
 	}
 
 	#[tokio::test]
-	async fn v0_search_marks_tracked_across_collection_pages() {
-		let first_page = (1..=100).map(|id| json!({"subject_id": id})).collect::<Vec<_>>();
-		let (origin, mock) = serve(move |request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections" => {
-				if request.query("offset") == Some("100") {
-					(StatusCode::OK, json!({"data": [{"subject_id": 101}], "total": 101}))
-				} else {
-					(StatusCode::OK, json!({"data": first_page, "total": 101}))
-				}
+	async fn search_reads_platform_series_and_interest_from_one_request() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/search/subjects" => {
+				let mut manga = slim_subject(101, "Book");
+				manga["nameCN"] = json!("书籍");
+				manga["interest"] = json!({"type": 3, "rate": 8});
+				manga["series"] = json!(true);
+				let mut novel = slim_subject(102, "Novel");
+				novel["platform"]["typeCN"] = json!("轻小说");
+				(StatusCode::OK, json!({"data": [manga, novel], "total": 2}))
 			}
-			"/v0/search/subjects" => (StatusCode::OK, json!({"data": [subject(101, "Book")]})),
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
@@ -443,28 +419,31 @@ mod tests {
 		assert!(service.is_logged_in(USER_ID).await.unwrap());
 
 		let results = service.search(USER_ID, "Book", false).await.unwrap();
-		assert_eq!(results.len(), 1);
+		assert_eq!(results.len(), 2);
+		assert_eq!(results[0].id, "101");
+		assert_eq!(results[0].title, "书籍");
 		assert!(results[0].tracked);
+		assert!(results[0].series);
 		assert_eq!(results[0].media_type, Some(TrackMediaType::Manga));
+		assert_eq!(results[0].description.as_deref(), Some("Info 101"));
+		assert_eq!(results[1].id, "102");
+		assert!(!results[1].tracked);
+		assert!(!results[1].series);
+		assert_eq!(results[1].media_type, Some(TrackMediaType::Novel));
 		let requests = mock.requests();
-		let search = requests.iter().find(|request| request.path == "/v0/search/subjects").unwrap();
+		assert_eq!(requests.len(), 1);
+		let search = &requests[0];
+		assert_eq!(search.path, "/p1/search/subjects");
 		assert_eq!(search.method, Method::POST);
+		assert_eq!(search.query("limit"), Some("20"));
 		assert_eq!(search.authorization.as_deref(), Some("Bearer old-token"));
 		assert_eq!(search.json(), json!({"keyword": "Book", "sort": "match", "filter": {"type": [1], "nsfw": false}}));
-		let collections = requests.iter().filter(|request| request.path == "/v0/users/alice-bg/collections").collect::<Vec<_>>();
-		assert_eq!(collections.len(), 2);
-		assert_eq!(collections[0].query("offset"), Some("0"));
-		assert_eq!(collections[1].query("offset"), Some("100"));
-		assert!(requests.iter().all(|request| !request.path.starts_with("/search/subject/")));
 	}
 
 	#[tokio::test]
-	async fn failed_v0_search_returns_error_without_legacy_request() {
+	async fn failed_search_returns_error_without_detail_requests() {
 		let (origin, mock) = serve(|request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections" => (StatusCode::OK, json!({"data": [{"subject_id": 7}], "total": 1})),
-			"/v0/search/subjects" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "v0 unavailable"})),
-			path if path.starts_with("/search/subject/") => (StatusCode::OK, json!({"list": [subject(7, "Legacy")]})),
+			"/p1/search/subjects" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "search unavailable"})),
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
@@ -475,75 +454,31 @@ mod tests {
 			Err(TrackerError::Provider { provider: Provider::Bangumi, .. })
 		));
 		let requests = mock.requests();
-		assert!(!requests.iter().any(|request| request.path.starts_with("/search/subject/")));
-		let v0 = requests.iter().find(|request| request.path == "/v0/search/subjects").unwrap();
-		assert_eq!(v0.json()["filter"]["nsfw"], true);
+		let search = requests.iter().find(|request| request.path == "/p1/search/subjects").unwrap();
+		assert_eq!(search.json()["filter"]["nsfw"], true);
+		assert!(!requests.iter().any(|request| request.path.starts_with("/p1/subjects/")));
 	}
 
 	#[tokio::test]
-	async fn search_propagates_collection_list_failure() {
-		let (origin, mock) = serve(|request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "collections unavailable"})),
-			"/v0/search/subjects" => (StatusCode::OK, json!({"data": [subject(7, "Book")]})),
+	async fn state_propagates_subject_detail_failure() {
+		let (origin, _mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "subject unavailable"})),
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
 		let (service, _pool, _tmp) = test_service(&origin).await;
-
-		assert!(matches!(
-			service.search(USER_ID, "Book", false).await,
-			Err(TrackerError::Provider { provider: Provider::Bangumi, .. })
-		));
-		assert!(!mock.requests().iter().any(|request| request.path == "/v0/search/subjects"));
-	}
-
-	async fn state_with_subject_detail_failure(collection_status: StatusCode, collection: Value) -> Result<RemoteState, TrackerError> {
-		let (origin, _mock) = serve(move |request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections/42" => (collection_status, collection.clone()),
-			"/v0/subjects/42" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "subject unavailable"})),
-			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
-		})
-		.await;
-		let (service, _pool, _tmp) = test_service(&origin).await;
-		service.get_state(USER_ID, "42").await
+		assert!(matches!(service.get_state(USER_ID, "42").await, Err(TrackerError::Provider { provider: Provider::Bangumi, .. })));
 	}
 
 	#[tokio::test]
-	async fn uncollected_state_propagates_subject_detail_failure() {
-		assert!(matches!(
-			state_with_subject_detail_failure(StatusCode::NOT_FOUND, json!({})).await,
-			Err(TrackerError::Provider { provider: Provider::Bangumi, .. })
-		));
-	}
-
-	#[tokio::test]
-	async fn missing_collection_type_state_propagates_subject_detail_failure() {
-		assert!(matches!(
-			state_with_subject_detail_failure(StatusCode::OK, json!({})).await,
-			Err(TrackerError::Provider { provider: Provider::Bangumi, .. })
-		));
-	}
-
-	#[tokio::test]
-	async fn collected_state_propagates_subject_detail_failure() {
-		assert!(matches!(
-			state_with_subject_detail_failure(StatusCode::OK, json!({"type": 3, "rate": 8, "ep_status": 12, "vol_status": 2})).await,
-			Err(TrackerError::Provider { provider: Provider::Bangumi, .. })
-		));
-	}
-
-	#[tokio::test]
-	async fn state_preserves_totals_for_uncollected_and_missing_type() {
+	async fn state_reads_interest_and_totals_from_one_subject_request() {
 		let (origin, mock) = serve(|request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections/42" => (StatusCode::OK, json!({"type": 3, "rate": 8, "ep_status": 12, "vol_status": 2})),
-			"/v0/subjects/42" => (StatusCode::OK, json!({"id": 42, "name": "Book", "eps": 30, "volumes": 6})),
-			"/v0/subjects/43" => (StatusCode::OK, json!({"id": 43, "name": "Book 43", "eps": 30, "volumes": 6})),
-			"/v0/subjects/44" => (StatusCode::OK, json!({"id": 44, "name": "Book 44", "eps": 40, "volumes": 8})),
-			"/v0/users/alice-bg/collections/43" => (StatusCode::NOT_FOUND, json!({"message": "subject is not collected"})),
-			"/v0/users/alice-bg/collections/44" => (StatusCode::OK, json!({})),
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Book");
+				value["interest"] = json!({"type": 3, "rate": 8, "epStatus": 12, "volStatus": 2});
+				(StatusCode::OK, value)
+			}
+			"/p1/subjects/43" => (StatusCode::OK, subject(43, "Book 43")),
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
@@ -560,17 +495,18 @@ mod tests {
 		assert_eq!(state.finish_read_date, None);
 
 		let uncollected = service.get_state(USER_ID, "43").await.unwrap();
+		assert_eq!(uncollected.score, None);
+		assert_eq!(uncollected.status, None);
+		assert_eq!(uncollected.last_read_chapter, None);
 		assert_eq!(uncollected.total_chapters, Some(30));
 		assert_eq!(uncollected.total_volumes, Some(6));
-		assert_eq!(uncollected.status, None);
 		let chapters = [ChapterTrackInput { number: Some(30.0), volume: None, read: true }];
 		let update = crate::tracker::core::decide(TrackMode::Chapter, 0, &uncollected, &chapters, NaiveDate::from_ymd_opt(2026, 10, 25).unwrap()).unwrap();
 		assert_eq!(update.status, Some(TrackStatus::Completed));
 
-		let missing_type = service.get_state(USER_ID, "44").await.unwrap();
-		assert_eq!(missing_type.total_chapters, Some(40));
-		assert_eq!(missing_type.total_volumes, Some(8));
-		assert!(mock.requests().iter().any(|request| request.path == "/v0/subjects/43"));
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2);
+		assert!(requests.iter().all(|request| request.path.starts_with("/p1/subjects/")));
 	}
 
 	#[tokio::test]
@@ -587,13 +523,13 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn update_ignores_dates_downgrades_rereading_and_refreshes_once() {
+	async fn update_splits_collection_and_progress_and_refreshes_once() {
 		let (origin, mock) = serve(|request| match request.path.as_str() {
 			"/token" => (StatusCode::OK, json!({"access_token": "fresh", "refresh_token": "refresh-new", "expires_in": 3600})),
-			"/v0/users/-/collections/42" if request.authorization.as_deref() == Some("Bearer old-token") => {
+			"/p1/collections/subjects/42" if request.authorization.as_deref() == Some("Bearer old-token") => {
 				(StatusCode::UNAUTHORIZED, json!({"message": "expired"}))
 			}
-			"/v0/users/-/collections/42" => (StatusCode::NO_CONTENT, Value::Null),
+			"/p1/collections/subjects/42" => (StatusCode::OK, json!({})),
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
@@ -609,25 +545,134 @@ mod tests {
 
 		service.update(USER_ID, "42", &update).await.unwrap();
 		let requests = mock.requests();
-		let updates = requests.iter().filter(|request| request.path == "/v0/users/-/collections/42").collect::<Vec<_>>();
-		assert_eq!(updates.len(), 2);
+		let updates = requests.iter().filter(|request| request.path == "/p1/collections/subjects/42").collect::<Vec<_>>();
+		assert_eq!(updates.len(), 3);
+		assert_eq!(updates[0].method, Method::PUT);
+		assert_eq!(updates[1].method, Method::PUT);
+		assert_eq!(updates[2].method, Method::PATCH);
 		assert_eq!(updates[0].authorization.as_deref(), Some("Bearer old-token"));
 		assert_eq!(updates[1].authorization.as_deref(), Some("Bearer fresh"));
-		for request in updates {
-			assert_eq!(request.method, Method::POST);
-			assert_eq!(request.json(), json!({"type": 3, "rate": 8, "ep_status": 12, "vol_status": 3}));
+		assert_eq!(updates[2].authorization.as_deref(), Some("Bearer fresh"));
+		for request in &updates[..2] {
+			assert_eq!(request.json(), json!({"type": 3, "rate": 8}));
 		}
-		let token = requests.iter().find(|request| request.path == "/token").unwrap();
-		assert_eq!(token.form()["grant_type"], "refresh_token");
-		assert_eq!(token.form()["refresh_token"], "refresh-old");
+		assert_eq!(updates[2].json(), json!({"epStatus": 12, "volStatus": 3}));
+		let tokens = requests.iter().filter(|request| request.path == "/token").collect::<Vec<_>>();
+		assert_eq!(tokens.len(), 1);
+		assert_eq!(tokens[0].form()["grant_type"], "refresh_token");
+		assert_eq!(tokens[0].form()["refresh_token"], "refresh-old");
+		assert!(!requests.iter().any(|request| request.path == "/p1/subjects/42"));
+	}
+
+	#[tokio::test]
+	async fn status_only_update_preserves_existing_rating() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Book");
+				value["interest"] = json!({"type": 1, "rate": 8, "epStatus": 4, "volStatus": 1});
+				(StatusCode::OK, value)
+			}
+			"/p1/collections/subjects/42" => (StatusCode::OK, json!({})),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		let update = TrackUpdate { status: Some(TrackStatus::Reading), ..TrackUpdate::default() };
+
+		service.update(USER_ID, "42", &update).await.unwrap();
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2);
+		assert_eq!(requests[0].path, "/p1/subjects/42");
+		assert_eq!(requests[1].method, Method::PUT);
+		assert_eq!(requests[1].json(), json!({"type": 3, "rate": 8}));
+	}
+
+	#[tokio::test]
+	async fn score_only_update_creates_reading_collection_when_missing() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => (StatusCode::OK, subject(42, "Book")),
+			"/p1/collections/subjects/42" => (StatusCode::OK, json!({})),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		let update = TrackUpdate { score: Some(8), ..TrackUpdate::default() };
+
+		service.update(USER_ID, "42", &update).await.unwrap();
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2);
+		assert_eq!(requests[1].method, Method::PUT);
+		assert_eq!(requests[1].json(), json!({"type": 3, "rate": 8}));
+	}
+
+	#[tokio::test]
+	async fn progress_only_update_sends_one_patch() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/collections/subjects/42" => (StatusCode::OK, json!({})),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		let update = TrackUpdate { last_read_chapter: Some(12.9), ..TrackUpdate::default() };
+
+		service.update(USER_ID, "42", &update).await.unwrap();
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 1);
+		assert_eq!(requests[0].method, Method::PATCH);
+		assert_eq!(requests[0].json(), json!({"epStatus": 12}));
+	}
+
+	#[tokio::test]
+	async fn progress_only_update_creates_missing_collection_and_retries() {
+		let collected = Arc::new(Mutex::new(false));
+		let collected_by_put = collected.clone();
+		let (origin, mock) = serve(move |request| match request.path.as_str() {
+			"/p1/collections/subjects/42" if request.method == Method::PUT => {
+				*collected_by_put.lock().unwrap() = true;
+				(StatusCode::OK, json!({}))
+			}
+			"/p1/collections/subjects/42" if !*collected.lock().unwrap() => (StatusCode::NOT_FOUND, json!({"message": "subject not collected"})),
+			"/p1/collections/subjects/42" => (StatusCode::OK, json!({})),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		let update = TrackUpdate { last_read_chapter: Some(12.9), last_read_volume: Some(3), ..TrackUpdate::default() };
+
+		service.update(USER_ID, "42", &update).await.unwrap();
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 3);
+		assert_eq!(requests[0].method, Method::PATCH);
+		assert_eq!(requests[1].method, Method::PUT);
+		assert_eq!(requests[2].method, Method::PATCH);
+		assert_eq!(requests[1].json(), json!({"type": 3, "rate": 0}));
+		for request in [&requests[0], &requests[2]] {
+			assert_eq!(request.json(), json!({"epStatus": 12, "volStatus": 3}));
+		}
+	}
+
+	#[tokio::test]
+	async fn empty_or_date_only_update_skips_requests() {
+		let (origin, mock) = serve(|_| (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "unexpected"}))).await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		service.update(USER_ID, "42", &TrackUpdate::default()).await.unwrap();
+		let update = TrackUpdate {
+			start_read_date: Some("2026-10-01".into()),
+			finish_read_date: Some("2026-10-20".into()),
+			..TrackUpdate::default()
+		};
+		service.update(USER_ID, "42", &update).await.unwrap();
+		assert!(mock.requests().is_empty());
 	}
 
 	#[tokio::test]
 	async fn subject_url_uses_detail_and_official_result_url() {
-		let (origin, _mock) = serve(|request| match request.path.as_str() {
-			"/v0/me" => (StatusCode::OK, json!({"username": "alice-bg"})),
-			"/v0/users/alice-bg/collections" => (StatusCode::OK, json!({"data": [], "total": 0})),
-			"/v0/subjects/1902" => (StatusCode::OK, subject(1902, "Book")),
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/1902" => {
+				let mut value = subject(1902, "Book");
+				value["interest"] = json!({"type": 3, "rate": 8});
+				(StatusCode::OK, value)
+			}
 			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
 		})
 		.await;
@@ -636,7 +681,13 @@ mod tests {
 		let results = service.search(USER_ID, "bgm.tv/subject/1902", false).await.unwrap();
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].id, "1902");
+		assert!(results[0].tracked);
+		assert_eq!(results[0].media_type, Some(TrackMediaType::Manga));
+		assert_eq!(results[0].description.as_deref(), Some("Summary 1902"));
 		assert_eq!(results[0].url.as_deref(), Some("https://bgm.tv/subject/1902"));
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 1);
+		assert_eq!(requests[0].path, "/p1/subjects/1902");
 	}
 
 	#[test]

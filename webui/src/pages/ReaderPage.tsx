@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { ChangeEvent, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
+import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -13,6 +13,8 @@ import {
 	CheckCircle2,
 	List,
 	Lock,
+	Maximize,
+	Minimize,
 	Settings,
 	StretchVertical,
 	TriangleAlert,
@@ -31,8 +33,25 @@ import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../co
 import { usePinchZoom } from './reader/usePinchZoom';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
-import { dirFromViewer, modeFromViewer, resolveDir, resolveMode, zoneMovesForward } from './reader/readerPrefs';
-import type { Dir, Mode } from './reader/readerPrefs';
+import {
+	dirFromViewer,
+	modeFromViewer,
+	nextScale,
+	parseBackground,
+	parseScale,
+	parseTapZones,
+	resolveDir,
+	resolveMode,
+	zoneAction,
+	zoneAt,
+	zoneMovesForward
+} from './reader/readerPrefs';
+import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
+import { buildSpreads, measureWhenKnown, recordMeasured, spreadIndexOf, spreadLeadPage } from './reader/spreads';
+import type { PageDims, SpreadLayout } from './reader/spreads';
+import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
+import { readerKeyAction } from './reader/hotkeys';
+import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -94,6 +113,159 @@ function readModeOverride(mangaId: number | null): Mode | null {
 	try {
 		const v = localStorage.getItem(modeOverrideKey(mangaId));
 		if (v === 'paged' || v === 'continuous' || v === 'webtoon') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Page layout (single/double spread) has no manga-metadata counterpart, so the
+// resolution is just per-manga override over the global default
+function readLayout(): SpreadLayout {
+	try {
+		const v = localStorage.getItem('sumidoku.reader.layout');
+		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
+	} catch {
+		// Same as above
+	}
+	return 'single';
+}
+
+function layoutOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.layout.${mangaId}`;
+}
+
+function readLayoutOverride(mangaId: number | null): SpreadLayout | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(layoutOverrideKey(mangaId));
+		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Tap-zone layout and canvas background follow the page layout's persistence
+// shape: a global default plus a per-manga override, no metadata layer
+function readTapZones(): TapZoneLayout {
+	try {
+		const v = parseTapZones(localStorage.getItem('sumidoku.reader.tapzones'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'lr';
+}
+
+function tapZonesOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.tapzones.${mangaId}`;
+}
+
+function readTapZonesOverride(mangaId: number | null): TapZoneLayout | null {
+	if (mangaId === null) return null;
+	try {
+		return parseTapZones(localStorage.getItem(tapZonesOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+function readBackground(): ReaderBackground {
+	try {
+		const v = parseBackground(localStorage.getItem('sumidoku.reader.bg'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'dark';
+}
+
+function backgroundOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.bg.${mangaId}`;
+}
+
+function readBackgroundOverride(mangaId: number | null): ReaderBackground | null {
+	if (mangaId === null) return null;
+	try {
+		return parseBackground(localStorage.getItem(backgroundOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Page scale and small-page stretching share the same persistence shape: a
+// global default plus a per-manga override, no metadata layer
+function readScale(): PageScale {
+	try {
+		const v = parseScale(localStorage.getItem('sumidoku.reader.scale'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return 'screen';
+}
+
+function scaleOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.scale.${mangaId}`;
+}
+
+function readScaleOverride(mangaId: number | null): PageScale | null {
+	if (mangaId === null) return null;
+	try {
+		return parseScale(localStorage.getItem(scaleOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// The stretch flag stores only "on"; anything else (including absence) is off
+function readStretch(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.stretch') === '1';
+	} catch {
+		return false;
+	}
+}
+
+function stretchOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.stretch.${mangaId}`;
+}
+
+function readStretchOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(stretchOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Same storage convention as stretch: only "1" is on
+function readSplit(): boolean {
+	try {
+		return localStorage.getItem('sumidoku.reader.split') === '1';
+	} catch {
+		return false;
+	}
+}
+
+function splitOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.split.${mangaId}`;
+}
+
+function readSplitOverride(mangaId: number | null): boolean | null {
+	if (mangaId === null) return null;
+	try {
+		const v = localStorage.getItem(splitOverrideKey(mangaId));
+		if (v === '1') return true;
+		if (v === '0') return false;
 	} catch {
 		// Same as above
 	}
@@ -233,6 +405,24 @@ function ReaderCore({
 	const [modeOverride, setModeOverride] = useState<Mode | null>(() => readModeOverride(mangaId));
 	const [globalDir] = useState<Dir>(readDir);
 	const [dirOverride, setDirOverride] = useState<Dir | null>(() => readDirOverride(mangaId));
+	const [globalLayout] = useState<SpreadLayout>(readLayout);
+	const [layoutOverride, setLayoutOverride] = useState<SpreadLayout | null>(() => readLayoutOverride(mangaId));
+	const layout = layoutOverride ?? globalLayout;
+	const [globalTapZones] = useState<TapZoneLayout>(readTapZones);
+	const [tapZonesOverride, setTapZonesOverride] = useState<TapZoneLayout | null>(() => readTapZonesOverride(mangaId));
+	const tapZones = tapZonesOverride ?? globalTapZones;
+	const [globalBg] = useState<ReaderBackground>(readBackground);
+	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
+	const bg = bgOverride ?? globalBg;
+	const [globalScale] = useState<PageScale>(readScale);
+	const [scaleOverride, setScaleOverride] = useState<PageScale | null>(() => readScaleOverride(mangaId));
+	const scale = scaleOverride ?? globalScale;
+	const [globalStretch] = useState<boolean>(readStretch);
+	const [stretchOverride, setStretchOverride] = useState<boolean | null>(() => readStretchOverride(mangaId));
+	const stretch = stretchOverride ?? globalStretch;
+	const [globalSplit] = useState<boolean>(readSplit);
+	const [splitOverride, setSplitOverride] = useState<boolean | null>(() => readSplitOverride(mangaId));
+	const split = splitOverride ?? globalSplit;
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
@@ -242,6 +432,23 @@ function ReaderCore({
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
+	// Fullscreen targets the reader root so the toolbars (fixed) stay visible inside it
+	const rootRef = useRef<HTMLDivElement>(null);
+	const [isFullscreen, setIsFullscreen] = useState(false);
+	const fullscreenEnabled = typeof document !== 'undefined' && !!document.fullscreenEnabled;
+	useEffect(() => {
+		const onFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+		document.addEventListener('fullscreenchange', onFsChange);
+		return () => document.removeEventListener('fullscreenchange', onFsChange);
+	}, []);
+	function toggleFullscreen() {
+		try {
+			if (document.fullscreenElement) void document.exitFullscreen();
+			else void rootRef.current?.requestFullscreen();
+		} catch {
+			// Fullscreen can be denied (permissions policy); the toggle just stays off
+		}
+	}
 	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
 	const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
 	const textStyle = typographyStyle(typography);
@@ -260,11 +467,15 @@ function ReaderCore({
 	const [cur, setCurState] = useState(0);
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
+	const pagedRef = useRef<HTMLDivElement>(null);
 	const contentResizeRef = useRef<() => void>(() => {});
 
 	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
 	const colRef = useRef(0);
 	const [col, setColState] = useState(0);
+	// Reading-order half of a split page (0 = first); ignored when splitOn is off or the page is not landscape
+	const halfRef = useRef<0 | 1>(0);
+	const [half, setHalfState] = useState<0 | 1>(0);
 	const [textLayout, setTextLayout] = useState({ w: 0, gap: 0, cols: 1 });
 	const textLayoutRef = useRef(textLayout);
 	textLayoutRef.current = textLayout;
@@ -281,14 +492,51 @@ function ReaderCore({
 		consumeClick,
 		reset: resetPinch
 	} = usePinchZoom({ zoomedTouchAction: mode === 'paged' ? 'none' : 'pan-y' });
-	// Layout changes leave stale pan offsets behind
-	useLayoutEffect(() => {
-		resetPinch();
-	}, [mode, idx, col, dir, imgWidth, resetPinch]);
+
 
 	const total = pages?.length ?? 0;
 	const curPage = pages?.[idx] ?? null;
 	const curText = pageText(curPage);
+	// Dimensions measured from loaded images fill the gaps the server left (remote
+	// chapters carry no dimensions until downloaded). Rebuilding spreads off them
+	// keeps idx page-based, so the current page stays put when a mate re-pairs
+	const [measuredDims, setMeasuredDims] = useState<Record<number, PageDims>>({});
+	function reportDims(arrayIndex: number, width: number, height: number) {
+		setMeasuredDims((prev) =>
+			recordMeasured(prev, arrayIndex, { width, height }, pageDimensions(pages?.[arrayIndex]))
+		);
+	}
+	function dimsOf(arrayIndex: number): PageDims | null {
+		return pageDimensions(pages?.[arrayIndex]) ?? measuredDims[arrayIndex] ?? null;
+	}
+	// Spreads only exist in paged mode; slots carry page indexes so progress and the
+	// slider stay page-based regardless of the layout
+	const spreads = useMemo(() => {
+		if (mode !== 'paged' || !pages) return null;
+		return buildSpreads(
+			pages.length,
+			(i) => {
+				const d = pageDimensions(pages[i]) ?? measuredDims[i] ?? null;
+				return d !== null && d.width > d.height;
+			},
+			layout
+		);
+	}, [mode, pages, layout, measuredDims]);
+	const curSpread = spreads ? spreads[spreadIndexOf(spreads, idx)] : null;
+	// Wide-page splitting is a paged-mode, single-layout navigation overlay: the
+	// current page keeps its real index while a landscape page takes two turns
+	const splitOn = mode === 'paged' && layout === 'single' && split;
+	function landscapeOf(arrayIndex: number): boolean {
+		const d = dimsOf(arrayIndex);
+		return d !== null && d.width > d.height;
+	}
+	// Composition of the visible spread; a re-pair resets stale pinch pan offsets
+	const curSpreadKey = curSpread ? curSpread.map((s) => (s === null ? 'b' : s)).join('-') : '';
+	// Layout changes leave stale pan offsets behind; curSpreadKey catches a measured
+	// re-pair of the visible spread without resetting zoom over distant prefetches
+	useLayoutEffect(() => {
+		resetPinch();
+	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, scale, stretch, half, split, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -297,6 +545,11 @@ function ReaderCore({
 	const prevCh = pos >= 0 && pos < navChapters.length - 1 ? navChapters[pos + 1] : null;
 	const nextCh = pos > 0 ? navChapters[pos - 1] : null;
 	const shown = mode === 'paged' ? idx : cur;
+	// A split page renders one half of the same image; the box carries the (w/2):h
+	// ratio so object-fit: cover overflows by exactly the other half. Unknown-dim
+	// pages render whole until recordMeasured proves them landscape
+	const splitDims = splitOn && curPage && curText === null && !isUnsupported(curPage) ? dimsOf(idx) : null;
+	const splitActive = splitDims !== null && isSplittable(splitDims) ? splitDims : null;
 	// The pagination unit of a text-only chapter is the column; everything else's is the page
 	const navTotal = textOnly ? textLayout.cols : total;
 	const navPos = textOnly ? col : shown;
@@ -325,6 +578,11 @@ function ReaderCore({
 	function setCol(c: number) {
 		colRef.current = c;
 		setColState(c);
+	}
+
+	function setHalf(h: 0 | 1) {
+		halfRef.current = h;
+		setHalfState(h);
 	}
 
 	// After a window resize, refetch variants at the new width; debounced so dragging the window doesn't refetch images repeatedly
@@ -390,10 +648,15 @@ function ReaderCore({
 	function prefetch(center: number) {
 		if (!pages) return;
 		for (let d = -3; d <= 3; d++) {
-			if (d === 0) continue;
 			const p = pages[center + d];
 			if (!p || pageText(p) !== null) continue;
 			const im = new Image();
+			// The prefetched image doubles as a dimension probe for pages the server has
+			// not measured yet. Polling catches the header parse long before load, so
+			// even the current page's pairing settles early; the center probe coalesces
+			// with the rendered image's request, and onload stays the fallback.
+			im.onload = () => reportDims(center + d, im.naturalWidth, im.naturalHeight);
+			measureWhenKnown(im, (w, h) => reportDims(center + d, w, h));
 			im.src = pageUrl(chapterId, p.index, imgWidth, p.cacheRevision);
 		}
 	}
@@ -403,8 +666,10 @@ function ReaderCore({
 		if (clamped === idxRef.current && pages) return;
 		setIdx(clamped);
 		setCol(0);
+		setHalf(0);
 		if (clamped > furthestRef.current) setFurthest(clamped);
-		scheduleProgress(clamped, clamped >= total - 1);
+		// Landing on a split final page is not the chapter end yet — its second half is
+		scheduleProgress(clamped, clamped >= total - 1 && !(splitOn && landscapeOf(clamped)));
 		prefetch(clamped);
 	}
 
@@ -415,14 +680,37 @@ function ReaderCore({
 
 	// Hitting a boundary switches chapters outright: past the last page = next chapter, before the first page = previous chapter
 	// Text pages turn column by column first; only when the columns run out does the page/chapter boundary apply
+	// Double-page layouts turn spread by spread, landing on each spread's leading page in reading order
+	// Split navigation steps through half-pages; text pages keep their column flow
 	function turn(forward: boolean) {
 		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
+		if (splitOn && !textPage) {
+			const next = turnSplit({ page: idxRef.current, half: halfRef.current }, total, landscapeOf, forward);
+			if (next === null) {
+				navCh(forward ? nextCh : prevCh);
+				return;
+			}
+			if (next.page === idxRef.current) {
+				setHalf(next.half);
+				scheduleProgress(next.page, splitEndReached(next.page, next.half, total, landscapeOf));
+			} else {
+				gotoPage(next.page);
+				if (next.half === 1) setHalf(1);
+			}
+			return;
+		}
 		if (forward) {
 			if (textPage && colRef.current < cols - 1) {
 				const nextCol = colRef.current + 1;
 				setCol(nextCol);
 				scheduleProgress(idxRef.current, idxRef.current >= total - 1 && nextCol >= cols - 1);
+				return;
+			}
+			if (spreads) {
+				const si = spreadIndexOf(spreads, idxRef.current);
+				if (si >= spreads.length - 1) navCh(nextCh);
+				else gotoPage(spreadLeadPage(spreads[si + 1]));
 				return;
 			}
 			if (idxRef.current >= total - 1) navCh(nextCh);
@@ -431,6 +719,12 @@ function ReaderCore({
 			if (textPage && colRef.current > 0) {
 				setCol(colRef.current - 1);
 				scheduleProgress(idxRef.current, false);
+				return;
+			}
+			if (spreads) {
+				const si = spreadIndexOf(spreads, idxRef.current);
+				if (si <= 0) navCh(prevCh);
+				else gotoPage(spreadLeadPage(spreads[si - 1]));
 				return;
 			}
 			if (idxRef.current <= 0) navCh(prevCh);
@@ -450,9 +744,20 @@ function ReaderCore({
 		else navigate('/library');
 	}
 
+	function scrollByScreen(sign: 1 | -1) {
+		const el = contRef.current;
+		if (el) el.scrollBy({ top: sign * el.clientHeight * 0.9, behavior: 'smooth' });
+	}
+
 	const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
 	keyRef.current = (e) => {
 		if (e.key === 'Escape') {
+			// The browser usually consumes the Escape that leaves fullscreen before the
+			// page sees it; if it does arrive, leaving fullscreen beats closing panels
+			if (document.fullscreenElement) {
+				void document.exitFullscreen();
+				return;
+			}
 			if (chaptersOpen) {
 				setChaptersOpen(false);
 				return;
@@ -465,15 +770,86 @@ function ReaderCore({
 			return;
 		}
 		if (chaptersOpen) return;
-		if (mode !== 'paged') return;
-		if (e.key === 'ArrowLeft') onZone('left');
-		else if (e.key === 'ArrowRight') onZone('right');
+		const action = readerKeyAction(e, mode);
+		if (action === null) return;
+		// The key is ours: keep Space and the arrows from scrolling the page natively
+		e.preventDefault();
+		switch (action) {
+			case 'left':
+				onZone('left');
+				break;
+			case 'right':
+				onZone('right');
+				break;
+			case 'pageBack':
+				turn(false);
+				break;
+			case 'pageForward':
+				turn(true);
+				break;
+			case 'scrollBack':
+				scrollByScreen(-1);
+				break;
+			case 'scrollForward':
+				scrollByScreen(1);
+				break;
+			case 'first':
+				if (mode === 'paged') gotoPage(0);
+				else scrollToPage(0);
+				break;
+			case 'last':
+				if (mode === 'paged') gotoPage(total - 1);
+				else scrollToPage(total - 1);
+				break;
+			case 'toggleOverlay':
+				setOverlay((v) => !v);
+				break;
+			case 'toggleFullscreen':
+				toggleFullscreen();
+				break;
+			case 'cycleScale':
+				setScale(nextScale(scale));
+				break;
+		}
 	};
 	useEffect(() => {
 		const h = (e: KeyboardEvent) => keyRef.current(e);
 		window.addEventListener('keydown', h);
 		return () => window.removeEventListener('keydown', h);
 	}, []);
+
+	// Wheel page turning (paged mode): the controller accumulates deltas, emits one
+	// turn per gesture and locks until the wheel goes quiet (trackpad inertia guard)
+	const turnRef = useRef(turn);
+	turnRef.current = turn;
+	const wheelCtlRef = useRef<WheelTurnController | null>(null);
+	if (wheelCtlRef.current === null) {
+		wheelCtlRef.current = new WheelTurnController({
+			setTimeout: (cb, ms) => window.setTimeout(cb, ms),
+			clearTimeout: (h) => window.clearTimeout(h as number),
+			onTurn: (forward) => turnRef.current(forward)
+		});
+	}
+	const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
+	wheelRef.current = (e) => {
+		if (mode !== 'paged' || chaptersOpen) return;
+		// Scrollable scale modes (width/widthShrink/original) keep the wheel for native scrolling
+		if (scale === 'width' || scale === 'widthShrink' || scale === 'original') return;
+		// Browser zoom chords and an active pinch zoom keep the wheel to themselves
+		if (e.ctrlKey || e.metaKey || zoomed) return;
+		// Horizontal gestures (trackpad pans) are not page turns
+		if (Math.abs(e.deltaY) < Math.abs(e.deltaX)) return;
+		e.preventDefault();
+		wheelCtlRef.current?.feed(e.deltaY, e.deltaMode, window.innerHeight);
+	};
+	useEffect(() => {
+		const el = pagedRef.current;
+		if (!el) return;
+		const h = (e: WheelEvent) => wheelRef.current(e);
+		el.addEventListener('wheel', h, { passive: false });
+		return () => el.removeEventListener('wheel', h);
+	}, [mode, pages]);
+	useEffect(() => () => wheelCtlRef.current?.dispose(), []);
 
 	useEffect(() => {
 		if (!chaptersOpen) return;
@@ -517,6 +893,74 @@ function ReaderCore({
 			// Private mode blocks persistence but the direction still switches
 		}
 		setDirOverride(mangaId !== null && d !== metaDir ? d : null);
+	}
+
+	function setLayout(l: SpreadLayout) {
+		if (l === layout) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(layoutOverrideKey(mangaId), l);
+			else localStorage.setItem('sumidoku.reader.layout', l);
+		} catch {
+			// Private mode blocks persistence but the layout still switches
+		}
+		setLayoutOverride(mangaId !== null ? l : null);
+	}
+
+	function setTapZones(z: TapZoneLayout) {
+		if (z === tapZones) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(tapZonesOverrideKey(mangaId), z);
+			else localStorage.setItem('sumidoku.reader.tapzones', z);
+		} catch {
+			// Private mode blocks persistence but the layout still switches
+		}
+		setTapZonesOverride(mangaId !== null ? z : null);
+	}
+
+	function setBackground(b: ReaderBackground) {
+		if (b === bg) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(backgroundOverrideKey(mangaId), b);
+			else localStorage.setItem('sumidoku.reader.bg', b);
+		} catch {
+			// Private mode blocks persistence but the background still switches
+		}
+		setBgOverride(mangaId !== null ? b : null);
+	}
+
+	function setScale(s: PageScale) {
+		if (s === scale) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(scaleOverrideKey(mangaId), s);
+			else localStorage.setItem('sumidoku.reader.scale', s);
+		} catch {
+			// Private mode blocks persistence but the scale still switches
+		}
+		setScaleOverride(mangaId !== null ? s : null);
+	}
+
+	function setStretch(v: boolean) {
+		if (v === stretch) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(stretchOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.setItem('sumidoku.reader.stretch', '1');
+			else localStorage.removeItem('sumidoku.reader.stretch');
+		} catch {
+			// Private mode blocks persistence but the stretch still switches
+		}
+		setStretchOverride(mangaId !== null ? v : null);
+	}
+
+	function setSplit(v: boolean) {
+		if (v === split) return;
+		try {
+			if (mangaId !== null) localStorage.setItem(splitOverrideKey(mangaId), v ? '1' : '0');
+			else if (v) localStorage.setItem('sumidoku.reader.split', '1');
+			else localStorage.removeItem('sumidoku.reader.split');
+		} catch {
+			// Private mode blocks persistence but the split still switches
+		}
+		setSplitOverride(mangaId !== null ? v : null);
 	}
 
 	function toggleAsc() {
@@ -643,21 +1087,26 @@ function ReaderCore({
 		};
 	}, [mode, pages, navReady]);
 
-	// A light tap in the middle summons the toolbar; swipes don't trigger it
+	// A light tap fires the tap-zone layout's action for its zone; swipes don't
+	// trigger it, and while zoomed any tap just toggles the toolbar
 	const downRef = useRef({ x: 0, y: 0 });
-	function onPagedClick(which: 'left' | 'right' | 'mid') {
+	function onPagedZoneClick(which: 'left' | 'right' | 'mid') {
 		if (consumeClick()) return;
-		if (zoomed || which === 'mid') {
+		if (zoomed) {
 			setOverlay((v) => !v);
 			return;
 		}
-		onZone(which);
+		const action = zoneAction(dir, tapZones, which);
+		if (action === 'menu') setOverlay((v) => !v);
+		else if (action === 'next') turn(true);
+		else if (action === 'prev') turn(false);
 	}
 	function onPagedContainerClick(e: RMouseEvent<HTMLDivElement>) {
 		if (e.target !== e.currentTarget) return;
 		const rect = e.currentTarget.getBoundingClientRect();
-		const ratio = (e.clientX - rect.left) / rect.width;
-		onPagedClick(ratio < 0.28 ? 'left' : ratio > 0.72 ? 'right' : 'mid');
+		onPagedZoneClick(
+			zoneAt(tapZones, (e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height)
+		);
 	}
 	function onContinuousPointerDown(e: RPointerEvent<HTMLDivElement>) {
 		downRef.current = { x: e.clientX, y: e.clientY };
@@ -697,17 +1146,20 @@ function ReaderCore({
 	}
 
 	const barCls = (base: string) => (overlay ? base : `${base} reader__bar--hidden`);
+	// Canvas background variants: dark stays the unclassed default
+	const rootCls = (extra?: string) =>
+		['reader', bg === 'dark' ? '' : `reader--bg-${bg}`, extra ?? ''].filter(Boolean).join(' ');
 
 	if (pagesQuery.isPending) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<Spinner />
 			</div>
 		);
 	}
 	if (pagesQuery.isError) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<EmptyState
 					icon={TriangleAlert}
 					title={t('reader.loadFailed')}
@@ -723,7 +1175,7 @@ function ReaderCore({
 	}
 	if (!pages || pages.length === 0) {
 		return (
-			<div className="reader reader--msg">
+			<div className={rootCls('reader--msg')}>
 				<EmptyState
 					icon={BookOpen}
 					title={t('reader.noPages')}
@@ -733,13 +1185,15 @@ function ReaderCore({
 		);
 	}
 
-	const curDimensions = pageDimensions(curPage);
-
 	return (
-		<div className="reader">
+		<div className={rootCls()} ref={rootRef}>
 			{mode === 'paged' ? (
 				<div
 					className="reader__paged"
+					data-tz={tapZones}
+					data-scale={scale}
+					data-stretch={stretch}
+					ref={pagedRef}
 					style={{ touchAction }}
 					onClick={onPagedContainerClick}
 					onPointerDown={pinchPointerDown}
@@ -762,46 +1216,112 @@ function ReaderCore({
 									col={col}
 									innerRef={textColsRef}
 								/>
-							) : isUnsupported(curPage) ? (
-								<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
+							) : splitActive ? (
+								<div
+									className="reader__split"
+									style={
+										{
+											aspectRatio: `${splitActive.width / 2} / ${splitActive.height}`,
+											'--split-ratio': `${(splitActive.width / 2) / splitActive.height}`,
+											'--split-natural-w': `${splitActive.width / 2}px`
+										} as CSSProperties
+									}
+								>
+									{/* The half renders the image at twice the box width, so the
+									    downsample request doubles to stay sharp */}
+									<img
+										key={curPage.index}
+										className="reader__img"
+										src={pageUrl(chapterId, curPage.index, imgWidth * 2, curPage.cacheRevision)}
+										alt={t('reader.pageAlt', { page: idx + 1 })}
+										style={{ objectPosition: `${splitSides(dir)[half]} center` }}
+										draggable={false}
+										onLoad={(e) =>
+											reportDims(idx, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+										}
+									/>
+								</div>
 							) : (
-								<img
-									className="reader__img"
-									src={pageUrl(chapterId, curPage.index, imgWidth, curPage.cacheRevision)}
-									alt={t('reader.pageAlt', { page: idx + 1 })}
-									width={curDimensions?.width}
-									height={curDimensions?.height}
-									draggable={false}
-								/>
+								// Slots are in reading order; the flex row's direction puts the first
+								// slot on the leading side (right under rtl)
+								<div
+									className="reader__spread"
+									style={{ direction: dir }}
+									data-slots={(curSpread ?? [idx]).length}
+								>
+									{(curSpread ?? [idx]).map((slot, si) => {
+										if (slot === null || !pages?.[slot]) {
+											return <div key={`blank-${si}`} className="reader__blank" />;
+										}
+										const p = pages[slot];
+										const slotText = pageText(p);
+										const dims = dimsOf(slot);
+										if (slotText !== null) {
+											return (
+												<div
+													key={p.index}
+													className="reader-text reader__spread-text"
+													style={textStyle}
+													dangerouslySetInnerHTML={{ __html: md(slotText) }}
+												/>
+											);
+										}
+										if (isUnsupported(p)) {
+											return (
+												<div key={p.index} className="reader__unsupported">
+													{t('reader.unsupportedPage')}
+												</div>
+											);
+										}
+										return (
+											<img
+												key={p.index}
+												className="reader__img"
+												src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
+												alt={t('reader.pageAlt', { page: slot + 1 })}
+												width={dims?.width}
+												height={dims?.height}
+												draggable={false}
+												onLoad={(e) =>
+													reportDims(slot, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)
+												}
+											/>
+										);
+									})}
+								</div>
 							))}
 					</div>
-					<button
-						type="button"
-						className="reader__zone reader__zone--left"
-						aria-label={t(zoneMovesForward(dir, 'left') ? 'reader.nextPage' : 'reader.prevPage')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('left');
-						}}
-					/>
-					<button
-						type="button"
-						className="reader__zone reader__zone--right"
-						aria-label={t(zoneMovesForward(dir, 'right') ? 'reader.nextPage' : 'reader.prevPage')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('right');
-						}}
-					/>
-					<button
-						type="button"
-						className="reader__zone reader__zone--mid"
-						aria-label={t('reader.toggleToolbar')}
-						onClick={(e) => {
-							e.stopPropagation();
-							onPagedClick('mid');
-						}}
-					/>
+					{tapZones !== 'off' && (
+						<>
+							<button
+								type="button"
+								className="reader__zone reader__zone--left"
+								aria-label={t(zoneAction(dir, tapZones, 'left') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('left');
+								}}
+							/>
+							<button
+								type="button"
+								className="reader__zone reader__zone--right"
+								aria-label={t(zoneAction(dir, tapZones, 'right') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('right');
+								}}
+							/>
+							<button
+								type="button"
+								className="reader__zone reader__zone--mid"
+								aria-label={t('reader.toggleToolbar')}
+								onClick={(e) => {
+									e.stopPropagation();
+									onPagedZoneClick('mid');
+								}}
+							/>
+						</>
+					)}
 				</div>
 			) : (
 				<div
@@ -822,10 +1342,10 @@ function ReaderCore({
 							className={mode === 'webtoon' ? 'reader__cont reader__cont--webtoon' : 'reader__cont'}
 							ref={contRef}
 						>
-							{pages.map((p) => {
+							{pages.map((p, arrayIndex) => {
 								const text = pageText(p);
 								const unsupported = isUnsupported(p);
-								const dimensions = text === null && !unsupported ? pageDimensions(p) : null;
+								const dimensions = text === null && !unsupported ? dimsOf(arrayIndex) : null;
 								return (
 									<div
 										className="reader__pg"
@@ -839,12 +1359,15 @@ function ReaderCore({
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
 											<img
-												src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
+											src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
 												width={dimensions?.width}
 												height={dimensions?.height}
 												loading="lazy"
-												onLoad={() => contentResizeRef.current()}
+												onLoad={(e) => {
+													contentResizeRef.current();
+													reportDims(arrayIndex, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
+												}}
 												draggable={false}
 											/>
 										)}
@@ -887,6 +1410,15 @@ function ReaderCore({
 						<List size={17} />
 					</IconButton>
 				)}
+				{fullscreenEnabled && (
+					<IconButton
+						label={isFullscreen ? t('reader.exitFullscreen') : t('reader.enterFullscreen')}
+						className={isFullscreen ? 'reader__icon--on' : undefined}
+						onClick={toggleFullscreen}
+					>
+						{isFullscreen ? <Minimize size={17} /> : <Maximize size={17} />}
+					</IconButton>
+				)}
 				<IconButton
 					label={t('reader.settings')}
 					className={settingsOpen ? 'reader__icon--on' : undefined}
@@ -901,6 +1433,18 @@ function ReaderCore({
 					mode={mode}
 					dir={dir}
 					onDirChange={setDir}
+					layout={layout}
+					onLayoutChange={setLayout}
+					tapZones={tapZones}
+					onTapZonesChange={setTapZones}
+					bg={bg}
+					onBgChange={setBackground}
+					scale={scale}
+					onScaleChange={setScale}
+					split={split}
+					onSplitChange={setSplit}
+					stretch={stretch}
+					onStretchChange={setStretch}
 					currentPage={curPage}
 					typography={typography}
 					onTypographyChange={updateTypography}

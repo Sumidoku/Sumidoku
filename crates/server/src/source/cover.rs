@@ -7,7 +7,7 @@ use axum::Json;
 use axum::Extension;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -16,6 +16,10 @@ use std::sync::Arc;
 
 const DEFAULT_MIME: &str = "image/jpeg";
 const COVER_MAX_AGE: u64 = 86400;
+/// A `?v=` cover URL changes whenever the manga's cover URL does, so the browser may keep it far longer
+const VERSIONED_COVER_MAX_AGE: u64 = 30 * 86400;
+/// Proxied source images are addressed by their own URL, which a source changes when the image changes
+const SOURCE_IMAGE_MAX_AGE: u64 = 7 * 86400;
 
 /// Local-source covers are user-owned files at original resolution (a cover.* sidecar or a chapter's first
 /// page), far larger than any display slot; cap the longest edge — the cached artifact is the downscaled JPEG
@@ -28,6 +32,13 @@ pub struct ImageQuery {
 	pub url: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CoverQuery {
+	pub refresh: Option<String>,
+	/// Cache-busting version the web UI appends (the manga's cover URL); the server only reads its presence
+	pub v: Option<String>,
+}
+
 /// A source image host's hotlink protection (Referer etc.) can only be satisfied by the server per the source's
 /// declaration, so a direct <img> always gets 403; this takes the same fetch_cover_image as the details-page cover:
 /// a source-declared cover processor returns processed bytes (an encrypted image host is otherwise ciphertext the
@@ -36,6 +47,7 @@ pub async fn get_source_image(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
 	Query(query): Query<ImageQuery>,
+	headers: HeaderMap,
 ) -> ApiResult<Response> {
 	let parsed = reqwest::Url::parse(&query.url).map_err(|_| ApiError::bad_request("invalid image url"))?;
 	if !matches!(parsed.scheme(), "http" | "https") {
@@ -43,23 +55,26 @@ pub async fn get_source_image(
 	}
 	let (bytes, mime) = fetch_cover_image(&state, id, &query.url).await?;
 	let mime = mime.unwrap_or_else(|| DEFAULT_MIME.into());
-	Ok(bytes_response(bytes, &mime, COVER_MAX_AGE))
+	Ok(validated_response(&headers, bytes, &mime, SOURCE_IMAGE_MAX_AGE))
 }
 
 pub async fn get_cover(
 	State(state): State<Arc<AppState>>,
 	Path(id): Path<i64>,
-	Query(query): Query<RefreshQuery>,
+	Query(query): Query<CoverQuery>,
+	headers: HeaderMap,
 ) -> ApiResult<Response> {
 	let manga = manga_row(&state.pool, id).await?;
 	let is_local = crate::source::source_is_local(&state.pool, manga.source_id).await?;
+	// A local cover can change on disk without its cover field changing, so its version marker proves nothing
+	let max_age = if query.v.is_some() && !is_local { VERSIONED_COVER_MAX_AGE } else { COVER_MAX_AGE };
 	let cache_variant = is_local.then_some(LOCAL_COVER_CACHE_VARIANT);
 	let covers_dir = state.config.covers_dir.clone();
 	let cache_path = covers_dir.join(id.to_string());
-	if !wants_refresh(&query)
+	if !wants_refresh(&RefreshQuery { refresh: query.refresh.clone() })
 		&& let Some((bytes, mime)) = read_fresh_cache(&cache_path, manga.last_fetched_at, cache_variant).await
 	{
-		return Ok(bytes_response(bytes, &mime, COVER_MAX_AGE));
+		return Ok(validated_response(&headers, bytes, &mime, max_age));
 	}
 	let (bytes, mime) = if is_local {
 		let (bytes, mime) = crate::internal::local::resolve_cover(
@@ -90,10 +105,41 @@ pub async fn get_cover(
 		(bytes, mime.unwrap_or_else(|| DEFAULT_MIME.into()))
 	};
 	match write_cache(&covers_dir, id, &bytes, &mime, cache_variant).await {
-		Ok(()) => enforce_cache_limit(&covers_dir, state.config.cover_cache_max),
+		Ok(()) => enforce_cache_limit(&state.pool, &covers_dir, state.config.cover_cache_max).await,
 		Err(e) => tracing::warn!(manga_id = id, "cover cache write failed: {e}"),
 	}
-	Ok(bytes_response(bytes, &mime, COVER_MAX_AGE))
+	Ok(validated_response(&headers, bytes, &mime, max_age))
+}
+
+/// Strong validator over the served bytes, so an expired browser entry revalidates with a 304 instead of a
+/// full download; a cover served from a fresh fetch matches as long as the source returned the same bytes
+fn etag(bytes: &[u8]) -> String {
+	use sha2::Digest;
+	let digest = sha2::Sha256::digest(bytes);
+	let hex: String = digest[..16].iter().map(|b| format!("{b:02x}")).collect();
+	format!("\"{hex}\"")
+}
+
+fn if_none_match_hits(headers: &HeaderMap, tag: &str) -> bool {
+	headers.get_all(header::IF_NONE_MATCH).iter().filter_map(|value| value.to_str().ok()).flat_map(|value| value.split(',')).any(|candidate| {
+		let candidate = candidate.trim();
+		candidate == "*" || candidate.strip_prefix("W/").unwrap_or(candidate) == tag
+	})
+}
+
+fn validated_response(headers: &HeaderMap, bytes: Vec<u8>, mime: &str, max_age: u64) -> Response {
+	let tag = etag(&bytes);
+	if if_none_match_hits(headers, &tag) {
+		return Response::builder()
+			.status(StatusCode::NOT_MODIFIED)
+			.header(header::ETAG, &tag)
+			.header(header::CACHE_CONTROL, format!("private, max-age={max_age}"))
+			.body(Body::empty())
+			.expect("not-modified response");
+	}
+	let mut response = bytes_response(bytes, mime, max_age);
+	response.headers_mut().insert(header::ETAG, tag.parse().expect("hex etag is a valid header value"));
+	response
 }
 
 pub(crate) fn bytes_response(bytes: Vec<u8>, mime: &str, max_age: u64) -> Response {
@@ -193,6 +239,9 @@ async fn read_fresh_cache(
 		}
 	}
 	let bytes = tokio::fs::read(cache_path).await.ok()?;
+	// The eviction order is mtime, so a hit moves the cover to the young end; the new mtime is still
+	// at or after last_fetched_at, so freshness is unchanged
+	touch(cache_path).await;
 	let mime = tokio::fs::read_to_string(sidecar_path(cache_path))
 		.await
 		.ok()
@@ -224,34 +273,141 @@ async fn write_cache(
 	Ok(())
 }
 
-/// LRU: when the cache file count exceeds the cap, delete oldest by mtime first (sidecar included)
-fn enforce_cache_limit(covers_dir: &FsPath, max: usize) {
-	let mut entries: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+/// LRU over mtime (a cache hit touches it): when the cache file count exceeds the cap, delete the least recently
+/// used first (sidecars included). Library covers are what the library page shows on every visit, so covers of
+/// manga outside the library go first and a library cover is evicted only when the library alone exceeds the cap
+async fn enforce_cache_limit(pool: &sqlx::SqlitePool, covers_dir: &FsPath, max: usize) {
+	let library: std::collections::HashSet<i64> = match sqlx::query_scalar::<_, i64>("SELECT id FROM manga WHERE in_library = 1")
+		.fetch_all(pool)
+		.await
+	{
+		Ok(ids) => ids.into_iter().collect(),
+		Err(e) => {
+			tracing::warn!("cover cache eviction skipped, library ids unreadable: {e}");
+			return;
+		}
+	};
+	let covers_dir = covers_dir.to_path_buf();
+	let _ = tokio::task::spawn_blocking(move || evict_over_cap(&covers_dir, max, &library)).await;
+}
+
+fn evict_over_cap(covers_dir: &FsPath, max: usize, library: &std::collections::HashSet<i64>) {
+	let mut entries: Vec<(PathBuf, bool, std::time::SystemTime)> = Vec::new();
 	let Ok(read_dir) = std::fs::read_dir(covers_dir) else {
 		return;
 	};
 	for entry in read_dir.flatten() {
 		let name = entry.file_name();
 		// Only count the cover bodies (file name is a bare manga id); sidecars and tmp files are handled along with their body
-		if name.to_str().and_then(|n| n.parse::<i64>().ok()).is_none() {
+		let Some(id) = name.to_str().and_then(|n| n.parse::<i64>().ok()) else {
 			continue;
-		}
+		};
 		let Ok(metadata) = entry.metadata() else {
 			continue;
 		};
 		let Ok(mtime) = metadata.modified() else {
 			continue;
 		};
-		entries.push((entry.path(), mtime));
+		entries.push((entry.path(), library.contains(&id), mtime));
 	}
 	if entries.len() <= max {
 		return;
 	}
-	entries.sort_by_key(|(_, mtime)| *mtime);
+	// false sorts first: non-library covers are evicted before any library cover, each group oldest first
+	entries.sort_by_key(|(_, in_library, mtime)| (*in_library, *mtime));
 	let excess = entries.len() - max;
-	for (path, _) in entries.into_iter().take(excess) {
+	for (path, _, _) in entries.into_iter().take(excess) {
 		let _ = std::fs::remove_file(sidecar_path(&path));
 		let _ = std::fs::remove_file(variant_path(&path));
 		let _ = std::fs::remove_file(path);
+	}
+}
+
+/// Best effort: a cover that cannot be touched only loses its recency, never its bytes
+async fn touch(path: &FsPath) {
+	let path = path.to_path_buf();
+	let _ = tokio::task::spawn_blocking(move || {
+		std::fs::File::options().write(true).open(&path).and_then(|file| file.set_modified(std::time::SystemTime::now()))
+	})
+	.await;
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::collections::HashSet;
+	use std::time::{Duration, UNIX_EPOCH};
+
+	fn seed(dir: &FsPath, id: i64, age_secs: u64) -> PathBuf {
+		let path = dir.join(id.to_string());
+		std::fs::write(&path, b"img").unwrap();
+		std::fs::write(sidecar_path(&path), "image/jpeg").unwrap();
+		let at = filetime::FileTime::from_system_time(UNIX_EPOCH + Duration::from_secs(1_700_000_000 - age_secs));
+		filetime::set_file_mtime(&path, at).unwrap();
+		path
+	}
+
+	fn cached(dir: &FsPath) -> Vec<i64> {
+		let mut ids: Vec<i64> =
+			std::fs::read_dir(dir).unwrap().flatten().filter_map(|e| e.file_name().to_str().and_then(|n| n.parse().ok())).collect();
+		ids.sort();
+		ids
+	}
+
+	#[test]
+	fn eviction_drops_non_library_covers_before_older_library_ones() {
+		let tmp = tempfile::tempdir().unwrap();
+		// 1 and 2 are library covers and the oldest of all; 3..=5 are browsed-only
+		for (id, age) in [(1, 500), (2, 400), (3, 300), (4, 200), (5, 100)] {
+			seed(tmp.path(), id, age);
+		}
+		let library = HashSet::from([1, 2]);
+		evict_over_cap(tmp.path(), 3, &library);
+		assert_eq!(cached(tmp.path()), [1, 2, 5]);
+		assert!(!sidecar_path(&tmp.path().join("3")).exists(), "sidecars leave with their body");
+
+		// a library larger than the cap still loses its least recently used covers, after every browsed one
+		evict_over_cap(tmp.path(), 1, &library);
+		assert_eq!(cached(tmp.path()), [2]);
+	}
+
+	#[tokio::test]
+	async fn a_cache_hit_refreshes_recency() {
+		let tmp = tempfile::tempdir().unwrap();
+		let old = seed(tmp.path(), 1, 500);
+		seed(tmp.path(), 2, 100);
+		assert!(read_fresh_cache(&old, Some(1_000), None).await.is_some());
+		evict_over_cap(tmp.path(), 1, &HashSet::new());
+		assert_eq!(cached(tmp.path()), [1], "the cover just served must outlive the untouched one");
+	}
+
+	#[test]
+	fn if_none_match_accepts_lists_weak_tags_and_wildcard() {
+		let tag = etag(b"img");
+		let headers = |value: &str| {
+			let mut map = HeaderMap::new();
+			map.insert(header::IF_NONE_MATCH, value.parse().unwrap());
+			map
+		};
+		assert!(if_none_match_hits(&headers(&tag), &tag));
+		assert!(if_none_match_hits(&headers(&format!("\"other\", W/{tag}")), &tag));
+		assert!(if_none_match_hits(&headers("*"), &tag));
+		assert!(!if_none_match_hits(&headers("\"other\""), &tag));
+		assert!(!if_none_match_hits(&HeaderMap::new(), &tag));
+		assert_ne!(etag(b"img"), etag(b"img2"));
+	}
+
+	#[test]
+	fn not_modified_carries_validator_and_no_body() {
+		let tag = etag(b"img");
+		let mut headers = HeaderMap::new();
+		headers.insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+		let response = validated_response(&headers, b"img".to_vec(), "image/jpeg", 60);
+		assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+		assert_eq!(response.headers()[header::ETAG], tag.as_str());
+		assert_eq!(response.headers()[header::CACHE_CONTROL], "private, max-age=60");
+		let fresh = validated_response(&HeaderMap::new(), b"img".to_vec(), "image/jpeg", 60);
+		assert_eq!(fresh.status(), StatusCode::OK);
+		assert_eq!(fresh.headers()[header::ETAG], tag.as_str());
 	}
 }

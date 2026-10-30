@@ -1191,6 +1191,10 @@ async fn nested_comic_info_and_cover_resolve() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/jpeg");
 	assert_eq!(bytes, b"sa-sidecar-cover");
+	// a local cover file can change under the same cover value, so a version marker does not extend its lifetime
+	let (status, headers, _) = request_full(&t.app, "GET", &format!("/api/v1/manga/{a_id}/cover?v=x"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(headers["cache-control"], "private, max-age=86400");
 
 	// without a sidecar the fallback chain walks the nested chapter list: last chapter's first page
 	let c_id = register_local(&t.app, "Pub/Series C").await;

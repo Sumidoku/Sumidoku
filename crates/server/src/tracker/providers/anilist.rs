@@ -267,6 +267,7 @@ impl AniListTracker {
 			description: media.get("description").and_then(Value::as_str).map(str::to_string),
 			tracked: media.get("mediaListEntry").is_some_and(|entry| !entry.is_null()),
 			media_type,
+			series: false,
 			url: Some(format!("https://anilist.co/manga/{id}")),
 		})
 	}

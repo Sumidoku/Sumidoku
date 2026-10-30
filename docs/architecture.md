@@ -154,8 +154,10 @@ no alias is derived from migration text.
   binding-only edits do not issue a remote update. Each provider
   (`tracker/providers/*`) implements one `TrackerService` trait
   (login check, search, state read, update) over its HTTP contract: AniList
-  GraphQL with a per-user score-format cache, MAL v2, Bangumi v0 and
-  MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,
+  GraphQL with a per-user score-format cache, MAL v2, Bangumi Next `/p1`
+  (search and subject detail embed the caller's collection, so a search is
+  one request; status/rating go through `PUT` and progress through `PATCH`)
+  and MangaBaka v1 REST; on 401 every provider refreshes via `refresh_now`,
   replays the identical request once, and only then conditionally logs out —
   the delete is guarded on the access token that actually failed
   (`oauth.rs:logout_if_current`), so a racing re-login never loses its fresh
@@ -1275,17 +1277,22 @@ no alias is derived from migration text.
 - Page image dimensions (`source/page_dimensions.rs`, migration
   `0015_page_dimensions.sql`): the stored `PageRow` projection carries
   nullable `width`/`height` and an internal `dimensions_checked` marker. Dimensions
-  are measured only during downloads (`download/mod.rs:fetch_page`): after the
-  page file is written, the downloader reads only the first 64 KiB head and runs
-  it through image 0.25's `ImageReader::into_dimensions` (decoder metadata, not
-  full pixel decoding). If the head is inconclusive and the file is larger than
-  the window, it falls back to a full read; a read failure leaves the row
-  retryable and invalid image bytes become checked with nulls. Page-list loads
-  (`load_pages`) do not fetch or measure images just for metadata. Page-row
-  rewrites reset all three fields so changed images cannot inherit stale
-  dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing content/index
-  shape and adds top-level `width`/`height` only when both are known; text and
-  unknown pages omit the pair.
+  are measured on two paths, both through image 0.25's
+  `ImageReader::into_dimensions` (decoder metadata, not full pixel decoding).
+  During downloads (`download/mod.rs:fetch_page`), after the page file is
+  written, the downloader reads only the first 64 KiB head; if the head is
+  inconclusive and the file is larger than the window, it falls back to a full
+  read, a read failure leaves the row retryable, and invalid image bytes become
+  checked with nulls. During reading (`api/page.rs:get_page`), any page served
+  from bytes already in memory is measured and backfilled when its row is still
+  unchecked (`persist_measured` adds a `dimensions_checked = 0` guard, so a
+  read-path probe never overwrites the download path's authoritative values;
+  undecodable bytes stay unchecked and retryable rather than pinned as nulls).
+  Page-list loads (`load_pages`) do not fetch or measure images just for
+  metadata. Page-row rewrites reset all three fields so changed images cannot
+  inherit stale dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing
+  content/index shape and adds top-level `width`/`height` only when both are
+  known; text and unknown pages omit the pair.
 - Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
   `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
   variant of any image page kind (blob, zip entry or fetched URL), the
@@ -1333,14 +1340,20 @@ no alias is derived from migration text.
   only http/https URLs are accepted and the response goes through
   `fetch_cover_image` (so a declared cover processor runs) without a disk
   cache, so a hotlink-protected host sees the source's `get_image_request`
-  headers exactly as on the detail and reader paths.
+  headers exactly as on the detail and reader paths. The response is
+  browser-cacheable for 7 days (the URL addresses the image) and carries an
+  ETag, so an expired entry revalidates with a 304.
 - Manga covers (`source/cover.rs`): `GET /api/v1/manga/{id}/cover` serves a
   disk cache (`covers_dir/<id>` plus an `<id>.content-type` sidecar) and
   refetches `manga.cover_url` through `fetch_cover_image` only when the
   file is missing or `last_fetched_at` is newer than its mtime. Local covers
   are downsampled to fit a 600px longest edge; their cache hits also require
   an `<id>.variant` sidecar matching the current transform, so unversioned
-  original-size artifacts cannot bypass the cap.
+  original-size artifacts cannot bypass the cap. The cache is an LRU over
+  mtime: a hit touches the file (the new mtime stays at or after
+  `last_fetched_at`, so freshness is unchanged), and past
+  `SUMIDOKU_COVER_CACHE_MAX` covers of manga outside the library are evicted
+  before any library cover, least recently served first.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
@@ -1348,9 +1361,12 @@ no alias is derived from migration text.
   `manga.cover_url` and deletes the cache files: the freshness key is
   `last_fetched_at`, which a user pick must not move, so without the
   delete the stale bytes keep serving and the pick never takes effect.
-  Because the cover response is `max-age=86400` cacheable, the web UI
-  versions cover `<img>` URLs with the manga's `cover` string
-  (`webui/src/api/client.ts:coverUrl`), and the detail page's picker
+  The web UI versions cover `<img>` URLs with the manga's `cover` string
+  (`webui/src/api/client.ts:coverUrl`), so a changed cover is a new URL: a
+  `?v=` request is cacheable for 30 days, an unversioned one or any local
+  cover (whose file can change under the same `cover` value) for 1 day.
+  Every cover response carries a strong ETag over the served bytes and
+  answers a matching `If-None-Match` with 304. The detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
 - Library updates (`update/mod.rs`): serial per source, at most 3 sources at
@@ -1903,6 +1919,22 @@ invalidates that chapter's page query and cache-usage stats, while an SSE
 snapshot or reconnect invalidates all chapter page queries and cache stats so
 resumed image/preload URLs receive current `cacheRevision`. Progress events do
 not refetch page queries.
+The reader uses positive known page dimensions (populated during downloads and by the
+read-path backfill in `get_page`, so a remote chapter reports dimensions from its
+second open onward) as
+image intrinsic dimensions and continuous/webtoon container aspect ratios,
+reserving space before lazy loads; text and unsupported pages get no forced
+ratio, and paged mode keeps its fixed viewport. Pages the server has not
+measured (remote chapters never downloaded) start without a ratio and get one
+from the image itself: the prefetch probe polls `naturalWidth` past the header
+parse (`reader/spreads.ts:measureWhenKnown`, capped at 600 frames and probing
+the current page too — the browser coalesces its duplicate request with the
+rendered image), so pairing and wide-page splitting settle before the image
+finishes loading, while the spread `<img>`, the continuous-mode `<img>` and the
+probe `onload` still report through `recordMeasured` as the fallback, which only
+fills gaps (server values win, unchanged values keep the map identity), so
+double-page spreads re-pair when a loaded image turns out landscape without
+moving the current page.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction
@@ -1917,7 +1949,63 @@ RightToLeft/LeftToRight set the direction, Webtoon selects webtoon mode and
 Vertical continuous mode. Reader toggles write per-manga overrides in
 `sumidoku.reader.dir.<id>` / `sumidoku.reader.mode.<id>` (cleared when they match
 the metadata), and the global settings are the fallback for manga whose viewer
-carries no corresponding preference.
+carries no corresponding preference. The paged mode also offers a page layout
+(`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
+pages into spreads in reading order, giving the cover and closing page a blank
+mate and always showing landscape pages solo. Spreads carry page indexes, so
+progress reporting and the page slider stay page-based while turning moves by
+spread; the layout persists in `sumidoku.reader.layout(.<id>)` with the same
+override-over-global resolution but no metadata counterpart. Keyboard shortcuts
+are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
+pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
+a screen in the continuous modes, Home/End jump to the ends, m toggles the
+toolbar, f toggles fullscreen, and keys aimed at form controls never reach the
+reader. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
+deltas accumulate past a threshold into one turn per gesture, locked until
+200ms of wheel quiet so trackpad inertia cannot flip multiple pages. The paged
+tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
+`sumidoku.reader.tapzones(.<id>)`, paged mode only): `lr`/`rl` keep the default
+28/44/28 geometry and only swap which side moves forward, `edge` shrinks the
+turn zones to 15%, `kindle` makes the menu a full-width top strip above a
+75/25 prev/next split, and `off` removes the zone buttons so every tap falls
+back to toggling the toolbar. The hit-test helper and the CSS geometry are the
+single source of truth and must change together. The reader canvas background
+(`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
+`dark` is the classless default, `gray` matches the app chrome, and `light`
+also lifts the dim page-counter and unsupported-page text that assumes a dark
+canvas. Fullscreen uses the Fullscreen API on the reader root so the fixed
+toolbar and settings card move into the fullscreen subtree; the toggle hides
+when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
+reader's own Esc chain.
+Paged page scale (`sumidoku.reader.scale` + `.scale.<id>`, after Suwayomi's
+ReaderPageScaleMode) is a `data-scale` variant on the paged container: `screen`
+contain-fits (the default), `width` fills the width, `widthShrink` only shrinks
+to the width without upscaling, `height` fills the height, and `original`
+shows natural pixels. The scrollable modes (width/widthShrink/original) make
+the zoom wrapper content-sized (`:has(.reader__spread)`, so text pages keep
+their fixed-height columns) and trade the fixed viewport for native scrolling;
+the wheel page-turner leaves the wheel to them, and pinch zoom resets on scale
+changes like any layout change. A stretch flag (`sumidoku.reader.stretch` +
+`.stretch.<id>`, `1`/`0`) upscales pages smaller than the viewport under the
+screen scale via a full-size object-fit: contain box. The c hotkey cycles the
+scale modes (`reader/readerPrefs.ts:SCALE_CYCLE`).
+
+Wide-page splitting (`sumidoku.reader.split` + `.split.<id>`, `1`/`0`, paged
+mode + single layout only, after Tachiyomi/Mihon's "split double pages") turns
+a landscape page into two half-pages in reading order. The split is pure client
+navigation: the half-box carries the page's (w/2):h aspect ratio and the same
+image renders with `object-fit: cover` + `object-position` to crop each side
+(`splitSides` orders halves right-to-left under rtl), so the slider, page
+numbers, saved progress and restore all stay in real page indexes
+(`reader/splitWide.ts:turnSplit` walks half-steps inside landscape pages).
+Mark-read deliberately waits for the LAST half of a split final page
+(`splitWide.ts:splitEndReached`), otherwise the first half would already fire
+tracker sync and read-chapter download cleanup. Splitting shares the spread
+builder's wide-page rule (strictly wider than tall) and the same measured-dims
+pipeline, so unknown-dimension pages render whole until `recordMeasured` proves
+them landscape and the halves appear without moving the current page; the
+half-page doubles its `?width=` downsample request because it shows the image
+at twice the box width.
 
 ## Known gaps
 

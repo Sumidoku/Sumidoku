@@ -119,6 +119,9 @@ pub struct TrackSearchItem {
 	pub tracked: bool,
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub media_type: Option<TrackMediaType>,
+	/// The entry is a whole series rather than a single volume (Bangumi only; false elsewhere)
+	#[serde(default)]
+	pub series: bool,
 	pub url: Option<String>,
 }
 
@@ -472,10 +475,12 @@ mod tests {
 			description: None,
 			tracked: true,
 			media_type: Some(TrackMediaType::Novel),
+			series: true,
 			url: Some("https://tracker.example/42".into()),
 		};
 		let wire = serde_json::to_value(&item).unwrap();
 		assert_eq!(wire["mediaType"], "novel");
+		assert_eq!(wire["series"], true);
 		assert!(wire.get("coverUrl").is_some_and(|v| v.is_null()));
 		assert_eq!(wire["id"], "42");
 		let mut without_type = serde_json::to_value(TrackSearchItem { media_type: None, ..item }).unwrap();

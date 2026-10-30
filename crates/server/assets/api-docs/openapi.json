@@ -1131,9 +1131,18 @@
         ],
         "operationId": "getSourceImage",
         "summary": "Fetch an image through source-specific request processing",
+        "description": "Cacheable for 7 days and carries a strong ETag; a matching If-None-Match answers 304.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
+          }
+        ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/Image"
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
@@ -1717,14 +1726,29 @@
         ],
         "operationId": "getMangaCover",
         "summary": "Get a manga cover image",
+        "description": "Carries a strong ETag; a matching If-None-Match answers 304. A `v` request from a non-local source is cacheable for 30 days, everything else for 1 day.",
         "parameters": [
           {
             "$ref": "#/components/parameters/Refresh"
+          },
+          {
+            "name": "v",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Cache-busting version (the web UI passes the manga's cover URL); only its presence is read."
+          },
+          {
+            "$ref": "#/components/parameters/IfNoneMatch"
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/Image"
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -5170,6 +5194,14 @@
           "default": 1
         }
       },
+      "IfNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "schema": {
+          "type": "string"
+        },
+        "description": "ETag from an earlier response; a match answers 304 without a body."
+      },
       "Refresh": {
         "name": "refresh",
         "in": "query",
@@ -5300,6 +5332,21 @@
           "application/json": {
             "schema": {
               "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotModified": {
+        "description": "The cached copy named by If-None-Match is still current; no body",
+        "headers": {
+          "ETag": {
+            "schema": {
+              "type": "string"
+            }
+          },
+          "Cache-Control": {
+            "schema": {
+              "type": "string"
             }
           }
         }
@@ -5615,6 +5662,10 @@
               "manga",
               "novel"
             ]
+          },
+          "series": {
+            "type": "boolean",
+            "description": "The entry is a whole series rather than a single volume; only Bangumi sets it"
           },
           "url": {
             "type": "string",

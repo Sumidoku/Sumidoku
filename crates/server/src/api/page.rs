@@ -1,7 +1,8 @@
-use crate::source::cover::bytes_response;
 use crate::error::{ApiError, ApiResult};
 use crate::model::ChapterRow;
+use crate::source::cover::bytes_response;
 use crate::source::downsample::{VariantHit, bucket_width, downsample_png, read_variant};
+use crate::source::page_dimensions::{PageDimensionUpdate, image_dimensions, persist_measured};
 use crate::source::{chapter_row, fetch_page_image, http_get, manga_row, page_image_blob};
 use crate::state::AppState;
 use aidoku::PageContext;
@@ -67,6 +68,18 @@ pub async fn get_page(
 
 	let manga = manga_row(&state.pool, chapter.manga_id).await?;
 	let (bytes, mime) = page_image_bytes(&state, &chapter, index, &content).await?;
+	// The read path doubles as a dimension probe for chapters never downloaded: the bytes are
+	// already in memory and image_dimensions reads only the header, so rows still unchecked get
+	// measured and backfilled here. Only successful parses persist — undecodable bytes stay
+	// unchecked and retryable, and download-measured rows are never overwritten.
+	if !page.dimensions_checked
+		&& let Some(dims) = image_dimensions(&bytes)
+	{
+		let update = PageDimensionUpdate::new(page, Some(dims));
+		if let Err(e) = persist_measured(&state.pool, id, &[update]).await {
+			tracing::warn!(chapter_id = id, index, "page dimension backfill failed: {e:?}");
+		}
+	}
 	let identity = crate::cache::source_variant_identity(manga.source_id, &content, &bytes)?;
 	let mut bucket = query.width.filter(|w| *w > 0).map(bucket_width);
 	if let Some(b) = bucket {
@@ -319,6 +332,95 @@ mod tests {
 		let headers = resp.headers().clone();
 		let body = to_bytes(resp.into_body(), 1024 * 1024).await.expect("body");
 		(status, headers, body.to_vec())
+	}
+
+	fn test_png(width: u32, height: u32) -> Vec<u8> {
+		let image = image::RgbaImage::from_pixel(width, height, image::Rgba([10, 20, 30, 255]));
+		let mut out = Vec::new();
+		image::DynamicImage::ImageRgba8(image)
+			.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+			.expect("encode png");
+		out
+	}
+
+	async fn insert_blob_page(state: &AppState, chapter_id: i64, png: &[u8], checked: bool) {
+		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
+		std::fs::create_dir_all(&blob_dir).expect("blob dir");
+		std::fs::write(blob_dir.join("0.png"), png).expect("blob");
+		sqlx::query("INSERT INTO page (chapter_id, idx, content, width, height, dimensions_checked) VALUES (?, 0, ?, ?, ?, ?)")
+			.bind(chapter_id)
+			.bind(serde_json::to_string(&json!({ "content": { "Image": "0.png" } })).expect("encode"))
+			.bind(if checked { Some(99) } else { None })
+			.bind(if checked { Some(99) } else { None })
+			.bind(checked)
+			.execute(&state.pool)
+			.await
+			.expect("page row");
+	}
+
+	async fn page_dims(state: &AppState, chapter_id: i64) -> (Option<i64>, Option<i64>, i64) {
+		use sqlx::Row;
+		let row = sqlx::query("SELECT width, height, dimensions_checked FROM page WHERE chapter_id = ? AND idx = 0")
+			.bind(chapter_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("dimension row");
+		(
+			row.get::<Option<i64>, _>("width"),
+			row.get::<Option<i64>, _>("height"),
+			row.get::<i64, _>("dimensions_checked"),
+		)
+	}
+
+	#[tokio::test]
+	async fn get_page_backfills_dimensions_for_unchecked_rows() {
+		let (state, _manga_id, chapter_id, _tmp) = page_db().await;
+		insert_blob_page(&state, chapter_id, &test_png(37, 61), false).await;
+		let (status, _, body) = get_page_bytes(&state, chapter_id, 0).await;
+		assert_eq!(status, axum::http::StatusCode::OK);
+		assert!(!body.is_empty());
+		assert_eq!(page_dims(&state, chapter_id).await, (Some(37), Some(61), 1));
+	}
+
+	#[tokio::test]
+	async fn get_page_never_overwrites_download_measured_dimensions() {
+		let (state, _manga_id, chapter_id, _tmp) = page_db().await;
+		insert_blob_page(&state, chapter_id, &test_png(37, 61), true).await;
+		let (status, _, _) = get_page_bytes(&state, chapter_id, 0).await;
+		assert_eq!(status, axum::http::StatusCode::OK);
+		// The download path's values are authoritative: a read-path probe must not touch them
+		assert_eq!(page_dims(&state, chapter_id).await, (Some(99), Some(99), 1));
+	}
+
+	#[tokio::test]
+	async fn persist_measured_refuses_rows_checked_since_the_snapshot() {
+		let (state, _manga_id, chapter_id, _tmp) = page_db().await;
+		insert_blob_page(&state, chapter_id, &test_png(37, 61), true).await;
+		// Simulate the race: the handler read the row unchecked, the download measured it in
+		// between, then the handler's UPDATE lands. The SQL guard must make it a no-op.
+		let stale = crate::model::PageRow {
+			idx: 0,
+			content: serde_json::to_string(&json!({ "content": { "Image": "0.png" } })).expect("encode"),
+			width: None,
+			height: None,
+			dimensions_checked: false,
+		};
+		let update = PageDimensionUpdate::new(&stale, Some((37, 61)));
+		persist_measured(&state.pool, chapter_id, &[update])
+			.await
+			.expect("persist_measured");
+		assert_eq!(page_dims(&state, chapter_id).await, (Some(99), Some(99), 1));
+	}
+
+	#[tokio::test]
+	async fn get_page_leaves_undecodable_bytes_unchecked() {
+		let (state, _manga_id, chapter_id, _tmp) = page_db().await;
+		insert_blob_page(&state, chapter_id, b"BLOB-BYTES", false).await;
+		let (status, _, body) = get_page_bytes(&state, chapter_id, 0).await;
+		assert_eq!(status, axum::http::StatusCode::OK);
+		assert_eq!(body, b"BLOB-BYTES");
+		// Undecodable bytes stay retryable instead of being pinned as checked-with-nulls
+		assert_eq!(page_dims(&state, chapter_id).await, (None, None, 0));
 	}
 
 	#[tokio::test]
