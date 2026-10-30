@@ -1123,27 +1123,27 @@ pub async fn load_pages(
 	chapter_id: i64,
 	refresh: bool,
 ) -> ApiResult<Vec<PageRow>> {
-    let _lease = state.chapter_cache_gate.read().await;
-    let lock = state.chapter_cache_lock(chapter_id).await;
-    let _chapter_read = if refresh {
-        None
-    } else {
-        Some(lock.read().await)
-    };
-    let _chapter_write = if refresh {
-        Some(lock.write().await)
-    } else {
-        None
-    };
-    load_pages_under_lease(state, chapter_id, refresh).await
+	let _lease = state.chapter_cache_gate.read().await;
+	let lock = state.chapter_cache_lock(chapter_id).await;
+	let _chapter_read = if refresh {
+		None
+	} else {
+		Some(lock.read().await)
+	};
+	let _chapter_write = if refresh {
+		Some(lock.write().await)
+	} else {
+		None
+	};
+	load_pages_under_lease(state, chapter_id, refresh).await
 }
 
 /// Caller holds `chapter_cache_gate` for reading. Use from a request or whole-download operation
 /// that already owns the lease, avoiding a second read-lock acquisition behind a waiting clearer.
 pub async fn load_pages_under_lease(
-    state: &Arc<AppState>,
-    chapter_id: i64,
-    refresh: bool,
+	state: &Arc<AppState>,
+	chapter_id: i64,
+	refresh: bool,
 ) -> ApiResult<Vec<PageRow>> {
 	if !refresh {
 		let cached: Vec<PageRow> = sqlx::query_as(
@@ -1153,17 +1153,17 @@ pub async fn load_pages_under_lease(
 		.fetch_all(&state.pool)
 		.await?;
 		if !cached.is_empty() {
-            crate::cache::touch(&state.pool, chapter_id).await?;
-            return Ok(cached);
-        }
-    }
-    let build_lock = state.chapter_cache_build_lock(chapter_id).await;
-    let _build = build_lock.lock().await;
-    if !refresh {
-        let cached: Vec<PageRow> = sqlx::query_as("SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC")
+			crate::cache::touch(&state.pool, chapter_id).await?;
+			return Ok(cached);
+		}
+	}
+	let build_lock = state.chapter_cache_build_lock(chapter_id).await;
+	let _build = build_lock.lock().await;
+	if !refresh {
+		let cached: Vec<PageRow> = sqlx::query_as("SELECT idx, content, width, height, dimensions_checked FROM page WHERE chapter_id = ? ORDER BY idx ASC")
 			.bind(chapter_id).fetch_all(&state.pool).await?;
-        if !cached.is_empty() {
-            crate::cache::touch(&state.pool, chapter_id).await?;
+		if !cached.is_empty() {
+			crate::cache::touch(&state.pool, chapter_id).await?;
 			return Ok(cached);
 		}
 	}

@@ -46,27 +46,27 @@ pub async fn build_app(config: Config) -> Result<Router, Error> {
 	let (cookie_tx, cookie_rx) = tokio::sync::mpsc::unbounded_channel();
 	tokio::spawn(state::run_cookie_writer(pool.clone(), cookie_rx));
 	let state = state::AppState::new(pool, config, defaults_tx, cookie_tx);
-    std::fs::create_dir_all(state.config.page_blobs_dir())?;
-    std::fs::create_dir_all(state.config.config_dir.join("opds-cbz"))?;
-    cache::reconcile_all(
-        &state.pool,
-        &state.config.page_blobs_dir(),
-        &state.config.config_dir.join("opds-cbz"),
-    )
-    .await
-    .map_err(|error| Error::Local(error.message().to_string()))?;
-    {
-        let cache_state = state.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                interval.tick().await;
-                if let Err(error) = cache::enforce_limit(&cache_state).await {
-                    tracing::warn!("chapter cache sweep failed: {}", error.message());
-                }
-            }
-        });
-    }
+	std::fs::create_dir_all(state.config.page_blobs_dir())?;
+	std::fs::create_dir_all(state.config.config_dir.join("opds-cbz"))?;
+	cache::reconcile_all(
+		&state.pool,
+		&state.config.page_blobs_dir(),
+		&state.config.config_dir.join("opds-cbz"),
+	)
+	.await
+	.map_err(|error| Error::Local(error.message().to_string()))?;
+	{
+		let cache_state = state.clone();
+		tokio::spawn(async move {
+			let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+			loop {
+				interval.tick().await;
+				if let Err(error) = cache::enforce_limit(&cache_state).await {
+					tracing::warn!("chapter cache sweep failed: {}", error.message());
+				}
+			}
+		});
+	}
 	auth::init(&state).await?;
 	internal::local::ensure_default_instance(&state)
 		.await

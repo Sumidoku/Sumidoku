@@ -59,7 +59,7 @@ pub async fn publish_chapter(state: &std::sync::Arc<crate::state::AppState>, cha
 	.await?;
 	let bytes = pages.saturating_add(disk_bytes);
 	sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,accessed_at,revision) VALUES (?,?,?,?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes, accessed_at=excluded.accessed_at, revision=excluded.revision, last_error=NULL")
-        .bind(chapter_id).bind(bytes).bind(unix_now()).bind(revision).execute(&mut *tx).await?;
+		.bind(chapter_id).bind(bytes).bind(unix_now()).bind(revision).execute(&mut *tx).await?;
 	tx.commit().await?;
 	Ok(())
 }
@@ -671,7 +671,7 @@ async fn enforce_limit_with_budget(
 		return Ok(());
 	}
 	let rows: Vec<(i64, i64)> = sqlx::query_as("SELECT chapter_id, bytes FROM chapter_cache_state WHERE bytes > 0 AND accessed_at < ? ORDER BY accessed_at ASC, chapter_id ASC")
-        .bind(unix_now() - 300).fetch_all(&state.pool).await?;
+		.bind(unix_now() - 300).fetch_all(&state.pool).await?;
 	let mut projected = used;
 	for (id, _listed_bytes) in rows {
 		if projected <= max_bytes {

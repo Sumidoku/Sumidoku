@@ -85,12 +85,12 @@ pub struct AppState {
 	pub tasks: tokio::sync::OnceCell<Arc<crate::task::TaskManager>>,
 	pub tracker: tokio::sync::OnceCell<Arc<crate::tracker::TrackerServices>>,
 	pub tracker_tx: tokio::sync::OnceCell<crate::tracker::sync::TrackerSyncSender>,
-    /// Readers, materializers and packagers hold a read lease; cache clearing holds the write lease.
-    pub chapter_cache_gate: RwLock<()>,
-    /// Per-chapter operations serialize refresh, image reads and whole-chapter packaging without
-    /// blocking unrelated chapters behind one slow source.
-    chapter_cache_locks: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<RwLock<()>>>>,
-    chapter_cache_builds: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+	/// Readers, materializers and packagers hold a read lease; cache clearing holds the write lease.
+	pub chapter_cache_gate: RwLock<()>,
+	/// Per-chapter operations serialize refresh, image reads and whole-chapter packaging without
+	/// blocking unrelated chapters behind one slow source.
+	chapter_cache_locks: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<RwLock<()>>>>,
+	chapter_cache_builds: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 	/// Only one LRU collector may make decisions against the persistent byte total at a time.
 	chapter_cache_collect: tokio::sync::Mutex<()>,
 	chapter_variant_locks: tokio::sync::Mutex<ChapterVariantLocks>,
@@ -223,9 +223,9 @@ impl AppState {
 			tasks: tokio::sync::OnceCell::new(),
 			tracker: tokio::sync::OnceCell::new(),
 			tracker_tx: tokio::sync::OnceCell::new(),
-            chapter_cache_gate: RwLock::new(()),
-            chapter_cache_locks: tokio::sync::Mutex::new(HashMap::new()),
-            chapter_cache_builds: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_cache_gate: RwLock::new(()),
+			chapter_cache_locks: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_cache_builds: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_cache_collect: tokio::sync::Mutex::new(()),
 			chapter_variant_locks: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_original_locks: tokio::sync::Mutex::new(HashMap::new()),
@@ -561,26 +561,26 @@ impl AppState {
 		}
 	}
 
-    pub async fn chapter_cache_lock(&self, chapter_id: i64) -> Arc<RwLock<()>> {
-        let mut locks = self.chapter_cache_locks.lock().await;
-        if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
-            return lock;
-        }
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        let lock = Arc::new(RwLock::new(()));
-        locks.insert(chapter_id, Arc::downgrade(&lock));
-        lock
-    }
+	pub async fn chapter_cache_lock(&self, chapter_id: i64) -> Arc<RwLock<()>> {
+		let mut locks = self.chapter_cache_locks.lock().await;
+		if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
+			return lock;
+		}
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(RwLock::new(()));
+		locks.insert(chapter_id, Arc::downgrade(&lock));
+		lock
+	}
 
-    pub async fn chapter_cache_build_lock(&self, chapter_id: i64) -> Arc<tokio::sync::Mutex<()>> {
-        let mut locks = self.chapter_cache_builds.lock().await;
-        if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
-            return lock;
-        }
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        let lock = Arc::new(tokio::sync::Mutex::new(()));
-        locks.insert(chapter_id, Arc::downgrade(&lock));
-        lock
+	pub async fn chapter_cache_build_lock(&self, chapter_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+		let mut locks = self.chapter_cache_builds.lock().await;
+		if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
+			return lock;
+		}
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(tokio::sync::Mutex::new(()));
+		locks.insert(chapter_id, Arc::downgrade(&lock));
+		lock
 	}
 
 	pub async fn chapter_variant_lock(&self, chapter_id: i64, index: i64, bucket: u32) -> Arc<tokio::sync::Mutex<()>> {

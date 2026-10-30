@@ -161,8 +161,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/start", post(crate::api::download::start_downloads))
 		.route("/api/v1/downloads/stop", post(crate::api::download::stop_downloads))
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
-        .route("/api/v1/cache/chapters", get(chapter_cache_stats))
-        .route("/api/v1/cache/chapters/clear", post(clear_chapter_cache))
+		.route("/api/v1/cache/chapters", get(chapter_cache_stats))
+		.route("/api/v1/cache/chapters/clear", post(clear_chapter_cache))
 		.route("/api/v1/downloads/delete", post(crate::api::download::delete_downloads))
 		.route(
 			"/api/v1/downloads/{id}",
@@ -1894,8 +1894,8 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: 
 	.await?
 	.into_iter()
 	.collect();
-    let finished: HashSet<i64> = sqlx::query_scalar(
-        "SELECT chapter_id FROM download WHERE user_id = ? AND status = 'finished'
+	let finished: HashSet<i64> = sqlx::query_scalar(
+		"SELECT chapter_id FROM download WHERE user_id = ? AND status = 'finished'
 		 AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
 	)
 	.bind(user_id)
@@ -1911,41 +1911,41 @@ async fn chapters_json(state: &AppState, user_id: i64, manga_id: i64, order_by: 
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected chapter shape"))?;
 		object.insert("isDownloaded".into(), json!(downloaded.contains(&row.chapter.id)),
-        );
-        object.insert(
-            "hasFinishedDownload".into(),
-            json!(finished.contains(&row.chapter.id)),);
+		);
+		object.insert(
+			"hasFinishedDownload".into(),
+			json!(finished.contains(&row.chapter.id)),);
 		chapters.push(value);
 	}
 	Ok(json!(chapters))
 }
 
 async fn chapter_cache_stats(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-    let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
-    let stats = crate::cache::stats(
-        &state.pool,
-        &state.config.page_blobs_dir(),
-        &state.config.config_dir.join("opds-cbz"),
-        enabled,
-        max_bytes,
-    )
-    .await?;
-    Ok(Json(serde_json::to_value(stats)?))
+	let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+	let stats = crate::cache::stats(
+		&state.pool,
+		&state.config.page_blobs_dir(),
+		&state.config.config_dir.join("opds-cbz"),
+		enabled,
+		max_bytes,
+	)
+	.await?;
+	Ok(Json(serde_json::to_value(stats)?))
 }
 
 async fn clear_chapter_cache(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
-    let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
-    let (cleared_bytes, used_bytes, chapter_count) = crate::cache::clear_state(&state).await?;
-    let stats = crate::cache::stats(
-        &state.pool,
-        &state.config.page_blobs_dir(),
-        &state.config.config_dir.join("opds-cbz"),
-        enabled,
-        max_bytes,
-    )
-    .await?;
-    Ok(Json(
-        json!({"clearedBytes": cleared_bytes, "usedBytes": used_bytes, "chapterCount": chapter_count, "cacheRevision": stats.cache_revision}),))
+	let (enabled, max_bytes) = crate::cache::settings(&state.pool).await?;
+	let (cleared_bytes, used_bytes, chapter_count) = crate::cache::clear_state(&state).await?;
+	let stats = crate::cache::stats(
+		&state.pool,
+		&state.config.page_blobs_dir(),
+		&state.config.config_dir.join("opds-cbz"),
+		enabled,
+		max_bytes,
+	)
+	.await?;
+	Ok(Json(
+		json!({"clearedBytes": cleared_bytes, "usedBytes": used_bytes, "chapterCount": chapter_count, "cacheRevision": stats.cache_revision}),))
 }
 
 pub(crate) async fn get_pages(
@@ -1954,18 +1954,18 @@ pub(crate) async fn get_pages(
 	Path(id): Path<i64>,
 	Query(query): Query<RefreshQuery>,
 ) -> ApiResult<Json<Value>> {
-    let _cache_lease = state.chapter_cache_gate.read().await;
-    let cache_lock = state.chapter_cache_lock(id).await;
-    let _chapter_cache_read = if wants_refresh(&query) {
-        None
-    } else {
-        Some(cache_lock.read().await)
-    };
-    let _chapter_cache_write = if wants_refresh(&query) {
-        Some(cache_lock.write().await)
-    } else {
-        None
-    };
+	let _cache_lease = state.chapter_cache_gate.read().await;
+	let cache_lock = state.chapter_cache_lock(id).await;
+	let _chapter_cache_read = if wants_refresh(&query) {
+		None
+	} else {
+		Some(cache_lock.read().await)
+	};
+	let _chapter_cache_write = if wants_refresh(&query) {
+		Some(cache_lock.write().await)
+	} else {
+		None
+	};
 	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
 	let row = chapter_row(&state.pool, id).await?;
 	if row.trashed_at.is_some() {
@@ -1979,20 +1979,20 @@ pub(crate) async fn get_pages(
 	} else if wants_refresh(&query) {
 		crate::source::load_pages_under_lease(&state, id, true).await?
 	} else {
-        crate::source::load_pages_under_lease(&state, id, false).await?
+		crate::source::load_pages_under_lease(&state, id, false).await?
 	};
 	if let Err(e) = state.downloads().enqueue_reader_ahead(id, user.id).await {
 		tracing::warn!(chapter_id = id, "reader-ahead enqueue failed: {}", e.message());
 	}
 	let mut out = Vec::with_capacity(pages.len());
-    let cache_revision = crate::cache::chapter_revision(&state.pool, id).await?;
+	let cache_revision = crate::cache::chapter_revision(&state.pool, id).await?;
 	for page in pages {
 		let mut value = serde_json::from_str::<Value>(&page.content)?;
 		let object = value
 			.as_object_mut()
 			.ok_or_else(|| ApiError::bad_request("unexpected cached page shape"))?;
 		object.insert("index".into(), json!(page.idx));
-        object.insert("cacheRevision".into(), json!(cache_revision));
+		object.insert("cacheRevision".into(), json!(cache_revision));
 		if let (Some(width), Some(height)) = (page.width, page.height) {
 			object.insert("width".into(), json!(width));
 			object.insert("height".into(), json!(height));
@@ -2083,20 +2083,20 @@ pub(crate) async fn apply_settings(
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in body {
-        if key == "cache.chapterLruEnabled" && !value.is_boolean() {
-            return Err(ApiError::bad_request(
-                "cache.chapterLruEnabled must be a boolean",
-            ));
-        }
-        if key == "cache.chapterMaxBytes"
-            && !value
-                .as_u64()
-                .is_some_and(|n| n >= crate::cache::MIN_MAX_BYTES as u64 && n <= i64::MAX as u64)
-        {
-            return Err(ApiError::bad_request(
-                "cache.chapterMaxBytes must be between 268435456 and 9223372036854775807",
-            ));
-        }
+		if key == "cache.chapterLruEnabled" && !value.is_boolean() {
+			return Err(ApiError::bad_request(
+				"cache.chapterLruEnabled must be a boolean",
+			));
+		}
+		if key == "cache.chapterMaxBytes"
+			&& !value
+				.as_u64()
+				.is_some_and(|n| n >= crate::cache::MIN_MAX_BYTES as u64 && n <= i64::MAX as u64)
+		{
+			return Err(ApiError::bad_request(
+				"cache.chapterMaxBytes must be between 268435456 and 9223372036854775807",
+			));
+		}
 		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
 			sqlx::query("DELETE FROM setting WHERE key = ?")
 				.bind(key)
@@ -2125,7 +2125,7 @@ pub(crate) async fn apply_settings(
 			&& !value
 				.as_array()
 				.is_some_and(|dirs| { dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty()))
-            })
+			})
 		{
 			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
 		}
@@ -2165,9 +2165,9 @@ pub(crate) async fn apply_settings(
 		.await?;
 	}
 	tx.commit().await?;
-    if body.contains_key("cache.chapterLruEnabled") || body.contains_key("cache.chapterMaxBytes") {
-        crate::cache::enforce_limit(state).await?;
-    }
+	if body.contains_key("cache.chapterLruEnabled") || body.contains_key("cache.chapterMaxBytes") {
+		crate::cache::enforce_limit(state).await?;
+	}
 	Ok(())
 }
 

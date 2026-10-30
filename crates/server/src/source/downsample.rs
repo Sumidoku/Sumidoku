@@ -44,12 +44,12 @@ fn variant_dir(blobs_dir: &Path, chapter_id: i64, bucket: u32) -> PathBuf {
 }
 
 pub fn variant_paths(blobs_dir: &Path, chapter_id: i64, index: i64, bucket: u32) -> [PathBuf; 3] {
-    let dir = variant_dir(blobs_dir, chapter_id, bucket);
-    [
-        dir.join(format!("{index}.png")),
-        dir.join(format!("{index}.pass")),
-        dir.join(format!("{index}.identity")),
-    ]
+	let dir = variant_dir(blobs_dir, chapter_id, bucket);
+	[
+		dir.join(format!("{index}.png")),
+		dir.join(format!("{index}.pass")),
+		dir.join(format!("{index}.identity")),
+	]
 }
 
 /// The variant lifecycle hangs on the page-blob directory: load_pages' chapter rewrite and the startup sweep remove

@@ -27,14 +27,14 @@ pub async fn get_page(
 	Query(query): Query<PageQuery>,
 ) -> ApiResult<Response> {
 	let _cache_lease = state.chapter_cache_gate.read().await;
-    let cache_lock = state.chapter_cache_lock(id).await;
+	let cache_lock = state.chapter_cache_lock(id).await;
 	let chapter_cache = cache_lock.read().await;
 	let chapter = chapter_row(&state.pool, id).await?;
 	// a trashed chapter's files are gone: refuse reads at the API boundary, not only in the web UI
 	if chapter.trashed_at.is_some() {
 		return Err(ApiError::not_found("chapter is in the trash"));
 	}
-    crate::cache::touch(&state.pool, id).await?;
+	crate::cache::touch(&state.pool, id).await?;
 	// A finished download product remains the reader source even after page metadata is refreshed.
 	// Missing products fall back to source pages; actual product read errors propagate.
 	if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
