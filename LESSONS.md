@@ -1,6 +1,16 @@
 <!-- reviewed-through: 31c4c7a (2026-10-28) -->
 # Lessons from merged work
 
+**Artifact cleanup must coordinate with in-flight path claims as well as database references.**
+A producer can claim a destination before its finished row commits, so an empty
+database reference query does not prove that a path is unused. Hold the shared
+claim coordination through the reference check and unlink, and preserve paths
+claimed by another chapter.
+- Evidence: 2026-10-30, an active cancellation left an orphaned prior path while
+  another chapter held that destination in `claimed_paths` but had not committed
+  its row yet. `cancelled_artifact_cleanup_preserves_another_chapters_claim`
+  verifies the cleanup leaves the in-flight producer's file intact.
+
 **Active-download cancellation must not wait for a chapter lease held across source I/O.**
 Remove a nonfinished download row and signal cancellation in a short transaction;
 the worker performs attempt cleanup after the in-flight source call returns.
