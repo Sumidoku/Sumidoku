@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { menuViewportWidth } from './MenuButton';
 import { placeMenu } from './selectModel';
 
 const MIN_WIDTH = 160;
@@ -26,7 +27,7 @@ export function useAnchoredMenu<A extends HTMLElement>() {
 		const anchor = anchorRef.current?.getBoundingClientRect();
 		const menu = menuRef.current?.getBoundingClientRect();
 		if (!open || !anchor || !menu) return;
-		const placement = placeMenu(anchor, menu, { width: window.innerWidth, height: window.innerHeight });
+		const placement = placeMenu(anchor, menu, { width: menuViewportWidth(), height: window.innerHeight });
 		setStyle((current) => ({ ...current, ...placement, visibility: 'visible' }));
 	}, [open]);
 
