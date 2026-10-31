@@ -725,11 +725,17 @@ function ReaderCore({
 		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`, { replace: true });
 	}
 
-	// A boundary turn parks on the transition page when a target chapter exists and
-	// the preference is on; the same boundary turn again (or the page's continue
-	// action) confirms the jump, and an opposite turn cancels the pending jump
+	// A boundary turn parks on the transition page when the preference is on;
+	// the same boundary turn again (or the page's continue action) confirms the
+	// jump, and an opposite turn cancels the pending jump. With no chapter left
+	// in that direction the page answers with an end-of-list card whose continue
+	// leaves the reader — before the chapter list is fetched (or with the
+	// preference off) a boundary tap stays silent
 	function boundaryNav(c: ChapterWithDownload | null, direction: 'next' | 'prev') {
-		if (!c) return;
+		if (!c) {
+			if (transition && chaptersQuery.isFetched) setPendingTurn(direction);
+			return;
+		}
 		if (pendingTurn === direction) {
 			navCh(c);
 			return;
@@ -1480,7 +1486,9 @@ function ReaderCore({
 							onContinue={() => {
 								const target = pendingTurn === 'next' ? nextCh : prevCh;
 								setPendingTurn(null);
-								navCh(target);
+								// No chapter left in that direction: continue leaves the reader
+								if (target) navCh(target);
+								else goBack();
 							}}
 							onCancel={() => setPendingTurn(null)}
 						/>

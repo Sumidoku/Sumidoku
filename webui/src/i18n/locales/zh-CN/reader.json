@@ -81,6 +81,9 @@
     "transitionContinue": "进入下一章",
     "transitionContinuePrev": "回到上一章",
     "transitionStay": "留在本页",
+    "transitionNoNext": "没有下一章了",
+    "transitionNoPrev": "没有上一章了",
+    "transitionBackToManga": "返回漫画页面",
     "descending": "降序"
   }
 }

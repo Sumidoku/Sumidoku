@@ -81,6 +81,9 @@
     "transitionContinue": "Continue to next chapter",
     "transitionContinuePrev": "Continue to previous chapter",
     "transitionStay": "Stay on this page",
+    "transitionNoNext": "No more chapters",
+    "transitionNoPrev": "No previous chapter",
+    "transitionBackToManga": "Back to the manga page",
     "descending": "Descending"
   }
 }

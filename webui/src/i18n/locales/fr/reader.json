@@ -81,6 +81,9 @@
     "transitionContinue": "Passer au chapitre suivant",
     "transitionContinuePrev": "Revenir au chapitre précédent",
     "transitionStay": "Rester sur cette page",
+    "transitionNoNext": "Plus de chapitre",
+    "transitionNoPrev": "Pas de chapitre précédent",
+    "transitionBackToManga": "Retour à la page du manga",
     "descending": "Décroissant"
   }
 }

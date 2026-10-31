@@ -15,7 +15,9 @@ interface TransitionPageProps {
 }
 
 // Shown when a turn crosses a chapter boundary, so reading never jumps chapters
-// without a beat. Continue opens the target chapter; cancel stays on the page.
+// without a beat. Continue opens the target chapter; with no chapter left in
+// that direction (target null) the page reports the end of the list and
+// continue leaves the reader instead. Cancel stays on the page either way.
 export function TransitionPage({ direction, currentLabel, target, onContinue, onCancel }: TransitionPageProps) {
 	const { t } = useTranslation();
 	const targetLabel = target ? chapterLabel(target) : '';
@@ -33,7 +35,7 @@ export function TransitionPage({ direction, currentLabel, target, onContinue, on
 					{direction === 'next' ? t('reader.transitionFinished') : t('reader.transitionAtStart')}
 				</div>
 				<div className="reader__transition-current">{currentLabel}</div>
-				{target && (
+				{target ? (
 					<div className="reader__transition-target">
 						<div className="reader__transition-target-label">
 							{direction === 'next' ? t('reader.transitionNext') : t('reader.transitionPrev')}
@@ -41,10 +43,20 @@ export function TransitionPage({ direction, currentLabel, target, onContinue, on
 						<div className="reader__transition-target-title">{targetLabel}</div>
 						{scanlator && <div className="reader__transition-target-scan">{scanlator}</div>}
 					</div>
+				) : (
+					<div className="reader__transition-target">
+						<div className="reader__transition-target-title">
+							{direction === 'next' ? t('reader.transitionNoNext') : t('reader.transitionNoPrev')}
+						</div>
+					</div>
 				)}
 				<div className="reader__transition-actions">
 					<Button variant="primary" onClick={onContinue}>
-						{direction === 'next' ? t('reader.transitionContinue') : t('reader.transitionContinuePrev')}
+						{target
+							? direction === 'next'
+								? t('reader.transitionContinue')
+								: t('reader.transitionContinuePrev')
+							: t('reader.transitionBackToManga')}
 					</Button>
 					<Button onClick={onCancel}>{t('reader.transitionStay')}</Button>
 				</div>
