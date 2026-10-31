@@ -12,6 +12,7 @@
     "pause": "Pausa",
     "start": "Avvia",
     "clearFinished": "Rimuovi i completati",
+    "clearFinishedHint": "La pulizia rimuove da questo elenco le attività completate o non riuscite; i file scaricati restano disponibili offline.",
     "select": "Seleziona",
     "selectAll": "Seleziona tutto",
     "deselectAll": "Deseleziona tutto",

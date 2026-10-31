@@ -9,6 +9,17 @@ import { IconButton, MenuButton, Spinner } from '../../components';
 
 export type ChapterDlState = 'idle' | 'pending' | 'queued' | 'downloading';
 
+export function RemoveFinishedDownloadAction({ available, onRemove }: { available: boolean; onRemove: () => void }) {
+	const { t } = useTranslation();
+	if (!available) return null;
+	return (
+		<button type="button" className="menu-row menu-row--danger" onClick={onRemove}>
+			<span>{t('chapterRow.removeDownload')}</span>
+			<Trash2 size={14} />
+		</button>
+	);
+}
+
 interface ChapterRowProps {
 	chapter: ChapterWithDownload;
 	selecting: boolean;
@@ -28,6 +39,7 @@ interface ChapterRowProps {
 	/** Mark-previous targets the rows below this one in the visible list, so it hides on the last row (Aidoku: !last) */
 	onMarkPreviousRead?: () => void;
 	onMarkPreviousUnread?: () => void;
+	onRemoveDownload?: () => void;
 	markPending?: boolean;
 }
 
@@ -46,6 +58,7 @@ export function ChapterRow({
 	onMarkUnread,
 	onMarkPreviousRead,
 	onMarkPreviousUnread,
+	onRemoveDownload,
 	markPending
 }: ChapterRowProps) {
 	const { t } = useTranslation();
@@ -161,7 +174,7 @@ export function ChapterRow({
 					>
 						<Bookmark size={16} fill={c.isBookmarked ? 'currentColor' : 'none'} />
 					</IconButton>
-					{(onMarkRead || onMarkUnread || onMarkPreviousRead) && (
+					{(onMarkRead || onMarkUnread || onMarkPreviousRead || (c.hasFinishedDownload && onRemoveDownload)) && (
 						<MenuButton label={t('chapterRow.chapterActions')}>
 							{(close) => (
 								<>
@@ -224,6 +237,13 @@ export function ChapterRow({
 											<ListMinus size={14} />
 										</button>
 									)}
+									<RemoveFinishedDownloadAction
+										available={c.hasFinishedDownload && !!onRemoveDownload}
+										onRemove={() => {
+											close();
+											onRemoveDownload?.();
+										}}
+									/>
 								</>
 							)}
 						</MenuButton>

@@ -12,6 +12,7 @@
     "pause": "Pause",
     "start": "Démarrer",
     "clearFinished": "Effacer les terminés",
+    "clearFinishedHint": "Le vidage retire les tâches terminées ou échouées de cette liste ; les fichiers téléchargés restent disponibles hors ligne.",
     "select": "Sélectionner",
     "selectAll": "Tout sélectionner",
     "deselectAll": "Tout désélectionner",

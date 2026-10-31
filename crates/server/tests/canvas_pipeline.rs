@@ -198,6 +198,55 @@ async fn image_pages_download_as_png() {
 }
 
 #[tokio::test]
+async fn removed_image_product_rebuilds_blobs_for_read_and_redownload() {
+	let t = canvas_app().await;
+	let app = t.app.clone();
+	let manga_id = register_canvas_manga(&app).await;
+	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK);
+	let chapter_id = canvas_chapter(&app, manga_id).await;
+	let (status, initial_pages) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let mut previous_revision = initial_pages[0]["cacheRevision"].as_i64().expect("initial cache revision");
+	let blob_dir = t.tmp.path().join("page-blobs").join(chapter_id.to_string());
+
+	for round in 0..2 {
+		let (status, _) = request(&app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [chapter_id]}))).await;
+		assert_eq!(status, StatusCode::OK);
+		let deadline = Instant::now() + Duration::from_secs(15);
+		loop {
+			let (status, body) = request(&app, "GET", "/api/v1/downloads", None).await;
+			assert_eq!(status, StatusCode::OK);
+			if body.as_array().and_then(|rows| rows.iter().find(|row| row["chapterId"] == chapter_id)).is_some_and(|entry| entry["status"] == "finished") { break; }
+			assert!(Instant::now() < deadline, "download round {round} did not finish: {body}");
+			tokio::time::sleep(Duration::from_millis(100)).await;
+		}
+		let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+		loop {
+			let (status, pages) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+			assert_eq!(status, StatusCode::OK);
+			let revision = pages[0]["cacheRevision"].as_i64().expect("cache revision");
+			if revision > previous_revision && !blob_dir.exists() { previous_revision = revision; break; }
+			assert!(Instant::now() < cleanup_deadline, "download cleanup did not advance cache revision: {pages}");
+			tokio::task::yield_now().await;
+		}
+		assert!(!blob_dir.exists(), "finished product cleanup removes materialized Image blobs");
+		let red = decode_png(&fetch_page_png(&app, chapter_id, 0).await);
+		assert_solid(&red, [255, 0, 0, 255], "product page after cleanup");
+		if round == 0 {
+			let (status, _) = request(&app, "DELETE", &format!("/api/v1/downloads/{chapter_id}"), None).await;
+			assert_eq!(status, StatusCode::NO_CONTENT);
+			let (status, pages) = request(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages"), None).await;
+			assert_eq!(status, StatusCode::OK);
+			previous_revision = pages[0]["cacheRevision"].as_i64().expect("delete cache revision");
+			let red = decode_png(&fetch_page_png(&app, chapter_id, 0).await);
+			assert_solid(&red, [255, 0, 0, 255], "source page after product removal");
+			assert!(blob_dir.join("0.png").exists(), "missing Image row was rematerialized before reading");
+		}
+	}
+}
+
+#[tokio::test]
 async fn processors_transform_fetched_images() {
 	let t = canvas_app().await;
 	let app = t.app.clone();

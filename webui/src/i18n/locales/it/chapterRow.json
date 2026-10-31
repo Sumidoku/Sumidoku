@@ -16,6 +16,12 @@
     "markRead": "Segna come letto",
     "markUnread": "Segna come non letto",
     "markPreviousRead": "Segna come letti tutti i capitoli sotto questo",
-    "markPreviousUnread": "Segna come non letti tutti i capitoli sotto questo"
+    "markPreviousUnread": "Segna come non letti tutti i capitoli sotto questo",
+    "removeDownload": "Rimuovi il download",
+    "removeDownloadCount_one": "Rimuovi {{count}} download completato",
+    "removeDownloadCount_other": "Rimuovi {{count}} download completati",
+    "removeDownloadConfirm_one": "Rimuovere questo download completato e i relativi file sul server?",
+    "removeDownloadConfirm_other": "Rimuovere questi {{count}} download completati e i relativi file sul server?",
+    "removeDownloadConfirmSingle": "Rimuovere il download completato di “{{name}}” e i relativi file sul server?"
   }
 }

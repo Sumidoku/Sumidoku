@@ -17,6 +17,8 @@
     "catsSaved": "分类已保存",
     "removedFromLibrary": "已移出书库",
     "downloadQueued": "已加入下载队列",
+    "downloadsRemoved_other": "已移除 {{count}} 个已完成的下载",
+    "downloadRemoveFailed": "无法移除已完成的下载",
     "queuedChapters_other": "已把 {{count}} 章加入下载队列",
     "loadFailed": "漫画加载失败",
     "loadFailedHint": "这部漫画不存在或已被移除",

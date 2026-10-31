@@ -22,6 +22,8 @@ import {
 	useApiKeys,
 	useBackupFiles,
 	useCategories,
+	useChapterCacheStats,
+	useClearChapterCache,
 	useCreateApiKey,
 	useCreateCategory,
 	useCreateFilterGroup,
@@ -82,6 +84,7 @@ import {
 	TriStateDropdown,
 	pushToast
 } from '../components';
+import { chapterCacheLimitBytes } from './settings/chapterCache';
 import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
 import { SettingsLayout, SETTINGS_GROUPS } from './settings/SettingsLayout';
 import { SkippedItems } from './settings/SkippedItems';
@@ -329,6 +332,136 @@ function IncognitoSection() {
 					{t('settings.incognitoGlobal')}
 				</label>
 			)}
+		</Section>
+	);
+}
+
+function formatBytes(value: number): string {
+	if (value < 1024) return `${value} B`;
+	const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+	let size = value / 1024;
+	let unit = 0;
+	while (size >= 1024 && unit < units.length - 1) {
+		size /= 1024;
+		unit++;
+	}
+	return `${size.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
+}
+
+function ChapterCacheSection() {
+	const { t } = useTranslation();
+	const settings = useServerSettings();
+	const save = useSaveServerSettings();
+	const stats = useChapterCacheStats();
+	const clear = useClearChapterCache();
+	const [clearConfirm, setClearConfirm] = useState(false);
+	const cacheSettings = settings.data?.cache;
+	const maxBytes = cacheSettings?.chapterMaxBytes ?? 2 * 1024 ** 3;
+	const [maxMiB, setMaxMiB] = useState(String(maxBytes / 1024 ** 2));
+	useEffect(() => setMaxMiB(String(maxBytes / 1024 ** 2)), [maxBytes]);
+
+	async function saveLimit() {
+		const value = chapterCacheLimitBytes(maxMiB);
+		if (value === null) {
+			setMaxMiB(String(maxBytes / 1024 ** 2));
+			return;
+		}
+		if (value === maxBytes || !settings.data) return;
+		try {
+			await save.mutateAsync(
+				mergeServerSettings(settings.data, {
+					cache: { chapterMaxBytes: value }
+				})
+			);
+		} catch {
+			setMaxMiB(String(maxBytes / 1024 ** 2));
+		}
+	}
+
+	async function clearCache() {
+		try {
+			const result = await clear.mutateAsync();
+			pushToast(t('settings.chapterCacheCleared', { size: formatBytes(result.clearedBytes) }), 'info');
+			setClearConfirm(false);
+		} catch {
+			// The API client already reports the error; keep the confirmation open for retry.
+		}
+	}
+
+	return (
+		<Section title={t('settings.chapterCacheTitle')} desc={t('settings.chapterCacheDesc')}>
+			{settings.isPending || stats.isPending ? (
+				<Skeleton height={48} />
+			) : settings.isError || stats.isError || !settings.data || !stats.data ? (
+				<div>
+					<p className="settings-backup__warn">{t('settings.chapterCacheLoadFailed')}</p>
+					<Button
+						disabled={settings.isFetching || stats.isFetching}
+						loading={settings.isFetching || stats.isFetching}
+						onClick={() => {
+							void settings.refetch();
+							void stats.refetch();
+						}}
+					>
+						{t('settings.retry')}
+					</Button>
+				</div>
+			) : (
+				<>
+					<div className="settings-row">
+						<label className="settings-row__label" htmlFor="chapter-cache-limit">
+							{t('settings.chapterCacheLimit')}
+						</label>
+						<Input
+							id="chapter-cache-limit"
+							type="number"
+							min={0}
+							step={1}
+							value={maxMiB}
+							disabled={save.isPending}
+							onChange={(event) => setMaxMiB(event.currentTarget.value)}
+							onBlur={() => void saveLimit()}
+							onKeyDown={(event) => {
+								if (event.key === 'Enter') event.currentTarget.blur();
+							}}
+						/>
+						<span className="faint">MiB</span>
+					</div>
+					<p className="faint">
+						{t('settings.chapterCacheUsage', {
+							used: formatBytes(stats.data?.usedBytes ?? 0),
+							count: stats.data?.chapterCount ?? 0
+						})}
+					</p>
+					{stats.data?.lastError && (
+						<p className="settings-backup__warn">
+							{t('settings.chapterCacheError', { error: stats.data.lastError })}
+						</p>
+					)}
+					<Button variant="danger" disabled={clear.isPending} onClick={() => setClearConfirm(true)}>
+						{t('settings.clearChapterCache')}
+					</Button>
+				</>
+			)}
+			<Modal
+				open={clearConfirm}
+				title={t('settings.clearChapterCache')}
+				onClose={() => {
+					if (!clear.isPending) setClearConfirm(false);
+				}}
+				footer={
+					<>
+						<Button disabled={clear.isPending} onClick={() => setClearConfirm(false)}>
+							{t('common.cancel')}
+						</Button>
+						<Button variant="danger" loading={clear.isPending} onClick={() => void clearCache()}>
+							{t('settings.clearChapterCache')}
+						</Button>
+					</>
+				}
+			>
+				<p className="settings-modal-text">{t('settings.clearChapterCacheConfirm')}</p>
+			</Modal>
 		</Section>
 	);
 }
@@ -2303,6 +2436,7 @@ export default function SettingsPage() {
 						<>
 							<SecuritySection />
 							<ApiKeysSection />
+							<ChapterCacheSection />
 							<AboutSection />
 						</>
 					)

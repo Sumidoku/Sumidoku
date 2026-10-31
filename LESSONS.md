@@ -17,6 +17,77 @@ hands the result in cannot see it; run the query against a migrated database.
   set. `eviction_reads_library_membership_from_the_real_schema` failed with the
   old query and passed with the fix.
 
+**A temporary database does not isolate a test's other writable paths.**
+A fixture built from `Config::default()` must also pin every artifact directory
+it writes into its `TempDir`; setting only `config_dir` leaves independent
+relative defaults, including `downloads_dir`, pointing outside the fixture.
+Assert the artifact path is beneath the temporary root before writing it.
+- Evidence: 2026-10-30, the zero-budget LRU regression created an untracked
+  `crates/server/downloads/kept.cbz` because the shared cache fixture only
+  overrode the database and configuration directory. The fixture now assigns
+  its download directory beneath `TempDir` and asserts that boundary; the
+  unintended product was removed.
+
+**Artifact cleanup must coordinate with in-flight path claims as well as database references.**
+A producer can claim a destination before its finished row commits, so an empty
+database reference query does not prove that a path is unused. Hold the shared
+claim coordination through the reference check and unlink, and preserve paths
+claimed by another chapter.
+- Evidence: 2026-10-30, an active cancellation left an orphaned prior path while
+  another chapter held that destination in `claimed_paths` but had not committed
+  its row yet. `cancelled_artifact_cleanup_preserves_another_chapters_claim`
+  verifies the cleanup leaves the in-flight producer's file intact.
+
+**Active-download cancellation must not wait for a chapter lease held across source I/O.**
+Remove a nonfinished download row and signal cancellation in a short transaction;
+the worker performs attempt cleanup after the in-flight source call returns.
+Reserve the exclusive chapter lease for finished-product removal, and never hold
+a database transaction while waiting for that lease. Recheck row state inside the
+transaction so a queued-to-downloading transition follows the active path. Remove
+queue and progress state before committing the row deletion: commit makes the id
+available to a concurrent enqueue, whose new queue entry must not be removed by
+the older delete.
+- Evidence: 2026-10-30, the OPDS feed in
+  `download_delete_while_worker_finishes_cleans_artifact_and_allows_requeue`
+  was gated while the worker held a chapter read lease. Deletion waited forever
+  for the write lease, even though it had only set a cancellation flag. The
+  bounded 10-second delete assertion now passes, and the test confirms active
+  cancellation preserves source page variants until the worker drains. Review of
+  the follow-up found that moving queue removal after commit could erase a new
+  enqueue's queue entry; `c0d387d` restores the pre-commit ordering. Existing
+  gated-delete/requeue regressions pass, but do not deterministically schedule
+  that specific queue race. The completed workspace run passed 1,154 tests, with
+  two manual real-site probes skipped.
+
+**Cache acceptance tests must request the actual image bytes, not count page
+metadata.** A page list can be cached while every reader request still fetches
+the upstream image; verify byte-for-byte responses, upstream hit counts and
+disk usage across repeat reads, clear and restart.
+- Evidence: 2026-10-30, a chapter with one 300 KiB remote page reported only
+  7.4 KiB of cache use because the page row was persistent but the image was
+  fetched on every read. The revised regression checks the image response,
+  upstream request count and exact cache accounting.
+
+**Repairing a cache entry must reconcile the actual damaged size before
+applying a replacement delta.** A delta from the bytes currently on disk is
+wrong when storage changed after the prior total was charged; serialize cache
+writers and reconcile corrupted entries against page rows and disk contents.
+- Evidence: 2026-10-30, `corrupt_original_is_a_miss_and_write_failure_still_serves_fetched_bytes`
+  replaced an 8-byte entry after it had been truncated to 7 bytes. Adding the
+  apparent 1-byte delta to the old 8-byte charge overstated usage; a locked
+  reconciliation now matches the page JSON plus the actual cache tree.
+
+**Clearing a download list must not delete the downloaded product.** A
+"clear" action that only dismisses completed entries should update their
+visibility state while retaining the download row, artifact path and chapter
+download flag. Those records back offline reading and export, and explicit
+deletion remains a separate action.
+- Evidence: 2026-10-29, review of the chapter cache and download management
+  work found `/downloads/clear` calling the product deletion routine, which
+  removed the file and offline flag along with the list entry. The fix uses a
+  transactional dismissal state and tests that the hidden artifact still
+  serves offline pages and CBZ export and can still be explicitly removed.
+
 **Every issue a PR closes needs its own closing keyword; check the linked
 list before merging.** GitHub binds `Closes` only to the reference right
 after it, so `Closes #495 and #496` links #495 and leaves #496 open after
@@ -186,6 +257,10 @@ hashed assets can make the embedded HTML and the on-disk index disagree.
   served HTML and disk index named different hashed JS bundles. The ordered
   Web UI build → workspace suite → clippy → release build pipeline then passed
   1060 tests with 2 skipped, clippy with `-D warnings`, and the release build.
+- Seen again: 2026-10-30, #527 follow-up validation overlapped a final Vite
+  rebuild with the workspace run. `embedded_webui` again found different served
+  and on-disk index bytes; it passed after the Web UI build finished and the
+  Rust target rebuilt. Keep the complete validation pipeline ordered.
 
 **Dropping a test fixture's TempDir unlinks its database file; lazy pool
 connections then fail at a wandering point.** A `let TestApp { app, .. }`
@@ -290,6 +365,11 @@ its cleanup.
   300ms blocker. An explicit gate kept the blocker running until the other
   group finished; the regression then passed 20 consecutive runs and the full
   workspace suite passed 916 tests with 2 skipped.
+- Seen again: 2026-10-30, the full workspace run found global peak 1 rather
+  than 2 in `same_source_serializes_and_sources_run_in_parallel`: its 100 ms
+  handlers could finish before the other source was ready. Enqueueing before
+  dispatch and holding each wave at a two-worker barrier passed 20 consecutive
+  runs without a duration-based overlap assumption.
 
 **Commit before anything can move the working tree; a shared checkout is
 not a safe place for uncommitted work.** Another session switching the

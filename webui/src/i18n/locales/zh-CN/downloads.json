@@ -11,6 +11,7 @@
     "pause": "暂停",
     "start": "开始",
     "clearFinished": "清空已完成",
+    "clearFinishedHint": "清空会从列表中移除已完成和失败的任务；已下载文件仍可离线阅读。",
     "select": "选择",
     "selectAll": "全选",
     "deselectAll": "取消全选",

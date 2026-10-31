@@ -16,6 +16,12 @@
     "markRead": "Marquer comme lu",
     "markUnread": "Marquer comme non lu",
     "markPreviousRead": "Marquer tous les chapitres en dessous comme lus",
-    "markPreviousUnread": "Marquer tous les chapitres en dessous comme non lus"
+    "markPreviousUnread": "Marquer tous les chapitres en dessous comme non lus",
+    "removeDownload": "Supprimer le téléchargement",
+    "removeDownloadCount_one": "Supprimer {{count}} téléchargement terminé",
+    "removeDownloadCount_other": "Supprimer {{count}} téléchargements terminés",
+    "removeDownloadConfirm_one": "Supprimer ce téléchargement terminé et ses fichiers serveur ?",
+    "removeDownloadConfirm_other": "Supprimer ces {{count}} téléchargements terminés et leurs fichiers serveur ?",
+    "removeDownloadConfirmSingle": "Supprimer le téléchargement terminé de « {{name}} » et ses fichiers serveur ?"
   }
 }

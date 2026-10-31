@@ -23,8 +23,10 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { api, pageUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
-import { qk, useChapterPages, useManga, useMangaChapters } from '../api/hooks';
+import { qk, subscribeChapterCacheEvents, useChapterPages, useManga, useMangaChapters, useWhoami } from '../api/hooks';
 import type { ChapterWithDownload, Page } from '../api/types';
+import { acquireSseConnection } from '../api/sse';
+import { authAllowsEvents } from '../lib/auth';
 import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { useResolvedTheme } from '../lib/theme';
@@ -432,6 +434,10 @@ function ReaderCore({
 	const navigate = useNavigate();
 	const qc = useQueryClient();
 	const { t } = useTranslation();
+	const auth = useWhoami();
+	const eventsAllowed = authAllowsEvents(auth.data);
+	useEffect(() => acquireSseConnection(eventsAllowed), [eventsAllowed, auth.data?.user?.id]);
+	useEffect(() => eventsAllowed ? subscribeChapterCacheEvents(qc) : undefined, [eventsAllowed, qc]);
 
 	const pagesQuery = useChapterPages(chapterId);
 	const pages = useMemo(() => pagesQuery.data ?? null, [pagesQuery.data]);
@@ -717,7 +723,7 @@ function ReaderCore({
 			// with the rendered image's request, and onload stays the fallback.
 			im.onload = () => reportDims(center + d, im.naturalWidth, im.naturalHeight);
 			measureWhenKnown(im, (w, h) => reportDims(center + d, w, h));
-			im.src = pageUrl(chapterId, p.index, imgWidth);
+			im.src = pageUrl(chapterId, p.index, imgWidth, p.cacheRevision);
 		}
 	}
 
@@ -1377,7 +1383,7 @@ function ReaderCore({
 														<PageImage
 															key={curPage?.index}
 															className="reader__img"
-															src={pageUrl(chapterId, idx, imgWidth * 2)}
+															src={pageUrl(chapterId, idx, imgWidth * 2, curPage?.cacheRevision)}
 															alt={t('reader.pageAlt', { page: idx + 1 })}
 															style={{ objectPosition: `${splitSides(dir)[half]} center` }}
 															onLoad={(w, h) => reportDims(idx, w, h)}
@@ -1438,7 +1444,7 @@ function ReaderCore({
 															<PageImage
 																key={p.index}
 																className="reader__img"
-																src={pageUrl(chapterId, p.index, imgWidth)}
+																src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
 																alt={t('reader.pageAlt', { page: slot + 1 })}
 																// The slot keeps an aspect-ratio box even before dims are
 																// known (2:3 fallback), so an unloaded or failed page stays
@@ -1538,7 +1544,7 @@ function ReaderCore({
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
 											<PageImage
-												src={pageUrl(chapterId, p.index, imgWidth)}
+												src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
 												width={dimensions?.width}
 												height={dimensions?.height}

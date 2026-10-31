@@ -15,6 +15,8 @@ import type {
 	BackupFiles,
 	BackupRestoreResponse,
 	Category,
+	ChapterCacheClearResponse,
+	ChapterCacheStats,
 	ChapterProgress,
 	ChapterWithDownload,
 	DeepLinkResponse,
@@ -60,7 +62,8 @@ import type {
 	GlobalSearchStreamEvent,
 	HomeStreamEvent,
 	MangaUpdateStreamEvent,
-	SearchStreamEvent
+	SearchStreamEvent,
+	DownloadChapterEvent
 } from './protocol';
 import { sse } from './sse';
 import type { TriStateSelection } from '../lib/triState';
@@ -91,6 +94,7 @@ export const qk = {
 	backups: ['backups'] as const,
 	whoami: ['whoami'] as const,
 	apiKeys: ['api-keys'] as const,
+	chapterCache: ['chapter-cache'] as const,
 	tasks: ['tasks'] as const,
 	localTrash: ['local-trash'] as const
 };
@@ -658,6 +662,31 @@ export function subscribeTaskEvents(qc: QueryClient): () => void {
 	});
 }
 
+/** Refresh cache revisions when a download finishes or an SSE snapshot/reconnect may have skipped it. */
+export function subscribeChapterCacheEvents(qc: QueryClient): () => void {
+	const revalidateCacheState = () => {
+		void qc.invalidateQueries({ queryKey: ['chapter'] });
+		void qc.invalidateQueries({ queryKey: qk.chapterCache });
+	};
+	const unsubscribeDownload = sse.on('download', (data) => {
+		const event = data as Partial<DownloadChapterEvent>;
+		if (event.type !== 'finished' || !Number.isSafeInteger(event.chapterId)) return;
+		void qc.invalidateQueries({ queryKey: ['chapter', event.chapterId, 'pages'] });
+		void qc.invalidateQueries({ queryKey: qk.chapterCache });
+	});
+	const unsubscribeSnapshot = sse.on('snapshot', revalidateCacheState);
+	let wasOnline = false;
+	const unsubscribeStatus = sse.onStatus((online) => {
+		if (online && !wasOnline) revalidateCacheState();
+		wasOnline = online;
+	});
+	return () => {
+		unsubscribeDownload();
+		unsubscribeSnapshot();
+		unsubscribeStatus();
+	};
+}
+
 // ---- Source repos ----
 
 export interface RepoBrowseFilter {
@@ -788,13 +817,18 @@ export function useMangaChapters(mangaId: number, opts: MangaQueryOpts = {}) {
 	});
 }
 
-/** A chapter's pages don't change within a session, so never refetch */
+/** Pages are revalidated on entry because cache clearing may replace the backing image revision. */
 export function useChapterPages(chapterId: number) {
-	return useQuery({
+	return useQuery(chapterPagesQueryOptions(chapterId));
+}
+
+export function chapterPagesQueryOptions(chapterId: number) {
+	return {
 		queryKey: ['chapter', chapterId, 'pages'],
 		queryFn: () => api<Page[]>(`/chapter/${chapterId}/pages`),
-		staleTime: Infinity
-	});
+		staleTime: 0,
+		refetchOnMount: 'always' as const
+	};
 }
 
 // ?refresh pulls from the source with unbounded latency, so it goes through a mutation for the pending state; on success the cache is written directly, saving a refetch
@@ -855,7 +889,8 @@ export function useRefreshChapters() {
 						isRead: false,
 						isBookmarked: false,
 						lastReadAt: null,
-						isDownloaded: false
+						isDownloaded: false,
+						hasFinishedDownload: false
 					}));
 					qc.setQueryData(qk.chapters(mangaId), partial);
 				}
@@ -904,8 +939,36 @@ export function useDownloadsClear() {
 }
 
 export function useDeleteDownload() {
+	const qc = useQueryClient();
 	return useMutation({
-		mutationFn: (chapterId: number) => api(`/downloads/${chapterId}`, { method: 'DELETE' })
+		mutationFn: (chapterId: number) => api(`/downloads/${chapterId}`, { method: 'DELETE' }),
+		onSettled: (_result, _error, chapterId) => {
+			if (typeof window !== 'undefined') window.dispatchEvent(new Event('sumidoku:downloads-invalidated'));
+			void qc.invalidateQueries({ queryKey: ['downloads'] });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['chapter', chapterId, 'pages'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
+	});
+}
+
+export function useDeleteFinishedDownloads() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (chapterIds: number[]) =>
+			api<{ deleted: number }>('/downloads/delete', {
+				method: 'POST',
+				body: { chapterIds, finishedOnly: true }
+			}),
+		onSettled: () => {
+			if (typeof window !== 'undefined') window.dispatchEvent(new Event('sumidoku:downloads-invalidated'));
+			void qc.invalidateQueries({ queryKey: ['downloads'] });
+			void qc.invalidateQueries({ queryKey: ['manga'] });
+			void qc.invalidateQueries({ queryKey: qk.library });
+			void qc.invalidateQueries({ queryKey: ['chapter'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
 	});
 }
 
@@ -930,11 +993,37 @@ export function useServerSettings() {
 	});
 }
 
+export function useChapterCacheStats() {
+	return useQuery({
+		queryKey: qk.chapterCache,
+		queryFn: () => api<ChapterCacheStats>('/cache/chapters')
+	});
+}
+
+export function useClearChapterCache() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () => api<ChapterCacheClearResponse>('/cache/chapters/clear', { method: 'POST' }),
+		onSuccess: (result) => {
+			qc.setQueryData(qk.chapterCache, (current: ChapterCacheStats | undefined) => current
+				? { ...current, usedBytes: result.usedBytes, chapterCount: result.chapterCount, cacheRevision: result.cacheRevision }
+				: current);
+		},
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: ['chapter'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
+	});
+}
+
 export function useSaveServerSettings() {
 	const qc = useQueryClient();
 	return useMutation({
 		mutationFn: (body: ServerSettings) => api<ServerSettings>('/settings', { method: 'PUT', body }),
-		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved)
+		onSuccess: (saved) => qc.setQueryData(['server-settings'], saved),
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
 	});
 }
 
@@ -953,7 +1042,8 @@ export function mergeServerSettings(
 		library: { ...current?.library, ...patch.library },
 		download: { ...current?.download, ...patch.download },
 		backup: { ...current?.backup, ...patch.backup },
-		browse: { ...current?.browse, ...patch.browse }
+		browse: { ...current?.browse, ...patch.browse },
+		cache: { ...current?.cache, ...patch.cache }
 	} as ServerSettings;
 }
 

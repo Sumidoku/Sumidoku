@@ -971,6 +971,7 @@ async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &Chap
 		.ok_or_else(|| ApiError::bad_request("opds entry has no acquisition link"))?;
 	let href = Catalog::resolve(&feed_url, &acquisition.href)?;
 	ensure_cbz(state, &catalog, chapter.id, &href).await?;
+	crate::cache::reconcile_chapter_accounted(state, chapter.id).await?;
 	Ok(path)
 }
 

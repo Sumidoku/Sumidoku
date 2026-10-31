@@ -1079,6 +1079,7 @@ button.menu-row:hover:not(:disabled) {
 	gap: 8px;
 	flex-wrap: wrap;
 	justify-content: center;
+	width: max-content;
 	max-width: calc(100vw - 24px);
 	padding: 10px 14px;
 	border-radius: 999px;
@@ -1092,6 +1093,10 @@ button.menu-row:hover:not(:disabled) {
 	font-size: 13px;
 	color: var(--text-dim);
 	font-variant-numeric: tabular-nums;
+}
+
+.batch-bar__action {
+	margin-left: auto;
 }
 
 @media (max-width: 767px) {

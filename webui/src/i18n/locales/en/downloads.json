@@ -12,6 +12,7 @@
     "pause": "Pause",
     "start": "Start",
     "clearFinished": "Clear finished",
+    "clearFinishedHint": "Clearing removes finished and failed tasks from this list; downloaded files remain available for offline reading.",
     "select": "Select",
     "selectAll": "Select all",
     "deselectAll": "Deselect all",

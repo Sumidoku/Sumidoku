@@ -9,6 +9,28 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore, mpsc};
 
+type ChapterVariantKey = (i64, i64, u32);
+type ChapterVariantLocks =
+	HashMap<ChapterVariantKey, std::sync::Weak<tokio::sync::Mutex<()>>>;
+type ChapterOriginalKey = (i64, i64);
+type OriginalPageResponse = Arc<(Vec<u8>, String)>;
+type OriginalPageFlightResult = Option<(Vec<u8>, OriginalPageResponse)>;
+
+pub struct OriginalPageFlight {
+	pub lock: tokio::sync::Mutex<()>,
+	result: std::sync::Mutex<OriginalPageFlightResult>,
+}
+
+impl OriginalPageFlight {
+	pub fn cached(&self, identity: &[u8]) -> Option<OriginalPageResponse> {
+		self.result.lock().ok()?.as_ref().filter(|(key, _)| key.as_slice() == identity).map(|(_, value)| value.clone())
+	}
+	pub fn publish(&self, identity: Vec<u8>, bytes: Vec<u8>, mime: String) {
+		if let Ok(mut slot) = self.result.lock() { *slot = Some((identity, Arc::new((bytes, mime)))); }
+	}
+}
+
+
 pub struct SourceEntry {
 	pub handle: Arc<SourceHandle>,
 	pub key: String,
@@ -63,6 +85,17 @@ pub struct AppState {
 	pub tasks: tokio::sync::OnceCell<Arc<crate::task::TaskManager>>,
 	pub tracker: tokio::sync::OnceCell<Arc<crate::tracker::TrackerServices>>,
 	pub tracker_tx: tokio::sync::OnceCell<crate::tracker::sync::TrackerSyncSender>,
+	/// Readers, materializers and packagers hold a read lease; cache clearing holds the write lease.
+	pub chapter_cache_gate: RwLock<()>,
+	/// Per-chapter operations serialize refresh, image reads and whole-chapter packaging without
+	/// blocking unrelated chapters behind one slow source.
+	chapter_cache_locks: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<RwLock<()>>>>,
+	chapter_cache_builds: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
+	/// Only one LRU collector may make decisions against the persistent byte total at a time.
+	chapter_cache_collect: tokio::sync::Mutex<()>,
+	chapter_variant_locks: tokio::sync::Mutex<ChapterVariantLocks>,
+	chapter_original_locks: tokio::sync::Mutex<HashMap<ChapterOriginalKey, std::sync::Weak<OriginalPageFlight>>>,
+	chapter_accounting_locks: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
 
 pub struct DefaultsWrite {
@@ -190,6 +223,13 @@ impl AppState {
 			tasks: tokio::sync::OnceCell::new(),
 			tracker: tokio::sync::OnceCell::new(),
 			tracker_tx: tokio::sync::OnceCell::new(),
+			chapter_cache_gate: RwLock::new(()),
+			chapter_cache_locks: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_cache_builds: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_cache_collect: tokio::sync::Mutex::new(()),
+			chapter_variant_locks: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_original_locks: tokio::sync::Mutex::new(HashMap::new()),
+			chapter_accounting_locks: tokio::sync::Mutex::new(HashMap::new()),
 		})
 	}
 
@@ -519,6 +559,63 @@ impl AppState {
 				Ok(handle)
 			}
 		}
+	}
+
+	pub async fn chapter_cache_lock(&self, chapter_id: i64) -> Arc<RwLock<()>> {
+		let mut locks = self.chapter_cache_locks.lock().await;
+		if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
+			return lock;
+		}
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(RwLock::new(()));
+		locks.insert(chapter_id, Arc::downgrade(&lock));
+		lock
+	}
+
+	pub async fn chapter_cache_build_lock(&self, chapter_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+		let mut locks = self.chapter_cache_builds.lock().await;
+		if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) {
+			return lock;
+		}
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(tokio::sync::Mutex::new(()));
+		locks.insert(chapter_id, Arc::downgrade(&lock));
+		lock
+	}
+
+	pub async fn chapter_variant_lock(&self, chapter_id: i64, index: i64, bucket: u32) -> Arc<tokio::sync::Mutex<()>> {
+		let key = (chapter_id, index, bucket);
+		let mut locks = self.chapter_variant_locks.lock().await;
+		if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) { return lock; }
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(tokio::sync::Mutex::new(()));
+		locks.insert(key, Arc::downgrade(&lock));
+		lock
+	}
+
+	pub async fn chapter_original_lock(&self, chapter_id: i64, index: i64) -> Arc<OriginalPageFlight> {
+		let key = (chapter_id, index);
+		let mut locks = self.chapter_original_locks.lock().await;
+		if let Some(flight) = locks.get(&key).and_then(std::sync::Weak::upgrade) {
+			return flight;
+		}
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let flight = Arc::new(OriginalPageFlight { lock: tokio::sync::Mutex::new(()), result: std::sync::Mutex::new(None) });
+		locks.insert(key, Arc::downgrade(&flight));
+		flight
+	}
+
+	pub async fn chapter_accounting_lock(&self, chapter_id: i64) -> Arc<tokio::sync::Mutex<()>> {
+		let mut locks = self.chapter_accounting_locks.lock().await;
+		if let Some(lock) = locks.get(&chapter_id).and_then(std::sync::Weak::upgrade) { return lock; }
+		locks.retain(|_, lock| lock.strong_count() > 0);
+		let lock = Arc::new(tokio::sync::Mutex::new(()));
+		locks.insert(chapter_id, Arc::downgrade(&lock));
+		lock
+	}
+
+	pub fn try_chapter_cache_collect(&self) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+		self.chapter_cache_collect.try_lock().ok()
 	}
 }
 

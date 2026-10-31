@@ -28,7 +28,8 @@ function chapter(id: number): ChapterWithDownload {
 		isRead: false,
 		isBookmarked: false,
 		lastReadAt: null,
-		isDownloaded: false
+		isDownloaded: false,
+		hasFinishedDownload: false
 	};
 }
 
@@ -83,6 +84,7 @@ test('finished updates cached chapters and invalidates chapters and library', ()
 	const chapters = h.getChapters();
 	assert.ok(chapters);
 	assert.equal(chapters[0].isDownloaded, true);
+	assert.equal(chapters[0].hasFinishedDownload, true);
 	assert.equal(chapters[1].isDownloaded, false);
 	assert.deepEqual(h.invalidated, [chaptersKey, libraryKey]);
 	assert.equal(h.getActivity().has(7), false);

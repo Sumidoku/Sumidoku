@@ -307,6 +307,15 @@ async fn downsample_reuses_local_original_bytes() {
 		.decode()
 		.expect("decode");
 	assert_eq!((image.width(), image.height()), (512, 682));
+	// Local files can change without a page-list refresh; an old resized image must not hide it.
+	let mut replacement = Vec::new();
+	image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(800, 400, image::Rgb([70, 20, 10])))
+		.write_to(&mut std::io::Cursor::new(&mut replacement), image::ImageFormat::Png).expect("replacement PNG");
+	std::fs::write(tmp.path().join("local/Alpha/ch 2/big.png"), replacement).expect("replace local image in place");
+	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0?width=512"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(sumidoku_server::source::page_dimensions::image_dimensions(&bytes), Some((512, 256)), "Local identity must follow the actual bytes");
+
 }
 
 #[tokio::test]

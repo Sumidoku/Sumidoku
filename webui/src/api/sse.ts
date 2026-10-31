@@ -86,3 +86,24 @@ export class SseClient {
 }
 
 export const sse = new SseClient();
+
+// AppLayout and the full-screen reader both need the shared stream, but the
+// reader route sits outside AppLayout. Keep the connection alive while any
+// authenticated route owns a lease, and stop it when the last route releases
+// one (including when auth becomes unavailable).
+const connectionLeases = new Map<object, boolean>();
+
+function syncConnection() {
+	if ([...connectionLeases.values()].some(Boolean)) sse.start();
+	else sse.stop();
+}
+
+export function acquireSseConnection(allowed: boolean): () => void {
+	const lease = {};
+	connectionLeases.set(lease, allowed);
+	syncConnection();
+	return () => {
+		connectionLeases.delete(lease);
+		syncConnection();
+	};
+}
