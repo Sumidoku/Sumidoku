@@ -78,6 +78,52 @@
 	background: var(--bg);
 }
 
+/* One small line under the categories: pills out-specify .chip--clickable's 36px touch height */
+.library__active {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+}
+
+.library__active-filters {
+	display: flex;
+	flex: 1;
+	flex-wrap: wrap;
+	gap: 6px;
+	min-width: 0;
+}
+
+.library__active-filters .chip--clickable {
+	gap: 3px;
+	min-height: 28px;
+	max-width: 240px;
+	padding: 2px 8px;
+	background: var(--bg);
+}
+
+.library__active-filters .chip--clickable.chip--accent {
+	background: var(--accent-soft);
+}
+
+.library__active-filters .chip--clickable.chip--danger {
+	background: color-mix(in srgb, var(--danger) 14%, var(--bg-elev));
+}
+
+.library__active-filters .chip svg {
+	flex: none;
+}
+
+.library__active-label {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.library__active-clear {
+	flex: none;
+	min-height: 28px;
+}
+
 .library__filter-panel {
 	display: grid;
 	grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -185,6 +231,30 @@
 
 	.library__categories > * {
 		flex: none;
+	}
+
+	.library__active-filters {
+		flex-wrap: nowrap;
+		overflow-x: auto;
+		scrollbar-width: none;
+	}
+
+	.library__active-filters::-webkit-scrollbar {
+		display: none;
+	}
+
+	.library__active-filters > * {
+		flex: none;
+	}
+
+	/* Phones keep a little more touch height, and the pinned clear shrinks to its icon so the pills keep the row */
+	.library__active-filters .chip--clickable,
+	.library__active-clear {
+		min-height: 32px;
+	}
+
+	.library__active-clear span {
+		display: none;
 	}
 
 	.library__filter-panel {

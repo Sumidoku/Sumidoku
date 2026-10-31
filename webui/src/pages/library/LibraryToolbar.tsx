@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { RotateCcw, Search, SlidersHorizontal } from 'lucide-react';
+import { RotateCcw, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Category, FilterGroup, LibraryFilter, LibrarySort } from '../../api/types';
 import type { TriStateSelection } from '../../lib/triState';
 import { MANGA_CONTENT_RATING_LEVELS } from '../../lib/source';
@@ -47,6 +47,63 @@ export function advancedFilterCount(
 	);
 }
 
+export type RemovableFilterKind = 'filter' | 'rating' | 'source' | 'author' | 'tag';
+
+export interface ActiveFilterItem {
+	id: string;
+	label: string;
+	state: 1 | -1;
+	/** null is the selected filter group, which has no tri-state key to drop */
+	kind: RemovableFilterKind | null;
+	filterKey: string;
+}
+
+/** Everything advancedFilterCount counts, as summary pills. Search and categories stay out: their own controls are always on screen */
+export function activeFilterItems(
+	t: TFunction,
+	selections: {
+		filterTri: TriStateSelection;
+		ratings: TriStateSelection;
+		sourceTri: TriStateSelection;
+		authorTri: TriStateSelection;
+		tagTri: TriStateSelection;
+		groupId: number | null;
+		groups: FilterGroup[];
+		sourceOptions: { key: string; label: string; name?: string }[];
+	}
+): ActiveFilterItem[] {
+	const { filterTri, ratings, sourceTri, authorTri, tagTri, groupId, groups, sourceOptions } = selections;
+	const named = (kind: string, value: string | undefined) =>
+		value ? t('library.activeFilter', { kind, value }) : kind;
+	const items: ActiveFilterItem[] = [];
+	const add = (kind: RemovableFilterKind, states: TriStateSelection, label: (key: string) => string) => {
+		for (const [filterKey, state] of Object.entries(states)) {
+			items.push({ id: `${kind}:${filterKey}`, label: label(filterKey), state, kind, filterKey });
+		}
+	};
+	add('filter', filterTri, (key) => {
+		const option = FILTER_OPTIONS.find((o) => o.value === key);
+		return option ? t(option.labelKey) : key;
+	});
+	add('rating', ratings, (key) =>
+		named(t('library.rating'), MANGA_CONTENT_RATING_LEVELS.find((l) => String(l.value) === key)?.label)
+	);
+	// The source list may still be loading on a restored selection; a bare dimension label beats a raw id
+	add('source', sourceTri, (key) => named(t('library.source'), sourceOptions.find((o) => o.key === key)?.name));
+	add('author', authorTri, (key) => named(t('library.author'), key));
+	add('tag', tagTri, (key) => named(t('library.tag'), key));
+	if (groupId !== null) {
+		items.push({
+			id: 'group',
+			label: named(t('library.group'), groups.find((g) => g.id === groupId)?.name),
+			state: 1,
+			kind: null,
+			filterKey: ''
+		});
+	}
+	return items;
+}
+
 export interface LibraryToolbarProps {
 	searchInput: string;
 	onSearchInput: (value: string) => void;
@@ -61,7 +118,7 @@ export interface LibraryToolbarProps {
 	groupId: number | null;
 	groups: FilterGroup[];
 	categories: Category[];
-	sourceOptions: { key: string; label: string }[];
+	sourceOptions: { key: string; label: string; name?: string }[];
 	authorOptions: { key: string; label: string }[];
 	tagOptions: { key: string; label: string }[];
 	showUncategorized: boolean;
@@ -72,6 +129,7 @@ export interface LibraryToolbarProps {
 	onAuthorCycle: (key: string) => void;
 	onTagCycle: (key: string) => void;
 	onGroupChange: (id: number | null) => void;
+	onRemoveFilter: (kind: RemovableFilterKind, key: string) => void;
 	onResetRatings: () => void;
 	onResetSources: () => void;
 	onResetAuthors: () => void;
@@ -104,6 +162,7 @@ export function LibraryToolbar({
 	onAuthorCycle,
 	onTagCycle,
 	onGroupChange,
+	onRemoveFilter,
 	onResetRatings,
 	onResetSources,
 	onResetAuthors,
@@ -112,8 +171,10 @@ export function LibraryToolbar({
 }: LibraryToolbarProps) {
 	const { t } = useTranslation();
 	const activeCount = advancedFilterCount(filterTri, ratings, sourceTri, authorTri, tagTri, groupId);
-	const [filtersOpen, setFiltersOpen] = useState(activeCount > 0);
-	const canClear = searchInput.trim() !== '' || activeCount > 0 || Object.keys(categoryTri).length > 0;
+	const [filtersOpen, setFiltersOpen] = useState(false);
+	const activeItems = activeFilterItems(t, { filterTri, ratings, sourceTri, authorTri, tagTri, groupId, groups, sourceOptions });
+	// With a summary row on screen its clear button is the one; the panel keeps one for search and category selections
+	const canClearInPanel = activeCount === 0 && (searchInput.trim() !== '' || Object.keys(categoryTri).length > 0);
 
 	return (
 		<section className="library__toolbar" aria-label={t('library.toolbar')}>
@@ -176,6 +237,34 @@ export function LibraryToolbar({
 					);
 				})}
 			</div>
+
+			{activeItems.length > 0 && (
+				<div className="library__active">
+					<div className="library__active-filters" role="group" aria-label={t('library.activeFilters')}>
+						{activeItems.map((item) => (
+							<Chip
+								key={item.id}
+								triState={item.state}
+								title={t(item.state === 1 ? 'library.activeIncluded' : 'library.activeExcluded', { label: item.label })}
+								onClick={() => (item.kind === null ? onGroupChange(null) : onRemoveFilter(item.kind, item.filterKey))}
+							>
+								<span className="library__active-label">{item.label}</span>
+								<X size={12} />
+							</Chip>
+						))}
+					</div>
+					<Button
+						size="sm"
+						className="library__active-clear"
+						aria-label={t('library.clearFilters')}
+						title={t('library.clearFilters')}
+						onClick={onClearFilters}
+					>
+						<RotateCcw size={14} />
+						<span>{t('library.clearFilters')}</span>
+					</Button>
+				</div>
+			)}
 
 			{filtersOpen && (
 				<div className="library__filter-panel" id="library-filter-panel">
@@ -256,7 +345,7 @@ export function LibraryToolbar({
 						</section>
 					)}
 
-					{canClear && (
+					{canClearInPanel && (
 						<div className="library__filter-footer">
 							<Button size="sm" onClick={onClearFilters}>
 								<RotateCcw size={14} />
