@@ -20,6 +20,16 @@ the primary write and put the companion write in its transaction.
   outright. The resolved change adds only the column; the snapshot field now
   lives in `sync/journal.rs`, and `store/manga.rs:set_metadata` writes the
   journal row in the same transaction.
+**`npm test` rewrites the dependency cache a running Vite dev server uses.**
+The render tests start their own `configFile: false` Vite server, which shares
+`node_modules/.vite` with the dev server but hashes a different config, so the
+dev server's next page gets 504 `Outdated Optimize Dep` and renders blank, and a
+reload does not cure it. Don't run the suite beside a smoke, and restart with
+`vite --force` before reading a blank page as an app bug.
+- Evidence: 2026-11-01, a reader-menu smoke opened a blank `/browse/1` with every
+  optimized dep at 504 after a full `npm test`, and a reload changed nothing.
+  Clearing the cache and restarting with `--force` rendered the page.
+
 **A box with no size still intersects.** An `IntersectionObserver` reports a
 zero-height element inside the viewport as intersecting, so a list of unloaded
 items all count as seen at once. Reserve each item's box before treating

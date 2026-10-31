@@ -11,6 +11,7 @@ export interface SegmentedControlProps<T extends string | number> {
 	value: T;
 	onChange: (v: T) => void;
 	disabled?: boolean;
+	'aria-label'?: string;
 }
 
 /** Pill segmented control; the thumb is positioned by the selected item's actual rendered width/offset */
@@ -18,7 +19,8 @@ export function SegmentedControl<T extends string | number>({
 	options,
 	value,
 	onChange,
-	disabled = false
+	disabled = false,
+	'aria-label': ariaLabel
 }: SegmentedControlProps<T>) {
 	const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
 	const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
@@ -35,7 +37,7 @@ export function SegmentedControl<T extends string | number>({
 	}, [value, options]);
 
 	return (
-		<div className="seg" role="tablist">
+		<div className="seg" role="tablist" aria-label={ariaLabel}>
 			{thumb && <span className="seg__thumb" style={{ left: thumb.left, width: thumb.width }} />}
 			{options.map((o, i) => (
 				<button

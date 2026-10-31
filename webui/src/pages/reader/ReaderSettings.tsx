@@ -1,6 +1,7 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Page } from '../../api/types';
-import { SegmentedControl, Select } from '../../components';
+import { SegmentedControl, Select, Switch } from '../../components';
 import { FONT_SIZE_LIMITS, LINE_HEIGHT_LIMITS } from './typography';
 import type { ReaderFont, ReaderTypography } from './typography';
 import { pageText } from './pageText';
@@ -32,6 +33,40 @@ interface ReaderSettingsProps {
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
 }
 
+/** A titled block of the menu; a note marks it unavailable in the current mode and locks its controls */
+function SettingsGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+	return (
+		<section className="reader__settings-group">
+			<div className="reader__settings-head">
+				<h3 className="reader__settings-title">{title}</h3>
+				{note && <span>{note}</span>}
+			</div>
+			<div className={note ? 'reader__settings-body reader__settings-body--off' : 'reader__settings-body'} inert={!!note}>
+				{children}
+			</div>
+		</section>
+	);
+}
+
+function SwitchRow({
+	label,
+	checked,
+	onChange,
+	disabled
+}: {
+	label: string;
+	checked: boolean;
+	onChange: (checked: boolean) => void;
+	disabled?: boolean;
+}) {
+	return (
+		<label className={disabled ? 'reader__settings-row reader__settings-row--off' : 'reader__settings-row'}>
+			<span>{label}</span>
+			<Switch checked={checked} onChange={onChange} disabled={disabled} label={label} />
+		</label>
+	);
+}
+
 export function ReaderSettings({
 	mode,
 	dir,
@@ -58,26 +93,13 @@ export function ReaderSettings({
 }: ReaderSettingsProps) {
 	const { t } = useTranslation();
 	const showTypography = pageText(currentPage) !== null;
+	const pagedOnly = mode !== 'paged';
+	const splitAvailable = layout === 'single';
 	return (
 		<div className="reader__settings card">
-			<div className="reader__settings-title">
-				{mode !== 'paged' ? t('reader.directionPagedOnly') : t('reader.direction')}
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
+			<SettingsGroup title={t('reader.groupPage')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
 				<SegmentedControl
-					options={[
-						{ value: 'ltr', label: t('reader.ltr') },
-						{ value: 'rtl', label: t('reader.rtl') }
-					]}
-					value={dir}
-					onChange={onDirChange}
-				/>
-			</div>
-			<div className="reader__settings-title">
-				{mode !== 'paged' ? t('reader.layoutPagedOnly') : t('reader.layout')}
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<SegmentedControl
+					aria-label={t('reader.layout')}
 					options={[
 						{ value: 'single', label: t('reader.layoutSingle') },
 						{ value: 'double', label: t('reader.layoutDouble') },
@@ -86,99 +108,70 @@ export function ReaderSettings({
 					value={layout}
 					onChange={onLayoutChange}
 				/>
-			</div>
-			<div className="reader__settings-title">
-				{mode !== 'paged' ? t('reader.tapZonesPagedOnly') : t('reader.tapZones')}
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<Select
-					aria-label={t('reader.tapZones')}
-					value={tapZones}
-					onChange={(value) => onTapZonesChange(value as TapZoneLayout)}
-				>
-					<option value="lr">{t('reader.tzLr')}</option>
-					<option value="rl">{t('reader.tzRl')}</option>
-					<option value="edge">{t('reader.tzEdge')}</option>
-					<option value="kindle">{t('reader.tzKindle')}</option>
-					<option value="off">{t('reader.tzOff')}</option>
-				</Select>
-			</div>
-			<div className="reader__settings-title">
-				{mode !== 'paged' ? t('reader.scalePagedOnly') : t('reader.pageScale')}
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<Select
-					aria-label={t('reader.pageScale')}
-					value={scale}
-					onChange={(value) => onScaleChange(value as PageScale)}
-				>
-					<option value="screen">{t('reader.scaleScreen')}</option>
-					<option value="width">{t('reader.scaleWidth')}</option>
-					<option value="widthShrink">{t('reader.scaleWidthShrink')}</option>
-					<option value="height">{t('reader.scaleHeight')}</option>
-					<option value="original">{t('reader.scaleOriginal')}</option>
-				</Select>
-			</div>
-			<div className={mode !== 'paged' || layout !== 'single' ? 'reader__settings-dir--off' : undefined}>
-				<label className="reader__stretch">
-					<input
-						type="checkbox"
-						checked={split}
-						onChange={(e) => onSplitChange(e.currentTarget.checked)}
-					/>
-					<span>
-						{mode !== 'paged'
-							? t('reader.splitWidePagedOnly')
-							: layout !== 'single'
-								? t('reader.splitWideSingleOnly')
-								: t('reader.splitWide')}
-					</span>
-				</label>
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<label className="reader__stretch">
-					<input
-						type="checkbox"
-						checked={stretch}
-						onChange={(e) => onStretchChange(e.currentTarget.checked)}
-					/>
-					<span>{mode !== 'paged' ? t('reader.stretchPagedOnly') : t('reader.stretch')}</span>
-				</label>
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<label className="reader__stretch">
-					<input
-						type="checkbox"
-						checked={anim}
-						onChange={(e) => onAnimChange(e.currentTarget.checked)}
-					/>
-					<span>{mode !== 'paged' ? t('reader.animationsPagedOnly') : t('reader.animations')}</span>
-				</label>
-			</div>
-			<div className={mode !== 'paged' ? 'reader__settings-dir--off' : undefined}>
-				<label className="reader__stretch">
-					<input
-						type="checkbox"
-						checked={transition}
-						onChange={(e) => onTransitionChange(e.currentTarget.checked)}
-					/>
-					<span>{mode !== 'paged' ? t('reader.transitionPagedOnly') : t('reader.transition')}</span>
-				</label>
-			</div>
-			<div className="reader__settings-title">{t('reader.background')}</div>
-			<SegmentedControl
-				options={[
-					{ value: 'dark', label: t('reader.bgDark') },
-					{ value: 'gray', label: t('reader.bgGray') },
-					{ value: 'light', label: t('reader.bgLight') },
-					{ value: 'auto', label: t('reader.bgAuto') }
-				]}
-				value={bg}
-				onChange={onBgChange}
-			/>
+				<div className="reader__settings-row">
+					<span>{t('reader.pageScale')}</span>
+					<Select
+						aria-label={t('reader.pageScale')}
+						value={scale}
+						onChange={(value) => onScaleChange(value as PageScale)}
+					>
+						<option value="screen">{t('reader.scaleScreen')}</option>
+						<option value="width">{t('reader.scaleWidth')}</option>
+						<option value="widthShrink">{t('reader.scaleWidthShrink')}</option>
+						<option value="height">{t('reader.scaleHeight')}</option>
+						<option value="original">{t('reader.scaleOriginal')}</option>
+					</Select>
+				</div>
+				<SwitchRow
+					label={splitAvailable ? t('reader.splitWide') : t('reader.splitWideSingleOnly')}
+					checked={split}
+					onChange={onSplitChange}
+					disabled={!splitAvailable}
+				/>
+				<SwitchRow label={t('reader.stretch')} checked={stretch} onChange={onStretchChange} />
+			</SettingsGroup>
+			<SettingsGroup title={t('reader.groupTurning')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
+				<SegmentedControl
+					aria-label={t('reader.direction')}
+					options={[
+						{ value: 'ltr', label: t('reader.ltr') },
+						{ value: 'rtl', label: t('reader.rtl') }
+					]}
+					value={dir}
+					onChange={onDirChange}
+				/>
+				<div className="reader__settings-row">
+					<span>{t('reader.tapZones')}</span>
+					<Select
+						aria-label={t('reader.tapZones')}
+						value={tapZones}
+						onChange={(value) => onTapZonesChange(value as TapZoneLayout)}
+					>
+						<option value="lr">{t('reader.tzLr')}</option>
+						<option value="rl">{t('reader.tzRl')}</option>
+						<option value="edge">{t('reader.tzEdge')}</option>
+						<option value="kindle">{t('reader.tzKindle')}</option>
+						<option value="off">{t('reader.tzOff')}</option>
+					</Select>
+				</div>
+				<SwitchRow label={t('reader.animations')} checked={anim} onChange={onAnimChange} />
+				<SwitchRow label={t('reader.transition')} checked={transition} onChange={onTransitionChange} />
+			</SettingsGroup>
+			<SettingsGroup title={t('reader.groupAppearance')}>
+				<SegmentedControl
+					aria-label={t('reader.background')}
+					options={[
+						{ value: 'dark', label: t('reader.bgDark') },
+						{ value: 'gray', label: t('reader.bgGray') },
+						{ value: 'light', label: t('reader.bgLight') },
+						{ value: 'auto', label: t('reader.bgAuto') }
+					]}
+					value={bg}
+					onChange={onBgChange}
+				/>
+			</SettingsGroup>
 			{showTypography && (
-				<>
-					<div className="reader__settings-title">{t('reader.typography')}</div>
+				<SettingsGroup title={t('reader.typography')}>
 					<div className="reader__typography">
 						<Select
 							aria-label={t('reader.fontFamily')}
@@ -215,7 +208,7 @@ export function ReaderSettings({
 							<span>{typography.lineHeight.toFixed(1)}</span>
 						</label>
 					</div>
-				</>
+				</SettingsGroup>
 			)}
 		</div>
 	);
