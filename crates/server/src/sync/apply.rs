@@ -898,6 +898,34 @@ fn category_parent_origin(identity: &Value) -> ApiResult<Option<(String, i64, St
 	)))
 }
 
+/// The local category a peer's event names through `categoryAliases`, which survive a rename
+async fn category_from_aliases(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	identity: &Value,
+	user_id: i64,
+) -> ApiResult<Option<i64>> {
+	let Some(aliases) = identity.get("categoryAliases") else {
+		return Ok(None);
+	};
+	let aliases = aliases.as_array().ok_or_else(|| ApiError::bad_request("identity categoryAliases must be an array"))?;
+	for alias in aliases {
+		let key: Option<String> = sqlx::query_scalar(
+			"SELECT entity_key FROM sync_alias
+			 WHERE origin = ? AND origin_user_id = ? AND user_id = ? AND entity_kind = 'category' AND origin_entity_key = ?",
+		)
+		.bind(identity_string(alias, "origin")?)
+		.bind(identity_id(alias, "originUserId")?)
+		.bind(user_id)
+		.bind(identity_string(alias, "originEntityKey")?)
+		.fetch_optional(&mut **tx)
+		.await?;
+		if let Some(key) = key {
+			return key.parse::<i64>().map(Some).map_err(|_| ApiError::bad_request("invalid mapped category key"));
+		}
+	}
+	Ok(None)
+}
+
 async fn category_from_membership(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	change: &WireChange,
@@ -1377,13 +1405,14 @@ async fn apply_category(
 		.map(str::parse::<i64>)
 		.transpose()
 		.map_err(|_| ApiError::bad_request("invalid mapped category key"))?;
+	let aliased = category_from_aliases(tx, &change.identity, user_id).await?;
 	let child_mapped = category_from_membership(tx, change, user_id).await?;
 	let natural_id = sqlx::query_scalar("SELECT id FROM category WHERE user_id = ? AND name = ?")
 		.bind(user_id)
 		.bind(string(&snapshot, "name")?)
 		.fetch_optional(&mut **tx)
 		.await?;
-	let mut id = mapped_id.or(child_mapped).or(natural_id);
+	let mut id = mapped_id.or(aliased).or(child_mapped).or(natural_id);
 	if let (Some(stub_id), Some(target_id)) = (id, natural_id)
 		&& stub_id != target_id
 		&& merge_category_stub(tx, start_sequence, stub_id, target_id).await?

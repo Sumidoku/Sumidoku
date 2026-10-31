@@ -780,6 +780,56 @@ async fn relayed_category_membership_resolves_parent_across_origins() {
 }
 
 #[tokio::test]
+async fn renamed_category_keeps_its_identity_across_peers() {
+	let a = peer().await;
+	let b = peer().await;
+	let c = peer().await;
+	seed_initial(&a, 100, 500, 700, "shared", false).await;
+	exchange(&a, &b).await;
+	exchange(&b, &c).await;
+
+	let rename = async |peer: &Peer, name: &str| {
+		let pool = connect_db(&peer.db_path).await;
+		let id: i64 = sqlx::query_scalar("SELECT id FROM category WHERE user_id = 1")
+			.fetch_one(&pool)
+			.await
+			.expect("one category");
+		sqlx::query("UPDATE category SET name = ? WHERE id = ?")
+			.bind(name)
+			.bind(id)
+			.execute(&pool)
+			.await
+			.expect("rename");
+		common::publish_category(&pool, id).await;
+		pool.close().await;
+	};
+	let names = async |peer: &Peer| -> Vec<String> {
+		let pool = connect_db(&peer.db_path).await;
+		let names = sqlx::query_scalar("SELECT name FROM category WHERE user_id = 1 ORDER BY name")
+			.fetch_all(&pool)
+			.await
+			.expect("categories");
+		pool.close().await;
+		names
+	};
+
+	rename(&b, "Renamed on B").await;
+	exchange(&b, &a).await;
+	assert_eq!(names(&a).await, ["Renamed on B"]);
+
+	rename(&b, "Renamed twice").await;
+	exchange(&b, &a).await;
+	assert_eq!(names(&a).await, ["Renamed twice"]);
+
+	exchange(&a, &b).await;
+	assert_eq!(names(&b).await, ["Renamed twice"]);
+
+	rename(&c, "Renamed on C").await;
+	exchange(&c, &a).await;
+	assert_eq!(names(&a).await, ["Renamed on C"]);
+}
+
+#[tokio::test]
 async fn category_id_collision_does_not_merge_unrelated_categories() {
 	let a = peer().await;
 	let b = peer().await;

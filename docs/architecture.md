@@ -878,7 +878,10 @@ no alias is derived from migration text.
   remote-to-local mappings independently of event versions; local events also
   register their own origin so a relay can sync back to the source instance.
   First matches use source/manga/chapter natural keys and category names; a
-  numeric category id alone never proves a match. Category snapshots always
+  numeric category id alone never proves a match. A rename leaves no name to
+  match, so a category event's identity also carries `categoryAliases`, the
+  other keys `sync_alias` knows it by, added when the event is served. A peer
+  resolves those before falling back to the name. Category snapshots always
   carry numeric `includeInDownload: 0` for older peers that require the field.
   Apply accepts legacy values but normalizes the journaled snapshot to `0` and
   never writes the retired column; compaction likewise rewrites reused live and
