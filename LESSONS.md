@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A new migration ships only with its checksum pin appended.** `db.rs`'s
+`shipped_migrations_are_immutable` asserts the discovered migration count
+equals the pinned list length, so landing `NNNN_*.sql` without a
+`(version, sha384)` entry fails CI while clippy and every other check stay
+green. Compute the pin as uppercase hex SHA-384 of the file bytes and append
+it in the same change.
+- Evidence: 2026-10-31, PR #542's first test leg failed
+  `db::tests::shipped_migrations_are_immutable` ("left: 31, right: 30") after
+  `0031_chapter_cache_breakdown.sql` landed without a pin; the follow-up
+  commit appended it.
+
 **A runtime SQL string needs a test on the migrated schema, above all when its
 failure only logs and skips.** `sqlx::query` strings are not checked at compile
 time, and a warn-and-return path turns a wrong column into a feature that quietly
