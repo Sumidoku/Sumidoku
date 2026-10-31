@@ -1860,6 +1860,7 @@ async fn update_manga(
 		}
 	}
 	if !writes.is_empty() || !unlocks.is_empty() {
+		crate::api::metadata::require_in_library(&state.pool, id, user.id).await?;
 		let now = crate::model::unix_now();
 		let mut tx = state.pool.begin().await?;
 		let mut locks = crate::metadata::load(&mut tx, id).await?;

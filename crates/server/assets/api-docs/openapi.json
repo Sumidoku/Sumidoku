@@ -1573,7 +1573,8 @@
           "manga"
         ],
         "operationId": "updateManga",
-        "summary": "Patch manga update strategy or the admin's incognito state",
+        "summary": "Patch manga update strategy, incognito state, or metadata fields",
+        "description": "Metadata fields are written with a manual lock and metadataUnlock drops a field's lock, so the owning source takes it back. Metadata edits are only accepted for entries in the library.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1603,6 +1604,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1815,7 +1819,7 @@
         ],
         "operationId": "applyMangaMetadata",
         "summary": "Write metadata matched from a tracker or another source",
-        "description": "fields carry the metadata field names the user confirmed. values may only replace the title with another variant the preview offered; some fields may only carry the matched value. bind remembers the tracker binding in the same transaction and is rejected for source matches.",
+        "description": "fields carry the metadata field names the user confirmed. values may only replace the title with another variant the preview offered; some fields may only carry the matched value. bind remembers the tracker binding in the same transaction and is rejected for source matches. Only an entry in the library can be matched.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1846,6 +1850,9 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1864,7 +1871,7 @@
         ],
         "operationId": "previewMangaMetadata",
         "summary": "Preview another tracker or source entry's metadata against this library entry",
-        "description": "A preview never writes. Fields the provider cannot fill answer selectable=false with a reason; the title carries its alternatives.",
+        "description": "A preview never writes and only serves entries in the library. Fields the provider cannot fill answer selectable=false with a reason; the title carries its alternatives.",
         "parameters": [
           {
             "name": "provider",
@@ -1905,6 +1912,9 @@
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1923,7 +1933,7 @@
         ],
         "operationId": "restoreMangaMetadata",
         "summary": "Drop metadata field locks so the owning source owns them again",
-        "description": "An empty or absent fields list unlocks every locked field. refresh re-reads the owning source immediately so unlocked fields take its values now.",
+        "description": "An empty or absent fields list unlocks every locked field. refresh re-reads the owning source immediately so unlocked fields take its values now. Only an entry in the library can be restored.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1953,6 +1963,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error"

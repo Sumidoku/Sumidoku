@@ -816,28 +816,32 @@ export default function MangaDetailPage() {
 											<span>{t('mangaDetail.changeCover')}</span>
 											<Images size={14} />
 										</button>
-										<button
-											type="button"
-											className="manga-menu__row"
-											onClick={() => {
-												closeMenu();
-												setMatchMetadataOpen(true);
-											}}
-										>
-											<span>{t('mangaDetail.matchMetadata')}</span>
-											<Tags size={14} />
-										</button>
-										<button
-											type="button"
-											className="manga-menu__row"
-											onClick={() => {
-												closeMenu();
-												setEditMetadataOpen(true);
-											}}
-										>
-											<span>{t('mangaDetail.editMetadata')}</span>
-											<PencilLine size={14} />
-										</button>
+										{manga.inLibrary && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setMatchMetadataOpen(true);
+												}}
+											>
+												<span>{t('mangaDetail.matchMetadata')}</span>
+												<Tags size={14} />
+											</button>
+										)}
+										{manga.inLibrary && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setEditMetadataOpen(true);
+												}}
+											>
+												<span>{t('mangaDetail.editMetadata')}</span>
+												<PencilLine size={14} />
+											</button>
+										)}
 										{!isLocal && chapters.length > 0 && (
 											<button
 												type="button"
@@ -1148,7 +1152,7 @@ export default function MangaDetailPage() {
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
 
-			{matchMetadataOpen && (
+			{manga.inLibrary && matchMetadataOpen && (
 				<MatchMetadataDialog
 					mangaId={mangaId}
 					mangaTitle={manga.title}
@@ -1156,7 +1160,7 @@ export default function MangaDetailPage() {
 				/>
 			)}
 
-			{editMetadataOpen && (
+			{manga.inLibrary && editMetadataOpen && (
 				<EditMetadataDialog mangaId={mangaId} onClose={() => setEditMetadataOpen(false)} />
 			)}
 

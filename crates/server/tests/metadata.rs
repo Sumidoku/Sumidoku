@@ -28,11 +28,19 @@ fn lock_provider<'a>(manga: &'a Value, field: &str) -> Option<&'a Value> {
 	manga["metadataLocks"].get(field).map(|lock| &lock["provider"])
 }
 
+/// Matching and editing metadata is a library feature, so every test shelves its
+/// entry before touching metadata.
+async fn shelve(app: &Router, manga_id: i64) {
+	let (status, body) = request(app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 #[tokio::test]
 async fn patch_records_manual_locks_and_unlocks_them() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 
 	let (status, body) = request(
 		&app,
@@ -86,6 +94,7 @@ async fn source_refresh_keeps_locked_metadata() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 	let source_title = detail(&app, manga_id).await["title"].as_str().expect("title").to_string();
 
 	let (status, _) = request(
@@ -122,6 +131,7 @@ async fn preview_and_apply_from_another_source() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 	let source_id = example_source_id(&app).await;
 	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
 
@@ -168,6 +178,7 @@ async fn metadata_endpoints_validate_citations_and_selections() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 	let source_id = example_source_id(&app).await;
 	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
 
@@ -234,6 +245,7 @@ async fn restore_without_fields_unlocks_everything() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 	let source_title = detail(&app, manga_id).await["title"].as_str().expect("title").to_string();
 
 	let (status, _) = request(
@@ -275,6 +287,7 @@ async fn sync_snapshot_carries_metadata_locks() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 	let pool = connect_db(&t.db_path).await;
 
 	let (status, _) = request(
@@ -306,6 +319,7 @@ async fn backup_document_round_trips_metadata_locks() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
 
 	let (status, _) = request(
 		&app,
@@ -356,4 +370,44 @@ async fn backup_document_round_trips_metadata_locks() {
 	let (status, _) = request(&app, "POST", "/api/v1/backups/document", Some(cleared)).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(detail(&app, manga_id).await["metadataLocks"].get("title").is_none());
+}
+
+#[tokio::test]
+async fn unshelved_entries_reject_metadata_changes() {
+	let t = test_app().await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	let source_id = example_source_id(&app).await;
+	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
+
+	// A stray search result is not editable, matched or restored
+	let (status, body) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/manga/{manga_id}"),
+		Some(json!({"title": "Hand Written"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	let (status, _) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/metadata/preview?provider=source:{source_id}&remoteId={key}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT);
+	let (status, _) = request(&app, "POST", &format!("/api/v1/manga/{manga_id}/metadata/restore"), None).await;
+	assert_eq!(status, StatusCode::CONFLICT);
+
+	// Update strategy and incognito still apply to an unshelved entry
+	let (status, body) = request(
+		&app,
+		"PATCH",
+		&format!("/api/v1/manga/{manga_id}"),
+		Some(json!({"updateStrategy": "Never"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["update_strategy"], "Never");
 }

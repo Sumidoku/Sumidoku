@@ -170,6 +170,21 @@ pub struct MetadataRestoreRequest {
 	pub refresh: bool,
 }
 
+/// Matching and editing metadata is a library feature: only a shelved entry has
+/// a durable row to lock against, while a stray search result is refreshed by
+/// its source anyway.
+pub(crate) async fn require_in_library(pool: &sqlx::SqlitePool, manga_id: i64, user_id: i64) -> ApiResult<()> {
+	let in_library: Option<(bool,)> = sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ? AND user_id = ?")
+		.bind(manga_id)
+		.bind(user_id)
+		.fetch_optional(pool)
+		.await?;
+	if !in_library.map(|(flag,)| flag).unwrap_or(false) {
+		return Err(ApiError::not_in_library("manga not in library"));
+	}
+	Ok(())
+}
+
 /// A preview never writes: it reports the provider's values next to the current
 /// ones and marks fields the provider cannot fill as unselectable.
 pub async fn preview_metadata(
@@ -179,6 +194,7 @@ pub async fn preview_metadata(
 	Query(query): Query<MetadataPreviewQuery>,
 ) -> ApiResult<Json<Value>> {
 	let row = manga_row(&state.pool, manga_id).await?;
+	require_in_library(&state.pool, manga_id, user.id).await?;
 	let citation = parse_citation(&query.provider, &query.remote_id)?;
 	let metadata = fetch_metadata(&state, &citation, user.id).await?;
 	let mut conn = state.pool.acquire().await?;
@@ -247,6 +263,7 @@ pub async fn apply_metadata(
 	Json(body): Json<MetadataApplyRequest>,
 ) -> ApiResult<Json<Value>> {
 	manga_row(&state.pool, manga_id).await?;
+	require_in_library(&state.pool, manga_id, user.id).await?;
 	let citation = parse_citation(&body.provider, &body.remote_id)?;
 	if body.bind && !matches!(citation, Citation::Tracker(..)) {
 		return Err(ApiError::bad_request("bind is only available for tracker matches"));
@@ -323,6 +340,7 @@ pub async fn restore_metadata(
 ) -> ApiResult<Json<Value>> {
 	let body = body.map(|Json(body)| body).unwrap_or_default();
 	let row = manga_row(&state.pool, manga_id).await?;
+	require_in_library(&state.pool, manga_id, user.id).await?;
 	let fields: Vec<Field> = match body.fields {
 		Some(names) if !names.is_empty() => names
 			.iter()
