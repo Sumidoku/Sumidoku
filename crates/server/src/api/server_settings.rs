@@ -213,7 +213,6 @@ impl ServerSettings {
 			"browse.pinned_sources",
 		]
 		.iter()
-		.chain(&crate::api::SERVER_OWNED_SETTING_KEYS)
 		.copied()
 		.collect();
 		let extra = map

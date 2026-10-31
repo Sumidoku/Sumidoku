@@ -2031,15 +2031,6 @@ pub(crate) async fn get_pages(
 /// the same statements while a select-all library stays far below the cap.
 pub(crate) const MANGA_ID_QUERY_CHUNK: usize = 500;
 
-/// Instance state only the server writes: settings writes ignore these keys, the structured view
-/// leaves them out, and backups neither carry nor restore them.
-pub(crate) const SERVER_OWNED_SETTING_KEYS: [&str; 4] = [
-	"sync.instance_id",
-	crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT,
-	crate::update::LIBRARY_LAST_UPDATE_FINISHED_AT,
-	crate::internal::local::scan::LOCAL_LAST_SCAN_AT,
-];
-
 /// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
 /// the library.* values reference the admin's category ids. New keys are added on both read and write sides together
 pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
@@ -2064,9 +2055,6 @@ async fn get_settings(
 	let mut map = serde_json::Map::new();
 	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
-		if key == "sync.instance_id" {
-			continue;
-		}
 		if key.starts_with("user.") {
 			if let Some(scoped) = key.strip_prefix(&own_prefix)
 				&& USER_SCOPED_SETTING_KEYS.contains(&scoped)
@@ -2076,6 +2064,9 @@ async fn get_settings(
 			continue;
 		}
 		map.insert(key, serde_json::from_str(&raw)?);
+	}
+	if let Some(at) = crate::server_state::time(&state.pool, crate::server_state::BACKUP_LAST_RUN).await? {
+		map.insert(crate::server_state::BACKUP_LAST_RUN.into(), json!(at));
 	}
 	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
 	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
@@ -2141,7 +2132,7 @@ pub(crate) async fn apply_settings(
 			result?;
 		}
 		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
-		if key == "localDirs" || key == "localOneshotsDir" || SERVER_OWNED_SETTING_KEYS.contains(&key.as_str()) {
+		if key == "localDirs" || key == "localOneshotsDir" || crate::server_state::KEYS.contains(&key.as_str()) {
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated

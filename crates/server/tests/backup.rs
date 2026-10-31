@@ -683,7 +683,7 @@ async fn sync_instance_id_stays_out_of_public_settings_and_backups() {
 
 	let b = fresh_target().await;
 	let pool = connect_db(&b.db_path).await;
-	let before: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+	let before: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
 		.expect("target instance id");
@@ -700,7 +700,7 @@ async fn sync_instance_id_stays_out_of_public_settings_and_backups() {
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&b.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let after: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+	let after: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
 		.expect("restored instance id");

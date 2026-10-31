@@ -19,7 +19,7 @@ struct Peer {
 async fn peer() -> Peer {
 	let app = test_app().await;
 	let pool = connect_db(&app.db_path).await;
-	let origin: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+	let origin: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
 		.expect("instance id");
@@ -1793,7 +1793,7 @@ async fn auth_peer() -> Peer {
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build auth app");
 	let pool = connect_db(&db_path).await;
-	let origin: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+	let origin: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 		.fetch_one(&pool)
 		.await
 		.expect("instance id");

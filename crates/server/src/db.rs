@@ -144,10 +144,7 @@ pub async fn create_pool(database_url: &str) -> Result<SqlitePool, Error> {
 		}
 		Err(error) => return Err(error.into()),
 	}
-	let rebaseline: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'sync.single_owner_rebaseline'")
-		.fetch_optional(&pool)
-		.await?;
-	if rebaseline.is_some() {
+	if crate::server_state::get(&pool, crate::server_state::SINGLE_OWNER_REBASELINE).await?.is_some() {
 		crate::sync::compact::rebaseline(&pool)
 			.await
 			.map_err(|e| Error::Sync(e.message().to_string()))?;
@@ -197,7 +194,101 @@ mod tests {
 
 	/// Existing databases reject changed migration bytes unless their exact old checksum is registered.
 	/// Pin the canonical SHA-384 for every shipped file; new migrations append a pin.
-	#[test]
+	#[tokio::test]
+	async fn migration_32_moves_server_state_and_the_origin_trigger() {
+		use sqlx::migrate::Migrate;
+		use std::str::FromStr;
+		let tmp = tempfile::tempdir().expect("tmp");
+		let url = format!("sqlite://{}/state.db?mode=rwc", tmp.path().display());
+		let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+			.expect("database url")
+			.create_if_missing(true)
+			.foreign_keys(true);
+		let pool = sqlx::sqlite::SqlitePoolOptions::new()
+			.max_connections(1)
+			.connect_with(options)
+			.await
+			.expect("connect");
+		let migrator = sqlx::migrate!("./migrations");
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.ensure_migrations_table().await.expect("migration table");
+		for migration in migrator.iter().filter(|migration| migration.version < 32) {
+			conn.apply(migration).await.expect("apply pre-0032 migration");
+		}
+		drop(conn);
+		let instance_id: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+			.fetch_one(&pool)
+			.await
+			.expect("instance id");
+		for (key, value) in [
+			("library.last_scheduled_run_at", "11"),
+			("library.last_update_finished_at", "22"),
+			("local.last_scan_at", "33"),
+			("backup.last_run", "null"),
+			("sync.single_owner_rebaseline", "true"),
+			("custom.option", "1"),
+		] {
+			sqlx::query("INSERT OR REPLACE INTO setting (key, value) VALUES (?, ?)")
+				.bind(key)
+				.bind(value)
+				.execute(&pool)
+				.await
+				.expect("seed setting");
+		}
+
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.apply(migrator.iter().find(|migration| migration.version == 32).expect("migration 32"))
+			.await
+			.expect("apply 0032 migration");
+		drop(conn);
+
+		let moved: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM server_state ORDER BY key")
+			.fetch_all(&pool)
+			.await
+			.expect("server state");
+		assert_eq!(
+			moved,
+			[
+				("library.last_scheduled_run_at", "11"),
+				("library.last_update_finished_at", "22"),
+				("local.last_scan_at", "33"),
+				("sync.instance_id", instance_id.as_str()),
+				("sync.single_owner_rebaseline", "true"),
+			]
+			.map(|(key, value)| (key.to_string(), value.to_string()))
+		);
+		let mut left: Vec<&str> = crate::server_state::KEYS.to_vec();
+		left.push("custom.option");
+		let mut remaining = 0;
+		for key in left {
+			let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = ?")
+				.bind(key)
+				.fetch_one(&pool)
+				.await
+				.expect("setting rows");
+			remaining += count;
+		}
+		assert_eq!(remaining, 1, "only custom.option stays");
+
+		sqlx::query("DELETE FROM server_state WHERE key = 'sync.single_owner_rebaseline'")
+			.execute(&pool)
+			.await
+			.expect("clear marker");
+		sqlx::query(
+			"INSERT INTO sync_change (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot)
+			 VALUES (1, 'manga', '7', 0, 1, '{}', '{}')",
+		)
+		.execute(&pool)
+		.await
+		.expect("insert sync change");
+		let origin: String = sqlx::query_scalar("SELECT origin FROM sync_change WHERE entity_key = '7'")
+			.fetch_one(&pool)
+			.await
+			.expect("origin");
+		assert_eq!(origin, instance_id);
+	}
+
+		#[test]
 	fn shipped_migrations_are_immutable() {
 		static PINS: &[(i64, &str)] = &[
 			(1, "2BBFC0F9B10375B680176FBC7CE075876B0D43D90130E42FDD1EC1D2A560A91F4476D87DBB9C0B5A308B3C48890C0BFE"),
@@ -231,6 +322,7 @@ mod tests {
 			(29, "8C2D4542C2632F75059B8E195AE8426B4B42CDABAA090F3BF1109D454848FFD179352E51749B100FF74135775E0932D4"),
 			(30, "C50F50303BE725E33BE955FE38768D8D948311487F450D372EFFFADB5E17B58E2BE0D08DA9112DBA66A904351E8647F6"),
 			(31, "F149F163796123A8F0A99F27943E7A895E76CB07FD73C9B937AFFE523801C83D5A851F14A6CE4506D76A46FFCBB0A120"),
+			(32, "CB18CACFE9A9F3A939FF7A7C3294BD7449B16FF45DEA56355FCFDC688016A33DD6F76552894B0742B0527CAE1F54FFF9"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -907,15 +999,24 @@ mod tests {
 		.execute(&pool)
 		.await
 		.expect("insert reader owner-state tombstone");
-		let instance_id: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		let instance_id: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 			.fetch_one(&pool)
 			.await
 			.expect("instance id");
-		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 19")
+		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (19, 32)")
 			.execute(&pool)
 			.await
-			.expect("remove migration 19 bookkeeping");
-		assert_eq!(deleted.rows_affected(), 1);
+			.expect("remove migration 19 and 32 bookkeeping");
+		assert_eq!(deleted.rows_affected(), 2);
+		// Back to the shape 0019 runs against, so 0019 and then 0032 replay in shipping order
+		for statement in [
+			"INSERT INTO setting (key, value) SELECT key, value FROM server_state",
+			"DROP TRIGGER sync_change_origin_insert",
+			"DROP TABLE server_state",
+			"CREATE TRIGGER sync_change_origin_insert AFTER INSERT ON sync_change WHEN 0 BEGIN SELECT 1; END",
+		] {
+			sqlx::query(statement).execute(&pool).await.expect("undo server_state");
+		}
 		pool.close().await;
 
 		let pool = super::create_pool(&url).await.expect("rerun migrations");
@@ -965,7 +1066,7 @@ mod tests {
 			.await
 			.expect("admin setting");
 		assert_eq!(admin_setting, 1);
-		let current_instance: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+		let current_instance: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 			.fetch_one(&pool)
 			.await
 			.expect("current instance id");
@@ -983,7 +1084,7 @@ mod tests {
 		assert_eq!(shared.snapshot["title"], "Reader updated");
 		assert!(shared.modified_at > 5000);
 		assert!(shared.origin_sequence > 0);
-		let marker: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'sync.single_owner_rebaseline'")
+		let marker: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM server_state WHERE key = 'sync.single_owner_rebaseline'")
 			.fetch_one(&pool)
 			.await
 			.expect("rebaseline marker");

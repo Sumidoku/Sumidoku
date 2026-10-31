@@ -10,6 +10,7 @@
 //! - a mid-scan IO error fails the whole scan (the module contract: reconciling against half a listing
 //!   would mistake unscanned chapters for deleted ones).
 
+use crate::server_state::{self, LOCAL_LAST_SCAN_AT};
 use crate::error::ApiResult;
 use crate::model::unix_now;
 use crate::source::reconcile_chapters_detailed;
@@ -24,8 +25,6 @@ pub const KIND_SCAN: &str = "local_scan";
 pub const KIND_ANALYZE: &str = "local_analyze";
 pub const KIND_EMPTY_TRASH: &str = "empty_trash";
 
-/// Scheduler state in the setting table, mirroring library.last_scheduled_run_at
-pub const LOCAL_LAST_SCAN_AT: &str = "local.last_scan_at";
 
 /// How many persisted rows between inputs checkpoints: the scan reloads roots/oneshots/exclusions/force
 /// this often so a settings write mid-run is observed and the handler reruns on the fresh configuration
@@ -703,25 +702,14 @@ async fn run_scheduled_if_due(state: &Arc<AppState>) -> ApiResult<bool> {
 		return Ok(false);
 	}
 	let now = unix_now();
-	let last: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
-		.bind(LOCAL_LAST_SCAN_AT)
-		.fetch_optional(&state.pool)
-		.await?;
-	let last: Option<i64> = last.and_then(|raw| serde_json::from_str(&raw).ok());
+	let last = server_state::time(&state.pool, LOCAL_LAST_SCAN_AT).await?;
 	let due = last.is_none_or(|at| now.saturating_sub(at) >= i64::try_from(interval).unwrap_or(i64::MAX));
 	if !due {
 		return Ok(false);
 	}
 	// Stamp before enqueueing: a crash between them would otherwise double-run; at worst the stamp stands
 	// and the next tick is one interval later
-	sqlx::query(
-		"INSERT INTO setting (key, value) VALUES (?, ?)
-		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-	)
-	.bind(LOCAL_LAST_SCAN_AT)
-	.bind(now.to_string())
-	.execute(&state.pool)
-	.await?;
+	server_state::set_time(&state.pool, LOCAL_LAST_SCAN_AT, now).await?;
 	let settings = crate::update::LibraryUpdateSettings::load(&state.pool, crate::USER_ID, 0).await?;
 	enqueue_scan(state, None, PRIORITY_SCHEDULED, settings.refresh_metadata).await?;
 	tracing::info!("scheduled local scan enqueued");

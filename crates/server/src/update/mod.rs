@@ -1,3 +1,4 @@
+use crate::server_state::{self, LIBRARY_LAST_SCHEDULED_RUN_AT, LIBRARY_LAST_UPDATE_FINISHED_AT};
 use crate::error::{ApiError, ApiResult};
 use crate::model::{MangaRow, manga_from_row, unix_now, update_strategy_from_int};
 use crate::source::{ReconcileOutcome, reconcile_chapters_detailed, upsert_manga};
@@ -19,9 +20,6 @@ const SCHEDULE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 pub const LIBRARY_SKIP_TITLES: &str = "library.skip_titles";
 pub const LIBRARY_REFRESH_METADATA: &str = "library.refresh_metadata";
 pub const LIBRARY_UPDATE_INTERVAL_HOURS: &str = "library.update_interval_hours";
-pub(crate) const LIBRARY_LAST_SCHEDULED_RUN_AT: &str = "library.last_scheduled_run_at";
-/// When the last batch of either kind finished, for the summary only: the scheduled clock must not move on a manual run
-pub(crate) const LIBRARY_LAST_UPDATE_FINISHED_AT: &str = "library.last_update_finished_at";
 pub const LIBRARY_EXCLUDED_UPDATE_CATEGORIES: &str = "library.excluded_update_categories";
 pub const SKIP_TITLE_RULES: [&str; 3] = ["hasUnread", "completed", "notStarted"];
 
@@ -139,38 +137,18 @@ fn is_due(last_run_at: Option<i64>, now: i64, interval_hours: u64) -> bool {
 		&& last_run_at.is_none_or(|at| now.saturating_sub(at) >= interval_seconds(interval_hours))
 }
 
-async fn stored_time(pool: &SqlitePool, key: &str) -> ApiResult<Option<i64>> {
-	let raw: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
-		.bind(key)
-		.fetch_optional(pool)
-		.await?;
-	Ok(raw.and_then(|value| serde_json::from_str(&value).ok()))
-}
-
-async fn stamp_time(pool: &SqlitePool, key: &str, at: i64) -> ApiResult<()> {
-	sqlx::query(
-		"INSERT INTO setting (key, value) VALUES (?, ?)
-		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-	)
-	.bind(key)
-	.bind(at.to_string())
-	.execute(pool)
-	.await?;
-	Ok(())
-}
-
 async fn scheduled_run_at(pool: &SqlitePool) -> ApiResult<Option<i64>> {
-	stored_time(pool, LIBRARY_LAST_SCHEDULED_RUN_AT).await
+	server_state::time(pool, LIBRARY_LAST_SCHEDULED_RUN_AT).await
 }
 
 async fn stamp_scheduled_run_at(pool: &SqlitePool, at: i64) -> ApiResult<()> {
-	stamp_time(pool, LIBRARY_LAST_SCHEDULED_RUN_AT, at).await
+	server_state::set_time(pool, LIBRARY_LAST_SCHEDULED_RUN_AT, at).await
 }
 
 /// The summary lives in memory, so after a restart its time comes from here. A database that has not
 /// finished a batch since this key shipped still has the scheduled clock to show.
 async fn persisted_last_run_at(pool: &SqlitePool) -> ApiResult<Option<i64>> {
-	match stored_time(pool, LIBRARY_LAST_UPDATE_FINISHED_AT).await? {
+	match server_state::time(pool, LIBRARY_LAST_UPDATE_FINISHED_AT).await? {
 		Some(at) => Ok(Some(at)),
 		None => scheduled_run_at(pool).await,
 	}
@@ -411,7 +389,7 @@ impl UpdateScheduler {
 			summary.last_run_at = Some(finished_at);
 			(summary.complete, summary.failed, summary.skipped)
 		};
-		if let Err(e) = stamp_time(&self.pool, LIBRARY_LAST_UPDATE_FINISHED_AT, finished_at).await {
+		if let Err(e) = server_state::set_time(&self.pool, LIBRARY_LAST_UPDATE_FINISHED_AT, finished_at).await {
 			tracing::warn!("last update time write failed: {e:?}");
 		}
 		self.running.store(false, Ordering::SeqCst);
@@ -1497,7 +1475,7 @@ mod tests {
 
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(1)).await;
 		assert!(scheduler.scheduled_due(started_at).await.expect("first run without history is due"));
-		set_setting(&state, LIBRARY_LAST_SCHEDULED_RUN_AT, serde_json::json!(started_at)).await;
+		server_state::set_time(&state.pool, LIBRARY_LAST_SCHEDULED_RUN_AT, started_at).await.expect("stamp");
 		assert!(!scheduler.scheduled_due(started_at + 3599).await.expect("early due"));
 		assert!(scheduler.scheduled_due(started_at + 3600).await.expect("interval due"));
 
@@ -1630,10 +1608,10 @@ mod tests {
 	#[tokio::test]
 	async fn last_run_time_falls_back_to_the_scheduled_clock() {
 		let (state, _, _tmp) = union_state(Config::default()).await;
-		set_setting(&state, LIBRARY_LAST_SCHEDULED_RUN_AT, serde_json::json!(456)).await;
+		server_state::set_time(&state.pool, LIBRARY_LAST_SCHEDULED_RUN_AT, 456).await.expect("stamp");
 		assert_eq!(UpdateScheduler::new(&state).summary().await.last_run_at, Some(456));
 
-		set_setting(&state, LIBRARY_LAST_UPDATE_FINISHED_AT, serde_json::json!(789)).await;
+		server_state::set_time(&state.pool, LIBRARY_LAST_UPDATE_FINISHED_AT, 789).await.expect("stamp");
 		assert_eq!(UpdateScheduler::new(&state).summary().await.last_run_at, Some(789));
 	}
 
@@ -1643,7 +1621,7 @@ mod tests {
 		let scheduler = UpdateScheduler::new(&state);
 		let guard = scheduler.try_acquire().expect("manual fetch guard");
 		scheduler.fetch(1, None, guard).await;
-		assert!(stored_time(&state.pool, LIBRARY_LAST_UPDATE_FINISHED_AT).await.expect("read").is_some());
+		assert!(server_state::time(&state.pool, LIBRARY_LAST_UPDATE_FINISHED_AT).await.expect("read").is_some());
 		assert_eq!(scheduled_run_at(&state.pool).await.expect("read"), None);
 	}
 

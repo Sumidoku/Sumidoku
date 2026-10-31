@@ -910,7 +910,7 @@ async fn restore_progress(
 fn omitted_from_backup(key: &str) -> bool {
 	key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
 		|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
-		|| crate::api::SERVER_OWNED_SETTING_KEYS.contains(&key)
+		|| crate::server_state::KEYS.contains(&key)
 }
 
 async fn restore_settings(

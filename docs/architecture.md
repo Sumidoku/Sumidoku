@@ -823,8 +823,8 @@ no alias is derived from migration text.
   version; child entities carry their own versions.
   Migration 0018 adds `origin`, `origin_user_id`, `origin_entity_key` and
   `origin_sequence`. Existing rows are backfilled from the local instance,
-  user, mapped entity key and sequence. `setting.sync.instance_id` is seeded
-  once with 16 random bytes encoded as hex, and the journal insert trigger
+  user, mapped entity key and sequence. `sync.instance_id` is seeded once with 16
+  random bytes encoded as hex (it moved to `server_state` in migration 0032), and the journal insert trigger
   fills local origin metadata only when `origin_sequence = 0`. `entity_key`
   remains the local mapped key; the origin fields retain the original event
   identity. `sync_alias` stores remote-to-local entity mappings separately from
@@ -1438,13 +1438,10 @@ no alias is derived from migration text.
   not alter `new_ids`, update counts, unread state or notifications.
   The scheduler checks due every 60s and reloads the interval instead of
   capturing it at construction, so setting changes need no restart. A scheduled
-  union stamps `library.last_scheduled_run_at` in the settings at start and
+  union stamps `library.last_scheduled_run_at` in `server_state` at start and
   finish; due uses that persisted timestamp and is immediate when no scheduled
-  batch has run. The key is excluded from structured settings extras, and both
-  settings write forms ignore it because only the scheduler owns it. Backup
-  exports omit it and imports ignore it. Every finished batch also stamps
-  `library.last_update_finished_at`, under the same guards, which the summary
-  reads for `last_run_at` while its in-memory value is empty after a restart;
+  batch has run. Every finished batch also stamps
+  `library.last_update_finished_at` there, which the summary reads for `last_run_at` while its in-memory value is empty after a restart;
   the scheduled clock is its fallback on a database that has not finished a
   batch since. Manual batches still stamp the summary's `last_run_at` for
   reporting, but never the scheduled-only clock, so

@@ -24,9 +24,11 @@ category restore containing any such entry forces `auto_download_new_chapters`
 to `false`, even when the target or backup enables it; review and reconfigure
 category exclusions and automatic downloads before re-enabling them. The raw
 `library.excluded_update_categories` and `library.excluded_download_categories`
-settings are omitted from exports and ignored on import. Scheduler-owned runtime
-timestamps such as `library.last_scheduled_run_at` and
-`library.last_update_finished_at` are omitted too and ignored on import; category restoration maps names to target-local category ids and merges
+settings are omitted from exports and ignored on import. Instance state only the
+server writes, such as `library.last_scheduled_run_at` and `backup.last_run`, lives
+in the `server_state` table, so exports never carry it; an older backup that still
+names those keys has them ignored on import. Category restoration maps names to
+target-local category ids and merges
 those ids into the existing exclusion settings without writing the retired
 category columns. The settings
 page of the web UI has
@@ -63,9 +65,8 @@ deletes files beyond the retention count, oldest first; the newest file is
 never deleted, even with `backup.retention_count = 0`. At startup, if more
 than one interval elapsed since `backup.last_run` (or no backup was ever
 taken), one backup runs immediately, so downtime does not leave a gap.
-Structured settings writes leave `backup.last_run` untouched, so saving an
-unrelated setting cannot replay an older timestamp. Legacy flat dotted-key
-writes retain their existing reset behavior.
+`backup.last_run` lives in `server_state`, so no settings write can change it
+and saving an unrelated setting cannot replay an older timestamp.
 `GET /api/v1/backups/files` lists the files (name, size, creation time, newest
 first); `POST /api/v1/backups/files/restore` with `{"name": "<file>"}` restores
 one through the same validated import path as the upload endpoint, and the

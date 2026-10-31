@@ -124,6 +124,11 @@ async fn library_update_settings_validate_writes() {
 #[tokio::test]
 async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 	let app = app_with_interval(0).await;
+	let pool = connect_db(&app.db_path).await;
+	sqlx::query("INSERT INTO server_state (key, value) VALUES ('backup.last_run', '123')")
+		.execute(&pool)
+		.await
+		.expect("seed backup clock");
 	let (status, mut settings) = request(
 		&app.app,
 		"PUT",
@@ -131,7 +136,6 @@ async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 		Some(json!({
 			"local.oneshots_dir": "oneshots",
 			"backup.dir": "custom-backups",
-			"backup.last_run": 123,
 			"custom.option": {"keep": true}
 		})),
 	)
@@ -148,7 +152,6 @@ async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 	assert_eq!(body["backup"]["lastRun"], 123);
 	assert_eq!(body["custom.option"], json!({"keep": true}));
 
-	let pool = connect_db(&app.db_path).await;
 	// the legacy local.oneshots_dir row stays stored (still the default local instance's fallback layer);
 	// only the nullable overrides that were explicitly nulled are gone
 	let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'backup.dir'")
@@ -161,12 +164,6 @@ async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 		.await
 		.expect("legacy oneshots row");
 	assert_eq!(oneshots, 1);
-	let last_run: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'backup.last_run'")
-		.fetch_one(&pool)
-		.await
-		.expect("preserved last run");
-	assert_eq!(last_run, "123");
-
 	let (status, body) = request(
 		&app.app,
 		"PUT",
@@ -175,12 +172,12 @@ async fn structured_settings_preserve_last_run_while_null_clears_overrides() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	assert_eq!(body["backup"]["lastRun"], serde_json::Value::Null);
-	let last_run: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'backup.last_run'")
+	assert_eq!(body["backup"]["lastRun"], 123);
+	let last_run: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'backup.last_run'")
 		.fetch_one(&pool)
 		.await
-		.expect("legacy last run clear");
-	assert_eq!(last_run, "null");
+		.expect("preserved last run");
+	assert_eq!(last_run, "123");
 }
 
 #[tokio::test]
@@ -235,14 +232,18 @@ async fn structured_settings_reject_partial_or_malformed_groups() {
 	assert_eq!(garbage, 0);
 }
 
-const SERVER_OWNED_CLOCKS: [&str; 2] = ["library.last_scheduled_run_at", "library.last_update_finished_at"];
+const SERVER_OWNED_CLOCKS: [&str; 3] = [
+	"library.last_scheduled_run_at",
+	"library.last_update_finished_at",
+	"backup.last_run",
+];
 
 #[tokio::test]
 async fn scheduled_library_clock_is_server_owned() {
 	for key in SERVER_OWNED_CLOCKS {
 		let app = app_with_interval(0).await;
 		let pool = connect_db(&app.db_path).await;
-		sqlx::query("INSERT INTO setting (key, value) VALUES (?, '456')")
+		sqlx::query("INSERT INTO server_state (key, value) VALUES (?, '456')")
 			.bind(key)
 			.execute(&pool)
 			.await
@@ -257,12 +258,18 @@ async fn scheduled_library_clock_is_server_owned() {
 		let (status, body) = request(&app.app, "PUT", "/api/v1/settings", Some(json!({ key: 123 }))).await;
 		assert_eq!(status, StatusCode::OK, "{body}");
 
-		let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+		let stored: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = ?")
 			.bind(key)
 			.fetch_one(&pool)
 			.await
 			.expect("scheduler clock must survive both settings write forms");
 		assert_eq!(stored, "456", "{key}");
+		let dead_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = ?")
+			.bind(key)
+			.fetch_one(&pool)
+			.await
+			.expect("count setting rows");
+		assert_eq!(dead_rows, 0, "{key}");
 	}
 }
 
@@ -271,7 +278,7 @@ async fn scheduled_library_clock_stays_out_of_backups() {
 	for key in SERVER_OWNED_CLOCKS {
 		let app = app_with_interval(0).await;
 		let pool = connect_db(&app.db_path).await;
-		sqlx::query("INSERT INTO setting (key, value) VALUES (?, '456')")
+		sqlx::query("INSERT INTO server_state (key, value) VALUES (?, '456')")
 			.bind(key)
 			.execute(&pool)
 			.await
@@ -284,7 +291,7 @@ async fn scheduled_library_clock_stays_out_of_backups() {
 		doc["settings"][key] = json!(123);
 		let (status, body) = request(&app.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 		assert_eq!(status, StatusCode::OK, "{body}");
-		let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+		let stored: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = ?")
 			.bind(key)
 			.fetch_one(&pool)
 			.await

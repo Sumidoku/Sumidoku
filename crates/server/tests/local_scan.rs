@@ -916,7 +916,7 @@ async fn empty_trash_never_deletes_a_restored_manga() {
 async fn local_scan_clock_is_server_owned() {
 	let t = scan_app().await;
 	let pool = common::connect_db(&t.db_path).await;
-	sqlx::query("INSERT INTO setting (key, value) VALUES ('local.last_scan_at', '456')")
+	sqlx::query("INSERT INTO server_state (key, value) VALUES ('local.last_scan_at', '456')")
 		.execute(&pool)
 		.await
 		.expect("seed scan clock");
@@ -930,7 +930,7 @@ async fn local_scan_clock_is_server_owned() {
 	let (status, body) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"local.last_scan_at": 123}))).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
-	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'local.last_scan_at'")
+	let stored: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'local.last_scan_at'")
 		.fetch_one(&pool)
 		.await
 		.expect("scan clock must survive both settings write forms");
@@ -942,7 +942,7 @@ async fn local_scan_clock_is_server_owned() {
 async fn local_scan_clock_stays_out_of_backups() {
 	let t = scan_app().await;
 	let pool = common::connect_db(&t.db_path).await;
-	sqlx::query("INSERT INTO setting (key, value) VALUES ('local.last_scan_at', '456')")
+	sqlx::query("INSERT INTO server_state (key, value) VALUES ('local.last_scan_at', '456')")
 		.execute(&pool)
 		.await
 		.expect("seed scan clock");
@@ -953,7 +953,7 @@ async fn local_scan_clock_stays_out_of_backups() {
 	doc["settings"]["local.last_scan_at"] = json!(123);
 	let (status, body) = request(&t.app, "POST", "/api/v1/backups/document", Some(doc)).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'local.last_scan_at'")
+	let stored: String = sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'local.last_scan_at'")
 		.fetch_one(&pool)
 		.await
 		.expect("scan clock must survive restoring an old backup");
