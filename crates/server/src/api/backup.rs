@@ -380,6 +380,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::update::LIBRARY_LAST_UPDATE_FINISHED_AT
 			|| key == crate::internal::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;
@@ -925,6 +926,7 @@ async fn restore_settings(
 			|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::update::LIBRARY_LAST_UPDATE_FINISHED_AT
 			|| key == crate::internal::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;

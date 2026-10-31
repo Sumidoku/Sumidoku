@@ -2136,6 +2136,7 @@ pub(crate) async fn apply_settings(
 			|| key == "localOneshotsDir"
 			|| key == "sync.instance_id"
 			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
+			|| key == crate::update::LIBRARY_LAST_UPDATE_FINISHED_AT
 			|| key == crate::internal::local::scan::LOCAL_LAST_SCAN_AT
 		{
 			continue;

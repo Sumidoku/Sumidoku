@@ -1442,8 +1442,12 @@ no alias is derived from migration text.
   finish; due uses that persisted timestamp and is immediate when no scheduled
   batch has run. The key is excluded from structured settings extras, and both
   settings write forms ignore it because only the scheduler owns it. Backup
-  exports omit it and imports ignore it. Manual batches still stamp the
-  summary's `last_run_at` for reporting, but never the scheduled-only clock, so
+  exports omit it and imports ignore it. Every finished batch also stamps
+  `library.last_update_finished_at`, under the same guards, which the summary
+  reads for `last_run_at` while its in-memory value is empty after a restart;
+  the scheduled clock is its fallback on a database that has not finished a
+  batch since. Manual batches still stamp the summary's `last_run_at` for
+  reporting, but never the scheduled-only clock, so
   they cannot postpone the union. Restarting the process does not defer a due
   union by another interval.
   Each manga fetch also reloads refresh/interval. WASM receives the refresh
