@@ -535,8 +535,10 @@
 	pointer-events: none;
 }
 
+/* Below the centered failure message rather than on top of it */
 .reader__page-retry > * {
 	pointer-events: auto;
+	transform: translateY(64px);
 }
 
 /* Loading state: the spinner is a centered background painted on the img itself —
