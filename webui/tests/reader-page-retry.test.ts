@@ -7,6 +7,7 @@ import { createServer } from 'vite';
 import {
 	PAGE_AUTO_RETRIES,
 	imageErrored,
+	imageLoading,
 	imageRetried,
 	imageStateFor,
 	retrySrc
@@ -49,6 +50,20 @@ test('a state stored for another page does not leak its failure or attempts into
 	assert.deepEqual(imageErrored(other, withQuery), { src: withQuery, attempt: 1, failed: false });
 });
 
+test('a page image with no recorded load is still loading', () => {
+	assert.equal(imageLoading(null, bare, 0), true);
+});
+
+test('the recorded load clears the indicator only for the exact effective URL', () => {
+	assert.equal(imageLoading(bare, bare, 0), false);
+	assert.equal(imageLoading(withQuery, bare, 0), true);
+});
+
+test('an automatic retry re-arms the indicator: the cache-busted URL has not loaded yet', () => {
+	assert.equal(imageLoading(bare, bare, 1), true);
+	assert.equal(imageLoading('/api/v1/chapter/7/page/3?r=1', bare, 1), false);
+});
+
 test('PageImage initially renders the plain page URL with no retry UI', async () => {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
@@ -70,6 +85,32 @@ test('PageImage initially renders the plain page URL with no retry UI', async ()
 			assert.match(markup, /src="\/api\/v1\/chapter\/7\/page\/3\?revision=8"/);
 			assert.doesNotMatch(markup, /role="alert"/);
 			assert.doesNotMatch(markup, /Retry/);
+		} finally {
+			await i18n.changeLanguage(previous);
+		}
+	} finally {
+		await vite.close();
+	}
+});
+
+test('PageImage marks the image as loading until its own load event lands', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+		const previous = i18n.language;
+		await i18n.changeLanguage('en');
+		try {
+			const { PageImage } = await vite.ssrLoadModule('/src/pages/reader/PageImage.tsx');
+			const markup = renderToStaticMarkup(
+				createElement(PageImage, { src: bare, alt: 'Page 4', className: 'reader__img' })
+			);
+			assert.match(markup, /class="reader__img reader__img--loading"/);
 		} finally {
 			await i18n.changeLanguage(previous);
 		}

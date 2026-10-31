@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ImageOff } from 'lucide-react';
 import { Button } from '../../components';
-import { imageErrored, imageRetried, imageStateFor, retrySrc } from './pageRetry';
+import { imageErrored, imageLoading, imageRetried, imageStateFor, retrySrc } from './pageRetry';
 import type { PageImageState } from './pageRetry';
 
 export interface PageImageProps {
@@ -17,11 +17,14 @@ export interface PageImageProps {
 	onLoad?: (width: number, height: number) => void;
 }
 
-/** A reader page image: the first load error is retried automatically once; if
-    that also fails the page's slot keeps its box and shows a retry button */
+/** A reader page image: while the effective URL is in flight the img carries a
+    `reader__img--loading` class that paints a spinner on its box; the first
+    load error is retried automatically once, and if that also fails the page's
+    slot keeps its box and shows a retry button */
 export function PageImage({ src, alt, className, style, width, height, lazy, onLoad }: PageImageProps) {
 	const { t } = useTranslation();
 	const [state, setState] = useState<PageImageState | null>(null);
+	const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
 	const { attempt, failed } = imageStateFor(state, src);
 	if (failed) {
 		return (
@@ -38,17 +41,24 @@ export function PageImage({ src, alt, className, style, width, height, lazy, onL
 			</div>
 		);
 	}
+	const effectiveSrc = retrySrc(src, attempt);
+	const cls = [className, imageLoading(loadedSrc, src, attempt) ? 'reader__img--loading' : null]
+		.filter(Boolean)
+		.join(' ');
 	return (
 		<img
-			className={className}
-			src={retrySrc(src, attempt)}
+			className={cls || undefined}
+			src={effectiveSrc}
 			alt={alt}
 			style={style}
 			width={width}
 			height={height}
 			loading={lazy ? 'lazy' : undefined}
 			draggable={false}
-			onLoad={(e) => onLoad?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
+			onLoad={(e) => {
+				setLoadedSrc(effectiveSrc);
+				onLoad?.(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
+			}}
 			onError={() => setState((s) => imageErrored(s, src))}
 		/>
 	);

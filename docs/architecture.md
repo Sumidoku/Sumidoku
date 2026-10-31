@@ -1951,11 +1951,19 @@ finishes loading, while the spread `<img>`, the continuous-mode `<img>` and the
 probe `onload` still report through `recordMeasured` as the fallback, which only
 fills gaps (server values win, unchanged values keep the map identity), so
 double-page spreads re-pair when a loaded image turns out landscape without
-moving the current page. A page image that fails to load retries once
+moving the current page. While the effective URL is in flight the image
+paints a centered spinner on its box (`reader__img--loading`, a CSS background,
+so there is no wrapper, no layout shift and nothing to intercept taps; the
+class comes off on load so it never shows through transparent regions, and
+`prefers-reduced-motion` swaps the SMIL animation for a static arc) — a page
+whose size was never measured has no box yet and stays silent. A page image
+that fails to load retries once
 automatically with an `r=N` cache-buster the server ignores, and latches into a failed placeholder
 that keeps the slot's aspect-ratio box and offers a manual retry button
 (`reader/PageImage.tsx`, state machine in `reader/pageRetry.ts`, keyed by src
-so a component reused for another page cannot inherit a stale failure).
+so a component reused for another page cannot inherit a stale failure; the
+loading indicator keys on the exact effective URL, so the automatic retry
+re-arms it).
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction

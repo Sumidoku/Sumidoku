@@ -43,3 +43,10 @@ export function retrySrc(src: string, attempt: number): string {
 	if (attempt <= 0) return src;
 	return `${src}${src.includes('?') ? '&' : '?'}r=${attempt}`;
 }
+
+/** Whether the page is still loading: only the exact effective URL whose load
+    event fired clears the indicator, so an automatic retry (a new cache-buster)
+    flips it back on, and a load recorded for another page never leaks in */
+export function imageLoading(loadedSrc: string | null, src: string, attempt: number): boolean {
+	return loadedSrc !== retrySrc(src, attempt);
+}
