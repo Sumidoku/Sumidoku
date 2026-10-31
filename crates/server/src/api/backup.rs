@@ -637,22 +637,18 @@ async fn restore_library(
 				.bind(&entry.key)
 				.fetch_one(&mut **tx)
 				.await?;
-		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at, viewer_flags, incognito, sort_key)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (manga_id, user_id) DO UPDATE SET
-			 in_library = excluded.in_library, in_library_at = excluded.in_library_at,
-			 viewer_flags = excluded.viewer_flags, incognito = excluded.incognito,
-			 sort_key = excluded.sort_key",
+		crate::store::library::upsert(
+			&mut **tx,
+			&crate::store::library::LibraryEntry {
+				manga_id,
+				user_id,
+				in_library: entry.in_library,
+				in_library_at: entry.in_library_at,
+				viewer_flags: entry.viewer_flags,
+				incognito: entry.incognito,
+				sort_key: &entry.sort_key,
+			},
 		)
-		.bind(manga_id)
-		.bind(user_id)
-		.bind(entry.in_library)
-		.bind(entry.in_library_at)
-		.bind(entry.viewer_flags)
-		.bind(entry.incognito)
-		.bind(&entry.sort_key)
-		.execute(&mut **tx)
 		.await?;
 		restored.library += 1;
 	}

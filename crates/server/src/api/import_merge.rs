@@ -165,20 +165,7 @@ pub async fn mark_in_library(
 	manga_id: i64,
 	in_library_at: i64,
 ) -> ApiResult<()> {
-	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at)
-		 VALUES (?, ?, 1, ?)
-		 ON CONFLICT (manga_id, user_id) DO UPDATE SET
-		 in_library = 1,
-		 in_library_at = CASE WHEN manga_user.in_library != 0 THEN manga_user.in_library_at
-		 ELSE excluded.in_library_at END",
-	)
-	.bind(manga_id)
-	.bind(user_id)
-	.bind(in_library_at)
-	.execute(&mut **tx)
-	.await?;
-	Ok(())
+	crate::store::library::shelve_imported(&mut **tx, manga_id, user_id, in_library_at).await
 }
 
 /// Progress merge: page number takes the max, is_read takes OR, timestamp takes the newer NULL-safely; is_bookmarked is local state, neither carried nor overwritten

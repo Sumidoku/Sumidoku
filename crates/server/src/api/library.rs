@@ -435,16 +435,7 @@ pub async fn add_to_library(
 		}
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	// Entries already in the library keep their first-shelved time
-	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
-		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
-	)
-	.bind(manga.id)
-	.bind(user.id)
-	.bind(unix_now())
-	.execute(&mut *tx)
-	.await?;
+	crate::store::library::shelve(&mut *tx, manga.id, user.id, unix_now()).await?;
 	if let Some(category_ids) = &body.category_ids {
 		crate::store::category::set_manga_categories(&mut tx, manga.id, user.id, category_ids).await?;
 	}
@@ -459,14 +450,7 @@ pub async fn remove_from_library(
 ) -> ApiResult<StatusCode> {
 	manga_row(&state.pool, id).await?;
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
-		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
-	)
-	.bind(id)
-	.bind(user.id)
-	.execute(&mut *tx)
-	.await?;
+	crate::store::library::unshelve(&mut *tx, id, user.id).await?;
 	crate::store::category::clear_manga(&mut *tx, id, user.id).await?;
 	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)

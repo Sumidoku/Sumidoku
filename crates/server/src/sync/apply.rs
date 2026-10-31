@@ -655,12 +655,7 @@ pub(crate) async fn set_final_version(
 		}
 		"manga_user" => {
 			let (manga_id, user_id) = relation_key(local_key, 2)?;
-			sqlx::query("UPDATE manga_user SET last_modified_at = ? WHERE manga_id = ? AND user_id = ?")
-				.bind(modified_at)
-				.bind(manga_id[0])
-				.bind(user_id[0])
-				.execute(&mut **tx)
-				.await?
+			crate::store::library::set_modified_at(&mut **tx, manga_id[0], user_id[0], modified_at).await?
 		}
 		"chapter_user" => {
 			let (chapter_id, user_id) = relation_key(local_key, 2)?;
@@ -1593,11 +1588,7 @@ async fn apply_manga_user(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		sqlx::query("DELETE FROM manga_user WHERE manga_id = ? AND user_id = ?")
-			.bind(ids[0])
-			.bind(ids[1])
-			.execute(&mut **tx)
-			.await?;
+		crate::store::library::delete(&mut **tx, ids[0], ids[1]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1620,22 +1611,18 @@ async fn apply_manga_user(
 		return Ok(Disposition::Skipped);
 	};
 	let local_key = format!("{manga_id}:{user_id}");
-	sqlx::query(
-		"INSERT INTO manga_user
-		 (manga_id, user_id, in_library, in_library_at, viewer_flags, sort_key, incognito)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (manga_id, user_id) DO UPDATE SET
-		 in_library = excluded.in_library, in_library_at = excluded.in_library_at,
-		 viewer_flags = excluded.viewer_flags, sort_key = excluded.sort_key, incognito = excluded.incognito",
+	crate::store::library::upsert(
+		&mut **tx,
+		&crate::store::library::LibraryEntry {
+			manga_id,
+			user_id,
+			in_library: flag(&change.snapshot, "inLibrary")?,
+			in_library_at: optional_integer(&change.snapshot, "inLibraryAt")?,
+			viewer_flags: integer(&change.snapshot, "viewerFlags")?,
+			incognito: flag(&change.snapshot, "incognito")?,
+			sort_key: &string(&change.snapshot, "sortKey")?,
+		},
 	)
-	.bind(manga_id)
-	.bind(user_id)
-	.bind(flag(&change.snapshot, "inLibrary")?)
-	.bind(optional_integer(&change.snapshot, "inLibraryAt")?)
-	.bind(integer(&change.snapshot, "viewerFlags")?)
-	.bind(string(&change.snapshot, "sortKey")?)
-	.bind(flag(&change.snapshot, "incognito")?)
-	.execute(&mut **tx)
 	.await?;
 	finish(
 		tx,
