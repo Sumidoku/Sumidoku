@@ -99,6 +99,16 @@ ancestor's key and pointer handlers before swapping it.
   smoke then confirmed a pick leaves the page and panel alone, and a modal probe
   confirmed Escape closes the list first and the modal only on the second press.
 
+**A text check for write statements must also reject interpolated table
+names.** A boundary test that searches for `UPDATE manga` cannot see
+`format!("UPDATE {table} ...")`, and that write is exactly the kind that loses
+its side effect when the logic moves out of a trigger. Fail on any write verb
+followed by an interpolated name, and route the write through the owner.
+- Evidence: 2026-10-31, `source/rekey.rs:apply_rekeys` built `UPDATE {table}`
+  for `manga` and `chapter`, so the owning-store test passed while rekeys would
+  have skipped the journal once the triggers were gone. It now calls
+  `manga::try_rekey` and `chapter::try_set_key`, and the test rejects the form.
+
 **A nullable prop that anticipates a state does not deliver it; the
 caller's early return is the real contract.** `TransitionPage` took
 `target: ChapterWithDownload | null` from the start, but
