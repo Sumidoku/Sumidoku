@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A fixed element's `right` is measured from inside a classic scrollbar;
+`window.innerWidth` is not.** Subtracting an anchor's rect from `innerWidth`
+overstates `right` by the scrollbar's width, and clamping against it leaves
+the menu that far past the left edge. Use
+`document.documentElement.clientWidth`, and check a portaled menu at a width
+with a real scrollbar: phone emulation has overlay scrollbars, so the two
+widths agree there and the error cannot show.
+- Evidence: 2026-10-31, the manga More actions menu clamp passed at 375px
+  emulation with its left edge at 8, then sat at -2 at a pane width with a
+  10px scrollbar; its right edge was 595 against a 605 anchor on desktop.
+  Measuring from `clientWidth` put both on target.
+
 **A nullable prop that anticipates a state does not deliver it; the
 caller's early return is the real contract.** `TransitionPage` took
 `target: ChapterWithDownload | null` from the start, but
