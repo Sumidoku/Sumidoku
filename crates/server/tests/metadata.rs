@@ -184,7 +184,7 @@ async fn preview_and_apply_from_another_source() {
 	// The same reference survives into a backup document
 	let (status, doc) = request(&app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
-	let entry = doc["manga"]
+	let entry = doc["library"]
 		.as_array()
 		.expect("manga entries")
 		.iter()
