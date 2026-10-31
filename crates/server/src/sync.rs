@@ -183,6 +183,20 @@ async fn changes_since_filtered(
 	} else {
 		std::collections::HashMap::new()
 	};
+	// A rename leaves a peer nothing to match on, so a category names every key it is known by
+	let mut category_aliases = std::collections::HashMap::<String, Vec<(String, i64, String)>>::new();
+	if rows.iter().any(|row| row.entity_kind == "category") {
+		let aliases = sqlx::query_as::<_, (String, String, i64, String)>(
+			"SELECT entity_key, origin, origin_user_id, origin_entity_key FROM sync_alias
+			 WHERE user_id = ? AND entity_kind = 'category' ORDER BY origin, origin_user_id, origin_entity_key",
+		)
+		.bind(authenticated_user_id)
+		.fetch_all(&mut *tx)
+		.await?;
+		for (key, origin, user_id, entity_key) in aliases {
+			category_aliases.entry(key).or_default().push((origin, user_id, entity_key));
+		}
+	}
 	tx.commit().await?;
 
 	let has_more = rows.len() > limit_usize;
@@ -202,6 +216,22 @@ async fn changes_since_filtered(
 			change.identity["categoryOrigin"] = serde_json::json!(origin);
 			change.identity["categoryOriginUserId"] = serde_json::json!(origin_user_id);
 			change.identity["categoryOriginEntityKey"] = serde_json::json!(origin_entity_key);
+		}
+		if change.entity_kind == "category" {
+			let aliases: Vec<_> = category_aliases
+				.get(&change.entity_key)
+				.into_iter()
+				.flatten()
+				.filter(|(origin, user_id, key)| {
+					(origin, *user_id, key) != (&change.origin, change.origin_user_id, &change.origin_entity_key)
+				})
+				.map(|(origin, user_id, key)| {
+					serde_json::json!({"origin": origin, "originUserId": user_id, "originEntityKey": key})
+				})
+				.collect();
+			if !aliases.is_empty() {
+				change.identity["categoryAliases"] = serde_json::json!(aliases);
+			}
 		}
 		changes.push(change);
 	}

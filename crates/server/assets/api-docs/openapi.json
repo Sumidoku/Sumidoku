@@ -10806,7 +10806,7 @@
         "additionalProperties": {
           "$ref": "#/components/schemas/JsonValue"
         },
-        "description": "Natural-key identity. category_manga identities can additionally carry categoryOrigin, categoryOriginUserId and categoryOriginEntityKey."
+        "description": "Natural-key identity. category_manga identities can additionally carry categoryOrigin, categoryOriginUserId and categoryOriginEntityKey. category identities can carry categoryAliases, a list of {origin, originUserId, originEntityKey} naming the other keys the category is known by."
       },
       "SyncSnapshot": {
         "type": "object",

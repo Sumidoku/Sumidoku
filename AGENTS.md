@@ -46,6 +46,9 @@ attribution.
 ## Database migrations
 
 - Schema changes are new numbered files only; do not edit an applied migration.
+- No SQL triggers without a special case: what a write must also do belongs in
+  the store that makes the write. `db.rs:migrated_schema_has_no_triggers`
+  enforces it.
 - Keep migration comments in English and files in LF. `.gitattributes` and
   `db.rs:shipped_migrations_use_ascii_comments_and_lf` enforce the encoding.
 - `db.rs:shipped_migrations_are_immutable` pins canonical checksums. The
