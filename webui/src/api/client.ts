@@ -179,9 +179,8 @@ export async function apiStream<TFinal, TPartial extends { type: string }>(
 	return finalPayload;
 }
 
-export const pageUrl = (chapterId: number, index: number, width?: number, cacheRevision?: number) => {
+export const pageUrl = (chapterId: number, index: number, cacheRevision?: number) => {
 	const params = new URLSearchParams();
-	if (width) params.set('width', String(width));
 	if (cacheRevision !== undefined) params.set('revision', String(cacheRevision));
 	const query = params.toString();
 	return `${BASE}/chapter/${chapterId}/page/${index}${query ? `?${query}` : ''}`;

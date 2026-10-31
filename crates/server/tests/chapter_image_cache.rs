@@ -373,18 +373,9 @@ async fn remote_original_survives_restart_and_clear_advances_revision() {
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers["content-type"], "image/png");
 	assert_eq!(bytes, upstream.first);
-	let (status, _, variant) =
-		request_full(&app, "GET", &format!("{zip_page}?width=256"), None).await;
+	let (status, _, zipped) = request_full(&app, "GET", &zip_page, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(!variant.is_empty());
-	let (status, _, larger_variant) =
-		request_full(&app, "GET", &format!("{zip_page}?width=512"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert!(!larger_variant.is_empty());
-	assert_ne!(
-		variant, larger_variant,
-		"different width buckets keep separate variants"
-	);
+	assert_eq!(zipped, upstream.second);
 	assert_eq!(
 		upstream.first_hits.load(Ordering::SeqCst),
 		1,
@@ -393,7 +384,7 @@ async fn remote_original_survives_restart_and_clear_advances_revision() {
 	assert_eq!(
 		upstream.second_hits.load(Ordering::SeqCst),
 		1,
-		"restart and resize must reuse Zip originals"
+		"restart must reuse Zip originals"
 	);
 
 	let (status, cleared) = request(&app, "POST", "/api/v1/cache/chapters/clear", None).await;
@@ -530,10 +521,9 @@ async fn download_reuses_cached_original_fetches_only_misses_and_cleans_derived_
 	);
 
 	let _path = product["path"].as_str().expect("artifact path");
-	let (status, _, variant) =
-		request_full(&t.app, "GET", &format!("{original_url}?width=256"), None).await;
+	let (status, _, product_page) = request_full(&t.app, "GET", &original_url, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert!(!variant.is_empty());
+	assert!(!product_page.is_empty());
 	let (status, _) = request(
 		&t.app,
 		"DELETE",
@@ -560,7 +550,7 @@ async fn download_reuses_cached_original_fetches_only_misses_and_cleans_derived_
 	assert_eq!(
 		tree_bytes(&blob_dir),
 		0,
-		"product deletion removes product-derived variants"
+		"product deletion leaves no page cache files behind"
 	);
 	let (status, _, bytes) = request_full(&t.app, "GET", &original_url, None).await;
 	assert_eq!(
@@ -695,16 +685,17 @@ async fn cold_download_does_not_fill_persistent_original_cache() {
 }
 
 #[tokio::test]
-async fn url_and_zip_variant_hits_skip_original_bytes_and_backfill_original_dimensions() {
+async fn url_and_zip_reads_refetch_missing_original_bytes_and_backfill_dimensions() {
 	let (t, chapter_id, upstream) = remote_chapter().await;
 	let pool = connect_db(&t.db_path).await;
 	for (index, hits, original) in [
 		(0, &upstream.first_hits, &upstream.first),
 		(1, &upstream.second_hits, &upstream.second),
 	] {
-		let url = format!("/api/v1/chapter/{chapter_id}/page/{index}?width=256");
+		let url = format!("/api/v1/chapter/{chapter_id}/page/{index}");
 		let (status, _, first) = request_full(&t.app, "GET", &url, None).await;
 		assert_eq!(status, StatusCode::OK);
+		assert_eq!(&first, original);
 		assert_eq!(hits.load(Ordering::SeqCst), 1);
 		let bytes_path = t.tmp.path().join(format!("page-blobs/{chapter_id}/originals/{index}/bytes"));
 		std::fs::remove_file(&bytes_path).expect("remove original bytes but keep its published version metadata");
@@ -712,17 +703,16 @@ async fn url_and_zip_variant_hits_skip_original_bytes_and_backfill_original_dime
 			.bind(chapter_id).bind(index).execute(&pool).await.expect("retry dimension backfill");
 		let (status, _, second) = request_full(&t.app, "GET", &url, None).await;
 		assert_eq!(status, StatusCode::OK);
-		assert_eq!(second, first);
-		assert_eq!(hits.load(Ordering::SeqCst), 1, "a hot variant must not read or refetch its original");
+		assert_eq!(&second, original, "a missing original re-fetches from the source");
+		assert_eq!(hits.load(Ordering::SeqCst), 2);
 		let dimensions: (Option<i64>, Option<i64>, i64) = sqlx::query_as("SELECT width,height,dimensions_checked FROM page WHERE chapter_id=? AND idx=?")
 			.bind(chapter_id).bind(index).fetch_one(&pool).await.expect("original dimensions");
-		assert_eq!(dimensions, (Some(640), Some(640), 1), "variant metadata must preserve original dimensions");
-		std::fs::write(bytes_path, original).expect("restore original bytes");
+		assert_eq!(dimensions, (Some(640), Some(640), 1), "the re-fetched original backfills page dimensions");
 	}
 }
 
 #[tokio::test]
-async fn repaired_original_at_same_url_rejects_old_resized_variant() {
+async fn repaired_original_at_same_url_serves_the_new_bytes() {
 	let first = payload(5);
 	let second = payload(6);
 	let current = Arc::new(std::sync::Mutex::new(first));
@@ -748,23 +738,23 @@ async fn repaired_original_at_same_url_rejects_old_resized_variant() {
 	sqlx::query("UPDATE page SET content=? WHERE chapter_id=? AND idx=0")
 		.bind(content.to_string()).bind(chapter_id).execute(&pool).await.expect("mutable page");
 	let url = format!("/api/v1/chapter/{chapter_id}/page/0");
-	let (status, _, old_variant) = request_full(&t.app, "GET", &format!("{url}?width=256"), None).await;
+	let (status, _, old) = request_full(&t.app, "GET", &url, None).await;
 	assert_eq!(status, StatusCode::OK);
 	*current.lock().expect("replace image") = second.clone();
 	std::fs::write(t.tmp.path().join(format!("page-blobs/{chapter_id}/originals/0/bytes")), b"corrupted").expect("damage original");
 	let (status, _, repaired) = request_full(&t.app, "GET", &url, None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(repaired, second, "a full original read must repair corruption");
-	let (status, _, new_variant) = request_full(&t.app, "GET", &format!("{url}?width=256"), None).await;
+	let (status, _, reread) = request_full(&t.app, "GET", &url, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_ne!(new_variant, old_variant, "same-URL repair must reject a variant of the previous original");
-	assert_eq!(new_variant, sumidoku_server::source::downsample::downsample_png(&second, 256).expect("resized new original"));
+	assert_eq!(reread, second, "the repaired original keeps serving the new bytes");
+	assert_ne!(reread, old);
 	assert_eq!(hits.load(Ordering::SeqCst), 2);
 	server.abort();
 }
 
 #[tokio::test]
-async fn zero_budget_bypasses_originals_and_variants_then_positive_budget_restores_reuse() {
+async fn zero_budget_bypasses_originals_then_positive_budget_restores_reuse() {
 	let (t, chapter_id, upstream) = remote_chapter().await;
 	let (status, settings) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"cache.chapterMaxBytes": 0}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -772,29 +762,27 @@ async fn zero_budget_bypasses_originals_and_variants_then_positive_budget_restor
 	let dir = t.tmp.path().join("page-blobs").join(chapter_id.to_string());
 	for _ in 0..2 {
 		for index in 0..2 {
-			let (status, _, _) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}?width=256"), None).await;
+			let (status, _, _) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}"), None).await;
 			assert_eq!(status, StatusCode::OK);
 		}
 	}
 	assert_eq!(upstream.first_hits.load(Ordering::SeqCst), 2);
 	assert_eq!(upstream.second_hits.load(Ordering::SeqCst), 2);
 	assert!(!dir.join("originals").exists(), "zero budget must not persist remote originals");
-	assert!(!dir.join("variants").exists(), "zero budget must not persist resized images");
 	let (status, stats) = request(&t.app, "GET", "/api/v1/cache/chapters", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(stats["enabled"], false);
 	assert_eq!(stats["maxBytes"], 0);
 	let (status, _) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"cache.chapterMaxBytes": 8 * 1024 * 1024}))).await;
 	assert_eq!(status, StatusCode::OK);
-	let url = format!("/api/v1/chapter/{chapter_id}/page/0?width=256");
+	let url = format!("/api/v1/chapter/{chapter_id}/page/0");
 	for _ in 0..2 { assert_eq!(request_full(&t.app, "GET", &url, None).await.0, StatusCode::OK); }
 	assert_eq!(upstream.first_hits.load(Ordering::SeqCst), 3, "a positive budget restores caching");
 	assert!(dir.join("originals/0/bytes").exists());
-	assert!(dir.join("variants/256/0.png").exists());
 	let (status, _) = request(&t.app, "PUT", "/api/v1/settings", Some(json!({"cache.chapterMaxBytes": 0}))).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(request_full(&t.app, "GET", &url, None).await.0, StatusCode::OK);
-	assert_eq!(upstream.first_hits.load(Ordering::SeqCst), 4, "zero budget bypasses already-persisted originals and variants too");
+	assert_eq!(upstream.first_hits.load(Ordering::SeqCst), 4, "zero budget bypasses already-persisted originals too");
 }
 
 #[tokio::test]

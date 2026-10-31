@@ -8,7 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { QueryClient } from '@tanstack/react-query';
 import { createServer } from 'vite';
 
-test('page image URLs include width and the chapter cache revision', async () => {
+test('page image URLs carry the chapter cache revision and no downsample width', async () => {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -18,9 +18,9 @@ test('page image URLs include width and the chapter cache revision', async () =>
 	});
 	try {
 		const { pageUrl } = await vite.ssrLoadModule('/src/api/client.ts');
-		const url = new URL(pageUrl(19, 3, 1200, 8), 'http://sumidoku.test');
+		const url = new URL(pageUrl(19, 3, 8), 'http://sumidoku.test');
 		assert.equal(url.pathname, '/api/v1/chapter/19/page/3');
-		assert.equal(url.searchParams.get('width'), '1200');
+		assert.equal(url.searchParams.get('width'), null);
 		assert.equal(url.searchParams.get('revision'), '8');
 	} finally {
 		await vite.close();

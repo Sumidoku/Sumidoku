@@ -1177,7 +1177,7 @@ pub async fn load_pages_under_lease(
 			&chapter.key,
 		)
 		.await?;
-		// A local chapter has no materialized blobs, but may have variants from its prior generation.
+		// A local chapter has no materialized blobs, but may have cached page assets from its prior generation.
 		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
 		let previous = blob_dir.with_extension("previous");
 		let _ = tokio::fs::remove_dir_all(&previous).await;

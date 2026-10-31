@@ -721,20 +721,11 @@ impl DownloadManager {
 			tx.commit().await?;
 			self.cleanup_tmp(chapter_id).await;
 			if let Some(path) = path && orphaned { let _ = remove_path(&product_path(&self.downloads_dir, &path)).await; }
-			if let Some(state) = &state {
-				let variants = state.config.page_blobs_dir().join(chapter_id.to_string()).join("variants");
-				let invalidation = match tokio::fs::remove_dir_all(&variants).await {
-					Ok(()) => None,
-					Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-					Err(error) => Some(format!("invalidate page variants: {error}")),
-				};
-				if let Err(error) = crate::cache::publish_chapter(state, chapter_id).await {
-					let message = error.message().to_string();
-					tracing::warn!(chapter_id, "download deletion cache revision update failed: {message}");
-				} else if let Some(message) = invalidation {
-					tracing::warn!(chapter_id, "{message}");
-					let _ = sqlx::query("UPDATE chapter_cache_state SET last_error=? WHERE chapter_id=?").bind(message).bind(chapter_id).execute(&self.pool).await;
-				}
+			if let Some(state) = &state
+				&& let Err(error) = crate::cache::publish_chapter(state, chapter_id).await
+			{
+				let message = error.message().to_string();
+				tracing::warn!(chapter_id, "download deletion cache revision update failed: {message}");
 			}
 			return Ok(true);
 		}
@@ -2518,9 +2509,8 @@ mod tests {
 		write_test_cbz(&dir.join("done.cbz"), &[("000.png", b"product-page")]);
 		insert_finished_product(&state, chapter_id, "cbz", "Source/Manga/done.cbz").await;
 		let blob_dir = state.config.page_blobs_dir().join(chapter_id.to_string());
-		std::fs::create_dir_all(blob_dir.join("variants/256")).expect("blob dirs");
+		std::fs::create_dir_all(&blob_dir).expect("blob dir");
 		std::fs::write(blob_dir.join("0.png"), b"materialized").expect("materialized page");
-		std::fs::write(blob_dir.join("variants/256/0.png"), b"variant").expect("variant");
 		sqlx::query("INSERT INTO page(chapter_id,idx,content,width,height,dimensions_checked) VALUES (?,0,'{\"content\":{\"Image\":\"0.png\"}}',640,480,1)")
 			.bind(chapter_id).execute(&state.pool).await.expect("page metadata");
 		let old_revision = crate::cache::chapter_revision(&state.pool, chapter_id).await.expect("old revision");

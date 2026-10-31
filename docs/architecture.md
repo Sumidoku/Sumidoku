@@ -1205,12 +1205,12 @@ no alias is derived from migration text.
   ordinary enqueue dedupe prevents repeated page loads from growing the queue;
   download workers and image requests never recurse into reader-ahead.
 - Chapter page cache (`cache.rs`, `source/mod.rs`): page JSON rows, materialized
-  image blobs, validated remote URL/Zip original responses and variants, and OPDS acquisition CBZ files share a persistent
+  image blobs, validated remote URL/Zip original responses, and OPDS acquisition CBZ files share a persistent
   per-chapter LRU budget. `cache.chapterMaxBytes` defaults to 2 GiB and accepts
   nonnegative integer byte budgets. Collection is always enabled; the former
   `cache.chapterLruEnabled` setting is ignored and omitted from settings responses.
-  A zero budget bypasses remote original and resized-variant cache reads and writes,
-  while downsampling still runs on demand. Page rows, materialized Image blobs and
+  A zero budget bypasses remote original cache reads and writes. Page rows,
+  materialized Image blobs and
   OPDS working archives retain their existing read lifecycle and can be reused
   between requests. Zero also remains a collection target: active leases and the
   five-minute recent-use grace still protect working data, so usage need not drop
@@ -1237,11 +1237,11 @@ no alias is derived from migration text.
   keep their existing storage.
 - Finished download cache cleanup (`download/mod.rs`): after the product row
   commits, the server takes the chapter write lease, rechecks the finished row
-  and artifact, removes page originals, materialized blobs, variants and OPDS
+  and artifact, removes page originals, materialized blobs and OPDS
   acquisition files, reconciles actual bytes, and advances `cacheRevision`
   before broadcasting completion. Source page rows, dimensions, page count and
   reading state remain. Deleting a finished product serializes on the same
-  chapter lease, removes product-derived variants and advances the revision.
+  chapter lease and advances the revision.
   Deleting a nonfinished row removes its row and downloaded flag transactionally
   without waiting for an active upstream call; the worker cleans its temporary
   and output files after that call drains, while source page cache assets remain.
@@ -1307,35 +1307,19 @@ no alias is derived from migration text.
   inherit stale dimensions. `GET /api/v1/chapter/{id}/pages` keeps the existing
   content/index shape and adds top-level `width`/`height` only when both are
   known; text and unknown pages omit the pair.
-- Reader page downsampling (`api/page.rs`, `source/downsample.rs`):
-  `GET /api/v1/chapter/{id}/page/{index}?width=N` serves a downsampled
-  variant of any image page kind (blob, zip entry or fetched URL), the
-  server-side counterpart of Aidoku's `Reader.downsampleImages`. The width
-  is quantized up to a multiple of 256 and variants are stored as PNG under
-  `page-blobs/<chapter_id>/variants/<bucket>/<idx>.png`, so buckets never
-  share bytes; each variant manifest records the backing page identity and a
-  digest of the resized bytes, so product bytes cannot reuse source variants.
-  URL/Zip variants use the stored original `identity` and `sha256`, read under the
-  single-page flight lock: a warm PNG hit does not read or hash original bytes.
-  Original reads still validate their complete payload; repair at an unchanged URL
-  changes the digest and rejects earlier variants. Materialized Image identities
-  include the source, page content and chapter cache revision. Local, OpdsZip and
-  finished-product identities retain byte validation; identity hashes are only
-  computed for variant requests. Manifests carry original dimensions so a PNG hit
-  can backfill an unchecked page without reading the original or storing resized
-  dimensions. Missing metadata takes the normal original path. Recency writes on
-  image and page-list read paths are best effort and log failures without failing
-  the response. A chapter reload (`materialize_image_pages`' wipe) or the
-  startup blob sweep invalidates them for free; a `<idx>.pass` marker
-  records "not resized at this bucket" (narrow image or undecodable bytes)
-  so repeat hits skip re-decoding. Pages never upscale and any failure
-  falls back to the original bytes, so a request without `width` — and
-  downloads, which never pass one — stays byte-identical to the
-  unmodified pipeline. Decode+resize runs on a blocking thread with
-  a Lanczos3 filter (line art survives shrinking better; the cost lands
-  only on a variant's first request). The web reader asks for its
-  container width times the device pixel ratio
-  (`webui/src/pages/ReaderPage.tsx:readImgWidth`).
+- Reader page images (`api/page.rs`): `GET /api/v1/chapter/{id}/page/{index}`
+  always serves the original image bytes — the earlier `?width=` server-side
+  downsample variant cache was removed because the display size changes on
+  the client (orientation flips, window resizes), so scaling to the box is
+  the client's job (browser `object-fit` scaling in the web reader). A
+  legacy `width` query parameter is ignored. Missing metadata takes the
+  normal original path. Recency writes on image and page-list read paths
+  are best effort and log failures without failing the response. A chapter
+  reload (`materialize_image_pages`' wipe) or the startup blob sweep
+  invalidates cached originals for free. Downloads and finished products
+  stay byte-identical to the unmodified pipeline. Local covers still
+  downsample to a 600px longest edge on cache miss via
+  `source/downsample.rs:downsample_jpeg`.
 - Page descriptions (`source/mod.rs:fetch_page_descriptions`): per the
   Aidoku contract a page with `has_description` and no inline
   `description` gets its text from the source's `get_page_description`, so
@@ -1959,8 +1943,7 @@ probe `onload` still report through `recordMeasured` as the fallback, which only
 fills gaps (server values win, unchanged values keep the map identity), so
 double-page spreads re-pair when a loaded image turns out landscape without
 moving the current page. A page image that fails to load retries once
-automatically with an `r=N` cache-buster the server ignores (`api/page.rs`'s
-`PageQuery` deserializes `width` only), and latches into a failed placeholder
+automatically with an `r=N` cache-buster the server ignores, and latches into a failed placeholder
 that keeps the slot's aspect-ratio box and offers a manual retry button
 (`reader/PageImage.tsx`, state machine in `reader/pageRetry.ts`, keyed by src
 so a component reused for another page cannot inherit a stale failure).
@@ -2067,9 +2050,7 @@ Mark-read deliberately waits for the LAST half of a split final page
 tracker sync and read-chapter download cleanup. Splitting shares the spread
 builder's wide-page rule (strictly wider than tall) and the same measured-dims
 pipeline, so unknown-dimension pages render whole until `recordMeasured` proves
-them landscape and the halves appear without moving the current page; the
-half-page doubles its `?width=` downsample request because it shows the image
-at twice the box width.
+them landscape and the halves appear without moving the current page.
 
 ## Known gaps
 

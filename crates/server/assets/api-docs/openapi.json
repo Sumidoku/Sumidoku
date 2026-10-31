@@ -2037,9 +2037,6 @@
         },
         {
           "$ref": "#/components/parameters/PageIndex"
-        },
-        {
-          "$ref": "#/components/parameters/Width"
         }
       ],
       "get": {
@@ -2048,7 +2045,7 @@
         ],
         "operationId": "getChapterPage",
         "summary": "Get page text or image bytes",
-        "description": "Text pages return JSON {type:text,text}. Image pages return original or downsampled bytes; a positive width requests a bounded PNG variant when resizing is possible. Finished products take precedence for reading. Remote URL and Zip page originals are cached with their MIME type and validated against the page source identity; successful downloads may reuse overlapping in-flight/cache reads.",
+        "description": "Text pages return JSON {type:text,text}. Image pages return the original bytes; scaling to the display size is the client's job. Finished products take precedence for reading. Remote URL and Zip page originals are cached with their MIME type and validated against the page source identity; successful downloads may reuse overlapping in-flight/cache reads.",
         "responses": {
           "200": {
             "description": "Text JSON or image bytes",
@@ -5217,16 +5214,6 @@
           "type": "string"
         },
         "description": "Empty, 1 or true enables refresh; other values are ignored."
-      },
-      "Width": {
-        "name": "width",
-        "in": "query",
-        "schema": {
-          "type": "integer",
-          "format": "int32",
-          "minimum": 0
-        },
-        "description": "Absent or 0 returns original bytes."
       },
       "ImageUrl": {
         "name": "url",

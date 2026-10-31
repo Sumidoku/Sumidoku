@@ -85,8 +85,8 @@ pub async fn get_cover(
 		)
 		.await?
 		.ok_or_else(|| ApiError::not_found("cover not available"))?;
-		// Decode+resize is CPU-heavy work, moved to a blocking thread (the page pipeline's pattern); an image
-		// within the cap or an undecodable image passes through at its original bytes, same as the page variants
+		// Decode+resize is CPU-heavy work, moved to a blocking thread; an image
+		// within the cap or an undecodable image passes through at its original bytes
 		let (resized, original) = tokio::task::spawn_blocking(move || {
 			let resized = crate::source::downsample::downsample_jpeg(&bytes, LOCAL_COVER_MAX_EDGE);
 			(resized, bytes)

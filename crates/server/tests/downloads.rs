@@ -909,9 +909,9 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	.fetch_one(&pool)
 	.await
 	.expect("first chapter");
-	let source_variant = t.tmp.path().join("page-blobs").join(chapter_id.to_string()).join("variants/256/0.png");
-	std::fs::create_dir_all(source_variant.parent().expect("variant parent")).expect("variant dir");
-	std::fs::write(&source_variant, b"source variant").expect("source variant");
+	let source_blob = t.tmp.path().join("page-blobs").join(chapter_id.to_string()).join("0.png");
+	std::fs::create_dir_all(source_blob.parent().expect("blob parent")).expect("blob dir");
+	std::fs::write(&source_blob, b"materialized page").expect("materialized page");
 	let probe_id: i64 = sqlx::query_scalar(
 		"INSERT INTO chapter (manga_id, key, title, number, source_order)
 		 VALUES (?, 'probe', 'Probe', 2, 1) RETURNING id",
@@ -951,7 +951,7 @@ async fn download_delete_while_worker_finishes_cleans_artifact_and_allows_requeu
 	.expect("active download deletion must not wait for blocked upstream I/O");
 	assert_eq!(status, StatusCode::NO_CONTENT);
 	assert!(artifact.exists(), "the active worker must finish before its old artifact is removed");
-	assert!(source_variant.exists(), "canceling an active attempt preserves source page variants");
+	assert!(source_blob.exists(), "canceling an active attempt preserves source page blobs");
 	release.notify_one();
 
 	let (status, _) = request(&t.app, "POST", "/api/v1/downloads", Some(json!({"chapterIds": [probe_id]}))).await;
