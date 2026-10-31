@@ -177,23 +177,11 @@ pub async fn merge_chapter_progress(
 	is_read: bool,
 	last_read_at: Option<i64>,
 ) -> ApiResult<()> {
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
-		 last_read_at) VALUES (?, ?, ?, ?, 0, ?)
-		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
-		 last_page_read = MAX(chapter_user.last_page_read, excluded.last_page_read),
-		 is_read = MAX(chapter_user.is_read, excluded.is_read),
-		 last_read_at = CASE
-		 WHEN chapter_user.last_read_at IS NULL THEN excluded.last_read_at
-		 WHEN excluded.last_read_at IS NULL THEN chapter_user.last_read_at
-		 ELSE MAX(chapter_user.last_read_at, excluded.last_read_at) END",
+	crate::store::progress::merge(
+		&mut **tx,
+		chapter_id,
+		user_id,
+		&crate::model::ChapterProgress { last_page_read, is_read, is_bookmarked: false, last_read_at },
 	)
-	.bind(chapter_id)
-	.bind(user_id)
-	.bind(last_page_read)
-	.bind(is_read)
-	.bind(last_read_at)
-	.execute(&mut **tx)
-	.await?;
-	Ok(())
+	.await
 }

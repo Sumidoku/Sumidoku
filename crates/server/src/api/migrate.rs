@@ -310,25 +310,17 @@ async fn run_entry(
 			continue;
 		};
 		// Existing target progress keeps the newer values: page number takes the max, read/bookmarked take OR, read time takes the newer
-		sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at)
-			 VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
-			 last_page_read = MAX(last_page_read, excluded.last_page_read),
-			 is_read = MAX(is_read, excluded.is_read),
-			 is_bookmarked = MAX(is_bookmarked, excluded.is_bookmarked),
-			 last_read_at = CASE
-			 WHEN excluded.last_read_at IS NULL THEN last_read_at
-			 WHEN last_read_at IS NULL THEN excluded.last_read_at
-			 ELSE MAX(last_read_at, excluded.last_read_at) END",
+		crate::store::progress::merge(
+			&mut *tx,
+			target.id,
+			user_id,
+			&crate::model::ChapterProgress {
+				last_page_read: row.last_page_read,
+				is_read: row.is_read,
+				is_bookmarked: row.is_bookmarked,
+				last_read_at: row.last_read_at,
+			},
 		)
-		.bind(target.id)
-		.bind(user_id)
-		.bind(row.last_page_read)
-		.bind(row.is_read)
-		.bind(row.is_bookmarked)
-		.bind(row.last_read_at)
-		.execute(&mut *tx)
 		.await?;
 	}
 
@@ -337,17 +329,8 @@ async fn run_entry(
 		MigrateMode::Migrate | MigrateMode::MigrateWithHistory => {
 			crate::store::library::unshelve(&mut *tx, origin.id, user_id).await?;
 			crate::store::category::clear_manga(&mut *tx, origin.id, user_id).await?;
-			// chapter_user also carries the download flag, so clearing progress only resets the progress fields without deleting the row
 			if mode == MigrateMode::Migrate {
-				sqlx::query(
-					"UPDATE chapter_user SET last_page_read = 0, is_read = 0, is_bookmarked = 0,
-					 last_read_at = NULL
-					 WHERE user_id = ? AND chapter_id IN (SELECT id FROM chapter WHERE manga_id = ?)",
-				)
-				.bind(user_id)
-				.bind(origin.id)
-				.execute(&mut *tx)
-				.await?;
+				crate::store::progress::reset_manga(&mut *tx, origin.id, user_id).await?;
 			}
 		}
 	}

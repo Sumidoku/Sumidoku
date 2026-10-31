@@ -816,21 +816,17 @@ async fn restore_progress(
 				.bind(&entry.chapter.key)
 				.fetch_one(&mut **tx)
 				.await?;
-		// is_downloaded points at local files; the backup neither carries nor overwrites it
-		sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked,
-			 last_read_at) VALUES (?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
-			 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
-			 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at",
+		crate::store::progress::set(
+			&mut **tx,
+			chapter_id,
+			user_id,
+			&crate::model::ChapterProgress {
+				last_page_read: entry.last_page_read,
+				is_read: entry.is_read,
+				is_bookmarked: entry.is_bookmarked,
+				last_read_at: entry.last_read_at,
+			},
 		)
-		.bind(chapter_id)
-		.bind(user_id)
-		.bind(entry.last_page_read)
-		.bind(entry.is_read)
-		.bind(entry.is_bookmarked)
-		.bind(entry.last_read_at)
-		.execute(&mut **tx)
 		.await?;
 		restored.progress += 1;
 	}
