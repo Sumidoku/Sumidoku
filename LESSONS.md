@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A name a user can edit is not an identity.** Matching a synced entity by its
+name works until the name changes, and then the event that carries the change
+matches nothing and creates a duplicate, without an error. An event also has to
+carry what its receiver can resolve: an alias recorded on the other side does
+not help the instance that sent the entity first. Test the edit on the receiving
+side, then send it back.
+- Evidence: 2026-10-31, a category sent from one instance to another and renamed
+  there came back as a new category, so the two stopped converging. Two old
+  binaries gave the same result, so the journal refactor had not caused it. #565
+  adds `categoryAliases`; without the apply change its regression returned
+  `["Category shared", "Renamed on B"]`.
+
 **A z-index claim must survive a hit test, not just a stylesheet read.** A
 positive z-index lifts an element above a sibling overlay only while no
 ancestor creates a stacking context in between; a later `transform` on a
