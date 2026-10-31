@@ -350,6 +350,37 @@ async fn cover_sidecar_wins() {
 	assert_eq!(bytes, b"beta-sidecar-cover");
 }
 
+/// A cover matched from a tracker or typed by hand becomes the entry's cover_url; for a local entry that url must
+/// win over the on-disk cover, so the request goes to the stored url (here: an unreachable host) instead of the file
+#[tokio::test]
+async fn matched_cover_overrides_the_local_cover() {
+	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let manga_id = register_local(&app, "Beta").await;
+	let (status, _, bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"beta-sidecar-cover");
+
+	let patch = serde_json::json!({ "cover": "http://127.0.0.1:1/cover.jpg" });
+	let (status, body) = request(&app, "PATCH", &format!("/api/v1/manga/{manga_id}"), Some(patch)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["metadataLocks"]["cover"]["provider"], "manual");
+
+	// the stored url is authoritative now: the request fails upstream instead of serving the sidecar file
+	let (status, _headers, _bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::BAD_GATEWAY);
+
+	// unlocking returns the entry to its own disk cover
+	let unlock = serde_json::json!({ "metadataUnlock": ["cover"] });
+	let (status, body) = request(&app, "PATCH", &format!("/api/v1/manga/{manga_id}"), Some(unlock)).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let (status, _headers, bytes) =
+		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, b"beta-sidecar-cover");
+}
+
 #[tokio::test]
 async fn cover_falls_back_to_last_chapter_first_page() {
 	let TestApp { app, tmp: _tmp, .. } = local_app().await;

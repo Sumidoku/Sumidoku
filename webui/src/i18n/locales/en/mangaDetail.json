@@ -47,6 +47,8 @@
     "chaptersRefreshed": "Chapter list refreshed",
     "refreshChapters": "Refresh chapter list",
     "migrate": "Migrate source",
+    "matchMetadata": "Match metadata",
+    "editMetadata": "Edit metadata",
     "chapters": "Chapters",
     "chapterStats_one": "{{total}} chapter · {{unread}} unread",
     "chapterStats_other": "{{total}} chapters · {{unread}} unread",

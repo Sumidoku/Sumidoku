@@ -13,6 +13,7 @@ pub mod library;
 pub mod listings;
 pub mod local;
 pub mod login;
+pub mod metadata;
 pub mod migrate;
 pub mod oauth;
 pub mod page;
@@ -121,6 +122,18 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route(
 			"/api/v1/manga/{id}/covers/alternates",
 			get(cover::get_alternate_covers),
+		)
+		.route(
+			"/api/v1/manga/{id}/metadata/preview",
+			get(metadata::preview_metadata),
+		)
+		.route(
+			"/api/v1/manga/{id}/metadata/apply",
+			post(metadata::apply_metadata),
+		)
+		.route(
+			"/api/v1/manga/{id}/metadata/restore",
+			post(metadata::restore_metadata),
 		)
 		.route("/api/v1/manga/{id}/categories", put(library::set_manga_categories))
 		.route("/api/v1/chapter/{id}", patch(reader::update_chapter))
@@ -1563,6 +1576,9 @@ pub(crate) async fn manga_json(state: &AppState, user_id: i64, row: &MangaRow) -
 		.map(|link| link.provider)
 		.collect();
 	object.insert("trackerProviders".into(), json!(tracker_providers));
+	let mut conn = state.pool.acquire().await?;
+	let locks = crate::metadata::load(&mut conn, row.id).await?;
+	object.insert("metadataLocks".into(), crate::metadata::locks_json(&locks));
 	Ok(value)
 }
 
@@ -1624,6 +1640,12 @@ pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&Ma
 	for (manga_id, provider) in q.fetch_all(&state.pool).await? {
 		tracker_providers.entry(manga_id).or_default().push(provider);
 	}
+	let locks_sql = format!("SELECT id, metadata_locks FROM manga WHERE id IN ({placeholders})");
+	let mut q = sqlx::query_as::<_, (i64, String)>(&locks_sql);
+	for row in rows {
+		q = q.bind(row.id);
+	}
+	let metadata_locks: HashMap<i64, String> = q.fetch_all(&state.pool).await?.into_iter().collect();
 	let mut out = Vec::with_capacity(rows.len());
 	for row in rows {
 		let mut value = serde_json::to_value(manga_from_row(row))?;
@@ -1657,6 +1679,8 @@ pub(crate) async fn manga_json_batch(state: &AppState, user_id: i64, rows: &[&Ma
 			"trackerProviders".into(),
 			json!(tracker_providers.get(&row.id).cloned().unwrap_or_default()),
 		);
+		let locks = crate::metadata::parse_locks(metadata_locks.get(&row.id).map(String::as_str).unwrap_or("{}"));
+		object.insert("metadataLocks".into(), crate::metadata::locks_json(&locks));
 		out.push(value);
 	}
 	Ok(out)
@@ -1774,6 +1798,18 @@ async fn get_manga(
 pub struct UpdateMangaRequest {
 	pub update_strategy: Option<UpdateStrategy>,
 	pub incognito: Option<bool>,
+	/// Metadata overrides: a written value is stored with a `manual` lock, so a
+	/// source refresh stops overwriting it
+	pub title: Option<Value>,
+	pub authors: Option<Value>,
+	pub artists: Option<Value>,
+	pub description: Option<Value>,
+	pub tags: Option<Value>,
+	pub status: Option<Value>,
+	pub content_rating: Option<Value>,
+	pub cover: Option<Value>,
+	/// Fields whose lock is dropped, so the owning source owns them again
+	pub metadata_unlock: Option<Vec<String>>,
 }
 
 /// Parses the body by hand: axum's Json rejection is 422, while the endpoint convention for invalid values is 400; an empty body is a no-op
@@ -1783,7 +1819,7 @@ async fn update_manga(
 	Path(id): Path<i64>,
 	body: Option<Json<Value>>,
 ) -> ApiResult<Json<Value>> {
-	manga_row(&state.pool, id).await?;
+	let existing = manga_row(&state.pool, id).await?;
 	let patch = match body {
 		None => UpdateMangaRequest::default(),
 		Some(Json(value)) => serde_json::from_value(value)
@@ -1798,6 +1834,49 @@ async fn update_manga(
 		let mut write = crate::db::begin_write(&state.pool).await?;
 		crate::store::library::set_incognito(&mut write, id, user.id, incognito).await?;
 		write.commit().await?;
+	}
+	let mut writes: Vec<(crate::metadata::Field, crate::metadata::FieldValue)> = Vec::new();
+	for (field, value) in [
+		(crate::metadata::Field::Title, &patch.title),
+		(crate::metadata::Field::Authors, &patch.authors),
+		(crate::metadata::Field::Artists, &patch.artists),
+		(crate::metadata::Field::Description, &patch.description),
+		(crate::metadata::Field::Tags, &patch.tags),
+		(crate::metadata::Field::Status, &patch.status),
+		(crate::metadata::Field::ContentRating, &patch.content_rating),
+		(crate::metadata::Field::Cover, &patch.cover),
+	] {
+		if let Some(value) = value {
+			let parsed = crate::metadata::parse_value(field, value).map_err(ApiError::bad_request)?;
+			writes.push((field, parsed));
+		}
+	}
+	let mut unlocks: Vec<crate::metadata::Field> = Vec::new();
+	for name in patch.metadata_unlock.unwrap_or_default() {
+		let field = crate::metadata::Field::parse(name.trim())
+			.ok_or_else(|| ApiError::bad_request(format!("'{name}' is not a metadata field")))?;
+		if !unlocks.contains(&field) {
+			unlocks.push(field);
+		}
+	}
+	if !writes.is_empty() || !unlocks.is_empty() {
+		crate::api::metadata::require_in_library(&state.pool, id, existing.source_id, user.id).await?;
+		let now = crate::model::unix_now();
+		let mut tx = crate::db::begin_write(&state.pool).await?;
+		let mut locks = crate::metadata::load(&mut tx, id).await?;
+		for (field, _) in &writes {
+			crate::metadata::lock_field(&mut locks, *field, crate::metadata::MANUAL, None, now);
+		}
+		for field in &unlocks {
+			crate::metadata::unlock_field(&mut locks, *field);
+		}
+		crate::store::manga::set_metadata(&mut tx, id, &writes, &locks).await?;
+		tx.commit().await?;
+		if writes.iter().any(|(field, _)| *field == crate::metadata::Field::Cover)
+			|| unlocks.contains(&crate::metadata::Field::Cover)
+		{
+			crate::source::cover::invalidate_cache(&state.config.covers_dir, id).await;
+		}
 	}
 	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(manga_json(&state, user.id, &row).await?))

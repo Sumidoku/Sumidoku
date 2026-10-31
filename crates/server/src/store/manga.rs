@@ -4,6 +4,7 @@ use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteQueryResult;
 
 use crate::error::ApiResult;
+use crate::metadata::{self, Field, FieldValue, Locks};
 use crate::sync::journal;
 
 /// The columns a source, a backup or a sync event describes. The JSON columns hold array text.
@@ -46,10 +47,11 @@ struct Published {
 	url: Option<String>,
 	initialized: bool,
 	update_strategy: i64,
+	metadata_locks: String,
 }
 
 const PUBLISHED: &str = "SELECT source_id, key, title, authors, artists, description, tags, status, content_rating,
-	viewer, cover_url, url, initialized, update_strategy FROM manga";
+	viewer, cover_url, url, initialized, update_strategy, metadata_locks FROM manga";
 
 async fn published(conn: &mut SqliteConnection, id: i64) -> ApiResult<Option<Published>> {
 	Ok(sqlx::query_as(&format!("{PUBLISHED} WHERE id = ?")).bind(id).fetch_optional(conn).await?)
@@ -111,6 +113,9 @@ pub async fn publish(conn: &mut SqliteConnection, id: i64) -> ApiResult<()> {
 /// A refresh revives a trashed row. `next_update_is_fallback` survives only an unchanged value, so a
 /// derived deadline the source merely echoes back stays derived; the fetch times are stamped apart,
 /// because only the caller knows which fetches happened.
+///
+/// A locked column keeps the row's value: the CASE reads the lock map in the statement, so a refresh
+/// that raced a match still sees the lock that match wrote.
 pub(crate) async fn upsert_from_source(conn: &mut SqliteConnection, source_id: i64,
 	key: &str,
 	manga: &MangaFields<'_>,
@@ -121,16 +126,16 @@ pub(crate) async fn upsert_from_source(conn: &mut SqliteConnection, source_id: i
 		Some(id) => Some((id, published(conn, id).await?, version_of(conn, id).await?)),
 		None => None,
 	};
-	sqlx::query(
+	let sql = format!(
 		"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
 		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
 		 last_fetched_at, chapters_last_fetched_at, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (source_id, key) DO UPDATE SET
-		 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
-		 description = excluded.description, tags = excluded.tags, status = excluded.status,
-		 content_rating = excluded.content_rating, viewer = excluded.viewer,
-		 cover_url = excluded.cover_url,
+		 title = {}, authors = {}, artists = {},
+		 description = {}, tags = {}, status = {},
+		 content_rating = {}, viewer = excluded.viewer,
+		 cover_url = {},
 		 url = excluded.url, initialized = excluded.initialized,
 		 trashed_at = NULL,
 		 update_strategy = excluded.update_strategy,
@@ -139,7 +144,16 @@ pub(crate) async fn upsert_from_source(conn: &mut SqliteConnection, source_id: i
 		 WHEN manga.next_update_time IS excluded.next_update_time THEN manga.next_update_is_fallback
 		 ELSE 0 END,
 		 created_at = manga.created_at",
-	)
+		Field::Title.refresh_guard(),
+		Field::Authors.refresh_guard(),
+		Field::Artists.refresh_guard(),
+		Field::Description.refresh_guard(),
+		Field::Tags.refresh_guard(),
+		Field::Status.refresh_guard(),
+		Field::ContentRating.refresh_guard(),
+		Field::Cover.refresh_guard(),
+	);
+	sqlx::query(&sql)
 	.bind(source_id)
 	.bind(key)
 	.bind(manga.title)
@@ -178,9 +192,12 @@ async fn publish_upsert(
 	}
 }
 
+/// A backup may predate metadata locks: a missing map leaves the target's locks
+/// alone, an empty one clears them, because the document is the whole truth.
 pub(crate) async fn upsert_from_backup(conn: &mut SqliteConnection, source_id: i64,
 	key: &str,
 	manga: &MangaFields<'_>,
+	locks: Option<&str>,
 ) -> ApiResult<()> {
 	let existing = id_of(conn, source_id, key).await?;
 	let before = match existing {
@@ -189,15 +206,16 @@ pub(crate) async fn upsert_from_backup(conn: &mut SqliteConnection, source_id: i
 	};
 	sqlx::query(
 		"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, viewer, cover_url, url, initialized, update_strategy)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 content_rating, viewer, cover_url, url, initialized, update_strategy, metadata_locks)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, '{}'))
 		 ON CONFLICT (source_id, key) DO UPDATE SET
 		 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
 		 description = excluded.description, tags = excluded.tags, status = excluded.status,
 		 content_rating = excluded.content_rating, viewer = excluded.viewer,
 		 cover_url = excluded.cover_url,
 		 url = excluded.url, initialized = excluded.initialized,
-		 update_strategy = excluded.update_strategy",
+		 update_strategy = excluded.update_strategy,
+		 metadata_locks = CASE WHEN ? IS NULL THEN manga.metadata_locks ELSE excluded.metadata_locks END",
 	)
 	.bind(source_id)
 	.bind(key)
@@ -213,6 +231,8 @@ pub(crate) async fn upsert_from_backup(conn: &mut SqliteConnection, source_id: i
 	.bind(manga.url)
 	.bind(manga.initialized)
 	.bind(manga.update_strategy)
+	.bind(locks)
+	.bind(locks)
 	.execute(&mut *conn)
 	.await?;
 	publish_upsert(conn, source_id, key, before).await
@@ -251,16 +271,20 @@ pub(crate) async fn insert_from_import(conn: &mut SqliteConnection, source_id: i
 	Ok(())
 }
 
+/// A sync apply is authoritative for the fields it carries: a peer's lock map
+/// arrives with the same snapshot, and a snapshot without one keeps this row's.
 pub(crate) async fn set_fields(conn: &mut SqliteConnection, id: i64,
 	source_id: i64,
 	key: &str,
 	manga: &MangaFields<'_>,
+	locks: Option<&str>,
 ) -> ApiResult<()> {
 	let before = published(conn, id).await?;
 	let version = version_of(conn, id).await?;
 	sqlx::query(
 		"UPDATE manga SET source_id = ?, key = ?, title = ?, authors = ?, artists = ?, description = ?, tags = ?,
-		 status = ?, content_rating = ?, viewer = ?, cover_url = ?, url = ?, initialized = ?, update_strategy = ?
+		 status = ?, content_rating = ?, viewer = ?, cover_url = ?, url = ?, initialized = ?, update_strategy = ?,
+		 metadata_locks = COALESCE(?, metadata_locks)
 		 WHERE id = ?",
 	)
 	.bind(source_id)
@@ -277,9 +301,67 @@ pub(crate) async fn set_fields(conn: &mut SqliteConnection, id: i64,
 	.bind(manga.url)
 	.bind(manga.initialized)
 	.bind(manga.update_strategy)
+	.bind(locks)
 	.bind(id)
 	.execute(&mut *conn)
 	.await?;
+	match before {
+		Some(before) => publish_change(conn, id, before, version).await,
+		None => Ok(()),
+	}
+}
+
+/// Writes the selected metadata columns and their lock map in one statement, so
+/// a reader never sees a new value without the lock that explains it. Columns
+/// are ordered by [`Field::ALL`] to keep the bind order stable.
+pub(crate) async fn set_metadata(conn: &mut SqliteConnection, id: i64,
+	writes: &[(Field, FieldValue)],
+	locks: &Locks,
+) -> ApiResult<()> {
+	let before = published(conn, id).await?;
+	let version = version_of(conn, id).await?;
+	let mut ordered = writes.to_vec();
+	ordered.sort_by_key(|(field, _)| *field);
+	let mut sql = String::from("UPDATE manga SET ");
+	for (index, (field, _)) in ordered.iter().enumerate() {
+		if index > 0 {
+			sql.push_str(", ");
+		}
+		sql.push_str(field.column());
+		sql.push_str(" = ?");
+	}
+	if !ordered.is_empty() {
+		sql.push_str(", ");
+	}
+	sql.push_str("metadata_locks = ? WHERE id = ?");
+	let mut query = sqlx::query(&sql);
+	for (_, value) in &ordered {
+		query = match value {
+			FieldValue::Text(text) => query.bind(text.clone()),
+			FieldValue::List(items) => query.bind(serde_json::to_string(items).unwrap_or_else(|_| "[]".into())),
+			FieldValue::Integer(code) => query.bind(*code),
+		};
+	}
+	query
+		.bind(metadata::serialize_locks(locks))
+		.bind(id)
+		.execute(&mut *conn)
+		.await?;
+	match before {
+		Some(before) => publish_change(conn, id, before, version).await,
+		None => Ok(()),
+	}
+}
+
+/// Drops locks without touching a value; `restore` then refetches the source fields.
+pub(crate) async fn set_locks(conn: &mut SqliteConnection, id: i64, locks: &Locks) -> ApiResult<()> {
+	let before = published(conn, id).await?;
+	let version = version_of(conn, id).await?;
+	sqlx::query("UPDATE manga SET metadata_locks = ? WHERE id = ?")
+		.bind(metadata::serialize_locks(locks))
+		.bind(id)
+		.execute(&mut *conn)
+		.await?;
 	match before {
 		Some(before) => publish_change(conn, id, before, version).await,
 		None => Ok(()),
@@ -516,6 +598,9 @@ pub(crate) async fn set_next_update(conn: &mut SqliteConnection, id: i64,
 	Ok(())
 }
 
+/// Test-only: the HTTP cover pick writes the URL and its lock in one `set_metadata` statement, and
+/// only the journal-contract tests still pin this single-column write on its own.
+#[cfg(test)]
 pub(crate) async fn set_cover_url(conn: &mut SqliteConnection, id: i64, url: &str) -> ApiResult<()> {
 	let before = published(conn, id).await?;
 	let version = version_of(conn, id).await?;

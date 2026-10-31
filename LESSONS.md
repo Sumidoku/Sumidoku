@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A migration that needs a second write belongs to the store that owns the
+table, not to a trigger.** Re-creating or widening a trigger to keep a derived
+row in step with a new column is the tempting shape, but triggers make the
+second write invisible to the code that made the first one, and the rule
+against them is enforced, not stylistic. Find the store function that performs
+the primary write and put the companion write in its transaction.
+- Evidence: 2026-10-31, a metadata-lock migration re-created
+  `manga_sync_update` and widened `sync_manga_state` so a lock change was
+  journaled; by the time it was rebased, #561 and #564 had moved every manga
+  write into `store/manga.rs` and dropped all journal triggers, and
+  `db.rs:migrated_schema_has_no_triggers` rejected the migration outright. The
+  resolved change adds only the column and the snapshot field, and
+  `store/manga.rs:set_metadata` writes the journal row in the same transaction.
+
 **A z-index claim must survive a hit test, not just a stylesheet read.** A
 positive z-index lifts an element above a sibling overlay only while no
 ancestor creates a stacking context in between; a later `transform` on a

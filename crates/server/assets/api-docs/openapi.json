@@ -1573,7 +1573,8 @@
           "manga"
         ],
         "operationId": "updateManga",
-        "summary": "Patch manga update strategy or the admin's incognito state",
+        "summary": "Patch manga update strategy, incognito state, or metadata fields",
+        "description": "Metadata fields are written with a manual lock and metadataUnlock drops a field's lock, so the owning source takes it back. Metadata edits are only accepted for entries in the library or in a local source.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1603,6 +1604,9 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -1766,7 +1770,8 @@
           "manga"
         ],
         "operationId": "selectMangaCover",
-        "summary": "Select a cover URL and invalidate the cached image",
+        "summary": "Select a cover URL, record the source's ownership of the cover and invalidate the cached image",
+        "description": "The pick is written together with a cover lock naming the entry's own source (by source key), so a later refresh keeps it and the bytes stay on the source image chain. Selecting the cover the entry already owns stamps nothing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1796,6 +1801,172 @@
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/manga/{id}/metadata/apply": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MangaId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "applyMangaMetadata",
+        "summary": "Write metadata matched from a tracker or another source",
+        "description": "fields carry the metadata field names the user confirmed. values may only replace the title with another variant the preview offered; some fields may only carry the matched value. bind remembers the tracker binding in the same transaction and is rejected for source matches. Only an entry in the library or in a local source can be matched.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated manga and the fields that were written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataApplyResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/manga/{id}/metadata/preview": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MangaId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "previewMangaMetadata",
+        "summary": "Preview another tracker or source entry's metadata against this library entry",
+        "description": "A preview never writes and only serves entries in the library or in a local source. Fields the provider cannot fill answer selectable=false with a reason; the title carries its alternatives.",
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "'tracker:<provider>' or 'source:<id>'."
+          },
+          {
+            "name": "remoteId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Tracker entry id, or the other source's manga key."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Field-by-field comparison",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataPreview"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/manga/{id}/metadata/restore": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MangaId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "metadata"
+        ],
+        "operationId": "restoreMangaMetadata",
+        "summary": "Drop metadata field locks so the owning source owns them again",
+        "description": "An empty or absent fields list unlocks every locked field. refresh re-reads the owning source immediately so unlocked fields take its values now. Only an entry in the library or in a local source can be restored.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MetadataRestoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated manga and the fields that were unlocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetadataRestoreResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -7919,6 +8090,13 @@
                 "items": {
                   "$ref": "#/components/schemas/TrackerProvider"
                 }
+              },
+              "metadataLocks": {
+                "type": "object",
+                "description": "Metadata fields owned by a tracker match, another source or a manual edit",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/MetadataFieldLock"
+                }
               }
             }
           }
@@ -8260,6 +8438,292 @@
           },
           "incognito": {
             "type": "boolean"
+          },
+          "title": {
+            "type": "string",
+            "description": "Writing a metadata field stores a manual lock, so source refreshes stop overwriting it"
+          },
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "artists": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/MangaStatus"
+          },
+          "contentRating": {
+            "$ref": "#/components/schemas/ContentRating"
+          },
+          "cover": {
+            "type": "string",
+            "format": "uri"
+          },
+          "metadataUnlock": {
+            "type": "array",
+            "description": "Field names whose lock is dropped, so the owning source owns them again",
+            "items": {
+              "$ref": "#/components/schemas/MetadataField"
+            }
+          }
+        }
+      },
+      "MetadataField": {
+        "type": "string",
+        "enum": [
+          "title",
+          "authors",
+          "artists",
+          "description",
+          "tags",
+          "status",
+          "contentRating",
+          "cover"
+        ]
+      },
+      "MetadataFieldLock": {
+        "type": "object",
+        "required": [
+          "provider",
+          "appliedAt"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "description": "'tracker:<provider>', 'source:<source key>' or 'manual'. A source is named by its natural key, not its instance id, because the lock map travels through backups and sync events."
+          },
+          "remoteId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The tracker entry id the value came from; absent for manual edits"
+          },
+          "appliedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "MetadataFieldValue": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ],
+        "nullable": true
+      },
+      "MetadataTitleAlternative": {
+        "type": "object",
+        "required": [
+          "label",
+          "value"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "MetadataPreviewField": {
+        "type": "object",
+        "required": [
+          "field",
+          "label",
+          "current",
+          "incoming",
+          "selectable",
+          "alternatives"
+        ],
+        "properties": {
+          "field": {
+            "$ref": "#/components/schemas/MetadataField"
+          },
+          "label": {
+            "type": "string"
+          },
+          "current": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "incoming": {
+            "$ref": "#/components/schemas/MetadataFieldValue"
+          },
+          "selectable": {
+            "type": "boolean",
+            "description": "false when the provider has no value for this field"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "alternatives": {
+            "type": "array",
+            "description": "Title variants the user may pick instead; empty for other fields",
+            "items": {
+              "$ref": "#/components/schemas/MetadataTitleAlternative"
+            }
+          },
+          "lock": {
+            "$ref": "#/components/schemas/MetadataFieldLock",
+            "nullable": true,
+            "description": "The field's current lock, absent when the entry's source owns it"
+          }
+        }
+      },
+      "MetadataPreview": {
+        "type": "object",
+        "required": [
+          "candidate",
+          "linked",
+          "fields"
+        ],
+        "properties": {
+          "candidate": {
+            "type": "object",
+            "required": [
+              "provider",
+              "remoteId"
+            ],
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "remoteId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string",
+                "nullable": true
+              },
+              "coverUrl": {
+                "type": "string",
+                "nullable": true
+              },
+              "info": {
+                "type": "string",
+                "nullable": true
+              }
+            }
+          },
+          "linked": {
+            "type": "boolean",
+            "description": "Whether this tracker entry is already bound to the library entry"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataPreviewField"
+            }
+          }
+        }
+      },
+      "MetadataApplyRequest": {
+        "type": "object",
+        "required": [
+          "provider",
+          "remoteId",
+          "fields"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "remoteId": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataField"
+            }
+          },
+          "values": {
+            "type": "object",
+            "description": "Per-field overrides; only a title may differ from the match, and only among the offered variants",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MetadataFieldValue"
+            }
+          },
+          "bind": {
+            "type": "boolean",
+            "description": "Also remember the tracker binding; rejected for source matches"
+          }
+        }
+      },
+      "MetadataApplyResult": {
+        "type": "object",
+        "required": [
+          "manga",
+          "appliedFields"
+        ],
+        "properties": {
+          "manga": {
+            "$ref": "#/components/schemas/Manga"
+          },
+          "appliedFields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataField"
+            }
+          }
+        }
+      },
+      "MetadataRestoreRequest": {
+        "type": "object",
+        "properties": {
+          "fields": {
+            "type": "array",
+            "description": "Empty or absent unlocks every locked field",
+            "items": {
+              "$ref": "#/components/schemas/MetadataField"
+            }
+          },
+          "refresh": {
+            "type": "boolean",
+            "description": "Re-read the owning source now so unlocked fields take its values"
+          }
+        }
+      },
+      "MetadataRestoreResult": {
+        "type": "object",
+        "required": [
+          "manga",
+          "unlockedFields"
+        ],
+        "properties": {
+          "manga": {
+            "$ref": "#/components/schemas/Manga"
+          },
+          "unlockedFields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MetadataField"
+            }
           }
         }
       },

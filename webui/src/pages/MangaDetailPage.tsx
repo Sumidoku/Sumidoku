@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
-import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, RefreshCw, Search, Trash2, TriangleAlert } from 'lucide-react';
+import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, PencilLine, RefreshCw, Search, Tags, Trash2, TriangleAlert } from 'lucide-react';
 import { api, coverUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import {
@@ -60,6 +60,8 @@ import { TrackerSection } from '../components/trackers/TrackerSection';
 import { ChapterRow } from './manga/ChapterRow';
 import type { ChapterDlState } from './manga/ChapterRow';
 import { CoverPickerModal } from './manga/CoverPickerModal';
+import { EditMetadataDialog } from './manga/EditMetadataDialog';
+import { MatchMetadataDialog } from './manga/MatchMetadataDialog';
 import { MigrateModal } from './manga/MigrateModal';
 import { MoreMenu } from './manga/MoreMenu';
 import './manga.css';
@@ -188,6 +190,8 @@ export default function MangaDetailPage() {
 
 	const [search, setSearch] = useState('');
 	const [migrateOpen, setMigrateOpen] = useState(false);
+	const [matchMetadataOpen, setMatchMetadataOpen] = useState(false);
+	const [editMetadataOpen, setEditMetadataOpen] = useState(false);
 	const [coverPickerOpen, setCoverPickerOpen] = useState(false);
 	const [downloadRulesOpen, setDownloadRulesOpen] = useState(false);
 	const [downloadRule, setDownloadRule] = useState<DownloadRule>('unread');
@@ -812,6 +816,32 @@ export default function MangaDetailPage() {
 											<span>{t('mangaDetail.changeCover')}</span>
 											<Images size={14} />
 										</button>
+										{(manga.inLibrary || isLocal) && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setMatchMetadataOpen(true);
+												}}
+											>
+												<span>{t('mangaDetail.matchMetadata')}</span>
+												<Tags size={14} />
+											</button>
+										)}
+										{(manga.inLibrary || isLocal) && (
+											<button
+												type="button"
+												className="manga-menu__row"
+												onClick={() => {
+													closeMenu();
+													setEditMetadataOpen(true);
+												}}
+											>
+												<span>{t('mangaDetail.editMetadata')}</span>
+												<PencilLine size={14} />
+											</button>
+										)}
 										{!isLocal && chapters.length > 0 && (
 											<button
 												type="button"
@@ -1121,6 +1151,18 @@ export default function MangaDetailPage() {
 			</Modal>
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
+
+			{(manga.inLibrary || isLocal) && matchMetadataOpen && (
+				<MatchMetadataDialog
+					mangaId={mangaId}
+					mangaTitle={manga.title}
+					onClose={() => setMatchMetadataOpen(false)}
+				/>
+			)}
+
+			{(manga.inLibrary || isLocal) && editMetadataOpen && (
+				<EditMetadataDialog mangaId={mangaId} onClose={() => setEditMetadataOpen(false)} />
+			)}
 
 			{coverPickerOpen && <CoverPickerModal manga={manga} onClose={() => setCoverPickerOpen(false)} />}
 

@@ -5,6 +5,7 @@
 //! fields are dropped on update.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
+use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService};
 use reqwest::{Method, StatusCode, Url};
@@ -46,6 +47,30 @@ struct Subject {
 	volumes: Option<i32>,
 	#[serde(default)]
 	interest: Option<SubjectInterest>,
+	/// Subject-detail infobox: labelled facts such as author, publisher, aliases
+	#[serde(default)]
+	infobox: Option<Vec<InfoboxItem>>,
+	/// Subject-detail community tags, ordered by usage count
+	#[serde(default)]
+	tags: Option<Vec<SubjectTag>>,
+	#[serde(default)]
+	nsfw: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct InfoboxItem {
+	#[serde(default)]
+	key: String,
+	#[serde(default)]
+	value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct SubjectTag {
+	#[serde(default)]
+	name: String,
+	#[serde(default)]
+	count: i64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,6 +253,73 @@ impl BangumiTracker {
 		}
 	}
 
+	/// One infobox value as text; array values (and arrays of `{v: ...}`
+	/// entries) join with " / ".
+	fn infobox_text(value: &Value) -> String {
+		match value {
+			Value::String(text) => text.clone(),
+			Value::Array(items) => items
+				.iter()
+				.filter_map(|item| match item {
+					Value::String(text) => Some(text.clone()),
+					Value::Object(object) => object.get("v").and_then(Value::as_str).map(str::to_string),
+					_ => None,
+				})
+				.collect::<Vec<_>>()
+				.join(" / "),
+			_ => String::new(),
+		}
+	}
+
+	/// People named by one infobox key (`作者`, `作画`, `别名`), split on the
+	/// separators Bangumi uses inside a single value.
+	fn infobox_people(subject: &Subject, key: &str) -> Vec<String> {
+		let Some(items) = subject.infobox.as_ref() else {
+			return Vec::new();
+		};
+		let mut people = Vec::new();
+		for item in items.iter().filter(|item| item.key == key) {
+			for name in Self::infobox_text(&item.value).split(['/', '、', ',', '，']) {
+				let name = name.trim();
+				if !name.is_empty() {
+					people.push(name.to_string());
+				}
+			}
+		}
+		dedupe(people)
+	}
+
+	/// Full metadata mapping. Bangumi's Chinese name is the library title when
+	/// present (the native name and aliases travel as alternatives); the p1
+	/// subject carries no publication status, so that field stays absent.
+	fn metadata_from_subject(subject: &Subject) -> TrackerMetadata {
+		let name_cn = subject.name_cn.clone().filter(|name| !name.is_empty());
+		let default = name_cn.clone().unwrap_or_else(|| subject.name.clone());
+		let mut alternatives = Vec::new();
+		if !subject.name.is_empty() && subject.name != default {
+			alternatives.push(TitleAlternative { label: "Original".into(), value: subject.name.clone() });
+		}
+		for alias in Self::infobox_people(subject, "别名") {
+			alternatives.push(TitleAlternative { label: "Alias".into(), value: alias });
+		}
+		let mut ranked = subject.tags.iter().flatten().filter(|tag| !tag.name.is_empty()).collect::<Vec<_>>();
+		ranked.sort_by_key(|tag| std::cmp::Reverse(tag.count));
+		let tags = dedupe(ranked.into_iter().map(|tag| tag.name.clone()).take(12));
+		TrackerMetadata {
+			id: subject.id.to_string(),
+			title: TitleVariants { default, alternatives },
+			info: subject.info.clone().filter(|info| !info.is_empty()),
+			authors: Self::infobox_people(subject, "作者"),
+			artists: Self::infobox_people(subject, "作画"),
+			description: subject.summary.clone().filter(|summary| !summary.is_empty()),
+			tags,
+			status: None,
+			content_rating: subject.nsfw.then_some(aidoku::ContentRating::NSFW),
+			cover_url: subject.images.as_ref().and_then(|images| images.large.clone().or_else(|| images.common.clone())),
+			url: Some(format!("{SITE_ORIGIN}/subject/{}", subject.id)),
+		}
+	}
+
 	async fn search_subjects(&self, user_id: i64, query: &str, nsfw: bool) -> Result<Vec<Subject>, TrackerError> {
 		let mut url = self.api_url(&["p1", "search", "subjects"])?;
 		url.query_pairs_mut().append_pair("limit", "20");
@@ -317,6 +409,11 @@ impl TrackerService for BangumiTracker {
 		}
 		Self::ensure_success(response, "Bangumi progress update").await
 	}
+
+	async fn metadata(&self, user_id: i64, track_id: &str) -> Result<TrackerMetadata, TrackerError> {
+		let subject = self.subject(user_id, subject_id(track_id)?).await?;
+		Ok(Self::metadata_from_subject(&subject))
+	}
 }
 
 #[cfg(test)]
@@ -384,6 +481,37 @@ mod tests {
 			"volumes": 6,
 			"interest": null
 		})
+	}
+
+	#[test]
+	fn metadata_prefers_localized_title_and_reads_infobox_people() {
+		let subject: Subject = serde_json::from_value(json!({
+			"id": 42,
+			"name": "Berserk",
+			"nameCN": "剑风传奇",
+			"summary": "Summary",
+			"images": {"large": "https://img.test/42.jpg"},
+			"info": "Info",
+			"infobox": [
+				{"key": "作者", "value": [{"v": "三浦建太郎"}, {"v": "Studio Gaga"}]},
+				{"key": "作画", "value": "Studio Gaga"},
+				{"key": "别名", "value": [{"v": "Berserk"}]}
+			],
+			"tags": [{"name": "奇幻", "count": 200}, {"name": "冒险", "count": 50}],
+			"nsfw": true
+		}))
+		.expect("subject");
+		let metadata = BangumiTracker::metadata_from_subject(&subject);
+		assert_eq!(metadata.title_default(), Some("剑风传奇"));
+		assert_eq!(metadata.authors, ["三浦建太郎", "Studio Gaga"]);
+		assert_eq!(metadata.artists, ["Studio Gaga"]);
+		assert_eq!(metadata.tags, ["奇幻", "冒险"]);
+		assert!(metadata.status.is_none());
+		assert_eq!(metadata.content_rating, Some(aidoku::ContentRating::NSFW));
+		assert_eq!(metadata.cover_url.as_deref(), Some("https://img.test/42.jpg"));
+		assert_eq!(metadata.url.as_deref(), Some("https://bgm.tv/subject/42"));
+		// the untranslated name is kept as an alternative because the localized one won
+		assert!(metadata.title.alternatives.iter().any(|alternative| alternative.label == "Original" && alternative.value == "Berserk"));
 	}
 
 	// search results carry no summary, eps or volumes

@@ -3,6 +3,7 @@
 //! the viewer's configured score format, cached per user.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
+use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService};
 use serde_json::{Value, json};
@@ -103,6 +104,25 @@ query ($id: Int) {
       startedAt { year month day }
       completedAt { year month day }
     }
+  }
+}
+"#;
+
+const METADATA_BY_ID: &str = r#"
+query ($id: Int) {
+  Media(id: $id, type: MANGA) {
+    id
+    title { native romaji english userPreferred }
+    description
+    startDate { year }
+    staff(perPage: 4, sort: RELEVANCE) { nodes { name { full } } }
+    genres
+    tags { name rank }
+    status
+    format
+    coverImage { extraLarge large }
+    isAdult
+    siteUrl
   }
 }
 "#;
@@ -317,6 +337,65 @@ impl AniListTracker {
 			url: Some(format!("https://anilist.co/manga/{id}")),
 		})
 	}
+
+	/// Full metadata mapping. AniList titles are native/romaji/english variants;
+	/// the native one is the default (the library title follows the original
+	/// language), the rest travel as labelled alternatives.
+	fn metadata_from_media(id: i64, media: &Value) -> TrackerMetadata {
+		let variant = |key: &str| {
+			media.pointer(&format!("/title/{key}")).and_then(Value::as_str).map(str::to_string).filter(|title| !title.is_empty())
+		};
+		let native = variant("native");
+		let romaji = variant("romaji");
+		let english = variant("english");
+		let preferred = variant("userPreferred");
+		let default = native.clone().or_else(|| romaji.clone()).or_else(|| english.clone()).or_else(|| preferred.clone()).unwrap_or_default();
+		let alternatives = [("Native", native), ("Romaji", romaji), ("English", english), ("User preferred", preferred)]
+			.into_iter()
+			.filter_map(|(label, value)| value.map(|value| TitleAlternative { label: label.into(), value }))
+			.collect();
+
+		let staff = media
+			.pointer("/staff/nodes")
+			.and_then(Value::as_array)
+			.into_iter()
+			.flatten()
+			.filter_map(|staff| staff.pointer("/name/full").and_then(Value::as_str).filter(|name| !name.is_empty()))
+			.map(str::to_string);
+		let authors = dedupe(staff);
+		let mut ranked = media
+			.get("tags")
+			.and_then(Value::as_array)
+			.into_iter()
+			.flatten()
+			.filter_map(|tag| {
+				let name = tag.get("name").and_then(Value::as_str).filter(|name| !name.is_empty())?;
+				let rank = tag.get("rank").and_then(Value::as_i64).unwrap_or(0);
+				(rank >= 60).then(|| (rank, name.to_string()))
+			})
+			.collect::<Vec<_>>();
+		ranked.sort_by_key(|item| std::cmp::Reverse(item.0));
+		let genres = media.get("genres").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string);
+		let tags = dedupe(genres.chain(ranked.into_iter().map(|(_, name)| name)).take(12));
+
+		TrackerMetadata {
+			id: id.to_string(),
+			title: TitleVariants { default, alternatives },
+			info: super::search_info(media.pointer("/startDate/year").and_then(Value::as_i64), authors.iter().cloned()),
+			authors,
+			artists: Vec::new(),
+			description: media.get("description").and_then(Value::as_str).map(plain_description).filter(|text| !text.is_empty()),
+			tags,
+			status: media.get("status").and_then(Value::as_str).and_then(crate::tracker::metadata::anilist_status),
+			content_rating: media.get("isAdult").and_then(Value::as_bool).unwrap_or(false).then_some(aidoku::ContentRating::NSFW),
+			cover_url: media
+				.pointer("/coverImage/extraLarge")
+				.or_else(|| media.pointer("/coverImage/large"))
+				.and_then(Value::as_str)
+				.map(str::to_string),
+			url: media.get("siteUrl").and_then(Value::as_str).map(str::to_string),
+		}
+	}
 }
 
 #[async_trait::async_trait]
@@ -393,6 +472,13 @@ impl TrackerService for AniListTracker {
 		}
 		self.graphql(user_id, SAVE_MEDIA_LIST_ENTRY, Value::Object(variables)).await?;
 		Ok(())
+	}
+
+	async fn metadata(&self, user_id: i64, track_id: &str) -> Result<TrackerMetadata, TrackerError> {
+		let id = Self::manga_id(track_id)?;
+		let data = self.graphql(user_id, METADATA_BY_ID, json!({ "id": id })).await?;
+		let media = data.get("Media").filter(|media| !media.is_null()).ok_or_else(|| Self::error("media not found"))?;
+		Ok(Self::metadata_from_media(id, media))
 	}
 }
 
@@ -492,6 +578,35 @@ mod tests {
 				"completedAt": {"year": 0, "month": 0, "day": 0}
 			}
 		})
+	}
+
+	#[test]
+	fn metadata_maps_native_titles_authors_tags_and_rating() {
+		let media = json!({
+			"id": 30002,
+			"title": {"native": "ベルセルク", "romaji": "Berserk", "english": "Berserk", "userPreferred": "Berserk"},
+			"description": "A <i>story</i> of a swordsman.",
+			"startDate": {"year": 1989},
+			"staff": {"nodes": [{"name": {"full": "Kentarou Miura"}}, {"name": {"full": "Studio Gaga"}}]},
+			"genres": ["Action", "Drama"],
+			"tags": [{"name": "Seinen", "rank": 90}, {"name": "Rare", "rank": 20}],
+			"status": "RELEASING",
+			"isAdult": true,
+			"coverImage": {"large": "https://img.example/large.jpg"},
+			"siteUrl": "https://anilist.co/manga/30002"
+		});
+		let metadata = AniListTracker::metadata_from_media(30002, &media);
+		assert_eq!(metadata.id, "30002");
+		assert_eq!(metadata.title_default(), Some("ベルセルク"));
+		assert_eq!(metadata.title.alternatives.len(), 4);
+		assert_eq!(metadata.authors, ["Kentarou Miura", "Studio Gaga"]);
+		// genres lead, then the tags above the relevance cut, both keeping their order
+		assert_eq!(metadata.tags, ["Action", "Drama", "Seinen"]);
+		assert_eq!(metadata.status, Some(aidoku::MangaStatus::Ongoing));
+		assert_eq!(metadata.content_rating, Some(aidoku::ContentRating::NSFW));
+		assert_eq!(metadata.cover_url.as_deref(), Some("https://img.example/large.jpg"));
+		assert_eq!(metadata.url.as_deref(), Some("https://anilist.co/manga/30002"));
+		assert!(metadata.description.as_deref().unwrap_or_default().contains("story"));
 	}
 
 	// token rows reference user(id) with foreign keys enforced, so the user
