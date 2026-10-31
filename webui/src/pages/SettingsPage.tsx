@@ -140,7 +140,7 @@ function AppearanceSection() {
 				<span className="settings-row__label">{t('settings.language')}</span>
 				<Select
 					value={i18n.language}
-					onChange={(e) => setLanguage(e.currentTarget.value as Language)}
+					onChange={(value) => setLanguage(value as Language)}
 				>
 					<option value="en">English</option>
 					<option value="zh-CN">中文（简体）</option>
@@ -214,7 +214,7 @@ function ReaderSection() {
 				<span className="settings-row__label">{t('settings.readerMode')}</span>
 				<Select
 					value={mode}
-					onChange={(e) => persist(READER_MODE_KEY, e.currentTarget.value, setMode)}
+					onChange={(value) => persist(READER_MODE_KEY, value, setMode)}
 				>
 					<option value="paged">{t('settings.modePaged')}</option>
 					<option value="continuous">{t('settings.modeContinuous')}</option>
@@ -223,14 +223,14 @@ function ReaderSection() {
 			</div>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerDirection')}</span>
-				<Select value={dir} onChange={(e) => persist(READER_DIR_KEY, e.currentTarget.value, setDir)}>
+				<Select value={dir} onChange={(value) => persist(READER_DIR_KEY, value, setDir)}>
 					<option value="ltr">{t('settings.dirLtr')}</option>
 					<option value="rtl">{t('settings.dirRtl')}</option>
 				</Select>
 			</div>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerLayout')}</span>
-				<Select value={layout} onChange={(e) => persist(READER_LAYOUT_KEY, e.currentTarget.value, setLayout)}>
+				<Select value={layout} onChange={(value) => persist(READER_LAYOUT_KEY, value, setLayout)}>
 					<option value="single">{t('settings.layoutSingle')}</option>
 					<option value="double">{t('settings.layoutDouble')}</option>
 					<option value="doubleNoCover">{t('settings.layoutDoubleNoCover')}</option>
@@ -238,7 +238,7 @@ function ReaderSection() {
 			</div>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerTapZones')}</span>
-				<Select value={tapZones} onChange={(e) => persist(READER_TAPZONES_KEY, e.currentTarget.value, setTapZones)}>
+				<Select value={tapZones} onChange={(value) => persist(READER_TAPZONES_KEY, value, setTapZones)}>
 					<option value="lr">{t('settings.tzLr')}</option>
 					<option value="rl">{t('settings.tzRl')}</option>
 					<option value="edge">{t('settings.tzEdge')}</option>
@@ -248,7 +248,7 @@ function ReaderSection() {
 			</div>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerBackground')}</span>
-				<Select value={bg} onChange={(e) => persist(READER_BG_KEY, e.currentTarget.value, setBg)}>
+				<Select value={bg} onChange={(value) => persist(READER_BG_KEY, value, setBg)}>
 					<option value="dark">{t('settings.bgDark')}</option>
 					<option value="gray">{t('settings.bgGray')}</option>
 					<option value="light">{t('settings.bgLight')}</option>
@@ -257,7 +257,7 @@ function ReaderSection() {
 			</div>
 			<div className="settings-row">
 				<span className="settings-row__label">{t('settings.readerPageScale')}</span>
-				<Select value={scale} onChange={(e) => persist(READER_SCALE_KEY, e.currentTarget.value, setScale)}>
+				<Select value={scale} onChange={(value) => persist(READER_SCALE_KEY, value, setScale)}>
 					<option value="screen">{t('settings.scaleScreen')}</option>
 					<option value="width">{t('settings.scaleWidth')}</option>
 					<option value="widthShrink">{t('settings.scaleWidthShrink')}</option>
@@ -269,7 +269,7 @@ function ReaderSection() {
 				<span className="settings-row__label">{t('settings.readerStretch')}</span>
 				<Select
 					value={stretch ? '1' : '0'}
-					onChange={(e) => persist(READER_STRETCH_KEY, e.currentTarget.value, (v) => setStretch(v === '1'))}
+					onChange={(value) => persist(READER_STRETCH_KEY, value, (v) => setStretch(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>
@@ -279,7 +279,7 @@ function ReaderSection() {
 				<span className="settings-row__label">{t('settings.readerSplitWide')}</span>
 				<Select
 					value={split ? '1' : '0'}
-					onChange={(e) => persist(READER_SPLIT_KEY, e.currentTarget.value, (v) => setSplit(v === '1'))}
+					onChange={(value) => persist(READER_SPLIT_KEY, value, (v) => setSplit(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>
@@ -289,7 +289,7 @@ function ReaderSection() {
 				<span className="settings-row__label">{t('settings.readerAnimations')}</span>
 				<Select
 					value={anim ? '1' : '0'}
-					onChange={(e) => persist(READER_ANIM_KEY, e.currentTarget.value, (v) => setAnim(v === '1'))}
+					onChange={(value) => persist(READER_ANIM_KEY, value, (v) => setAnim(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>
@@ -299,7 +299,7 @@ function ReaderSection() {
 				<span className="settings-row__label">{t('settings.readerTransition')}</span>
 				<Select
 					value={transition ? '1' : '0'}
-					onChange={(e) => persist(READER_TRANSITION_KEY, e.currentTarget.value, (v) => setTransition(v === '1'))}
+					onChange={(value) => persist(READER_TRANSITION_KEY, value, (v) => setTransition(v === '1'))}
 				>
 					<option value="0">{t('settings.stretchOff')}</option>
 					<option value="1">{t('settings.stretchOn')}</option>
@@ -1074,9 +1074,9 @@ function LibraryDisplaySection() {
 						<Select
 							value={defaultCategory}
 							disabled={save.isPending}
-							onChange={(e) =>
+							onChange={(value) =>
 								save.mutate(
-									mergeServerSettings(settings.data, { library: { defaultCategory: e.currentTarget.value } })
+									mergeServerSettings(settings.data, { library: { defaultCategory: value } })
 								)
 							}
 						>
@@ -1189,10 +1189,10 @@ function DownloadSection() {
 						<Select
 							value={data?.downloadFormat ?? 'cbz'}
 							disabled={save.isPending}
-							onChange={(e) =>
+							onChange={(value) =>
 								save.mutate(
 									mergeServerSettings(settings.data, {
-										download: { downloadFormat: e.currentTarget.value as 'cbz' | 'folder' }
+										download: { downloadFormat: value as 'cbz' | 'folder' }
 									})
 								)
 							}
@@ -1283,8 +1283,7 @@ function LibraryUpdateSection() {
 						<Select
 							value={String(intervalHours)}
 							disabled={save.isPending}
-							onChange={(e) => {
-								const value = e.currentTarget.value;
+							onChange={(value) => {
 								save.mutate(
 									mergeServerSettings(settings.data, { library: { updateIntervalHours: Number(value) } })
 								);
@@ -1809,7 +1808,7 @@ function SuwayomiMappingSelect({
 	const candidateKeys = new Set(group.candidates.map((c) => c.key));
 	const rest = (sources.data ?? []).filter((s) => !candidateKeys.has(s.key));
 	return (
-		<Select value={value} onChange={(e) => onChange(e.currentTarget.value)}>
+		<Select value={value} onChange={onChange}>
 			<option value="">{t('settings.skipSource')}</option>
 			{group.candidates.map((c) => (
 				<option key={c.key} value={c.key}>
