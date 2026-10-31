@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -62,6 +62,9 @@ import { CoverPickerModal } from './manga/CoverPickerModal';
 import { MigrateModal } from './manga/MigrateModal';
 import { MoreMenu } from './manga/MoreMenu';
 import './manga.css';
+
+// Row gap of .manga-hero__tags in manga.css; the two-row clamp stops this much above the third row
+const TAG_LIST_GAP = 6;
 
 const STATUS_COLOR: Record<string, ChipColor> = {
 	ongoing: 'accent',
@@ -138,7 +141,42 @@ export default function MangaDetailPage() {
 	const filtersQuery = useSourceFilters(manga?.sourceId ?? 0, !isLocal);
 
 	const [descOpen, setDescOpen] = useState(false);
+	// Tags wrap onto rows; past two rows the list clamps to the measured third-row top and a toggle
+	// expands it — the same interaction as the description clamp. Chip heights differ between
+	// clickable and plain chips, so the clamp height is measured, not hardcoded.
+	const [tagsOpen, setTagsOpen] = useState(false);
+	const [tagsClamp, setTagsClamp] = useState<number | null>(null);
+	const tagsRef = useRef<HTMLDivElement>(null);
 	const [removeOpen, setRemoveOpen] = useState(false);
+
+	// On the wire tags can be null (aidoku Option<Vec>), not an empty array
+	const tags = manga?.tags ?? [];
+	useLayoutEffect(() => {
+		const el = tagsRef.current;
+		if (!el) return;
+		const measure = () => {
+			// offsetTop marks a new wrapped row; clamping only hides overflow,
+			// it does not move the rows, so measuring while clamped is still correct
+			let rows = 0;
+			let lastTop = -1;
+			let thirdRowTop = -1;
+			for (const kid of Array.from(el.children)) {
+				const top = (kid as HTMLElement).offsetTop;
+				if (top !== lastTop) {
+					rows++;
+					lastTop = top;
+					if (rows === 3) {
+						thirdRowTop = top;
+						break;
+					}
+				}
+			}
+			setTagsClamp(thirdRowTop >= 0 ? thirdRowTop - TAG_LIST_GAP : null);
+		};
+		measure();
+		window.addEventListener('resize', measure);
+		return () => window.removeEventListener('resize', measure);
+	}, [tags]);
 	const [catOpen, setCatOpen] = useState(false);
 	const [catSel, setCatSel] = useState<Set<number>>(new Set());
 
@@ -532,10 +570,9 @@ export default function MangaDetailPage() {
 		);
 	}
 
-	// On the wire authors/artists/tags can be null (aidoku Option<Vec>), not empty arrays
+	// On the wire authors/artists can be null (aidoku Option<Vec>), not empty arrays
 	const authors = manga.authors ?? [];
 	const artists = manga.artists ?? [];
-	const tags = manga.tags ?? [];
 	const filters = filtersQuery.data ?? [];
 	const sourceConfig = sourceQuery.data?.config;
 	// Deduplicated with order kept; a name appearing in both authors and artists searches as author (same as Aidoku's author search)
@@ -632,7 +669,12 @@ export default function MangaDetailPage() {
 							)}
 						</div>
 						{tags.length > 0 && (
-							<div className="manga-hero__tags">
+							<>
+							<div
+								ref={tagsRef}
+								className="manga-hero__tags"
+								style={tagsClamp !== null && !tagsOpen ? { maxHeight: tagsClamp } : undefined}
+							>
 							{tags.map((tag) => {
 								// Aidoku: the config.supportsTagSearch declaration wins (send Select "genre" with the raw tag as value);
 								// only when undeclared does it fall back to an exact option match on isGenre filters
@@ -650,6 +692,16 @@ export default function MangaDetailPage() {
 									);
 								})}
 							</div>
+							{tagsClamp !== null && (
+								<button
+									type="button"
+									className="manga-hero__tags-toggle"
+									onClick={() => setTagsOpen((v) => !v)}
+								>
+									{tagsOpen ? t('mangaDetail.collapse') : t('mangaDetail.expand')}
+								</button>
+							)}
+							</>
 						)}
 						{manga.description && (
 							<>

@@ -164,15 +164,18 @@
 
 .manga-hero__tags {
 	display: flex;
+	flex-wrap: wrap;
 	gap: 6px;
-	overflow-x: auto;
 	margin-top: 10px;
-	padding-bottom: 2px;
-	scrollbar-width: none;
+	/* hides the rows past the inline max-height the page measures (two rows when clamped) */
+	overflow: hidden;
 }
 
-.manga-hero__tags::-webkit-scrollbar {
-	display: none;
+.manga-hero__tags-toggle {
+	align-self: flex-start;
+	padding: 3px 0 0;
+	font-size: 13px;
+	color: var(--accent-hover);
 }
 
 .manga-hero__desc {
@@ -790,12 +793,6 @@ button.manga-menu__row:hover:not(:disabled) {
 
 	.manga-hero__title {
 		font-size: 18px;
-	}
-
-	/* The right-edge fade hints that the tag row scrolls horizontally */
-	.manga-hero__tags {
-		mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-		-webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
 	}
 
 	/* On mobile the batch bar hugs the tab bar and may wrap */
