@@ -1,30 +1,21 @@
 use crate::error::{ApiError, ApiResult};
 use crate::model::{ChapterRow, PageRow};
 use crate::source::cover::bytes_response;
-use crate::source::downsample::{VariantHit, bucket_width, downsample_png, read_variant};
 use crate::source::page_dimensions::{PageDimensionUpdate, image_dimensions, persist_measured};
 use crate::source::{chapter_row, fetch_page_image, http_get, manga_row, page_image_blob};
 use crate::state::AppState;
 use aidoku::PageContext;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
 const PAGE_MAX_AGE: u64 = 3600;
 
-#[derive(Deserialize)]
-pub struct PageQuery {
-	/// Target width for a requested downsampled variant; absent/0 = pass the original bytes through
-	width: Option<u32>,
-}
-
 pub async fn get_page(
 	State(state): State<Arc<AppState>>,
 	Path((id, index)): Path<(i64, i64)>,
-	Query(query): Query<PageQuery>,
 ) -> ApiResult<Response> {
 	let _cache_lease = state.chapter_cache_gate.read().await;
 	let cache_lock = state.chapter_cache_lock(id).await;
@@ -38,7 +29,7 @@ pub async fn get_page(
 	// A finished download product remains the reader source even after page metadata is refreshed.
 	// Missing products fall back to source pages; actual product read errors propagate.
 	if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
-		return product_page_response(&state, id, index, query.width, bytes, entry).await;
+		return Ok(product_page_response(bytes, entry));
 	}
 
 	let mut pages = crate::source::load_pages_under_lease(&state, id, false).await?;
@@ -47,7 +38,7 @@ pub async fn get_page(
 		drop(chapter_cache);
 		let chapter_write = cache_lock.write().await;
 		if let Some((bytes, entry)) = crate::download::read_product_page(&state, id, index as usize).await? {
-			return product_page_response(&state, id, index, query.width, bytes, entry).await;
+			return Ok(product_page_response(bytes, entry));
 		}
 		pages = crate::source::load_pages_under_lease(&state, id, false).await?;
 		if crate::source::has_missing_materialized_page(&state, id, &pages).await? {
@@ -66,68 +57,14 @@ pub async fn get_page(
 		return Ok(Json(json!({ "type": "text", "text": text })).into_response());
 	}
 
-	let manga = manga_row(&state.pool, chapter.manga_id).await?;
-	let cache_enabled = crate::cache::settings(&state.pool).await?.0;
-	let mut bucket = query.width.filter(|w| *w > 0).map(bucket_width);
-	// A PNG variant can answer using only its backing version metadata. Materialized images
-	// change with the chapter generation; remote originals publish an exact response digest.
-	let early_identity = if cache_enabled && bucket.is_some() {
-		if content.get("Image").is_some() {
-			Some(crate::cache::image_variant_identity(manga.source_id, &content,
-				crate::cache::chapter_revision(&state.pool, id).await?)?)
-		} else if content.get("Url").is_some() || content.get("Zip").is_some() {
-			crate::cache::cached_original_variant_identity(&state, id, index, manga.source_id, &content).await
-		} else { None }
-	} else { None };
-	if let (Some(b), Some(identity)) = (bucket, early_identity.as_deref()) {
-		match read_variant_for(&state, id, index, b, identity).await {
-			Some(VariantHit::Png(bytes, dimensions)) => {
-				backfill_dimensions(&state, id, page, dimensions).await;
-				return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE));
-			}
-			Some(VariantHit::PassThrough) => bucket = None,
-			None => {}
-		}
-	}
-
 	let (bytes, mime) = page_image_bytes(&state, &chapter, index, &content).await?;
 	let dimensions = image_dimensions(&bytes);
 	backfill_dimensions(&state, id, page, dimensions).await;
-	let Some(b) = bucket else { return Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE)); };
-	let identity = if !cache_enabled { String::new() }
-		else if content.get("Image").is_some() {
-			early_identity.expect("image variant identity was resolved under the chapter lease")
-		} else if content.get("Url").is_some() || content.get("Zip").is_some() {
-			// Derive from these exact bytes: another reader may have replaced the original
-			// since the early metadata lookup. Never label older bytes with a newer digest.
-			crate::cache::original_variant_identity(manga.source_id, &content, &bytes, &mime)?
-		} else { crate::cache::source_variant_identity(manga.source_id, &content, &bytes)? };
-	if cache_enabled {
-		match read_variant_for(&state, id, index, b, &identity).await {
-			Some(VariantHit::Png(bytes, _)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
-			Some(VariantHit::PassThrough) => return Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE)),
-			None => {}
-		}
-	}
-
-	let (resized, original) = tokio::task::spawn_blocking(move || {
-		let resized = downsample_png(&bytes, b);
-		(resized, bytes)
-	}).await.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
-	if cache_enabled {
-		if let Err(error) = crate::cache::write_variant(&state, id, index, b, resized.as_deref(), &identity, dimensions).await {
-			tracing::warn!(chapter_id = id, index, "page variant write failed: {}", error.message());
-		}
-		let _ = crate::cache::enforce_limit(&state).await;
-	}
-	match resized {
-		Some(png) => Ok(bytes_response(png, "image/png", PAGE_MAX_AGE)),
-		None => Ok(bytes_response(original, &mime, PAGE_MAX_AGE)),
-	}
+	Ok(bytes_response(bytes, &mime, PAGE_MAX_AGE))
 }
 
-/// A variant stores the original dimensions, so a warm hit can retry a failed DB backfill
-/// without loading its original. The SQL guard preserves authoritative download measurements.
+/// Read-path measurements backfill the page dimensions a download would have written. The SQL
+/// guard preserves authoritative download measurements.
 async fn backfill_dimensions(state: &Arc<AppState>, id: i64, page: &PageRow, dimensions: Option<(i64, i64)>) {
 	if !page.dimensions_checked && dimensions.is_some() {
 		let update = PageDimensionUpdate::new(page, dimensions);
@@ -137,44 +74,11 @@ async fn backfill_dimensions(state: &Arc<AppState>, id: i64, page: &PageRow, dim
 	}
 }
 
-async fn product_page_response(state: &Arc<AppState>, id: i64, index: i64, width: Option<u32>, bytes: Vec<u8>, entry: String) -> ApiResult<Response> {
+fn product_page_response(bytes: Vec<u8>, entry: String) -> Response {
 	if crate::download::is_text_entry(&entry) {
-		return Ok(Json(json!({ "type": "text", "text": String::from_utf8_lossy(&bytes) })).into_response());
+		return Json(json!({ "type": "text", "text": String::from_utf8_lossy(&bytes) })).into_response();
 	}
-	let Some(b) = width.filter(|w| *w > 0).map(bucket_width) else {
-		return Ok(bytes_response(bytes, mime_for(&entry), PAGE_MAX_AGE));
-	};
-	let cache_enabled = crate::cache::settings(&state.pool).await?.0;
-	let identity = if cache_enabled { crate::cache::product_variant_identity(&entry, &bytes) } else { String::new() };
-	if cache_enabled {
-		match read_variant_for(state, id, index, b, &identity).await {
-			Some(VariantHit::Png(bytes, _)) => return Ok(bytes_response(bytes, "image/png", PAGE_MAX_AGE)),
-			Some(VariantHit::PassThrough) => return Ok(bytes_response(bytes, mime_for(&entry), PAGE_MAX_AGE)),
-			None => {}
-		}
-	}
-	let dimensions = image_dimensions(&bytes);
-	let (resized, original) = tokio::task::spawn_blocking(move || {
-		let resized = downsample_png(&bytes, b);
-		(resized, bytes)
-	}).await.map_err(|e| ApiError::internal(format!("downsample task failed: {e}")))?;
-	if cache_enabled {
-		if let Err(error) = crate::cache::write_variant(state, id, index, b, resized.as_deref(), &identity, dimensions).await {
-			tracing::warn!(chapter_id = id, index, "page variant write failed: {}", error.message());
-		}
-		let _ = crate::cache::enforce_limit(state).await;
-	}
-	match resized {
-		Some(png) => Ok(bytes_response(png, "image/png", PAGE_MAX_AGE)),
-		None => Ok(bytes_response(original, mime_for(&entry), PAGE_MAX_AGE)),
-	}
-}
-
-async fn read_variant_for(state: &Arc<AppState>, id: i64, index: i64, bucket: u32, identity: &str) -> Option<VariantHit> {
-	if !crate::cache::settings(&state.pool).await.ok()?.0 { return None; }
-	let lock = state.chapter_variant_lock(id, index, bucket).await;
-	let _guard = lock.lock().await;
-	read_variant(&state.config.page_blobs_dir(), id, index, bucket, identity).await
+	bytes_response(bytes, mime_for(&entry), PAGE_MAX_AGE)
 }
 
 /// Remote URL and Zip pages are cached as an exact response pair. Local and already-materialized
@@ -268,7 +172,7 @@ mod tests {
 	use super::*;
 	use crate::api::{get_pages, RefreshQuery};
 	use axum::body::to_bytes;
-	use axum::extract::Extension;
+	use axum::extract::{Extension, Query};
 	use axum::http::header;
 	use std::path::Path;
 
@@ -339,7 +243,7 @@ mod tests {
 		chapter_id: i64,
 		index: i64,
 	) -> (axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>) {
-		let resp = get_page(State(state.clone()), Path((chapter_id, index)), Query(PageQuery { width: None }))
+		let resp = get_page(State(state.clone()), Path((chapter_id, index)))
 			.await
 			.expect("get_page");
 		let status = resp.status();
@@ -482,7 +386,7 @@ mod tests {
 			.await
 			.expect("trash chapter");
 
-		let error = get_page(State(state), Path((chapter_id, 0)), Query(PageQuery { width: None }))
+		let error = get_page(State(state), Path((chapter_id, 0)))
 			.await
 			.expect_err("a finished product must not make a trashed chapter readable");
 		assert_eq!(error.code(), "not_found");
@@ -578,11 +482,6 @@ mod tests {
 		assert_eq!(list[0]["content"]["Downloaded"], "000.png");
 		assert_eq!(list[1]["content"]["Downloaded"], "001.png");
 	}
-	async fn variant_bytes(state: &Arc<AppState>, chapter_id: i64) -> Vec<u8> {
-		let response = get_page(State(state.clone()), Path((chapter_id, 0)), Query(PageQuery { width: Some(256) }))
-			.await.expect("variant response");
-		to_bytes(response.into_body(), 1024 * 1024).await.expect("variant body").to_vec()
-	}
 
 	#[tokio::test]
 	async fn image_get_and_page_list_survive_recency_write_failure() {
@@ -596,45 +495,6 @@ mod tests {
 		let pages = get_pages(State(state.clone()), Extension(state.auth.admin_user()), Path(chapter_id), Query(RefreshQuery { refresh: None }))
 			.await.expect("page list survives recency failure");
 		assert_eq!(pages.0.as_array().expect("pages").len(), 1);
-	}
-
-	#[tokio::test]
-	async fn image_variant_hit_skips_original_and_retries_dimension_backfill() {
-		let (state, _, chapter_id, _tmp) = page_db().await;
-		insert_blob_page(&state, chapter_id, &test_png(640, 480), false).await;
-		crate::cache::publish_chapter(&state, chapter_id).await.expect("publish images");
-		let first = variant_bytes(&state, chapter_id).await;
-		assert_eq!(image_dimensions(&first), Some((256, 192)));
-		let blob = state.config.page_blobs_dir().join(chapter_id.to_string()).join("0.png");
-		std::fs::remove_file(&blob).expect("remove original");
-		std::fs::create_dir(&blob).expect("make original unreadable as bytes");
-		sqlx::query("UPDATE page SET width=NULL,height=NULL,dimensions_checked=0 WHERE chapter_id=?")
-			.bind(chapter_id).execute(&state.pool).await.expect("retry dimensions");
-		assert_eq!(variant_bytes(&state, chapter_id).await, first, "a warm Image variant must not read its original");
-		assert_eq!(page_dims(&state, chapter_id).await, (Some(640), Some(480), 1), "backfill uses original, not resized dimensions");
-		std::fs::remove_dir(&blob).expect("restore original path");
-		std::fs::write(&blob, test_png(800, 400)).expect("new image at same name");
-		crate::cache::publish_chapter(&state, chapter_id).await.expect("publish new generation");
-		let second = variant_bytes(&state, chapter_id).await;
-		assert_eq!(image_dimensions(&second), Some((256, 128)), "a new generation must reject the same-name old variant");
-	}
-
-	#[tokio::test]
-	async fn zero_budget_bypasses_variants_but_keeps_materialized_pages() {
-		let (state, _, chapter_id, _tmp) = page_db().await;
-		insert_blob_page(&state, chapter_id, &test_png(640, 480), false).await;
-		assert_eq!(image_dimensions(&variant_bytes(&state, chapter_id).await), Some((256, 192)));
-		sqlx::query("INSERT INTO setting(key,value) VALUES ('cache.chapterMaxBytes','0')")
-			.execute(&state.pool).await.expect("disable cache");
-		let dir = state.config.page_blobs_dir().join(chapter_id.to_string());
-		std::fs::write(dir.join("0.png"), test_png(800, 400)).expect("changed working image");
-		assert_eq!(image_dimensions(&variant_bytes(&state, chapter_id).await), Some((256, 128)), "zero budget must bypass an existing variant");
-		std::fs::remove_dir_all(dir.join("variants")).expect("remove preexisting variants");
-		assert_eq!(image_dimensions(&variant_bytes(&state, chapter_id).await), Some((256, 128)));
-		assert!(!dir.join("variants").exists(), "zero budget must not persist resized images");
-		assert!(dir.join("0.png").exists(), "working images survive between page requests");
-		assert_eq!(get_pages(State(state.clone()), Extension(state.auth.admin_user()), Path(chapter_id), Query(RefreshQuery { refresh: None }))
-			.await.expect("reuse working page list").0.as_array().expect("pages").len(), 1);
 	}
 
 }

@@ -142,34 +142,6 @@ pub async fn touch_best_effort(pool: &SqlitePool, chapter_id: i64) {
 	}
 }
 
-pub async fn write_variant(
-	state: &std::sync::Arc<crate::state::AppState>,
-	chapter_id: i64,
-	index: i64,
-	bucket: u32,
-	png: Option<&[u8]>,
-	identity: &str,
-	dimensions: Option<(i64, i64)>,
-) -> ApiResult<()> {
-	let lock = state.chapter_variant_lock(chapter_id, index, bucket).await;
-	let _write = lock.lock().await;
-	let accounting_lock = state.chapter_accounting_lock(chapter_id).await;
-	let _accounting = accounting_lock.lock().await;
-	if !settings(&state.pool).await?.0 { return Ok(()); }
-	let blobs = state.config.page_blobs_dir();
-	let paths = crate::source::downsample::variant_paths(&blobs, chapter_id, index, bucket);
-	let before = file_paths_bytes(paths.to_vec()).await?;
-	let intact = crate::source::downsample::variant_entry_is_intact(&blobs, chapter_id, index, bucket).await;
-	let result = crate::source::downsample::write_variant(&blobs, chapter_id, index, bucket, png, identity, dimensions).await;
-	if intact || before == 0 {
-		let after = file_paths_bytes(paths.to_vec()).await?;
-		update_byte_delta(state, chapter_id, after - before).await?;
-	} else {
-		reconcile_chapter(&state.pool, &blobs, &state.config.opds_cbz_dir(), chapter_id).await?;
-	}
-	result.map_err(|error| crate::error::ApiError::internal(format!("write page variant failed: {error}")))
-}
-
 fn original_dir(state: &crate::state::AppState, chapter_id: i64, index: i64) -> std::path::PathBuf {
 	state.config.page_blobs_dir().join(chapter_id.to_string()).join("originals").join(index.to_string())
 }
@@ -187,40 +159,6 @@ fn original_digest(bytes: &[u8], mime: &str, identity: &[u8]) -> String {
 	hasher.update([0]);
 	hasher.update(bytes);
 	hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-pub fn source_variant_identity(source_id: i64, content: &serde_json::Value, bytes: &[u8]) -> ApiResult<String> {
-	let identity = original_identity(source_id, content)?;
-	Ok(format!("source:{}", original_digest(bytes, "", &identity)))
-}
-
-/// The digest includes source identity, response MIME and exact processed/extracted bytes.
-pub fn original_variant_identity(source_id: i64, content: &serde_json::Value, bytes: &[u8], mime: &str) -> ApiResult<String> {
-	Ok(format!("source:original:{}", original_digest(bytes, mime, &original_identity(source_id, content)?)))
-}
-
-pub fn image_variant_identity(source_id: i64, content: &serde_json::Value, revision: i64) -> ApiResult<String> {
-	Ok(format!("source:image:{revision}:{}", original_digest(&[], "", &original_identity(source_id, content)?)))
-}
-
-/// Inspect only published original metadata. The single-page lock excludes staged replacement;
-/// original bytes are validated when used, while a variant validates its own payload separately.
-pub async fn cached_original_variant_identity(
-	state: &std::sync::Arc<crate::state::AppState>, chapter_id: i64, index: i64,
-	source_id: i64, content: &serde_json::Value,
-) -> Option<String> {
-	let flight = state.chapter_original_lock(chapter_id, index).await;
-	let _guard = flight.lock.lock().await;
-	let dir = original_dir(state, chapter_id, index);
-	let identity = tokio::fs::read(dir.join("identity")).await.ok()?;
-	if identity != original_identity(source_id, content).ok()? { return None; }
-	let digest = tokio::fs::read_to_string(dir.join("sha256")).await.ok()?;
-	if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) { return None; }
-	Some(format!("source:original:{digest}"))
-}
-
-pub fn product_variant_identity(entry: &str, bytes: &[u8]) -> String {
-	format!("product:{entry}:{}", original_digest(bytes, entry, entry.as_bytes()))
 }
 
 /// Serializes concurrent reader/download misses for one page. Download callers pass `persist`
@@ -347,19 +285,6 @@ async fn original_tree_bytes(path: std::path::PathBuf) -> ApiResult<i64> {
 		.map_err(|error| crate::error::ApiError::internal(format!("inspect page original cache: {error}")))
 }
 
-async fn file_paths_bytes(paths: Vec<std::path::PathBuf>) -> ApiResult<i64> {
-	tokio::task::spawn_blocking(move || {
-		paths.into_iter().try_fold(0i64, |sum, path| match std::fs::symlink_metadata(path) {
-			Ok(meta) if meta.file_type().is_symlink() => Ok(sum),
-			Ok(meta) if meta.is_file() => Ok(sum.saturating_add(meta.len().min(i64::MAX as u64) as i64)),
-			Ok(_) => Ok(sum),
-			Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(sum),
-			Err(error) => Err(error),
-		})
-	}).await.map_err(|error| crate::error::ApiError::internal(format!("page cache accounting task failed: {error}")))?
-		.map_err(|error| crate::error::ApiError::internal(format!("inspect page cache files: {error}")))
-}
-
 async fn original_entry_is_intact(dir: &Path) -> bool {
 	let Ok(bytes) = tokio::fs::read(dir.join("bytes")).await else { return false; };
 	let Ok(mime) = tokio::fs::read_to_string(dir.join("mime")).await else { return false; };
@@ -415,7 +340,7 @@ pub async fn stats(
 	})
 }
 
-/// Startup reconciliation charges historical page rows, blob variants and OPDS archives, then
+/// Startup reconciliation charges historical page rows, blob trees and OPDS archives, then
 /// removes cache files whose chapter row no longer exists without following symlinks.
 pub async fn reconcile_all(pool: &SqlitePool, blobs: &Path, opds: &Path) -> ApiResult<()> {
 	let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM chapter")
@@ -966,13 +891,13 @@ mod tests {
 		sqlx::query("INSERT INTO download(chapter_id,user_id,status,format,path) VALUES (?,1,'finished','cbz','kept.cbz')").bind(chapter).execute(&pool).await.expect("download");
 		let blobs = tmp.path().join("blobs");
 		let opds = tmp.path().join("opds-cbz");
-		std::fs::create_dir_all(blobs.join(chapter.to_string()).join("variants")).expect("blobs");
+		std::fs::create_dir_all(blobs.join(chapter.to_string()).join("originals/1")).expect("blobs");
 		std::fs::write(blobs.join(chapter.to_string()).join("0.png"), b"image").expect("image");
 		std::fs::write(
-			blobs.join(chapter.to_string()).join("variants/1.png"),
-			b"variant",
+			blobs.join(chapter.to_string()).join("originals/1/bytes"),
+			b"original",
 		)
-		.expect("variant");
+		.expect("original");
 		std::fs::create_dir_all(&opds).expect("opds");
 		std::fs::write(opds.join(chapter.to_string()), b"archive cache").expect("archive");
 		reconcile_chapter(&pool, &blobs, &opds, chapter)
@@ -1005,7 +930,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn clear_removes_zero_byte_variant_markers_and_advances_revision() {
+	async fn clear_removes_zero_byte_cache_assets_and_advances_revision() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let state = app_state(&tmp).await;
 		let source: i64 = sqlx::query_scalar(
@@ -1033,10 +958,10 @@ mod tests {
 		let opds = state.config.config_dir.join("opds-cbz");
 		let marker = blobs
 			.join(chapter.to_string())
-			.join("variants/512/0.pass");
+			.join("originals/0/sha256");
 		std::fs::create_dir_all(marker.parent().expect("marker parent"))
-			.expect("variant dir");
-		std::fs::write(&marker, []).expect("zero-byte pass marker");
+			.expect("asset dir");
+		std::fs::write(&marker, []).expect("zero-byte cache asset");
 		let before = chapter_revision(&state.pool, chapter).await.expect("before revision");
 		assert!(marker.exists());
 
@@ -1143,7 +1068,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn reconciliation_counts_unicode_page_json_blobs_variants_and_opds_and_removes_orphans() {
+	async fn reconciliation_counts_unicode_page_json_blobs_and_opds_and_removes_orphans() {
 		let tmp = tempfile::tempdir().expect("tempdir");
 		let state = app_state(&tmp).await;
 		let source: i64 = sqlx::query_scalar(
@@ -1175,15 +1100,15 @@ mod tests {
 			.expect("page");
 		let blobs = state.config.page_blobs_dir();
 		let opds = state.config.config_dir.join("opds-cbz");
-		std::fs::create_dir_all(blobs.join(chapter.to_string()).join("variants/512"))
+		std::fs::create_dir_all(blobs.join(chapter.to_string()).join("originals/0"))
 			.expect("blob tree");
 		std::fs::write(blobs.join(chapter.to_string()).join("0.png"), b"original")
 			.expect("original");
 		std::fs::write(
-			blobs.join(chapter.to_string()).join("variants/512/0.png"),
-			b"variant",
+			blobs.join(chapter.to_string()).join("originals/0/bytes"),
+			b"derived",
 		)
-		.expect("variant");
+		.expect("derived");
 		std::fs::create_dir_all(&opds).expect("opds");
 		std::fs::write(opds.join(chapter.to_string()), b"cbz").expect("cbz");
 		std::fs::create_dir_all(blobs.join("999999")).expect("orphan");
@@ -1193,7 +1118,7 @@ mod tests {
 			.expect("startup reconciliation");
 		let expected = content.len() as i64
 			+ b"original".len() as i64
-			+ b"variant".len() as i64
+			+ b"derived".len() as i64
 			+ b"cbz".len() as i64;
 		let stats = stats(&state.pool, &blobs, &opds, DEFAULT_MAX_BYTES)
 			.await

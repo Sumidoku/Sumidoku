@@ -395,12 +395,6 @@ function ReaderChapterItem({
 	);
 }
 
-// Page-image downsampling target width = display container CSS width × DPR, bucketed up to 256 by the server; webtoon/paged fill the screen width, continuous caps at 780
-function readImgWidth(mode: Mode): number {
-	const css = mode === 'continuous' ? Math.min(window.innerWidth, 780) : window.innerWidth;
-	return Math.max(1, Math.round(css * (window.devicePixelRatio || 1)));
-}
-
 export default function ReaderPage() {
 	const { t } = useTranslation();
 	const { chapterId: raw } = useParams();
@@ -514,7 +508,6 @@ function ReaderCore({
 			// Fullscreen can be denied (permissions policy); the toggle just stays off
 		}
 	}
-	const [imgWidth, setImgWidth] = useState(() => readImgWidth(mode));
 	const [typography, setTypography] = useState<ReaderTypography>(loadTypography);
 	const textStyle = typographyStyle(typography);
 
@@ -602,7 +595,7 @@ function ReaderCore({
 	// re-pair of the visible spread without resetting zoom over distant prefetches
 	useLayoutEffect(() => {
 		resetPinch();
-	}, [mode, idx, col, dir, layout, imgWidth, curSpreadKey, scale, stretch, half, split, resetPinch]);
+	}, [mode, idx, col, dir, layout, curSpreadKey, scale, stretch, half, split, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
 	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
@@ -650,21 +643,6 @@ function ReaderCore({
 		halfRef.current = h;
 		setHalfState(h);
 	}
-
-	// After a window resize, refetch variants at the new width; debounced so dragging the window doesn't refetch images repeatedly
-	useEffect(() => {
-		setImgWidth(readImgWidth(mode));
-		let timer: ReturnType<typeof setTimeout> | undefined;
-		const onResize = () => {
-			if (timer !== undefined) clearTimeout(timer);
-			timer = setTimeout(() => setImgWidth(readImgWidth(mode)), 200);
-		};
-		window.addEventListener('resize', onResize);
-		return () => {
-			if (timer !== undefined) clearTimeout(timer);
-			window.removeEventListener('resize', onResize);
-		};
-	}, [mode]);
 
 	const reportRef = useRef<{
 		timer: ReturnType<typeof setTimeout> | undefined;
@@ -723,7 +701,7 @@ function ReaderCore({
 			// with the rendered image's request, and onload stays the fallback.
 			im.onload = () => reportDims(center + d, im.naturalWidth, im.naturalHeight);
 			measureWhenKnown(im, (w, h) => reportDims(center + d, w, h));
-			im.src = pageUrl(chapterId, p.index, imgWidth, p.cacheRevision);
+			im.src = pageUrl(chapterId, p.index, p.cacheRevision);
 		}
 	}
 
@@ -1378,12 +1356,12 @@ function ReaderCore({
 															} as CSSProperties
 														}
 													>
-														{/* The half renders the image at twice the box width, so the
-														    downsample request doubles to stay sharp */}
+														{/* The half renders the image at twice the box width via
+														    object-fit: cover, scaled by the browser */}
 														<PageImage
 															key={curPage?.index}
 															className="reader__img"
-															src={pageUrl(chapterId, idx, imgWidth * 2, curPage?.cacheRevision)}
+															src={pageUrl(chapterId, idx, curPage?.cacheRevision)}
 															alt={t('reader.pageAlt', { page: idx + 1 })}
 															style={{ objectPosition: `${splitSides(dir)[half]} center` }}
 															onLoad={(w, h) => reportDims(idx, w, h)}
@@ -1444,7 +1422,7 @@ function ReaderCore({
 															<PageImage
 																key={p.index}
 																className="reader__img"
-																src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
+																src={pageUrl(chapterId, p.index, p.cacheRevision)}
 																alt={t('reader.pageAlt', { page: slot + 1 })}
 																// The slot keeps an aspect-ratio box even before dims are
 																// known (2:3 fallback), so an unloaded or failed page stays
@@ -1544,7 +1522,7 @@ function ReaderCore({
 											<div className="reader__unsupported">{t('reader.unsupportedPage')}</div>
 										) : (
 											<PageImage
-												src={pageUrl(chapterId, p.index, imgWidth, p.cacheRevision)}
+												src={pageUrl(chapterId, p.index, p.cacheRevision)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
 												width={dimensions?.width}
 												height={dimensions?.height}

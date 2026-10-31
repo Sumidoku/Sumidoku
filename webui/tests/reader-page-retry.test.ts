@@ -13,16 +13,16 @@ import {
 } from '../src/pages/reader/pageRetry.ts';
 
 const bare = '/api/v1/chapter/7/page/3';
-const withWidth = '/api/v1/chapter/7/page/3?width=780';
+const withQuery = '/api/v1/chapter/7/page/3?revision=8';
 
 test('the first attempt keeps the base page URL untouched', () => {
 	assert.equal(retrySrc(bare, 0), bare);
-	assert.equal(retrySrc(withWidth, 0), withWidth);
+	assert.equal(retrySrc(withQuery, 0), withQuery);
 });
 
 test('retrySrc picks the query separator from whether the base URL already has one', () => {
 	assert.equal(retrySrc(bare, 1), '/api/v1/chapter/7/page/3?r=1');
-	assert.equal(retrySrc(withWidth, 1), '/api/v1/chapter/7/page/3?width=780&r=1');
+	assert.equal(retrySrc(withQuery, 1), '/api/v1/chapter/7/page/3?revision=8&r=1');
 });
 
 test('the first error arms exactly one automatic retry instead of latching', () => {
@@ -45,8 +45,8 @@ test('a manual retry clears the latch and reloads with a fresh cache-buster', ()
 
 test('a state stored for another page does not leak its failure or attempts into a new src', () => {
 	const other = imageErrored(imageErrored(null, bare), bare);
-	assert.deepEqual(imageStateFor(other, withWidth), { attempt: 0, failed: false });
-	assert.deepEqual(imageErrored(other, withWidth), { src: withWidth, attempt: 1, failed: false });
+	assert.deepEqual(imageStateFor(other, withQuery), { attempt: 0, failed: false });
+	assert.deepEqual(imageErrored(other, withQuery), { src: withQuery, attempt: 1, failed: false });
 });
 
 test('PageImage initially renders the plain page URL with no retry UI', async () => {
@@ -64,10 +64,10 @@ test('PageImage initially renders the plain page URL with no retry UI', async ()
 		try {
 			const { PageImage } = await vite.ssrLoadModule('/src/pages/reader/PageImage.tsx');
 			const markup = renderToStaticMarkup(
-				createElement(PageImage, { src: withWidth, alt: 'Page 4', className: 'reader__img' })
+				createElement(PageImage, { src: withQuery, alt: 'Page 4', className: 'reader__img' })
 			);
 			assert.match(markup, /<img/);
-			assert.match(markup, /src="\/api\/v1\/chapter\/7\/page\/3\?width=780"/);
+			assert.match(markup, /src="\/api\/v1\/chapter\/7\/page\/3\?revision=8"/);
 			assert.doesNotMatch(markup, /role="alert"/);
 			assert.doesNotMatch(markup, /Retry/);
 		} finally {

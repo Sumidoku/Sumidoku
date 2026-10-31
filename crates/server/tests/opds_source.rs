@@ -642,11 +642,10 @@ async fn zero_budget_reuses_required_opds_archive_between_page_requests() {
 	for _ in 0..2 {
 		assert_eq!(request(&t.app, "GET", &pages_url, None).await.0, StatusCode::OK);
 		for (index, expected) in [CBZ_PAGE_1, CBZ_PAGE_2].iter().enumerate() {
-			let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}?width=256"), None).await;
+			let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/{index}"), None).await;
 			assert_eq!(status, StatusCode::OK, "working archive must not be downloaded for every page");
 			assert_eq!(&bytes, expected);
 		}
 	}
 	assert!(t.tmp.path().join("opds-cbz").join(chapter_id.to_string()).exists());
-	assert!(!t.tmp.path().join("page-blobs").join(chapter_id.to_string()).join("variants").exists());
 }

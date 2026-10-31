@@ -280,42 +280,26 @@ async fn image_chapter_pages_natural_order_and_bytes() {
 }
 
 #[tokio::test]
-async fn downsample_reuses_local_original_bytes() {
+async fn local_page_reads_follow_the_current_file_bytes() {
 	let TestApp { app, tmp, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 2").await;
 
-	// no width: original bytes pass through
+	// original bytes pass through
 	let original = std::fs::read(tmp.path().join("local/Alpha/ch 2/big.png")).expect("read big.png");
 	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, original);
 
-	// ?width=512: the same downsampling pipeline as online pages (width quantized to 256 buckets)
-	let (status, headers, bytes) = request_full(
-		&app,
-		"GET",
-		&format!("/api/v1/chapter/{chapter_id}/page/0?width=512"),
-		None,
-	)
-	.await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(headers["content-type"], "image/png");
-	let image = image::ImageReader::new(std::io::Cursor::new(bytes))
-		.with_guessed_format()
-		.expect("format")
-		.decode()
-		.expect("decode");
-	assert_eq!((image.width(), image.height()), (512, 682));
-	// Local files can change without a page-list refresh; an old resized image must not hide it.
+	// Local files can change without a page-list refresh; the next read must serve the new bytes.
 	let mut replacement = Vec::new();
 	image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(800, 400, image::Rgb([70, 20, 10])))
 		.write_to(&mut std::io::Cursor::new(&mut replacement), image::ImageFormat::Png).expect("replacement PNG");
-	std::fs::write(tmp.path().join("local/Alpha/ch 2/big.png"), replacement).expect("replace local image in place");
-	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0?width=512"), None).await;
+	std::fs::write(tmp.path().join("local/Alpha/ch 2/big.png"), &replacement).expect("replace local image in place");
+	let (status, headers, bytes) = request_full(&app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(sumidoku_server::source::page_dimensions::image_dimensions(&bytes), Some((512, 256)), "Local identity must follow the actual bytes");
-
+	assert_eq!(headers["content-type"], "image/png");
+	assert_eq!(bytes, replacement, "Local reads must follow the actual bytes");
 }
 
 #[tokio::test]

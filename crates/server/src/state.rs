@@ -9,9 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{RwLock, Semaphore, mpsc};
 
-type ChapterVariantKey = (i64, i64, u32);
-type ChapterVariantLocks =
-	HashMap<ChapterVariantKey, std::sync::Weak<tokio::sync::Mutex<()>>>;
 type ChapterOriginalKey = (i64, i64);
 type OriginalPageResponse = Arc<(Vec<u8>, String)>;
 type OriginalPageFlightResult = Option<(Vec<u8>, OriginalPageResponse)>;
@@ -93,7 +90,6 @@ pub struct AppState {
 	chapter_cache_builds: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 	/// Only one LRU collector may make decisions against the persistent byte total at a time.
 	chapter_cache_collect: tokio::sync::Mutex<()>,
-	chapter_variant_locks: tokio::sync::Mutex<ChapterVariantLocks>,
 	chapter_original_locks: tokio::sync::Mutex<HashMap<ChapterOriginalKey, std::sync::Weak<OriginalPageFlight>>>,
 	chapter_accounting_locks: tokio::sync::Mutex<HashMap<i64, std::sync::Weak<tokio::sync::Mutex<()>>>>,
 }
@@ -227,7 +223,6 @@ impl AppState {
 			chapter_cache_locks: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_cache_builds: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_cache_collect: tokio::sync::Mutex::new(()),
-			chapter_variant_locks: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_original_locks: tokio::sync::Mutex::new(HashMap::new()),
 			chapter_accounting_locks: tokio::sync::Mutex::new(HashMap::new()),
 		})
@@ -580,16 +575,6 @@ impl AppState {
 		locks.retain(|_, lock| lock.strong_count() > 0);
 		let lock = Arc::new(tokio::sync::Mutex::new(()));
 		locks.insert(chapter_id, Arc::downgrade(&lock));
-		lock
-	}
-
-	pub async fn chapter_variant_lock(&self, chapter_id: i64, index: i64, bucket: u32) -> Arc<tokio::sync::Mutex<()>> {
-		let key = (chapter_id, index, bucket);
-		let mut locks = self.chapter_variant_locks.lock().await;
-		if let Some(lock) = locks.get(&key).and_then(std::sync::Weak::upgrade) { return lock; }
-		locks.retain(|_, lock| lock.strong_count() > 0);
-		let lock = Arc::new(tokio::sync::Mutex::new(()));
-		locks.insert(key, Arc::downgrade(&lock));
 		lock
 	}
 

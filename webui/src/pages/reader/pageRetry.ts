@@ -38,7 +38,7 @@ export function imageStateFor(state: PageImageState | null, src: string): { atte
 
 /** Attempts past the first carry a cache-buster so a cached error response is not
     replayed; the separator must match whether the base URL already has a query
-    (a bare page URL takes `?`, a `?width=` one takes `&`) */
+    (a bare page URL takes `?`, one with `?revision=` takes `&`) */
 export function retrySrc(src: string, attempt: number): string {
 	if (attempt <= 0) return src;
 	return `${src}${src.includes('?') ? '&' : '?'}r=${attempt}`;

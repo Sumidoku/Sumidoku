@@ -1,6 +1,6 @@
-//! Page image downsampling contract: ?width= variants (resizing / 256 quantization / disk cache /
-//! no upscaling) and byte-identical originals without the parameter; downloads and CBZ packing
-//! don't go through the downsampling branch, bytes stay as they are today
+//! Page image serving contract: original bytes pass through byte for byte (a legacy `?width=`
+//! downsample parameter is ignored — scaling is the client's job), downloads and CBZ packing
+//! serve byte-identical originals, and a source refresh replaces the served generation
 mod common;
 
 use axum::Router;
@@ -44,7 +44,6 @@ fn decode_dims(bytes: &[u8]) -> (u32, u32) {
 
 struct Upstream {
 	port: u16,
-	big_hits: Arc<AtomicUsize>,
 	small_hits: Arc<AtomicUsize>,
 }
 
@@ -71,7 +70,6 @@ async fn serve_upstream(big: Vec<u8>, small: Vec<u8>) -> Upstream {
 	});
 	Upstream {
 		port,
-		big_hits,
 		small_hits,
 	}
 }
@@ -116,54 +114,24 @@ async fn url_page_app() -> (TestApp, i64, Upstream, Vec<u8>, Vec<u8>) {
 }
 
 #[tokio::test]
-async fn downsampled_variant_is_resized_quantized_and_cached() {
-	let (t, chapter_id, upstream, big, _small) = url_page_app().await;
-	let page_url = format!("/api/v1/chapter/{chapter_id}/page/0");
-
-	let (status, headers, bytes) = request_full(&t.app, "GET", &format!("{page_url}?width=1536"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(headers["content-type"], "image/png");
-	assert_eq!(decode_dims(&bytes), (1536, BIG_H * 1536 / BIG_W));
-	assert!(bytes.len() < big.len(), "variant must be smaller than original");
-	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
-
-	// the variant lands on disk: a same-bucket repeat request doesn't go back to the source
-	let (status, _, _) = request_full(&t.app, "GET", &format!("{page_url}?width=1536"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
-
-	// widths quantize up to a multiple of 256: 1500 and 1536 share one variant
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{page_url}?width=1500"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(decode_dims(&bytes), (1536, BIG_H * 1536 / BIG_W));
-	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1);
-
-	// different buckets keep their own variants without polluting each other
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{page_url}?width=256"), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(decode_dims(&bytes), (256, BIG_H * 256 / BIG_W));
-	assert_eq!(upstream.big_hits.load(Ordering::SeqCst), 1, "all widths reuse the persisted original");
-}
-
-#[tokio::test]
-async fn original_bytes_untouched_without_width_or_when_narrow() {
+async fn original_bytes_pass_through_and_a_legacy_width_parameter_is_ignored() {
 	let (t, chapter_id, upstream, big, small) = url_page_app().await;
 	let page_url = |idx: i64| format!("/api/v1/chapter/{chapter_id}/page/{idx}");
 
-	// no width parameter: original bytes pass through byte for byte
+	// original bytes pass through byte for byte
 	let (status, _, bytes) = request_full(&t.app, "GET", &page_url(0), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
 
-	// requested width not smaller than the original: no upscaling, original bytes pass through
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=8192", page_url(0)), None).await;
+	// a legacy downsample width no longer resizes: the same original bytes come back
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(0)), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
-
-	// an image narrower than the requested width passes through as-is, and a pass-through Url page reuses its persisted original
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(1)), None).await;
+	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=256", page_url(1)), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, small);
+
+	// the persisted Url-page original serves repeat reads without going back to the source
 	let (status, _, bytes) = request_full(&t.app, "GET", &page_url(1), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, small);
@@ -225,7 +193,7 @@ async fn register_canvas_manga(app: &Router) -> i64 {
 }
 
 #[tokio::test]
-async fn blob_variant_download_byte_identical_and_refresh_uses_product() {
+async fn blob_download_is_byte_identical_and_refresh_uses_product() {
 	let t = canvas_app().await;
 	let manga_id = register_canvas_manga(&t.app).await;
 	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
@@ -239,24 +207,14 @@ async fn blob_variant_download_byte_identical_and_refresh_uses_product() {
 	let big = gradient_png(BIG_W, BIG_H);
 	let blob_dir = t.tmp.path().join("page-blobs").join(chapter_id.to_string());
 	std::fs::write(blob_dir.join("0.png"), &big).expect("overwrite blob");
-	let small_blob = std::fs::read(blob_dir.join("1.png")).expect("read small blob");
 	let page_url = |idx: i64| format!("/api/v1/chapter/{chapter_id}/page/{idx}");
 
-	// downsampling on the blob path
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(0)), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(decode_dims(&bytes), (1536, BIG_H * 1536 / BIG_W));
-
-	// the no-parameter and narrow-page cases still pass through byte for byte
+	// the blob page passes through byte for byte
 	let (status, _, bytes) = request_full(&t.app, "GET", &page_url(0), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(bytes, big);
-	let (status, _, bytes) = request_full(&t.app, "GET", &format!("{}?width=1536", page_url(1)), None).await;
-	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, small_blob);
-	assert!(blob_dir.join("variants").exists(), "variants are materialized before the download completes");
 
-	// downloads/CBZ don't go through the downsampling branch: packed bytes are byte-identical to the blob
+	// downloads/CBZ packing stay byte-identical to the blob
 	let (status, _) = request(&t.app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, _) = request(
@@ -304,8 +262,8 @@ async fn blob_variant_download_byte_identical_and_refresh_uses_product() {
 	}
 	assert_eq!(packed, big, "cbz page bytes must stay byte-identical");
 
-	// A finished product removes source blobs and variants; force refresh keeps the product authoritative.
-	assert!(!blob_dir.exists(), "successful download cleanup removes materialized blobs and variants");
+	// A finished product removes source blobs; force refresh keeps the product authoritative.
+	assert!(!blob_dir.exists(), "successful download cleanup removes materialized blobs");
 	let (status, _) = request(
 		&t.app,
 		"GET",
@@ -322,7 +280,7 @@ async fn blob_variant_download_byte_identical_and_refresh_uses_product() {
 }
 
 #[tokio::test]
-async fn refreshing_image_pages_rejects_same_filename_variant() {
+async fn refreshing_image_pages_serves_the_new_generation() {
 	let t = canvas_app().await;
 	let manga_id = register_canvas_manga(&t.app).await;
 	let (_, chapters) = request(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/chapters"), None).await;
@@ -332,16 +290,15 @@ async fn refreshing_image_pages_rejects_same_filename_variant() {
 	let first_revision = first_pages[0]["cacheRevision"].as_i64().expect("revision");
 	let blob = t.tmp.path().join(format!("page-blobs/{chapter_id}/0.png"));
 	std::fs::write(&blob, gradient_png(640, 480)).expect("wide image fixture");
-	let image_url = format!("/api/v1/chapter/{chapter_id}/page/0?width=256");
-	let (status, _, previous_variant) = request_full(&t.app, "GET", &image_url, None).await;
+	let image_url = format!("/api/v1/chapter/{chapter_id}/page/0");
+	let (status, _, previous) = request_full(&t.app, "GET", &image_url, None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, refreshed) = request(&t.app, "GET", &format!("{pages_url}?refresh=true"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(refreshed[0]["cacheRevision"].as_i64().expect("new revision") > first_revision);
 	let fresh_original = std::fs::read(&blob).expect("fresh Image under same filename");
-	let expected = sumidoku_server::source::downsample::downsample_png(&fresh_original, 256).unwrap_or(fresh_original);
 	let (status, _, bytes) = request_full(&t.app, "GET", &image_url, None).await;
 	assert_eq!(status, StatusCode::OK);
-	assert_eq!(bytes, expected, "an explicit source refresh must show the new Image generation when there is no finished product");
-	assert_ne!(bytes, previous_variant);
+	assert_eq!(bytes, fresh_original, "an explicit source refresh must show the new Image generation when there is no finished product");
+	assert_ne!(bytes, previous);
 }
