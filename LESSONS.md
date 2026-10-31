@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An inline `aspect-ratio` does not give an unloaded `<img>` a box.** With
+auto width and height there is no intrinsic size to resolve the ratio against,
+so anything painted on the element is invisible until it loads. Check a loading
+state with the request actually held open, in the default mode, and read the
+element's size rather than trusting the layout rules.
+- Evidence: 2026-10-31, #544 painted its spinner on the img and described a
+  definite box in every paged scale mode. With page requests delayed 4s, the
+  box measured 0x0 in fit-screen, fit-width-shrink and original, even with
+  stored dimensions, and SSR tests could only see the class. A 64px paged
+  minimum made the spinner visible and centered.
+
 **A fixed element's `right` is measured from inside a classic scrollbar;
 `window.innerWidth` is not.** Subtracting an anchor's rect from `innerWidth`
 overstates `right` by the scrollbar's width, and clamping against it leaves
