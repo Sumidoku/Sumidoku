@@ -1,13 +1,22 @@
-//! Metadata locks: editing metadata records a manual lock, and the owning source
-//! refresh must leave locked fields alone.
+//! Metadata matching: trackers and other sources supply metadata, field locks record who owns what, and the
+//! owning source refresh must leave locked fields alone.
 
 mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
-use common::{connect_db, register_example_manga, request, test_app};
+use common::{connect_db, register_example_manga, request, source_by_key, test_app};
 use serde_json::{Value, json};
 use sumidoku_server::sync::changes_since;
+
+const SOURCE_KEY: &str = "en.example-source";
+
+async fn example_source_id(app: &Router) -> i64 {
+	let (_, sources) = request(app, "GET", "/api/v1/sources", None).await;
+	source_by_key(&sources, SOURCE_KEY)["id"]
+		.as_i64()
+		.expect("source id")
+}
 
 async fn detail(app: &Router, manga_id: i64) -> Value {
 	let (status, body) = request(app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
@@ -19,7 +28,7 @@ fn lock_provider<'a>(manga: &'a Value, field: &str) -> Option<&'a Value> {
 	manga["metadataLocks"].get(field).map(|lock| &lock["provider"])
 }
 
-/// Editing metadata is a library feature, so every test shelves its
+/// Matching and editing metadata is a library feature, so every test shelves its
 /// entry before touching metadata.
 async fn shelve(app: &Router, manga_id: i64) {
 	let (status, body) = request(app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
@@ -115,6 +124,133 @@ async fn source_refresh_keeps_locked_metadata() {
 	assert_eq!(body["manga"]["title"], source_title);
 	assert!(body["manga"]["metadataLocks"].get("title").is_none());
 	assert_eq!(body["unlockedFields"], json!(["title"]));
+}
+
+#[tokio::test]
+async fn preview_and_apply_from_another_source() {
+	let t = test_app().await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
+	let source_id = example_source_id(&app).await;
+	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
+
+	let (status, preview) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/metadata/preview?provider=source:{source_id}&remoteId={key}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{preview}");
+	assert_eq!(preview["candidate"]["provider"], format!("source:{source_id}"));
+	assert_eq!(preview["candidate"]["remoteId"], key);
+	assert_eq!(preview["linked"], false);
+	let fields = preview["fields"].as_array().expect("fields");
+	assert_eq!(fields.len(), 8);
+	let title = fields.iter().find(|field| field["field"] == "title").expect("title field");
+	assert_eq!(title["selectable"], true);
+	assert_eq!(title["incoming"], detail(&app, manga_id).await["title"]);
+	assert_eq!(title["lock"], Value::Null);
+
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/manga/{manga_id}/metadata/apply"),
+		Some(json!({"provider": format!("source:{source_id}"), "remoteId": key, "fields": ["title"]})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["appliedFields"], json!(["title"]));
+	// The lock records the source's natural key, not its instance id: the map is carried
+	// by backups and sync events, where an id would name a different source
+	assert_eq!(lock_provider(&body["manga"], "title"), Some(&json!(format!("source:{SOURCE_KEY}"))));
+
+	// The same reference survives into a backup document
+	let (status, doc) = request(&app, "GET", "/api/v1/backups/document", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = doc["manga"]
+		.as_array()
+		.expect("manga entries")
+		.iter()
+		.find(|entry| entry["key"] == key)
+		.expect("manga entry");
+	assert_eq!(entry["metadataLocks"]["title"]["provider"], format!("source:{SOURCE_KEY}"));
+
+	// The match survives a later source refresh
+	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(
+		lock_provider(&body, "title"),
+		Some(&json!(format!("source:{SOURCE_KEY}")))
+	);
+}
+
+#[tokio::test]
+async fn metadata_endpoints_validate_citations_and_selections() {
+	let t = test_app().await;
+	let app = t.app.clone();
+	let manga_id = register_example_manga(&app).await;
+	shelve(&app, manga_id).await;
+	let source_id = example_source_id(&app).await;
+	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
+
+	// Citation forms
+	let (status, _) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/metadata/preview?provider=foo&remoteId=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (status, _) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/metadata/preview?provider=source:99999&remoteId=x"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+	let (status, _) = request(
+		&app,
+		"GET",
+		"/api/v1/manga/999999/metadata/preview?provider=tracker:anilist&remoteId=1",
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::NOT_FOUND);
+
+	// bind is tracker-only, an empty selection is rejected, and unknown fields answer 400
+	for body in [
+		json!({"provider": format!("source:{source_id}"), "remoteId": key, "fields": ["title"], "bind": true}),
+		json!({"provider": format!("source:{source_id}"), "remoteId": key, "fields": []}),
+		json!({"provider": format!("source:{source_id}"), "remoteId": key, "fields": ["nope"]}),
+	] {
+		let (status, _) = request(
+			&app,
+			"POST",
+			&format!("/api/v1/manga/{manga_id}/metadata/apply"),
+			Some(body),
+		)
+		.await;
+		assert_eq!(status, StatusCode::BAD_REQUEST);
+	}
+
+	// Only a title variant the preview offered may be applied
+	let (status, _) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/manga/{manga_id}/metadata/apply"),
+		Some(json!({
+			"provider": format!("source:{source_id}"),
+			"remoteId": key,
+			"fields": ["title"],
+			"values": {"title": "Not Offered"}
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -254,8 +390,10 @@ async fn unshelved_entries_reject_metadata_changes() {
 	let t = test_app().await;
 	let app = t.app.clone();
 	let manga_id = register_example_manga(&app).await;
+	let source_id = example_source_id(&app).await;
+	let key = detail(&app, manga_id).await["key"].as_str().expect("key").to_string();
 
-	// A stray search result is not editable or restored
+	// A stray search result is not editable, matched or restored
 	let (status, body) = request(
 		&app,
 		"PATCH",
@@ -264,6 +402,14 @@ async fn unshelved_entries_reject_metadata_changes() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::CONFLICT, "{body}");
+	let (status, _) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/manga/{manga_id}/metadata/preview?provider=source:{source_id}&remoteId={key}"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::CONFLICT);
 	let (status, _) = request(&app, "POST", &format!("/api/v1/manga/{manga_id}/metadata/restore"), None).await;
 	assert_eq!(status, StatusCode::CONFLICT);
 

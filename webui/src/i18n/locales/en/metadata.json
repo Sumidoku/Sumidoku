@@ -1,5 +1,20 @@
 {
   "metadata": {
+    "title": "Match metadata",
+    "searchPlaceholder": "Search a tracker or source…",
+    "searching": "Searching…",
+    "noResults": "No matches",
+    "linkedTrackers": "Linked trackers",
+    "pullMetadata": "Pull metadata",
+    "tabTracker": "Tracker",
+    "tabSource": "Source",
+    "useThis": "Use",
+    "matchFrom": "Metadata from {{source}}",
+    "openMatch": "Open entry",
+    "columnField": "Field",
+    "columnCurrent": "Current",
+    "columnIncoming": "Incoming",
+    "noIncomingValue": "No value provided",
     "lockedBy": "Written by {{provider}}",
     "manualLock": "Manually locked",
     "contentRatings": {
@@ -8,6 +23,15 @@
       "suggestive": "Suggestive",
       "nsfw": "NSFW"
     },
+    "bindTracker": "Also link this {{provider}} entry",
+    "alreadyBound": "Already linked to this entry",
+    "applySelected_one": "Apply {{count}} field",
+    "applySelected_other": "Apply {{count}} fields",
+    "backToSearch": "Back to search",
+    "done": "Done",
+    "appliedSummary_one": "Applied {{count}} field",
+    "appliedSummary_other": "Applied {{count}} fields",
+    "appliedHint": "Applied fields are locked and survive source refreshes. Unlock them any time from Edit metadata.",
     "fieldLabels": {
       "title": "Title",
       "authors": "Authors",

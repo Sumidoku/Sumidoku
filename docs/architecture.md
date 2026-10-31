@@ -1410,49 +1410,74 @@ no alias is derived from migration text.
   resolving `cover.png` or the first page. The external bytes never pass
   the local downsample, so they are cached without the local transform
   variant, and unlocking the field returns the entry to its own file.
-- Metadata locks (`metadata.rs`, `api/metadata.rs`, migration
-  `0036_metadata_locks.sql`): an entry's metadata stays in the `manga` row, and
-  external writes are expressed as column-level locks rather than a second
-  store. `manga.metadata_locks` is a JSON object keyed by camelCase field name
-  (`title`, `authors`, `artists`, `description`, `tags`, `status`,
-  `contentRating`, `cover`) whose values are `{provider, remoteId?,
-  appliedAt}`. `provider` is `tracker:<anilist|mal|bangumi|mangabaka>`,
-  `source:<source key>` or `manual`, so the lock doubles as provenance. A source
-  is named by its natural key (`source.key`), never its instance id: the map
-  travels through backup documents and sync events, where an id would name a
-  different or absent source on the target. The wire reference a client sends is
-  still `source:<id>`, resolved to the key when the lock is written; the UI
-  labels a lock by looking the key up in the source list. A locked column wins
-  over the source: `store/manga.rs:upsert_from_source` wraps every lockable
-  `ON CONFLICT DO UPDATE` assignment in
+- Metadata locks and matching (`metadata.rs`, `api/metadata.rs`,
+  `tracker/metadata.rs`, migration `0036_metadata_locks.sql`): an entry's
+  metadata stays in the `manga` row, and external writes are expressed as
+  column-level locks rather than a second store. `manga.metadata_locks` is a
+  JSON object keyed by camelCase field name (`title`, `authors`, `artists`,
+  `description`, `tags`, `status`, `contentRating`, `cover`) whose values are
+  `{provider, remoteId?, appliedAt}`. `provider` is `tracker:<anilist|mal|bangumi|mangabaka>`,
+  `source:<source key>` or `manual`, so the lock doubles as provenance. A
+  source is named by its natural key (`source.key`), never its instance id: the
+  map travels through backup documents and sync events, where an id would name
+  a different or absent source on the target. The wire reference a client
+  sends is still `source:<id>`, resolved to the key when the lock is written;
+  the UI labels a lock by looking the key up in the source list. A locked
+  column wins over the source: `store/manga.rs:upsert_from_source` wraps every
+  lockable `ON CONFLICT DO UPDATE` assignment in
   `CASE WHEN json_extract(manga.metadata_locks, '$.<field>') IS NOT NULL THEN manga.<column> ELSE excluded.<column> END`,
-  so an entry refresh, a scheduled update and a backup restore keep the value,
-  while unlocked columns still follow the source. Backups carry the map
-  (`metadataLocks` on the exported entry) and a document without one leaves the
-  target's locks alone. A metadata write reads the lock map before changing it,
-  so `restore`, the PATCH metadata block and the cover pick run in
-  `db::begin_write` (`BEGIN IMMEDIATE`): upgrading a deferred transaction that
-  already read would fail with `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` does
-  not retry. A refresh that journals a new version commits the row and its
-  events in one write transaction. Reads are unchanged: `manga_json` and
-  `manga_json_batch` add a `metadataLocks` object built from the column, and the
-  aggregate search, OPDS and reader responses are untouched. `trashed_at`,
-  `url` and `viewer` are deliberately not lockable. The lock map is journaled
-  like the values it protects: the `journal::MANGA_STATE` snapshot in
-  `sync/journal.rs` includes `metadataLocks`, and `store/manga.rs` writes the
-  journal row in the same transaction as `set_metadata`, so a peer applies
-  values and provenance together. `POST …/metadata/restore` unlocks the listed
-  fields (or every field when the body is absent or `fields` is omitted) and,
-  with `refresh: true`, immediately re-fetches the source metadata under the
+  so an entry refresh, a scheduled update and a backup restore keep the
+  value, while unlocked columns still follow the source. Backups carry the
+  map (`metadataLocks` on the exported entry) and a document without one
+  leaves the target's locks alone. A metadata write reads the lock map
+  before changing it, so `apply`, `restore`, the PATCH metadata block and the
+  cover pick run in `db::begin_write` (`BEGIN IMMEDIATE`): upgrading a
+  deferred transaction that already read would fail with
+  `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` does not retry. A refresh that
+  journals a new version commits the row and its events in one write
+  transaction. Reads are unchanged: `manga_json` and
+  `manga_json_batch` add a `metadataLocks` object built from the column, and
+  the aggregate search, OPDS and reader responses are untouched. `trashed_at`,
+  `url` and `viewer` are deliberately not lockable.
+  The lock map is journaled like the values it protects: the
+  `journal::MANGA_STATE` snapshot in `sync/journal.rs` includes `metadataLocks`,
+  and `store/manga.rs` writes the journal row in the same transaction as
+  `set_metadata`, so a peer applies values and provenance together.
+  `GET /api/v1/manga/{id}/metadata/preview?provider=<ref>&remoteId=<id>`
+  fetches the remote record — tracker services answer through
+  `TrackerService::metadata`, a default trait method that errors with
+  "metadata is not supported by this tracker" (all four providers implement
+  it; a `source:<id>` wire reference resolves the id to the source key and
+  fetches a fresh `get_manga_update`
+  through the source runtime) — and returns
+  `{candidate, linked, fields}`. A tracker whose detail endpoint is public
+  reports `metadata_is_public()`, so MangaBaka previews work without a login;
+  the other three read their record with an OAuth token and answer
+  `NotLoggedIn` themselves. Each field carries the current value, the
+  incoming value, `selectable` (false when the remote has no value or the
+  type cannot be applied), a `reason` and title `alternatives`; `linked`
+  reports whether a `tracker_link` for that provider and record already
+  exists. Matching and editing are library features: preview, apply, restore
+  and metadata edits through PATCH answer 409 `not_in_library` for an entry
+  that is not shelved, while `updateStrategy`/`incognito` keep working on any
+  entry. Local sources are exempt — their entries are the user's own files and
+  are editable without a `manga_user` row. `POST …/metadata/apply` takes `{provider, remoteId, fields, values?, bind?}`:
+  `fields` is required and non-empty, `values` may only replace a value the
+  preview exposed for that field (the server refetches the record and
+  revalidates membership, so a stale preview cannot inject arbitrary text),
+  a single transaction writes the values, stamps locks for exactly the
+  applied fields and, for tracker references with `bind: true`, upserts the
+  `tracker_link` through `tracker/dao.rs:upsert_link_tx`. An applied `cover`
+  invalidates the disk cover cache, and a tracker-sourced cover is fetched
+  with `fetch_direct_image` (a plain outbound GET) instead of
+  `fetch_cover_image`, so a source's cover processor never rewrites another
+  provider's image. `POST …/metadata/restore` unlocks the listed fields (or
+  every field when the body is absent or `fields` is omitted) and, with
+  `refresh: true`, immediately re-fetches the source metadata under the
   remaining locks. `PATCH /api/v1/manga/{id}` still accepts
-  `updateStrategy`/`incognito`, and now also accepts the eight metadata fields
-  (written with a `manual` lock) plus `metadataUnlock` (a field list), which is
-  how the edit dialog saves manual values and drops single locks. Editing
-  metadata is a library feature: restore and metadata edits through PATCH answer
-  409 `not_in_library` for an entry that is not shelved, while
-  `updateStrategy`/`incognito` keep working on any entry. Local sources are
-  exempt — their entries are the user's own files and are editable without a
-  `manga_user` row.
+  `updateStrategy`/`incognito`, and now also accepts the eight metadata
+  fields (written with a `manual` lock) plus `metadataUnlock` (a field list),
+  which is how the edit dialog saves manual values and drops single locks.
 - Library updates (`update/mod.rs`): serial per source, at most 3 sources at
   once, broadcasting progress as `UpdateEvent`s. The global
   `library.skip_titles` setting defaults to `hasUnread`, `completed` and
@@ -1980,12 +2005,16 @@ filtering uses a 500ms debounce. Clearing a source's search box resubmits an
 empty query so the unsearched results return without waiting for submission.
 Aggregate rating/language/source filters can be
 changed before the first query, and the search view's URL changes on submission.
-The manga detail page's more-menu reaches metadata through
-`EditMetadataDialog.tsx`: it edits the lockable fields directly and shows each
-field's source as follow-the-source, written by a provider, or manual, with
-per-field unlock and a restore-to-source action. It lives in
-`webui/src/pages/manga/` and is only offered while the entry is in the library
-or its source is local.
+The manga detail page's more-menu reaches metadata through two dialogs that
+reuse the same infrastructure instead of adding a separate search surface:
+`MatchMetadataDialog.tsx` searches trackers (a linked tracker is offered as a
+one-click shortcut) or the aggregate source search, renders the preview diff
+with per-field checkboxes, title alternatives and lock provenance, and applies
+the selected fields; `EditMetadataDialog.tsx` edits the lockable fields directly
+and shows each field's source as follow-the-source, written by a provider, or
+manual, with per-field unlock and a restore-to-source action. Both live in
+`webui/src/pages/manga/`, share `metadata.css`, and are only offered while the
+entry is in the library or its source is local.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The

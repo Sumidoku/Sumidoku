@@ -268,6 +268,35 @@ pub async fn upsert_link(pool: &SqlitePool, link: &NewTrackerLink<'_>) -> Result
 	Ok(())
 }
 
+/// Same binding upsert as [`upsert_link`], for a caller that already holds a transaction (metadata apply binds
+/// and writes metadata atomically).
+pub async fn upsert_link_tx(
+	tx: &mut Transaction<'_, Sqlite>,
+	link: &NewTrackerLink<'_>,
+) -> Result<(), sqlx::Error> {
+	let now = now();
+	sqlx::query(
+		"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, title, track_mode, chapter_offset,
+		 created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (manga_id, user_id, provider) DO UPDATE SET
+		 track_id = excluded.track_id, title = excluded.title, track_mode = excluded.track_mode,
+		 chapter_offset = excluded.chapter_offset, updated_at = excluded.updated_at",
+	)
+	.bind(link.manga_id)
+	.bind(link.user_id)
+	.bind(link.provider)
+	.bind(link.track_id)
+	.bind(link.title)
+	.bind(link.track_mode.as_str())
+	.bind(link.chapter_offset)
+	.bind(now)
+	.bind(now)
+	.execute(&mut **tx)
+	.await?;
+	Ok(())
+}
+
 /// Additive merge used by the external-app imports: a binding that already
 /// exists for (manga, user, provider) wins, so importing a backup never
 /// rewrites a link the user made here; returns whether a row was inserted, so
