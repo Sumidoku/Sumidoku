@@ -1008,15 +1008,18 @@ mod tests {
 			.await
 			.expect("remove migration 19 and 32 bookkeeping");
 		assert_eq!(deleted.rows_affected(), 2);
-		// Back to the shape 0019 runs against, so 0019 and then 0032 replay in shipping order
+		// Back to the shape 0019 runs against, so 0019 and then 0032 replay in shipping order. One transaction
+		// keeps these on one connection: another pooled connection can parse with a stale schema.
+		let mut tx = pool.begin().await.expect("undo transaction");
 		for statement in [
 			"INSERT INTO setting (key, value) SELECT key, value FROM server_state",
 			"DROP TRIGGER sync_change_origin_insert",
 			"DROP TABLE server_state",
 			"CREATE TRIGGER sync_change_origin_insert AFTER INSERT ON sync_change WHEN 0 BEGIN SELECT 1; END",
 		] {
-			sqlx::query(statement).execute(&pool).await.expect("undo server_state");
+			sqlx::query(statement).execute(&mut *tx).await.expect("undo server_state");
 		}
+		tx.commit().await.expect("commit undo");
 		pool.close().await;
 
 		let pool = super::create_pool(&url).await.expect("rerun migrations");
