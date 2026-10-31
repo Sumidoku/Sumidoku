@@ -1198,6 +1198,17 @@ treat a reopen as new input, not noise.
   unsupported" and merged while everpcpc's chromiumoxide/moli references
   sat unread in the thread; dyphire reopened it the same day.
 
+**A target dir shared between worktrees can run test binaries from a deleted
+one.** `env!("CARGO_MANIFEST_DIR")` is compiled in, so a test binary reused from
+another worktree reads its fixtures through that worktree's path, and removing
+the worktree fails those tests with "No such file". A surprise failure like that
+means rebuild before investigating code, and a command that opens a PR must not
+run after the tests regardless of their result.
+- Evidence: 2026-10-31, after `sumidoku-task` was removed, 30 `aidoku-wasm` tests
+  failed reading `main.wasm` under that path while `cargo nextest -p aidoku-wasm`
+  passed. Touching the sources and rebuilding passed all 1175. The same chained
+  command had already opened #557 and #558 before the failure was read.
+
 **A rewritten branch gets its test count re-checked, not just its CI.**
 A collaborator consolidated their branch into one commit before merge;
 the rewrite kept the code fixes but silently dropped two tests added
