@@ -58,7 +58,7 @@ fn default_skip_titles() -> Vec<String> {
 	SKIP_TITLE_RULES.iter().map(|rule| (*rule).to_string()).collect()
 }
 
-fn valid_skip_titles(value: &Value) -> bool {
+pub(crate) fn valid_skip_titles(value: &Value) -> bool {
 	value.as_array().is_some_and(|rules| {
 		rules.iter().all(|rule| {
 			rule.as_str().is_some_and(|rule| SKIP_TITLE_RULES.contains(&rule))
@@ -73,7 +73,7 @@ fn parse_skip_titles(value: Option<&Value>) -> Vec<String> {
 		.unwrap_or_else(default_skip_titles)
 }
 
-fn valid_excluded_categories(value: &Value) -> bool {
+pub(crate) fn valid_excluded_categories(value: &Value) -> bool {
 	value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
 }
 
@@ -82,26 +82,6 @@ fn parse_excluded_categories(value: Option<&Value>) -> Vec<i64> {
 		.filter(|value| valid_excluded_categories(value))
 		.and_then(|value| serde_json::from_value::<Vec<i64>>(value.clone()).ok())
 		.unwrap_or_default()
-}
-
-pub(crate) fn validate_library_setting(key: &str, value: &Value) -> Option<ApiResult<()>> {
-	let result = match key {
-		LIBRARY_SKIP_TITLES if !valid_skip_titles(value) => Err(ApiError::bad_request(
-			"library.skip_titles must be an array containing only hasUnread, completed or notStarted",
-		)),
-		LIBRARY_REFRESH_METADATA if !value.is_boolean() => {
-			Err(ApiError::bad_request("library.refresh_metadata must be a boolean"))
-		}
-		LIBRARY_UPDATE_INTERVAL_HOURS if value.as_u64().is_none() => Err(ApiError::bad_request(
-			"library.update_interval_hours must be a non-negative integer",
-		)),
-		LIBRARY_EXCLUDED_UPDATE_CATEGORIES if !valid_excluded_categories(value) => Err(ApiError::bad_request(
-			"library.excluded_update_categories must be an array of category ids",
-		)),
-		LIBRARY_SKIP_TITLES | LIBRARY_REFRESH_METADATA | LIBRARY_UPDATE_INTERVAL_HOURS | LIBRARY_EXCLUDED_UPDATE_CATEGORIES => Ok(()),
-		_ => return None,
-	};
-	Some(result)
 }
 
 fn interval_seconds(interval_hours: u64) -> i64 {

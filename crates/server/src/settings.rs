@@ -76,6 +76,175 @@ pub(crate) const EXCLUDED_UPDATE_CATEGORIES: UserKey<Vec<i64>> =
 	UserKey::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
 pub(crate) const INCOGNITO_ENABLED: UserKey<bool> = UserKey::new("incognito.enabled");
 
+/// One setting the server knows about. New settings are added here, and validation, the structured
+/// view and backups all follow from this entry.
+pub(crate) struct Definition {
+	pub(crate) key: &'static str,
+	user_scoped: bool,
+	in_backup: bool,
+	clears_on_null: bool,
+	check: fn(&str, &Value) -> Result<(), String>,
+}
+
+impl Definition {
+	const fn new(key: &'static str, check: fn(&str, &Value) -> Result<(), String>) -> Self {
+		Self { key, user_scoped: false, in_backup: true, clears_on_null: false, check }
+	}
+
+	const fn user_scoped(mut self) -> Self {
+		self.user_scoped = true;
+		self
+	}
+
+	/// Holds instance-local ids, which backups carry by name instead
+	const fn not_in_backup(mut self) -> Self {
+		self.in_backup = false;
+		self
+	}
+
+	const fn clearable(mut self) -> Self {
+		self.clears_on_null = true;
+		self
+	}
+
+	pub(crate) fn clears_on_null(&self) -> bool {
+		self.clears_on_null
+	}
+
+	pub(crate) fn validate(&self, value: &Value) -> Result<(), String> {
+		(self.check)(self.key, value)
+	}
+}
+
+fn any(_: &str, _: &Value) -> Result<(), String> {
+	Ok(())
+}
+
+fn boolean(key: &str, value: &Value) -> Result<(), String> {
+	if value.is_boolean() { Ok(()) } else { Err(format!("{key} must be a boolean")) }
+}
+
+fn non_negative(key: &str, value: &Value) -> Result<(), String> {
+	if value.as_u64().is_some() { Ok(()) } else { Err(format!("{key} must be a non-negative integer")) }
+}
+
+fn positive(key: &str, value: &Value) -> Result<(), String> {
+	if matches!(value.as_u64(), Some(1..)) { Ok(()) } else { Err(format!("{key} must be a positive integer")) }
+}
+
+fn string(key: &str, value: &Value) -> Result<(), String> {
+	if value.is_string() { Ok(()) } else { Err(format!("{key} must be a string")) }
+}
+
+fn category_ids(key: &str, value: &Value) -> Result<(), String> {
+	if crate::update::valid_excluded_categories(value) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be an array of category ids"))
+	}
+}
+
+fn skip_titles(key: &str, value: &Value) -> Result<(), String> {
+	if crate::update::valid_skip_titles(value) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be an array containing only hasUnread, completed or notStarted"))
+	}
+}
+
+fn download_format(key: &str, value: &Value) -> Result<(), String> {
+	if matches!(value.as_str(), Some("cbz" | "folder")) { Ok(()) } else { Err(format!("{key} must be cbz or folder")) }
+}
+
+fn chapter_cache_bytes(key: &str, value: &Value) -> Result<(), String> {
+	if value.as_u64().is_some_and(|bytes| bytes <= i64::MAX as u64) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be between 0 and {}", i64::MAX))
+	}
+}
+
+/// An empty array clears the override
+fn directories(key: &str, value: &Value) -> Result<(), String> {
+	if value.as_array().is_some_and(|dirs| dirs.iter().all(|dir| dir.as_str().is_some_and(|dir| !dir.trim().is_empty()))) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be an array of directory paths"))
+	}
+}
+
+/// The library page's initial chip; a since-deleted id is pruned client-side, so any positive id stores
+fn default_category(key: &str, value: &Value) -> Result<(), String> {
+	if value.as_str().is_some_and(|v| v == "all" || v == "uncategorized" || v.parse::<i64>().is_ok_and(|id| id > 0)) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be \"all\", \"uncategorized\" or a category id"))
+	}
+}
+
+const DEFINITIONS: &[Definition] = &[
+	Definition::new("cache.chapterMaxBytes", chapter_cache_bytes),
+	Definition::new("incognito.enabled", any).user_scoped(),
+	Definition::new("library.default_category", default_category).user_scoped(),
+	Definition::new("library.show_uncategorized", boolean).user_scoped(),
+	Definition::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES, category_ids).user_scoped().not_in_backup(),
+	Definition::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES, category_ids).user_scoped().not_in_backup(),
+	Definition::new(crate::update::LIBRARY_SKIP_TITLES, skip_titles),
+	Definition::new(crate::update::LIBRARY_REFRESH_METADATA, boolean),
+	Definition::new(crate::update::LIBRARY_UPDATE_INTERVAL_HOURS, non_negative),
+	Definition::new(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS, boolean),
+	Definition::new(crate::download::AUTO_DOWNLOAD_LIMIT, non_negative),
+	Definition::new(crate::download::DOWNLOAD_FORMAT, download_format),
+	Definition::new(crate::download::DOWNLOAD_CONCURRENCY, positive),
+	Definition::new(crate::download::DELETE_AFTER_MANUAL_READ, boolean),
+	Definition::new(crate::download::DELETE_AFTER_READ, boolean),
+	Definition::new(crate::download::ALLOW_DELETE_BOOKMARKED, boolean),
+	Definition::new(crate::download::AUTO_SKIP_MANGA_WITH_UNREAD, boolean),
+	Definition::new(crate::download::AUTO_IGNORE_REUPLOADS, boolean),
+	Definition::new(crate::download::DOWNLOAD_AHEAD, boolean),
+	Definition::new(crate::download::DOWNLOAD_AHEAD_COUNT, non_negative),
+	Definition::new("download.move_path", any),
+	Definition::new("local.dirs", directories),
+	Definition::new("local.oneshots_dir", string).clearable(),
+	Definition::new("backup.enabled", any),
+	Definition::new("backup.interval_hours", any),
+	Definition::new("backup.retention_count", any),
+	Definition::new("backup.dir", any).clearable(),
+	Definition::new("browse.pinned_sources", any),
+];
+
+/// Names older clients and backups can still send: the removed chapter LRU switch, which must not
+/// disable collection, and read-only values that were once injected into the flat view.
+const RETIRED_KEYS: [&str; 3] = ["cache.chapterLruEnabled", "localDirs", "localOneshotsDir"];
+
+pub(crate) fn definition(key: &str) -> Option<&'static Definition> {
+	DEFINITIONS.iter().find(|definition| definition.key == key)
+}
+
+pub(crate) fn is_user_scoped(key: &str) -> bool {
+	definition(key).is_some_and(|definition| definition.user_scoped)
+}
+
+/// Namespace keys come from the request identity, so a literal `user.*` is never accepted either
+pub(crate) fn ignored_on_write(key: &str) -> bool {
+	key.starts_with("user.") || RETIRED_KEYS.contains(&key) || crate::server_state::KEYS.contains(&key)
+}
+
+/// Anything else is an unknown key, which the settings API stores and returns as it came
+pub(crate) fn is_modeled(key: &str) -> bool {
+	definition(key).is_some() || ignored_on_write(key)
+}
+
+/// Older backups can still name these, so restore needs the same answer as export
+pub(crate) fn omitted_from_backup(key: &str) -> bool {
+	crate::server_state::KEYS.contains(&key) || definition(key).is_some_and(|definition| !definition.in_backup)
+}
+
+/// The row a request's bare key is stored under
+pub(crate) fn stored_key(user_id: i64, key: &str) -> String {
+	if is_user_scoped(key) { user_key(user_id, key) } else { key.to_string() }
+}
+
 pub(crate) fn user_key(user_id: i64, key: &str) -> String {
 	format!("user.{user_id}.{key}")
 }
@@ -181,6 +350,45 @@ mod tests {
 			} else if path.extension().is_some_and(|ext| ext == "rs") {
 				files.push(path);
 			}
+		}
+	}
+
+	#[test]
+	fn every_key_is_defined_once() {
+		let mut keys: Vec<&str> = super::DEFINITIONS.iter().map(|definition| definition.key).collect();
+		let total = keys.len();
+		keys.sort_unstable();
+		keys.dedup();
+		assert_eq!(keys.len(), total);
+	}
+
+	#[test]
+	fn every_structured_setting_is_defined() {
+		let settings = crate::api::server_settings::ServerSettings::from_flat(&serde_json::Map::new()).expect("defaults");
+		for key in settings.into_flat().keys() {
+			assert!(super::is_modeled(key), "{key}");
+		}
+	}
+
+	#[test]
+	fn validation_keeps_the_public_messages() {
+		for (key, value, message) in [
+			("library.refresh_metadata", serde_json::json!(1), "library.refresh_metadata must be a boolean"),
+			("download_concurrency", serde_json::json!(0), "download_concurrency must be a positive integer"),
+			("download_format", serde_json::json!("zip"), "download_format must be cbz or folder"),
+			("local.oneshots_dir", serde_json::json!(1), "local.oneshots_dir must be a string"),
+			(
+				"cache.chapterMaxBytes",
+				serde_json::json!(-1),
+				"cache.chapterMaxBytes must be between 0 and 9223372036854775807",
+			),
+			(
+				"library.default_category",
+				serde_json::json!("0"),
+				"library.default_category must be \"all\", \"uncategorized\" or a category id",
+			),
+		] {
+			assert_eq!(super::definition(key).expect("defined").validate(&value), Err(message.to_string()));
 		}
 	}
 
