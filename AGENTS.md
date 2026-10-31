@@ -40,8 +40,10 @@ attribution.
 - Server: `cargo nextest run --workspace` and
   `cargo clippy --workspace --all-targets -- -D warnings`
 - Web UI: `cd webui && npm ci && npm run check && npm run build`
-- When `webui/` changed, also `cargo build --release -p sumidoku-server`:
-  rust-embed only bundles `webui/build` into a release binary.
+- A change only under `webui/` skips the Rust tests, clippy and the release
+  build. When a change touches both, build `webui/` first and then run
+  `cargo build --release -p sumidoku-server`: rust-embed only bundles
+  `webui/build` into a release binary.
 
 ## Database migrations
 
