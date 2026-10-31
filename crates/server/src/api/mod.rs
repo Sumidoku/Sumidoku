@@ -124,6 +124,14 @@ pub fn router(state: Arc<AppState>) -> Router {
 			get(cover::get_alternate_covers),
 		)
 		.route(
+			"/api/v1/manga/{id}/metadata/preview",
+			get(metadata::preview_metadata),
+		)
+		.route(
+			"/api/v1/manga/{id}/metadata/apply",
+			post(metadata::apply_metadata),
+		)
+		.route(
 			"/api/v1/manga/{id}/metadata/restore",
 			post(metadata::restore_metadata),
 		)

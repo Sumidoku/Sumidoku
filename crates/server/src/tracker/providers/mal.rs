@@ -3,6 +3,7 @@
 //! answers it; rereading has no MAL status and degrades to reading on write.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
+use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService};
 use serde_json::Value;
@@ -10,6 +11,7 @@ use std::sync::Arc;
 
 const BASE_URL: &str = "https://api.myanimelist.net/v2";
 const SEARCH_FIELDS: &str = "id,title,synopsis,num_chapters,main_picture,status,media_type,my_list_status,start_date,authors{first_name,last_name}";
+const METADATA_FIELDS: &str = "id,title,alternative_titles{en,ja,synonyms},synopsis,main_picture,status,genres{id,name},media_type,authors{first_name,last_name},start_date";
 const SEARCH_LIMIT: usize = 20;
 
 pub struct MalTracker {
@@ -148,6 +150,66 @@ impl MalTracker {
 		}
 	}
 
+	fn metadata_from_manga(id: i64, manga: &Value) -> TrackerMetadata {
+		let string = |value: Option<&Value>| value.and_then(Value::as_str).map(str::to_string).filter(|value| !value.is_empty());
+		let default = string(manga.get("title")).unwrap_or_default();
+		let alternatives = [
+			("English", string(manga.pointer("/alternative_titles/en"))),
+			("Japanese", string(manga.pointer("/alternative_titles/ja"))),
+		]
+		.into_iter()
+		.filter_map(|(label, value)| value.map(|value| TitleAlternative { label: label.into(), value }))
+		.chain(
+			manga
+				.pointer("/alternative_titles/synonyms")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(Value::as_str)
+				.filter(|synonym| !synonym.is_empty())
+				.map(|synonym| TitleAlternative { label: "Synonym".into(), value: synonym.to_string() }),
+		)
+		.collect();
+		let authors = dedupe(
+			manga
+				.get("authors")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(|author| author.get("node"))
+				.map(|person| {
+					let name = |key| person.get(key).and_then(Value::as_str).unwrap_or("");
+					format!("{} {}", name("first_name"), name("last_name")).trim().to_string()
+				})
+				.filter(|name| !name.is_empty()),
+		);
+		let tags = dedupe(
+			manga
+				.get("genres")
+				.and_then(Value::as_array)
+				.into_iter()
+				.flatten()
+				.filter_map(|genre| genre.get("name").and_then(Value::as_str))
+				.map(str::to_string),
+		);
+		TrackerMetadata {
+			id: id.to_string(),
+			title: TitleVariants { default, alternatives },
+			info: super::search_info(
+				manga.get("start_date").and_then(Value::as_str).and_then(|date| date.get(..4)).and_then(|year| year.parse().ok()),
+				authors.iter().cloned(),
+			),
+			authors,
+			artists: Vec::new(),
+			description: string(manga.get("synopsis")),
+			tags,
+			status: manga.get("status").and_then(Value::as_str).and_then(crate::tracker::metadata::mal_status),
+			content_rating: None,
+			cover_url: string(manga.pointer("/main_picture/large")),
+			url: Some(format!("https://myanimelist.net/manga/{id}")),
+		}
+	}
+
 	fn date_update(date: &str) -> String {
 		if matches!(date, "1969-12-31" | "1970-01-01") { String::new() } else { date.to_string() }
 	}
@@ -251,6 +313,12 @@ impl TrackerService for MalTracker {
 			return Err(Self::response_error("update", status, &raw));
 		}
 		Ok(())
+	}
+
+	async fn metadata(&self, user_id: i64, track_id: &str) -> Result<TrackerMetadata, TrackerError> {
+		let id = Self::manga_id(track_id)?;
+		let manga = self.get_json(user_id, &format!("{}/manga/{id}?fields={METADATA_FIELDS}", self.base_url)).await?;
+		Ok(Self::metadata_from_manga(id, &manga))
 	}
 }
 
@@ -553,5 +621,32 @@ mod tests {
 			assert_eq!(MalTracker::status_from_wire(wire), Some(status));
 		}
 		assert_eq!(MalTracker::status_from_wire("rereading"), None);
+	}
+	#[test]
+	fn metadata_maps_alternative_titles_authors_and_genres() {
+		let manga = json!({
+			"id": 30002,
+			"title": "Berserk",
+			"alternative_titles": {"en": "Berserk", "ja": "ベルセルク", "synonyms": ["Berserk Manga"]},
+			"synopsis": "A swordsman's tale.",
+			"main_picture": {"large": "https://img.test/large.jpg"},
+			"status": "currently_publishing",
+			"genres": [{"id": 1, "name": "Action"}, {"id": 2, "name": "Adventure"}],
+			"media_type": "manga",
+			"start_date": "1989-01-01",
+			"num_volumes": 41,
+			"authors": [{"node": {"first_name": "Kentarou", "last_name": "Miura"}}]
+		});
+		let metadata = MalTracker::metadata_from_manga(30002, &manga);
+		assert_eq!(metadata.id, "30002");
+		assert_eq!(metadata.title_default(), Some("Berserk"));
+		assert_eq!(metadata.authors, ["Kentarou Miura"]);
+		assert_eq!(metadata.tags, ["Action", "Adventure"]);
+		assert_eq!(metadata.status, Some(aidoku::MangaStatus::Ongoing));
+		assert!(metadata.content_rating.is_none());
+		assert_eq!(metadata.cover_url.as_deref(), Some("https://img.test/large.jpg"));
+		assert_eq!(metadata.url.as_deref(), Some("https://myanimelist.net/manga/30002"));
+		assert!(metadata.title.alternatives.iter().any(|alternative| alternative.label == "Japanese" && alternative.value == "ベルセルク"));
+		assert!(metadata.title.alternatives.iter().any(|alternative| alternative.label == "Synonym" && alternative.value == "Berserk Manga"));
 	}
 }
