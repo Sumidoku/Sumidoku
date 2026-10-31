@@ -32,11 +32,10 @@ pub struct LibraryUpdateSettings {
 }
 
 impl LibraryUpdateSettings {
-	pub async fn load(pool: &SqlitePool, user_id: i64, config_interval_hours: u64) -> ApiResult<Self> {
-		let excluded_key = crate::settings::user_key(user_id, LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
+	pub async fn load(pool: &SqlitePool, config_interval_hours: u64) -> ApiResult<Self> {
 		let values = crate::settings::values(
 			pool,
-			&[LIBRARY_SKIP_TITLES, LIBRARY_REFRESH_METADATA, LIBRARY_UPDATE_INTERVAL_HOURS, &excluded_key],
+			&[LIBRARY_SKIP_TITLES, LIBRARY_REFRESH_METADATA, LIBRARY_UPDATE_INTERVAL_HOURS, LIBRARY_EXCLUDED_UPDATE_CATEGORIES],
 		)
 		.await?;
 		Ok(Self {
@@ -49,7 +48,7 @@ impl LibraryUpdateSettings {
 				.get(LIBRARY_UPDATE_INTERVAL_HOURS)
 				.and_then(Value::as_u64)
 				.unwrap_or(config_interval_hours),
-			excluded_update_categories: parse_excluded_categories(values.get(&excluded_key)),
+			excluded_update_categories: parse_excluded_categories(values.get(LIBRARY_EXCLUDED_UPDATE_CATEGORIES)),
 		})
 	}
 }
@@ -237,7 +236,7 @@ impl UpdateScheduler {
 
 	async fn scheduled_due(&self, now: i64) -> ApiResult<bool> {
 		// update_interval_hours is global; any user id works for loading it.
-		let settings = LibraryUpdateSettings::load(&self.pool, 1, self.config_interval_hours).await?;
+		let settings = LibraryUpdateSettings::load(&self.pool, self.config_interval_hours).await?;
 		let last_run_at = scheduled_run_at(&self.pool).await?;
 		Ok(is_due(last_run_at, now, settings.update_interval_hours))
 	}
@@ -412,7 +411,7 @@ impl UpdateScheduler {
 				.upgrade()
 				.ok_or_else(|| ApiError::bad_request("server is shutting down"))?;
 			// refresh_metadata and update_interval_hours are global; user id only matters for excluded categories.
-			let settings = LibraryUpdateSettings::load(&self.pool, 1, state.config.update_interval_hours).await?;
+			let settings = LibraryUpdateSettings::load(&self.pool, state.config.update_interval_hours).await?;
 			if is_local {
 				if settings.refresh_metadata {
 					// refresh_metadata opts into the archive-opening chain inline (the analysis pass's
@@ -541,7 +540,7 @@ impl UpdateScheduler {
 			return;
 		}
 		let Some(state) = self.state.upgrade() else { return };
-		let settings = match crate::download::DownloadSettings::load(&self.pool, user_id, &state.config).await {
+		let settings = match crate::download::DownloadSettings::load(&self.pool, &state.config).await {
 			Ok(settings) => settings,
 			Err(e) => {
 				tracing::warn!(manga_id, "download settings load failed: {e:?}");
@@ -675,7 +674,7 @@ async fn select_manga(
 	const BASE: &str = "SELECT m.* FROM manga m
 	 JOIN manga_user mu ON mu.manga_id = m.id AND mu.user_id = ?
 	 WHERE mu.in_library = 1 AND m.update_strategy != 1 AND m.trashed_at IS NULL";
-	let settings = LibraryUpdateSettings::load(pool, user_id, config_interval_hours).await?;
+	let settings = LibraryUpdateSettings::load(pool, config_interval_hours).await?;
 	let seconds = interval_seconds(settings.update_interval_hours);
 	// When updating from a specific category, Aidoku ignores that category in the global exclusion list
 	// (pulling that category explicitly should still update its titles).
@@ -946,7 +945,7 @@ mod tests {
 			.expect("link category");
 		set_setting(
 			&state,
-			"user.1.library.excluded_download_categories",
+			"library.excluded_download_categories",
 			serde_json::json!([category_id]),
 		)
 		.await;
@@ -1201,7 +1200,7 @@ mod tests {
 		// The setting is user-scoped; user 1 is the only user in this test.
 		set_setting(
 			&state,
-			"user.1.library.excluded_update_categories",
+			"library.excluded_update_categories",
 			serde_json::json!([excluded_category]),
 		)
 		.await;
@@ -1214,7 +1213,7 @@ mod tests {
 		// The pulled category is ignored in the exclusion, but the other excluded category still filters.
 		set_setting(
 			&state,
-			"user.1.library.excluded_update_categories",
+			"library.excluded_update_categories",
 			serde_json::json!([excluded_category, other_category]),
 		)
 		.await;
@@ -1412,7 +1411,7 @@ mod tests {
 			..Config::default()
 		};
 		let (state, _, _tmp) = union_state(config).await;
-		let settings = LibraryUpdateSettings::load(&state.pool, 1, 36).await.expect("default settings");
+		let settings = LibraryUpdateSettings::load(&state.pool, 36).await.expect("default settings");
 		assert_eq!(
 			settings,
 			LibraryUpdateSettings {
@@ -1426,7 +1425,7 @@ mod tests {
 		set_setting(&state, "library.skip_titles", serde_json::json!([])).await;
 		set_setting(&state, "library.refresh_metadata", serde_json::json!(true)).await;
 		set_setting(&state, "library.update_interval_hours", serde_json::json!(12)).await;
-		let settings = LibraryUpdateSettings::load(&state.pool, 1, 36).await.expect("runtime settings");
+		let settings = LibraryUpdateSettings::load(&state.pool, 36).await.expect("runtime settings");
 		assert_eq!(
 			settings,
 			LibraryUpdateSettings {

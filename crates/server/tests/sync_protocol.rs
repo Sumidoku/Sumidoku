@@ -230,8 +230,8 @@ async fn sync_category_delete_clears_exclusions_before_id_reuse() {
 		.expect("mapped category");
 	assert_eq!(category_id, 1);
 	for key in [
-		"user.1.library.excluded_update_categories",
-		"user.1.library.excluded_download_categories",
+		"library.excluded_update_categories",
+		"library.excluded_download_categories",
 	] {
 		sqlx::query("INSERT INTO setting (key, value) VALUES (?, ?)")
 			.bind(key)
@@ -256,8 +256,8 @@ async fn sync_category_delete_clears_exclusions_before_id_reuse() {
 
 	let pool = connect_db(&b.db_path).await;
 	for key in [
-		"user.1.library.excluded_update_categories",
-		"user.1.library.excluded_download_categories",
+		"library.excluded_update_categories",
+		"library.excluded_download_categories",
 	] {
 		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
 			.bind(key)
@@ -654,7 +654,7 @@ async fn category_stub_merge_clears_exclusions_before_id_reuse() {
 	let (status, applied) = push(&b, &a, json!([stub_membership])).await;
 	assert_eq!(status, StatusCode::OK, "{applied}");
 	assert_eq!(applied["results"][0]["status"], "applied");
-	for key in ["user.1.library.excluded_update_categories", "user.1.library.excluded_download_categories"] {
+	for key in ["library.excluded_update_categories", "library.excluded_download_categories"] {
 		sqlx::query("INSERT OR REPLACE INTO setting (key, value) VALUES (?, '[700]')")
 			.bind(key)
 			.execute(&b_pool)
@@ -671,7 +671,7 @@ async fn category_stub_merge_clears_exclusions_before_id_reuse() {
 		.execute(&b_pool)
 		.await
 		.expect("reused category id");
-	for key in ["user.1.library.excluded_update_categories", "user.1.library.excluded_download_categories"] {
+	for key in ["library.excluded_update_categories", "library.excluded_download_categories"] {
 		let excluded: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
 			.bind(key)
 			.fetch_one(&b_pool)

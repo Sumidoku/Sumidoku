@@ -2033,26 +2033,16 @@ pub(crate) const MANGA_ID_QUERY_CHUNK: usize = 500;
 
 async fn get_settings(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
 	let rows = crate::settings::all(&state.pool).await?;
 	let mut map = serde_json::Map::new();
-	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
-		if key.starts_with("user.") {
-			if let Some(scoped) = key.strip_prefix(&own_prefix)
-				&& crate::settings::is_user_scoped(scoped)
-			{
-				map.insert(scoped.into(), serde_json::from_str(&raw)?);
-			}
-			continue;
-		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
 	if let Some(at) = crate::server_state::time(&state.pool, crate::server_state::BACKUP_LAST_RUN).await? {
 		map.insert(crate::server_state::BACKUP_LAST_RUN.into(), json!(at));
 	}
-	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
+	let library = crate::update::LibraryUpdateSettings::load(&state.pool, state.config.update_interval_hours).await?;
 	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
 	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
 	map.insert(
@@ -2063,7 +2053,7 @@ async fn get_settings(
 		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
 		json!(library.excluded_update_categories),
 	);
-	let download = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+	let download = crate::download::DownloadSettings::load(&state.pool, &state.config).await?;
 	map.insert(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS.into(), json!(download.auto_download_new_chapters));
 	map.insert(crate::download::AUTO_DOWNLOAD_LIMIT.into(), json!(download.auto_download_limit));
 	map.insert(crate::download::DOWNLOAD_FORMAT.into(), json!(download.download_format));
@@ -2086,7 +2076,6 @@ async fn get_settings(
 /// flat-map variant of PUT /settings.
 pub(crate) async fn apply_settings(
 	state: &Arc<AppState>,
-	user: &crate::auth::AuthUser,
 	body: &HashMap<String, Value>,
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
@@ -2103,7 +2092,7 @@ pub(crate) async fn apply_settings(
 			continue;
 		}
 		definition.validate(value).map_err(ApiError::bad_request)?;
-		crate::settings::write_value(&mut *tx, &crate::settings::stored_key(user.id, key), value).await?;
+		crate::settings::write_value(&mut *tx, key, value).await?;
 	}
 	tx.commit().await?;
 	if body.contains_key("cache.chapterMaxBytes") {
@@ -2114,7 +2103,6 @@ pub(crate) async fn apply_settings(
 
 async fn put_settings(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(mut body): Json<Value>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
 	// The local directories moved to the per-instance source settings (GET/PUT /sources/{id}/settings):
@@ -2144,8 +2132,8 @@ async fn put_settings(
 			map
 		}
 	};
-	apply_settings(&state, &user, &flat).await?;
-	get_settings(State(state), Extension(user)).await
+	apply_settings(&state, &flat).await?;
+	get_settings(State(state)).await
 }
 
 #[cfg(test)]

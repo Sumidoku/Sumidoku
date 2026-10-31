@@ -168,6 +168,68 @@ mod tests {
 	/// Existing databases reject changed migration bytes unless their exact old checksum is registered.
 	/// Pin the canonical SHA-384 for every shipped file; new migrations append a pin.
 	#[tokio::test]
+	async fn migration_33_flattens_owner_settings() {
+		use sqlx::migrate::Migrate;
+		use std::str::FromStr;
+		let tmp = tempfile::tempdir().expect("tmp");
+		let url = format!("sqlite://{}/flat.db?mode=rwc", tmp.path().display());
+		let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+			.expect("database url")
+			.create_if_missing(true)
+			.foreign_keys(true);
+		let pool = sqlx::sqlite::SqlitePoolOptions::new()
+			.max_connections(1)
+			.connect_with(options)
+			.await
+			.expect("connect");
+		let migrator = sqlx::migrate!("./migrations");
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.ensure_migrations_table().await.expect("migration table");
+		for migration in migrator.iter().filter(|migration| migration.version < 33) {
+			conn.apply(migration).await.expect("apply pre-0033 migration");
+		}
+		drop(conn);
+		for (key, value) in [
+			("user.1.incognito.enabled", "true"),
+			("user.1.library.excluded_update_categories", "[1]"),
+			("library.excluded_update_categories", "[9]"),
+			("user.2.library.default_category", "\"all\""),
+			("download_format", "\"folder\""),
+		] {
+			sqlx::query("INSERT OR REPLACE INTO setting (key, value) VALUES (?, ?)")
+				.bind(key)
+				.bind(value)
+				.execute(&pool)
+				.await
+				.expect("seed setting");
+		}
+
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.apply(migrator.iter().find(|migration| migration.version == 33).expect("migration 33"))
+			.await
+			.expect("apply 0033 migration");
+		drop(conn);
+
+		for (key, value) in [
+			("incognito.enabled", "true"),
+			("library.excluded_update_categories", "[1]"),
+			("download_format", "\"folder\""),
+		] {
+			let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+				.bind(key)
+				.fetch_one(&pool)
+				.await
+				.expect("flattened setting");
+			assert_eq!(stored, value, "{key}");
+		}
+		let namespaced: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key LIKE 'user.%'")
+			.fetch_one(&pool)
+			.await
+			.expect("namespaced rows");
+		assert_eq!(namespaced, 0);
+	}
+
+	#[tokio::test]
 	async fn migration_32_moves_server_state_and_the_origin_trigger() {
 		use sqlx::migrate::Migrate;
 		use std::str::FromStr;
@@ -296,6 +358,7 @@ mod tests {
 			(30, "C50F50303BE725E33BE955FE38768D8D948311487F450D372EFFFADB5E17B58E2BE0D08DA9112DBA66A904351E8647F6"),
 			(31, "F149F163796123A8F0A99F27943E7A895E76CB07FD73C9B937AFFE523801C83D5A851F14A6CE4506D76A46FFCBB0A120"),
 			(32, "CB18CACFE9A9F3A939FF7A7C3294BD7449B16FF45DEA56355FCFDC688016A33DD6F76552894B0742B0527CAE1F54FFF9"),
+			(33, "34AC8BEC17F4466576ACFBBCC6A3BC9EDC1DC1C043279B6A820C857E56307301E3740641519A05A04B6AEA348125E01F"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -503,16 +566,22 @@ mod tests {
 		pool.close().await;
 
 		let pool = super::create_pool(&url).await.expect("rerun migrations");
-		let mut admin = crate::update::LibraryUpdateSettings::load(&pool, 1, 0)
-			.await
-			.expect("load admin settings")
-			.excluded_update_categories;
+		// Migration 0016 reruns after 0033 here, so its rows keep the namespace it wrote
+		let stored = |key: &'static str| {
+			let pool = pool.clone();
+			async move {
+				let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
+					.bind(key)
+					.fetch_one(&pool)
+					.await
+					.expect("stored exclusions");
+				serde_json::from_str::<Vec<i64>>(&raw).expect("exclusion ids")
+			}
+		};
+		let mut admin = stored("user.1.library.excluded_update_categories").await;
 		admin.sort_unstable();
 		assert_eq!(admin, vec![first, second]);
-		let bob = crate::update::LibraryUpdateSettings::load(&pool, 2, 0)
-			.await
-			.expect("load bob settings")
-			.excluded_update_categories;
+		let bob = stored("user.2.library.excluded_update_categories").await;
 		assert_eq!(bob, vec![bob_existing]);
 		pool.close().await;
 	}

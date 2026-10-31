@@ -50,8 +50,7 @@ pub struct DownloadSettings {
 }
 
 impl DownloadSettings {
-	pub async fn load(pool: &SqlitePool, user_id: i64, config: &crate::config::Config) -> ApiResult<Self> {
-		let excluded_key = crate::settings::user_key(user_id, LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
+	pub async fn load(pool: &SqlitePool, config: &crate::config::Config) -> ApiResult<Self> {
 		let values = crate::settings::values(
 			pool,
 			&[
@@ -66,7 +65,7 @@ impl DownloadSettings {
 				AUTO_IGNORE_REUPLOADS,
 				DOWNLOAD_AHEAD,
 				DOWNLOAD_AHEAD_COUNT,
-				&excluded_key,
+				LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES,
 			],
 		)
 		.await?;
@@ -103,7 +102,7 @@ impl DownloadSettings {
 				.filter(|value| *value >= 0)
 				.unwrap_or(2),
 			excluded_download_categories: values
-				.get(&excluded_key)
+				.get(LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES)
 				.filter(|value| {
 					value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
 				})
@@ -249,12 +248,12 @@ impl DownloadManager {
 		&self.downloads_dir
 	}
 
-	async fn settings(&self, user_id: i64) -> ApiResult<DownloadSettings> {
+	async fn settings(&self) -> ApiResult<DownloadSettings> {
 		let state = self
 			.state
 			.upgrade()
 			.ok_or_else(|| crate::error::ApiError::bad_request("server is shutting down"))?;
-		DownloadSettings::load(&self.pool, user_id, &state.config).await
+		DownloadSettings::load(&self.pool, &state.config).await
 	}
 
 	pub fn is_paused(&self) -> bool {
@@ -382,7 +381,7 @@ impl DownloadManager {
 
 	/// Enqueues the deduped chapter list; rows belong to user_id, already finished/queued/running ones are skipped, error rows are reset and requeued
 	pub async fn enqueue(self: &Arc<Self>, chapter_ids: &[i64], user_id: i64) -> Vec<i64> {
-		let settings = match self.settings(user_id).await {
+		let settings = match self.settings().await {
 			Ok(settings) => settings,
 			Err(e) => {
 				tracing::warn!("download settings load failed: {e:?}");
@@ -759,7 +758,7 @@ impl DownloadManager {
 	}
 
 	pub async fn enqueue_reader_ahead(self: &Arc<Self>, chapter_id: i64, user_id: i64) -> ApiResult<Vec<i64>> {
-		let settings = self.settings(user_id).await?;
+		let settings = self.settings().await?;
 		if !settings.download_ahead || settings.download_ahead_count == 0 {
 			return Ok(Vec::new());
 		}
@@ -825,7 +824,7 @@ impl DownloadManager {
 		if !self.running.load(Ordering::SeqCst) {
 			return;
 		}
-		let settings = match self.settings(1).await {
+		let settings = match self.settings().await {
 			Ok(settings) => settings,
 			Err(e) => {
 				tracing::warn!("download settings load failed: {e:?}");
@@ -2598,7 +2597,7 @@ mod tests {
 			..crate::config::Config::default()
 		};
 		let (state, _manga_id, chapter_id, _tmp) = manager_db(config).await;
-		let loaded = DownloadSettings::load(&state.pool, 1, &state.config).await.expect("defaults");
+		let loaded = DownloadSettings::load(&state.pool, &state.config).await.expect("defaults");
 		assert!(loaded.auto_download_new_chapters);
 		assert_eq!(loaded.auto_download_limit, 7);
 		assert_eq!(loaded.download_format, "folder");
@@ -2617,8 +2616,8 @@ mod tests {
 		set_setting(&state, AUTO_IGNORE_REUPLOADS, serde_json::json!(true)).await;
 		set_setting(&state, DOWNLOAD_AHEAD, serde_json::json!(true)).await;
 		set_setting(&state, DOWNLOAD_AHEAD_COUNT, serde_json::json!(5)).await;
-		set_setting(&state, "user.1.library.excluded_download_categories", serde_json::json!([3, 4])).await;
-		let loaded = DownloadSettings::load(&state.pool, 1, &state.config).await.expect("runtime values");
+		set_setting(&state, "library.excluded_download_categories", serde_json::json!([3, 4])).await;
+		let loaded = DownloadSettings::load(&state.pool, &state.config).await.expect("runtime values");
 		assert!(!loaded.auto_download_new_chapters);
 		assert_eq!(loaded.auto_download_limit, 0);
 		assert_eq!(loaded.download_format, "cbz");

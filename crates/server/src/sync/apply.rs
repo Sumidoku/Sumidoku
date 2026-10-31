@@ -1448,11 +1448,7 @@ async fn merge_category_stub(
 	.bind(format!("{stub_id}:%"))
 	.execute(&mut **tx)
 	.await?;
-	let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM category WHERE id = ?")
-		.bind(stub_id)
-		.fetch_one(&mut **tx)
-		.await?;
-	crate::settings::remove_category_exclusions(tx, user_id, stub_id).await?;
+	crate::settings::remove_category_exclusions(tx, stub_id).await?;
 	sqlx::query("DELETE FROM category WHERE id = ?")
 		.bind(stub_id)
 		.execute(&mut **tx)
@@ -1509,7 +1505,7 @@ async fn apply_category(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		crate::settings::remove_category_exclusions(tx, user_id, id).await?;
+		crate::settings::remove_category_exclusions(tx, id).await?;
 		sqlx::query("DELETE FROM category WHERE id = ?")
 			.bind(id)
 			.execute(&mut **tx)

@@ -459,7 +459,7 @@ async fn config_password_reseeds_on_restart() {
 }
 
 /// Old-DB migration: auth_credential's site password becomes the admin password, old token sessions
-/// are kept and assigned to user 1, the incognito key moves into the user.1 namespace, and download
+/// are kept and assigned to user 1, the incognito key survives, and download
 /// rows are kept with the table gaining a composite primary key
 #[tokio::test]
 async fn migration_from_site_password_era() {
@@ -551,17 +551,12 @@ async fn migration_from_site_password_era() {
 	assert_eq!(status, StatusCode::OK);
 
 	let pool = connect_db(&tmp.path().join("test.db")).await;
-	let legacy_keys: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM setting WHERE key = 'incognito.enabled'")
-		.fetch_one(&pool)
-		.await
-		.expect("count legacy key");
-	assert_eq!(legacy_keys, 0);
-	let namespaced: Option<(String,)> =
-		sqlx::query_as("SELECT value FROM setting WHERE key = 'user.1.incognito.enabled'")
+	let incognito: Option<(String,)> =
+		sqlx::query_as("SELECT value FROM setting WHERE key = 'incognito.enabled'")
 			.fetch_optional(&pool)
 			.await
-			.expect("namespaced key");
-	assert_eq!(namespaced.map(|(v,)| v).as_deref(), Some("true"));
+			.expect("incognito key");
+	assert_eq!(incognito.map(|(v,)| v).as_deref(), Some("true"));
 	let download_user: i64 = sqlx::query_scalar("SELECT user_id FROM download WHERE chapter_id = 100")
 		.fetch_one(&pool)
 		.await

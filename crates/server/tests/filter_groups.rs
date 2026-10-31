@@ -599,18 +599,11 @@ async fn library_display_settings() {
 		assert_eq!(status, StatusCode::BAD_REQUEST, "{value}: {body}");
 	}
 
-	// user display preferences live in the caller's namespace, never as bare global keys
 	let pool = connect_db(&db_path).await;
-	let (namespaced,): (i64,) =
-		sqlx::query_as("SELECT COUNT(*) FROM setting WHERE key = 'user.1.library.default_category'")
-			.fetch_one(&pool)
-			.await
-			.expect("count namespaced");
-	assert_eq!(namespaced, 1);
-	let (bare,): (i64,) =
+	let (stored,): (i64,) =
 		sqlx::query_as("SELECT COUNT(*) FROM setting WHERE key = 'library.default_category'")
 			.fetch_one(&pool)
 			.await
-			.expect("count bare");
-	assert_eq!(bare, 0);
+			.expect("count stored");
+	assert_eq!(stored, 1);
 }
