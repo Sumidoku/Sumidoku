@@ -113,36 +113,6 @@ impl DownloadSettings {
 	}
 }
 
-fn valid_excluded_categories(value: &Value) -> bool {
-	value.as_array().is_some_and(|ids| ids.iter().all(|id| id.as_i64().is_some()))
-}
-
-pub(crate) fn validate_download_setting(key: &str, value: &Value) -> Option<ApiResult<()>> {
-	let result = match key {
-		AUTO_DOWNLOAD_NEW_CHAPTERS | DELETE_AFTER_MANUAL_READ | DELETE_AFTER_READ | ALLOW_DELETE_BOOKMARKED
-		| AUTO_SKIP_MANGA_WITH_UNREAD | AUTO_IGNORE_REUPLOADS | DOWNLOAD_AHEAD if !value.is_boolean() => {
-			Err(crate::error::ApiError::bad_request(format!("{key} must be a boolean")))
-		}
-		AUTO_DOWNLOAD_LIMIT | DOWNLOAD_AHEAD_COUNT if value.as_u64().is_none() => {
-			Err(crate::error::ApiError::bad_request(format!("{key} must be a non-negative integer")))
-		}
-		DOWNLOAD_CONCURRENCY if !matches!(value.as_u64(), Some(1..)) => {
-			Err(crate::error::ApiError::bad_request("download_concurrency must be a positive integer"))
-		}
-		DOWNLOAD_FORMAT if !matches!(value.as_str(), Some("cbz" | "folder")) => {
-			Err(crate::error::ApiError::bad_request("download_format must be cbz or folder"))
-		}
-		LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES if !valid_excluded_categories(value) => {
-			Err(crate::error::ApiError::bad_request("library.excluded_download_categories must be an array of category ids"))
-		}
-		AUTO_DOWNLOAD_NEW_CHAPTERS | AUTO_DOWNLOAD_LIMIT | DOWNLOAD_FORMAT | DOWNLOAD_CONCURRENCY
-		| DELETE_AFTER_MANUAL_READ | DELETE_AFTER_READ | ALLOW_DELETE_BOOKMARKED | AUTO_SKIP_MANGA_WITH_UNREAD
-		| AUTO_IGNORE_REUPLOADS | DOWNLOAD_AHEAD | DOWNLOAD_AHEAD_COUNT | LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES => Ok(()),
-		_ => return None,
-	};
-	Some(result)
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DownloadEvent {
 	#[serde(rename = "type")]

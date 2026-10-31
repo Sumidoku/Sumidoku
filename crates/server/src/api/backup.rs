@@ -360,13 +360,13 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		// Legacy owner namespace keys are restored to bare keys, matching the settings API contract
 		let key = if key.starts_with("user.") {
 			match key.strip_prefix(&own_prefix) {
-				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
+				Some(scoped) if crate::settings::is_user_scoped(scoped) => scoped.to_string(),
 				_ => continue,
 			}
 		} else {
 			key
 		};
-		if omitted_from_backup(&key) {
+		if crate::settings::omitted_from_backup(&key) {
 			continue;
 		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
@@ -876,13 +876,6 @@ async fn restore_progress(
 	Ok(())
 }
 
-/// Raw exclusion ids are instance-local, so categories carry them by name instead
-fn omitted_from_backup(key: &str) -> bool {
-	key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
-		|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
-		|| crate::server_state::KEYS.contains(&key)
-}
-
 async fn restore_settings(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
@@ -892,13 +885,10 @@ async fn restore_settings(
 	for (key, value) in &doc.settings {
 		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
 		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
-		if key.starts_with("user.") || omitted_from_backup(key) {
+		if key.starts_with("user.") || crate::settings::omitted_from_backup(key) {
 			continue;
 		}
-		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
-			true => crate::settings::user_key(user_id, key),
-			false => key.clone(),
-		};
+		let stored_key = crate::settings::stored_key(user_id, key);
 		crate::settings::write_value(&mut **tx, &stored_key, value).await?;
 		restored.settings += 1;
 	}

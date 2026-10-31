@@ -353,6 +353,10 @@ to land. Bind the field (`tmp: _tmp`) so the directory outlives the test.
   three different spots across runs (logout, update, ledger, each a 500) as
   each fresh connection hit the unlinked file; binding `tmp` made all four
   pass deterministically.
+- Seen again: 2026-10-31, #551's CI failed `search_query_matches_author_and_tag_substring`
+  with a 500 that 96 parallel local runs of the same test did not reproduce;
+  eight tests in `local_search.rs` and `api.rs` destructured `TestApp { app, .. }`.
+  Binding `tmp: _tmp` covers them all.
 
 **A version bump is incomplete without the lockfile.** `Cargo.lock` records
 every workspace member's version, so bumping only `Cargo.toml` leaves the
