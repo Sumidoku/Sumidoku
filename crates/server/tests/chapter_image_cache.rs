@@ -864,6 +864,10 @@ async fn source_scoped_clear_only_evicts_that_source() {
 	assert_eq!(after["sources"].as_array().expect("sources").len(), 0);
 	assert_eq!(after["usedBytes"].as_i64(), Some(0));
 
+	// The scoped clear deletes page rows, so re-analysis would ask the real source; point
+	// the pages back at the local upstream before proving the refetch (as the global
+	// clear test does).
+	rewrite_urls(&t.db_path, chapter_id, upstream.port).await;
 	// The scoped clear forces a refetch on the next read, like the global one.
 	let (status, _, bytes) = request_full(&t.app, "GET", &url, None).await;
 	assert_eq!(status, StatusCode::OK);
