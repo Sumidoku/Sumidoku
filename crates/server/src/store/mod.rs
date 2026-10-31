@@ -8,6 +8,9 @@ pub mod manga;
 pub mod progress;
 
 #[cfg(test)]
+mod journal_contract;
+
+#[cfg(test)]
 mod tests {
 	use std::fs;
 	use std::path::{Path, PathBuf};
