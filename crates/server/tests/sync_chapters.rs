@@ -42,11 +42,14 @@ fn assert_time_contract(events: &[SyncChange]) {
 	}
 }
 
-async fn assert_local_origins(pool: &SqlitePool, events: &[SyncChange]) {
-	let instance: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
+async fn local_instance(pool: &SqlitePool) -> String {
+	sqlx::query_scalar("SELECT value FROM server_state WHERE key = 'sync.instance_id'")
 		.fetch_one(pool)
 		.await
-		.expect("instance id");
+		.expect("instance id")
+}
+
+async fn assert_local_origins(instance: &str, events: &[SyncChange]) {
 	for event in events {
 		assert_eq!(event.origin, instance);
 		assert_eq!(event.origin_user_id, event.user_id);
@@ -228,7 +231,7 @@ async fn migration_18_replays_real_history_with_origins_and_parent_baselines() {
 	assert!(admin[2].snapshot.get("isDownloaded").is_none());
 	assert!(admin[0].snapshot.get("fetchedAt").is_none());
 	assert_time_contract(&admin);
-	assert_local_origins(&pool, &admin).await;
+	assert_local_origins(&instance, &admin).await;
 
 	let states: Vec<(i64, String, String, String, String)> = sqlx::query_as(
 		"SELECT chapter_id, source_key, manga_key, chapter_key, snapshot FROM sync_chapter_state ORDER BY chapter_id",
@@ -284,7 +287,7 @@ async fn local_origin_fill_preserves_remote_metadata_and_mapped_entity_key() {
 	let manga_id = add_manga(&pool, source_id, 100).await;
 	add_library(&pool, manga_id, 1, 101).await;
 	let local = since(&pool, 1, 0).await;
-	assert_local_origins(&pool, &local).await;
+	assert_local_origins(&local_instance(&pool).await, &local).await;
 
 	sqlx::query(
 		"INSERT INTO sync_change
@@ -345,7 +348,7 @@ async fn chapter_content_noop_rekey_and_recursive_updates_follow_the_time_contra
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false)]);
 	assert_time_contract(&events);
-	assert_local_origins(&pool, &events).await;
+	assert_local_origins(&local_instance(&pool).await, &events).await;
 	let chapter = &events[1];
 	assert_eq!(chapter.entity_key, chapter_id.to_string());
 	assert_eq!(chapter.identity["chapterKey"], "renamed");
@@ -649,7 +652,7 @@ async fn manga_delete_captures_chapter_and_progress_before_parent_disappears() {
 	);
 	assert_time_contract(&admin);
 	assert_cascade_identities(&admin, chapter_id);
-	assert_local_origins(&pool, &admin).await;
+	assert_local_origins(&local_instance(&pool).await, &admin).await;
 }
 
 #[tokio::test]

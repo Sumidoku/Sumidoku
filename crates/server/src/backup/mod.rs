@@ -151,20 +151,11 @@ async fn setting_json(pool: &SqlitePool, key: &str) -> ApiResult<Option<Value>> 
 }
 
 async fn last_run(pool: &SqlitePool) -> ApiResult<Option<i64>> {
-	Ok(setting_json(pool, "backup.last_run")
-		.await?
-		.and_then(|v| v.as_i64()))
+	crate::server_state::time(pool, crate::server_state::BACKUP_LAST_RUN).await
 }
 
 async fn set_last_run(pool: &SqlitePool, at: i64) -> ApiResult<()> {
-	sqlx::query(
-		"INSERT INTO setting (key, value) VALUES ('backup.last_run', ?)
-		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-	)
-	.bind(serde_json::to_string(&at)?)
-	.execute(pool)
-	.await?;
-	Ok(())
+	crate::server_state::set_time(pool, crate::server_state::BACKUP_LAST_RUN, at).await
 }
 
 /// Backup destination: env (config.backup_dir) > setting backup.dir > default <config_dir>/backups

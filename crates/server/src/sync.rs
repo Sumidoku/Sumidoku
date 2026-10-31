@@ -94,9 +94,9 @@ fn into_change(row: SyncChangeRow) -> ApiResult<SyncChange> {
 }
 
 pub async fn instance_id(pool: &SqlitePool) -> ApiResult<String> {
-	Ok(sqlx::query_scalar("SELECT value FROM setting WHERE key = 'sync.instance_id'")
-		.fetch_one(pool)
-		.await?)
+	crate::server_state::get(pool, crate::server_state::INSTANCE_ID)
+		.await?
+		.ok_or_else(|| sqlx::Error::RowNotFound.into())
 }
 
 pub async fn changes_since(

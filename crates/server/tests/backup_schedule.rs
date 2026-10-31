@@ -21,8 +21,19 @@ async fn set_setting(pool: &SqlitePool, key: &str, value: Value) {
 	.expect("set setting");
 }
 
+async fn set_last_run(pool: &SqlitePool, at: i64) {
+	sqlx::query(
+		"INSERT INTO server_state (key, value) VALUES ('backup.last_run', ?)
+		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+	)
+	.bind(at.to_string())
+	.execute(pool)
+	.await
+	.expect("set last run");
+}
+
 async fn last_run(pool: &SqlitePool) -> Option<i64> {
-	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'backup.last_run'")
+	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM server_state WHERE key = 'backup.last_run'")
 		.fetch_optional(pool)
 		.await
 		.expect("last_run query");
@@ -102,7 +113,7 @@ async fn scheduled_backup_runs_and_respects_due() {
 
 	// with the switch off, it doesn't run even when overdue
 	set_setting(&pool, "backup.enabled", json!(false)).await;
-	set_setting(&pool, "backup.last_run", json!(0)).await;
+	set_last_run(&pool, 0).await;
 	assert!(!restarted.run_if_due().await.expect("due check"));
 
 	// re-enabled and overdue → immediately makes one, updating last_run
@@ -128,7 +139,6 @@ async fn scheduled_backup_matches_export_and_lists() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 
-	// take the HTTP export first: once run_once lands, the setting table gains backup.last_run and the snapshots are no longer identical
 	let (status, _, body) = request_full(&app.app, "GET", "/api/v1/backups/document", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let mut from_http: Value = serde_json::from_slice(&body).expect("http json");
@@ -314,7 +324,7 @@ async fn startup_runs_overdue_backup_and_survives_restart() {
 		let pool = db::create_pool(&config.database_url).await.expect("pool");
 		set_setting(&pool, "backup.enabled", json!(true)).await;
 		set_setting(&pool, "backup.interval_hours", json!(1)).await;
-		set_setting(&pool, "backup.last_run", json!(0)).await;
+		set_last_run(&pool, 0).await;
 		pool.close().await;
 	}
 	let dir = config.default_backups_dir();

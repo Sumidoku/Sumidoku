@@ -12,6 +12,7 @@ pub mod internal;
 pub mod logging;
 pub mod model;
 pub mod rss;
+pub mod server_state;
 pub mod source;
 pub mod state;
 pub mod sync;
