@@ -157,11 +157,14 @@ export default function MangaDetailPage() {
 		const measure = () => {
 			// offsetTop marks a new wrapped row; clamping only hides overflow,
 			// it does not move the rows, so measuring while clamped is still correct
+			const kids = Array.from(el.children) as HTMLElement[];
+			// offsetTop counts from the positioned hero body, so heights are relative to the first row
+			const firstRowTop = kids[0]?.offsetTop ?? 0;
 			let rows = 0;
 			let lastTop = -1;
 			let thirdRowTop = -1;
-			for (const kid of Array.from(el.children)) {
-				const top = (kid as HTMLElement).offsetTop;
+			for (const kid of kids) {
+				const top = kid.offsetTop;
 				if (top !== lastTop) {
 					rows++;
 					lastTop = top;
@@ -171,11 +174,13 @@ export default function MangaDetailPage() {
 					}
 				}
 			}
-			setTagsClamp(thirdRowTop >= 0 ? thirdRowTop - TAG_LIST_GAP : null);
+			setTagsClamp(thirdRowTop >= 0 ? thirdRowTop - firstRowTop - TAG_LIST_GAP : null);
 		};
 		measure();
-		window.addEventListener('resize', measure);
-		return () => window.removeEventListener('resize', measure);
+		// The list width also changes with the sidebar, which fires no window resize
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		return () => observer.disconnect();
 	}, [tags]);
 	const [catOpen, setCatOpen] = useState(false);
 	const [catSel, setCatSel] = useState<Set<number>>(new Set());

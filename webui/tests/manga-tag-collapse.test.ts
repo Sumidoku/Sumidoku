@@ -24,7 +24,8 @@ test('no scroll-hint mask survives on the tag list', () => {
 test('the clamp is measured from the third wrapped row, not a fixed pixel count', () => {
 	// Clickable chips are 36px tall and plain chips shorter, so a hardcoded clamp crops rows.
 	assert.match(page, /rows === 3/);
-	assert.match(page, /setTagsClamp\(thirdRowTop >= 0 \? thirdRowTop - TAG_LIST_GAP : null\)/);
+	// offsetTop counts from the positioned hero body, not the list, so the first row is the origin
+	assert.match(page, /setTagsClamp\(thirdRowTop >= 0 \? thirdRowTop - firstRowTop - TAG_LIST_GAP : null\)/);
 	assert.match(page, /maxHeight: tagsClamp/);
 });
 
