@@ -132,23 +132,25 @@ pub async fn ensure_chapter_row(
 	};
 	let meta = meta.unwrap_or(&empty);
 	let now = crate::model::unix_now();
-	sqlx::query(
-		"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators, language,
-		 url, date_uploaded, source_order, page_count, fetched_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
+	crate::store::chapter::insert_from_import(
+		&mut **tx,
+		manga_id,
+		&crate::store::chapter::ChapterFields {
+			key,
+			title: meta.title,
+			number: meta.number,
+			volume: meta.volume,
+			scanlators: &meta.scanlators,
+			language: meta.language,
+			thumbnail: None,
+			url: meta.url,
+			date_uploaded: meta.date_uploaded,
+			source_order: meta.source_order,
+			page_count: 0,
+			locked: false,
+		},
+		now,
 	)
-	.bind(manga_id)
-	.bind(key)
-	.bind(meta.title)
-	.bind(meta.number)
-	.bind(meta.volume)
-	.bind(&meta.scanlators)
-	.bind(meta.language)
-	.bind(meta.url)
-	.bind(meta.date_uploaded)
-	.bind(meta.source_order)
-	.bind(now)
-	.execute(&mut **tx)
 	.await?;
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
 		.bind(manga_id)

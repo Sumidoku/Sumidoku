@@ -94,11 +94,7 @@ pub async fn analyze_instance(run: &crate::task::TaskRun, source_id: i64) -> Api
 			}
 			// a chapter still at zero pages (no images, an unreadable archive) is settled until a scan sees its
 			// manga change; without the stamp every pass would reopen it
-			sqlx::query("UPDATE chapter SET pages_analyzed_at = ? WHERE id = ? AND page_count = 0")
-				.bind(crate::model::unix_now())
-				.bind(chapter_id)
-				.execute(&state.pool)
-				.await?;
+			crate::store::chapter::stamp_empty_analyzed(&state.pool, chapter_id, crate::model::unix_now()).await?;
 		}
 	}
 

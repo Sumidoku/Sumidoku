@@ -895,20 +895,10 @@ pub async fn store_chapter_metadata(
 ) -> ApiResult<()> {
 	for (key, meta) in values {
 		if let Some(title) = meta.title.as_deref() {
-			sqlx::query("UPDATE chapter SET title = ? WHERE manga_id = ? AND key = ?")
-				.bind(title)
-				.bind(manga_id)
-				.bind(key)
-				.execute(&mut *conn)
-				.await?;
+			crate::store::chapter::set_title_by_key(&mut *conn, manga_id, key, title).await?;
 		}
 		if !meta.authors.is_empty() {
-			sqlx::query("UPDATE chapter SET scanlators = ? WHERE manga_id = ? AND key = ?")
-				.bind(serde_json::to_string(&meta.authors)?)
-				.bind(manga_id)
-				.bind(key)
-				.execute(&mut *conn)
-				.await?;
+			crate::store::chapter::set_scanlators_by_key(&mut *conn, manga_id, key, &serde_json::to_string(&meta.authors)?).await?;
 		}
 	}
 	Ok(())
@@ -926,12 +916,7 @@ pub async fn store_epub_divina(
 		} else {
 			None
 		};
-		sqlx::query("UPDATE chapter SET epub_divina_compatible = ? WHERE manga_id = ? AND key = ?")
-			.bind(compatible)
-			.bind(manga_id)
-			.bind(&chapter.key)
-			.execute(&mut *conn)
-			.await?;
+		crate::store::chapter::set_epub_compatible_by_key(&mut *conn, manga_id, &chapter.key, compatible).await?;
 	}
 	Ok(())
 }
