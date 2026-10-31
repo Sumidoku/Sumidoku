@@ -8,6 +8,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
+use std::time::Duration;
 use tokio::sync::{Mutex, Notify, broadcast};
 
 /// kmrs priorities: a manual trigger preempts scheduled work, and work derived from a scan trails both
@@ -27,6 +28,8 @@ const FINISHED_KEEP: i64 = 100;
 /// Page size for keyset candidate selection: the cursor advances past failed rows too,
 /// so they cannot hide runnable work behind them
 const PICK_PAGE: i64 = 64;
+/// How long a failed dispatch waits before trying again
+const DISPATCH_RETRY: Duration = Duration::from_secs(1);
 
 const COLUMNS: &str = "id, kind, source_id, payload, priority, status, created_at, started_at, finished_at, error, result";
 
@@ -305,6 +308,12 @@ impl TaskManager {
 				Ok(None) => break,
 				Err(e) => {
 					tracing::warn!("task dispatch failed: {}", e.message());
+					// Nothing else may wake the dispatcher, and pending work would sit until something did
+					let manager = self.clone();
+					tokio::spawn(async move {
+						tokio::time::sleep(DISPATCH_RETRY).await;
+						manager.wake.notify_one();
+					});
 					break;
 				}
 			}
@@ -870,6 +879,28 @@ mod tests {
 		assert_eq!(blocker.status, STATUS_RUNNING, "the blocker outlives the runnable task");
 		release_blocker.notify_one();
 		wait_status(&manager, "t:blocker", STATUS_DONE).await;
+	}
+
+	#[tokio::test]
+	async fn a_failed_dispatch_retries_without_a_new_wake() {
+		let (_state, manager, _tmp) = test_state(1).await;
+		manager.register("retried", ok_handler()).await;
+		manager
+			.enqueue("t:retried", "retried", None, serde_json::json!({}), PRIORITY_MANUAL)
+			.await
+			.expect("enqueue");
+		sqlx::query("ALTER TABLE task RENAME TO task_hidden")
+			.execute(&manager.pool)
+			.await
+			.expect("hide task table");
+		tokio::spawn(manager.clone().run());
+		// The first dispatch has failed once the retry window is open; nothing enqueues after this
+		tokio::time::sleep(DISPATCH_RETRY / 2).await;
+		sqlx::query("ALTER TABLE task_hidden RENAME TO task")
+			.execute(&manager.pool)
+			.await
+			.expect("restore task table");
+		wait_status(&manager, "t:retried", STATUS_DONE).await;
 	}
 
 	#[tokio::test]
