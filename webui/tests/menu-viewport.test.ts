@@ -45,7 +45,11 @@ test('every anchored menu goes through the viewport clamp', () => {
 });
 
 test('menu offsets are measured without a classic scrollbar', () => {
-	for (const path of ['../src/components/MenuButton.tsx', '../src/pages/manga/MoreMenu.tsx']) {
+	for (const path of [
+		'../src/components/MenuButton.tsx',
+		'../src/pages/manga/MoreMenu.tsx',
+		'../src/components/useAnchoredMenu.ts'
+	]) {
 		const source = readFileSync(new URL(path, import.meta.url), 'utf8');
 		assert.doesNotMatch(source, /window\.innerWidth(?! includes)/, path);
 	}
