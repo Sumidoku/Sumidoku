@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { MoreVertical } from 'lucide-react';
-import { IconButton } from '../../components';
+import { IconButton, menuViewportWidth, useMenuInViewport } from '../../components';
 
 // The popover goes through a portal: the hero container is overflow:hidden, so absolute positioning would be clipped
 export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
@@ -16,10 +16,12 @@ export function MoreMenu({ children }: { children: (close: () => void) => ReactN
 	function toggle() {
 		if (!open && btnRef.current) {
 			const r = btnRef.current.getBoundingClientRect();
-			setPos({ top: r.bottom + 6, right: window.innerWidth - r.right });
+			setPos({ top: r.bottom + 6, right: menuViewportWidth() - r.right });
 		}
 		setOpen((v) => !v);
 	}
+
+	useMenuInViewport(open, popRef, setPos);
 
 	useEffect(() => {
 		if (!open) return;

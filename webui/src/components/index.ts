@@ -23,7 +23,7 @@ export { Input } from './Input';
 export type { InputProps } from './Input';
 export { Modal } from './Modal';
 export type { ModalProps } from './Modal';
-export { MenuButton } from './MenuButton';
+export { MenuButton, menuViewportWidth, useMenuInViewport } from './MenuButton';
 export { PageHeader } from './PageHeader';
 export { ProgressBar } from './ProgressBar';
 export type { ProgressBarProps } from './ProgressBar';
