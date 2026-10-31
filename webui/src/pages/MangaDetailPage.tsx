@@ -840,8 +840,8 @@ export default function MangaDetailPage() {
 									value={prefs.sort}
 									title={t('mangaDetail.sortBy')}
 									aria-label={t('mangaDetail.sortBy')}
-									onChange={(e) => {
-										const v = e.currentTarget.value as SortKey;
+									onChange={(value) => {
+										const v = value as SortKey;
 										setPrefs((p) => ({ ...p, sort: v }));
 									}}
 								>
@@ -888,9 +888,8 @@ export default function MangaDetailPage() {
 								value={prefs.language ?? ''}
 								title={t('mangaDetail.language')}
 								aria-label={t('mangaDetail.language')}
-								onChange={(e) => {
-									const v = e.currentTarget.value;
-									setPrefs((p) => ({ ...p, language: v || null }));
+								onChange={(value) => {
+									setPrefs((p) => ({ ...p, language: value || null }));
 								}}
 							>
 								<option value="">{t('mangaDetail.allLanguages')}</option>
@@ -906,9 +905,8 @@ export default function MangaDetailPage() {
 								value={prefs.scanlators[0] ?? ''}
 								title={t('mangaDetail.scanlator')}
 								aria-label={t('mangaDetail.scanlator')}
-								onChange={(e) => {
-									const v = e.currentTarget.value;
-									setPrefs((p) => ({ ...p, scanlators: v ? [v] : [] }));
+								onChange={(value) => {
+									setPrefs((p) => ({ ...p, scanlators: value ? [value] : [] }));
 								}}
 							>
 								<option value="">{t('mangaDetail.allScanlators')}</option>
@@ -1091,8 +1089,8 @@ export default function MangaDetailPage() {
 					<Select
 						value={downloadRule}
 						aria-label={t('mangaDetail.downloadRule')}
-						onChange={(e) => {
-							setDownloadRule(e.currentTarget.value as DownloadRule);
+						onChange={(value) => {
+							setDownloadRule(value as DownloadRule);
 							setDownloadRuleQueued(null);
 						}}
 					>

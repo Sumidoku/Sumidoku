@@ -34,7 +34,10 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 	const el = target as Partial<HTMLElement> | null;
 	if (!el) return false;
 	return (
-		!!el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
+		!!el.isContentEditable ||
+		el.tagName === 'INPUT' ||
+		el.tagName === 'TEXTAREA' ||
+		el.getAttribute?.('role') === 'combobox'
 	);
 }
 

@@ -75,6 +75,10 @@ test('modifier chords and editable targets never reach the reader', async () => 
 		const slider = { tagName: 'INPUT' } as unknown as EventTarget;
 		assert.equal(readerKeyAction(key('ArrowLeft', { target: slider }), 'paged'), null);
 		assert.equal(readerKeyAction(key('ArrowRight', { target: slider }), 'paged'), null);
+		// A Select's trigger is a button, but it owns the same keys a native picker did
+		const select = { tagName: 'BUTTON', getAttribute: () => 'combobox' } as unknown as EventTarget;
+		assert.equal(readerKeyAction(key('ArrowLeft', { target: select }), 'paged'), null);
+		assert.equal(readerKeyAction(key(' ', { target: select }), 'paged'), null);
 		// Shift+Space stays a reader action: shift is not a browser chord
 		assert.equal(readerKeyAction(key(' ', { shiftKey: true }), 'paged'), 'pageBack');
 	});
