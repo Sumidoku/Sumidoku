@@ -1,0 +1,2219 @@
+[
+  {
+    "events": [],
+    "step": "source inserted"
+  },
+  {
+    "events": [],
+    "step": "manga inserted, not in library"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "",
+          "userId": 1,
+          "viewerFlags": 0
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga shelved"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga refreshed with a change"
+  },
+  {
+    "events": [],
+    "step": "manga refreshed unchanged"
+  },
+  {
+    "events": [],
+    "step": "manga fetch time stamped"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga cover changed"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      }
+    ],
+    "step": "chapter inserted"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 2,
+          "key": "c2",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 1.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 1,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 3,
+          "chapterKey": "c3",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "3",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 3,
+          "key": "c3",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 2.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 2,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      }
+    ],
+    "step": "two chapters inserted"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 3,
+          "chapterKey": "c3b",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "3",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 3,
+          "key": "c3b",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 2.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 2,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      }
+    ],
+    "step": "chapter rekeyed"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 9,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      }
+    ],
+    "step": "chapter page count changed"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 9,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 1,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 1,
+          "lastReadAt": 2000,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "progress set"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 9,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 1,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 5,
+          "lastReadAt": 2000,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "progress merged forward"
+  },
+  {
+    "events": [],
+    "step": "progress merged backward"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 2,
+          "key": "c2",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 1.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 1,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 2,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 3,
+          "lastReadAt": 2000,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "second chapter progress"
+  },
+  {
+    "events": [],
+    "step": "chapter marked downloaded"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 9,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 1,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 0,
+          "lastReadAt": null,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 2,
+          "key": "c2",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 1.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 1,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 2,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 0,
+          "lastReadAt": null,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "bulk progress reset"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 1,
+          "userId": 1
+        },
+        "key": "1",
+        "kind": "category",
+        "snapshot": {
+          "id": 1,
+          "includeInDownload": 0,
+          "isDefault": 0,
+          "lastModifiedAt": "<time>",
+          "name": "First",
+          "sortOrder": 0,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "category created"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 2,
+          "userId": 1
+        },
+        "key": "2",
+        "kind": "category",
+        "snapshot": {
+          "id": 2,
+          "includeInDownload": 0,
+          "isDefault": 0,
+          "lastModifiedAt": "<time>",
+          "name": "Second",
+          "sortOrder": 1,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "second category created"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 1,
+          "userId": 1
+        },
+        "key": "1",
+        "kind": "category",
+        "snapshot": {
+          "id": 1,
+          "includeInDownload": 0,
+          "isDefault": 0,
+          "lastModifiedAt": "<time>",
+          "name": "Renamed",
+          "sortOrder": 0,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "category renamed"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 2,
+          "userId": 1
+        },
+        "key": "2",
+        "kind": "category",
+        "snapshot": {
+          "id": 2,
+          "includeInDownload": 0,
+          "isDefault": 0,
+          "lastModifiedAt": "<time>",
+          "name": "Second",
+          "sortOrder": 5,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "category reordered"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 1,
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 1,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 2,
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 2,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "membership set to two"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "categoryId": 1,
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 1,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "membership reduced to one"
+  },
+  {
+    "events": [
+      {
+        "deleted": true,
+        "identity": {
+          "categoryId": 2,
+          "userId": 1
+        },
+        "key": "2",
+        "kind": "category",
+        "snapshot": {
+          "id": 2,
+          "includeInDownload": 0,
+          "isDefault": 0,
+          "lastModifiedAt": "<time>",
+          "name": "Second",
+          "sortOrder": 5,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "categoryId": 2,
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 2,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "category with a member deleted"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 1,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "",
+          "userId": 1,
+          "viewerFlags": 0
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga incognito set"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "key",
+          "userId": 1,
+          "viewerFlags": 2
+        },
+        "userId": 1
+      }
+    ],
+    "step": "library row replaced"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 0,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "key",
+          "userId": 1,
+          "viewerFlags": 2
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga unshelved"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "key",
+          "userId": 1,
+          "viewerFlags": 2
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga reshelved"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 2,
+          "key": "c2",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 1.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 1,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 2,
+          "chapterKey": "c2",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 2,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 0,
+          "lastReadAt": null,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "chapter with progress deleted"
+  },
+  {
+    "events": [
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 2,
+          "initialized": 1,
+          "key": "m2",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 2,
+          "sortKey": "",
+          "userId": 1,
+          "viewerFlags": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 2,
+          "initialized": 1,
+          "key": "m2",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 4,
+          "chapterKey": "c1",
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "4",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 4,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 2,
+          "number": 0.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 2,
+          "initialized": 1,
+          "key": "m2",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 4,
+          "chapterKey": "c1",
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "4",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 4,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 2,
+          "number": 0.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "chapterId": 4,
+          "chapterKey": "c1",
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "4:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 4,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 1,
+          "lastReadAt": 2000,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 2,
+          "initialized": 1,
+          "key": "m2",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": false,
+        "identity": {
+          "categoryId": 1,
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:2:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 1,
+          "lastModifiedAt": "<time>",
+          "mangaId": 2,
+          "userId": 1
+        },
+        "userId": 1
+      }
+    ],
+    "step": "second manga set up"
+  },
+  {
+    "events": [
+      {
+        "deleted": true,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "2",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": null,
+          "description": "Description",
+          "id": 2,
+          "initialized": 1,
+          "key": "m2",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Manga",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 4,
+          "chapterKey": "c1",
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "4",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 4,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 2,
+          "number": 0.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 4,
+          "chapterKey": "c1",
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "4:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 4,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 1,
+          "lastReadAt": 2000,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "categoryId": 1,
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:2:1",
+        "kind": "category_manga",
+        "snapshot": {
+          "categoryId": 1,
+          "lastModifiedAt": "<time>",
+          "mangaId": 2,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "mangaId": 2,
+          "mangaKey": "m2",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "2:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 2,
+          "sortKey": "",
+          "userId": 1,
+          "viewerFlags": 0
+        },
+        "userId": 1
+      }
+    ],
+    "step": "manga cascade delete"
+  },
+  {
+    "events": [
+      {
+        "deleted": true,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "manga",
+        "snapshot": {
+          "artists": [],
+          "authors": [
+            "Author"
+          ],
+          "contentRating": 0,
+          "coverUrl": "https://example.invalid/c",
+          "description": "Description",
+          "id": 1,
+          "initialized": 1,
+          "key": "m1",
+          "lastModifiedAt": "<time>",
+          "sourceId": 2,
+          "status": 1,
+          "tags": [
+            "Tag"
+          ],
+          "title": "Renamed",
+          "updateStrategy": 0,
+          "url": "https://example.invalid/m",
+          "viewer": 0
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "1",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 1,
+          "key": "c1",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 0.0,
+          "pageCount": 9,
+          "scanlators": [],
+          "sourceOrder": 0,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 3,
+          "chapterKey": "c3b",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract"
+        },
+        "key": "3",
+        "kind": "chapter",
+        "snapshot": {
+          "dateUploaded": 1000,
+          "id": 3,
+          "key": "c3b",
+          "language": "en",
+          "lastModifiedAt": "<time>",
+          "locked": 0,
+          "mangaId": 1,
+          "number": 2.0,
+          "pageCount": 0,
+          "scanlators": [],
+          "sourceOrder": 2,
+          "thumbnail": null,
+          "title": "Chapter",
+          "url": null,
+          "volume": null
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "chapterId": 1,
+          "chapterKey": "c1",
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "chapter_user",
+        "snapshot": {
+          "chapterId": 1,
+          "isBookmarked": 0,
+          "isRead": 0,
+          "lastModifiedAt": "<time>",
+          "lastPageRead": 0,
+          "lastReadAt": null,
+          "userId": 1
+        },
+        "userId": 1
+      },
+      {
+        "deleted": true,
+        "identity": {
+          "mangaId": 1,
+          "mangaKey": "m1",
+          "sourceId": 2,
+          "sourceKey": "test.contract",
+          "userId": 1
+        },
+        "key": "1:1",
+        "kind": "manga_user",
+        "snapshot": {
+          "inLibrary": 1,
+          "inLibraryAt": 1000,
+          "incognito": 0,
+          "lastModifiedAt": "<time>",
+          "mangaId": 1,
+          "sortKey": "key",
+          "userId": 1,
+          "viewerFlags": 2
+        },
+        "userId": 1
+      }
+    ],
+    "step": "source cascade delete"
+  }
+]
