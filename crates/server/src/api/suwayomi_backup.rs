@@ -575,15 +575,7 @@ async fn import_group(
 				}
 				let category_id = ensure_category(tx, user_id, name).await?;
 				import.seen_categories.insert(name.to_string());
-				sqlx::query(
-					"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-					 VALUES (?, ?, ?)",
-				)
-				.bind(category_id)
-				.bind(manga_id)
-				.bind(user_id)
-				.execute(&mut **tx)
-				.await?;
+				crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
 			}
 			import.counts.library += 1;
 		}

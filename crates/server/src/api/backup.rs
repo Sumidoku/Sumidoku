@@ -264,13 +264,13 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		})
 		.collect();
 
-	let excluded_update_categories: HashSet<i64> = crate::update::LibraryUpdateSettings::load(pool, user_id, 0)
+	let excluded_update_categories: HashSet<i64> = crate::update::LibraryUpdateSettings::load(pool, 0)
 		.await?
 		.excluded_update_categories
 		.into_iter()
 		.collect();
 	let excluded_download_categories: HashSet<i64> = crate::settings::EXCLUDED_DOWNLOAD_CATEGORIES
-		.get(pool, user_id)
+		.get(pool)
 		.await?
 		.unwrap_or_default()
 		.into_iter()
@@ -355,18 +355,8 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 
 	let setting_rows = crate::settings::all(pool).await?;
 	let mut settings = BTreeMap::new();
-	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
-		// Legacy owner namespace keys are restored to bare keys, matching the settings API contract
-		let key = if key.starts_with("user.") {
-			match key.strip_prefix(&own_prefix) {
-				Some(scoped) if crate::api::USER_SCOPED_SETTING_KEYS.contains(&scoped) => scoped.to_string(),
-				_ => continue,
-			}
-		} else {
-			key
-		};
-		if omitted_from_backup(&key) {
+		if crate::settings::omitted_from_backup(&key) {
 			continue;
 		}
 		// A corrupt row must not fail the whole backup; export it as the raw string
@@ -548,7 +538,7 @@ pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, b
 			restore_progress(&mut tx, user_id, &doc, &mut restored, &mut warnings).await?;
 		}
 		if sections.contains(&Section::Settings) {
-			restore_settings(&mut tx, user_id, &doc, &mut restored).await?;
+			restore_settings(&mut tx, &doc, &mut restored).await?;
 		}
 		if sections.contains(&Section::SourceSettings) {
 			restore_source_settings(&mut tx, &doc, &mut restored, &mut warnings, &mut touched_sources)
@@ -680,20 +670,19 @@ fn check_include_in(category: &str, field: &str, value: i64) -> ApiResult<i64> {
 
 async fn merge_excluded_categories(
 	tx: &mut Transaction<'_, Sqlite>,
-	user_id: i64,
-	setting: crate::settings::UserKey<Vec<i64>>,
+	setting: crate::settings::Key<Vec<i64>>,
 	migrated: Vec<i64>,
 ) -> ApiResult<()> {
 	if migrated.is_empty() {
 		return Ok(());
 	}
-	let mut existing = setting.get(&mut **tx, user_id).await?.unwrap_or_default();
+	let mut existing = setting.get(&mut **tx).await?.unwrap_or_default();
 	for id in migrated {
 		if !existing.contains(&id) {
 			existing.push(id);
 		}
 	}
-	setting.set(&mut **tx, user_id, &existing).await
+	setting.set(&mut **tx, &existing).await
 }
 
 async fn restore_categories(
@@ -719,25 +708,11 @@ async fn restore_categories(
 				.await?;
 		let category_id = match existing {
 			Some((id,)) => {
-				sqlx::query("UPDATE category SET sort_order = ?, is_default = ? WHERE id = ?")
-					.bind(category.sort_order)
-					.bind(category.is_default)
-					.bind(id)
-					.execute(&mut **tx)
-					.await?;
+				crate::store::category::set_placement(&mut **tx, id, category.sort_order, category.is_default).await?;
 				id
 			}
 			None => {
-				sqlx::query_scalar(
-					"INSERT INTO category (user_id, name, sort_order, is_default)
-					 VALUES (?, ?, ?, ?) RETURNING id",
-				)
-				.bind(user_id)
-				.bind(&category.name)
-				.bind(category.sort_order)
-				.bind(category.is_default)
-				.fetch_one(&mut **tx)
-				.await?
+				crate::store::category::create(&mut **tx, user_id, &category.name, category.sort_order, category.is_default).await?
 			}
 		};
 		if category.include_in_update == 2 {
@@ -767,28 +742,18 @@ async fn restore_categories(
 				));
 				continue;
 			};
-			sqlx::query(
-				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, ?)",
-			)
-			.bind(category_id)
-			.bind(manga_id)
-			.bind(user_id)
-			.execute(&mut **tx)
-			.await?;
+			crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
 		}
 		restored.categories += 1;
 	}
 	merge_excluded_categories(
 		tx,
-		user_id,
 		crate::settings::EXCLUDED_UPDATE_CATEGORIES,
 		migrated_update,
 	)
 	.await?;
 	merge_excluded_categories(
 		tx,
-		user_id,
 		crate::settings::EXCLUDED_DOWNLOAD_CATEGORIES,
 		migrated_download,
 	)
@@ -876,30 +841,18 @@ async fn restore_progress(
 	Ok(())
 }
 
-/// Raw exclusion ids are instance-local, so categories carry them by name instead
-fn omitted_from_backup(key: &str) -> bool {
-	key == crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES
-		|| key == crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
-		|| crate::server_state::KEYS.contains(&key)
-}
-
 async fn restore_settings(
 	tx: &mut Transaction<'_, Sqlite>,
-	user_id: i64,
 	doc: &BackupDoc,
 	restored: &mut Restored,
 ) -> ApiResult<()> {
 	for (key, value) in &doc.settings {
-		// User-scoped keys from the backup are written back into the owner's namespace; literal user.* keys are rejected (same rule as /settings PUT)
+		// Literal user.* keys are rejected (same rule as /settings PUT)
 		// Instance-owned values must not overwrite the target; category restoration handles raw exclusion ids separately.
-		if key.starts_with("user.") || omitted_from_backup(key) {
+		if key.starts_with("user.") || crate::settings::omitted_from_backup(key) {
 			continue;
 		}
-		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
-			true => crate::settings::user_key(user_id, key),
-			false => key.clone(),
-		};
-		crate::settings::write_value(&mut **tx, &stored_key, value).await?;
+		crate::settings::write_value(&mut **tx, key, value).await?;
 		restored.settings += 1;
 	}
 	Ok(())

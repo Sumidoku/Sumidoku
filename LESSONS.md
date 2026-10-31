@@ -15,6 +15,24 @@ because a source-text test passes either way.
   `.manga-hero__body`, so a third row at 209 gave a 203px clamp and showed five
   rows; its source assertions were green. Subtracting the first row's top gave
   78px and exactly two rows on desktop and phone.
+**A back button wired to a fixed destination breaks every later deep-link
+entry into that page.** "Back = go to the parent list" is only true while the
+list is the page's sole entry point; once other pages start pushing onto it
+(author/tag searches, deep links), the hard-coded destination silently
+discards the caller. Wire back buttons to pop history
+(`navigate(-1)` gated on `window.history.state?.idx > 0`) and keep the fixed
+path only as the direct-entry fallback, via the shared
+`webui/src/lib/navigation.ts:hasHistoryBack`.
+- Evidence: 2026-10-31, the source browse page's back was
+  `navigate('/browse')` since the i18n commit, correct when the source list
+  was the only entry. The manga detail's author/tag search later reused the
+  browse page's `?filters=` deep link, and pressing back after such a search
+  left the source instead of returning to the detail page. The fix shares the
+  detail/reader history-pop convention; `navigation-back.test.ts` pins it.
+  The sweep also caught the reverse hazard: the source home's back pushed its
+  parent `/browse/:sourceId`, which against a pop-back browse page ping-pongs
+  between the two forever — a back button must never push, only pop or fall
+  back.
 
 **Consecutive schema changes in a test belong on one connection.** A pooled
 query can land on a connection whose cached schema predates the previous
@@ -363,6 +381,10 @@ to land. Bind the field (`tmp: _tmp`) so the directory outlives the test.
   three different spots across runs (logout, update, ledger, each a 500) as
   each fresh connection hit the unlinked file; binding `tmp` made all four
   pass deterministically.
+- Seen again: 2026-10-31, #551's CI failed `search_query_matches_author_and_tag_substring`
+  with a 500 that 96 parallel local runs of the same test did not reproduce;
+  eight tests in `local_search.rs` and `api.rs` destructured `TestApp { app, .. }`.
+  Binding `tmp: _tmp` covers them all.
 
 **A version bump is incomplete without the lockfile.** `Cargo.lock` records
 every workspace member's version, so bumping only `Cargo.toml` leaves the

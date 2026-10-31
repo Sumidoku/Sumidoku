@@ -31,6 +31,7 @@ import type { MangaDownloadActivity } from '../lib/downloadEvents';
 import { selectDownloadChapterIds } from '../lib/downloadRules';
 import type { DownloadRule } from '../lib/downloadRules';
 import { chapterLabel, statusText } from '../lib/format';
+import { hasHistoryBack } from '../lib/navigation';
 import {
 	applyPrefs,
 	loadPrefs,
@@ -596,9 +597,8 @@ export default function MangaDetailPage() {
 	}
 
 	function goBack() {
-		// history.state.idx counts SPA navigations: 0 means this page was entered directly (fresh load/deep link),
-		// where -1 would leave the app — fall back to the library
-		if (window.history.state?.idx > 0) navigate(-1);
+		// Direct entry (fresh load/deep link) has no in-app back target — fall back to the library
+		if (hasHistoryBack(window.history.state?.idx)) navigate(-1);
 		else navigate('/library');
 	}
 

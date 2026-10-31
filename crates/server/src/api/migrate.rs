@@ -290,12 +290,7 @@ async fn run_entry(
 			.fetch_all(&mut *tx)
 			.await?;
 	for category_id in &category_ids {
-		sqlx::query("INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, ?)")
-			.bind(category_id)
-			.bind(to_manga_id)
-			.bind(user_id)
-			.execute(&mut *tx)
-			.await?;
+		crate::store::category::add_manga(&mut *tx, *category_id, to_manga_id, user_id).await?;
 	}
 
 	let origin_progress: Vec<OriginProgress> = sqlx::query_as(
@@ -356,11 +351,7 @@ async fn run_entry(
 			.bind(user_id)
 			.execute(&mut *tx)
 			.await?;
-			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
-				.bind(origin.id)
-				.bind(user_id)
-				.execute(&mut *tx)
-				.await?;
+			crate::store::category::clear_manga(&mut *tx, origin.id, user_id).await?;
 			// chapter_user also carries the download flag, so clearing progress only resets the progress fields without deleting the row
 			if mode == MigrateMode::Migrate {
 				sqlx::query(

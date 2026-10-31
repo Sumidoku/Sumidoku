@@ -710,7 +710,7 @@ async fn run_scheduled_if_due(state: &Arc<AppState>) -> ApiResult<bool> {
 	// Stamp before enqueueing: a crash between them would otherwise double-run; at worst the stamp stands
 	// and the next tick is one interval later
 	server_state::set_time(&state.pool, LOCAL_LAST_SCAN_AT, now).await?;
-	let settings = crate::update::LibraryUpdateSettings::load(&state.pool, crate::USER_ID, 0).await?;
+	let settings = crate::update::LibraryUpdateSettings::load(&state.pool, 0).await?;
 	enqueue_scan(state, None, PRIORITY_SCHEDULED, settings.refresh_metadata).await?;
 	tracing::info!("scheduled local scan enqueued");
 	Ok(true)
@@ -719,7 +719,7 @@ async fn run_scheduled_if_due(state: &Arc<AppState>) -> ApiResult<bool> {
 /// Boot hook for local_scan_on_startup
 pub async fn enqueue_startup_scan(state: &AppState) -> ApiResult<()> {
 	if state.config.local_scan_on_startup {
-		let settings = crate::update::LibraryUpdateSettings::load(&state.pool, crate::USER_ID, 0).await?;
+		let settings = crate::update::LibraryUpdateSettings::load(&state.pool, 0).await?;
 		enqueue_scan(state, None, PRIORITY_SCHEDULED, settings.refresh_metadata).await?;
 	}
 	Ok(())

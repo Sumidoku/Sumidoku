@@ -649,11 +649,10 @@ pub(crate) async fn set_final_version(
 			.bind(local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid chapter key"))?)
 			.execute(&mut **tx)
 			.await?,
-		"category" => sqlx::query("UPDATE category SET last_modified_at = ? WHERE id = ?")
-			.bind(modified_at)
-			.bind(local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid category key"))?)
-			.execute(&mut **tx)
-			.await?,
+		"category" => {
+			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid category key"))?;
+			crate::store::category::set_modified_at(&mut **tx, id, modified_at).await?
+		}
 		"manga_user" => {
 			let (manga_id, user_id) = relation_key(local_key, 2)?;
 			sqlx::query("UPDATE manga_user SET last_modified_at = ? WHERE manga_id = ? AND user_id = ?")
@@ -674,16 +673,7 @@ pub(crate) async fn set_final_version(
 		}
 		"category_manga" => {
 			let (category_id, remainder) = relation_key(local_key, 3)?;
-			sqlx::query(
-				"UPDATE category_manga SET last_modified_at = ?
-				 WHERE category_id = ? AND manga_id = ? AND user_id = ?",
-			)
-			.bind(modified_at)
-			.bind(category_id[0])
-			.bind(category_id[1])
-			.bind(remainder[0])
-			.execute(&mut **tx)
-			.await?
+			crate::store::category::set_manga_modified_at(&mut **tx, category_id[0], category_id[1], remainder[0], modified_at).await?
 		}
 		_ => return Err(ApiError::bad_request("unsupported entity kind")),
 	};
@@ -883,24 +873,12 @@ async fn ensure_category(
 		.bind(id)
 		.fetch_one(&mut **tx)
 		.await?;
-	let id: i64 = if occupied {
-		sqlx::query_scalar::<_, i64>("INSERT INTO category (user_id, name, last_modified_at) VALUES (?, '', 0) RETURNING id")
-			.bind(user_id)
-			.fetch_one(&mut **tx)
-			.await?
+	let id = if occupied {
+		crate::store::category::insert_stub(&mut **tx, user_id).await?
 	} else {
-		sqlx::query_scalar::<_, i64>(
-			"INSERT INTO category (id, user_id, name, last_modified_at) VALUES (?, ?, '', 0) RETURNING id",
-		)
-		.bind(id)
-		.bind(user_id)
-		.fetch_one(&mut **tx)
-		.await?
+		crate::store::category::insert_stub_with_id(&mut **tx, id, user_id).await?
 	};
-	sqlx::query("UPDATE category SET last_modified_at = 0 WHERE id = ?")
-		.bind(id)
-		.execute(&mut **tx)
-		.await?;
+	crate::store::category::set_modified_at(&mut **tx, id, 0).await?;
 	stubs.insert(("category".into(), id.to_string()));
 	Ok(id)
 }
@@ -1396,32 +1374,15 @@ async fn merge_category_stub(
 			continue;
 		}
 		if stub_state.deleted {
-			sqlx::query("DELETE FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = ?")
-				.bind(target_id)
-				.bind(ids[1])
-				.bind(ids[2])
-				.execute(&mut **tx)
-				.await?;
+			crate::store::category::remove_manga(&mut **tx, target_id, ids[1], ids[2]).await?;
 		} else {
-			sqlx::query(
-				"INSERT INTO category_manga (category_id, manga_id, user_id, last_modified_at) VALUES (?, ?, ?, ?)
-				 ON CONFLICT (category_id, manga_id, user_id) DO UPDATE SET last_modified_at = excluded.last_modified_at",
-			)
-			.bind(target_id)
-			.bind(ids[1])
-			.bind(ids[2])
-			.bind(stub_state.version.modified_at)
-			.execute(&mut **tx)
-			.await?;
+			crate::store::category::upsert_manga_at(&mut **tx, target_id, ids[1], ids[2], stub_state.version.modified_at).await?;
 			if let Some(modified_at) = stub_derived_version {
 				derived_events.push(derived_membership_event(tx, target_id, ids[1], ids[2], modified_at).await?);
 			}
 		}
 	}
-	sqlx::query("DELETE FROM category_manga WHERE category_id = ?")
-		.bind(stub_id)
-		.execute(&mut **tx)
-		.await?;
+	crate::store::category::clear_category(&mut **tx, stub_id).await?;
 	// Rekeying keeps the original events; trigger-generated membership copies would replace their provenance.
 	sqlx::query("DELETE FROM sync_change WHERE sequence > ? AND entity_kind = 'category_manga'")
 		.bind(start_sequence)
@@ -1448,15 +1409,8 @@ async fn merge_category_stub(
 	.bind(format!("{stub_id}:%"))
 	.execute(&mut **tx)
 	.await?;
-	let user_id: i64 = sqlx::query_scalar("SELECT user_id FROM category WHERE id = ?")
-		.bind(stub_id)
-		.fetch_one(&mut **tx)
-		.await?;
-	crate::settings::remove_category_exclusions(tx, user_id, stub_id).await?;
-	sqlx::query("DELETE FROM category WHERE id = ?")
-		.bind(stub_id)
-		.execute(&mut **tx)
-		.await?;
+	crate::settings::remove_category_exclusions(tx, stub_id).await?;
+	crate::store::category::delete(&mut **tx, stub_id).await?;
 	Ok(true)
 }
 
@@ -1509,11 +1463,8 @@ async fn apply_category(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		crate::settings::remove_category_exclusions(tx, user_id, id).await?;
-		sqlx::query("DELETE FROM category WHERE id = ?")
-			.bind(id)
-			.execute(&mut **tx)
-			.await?;
+		crate::settings::remove_category_exclusions(tx, id).await?;
+		crate::store::category::delete(&mut **tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1533,13 +1484,14 @@ async fn apply_category(
 	}
 	let mut stubs = HashSet::new();
 	let id = ensure_category(tx, change, user_id, id, &mut stubs).await?;
-	sqlx::query("UPDATE category SET name = ?, sort_order = ?, is_default = ? WHERE id = ?")
-		.bind(string(&snapshot, "name")?)
-		.bind(integer(&snapshot, "sortOrder")?)
-		.bind(flag(&snapshot, "isDefault")?)
-		.bind(id)
-		.execute(&mut **tx)
-		.await?;
+	crate::store::category::set_fields(
+		&mut **tx,
+		id,
+		&string(&snapshot, "name")?,
+		integer(&snapshot, "sortOrder")?,
+		flag(&snapshot, "isDefault")?,
+	)
+	.await?;
 	finish(
 		tx,
 		start_sequence,
@@ -1748,12 +1700,7 @@ async fn apply_category_manga(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		sqlx::query("DELETE FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = ?")
-			.bind(ids[0])
-			.bind(ids[1])
-			.bind(ids[2])
-			.execute(&mut **tx)
-			.await?;
+		crate::store::category::remove_manga(&mut **tx, ids[0], ids[1], ids[2]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1777,15 +1724,7 @@ async fn apply_category_manga(
 		return Ok(Disposition::Skipped);
 	};
 	let local_key = format!("{category_id}:{manga_id}:{user_id}");
-	sqlx::query(
-		"INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, ?)
-		 ON CONFLICT (category_id, manga_id, user_id) DO NOTHING",
-	)
-	.bind(category_id)
-	.bind(manga_id)
-	.bind(user_id)
-	.execute(&mut **tx)
-	.await?;
+	crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
 	finish(
 		tx,
 		start_sequence,

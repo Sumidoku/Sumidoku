@@ -30,16 +30,7 @@ pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, nam
 			.bind(user_id)
 			.fetch_one(&mut **tx)
 			.await?;
-	let result = sqlx::query(
-		"INSERT INTO category (user_id, name, sort_order, is_default)
-		 VALUES (?, ?, ?, 0)",
-	)
-	.bind(user_id)
-	.bind(name)
-	.bind(next)
-	.execute(&mut **tx)
-	.await?;
-	Ok(result.last_insert_rowid())
+	crate::store::category::create(&mut **tx, user_id, name, next, false).await
 }
 
 pub async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> ApiResult<Option<i64>> {

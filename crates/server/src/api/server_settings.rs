@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub(crate) const ROOT_GROUPS: [&str; 8] = [
 	"incognito",
@@ -180,45 +180,10 @@ impl ServerSettings {
 		// Anything not modeled above is preserved round-trip (excluding injected/read-only/internal keys).
 		// The legacy global local.* rows keep working as the default local instance's fallback layer
 		// (state.local_dirs), so they stay stored but are no longer exposed in the structured view.
-		let known: HashSet<&str> = [
-			"cache.chapterLruEnabled",
-			"cache.chapterMaxBytes",
-			"incognito.enabled",
-			"library.default_category",
-			"library.show_uncategorized",
-			"library.excluded_update_categories",
-			"library.excluded_download_categories",
-			"library.skip_titles",
-			"library.refresh_metadata",
-			"library.update_interval_hours",
-			"auto_download_new_chapters",
-			"auto_download_limit",
-			"download_format",
-			"download_concurrency",
-			"delete_after_manual_read",
-			"delete_after_read",
-			"allow_delete_bookmarked",
-			"downloads.auto_skip_manga_with_unread",
-			"downloads.auto_ignore_reuploads",
-			"downloads.download_ahead",
-			"downloads.download_ahead_count",
-			"local.dirs",
-			"local.oneshots_dir",
-			"download.move_path",
-			"backup.enabled",
-			"backup.interval_hours",
-			"backup.retention_count",
-			"backup.last_run",
-			"backup.dir",
-			"browse.pinned_sources",
-		]
-		.iter()
-		.copied()
-		.collect();
 		let extra = map
 			.iter()
 			.filter(|(k, _)| {
-				!known.contains(k.as_str()) && !ROOT_GROUPS.contains(&k.as_str()) && !k.starts_with("user.")
+				!crate::settings::is_modeled(k) && !ROOT_GROUPS.contains(&k.as_str())
 			})
 			.map(|(k, v)| (k.clone(), v.clone()))
 			.collect();

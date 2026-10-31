@@ -2031,38 +2031,18 @@ pub(crate) async fn get_pages(
 /// the same statements while a select-all library stays far below the cap.
 pub(crate) const MANGA_ID_QUERY_CHUNK: usize = 500;
 
-/// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
-/// the library.* values reference the admin's category ids. New keys are added on both read and write sides together
-pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
-	"incognito.enabled",
-	"library.default_category",
-	"library.show_uncategorized",
-	"library.excluded_update_categories",
-	"library.excluded_download_categories",
-];
-
 async fn get_settings(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
 	let rows = crate::settings::all(&state.pool).await?;
 	let mut map = serde_json::Map::new();
-	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
-		if key.starts_with("user.") {
-			if let Some(scoped) = key.strip_prefix(&own_prefix)
-				&& USER_SCOPED_SETTING_KEYS.contains(&scoped)
-			{
-				map.insert(scoped.into(), serde_json::from_str(&raw)?);
-			}
-			continue;
-		}
 		map.insert(key, serde_json::from_str(&raw)?);
 	}
 	if let Some(at) = crate::server_state::time(&state.pool, crate::server_state::BACKUP_LAST_RUN).await? {
 		map.insert(crate::server_state::BACKUP_LAST_RUN.into(), json!(at));
 	}
-	let library = crate::update::LibraryUpdateSettings::load(&state.pool, user.id, state.config.update_interval_hours).await?;
+	let library = crate::update::LibraryUpdateSettings::load(&state.pool, state.config.update_interval_hours).await?;
 	map.insert(crate::update::LIBRARY_SKIP_TITLES.into(), json!(library.skip_titles));
 	map.insert(crate::update::LIBRARY_REFRESH_METADATA.into(), json!(library.refresh_metadata));
 	map.insert(
@@ -2073,7 +2053,7 @@ async fn get_settings(
 		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES.into(),
 		json!(library.excluded_update_categories),
 	);
-	let download = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+	let download = crate::download::DownloadSettings::load(&state.pool, &state.config).await?;
 	map.insert(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS.into(), json!(download.auto_download_new_chapters));
 	map.insert(crate::download::AUTO_DOWNLOAD_LIMIT.into(), json!(download.auto_download_limit));
 	map.insert(crate::download::DOWNLOAD_FORMAT.into(), json!(download.download_format));
@@ -2096,73 +2076,23 @@ async fn get_settings(
 /// flat-map variant of PUT /settings.
 pub(crate) async fn apply_settings(
 	state: &Arc<AppState>,
-	user: &crate::auth::AuthUser,
 	body: &HashMap<String, Value>,
 ) -> ApiResult<()> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (key, value) in body {
-		// Removed experimental switch: older clients/backups must not disable collection.
-		if key == "cache.chapterLruEnabled" { continue; }
-		if key == "cache.chapterMaxBytes"
-			&& !value
-				.as_u64()
-				.is_some_and(|n| n <= i64::MAX as u64)
-		{
-			return Err(ApiError::bad_request(
-				"cache.chapterMaxBytes must be between 0 and 9223372036854775807",
-			));
+		if crate::settings::ignored_on_write(key) {
+			continue;
 		}
-		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
+		let Some(definition) = crate::settings::definition(key) else {
+			crate::settings::write_value(&mut *tx, key, value).await?;
+			continue;
+		};
+		if value.is_null() && definition.clears_on_null() {
 			crate::settings::remove(&mut *tx, key).await?;
 			continue;
 		}
-		if let Some(result) = crate::update::validate_library_setting(key, value) {
-			result?;
-		}
-		if let Some(result) = crate::download::validate_download_setting(key, value) {
-			result?;
-		}
-		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
-		if key == "localDirs" || key == "localOneshotsDir" || crate::server_state::KEYS.contains(&key.as_str()) {
-			continue;
-		}
-		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
-		// rather than stored raw like the other keys; an empty array clears the override
-		if key == "local.dirs"
-			&& !value
-				.as_array()
-				.is_some_and(|dirs| { dirs.iter().all(|dir| dir.as_str().is_some_and(|s| !s.trim().is_empty()))
-			})
-		{
-			return Err(ApiError::bad_request("local.dirs must be an array of directory paths"));
-		}
-		// local.oneshots_dir marks oneshots directories (state.local_oneshots_dir); a string, empty clears the override
-		if key == "local.oneshots_dir" && !value.is_string() {
-			return Err(ApiError::bad_request("local.oneshots_dir must be a string"));
-		}
-		// library.default_category names the library page's initial chip: "all" / "uncategorized" / a category id
-		// in string form; a since-deleted id is pruned client-side, so any positive id stores
-		if key == "library.default_category"
-			&& !value.as_str().is_some_and(|v| {
-				v == "all" || v == "uncategorized" || v.parse::<i64>().is_ok_and(|id| id > 0)
-			})
-		{
-			return Err(ApiError::bad_request(
-				"library.default_category must be \"all\", \"uncategorized\" or a category id",
-			));
-		}
-		if key == "library.show_uncategorized" && !value.is_boolean() {
-			return Err(ApiError::bad_request("library.show_uncategorized must be a boolean"));
-		}
-		// Namespace keys are generated server-side from the request identity; direct writes to user.* are never accepted
-		if key.starts_with("user.") {
-			continue;
-		}
-		let stored_key = match USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
-			true => crate::settings::user_key(user.id, key),
-			false => key.clone(),
-		};
-		crate::settings::write_value(&mut *tx, &stored_key, value).await?;
+		definition.validate(value).map_err(ApiError::bad_request)?;
+		crate::settings::write_value(&mut *tx, key, value).await?;
 	}
 	tx.commit().await?;
 	if body.contains_key("cache.chapterMaxBytes") {
@@ -2173,7 +2103,6 @@ pub(crate) async fn apply_settings(
 
 async fn put_settings(
 	State(state): State<Arc<AppState>>,
-	Extension(user): Extension<crate::auth::AuthUser>,
 	Json(mut body): Json<Value>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
 	// The local directories moved to the per-instance source settings (GET/PUT /sources/{id}/settings):
@@ -2203,8 +2132,8 @@ async fn put_settings(
 			map
 		}
 	};
-	apply_settings(&state, &user, &flat).await?;
-	get_settings(State(state), Extension(user)).await
+	apply_settings(&state, &flat).await?;
+	get_settings(State(state)).await
 }
 
 #[cfg(test)]

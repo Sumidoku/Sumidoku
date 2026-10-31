@@ -28,6 +28,7 @@ import type { ChapterWithDownload, Page } from '../api/types';
 import { acquireSseConnection } from '../api/sse';
 import { authAllowsEvents } from '../lib/auth';
 import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
+import { hasHistoryBack } from '../lib/navigation';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { useResolvedTheme } from '../lib/theme';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
@@ -812,7 +813,7 @@ function ReaderCore({
 	function goBack() {
 		// If there is history to go back to, pop it (e.g. back to manga detail).
 		// Otherwise this is a deep link; fall back to the manga detail page or library.
-		if (window.history.state?.idx > 0) navigate(-1);
+		if (hasHistoryBack(window.history.state?.idx)) navigate(-1);
 		else if (mangaId !== null) navigate(`/manga/${mangaId}`);
 		else navigate('/library');
 	}

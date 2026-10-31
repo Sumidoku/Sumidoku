@@ -585,8 +585,8 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	let pool = connect_db(&a.db_path).await;
 	sqlx::query(
 		"INSERT INTO setting (key, value) VALUES
-		 ('user.1.library.excluded_update_categories', ?),
-		 ('user.1.library.excluded_download_categories', ?)",
+		 ('library.excluded_update_categories', ?),
+		 ('library.excluded_download_categories', ?)",
 	)
 	.bind(format!("[{source_excluded_id}]"))
 	.bind(format!("[{source_excluded_id}]"))
@@ -614,8 +614,8 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	let pool = connect_db(&b.db_path).await;
 	sqlx::query(
 		"INSERT INTO setting (key, value) VALUES
-		 ('user.1.library.excluded_update_categories', ?),
-		 ('user.1.library.excluded_download_categories', ?)",
+		 ('library.excluded_update_categories', ?),
+		 ('library.excluded_download_categories', ?)",
 	)
 	.bind(format!("[{placeholder_id}]"))
 	.bind(format!("[{placeholder_id}]"))
@@ -643,8 +643,8 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 	assert_ne!(target_excluded_id, source_excluded_id);
 	let pool = connect_db(&b.db_path).await;
 	for key in [
-		"user.1.library.excluded_update_categories",
-		"user.1.library.excluded_download_categories",
+		"library.excluded_update_categories",
+		"library.excluded_download_categories",
 	] {
 		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
 			.bind(key)
@@ -654,14 +654,6 @@ async fn backup_round_trip_maps_exclusions_to_target_category_ids() {
 		let ids: Vec<i64> = serde_json::from_str(&raw).expect("exclusion ids");
 		assert_eq!(ids, vec![placeholder_id, target_excluded_id], "{key}");
 	}
-	let raw_settings: i64 = sqlx::query_scalar(
-		"SELECT COUNT(*) FROM setting WHERE key IN (
-		 'library.excluded_update_categories', 'library.excluded_download_categories')",
-	)
-	.fetch_one(&pool)
-	.await
-	.expect("raw settings are ignored");
-	assert_eq!(raw_settings, 0);
 	let legacy: i64 = sqlx::query_scalar("SELECT include_in_download FROM category WHERE id = ?")
 		.bind(target_excluded_id)
 		.fetch_one(&pool)
