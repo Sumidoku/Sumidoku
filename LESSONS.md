@@ -6,6 +6,25 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A back button wired to a fixed destination breaks every later deep-link
+entry into that page.** "Back = go to the parent list" is only true while the
+list is the page's sole entry point; once other pages start pushing onto it
+(author/tag searches, deep links), the hard-coded destination silently
+discards the caller. Wire back buttons to pop history
+(`navigate(-1)` gated on `window.history.state?.idx > 0`) and keep the fixed
+path only as the direct-entry fallback, via the shared
+`webui/src/lib/navigation.ts:hasHistoryBack`.
+- Evidence: 2026-10-31, the source browse page's back was
+  `navigate('/browse')` since the i18n commit, correct when the source list
+  was the only entry. The manga detail's author/tag search later reused the
+  browse page's `?filters=` deep link, and pressing back after such a search
+  left the source instead of returning to the detail page. The fix shares the
+  detail/reader history-pop convention; `navigation-back.test.ts` pins it.
+  The sweep also caught the reverse hazard: the source home's back pushed its
+  parent `/browse/:sourceId`, which against a pop-back browse page ping-pongs
+  between the two forever — a back button must never push, only pop or fall
+  back.
+
 **Consecutive schema changes in a test belong on one connection.** A pooled
 query can land on a connection whose cached schema predates the previous
 statement, and SQLite parses against that cache, so a DROP followed by a CREATE
