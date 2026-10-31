@@ -87,6 +87,13 @@ pub trait TrackerService: Send + Sync {
 	async fn metadata(&self, _user_id: i64, _track_id: &str) -> Result<TrackerMetadata, TrackerError> {
 		Err(TrackerError::Provider { provider: self.provider(), message: "metadata is not supported by this tracker".into() })
 	}
+
+	/// True when `metadata` reads public data, so a user without this tracker's
+	/// login can still preview a match. Providers whose metadata call is
+	/// authenticated override this.
+	fn metadata_is_public(&self) -> bool {
+		false
+	}
 }
 
 #[derive(Clone)]

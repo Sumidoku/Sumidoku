@@ -1425,7 +1425,10 @@ no alias is derived from migration text.
   "metadata is not supported by this tracker" (all four providers implement
   it; a `source:<id>` reference instead fetches a fresh `get_manga_update`
   through the source runtime) — and returns
-  `{candidate, linked, fields}`. Each field carries the current value, the
+  `{candidate, linked, fields}`. A tracker whose detail endpoint is public
+  reports `metadata_is_public()`, so MangaBaka previews work without a login;
+  the other three read their record with an OAuth token and answer
+  `NotLoggedIn` themselves. Each field carries the current value, the
   incoming value, `selectable` (false when the remote has no value or the
   type cannot be applied), a `reason` and title `alternatives`; `linked`
   reports whether a `tracker_link` for that provider and record already

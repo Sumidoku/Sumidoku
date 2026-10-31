@@ -82,7 +82,11 @@ async fn fetch_metadata(state: &Arc<AppState>, citation: &Citation, user_id: i64
 			let service = services
 				.get(*provider)
 				.ok_or_else(|| ApiError::not_found(format!("tracker provider '{provider}' is not supported")))?;
-			if !service.is_logged_in(user_id).await.map_err(crate::api::tracker::tracker_error)? {
+			// MangaBaka detail is a public endpoint, so a signed-out user can still preview a match; the other
+			// providers read their metadata with an OAuth token and answer NotLoggedIn from the call itself
+			if !service.metadata_is_public()
+				&& !service.is_logged_in(user_id).await.map_err(crate::api::tracker::tracker_error)?
+			{
 				return Err(crate::api::tracker::tracker_error(TrackerError::NotLoggedIn { provider: *provider }));
 			}
 			service

@@ -486,6 +486,12 @@ impl TrackerService for MangaBakaTracker {
 		let series = self.detail(track_id(remote_id)?).await?;
 		Ok(Self::metadata_from_series(&series, &self.title_language))
 	}
+
+	/// The series detail endpoint is public, so a match preview does not need a
+	/// MangaBaka login (search and library updates still do).
+	fn metadata_is_public(&self) -> bool {
+		true
+	}
 }
 
 #[cfg(test)]
@@ -576,6 +582,70 @@ mod tests {
 		})
 	}
 
+	#[test]
+	fn metadata_maps_titles_authors_tags_status_and_cover() {
+		let series: Series = serde_json::from_value(json!({
+			"id": 42,
+			"title": "Legacy 42",
+			"titles": [
+				{"language": "ja", "title": "日本語 42", "traits": ["native"]},
+				{"language": "en", "title": "English 42", "is_primary": true},
+				{"language": "ko", "title": "한국어 42"}
+			],
+			"cover": {"raw": {"url": "https://img.test/42-raw.jpg"}, "x350": {"x1": "https://img.test/42.jpg"}},
+			"description": "Description 42",
+			"year": 2019,
+			"authors": ["Aiko Author", "aiko author", "Dana Illustrator"],
+			"status": "releasing",
+			"tags": [{"name": "Action"}, {"name": "Romance"}]
+		}))
+		.expect("series fixture");
+
+		let metadata = MangaBakaTracker::metadata_from_series(&series, "ja");
+		assert_eq!(metadata.id, "42");
+		// the configured title language leads; the other spellings travel as labelled alternatives
+		assert_eq!(metadata.title.default, "日本語 42");
+		let alternatives: Vec<(&str, &str)> = metadata
+			.title
+			.alternatives
+			.iter()
+			.map(|alternative| (alternative.label.as_str(), alternative.value.as_str()))
+			.collect();
+		assert_eq!(alternatives, [("en", "English 42"), ("ko", "한국어 42")]);
+		// authors are deduplicated case-insensitively, keeping the first spelling
+		assert_eq!(metadata.authors, ["Aiko Author", "Dana Illustrator"]);
+		assert!(metadata.artists.is_empty());
+		assert_eq!(metadata.tags, ["Action", "Romance"]);
+		assert_eq!(metadata.status, Some(aidoku::MangaStatus::Ongoing));
+		assert_eq!(metadata.content_rating, None);
+		// the 350px thumbnail is preferred over the raw original
+		assert_eq!(metadata.cover_url.as_deref(), Some("https://img.test/42.jpg"));
+		assert_eq!(metadata.url.as_deref(), Some("https://mangabaka.org/42"));
+		assert_eq!(metadata.description.as_deref(), Some("Description 42"));
+		assert_eq!(metadata.info.as_deref(), Some("2019 / Aiko Author / Dana Illustrator"));
+
+		// a series without a 350px variant falls back to the raw cover, an English primary title leads when the
+		// configured language has no title, and a legacy flat title survives an empty titles list
+		let mut fallback: Series = serde_json::from_value(json!({
+			"id": 43,
+			"titles": [{"language": "en", "title": "English 43", "is_primary": true}],
+			"cover": {"raw": {"url": "https://img.test/43-raw.jpg"}},
+			"status": "hiatus"
+		}))
+		.expect("fallback fixture");
+		let fallback_metadata = MangaBakaTracker::metadata_from_series(&fallback, "it");
+		assert_eq!(fallback_metadata.title.default, "English 43");
+		assert_eq!(fallback_metadata.cover_url.as_deref(), Some("https://img.test/43-raw.jpg"));
+		assert_eq!(fallback_metadata.status, Some(aidoku::MangaStatus::Hiatus));
+		assert_eq!(fallback_metadata.description, None);
+		assert_eq!(fallback_metadata.info, None);
+		fallback.titles.clear();
+		fallback.title = "Legacy 43".into();
+		let legacy = MangaBakaTracker::metadata_from_series(&fallback, "en");
+		assert_eq!(legacy.title.default, "Legacy 43");
+		assert!(legacy.title.alternatives.is_empty());
+	}
+
 	#[tokio::test]
 	async fn public_search_uses_batch_tracking_and_title_language() {
 		let (origin, mock) = serve(|request| match request.path.as_str() {
@@ -588,6 +658,8 @@ mod tests {
 		let service = service.with_title_language("ja");
 		assert_eq!(service.provider(), Provider::Mangabaka);
 		assert!(service.is_logged_in(user).await.unwrap());
+		// the series detail endpoint is public, so a match preview works without a MangaBaka login
+		assert!(service.metadata_is_public());
 
 		let results = service.search(user, "A title / 検索", false).await.unwrap();
 		assert_eq!(results.len(), 2);
