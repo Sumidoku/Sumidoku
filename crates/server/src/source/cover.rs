@@ -183,11 +183,7 @@ pub async fn select_cover(
 	if !matches!(parsed.scheme(), "http" | "https") {
 		return Err(ApiError::bad_request("unsupported cover url scheme"));
 	}
-	sqlx::query("UPDATE manga SET cover_url = ? WHERE id = ?")
-		.bind(&body.url)
-		.bind(id)
-		.execute(&state.pool)
-		.await?;
+	crate::store::manga::set_cover_url(&state.pool, id, &body.url).await?;
 	invalidate_cache(&state.config.covers_dir, id).await;
 	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(crate::api::manga_json(&state, user.id, &row).await?))

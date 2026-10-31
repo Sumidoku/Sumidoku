@@ -603,33 +603,25 @@ async fn restore_library(
 			));
 			continue;
 		};
-		sqlx::query(
-			"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
-			 content_rating, viewer, cover_url, url, initialized, update_strategy)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (source_id, key) DO UPDATE SET
-			 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
-			 description = excluded.description, tags = excluded.tags, status = excluded.status,
-			 content_rating = excluded.content_rating, viewer = excluded.viewer,
-			 cover_url = excluded.cover_url,
-			 url = excluded.url, initialized = excluded.initialized,
-			 update_strategy = excluded.update_strategy",
+		crate::store::manga::upsert_from_backup(
+			&mut **tx,
+			source_id,
+			&entry.key,
+			&crate::store::manga::MangaFields {
+				title: &entry.title,
+				authors: &serde_json::to_string(&entry.authors)?,
+				artists: &serde_json::to_string(&entry.artists)?,
+				description: entry.description.as_deref(),
+				tags: &serde_json::to_string(&entry.tags)?,
+				status: entry.status,
+				content_rating: entry.content_rating,
+				viewer: entry.viewer,
+				cover_url: entry.cover_url.as_deref(),
+				url: entry.url.as_deref(),
+				initialized: entry.initialized,
+				update_strategy: entry.update_strategy,
+			},
 		)
-		.bind(source_id)
-		.bind(&entry.key)
-		.bind(&entry.title)
-		.bind(serde_json::to_string(&entry.authors)?)
-		.bind(serde_json::to_string(&entry.artists)?)
-		.bind(&entry.description)
-		.bind(serde_json::to_string(&entry.tags)?)
-		.bind(entry.status)
-		.bind(entry.content_rating)
-		.bind(entry.viewer)
-		.bind(&entry.cover_url)
-		.bind(&entry.url)
-		.bind(entry.initialized)
-		.bind(entry.update_strategy)
-		.execute(&mut **tx)
 		.await?;
 		let (manga_id,): (i64,) =
 			sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")

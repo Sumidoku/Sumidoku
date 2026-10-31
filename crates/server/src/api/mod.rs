@@ -1784,11 +1784,7 @@ async fn update_manga(
 			.map_err(|e| ApiError::bad_request(format!("invalid manga patch: {e}")))?,
 	};
 	if let Some(strategy) = patch.update_strategy {
-		sqlx::query("UPDATE manga SET update_strategy = ? WHERE id = ?")
-			.bind(strategy as i64)
-			.bind(id)
-			.execute(&state.pool)
-			.await?;
+		crate::store::manga::set_update_strategy(&state.pool, id, strategy as i64).await?;
 	}
 	if let Some(incognito) = patch.incognito {
 		crate::store::library::set_incognito(&state.pool, id, user.id, incognito).await?;
@@ -1812,11 +1808,7 @@ async fn get_chapters(
 		// the background pass the rescan kicks
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
 			crate::internal::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false, None).await?;
-			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-				.bind(crate::model::unix_now())
-				.bind(id)
-				.execute(&state.pool)
-				.await?;
+			crate::store::manga::set_chapters_fetched_at(&state.pool, id, crate::model::unix_now()).await?;
 			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
@@ -1824,11 +1816,7 @@ async fn get_chapters(
 			let updated = crate::internal::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
 			let mut conn = state.pool.acquire().await?;
 			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-			sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-				.bind(crate::model::unix_now())
-				.bind(id)
-			.execute(&mut *conn)
-			.await?;
+			crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
 			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		let handle = state.get_handle(manga.source_id).await?;
@@ -1842,11 +1830,7 @@ async fn get_chapters(
 					.await?;
 				let mut conn = state.pool.acquire().await?;
 				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-				sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-					.bind(crate::model::unix_now())
-					.bind(id)
-					.execute(&mut *conn)
-					.await?;
+				crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
 				chapters_json(&state, user_id, id, order_by).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
@@ -1857,11 +1841,7 @@ async fn get_chapters(
 			.await?;
 		let mut conn = state.pool.acquire().await?;
 		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-			.bind(crate::model::unix_now())
-			.bind(id)
-			.execute(&mut *conn)
-			.await?;
+		crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
 	}
 	Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response())
 }

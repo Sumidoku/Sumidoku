@@ -639,11 +639,10 @@ pub(crate) async fn set_final_version(
 	modified_at: i64,
 ) -> ApiResult<()> {
 	match kind {
-		"manga" => sqlx::query("UPDATE manga SET last_modified_at = ? WHERE id = ?")
-			.bind(modified_at)
-			.bind(local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid manga key"))?)
-			.execute(&mut **tx)
-			.await?,
+		"manga" => {
+			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid manga key"))?;
+			crate::store::manga::set_modified_at(&mut **tx, id, modified_at).await?
+		}
 		"chapter" => {
 			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid chapter key"))?;
 			crate::store::chapter::set_modified_at(&mut **tx, id, modified_at).await?
@@ -751,16 +750,8 @@ async fn ensure_manga(
 		return Ok(Some(id));
 	}
 	if let Some(id) = preferred_id {
-		sqlx::query("INSERT INTO manga (id, source_id, key, title, last_modified_at) VALUES (?, ?, ?, '', 0)")
-			.bind(id)
-			.bind(source_id)
-			.bind(&manga_key)
-			.execute(&mut **tx)
-			.await?;
-		sqlx::query("UPDATE manga SET last_modified_at = 0 WHERE id = ?")
-			.bind(id)
-			.execute(&mut **tx)
-			.await?;
+		crate::store::manga::insert_stub_with_id(&mut **tx, id, source_id, &manga_key).await?;
+		crate::store::manga::set_modified_at(&mut **tx, id, 0).await?;
 		stubs.insert(("manga".into(), id.to_string()));
 		return Ok(Some(id));
 	}
@@ -773,17 +764,8 @@ async fn ensure_manga(
 		mark_quiet_stub(tx, "manga", id, stubs).await?;
 		return Ok(Some(id));
 	}
-	let id: i64 = sqlx::query_scalar(
-		"INSERT INTO manga (source_id, key, title, last_modified_at) VALUES (?, ?, '', 0) RETURNING id",
-	)
-	.bind(source_id)
-	.bind(&manga_key)
-	.fetch_one(&mut **tx)
-	.await?;
-	sqlx::query("UPDATE manga SET last_modified_at = 0 WHERE id = ?")
-		.bind(id)
-		.execute(&mut **tx)
-		.await?;
+	let id = crate::store::manga::insert_stub(&mut **tx, source_id, &manga_key).await?;
+	crate::store::manga::set_modified_at(&mut **tx, id, 0).await?;
 	stubs.insert(("manga".into(), id.to_string()));
 	Ok(Some(id))
 }
@@ -1051,10 +1033,7 @@ async fn apply_manga(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		sqlx::query("DELETE FROM manga WHERE id = ?")
-			.bind(id)
-			.execute(&mut **tx)
-			.await?;
+		crate::store::manga::delete(&mut **tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1077,27 +1056,26 @@ async fn apply_manga(
 		return Ok(Disposition::Skipped);
 	};
 	let source_id = source_id.ok_or_else(|| ApiError::bad_request("source is unavailable"))?;
-	sqlx::query(
-		"UPDATE manga SET source_id = ?, key = ?, title = ?, authors = ?, artists = ?, description = ?, tags = ?,
-		 status = ?, content_rating = ?, viewer = ?, cover_url = ?, url = ?, initialized = ?, update_strategy = ?
-		 WHERE id = ?",
+	crate::store::manga::set_fields(
+		&mut **tx,
+		id,
+		source_id,
+		&string(&change.snapshot, "key")?,
+		&crate::store::manga::MangaFields {
+			title: &string(&change.snapshot, "title")?,
+			authors: &serde_json::to_string(&strings(&change.snapshot, "authors")?)?,
+			artists: &serde_json::to_string(&strings(&change.snapshot, "artists")?)?,
+			description: optional_string(&change.snapshot, "description")?.as_deref(),
+			tags: &serde_json::to_string(&strings(&change.snapshot, "tags")?)?,
+			status: integer(&change.snapshot, "status")?,
+			content_rating: integer(&change.snapshot, "contentRating")?,
+			viewer: integer(&change.snapshot, "viewer")?,
+			cover_url: optional_string(&change.snapshot, "coverUrl")?.as_deref(),
+			url: optional_string(&change.snapshot, "url")?.as_deref(),
+			initialized: flag(&change.snapshot, "initialized")?,
+			update_strategy: integer(&change.snapshot, "updateStrategy")?,
+		},
 	)
-	.bind(source_id)
-	.bind(string(&change.snapshot, "key")?)
-	.bind(string(&change.snapshot, "title")?)
-	.bind(serde_json::to_string(&strings(&change.snapshot, "authors")?)?)
-	.bind(serde_json::to_string(&strings(&change.snapshot, "artists")?)?)
-	.bind(optional_string(&change.snapshot, "description")?)
-	.bind(serde_json::to_string(&strings(&change.snapshot, "tags")?)?)
-	.bind(integer(&change.snapshot, "status")?)
-	.bind(integer(&change.snapshot, "contentRating")?)
-	.bind(integer(&change.snapshot, "viewer")?)
-	.bind(optional_string(&change.snapshot, "coverUrl")?)
-	.bind(optional_string(&change.snapshot, "url")?)
-	.bind(flag(&change.snapshot, "initialized")?)
-	.bind(integer(&change.snapshot, "updateStrategy")?)
-	.bind(id)
-	.execute(&mut **tx)
 	.await?;
 	finish(
 		tx,
