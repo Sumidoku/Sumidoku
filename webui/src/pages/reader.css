@@ -640,33 +640,88 @@
 
 .reader__settings {
 	position: fixed;
-	top: 56px;
+	top: 64px;
 	right: 12px;
 	z-index: 61;
-	width: min(300px, calc(100vw - 24px));
+	display: grid;
+	gap: 12px;
+	width: min(344px, calc(100vw - 24px));
+	/* Stops above the bottom pager, so a short screen scrolls the menu instead of covering it */
+	max-height: calc(100dvh - 124px - env(safe-area-inset-bottom));
+	overflow-y: auto;
+	overscroll-behavior: contain;
 	animation: fade-in 0.2s ease-out;
 }
 
-.reader__settings-title {
-	font-size: 13px;
+.reader__settings-group {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+
+.reader__settings-group + .reader__settings-group {
+	padding-top: 12px;
+	border-top: 1px solid var(--border);
+}
+
+.reader__settings-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 8px;
+	font-size: 12px;
 	color: var(--text-dim);
-	margin-bottom: 8px;
 }
 
-.reader__settings-dir--off {
+.reader__settings-title {
+	margin: 0;
+	font-size: inherit;
+	font-weight: 600;
+}
+
+.reader__settings-body {
+	display: grid;
+	gap: 6px;
+	min-width: 0;
+}
+
+.reader__settings-body--off,
+.reader__settings-row--off {
 	opacity: 0.45;
-	pointer-events: none;
 }
 
-.reader__settings .select {
-	width: 100%;
-}
-
-.reader__stretch {
+.reader__settings-row {
 	display: flex;
 	align-items: center;
-	gap: 8px;
+	justify-content: space-between;
+	gap: 12px;
+	min-height: 36px;
 	font-size: 13px;
+}
+
+.reader__settings-row > span {
+	min-width: 0;
+}
+
+.reader__settings-row > .select {
+	flex: 0 1 164px;
+	min-width: 0;
+}
+
+/* Labels of the longer locales wrap inside their segment instead of scrolling the pill */
+.reader__settings .seg {
+	display: flex;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.reader__settings .seg__item {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 5px 6px;
+	font-size: 13px;
+	line-height: 1.25;
+	white-space: normal;
 }
 
 .reader__typography {
@@ -680,7 +735,7 @@
 
 .reader__typography label {
 	display: grid;
-	grid-template-columns: 56px minmax(0, 1fr) 38px;
+	grid-template-columns: 84px minmax(0, 1fr) 38px;
 	align-items: center;
 	gap: 8px;
 	font-size: 13px;

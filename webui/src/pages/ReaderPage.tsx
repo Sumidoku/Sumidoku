@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -55,6 +55,7 @@ import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, sl
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
+import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { PageImage } from './reader/PageImage';
@@ -495,8 +496,7 @@ function ReaderCore({
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
 	const mode = resolveMode(modeOverride, metaMode, globalMode);
 	const dir = resolveDir(dirOverride, metaDir, globalDir);
-	const [overlay, setOverlay] = useState(true);
-	const [settingsOpen, setSettingsOpen] = useState(false);
+	const [{ overlay, settingsOpen }, dispatchChrome] = useReducer(readerChromeReducer, INITIAL_READER_CHROME);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
 	// Fullscreen targets the reader root so the toolbars (fixed) stay visible inside it
@@ -866,7 +866,7 @@ function ReaderCore({
 				return;
 			}
 			if (settingsOpen) {
-				setSettingsOpen(false);
+				dispatchChrome('closeSettings');
 				return;
 			}
 			// A pending chapter jump cancels ahead of leaving the reader
@@ -910,7 +910,7 @@ function ReaderCore({
 				else scrollToPage(total - 1);
 				break;
 			case 'toggleOverlay':
-				setOverlay((v) => !v);
+				dispatchChrome('toggleOverlay');
 				break;
 			case 'toggleFullscreen':
 				toggleFullscreen();
@@ -1225,11 +1225,11 @@ function ReaderCore({
 	function onPagedZoneClick(which: 'left' | 'right' | 'mid') {
 		if (consumeClick()) return;
 		if (zoomed) {
-			setOverlay((v) => !v);
+			dispatchChrome('toggleOverlay');
 			return;
 		}
 		const action = zoneAction(dir, tapZones, which);
-		if (action === 'menu') setOverlay((v) => !v);
+		if (action === 'menu') dispatchChrome('toggleOverlay');
 		else if (action === 'next') turn(true);
 		else if (action === 'prev') turn(false);
 	}
@@ -1248,11 +1248,11 @@ function ReaderCore({
 		if (consumeClick()) return;
 		if (Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 10) return;
 		if (zoomed) {
-			setOverlay((v) => !v);
+			dispatchChrome('toggleOverlay');
 			return;
 		}
 		const third = window.innerWidth / 3;
-		if (e.clientX > third && e.clientX < third * 2) setOverlay((v) => !v);
+		if (e.clientX > third && e.clientX < third * 2) dispatchChrome('toggleOverlay');
 	}
 
 	function onSlider(e: ChangeEvent<HTMLInputElement>) {
@@ -1650,7 +1650,7 @@ function ReaderCore({
 				<IconButton
 					label={t('reader.settings')}
 					className={settingsOpen ? 'reader__icon--on' : undefined}
-					onClick={() => setSettingsOpen((v) => !v)}
+					onClick={() => dispatchChrome('toggleSettings')}
 				>
 					<Settings size={17} />
 				</IconButton>

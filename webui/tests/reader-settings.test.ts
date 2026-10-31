@@ -11,7 +11,11 @@ function page(content: Page['content']): Page {
 	return { content, thumbnail: null, hasDescription: false, description: null, index: 0 };
 }
 
-async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continuous' = 'paged'): Promise<string> {
+async function renderSettings(
+	currentPage: Page | null,
+	mode: 'paged' | 'continuous' = 'paged',
+	layout: 'single' | 'double' = 'single'
+): Promise<string> {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -30,7 +34,7 @@ async function renderSettings(currentPage: Page | null, mode: 'paged' | 'continu
 					mode,
 					dir: 'ltr',
 					onDirChange: () => {},
-					layout: 'single',
+					layout,
 					onLayoutChange: () => {},
 					tapZones: 'lr',
 					onTapZonesChange: () => {},
@@ -94,13 +98,14 @@ test('tap-zone and background controls render in paged mode', async () => {
 	assert.match(markup, />Follow system</);
 });
 
-test('continuous mode marks direction, layout and tap zones as paged-only', async () => {
+test('continuous mode marks the page and turning groups as paged-only and locks them', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
-	assert.match(markup, /Reading direction \(paged mode only\)/);
-	assert.match(markup, /Page layout \(paged mode only\)/);
-	assert.match(markup, /Tap zones \(paged mode only\)/);
-	// The background applies to every mode, so its title stays unmarked
-	assert.doesNotMatch(markup, /Background \(paged mode only\)/);
+	assert.equal(markup.match(/Paged mode only/g)?.length, 2);
+	assert.equal(markup.match(/reader__settings-body--off" inert=""/g)?.length, 2);
+	// The background applies to every mode, so its group stays unmarked and live
+	const appearance = markup.slice(markup.indexOf('Appearance'));
+	assert.doesNotMatch(appearance, /Paged mode only|inert/);
+	assert.match(appearance, /aria-label="Background"/);
 });
 
 test('page-scale select and stretch toggle render in paged mode', async () => {
@@ -112,41 +117,29 @@ test('page-scale select and stretch toggle render in paged mode', async () => {
 	assert.match(markup, /Stretch small pages/);
 });
 
-test('continuous mode marks page scale and stretch as paged-only', async () => {
-	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
-	assert.match(markup, /Page scale \(paged mode only\)/);
-	assert.match(markup, /Stretch small pages \(paged mode only\)/);
-});
-
-test('the wide-page split toggle renders unmarked in paged single layout', async () => {
+test('toggles use the shared switch', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
-	assert.match(markup, /Split wide pages/);
-	assert.doesNotMatch(markup, /Split wide pages \(/);
+	assert.equal(markup.match(/type="checkbox"/g)?.length, 4);
+	assert.equal(markup.match(/class="switch"/g)?.length, 4);
 });
 
-test('continuous mode marks the split toggle as paged-only', async () => {
-	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
-	assert.match(markup, /Split wide pages \(paged mode only\)/);
-});
-
-test('the animation toggle renders unmarked in paged mode', async () => {
+test('groups separate page, turning and appearance settings', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
-	assert.match(markup, /Page turn animation/);
-	assert.doesNotMatch(markup, /Page turn animation \(/);
+	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
+	assert.deepEqual(titles, ['Page', 'Page turning', 'Appearance']);
+	for (const label of ['Page layout', 'Reading direction', 'Background']) {
+		assert.match(markup, new RegExp(`role="tablist" aria-label="${label}"`));
+	}
 });
 
-test('continuous mode marks the animation toggle as paged-only', async () => {
-	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
-	assert.match(markup, /Page turn animation \(paged mode only\)/);
-});
-
-test('the transition toggle renders unmarked in paged mode', async () => {
+test('paged mode leaves every group unmarked and live', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
-	assert.match(markup, /Chapter transition page/);
-	assert.doesNotMatch(markup, /Chapter transition page \(/);
+	assert.doesNotMatch(markup, /Paged mode only|inert|\(single-page layout only\)/);
+	assert.doesNotMatch(markup, /class="switch"[^>]*disabled/);
 });
 
-test('continuous mode marks the transition toggle as paged-only', async () => {
-	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'continuous');
-	assert.match(markup, /Chapter transition page \(paged mode only\)/);
+test('double layouts lock only the split toggle and say why', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'paged', 'double');
+	assert.match(markup, /reader__settings-row--off"><span>Split wide pages \(single-page layout only\)/);
+	assert.equal(markup.match(/disabled=""/g)?.length, 1);
 });
