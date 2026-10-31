@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**`offsetTop` counts from the offset parent, not from the element you measure
+inside.** Heights derived from a child's `offsetTop` are only right when the
+container is the offset parent; otherwise they include the container's own
+position. Measure relative to the first child, and check the rendered result,
+because a source-text test passes either way.
+- Evidence: 2026-10-31, #554's two-row tag clamp sat inside the positioned
+  `.manga-hero__body`, so a third row at 209 gave a 203px clamp and showed five
+  rows; its source assertions were green. Subtracting the first row's top gave
+  78px and exactly two rows on desktop and phone.
+
 **Consecutive schema changes in a test belong on one connection.** A pooled
 query can land on a connection whose cached schema predates the previous
 statement, and SQLite parses against that cache, so a DROP followed by a CREATE
