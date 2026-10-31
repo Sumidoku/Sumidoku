@@ -446,35 +446,7 @@ pub async fn add_to_library(
 	.execute(&mut *tx)
 	.await?;
 	if let Some(category_ids) = &body.category_ids {
-		if category_ids.is_empty() {
-			sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
-				.bind(manga.id)
-				.bind(user.id)
-				.execute(&mut *tx)
-				.await?;
-		} else {
-			let sql = format!(
-				"DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?
-				 AND category_id NOT IN ({})",
-				in_placeholders(category_ids.len())
-			);
-			let mut delete = sqlx::query(&sql).bind(manga.id).bind(user.id);
-			for category_id in category_ids {
-				delete = delete.bind(category_id);
-			}
-			delete.execute(&mut *tx).await?;
-		}
-		for category_id in category_ids {
-			sqlx::query(
-				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, ?)",
-			)
-			.bind(category_id)
-			.bind(manga.id)
-			.bind(user.id)
-			.execute(&mut *tx)
-			.await?;
-		}
+		crate::store::category::set_manga_categories(&mut tx, manga.id, user.id, category_ids).await?;
 	}
 	tx.commit().await?;
 	Ok(Json(manga_json(&state, user.id, &manga).await?))
@@ -495,11 +467,7 @@ pub async fn remove_from_library(
 	.bind(user.id)
 	.execute(&mut *tx)
 	.await?;
-	sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
-		.bind(id)
-		.bind(user.id)
-		.execute(&mut *tx)
-		.await?;
+	crate::store::category::clear_manga(&mut *tx, id, user.id).await?;
 	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)
 }
@@ -657,17 +625,7 @@ pub async fn create_category(
 			.bind(user.id)
 			.fetch_one(&state.pool)
 			.await?;
-	sqlx::query("INSERT INTO category (user_id, name, sort_order) VALUES (?, ?, ?)")
-		.bind(user.id)
-		.bind(name)
-		.bind(sort_order)
-		.execute(&state.pool)
-	.await?;
-	let (id,): (i64,) = sqlx::query_as("SELECT id FROM category WHERE user_id = ? AND name = ?")
-		.bind(user.id)
-		.bind(name)
-		.fetch_one(&state.pool)
-		.await?;
+	let id = crate::store::category::create(&state.pool, user.id, name, sort_order, false).await?;
 	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
@@ -716,12 +674,7 @@ pub async fn update_category(
 	let Some(name) = name else {
 		return Ok(Json(category_json(&row)));
 	};
-	sqlx::query("UPDATE category SET name = ? WHERE id = ? AND user_id = ?")
-		.bind(name)
-		.bind(id)
-		.bind(user.id)
-		.execute(&state.pool)
-		.await?;
+	crate::store::category::rename(&state.pool, id, user.id, &name).await?;
 	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
@@ -740,11 +693,7 @@ pub async fn delete_category(
 		return Err(ApiError::not_found("category not found"));
 	}
 	crate::settings::remove_category_exclusions(&mut tx, id).await?;
-	sqlx::query("DELETE FROM category WHERE id = ? AND user_id = ?")
-		.bind(id)
-		.bind(user.id)
-		.execute(&mut *tx)
-		.await?;
+	crate::store::category::delete_owned(&mut *tx, id, user.id).await?;
 	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)
 }
@@ -761,12 +710,7 @@ pub async fn reorder_categories(
 ) -> ApiResult<Json<Value>> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (index, id) in body.ids.iter().enumerate() {
-		sqlx::query("UPDATE category SET sort_order = ? WHERE id = ? AND user_id = ?")
-			.bind(index as i64)
-			.bind(id)
-			.bind(user.id)
-			.execute(&mut *tx)
-			.await?;
+		crate::store::category::set_sort_order(&mut *tx, *id, user.id, index as i64).await?;
 	}
 	tx.commit().await?;
 	Ok(Json(categories_json(&state, user.id).await?))
@@ -798,35 +742,7 @@ pub async fn set_manga_categories(
 		category_row(&state.pool, user.id, *category_id).await?;
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	if body.category_ids.is_empty() {
-		sqlx::query("DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?")
-			.bind(id)
-			.bind(user.id)
-			.execute(&mut *tx)
-			.await?;
-	} else {
-		let sql = format!(
-			"DELETE FROM category_manga WHERE manga_id = ? AND user_id = ?
-			 AND category_id NOT IN ({})",
-			in_placeholders(body.category_ids.len())
-		);
-		let mut delete = sqlx::query(&sql).bind(id).bind(user.id);
-		for category_id in &body.category_ids {
-			delete = delete.bind(category_id);
-		}
-		delete.execute(&mut *tx).await?;
-	}
-	for category_id in &body.category_ids {
-		sqlx::query(
-			"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-			 VALUES (?, ?, ?)",
-		)
-		.bind(category_id)
-		.bind(id)
-		.bind(user.id)
-		.execute(&mut *tx)
-		.await?;
-	}
+	crate::store::category::set_manga_categories(&mut tx, id, user.id, &body.category_ids).await?;
 	tx.commit().await?;
 	Ok(Json(manga_json(&state, user.id, &manga).await?))
 }

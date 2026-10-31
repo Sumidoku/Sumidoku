@@ -708,25 +708,11 @@ async fn restore_categories(
 				.await?;
 		let category_id = match existing {
 			Some((id,)) => {
-				sqlx::query("UPDATE category SET sort_order = ?, is_default = ? WHERE id = ?")
-					.bind(category.sort_order)
-					.bind(category.is_default)
-					.bind(id)
-					.execute(&mut **tx)
-					.await?;
+				crate::store::category::set_placement(&mut **tx, id, category.sort_order, category.is_default).await?;
 				id
 			}
 			None => {
-				sqlx::query_scalar(
-					"INSERT INTO category (user_id, name, sort_order, is_default)
-					 VALUES (?, ?, ?, ?) RETURNING id",
-				)
-				.bind(user_id)
-				.bind(&category.name)
-				.bind(category.sort_order)
-				.bind(category.is_default)
-				.fetch_one(&mut **tx)
-				.await?
+				crate::store::category::create(&mut **tx, user_id, &category.name, category.sort_order, category.is_default).await?
 			}
 		};
 		if category.include_in_update == 2 {
@@ -756,15 +742,7 @@ async fn restore_categories(
 				));
 				continue;
 			};
-			sqlx::query(
-				"INSERT OR IGNORE INTO category_manga (category_id, manga_id, user_id)
-				 VALUES (?, ?, ?)",
-			)
-			.bind(category_id)
-			.bind(manga_id)
-			.bind(user_id)
-			.execute(&mut **tx)
-			.await?;
+			crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
 		}
 		restored.categories += 1;
 	}
