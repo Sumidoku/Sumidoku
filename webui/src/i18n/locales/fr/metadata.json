@@ -43,7 +43,7 @@
       "cover": "Couverture"
     },
     "editTitle": "Modifier les métadonnées",
-    "editHint": "Les valeurs modifiées ici sont verrouillées et résistent aux rafraîchissements de la source.",
+    "editHint": "Les valeurs modifiées ici sont verrouillées et résistent aux rafraîchissements de la source. Les listes prennent une entrée par ligne.",
     "editSaved": "Métadonnées enregistrées",
     "editFailed": "Impossible d'enregistrer les métadonnées",
     "sourceFollows": "Suit la source",

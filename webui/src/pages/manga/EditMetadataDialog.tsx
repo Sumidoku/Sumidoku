@@ -21,16 +21,36 @@ const EDITABLE: Array<keyof FormState> = [
 const STATUSES: Array<MangaStatus> = ['Unknown', 'Ongoing', 'Completed', 'Cancelled', 'Hiatus'];
 const RATINGS: Array<ContentRating> = ['Unknown', 'Safe', 'Suggestive', 'NSFW'];
 
-const joinList = (values: Array<string> | null | undefined) => (values ?? []).join(', ');
+// List fields are one item per line: names such as "Last, First" stay intact
+const joinList = (values: Array<string> | null | undefined) => (values ?? []).join('\n');
 const splitList = (value: string) =>
 	value
-		.split(',')
+		.split(/\r?\n/)
 		.map((item) => item.trim())
 		.filter(Boolean);
 
-function sameList(a: Array<string>, b: Array<string>) {
-	return a.length === b.length && a.every((item, index) => item === b[index]);
+// Trim and drop case-insensitive duplicates, so the stored value has no noise
+function normalizeList(values: Array<string>) {
+	const seen = new Set<string>();
+	const unique: Array<string> = [];
+	for (const value of values) {
+		const trimmed = value.trim();
+		if (!trimmed) continue;
+		const key = trimmed.toLocaleLowerCase();
+		if (seen.has(key)) continue;
+		seen.add(key);
+		unique.push(trimmed);
+	}
+	return unique;
 }
+
+function sameList(a: Array<string>, b: Array<string>) {
+	const left = normalizeList(a);
+	const right = normalizeList(b);
+	return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+const LIST_FIELDS: ReadonlySet<string> = new Set(['authors', 'artists', 'tags']);
 
 interface FormState {
 	title: string;
@@ -62,6 +82,7 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 	const manga = mangaQuery.data;
 	const [form, setForm] = useState<FormState | null>(null);
 	const [restoring, setRestoring] = useState(false);
+	const [restoreError, setRestoreError] = useState<string | null>(null);
 	const formRef = useRef<HTMLFormElement>(null);
 
 	// Seed the draft once; later refetches must not clobber what the user is typing
@@ -72,14 +93,15 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 	const sourceName = (id: number) =>
 		(sourcesQuery.data ?? []).find((source) => source.id === id)?.name;
 	const lockOf = (field: MetadataField) => manga?.metadataLocks?.[field];
+	const titleMissing = form !== null && form.title.trim() === '';
 
 	const patch = usePatchManga();
 	const patchBody = (next: FormState): Parameters<typeof patch.mutate>[0] => {
 		const body: Parameters<typeof patch.mutate>[0] = { id: mangaId };
 		if (!manga) return body;
-		const authors = splitList(next.authors);
-		const artists = splitList(next.artists);
-		const tags = splitList(next.tags);
+		const authors = normalizeList(splitList(next.authors));
+		const artists = normalizeList(splitList(next.artists));
+		const tags = normalizeList(splitList(next.tags));
 		if (next.title.trim() && next.title !== manga.title) body.title = next.title.trim();
 		if (!sameList(authors, manga.authors ?? [])) body.authors = authors;
 		if (!sameList(artists, manga.artists ?? [])) body.artists = artists;
@@ -101,10 +123,13 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 	async function restore() {
 		if (!window.confirm(t('metadata.restoreConfirm'))) return;
 		setRestoring(true);
+		setRestoreError(null);
 		try {
 			const result = await restoreMetadata(mangaId, { refresh: true });
 			setForm(formFrom(result.manga));
 			onClose();
+		} catch (error) {
+			setRestoreError(error instanceof Error ? error.message : t('metadata.editFailed'));
 		} finally {
 			setRestoring(false);
 		}
@@ -112,7 +137,7 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 
 	function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!form || !manga) return;
+		if (!form || !manga || !form.title.trim()) return;
 		const body = patchBody(form);
 		if (Object.keys(body).length <= 1) {
 			onClose();
@@ -138,7 +163,7 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 					<Button
 						variant="primary"
 						loading={patch.isPending}
-						disabled={!form}
+						disabled={!form || titleMissing}
 						onClick={() => formRef.current?.requestSubmit()}
 					>
 						{t('common.save')}
@@ -167,12 +192,14 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 										onUnlock={() => unlock(field)}
 									/>
 								</span>
-								{field === 'description' ? (
+								{field === 'description' || LIST_FIELDS.has(field) ? (
 									<textarea
 										className="input metadata-edit__textarea"
-										rows={4}
-										value={form.description}
-										onChange={(event) => update('description', event.currentTarget.value)}
+										rows={field === 'description' ? 4 : 3}
+										value={form[field]}
+										onChange={(event) =>
+											update(field, event.currentTarget.value)
+										}
 									/>
 								) : field === 'status' ? (
 									<Select value={form.status} onChange={(value) => update('status', value)}>
@@ -202,6 +229,16 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 							</label>
 						);
 					})}
+					{titleMissing && (
+						<p className="tracker-error" role="alert">
+							{t('metadata.titleRequired')}
+						</p>
+					)}
+					{restoreError && (
+						<p className="tracker-error" role="alert">
+							{restoreError}
+						</p>
+					)}
 					{patch.isError && (
 						<p className="tracker-error" role="alert">
 							{patch.error.message}

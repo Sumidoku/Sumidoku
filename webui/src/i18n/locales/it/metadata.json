@@ -43,7 +43,7 @@
       "cover": "Copertina"
     },
     "editTitle": "Modifica metadati",
-    "editHint": "I valori modificati qui vengono bloccati e sopravvivono agli aggiornamenti della fonte.",
+    "editHint": "I valori modificati qui vengono bloccati e sopravvivono agli aggiornamenti della fonte. Gli elenchi prendono una voce per riga.",
     "editSaved": "Metadati salvati",
     "editFailed": "Impossibile salvare i metadati",
     "sourceFollows": "Segue la fonte",

@@ -43,7 +43,7 @@
       "cover": "Cover"
     },
     "editTitle": "Edit metadata",
-    "editHint": "Values you edit here are locked to you and survive source refreshes.",
+    "editHint": "Values you edit here are locked to you and survive source refreshes. Lists take one entry per line.",
     "editSaved": "Metadata saved",
     "editFailed": "Could not save metadata",
     "sourceFollows": "Follows the source",

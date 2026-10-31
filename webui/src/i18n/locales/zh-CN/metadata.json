@@ -43,7 +43,7 @@
       "cover": "封面"
     },
     "editTitle": "编辑元数据",
-    "editHint": "这里修改的值会锁定为手动值，图源刷新不会覆盖。",
+    "editHint": "这里修改的值会锁定为手动值，图源刷新不会覆盖；列表字段每行一项。",
     "editSaved": "元数据已保存",
     "editFailed": "保存元数据失败",
     "sourceFollows": "随图源",
