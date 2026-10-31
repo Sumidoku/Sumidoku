@@ -18,6 +18,15 @@ side, then send it back.
   adds `categoryAliases`; without the apply change its regression returned
   `["Category shared", "Renamed on B"]`.
 
+**A failed `cd` does not stop the commands after it.** With `;` or a newline the
+rest of a script runs in the previous directory, so a step meant for a worktree
+lands in the shared checkout. Write `cd <dir> || exit 1`, and read `pwd` or
+`git status` first when a worktree may have been removed.
+- Evidence: 2026-10-31, a worktree was gone after #565 merged, so the next script's
+  `cd` failed and the version bump branch was created in the main checkout. #566
+  still carried the right two files, and the checkout was switched back. The same
+  worktree loss followed #568's merge; its cause is unconfirmed.
+
 **A z-index claim must survive a hit test, not just a stylesheet read.** A
 positive z-index lifts an element above a sibling overlay only while no
 ancestor creates a stacking context in between; a later `transform` on a
