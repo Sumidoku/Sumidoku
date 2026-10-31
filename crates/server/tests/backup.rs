@@ -117,7 +117,7 @@ async fn authenticated_app(password: &str) -> TestApp {
 	config.auth.password = Some(password.into());
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn login_token(app: &Router, password: &str) -> String {

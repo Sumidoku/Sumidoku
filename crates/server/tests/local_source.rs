@@ -79,7 +79,7 @@ async fn local_app_with(configure: impl FnOnce(&mut Config)) -> TestApp {
 	configure(&mut config);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 /// Alpha's ch 2 single-page big image, needed by the downsampling assertions; returns the on-disk original bytes
@@ -178,7 +178,7 @@ async fn chapter_id_of(app: &Router, manga_id: i64, key: &str) -> i64 {
 
 #[tokio::test]
 async fn migration_seeds_builtin_local_source() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (status, body) = request(&app, "GET", "/api/v1/sources", None).await;
@@ -217,7 +217,7 @@ async fn scan_lists_only_real_manga_dirs() {
 
 #[tokio::test]
 async fn register_persists_scan_metadata_and_chapter_order() {
-	let TestApp { app, tmp: _tmp, db_path: _ } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
 
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
@@ -244,7 +244,7 @@ async fn register_persists_scan_metadata_and_chapter_order() {
 
 #[tokio::test]
 async fn image_chapter_pages_natural_order_and_bytes() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 1").await;
 
@@ -304,7 +304,7 @@ async fn local_page_reads_follow_the_current_file_bytes() {
 
 #[tokio::test]
 async fn cbz_chapter_pages_and_bytes_match_image_chapter() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 4.cbz").await;
 
@@ -331,7 +331,7 @@ async fn cbz_chapter_pages_and_bytes_match_image_chapter() {
 #[tokio::test]
 async fn comic_info_extracted_from_cbz() {
 
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Delta").await;
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -341,7 +341,7 @@ async fn comic_info_extracted_from_cbz() {
 
 #[tokio::test]
 async fn cover_sidecar_wins() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Beta").await;
 	let (status, headers, bytes) =
 		request_full(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
@@ -352,7 +352,7 @@ async fn cover_sidecar_wins() {
 
 #[tokio::test]
 async fn cover_falls_back_to_last_chapter_first_page() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	// the chapter list is descending by number, so the tail = the oldest chapter (ch 1); take its first page
 	let gamma_id = register_local(&app, "Gamma").await;
 	let (status, _, bytes) = request_full(&app, "GET", &format!("/api/v1/manga/{gamma_id}/cover"), None).await;
@@ -370,7 +370,7 @@ async fn cover_falls_back_to_last_chapter_first_page() {
 
 #[tokio::test]
 async fn cover_missing_answers_404() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Epsilon").await;
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::NOT_FOUND);
@@ -447,7 +447,7 @@ async fn local_cover_rebuilds_unversioned_cache() {
 
 #[tokio::test]
 async fn first_browse_uses_pre_kick_snapshot() {
-	let TestApp { app, tmp: _tmp, db_path } = local_app().await;
+	let TestApp { app, db_path, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 	let pool = common::connect_db(&db_path).await;
 	sqlx::query(
@@ -600,7 +600,7 @@ async fn unreadable_chapter_entry_never_deletes_rows() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Sigma").await;
 	let before = chapters_of(&t.app, manga_id).await;
 	assert_eq!(before.len(), 3);
@@ -627,7 +627,7 @@ async fn unreadable_chapter_entry_never_deletes_rows() {
 
 #[tokio::test]
 async fn invalid_or_unknown_keys_rejected() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 	// nested keys are well-formed relative paths: they pass the guard and fail on the filesystem lookup instead
 	for (key, want) in [("../escape", 400), ("a/b", 404), ("Nope", 404)] {
@@ -651,7 +651,7 @@ async fn local_dir_config_override() {
 	config.local_dirs = Some(vec![outside.path().join("manga")]);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Beta").await;
 	let (status, _, bytes) = request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -661,7 +661,7 @@ async fn local_dir_config_override() {
 
 #[tokio::test]
 async fn shelving_progress_and_library_filters_behave_like_online() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let manga_id = register_local(&app, "Alpha").await;
 	let chapter_id = chapter_id_of(&app, manga_id, "ch 1").await;
 
@@ -743,7 +743,7 @@ async fn update_scheduler_rescans_local_library() {
 
 #[tokio::test]
 async fn browse_search_reads_the_index_and_filters() {
-	let TestApp { app, tmp: _tmp, .. } = local_app_with(|config| {
+	let TestApp { app, .. } = local_app_with(|config| {
 		config.local_analyze_pages = false;
 		config.local_analyze_metadata = false;
 	})
@@ -812,7 +812,7 @@ async fn browse_search_reads_the_index_and_filters() {
 
 #[tokio::test]
 async fn aggregate_search_includes_local_source() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 	// the local arm answers from the scan index, so index first
 	common::local_scan_and_settle(&app, None).await;
@@ -886,7 +886,7 @@ async fn settings_no_longer_inject_local_dirs() {
 
 #[tokio::test]
 async fn local_listings_answer_synthesized() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 
 	// local sources synthesize listings server-side (all / continue-reading / latest-updates / ...)
@@ -944,7 +944,7 @@ async fn nested_app() -> TestApp {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 #[tokio::test]
@@ -960,7 +960,7 @@ async fn nested_scan_discovers_series_under_containers() {
 
 #[tokio::test]
 async fn nested_browse_lists_leaf_titles_and_filters() {
-	let TestApp { app, tmp: _tmp, .. } = nested_app().await;
+	let TestApp { app, .. } = nested_app().await;
 	let source_id = local_source_id(&app).await;
 	// browse reads the scan index: index first, then read
 	common::local_scan_and_settle(&app, None).await;
@@ -1015,7 +1015,7 @@ async fn nested_browse_lists_leaf_titles_and_filters() {
 
 #[tokio::test]
 async fn nested_image_leaf_chapter_reads_pages_in_order() {
-	let TestApp { app, tmp: _tmp, .. } = nested_app().await;
+	let TestApp { app, .. } = nested_app().await;
 	let manga_id = register_local(&app, "My Series").await;
 
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}"), None).await;
@@ -1060,7 +1060,7 @@ async fn manga_absorbs_nested_archives() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	// the claimed manga absorbs its whole subtree: nested is never a manga of its own
 	let dirs = sumidoku_server::internal::local::scan_manga_dirs(&[t.tmp.path().join("local")], None, &[])
@@ -1100,7 +1100,7 @@ async fn same_name_dirs_at_different_depths_do_not_collide() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let manga_id = register_local(&t.app, "Same").await;
 	let chapters = chapters_of(&t.app, manga_id).await;
@@ -1118,7 +1118,7 @@ async fn same_name_dirs_at_different_depths_do_not_collide() {
 
 #[tokio::test]
 async fn path_guard_rejects_traversal_absolute_and_drive() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let source_id = local_source_id(&app).await;
 	for key in ["../escape", "a/../b", "a/./b", "a//b", "a/b/", "/abs", "a\\b", "C:/x", "c:/y", "C:foo", "c:foo/x", "2:C:foo"] {
 		let (status, body) = request(
@@ -1162,7 +1162,7 @@ async fn nested_comic_info_and_cover_resolve() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let a_id = register_local(&t.app, "Pub/Series A").await;
 	let (status, body) = request(&t.app, "GET", &format!("/api/v1/manga/{a_id}"), None).await;
@@ -1212,7 +1212,7 @@ async fn unreadable_nested_entry_never_deletes_rows() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Sigma").await;
 	let before = chapters_of(&t.app, manga_id).await;
 	assert_eq!(before.len(), 3);
@@ -1246,7 +1246,7 @@ async fn unreadable_nested_container_never_deletes_subtree() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Tau").await;
 	assert_eq!(chapters_of(&t.app, manga_id).await.len(), 3);
 
@@ -1315,7 +1315,7 @@ async fn oneshots_app_with(configure: impl FnOnce(&mut Config)) -> TestApp {
 	configure(&mut config);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn put_oneshots_dir(app: &Router, value: serde_json::Value) -> (StatusCode, serde_json::Value) {
@@ -1363,7 +1363,7 @@ async fn browse_local(app: &Router) -> Vec<(String, String)> {
 
 #[tokio::test]
 async fn oneshots_dir_lists_archives_as_one_shot_manga() {
-	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	let TestApp { app, .. } = oneshots_app().await;
 	enable_oneshots(&app).await;
 
 	let mut entries = browse_local(&app).await;
@@ -1386,7 +1386,7 @@ async fn oneshots_dir_lists_archives_as_one_shot_manga() {
 
 #[tokio::test]
 async fn oneshots_dir_default_off_claims_directory() {
-	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	let TestApp { app, .. } = oneshots_app().await;
 	// control group: with nothing configured the oneshots directory is claimed by the plain archive
 	// trigger, so the rule never misfires on an unconfigured library
 	let mut entries = browse_local(&app).await;
@@ -1400,7 +1400,7 @@ async fn oneshots_dir_default_off_claims_directory() {
 
 #[tokio::test]
 async fn oneshot_manga_opens_as_single_chapter() {
-	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	let TestApp { app, .. } = oneshots_app().await;
 	enable_oneshots(&app).await;
 	let manga_id = register_local(&app, "oneshots/Foo.cbz").await;
 
@@ -1445,7 +1445,7 @@ async fn oneshots_rule_matches_at_any_depth_case_insensitive() {
 	config.local_analyze_metadata = false;
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let (status, body) = put_oneshots_dir(&t.app, json!("ONESHOTS")).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 
@@ -1462,7 +1462,7 @@ async fn oneshots_rule_matches_at_any_depth_case_insensitive() {
 
 #[tokio::test]
 async fn oneshots_dir_setting_validation_clear_and_injection() {
-	let TestApp { app, tmp: _tmp, .. } = oneshots_app().await;
+	let TestApp { app, .. } = oneshots_app().await;
 
 	// unconfigured: the effective value is null
 	assert_eq!(oneshots_value(&app).await, serde_json::Value::Null);
@@ -1504,7 +1504,7 @@ async fn oneshots_dir_from_config_and_setting_override() {
 	config.local_analyze_metadata = false;
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let (status, body) = request(&t.app, "GET", "/api/v1/settings", None).await;
 	assert_eq!(status, StatusCode::OK, "{body}");
@@ -1646,7 +1646,7 @@ async fn epub_chapter_pages_follow_spine_order() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Spine").await;
 	let chapter_id = chapter_id_of(&t.app, manga_id, "ch 1.epub").await;
 
@@ -1708,7 +1708,7 @@ async fn epub_xhtml_and_svg_pages_follow_spine_order() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Markup").await;
 	let chapter_id = chapter_id_of(&t.app, manga_id, "ch 1.epub").await;
 
@@ -1742,7 +1742,7 @@ async fn epub_invalid_packages_do_not_fall_back_to_archive_images() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Broken").await;
 
 	for key in ["ch 1.epub", "ch 2.epub"] {
@@ -1771,7 +1771,7 @@ async fn epub_mimetype_is_validated() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Fake").await;
 
 	for key in ["wrong.epub", "missing.epub"] {
@@ -1843,7 +1843,7 @@ async fn epub_non_divina_and_incomplete_books_have_no_pages() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Cases").await;
 
 	for key in ["prose.epub", "multi.epub", "missing.epub", "unlisted.epub", "dangling.epub"] {
@@ -1893,7 +1893,7 @@ async fn epub_divina_compatibility_is_persisted_and_refreshed() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Types").await;
 	// the test rewrites archives in place: only forceModifiedTime lets the scan's mtime detector see that
 	let source_id = local_source_id(&t.app).await;
@@ -2021,7 +2021,7 @@ async fn nested_epub_chapter_reads_in_spine_order() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	let manga_id = register_local(&t.app, "Nest").await;
 
 	let chapters = chapters_of(&t.app, manga_id).await;
@@ -2053,7 +2053,7 @@ async fn oneshot_epub_opens_as_single_chapter() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	enable_oneshots(&t.app).await;
 
 	let entries = browse_local(&t.app).await;
@@ -2138,7 +2138,7 @@ async fn series_json_maps_into_manga() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let theta_id = register_local(&t.app, "Theta").await;
 	let body = manga_json(&t.app, theta_id).await;
@@ -2168,7 +2168,7 @@ async fn series_json_unknown_status_is_unset() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let manga_id = register_local(&t.app, "Kappa").await;
 	let body = manga_json(&t.app, manga_id).await;
@@ -2183,7 +2183,7 @@ async fn epub_opf_maps_into_manga() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let manga_id = register_local(&t.app, "Lambda").await;
 	let body = manga_json(&t.app, manga_id).await;
@@ -2218,7 +2218,7 @@ async fn comic_info_outranks_series_json() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let mu_id = register_local(&t.app, "Mu").await;
 	let body = manga_json(&t.app, mu_id).await;
@@ -2245,7 +2245,7 @@ async fn series_json_outranks_epub_opf() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let manga_id = register_local(&t.app, "Nu").await;
 	let body = manga_json(&t.app, manga_id).await;
@@ -2264,7 +2264,7 @@ async fn broken_series_json_falls_through_to_epub_opf() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	// a broken sidecar warns and is skipped: shelving succeeds and the chain lands on the OPF
 	let manga_id = register_local(&t.app, "Xi").await;
@@ -2303,7 +2303,7 @@ async fn structured_metadata_preserves_commas_in_api() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 
 	let mylar_id = register_local(&t.app, "MylarCommas").await;
 	let body = manga_json(&t.app, mylar_id).await;
@@ -2435,7 +2435,7 @@ async fn oneshot_epub_reads_opf_not_sidecar_series_json() {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	let t = TestApp { app, tmp, db_path };
+	let t = TestApp::new(app, tmp, db_path);
 	enable_oneshots(&t.app).await;
 
 	let manga_id = register_local(&t.app, "oneshots/Solo.epub").await;

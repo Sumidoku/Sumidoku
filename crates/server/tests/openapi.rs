@@ -391,7 +391,7 @@ fn response_validator_enforces_body_and_media_contract() {
 
 #[tokio::test]
 async fn spec_is_served_from_embedded_assets() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let (status, headers, bytes) = request_full(&app, "GET", "/api/openapi.json", None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert!(headers[header::CONTENT_TYPE].to_str().expect("JSON content type").starts_with("application/json"));
@@ -401,7 +401,7 @@ async fn spec_is_served_from_embedded_assets() {
 
 #[tokio::test]
 async fn docs_assets_are_served_offline() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	for path in ["/api/docs", "/api/docs/"] {
 		let (status, headers, bytes) = request_full(&app, "GET", path, None).await;
 		assert_eq!(status, StatusCode::OK);
@@ -433,7 +433,7 @@ async fn docs_assets_are_served_offline() {
 
 #[tokio::test]
 async fn third_party_notices_are_embedded() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	for file in ["swagger-ui-bundle.js.LICENSE.txt", "swagger-ui-standalone-preset.js.LICENSE.txt"] {
 		let path = format!("/api/docs/{file}");
 		let (status, _, bytes) = request_full(&app, "GET", &path, None).await;

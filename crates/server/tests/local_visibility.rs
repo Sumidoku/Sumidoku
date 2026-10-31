@@ -19,7 +19,7 @@ async fn app_with_roots(roots: &[&std::path::Path]) -> TestApp {
 	config.local_dirs = Some(roots.iter().map(|p| p.to_path_buf()).collect());
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn local_id(app: &axum::Router) -> i64 {

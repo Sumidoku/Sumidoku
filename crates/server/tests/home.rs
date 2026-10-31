@@ -27,7 +27,7 @@ async fn scan_and_source_ids(app: &axum::Router) -> Vec<(String, i64)> {
 
 #[tokio::test]
 async fn home_layout_serialized() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let ids = scan_and_source_ids(&app).await;
 	let source_id = ids
 		.iter()

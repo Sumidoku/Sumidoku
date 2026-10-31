@@ -14,7 +14,7 @@ const PNG: &[u8] = &[
 #[tokio::test]
 async fn http_response_logging_is_info_and_omits_query() {
 	let (logs, _guard) = common::capture_logs();
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	logs.take();
 
 	let (status, _) = request(&app, "GET", "/api/v1/version?token=query-secret", None).await;
@@ -34,7 +34,7 @@ async fn http_response_logging_is_info_and_omits_query() {
 #[tokio::test]
 async fn database_errors_do_not_leak_into_responses() {
 	let (logs, _guard) = common::capture_logs();
-	let TestApp { app, db_path, tmp: _tmp } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = common::connect_db(&db_path).await;
 	sqlx::query("DROP TABLE download").execute(&pool).await.expect("drop table");
 	let (status, body) = request(&app, "GET", "/api/v1/downloads", None).await;
@@ -215,7 +215,7 @@ async fn full_flow() {
 
 #[tokio::test]
 async fn reset_and_clear_source_state() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
 	let (_, sources) = request(&app, "GET", "/api/v1/sources", None).await;
@@ -297,7 +297,7 @@ async fn source_icon() {
 
 #[tokio::test]
 async fn patch_manga_update_strategy() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let manga_path = format!("/api/v1/manga/{manga_id}");
 	let (_, body) = request(&app, "GET", &manga_path, None).await;
@@ -391,4 +391,14 @@ async fn manga_api_exposes_stored_viewer_thumbnail_and_override() {
 		.await
 		.expect("stored viewer");
 	assert_eq!(stored, 2);
+}
+
+#[tokio::test]
+async fn a_destructured_app_keeps_its_temp_dir() {
+	let TestApp { app, db_path, .. } = test_app().await;
+	assert!(db_path.exists());
+	let (status, _) = request(&app, "GET", "/api/v1/categories", None).await;
+	assert_eq!(status, StatusCode::OK);
+	drop(app);
+	assert!(!db_path.exists());
 }

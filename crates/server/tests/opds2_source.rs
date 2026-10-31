@@ -245,7 +245,7 @@ async fn opds_app() -> TestApp {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn register_alpha_manga(app: &Router, source_id: i64) -> (i64, Value) {

@@ -106,11 +106,7 @@ async fn group_library_set(app: &Router, group_id: i64) -> std::collections::Has
 
 #[tokio::test]
 async fn filter_group_crud_reorder() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 
 	let (status, body) = request(&app, "GET", "/api/v1/filter-groups", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -286,11 +282,7 @@ async fn must_group(app: &Router, name: &str, rules: Value) -> i64 {
 
 #[tokio::test]
 async fn library_group_flag_rules() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let f = library_fixture(&app, &pool).await;
 
@@ -328,11 +320,7 @@ async fn library_group_flag_rules() {
 
 #[tokio::test]
 async fn library_group_dimensions_or_and() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let f = library_fixture(&app, &pool).await;
 
@@ -383,11 +371,7 @@ async fn library_group_dimensions_or_and() {
 
 #[tokio::test]
 async fn library_group_composes_with_adhoc_filters() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let f = library_fixture(&app, &pool).await;
 	let group = must_group(&app, "unread", json!([{"type": "has_unread"}])).await;
@@ -426,11 +410,7 @@ async fn library_group_composes_with_adhoc_filters() {
 /// the manga's JSON array column; validated on write, echoing back as a JSON string
 #[tokio::test]
 async fn library_group_text_rules() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_three_shelved(&app).await;
 	let (a, b, c) = (ids[0], ids[1], ids[2]);
 	let pool = connect_db(&db_path).await;
@@ -509,11 +489,7 @@ fn urlencoding(raw: &str) -> String {
 
 #[tokio::test]
 async fn library_card_unread_count_is_default_unread() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let ids = register_three_shelved(&app).await;
 	let (a, b, c) = (ids[0], ids[1], ids[2]);
@@ -556,11 +532,7 @@ async fn library_card_unread_count_is_default_unread() {
 
 #[tokio::test]
 async fn library_display_settings() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 
 	// round-trip through the settings endpoint
 	let (status, body) = request(

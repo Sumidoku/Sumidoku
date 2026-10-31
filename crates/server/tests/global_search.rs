@@ -94,7 +94,7 @@ async fn failing_source_only_marks_itself() {
 
 #[tokio::test]
 async fn unknown_source_only_marks_itself() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let ids = scan_sources(&app).await;
 	let good = source_id_of(&ids, "en.example-source");
 
@@ -166,7 +166,7 @@ async fn ndjson_emits_per_source_events_then_final() {
 
 #[tokio::test]
 async fn page_must_be_positive() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let ids = scan_sources(&app).await;
 	let good = source_id_of(&ids, "en.example-source");
 

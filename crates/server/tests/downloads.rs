@@ -25,7 +25,7 @@ async fn downloads_app(configure: impl FnOnce(&mut Config)) -> TestApp {
 	configure(&mut config);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn first_chapter_id(app: &Router, manga_id: i64) -> i64 {

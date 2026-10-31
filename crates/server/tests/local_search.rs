@@ -49,7 +49,7 @@ async fn local_app() -> TestApp {
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	local_scan_and_settle(&app, None).await;
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn local_source_id(app: &axum::Router) -> i64 {
@@ -86,7 +86,7 @@ fn titles(entries: &[serde_json::Value]) -> Vec<&str> {
 
 #[tokio::test]
 async fn search_by_title_substring() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	let entries = search(&app, id, Some("lpha"), json!([])).await;
 	assert_eq!(titles(&entries), vec!["Alpha Title"]);
@@ -94,7 +94,7 @@ async fn search_by_title_substring() {
 
 #[tokio::test]
 async fn search_by_author_exact() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	let entries = search(&app, id, None, json!([{"Text": {"id": "author", "value": "Author A"}}])).await;
 	assert_eq!(titles(&entries), vec!["Alpha Title"]);
@@ -102,7 +102,7 @@ async fn search_by_author_exact() {
 
 #[tokio::test]
 async fn search_by_artist_exact() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	let entries = search(&app, id, None, json!([{"Text": {"id": "artist", "value": "Shared Artist"}}])).await;
 	assert_eq!(titles(&entries), vec!["Beta Title"]);
@@ -110,7 +110,7 @@ async fn search_by_artist_exact() {
 
 #[tokio::test]
 async fn search_by_tag_exact() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	let entries = search(&app, id, None, json!([{"Select": {"id": "genre", "value": "Action"}}])).await;
 	let mut got = titles(&entries);
@@ -120,7 +120,7 @@ async fn search_by_tag_exact() {
 
 #[tokio::test]
 async fn search_query_matches_author_and_tag_substring() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	// "Author" matches authors; "Comedy" matches tags.
 	let entries = search(&app, id, Some("Author B"), json!([])).await;
@@ -131,7 +131,7 @@ async fn search_query_matches_author_and_tag_substring() {
 
 #[tokio::test]
 async fn search_by_multiple_tags() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	let entries = search(
 		&app,
@@ -145,7 +145,7 @@ async fn search_by_multiple_tags() {
 
 #[tokio::test]
 async fn search_combines_query_and_filters() {
-	let TestApp { app, tmp: _tmp, .. } = local_app().await;
+	let TestApp { app, .. } = local_app().await;
 	let id = local_source_id(&app).await;
 	// "Title" matches all; author filter narrows to Beta.
 	let entries = search(&app, id, Some("Title"), json!([{"Text": {"id": "author", "value": "Author B"}}])).await;
