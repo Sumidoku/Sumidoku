@@ -31,6 +31,7 @@ import {
 import type { FilterValue, SearchManga, SourceFilter } from '../api/types';
 import { entrySubtitle, formatRangeBound } from '../lib/format';
 import { localListingLabel } from '../lib/localListings';
+import { hasHistoryBack } from '../lib/navigation';
 import { loadFilterPrefs, saveFilterPrefs } from '../lib/sourceFilterPrefs';
 import {
 	addSavedFilter,
@@ -167,6 +168,13 @@ export default function SourceBrowsePage() {
 	const { sourceId: rawId } = useParams();
 	const sourceId = Number(rawId);
 	const navigate = useNavigate();
+
+	// Author/tag taps on a manga detail push this page onto the stack, so back pops to that
+	// detail; only a direct entry (fresh load/deep link) falls back to the source list
+	function goBack() {
+		if (hasHistoryBack(window.history.state?.idx)) navigate(-1);
+		else navigate('/browse');
+	}
 
 	const source = useSource(sourceId);
 	useDocumentTitle(source.data?.name);
@@ -424,7 +432,7 @@ export default function SourceBrowsePage() {
 		return (
 			<div className="page container">
 				<div className="source-page__head">
-					<IconButton label={t('sourceBrowse.backToBrowse')} onClick={() => navigate('/browse')}>
+					<IconButton label={t('sourceBrowse.backToBrowse')} onClick={goBack}>
 						<ArrowLeft size={18} />
 					</IconButton>
 					<h1 className="source-page__title">{source.data.name}</h1>
@@ -441,7 +449,7 @@ export default function SourceBrowsePage() {
 	return (
 		<div className="page container">
 			<div className="source-page__head">
-				<IconButton label={t('sourceBrowse.backToBrowse')} onClick={() => navigate('/browse')}>
+				<IconButton label={t('sourceBrowse.backToBrowse')} onClick={goBack}>
 					<ArrowLeft size={18} />
 				</IconButton>
 				<h1 className="source-page__title">{source.data?.name ?? t('sourceBrowse.sourceFallback')}</h1>
