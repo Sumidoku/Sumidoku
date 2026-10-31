@@ -191,8 +191,6 @@ impl ServerSettings {
 			"library.skip_titles",
 			"library.refresh_metadata",
 			"library.update_interval_hours",
-			crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT,
-			crate::internal::local::scan::LOCAL_LAST_SCAN_AT,
 			"auto_download_new_chapters",
 			"auto_download_limit",
 			"download_format",
@@ -213,9 +211,9 @@ impl ServerSettings {
 			"backup.last_run",
 			"backup.dir",
 			"browse.pinned_sources",
-			"sync.instance_id",
 		]
 		.iter()
+		.chain(&crate::api::SERVER_OWNED_SETTING_KEYS)
 		.copied()
 		.collect();
 		let extra = map

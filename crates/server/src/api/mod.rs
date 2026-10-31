@@ -2031,6 +2031,15 @@ pub(crate) async fn get_pages(
 /// the same statements while a select-all library stays far below the cap.
 pub(crate) const MANGA_ID_QUERY_CHUNK: usize = 500;
 
+/// Instance state only the server writes: settings writes ignore these keys, the structured view
+/// leaves them out, and backups neither carry nor restore them.
+pub(crate) const SERVER_OWNED_SETTING_KEYS: [&str; 4] = [
+	"sync.instance_id",
+	crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT,
+	crate::update::LIBRARY_LAST_UPDATE_FINISHED_AT,
+	crate::internal::local::scan::LOCAL_LAST_SCAN_AT,
+];
+
 /// Legacy owner-scoped setting keys: stored under user.1 in the DB and exposed as bare keys through the API;
 /// the library.* values reference the admin's category ids. New keys are added on both read and write sides together
 pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
@@ -2132,12 +2141,7 @@ pub(crate) async fn apply_settings(
 			result?;
 		}
 		// Read-only and instance-owned keys must not be overwritten through the public settings surface.
-		if key == "localDirs"
-			|| key == "localOneshotsDir"
-			|| key == "sync.instance_id"
-			|| key == crate::update::LIBRARY_LAST_SCHEDULED_RUN_AT
-			|| key == crate::internal::local::scan::LOCAL_LAST_SCAN_AT
-		{
+		if key == "localDirs" || key == "localOneshotsDir" || SERVER_OWNED_SETTING_KEYS.contains(&key.as_str()) {
 			continue;
 		}
 		// local.dirs drives the local source's scan roots (state.local_dirs), so its shape is validated
