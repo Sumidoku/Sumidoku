@@ -469,10 +469,16 @@ no alias is derived from migration text.
   Local yields a section instead of an error entry. The local source
   synthesizes its own Aidoku-style home page (`internal/local/home.rs`):
   `continue-reading`, `latest-updates`, `latest-added`, and
-  `recently-read`. `latest-updates` lists manga whose content changed
-  after first indexing (`manga.updated_at IS NOT NULL`) ordered by
-  `manga.updated_at`; `latest-added` lists manga ordered by first-indexed
-  time (`manga.created_at`). A manga persists
+  `recently-read`. Every section is one row per manga: `continue-reading`
+  lists manga with a started-but-unfinished chapter and `recently-read`
+  manga with a finished chapter, each carrying the manga's most recently
+  read chapter of that kind (a per-manga windowed rank, so a manga with
+  several such chapters still occupies one row) and ordered by that
+  chapter's `chapter_user.last_read_at`; the listing pages dedupe the same
+  way, so a page matches its section. `latest-updates` lists manga whose
+  content changed after first indexing (`manga.updated_at IS NOT NULL`)
+  ordered by `manga.updated_at`; `latest-added` lists manga ordered by
+  first-indexed time (`manga.created_at`). A manga persists
   when opened, shelved, or indexed by a scan: a never-indexed open
   registers through `find_or_register_manga`'s full `manga_update`
   chain (the one synchronous expensive path); every other online access

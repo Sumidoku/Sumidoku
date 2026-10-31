@@ -4,12 +4,16 @@
 //! were 501 for it. This module builds the same section-based home page a WASM source would
 //! from the local scan index (`manga` / `chapter` / `chapter_user`), so a local library gets:
 //!
-//! - `continue-reading` — MangaChapterList (page_size=1), in-progress chapters ordered by last_read_at
+//! - `continue-reading` — MangaChapterList (page_size=1), one entry per manga with an in-progress
+//!   chapter, ordered by last_read_at; the entry holds that manga's most recently read in-progress
+//!   chapter, so a manga with several half-read chapters still occupies one row
 //! - `latest-updates` — MangaChapterList (page_size=1), manga whose content changed after first
 //!   indexing (`manga.updated_at IS NOT NULL`), ordered by `manga.updated_at`; the displayed chapter
 //!   is the newest by `chapter.created_at` and its subtitle time is `manga.updated_at`
 //! - `latest-added` — Scroller, manga ordered by first-indexed time (`manga.created_at`)
-//! - `recently-read` — MangaChapterList (page_size=1), finished chapters ordered by last_read_at
+//! - `recently-read` — MangaChapterList (page_size=1), one entry per manga with a finished chapter,
+//!   ordered by last_read_at; the entry holds that manga's most recently finished chapter, so a
+//!   manga read to the end of several chapters still occupies one row
 //!
 //! Each section carries a `listing` pointer, so the existing "View all" button on
 //! SourceHomePage routes to `/browse/{id}?mode={listingId}`; the listings endpoints below
@@ -185,17 +189,38 @@ fn row_to_joined(row: &sqlx::sqlite::SqliteRow) -> sqlx::Result<JoinedRow> {
 /// by `hidden_manga_ids_json` and bound as a JSON array, so the id list never meets the bound-variable cap
 const HIDDEN_CLAUSE: &str = " AND m.id NOT IN (SELECT value FROM json_each(?))";
 
-/// Continue-reading: chapters the user has started but not finished, newest progress first.
-async fn run_continue_reading(
+/// The two reading-history sections (`continue-reading`, `recently-read`) are about manga, not
+/// chapters: each row is one manga and carries that manga's most recently read chapter matching
+/// `progress_filter`. A manga with several half-read or finished chapters therefore appears once,
+/// and the chapter only supplies the row's resume target and subtitle. The home section and the
+/// listing page both come through here, so both dedupe the same way.
+async fn run_reading_history(
 	state: &AppState,
 	source_id: i64,
 	hidden: &str,
 	limit: i64,
 	offset: i64,
+	progress_filter: &str,
 ) -> ApiResult<Vec<Value>> {
+	// Rank the matching progress rows of each manga by reading time and keep the newest; the
+	// chapter id breaks ties, so a same-second read cannot make the chosen chapter depend on row
+	// order. The source and hidden filters live inside the CTE so the ranking only walks one
+	// source's history, and the outer join restores the full manga and chapter rows.
 	let clauses = HIDDEN_CLAUSE;
 	let sql = format!(
-		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
+		"WITH newest AS (
+		     SELECT cu.chapter_id AS chapter_id, cu.last_read_at AS last_read_at,
+		            ROW_NUMBER() OVER (
+		                PARTITION BY c.manga_id
+		                ORDER BY cu.last_read_at DESC, cu.chapter_id DESC
+		            ) AS rn
+		     FROM chapter_user cu
+		     JOIN chapter c ON c.id = cu.chapter_id
+		     JOIN manga m ON m.id = c.manga_id
+		     WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
+		       AND cu.user_id = ? AND {progress_filter}
+		 )
+		 SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
 		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
 		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at,
@@ -205,13 +230,12 @@ async fn run_continue_reading(
 		        c.date_uploaded AS cdate_uploaded, c.source_order AS csource_order,
 		        c.page_count AS cpage_count, c.locked AS clocked, c.fetched_at AS cfetched_at,
 		        c.created_at AS ccreated_at, c.trashed_at AS ctrashed_at,
-		        cu.last_read_at
-		 FROM chapter_user cu
-		 JOIN chapter c ON c.id = cu.chapter_id
+		        newest.last_read_at
+		 FROM newest
+		 JOIN chapter c ON c.id = newest.chapter_id
 		 JOIN manga m ON m.id = c.manga_id
-		 WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
-		   AND cu.user_id = ? AND cu.last_page_read > 0 AND cu.is_read = 0
-		 ORDER BY cu.last_read_at DESC
+		 WHERE newest.rn = 1
+		 ORDER BY newest.last_read_at DESC, c.id DESC
 		 LIMIT ? OFFSET ?"
 	);
 	let mut query = sqlx::query(&sql).bind(source_id);
@@ -226,6 +250,25 @@ async fn run_continue_reading(
 		out.push(json!({ "manga": m, "chapter": c }));
 	}
 	Ok(out)
+}
+
+/// Continue-reading: manga with a chapter the user has started but not finished, newest progress first.
+async fn run_continue_reading(
+	state: &AppState,
+	source_id: i64,
+	hidden: &str,
+	limit: i64,
+	offset: i64,
+) -> ApiResult<Vec<Value>> {
+	run_reading_history(
+		state,
+		source_id,
+		hidden,
+		limit,
+		offset,
+		"cu.last_page_read > 0 AND cu.is_read = 0",
+	)
+	.await
 }
 
 /// Latest chapter per manga, ordered by the manga's last content update time desc.
@@ -339,7 +382,7 @@ async fn run_recently_added(
 	Ok(out)
 }
 
-/// Recently-read (finished) chapters, newest last_read_at first.
+/// Recently-read: manga with a finished chapter, newest finish first.
 async fn run_recently_read(
 	state: &AppState,
 	source_id: i64,
@@ -347,38 +390,7 @@ async fn run_recently_read(
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	let clauses = HIDDEN_CLAUSE;
-	let sql = format!(
-		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
-		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
-		        m.update_strategy, m.next_update_time, m.last_fetched_at, m.chapters_last_fetched_at,
-		        m.trashed_at, m.scan_mtime, m.created_at, m.updated_at,
-		        c.id AS cid, c.manga_id AS cmanga_id, c.key AS ckey, c.title AS ctitle,
-		        c.number AS cnumber, c.volume AS cvolume, c.scanlators AS cscanlators,
-		        c.language AS clanguage, c.thumbnail AS cthumbnail, c.url AS curl,
-		        c.date_uploaded AS cdate_uploaded, c.source_order AS csource_order,
-		        c.page_count AS cpage_count, c.locked AS clocked, c.fetched_at AS cfetched_at,
-		        c.created_at AS ccreated_at, c.trashed_at AS ctrashed_at,
-		        cu.last_read_at
-		 FROM chapter_user cu
-		 JOIN chapter c ON c.id = cu.chapter_id
-		 JOIN manga m ON m.id = c.manga_id
-		 WHERE m.source_id = ? AND m.trashed_at IS NULL{clauses}
-		   AND cu.user_id = ? AND cu.is_read = 1
-		 ORDER BY cu.last_read_at DESC
-		 LIMIT ? OFFSET ?"
-	);
-	let mut query = sqlx::query(&sql).bind(source_id);
-	query = query.bind(hidden);
-	let rows = query.bind(USER_ID).bind(limit).bind(offset).fetch_all(&state.pool).await?;
-	let mut out = Vec::new();
-	for row in &rows {
-		let joined = row_to_joined(row)?;
-		let m = manga_to_json(&joined.manga)?;
-		let c = chapter_to_json(&joined.chapter, joined.last_read_at)?;
-		out.push(json!({ "manga": m, "chapter": c }));
-	}
-	Ok(out)
+	run_reading_history(state, source_id, hidden, limit, offset, "cu.is_read = 1").await
 }
 
 /// All manga in the source, sorted by title (case-insensitive). This is the default listing
