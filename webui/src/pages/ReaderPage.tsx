@@ -51,7 +51,7 @@ import {
 	zoneMovesForward
 } from './reader/readerPrefs';
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
-import { buildSpreads, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
+import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction } from './reader/hotkeys';
@@ -1568,7 +1568,7 @@ function ReaderCore({
 								const dimensions = text === null && !unsupported ? dimsOf(arrayIndex) : null;
 								return (
 									<div
-										className="reader__pg"
+										className={continuousPageClass(text === null && !unsupported, dimensions)}
 										data-page={p.index}
 										key={p.index}
 										style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}

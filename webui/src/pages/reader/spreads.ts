@@ -156,3 +156,10 @@ export function trackOffsetPercent(dir: 'ltr' | 'rtl', spreadIndex: number): num
 	if (spreadIndex === 0) return 0;
 	return (dir === 'rtl' ? 1 : -1) * spreadIndex * 100;
 }
+
+/** An image page with no known size has no box until it loads, so a stack of them
+    would all sit in the viewport at once and count as read. The modifier gives
+    such a page a viewport-tall placeholder until its dimensions arrive */
+export function continuousPageClass(isImage: boolean, dims: PageDims | null): string {
+	return isImage && dims === null ? 'reader__pg reader__pg--unsized' : 'reader__pg';
+}
