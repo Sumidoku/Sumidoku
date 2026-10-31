@@ -20,6 +20,25 @@ the primary write and put the companion write in its transaction.
   outright. The resolved change adds only the column; the snapshot field now
   lives in `sync/journal.rs`, and `store/manga.rs:set_metadata` writes the
   journal row in the same transaction.
+**A box with no size still intersects.** An `IntersectionObserver` reports a
+zero-height element inside the viewport as intersecting, so a list of unloaded
+items all count as seen at once. Reserve each item's box before treating
+intersection as "the user reached this", and test with responses held open: a
+fast local image loads before the bug can show.
+- Evidence: 2026-11-01, #574: opening an unread chapter with unmeasured pages
+  and images delayed 4s put all 30 pages in view at 0 height. Progress jumped to
+  page 29 and marked the chapter read, and no later scroll could report anything.
+  A viewport-tall placeholder put only page 0 in view, in continuous and webtoon.
+
+**A hidden browser page does not run frames, so a stuck reader there proves
+nothing.** `requestAnimationFrame` and `IntersectionObserver` stop while the page
+is not rendered, and scroll handlers built on them look dead with every listener
+attached. Race a `requestAnimationFrame` against a timeout before trusting a
+result that depends on either.
+- Evidence: 2026-11-01, the #574 smoke showed a page number and progress frozen
+  after reload and looked like a reproduction. Logging showed the listeners
+  attached and the update never ran. The rAF probe returned false in the hidden
+  pane, and everything moved once the pane was visible. The real bug was elsewhere.
 
 **A name a user can edit is not an identity.** Matching a synced entity by its
 name works until the name changes, and then the event that carries the change

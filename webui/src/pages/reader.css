@@ -428,6 +428,11 @@
 	padding: 0;
 }
 
+.reader__pg--unsized,
+.reader__pg--unsized .reader__img--loading {
+	min-height: 100dvh;
+}
+
 .reader__pg img {
 	display: block;
 	width: 100%;

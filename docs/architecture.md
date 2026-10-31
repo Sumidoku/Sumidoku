@@ -2033,8 +2033,11 @@ so there is no wrapper and nothing to intercept taps; the class comes off on
 load so it never shows through transparent regions, and
 `prefers-reduced-motion` swaps the SMIL animation for a static arc). Paged mode
 gives the unloaded image a 64px minimum, since the scale modes that size it
-from its content would otherwise leave a 0x0 box; in continuous mode a page
-whose size was never measured has no box yet and stays silent. A page image
+from its content would otherwise leave a 0x0 box. In continuous mode a page
+whose size was never measured gets a viewport-tall placeholder until its
+dimensions arrive (`reader/spreads.ts:continuousPageClass`): progress counts
+pages that enter the viewport, so a stack of 0x0 pages would mark the chapter
+read on open. A page image
 that fails to load retries once
 automatically with an `r=N` cache-buster the server ignores, and latches into a failed placeholder
 that keeps the slot's aspect-ratio box
