@@ -852,6 +852,8 @@
 }
 
 .select__field {
+	flex: 1;
+	min-width: 0;
 	display: inline-grid;
 	grid-template-columns: minmax(0, 1fr);
 	align-items: center;
