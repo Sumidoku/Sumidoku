@@ -101,7 +101,13 @@ pub async fn get_cover(
 		let Some(url) = manga.cover_url.clone() else {
 			return Err(ApiError::not_found("cover not available"));
 		};
-		let (bytes, mime) = fetch_cover_image(&state, manga.source_id, &url).await?;
+		// A cover the user matched from a tracker or typed in by hand may live on a host the owning source never
+		// described, so it is fetched with a bare GET instead of the source's image_request/cover processor chain
+		let (bytes, mime) = if external_cover_lock(&state, manga.id, manga.source_id).await? {
+			crate::source::fetch_direct_image(&state, &url).await?
+		} else {
+			fetch_cover_image(&state, manga.source_id, &url).await?
+		};
 		(bytes, mime.unwrap_or_else(|| DEFAULT_MIME.into()))
 	};
 	match write_cache(&covers_dir, id, &bytes, &mime, cache_variant).await {
@@ -109,6 +115,17 @@ pub async fn get_cover(
 		Err(e) => tracing::warn!(manga_id = id, "cover cache write failed: {e}"),
 	}
 	Ok(validated_response(&headers, bytes, &mime, max_age))
+}
+
+/// Whether the cover column is owned by someone other than the entry's own
+/// source (a tracker match or a manual edit), i.e. the URL did not come from a
+/// source detail fetch and must bypass that source's image rules
+async fn external_cover_lock(state: &AppState, manga_id: i64, source_id: i64) -> ApiResult<bool> {
+	let mut conn = state.pool.acquire().await?;
+	let locks = crate::metadata::load(&mut conn, manga_id).await?;
+	Ok(locks
+		.get(crate::metadata::Field::Cover.as_str())
+		.is_some_and(|lock| lock.provider != crate::metadata::source_reference(source_id)))
 }
 
 /// Strong validator over the served bytes, so an expired browser entry revalidates with a 304 instead of a
@@ -192,7 +209,7 @@ pub async fn select_cover(
 }
 
 /// Deletes the body and its sidecars together; missing files are not an error when nothing was cached yet
-async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
+pub(crate) async fn invalidate_cache(covers_dir: &FsPath, id: i64) {
 	let cache_path = covers_dir.join(id.to_string());
 	let _ = tokio::fs::remove_file(sidecar_path(&cache_path)).await;
 	let _ = tokio::fs::remove_file(variant_path(&cache_path)).await;

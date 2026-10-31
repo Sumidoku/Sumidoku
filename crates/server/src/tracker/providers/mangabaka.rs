@@ -1,4 +1,5 @@
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
+use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService};
 use reqwest::{Method, StatusCode, Url};
@@ -49,6 +50,9 @@ struct Series {
 	total_chapters: Option<String>,
 	#[serde(default)]
 	final_volume: Option<String>,
+	/// Genre/tag entries; the API may return names or `{name: ...}` objects
+	#[serde(default)]
+	tags: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -313,6 +317,57 @@ impl MangaBakaTracker {
 		}
 	}
 
+	fn tag_names(tags: &Option<Value>) -> Vec<String> {
+		let items = match tags {
+			Some(Value::Array(items)) => items.clone(),
+			_ => Vec::new(),
+		};
+		dedupe(items.into_iter().filter_map(|item| match item {
+			Value::String(name) => Some(name),
+			Value::Object(object) => object.get("name").and_then(Value::as_str).map(str::to_string),
+			_ => None,
+		}))
+	}
+
+	/// Full metadata mapping. The default title follows the configured title
+	/// language; other language titles and native spellings travel as
+	/// labelled alternatives.
+	fn metadata_from_series(series: &Series, title_language: &str) -> TrackerMetadata {
+		let default = if series.titles.is_empty() { series.title.clone() } else { primary_title(&series.titles, title_language) };
+		let alternatives = series
+			.titles
+			.iter()
+			.filter(|title| !title.title.is_empty() && title.title != default)
+			.map(|title| TitleAlternative {
+				label: if title.traits.iter().any(|trait_name| trait_name == "native") {
+					"Native".into()
+				} else {
+					title.language.clone()
+				},
+				value: title.title.clone(),
+			})
+			.collect();
+		let authors = dedupe(series.authors.iter().flatten().cloned());
+		TrackerMetadata {
+			id: series.id.to_string(),
+			title: TitleVariants { default, alternatives },
+			info: super::search_info(series.year, authors.iter().cloned()),
+			authors,
+			artists: Vec::new(),
+			description: series.description.clone().filter(|description| !description.is_empty()),
+			tags: Self::tag_names(&series.tags),
+			status: crate::tracker::metadata::mangabaka_status(&series.status),
+			content_rating: None,
+			cover_url: series
+				.cover
+				.x350
+				.as_ref()
+				.and_then(|cover| cover.x1.clone())
+				.or_else(|| series.cover.raw.as_ref().and_then(|cover| cover.url.clone())),
+			url: Some(format!("{SITE_ORIGIN}/{}", series.id)),
+		}
+	}
+
 	async fn tracked_ids(&self, user_id: i64, ids: &[i64]) -> Result<HashSet<i64>, TrackerError> {
 		if ids.is_empty() {
 			return Ok(HashSet::new());
@@ -425,6 +480,11 @@ impl TrackerService for MangaBakaTracker {
 			)
 			.await?;
 		Self::ensure_success(response, "MangaBaka library update").await
+	}
+
+	async fn metadata(&self, _user_id: i64, remote_id: &str) -> Result<TrackerMetadata, TrackerError> {
+		let series = self.detail(track_id(remote_id)?).await?;
+		Ok(Self::metadata_from_series(&series, &self.title_language))
 	}
 }
 
