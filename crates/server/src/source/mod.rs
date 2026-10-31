@@ -762,44 +762,31 @@ pub async fn upsert_manga(
 	let authors = serde_json::to_string(&manga.authors.clone().unwrap_or_default())?;
 	let artists = serde_json::to_string(&manga.artists.clone().unwrap_or_default())?;
 	let tags = serde_json::to_string(&manga.tags.clone().unwrap_or_default())?;
-	sqlx::query(
-		"INSERT INTO manga (source_id, key, title, authors, artists, description, tags, status,
-		 content_rating, viewer, cover_url, url, initialized, update_strategy, next_update_time,
-		 last_fetched_at, chapters_last_fetched_at, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (source_id, key) DO UPDATE SET
-		 title = excluded.title, authors = excluded.authors, artists = excluded.artists,
-		 description = excluded.description, tags = excluded.tags, status = excluded.status,
-		 content_rating = excluded.content_rating, viewer = excluded.viewer,
-		 cover_url = excluded.cover_url,
-		 url = excluded.url, initialized = excluded.initialized,
-		 trashed_at = NULL,
-		 update_strategy = excluded.update_strategy,
-		 next_update_time = excluded.next_update_time,
-		 next_update_is_fallback = CASE
-		 WHEN manga.next_update_time IS excluded.next_update_time THEN manga.next_update_is_fallback
-		 ELSE 0 END,
-		 created_at = manga.created_at",
+	crate::store::manga::upsert_from_source(
+		&mut *conn,
+		source_id,
+		&manga.key,
+		&crate::store::manga::MangaFields {
+			title: &manga.title,
+			authors: &authors,
+			artists: &artists,
+			description: manga.description.as_deref(),
+			tags: &tags,
+			status: manga.status as i64,
+			content_rating: manga.content_rating as i64,
+			viewer: manga.viewer as i64,
+			cover_url: manga.cover.as_deref(),
+			url: manga.url.as_deref(),
+			initialized,
+			update_strategy: manga.update_strategy as i64,
+		},
+		&crate::store::manga::FetchTimes {
+			next_update_time: manga.next_update_time,
+			last_fetched_at: fetched_details.then_some(now),
+			chapters_last_fetched_at: fetched_chapters.then_some(now),
+			now,
+		},
 	)
-	.bind(source_id)
-	.bind(&manga.key)
-	.bind(&manga.title)
-	.bind(authors)
-	.bind(artists)
-	.bind(&manga.description)
-	.bind(tags)
-	.bind(manga.status as i64)
-	.bind(manga.content_rating as i64)
-	.bind(manga.viewer as i64)
-	.bind(&manga.cover)
-	.bind(&manga.url)
-	.bind(initialized)
-	.bind(manga.update_strategy as i64)
-	.bind(manga.next_update_time)
-	.bind(if fetched_details { Some(now) } else { None })
-	.bind(if fetched_chapters { Some(now) } else { None })
-	.bind(now)
-	.execute(&mut *conn)
 	.await?;
 
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
@@ -808,18 +795,10 @@ pub async fn upsert_manga(
 		.fetch_one(&mut *conn)
 		.await?;
 	if fetched_details {
-		sqlx::query("UPDATE manga SET last_fetched_at = ? WHERE id = ?")
-			.bind(now)
-			.bind(id)
-			.execute(&mut *conn)
-			.await?;
+		crate::store::manga::set_last_fetched_at(&mut *conn, id, now).await?;
 	}
 	if fetched_chapters {
-		sqlx::query("UPDATE manga SET chapters_last_fetched_at = ? WHERE id = ?")
-			.bind(now)
-			.bind(id)
-			.execute(&mut *conn)
-			.await?;
+		crate::store::manga::set_chapters_fetched_at(&mut *conn, id, now).await?;
 	}
 	Ok(id)
 }

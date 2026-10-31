@@ -74,24 +74,26 @@ pub async fn ensure_manga_row(
 	};
 	let meta = meta.unwrap_or(&empty);
 	let now = crate::model::unix_now();
-	sqlx::query(
-		"INSERT OR IGNORE INTO manga (source_id, key, title, authors, artists, description, tags,
-		 status, content_rating, cover_url, url, initialized, update_strategy, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)",
+	crate::store::manga::insert_from_import(
+		&mut **tx,
+		source_id,
+		key,
+		&crate::store::manga::MangaFields {
+			title: meta.title,
+			authors: &meta.authors,
+			artists: &meta.artists,
+			description: meta.description,
+			tags: &meta.tags,
+			status: meta.status,
+			content_rating: meta.content_rating,
+			viewer: 0,
+			cover_url: meta.cover_url,
+			url: meta.url,
+			initialized: false,
+			update_strategy: 0,
+		},
+		now,
 	)
-	.bind(source_id)
-	.bind(key)
-	.bind(meta.title)
-	.bind(&meta.authors)
-	.bind(&meta.artists)
-	.bind(meta.description)
-	.bind(&meta.tags)
-	.bind(meta.status)
-	.bind(meta.content_rating)
-	.bind(meta.cover_url)
-	.bind(meta.url)
-	.bind(now)
-	.execute(&mut **tx)
 	.await?;
 	let (id,): (i64,) = sqlx::query_as("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(source_id)

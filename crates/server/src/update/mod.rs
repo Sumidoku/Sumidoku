@@ -443,15 +443,7 @@ impl UpdateScheduler {
 						reconcile_chapters_detailed(&mut tx, manga.id, &chapters, &update.protected, true).await?;
 					crate::internal::local::store_epub_divina(&mut tx, manga.id, &chapters, &update.epub_divina).await?;
 					crate::internal::local::store_chapter_metadata(&mut tx, manga.id, &update.chapter_meta).await?;
-					sqlx::query(
-						"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
-					)
-					.bind(next_update_time)
-					.bind(next_update_is_fallback)
-					.bind(now)
-					.bind(manga.id)
-					.execute(&mut *tx)
-					.await?;
+					crate::store::manga::set_next_update(&mut *tx, manga.id, next_update_time, next_update_is_fallback, now).await?;
 					tx.commit().await?;
 					Ok(reconciled)
 				} else {
@@ -462,15 +454,7 @@ impl UpdateScheduler {
 				let now = unix_now();
 				let (next_update_time, next_update_is_fallback) =
 					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
-				sqlx::query(
-					"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
-				)
-				.bind(next_update_time)
-				.bind(next_update_is_fallback)
-				.bind(now)
-				.bind(manga.id)
-				.execute(&state.pool)
-				.await?;
+				crate::store::manga::set_next_update(&state.pool, manga.id, next_update_time, next_update_is_fallback, now).await?;
 				Ok(reconciled)
 			}
 			} else {
@@ -649,15 +633,7 @@ async fn persist_success(
 		false,
 	)
 	.await?;
-	sqlx::query(
-		"UPDATE manga SET next_update_time = ?, next_update_is_fallback = ?, chapters_last_fetched_at = ? WHERE id = ?",
-	)
-	.bind(next_update_time)
-	.bind(next_update_is_fallback)
-	.bind(fetched_at)
-	.bind(manga.id)
-	.execute(&mut *conn)
-	.await?;
+	crate::store::manga::set_next_update(&mut *conn, manga.id, next_update_time, next_update_is_fallback, fetched_at).await?;
 	Ok(reconciled)
 }
 
