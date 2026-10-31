@@ -1239,7 +1239,7 @@ async fn derived_membership_event(
 	user_id: i64,
 	modified_at: i64,
 ) -> ApiResult<SyncChange> {
-	let identity: String = sqlx::query_scalar("SELECT identity FROM sync_manga_state WHERE manga_id = ?")
+	let identity: String = sqlx::query_scalar(&format!("SELECT identity FROM {} WHERE manga_id = ?", crate::sync::journal::MANGA_STATE))
 		.bind(manga_id)
 		.fetch_one(&mut **tx)
 		.await?;

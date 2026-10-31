@@ -807,7 +807,9 @@ no alias is derived from migration text.
   table), and each store journals in the transaction of the write: it reads
   the published fields, writes, compares, and appends through `sync/journal.rs`.
   Migration 0034 dropped every journal trigger, so a write outside the stores
-  reaches peers never. Ordinary updates and deletes use `max(now, old + 1)`. A
+  never reaches peers. Migration 0035 dropped the `sync_manga_state` view: the
+  manga identity and snapshot are `journal::MANGA_STATE`, so changing a sync
+  payload needs no migration. Ordinary updates and deletes use `max(now, old + 1)`. A
   new row uses `max(now, the entity key's historical maximum + 1)`, so
   recreating a deleted key cannot move its version backwards. Sync apply
   stores the version it received, then `sync/apply.rs:finish` rewrites what the

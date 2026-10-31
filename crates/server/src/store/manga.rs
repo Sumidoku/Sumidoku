@@ -4,7 +4,7 @@ use sqlx::SqliteConnection;
 use sqlx::sqlite::SqliteQueryResult;
 
 use crate::error::ApiResult;
-use crate::sync::journal;
+use crate::sync::journal::{self, MANGA_STATE};
 
 /// The columns a source, a backup or a sync event describes. The JSON columns hold array text.
 pub struct MangaFields<'a> {
@@ -321,15 +321,17 @@ async fn publish_delete(conn: &mut SqliteConnection, id: i64) -> ApiResult<()> {
 	let now = journal::now_ms();
 	journal::append!(
 		conn,
-		"SELECT fans.user_id, 'manga', CAST(sm.manga_id AS TEXT), 1, MAX(?2, sm.last_modified_at + 1), sm.identity, sm.snapshot
-		 FROM sync_manga_state sm
-		 JOIN (
-			SELECT mu.user_id FROM manga_user mu WHERE mu.manga_id = ?1
-			UNION
-			SELECT cu.user_id FROM chapter_user cu JOIN chapter c ON c.id = cu.chapter_id WHERE c.manga_id = ?1
-		 ) fans ON 1 = 1
-		 JOIN user u ON u.id = fans.user_id
-		 WHERE sm.manga_id = ?1 ORDER BY fans.user_id",
+		format!(
+			"SELECT fans.user_id, 'manga', CAST(sm.manga_id AS TEXT), 1, MAX(?2, sm.last_modified_at + 1), sm.identity, sm.snapshot
+			 FROM {MANGA_STATE} sm
+			 JOIN (
+				SELECT mu.user_id FROM manga_user mu WHERE mu.manga_id = ?1
+				UNION
+				SELECT cu.user_id FROM chapter_user cu JOIN chapter c ON c.id = cu.chapter_id WHERE c.manga_id = ?1
+			 ) fans ON 1 = 1
+			 JOIN user u ON u.id = fans.user_id
+			 WHERE sm.manga_id = ?1 ORDER BY fans.user_id"
+		),
 		id,
 		now,
 	)?;

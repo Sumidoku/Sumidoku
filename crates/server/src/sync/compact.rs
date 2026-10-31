@@ -1,5 +1,6 @@
 use super::{SyncChange, insert_change};
 use crate::error::ApiResult;
+use crate::sync::journal::MANGA_STATE;
 use sqlx::SqlitePool;
 use std::ops::DerefMut;
 
@@ -70,7 +71,7 @@ async fn baseline_rows(
 	.execute(&mut *tx)
 	.await?;
 
-	sqlx::query(
+	sqlx::query(&format!(
 		"INSERT INTO sync_compaction_baseline
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
@@ -81,7 +82,7 @@ async fn baseline_rows(
 		  CASE WHEN l.deleted = 0 THEN l.origin_sequence ELSE 0 END, 0, sm.last_modified_at,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.identity ELSE sm.identity END,
 		  CASE WHEN l.deleted = 0 AND l.modified_at = sm.last_modified_at THEN l.snapshot ELSE sm.snapshot END
-		 FROM sync_manga_state sm
+		 FROM {MANGA_STATE} sm
 		 JOIN (
 		  SELECT manga_id, user_id FROM manga_user
 		  UNION
@@ -93,11 +94,11 @@ async fn baseline_rows(
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = fans.user_id
 		  AND l.entity_kind = 'manga' AND l.entity_key = CAST(sm.manga_id AS TEXT)
 		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
-	)
+	))
 	.execute(&mut *tx)
 	.await?;
 
-	sqlx::query(
+	sqlx::query(&format!(
 		"INSERT INTO sync_compaction_baseline
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
@@ -115,12 +116,12 @@ async fn baseline_rows(
 		    'incognito', mu.incognito, 'lastModifiedAt', mu.last_modified_at
 		   ) END
 		 FROM manga_user mu
-		 JOIN sync_manga_state sm ON sm.manga_id = mu.manga_id
+		 JOIN {MANGA_STATE} sm ON sm.manga_id = mu.manga_id
 		 JOIN user u ON u.id = mu.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = mu.user_id
 		  AND l.entity_kind = 'manga_user' AND l.entity_key = mu.manga_id || ':' || mu.user_id
 		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
-	)
+	))
 	.execute(&mut *tx)
 	.await?;
 
@@ -206,7 +207,7 @@ async fn baseline_rows(
 	.execute(&mut *tx)
 	.await?;
 
-	sqlx::query(
+	sqlx::query(&format!(
 		"INSERT INTO sync_compaction_baseline
 		 (sort_order, user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key,
 		  origin_sequence, deleted, modified_at, identity, snapshot)
@@ -223,13 +224,13 @@ async fn baseline_rows(
 		    'lastModifiedAt', cm.last_modified_at
 		   ) END
 		 FROM category_manga cm
-		 JOIN sync_manga_state sm ON sm.manga_id = cm.manga_id
+		 JOIN {MANGA_STATE} sm ON sm.manga_id = cm.manga_id
 		 JOIN user u ON u.id = cm.user_id
 		 LEFT JOIN sync_compaction_latest l ON l.rn = 1 AND l.user_id = cm.user_id
 		  AND l.entity_kind = 'category_manga'
 		  AND l.entity_key = cm.category_id || ':' || cm.manga_id || ':' || cm.user_id
 		  AND (SELECT prefer_event_snapshots FROM temp.sync_compaction_options)",
-	)
+	))
 	.execute(&mut *tx)
 	.await?;
 
