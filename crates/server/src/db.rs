@@ -377,6 +377,19 @@ mod tests {
 		}
 	}
 
+	#[tokio::test]
+	async fn migrated_schema_has_no_triggers() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let url = format!("sqlite://{}/no-triggers.db?mode=rwc", dir.path().display());
+		let pool = super::create_pool(&url).await.expect("migrated database");
+		let triggers: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'trigger'")
+			.fetch_all(&pool)
+			.await
+			.expect("list triggers");
+		assert!(triggers.is_empty(), "side effects of a write belong in the owning store: {triggers:?}");
+		pool.close().await;
+	}
+
 	#[test]
 	fn shipped_migrations_use_ascii_comments_and_lf() {
 		for migration in sqlx::migrate!("./migrations").iter() {
