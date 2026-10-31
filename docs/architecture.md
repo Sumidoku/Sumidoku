@@ -1390,6 +1390,13 @@ no alias is derived from migration text.
   answers a matching `If-None-Match` with 304. The detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
+  A cover matched from a tracker or typed by hand becomes the entry's
+  `cover_url`; for a local entry that URL now replaces the on-disk cover:
+  `get_cover` serves the local pipeline only while no external cover lock is
+  recorded, and otherwise fetches the stored URL directly instead of
+  resolving `cover.png` or the first page. The external bytes never pass
+  the local downsample, so they are cached without the local transform
+  variant, and unlocking the field returns the entry to its own file.
 - Metadata locks and matching (`metadata.rs`, `api/metadata.rs`,
   `tracker/metadata.rs`, migration `0035_metadata_locks.sql`): an entry's
   metadata stays in the `manga` row, and external writes are expressed as

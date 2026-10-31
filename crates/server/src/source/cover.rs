@@ -68,7 +68,10 @@ pub async fn get_cover(
 	let is_local = crate::source::source_is_local(&state.pool, manga.source_id).await?;
 	// A local cover can change on disk without its cover field changing, so its version marker proves nothing
 	let max_age = if query.v.is_some() && !is_local { VERSIONED_COVER_MAX_AGE } else { COVER_MAX_AGE };
-	let cache_variant = is_local.then_some(LOCAL_COVER_CACHE_VARIANT);
+	// A matched cover (tracker or manual) replaces the disk cover of a local entry, and its bytes never went
+	// through the local downsample pipeline, so it must not carry the local cache marker either
+	let external = is_local && external_cover_lock(&state, manga.id, manga.source_id).await?;
+	let cache_variant = (is_local && !external).then_some(LOCAL_COVER_CACHE_VARIANT);
 	let covers_dir = state.config.covers_dir.clone();
 	let cache_path = covers_dir.join(id.to_string());
 	if !wants_refresh(&RefreshQuery { refresh: query.refresh.clone() })
@@ -76,7 +79,7 @@ pub async fn get_cover(
 	{
 		return Ok(validated_response(&headers, bytes, &mime, max_age));
 	}
-	let (bytes, mime) = if is_local {
+	let (bytes, mime) = if is_local && !external {
 		let (bytes, mime) = crate::internal::local::resolve_cover(
 			&state.local_dirs(manga.source_id).await?,
 			&state.local_zip,
@@ -103,7 +106,12 @@ pub async fn get_cover(
 		};
 		// A cover the user matched from a tracker or typed in by hand may live on a host the owning source never
 		// described, so it is fetched with a bare GET instead of the source's image_request/cover processor chain
-		let (bytes, mime) = if external_cover_lock(&state, manga.id, manga.source_id).await? {
+		let bypass = if is_local {
+			external
+		} else {
+			external_cover_lock(&state, manga.id, manga.source_id).await?
+		};
+		let (bytes, mime) = if bypass {
 			crate::source::fetch_direct_image(&state, &url).await?
 		} else {
 			fetch_cover_image(&state, manga.source_id, &url).await?

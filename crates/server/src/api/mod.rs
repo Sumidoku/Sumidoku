@@ -1872,7 +1872,9 @@ async fn update_manga(
 		}
 		crate::store::manga::set_metadata(&mut tx, id, &writes, &locks).await?;
 		tx.commit().await?;
-		if writes.iter().any(|(field, _)| *field == crate::metadata::Field::Cover) {
+		if writes.iter().any(|(field, _)| *field == crate::metadata::Field::Cover)
+			|| unlocks.contains(&crate::metadata::Field::Cover)
+		{
 			crate::source::cover::invalidate_cache(&state.config.covers_dir, id).await;
 		}
 	}
