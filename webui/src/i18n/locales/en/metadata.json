@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "lockedBy": "Written by {{provider}}",
+    "manualLock": "Manually locked",
+    "contentRatings": {
+      "unknown": "Unknown",
+      "safe": "Safe",
+      "suggestive": "Suggestive",
+      "nsfw": "NSFW"
+    },
+    "fieldLabels": {
+      "title": "Title",
+      "authors": "Authors",
+      "artists": "Artists",
+      "description": "Description",
+      "tags": "Tags",
+      "status": "Status",
+      "contentRating": "Content rating",
+      "cover": "Cover"
+    },
+    "editTitle": "Edit metadata",
+    "editHint": "Values you edit here are locked to you and survive source refreshes. Lists take one entry per line.",
+    "editSaved": "Metadata saved",
+    "editFailed": "Could not save metadata",
+    "sourceFollows": "Follows the source",
+    "unlock": "Unlock",
+    "unlockAll": "Unlock all",
+    "restoreSource": "Restore source metadata",
+    "restored": "Source metadata restored",
+    "restoreConfirm": "Restore the source metadata and drop these locks?",
+    "titleRequired": "Title cannot be empty"
+  }
+}

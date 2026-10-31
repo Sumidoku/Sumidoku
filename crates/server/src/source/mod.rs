@@ -1058,6 +1058,16 @@ pub(crate) fn slugify(name: &str) -> Option<String> {
 pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
+/// The natural key of a source instance; `None` if the row is gone. Instance ids are
+/// local to one database, so anything a backup or a sync event carries across
+/// databases — journal identities, metadata locks — names the source by this key.
+pub(crate) async fn source_key(pool: &SqlitePool, source_id: i64) -> ApiResult<Option<String>> {
+	Ok(sqlx::query_scalar("SELECT key FROM source WHERE id = ?")
+		.bind(source_id)
+		.fetch_optional(pool)
+		.await?)
+}
+
 /// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
 pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)
@@ -1410,6 +1420,21 @@ pub async fn http_get(
 		.await
 		.map_err(fetch_err)?;
 	read_body(response, max).await
+}
+
+/// A bare GET for an image whose URL did not come from the source that owns the entry: a tracker cover (or a
+/// metadata match from another source) never went through that source's image_request, so its hotlink rules do
+/// not apply and running its cover processor could mangle bytes it does not understand
+pub async fn fetch_direct_image(
+	state: &Arc<AppState>,
+	url: &str,
+) -> ApiResult<(Vec<u8>, Option<String>)> {
+	let parsed = reqwest::Url::parse(url).map_err(|_| ApiError::bad_request("invalid image url"))?;
+	let response = state.http.get(&parsed).await.map_err(fetch_err)?;
+	if !response.status().is_success() {
+		return Err(ApiError::bad_gateway(format!("upstream returned status {}", response.status())));
+	}
+	read_body(response, state.config.net_body_max_mb * 1024 * 1024).await
 }
 
 /// The complete result of an image fetch: bytes plus status and headers, which process_*_image needs to build the ImageResponse

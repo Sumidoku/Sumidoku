@@ -169,6 +169,10 @@ async fn selection_persists_and_is_served() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["cover"], json!(covers[0]));
+	// Selecting an alternate cover hands the cover column back to the entry's own source:
+	// the lock names the source key, so the fetched bytes take the source image chain and a
+	// refresh keeps the pick
+	assert_eq!(body["metadataLocks"]["cover"]["provider"], "source:en.altcovers");
 	let (status, _, bytes) = request_full(
 		&app,
 		"GET",

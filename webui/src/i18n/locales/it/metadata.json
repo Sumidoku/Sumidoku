@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "lockedBy": "Scritto da {{provider}}",
+    "manualLock": "Bloccato manualmente",
+    "contentRatings": {
+      "unknown": "Sconosciuto",
+      "safe": "Sicuro",
+      "suggestive": "Allusivo",
+      "nsfw": "NSFW"
+    },
+    "fieldLabels": {
+      "title": "Titolo",
+      "authors": "Autori",
+      "artists": "Disegnatori",
+      "description": "Descrizione",
+      "tags": "Tag",
+      "status": "Stato",
+      "contentRating": "Classificazione",
+      "cover": "Copertina"
+    },
+    "editTitle": "Modifica metadati",
+    "editHint": "I valori modificati qui vengono bloccati e sopravvivono agli aggiornamenti della fonte. Gli elenchi prendono una voce per riga.",
+    "editSaved": "Metadati salvati",
+    "editFailed": "Impossibile salvare i metadati",
+    "sourceFollows": "Segue la fonte",
+    "unlock": "Sblocca",
+    "unlockAll": "Sblocca tutto",
+    "restoreSource": "Ripristina metadati della fonte",
+    "restored": "Metadati della fonte ripristinati",
+    "restoreConfirm": "Ripristinare questi campi dalla fonte e rimuovere i loro blocchi?",
+    "titleRequired": "Il titolo non può essere vuoto"
+  }
+}
