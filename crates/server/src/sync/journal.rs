@@ -36,6 +36,7 @@ pub(crate) const MANGA_STATE: &str = "(SELECT
 		'url', m.url,
 		'initialized', m.initialized,
 		'updateStrategy', m.update_strategy,
+		'metadataLocks', json(m.metadata_locks),
 		'lastModifiedAt', m.last_modified_at
 	) AS snapshot
 	FROM manga m

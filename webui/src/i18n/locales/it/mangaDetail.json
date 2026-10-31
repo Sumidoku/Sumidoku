@@ -47,6 +47,7 @@
     "chaptersRefreshed": "Lista dei capitoli aggiornata",
     "refreshChapters": "Aggiorna la lista dei capitoli",
     "migrate": "Migra fonte",
+    "editMetadata": "Modifica metadati",
     "chapters": "Capitoli",
     "chapterStats_one": "{{total}} capitolo · {{unread}} non letto",
     "chapterStats_other": "{{total}} capitoli · {{unread}} non letti",

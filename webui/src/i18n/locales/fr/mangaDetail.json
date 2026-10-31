@@ -47,6 +47,7 @@
     "chaptersRefreshed": "Liste des chapitres actualisée",
     "refreshChapters": "Actualiser la liste des chapitres",
     "migrate": "Migrer la source",
+    "editMetadata": "Modifier les métadonnées",
     "chapters": "Chapitres",
     "chapterStats_one": "{{total}} chapitre · {{unread}} non lu",
     "chapterStats_other": "{{total}} chapitres · {{unread}} non lus",

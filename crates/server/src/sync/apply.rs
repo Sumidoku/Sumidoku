@@ -291,6 +291,15 @@ fn optional_string(value: &Value, key: &str) -> ApiResult<Option<String>> {
 	}
 }
 
+/// A JSON sub-object carried verbatim (the metadata lock map); absent means the
+/// remote side predates it and the local value is kept
+fn optional_json_text(value: &Value, key: &str) -> ApiResult<Option<String>> {
+	match value.get(key) {
+		None | Some(Value::Null) => Ok(None),
+		Some(inner) => Ok(Some(serde_json::to_string(inner)?)),
+	}
+}
+
 fn strings(value: &Value, key: &str) -> ApiResult<Vec<String>> {
 	let items = field(value, key)?
 		.as_array()
@@ -1103,6 +1112,7 @@ async fn apply_manga(
 			initialized: flag(&change.snapshot, "initialized")?,
 			update_strategy: integer(&change.snapshot, "updateStrategy")?,
 		},
+		optional_json_text(&change.snapshot, "metadataLocks")?.as_deref(),
 	)
 	.await?;
 	finish(

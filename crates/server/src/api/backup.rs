@@ -78,6 +78,10 @@ pub struct BackupManga {
 	pub initialized: bool,
 	#[serde(default)]
 	pub update_strategy: i64,
+	/// Metadata ownership map (field -> provider/remoteId/appliedAt); older backups
+	/// have none, and a missing map leaves the target's own locks untouched
+	#[serde(default)]
+	pub metadata_locks: Option<crate::metadata::Locks>,
 	#[serde(default)]
 	pub in_library: bool,
 	#[serde(default)]
@@ -174,6 +178,7 @@ struct ExportMangaRow {
 	url: Option<String>,
 	initialized: bool,
 	update_strategy: i64,
+	metadata_locks: String,
 	in_library: bool,
 	in_library_at: Option<i64>,
 	viewer_flags: i64,
@@ -230,6 +235,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 	let manga_rows: Vec<ExportMangaRow> = sqlx::query_as(
 		"SELECT s.key AS source_key, m.key, m.title, m.authors, m.artists, m.description, m.tags,
 		 m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized, m.update_strategy,
+		 m.metadata_locks,
 		 mu.in_library, mu.in_library_at, mu.viewer_flags, mu.incognito, mu.sort_key
 		 FROM manga m
 		 JOIN source s ON s.id = m.source_id
@@ -256,6 +262,10 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 			url: row.url,
 			initialized: row.initialized,
 			update_strategy: row.update_strategy,
+			metadata_locks: {
+				let locks = crate::metadata::parse_locks(&row.metadata_locks);
+				(!locks.is_empty()).then_some(locks)
+			},
 			in_library: row.in_library,
 			in_library_at: row.in_library_at,
 			viewer_flags: row.viewer_flags,
@@ -603,6 +613,7 @@ async fn restore_library(
 			));
 			continue;
 		};
+		let locks = entry.metadata_locks.as_ref().map(crate::metadata::serialize_locks);
 		crate::store::manga::upsert_from_backup(
 			tx,
 			source_id,
@@ -621,6 +632,7 @@ async fn restore_library(
 				initialized: entry.initialized,
 				update_strategy: entry.update_strategy,
 			},
+			locks.as_deref(),
 		)
 		.await?;
 		let (manga_id,): (i64,) =

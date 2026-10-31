@@ -10,6 +10,7 @@ pub mod error;
 pub mod events;
 pub mod internal;
 pub mod logging;
+pub mod metadata;
 pub mod model;
 pub mod rss;
 pub mod server_state;
