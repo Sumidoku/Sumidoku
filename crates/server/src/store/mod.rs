@@ -3,6 +3,7 @@
 
 pub mod category;
 pub mod library;
+pub mod progress;
 
 #[cfg(test)]
 mod tests {
@@ -34,6 +35,7 @@ mod tests {
 				("store/category.rs", "category"),
 				("store/category.rs", "category_manga"),
 				("store/library.rs", "manga_user"),
+				("store/progress.rs", "chapter_user"),
 			] {
 				if relative == owner {
 					continue;

@@ -659,12 +659,7 @@ pub(crate) async fn set_final_version(
 		}
 		"chapter_user" => {
 			let (chapter_id, user_id) = relation_key(local_key, 2)?;
-			sqlx::query("UPDATE chapter_user SET last_modified_at = ? WHERE chapter_id = ? AND user_id = ?")
-				.bind(modified_at)
-				.bind(chapter_id[0])
-				.bind(user_id[0])
-				.execute(&mut **tx)
-				.await?
+			crate::store::progress::set_modified_at(&mut **tx, chapter_id[0], user_id[0], modified_at).await?
 		}
 		"category_manga" => {
 			let (category_id, remainder) = relation_key(local_key, 3)?;
@@ -1836,11 +1831,7 @@ async fn apply_progress(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		sqlx::query("DELETE FROM chapter_user WHERE chapter_id = ? AND user_id = ?")
-			.bind(ids[0])
-			.bind(ids[1])
-			.execute(&mut **tx)
-			.await?;
+		crate::store::progress::delete(&mut **tx, ids[0], ids[1]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1908,20 +1899,17 @@ async fn apply_progress(
 			"lastModifiedAt": modified_at,
 		})
 	};
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, is_bookmarked, last_read_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
-		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
-		 last_page_read = excluded.last_page_read, is_read = excluded.is_read,
-		 is_bookmarked = excluded.is_bookmarked, last_read_at = excluded.last_read_at",
+	crate::store::progress::set(
+		&mut **tx,
+		chapter_id,
+		user_id,
+		&crate::model::ChapterProgress {
+			last_page_read: merged.last_page_read,
+			is_read: merged.is_read,
+			is_bookmarked: merged.is_bookmarked,
+			last_read_at: merged.last_read_at,
+		},
 	)
-	.bind(chapter_id)
-	.bind(user_id)
-	.bind(merged.last_page_read)
-	.bind(merged.is_read)
-	.bind(merged.is_bookmarked)
-	.bind(merged.last_read_at)
-	.execute(&mut **tx)
 	.await?;
 	finish(
 		tx,

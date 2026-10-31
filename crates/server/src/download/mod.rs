@@ -210,14 +210,7 @@ async fn persist_finished(
 		tx.rollback().await?;
 		return Ok(false);
 	}
-	sqlx::query(
-		"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 1)
-		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 1",
-	)
-	.bind(chapter_id)
-	.bind(user_id)
-	.execute(&mut *tx)
-	.await?;
+	crate::store::progress::set_downloaded(&mut *tx, chapter_id, user_id, true).await?;
 	tx.commit().await?;
 	Ok(true)
 }
@@ -745,11 +738,7 @@ impl DownloadManager {
 	) -> Result<bool, sqlx::Error> {
 		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
 			.bind(chapter_id).bind(user_id).execute(&mut **tx).await?;
-		sqlx::query(
-			"INSERT INTO chapter_user (chapter_id, user_id, is_downloaded) VALUES (?, ?, 0)
-			 ON CONFLICT (chapter_id, user_id) DO UPDATE SET is_downloaded = 0",
-		)
-		.bind(chapter_id).bind(user_id).execute(&mut **tx).await?;
+		crate::store::progress::set_downloaded(&mut **tx, chapter_id, user_id, false).await?;
 		if let Some(path) = path {
 			let referenced: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM download WHERE path = ? LIMIT 1")
 				.bind(path).fetch_optional(&mut **tx).await?;
