@@ -159,6 +159,8 @@ pub(crate) fn chapter_disk_breakdown_blocking(
 	))
 }
 
+/// Test-only convenience wrapper over the breakdown scan.
+#[cfg(test)]
 pub(crate) fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) -> std::io::Result<i64> {
 	let (originals, blobs, opds) = chapter_disk_breakdown_blocking(blobs, opds, id)?;
 	Ok(originals.saturating_add(blobs).saturating_add(opds))
@@ -384,6 +386,8 @@ pub async fn reconcile_chapter_accounted(state: &std::sync::Arc<crate::state::Ap
 	reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &state.config.opds_cbz_dir(), id).await
 }
 
+type SourceStatRow = (i64, String, i64, i64, i64, i64, i64, i64);
+
 pub async fn stats(
 	pool: &SqlitePool,
 	_blobs: &Path,
@@ -396,7 +400,7 @@ pub async fn stats(
 	let (page_bytes, original_bytes, blob_bytes, opds_bytes): (i64, i64, i64, i64) = sqlx::query_as(
 		"SELECT coalesce(sum(page_bytes),0), coalesce(sum(original_bytes),0), coalesce(sum(blob_bytes),0), coalesce(sum(opds_bytes),0) FROM chapter_cache_state"
 	).fetch_one(pool).await?;
-	let source_rows: Vec<(i64, String, i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
+	let source_rows: Vec<SourceStatRow> = sqlx::query_as(
 		"SELECT m.source_id, s.name, coalesce(sum(st.bytes),0), coalesce(sum(st.bytes > 0),0), \
 		 coalesce(sum(st.page_bytes),0), coalesce(sum(st.original_bytes),0), \
 		 coalesce(sum(st.blob_bytes),0), coalesce(sum(st.opds_bytes),0) \
