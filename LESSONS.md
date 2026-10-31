@@ -20,6 +20,10 @@ path only as the direct-entry fallback, via the shared
   browse page's `?filters=` deep link, and pressing back after such a search
   left the source instead of returning to the detail page. The fix shares the
   detail/reader history-pop convention; `navigation-back.test.ts` pins it.
+  The sweep also caught the reverse hazard: the source home's back pushed its
+  parent `/browse/:sourceId`, which against a pop-back browse page ping-pongs
+  between the two forever — a back button must never push, only pop or fall
+  back.
 
 **Consecutive schema changes in a test belong on one connection.** A pooled
 query can land on a connection whose cached schema predates the previous
