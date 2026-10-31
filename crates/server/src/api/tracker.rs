@@ -34,7 +34,7 @@ fn oauth_manager(state: &AppState) -> ApiResult<Arc<crate::tracker::oauth::OAuth
 	Ok(state.tracker.get().ok_or_else(|| ApiError::internal("tracker services are not initialized"))?.oauth().clone())
 }
 
-fn tracker_error(error: TrackerError) -> ApiError {
+pub(crate) fn tracker_error(error: TrackerError) -> ApiError {
 	match error {
 		// distinct from auth's reason-free 401: the web UI keys on this code to
 		// offer the connect-account flow instead of a re-login

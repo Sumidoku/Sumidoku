@@ -1,5 +1,20 @@
 {
   "metadata": {
+    "title": "Abbina metadati",
+    "searchPlaceholder": "Cerca un tracker o una fonte…",
+    "searching": "Ricerca…",
+    "noResults": "Nessun risultato",
+    "linkedTrackers": "Tracker collegati",
+    "pullMetadata": "Scarica metadati",
+    "tabTracker": "Tracker",
+    "tabSource": "Fonte",
+    "useThis": "Usa",
+    "matchFrom": "Metadati da {{source}}",
+    "openMatch": "Apri scheda",
+    "columnField": "Campo",
+    "columnCurrent": "Attuale",
+    "columnIncoming": "Proposto",
+    "noIncomingValue": "Nessun valore fornito",
     "lockedBy": "Scritto da {{provider}}",
     "manualLock": "Bloccato manualmente",
     "contentRatings": {
@@ -8,6 +23,15 @@
       "suggestive": "Allusivo",
       "nsfw": "NSFW"
     },
+    "bindTracker": "Collega anche questa scheda {{provider}}",
+    "alreadyBound": "Già collegato a questa scheda",
+    "applySelected_one": "Applica {{count}} campo",
+    "applySelected_other": "Applica {{count}} campi",
+    "backToSearch": "Torna alla ricerca",
+    "done": "Fatto",
+    "appliedSummary_one": "Applicato {{count}} campo",
+    "appliedSummary_other": "Applicati {{count}} campi",
+    "appliedHint": "I campi applicati sono bloccati e sopravvivono agli aggiornamenti della fonte. Puoi sbloccarli da «Modifica metadati».",
     "fieldLabels": {
       "title": "Titolo",
       "authors": "Autori",

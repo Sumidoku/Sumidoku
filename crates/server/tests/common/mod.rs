@@ -217,11 +217,20 @@ pub fn advance_mtime(path: &std::path::Path, previous: std::time::SystemTime) ->
 }
 
 pub async fn test_app() -> TestApp {
+	test_app_with_sources(&[]).await
+}
+
+/// The example fixture source plus the given extra fixtures (`key`, `name`, wasm), all installed
+/// before the app scans the sources directory
+pub async fn test_app_with_sources(extra: &[(&str, &str, PathBuf)]) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
 	let source_dir = tmp.path().join("sources").join("en.example-source");
 	std::fs::create_dir_all(&source_dir).expect("mkdir source dir");
 	for file in ["source.json", "main.wasm"] {
 		std::fs::copy(fixture_dir().join(file), source_dir.join(file)).expect("copy fixture");
+	}
+	for (key, name, wasm) in extra {
+		install_fixture_source(&tmp, key, name, wasm.as_path());
 	}
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");

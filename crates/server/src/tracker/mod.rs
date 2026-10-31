@@ -5,11 +5,13 @@
 
 pub mod core;
 pub mod dao;
+pub mod metadata;
 pub mod oauth;
 pub mod providers;
 pub mod sync;
 
 use core::{RemoteState, TrackSearchItem, TrackUpdate};
+use metadata::TrackerMetadata;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -79,6 +81,19 @@ pub trait TrackerService: Send + Sync {
 	async fn get_state(&self, user_id: i64, track_id: &str) -> Result<RemoteState, TrackerError>;
 
 	async fn update(&self, user_id: i64, track_id: &str, update: &TrackUpdate) -> Result<(), TrackerError>;
+
+	/// Full bibliographic metadata of one entry, for writing library metadata
+	/// from a tracker. Providers without this capability keep the default.
+	async fn metadata(&self, _user_id: i64, _track_id: &str) -> Result<TrackerMetadata, TrackerError> {
+		Err(TrackerError::Provider { provider: self.provider(), message: "metadata is not supported by this tracker".into() })
+	}
+
+	/// True when `metadata` reads public data, so a user without this tracker's
+	/// login can still preview a match. Providers whose metadata call is
+	/// authenticated override this.
+	fn metadata_is_public(&self) -> bool {
+		false
+	}
 }
 
 #[derive(Clone)]
