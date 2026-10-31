@@ -360,6 +360,7 @@ mod tests {
 			(32, "CB18CACFE9A9F3A939FF7A7C3294BD7449B16FF45DEA56355FCFDC688016A33DD6F76552894B0742B0527CAE1F54FFF9"),
 			(33, "34AC8BEC17F4466576ACFBBCC6A3BC9EDC1DC1C043279B6A820C857E56307301E3740641519A05A04B6AEA348125E01F"),
 			(34, "9C8958325710D0B1507F00DEAF5DE35E60EC74C2E310CC817909FBB028CEC05E28B7506967DB8FC978385BCA45F7E7D0"),
+			(35, "83C7B7BB45284084A4305B10D5887CDCFE5892EFAD4E0A36731E90600E7D928837BDBEE52F6D67DB3061DC3B83219AD1"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -378,7 +379,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn migrated_schema_has_no_triggers() {
+	async fn migrated_schema_has_no_triggers_or_views() {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let url = format!("sqlite://{}/no-triggers.db?mode=rwc", dir.path().display());
 		let pool = super::create_pool(&url).await.expect("migrated database");
@@ -387,6 +388,11 @@ mod tests {
 			.await
 			.expect("list triggers");
 		assert!(triggers.is_empty(), "side effects of a write belong in the owning store: {triggers:?}");
+		let views: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'view'")
+			.fetch_all(&pool)
+			.await
+			.expect("list views");
+		assert!(views.is_empty(), "sync payloads are defined in sync/journal.rs: {views:?}");
 		pool.close().await;
 	}
 
@@ -954,7 +960,7 @@ mod tests {
 		crate::store::manga::publish(&mut publisher, manga_id).await.expect("publish manga");
 		drop(publisher);
 		let (shared_identity, shared_snapshot): (String, String) =
-			sqlx::query_as("SELECT identity, snapshot FROM sync_manga_state WHERE manga_id = ?")
+			sqlx::query_as(&format!("SELECT identity, snapshot FROM {} WHERE manga_id = ?", crate::sync::journal::MANGA_STATE))
 				.bind(manga_id)
 				.fetch_one(&pool)
 				.await
@@ -982,7 +988,7 @@ mod tests {
 			.await
 			.expect("insert deleted manga");
 		let (deleted_identity, deleted_snapshot): (String, String) =
-			sqlx::query_as("SELECT identity, snapshot FROM sync_manga_state WHERE manga_id = ?")
+			sqlx::query_as(&format!("SELECT identity, snapshot FROM {} WHERE manga_id = ?", crate::sync::journal::MANGA_STATE))
 				.bind(deleted_id)
 				.fetch_one(&pool)
 				.await

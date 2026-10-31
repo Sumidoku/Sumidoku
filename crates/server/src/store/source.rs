@@ -4,7 +4,7 @@
 use sqlx::SqliteConnection;
 
 use crate::error::ApiResult;
-use crate::sync::journal;
+use crate::sync::journal::{self, MANGA_STATE};
 
 pub async fn delete(conn: &mut SqliteConnection, id: i64) -> ApiResult<()> {
 	let manga_ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM manga WHERE source_id = ? ORDER BY id")
@@ -14,18 +14,20 @@ pub async fn delete(conn: &mut SqliteConnection, id: i64) -> ApiResult<()> {
 	let now = journal::now_ms();
 	journal::append!(
 		conn,
-		"SELECT fans.user_id, 'manga', CAST(sm.manga_id AS TEXT), 1, MAX(?2, sm.last_modified_at + 1), sm.identity, sm.snapshot
-		 FROM sync_manga_state sm
-		 JOIN (
-			SELECT mu.manga_id, mu.user_id FROM manga_user mu
-			JOIN manga m ON m.id = mu.manga_id WHERE m.source_id = ?1
-			UNION
-			SELECT c.manga_id, cu.user_id FROM chapter_user cu
-			JOIN chapter c ON c.id = cu.chapter_id
-			JOIN manga m ON m.id = c.manga_id WHERE m.source_id = ?1
-		 ) fans ON fans.manga_id = sm.manga_id
-		 JOIN user u ON u.id = fans.user_id
-		 WHERE sm.source_id = ?1 ORDER BY fans.user_id, sm.manga_id",
+		format!(
+			"SELECT fans.user_id, 'manga', CAST(sm.manga_id AS TEXT), 1, MAX(?2, sm.last_modified_at + 1), sm.identity, sm.snapshot
+			 FROM {MANGA_STATE} sm
+			 JOIN (
+				SELECT mu.manga_id, mu.user_id FROM manga_user mu
+				JOIN manga m ON m.id = mu.manga_id WHERE m.source_id = ?1
+				UNION
+				SELECT c.manga_id, cu.user_id FROM chapter_user cu
+				JOIN chapter c ON c.id = cu.chapter_id
+				JOIN manga m ON m.id = c.manga_id WHERE m.source_id = ?1
+			 ) fans ON fans.manga_id = sm.manga_id
+			 JOIN user u ON u.id = fans.user_id
+			 WHERE sm.source_id = ?1 ORDER BY fans.user_id, sm.manga_id"
+		),
 		id,
 		now,
 	)?;

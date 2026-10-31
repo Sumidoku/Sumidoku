@@ -9,6 +9,38 @@ use crate::error::ApiResult;
 pub(crate) const INSERT_EVENT: &str =
 	"INSERT INTO sync_change (user_id, entity_kind, entity_key, deleted, modified_at, identity, snapshot)";
 
+/// Each manga's identity and snapshot as peers receive them. Read as a subquery, `FROM {MANGA_STATE} sm`.
+pub(crate) const MANGA_STATE: &str = "(SELECT
+	m.id AS manga_id,
+	m.source_id,
+	m.last_modified_at,
+	json_object(
+		'mangaId', m.id,
+		'sourceId', m.source_id,
+		'sourceKey', s.key,
+		'mangaKey', m.key
+	) AS identity,
+	json_object(
+		'id', m.id,
+		'sourceId', m.source_id,
+		'key', m.key,
+		'title', m.title,
+		'authors', json(m.authors),
+		'artists', json(m.artists),
+		'description', m.description,
+		'tags', json(m.tags),
+		'status', m.status,
+		'contentRating', m.content_rating,
+		'viewer', m.viewer,
+		'coverUrl', m.cover_url,
+		'url', m.url,
+		'initialized', m.initialized,
+		'updateStrategy', m.update_strategy,
+		'lastModifiedAt', m.last_modified_at
+	) AS snapshot
+	FROM manga m
+	JOIN source s ON s.id = m.source_id)";
+
 const MANGA_USER_SNAPSHOT: &str = "json_object(
 	'mangaId', mu.manga_id,
 	'userId', mu.user_id,
@@ -38,12 +70,16 @@ const MEMBERSHIP_SNAPSHOT: &str = "json_object(
 )";
 
 /// The manga's identity, falling back to its last event once the manga row is gone
-const MANGA_IDENTITY_OR_HISTORY: &str = "COALESCE(
-	(SELECT sm.identity FROM sync_manga_state sm WHERE sm.manga_id = {manga}),
+fn manga_identity_or_history(manga: &str, user: &str) -> String {
+	format!(
+		"COALESCE(
+	(SELECT sm.identity FROM {MANGA_STATE} sm WHERE sm.manga_id = {manga}),
 	(SELECT sc.identity FROM sync_change sc
 	 WHERE sc.user_id = {user} AND sc.entity_kind = 'manga' AND sc.entity_key = CAST({manga} AS TEXT)
 	 ORDER BY sc.sequence DESC LIMIT 1)
-)";
+)"
+	)
+}
 
 pub(crate) fn now_ms() -> i64 {
 	std::time::SystemTime::now()
@@ -126,8 +162,10 @@ pub(crate) use append;
 pub(crate) async fn manga_for_user(conn: &mut SqliteConnection, user_id: i64, manga_id: i64) -> ApiResult<()> {
 	append!(
 		conn,
-		"SELECT ?1, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
-		 FROM sync_manga_state sm JOIN user u ON u.id = ?1 WHERE sm.manga_id = ?2",
+		format!(
+			"SELECT ?1, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
+			 FROM {MANGA_STATE} sm JOIN user u ON u.id = ?1 WHERE sm.manga_id = ?2"
+		),
 		user_id,
 		manga_id,
 	)
@@ -136,11 +174,13 @@ pub(crate) async fn manga_for_user(conn: &mut SqliteConnection, user_id: i64, ma
 pub(crate) async fn manga_for_library(conn: &mut SqliteConnection, manga_id: i64) -> ApiResult<()> {
 	append!(
 		conn,
-		"SELECT mu.user_id, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
-		 FROM sync_manga_state sm
-		 JOIN manga_user mu ON mu.manga_id = sm.manga_id
-		 JOIN user u ON u.id = mu.user_id
-		 WHERE sm.manga_id = ?",
+		format!(
+			"SELECT mu.user_id, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
+			 FROM {MANGA_STATE} sm
+			 JOIN manga_user mu ON mu.manga_id = sm.manga_id
+			 JOIN user u ON u.id = mu.user_id
+			 WHERE sm.manga_id = ?"
+		),
 		manga_id,
 	)
 }
@@ -156,7 +196,7 @@ pub(crate) async fn manga_for_chapter_fans(conn: &mut SqliteConnection, chapter_
 		conn,
 		format!(
 			"SELECT fans.user_id, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
-			 FROM sync_manga_state sm JOIN {CHAPTER_FANS} fans ON 1 = 1 JOIN user u ON u.id = fans.user_id
+			 FROM {MANGA_STATE} sm JOIN {CHAPTER_FANS} fans ON 1 = 1 JOIN user u ON u.id = fans.user_id
 			 WHERE sm.manga_id = ?2 ORDER BY fans.user_id"
 		),
 		chapter_id,
@@ -182,11 +222,13 @@ pub(crate) async fn chapter_for_fans(conn: &mut SqliteConnection, chapter_id: i6
 pub(crate) async fn parents_of_progress(conn: &mut SqliteConnection, user_id: i64, chapter_id: i64) -> ApiResult<()> {
 	append!(
 		conn,
-		"SELECT ?1, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
-		 FROM sync_chapter_state scs
-		 JOIN sync_manga_state sm ON sm.manga_id = scs.manga_id
-		 JOIN user u ON u.id = ?1
-		 WHERE scs.chapter_id = ?2",
+		format!(
+			"SELECT ?1, 'manga', CAST(sm.manga_id AS TEXT), 0, sm.last_modified_at, sm.identity, sm.snapshot
+			 FROM sync_chapter_state scs
+			 JOIN {MANGA_STATE} sm ON sm.manga_id = scs.manga_id
+			 JOIN user u ON u.id = ?1
+			 WHERE scs.chapter_id = ?2"
+		),
 		user_id,
 		chapter_id,
 	)?;
@@ -218,7 +260,7 @@ pub(crate) async fn progress(conn: &mut SqliteConnection, chapter_id: i64, user_
 }
 
 pub(crate) async fn library_entry(conn: &mut SqliteConnection, manga_id: i64, user_id: i64, deleted: Option<i64>) -> ApiResult<()> {
-	let identity = MANGA_IDENTITY_OR_HISTORY.replace("{manga}", "mu.manga_id").replace("{user}", "mu.user_id");
+	let identity = manga_identity_or_history("mu.manga_id", "mu.user_id");
 	append!(
 		conn,
 		format!(
@@ -240,7 +282,7 @@ pub(crate) async fn membership(
 	user_id: i64,
 	deleted: Option<i64>,
 ) -> ApiResult<()> {
-	let identity = MANGA_IDENTITY_OR_HISTORY.replace("{manga}", "cm.manga_id").replace("{user}", "cm.user_id");
+	let identity = manga_identity_or_history("cm.manga_id", "cm.user_id");
 	append!(
 		conn,
 		format!(

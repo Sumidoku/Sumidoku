@@ -20,7 +20,7 @@ one; a PR that misses one gets a comment saying which.
 | Rule | What a reviewer looks at |
 | --- | --- |
 | Schema changes are new numbered files only; do not edit an applied migration. | sqlx checksums the whole file against `_sqlx_migrations` at startup. `db.rs:shipped_migrations_are_immutable` pins the canonical checksums. The explicitly registered historical Chinese/English LF/CRLF variants are a closed compatibility set; accepting any other old-file edit or deriving a replacement checksum from migration text is a stop. |
-| No SQL triggers without a special case. | What a write must also do belongs in the code that makes the write, where it can be read and tested. `db.rs:migrated_schema_has_no_triggers` fails on any trigger; an exception states in its PR why code cannot do it and names the trigger in that test. |
+| No SQL triggers or views without a special case. | What a write must also do belongs in the code that makes the write, and sync payloads belong in `sync/journal.rs`, where changing one needs no migration. `db.rs:migrated_schema_has_no_triggers_or_views` fails on either; an exception states in its PR why code cannot do it and names the object in that test. |
 | Migration comments are English and files use LF. | Keep comments ASCII in `crates/server/migrations/*.sql`; `db.rs:shipped_migrations_use_ascii_comments_and_lf` rejects other encodings and CR/CRLF bytes. `.gitattributes` forces LF checkouts. |
 
 ## Acceptance criteria
