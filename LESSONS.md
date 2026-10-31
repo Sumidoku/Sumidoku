@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A nullable prop that anticipates a state does not deliver it; the
+caller's early return is the real contract.** `TransitionPage` took
+`target: ChapterWithDownload | null` from the start, but
+`ReaderPage.tsx:boundaryNav` returned before ever parking on the page
+when no chapter remained in that direction, so a boundary turn at the
+last chapter was a silent no-op while the component looked prepared for
+it. When a component is built to render an empty or end state, trace the
+producer path that can actually reach it and test the null render.
+- Evidence: 2026-10-31, `reader-transition.test.ts`'s null-target cases
+  rendered "Continue to next chapter" with an empty target block; the
+  fix parks on the page once the chapter list is fetched and its primary
+  action leaves the reader for the manga page.
+
 **A cache-clearing test must re-point fixture URLs before refetching.**
 Clearing the chapter cache deletes the page rows, so the next read re-analyzes
 pages from the real source — and CI runners have network access, so the

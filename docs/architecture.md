@@ -2004,7 +2004,10 @@ chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
 direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
 current and target chapter with its scanlator; a second boundary turn in the
 same direction or the page's own continue button commits the jump, an opposite
-turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. The page
+turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. With no
+chapter left in that direction the same page answers with an end-of-list card
+(once the chapter list is fetched) whose continue leaves the reader for the
+manga page. The page
 is on by default and disabled by `sumidoku.reader.transition` +
 `.transition.<id>` storing `0`. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
