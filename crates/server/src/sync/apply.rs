@@ -1452,7 +1452,7 @@ async fn merge_category_stub(
 		.bind(stub_id)
 		.fetch_one(&mut **tx)
 		.await?;
-	crate::db::remove_category_exclusions(tx, user_id, stub_id).await?;
+	crate::settings::remove_category_exclusions(tx, user_id, stub_id).await?;
 	sqlx::query("DELETE FROM category WHERE id = ?")
 		.bind(stub_id)
 		.execute(&mut **tx)
@@ -1509,7 +1509,7 @@ async fn apply_category(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		crate::db::remove_category_exclusions(tx, user_id, id).await?;
+		crate::settings::remove_category_exclusions(tx, user_id, id).await?;
 		sqlx::query("DELETE FROM category WHERE id = ?")
 			.bind(id)
 			.execute(&mut **tx)

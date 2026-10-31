@@ -351,9 +351,7 @@ pub async fn rebaseline(pool: &SqlitePool) -> ApiResult<()> {
 		};
 		insert_change(&mut tx, &change).await?;
 	}
-	sqlx::query("DELETE FROM server_state WHERE key = 'sync.single_owner_rebaseline'")
-		.execute(&mut *tx)
-		.await?;
+	crate::server_state::clear(&mut *tx, crate::server_state::SINGLE_OWNER_REBASELINE).await?;
 	tx.commit().await?;
 	Ok(())
 }

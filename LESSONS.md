@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Consecutive schema changes in a test belong on one connection.** A pooled
+query can land on a connection whose cached schema predates the previous
+statement, and SQLite parses against that cache, so a DROP followed by a CREATE
+can fail with "already exists" on some runs. Wrap schema edits in a transaction
+so they share a connection, and repeat a new migration test before trusting one
+green run.
+- Evidence: 2026-10-31, #549's `migration_19_removes_non_admin_state_and_preserves_admin`
+  passed 4 local workspace runs, then failed in CI with "trigger
+  sync_change_origin_insert already exists". Running the undo in one transaction
+  passed 25 repeated runs.
+
 **An inline `aspect-ratio` does not give an unloaded `<img>` a box.** With
 auto width and height there is no intrinsic size to resolve the ratio against,
 so anything painted on the element is invisible until it loads. Check a loading

@@ -183,9 +183,7 @@ async fn chapter_disk_breakdown(
 
 /// Cache persistence is enabled only with a positive budget; LRU collection always runs.
 pub async fn settings(pool: &SqlitePool) -> ApiResult<(bool, i64)> {
-	let raw: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key='cache.chapterMaxBytes'")
-		.fetch_optional(pool).await?;
-	let max_bytes = raw.and_then(|raw| serde_json::from_str::<i64>(&raw).ok())
+	let max_bytes = crate::settings::CHAPTER_CACHE_MAX_BYTES.get(pool).await?
 		.filter(|value| *value >= 0).unwrap_or(DEFAULT_MAX_BYTES);
 	Ok((max_bytes > 0, max_bytes))
 }

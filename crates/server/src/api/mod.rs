@@ -2041,17 +2041,11 @@ pub(crate) const USER_SCOPED_SETTING_KEYS: &[&str] = &[
 	"library.excluded_download_categories",
 ];
 
-pub(crate) fn user_setting_key(user_id: i64, key: &str) -> String {
-	format!("user.{user_id}.{key}")
-}
-
 async fn get_settings(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 ) -> ApiResult<Json<server_settings::ServerSettings>> {
-	let rows: Vec<(String, String)> = sqlx::query_as("SELECT key, value FROM setting ORDER BY key")
-		.fetch_all(&state.pool)
-		.await?;
+	let rows = crate::settings::all(&state.pool).await?;
 	let mut map = serde_json::Map::new();
 	let own_prefix = format!("user.{}.", user.id);
 	for (key, raw) in rows {
@@ -2119,10 +2113,7 @@ pub(crate) async fn apply_settings(
 			));
 		}
 		if value.is_null() && matches!(key.as_str(), "local.oneshots_dir" | "backup.dir") {
-			sqlx::query("DELETE FROM setting WHERE key = ?")
-				.bind(key)
-				.execute(&mut *tx)
-				.await?;
+			crate::settings::remove(&mut *tx, key).await?;
 			continue;
 		}
 		if let Some(result) = crate::update::validate_library_setting(key, value) {
@@ -2168,17 +2159,10 @@ pub(crate) async fn apply_settings(
 			continue;
 		}
 		let stored_key = match USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
-			true => user_setting_key(user.id, key),
+			true => crate::settings::user_key(user.id, key),
 			false => key.clone(),
 		};
-		sqlx::query(
-			"INSERT INTO setting (key, value) VALUES (?, ?)
-			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-		)
-		.bind(&stored_key)
-		.bind(serde_json::to_string(value)?)
-		.execute(&mut *tx)
-		.await?;
+		crate::settings::write_value(&mut *tx, &stored_key, value).await?;
 	}
 	tx.commit().await?;
 	if body.contains_key("cache.chapterMaxBytes") {

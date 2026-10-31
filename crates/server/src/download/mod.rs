@@ -51,28 +51,25 @@ pub struct DownloadSettings {
 
 impl DownloadSettings {
 	pub async fn load(pool: &SqlitePool, user_id: i64, config: &crate::config::Config) -> ApiResult<Self> {
-		let excluded_key = format!("user.{user_id}.{LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES}");
-		let rows: Vec<(String, String)> = sqlx::query_as(
-			"SELECT key, value FROM setting WHERE key IN (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		let excluded_key = crate::settings::user_key(user_id, LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
+		let values = crate::settings::values(
+			pool,
+			&[
+				AUTO_DOWNLOAD_NEW_CHAPTERS,
+				AUTO_DOWNLOAD_LIMIT,
+				DOWNLOAD_FORMAT,
+				DOWNLOAD_CONCURRENCY,
+				DELETE_AFTER_MANUAL_READ,
+				DELETE_AFTER_READ,
+				ALLOW_DELETE_BOOKMARKED,
+				AUTO_SKIP_MANGA_WITH_UNREAD,
+				AUTO_IGNORE_REUPLOADS,
+				DOWNLOAD_AHEAD,
+				DOWNLOAD_AHEAD_COUNT,
+				&excluded_key,
+			],
 		)
-		.bind(AUTO_DOWNLOAD_NEW_CHAPTERS)
-		.bind(AUTO_DOWNLOAD_LIMIT)
-		.bind(DOWNLOAD_FORMAT)
-		.bind(DOWNLOAD_CONCURRENCY)
-		.bind(DELETE_AFTER_MANUAL_READ)
-		.bind(DELETE_AFTER_READ)
-		.bind(ALLOW_DELETE_BOOKMARKED)
-		.bind(AUTO_SKIP_MANGA_WITH_UNREAD)
-		.bind(AUTO_IGNORE_REUPLOADS)
-		.bind(DOWNLOAD_AHEAD)
-		.bind(DOWNLOAD_AHEAD_COUNT)
-		.bind(&excluded_key)
-		.fetch_all(pool)
 		.await?;
-		let values: HashMap<String, Value> = rows
-			.into_iter()
-			.filter_map(|(key, raw)| serde_json::from_str(&raw).ok().map(|value| (key, value)))
-			.collect();
 		let boolean = |key: &str, fallback: bool| {
 			values.get(key).and_then(Value::as_bool).unwrap_or(fallback)
 		};
@@ -1786,18 +1783,13 @@ async fn move_template(pool: &SqlitePool, config: &crate::config::Config) -> Opt
 	let raw = match &config.download_move_path {
 		Some(v) => Some(v.clone()),
 		None => {
-			let row: Option<(String,)> =
-				match sqlx::query_as("SELECT value FROM setting WHERE key = 'download.move_path'")
-					.fetch_optional(pool)
-					.await
-				{
-					Ok(row) => row,
-					Err(e) => {
-						tracing::warn!("download move_path setting read failed: {e}");
-						None
-					}
-				};
-			row.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+			match crate::settings::DOWNLOAD_MOVE_PATH.get(pool).await {
+				Ok(value) => value,
+				Err(e) => {
+					tracing::warn!("download move_path setting read failed: {}", e.message());
+					None
+				}
+			}
 		}
 	};
 	raw.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())

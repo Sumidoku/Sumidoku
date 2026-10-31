@@ -10,10 +10,6 @@ use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Ordered pin list in the settings (an array of source keys); the order is also the default priority for later
-/// cross-source migration, aligned with Aidoku's Browse.pinnedList; reinstalling/uninstalling a source changes its internal id, so the key is the stable identity
-const PINNED_KEY: &str = "browse.pinned_sources";
-
 /// key → pinOrder, for source_json; a wrong-shaped value reads as an empty list (the generic setting PUT accepts any JSON)
 pub(crate) async fn pinned_map(pool: &SqlitePool) -> ApiResult<HashMap<String, i64>> {
 	let keys = pinned_keys(pool).await?;
@@ -25,25 +21,11 @@ pub(crate) async fn pinned_map(pool: &SqlitePool) -> ApiResult<HashMap<String, i
 }
 
 async fn pinned_keys(pool: &SqlitePool) -> ApiResult<Vec<String>> {
-	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-		.bind(PINNED_KEY)
-		.fetch_optional(pool)
-		.await?;
-	Ok(row
-		.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
-		.unwrap_or_default())
+	Ok(crate::settings::PINNED_SOURCES.get(pool).await?.unwrap_or_default())
 }
 
 async fn write_pinned(pool: &SqlitePool, keys: &[String]) -> ApiResult<()> {
-	sqlx::query(
-		"INSERT INTO setting (key, value) VALUES (?, ?)
-		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-	)
-	.bind(PINNED_KEY)
-	.bind(serde_json::to_string(keys)?)
-	.execute(pool)
-	.await?;
-	Ok(())
+	crate::settings::PINNED_SOURCES.set(pool, &keys.to_vec()).await
 }
 
 /// Drops stale keys when a source is uninstalled; the survivors' relative order is unchanged
