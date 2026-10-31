@@ -1922,8 +1922,11 @@ changed before the first query, and the search view's URL changes on submission.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The
-System section exposes the chapter-page cache's automatic LRU toggle, MiB
-limit, usage and last error, plus a confirmed whole-cache clear. The reader
+System section lists the cover cache above the chapter-page cache: the cover
+cache shows cached entries, its entry cap and usage plus a confirmed clear,
+while the chapter-page cache shows its automatic LRU budget, usage, last error
+and a confirmed whole-cache clear. The chapter-page cache's per-source usage
+and per-source clear live in a "By source" disclosure that starts collapsed. The reader
 appends each page's `cacheRevision` to visible image and preload URLs, and
 revalidates the page list on chapter entry so a cache clear cannot leave the
 reader pointing at stale image bytes. The downloads page clears finished and

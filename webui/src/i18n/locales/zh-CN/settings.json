@@ -59,6 +59,7 @@
     "chapterCacheLimit": "缓存大小上限",
     "chapterCacheUsage": "已使用 {{used}}，涉及 {{count}} 个章节",
     "chapterCacheBreakdown": "页面数据 {{pages}} · 远程原图 {{originals}} · 本地图像 {{blobs}} · OPDS 压缩包 {{opds}}",
+    "chapterCacheSources": "图源明细（{{count}}）",
     "chapterCacheError": "上次缓存错误：{{error}}",
     "clearChapterCache": "清空章节缓存",
     "clearChapterCacheConfirm": "清空所有缓存的章节页面数据？已下载的章节文件不会受影响。",

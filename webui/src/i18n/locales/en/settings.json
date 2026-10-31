@@ -59,6 +59,7 @@
     "chapterCacheLimit": "Maximum cache size",
     "chapterCacheUsage": "{{used}} used across {{count}} chapters",
     "chapterCacheBreakdown": "Pages {{pages}} · remote originals {{originals}} · local images {{blobs}} · OPDS archives {{opds}}",
+    "chapterCacheSources": "By source ({{count}})",
     "chapterCacheError": "Last cache error: {{error}}",
     "clearChapterCache": "Clear chapter cache",
     "clearChapterCacheConfirm": "Clear all cached chapter page data? Downloaded chapter files are not affected.",

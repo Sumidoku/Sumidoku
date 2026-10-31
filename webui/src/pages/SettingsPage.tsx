@@ -67,6 +67,7 @@ import type {
 	SuwayomiSourceReport
 } from '../api/types';
 import type { TriStateSelection } from '../lib/triState';
+import { formatBytes } from '../lib/format';
 import { MANGA_CONTENT_RATING_LEVELS } from '../lib/source';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
@@ -88,6 +89,7 @@ import {
 	pushToast
 } from '../components';
 import { chapterCacheLimitBytes } from './settings/chapterCache';
+import { ChapterCacheSources } from './settings/ChapterCacheSources';
 import { ExcludedCategoriesSetting } from './settings/ExcludedCategoriesSetting';
 import { SettingsLayout, SETTINGS_GROUPS } from './settings/SettingsLayout';
 import { SkippedItems } from './settings/SkippedItems';
@@ -339,18 +341,6 @@ function IncognitoSection() {
 	);
 }
 
-function formatBytes(value: number): string {
-	if (value < 1024) return `${value} B`;
-	const units = ['KiB', 'MiB', 'GiB', 'TiB'];
-	let size = value / 1024;
-	let unit = 0;
-	while (size >= 1024 && unit < units.length - 1) {
-		size /= 1024;
-		unit++;
-	}
-	return `${size.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
-}
-
 function ChapterCacheSection() {
 	const { t } = useTranslation();
 	const settings = useServerSettings();
@@ -468,27 +458,12 @@ function ChapterCacheSection() {
 					<Button variant="danger" disabled={clear.isPending} onClick={() => setClearConfirm(true)}>
 						{t('settings.clearChapterCache')}
 					</Button>
-					{stats.data && stats.data.sources.length > 0 && (
-						<div>
-							{stats.data.sources.map((source) => (
-								<div className="settings-row" key={source.sourceId}>
-									<span className="settings-row__label">{source.sourceName}</span>
-									<span className="faint">
-										{t('settings.chapterCacheUsage', {
-											used: formatBytes(source.usedBytes),
-											count: source.chapterCount
-										})}
-									</span>
-									<Button
-										variant="danger"
-										disabled={clearSource.isPending}
-										onClick={() => setSourceConfirm(source.sourceId)}
-									>
-										{t('settings.clearSourceChapterCache')}
-									</Button>
-								</div>
-							))}
-						</div>
+					{stats.data && (
+						<ChapterCacheSources
+							sources={stats.data.sources}
+							clearing={clearSource.isPending}
+							onClear={setSourceConfirm}
+						/>
 					)}
 				</>
 			)}
@@ -2585,8 +2560,8 @@ export default function SettingsPage() {
 						<>
 							<SecuritySection />
 							<ApiKeysSection />
-							<ChapterCacheSection />
 							<CoverCacheSection />
+							<ChapterCacheSection />
 							<AboutSection />
 						</>
 					)
