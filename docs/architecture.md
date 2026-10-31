@@ -1953,9 +1953,11 @@ fills gaps (server values win, unchanged values keep the map identity), so
 double-page spreads re-pair when a loaded image turns out landscape without
 moving the current page. While the effective URL is in flight the image
 paints a centered spinner on its box (`reader__img--loading`, a CSS background,
-so there is no wrapper, no layout shift and nothing to intercept taps; the
-class comes off on load so it never shows through transparent regions, and
-`prefers-reduced-motion` swaps the SMIL animation for a static arc) — a page
+so there is no wrapper and nothing to intercept taps; the class comes off on
+load so it never shows through transparent regions, and
+`prefers-reduced-motion` swaps the SMIL animation for a static arc). Paged mode
+gives the unloaded image a 64px minimum, since the scale modes that size it
+from its content would otherwise leave a 0x0 box; in continuous mode a page
 whose size was never measured has no box yet and stays silent. A page image
 that fails to load retries once
 automatically with an `r=N` cache-buster the server ignores, and latches into a failed placeholder

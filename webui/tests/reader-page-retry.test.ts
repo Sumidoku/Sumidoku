@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -117,4 +118,12 @@ test('PageImage marks the image as loading until its own load event lands', asyn
 	} finally {
 		await vite.close();
 	}
+});
+
+test('the paged loading image keeps a box for the spinner while it has no intrinsic size', () => {
+	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8');
+	const rule = css.match(/\.reader__paged \.reader__img--loading\s*\{([^}]*)\}/)?.[1];
+	assert.ok(rule);
+	assert.match(rule, /\bmin-width:\s*64px;/);
+	assert.match(rule, /\bmin-height:\s*64px;/);
 });
