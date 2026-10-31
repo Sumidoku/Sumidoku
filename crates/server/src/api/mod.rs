@@ -163,6 +163,8 @@ pub fn router(state: Arc<AppState>) -> Router {
 		.route("/api/v1/downloads/clear", post(crate::api::download::clear_downloads))
 		.route("/api/v1/cache/chapters", get(chapter_cache_stats))
 		.route("/api/v1/cache/chapters/clear", post(clear_chapter_cache))
+		.route("/api/v1/cache/covers", get(cover::get_cover_cache_stats))
+		.route("/api/v1/cache/covers/clear", post(cover::clear_cover_cache))
 		.route("/api/v1/downloads/delete", post(crate::api::download::delete_downloads))
 		.route(
 			"/api/v1/downloads/{id}",
@@ -1932,9 +1934,33 @@ async fn chapter_cache_stats(State(state): State<Arc<AppState>>) -> ApiResult<Js
 	Ok(Json(serde_json::to_value(stats)?))
 }
 
-async fn clear_chapter_cache(State(state): State<Arc<AppState>>) -> ApiResult<Json<Value>> {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClearChapterCacheRequest {
+	source_id: Option<i64>,
+}
+
+/// Global clear takes no body; `{"sourceId": N}` scopes the same clear to one source's
+/// chapters. Downloaded products are untouched either way.
+async fn clear_chapter_cache(
+	State(state): State<Arc<AppState>>,
+	body: Option<Json<ClearChapterCacheRequest>>,
+) -> ApiResult<Json<Value>> {
 	let (_, max_bytes) = crate::cache::settings(&state.pool).await?;
-	let (cleared_bytes, used_bytes, chapter_count) = crate::cache::clear_state(&state).await?;
+	let source_id = body.and_then(|Json(body)| body.source_id);
+	let (cleared_bytes, used_bytes, chapter_count) = match source_id {
+		Some(source_id) => {
+			let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM source WHERE id = ?")
+				.bind(source_id)
+				.fetch_optional(&state.pool)
+				.await?;
+			if exists.is_none() {
+				return Err(ApiError::bad_request("unknown source"));
+			}
+			crate::cache::clear_source_state(&state, source_id).await?
+		}
+		None => crate::cache::clear_state(&state).await?,
+	};
 	let stats = crate::cache::stats(
 		&state.pool,
 		&state.config.page_blobs_dir(),

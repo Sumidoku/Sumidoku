@@ -1223,8 +1223,14 @@ no alias is derived from migration text.
   removing page rows and derived assets. Clearing preserves page count and
   reading progress, resets `pages_analyzed_at`, and advances each affected
   chapter's `cacheRevision`, returned with `GET /api/v1/chapter/{id}/pages`.
-  `GET /api/v1/cache/chapters` reports usage and errors; the matching POST clear
-  endpoint reports actual post-clear usage.
+  `chapter_cache_state` splits each chapter's bytes into page rows, remote
+  originals, materialized blobs and OPDS archives (`page_bytes`,
+  `original_bytes`, `blob_bytes`, `opds_bytes`; the total always equals their
+  sum), so `GET /api/v1/cache/chapters` reports both the per-type `breakdown`
+  and a per-source `sources` list alongside usage and errors. The matching POST
+  clear endpoint reports actual post-clear usage and accepts an optional
+  `{"sourceId": N}` body to clear only one source's chapters; an unknown source
+  id is a 400.
 - Remote page originals (`cache.rs`, `api/page.rs`, `download/mod.rs`): URL and
   Zip page bytes after source image processing (or Zip extraction), with the
   response MIME, are stored as a staged entry under
@@ -1362,6 +1368,9 @@ no alias is derived from migration text.
   `last_fetched_at`, so freshness is unchanged), and past
   `SUMIDOKU_COVER_CACHE_MAX` covers of manga outside the library are evicted
   before any library cover, least recently served first.
+  `GET /api/v1/cache/covers` reports entry count, bytes (bodies plus sidecars)
+  and the configured cap; `POST /api/v1/cache/covers/clear` removes every
+  cached cover file, after which a cover re-fetches on its next view.
   `GET /api/v1/manga/{id}/covers/alternates` calls the source's
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.

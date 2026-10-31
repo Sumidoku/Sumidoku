@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::Response;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
@@ -332,6 +332,115 @@ async fn touch(path: &FsPath) {
 	.await;
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverCacheStats {
+	pub entries: i64,
+	pub used_bytes: i64,
+	pub max_entries: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoverCacheClearResponse {
+	pub cleared_bytes: i64,
+	pub cleared_entries: i64,
+}
+
+/// Disk usage of the cover cache: entries are cover bodies (bare numeric file names);
+/// bytes count every regular file, sidecars included, so the number matches real usage.
+fn cover_cache_disk_stats(dir: &FsPath) -> std::io::Result<(i64, i64)> {
+	let read = match std::fs::read_dir(dir) {
+		Ok(read) => read,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+		Err(error) => return Err(error),
+	};
+	let mut entries = 0i64;
+	let mut bytes = 0i64;
+	for entry in read {
+		let entry = entry?;
+		if !entry.file_type()?.is_file() {
+			continue;
+		}
+		bytes = bytes.saturating_add(entry.metadata()?.len().min(i64::MAX as u64) as i64);
+		if entry.file_name().to_str().and_then(|name| name.parse::<i64>().ok()).is_some() {
+			entries += 1;
+		}
+	}
+	Ok((entries, bytes))
+}
+
+/// Removes every cached cover (bodies, sidecars, stale tmp files); manga rows are untouched,
+/// so a cover simply re-fetches on its next view. One removal failure does not abort the sweep.
+fn clear_cover_cache_dir(dir: &FsPath) -> std::io::Result<(i64, i64)> {
+	let read = match std::fs::read_dir(dir) {
+		Ok(read) => read,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
+		Err(error) => return Err(error),
+	};
+	let mut entries = 0i64;
+	let mut bytes = 0i64;
+	let mut first_error: Option<std::io::Error> = None;
+	for entry in read {
+		let entry = entry?;
+		if entry.file_type()?.is_dir() {
+			continue;
+		}
+		let size = entry.metadata()?.len().min(i64::MAX as u64) as i64;
+		match std::fs::remove_file(entry.path()) {
+			Ok(()) => {
+				bytes = bytes.saturating_add(size);
+				if entry.file_name().to_str().and_then(|name| name.parse::<i64>().ok()).is_some() {
+					entries += 1;
+				}
+			}
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+			Err(error) => {
+				if first_error.is_none() {
+					first_error = Some(error);
+				}
+			}
+		}
+	}
+	if let Some(error) = first_error {
+		return Err(error);
+	}
+	Ok((entries, bytes))
+}
+
+/// Cover cache usage for the settings page. The cap is the configured entry count
+/// (`cover_cache_max`); there is no byte budget for covers.
+pub async fn get_cover_cache_stats(
+	State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<CoverCacheStats>> {
+	let dir = state.config.covers_dir.clone();
+	let max_entries = state.config.cover_cache_max.min(i64::MAX as usize) as i64;
+	let (entries, used_bytes) = tokio::task::spawn_blocking(move || cover_cache_disk_stats(&dir))
+		.await
+		.map_err(|error| ApiError::internal(format!("cover cache scan task failed: {error}")))?
+		.map_err(|error| ApiError::internal(format!("cover cache scan failed: {error}")))?;
+	Ok(Json(CoverCacheStats {
+		entries,
+		used_bytes,
+		max_entries,
+	}))
+}
+
+pub async fn clear_cover_cache(
+	State(state): State<Arc<AppState>>,
+) -> ApiResult<Json<CoverCacheClearResponse>> {
+	let dir = state.config.covers_dir.clone();
+	let (cleared_entries, cleared_bytes) =
+		tokio::task::spawn_blocking(move || clear_cover_cache_dir(&dir))
+			.await
+			.map_err(|error| ApiError::internal(format!("cover cache clear task failed: {error}")))?
+			.map_err(|error| ApiError::internal(format!("cover cache clear failed: {error}")))?;
+	Ok(Json(CoverCacheClearResponse {
+		cleared_bytes,
+		cleared_entries,
+	}))
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -412,6 +521,32 @@ mod tests {
 		assert!(read_fresh_cache(&old, Some(1_000), None).await.is_some());
 		evict_over_cap(tmp.path(), 1, &HashSet::new());
 		assert_eq!(cached(tmp.path()), [1], "the cover just served must outlive the untouched one");
+	}
+
+	#[test]
+	fn cover_cache_stats_counts_bodies_and_every_file_byte() {
+		let tmp = tempfile::tempdir().unwrap();
+		seed(tmp.path(), 1, 100);
+		seed(tmp.path(), 2, 50);
+		std::fs::write(tmp.path().join("1.variant"), "v1").unwrap();
+		std::fs::write(tmp.path().join(".3.tmp"), b"partial").unwrap();
+		let (entries, bytes) = cover_cache_disk_stats(tmp.path()).unwrap();
+		assert_eq!(entries, 2, "tmp files are not covers");
+		assert_eq!(bytes, 2 * (3 + "image/jpeg".len() as i64) + 2 + 7);
+	}
+
+	#[test]
+	fn clear_cover_cache_removes_every_file_and_reports_usage() {
+		let tmp = tempfile::tempdir().unwrap();
+		seed(tmp.path(), 1, 100);
+		std::fs::write(tmp.path().join("1.variant"), "v1").unwrap();
+		std::fs::write(tmp.path().join(".2.tmp"), b"partial").unwrap();
+		let (entries, bytes) = clear_cover_cache_dir(tmp.path()).unwrap();
+		assert_eq!(entries, 1);
+		assert_eq!(bytes, 3 + "image/jpeg".len() as i64 + 2 + 7);
+		assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+		assert_eq!(clear_cover_cache_dir(tmp.path()).unwrap(), (0, 0));
+		assert_eq!(cover_cache_disk_stats(tmp.path()).unwrap(), (0, 0));
 	}
 
 	#[test]

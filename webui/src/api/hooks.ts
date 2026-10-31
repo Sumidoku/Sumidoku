@@ -17,6 +17,8 @@ import type {
 	Category,
 	ChapterCacheClearResponse,
 	ChapterCacheStats,
+	CoverCacheClearResponse,
+	CoverCacheStats,
 	ChapterProgress,
 	ChapterWithDownload,
 	DeepLinkResponse,
@@ -95,6 +97,7 @@ export const qk = {
 	whoami: ['whoami'] as const,
 	apiKeys: ['api-keys'] as const,
 	chapterCache: ['chapter-cache'] as const,
+	coverCache: ['cover-cache'] as const,
 	tasks: ['tasks'] as const,
 	localTrash: ['local-trash'] as const
 };
@@ -1012,6 +1015,36 @@ export function useClearChapterCache() {
 		onSettled: () => {
 			void qc.invalidateQueries({ queryKey: ['chapter'] });
 			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
+	});
+}
+
+// Scoped clear for one source; breakdown/sources in the stats are refreshed by the invalidation
+export function useClearSourceChapterCache() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: (sourceId: number) =>
+			api<ChapterCacheClearResponse>('/cache/chapters/clear', { method: 'POST', body: { sourceId } }),
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: ['chapter'] });
+			void qc.invalidateQueries({ queryKey: qk.chapterCache });
+		}
+	});
+}
+
+export function useCoverCacheStats() {
+	return useQuery({
+		queryKey: qk.coverCache,
+		queryFn: () => api<CoverCacheStats>('/cache/covers')
+	});
+}
+
+export function useClearCoverCache() {
+	const qc = useQueryClient();
+	return useMutation({
+		mutationFn: () => api<CoverCacheClearResponse>('/cache/covers/clear', { method: 'POST' }),
+		onSettled: () => {
+			void qc.invalidateQueries({ queryKey: qk.coverCache });
 		}
 	});
 }

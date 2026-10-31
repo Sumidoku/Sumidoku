@@ -478,7 +478,7 @@ async fn download_reuses_cached_original_fetches_only_misses_and_cleans_derived_
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(
 		stats["usedBytes"], page_json,
-		"originals and variants are removed; page rows remain charged"
+		"originals are removed; page rows remain charged"
 	);
 	let blob_dir = t.tmp.path().join("page-blobs").join(chapter_id.to_string());
 	assert_eq!(
@@ -811,4 +811,66 @@ async fn cache_budget_boundaries_and_removed_switch_are_consistent_for_both_sett
 		structured["cache"]["chapterMaxBytes"] = value.clone();
 		assert_eq!(request(&t.app, "PUT", "/api/v1/settings", Some(structured)).await.0, StatusCode::BAD_REQUEST, "invalid structured budget {value}");
 	}
+}
+
+#[tokio::test]
+async fn source_scoped_clear_only_evicts_that_source() {
+	let (t, chapter_id, upstream) = remote_chapter().await;
+	let url = format!("/api/v1/chapter/{chapter_id}/page/0");
+	let (status, _, _) = request_full(&t.app, "GET", &url, None).await;
+	assert_eq!(status, StatusCode::OK);
+
+	let (status, stats) = request(&t.app, "GET", "/api/v1/cache/chapters", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let used_before = stats["usedBytes"].as_i64().expect("used bytes");
+	assert!(used_before > 0);
+	// Breakdown components sum to the total and at least pages + originals are present.
+	let breakdown = &stats["breakdown"];
+	let component_sum = ["pageBytes", "originalBytes", "blobBytes", "opdsBytes"]
+		.iter()
+		.map(|key| breakdown[key].as_i64().expect("breakdown component"))
+		.sum::<i64>();
+	assert_eq!(component_sum, used_before, "breakdown must sum to total usage");
+	assert!(breakdown["pageBytes"].as_i64().expect("page bytes") > 0);
+	assert!(breakdown["originalBytes"].as_i64().expect("original bytes") > 0);
+	let sources = stats["sources"].as_array().expect("source breakdown");
+	assert_eq!(sources.len(), 1, "one source uses the cache");
+	let source_id = sources[0]["sourceId"].as_i64().expect("source id");
+	assert_eq!(sources[0]["usedBytes"].as_i64(), Some(used_before));
+
+	// An unknown source id is rejected and clears nothing.
+	let (status, _) = request(
+		&t.app,
+		"POST",
+		"/api/v1/cache/chapters/clear",
+		Some(json!({"sourceId": source_id + 1000})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	let (status, cleared) = request(
+		&t.app,
+		"POST",
+		"/api/v1/cache/chapters/clear",
+		Some(json!({"sourceId": source_id})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(cleared["clearedBytes"].as_i64(), Some(used_before));
+	assert_eq!(cleared["usedBytes"].as_i64(), Some(0));
+
+	let (status, after) = request(&t.app, "GET", "/api/v1/cache/chapters", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(after["sources"].as_array().expect("sources").len(), 0);
+	assert_eq!(after["usedBytes"].as_i64(), Some(0));
+
+	// The scoped clear deletes page rows, so re-analysis would ask the real source; point
+	// the pages back at the local upstream before proving the refetch (as the global
+	// clear test does).
+	rewrite_urls(&t.db_path, chapter_id, upstream.port).await;
+	// The scoped clear forces a refetch on the next read, like the global one.
+	let (status, _, bytes) = request_full(&t.app, "GET", &url, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(bytes, upstream.first);
+	assert_eq!(upstream.first_hits.load(Ordering::SeqCst), 2, "scoped clear must force one refetch");
 }

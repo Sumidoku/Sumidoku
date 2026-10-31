@@ -24,6 +24,9 @@ import {
 	useCategories,
 	useChapterCacheStats,
 	useClearChapterCache,
+	useClearCoverCache,
+	useClearSourceChapterCache,
+	useCoverCacheStats,
 	useCreateApiKey,
 	useCreateCategory,
 	useCreateFilterGroup,
@@ -354,7 +357,9 @@ function ChapterCacheSection() {
 	const save = useSaveServerSettings();
 	const stats = useChapterCacheStats();
 	const clear = useClearChapterCache();
+	const clearSource = useClearSourceChapterCache();
 	const [clearConfirm, setClearConfirm] = useState(false);
+	const [sourceConfirm, setSourceConfirm] = useState<number | null>(null);
 	const cacheSettings = settings.data?.cache;
 	const maxBytes = cacheSettings?.chapterMaxBytes ?? 2 * 1024 ** 3;
 	const [maxMiB, setMaxMiB] = useState(String(maxBytes / 1024 ** 2));
@@ -387,6 +392,18 @@ function ChapterCacheSection() {
 			// The API client already reports the error; keep the confirmation open for retry.
 		}
 	}
+
+	async function clearSourceCache(sourceId: number) {
+		try {
+			const result = await clearSource.mutateAsync(sourceId);
+			pushToast(t('settings.chapterCacheCleared', { size: formatBytes(result.clearedBytes) }), 'info');
+			setSourceConfirm(null);
+		} catch {
+			// The API client already reports the error; keep the confirmation open for retry.
+		}
+	}
+
+	const confirmSource = stats.data?.sources.find((source) => source.sourceId === sourceConfirm);
 
 	return (
 		<Section title={t('settings.chapterCacheTitle')} desc={t('settings.chapterCacheDesc')}>
@@ -433,6 +450,16 @@ function ChapterCacheSection() {
 							count: stats.data?.chapterCount ?? 0
 						})}
 					</p>
+					{stats.data && (
+						<p className="faint">
+							{t('settings.chapterCacheBreakdown', {
+								pages: formatBytes(stats.data.breakdown.pageBytes),
+								originals: formatBytes(stats.data.breakdown.originalBytes),
+								blobs: formatBytes(stats.data.breakdown.blobBytes),
+								opds: formatBytes(stats.data.breakdown.opdsBytes)
+							})}
+						</p>
+					)}
 					{stats.data?.lastError && (
 						<p className="settings-backup__warn">
 							{t('settings.chapterCacheError', { error: stats.data.lastError })}
@@ -441,6 +468,28 @@ function ChapterCacheSection() {
 					<Button variant="danger" disabled={clear.isPending} onClick={() => setClearConfirm(true)}>
 						{t('settings.clearChapterCache')}
 					</Button>
+					{stats.data && stats.data.sources.length > 0 && (
+						<div>
+							{stats.data.sources.map((source) => (
+								<div className="settings-row" key={source.sourceId}>
+									<span className="settings-row__label">{source.sourceName}</span>
+									<span className="faint">
+										{t('settings.chapterCacheUsage', {
+											used: formatBytes(source.usedBytes),
+											count: source.chapterCount
+										})}
+									</span>
+									<Button
+										variant="danger"
+										disabled={clearSource.isPending}
+										onClick={() => setSourceConfirm(source.sourceId)}
+									>
+										{t('settings.clearSourceChapterCache')}
+									</Button>
+								</div>
+							))}
+						</div>
+					)}
 				</>
 			)}
 			<Modal
@@ -461,6 +510,107 @@ function ChapterCacheSection() {
 				}
 			>
 				<p className="settings-modal-text">{t('settings.clearChapterCacheConfirm')}</p>
+			</Modal>
+			<Modal
+				open={sourceConfirm !== null}
+				title={t('settings.clearSourceChapterCache')}
+				onClose={() => {
+					if (!clearSource.isPending) setSourceConfirm(null);
+				}}
+				footer={
+					<>
+						<Button disabled={clearSource.isPending} onClick={() => setSourceConfirm(null)}>
+							{t('common.cancel')}
+						</Button>
+						<Button
+							variant="danger"
+							loading={clearSource.isPending}
+							onClick={() => {
+								if (sourceConfirm !== null) void clearSourceCache(sourceConfirm);
+							}}
+						>
+							{t('settings.clearSourceChapterCache')}
+						</Button>
+					</>
+				}
+			>
+				<p className="settings-modal-text">
+					{t('settings.clearSourceChapterCacheConfirm', { name: confirmSource?.sourceName ?? '' })}
+				</p>
+			</Modal>
+		</Section>
+	);
+}
+
+function CoverCacheSection() {
+	const { t } = useTranslation();
+	const stats = useCoverCacheStats();
+	const clear = useClearCoverCache();
+	const [clearConfirm, setClearConfirm] = useState(false);
+
+	async function clearCache() {
+		try {
+			const result = await clear.mutateAsync();
+			pushToast(
+				t('settings.coverCacheCleared', {
+					size: formatBytes(result.clearedBytes),
+					count: result.clearedEntries
+				}),
+				'info'
+			);
+			setClearConfirm(false);
+		} catch {
+			// The API client already reports the error; keep the confirmation open for retry.
+		}
+	}
+
+	return (
+		<Section title={t('settings.coverCacheTitle')} desc={t('settings.coverCacheDesc')}>
+			{stats.isPending ? (
+				<Skeleton height={48} />
+			) : stats.isError || !stats.data ? (
+				<div>
+					<p className="settings-backup__warn">{t('settings.coverCacheLoadFailed')}</p>
+					<Button
+						disabled={stats.isFetching}
+						loading={stats.isFetching}
+						onClick={() => void stats.refetch()}
+					>
+						{t('settings.retry')}
+					</Button>
+				</div>
+			) : (
+				<>
+					<p className="faint">
+						{t('settings.coverCacheUsage', {
+							entries: stats.data.entries,
+							max: stats.data.maxEntries,
+							size: formatBytes(stats.data.usedBytes)
+						})}
+					</p>
+					<Button variant="danger" disabled={clear.isPending} onClick={() => setClearConfirm(true)}>
+						{t('settings.clearCoverCache')}
+					</Button>
+				</>
+			)}
+			<Modal
+				open={clearConfirm}
+				title={t('settings.clearCoverCache')}
+				onClose={() => {
+					if (!clear.isPending) setClearConfirm(false);
+				}}
+				footer={
+					<>
+						<Button disabled={clear.isPending} onClick={() => setClearConfirm(false)}>
+							{t('common.cancel')}
+						</Button>
+						<Button variant="danger" loading={clear.isPending} onClick={() => void clearCache()}>
+							{t('settings.clearCoverCache')}
+						</Button>
+					</>
+				}
+			>
+				<p className="settings-modal-text">{t('settings.clearCoverCacheConfirm')}</p>
 			</Modal>
 		</Section>
 	);
@@ -2437,6 +2587,7 @@ export default function SettingsPage() {
 							<SecuritySection />
 							<ApiKeysSection />
 							<ChapterCacheSection />
+							<CoverCacheSection />
 							<AboutSection />
 						</>
 					)

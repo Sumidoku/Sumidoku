@@ -6,6 +6,27 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A cache-clearing test must re-point fixture URLs before refetching.**
+Clearing the chapter cache deletes the page rows, so the next read re-analyzes
+pages from the real source — and CI runners have network access, so the
+"unreachable" example URLs answer with real bytes. Rewrite the page rows to
+the local upstream after any clear, the way the global clear test does.
+- Evidence: 2026-10-31, PR #542's `source_scoped_clear_only_evicts_that_source`
+  refetched after a scoped clear without rewriting URLs and received a real
+  1024x1024 EXIF PNG from the example source instead of the 640x640 fixture
+  payload; the fix re-runs `rewrite_urls` before the refetch.
+
+**A new migration ships only with its checksum pin appended.** `db.rs`'s
+`shipped_migrations_are_immutable` asserts the discovered migration count
+equals the pinned list length, so landing `NNNN_*.sql` without a
+`(version, sha384)` entry fails CI while clippy and every other check stay
+green. Compute the pin as uppercase hex SHA-384 of the file bytes and append
+it in the same change.
+- Evidence: 2026-10-31, PR #542's first test leg failed
+  `db::tests::shipped_migrations_are_immutable` ("left: 31, right: 30") after
+  `0031_chapter_cache_breakdown.sql` landed without a pin; the follow-up
+  commit appended it.
+
 **A runtime SQL string needs a test on the migrated schema, above all when its
 failure only logs and skips.** `sqlx::query` strings are not checked at compile
 time, and a warn-and-return path turns a wrong column into a feature that quietly
