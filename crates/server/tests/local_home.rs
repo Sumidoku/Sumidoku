@@ -1,11 +1,13 @@
 //! Built-in local source home/listing semantics: latest-added vs latest-updates are
-//! distinguished by first-indexed time and subsequent content-change time.
+//! distinguished by first-indexed time and subsequent content-change time, and the two
+//! reading-history sections (continue-reading, recently-read) list one row per manga.
 mod common;
 
 use axum::Router;
 use axum::http::StatusCode;
 use common::{TestApp, base_config, local_scan_and_settle, request, source_by_key};
 use serde_json::Value;
+use sqlx::SqlitePool;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 use sumidoku_server::build_app;
@@ -245,4 +247,179 @@ async fn latest_added_orders_by_created_at() {
 	assert_eq!(status, StatusCode::OK);
 	let titles = listing_titles(&listing);
 	assert_eq!(titles, vec!["Beta", "Alpha"]);
+}
+
+/// Seed reading progress directly: the reading-history sections read `chapter_user`, and a test
+/// needs exact `last_read_at` values (the progress API always stamps "now").
+async fn set_reading_progress(
+	pool: &SqlitePool,
+	manga_key: &str,
+	chapter_key: &str,
+	last_page_read: i64,
+	is_read: i64,
+	last_read_at: Option<i64>,
+) {
+	let chapter_id: i64 = sqlx::query_scalar(
+		"SELECT c.id FROM chapter c JOIN manga m ON m.id = c.manga_id
+		 WHERE m.key = ? AND c.key = ?",
+	)
+	.bind(manga_key)
+	.bind(chapter_key)
+	.fetch_one(pool)
+	.await
+	.unwrap_or_else(|e| panic!("chapter {manga_key}/{chapter_key}: {e}"));
+	sqlx::query(
+		"INSERT INTO chapter_user (chapter_id, user_id, last_page_read, is_read, last_read_at)
+		 VALUES (?, 1, ?, ?, ?)
+		 ON CONFLICT (chapter_id, user_id) DO UPDATE SET
+		     last_page_read = excluded.last_page_read,
+		     is_read = excluded.is_read,
+		     last_read_at = excluded.last_read_at",
+	)
+	.bind(chapter_id)
+	.bind(last_page_read)
+	.bind(is_read)
+	.bind(last_read_at)
+	.execute(pool)
+	.await
+	.expect("insert chapter_user");
+}
+
+/// `(manga title, chapter key, chapter date_uploaded)` of a MangaChapterList section, in order.
+/// The reading-history sections stuff the row's reading time into `chapter.date_uploaded`, so the
+/// time also shows which of the manga's chapters the row picked.
+fn home_chapter_rows(body: &Value, section: &str) -> Vec<(String, String, Option<i64>)> {
+	body["components"]
+		.as_array()
+		.expect("components array")
+		.iter()
+		.find(|c| c["title"].as_str() == Some(section))
+		.and_then(|c| c["value"]["MangaChapterList"]["entries"].as_array())
+		.map(|entries| {
+			entries
+				.iter()
+				.map(|e| {
+					(
+						e["manga"]["title"].as_str().unwrap_or_default().to_string(),
+						e["chapter"]["key"].as_str().unwrap_or_default().to_string(),
+						e["chapter"]["date_uploaded"].as_i64(),
+					)
+				})
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+#[tokio::test]
+async fn continue_reading_lists_one_entry_per_manga() {
+	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+		write_page(&root.join("Alpha").join("ch 1"), "1.png", b"alpha-1");
+		write_page(&root.join("Alpha").join("ch 2"), "1.png", b"alpha-2");
+		write_page(&root.join("Beta").join("ch 1"), "1.png", b"beta-1");
+	})
+	.await;
+	let source_id = local_source_id(&app).await;
+	local_scan_and_settle(&app, Some(source_id)).await;
+
+	let pool = common::connect_db(&db_path).await;
+	set_reading_progress(&pool, "Alpha", "ch 1", 4, 0, Some(100)).await;
+	set_reading_progress(&pool, "Alpha", "ch 2", 2, 0, Some(200)).await;
+	set_reading_progress(&pool, "Beta", "ch 1", 7, 0, Some(150)).await;
+	pool.close().await;
+
+	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let rows = home_chapter_rows(&home, "Continue reading");
+	assert_eq!(
+		rows,
+		vec![
+			("Alpha".to_string(), "ch 2".to_string(), Some(200)),
+			("Beta".to_string(), "ch 1".to_string(), Some(150)),
+		],
+		"one row per manga, holding that manga's most recently read in-progress chapter"
+	);
+
+	let (status, listing) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings/continue-reading?page=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(listing_titles(&listing), vec!["Alpha", "Beta"]);
+}
+
+#[tokio::test]
+async fn recently_read_lists_one_entry_per_manga() {
+	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+		write_page(&root.join("Alpha").join("ch 1"), "1.png", b"alpha-1");
+		write_page(&root.join("Alpha").join("ch 2"), "1.png", b"alpha-2");
+		write_page(&root.join("Beta").join("ch 1"), "1.png", b"beta-1");
+	})
+	.await;
+	let source_id = local_source_id(&app).await;
+	local_scan_and_settle(&app, Some(source_id)).await;
+
+	let pool = common::connect_db(&db_path).await;
+	set_reading_progress(&pool, "Alpha", "ch 1", 10, 1, Some(100)).await;
+	set_reading_progress(&pool, "Alpha", "ch 2", 10, 1, Some(400)).await;
+	set_reading_progress(&pool, "Beta", "ch 1", 3, 1, Some(300)).await;
+	pool.close().await;
+
+	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let rows = home_chapter_rows(&home, "Recently read");
+	assert_eq!(
+		rows,
+		vec![
+			("Alpha".to_string(), "ch 2".to_string(), Some(400)),
+			("Beta".to_string(), "ch 1".to_string(), Some(300)),
+		],
+		"one row per manga, holding that manga's most recently finished chapter"
+	);
+
+	let (status, listing) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings/recently-read?page=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(listing_titles(&listing), vec!["Alpha", "Beta"]);
+}
+
+#[tokio::test]
+async fn recently_read_collapses_chapters_without_a_reading_time() {
+	// A batch "mark finished" writes is_read without a last_read_at stamp, so finished chapters can
+	// have no reading time at all; they must still collapse into one row per manga.
+	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+		write_page(&root.join("Gamma").join("ch 1"), "1.png", b"gamma-1");
+		write_page(&root.join("Gamma").join("ch 2"), "1.png", b"gamma-2");
+	})
+	.await;
+	let source_id = local_source_id(&app).await;
+	local_scan_and_settle(&app, Some(source_id)).await;
+
+	let pool = common::connect_db(&db_path).await;
+	set_reading_progress(&pool, "Gamma", "ch 1", 8, 1, None).await;
+	set_reading_progress(&pool, "Gamma", "ch 2", 8, 1, None).await;
+	pool.close().await;
+
+	let (status, home) = request(&app, "GET", &format!("/api/v1/sources/{source_id}/home"), None).await;
+	assert_eq!(status, StatusCode::OK);
+	let rows = home_chapter_rows(&home, "Recently read");
+	assert_eq!(rows.len(), 1, "one row per manga even without reading times: {rows:?}");
+	assert_eq!(rows[0].0, "Gamma");
+
+	let (status, listing) = request(
+		&app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings/recently-read?page=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(listing_titles(&listing), vec!["Gamma"]);
 }
