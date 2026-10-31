@@ -1387,9 +1387,14 @@ no alias is derived from migration text.
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
   `PUT /api/v1/manga/{id}/cover` `{url}` persists a pick to
-  `manga.cover_url` and deletes the cache files: the freshness key is
-  `last_fetched_at`, which a user pick must not move, so without the
-  delete the stale bytes keep serving and the pick never takes effect.
+  `manga.cover_url`, hands the cover column back to the entry's own source
+  and deletes the cache files: the freshness key is `last_fetched_at`, which a
+  user pick must not move, so without the delete the stale bytes keep serving
+  and the pick never takes effect. The write also records ownership, by source
+  key, in the cover lock: the bytes then take the source image chain rather
+  than the direct-URL path a tracker or manual cover needs, and a later refresh
+  cannot overwrite the pick. Reselecting the cover an entry already owns stamps
+  nothing, so the selection stays journal-idempotent.
   The web UI versions cover `<img>` URLs with the manga's `cover` string
   (`webui/src/api/client.ts:coverUrl`), so a changed cover is a new URL: a
   `?v=` request is cacheable for 30 days, an unversioned one or any local
@@ -1398,6 +1403,56 @@ no alias is derived from migration text.
   answers a matching `If-None-Match` with 304. The detail page's picker
   (`webui/src/pages/manga/CoverPickerModal.tsx`) grids the alternates
   through the source-image proxy above.
+  A cover matched from a tracker or typed by hand becomes the entry's
+  `cover_url`; for a local entry that URL now replaces the on-disk cover:
+  `get_cover` serves the local pipeline only while no external cover lock is
+  recorded, and otherwise fetches the stored URL directly instead of
+  resolving `cover.png` or the first page. The external bytes never pass
+  the local downsample, so they are cached without the local transform
+  variant, and unlocking the field returns the entry to its own file.
+- Metadata locks (`metadata.rs`, `api/metadata.rs`, migration
+  `0036_metadata_locks.sql`): an entry's metadata stays in the `manga` row, and
+  external writes are expressed as column-level locks rather than a second
+  store. `manga.metadata_locks` is a JSON object keyed by camelCase field name
+  (`title`, `authors`, `artists`, `description`, `tags`, `status`,
+  `contentRating`, `cover`) whose values are `{provider, remoteId?,
+  appliedAt}`. `provider` is `tracker:<anilist|mal|bangumi|mangabaka>`,
+  `source:<source key>` or `manual`, so the lock doubles as provenance. A source
+  is named by its natural key (`source.key`), never its instance id: the map
+  travels through backup documents and sync events, where an id would name a
+  different or absent source on the target. The wire reference a client sends is
+  still `source:<id>`, resolved to the key when the lock is written; the UI
+  labels a lock by looking the key up in the source list. A locked column wins
+  over the source: `store/manga.rs:upsert_from_source` wraps every lockable
+  `ON CONFLICT DO UPDATE` assignment in
+  `CASE WHEN json_extract(manga.metadata_locks, '$.<field>') IS NOT NULL THEN manga.<column> ELSE excluded.<column> END`,
+  so an entry refresh, a scheduled update and a backup restore keep the value,
+  while unlocked columns still follow the source. Backups carry the map
+  (`metadataLocks` on the exported entry) and a document without one leaves the
+  target's locks alone. A metadata write reads the lock map before changing it,
+  so `restore`, the PATCH metadata block and the cover pick run in
+  `db::begin_write` (`BEGIN IMMEDIATE`): upgrading a deferred transaction that
+  already read would fail with `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` does
+  not retry. A refresh that journals a new version commits the row and its
+  events in one write transaction. Reads are unchanged: `manga_json` and
+  `manga_json_batch` add a `metadataLocks` object built from the column, and the
+  aggregate search, OPDS and reader responses are untouched. `trashed_at`,
+  `url` and `viewer` are deliberately not lockable. The lock map is journaled
+  like the values it protects: the `journal::MANGA_STATE` snapshot in
+  `sync/journal.rs` includes `metadataLocks`, and `store/manga.rs` writes the
+  journal row in the same transaction as `set_metadata`, so a peer applies
+  values and provenance together. `POST …/metadata/restore` unlocks the listed
+  fields (or every field when the body is absent or `fields` is omitted) and,
+  with `refresh: true`, immediately re-fetches the source metadata under the
+  remaining locks. `PATCH /api/v1/manga/{id}` still accepts
+  `updateStrategy`/`incognito`, and now also accepts the eight metadata fields
+  (written with a `manual` lock) plus `metadataUnlock` (a field list), which is
+  how the edit dialog saves manual values and drops single locks. Editing
+  metadata is a library feature: restore and metadata edits through PATCH answer
+  409 `not_in_library` for an entry that is not shelved, while
+  `updateStrategy`/`incognito` keep working on any entry. Local sources are
+  exempt — their entries are the user's own files and are editable without a
+  `manga_user` row.
 - Library updates (`update/mod.rs`): serial per source, at most 3 sources at
   once, broadcasting progress as `UpdateEvent`s. The global
   `library.skip_titles` setting defaults to `hasUnread`, `completed` and
@@ -1925,6 +1980,12 @@ filtering uses a 500ms debounce. Clearing a source's search box resubmits an
 empty query so the unsearched results return without waiting for submission.
 Aggregate rating/language/source filters can be
 changed before the first query, and the search view's URL changes on submission.
+The manga detail page's more-menu reaches metadata through
+`EditMetadataDialog.tsx`: it edits the lockable fields directly and shows each
+field's source as follow-the-source, written by a provider, or manual, with
+per-field unlock and a restore-to-source action. It lives in
+`webui/src/pages/manga/` and is only offered while the entry is in the library
+or its source is local.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The

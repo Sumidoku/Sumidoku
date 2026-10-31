@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "lockedBy": "Écrit par {{provider}}",
+    "manualLock": "Verrouillé manuellement",
+    "contentRatings": {
+      "unknown": "Inconnu",
+      "safe": "Tout public",
+      "suggestive": "Suggestif",
+      "nsfw": "NSFW"
+    },
+    "fieldLabels": {
+      "title": "Titre",
+      "authors": "Auteurs",
+      "artists": "Dessinateurs",
+      "description": "Description",
+      "tags": "Tags",
+      "status": "Statut",
+      "contentRating": "Classification",
+      "cover": "Couverture"
+    },
+    "editTitle": "Modifier les métadonnées",
+    "editHint": "Les valeurs modifiées ici sont verrouillées et résistent aux rafraîchissements de la source. Les listes prennent une entrée par ligne.",
+    "editSaved": "Métadonnées enregistrées",
+    "editFailed": "Impossible d'enregistrer les métadonnées",
+    "sourceFollows": "Suit la source",
+    "unlock": "Déverrouiller",
+    "unlockAll": "Tout déverrouiller",
+    "restoreSource": "Restaurer les métadonnées de la source",
+    "restored": "Métadonnées de la source restaurées",
+    "restoreConfirm": "Restaurer ces champs depuis la source et retirer leurs verrous ?",
+    "titleRequired": "Le titre ne peut pas être vide"
+  }
+}

@@ -612,6 +612,9 @@ export type Manga = SourceManga & {
 	incognito: boolean;
 	categoryIds: Array<number>;
 	trackerProviders: Array<TrackerProvider>;
+	metadataLocks?: {
+		[key: string]: MetadataFieldLock;
+	};
 };
 
 export type MangaInput = {
@@ -642,6 +645,24 @@ export type MangaStatus = "Unknown" | "Ongoing" | "Completed" | "Cancelled" | "H
 export type MangaWithChapter = {
 	manga: SourceManga;
 	chapter: SourceChapter;
+};
+
+export type MetadataField = "title" | "authors" | "artists" | "description" | "tags" | "status" | "contentRating" | "cover";
+
+export type MetadataFieldLock = {
+	provider: string;
+	remoteId?: string | null;
+	appliedAt: number;
+};
+
+export type MetadataRestoreRequest = {
+	fields?: Array<MetadataField>;
+	refresh?: boolean;
+};
+
+export type MetadataRestoreResult = {
+	manga: Manga;
+	unlockedFields: Array<MetadataField>;
 };
 
 export type MigrateEntry = {
@@ -1345,6 +1366,15 @@ export type UpdateFilterGroupRequest = {
 export type UpdateMangaRequest = {
 	updateStrategy?: UpdateStrategy;
 	incognito?: boolean;
+	title?: string;
+	authors?: Array<string>;
+	artists?: Array<string>;
+	description?: string;
+	tags?: Array<string>;
+	status?: MangaStatus;
+	contentRating?: ContentRating;
+	cover?: string;
+	metadataUnlock?: Array<MetadataField>;
 };
 
 export type UpdateStrategy = "Always" | "Never";
