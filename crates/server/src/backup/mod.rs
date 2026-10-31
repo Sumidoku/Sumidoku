@@ -5,7 +5,6 @@ use crate::api::backup::build_backup_doc;
 use crate::config::Config;
 use crate::error::{ApiError, ApiResult};
 use crate::model::unix_now;
-use serde_json::Value;
 use sqlx::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -111,23 +110,17 @@ impl BackupSettings {
 	async fn load(pool: &SqlitePool, config: &Config) -> ApiResult<Self> {
 		let enabled = match config.backup_enabled {
 			Some(v) => v,
-			None => setting_json(pool, "backup.enabled")
-				.await?
-				.and_then(|v| v.as_bool())
-				.unwrap_or(false),
+			None => crate::settings::BACKUP_ENABLED.get(pool).await?.unwrap_or(false),
 		};
 		let interval_hours = match config.backup_interval_hours {
 			Some(v) => v,
-			None => setting_json(pool, "backup.interval_hours")
-				.await?
-				.and_then(|v| v.as_u64())
-				.unwrap_or(24),
+			None => crate::settings::BACKUP_INTERVAL_HOURS.get(pool).await?.unwrap_or(24),
 		};
 		let retention_count = match config.backup_retention_count {
 			Some(v) => v,
-			None => setting_json(pool, "backup.retention_count")
+			None => crate::settings::BACKUP_RETENTION_COUNT
+				.get(pool)
 				.await?
-				.and_then(|v| v.as_u64())
 				.map(|v| u32::try_from(v).unwrap_or(u32::MAX))
 				.unwrap_or(10),
 		};
@@ -139,15 +132,6 @@ impl BackupSettings {
 			dir: backups_dir(pool, config).await?,
 		})
 	}
-}
-
-/// Single-key read; the generic PUT accepts any JSON, so a wrong type is treated as unset
-async fn setting_json(pool: &SqlitePool, key: &str) -> ApiResult<Option<Value>> {
-	let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-		.bind(key)
-		.fetch_optional(pool)
-		.await?;
-	Ok(row.and_then(|(raw,)| serde_json::from_str(&raw).ok()))
 }
 
 async fn last_run(pool: &SqlitePool) -> ApiResult<Option<i64>> {
@@ -163,9 +147,7 @@ pub async fn backups_dir(pool: &SqlitePool, config: &Config) -> ApiResult<PathBu
 	if let Some(dir) = &config.backup_dir {
 		return Ok(dir.clone());
 	}
-	if let Some(dir) = setting_json(pool, "backup.dir")
-		.await?
-		.and_then(|v| v.as_str().map(str::to_string))
+	if let Some(dir) = crate::settings::BACKUP_DIR.get(pool).await?
 		&& !dir.trim().is_empty()
 	{
 		return Ok(PathBuf::from(dir));

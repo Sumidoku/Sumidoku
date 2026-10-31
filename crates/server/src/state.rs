@@ -287,11 +287,9 @@ impl AppState {
 			return Ok(dirs);
 		}
 		if self.is_default_local(source_id).await? {
-			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.dirs'")
-				.fetch_optional(&self.pool)
-				.await?;
-			if let Some(dirs) = row
-				.and_then(|(raw,)| serde_json::from_str::<Vec<String>>(&raw).ok())
+			if let Some(dirs) = crate::settings::LOCAL_DIRS
+				.get(&self.pool)
+				.await?
 				.map(|dirs| {
 					dirs.into_iter()
 						.filter(|dir| !dir.trim().is_empty())
@@ -326,17 +324,14 @@ impl AppState {
 				_ => None,
 			});
 		}
-		if self.is_default_local(source_id).await? {
-			let row: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = 'local.oneshots_dir'")
-				.fetch_optional(&self.pool)
-				.await?;
-			if let Some(name) = row
-				.and_then(|(raw,)| serde_json::from_str::<String>(&raw).ok())
+		if self.is_default_local(source_id).await?
+			&& let Some(name) = crate::settings::LOCAL_ONESHOTS_DIR
+				.get(&self.pool)
+				.await?
 				.map(|name| name.trim().to_string())
-				&& !name.is_empty()
-			{
-				return Ok(Some(name));
-			}
+			&& !name.is_empty()
+		{
+			return Ok(Some(name));
 		}
 		Ok(self.config.local_oneshots_dir().map(str::to_string))
 	}

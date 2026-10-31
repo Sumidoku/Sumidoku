@@ -1,7 +1,7 @@
 //! Instance state only the server writes. It lives apart from the `setting` table, so the settings
 //! API never shows it and backups never carry it.
 
-use sqlx::SqlitePool;
+use sqlx::{Executor, Sqlite, SqlitePool};
 
 use crate::error::ApiResult;
 
@@ -29,6 +29,14 @@ pub(crate) async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>, 
 		.bind(key)
 		.fetch_optional(pool)
 		.await
+}
+
+pub(crate) async fn clear<'e, E: Executor<'e, Database = Sqlite>>(db: E, key: &str) -> ApiResult<()> {
+	sqlx::query("DELETE FROM server_state WHERE key = ?")
+		.bind(key)
+		.execute(db)
+		.await?;
+	Ok(())
 }
 
 pub(crate) async fn time(pool: &SqlitePool, key: &str) -> ApiResult<Option<i64>> {

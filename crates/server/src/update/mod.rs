@@ -33,20 +33,12 @@ pub struct LibraryUpdateSettings {
 
 impl LibraryUpdateSettings {
 	pub async fn load(pool: &SqlitePool, user_id: i64, config_interval_hours: u64) -> ApiResult<Self> {
-		let excluded_key = format!("user.{user_id}.{LIBRARY_EXCLUDED_UPDATE_CATEGORIES}");
-		let rows: Vec<(String, String)> = sqlx::query_as(
-			"SELECT key, value FROM setting WHERE key IN (?, ?, ?, ?)",
+		let excluded_key = crate::settings::user_key(user_id, LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
+		let values = crate::settings::values(
+			pool,
+			&[LIBRARY_SKIP_TITLES, LIBRARY_REFRESH_METADATA, LIBRARY_UPDATE_INTERVAL_HOURS, &excluded_key],
 		)
-		.bind(LIBRARY_SKIP_TITLES)
-		.bind(LIBRARY_REFRESH_METADATA)
-		.bind(LIBRARY_UPDATE_INTERVAL_HOURS)
-		.bind(&excluded_key)
-		.fetch_all(pool)
 		.await?;
-		let values: HashMap<String, Value> = rows
-			.into_iter()
-			.filter_map(|(key, raw)| serde_json::from_str(&raw).ok().map(|value| (key, value)))
-			.collect();
 		Ok(Self {
 			skip_titles: parse_skip_titles(values.get(LIBRARY_SKIP_TITLES)),
 			refresh_metadata: values

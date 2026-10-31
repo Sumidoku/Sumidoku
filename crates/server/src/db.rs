@@ -161,33 +161,6 @@ pub async fn begin_write(
 	pool.begin_with("BEGIN IMMEDIATE").await
 }
 
-pub async fn remove_category_exclusions(
-	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-	user_id: i64,
-	category_id: i64,
-) -> Result<(), sqlx::Error> {
-	let update_key = format!("user.{user_id}.library.excluded_update_categories");
-	let download_key = format!("user.{user_id}.library.excluded_download_categories");
-	sqlx::query(
-		"UPDATE setting
-		 SET value = (
-		  SELECT json_group_array(item.value) FROM json_each(setting.value) AS item
-		  WHERE item.value <> ?
-		 )
-		 WHERE key IN (?, ?)
-		  AND EXISTS (
-		   SELECT 1 FROM json_each(setting.value) AS item WHERE item.value = ?
-		  )",
-	)
-	.bind(category_id)
-	.bind(update_key)
-	.bind(download_key)
-	.bind(category_id)
-	.execute(&mut **tx)
-	.await?;
-	Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 	use super::SqlitePool;

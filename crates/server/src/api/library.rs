@@ -739,7 +739,7 @@ pub async fn delete_category(
 	if !exists {
 		return Err(ApiError::not_found("category not found"));
 	}
-	crate::db::remove_category_exclusions(&mut tx, user.id, id).await?;
+	crate::settings::remove_category_exclusions(&mut tx, user.id, id).await?;
 	sqlx::query("DELETE FROM category WHERE id = ? AND user_id = ?")
 		.bind(id)
 		.bind(user.id)

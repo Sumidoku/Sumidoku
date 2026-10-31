@@ -81,14 +81,7 @@ impl ProgressPatch {
 /// Incognito check: the user's namespace key user.<id>.incognito.enabled or the manga_user.incognito of the
 /// chapter's manga — either on pauses stamping (aligned with Aidoku's pause history: no new history, old history untouched)
 async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user_id: i64, chapter_id: i64) -> ApiResult<bool> {
-	let global: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-		.bind(crate::api::user_setting_key(user_id, "incognito.enabled"))
-		.fetch_optional(&mut **tx)
-		.await?;
-	if global
-		.and_then(|(raw,)| serde_json::from_str::<bool>(&raw).ok())
-		.unwrap_or(false)
-	{
+	if crate::settings::INCOGNITO_ENABLED.get(&mut **tx, user_id).await?.unwrap_or(false) {
 		return Ok(true);
 	}
 	let per_manga: Option<(bool,)> = sqlx::query_as(

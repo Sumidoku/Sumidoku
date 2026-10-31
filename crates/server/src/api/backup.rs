@@ -269,19 +269,12 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		.excluded_update_categories
 		.into_iter()
 		.collect();
-	let excluded_download_key = format!(
-		"user.{user_id}.{}",
-		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES
-	);
-	let excluded_download_categories: HashSet<i64> =
-		sqlx::query_scalar::<_, String>("SELECT value FROM setting WHERE key = ?")
-			.bind(&excluded_download_key)
-			.fetch_optional(pool)
-			.await?
-			.and_then(|raw| serde_json::from_str::<Vec<i64>>(&raw).ok())
-			.unwrap_or_default()
-			.into_iter()
-			.collect();
+	let excluded_download_categories: HashSet<i64> = crate::settings::EXCLUDED_DOWNLOAD_CATEGORIES
+		.get(pool, user_id)
+		.await?
+		.unwrap_or_default()
+		.into_iter()
+		.collect();
 	let category_rows: Vec<(i64, String, i64, bool)> = sqlx::query_as(
 		"SELECT id, name, sort_order, is_default
 		 FROM category WHERE user_id = ? ORDER BY sort_order, id",
@@ -360,10 +353,7 @@ pub async fn build_backup_doc(pool: &SqlitePool) -> ApiResult<BackupDoc> {
 		})
 		.collect();
 
-	let setting_rows: Vec<(String, String)> =
-		sqlx::query_as("SELECT key, value FROM setting ORDER BY key")
-			.fetch_all(pool)
-			.await?;
+	let setting_rows = crate::settings::all(pool).await?;
 	let mut settings = BTreeMap::new();
 	let own_prefix = format!("user.{user_id}.");
 	for (key, raw) in setting_rows {
@@ -568,12 +558,7 @@ pub async fn import_backup_doc(state: &AppState, sections_query: Option<&str>, b
 			&& doc.categories.iter().any(|category| category.include_in_download == 1)
 		{
 			// Include-only categories have no exclusion-list equivalent, so automatic downloads must stay conservative.
-			sqlx::query(
-				"INSERT INTO setting (key, value) VALUES ('auto_download_new_chapters', 'false')
-				 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-			)
-			.execute(&mut *tx)
-			.await?;
+			crate::settings::AUTO_DOWNLOAD_NEW_CHAPTERS.set(&mut *tx, &false).await?;
 		}
 		tx.commit().await?;
 	}
@@ -696,34 +681,19 @@ fn check_include_in(category: &str, field: &str, value: i64) -> ApiResult<i64> {
 async fn merge_excluded_categories(
 	tx: &mut Transaction<'_, Sqlite>,
 	user_id: i64,
-	setting: &str,
+	setting: crate::settings::UserKey<Vec<i64>>,
 	migrated: Vec<i64>,
 ) -> ApiResult<()> {
 	if migrated.is_empty() {
 		return Ok(());
 	}
-	let key = format!("user.{user_id}.{setting}");
-	let current: Option<(String,)> = sqlx::query_as("SELECT value FROM setting WHERE key = ?")
-		.bind(&key)
-		.fetch_optional(&mut **tx)
-		.await?;
-	let mut existing: Vec<i64> = current
-		.and_then(|(raw,)| serde_json::from_str(&raw).ok())
-		.unwrap_or_default();
+	let mut existing = setting.get(&mut **tx, user_id).await?.unwrap_or_default();
 	for id in migrated {
 		if !existing.contains(&id) {
 			existing.push(id);
 		}
 	}
-	sqlx::query(
-		"INSERT INTO setting (key, value) VALUES (?, ?)
-		 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-	)
-	.bind(&key)
-	.bind(serde_json::to_string(&existing)?)
-	.execute(&mut **tx)
-	.await?;
-	Ok(())
+	setting.set(&mut **tx, user_id, &existing).await
 }
 
 async fn restore_categories(
@@ -812,14 +782,14 @@ async fn restore_categories(
 	merge_excluded_categories(
 		tx,
 		user_id,
-		crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES,
+		crate::settings::EXCLUDED_UPDATE_CATEGORIES,
 		migrated_update,
 	)
 	.await?;
 	merge_excluded_categories(
 		tx,
 		user_id,
-		crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES,
+		crate::settings::EXCLUDED_DOWNLOAD_CATEGORIES,
 		migrated_download,
 	)
 	.await?;
@@ -926,17 +896,10 @@ async fn restore_settings(
 			continue;
 		}
 		let stored_key = match crate::api::USER_SCOPED_SETTING_KEYS.contains(&key.as_str()) {
-			true => crate::api::user_setting_key(user_id, key),
+			true => crate::settings::user_key(user_id, key),
 			false => key.clone(),
 		};
-		sqlx::query(
-			"INSERT INTO setting (key, value) VALUES (?, ?)
-			 ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-		)
-		.bind(&stored_key)
-		.bind(serde_json::to_string(value)?)
-		.execute(&mut **tx)
-		.await?;
+		crate::settings::write_value(&mut **tx, &stored_key, value).await?;
 		restored.settings += 1;
 	}
 	Ok(())
