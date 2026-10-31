@@ -27,6 +27,18 @@ export function formatDate(v: number | string | null | undefined): string {
 	).padStart(2, '0')}`;
 }
 
+export function formatBytes(value: number): string {
+	if (value < 1024) return `${value} B`;
+	const units = ['KiB', 'MiB', 'GiB', 'TiB'];
+	let size = value / 1024;
+	let unit = 0;
+	while (size >= 1024 && unit < units.length - 1) {
+		size /= 1024;
+		unit++;
+	}
+	return `${size.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${units[unit]}`;
+}
+
 export function relativeTime(v: number | string | null | undefined): string {
 	const ms = toMillis(v);
 	if (ms === null) return '';

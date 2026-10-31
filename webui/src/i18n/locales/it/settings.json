@@ -59,6 +59,7 @@
     "chapterCacheLimit": "Dimensione massima della cache",
     "chapterCacheUsage": "{{used}} usati in {{count}} capitoli",
     "chapterCacheBreakdown": "Pagine {{pages}} · originali remoti {{originals}} · immagini locali {{blobs}} · archivi OPDS {{opds}}",
+    "chapterCacheSources": "Per fonte ({{count}})",
     "chapterCacheError": "Ultimo errore della cache: {{error}}",
     "clearChapterCache": "Svuota la cache dei capitoli",
     "clearChapterCacheConfirm": "Svuotare tutti i dati delle pagine in cache? I file dei capitoli scaricati non vengono modificati.",

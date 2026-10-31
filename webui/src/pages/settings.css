@@ -508,6 +508,27 @@
 	flex: none;
 }
 
+/* ============ Cache usage ============ */
+
+.settings-cache__sources {
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	padding: 10px 12px;
+	margin-top: 8px;
+}
+
+.settings-cache__sources > summary {
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 500;
+}
+
+.settings-cache__sources[open] > summary {
+	margin-bottom: 6px;
+}
+
+/* ============ Backup ============ */
+
 .settings-backup__ops {
 	display: flex;
 	gap: 12px;
