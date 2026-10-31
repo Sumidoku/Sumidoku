@@ -11,7 +11,7 @@ use sumidoku_server::build_app;
 struct Peer {
 	app: Router,
 	#[allow(dead_code)]
-	tmp: tempfile::TempDir,
+	tmp: std::sync::Arc<tempfile::TempDir>,
 	db_path: PathBuf,
 	origin: String,
 }
@@ -1859,7 +1859,7 @@ async fn auth_peer() -> Peer {
 	pool.close().await;
 	Peer {
 		app,
-		tmp,
+		tmp: tmp.into(),
 		db_path,
 		origin,
 	}

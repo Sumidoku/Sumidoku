@@ -80,7 +80,7 @@ async fn rawimg_app() -> TestApp {
 	config.downloads_dir = tmp.path().join("downloads");
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn register_rawimg_manga(app: &Router) -> i64 {

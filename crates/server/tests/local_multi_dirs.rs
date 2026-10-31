@@ -66,7 +66,7 @@ async fn two_dir_app() -> TwoDirApp {
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	TwoDirApp {
-		app: TestApp { app, tmp, db_path },
+		app: TestApp::new(app, tmp, db_path),
 		dir_a,
 		dir_b,
 	}

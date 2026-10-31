@@ -230,7 +230,7 @@ async fn remote_chapter_at(port: u16) -> (TestApp, i64) {
 	let app = build_app(base_config(&tmp))
 		.await
 		.expect("restart fixture app");
-	(TestApp { app, tmp, db_path }, chapter_id)
+	(TestApp::new(app, tmp, db_path), chapter_id)
 }
 
 fn tree_bytes(path: &Path) -> u64 {

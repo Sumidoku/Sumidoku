@@ -16,7 +16,7 @@ async fn app_with_interval(update_interval_hours: u64) -> TestApp {
 	config.update_interval_hours = update_interval_hours;
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 #[tokio::test]

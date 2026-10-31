@@ -34,7 +34,7 @@ async fn instance_app() -> InstanceApp {
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	InstanceApp {
-		app: TestApp { app, tmp, db_path },
+		app: TestApp::new(app, tmp, db_path),
 		root_a,
 		root_b,
 	}

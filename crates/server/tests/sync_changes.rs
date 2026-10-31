@@ -395,7 +395,7 @@ async fn actual_changes_preserve_explicit_times() {
 
 #[tokio::test]
 async fn library_api_preserves_same_set_and_quietly_repeats_unshelving() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let mut categories = Vec::new();
 	for name in ["a", "b", "c"] {
@@ -562,7 +562,7 @@ async fn library_api_preserves_same_set_and_quietly_repeats_unshelving() {
 
 #[tokio::test]
 async fn cascades_leave_durable_tombstones_without_duplicate_parent_events() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "delete"}))).await;
 	assert_eq!(status, StatusCode::OK);

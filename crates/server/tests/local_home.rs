@@ -32,7 +32,7 @@ async fn local_app_with_tree<F: FnOnce(&Path)>(seed: F) -> TestApp {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn local_source_id(app: &Router) -> i64 {
@@ -78,7 +78,7 @@ fn home_section_titles(body: &Value, section: &str) -> Vec<String> {
 
 #[tokio::test]
 async fn newly_added_manga_appears_in_latest_added_not_latest_updates() {
-	let TestApp { app, tmp: _tmp, db_path: _ } = local_app_with_tree(|root| {
+	let TestApp { app, .. } = local_app_with_tree(|root| {
 		let alpha = root.join("Alpha");
 		write_page(&alpha.join("ch 1"), "1.png", b"alpha-1");
 		let beta = root.join("Beta");
@@ -184,7 +184,7 @@ async fn removing_a_chapter_bumps_manga_to_latest_updates() {
 
 #[tokio::test]
 async fn unchanged_manga_stays_out_of_latest_updates() {
-	let TestApp { app, tmp: _tmp, db_path: _ } = local_app_with_tree(|root| {
+	let TestApp { app, .. } = local_app_with_tree(|root| {
 		let alpha = root.join("Alpha");
 		write_page(&alpha.join("ch 1"), "1.png", b"alpha-1");
 		set_dir_mtime(&alpha, SystemTime::now());
@@ -207,7 +207,7 @@ async fn unchanged_manga_stays_out_of_latest_updates() {
 
 #[tokio::test]
 async fn latest_added_orders_by_created_at() {
-	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+	let TestApp { app, db_path, .. } = local_app_with_tree(|root| {
 		write_page(&root.join("Alpha").join("ch 1"), "1.png", b"alpha-1");
 		write_page(&root.join("Beta").join("ch 1"), "1.png", b"beta-1");
 	})
@@ -312,7 +312,7 @@ fn home_chapter_rows(body: &Value, section: &str) -> Vec<(String, String, Option
 
 #[tokio::test]
 async fn continue_reading_lists_one_entry_per_manga() {
-	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+	let TestApp { app, db_path, .. } = local_app_with_tree(|root| {
 		write_page(&root.join("Alpha").join("ch 1"), "1.png", b"alpha-1");
 		write_page(&root.join("Alpha").join("ch 2"), "1.png", b"alpha-2");
 		write_page(&root.join("Beta").join("ch 1"), "1.png", b"beta-1");
@@ -352,7 +352,7 @@ async fn continue_reading_lists_one_entry_per_manga() {
 
 #[tokio::test]
 async fn recently_read_lists_one_entry_per_manga() {
-	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+	let TestApp { app, db_path, .. } = local_app_with_tree(|root| {
 		write_page(&root.join("Alpha").join("ch 1"), "1.png", b"alpha-1");
 		write_page(&root.join("Alpha").join("ch 2"), "1.png", b"alpha-2");
 		write_page(&root.join("Beta").join("ch 1"), "1.png", b"beta-1");
@@ -394,7 +394,7 @@ async fn recently_read_lists_one_entry_per_manga() {
 async fn recently_read_collapses_chapters_without_a_reading_time() {
 	// A batch "mark finished" writes is_read without a last_read_at stamp, so finished chapters can
 	// have no reading time at all; they must still collapse into one row per manga.
-	let TestApp { app, tmp: _tmp, db_path } = local_app_with_tree(|root| {
+	let TestApp { app, db_path, .. } = local_app_with_tree(|root| {
 		write_page(&root.join("Gamma").join("ch 1"), "1.png", b"gamma-1");
 		write_page(&root.join("Gamma").join("ch 2"), "1.png", b"gamma-2");
 	})

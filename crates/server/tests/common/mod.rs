@@ -3,11 +3,12 @@
 
 pub mod contract;
 
-use axum::Router;
+use axum::{Extension, Router};
 use axum::body::Body;
 use axum::http::{HeaderMap, Request, StatusCode};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::Arc;
 use sumidoku_server::build_app;
 use sumidoku_server::config::Config;
 use tower::ServiceExt;
@@ -114,8 +115,17 @@ pub fn install_fixture_source_with_doc(tmp: &tempfile::TempDir, doc: &Value, was
 
 pub struct TestApp {
 	pub app: Router,
-	pub tmp: tempfile::TempDir,
+	pub tmp: Arc<tempfile::TempDir>,
 	pub db_path: PathBuf,
+}
+
+impl TestApp {
+	/// The router holds the directory too, so `let TestApp { app, .. }` can't delete it from under the app
+	pub fn new(app: Router, tmp: impl Into<Arc<tempfile::TempDir>>, db_path: PathBuf) -> Self {
+		let tmp = tmp.into();
+		let app = app.layer(Extension(tmp.clone()));
+		Self { app, tmp, db_path }
+	}
 }
 
 #[derive(Clone, Default)]
@@ -216,7 +226,7 @@ pub async fn test_app() -> TestApp {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 pub async fn request(app: &Router, method: &str, path: &str, body: Option<Value>) -> (StatusCode, Value) {

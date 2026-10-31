@@ -165,11 +165,7 @@ fn entry_count(body: &Value) -> usize {
 #[tokio::test]
 async fn list_endpoints_constant_sql_per_page() {
 	let counter = QueryCounter::install();
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let source_id = seed_source(&pool).await;
 
@@ -252,11 +248,7 @@ async fn list_endpoints_constant_sql_per_page() {
 /// covers all edges — no categories / not in library (with an in_library=0 row) / never shelved (no manga_user row) / no chapters
 #[tokio::test]
 async fn batch_manga_json_matches_single_item_output() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let source_id = seed_source(&pool).await;
 
@@ -357,11 +349,7 @@ async fn batch_manga_json_matches_single_item_output() {
 /// update/recent must not treat chapters already present at first library add as new updates
 #[tokio::test]
 async fn recent_updates_excludes_pre_library_chapters() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let source_id = seed_source(&pool).await;
 

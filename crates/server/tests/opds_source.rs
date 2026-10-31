@@ -234,7 +234,7 @@ async fn opds_app() -> TestApp {
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
-	TestApp { app, tmp, db_path }
+	TestApp::new(app, tmp, db_path)
 }
 
 async fn register_instance(app: &Router, name: &str, url: &str, auth: Option<(&str, &str)>) -> Value {

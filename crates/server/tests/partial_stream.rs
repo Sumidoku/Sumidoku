@@ -125,7 +125,7 @@ async fn search_ndjson_streams_manga_deltas() {
 
 #[tokio::test]
 async fn stream_without_partials_has_only_final() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let ids = scan_sources(&app).await;
 	let source_id = ids
 		.iter()

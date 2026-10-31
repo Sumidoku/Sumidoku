@@ -19,11 +19,7 @@ const PNG: &[u8] = &[
 
 #[tokio::test]
 async fn library_category_progress_history() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 
 	// shelve
@@ -205,11 +201,7 @@ async fn library_category_progress_history() {
 /// runs the same wipe, and marking read still never touches the stamp by itself.
 #[tokio::test]
 async fn mark_unread_wipes_the_reading_trace() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		..
-	} = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
@@ -490,7 +482,7 @@ async fn static_webui() {
 
 #[tokio::test]
 async fn deleting_category_clears_exclusions_before_id_reuse() {
-	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Old"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let category_id = body["id"].as_i64().expect("category id");
@@ -531,7 +523,7 @@ async fn deleting_category_clears_exclusions_before_id_reuse() {
 
 #[tokio::test]
 async fn category_include_in_download_patch_is_rejected() {
-	let TestApp { app, tmp: _tmp, db_path, .. } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
@@ -593,7 +585,7 @@ async fn category_include_in_download_patch_is_rejected() {
 
 #[tokio::test]
 async fn category_include_in_update_patch_is_rejected() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let (status, body) = request(&app, "POST", "/api/v1/categories", Some(json!({"name": "Flags"}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let cat = body["id"].as_i64().expect("category id");
@@ -699,11 +691,7 @@ fn entry_ids(body: &Value) -> Vec<i64> {
 
 #[tokio::test]
 async fn library_unread_filters_include_missing_chapter_user_rows() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -726,11 +714,7 @@ async fn library_unread_filters_include_missing_chapter_user_rows() {
 
 #[tokio::test]
 async fn library_search_sort_filter() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_three_manga(&app).await;
 	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
 	let (ta, tb, tc) = (&ids[0].1, &ids[1].1, &ids[2].1);
@@ -879,11 +863,7 @@ async fn library_search_sort_filter() {
 
 #[tokio::test]
 async fn library_latest_chapter_sort() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_three_manga(&app).await;
 	let (a, b, c) = (ids[0].0, ids[1].0, ids[2].0);
 	for id in [a, b, c] {
@@ -944,11 +924,7 @@ async fn library_latest_chapter_sort() {
 
 #[tokio::test]
 async fn library_latest_chapter_refresh_keeps_first_seen_order() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_three_manga(&app).await;
 	let (a, b) = (ids[0].0, ids[1].0);
 	for id in [a, b] {
@@ -1002,11 +978,7 @@ async fn library_latest_chapter_refresh_keeps_first_seen_order() {
 
 #[tokio::test]
 async fn library_source_counts() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path: _,
-	} = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let (_, body) = request(&app, "GET", "/api/v1/library/source-counts", None).await;
 	assert_eq!(body.as_array().expect("array").len(), 0, "{body}");
 
@@ -1171,7 +1143,7 @@ async fn library_rating_source_filter() {
 /// Category tri-state (`category`/`categoryExclude`, 0 = uncategorized): OR within a set, NOT-OR for the exclude set, AND across
 #[tokio::test]
 async fn library_category_tri_state_filter() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	// the fixture source directory exists but is only registered by an explicit scan
 	let (status, _) = request(&app, "POST", "/api/v1/sources/scan", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -1272,11 +1244,7 @@ async fn library_category_tri_state_filter() {
 /// match against the manga's JSON arrays, OR within a set, NOT-OR for the exclude set, AND across
 #[tokio::test]
 async fn library_author_tag_filter() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_four_shelved(&app).await;
 	let (a, b, c, d) = (ids[0], ids[1], ids[2], ids[3]);
 	let pool = connect_db(&db_path).await;
@@ -1324,11 +1292,7 @@ async fn library_author_tag_filter() {
 /// counts follow library membership
 #[tokio::test]
 async fn library_author_tag_counts() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	for path in ["/api/v1/library/authors", "/api/v1/library/tags"] {
 		let (status, body) = request(&app, "GET", path, None).await;
 		assert_eq!(status, StatusCode::OK, "{path}");
@@ -1531,11 +1495,7 @@ fn read_states(body: &Value) -> std::collections::HashMap<i64, bool> {
 /// or already downloaded by the user. chapterIds merge in deduplicated.
 #[tokio::test]
 async fn batch_mark_read_by_manga_targets_only_readable_chapters() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
@@ -1596,11 +1556,7 @@ async fn batch_mark_read_by_manga_targets_only_readable_chapters() {
 /// chapters are included there, only the trash is skipped.
 #[tokio::test]
 async fn batch_mark_unread_by_manga_skips_only_trashed() {
-	let TestApp {
-		app,
-		tmp: _tmp,
-		db_path,
-	} = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let manga_id = register_example_manga(&app).await;
 	let chapters_path = format!("/api/v1/manga/{manga_id}/chapters");
 	let (_, body) = request(&app, "GET", &chapters_path, None).await;
@@ -1675,7 +1631,7 @@ async fn batch_mark_unread_by_manga_skips_only_trashed() {
 /// chunks: the endpoint answers instead of failing with "too many SQL variables".
 #[tokio::test]
 async fn batch_manga_expansion_beyond_sql_variable_limit() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 	let manga_ids: Vec<i64> = (900_001..=940_000).collect();
 	let (status, body) = request(
 		&app,

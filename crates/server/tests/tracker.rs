@@ -20,7 +20,7 @@ async fn seed_manga(pool: &sqlx::SqlitePool) -> i64 {
 
 #[tokio::test]
 async fn tracker_links_crud() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let manga_id = seed_manga(&pool).await;
 
@@ -83,7 +83,7 @@ async fn tracker_links_crud() {
 
 #[tokio::test]
 async fn tracker_link_upsert_validates_input() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let manga_id = seed_manga(&pool).await;
 
@@ -137,7 +137,7 @@ async fn tracker_link_upsert_validates_input() {
 /// a re-login.
 #[tokio::test]
 async fn remote_routes_require_a_connected_account() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 
 	for path in [
 		"/api/v1/trackers/anilist/search?name=Series",
@@ -166,7 +166,7 @@ async fn remote_routes_require_a_connected_account() {
 
 #[tokio::test]
 async fn oauth_status_and_start_without_build_credentials() {
-	let TestApp { app, tmp: _tmp, .. } = test_app().await;
+	let TestApp { app, .. } = test_app().await;
 
 	let (status, body) = request(&app, "GET", "/api/v1/trackers/oauth/anilist/status", None).await;
 	assert_eq!(status, StatusCode::OK);
@@ -207,7 +207,7 @@ async fn request_with_host(app: &axum::Router, path: &str) -> (StatusCode, Value
 
 #[tokio::test]
 async fn tracker_links_are_paginated_and_scoped() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let source_id: i64 = sqlx::query_scalar(
 		"INSERT INTO source (key, name, wasm_path) VALUES ('en.tracker-pagination', 'Tracker Pagination', '') RETURNING id",
@@ -296,7 +296,7 @@ async fn tracker_links_are_paginated_and_scoped() {
 
 #[tokio::test]
 async fn manga_responses_include_only_current_users_tracker_providers() {
-	let TestApp { app, tmp: _tmp, db_path } = test_app().await;
+	let TestApp { app, db_path, .. } = test_app().await;
 	let pool = connect_db(&db_path).await;
 	let manga_id = seed_manga(&pool).await;
 	let source_id: i64 = sqlx::query_scalar("SELECT source_id FROM manga WHERE id = ?")
