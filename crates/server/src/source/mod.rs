@@ -927,11 +927,7 @@ pub async fn reconcile_chapters_detailed(
 			.bind(old.id)
 			.execute(&mut *conn)
 			.await?;
-		sqlx::query("UPDATE chapter SET key = ?, page_count = 0, trashed_at = NULL WHERE id = ?")
-			.bind(&chapter.key)
-			.bind(old.id)
-			.execute(&mut *conn)
-			.await?;
+		crate::store::chapter::rekey(&mut *conn, old.id, &chapter.key).await?;
 		rekeyed_ids.insert(old.id);
 	}
 	for (index, chapter) in chapters.iter().enumerate() {
@@ -949,33 +945,25 @@ pub async fn reconcile_chapters_detailed(
 			.filter(|l| !l.is_empty())
 			.cloned()
 			.or_else(|| fill_language.clone());
-		sqlx::query(
-			"INSERT INTO chapter (manga_id, key, title, number, volume, scanlators, language, thumbnail, url,
-			 date_uploaded, source_order, locked, fetched_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT (manga_id, key) DO UPDATE SET
-			 title = excluded.title, number = excluded.number, volume = excluded.volume,
-			 scanlators = excluded.scanlators, language = excluded.language,
-			 thumbnail = excluded.thumbnail, url = excluded.url,
-			 date_uploaded = excluded.date_uploaded, source_order = excluded.source_order,
-			 locked = excluded.locked, fetched_at = chapter.fetched_at, created_at = chapter.created_at,
-			 trashed_at = NULL",
+		crate::store::chapter::upsert_from_source(
+			&mut *conn,
+			manga_id,
+			&crate::store::chapter::ChapterFields {
+				key: &chapter.key,
+				title: title.as_deref(),
+				number: chapter.chapter_number.map(|n| n as f64),
+				volume: chapter.volume_number.map(|n| n as f64),
+				scanlators: &scanlators,
+				language: language.as_deref(),
+				thumbnail: chapter.thumbnail.as_deref(),
+				url: chapter.url.as_deref(),
+				date_uploaded: chapter.date_uploaded,
+				source_order: index as i64,
+				page_count: 0,
+				locked: chapter.locked,
+			},
+			now,
 		)
-		.bind(manga_id)
-		.bind(&chapter.key)
-		.bind(title)
-		.bind(chapter.chapter_number.map(|n| n as f64))
-		.bind(chapter.volume_number.map(|n| n as f64))
-		.bind(scanlators)
-		.bind(language)
-		.bind(&chapter.thumbnail)
-		.bind(&chapter.url)
-		.bind(chapter.date_uploaded)
-		.bind(index as i64)
-		.bind(chapter.locked)
-		.bind(now)
-		.bind(now)
-		.execute(&mut *conn)
 		.await?;
 	}
 	let mut trashed_count = 0;
@@ -989,24 +977,11 @@ pub async fn reconcile_chapters_detailed(
 				.fetch_optional(&mut *conn)
 				.await?;
 		if has_download.is_some() {
-			sqlx::query("UPDATE chapter SET locked = 1 WHERE id = ?")
-				.bind(old.id)
-				.execute(&mut *conn)
-				.await?;
+			crate::store::chapter::lock(&mut *conn, old.id).await?;
 		} else if trash {
-			// first trashing only: the original trashed_at survives later scans as the "gone since" stamp
-			let changed = sqlx::query("UPDATE chapter SET trashed_at = ? WHERE id = ? AND trashed_at IS NULL")
-				.bind(now)
-				.bind(old.id)
-				.execute(&mut *conn)
-				.await?
-				.rows_affected();
-			trashed_count += changed as i64;
+			trashed_count += crate::store::chapter::trash(&mut *conn, old.id, now).await? as i64;
 		} else {
-			sqlx::query("DELETE FROM chapter WHERE id = ?")
-				.bind(old.id)
-				.execute(&mut *conn)
-				.await?;
+			crate::store::chapter::delete(&mut *conn, old.id).await?;
 		}
 	}
 	let restored_count = existing
@@ -1296,12 +1271,7 @@ async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json:
 		.execute(&mut *tx)
 		.await?;
 	}
-	sqlx::query("UPDATE chapter SET page_count = ?, epub_divina_compatible = ? WHERE id = ?")
-		.bind(rows.len() as i64)
-		.bind(compatible)
-		.bind(chapter_id)
-		.execute(&mut *tx)
-		.await?;
+	crate::store::chapter::set_page_info(&mut *tx, chapter_id, rows.len() as i64, compatible).await?;
 	tx.commit().await?;
 	Ok(())
 }

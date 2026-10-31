@@ -100,10 +100,7 @@ async fn scan_listed_entry(
 /// A reconcile means the manga's subtree changed on disk: a chapter analysed to zero pages (an empty
 /// directory, a broken archive) may hold pages now, so it becomes eligible for the analysis pass again
 async fn clear_zero_page_stamps(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, manga_id: i64) -> ApiResult<()> {
-	sqlx::query("UPDATE chapter SET pages_analyzed_at = NULL WHERE manga_id = ? AND pages_analyzed_at IS NOT NULL")
-		.bind(manga_id)
-		.execute(&mut **tx)
-		.await?;
+	crate::store::chapter::clear_manga_analyzed(&mut **tx, manga_id).await?;
 	Ok(())
 }
 
@@ -264,11 +261,7 @@ pub async fn scan_instance(
 				.bind(row.id)
 				.execute(&mut *tx)
 				.await?;
-			sqlx::query("UPDATE chapter SET trashed_at = ? WHERE manga_id = ? AND trashed_at IS NULL")
-				.bind(now)
-				.bind(row.id)
-				.execute(&mut *tx)
-				.await?;
+			crate::store::chapter::trash_manga(&mut *tx, row.id, now).await?;
 			tx.commit().await?;
 			outcome.trashed += 1;
 		}

@@ -791,24 +791,24 @@ async fn restore_progress(
 			continue;
 		};
 		// fetched_at = 0 marks a row created by the backup, to be overwritten by the source refresh; existing chapters keep their newer metadata
-		sqlx::query(
-			"INSERT OR IGNORE INTO chapter (manga_id, key, title, number, volume, scanlators,
-			 language, thumbnail, url, date_uploaded, source_order, page_count, fetched_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+		crate::store::chapter::insert_from_backup(
+			&mut **tx,
+			manga_id,
+			&crate::store::chapter::ChapterFields {
+				key: &entry.chapter.key,
+				title: entry.chapter.title.as_deref(),
+				number: entry.chapter.number,
+				volume: entry.chapter.volume,
+				scanlators: &serde_json::to_string(&entry.chapter.scanlators)?,
+				language: entry.chapter.language.as_deref(),
+				thumbnail: entry.chapter.thumbnail.as_deref(),
+				url: entry.chapter.url.as_deref(),
+				date_uploaded: entry.chapter.date_uploaded,
+				source_order: entry.chapter.source_order,
+				page_count: entry.chapter.page_count,
+				locked: false,
+			},
 		)
-		.bind(manga_id)
-		.bind(&entry.chapter.key)
-		.bind(&entry.chapter.title)
-		.bind(entry.chapter.number)
-		.bind(entry.chapter.volume)
-		.bind(serde_json::to_string(&entry.chapter.scanlators)?)
-		.bind(&entry.chapter.language)
-		.bind(&entry.chapter.thumbnail)
-		.bind(&entry.chapter.url)
-		.bind(entry.chapter.date_uploaded)
-		.bind(entry.chapter.source_order)
-		.bind(entry.chapter.page_count)
-		.execute(&mut **tx)
 		.await?;
 		let (chapter_id,): (i64,) =
 			sqlx::query_as("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")

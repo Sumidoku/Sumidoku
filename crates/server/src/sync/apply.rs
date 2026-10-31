@@ -644,11 +644,10 @@ pub(crate) async fn set_final_version(
 			.bind(local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid manga key"))?)
 			.execute(&mut **tx)
 			.await?,
-		"chapter" => sqlx::query("UPDATE chapter SET last_modified_at = ? WHERE id = ?")
-			.bind(modified_at)
-			.bind(local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid chapter key"))?)
-			.execute(&mut **tx)
-			.await?,
+		"chapter" => {
+			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid chapter key"))?;
+			crate::store::chapter::set_modified_at(&mut **tx, id, modified_at).await?
+		}
 		"category" => {
 			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid category key"))?;
 			crate::store::category::set_modified_at(&mut **tx, id, modified_at).await?
@@ -807,16 +806,8 @@ async fn ensure_chapter(
 		return Ok(Some(id));
 	}
 	if let Some(id) = preferred_chapter_id {
-		sqlx::query("INSERT INTO chapter (id, manga_id, key, last_modified_at) VALUES (?, ?, ?, 0)")
-			.bind(id)
-			.bind(manga_id)
-			.bind(&chapter_key)
-			.execute(&mut **tx)
-			.await?;
-		sqlx::query("UPDATE chapter SET last_modified_at = 0 WHERE id = ?")
-			.bind(id)
-			.execute(&mut **tx)
-			.await?;
+		crate::store::chapter::insert_stub_with_id(&mut **tx, id, manga_id, &chapter_key).await?;
+		crate::store::chapter::set_modified_at(&mut **tx, id, 0).await?;
 		stubs.insert(("chapter".into(), id.to_string()));
 		return Ok(Some(id));
 	}
@@ -829,17 +820,8 @@ async fn ensure_chapter(
 		mark_quiet_stub(tx, "chapter", id, stubs).await?;
 		return Ok(Some(id));
 	}
-	let id: i64 = sqlx::query_scalar(
-		"INSERT INTO chapter (manga_id, key, last_modified_at) VALUES (?, ?, 0) RETURNING id",
-	)
-	.bind(manga_id)
-	.bind(&chapter_key)
-	.fetch_one(&mut **tx)
-	.await?;
-	sqlx::query("UPDATE chapter SET last_modified_at = 0 WHERE id = ?")
-		.bind(id)
-		.execute(&mut **tx)
-		.await?;
+	let id = crate::store::chapter::insert_stub(&mut **tx, manga_id, &chapter_key).await?;
+	crate::store::chapter::set_modified_at(&mut **tx, id, 0).await?;
 	stubs.insert(("chapter".into(), id.to_string()));
 	Ok(Some(id))
 }
@@ -1185,10 +1167,7 @@ async fn apply_chapter(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		sqlx::query("DELETE FROM chapter WHERE id = ?")
-			.bind(id)
-			.execute(&mut **tx)
-			.await?;
+		crate::store::chapter::delete(&mut **tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1210,24 +1189,24 @@ async fn apply_chapter(
 	let Some(id) = ensure_chapter(tx, change, parent_id, id, &mut stubs).await? else {
 		return Ok(Disposition::Skipped);
 	};
-	sqlx::query(
-		"UPDATE chapter SET key = ?, title = ?, number = ?, volume = ?, scanlators = ?, language = ?,
-		 thumbnail = ?, url = ?, date_uploaded = ?, source_order = ?, page_count = ?, locked = ? WHERE id = ?",
+	crate::store::chapter::set_fields(
+		&mut **tx,
+		id,
+		&crate::store::chapter::ChapterFields {
+			key: &string(&change.snapshot, "key")?,
+			title: optional_string(&change.snapshot, "title")?.as_deref(),
+			number: optional_number(&change.snapshot, "number")?,
+			volume: optional_number(&change.snapshot, "volume")?,
+			scanlators: &serde_json::to_string(&strings(&change.snapshot, "scanlators")?)?,
+			language: optional_string(&change.snapshot, "language")?.as_deref(),
+			thumbnail: optional_string(&change.snapshot, "thumbnail")?.as_deref(),
+			url: optional_string(&change.snapshot, "url")?.as_deref(),
+			date_uploaded: optional_integer(&change.snapshot, "dateUploaded")?,
+			source_order: integer(&change.snapshot, "sourceOrder")?,
+			page_count: integer(&change.snapshot, "pageCount")?,
+			locked: flag(&change.snapshot, "locked")?,
+		},
 	)
-	.bind(string(&change.snapshot, "key")?)
-	.bind(optional_string(&change.snapshot, "title")?)
-	.bind(optional_number(&change.snapshot, "number")?)
-	.bind(optional_number(&change.snapshot, "volume")?)
-	.bind(serde_json::to_string(&strings(&change.snapshot, "scanlators")?)?)
-	.bind(optional_string(&change.snapshot, "language")?)
-	.bind(optional_string(&change.snapshot, "thumbnail")?)
-	.bind(optional_string(&change.snapshot, "url")?)
-	.bind(optional_integer(&change.snapshot, "dateUploaded")?)
-	.bind(integer(&change.snapshot, "sourceOrder")?)
-	.bind(integer(&change.snapshot, "pageCount")?)
-	.bind(flag(&change.snapshot, "locked")?)
-	.bind(id)
-	.execute(&mut **tx)
 	.await?;
 	finish(
 		tx,

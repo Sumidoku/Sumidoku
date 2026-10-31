@@ -2,6 +2,7 @@
 //! written happens in one place.
 
 pub mod category;
+pub mod chapter;
 pub mod library;
 pub mod progress;
 
@@ -34,6 +35,7 @@ mod tests {
 			for (owner, table) in [
 				("store/category.rs", "category"),
 				("store/category.rs", "category_manga"),
+				("store/chapter.rs", "chapter"),
 				("store/library.rs", "manga_user"),
 				("store/progress.rs", "chapter_user"),
 			] {
