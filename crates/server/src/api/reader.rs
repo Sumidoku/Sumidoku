@@ -58,7 +58,7 @@ impl ProgressPatch {
 				current.last_read_at
 			},
 		};
-		crate::store::progress::set(&mut **tx, chapter_id, user_id, &merged).await?;
+		crate::store::progress::set(tx, chapter_id, user_id, &merged).await?;
 		Ok(merged)
 	}
 }

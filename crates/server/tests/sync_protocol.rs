@@ -32,7 +32,15 @@ async fn peer() -> Peer {
 	}
 }
 
+/// The peer's raw test writes become journal entries before anything reads them
+async fn publish_peer(peer: &Peer) {
+	let pool = connect_db(&peer.db_path).await;
+	common::publish_raw_writes(&pool).await;
+	pool.close().await;
+}
+
 async fn pull(peer: &Peer, sender: &Peer, since: i64) -> (StatusCode, Value) {
+	publish_peer(peer).await;
 	request(
 		&peer.app,
 		"GET",
@@ -100,6 +108,7 @@ async fn seed_initial(peer: &Peer, manga_id: i64, category_id: i64, chapter_id: 
 	.execute(&pool)
 	.await
 	.expect("seed category");
+	common::publish_category(&pool, category_id).await;
 	sqlx::query(
 		"INSERT INTO chapter (id, manga_id, key, title, number, page_count, last_modified_at)
 		 VALUES (?, ?, ?, ?, 1.5, 20, 103)",
@@ -153,6 +162,7 @@ async fn category_snapshots_accept_and_sanitize_legacy_download_flag() {
 	.execute(&pool)
 	.await
 	.expect("seed target category");
+	common::publish_category(&pool, 500).await;
 	pool.close().await;
 
 	let (_, initial) = pull(&a, &b, 0).await;
@@ -216,6 +226,7 @@ async fn sync_category_delete_clears_exclusions_before_id_reuse() {
 	.execute(&pool)
 	.await
 	.expect("seed target category");
+	common::publish_category(&pool, 1).await;
 	pool.close().await;
 
 	let (_, initial) = pull(&a, &b, 0).await;
@@ -278,10 +289,8 @@ async fn compaction_removes_legacy_category_download_flags() {
 		.execute(&pool)
 		.await
 		.expect("seed deleted category");
-	sqlx::query("DELETE FROM category WHERE id = 999")
-		.execute(&pool)
-		.await
-		.expect("create category tombstone");
+	common::publish_category(&pool, 999).await;
+	common::delete_category(&pool, 999).await;
 	sqlx::query(
 		"UPDATE sync_change SET snapshot = json_set(snapshot, '$.includeInDownload', 2)
 		 WHERE entity_kind = 'category'",
@@ -350,10 +359,7 @@ async fn child_first_category_stub_does_not_duplicate_existing_name() {
 	assert_eq!(membership_category, stored_category);
 	let a_pool = connect_db(&a.db_path).await;
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM category_manga WHERE category_id = 700")
-		.execute(&a_pool)
-		.await
-		.expect("delete remote membership");
+	common::delete_membership(&a_pool, 700, 100).await;
 	exchange_since(&a, &b, cursor).await;
 	let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM category_manga WHERE user_id = 1")
 		.fetch_one(&pool)
@@ -375,6 +381,7 @@ async fn deleted_category_membership_stays_deleted_when_parent_arrives() {
 		.execute(&b_pool)
 		.await
 		.expect("same-named local category");
+	common::publish_category(&b_pool, 500).await;
 	b_pool.close().await;
 	let (_, initial) = pull(&a, &b, 0).await;
 	let membership = event_of(&initial, "category_manga");
@@ -499,6 +506,7 @@ async fn category_stub_merge_respects_target_tombstone() {
 		.execute(&b_pool)
 		.await
 		.expect("same-named local category");
+	common::publish_category(&b_pool, 500).await;
 	let (_, initial) = pull(&a, &b, 0).await;
 	let mut stub_membership = event_of(&initial, "category_manga");
 	let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
@@ -558,6 +566,7 @@ async fn category_stub_merge_journals_row_only_version() {
 			.execute(&b_pool)
 			.await
 			.expect("same-named local category");
+		common::publish_category(&b_pool, 500).await;
 		let (_, initial) = pull(&a, &b, 0).await;
 		let mut stub_membership = event_of(&initial, "category_manga");
 		let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
@@ -647,6 +656,7 @@ async fn category_stub_merge_clears_exclusions_before_id_reuse() {
 		.execute(&b_pool)
 		.await
 		.expect("same-named local category");
+	common::publish_category(&b_pool, 500).await;
 	let (_, initial) = pull(&a, &b, 0).await;
 	let mut stub_membership = event_of(&initial, "category_manga");
 	let stub_sequence = stub_membership["originSequence"].as_i64().expect("stub sequence");
@@ -671,6 +681,7 @@ async fn category_stub_merge_clears_exclusions_before_id_reuse() {
 		.execute(&b_pool)
 		.await
 		.expect("reused category id");
+	common::publish_category(&b_pool, 700).await;
 	for key in ["library.excluded_update_categories", "library.excluded_download_categories"] {
 		let excluded: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
 			.bind(key)
@@ -696,18 +707,14 @@ async fn relayed_category_membership_resolves_parent_across_origins() {
 		.expect("relayed category");
 	assert_ne!(remote_category, 700);
 	let remote_manga = id_for_key(&b_pool, "manga", "manga-remote").await;
-	sqlx::query("DELETE FROM category_manga WHERE category_id = ? AND manga_id = ? AND user_id = 1")
-		.bind(remote_category)
-		.bind(remote_manga)
-		.execute(&b_pool)
-		.await
-		.expect("delete relayed membership locally");
+	common::delete_membership(&b_pool, remote_category, remote_manga).await;
 	sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id) VALUES (?, ?, 1)")
 		.bind(remote_category)
 		.bind(remote_manga)
 		.execute(&b_pool)
 		.await
 		.expect("recreate relayed membership locally");
+	common::publish_membership(&b_pool, remote_category, remote_manga).await;
 	let destination = peer().await;
 	let (_, relayed) = pull(&b, &destination, 0).await;
 	let changes = relayed["changes"].as_array().expect("relayed changes");
@@ -972,6 +979,7 @@ async fn missing_source_skip_does_not_advance_and_can_be_retried() {
 }
 
 async fn high_watermark(pool: &SqlitePool) -> i64 {
+	common::publish_raw_writes(pool).await;
 	sqlx::query_scalar("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_change'), 0)")
 		.fetch_one(pool)
 		.await
@@ -1116,6 +1124,8 @@ async fn equal_versions_use_origin_as_deterministic_tie_break() {
 	let b = peer().await;
 	seed_conflict(&a, 100, "A").await;
 	seed_conflict(&b, 900, "B").await;
+	publish_peer(&a).await;
+	publish_peer(&b).await;
 	exchange(&a, &b).await;
 	exchange(&b, &a).await;
 	let expected = if a.origin > b.origin { "A" } else { "B" };
@@ -1146,6 +1156,7 @@ async fn stale_event_preserves_mapping_for_later_rekey() {
 		.execute(&b_pool)
 		.await
 		.expect("local newer edit");
+	common::publish_manga(&b_pool, 900).await;
 	let (_, initial) = pull(&a, &b, 0).await;
 	let mut stale = event_of(&initial, "manga");
 	set_version(&mut stale, 100, 100);
@@ -1296,11 +1307,13 @@ async fn compaction_preserves_older_origin_aliases() {
 		.execute(&b_pool)
 		.await
 		.expect("local category edit");
+	common::publish_category(&b_pool, category_id).await;
 	let cursor = high_watermark(&a_pool).await;
 	sqlx::query("UPDATE category SET name = 'Remote newer', last_modified_at = 400 WHERE id = 700")
 		.execute(&a_pool)
 		.await
 		.expect("remote category edit");
+	common::publish_category(&a_pool, 700).await;
 	let (status, compacted) = request(&b.app, "POST", "/api/v1/sync/compact", None).await;
 	assert_eq!(status, StatusCode::OK, "{compacted}");
 	exchange_since(&a, &b, cursor).await;
@@ -1334,6 +1347,7 @@ async fn progress_merge_is_commutative_and_unread_cannot_regress_read() {
 	.execute(&a_pool)
 	.await
 	.expect("A progress edit");
+	common::publish_progress(&a_pool, a_chapter).await;
 	sqlx::query(
 		"UPDATE chapter_user SET last_page_read = 9, is_read = 0, is_bookmarked = 1,
 		 last_read_at = 80, last_modified_at = 1100 WHERE chapter_id = ? AND user_id = 1",
@@ -1342,6 +1356,7 @@ async fn progress_merge_is_commutative_and_unread_cannot_regress_read() {
 	.execute(&b_pool)
 	.await
 	.expect("B progress edit");
+	common::publish_progress(&b_pool, b_chapter).await;
 	let pulled = exchange_since(&a, &b, a_cursor).await;
 	let progress_event = event_of(&pulled, "chapter_user");
 	exchange_since(&b, &a, b_cursor).await;
@@ -1376,6 +1391,7 @@ async fn progress_merge_is_commutative_and_unread_cannot_regress_read() {
 	.execute(&a_pool)
 	.await
 	.expect("A mark unread");
+	common::publish_progress(&a_pool, a_chapter).await;
 	exchange_since(&a, &b, a_cursor).await;
 	exchange_since(&b, &a, b_cursor).await;
 	for (pool, chapter_id) in [(&a_pool, a_chapter), (&b_pool, b_chapter)] {
@@ -1491,10 +1507,7 @@ async fn category_library_and_chapter_deletions_converge() {
 	let b_chapter = id_for_key(&b_pool, "chapter", "chapter-delete").await;
 
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM category WHERE id = 500")
-		.execute(&a_pool)
-		.await
-		.expect("delete category");
+	common::delete_category(&a_pool, 500).await;
 	exchange_since(&a, &b, cursor).await;
 	let category: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM category WHERE id = 500 AND user_id = 1")
 		.fetch_one(&b_pool)
@@ -1509,10 +1522,7 @@ async fn category_library_and_chapter_deletions_converge() {
 	assert_eq!(membership, 0);
 
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM manga_user WHERE manga_id = 100 AND user_id = 1")
-		.execute(&a_pool)
-		.await
-		.expect("remove library");
+	common::delete_library_row(&a_pool, 100).await;
 	exchange_since(&a, &b, cursor).await;
 	let library: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga_user WHERE manga_id = ? AND user_id = 1")
 		.bind(b_manga)
@@ -1528,10 +1538,7 @@ async fn category_library_and_chapter_deletions_converge() {
 	assert_eq!(manga, 1);
 
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM chapter WHERE id = 700")
-		.execute(&a_pool)
-		.await
-		.expect("delete chapter");
+	common::delete_chapter(&a_pool, 700).await;
 	exchange_since(&a, &b, cursor).await;
 	let chapter: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM chapter WHERE id = ?")
 		.bind(b_chapter)
@@ -1561,11 +1568,7 @@ async fn source_cascade_converges_without_leaving_children() {
 	let b_chapter = id_for_key(&b_pool, "chapter", "chapter-cascade").await;
 	let source_id = local_source_id(&a_pool).await;
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM source WHERE id = ?")
-		.bind(source_id)
-		.execute(&a_pool)
-		.await
-		.expect("delete source");
+	common::delete_source(&a_pool, source_id).await;
 	exchange_since(&a, &b, cursor).await;
 	for (table, id) in [("manga", b_manga), ("chapter", b_chapter)] {
 		let count: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE id = ?"))
@@ -1615,14 +1618,12 @@ async fn compaction_replays_baseline_and_preserves_origin_mapping() {
 		.execute(&a_pool)
 		.await
 		.expect("seed tombstone category");
+	common::publish_category(&a_pool, 999).await;
 	sqlx::query("INSERT INTO category_manga (category_id, manga_id, user_id, last_modified_at) VALUES (999, 100, 1, 201)")
 		.execute(&a_pool)
 		.await
 		.expect("seed tombstone membership");
-	sqlx::query("DELETE FROM category WHERE id = 999")
-		.execute(&a_pool)
-		.await
-		.expect("create category tombstones");
+	common::delete_category(&a_pool, 999).await;
 	let (status, b_body) = pull(&b, &a, 0).await;
 	assert_eq!(status, StatusCode::OK);
 	let mut authoritative = b_body["changes"]
@@ -1720,6 +1721,7 @@ async fn compaction_replays_baseline_and_preserves_origin_mapping() {
 		.execute(&a_pool)
 		.await
 		.expect("post-compaction delta");
+	common::publish_manga(&a_pool, 100).await;
 	exchange_since(&a, &c, delta_cursor).await;
 	let title: String = sqlx::query_scalar("SELECT title FROM manga WHERE key = 'manga-a'")
 		.fetch_one(&c_pool)
@@ -1729,7 +1731,13 @@ async fn compaction_replays_baseline_and_preserves_origin_mapping() {
 
 	let (status, b_changes) = pull(&b, &a, 0).await;
 	assert_eq!(status, StatusCode::OK);
-	let mut remote_update = event_of(&b_changes, "manga");
+	let mut remote_update = b_changes["changes"]
+		.as_array()
+		.expect("B changes")
+		.iter()
+		.find(|change| change["entityKind"] == "manga" && change["identity"]["mangaKey"] == "manga-b")
+		.expect("B manga")
+		.clone();
 	set_version(&mut remote_update, 5_000, 5_000);
 	remote_update["snapshot"]["title"] = json!("B after compact");
 	let (status, applied) = push(&a, &b, json!([remote_update])).await;
@@ -1765,6 +1773,7 @@ async fn authed(peer: &Peer, token: &str, method: &str, path: &str, body: Option
 }
 
 async fn pull_authed(peer: &Peer, sender: &Peer, token: &str, since: i64) -> (StatusCode, Value) {
+	publish_peer(peer).await;
 	authed(
 		peer,
 		token,
@@ -1876,10 +1885,7 @@ async fn compaction_does_not_reuse_tombstone_origin_for_recreated_stub() {
 	exchange(&a, &b).await;
 	let a_pool = connect_db(&a.db_path).await;
 	let cursor = high_watermark(&a_pool).await;
-	sqlx::query("DELETE FROM manga WHERE id = 100")
-		.execute(&a_pool)
-		.await
-		.expect("delete parent before stub recreation");
+	common::delete_manga(&a_pool, 100).await;
 	exchange_since(&a, &b, cursor).await;
 	let mut child = event_of(&initial, "chapter_user");
 	set_version(&mut child, 5_000, 9_000_000_000_000_000);

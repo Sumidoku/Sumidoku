@@ -284,10 +284,9 @@ async fn delete_source(State(state): State<Arc<AppState>>, Path(id): Path<i64>) 
 		));
 	}
 	state.evict_source(id).await;
-	sqlx::query("DELETE FROM source WHERE id = ?")
-		.bind(id)
-		.execute(&state.pool)
-		.await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	crate::store::source::delete(&mut tx, id).await?;
+	tx.commit().await?;
 	pins::prune_pinned(&state.pool, &row.key).await?;
 	// Uninstall also drops the on-disk package, otherwise the next directory scan would
 	// re-register the source. Internal instances (local/opds) live entirely in the database (no package).
@@ -1300,7 +1299,7 @@ async fn register_manga(
 		let updated = handle
 			.get_manga_update_streaming(initial, true, true, partial_tx)
 			.await?;
-		let mut conn = state.pool.acquire().await?;
+		let mut conn = crate::db::begin_write(&state.pool).await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
 		reconcile_chapters(
 			&mut conn,
@@ -1309,6 +1308,7 @@ async fn register_manga(
 			&[],
 		)
 		.await?;
+		conn.commit().await?;
 		Ok::<_, ApiError>(json!({ "id": manga_id }))
 	});
 	tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
@@ -1356,7 +1356,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			&state.local_exclusions(source_id).await?,
 		)
 		.await?;
-		let mut conn = state.pool.acquire().await?;
+		let mut conn = crate::db::begin_write(&state.pool).await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &update.manga, true, true, true).await?;
 		crate::source::reconcile_chapters_detailed(
 			&mut conn,
@@ -1374,11 +1374,12 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		)
 		.await?;
 		crate::internal::local::store_chapter_metadata(&mut conn, manga_id, &update.chapter_meta).await?;
+		conn.commit().await?;
 		return Ok(manga_id);
 	}
 	if crate::source::source_is_opds(&state.pool, source_id).await? {
 		let updated = crate::internal::opds_source::manga_update(state, source_id, initial).await?;
-		let mut conn = state.pool.acquire().await?;
+		let mut conn = crate::db::begin_write(&state.pool).await?;
 		let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
 		reconcile_chapters(
 			&mut conn,
@@ -1387,11 +1388,12 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 			&[],
 		)
 		.await?;
+		conn.commit().await?;
 		return Ok(manga_id);
 	}
 	let handle = state.get_handle(source_id).await?;
 	let updated = handle.get_manga_update(initial, true, true).await?;
-	let mut conn = state.pool.acquire().await?;
+	let mut conn = crate::db::begin_write(&state.pool).await?;
 	let manga_id = upsert_manga(&mut conn, source_id, &updated, true, true, true).await?;
 	reconcile_chapters(
 		&mut conn,
@@ -1400,6 +1402,7 @@ pub(crate) async fn find_or_register_manga(state: &Arc<AppState>, source_id: i64
 		&[],
 	)
 	.await?;
+	conn.commit().await?;
 	Ok(manga_id)
 }
 
@@ -1731,8 +1734,9 @@ async fn get_manga(
 		if crate::source::source_is_opds(&state.pool, row.source_id).await? {
 			let mut updated = crate::internal::opds_source::manga_update(&state, row.source_id, manga_from_row(&row)).await?;
 			updated.update_strategy = crate::model::update_strategy_from_int(row.update_strategy);
-			let mut conn = state.pool.acquire().await?;
+			let mut conn = crate::db::begin_write(&state.pool).await?;
 			upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
+			conn.commit().await?;
 			row = manga_row(&state.pool, id).await?;
 			return Ok(Json(manga_json(&state, user.id, &row).await?).into_response());
 		}
@@ -1745,8 +1749,9 @@ async fn get_manga(
 			let user_id = user.id;
 			let call = tokio::spawn(async move {
 				let updated = handle.get_manga_update_streaming(input, true, false, partial_tx).await?;
-				let mut conn = state.pool.acquire().await?;
+				let mut conn = crate::db::begin_write(&state.pool).await?;
 				upsert_manga(&mut conn, source_id, &updated, true, true, false).await?;
+				conn.commit().await?;
 				let row = manga_row(&state.pool, id).await?;
 				manga_json(&state, user_id, &row).await
 			});
@@ -1756,8 +1761,9 @@ async fn get_manga(
 		let updated = handle
 			.get_manga_update(manga_from_row(&row), true, false)
 			.await?;
-		let mut conn = state.pool.acquire().await?;
+		let mut conn = crate::db::begin_write(&state.pool).await?;
 		upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
+		conn.commit().await?;
 		row = manga_row(&state.pool, id).await?;
 	}
 	Ok(Json(manga_json(&state, user.id, &row).await?).into_response())
@@ -1784,10 +1790,14 @@ async fn update_manga(
 			.map_err(|e| ApiError::bad_request(format!("invalid manga patch: {e}")))?,
 	};
 	if let Some(strategy) = patch.update_strategy {
-		crate::store::manga::set_update_strategy(&state.pool, id, strategy as i64).await?;
+		let mut write = crate::db::begin_write(&state.pool).await?;
+		crate::store::manga::set_update_strategy(&mut write, id, strategy as i64).await?;
+		write.commit().await?;
 	}
 	if let Some(incognito) = patch.incognito {
-		crate::store::library::set_incognito(&state.pool, id, user.id, incognito).await?;
+		let mut write = crate::db::begin_write(&state.pool).await?;
+		crate::store::library::set_incognito(&mut write, id, user.id, incognito).await?;
+		write.commit().await?;
 	}
 	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(manga_json(&state, user.id, &row).await?))
@@ -1808,15 +1818,18 @@ async fn get_chapters(
 		// the background pass the rescan kicks
 		if crate::source::source_is_local(&state.pool, manga.source_id).await? {
 			crate::internal::local::scan::scan_manga_entry(&state, manga.source_id, &manga.key, true, false, None).await?;
-			crate::store::manga::set_chapters_fetched_at(&state.pool, id, crate::model::unix_now()).await?;
+			let mut write = crate::db::begin_write(&state.pool).await?;
+			crate::store::manga::set_chapters_fetched_at(&mut write, id, crate::model::unix_now()).await?;
+			write.commit().await?;
 			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		// opds-source refresh = re-pull the entry feed; chapters gone upstream follow the uniform reconcile rules
 		if crate::source::source_is_opds(&state.pool, manga.source_id).await? {
 			let updated = crate::internal::opds_source::manga_update(&state, manga.source_id, manga_from_row(&manga)).await?;
-			let mut conn = state.pool.acquire().await?;
+			let mut conn = crate::db::begin_write(&state.pool).await?;
 			reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-			crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
+			crate::store::manga::set_chapters_fetched_at(&mut conn, id, crate::model::unix_now()).await?;
+			conn.commit().await?;
 			return Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response());
 		}
 		let handle = state.get_handle(manga.source_id).await?;
@@ -1828,9 +1841,10 @@ async fn get_chapters(
 				let updated = handle
 					.get_manga_update_streaming(manga_from_row(&manga), false, true, partial_tx)
 					.await?;
-				let mut conn = state.pool.acquire().await?;
+				let mut conn = crate::db::begin_write(&state.pool).await?;
 				reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-				crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
+				crate::store::manga::set_chapters_fetched_at(&mut conn, id, crate::model::unix_now()).await?;
+				conn.commit().await?;
 				chapters_json(&state, user_id, id, order_by).await
 			});
 			tokio::spawn(partial::forward_manga_update(partial_rx, call, line_tx));
@@ -1839,9 +1853,10 @@ async fn get_chapters(
 		let updated = handle
 			.get_manga_update(manga_from_row(&manga), false, true)
 			.await?;
-		let mut conn = state.pool.acquire().await?;
+		let mut conn = crate::db::begin_write(&state.pool).await?;
 		reconcile_chapters(&mut conn, id, &updated.chapters.clone().unwrap_or_default(), &[]).await?;
-		crate::store::manga::set_chapters_fetched_at(&mut *conn, id, crate::model::unix_now()).await?;
+		crate::store::manga::set_chapters_fetched_at(&mut conn, id, crate::model::unix_now()).await?;
+		conn.commit().await?;
 	}
 	Ok(Json(chapters_json(&state, user.id, id, order_by).await?).into_response())
 }

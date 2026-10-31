@@ -575,7 +575,7 @@ async fn import_group(
 				}
 				let category_id = ensure_category(tx, user_id, name).await?;
 				import.seen_categories.insert(name.to_string());
-				crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
+				crate::store::category::add_manga(tx, category_id, manga_id, user_id).await?;
 			}
 			import.counts.library += 1;
 		}

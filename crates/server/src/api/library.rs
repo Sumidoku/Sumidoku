@@ -435,7 +435,7 @@ pub async fn add_to_library(
 		}
 	}
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	crate::store::library::shelve(&mut *tx, manga.id, user.id, unix_now()).await?;
+	crate::store::library::shelve(&mut tx, manga.id, user.id, unix_now()).await?;
 	if let Some(category_ids) = &body.category_ids {
 		crate::store::category::set_manga_categories(&mut tx, manga.id, user.id, category_ids).await?;
 	}
@@ -450,8 +450,8 @@ pub async fn remove_from_library(
 ) -> ApiResult<StatusCode> {
 	manga_row(&state.pool, id).await?;
 	let mut tx = crate::db::begin_write(&state.pool).await?;
-	crate::store::library::unshelve(&mut *tx, id, user.id).await?;
-	crate::store::category::clear_manga(&mut *tx, id, user.id).await?;
+	crate::store::library::unshelve(&mut tx, id, user.id).await?;
+	crate::store::category::clear_manga(&mut tx, id, user.id).await?;
 	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)
 }
@@ -609,7 +609,9 @@ pub async fn create_category(
 			.bind(user.id)
 			.fetch_one(&state.pool)
 			.await?;
-	let id = crate::store::category::create(&state.pool, user.id, name, sort_order, false).await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	let id = crate::store::category::create(&mut tx, user.id, name, sort_order, false).await?;
+	tx.commit().await?;
 	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
@@ -658,7 +660,9 @@ pub async fn update_category(
 	let Some(name) = name else {
 		return Ok(Json(category_json(&row)));
 	};
-	crate::store::category::rename(&state.pool, id, user.id, &name).await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
+	crate::store::category::rename(&mut tx, id, user.id, &name).await?;
+	tx.commit().await?;
 	Ok(Json(category_json(&category_row(&state.pool, user.id, id).await?)))
 }
 
@@ -677,7 +681,7 @@ pub async fn delete_category(
 		return Err(ApiError::not_found("category not found"));
 	}
 	crate::settings::remove_category_exclusions(&mut tx, id).await?;
-	crate::store::category::delete_owned(&mut *tx, id, user.id).await?;
+	crate::store::category::delete_owned(&mut tx, id, user.id).await?;
 	tx.commit().await?;
 	Ok(StatusCode::NO_CONTENT)
 }
@@ -694,7 +698,7 @@ pub async fn reorder_categories(
 ) -> ApiResult<Json<Value>> {
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	for (index, id) in body.ids.iter().enumerate() {
-		crate::store::category::set_sort_order(&mut *tx, *id, user.id, index as i64).await?;
+		crate::store::category::set_sort_order(&mut tx, *id, user.id, index as i64).await?;
 	}
 	tx.commit().await?;
 	Ok(Json(categories_json(&state, user.id).await?))

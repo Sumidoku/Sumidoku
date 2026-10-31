@@ -139,18 +139,20 @@ async fn apply_rekeys(
 	pending: Vec<(i64, String, String)>,
 	warnings: &mut Vec<String>,
 ) -> ApiResult<()> {
-	let sql = format!("UPDATE {table} SET key = ? WHERE id = ?");
 	let mut pending = pending;
 	loop {
 		let mut progressed = false;
 		let mut blocked = Vec::new();
 		for (id, old_key, new_key) in pending {
-			match sqlx::query(&sql).bind(&new_key).bind(id).execute(&mut *tx).await {
-				Ok(_) => progressed = true,
-				Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
-					blocked.push((id, old_key, new_key));
-				}
-				Err(e) => return Err(e.into()),
+			let moved = if table == "manga" {
+				crate::store::manga::try_rekey(&mut *tx, id, &new_key).await?
+			} else {
+				crate::store::chapter::try_set_key(&mut *tx, id, &new_key).await?
+			};
+			if moved {
+				progressed = true;
+			} else {
+				blocked.push((id, old_key, new_key));
 			}
 		}
 		if blocked.is_empty() {

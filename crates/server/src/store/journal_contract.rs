@@ -15,6 +15,12 @@ use crate::model::ChapterProgress;
 
 const USER: i64 = 1;
 
+macro_rules! conn {
+	($pool:expr) => {
+		$pool.acquire().await.expect("connection")
+	};
+}
+
 /// Times come from the clock, so only their order is pinned, by `assert_versions_advance`
 fn mask_times(value: &mut Value) {
 	match value {
@@ -142,7 +148,7 @@ fn chapter_fields<'a>(key: &'a str, order: i64) -> ChapterFields<'a> {
 
 async fn insert_manga(pool: &SqlitePool, source_id: i64, key: &str) -> i64 {
 	let times = FetchTimes { next_update_time: None, last_fetched_at: None, chapters_last_fetched_at: None, now: 1000 };
-	manga::upsert_from_source(pool, source_id, key, &manga_fields("Manga"), &times).await.expect("upsert manga");
+	manga::upsert_from_source(&mut conn!(pool), source_id, key, &manga_fields("Manga"), &times).await.expect("upsert manga");
 	sqlx::query_scalar("SELECT id FROM manga WHERE source_id = ? AND key = ?")
 		.bind(source_id)
 		.bind(key)
@@ -152,7 +158,7 @@ async fn insert_manga(pool: &SqlitePool, source_id: i64, key: &str) -> i64 {
 }
 
 async fn insert_chapter(pool: &SqlitePool, manga_id: i64, key: &str, order: i64) -> i64 {
-	chapter::upsert_from_source(pool, manga_id, &chapter_fields(key, order), 1000).await.expect("upsert chapter");
+	chapter::upsert_from_source(&mut conn!(pool), manga_id, &chapter_fields(key, order), 1000).await.expect("upsert chapter");
 	sqlx::query_scalar("SELECT id FROM chapter WHERE manga_id = ? AND key = ?")
 		.bind(manga_id)
 		.bind(key)
@@ -180,16 +186,16 @@ async fn record_operations(pool: SqlitePool) -> Vec<Value> {
 
 	let manga_id = insert_manga(&pool, source, "m1").await;
 	log.step("manga inserted, not in library").await;
-	library::shelve(&pool, manga_id, USER, 1000).await.expect("shelve");
+	library::shelve(&mut conn!(pool), manga_id, USER, 1000).await.expect("shelve");
 	log.step("manga shelved").await;
 	let times = FetchTimes { next_update_time: None, last_fetched_at: None, chapters_last_fetched_at: None, now: 1000 };
-	manga::upsert_from_source(&pool, source, "m1", &manga_fields("Renamed"), &times).await.expect("upsert");
+	manga::upsert_from_source(&mut conn!(pool), source, "m1", &manga_fields("Renamed"), &times).await.expect("upsert");
 	log.step("manga refreshed with a change").await;
-	manga::upsert_from_source(&pool, source, "m1", &manga_fields("Renamed"), &times).await.expect("upsert");
+	manga::upsert_from_source(&mut conn!(pool), source, "m1", &manga_fields("Renamed"), &times).await.expect("upsert");
 	log.step("manga refreshed unchanged").await;
-	manga::set_chapters_fetched_at(&pool, manga_id, 3000).await.expect("fetch time");
+	manga::set_chapters_fetched_at(&mut conn!(pool), manga_id, 3000).await.expect("fetch time");
 	log.step("manga fetch time stamped").await;
-	manga::set_cover_url(&pool, manga_id, "https://example.invalid/c").await.expect("cover");
+	manga::set_cover_url(&mut conn!(pool), manga_id, "https://example.invalid/c").await.expect("cover");
 	log.step("manga cover changed").await;
 
 	let first = insert_chapter(&pool, manga_id, "c1", 0).await;
@@ -197,31 +203,31 @@ async fn record_operations(pool: SqlitePool) -> Vec<Value> {
 	let second = insert_chapter(&pool, manga_id, "c2", 1).await;
 	let third = insert_chapter(&pool, manga_id, "c3", 2).await;
 	log.step("two chapters inserted").await;
-	chapter::rekey(&pool, third, "c3b").await.expect("rekey");
+	chapter::rekey(&mut conn!(pool), third, "c3b").await.expect("rekey");
 	log.step("chapter rekeyed").await;
-	chapter::set_page_info(&pool, first, 9, None).await.expect("page info");
+	chapter::set_page_info(&mut conn!(pool), first, 9, None).await.expect("page info");
 	log.step("chapter page count changed").await;
 
-	progress::set(&pool, first, USER, &progress_at(1)).await.expect("progress");
+	progress::set(&mut conn!(pool), first, USER, &progress_at(1)).await.expect("progress");
 	log.step("progress set").await;
-	progress::merge(&pool, first, USER, &progress_at(5)).await.expect("merge");
+	progress::merge(&mut conn!(pool), first, USER, &progress_at(5)).await.expect("merge");
 	log.step("progress merged forward").await;
-	progress::merge(&pool, first, USER, &progress_at(2)).await.expect("merge");
+	progress::merge(&mut conn!(pool), first, USER, &progress_at(2)).await.expect("merge");
 	log.step("progress merged backward").await;
-	progress::set(&pool, second, USER, &progress_at(3)).await.expect("progress");
+	progress::set(&mut conn!(pool), second, USER, &progress_at(3)).await.expect("progress");
 	log.step("second chapter progress").await;
-	progress::set_downloaded(&pool, first, USER, true).await.expect("downloaded");
+	progress::set_downloaded(&mut conn!(pool), first, USER, true).await.expect("downloaded");
 	log.step("chapter marked downloaded").await;
-	progress::reset_manga(&pool, manga_id, USER).await.expect("reset");
+	progress::reset_manga(&mut conn!(pool), manga_id, USER).await.expect("reset");
 	log.step("bulk progress reset").await;
 
-	let first_category = category::create(&pool, USER, "First", 0, false).await.expect("category");
+	let first_category = category::create(&mut conn!(pool), USER, "First", 0, false).await.expect("category");
 	log.step("category created").await;
-	let second_category = category::create(&pool, USER, "Second", 1, false).await.expect("category");
+	let second_category = category::create(&mut conn!(pool), USER, "Second", 1, false).await.expect("category");
 	log.step("second category created").await;
-	category::rename(&pool, first_category, USER, "Renamed").await.expect("rename");
+	category::rename(&mut conn!(pool), first_category, USER, "Renamed").await.expect("rename");
 	log.step("category renamed").await;
-	category::set_sort_order(&pool, second_category, USER, 5).await.expect("order");
+	category::set_sort_order(&mut conn!(pool), second_category, USER, 5).await.expect("order");
 	log.step("category reordered").await;
 
 	let mut tx = pool.begin().await.expect("transaction");
@@ -232,10 +238,10 @@ async fn record_operations(pool: SqlitePool) -> Vec<Value> {
 	category::set_manga_categories(&mut tx, manga_id, USER, &[second_category]).await.expect("set");
 	tx.commit().await.expect("commit");
 	log.step("membership reduced to one").await;
-	category::delete_owned(&pool, second_category, USER).await.expect("delete category");
+	category::delete_owned(&mut conn!(pool), second_category, USER).await.expect("delete category");
 	log.step("category with a member deleted").await;
 
-	library::set_incognito(&pool, manga_id, USER, true).await.expect("incognito");
+	library::set_incognito(&mut conn!(pool), manga_id, USER, true).await.expect("incognito");
 	log.step("manga incognito set").await;
 	let entry = LibraryEntry {
 		manga_id,
@@ -246,26 +252,26 @@ async fn record_operations(pool: SqlitePool) -> Vec<Value> {
 		incognito: false,
 		sort_key: "key",
 	};
-	library::upsert(&pool, &entry).await.expect("upsert entry");
+	library::upsert(&mut conn!(pool), &entry).await.expect("upsert entry");
 	log.step("library row replaced").await;
-	library::unshelve(&pool, manga_id, USER).await.expect("unshelve");
+	library::unshelve(&mut conn!(pool), manga_id, USER).await.expect("unshelve");
 	log.step("manga unshelved").await;
-	library::shelve(&pool, manga_id, USER, 1000).await.expect("shelve");
+	library::shelve(&mut conn!(pool), manga_id, USER, 1000).await.expect("shelve");
 	log.step("manga reshelved").await;
 
-	chapter::delete(&pool, second).await.expect("delete chapter");
+	chapter::delete(&mut conn!(pool), second).await.expect("delete chapter");
 	log.step("chapter with progress deleted").await;
 
 	let other = insert_manga(&pool, source, "m2").await;
-	library::shelve(&pool, other, USER, 1000).await.expect("shelve");
+	library::shelve(&mut conn!(pool), other, USER, 1000).await.expect("shelve");
 	let other_chapter = insert_chapter(&pool, other, "c1", 0).await;
-	progress::set(&pool, other_chapter, USER, &progress_at(1)).await.expect("progress");
-	category::add_manga(&pool, first_category, other, USER).await.expect("add");
+	progress::set(&mut conn!(pool), other_chapter, USER, &progress_at(1)).await.expect("progress");
+	category::add_manga(&mut conn!(pool), first_category, other, USER).await.expect("add");
 	log.step("second manga set up").await;
-	manga::delete(&pool, other).await.expect("delete manga");
+	manga::delete(&mut conn!(pool), other).await.expect("delete manga");
 	log.step("manga cascade delete").await;
 
-	sqlx::query("DELETE FROM source WHERE id = ?").bind(source).execute(&pool).await.expect("delete source");
+	super::source::delete(&mut conn!(pool), source).await.expect("delete source");
 	log.step("source cascade delete").await;
 	log.steps
 }
@@ -282,18 +288,18 @@ async fn rapid_writes_get_strictly_increasing_versions() {
 		.await
 		.expect("source");
 	let manga_id = insert_manga(&pool, source, "m1").await;
-	library::shelve(&pool, manga_id, USER, 1000).await.expect("shelve");
+	library::shelve(&mut conn!(pool), manga_id, USER, 1000).await.expect("shelve");
 	let chapter_id = insert_chapter(&pool, manga_id, "c1", 0).await;
-	let category_id = category::create(&pool, USER, "Start", 0, false).await.expect("category");
+	let category_id = category::create(&mut conn!(pool), USER, "Start", 0, false).await.expect("category");
 	let start: i64 = sqlx::query_scalar("SELECT MAX(sequence) FROM sync_change").fetch_one(&pool).await.expect("sequence");
 
 	let mut tx = pool.begin().await.expect("transaction");
 	for round in 0..20_i64 {
-		category::rename(&mut *tx, category_id, USER, &format!("Name {round}")).await.expect("rename");
-		manga::set_cover_url(&mut *tx, manga_id, &format!("https://example.invalid/{round}")).await.expect("cover");
-		chapter::set_page_info(&mut *tx, chapter_id, round + 10, None).await.expect("pages");
-		progress::set(&mut *tx, chapter_id, USER, &progress_at(round + 1)).await.expect("progress");
-		library::set_incognito(&mut *tx, manga_id, USER, round % 2 == 0).await.expect("incognito");
+		category::rename(&mut tx, category_id, USER, &format!("Name {round}")).await.expect("rename");
+		manga::set_cover_url(&mut tx, manga_id, &format!("https://example.invalid/{round}")).await.expect("cover");
+		chapter::set_page_info(&mut tx, chapter_id, round + 10, None).await.expect("pages");
+		progress::set(&mut tx, chapter_id, USER, &progress_at(round + 1)).await.expect("progress");
+		library::set_incognito(&mut tx, manga_id, USER, round % 2 == 0).await.expect("incognito");
 	}
 	tx.commit().await.expect("commit");
 

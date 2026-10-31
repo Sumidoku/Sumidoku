@@ -100,7 +100,7 @@ async fn scan_listed_entry(
 /// A reconcile means the manga's subtree changed on disk: a chapter analysed to zero pages (an empty
 /// directory, a broken archive) may hold pages now, so it becomes eligible for the analysis pass again
 async fn clear_zero_page_stamps(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, manga_id: i64) -> ApiResult<()> {
-	crate::store::chapter::clear_manga_analyzed(&mut **tx, manga_id).await?;
+	crate::store::chapter::clear_manga_analyzed(tx, manga_id).await?;
 	Ok(())
 }
 
@@ -256,8 +256,8 @@ pub async fn scan_instance(
 			}
 			// trashing a manga trashes its chapters with it (kmrs's soft_delete_many cascade)
 			let mut tx = crate::db::begin_write(&state.pool).await?;
-			crate::store::manga::trash(&mut *tx, row.id, now).await?;
-			crate::store::chapter::trash_manga(&mut *tx, row.id, now).await?;
+			crate::store::manga::trash(&mut tx, row.id, now).await?;
+			crate::store::chapter::trash_manga(&mut tx, row.id, now).await?;
 			tx.commit().await?;
 			outcome.trashed += 1;
 		}
@@ -307,7 +307,9 @@ pub async fn scan_instance(
 					&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind) =>
 			{
 				if row.local_entry_kind.is_none() {
-					crate::store::manga::backfill_entry_kind(&state.pool, row.id, scan.entry_kind).await?;
+					let mut write = crate::db::begin_write(&state.pool).await?;
+					crate::store::manga::backfill_entry_kind(&mut write, row.id, scan.entry_kind).await?;
+					write.commit().await?;
 				}
 				outcome.unchanged += 1;
 			}
@@ -320,7 +322,7 @@ pub async fn scan_instance(
 						// A changed subtree (or a restored row) reconciles; marking initialized = 0 (kmrs's
 						// OUTDATED, the analysis pass re-reads embedded metadata) happens only with the
 						// caller's metadata opt-in — enumeration is not metadata refresh
-						crate::store::manga::mark_scanned(&mut *tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
+						crate::store::manga::mark_scanned(&mut tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
 						if row.trashed_at.is_some() {
 							outcome.restored += 1;
 						} else {
@@ -332,7 +334,7 @@ pub async fn scan_instance(
 						// index-level insert: leaf-name title, no metadata (initialized stays 0 for the
 						// analysis pass / on-open path). updated_at stays NULL so the manga appears in
 						// latest-added but not latest-updates until a content change sets it.
-						let id = crate::store::manga::insert_local(&mut *tx, source_id, key, super::title_of(key), mtime, scan.entry_kind, now).await?;
+						let id = crate::store::manga::insert_local(&mut tx, source_id, key, super::title_of(key), mtime, scan.entry_kind, now).await?;
 						outcome.indexed += 1;
 						id
 					}
@@ -350,7 +352,7 @@ pub async fn scan_instance(
 					|| reconciled.trashed > 0
 					|| reconciled.restored > 0);
 			if content_changed {
-				crate::store::manga::set_updated_at(&mut *tx, manga_id, now).await?;
+				crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
 			}
 			tx.commit().await?;
 		}
@@ -419,7 +421,7 @@ pub async fn scan_manga_entry(
 		&& !force_reconcile
 	{
 		if row.local_entry_kind.is_none() {
-			crate::store::manga::backfill_entry_kind(&mut *tx, row.id, scan.entry_kind).await?;
+			crate::store::manga::backfill_entry_kind(&mut tx, row.id, scan.entry_kind).await?;
 		}
 		tx.commit().await?;
 		return Ok((row.id, crate::source::ReconcileOutcome {
@@ -433,7 +435,7 @@ pub async fn scan_manga_entry(
 	let is_existing = existing.is_some();
 	let manga_id = match existing {
 		Some(row) => {
-			crate::store::manga::mark_scanned(&mut *tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
+			crate::store::manga::mark_scanned(&mut tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
 			row.id
 		}
 		None => {
@@ -441,7 +443,7 @@ pub async fn scan_manga_entry(
 			if force_reconcile {
 				return Err(crate::error::ApiError::conflict("not_trashed", "manga was purged before restore"));
 			}
-			crate::store::manga::insert_local(&mut *tx, source_id, manga_key, super::title_of(manga_key), mtime, scan.entry_kind, now).await?
+			crate::store::manga::insert_local(&mut tx, source_id, manga_key, super::title_of(manga_key), mtime, scan.entry_kind, now).await?
 		}
 	};
 	let reconciled = reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
@@ -451,7 +453,7 @@ pub async fn scan_manga_entry(
 			|| reconciled.trashed > 0
 			|| reconciled.restored > 0);
 	if content_changed {
-		crate::store::manga::set_updated_at(&mut *tx, manga_id, now).await?;
+		crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
 	}
 	tx.commit().await?;
 	// The analysis pass owns archive-opening work; opening or refreshing an unanalyzed manga kicks it at
@@ -754,7 +756,9 @@ pub async fn restore_manga(state: &Arc<AppState>, manga_id: i64) -> ApiResult<()
 /// page rows (the same cascade as source deletion). The derived cover cache goes with it, or an id reused
 /// after a rescan could show the previous manga's cover
 pub async fn purge_manga(state: &AppState, manga_id: i64) -> ApiResult<()> {
-	let deleted = crate::store::manga::delete_trashed(&state.pool, manga_id).await?;
+	let mut write = crate::db::begin_write(&state.pool).await?;
+	let deleted = crate::store::manga::delete_trashed(&mut write, manga_id).await?;
+	write.commit().await?;
 	if !deleted {
 		return Err(crate::error::ApiError::conflict(
 			"not_trashed",
@@ -778,7 +782,9 @@ async fn empty_trash(run: &crate::task::TaskRun, source_id: i64) -> ApiResult<Va
 			break;
 		}
 		// Guarded per row: a manga restored after the ids snapshot must not be deleted again
-		let deleted = crate::store::manga::delete_trashed(&run.state.pool, id).await?;
+		let mut write = crate::db::begin_write(&run.state.pool).await?;
+		let deleted = crate::store::manga::delete_trashed(&mut write, id).await?;
+		write.commit().await?;
 		if deleted {
 			crate::source::cover::invalidate_cover(&run.state.config.covers_dir, id).await;
 			purged += 1;

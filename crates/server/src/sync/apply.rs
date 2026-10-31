@@ -641,27 +641,27 @@ pub(crate) async fn set_final_version(
 	match kind {
 		"manga" => {
 			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid manga key"))?;
-			crate::store::manga::set_modified_at(&mut **tx, id, modified_at).await?
+			crate::store::manga::set_modified_at(tx, id, modified_at).await?
 		}
 		"chapter" => {
 			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid chapter key"))?;
-			crate::store::chapter::set_modified_at(&mut **tx, id, modified_at).await?
+			crate::store::chapter::set_modified_at(tx, id, modified_at).await?
 		}
 		"category" => {
 			let id = local_key.parse::<i64>().map_err(|_| ApiError::bad_request("invalid category key"))?;
-			crate::store::category::set_modified_at(&mut **tx, id, modified_at).await?
+			crate::store::category::set_modified_at(tx, id, modified_at).await?
 		}
 		"manga_user" => {
 			let (manga_id, user_id) = relation_key(local_key, 2)?;
-			crate::store::library::set_modified_at(&mut **tx, manga_id[0], user_id[0], modified_at).await?
+			crate::store::library::set_modified_at(tx, manga_id[0], user_id[0], modified_at).await?
 		}
 		"chapter_user" => {
 			let (chapter_id, user_id) = relation_key(local_key, 2)?;
-			crate::store::progress::set_modified_at(&mut **tx, chapter_id[0], user_id[0], modified_at).await?
+			crate::store::progress::set_modified_at(tx, chapter_id[0], user_id[0], modified_at).await?
 		}
 		"category_manga" => {
 			let (category_id, remainder) = relation_key(local_key, 3)?;
-			crate::store::category::set_manga_modified_at(&mut **tx, category_id[0], category_id[1], remainder[0], modified_at).await?
+			crate::store::category::set_manga_modified_at(tx, category_id[0], category_id[1], remainder[0], modified_at).await?
 		}
 		_ => return Err(ApiError::bad_request("unsupported entity kind")),
 	};
@@ -750,8 +750,8 @@ async fn ensure_manga(
 		return Ok(Some(id));
 	}
 	if let Some(id) = preferred_id {
-		crate::store::manga::insert_stub_with_id(&mut **tx, id, source_id, &manga_key).await?;
-		crate::store::manga::set_modified_at(&mut **tx, id, 0).await?;
+		crate::store::manga::insert_stub_with_id(tx, id, source_id, &manga_key).await?;
+		crate::store::manga::set_modified_at(tx, id, 0).await?;
 		stubs.insert(("manga".into(), id.to_string()));
 		return Ok(Some(id));
 	}
@@ -764,8 +764,8 @@ async fn ensure_manga(
 		mark_quiet_stub(tx, "manga", id, stubs).await?;
 		return Ok(Some(id));
 	}
-	let id = crate::store::manga::insert_stub(&mut **tx, source_id, &manga_key).await?;
-	crate::store::manga::set_modified_at(&mut **tx, id, 0).await?;
+	let id = crate::store::manga::insert_stub(tx, source_id, &manga_key).await?;
+	crate::store::manga::set_modified_at(tx, id, 0).await?;
 	stubs.insert(("manga".into(), id.to_string()));
 	Ok(Some(id))
 }
@@ -788,8 +788,8 @@ async fn ensure_chapter(
 		return Ok(Some(id));
 	}
 	if let Some(id) = preferred_chapter_id {
-		crate::store::chapter::insert_stub_with_id(&mut **tx, id, manga_id, &chapter_key).await?;
-		crate::store::chapter::set_modified_at(&mut **tx, id, 0).await?;
+		crate::store::chapter::insert_stub_with_id(tx, id, manga_id, &chapter_key).await?;
+		crate::store::chapter::set_modified_at(tx, id, 0).await?;
 		stubs.insert(("chapter".into(), id.to_string()));
 		return Ok(Some(id));
 	}
@@ -802,8 +802,8 @@ async fn ensure_chapter(
 		mark_quiet_stub(tx, "chapter", id, stubs).await?;
 		return Ok(Some(id));
 	}
-	let id = crate::store::chapter::insert_stub(&mut **tx, manga_id, &chapter_key).await?;
-	crate::store::chapter::set_modified_at(&mut **tx, id, 0).await?;
+	let id = crate::store::chapter::insert_stub(tx, manga_id, &chapter_key).await?;
+	crate::store::chapter::set_modified_at(tx, id, 0).await?;
 	stubs.insert(("chapter".into(), id.to_string()));
 	Ok(Some(id))
 }
@@ -828,11 +828,11 @@ async fn ensure_category(
 		.fetch_one(&mut **tx)
 		.await?;
 	let id = if occupied {
-		crate::store::category::insert_stub(&mut **tx, user_id).await?
+		crate::store::category::insert_stub(tx, user_id).await?
 	} else {
-		crate::store::category::insert_stub_with_id(&mut **tx, id, user_id).await?
+		crate::store::category::insert_stub_with_id(tx, id, user_id).await?
 	};
-	crate::store::category::set_modified_at(&mut **tx, id, 0).await?;
+	crate::store::category::set_modified_at(tx, id, 0).await?;
 	stubs.insert(("category".into(), id.to_string()));
 	Ok(id)
 }
@@ -1033,7 +1033,7 @@ async fn apply_manga(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		crate::store::manga::delete(&mut **tx, id).await?;
+		crate::store::manga::delete(tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1057,7 +1057,7 @@ async fn apply_manga(
 	};
 	let source_id = source_id.ok_or_else(|| ApiError::bad_request("source is unavailable"))?;
 	crate::store::manga::set_fields(
-		&mut **tx,
+		tx,
 		id,
 		source_id,
 		&string(&change.snapshot, "key")?,
@@ -1145,7 +1145,7 @@ async fn apply_chapter(
 		if !exists {
 			return Ok(Disposition::Applied);
 		}
-		crate::store::chapter::delete(&mut **tx, id).await?;
+		crate::store::chapter::delete(tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1168,7 +1168,7 @@ async fn apply_chapter(
 		return Ok(Disposition::Skipped);
 	};
 	crate::store::chapter::set_fields(
-		&mut **tx,
+		tx,
 		id,
 		&crate::store::chapter::ChapterFields {
 			key: &string(&change.snapshot, "key")?,
@@ -1321,15 +1321,15 @@ async fn merge_category_stub(
 			continue;
 		}
 		if stub_state.deleted {
-			crate::store::category::remove_manga(&mut **tx, target_id, ids[1], ids[2]).await?;
+			crate::store::category::remove_manga(tx, target_id, ids[1], ids[2]).await?;
 		} else {
-			crate::store::category::upsert_manga_at(&mut **tx, target_id, ids[1], ids[2], stub_state.version.modified_at).await?;
+			crate::store::category::upsert_manga_at(tx, target_id, ids[1], ids[2], stub_state.version.modified_at).await?;
 			if let Some(modified_at) = stub_derived_version {
 				derived_events.push(derived_membership_event(tx, target_id, ids[1], ids[2], modified_at).await?);
 			}
 		}
 	}
-	crate::store::category::clear_category(&mut **tx, stub_id).await?;
+	crate::store::category::clear_category(tx, stub_id).await?;
 	// Rekeying keeps the original events; trigger-generated membership copies would replace their provenance.
 	sqlx::query("DELETE FROM sync_change WHERE sequence > ? AND entity_kind = 'category_manga'")
 		.bind(start_sequence)
@@ -1357,7 +1357,7 @@ async fn merge_category_stub(
 	.execute(&mut **tx)
 	.await?;
 	crate::settings::remove_category_exclusions(tx, stub_id).await?;
-	crate::store::category::delete(&mut **tx, stub_id).await?;
+	crate::store::category::delete(tx, stub_id).await?;
 	Ok(true)
 }
 
@@ -1411,7 +1411,7 @@ async fn apply_category(
 			return Ok(Disposition::Applied);
 		}
 		crate::settings::remove_category_exclusions(tx, id).await?;
-		crate::store::category::delete(&mut **tx, id).await?;
+		crate::store::category::delete(tx, id).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1432,7 +1432,7 @@ async fn apply_category(
 	let mut stubs = HashSet::new();
 	let id = ensure_category(tx, change, user_id, id, &mut stubs).await?;
 	crate::store::category::set_fields(
-		&mut **tx,
+		tx,
 		id,
 		&string(&snapshot, "name")?,
 		integer(&snapshot, "sortOrder")?,
@@ -1540,7 +1540,7 @@ async fn apply_manga_user(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		crate::store::library::delete(&mut **tx, ids[0], ids[1]).await?;
+		crate::store::library::delete(tx, ids[0], ids[1]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1564,7 +1564,7 @@ async fn apply_manga_user(
 	};
 	let local_key = format!("{manga_id}:{user_id}");
 	crate::store::library::upsert(
-		&mut **tx,
+		tx,
 		&crate::store::library::LibraryEntry {
 			manga_id,
 			user_id,
@@ -1639,7 +1639,7 @@ async fn apply_category_manga(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		crate::store::category::remove_manga(&mut **tx, ids[0], ids[1], ids[2]).await?;
+		crate::store::category::remove_manga(tx, ids[0], ids[1], ids[2]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1663,7 +1663,7 @@ async fn apply_category_manga(
 		return Ok(Disposition::Skipped);
 	};
 	let local_key = format!("{category_id}:{manga_id}:{user_id}");
-	crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
+	crate::store::category::add_manga(tx, category_id, manga_id, user_id).await?;
 	finish(
 		tx,
 		start_sequence,
@@ -1788,7 +1788,7 @@ async fn apply_progress(
 			return Ok(Disposition::Applied);
 		}
 		let ids = key_ids(&key)?;
-		crate::store::progress::delete(&mut **tx, ids[0], ids[1]).await?;
+		crate::store::progress::delete(tx, ids[0], ids[1]).await?;
 		finish(
 			tx,
 			start_sequence,
@@ -1857,7 +1857,7 @@ async fn apply_progress(
 		})
 	};
 	crate::store::progress::set(
-		&mut **tx,
+		tx,
 		chapter_id,
 		user_id,
 		&crate::model::ChapterProgress {

@@ -620,12 +620,11 @@ async fn update_fetch_reconciles_and_recent() {
 	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let pool = connect_db(&t.db_path).await;
-	let deleted = sqlx::query("DELETE FROM chapter WHERE key = '8'")
-		.execute(&pool)
+	let chapter_id: i64 = sqlx::query_scalar("SELECT id FROM chapter WHERE key = '8'")
+		.fetch_one(&pool)
 		.await
-		.expect("delete chapter")
-		.rows_affected();
-	assert_eq!(deleted, 1);
+		.expect("chapter id");
+	common::delete_chapter(&pool, chapter_id).await;
 
 	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(json!({"library.skip_titles": []}))).await;
 	assert_eq!(status, StatusCode::OK);
@@ -675,12 +674,11 @@ async fn update_auto_download_enqueues_new_chapters() {
 	let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": manga_id}))).await;
 	assert_eq!(status, StatusCode::OK);
 	let pool = connect_db(&t.db_path).await;
-	let deleted = sqlx::query("DELETE FROM chapter WHERE key = '8'")
-		.execute(&pool)
+	let chapter_id: i64 = sqlx::query_scalar("SELECT id FROM chapter WHERE key = '8'")
+		.fetch_one(&pool)
 		.await
-		.expect("delete chapter")
-		.rows_affected();
-	assert_eq!(deleted, 1);
+		.expect("chapter id");
+	common::delete_chapter(&pool, chapter_id).await;
 	let addr = serve_app(app.clone()).await;
 	let (mut stream, mut rest) = connect_sse(addr, "/api/v1/events", None, &[]).await;
 	let snapshot = read_sse_data(&mut stream, &mut rest, "snapshot").await;

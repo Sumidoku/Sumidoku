@@ -895,10 +895,10 @@ pub async fn store_chapter_metadata(
 ) -> ApiResult<()> {
 	for (key, meta) in values {
 		if let Some(title) = meta.title.as_deref() {
-			crate::store::chapter::set_title_by_key(&mut *conn, manga_id, key, title).await?;
+			crate::store::chapter::set_title_by_key(conn, manga_id, key, title).await?;
 		}
 		if !meta.authors.is_empty() {
-			crate::store::chapter::set_scanlators_by_key(&mut *conn, manga_id, key, &serde_json::to_string(&meta.authors)?).await?;
+			crate::store::chapter::set_scanlators_by_key(conn, manga_id, key, &serde_json::to_string(&meta.authors)?).await?;
 		}
 	}
 	Ok(())
@@ -916,7 +916,7 @@ pub async fn store_epub_divina(
 		} else {
 			None
 		};
-		crate::store::chapter::set_epub_compatible_by_key(&mut *conn, manga_id, &chapter.key, compatible).await?;
+		crate::store::chapter::set_epub_compatible_by_key(conn, manga_id, &chapter.key, compatible).await?;
 	}
 	Ok(())
 }
