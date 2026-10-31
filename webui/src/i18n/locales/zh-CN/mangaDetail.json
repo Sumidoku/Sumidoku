@@ -45,6 +45,8 @@
     "chaptersRefreshed": "章节列表已刷新",
     "refreshChapters": "刷新章节列表",
     "migrate": "切换图源",
+    "matchMetadata": "匹配元数据",
+    "editMetadata": "编辑元数据",
     "chapters": "章节",
     "chapterStats_other": "共 {{total}} 章 · 未读 {{unread}}",
     "refresh": "刷新",

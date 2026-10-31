@@ -612,6 +612,9 @@ export type Manga = SourceManga & {
 	incognito: boolean;
 	categoryIds: Array<number>;
 	trackerProviders: Array<TrackerProvider>;
+	metadataLocks?: {
+		[key: string]: MetadataFieldLock;
+	};
 };
 
 export type MangaInput = {
@@ -642,6 +645,70 @@ export type MangaStatus = "Unknown" | "Ongoing" | "Completed" | "Cancelled" | "H
 export type MangaWithChapter = {
 	manga: SourceManga;
 	chapter: SourceChapter;
+};
+
+export type MetadataApplyRequest = {
+	provider: string;
+	remoteId: string;
+	fields: Array<MetadataField>;
+	values?: {
+		[key: string]: MetadataFieldValue;
+	};
+	bind?: boolean;
+};
+
+export type MetadataApplyResult = {
+	manga: Manga;
+	appliedFields: Array<MetadataField>;
+};
+
+export type MetadataField = "title" | "authors" | "artists" | "description" | "tags" | "status" | "contentRating" | "cover";
+
+export type MetadataFieldLock = {
+	provider: string;
+	remoteId?: string | null;
+	appliedAt: number;
+};
+
+export type MetadataFieldValue = string | Array<string> | null;
+
+export type MetadataPreview = {
+	candidate: {
+		provider: string;
+		remoteId: string;
+		title?: string;
+		url?: string | null;
+		coverUrl?: string | null;
+		info?: string | null;
+	};
+	linked: boolean;
+	fields: Array<MetadataPreviewField>;
+};
+
+export type MetadataPreviewField = {
+	field: MetadataField;
+	label: string;
+	current: MetadataFieldValue;
+	incoming: MetadataFieldValue;
+	selectable: boolean;
+	reason?: string | null;
+	alternatives: Array<MetadataTitleAlternative>;
+	lock?: MetadataFieldLock | null;
+};
+
+export type MetadataRestoreRequest = {
+	fields?: Array<MetadataField>;
+	refresh?: boolean;
+};
+
+export type MetadataRestoreResult = {
+	manga: Manga;
+	unlockedFields: Array<MetadataField>;
+};
+
+export type MetadataTitleAlternative = {
+	label: string;
+	value: string;
 };
 
 export type MigrateEntry = {
@@ -1345,6 +1412,15 @@ export type UpdateFilterGroupRequest = {
 export type UpdateMangaRequest = {
 	updateStrategy?: UpdateStrategy;
 	incognito?: boolean;
+	title?: string;
+	authors?: Array<string>;
+	artists?: Array<string>;
+	description?: string;
+	tags?: Array<string>;
+	status?: MangaStatus;
+	contentRating?: ContentRating;
+	cover?: string;
+	metadataUnlock?: Array<MetadataField>;
 };
 
 export type UpdateStrategy = "Always" | "Never";
