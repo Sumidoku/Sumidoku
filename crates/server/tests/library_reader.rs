@@ -496,8 +496,8 @@ async fn deleting_category_clears_exclusions_before_id_reuse() {
 	let category_id = body["id"].as_i64().expect("category id");
 	let pool = connect_db(&db_path).await;
 	for key in [
-		"user.1.library.excluded_update_categories",
-		"user.1.library.excluded_download_categories",
+		"library.excluded_update_categories",
+		"library.excluded_download_categories",
 	] {
 		sqlx::query("INSERT INTO setting (key, value) VALUES (?, ?)")
 			.bind(key)
@@ -516,8 +516,8 @@ async fn deleting_category_clears_exclusions_before_id_reuse() {
 
 	let pool = connect_db(&db_path).await;
 	for key in [
-		"user.1.library.excluded_update_categories",
-		"user.1.library.excluded_download_categories",
+		"library.excluded_update_categories",
+		"library.excluded_download_categories",
 	] {
 		let raw: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = ?")
 			.bind(key)

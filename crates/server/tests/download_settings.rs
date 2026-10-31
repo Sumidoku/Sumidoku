@@ -51,16 +51,11 @@ async fn download_settings_expose_defaults_and_validate_writes() {
 	}
 	assert_eq!(settings["library"]["excludedDownloadCategories"], json!([1, 2]));
 	let pool = connect_db(&app.db_path).await;
-	let scoped: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'user.1.library.excluded_download_categories'")
+	let stored: String = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'library.excluded_download_categories'")
 		.fetch_one(&pool)
 		.await
-		.expect("owner-scoped excluded categories");
-	assert_eq!(serde_json::from_str::<Value>(&scoped).expect("scoped categories"), json!([1, 2]));
-	let global: Option<String> = sqlx::query_scalar("SELECT value FROM setting WHERE key = 'library.excluded_download_categories'")
-		.fetch_optional(&pool)
-		.await
-		.expect("no global excluded categories");
-	assert_eq!(global, None);
+		.expect("excluded categories");
+	assert_eq!(serde_json::from_str::<Value>(&stored).expect("stored categories"), json!([1, 2]));
 	pool.close().await;
 
 	for (key, value) in [

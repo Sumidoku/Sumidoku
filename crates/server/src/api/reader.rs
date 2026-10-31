@@ -81,7 +81,7 @@ impl ProgressPatch {
 /// Incognito check: the user's namespace key user.<id>.incognito.enabled or the manga_user.incognito of the
 /// chapter's manga — either on pauses stamping (aligned with Aidoku's pause history: no new history, old history untouched)
 async fn incognito_on(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, user_id: i64, chapter_id: i64) -> ApiResult<bool> {
-	if crate::settings::INCOGNITO_ENABLED.get(&mut **tx, user_id).await?.unwrap_or(false) {
+	if crate::settings::INCOGNITO_ENABLED.get(&mut **tx).await?.unwrap_or(false) {
 		return Ok(true);
 	}
 	let per_manga: Option<(bool,)> = sqlx::query_as(
@@ -187,7 +187,7 @@ pub async fn update_chapter(
 		notify_tracker_read(&state, chapter.manga_id, user.id, None);
 	}
 	if let Some(deletion) = deletion {
-		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+		let settings = crate::download::DownloadSettings::load(&state.pool, &state.config).await?;
 		delete_after_progress(&state, user.id, id, deletion, &progress, &settings).await?;
 	}
 	Ok(Json(progress_json(id, &progress)))
@@ -307,7 +307,7 @@ pub async fn batch_update_chapters(
 		}
 	}
 	if !deletions.is_empty() {
-		let settings = crate::download::DownloadSettings::load(&state.pool, user.id, &state.config).await?;
+		let settings = crate::download::DownloadSettings::load(&state.pool, &state.config).await?;
 		for (chapter_id, progress, deletion) in deletions {
 			delete_after_progress(&state, user.id, chapter_id, deletion, &progress, &settings).await?;
 		}

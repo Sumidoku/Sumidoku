@@ -57,15 +57,6 @@ async fn library_update_settings_expose_effective_values() {
 	.await
 	.expect("global settings");
 	assert_eq!(global, 3);
-	let (namespaced,): (i64,) = sqlx::query_as(
-		"SELECT COUNT(*) FROM setting WHERE key LIKE 'user.1.library.%'
-		 AND key IN (
-		 'user.1.library.skip_titles', 'user.1.library.refresh_metadata', 'user.1.library.update_interval_hours')",
-	)
-	.fetch_one(&pool)
-	.await
-	.expect("namespaced settings");
-	assert_eq!(namespaced, 0);
 }
 
 #[tokio::test]

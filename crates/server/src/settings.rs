@@ -31,31 +31,6 @@ impl<T: DeserializeOwned + Serialize> Key<T> {
 	}
 }
 
-/// A setting stored under the owner's `user.<id>.` namespace
-pub(crate) struct UserKey<T> {
-	name: &'static str,
-	value: PhantomData<fn() -> T>,
-}
-
-impl<T: DeserializeOwned + Serialize> UserKey<T> {
-	pub(crate) const fn new(name: &'static str) -> Self {
-		Self { name, value: PhantomData }
-	}
-
-	pub(crate) async fn get<'e, E: Executor<'e, Database = Sqlite>>(&self, db: E, user_id: i64) -> ApiResult<Option<T>> {
-		get_typed(db, &user_key(user_id, self.name)).await
-	}
-
-	pub(crate) async fn set<'e, E: Executor<'e, Database = Sqlite>>(
-		&self,
-		db: E,
-		user_id: i64,
-		value: &T,
-	) -> ApiResult<()> {
-		write(db, &user_key(user_id, self.name), &serde_json::to_string(value)?).await
-	}
-}
-
 pub(crate) const AUTO_DOWNLOAD_NEW_CHAPTERS: Key<bool> = Key::new(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS);
 pub(crate) const BACKUP_DIR: Key<String> = Key::new("backup.dir");
 pub(crate) const BACKUP_ENABLED: Key<bool> = Key::new("backup.enabled");
@@ -70,17 +45,14 @@ pub(crate) const LOCAL_ONESHOTS_DIR: Key<String> = Key::new("local.oneshots_dir"
 /// key is the stable identity
 pub(crate) const PINNED_SOURCES: Key<Vec<String>> = Key::new("browse.pinned_sources");
 
-pub(crate) const EXCLUDED_DOWNLOAD_CATEGORIES: UserKey<Vec<i64>> =
-	UserKey::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
-pub(crate) const EXCLUDED_UPDATE_CATEGORIES: UserKey<Vec<i64>> =
-	UserKey::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
-pub(crate) const INCOGNITO_ENABLED: UserKey<bool> = UserKey::new("incognito.enabled");
+pub(crate) const EXCLUDED_DOWNLOAD_CATEGORIES: Key<Vec<i64>> = Key::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
+pub(crate) const EXCLUDED_UPDATE_CATEGORIES: Key<Vec<i64>> = Key::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
+pub(crate) const INCOGNITO_ENABLED: Key<bool> = Key::new("incognito.enabled");
 
 /// One setting the server knows about. New settings are added here, and validation, the structured
 /// view and backups all follow from this entry.
 pub(crate) struct Definition {
 	pub(crate) key: &'static str,
-	user_scoped: bool,
 	in_backup: bool,
 	clears_on_null: bool,
 	check: fn(&str, &Value) -> Result<(), String>,
@@ -88,12 +60,7 @@ pub(crate) struct Definition {
 
 impl Definition {
 	const fn new(key: &'static str, check: fn(&str, &Value) -> Result<(), String>) -> Self {
-		Self { key, user_scoped: false, in_backup: true, clears_on_null: false, check }
-	}
-
-	const fn user_scoped(mut self) -> Self {
-		self.user_scoped = true;
-		self
+		Self { key, in_backup: true, clears_on_null: false, check }
 	}
 
 	/// Holds instance-local ids, which backups carry by name instead
@@ -184,11 +151,11 @@ fn default_category(key: &str, value: &Value) -> Result<(), String> {
 
 const DEFINITIONS: &[Definition] = &[
 	Definition::new("cache.chapterMaxBytes", chapter_cache_bytes),
-	Definition::new("incognito.enabled", any).user_scoped(),
-	Definition::new("library.default_category", default_category).user_scoped(),
-	Definition::new("library.show_uncategorized", boolean).user_scoped(),
-	Definition::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES, category_ids).user_scoped().not_in_backup(),
-	Definition::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES, category_ids).user_scoped().not_in_backup(),
+	Definition::new("incognito.enabled", any),
+	Definition::new("library.default_category", default_category),
+	Definition::new("library.show_uncategorized", boolean),
+	Definition::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES, category_ids).not_in_backup(),
+	Definition::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES, category_ids).not_in_backup(),
 	Definition::new(crate::update::LIBRARY_SKIP_TITLES, skip_titles),
 	Definition::new(crate::update::LIBRARY_REFRESH_METADATA, boolean),
 	Definition::new(crate::update::LIBRARY_UPDATE_INTERVAL_HOURS, non_negative),
@@ -221,11 +188,7 @@ pub(crate) fn definition(key: &str) -> Option<&'static Definition> {
 	DEFINITIONS.iter().find(|definition| definition.key == key)
 }
 
-pub(crate) fn is_user_scoped(key: &str) -> bool {
-	definition(key).is_some_and(|definition| definition.user_scoped)
-}
-
-/// Namespace keys come from the request identity, so a literal `user.*` is never accepted either
+/// The `user.*` namespace was retired by migration 0033, and older backups can still name it
 pub(crate) fn ignored_on_write(key: &str) -> bool {
 	key.starts_with("user.") || RETIRED_KEYS.contains(&key) || crate::server_state::KEYS.contains(&key)
 }
@@ -238,15 +201,6 @@ pub(crate) fn is_modeled(key: &str) -> bool {
 /// Older backups can still name these, so restore needs the same answer as export
 pub(crate) fn omitted_from_backup(key: &str) -> bool {
 	crate::server_state::KEYS.contains(&key) || definition(key).is_some_and(|definition| !definition.in_backup)
-}
-
-/// The row a request's bare key is stored under
-pub(crate) fn stored_key(user_id: i64, key: &str) -> String {
-	if is_user_scoped(key) { user_key(user_id, key) } else { key.to_string() }
-}
-
-pub(crate) fn user_key(user_id: i64, key: &str) -> String {
-	format!("user.{user_id}.{key}")
 }
 
 async fn get_typed<'e, E, T>(db: E, key: &str) -> ApiResult<Option<T>>
@@ -309,14 +263,8 @@ pub(crate) async fn remove<'e, E: Executor<'e, Database = Sqlite>>(db: E, key: &
 	Ok(())
 }
 
-/// Drops a deleted category from both of the owner's exclusion lists
-pub(crate) async fn remove_category_exclusions(
-	tx: &mut sqlx::Transaction<'_, Sqlite>,
-	user_id: i64,
-	category_id: i64,
-) -> ApiResult<()> {
-	let update_key = user_key(user_id, crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
-	let download_key = user_key(user_id, crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
+/// Drops a deleted category from both exclusion lists
+pub(crate) async fn remove_category_exclusions(tx: &mut sqlx::Transaction<'_, Sqlite>, category_id: i64) -> ApiResult<()> {
 	sqlx::query(
 		"UPDATE setting
 		 SET value = (
@@ -329,8 +277,8 @@ pub(crate) async fn remove_category_exclusions(
 		  )",
 	)
 	.bind(category_id)
-	.bind(update_key)
-	.bind(download_key)
+	.bind(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES)
+	.bind(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES)
 	.bind(category_id)
 	.execute(&mut **tx)
 	.await?;

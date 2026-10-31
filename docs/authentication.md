@@ -28,8 +28,7 @@ are removed.
 Migration 0019 removes all non-admin accounts and their libraries, progress,
 categories, settings, downloads and sync state. There is no export, merge or
 restore path for those accounts. Built-in admin data is preserved, including
-legacy rows whose `user_id` is 1 and settings stored under `user.1.*`; these
-legacy storage details do not represent a multi-user product model.
+legacy rows whose `user_id` is 1; these legacy storage details do not represent a multi-user product model.
 
 The release notes for this change explicitly call out the deletion as a
 breaking change.

@@ -740,8 +740,8 @@ no alias is derived from migration text.
   sync origins are deleted explicitly, then non-admin users and their
   user-owned rows are removed through existing foreign-key cascades. The
   built-in row is forced back to the admin role, while admin data and sessions
-  remain. Legacy `user_id` columns and `user.1.*` settings keys remain only as
-  storage details; there are no additional accounts, roles or role-dependent
+  remain. Legacy `user_id` columns remain only as
+  storage details, and migration 0033 flattened the `user.1.*` settings keys; there are no additional accounts, roles or role-dependent
   product branches. Before those deletions, the migration rehomes each latest
   admin-owned tombstone that has a non-admin origin and rewrites its identity
   to the admin. A one-time `sync.single_owner_rebaseline` marker then appends
@@ -943,8 +943,8 @@ no alias is derived from migration text.
   clause, ANDed with the ad-hoc parameters; a nonexistent group 404s like a
   nonexistent category. The web UI manages groups in Settings →
   Filter groups and renders them as a single-select chip strip above the
-  category chips; two admin display settings (legacy `user.1.*` keys,
-  next to `incognito.enabled`) steer the page: `library.default_category`
+  category chips; two admin display settings (next to
+  `incognito.enabled`) steer the page: `library.default_category`
   (`all` / `uncategorized` / a category id) seeds the initial chip only
   on the first visit — a stored chip selection (#243's localStorage
   prefs) always wins afterwards — and `library.show_uncategorized`
@@ -977,9 +977,7 @@ no alias is derived from migration text.
 - Incognito reading (`api/reader.rs`): "history" is `chapter_user.last_read_at`,
   stamped whenever `lastPageRead` is written; the history page selects rows
   where it is non-null. The admin's
-  `incognito.enabled` setting — stored as the legacy key
-  `user.1.incognito.enabled` and translated to a bare key by
-  `GET`/`PUT /api/v1/settings` — or a per-manga `manga_user.incognito` flag
+  `incognito.enabled` setting or a per-manga `manga_user.incognito` flag
   (Aidoku's pause-history analogue) pauses the stamp: a progress write still
   saves `last_page_read`/`is_read` but leaves `last_read_at` untouched — new
   reads never enter history and existing stamps are kept. Marking unread
@@ -1393,7 +1391,7 @@ no alias is derived from migration text.
   `library.update_interval_hours` falls back to config
   `update_interval_hours` (default 0 = never); and
   `library.excluded_update_categories` defaults to an empty array of category
-  ids stored in the legacy `user.1.library.excluded_update_categories` key.
+  ids.
   The admin can read and write all library settings. Migration
   `0016_excluded_update_categories.sql` originally converted per-user legacy
   `category.include_in_update = 2` ids; after migration 0019 only the admin's
@@ -1418,8 +1416,7 @@ no alias is derived from migration text.
   and the scheduled run both use the admin's library and auto-download rules.
   Each update reloads `auto_download_new_chapters`, `auto_download_limit` and
   the download filters. `library.excluded_download_categories` is the single
-  admin category exclusion list, stored as
-  `user.1.library.excluded_download_categories`; migration
+  admin category exclusion list; migration
   `0020_excluded_download_categories.sql` converts only the admin's legacy
   `include_in_download = 2` ids and preserves an existing new setting. Legacy
   `include_in_download = 1` include-only categories cannot be represented by an
