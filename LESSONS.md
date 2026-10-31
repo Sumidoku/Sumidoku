@@ -6,6 +6,23 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A z-index claim must survive a hit test, not just a stylesheet read.** A
+positive z-index lifts an element above a sibling overlay only while no
+ancestor creates a stacking context in between; a later `transform` on a
+shared ancestor silently traps it, and the code comment keeps asserting the
+lift works. Before claiming clickability, probe the button's center with
+`elementFromPoint` (or click it) in the real layout, with the transform
+present.
+- Evidence: 2026-10-31, the reader's failed-page placeholder carried
+  `z-index: 1` and a comment saying it lifted the retry above the paged tap
+  zones (#539), but the spread track's transform (#530, landed earlier)
+  already trapped it: hit-testing the button returned the zone, so the retry
+  was unclickable in paged mode, while in continuous mode its click bubbled
+  and also toggled the toolbar. The fix moved the paged retry to an overlay
+  above the zones and stopped propagation on the continuous one
+  (fix/reader-failed-page-retry); a headless-Chromium `elementFromPoint`
+  probe reproduced both halves before any code changed.
+
 **`offsetTop` counts from the offset parent, not from the element you measure
 inside.** Heights derived from a child's `offsetTop` are only right when the
 container is the offset parent; otherwise they include the container's own
@@ -15,6 +32,7 @@ because a source-text test passes either way.
   `.manga-hero__body`, so a third row at 209 gave a 203px clamp and showed five
   rows; its source assertions were green. Subtracting the first row's top gave
   78px and exactly two rows on desktop and phone.
+
 **A back button wired to a fixed destination breaks every later deep-link
 entry into that page.** "Back = go to the parent list" is only true while the
 list is the page's sole entry point; once other pages start pushing onto it
