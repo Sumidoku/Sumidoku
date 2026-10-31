@@ -118,6 +118,10 @@
 	font-size: 11px;
 }
 
+.metadata-fields__cover {
+	width: 46px;
+}
+
 .metadata-bind {
 	display: flex;
 	align-items: center;

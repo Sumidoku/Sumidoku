@@ -540,7 +540,15 @@ function FieldRow({
 					</span>
 				)}
 			</td>
-			<td>{multi ? value.join(', ') : displayValue(value)}</td>
+			<td>
+				{field.field === 'cover' ? (
+					<CoverCell url={coverUrlOf(value)} label={t('metadata.fieldLabels.cover')} />
+				) : multi ? (
+					value.join(', ')
+				) : (
+					displayValue(value)
+				)}
+			</td>
 			<td>
 				{field.field === 'title' && field.alternatives.length > 0 ? (
 					<Select value={titleValue || String(field.incoming)} onChange={onTitleValue}>
@@ -551,12 +559,30 @@ function FieldRow({
 						))}
 					</Select>
 				) : field.selectable ? (
-					displayValue(field.incoming)
+					field.field === 'cover' ? (
+						<CoverCell url={coverUrlOf(field.incoming)} label={t('metadata.fieldLabels.cover')} />
+					) : (
+						displayValue(field.incoming)
+					)
 				) : (
 					<span className="muted">{field.reason ?? t('metadata.noIncomingValue')}</span>
 				)}
 			</td>
 		</tr>
+	);
+}
+
+/// The cover is the only field whose value is an image address: show the two candidate images instead
+function coverUrlOf(value: unknown): string | null {
+	return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function CoverCell({ url, label }: { url: string | null; label: string }) {
+	if (!url) return <span className="muted">—</span>;
+	return (
+		<div className="metadata-fields__cover">
+			<Cover src={url} title={label} />
+		</div>
 	);
 }
 
