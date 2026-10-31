@@ -2,6 +2,7 @@
 //! written happens in one place.
 
 pub mod category;
+pub mod library;
 
 #[cfg(test)]
 mod tests {
@@ -27,12 +28,16 @@ mod tests {
 		let mut offenders = Vec::new();
 		for file in files {
 			let relative = file.strip_prefix(&src).expect("under src").to_string_lossy().replace('\\', "/");
-			if relative == "store/category.rs" {
-				continue;
-			}
 			let text = fs::read_to_string(&file).expect("read source");
 			let production = text.split("#[cfg(test)]\nmod tests").next().expect("split yields one part");
-			for table in ["category", "category_manga"] {
+			for (owner, table) in [
+				("store/category.rs", "category"),
+				("store/category.rs", "category_manga"),
+				("store/library.rs", "manga_user"),
+			] {
+				if relative == owner {
+					continue;
+				}
 				for verb in ["INSERT INTO", "INSERT OR IGNORE INTO", "INSERT OR REPLACE INTO", "UPDATE", "DELETE FROM"] {
 					for end in [" ", "(", "\n"] {
 						if production.contains(&format!("{verb} {table}{end}")) {

@@ -1791,16 +1791,7 @@ async fn update_manga(
 			.await?;
 	}
 	if let Some(incognito) = patch.incognito {
-		// The manga_user row may not exist (not in library): per-manga incognito does not depend on library state, upsert creates the row
-		sqlx::query(
-			"INSERT INTO manga_user (manga_id, user_id, incognito) VALUES (?, ?, ?)
-			 ON CONFLICT (manga_id, user_id) DO UPDATE SET incognito = excluded.incognito",
-		)
-		.bind(id)
-		.bind(user.id)
-		.bind(incognito)
-		.execute(&state.pool)
-		.await?;
+		crate::store::library::set_incognito(&state.pool, id, user.id, incognito).await?;
 	}
 	let row = manga_row(&state.pool, id).await?;
 	Ok(Json(manga_json(&state, user.id, &row).await?))

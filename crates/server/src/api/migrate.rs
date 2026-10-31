@@ -272,15 +272,7 @@ async fn run_entry(
 			.bind(user_id)
 			.fetch_optional(&mut *tx)
 			.await?;
-	sqlx::query(
-		"INSERT INTO manga_user (manga_id, user_id, in_library, in_library_at) VALUES (?, ?, 1, ?)
-		 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 1",
-	)
-	.bind(to_manga_id)
-	.bind(user_id)
-	.bind(origin_at.unwrap_or_else(unix_now))
-	.execute(&mut *tx)
-	.await?;
+	crate::store::library::shelve(&mut *tx, to_manga_id, user_id, origin_at.unwrap_or_else(unix_now)).await?;
 
 	// Categories are a union: the target's existing categories are kept, the source entry's are added in
 	let category_ids: Vec<i64> =
@@ -343,14 +335,7 @@ async fn run_entry(
 	match mode {
 		MigrateMode::Copy => {}
 		MigrateMode::Migrate | MigrateMode::MigrateWithHistory => {
-			sqlx::query(
-				"INSERT INTO manga_user (manga_id, user_id, in_library) VALUES (?, ?, 0)
-				 ON CONFLICT (manga_id, user_id) DO UPDATE SET in_library = 0",
-			)
-			.bind(origin.id)
-			.bind(user_id)
-			.execute(&mut *tx)
-			.await?;
+			crate::store::library::unshelve(&mut *tx, origin.id, user_id).await?;
 			crate::store::category::clear_manga(&mut *tx, origin.id, user_id).await?;
 			// chapter_user also carries the download flag, so clearing progress only resets the progress fields without deleting the row
 			if mode == MigrateMode::Migrate {
