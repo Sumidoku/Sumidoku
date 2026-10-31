@@ -6,6 +6,27 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A name a user can edit is not an identity.** Matching a synced entity by its
+name works until the name changes, and then the event that carries the change
+matches nothing and creates a duplicate, without an error. An event also has to
+carry what its receiver can resolve: an alias recorded on the other side does
+not help the instance that sent the entity first. Test the edit on the receiving
+side, then send it back.
+- Evidence: 2026-10-31, a category sent from one instance to another and renamed
+  there came back as a new category, so the two stopped converging. Two old
+  binaries gave the same result, so the journal refactor had not caused it. #565
+  adds `categoryAliases`; without the apply change its regression returned
+  `["Category shared", "Renamed on B"]`.
+
+**A failed `cd` does not stop the commands after it.** With `;` or a newline the
+rest of a script runs in the previous directory, so a step meant for a worktree
+lands in the shared checkout. Write `cd <dir> || exit 1`, and read `pwd` or
+`git status` first when a worktree may have been removed.
+- Evidence: 2026-10-31, a worktree was gone after #565 merged, so the next script's
+  `cd` failed and the version bump branch was created in the main checkout. #566
+  still carried the right two files, and the checkout was switched back. The same
+  worktree loss followed #568's merge; its cause is unconfirmed.
+
 **A z-index claim must survive a hit test, not just a stylesheet read.** A
 positive z-index lifts an element above a sibling overlay only while no
 ancestor creates a stacking context in between; a later `transform` on a
@@ -398,21 +419,6 @@ hashed assets can make the embedded HTML and the on-disk index disagree.
   rebuild with the workspace run. `embedded_webui` again found different served
   and on-disk index bytes; it passed after the Web UI build finished and the
   Rust target rebuilt. Keep the complete validation pipeline ordered.
-
-**Dropping a test fixture's TempDir unlinks its database file; lazy pool
-connections then fail at a wandering point.** A `let TestApp { app, .. }`
-destructure drops the TempDir immediately: already-open connections keep
-working off the unlinked file, but the first query that needs a fresh
-connection fails with "unable to open database file" — wherever that happens
-to land. Bind the field (`tmp: _tmp`) so the directory outlives the test.
-- Evidence: 2026-10-26, #35's tracker API tests. The same test failed at
-  three different spots across runs (logout, update, ledger, each a 500) as
-  each fresh connection hit the unlinked file; binding `tmp` made all four
-  pass deterministically.
-- Seen again: 2026-10-31, #551's CI failed `search_query_matches_author_and_tag_substring`
-  with a 500 that 96 parallel local runs of the same test did not reproduce;
-  eight tests in `local_search.rs` and `api.rs` destructured `TestApp { app, .. }`.
-  Binding `tmp: _tmp` covers them all.
 
 **A version bump is incomplete without the lockfile.** `Cargo.lock` records
 every workspace member's version, so bumping only `Cargo.toml` leaves the
@@ -966,18 +972,6 @@ session's page. Before launching, kill any Chrome bound to the port
   session's Chrome (pid from an older run) still held 127.0.0.1:9222, and
   the prefix match picked its `127.0.0.1:45672/browse/3` tab; the driver
   failed on a missing chip until both were fixed, then ran 30/30 green.
-
-**Destructuring `TestApp` without keeping `tmp` deletes the fixture
-directory mid-test.** `tempfile::TempDir` removes its tree on drop, so
-`let TestApp { app, .. } = test_app().await` wipes the sources directory
-the scan endpoint is about to read; the failure surfaces far from the
-cause (an empty source list, then a confusing "source id for X" panic in
-the lookup helper). Bind the field — `tmp: _tmp` when unused — in every
-test that builds a `TestApp`.
-- Evidence: 2026-10-20, PR #179's aggregate-search tests: the two cases
-  written with `let TestApp { app, .. }` failed at `source_id_of` with an
-  empty scan while the three that kept `tmp` passed; binding `tmp: _tmp`
-  (what every existing test already does) turned them green.
 
 **Before writing a file, confirm it does not exist — truncated listings
 lie.** A `find | head -20` that cuts off before the target makes an
