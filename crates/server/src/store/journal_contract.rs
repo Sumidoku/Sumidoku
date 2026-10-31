@@ -270,6 +270,58 @@ async fn record_operations(pool: SqlitePool) -> Vec<Value> {
 	log.steps
 }
 
+/// Writes inside one millisecond still get distinct versions, or peers could not order them
+#[tokio::test]
+async fn rapid_writes_get_strictly_increasing_versions() {
+	let tmp = tempfile::tempdir().expect("tempdir");
+	let pool = crate::db::create_pool(&format!("sqlite://{}/rapid.db?mode=rwc", tmp.path().display()))
+		.await
+		.expect("pool");
+	let source: i64 = sqlx::query_scalar("INSERT INTO source (key, name, wasm_path) VALUES ('test.rapid', 'Test', '') RETURNING id")
+		.fetch_one(&pool)
+		.await
+		.expect("source");
+	let manga_id = insert_manga(&pool, source, "m1").await;
+	library::shelve(&pool, manga_id, USER, 1000).await.expect("shelve");
+	let chapter_id = insert_chapter(&pool, manga_id, "c1", 0).await;
+	let category_id = category::create(&pool, USER, "Start", 0, false).await.expect("category");
+	let start: i64 = sqlx::query_scalar("SELECT MAX(sequence) FROM sync_change").fetch_one(&pool).await.expect("sequence");
+
+	let mut tx = pool.begin().await.expect("transaction");
+	for round in 0..20_i64 {
+		category::rename(&mut *tx, category_id, USER, &format!("Name {round}")).await.expect("rename");
+		manga::set_cover_url(&mut *tx, manga_id, &format!("https://example.invalid/{round}")).await.expect("cover");
+		chapter::set_page_info(&mut *tx, chapter_id, round + 10, None).await.expect("pages");
+		progress::set(&mut *tx, chapter_id, USER, &progress_at(round + 1)).await.expect("progress");
+		library::set_incognito(&mut *tx, manga_id, USER, round % 2 == 0).await.expect("incognito");
+	}
+	tx.commit().await.expect("commit");
+
+	let rows = rows_after(&pool, start).await;
+	assert!(rows.len() >= 100, "{} rows", rows.len());
+	// A child write re-emits its parent's snapshot unchanged at the same version, which peers treat as
+	// a duplicate. Two different payloads at one version are what must never happen.
+	let mut latest: std::collections::HashMap<(String, String), (i64, String)> = std::collections::HashMap::new();
+	for row in &rows {
+		let key = (row.entity_kind.clone(), row.entity_key.clone());
+		if let Some((version, snapshot)) = latest.insert(key, (row.modified_at, row.snapshot.clone())) {
+			assert!(row.modified_at >= version, "{} {} went back", row.entity_kind, row.entity_key);
+			assert!(
+				row.modified_at > version || row.snapshot == snapshot,
+				"{} {} changed without a new version",
+				row.entity_kind,
+				row.entity_key
+			);
+		}
+	}
+	let distinct_versions = |kind: &str| {
+		rows.iter().filter(|row| row.entity_kind == kind).map(|row| row.modified_at).collect::<std::collections::HashSet<_>>().len()
+	};
+	assert_eq!(distinct_versions("category"), 20);
+	assert_eq!(distinct_versions("chapter_user"), 20);
+	assert_eq!(distinct_versions("manga_user"), 20);
+}
+
 #[tokio::test]
 async fn store_operations_keep_their_journal_output() {
 	let tmp = tempfile::tempdir().expect("tempdir");
