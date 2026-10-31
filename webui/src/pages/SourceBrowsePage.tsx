@@ -757,13 +757,12 @@ function FilterItem({
 				<div className="filter-item__row">
 					<Select
 						value={cur.index === null ? '' : String(cur.index)}
-						onChange={(e) => {
-							const v = e.currentTarget.value;
+						onChange={(value) => {
 							setStates({
 								...states,
 								sortVals: {
 									...states.sortVals,
-									[f.id]: { index: v === '' ? null : Number(v), ascending: cur.ascending }
+									[f.id]: { index: value === '' ? null : Number(value), ascending: cur.ascending }
 								}
 							});
 						}}
@@ -839,8 +838,8 @@ function FilterItem({
 				<span className="filter-item__title">{f.title}</span>
 				<Select
 					value={states.selectVals[f.id] ?? ''}
-					onChange={(e) =>
-						setStates({ ...states, selectVals: { ...states.selectVals, [f.id]: e.currentTarget.value } })
+					onChange={(value) =>
+						setStates({ ...states, selectVals: { ...states.selectVals, [f.id]: value } })
 					}
 				>
 					<option value="">{t('sourceBrowse.unselected')}</option>

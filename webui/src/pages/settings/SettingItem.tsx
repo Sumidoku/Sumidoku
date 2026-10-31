@@ -619,7 +619,7 @@ export function SettingItem({
 				<span className="setting-row__title">{setting.title}</span>
 				<Select
 					value={(cur(setting.key) as string) ?? v.Select.default ?? ''}
-					onChange={(e) => onEdit(setting.key, e.currentTarget.value)}
+					onChange={(value) => onEdit(setting.key, value)}
 				>
 					{v.Select.values.map((opt, i) => (
 						<option key={opt} value={opt}>

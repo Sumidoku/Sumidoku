@@ -141,7 +141,7 @@ export function LibraryToolbar({
 						className="library__sort"
 						aria-label={t('library.sort')}
 						value={sort}
-						onChange={(e) => onSort(e.currentTarget.value as LibrarySort)}
+						onChange={(value) => onSort(value as LibrarySort)}
 					>
 						{SORT_OPTIONS.map((option) => (
 							<option key={option.value} value={option.value}>

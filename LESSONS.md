@@ -18,6 +18,19 @@ widths agree there and the error cannot show.
   10px scrollbar; its right edge was 595 against a 605 anchor on desktop.
   Measuring from `clientWidth` put both on target.
 
+**Replacing a native control means re-homing what the app keyed to it.**
+Code outside the component can depend on the native element: a tag-name check,
+a browser-managed popup that never joined the React tree, or an open list that
+sat above every modal without touching Escape handling. A portaled custom menu
+keeps React's bubbling, so a pick can reach ancestor click handlers, and a focused
+button stops being an editable target. Grep for the element's tag and walk each
+ancestor's key and pointer handlers before swapping it.
+- Evidence: 2026-10-31, the custom `Select` left `hotkeys.ts:isEditableTarget`
+  checking `SELECT`, so a focused dropdown would have handed its arrow keys to
+  page turns; the check now keys on `role="combobox"` with a regression. A reader
+  smoke then confirmed a pick leaves the page and panel alone, and a modal probe
+  confirmed Escape closes the list first and the modal only on the second press.
+
 **A nullable prop that anticipates a state does not deliver it; the
 caller's early return is the real contract.** `TransitionPage` took
 `target: ChapterWithDownload | null` from the start, but

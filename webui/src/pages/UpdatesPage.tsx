@@ -189,7 +189,7 @@ export default function UpdatesPage() {
 								<Select
 									aria-label={t('updates.selectCategory')}
 									value={catSel}
-									onChange={(e) => setCatSel(e.currentTarget.value)}
+									onChange={setCatSel}
 								>
 									<option value="">{t('updates.allCategories')}</option>
 									{cats.map((c) => (

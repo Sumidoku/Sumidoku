@@ -94,7 +94,7 @@ export function ReaderSettings({
 				<Select
 					aria-label={t('reader.tapZones')}
 					value={tapZones}
-					onChange={(e) => onTapZonesChange(e.currentTarget.value as TapZoneLayout)}
+					onChange={(value) => onTapZonesChange(value as TapZoneLayout)}
 				>
 					<option value="lr">{t('reader.tzLr')}</option>
 					<option value="rl">{t('reader.tzRl')}</option>
@@ -110,7 +110,7 @@ export function ReaderSettings({
 				<Select
 					aria-label={t('reader.pageScale')}
 					value={scale}
-					onChange={(e) => onScaleChange(e.currentTarget.value as PageScale)}
+					onChange={(value) => onScaleChange(value as PageScale)}
 				>
 					<option value="screen">{t('reader.scaleScreen')}</option>
 					<option value="width">{t('reader.scaleWidth')}</option>
@@ -183,7 +183,7 @@ export function ReaderSettings({
 						<Select
 							aria-label={t('reader.fontFamily')}
 							value={typography.font}
-							onChange={(e) => onTypographyChange({ font: e.currentTarget.value as ReaderFont })}
+							onChange={(value) => onTypographyChange({ font: value as ReaderFont })}
 						>
 							<option value="default">{t('reader.fontDefault')}</option>
 							<option value="sans">{t('reader.fontSans')}</option>
