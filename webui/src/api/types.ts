@@ -210,6 +210,13 @@ export type Chapter = SourceChapter & {
 	lastReadAt: number | null;
 };
 
+export type ChapterCacheBreakdown = {
+	pageBytes: number;
+	originalBytes: number;
+	blobBytes: number;
+	opdsBytes: number;
+};
+
 export type ChapterCacheClearResponse = {
 	clearedBytes: number;
 	usedBytes: number;
@@ -221,6 +228,14 @@ export type ChapterCacheSettings = {
 	chapterMaxBytes: number;
 };
 
+export type ChapterCacheSourceStats = {
+	sourceId: number;
+	sourceName: string;
+	usedBytes: number;
+	chapterCount: number;
+	breakdown: ChapterCacheBreakdown;
+};
+
 export type ChapterCacheStats = {
 	enabled: boolean;
 	maxBytes: number;
@@ -228,6 +243,8 @@ export type ChapterCacheStats = {
 	chapterCount: number;
 	lastError: string | null;
 	cacheRevision: number;
+	breakdown: ChapterCacheBreakdown;
+	sources: Array<ChapterCacheSourceStats>;
 };
 
 export type ChapterInput = {
@@ -258,11 +275,26 @@ export type ChapterWithDownload = Chapter & {
 	hasFinishedDownload: boolean;
 };
 
+export type ClearChapterCacheRequest = {
+	sourceId?: number;
+};
+
 export type ClearedResponse = {
 	cleared: number;
 };
 
 export type ContentRating = "Unknown" | "Safe" | "Suggestive" | "NSFW";
+
+export type CoverCacheClearResponse = {
+	clearedBytes: number;
+	clearedEntries: number;
+};
+
+export type CoverCacheStats = {
+	entries: number;
+	usedBytes: number;
+	maxEntries: number;
+};
 
 export type CreateFilterGroupRequest = {
 	name: string;

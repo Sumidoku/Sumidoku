@@ -5073,6 +5073,17 @@
         ],
         "operationId": "clearChapterCache",
         "summary": "Clear cached chapter page metadata and image assets",
+        "description": "Without a body every chapter's cache is cleared. With `sourceId` only that source's chapters are cleared. Downloaded chapter products are never touched.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClearChapterCacheRequest"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Cache cleared",
@@ -5080,6 +5091,61 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ChapterCacheClearResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/cache/covers": {
+      "get": {
+        "tags": [
+          "cache"
+        ],
+        "operationId": "coverCacheStats",
+        "summary": "Get cover cache usage and limits",
+        "responses": {
+          "200": {
+            "description": "Current cover cache accounting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverCacheStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/api/v1/cache/covers/clear": {
+      "post": {
+        "tags": [
+          "cache"
+        ],
+        "operationId": "clearCoverCache",
+        "summary": "Clear every cached cover image",
+        "description": "Removes all cached cover bodies and sidecars. Manga rows are untouched; a cover re-fetches from its source on the next view.",
+        "responses": {
+          "200": {
+            "description": "Cover cache cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverCacheClearResponse"
                 }
               }
             }
@@ -11147,13 +11213,15 @@
           "usedBytes",
           "chapterCount",
           "lastError",
-          "cacheRevision"
+          "cacheRevision",
+          "breakdown",
+          "sources"
         ],
         "properties": {
           "enabled": {
             "type": "boolean",
             "default": true,
-            "description": "Whether original and resized image caching is enabled (maxBytes > 0). LRU collection always runs, including at zero budget."
+            "description": "Whether chapter image caching is enabled (maxBytes > 0). LRU collection always runs, including at zero budget."
           },
           "maxBytes": {
             "type": "integer",
@@ -11174,6 +11242,130 @@
             "nullable": true
           },
           "cacheRevision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ChapterCacheBreakdown"
+          },
+          "sources": {
+            "type": "array",
+            "description": "Per-source usage, largest first; only sources currently using cache appear.",
+            "items": {
+              "$ref": "#/components/schemas/ChapterCacheSourceStats"
+            }
+          }
+        }
+      },
+      "ChapterCacheBreakdown": {
+        "type": "object",
+        "required": [
+          "pageBytes",
+          "originalBytes",
+          "blobBytes",
+          "opdsBytes"
+        ],
+        "properties": {
+          "pageBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of cached page metadata rows (the page table content column)."
+          },
+          "originalBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of cached remote page originals (exact upstream responses)."
+          },
+          "blobBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of materialized local image blobs."
+          },
+          "opdsBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of cached OPDS archives."
+          }
+        }
+      },
+      "ChapterCacheSourceStats": {
+        "type": "object",
+        "required": [
+          "sourceId",
+          "sourceName",
+          "usedBytes",
+          "chapterCount",
+          "breakdown"
+        ],
+        "properties": {
+          "sourceId": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sourceName": {
+            "type": "string"
+          },
+          "usedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "chapterCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/ChapterCacheBreakdown"
+          }
+        }
+      },
+      "ClearChapterCacheRequest": {
+        "type": "object",
+        "properties": {
+          "sourceId": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When present, only this source's chapter caches are cleared."
+          }
+        }
+      },
+      "CoverCacheStats": {
+        "type": "object",
+        "required": [
+          "entries",
+          "usedBytes",
+          "maxEntries"
+        ],
+        "properties": {
+          "entries": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Cached cover bodies."
+          },
+          "usedBytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Bytes of bodies and sidecars together."
+          },
+          "maxEntries": {
+            "type": "integer",
+            "format": "int64",
+            "default": 2048,
+            "description": "Configured cover entry cap (cover_cache_max); eviction is LRU over mtime, non-library covers first."
+          }
+        }
+      },
+      "CoverCacheClearResponse": {
+        "type": "object",
+        "required": [
+          "clearedBytes",
+          "clearedEntries"
+        ],
+        "properties": {
+          "clearedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "clearedEntries": {
             "type": "integer",
             "format": "int64"
           }
@@ -11218,7 +11410,7 @@
             "minimum": 0,
             "maximum": 9223372036854775807,
             "default": 2147483648,
-            "description": "Cache budget in bytes. Zero bypasses original and resized image caches; required page data remains protected while active or recently used, then is reclaimed by the always-running LRU."
+            "description": "Cache budget in bytes. Zero bypasses chapter image caches; required page data remains protected while active or recently used, then is reclaimed by the always-running LRU."
           }
         }
       }

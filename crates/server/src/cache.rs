@@ -9,6 +9,38 @@ use std::path::Path;
 pub const DEFAULT_MAX_BYTES: i64 = 2 * 1024 * 1024 * 1024;
 pub const MIN_MAX_BYTES: i64 = 0;
 
+/// Byte split of one chapter's (or an aggregate's) cache usage. The total `bytes`
+/// column always equals the sum of these components.
+#[derive(Debug, Default, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterCacheBreakdown {
+	pub page_bytes: i64,
+	pub original_bytes: i64,
+	pub blob_bytes: i64,
+	pub opds_bytes: i64,
+}
+
+impl ChapterCacheBreakdown {
+	fn total(&self) -> i64 {
+		self
+			.page_bytes
+			.saturating_add(self.original_bytes)
+			.saturating_add(self.blob_bytes)
+			.saturating_add(self.opds_bytes)
+	}
+}
+
+/// Per-source aggregate of the chapter cache, for scoped reporting and clearing.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChapterCacheSourceStats {
+	pub source_id: i64,
+	pub source_name: String,
+	pub used_bytes: i64,
+	pub chapter_count: i64,
+	pub breakdown: ChapterCacheBreakdown,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterCacheStats {
@@ -18,6 +50,8 @@ pub struct ChapterCacheStats {
 	pub chapter_count: i64,
 	pub last_error: Option<String>,
 	pub cache_revision: i64,
+	pub breakdown: ChapterCacheBreakdown,
+	pub sources: Vec<ChapterCacheSourceStats>,
 }
 
 /// Revision is stable between rebuilds and changes whenever that chapter's cache is cleared.
@@ -50,16 +84,23 @@ pub async fn publish_chapter(state: &std::sync::Arc<crate::state::AppState>, cha
 	.bind(chapter_id)
 	.fetch_one(pool)
 	.await?;
-	let disk_bytes = chapter_disk_bytes(blobs.clone(), opds.clone(), chapter_id).await?;
+	let (original_bytes, blob_bytes, opds_bytes) =
+		chapter_disk_breakdown(blobs.clone(), opds.clone(), chapter_id).await?;
 	let mut tx = crate::db::begin_write(pool).await?;
 	let revision: i64 = sqlx::query_scalar(
 		"UPDATE chapter_cache_meta SET revision=revision+1 WHERE id=1 RETURNING revision",
 	)
 	.fetch_one(&mut *tx)
 	.await?;
-	let bytes = pages.saturating_add(disk_bytes);
-	sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,accessed_at,revision) VALUES (?,?,?,?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes, accessed_at=excluded.accessed_at, revision=excluded.revision, last_error=NULL")
-		.bind(chapter_id).bind(bytes).bind(unix_now()).bind(revision).execute(&mut *tx).await?;
+	let breakdown = ChapterCacheBreakdown {
+		page_bytes: pages,
+		original_bytes,
+		blob_bytes,
+		opds_bytes,
+	};
+	let bytes = breakdown.total();
+	sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,page_bytes,original_bytes,blob_bytes,opds_bytes,accessed_at,revision) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes, page_bytes=excluded.page_bytes, original_bytes=excluded.original_bytes, blob_bytes=excluded.blob_bytes, opds_bytes=excluded.opds_bytes, accessed_at=excluded.accessed_at, revision=excluded.revision, last_error=NULL")
+		.bind(chapter_id).bind(bytes).bind(breakdown.page_bytes).bind(breakdown.original_bytes).bind(breakdown.blob_bytes).bind(breakdown.opds_bytes).bind(unix_now()).bind(revision).execute(&mut *tx).await?;
 	tx.commit().await?;
 	Ok(())
 }
@@ -92,8 +133,17 @@ fn tree_bytes(path: &Path) -> std::io::Result<i64> {
 	Ok(bytes)
 }
 
-pub(crate) fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) -> std::io::Result<i64> {
-	let blob_bytes = tree_bytes(&blobs.join(id.to_string()))?;
+/// Disk usage of one chapter split into remote originals, materialized local image blobs
+/// and the OPDS archive. The originals tree lives inside the blob directory, so its bytes
+/// are subtracted from the blob total.
+pub(crate) fn chapter_disk_breakdown_blocking(
+	blobs: &Path,
+	opds: &Path,
+	id: i64,
+) -> std::io::Result<(i64, i64, i64)> {
+	let chapter_dir = blobs.join(id.to_string());
+	let blob_total = tree_bytes(&chapter_dir)?;
+	let original_bytes = tree_bytes(&chapter_dir.join("originals"))?;
 	let path = opds.join(id.to_string());
 	let archive_bytes = match std::fs::symlink_metadata(&path) {
 		Ok(meta) if meta.file_type().is_symlink() => 0,
@@ -102,15 +152,24 @@ pub(crate) fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) ->
 		Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
 		Err(error) => return Err(error),
 	};
-	Ok(blob_bytes.saturating_add(archive_bytes))
+	Ok((
+		original_bytes,
+		blob_total.saturating_sub(original_bytes),
+		archive_bytes,
+	))
 }
 
-async fn chapter_disk_bytes(
+pub(crate) fn chapter_disk_bytes_blocking(blobs: &Path, opds: &Path, id: i64) -> std::io::Result<i64> {
+	let (originals, blobs, opds) = chapter_disk_breakdown_blocking(blobs, opds, id)?;
+	Ok(originals.saturating_add(blobs).saturating_add(opds))
+}
+
+async fn chapter_disk_breakdown(
 	blobs: std::path::PathBuf,
 	opds: std::path::PathBuf,
 	id: i64,
-) -> ApiResult<i64> {
-	tokio::task::spawn_blocking(move || chapter_disk_bytes_blocking(&blobs, &opds, id))
+) -> ApiResult<(i64, i64, i64)> {
+	tokio::task::spawn_blocking(move || chapter_disk_breakdown_blocking(&blobs, &opds, id))
 		.await
 		.map_err(|error| {
 			crate::error::ApiError::internal(format!("chapter cache scan failed: {error}"))
@@ -274,8 +333,8 @@ pub async fn write_page_original(
 }
 
 async fn update_byte_delta(state: &crate::state::AppState, chapter_id: i64, delta: i64) -> ApiResult<()> {
-	sqlx::query("UPDATE chapter_cache_state SET bytes=max(0,bytes+?),accessed_at=? WHERE chapter_id=?")
-		.bind(delta).bind(unix_now()).bind(chapter_id).execute(&state.pool).await?;
+	sqlx::query("UPDATE chapter_cache_state SET bytes=max(0,bytes+?), original_bytes=max(0,original_bytes+?), accessed_at=? WHERE chapter_id=?")
+		.bind(delta).bind(delta).bind(unix_now()).bind(chapter_id).execute(&state.pool).await?;
 	Ok(())
 }
 
@@ -305,10 +364,17 @@ pub async fn reconcile_chapter(
 	.bind(id)
 	.fetch_one(pool)
 	.await?;
-	let bytes = pages
-		.saturating_add(chapter_disk_bytes(blobs.to_path_buf(), opds.to_path_buf(), id).await?);
-	let _ = sqlx::query("INSERT INTO chapter_cache_state(chapter_id, bytes, accessed_at) VALUES (?, ?, ?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes")
-		.bind(id).bind(bytes).bind(unix_now()).execute(pool).await?;
+	let (original_bytes, blob_bytes, opds_bytes) =
+		chapter_disk_breakdown(blobs.to_path_buf(), opds.to_path_buf(), id).await?;
+	let breakdown = ChapterCacheBreakdown {
+		page_bytes: pages,
+		original_bytes,
+		blob_bytes,
+		opds_bytes,
+	};
+	let bytes = breakdown.total();
+	let _ = sqlx::query("INSERT INTO chapter_cache_state(chapter_id, bytes, page_bytes, original_bytes, blob_bytes, opds_bytes, accessed_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chapter_id) DO UPDATE SET bytes=excluded.bytes, page_bytes=excluded.page_bytes, original_bytes=excluded.original_bytes, blob_bytes=excluded.blob_bytes, opds_bytes=excluded.opds_bytes")
+		.bind(id).bind(bytes).bind(breakdown.page_bytes).bind(breakdown.original_bytes).bind(breakdown.blob_bytes).bind(breakdown.opds_bytes).bind(unix_now()).execute(pool).await?;
 	Ok(())
 }
 
@@ -327,6 +393,21 @@ pub async fn stats(
 	let (used, count, last_error): (i64, i64, Option<String>) = sqlx::query_as(
 		"SELECT coalesce(sum(bytes),0), coalesce(sum(bytes > 0),0), max(last_error) FROM chapter_cache_state"
 	).fetch_one(pool).await?;
+	let (page_bytes, original_bytes, blob_bytes, opds_bytes): (i64, i64, i64, i64) = sqlx::query_as(
+		"SELECT coalesce(sum(page_bytes),0), coalesce(sum(original_bytes),0), coalesce(sum(blob_bytes),0), coalesce(sum(opds_bytes),0) FROM chapter_cache_state"
+	).fetch_one(pool).await?;
+	let source_rows: Vec<(i64, String, i64, i64, i64, i64, i64, i64)> = sqlx::query_as(
+		"SELECT m.source_id, s.name, coalesce(sum(st.bytes),0), coalesce(sum(st.bytes > 0),0), \
+		 coalesce(sum(st.page_bytes),0), coalesce(sum(st.original_bytes),0), \
+		 coalesce(sum(st.blob_bytes),0), coalesce(sum(st.opds_bytes),0) \
+		 FROM chapter_cache_state st \
+		 JOIN chapter c ON c.id = st.chapter_id \
+		 JOIN manga m ON m.id = c.manga_id \
+		 JOIN source s ON s.id = m.source_id \
+		 GROUP BY m.source_id \
+		 HAVING coalesce(sum(st.bytes),0) > 0 \
+		 ORDER BY sum(st.bytes) DESC, m.source_id ASC"
+	).fetch_all(pool).await?;
 	let revision: i64 = sqlx::query_scalar("SELECT revision FROM chapter_cache_meta WHERE id=1")
 		.fetch_one(pool)
 		.await?;
@@ -337,6 +418,31 @@ pub async fn stats(
 		chapter_count: count,
 		last_error,
 		cache_revision: revision,
+		breakdown: ChapterCacheBreakdown {
+			page_bytes,
+			original_bytes,
+			blob_bytes,
+			opds_bytes,
+		},
+		sources: source_rows
+			.into_iter()
+			.map(
+				|(source_id, source_name, used_bytes, chapter_count, pages, originals, blobs, opds)| {
+					ChapterCacheSourceStats {
+						source_id,
+						source_name,
+						used_bytes,
+						chapter_count,
+						breakdown: ChapterCacheBreakdown {
+							page_bytes: pages,
+							original_bytes: originals,
+							blob_bytes: blobs,
+							opds_bytes: opds,
+						},
+					}
+				},
+			)
+			.collect(),
 	})
 }
 
@@ -488,16 +594,6 @@ async fn remove_path_async(path: &Path) -> std::io::Result<()> {
 }
 
 pub async fn clear(pool: &SqlitePool, blobs: &Path, opds: &Path) -> ApiResult<(i64, i64, i64)> {
-	clear_inner(pool, blobs, opds, None).await
-}
-
-async fn clear_inner(
-	pool: &SqlitePool,
-	blobs: &Path,
-	opds: &Path,
-	fail_on: Option<&Path>,
-) -> ApiResult<(i64, i64, i64)> {
-	let current = stats(pool, blobs, opds, DEFAULT_MAX_BYTES).await?;
 	let ids: Vec<i64> = sqlx::query_scalar(
 		"SELECT id FROM chapter WHERE pages_analyzed_at IS NOT NULL
 		 UNION SELECT chapter_id FROM chapter_cache_state
@@ -505,6 +601,37 @@ async fn clear_inner(
 	)
 	.fetch_all(pool)
 	.await?;
+	clear_inner(pool, blobs, opds, None, ids).await
+}
+
+/// Scoped variant of [`clear`]: only chapters belonging to one source. Download products
+/// are untouched here the same as in the global clear.
+pub async fn clear_for_source(
+	pool: &SqlitePool,
+	blobs: &Path,
+	opds: &Path,
+	source_id: i64,
+) -> ApiResult<(i64, i64, i64)> {
+	let ids: Vec<i64> = sqlx::query_scalar(
+		"SELECT id FROM chapter WHERE manga_id IN (SELECT id FROM manga WHERE source_id = ?)
+		 AND (pages_analyzed_at IS NOT NULL
+		 OR id IN (SELECT chapter_id FROM chapter_cache_state)
+		 OR id IN (SELECT chapter_id FROM page))",
+	)
+	.bind(source_id)
+	.fetch_all(pool)
+	.await?;
+	clear_inner(pool, blobs, opds, None, ids).await
+}
+
+async fn clear_inner(
+	pool: &SqlitePool,
+	blobs: &Path,
+	opds: &Path,
+	fail_on: Option<&Path>,
+	ids: Vec<i64>,
+) -> ApiResult<(i64, i64, i64)> {
+	let current = stats(pool, blobs, opds, DEFAULT_MAX_BYTES).await?;
 	let mut failures = Vec::<(i64, String)>::new();
 	for id in &ids {
 		for suffix in ["", ".previous", ".staging"] {
@@ -545,7 +672,7 @@ async fn clear_inner(
 			.bind(id)
 			.execute(&mut *tx)
 			.await?;
-		sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,accessed_at,revision,last_error) VALUES (?,0,?,?,NULL) ON CONFLICT(chapter_id) DO UPDATE SET bytes=0, revision=excluded.revision, accessed_at=excluded.accessed_at, last_error=NULL")
+		sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,page_bytes,original_bytes,blob_bytes,opds_bytes,accessed_at,revision,last_error) VALUES (?,0,0,0,0,0,?,?,NULL) ON CONFLICT(chapter_id) DO UPDATE SET bytes=0, page_bytes=0, original_bytes=0, blob_bytes=0, opds_bytes=0, revision=excluded.revision, accessed_at=excluded.accessed_at, last_error=NULL")
 			.bind(id).bind(unix_now()).bind(revision.unwrap_or(1)).execute(&mut *tx).await?;
 	}
 	tx.commit().await?;
@@ -585,6 +712,21 @@ pub async fn clear_state(
 		&state.pool,
 		&state.config.page_blobs_dir(),
 		&state.config.config_dir.join("opds-cbz"),
+	)
+	.await
+}
+
+/// Scoped clear under the same global write lease: readers never observe a half-cleared chapter.
+pub async fn clear_source_state(
+	state: &std::sync::Arc<crate::state::AppState>,
+	source_id: i64,
+) -> ApiResult<(i64, i64, i64)> {
+	let _lease = state.chapter_cache_gate.write().await;
+	clear_for_source(
+		&state.pool,
+		&state.config.page_blobs_dir(),
+		&state.config.config_dir.join("opds-cbz"),
+		source_id,
 	)
 	.await
 }
@@ -674,7 +816,7 @@ async fn enforce_limit_with_budget(
 			.execute(&mut *tx)
 			.await?;
 		sqlx::query(
-			"UPDATE chapter_cache_state SET bytes=0, revision=?, last_error=? WHERE chapter_id=?",
+			"UPDATE chapter_cache_state SET bytes=0, page_bytes=0, original_bytes=0, blob_bytes=0, opds_bytes=0, revision=?, last_error=? WHERE chapter_id=?",
 		)
 		.bind(revision)
 		.bind(failure.as_deref())
@@ -769,6 +911,110 @@ mod tests {
 		std::fs::create_dir_all(&blob).expect("blob dir");
 		std::fs::write(blob.join("0.png"), vec![b'x'; bytes as usize]).expect("blob");
 		chapter
+	}
+
+	#[tokio::test]
+	async fn breakdown_components_sum_to_total_and_stats_group_by_source() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		let chapter = cached_chapter(&state, "breakdown", 100, unix_now()).await;
+		// Originals subtree: counted as original bytes, not blob bytes.
+		let originals = state.config.page_blobs_dir().join(chapter.to_string()).join("originals/0");
+		std::fs::create_dir_all(&originals).expect("originals dir");
+		std::fs::write(originals.join("bytes"), vec![b'o'; 40]).expect("original bytes");
+		std::fs::write(originals.join("mime"), b"image/png").expect("original mime");
+		let opds = state.config.config_dir.join("opds-cbz");
+		std::fs::create_dir_all(&opds).expect("opds dir");
+		std::fs::write(opds.join(chapter.to_string()), vec![b'z'; 7]).expect("opds archive");
+		reconcile_chapter(&state.pool, &state.config.page_blobs_dir(), &opds, chapter)
+			.await
+			.expect("reconcile");
+		let (bytes, page_bytes, original_bytes, blob_bytes, opds_bytes): (i64, i64, i64, i64, i64) =
+			sqlx::query_as("SELECT bytes, page_bytes, original_bytes, blob_bytes, opds_bytes FROM chapter_cache_state WHERE chapter_id=?")
+				.bind(chapter)
+				.fetch_one(&state.pool)
+				.await
+				.expect("state row");
+		assert_eq!(page_bytes, "{\"content\":\"cached\"}".len() as i64);
+		assert_eq!(original_bytes, 40 + "image/png".len() as i64);
+		assert_eq!(blob_bytes, 100);
+		assert_eq!(opds_bytes, 7);
+		assert_eq!(bytes, page_bytes + original_bytes + blob_bytes + opds_bytes);
+		let report = stats(&state.pool, &state.config.page_blobs_dir(), &opds, DEFAULT_MAX_BYTES)
+			.await
+			.expect("stats");
+		assert_eq!(report.used_bytes, bytes);
+		assert_eq!(report.breakdown.total(), report.used_bytes);
+		assert_eq!(report.breakdown.original_bytes, original_bytes);
+		assert_eq!(report.sources.len(), 1);
+		let source_row = &report.sources[0];
+		assert_eq!(source_row.used_bytes, bytes);
+		assert_eq!(source_row.chapter_count, 1);
+		assert_eq!(source_row.breakdown.blob_bytes, blob_bytes);
+	}
+
+	#[tokio::test]
+	async fn clear_for_source_only_clears_that_sources_chapters() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let state = app_state(&tmp).await;
+		let first = cached_chapter(&state, "first", 100, unix_now()).await;
+		let second = cached_chapter(&state, "second", 200, unix_now()).await;
+		let blobs = state.config.page_blobs_dir();
+		let opds = state.config.config_dir.join("opds-cbz");
+		reconcile_chapter(&state.pool, &blobs, &opds, first).await.expect("reconcile first");
+		reconcile_chapter(&state.pool, &blobs, &opds, second).await.expect("reconcile second");
+		let second_source: i64 = sqlx::query_scalar(
+			"SELECT m.source_id FROM manga m JOIN chapter c ON c.manga_id=m.id WHERE c.id=?",
+		)
+		.bind(second)
+		.fetch_one(&state.pool)
+		.await
+		.expect("second source");
+		let (cleared, used_after, _count) =
+			clear_for_source(&state.pool, &blobs, &opds, second_source)
+				.await
+				.expect("scoped clear");
+		assert!(cleared > 0, "scoped clear reports freed bytes");
+		// The other source's chapter keeps its pages, blob files and accounting.
+		assert_eq!(
+			sqlx::query_scalar::<_, i64>("SELECT count(*) FROM page WHERE chapter_id=?")
+				.bind(first)
+				.fetch_one(&state.pool)
+				.await
+				.expect("first pages"),
+			1
+		);
+		assert!(blobs.join(first.to_string()).join("0.png").exists());
+		assert!(!blobs.join(second.to_string()).exists());
+		assert_eq!(
+			sqlx::query_scalar::<_, i64>("SELECT count(*) FROM page WHERE chapter_id=?")
+				.bind(second)
+				.fetch_one(&state.pool)
+				.await
+				.expect("second pages"),
+			0
+		);
+		let remaining: i64 = sqlx::query_scalar(
+			"SELECT bytes FROM chapter_cache_state WHERE chapter_id=?",
+		)
+		.bind(first)
+		.fetch_one(&state.pool)
+		.await
+		.expect("first bytes");
+		assert_eq!(used_after, remaining);
+		let report = stats(&state.pool, &blobs, &opds, DEFAULT_MAX_BYTES)
+			.await
+			.expect("stats after");
+		assert_eq!(report.sources.len(), 1);
+		assert_eq!(report.sources[0].source_id, {
+			sqlx::query_scalar::<_, i64>(
+				"SELECT m.source_id FROM manga m JOIN chapter c ON c.manga_id=m.id WHERE c.id=?",
+			)
+			.bind(first)
+			.fetch_one(&state.pool)
+			.await
+			.expect("first source")
+		});
 	}
 
 	#[tokio::test]
@@ -1143,6 +1389,7 @@ mod tests {
 			&state.config.page_blobs_dir(),
 			&opds,
 			Some(&target),
+			vec![chapter],
 		)
 		.await;
 		assert!(
