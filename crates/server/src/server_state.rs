@@ -24,10 +24,10 @@ pub(crate) const KEYS: [&str; 6] = [
 	LOCAL_LAST_SCAN_AT,
 ];
 
-pub(crate) async fn get(pool: &SqlitePool, key: &str) -> Result<Option<String>, sqlx::Error> {
+pub(crate) async fn get<'e, E: Executor<'e, Database = Sqlite>>(db: E, key: &str) -> Result<Option<String>, sqlx::Error> {
 	sqlx::query_scalar("SELECT value FROM server_state WHERE key = ?")
 		.bind(key)
-		.fetch_optional(pool)
+		.fetch_optional(db)
 		.await
 }
 

@@ -30,7 +30,7 @@ pub async fn ensure_category(tx: &mut Transaction<'_, Sqlite>, user_id: i64, nam
 			.bind(user_id)
 			.fetch_one(&mut **tx)
 			.await?;
-	crate::store::category::create(&mut **tx, user_id, name, next, false).await
+	crate::store::category::create(tx, user_id, name, next, false).await
 }
 
 pub async fn source_id_by_key(tx: &mut Transaction<'_, Sqlite>, key: &str) -> ApiResult<Option<i64>> {
@@ -75,7 +75,7 @@ pub async fn ensure_manga_row(
 	let meta = meta.unwrap_or(&empty);
 	let now = crate::model::unix_now();
 	crate::store::manga::insert_from_import(
-		&mut **tx,
+		tx,
 		source_id,
 		key,
 		&crate::store::manga::MangaFields {
@@ -135,7 +135,7 @@ pub async fn ensure_chapter_row(
 	let meta = meta.unwrap_or(&empty);
 	let now = crate::model::unix_now();
 	crate::store::chapter::insert_from_import(
-		&mut **tx,
+		tx,
 		manga_id,
 		&crate::store::chapter::ChapterFields {
 			key,
@@ -169,7 +169,7 @@ pub async fn mark_in_library(
 	manga_id: i64,
 	in_library_at: i64,
 ) -> ApiResult<()> {
-	crate::store::library::shelve_imported(&mut **tx, manga_id, user_id, in_library_at).await
+	crate::store::library::shelve_imported(tx, manga_id, user_id, in_library_at).await
 }
 
 /// Progress merge: page number takes the max, is_read takes OR, timestamp takes the newer NULL-safely; is_bookmarked is local state, neither carried nor overwritten
@@ -182,7 +182,7 @@ pub async fn merge_chapter_progress(
 	last_read_at: Option<i64>,
 ) -> ApiResult<()> {
 	crate::store::progress::merge(
-		&mut **tx,
+		tx,
 		chapter_id,
 		user_id,
 		&crate::model::ChapterProgress { last_page_read, is_read, is_bookmarked: false, last_read_at },

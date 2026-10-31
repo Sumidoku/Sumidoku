@@ -763,7 +763,7 @@ pub async fn upsert_manga(
 	let artists = serde_json::to_string(&manga.artists.clone().unwrap_or_default())?;
 	let tags = serde_json::to_string(&manga.tags.clone().unwrap_or_default())?;
 	crate::store::manga::upsert_from_source(
-		&mut *conn,
+		conn,
 		source_id,
 		&manga.key,
 		&crate::store::manga::MangaFields {
@@ -795,10 +795,10 @@ pub async fn upsert_manga(
 		.fetch_one(&mut *conn)
 		.await?;
 	if fetched_details {
-		crate::store::manga::set_last_fetched_at(&mut *conn, id, now).await?;
+		crate::store::manga::set_last_fetched_at(conn, id, now).await?;
 	}
 	if fetched_chapters {
-		crate::store::manga::set_chapters_fetched_at(&mut *conn, id, now).await?;
+		crate::store::manga::set_chapters_fetched_at(conn, id, now).await?;
 	}
 	Ok(id)
 }
@@ -906,7 +906,7 @@ pub async fn reconcile_chapters_detailed(
 			.bind(old.id)
 			.execute(&mut *conn)
 			.await?;
-		crate::store::chapter::rekey(&mut *conn, old.id, &chapter.key).await?;
+		crate::store::chapter::rekey(conn, old.id, &chapter.key).await?;
 		rekeyed_ids.insert(old.id);
 	}
 	for (index, chapter) in chapters.iter().enumerate() {
@@ -925,7 +925,7 @@ pub async fn reconcile_chapters_detailed(
 			.cloned()
 			.or_else(|| fill_language.clone());
 		crate::store::chapter::upsert_from_source(
-			&mut *conn,
+			conn,
 			manga_id,
 			&crate::store::chapter::ChapterFields {
 				key: &chapter.key,
@@ -956,11 +956,11 @@ pub async fn reconcile_chapters_detailed(
 				.fetch_optional(&mut *conn)
 				.await?;
 		if has_download.is_some() {
-			crate::store::chapter::lock(&mut *conn, old.id).await?;
+			crate::store::chapter::lock(conn, old.id).await?;
 		} else if trash {
-			trashed_count += crate::store::chapter::trash(&mut *conn, old.id, now).await? as i64;
+			trashed_count += crate::store::chapter::trash(conn, old.id, now).await? as i64;
 		} else {
-			crate::store::chapter::delete(&mut *conn, old.id).await?;
+			crate::store::chapter::delete(conn, old.id).await?;
 		}
 	}
 	let restored_count = existing
@@ -1250,7 +1250,7 @@ async fn store_page_rows(pool: &SqlitePool, chapter_id: i64, rows: &[serde_json:
 		.execute(&mut *tx)
 		.await?;
 	}
-	crate::store::chapter::set_page_info(&mut *tx, chapter_id, rows.len() as i64, compatible).await?;
+	crate::store::chapter::set_page_info(&mut tx, chapter_id, rows.len() as i64, compatible).await?;
 	tx.commit().await?;
 	Ok(())
 }

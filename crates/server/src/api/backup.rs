@@ -604,7 +604,7 @@ async fn restore_library(
 			continue;
 		};
 		crate::store::manga::upsert_from_backup(
-			&mut **tx,
+			tx,
 			source_id,
 			&entry.key,
 			&crate::store::manga::MangaFields {
@@ -630,7 +630,7 @@ async fn restore_library(
 				.fetch_one(&mut **tx)
 				.await?;
 		crate::store::library::upsert(
-			&mut **tx,
+			tx,
 			&crate::store::library::LibraryEntry {
 				manga_id,
 				user_id,
@@ -696,11 +696,11 @@ async fn restore_categories(
 				.await?;
 		let category_id = match existing {
 			Some((id,)) => {
-				crate::store::category::set_placement(&mut **tx, id, category.sort_order, category.is_default).await?;
+				crate::store::category::set_placement(tx, id, category.sort_order, category.is_default).await?;
 				id
 			}
 			None => {
-				crate::store::category::create(&mut **tx, user_id, &category.name, category.sort_order, category.is_default).await?
+				crate::store::category::create(tx, user_id, &category.name, category.sort_order, category.is_default).await?
 			}
 		};
 		if category.include_in_update == 2 {
@@ -730,7 +730,7 @@ async fn restore_categories(
 				));
 				continue;
 			};
-			crate::store::category::add_manga(&mut **tx, category_id, manga_id, user_id).await?;
+			crate::store::category::add_manga(tx, category_id, manga_id, user_id).await?;
 		}
 		restored.categories += 1;
 	}
@@ -784,7 +784,7 @@ async fn restore_progress(
 		};
 		// fetched_at = 0 marks a row created by the backup, to be overwritten by the source refresh; existing chapters keep their newer metadata
 		crate::store::chapter::insert_from_backup(
-			&mut **tx,
+			tx,
 			manga_id,
 			&crate::store::chapter::ChapterFields {
 				key: &entry.chapter.key,
@@ -809,7 +809,7 @@ async fn restore_progress(
 				.fetch_one(&mut **tx)
 				.await?;
 		crate::store::progress::set(
-			&mut **tx,
+			tx,
 			chapter_id,
 			user_id,
 			&crate::model::ChapterProgress {

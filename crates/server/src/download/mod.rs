@@ -169,7 +169,7 @@ async fn persist_finished(
 	path: &str,
 	format: &str,
 	mode: FinishMode,
-) -> Result<bool, sqlx::Error> {
+) -> ApiResult<bool> {
 	let now = unix_now();
 	let mut tx = crate::db::begin_write(pool).await?;
 	let applied = match mode {
@@ -210,7 +210,7 @@ async fn persist_finished(
 		tx.rollback().await?;
 		return Ok(false);
 	}
-	crate::store::progress::set_downloaded(&mut *tx, chapter_id, user_id, true).await?;
+	crate::store::progress::set_downloaded(&mut tx, chapter_id, user_id, true).await?;
 	tx.commit().await?;
 	Ok(true)
 }
@@ -302,7 +302,7 @@ impl DownloadManager {
 	/// Settles a row reusing a shared artifact: no repackaging, the row goes straight to finished and gets the download flag
 	async fn settle_finished(&self, chapter_id: i64, user_id: i64, path: &str, format: &str) {
 		let result = persist_finished(&self.pool, chapter_id, user_id, path, format, FinishMode::Upsert).await;
-		if let Err(e) = result { tracing::warn!(chapter_id, "download shared-artifact settle failed: {e}"); return; }
+		if let Err(e) = result { tracing::warn!(chapter_id, "download shared-artifact settle failed: {}", e.message()); return; }
 		self.cleanup_page_cache_after_finish(chapter_id, 0, 0, user_id).await;
 	}
 
@@ -735,10 +735,10 @@ impl DownloadManager {
 		chapter_id: i64,
 		user_id: i64,
 		path: Option<&str>,
-	) -> Result<bool, sqlx::Error> {
+	) -> ApiResult<bool> {
 		sqlx::query("DELETE FROM download WHERE chapter_id = ? AND user_id = ?")
 			.bind(chapter_id).bind(user_id).execute(&mut **tx).await?;
-		crate::store::progress::set_downloaded(&mut **tx, chapter_id, user_id, false).await?;
+		crate::store::progress::set_downloaded(tx, chapter_id, user_id, false).await?;
 		if let Some(path) = path {
 			let referenced: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM download WHERE path = ? LIMIT 1")
 				.bind(path).fetch_optional(&mut **tx).await?;
@@ -1082,7 +1082,7 @@ impl DownloadManager {
 						}
 						Ok(false) => self.cleanup_attempt(chapter_id, Some(&path)).await,
 						Err(e) => {
-							tracing::warn!(chapter_id, "download finish update failed: {e}");
+							tracing::warn!(chapter_id, "download finish update failed: {}", e.message());
 							self.progress.lock().await.remove(&chapter_id);
 							self.cleanup_tmp(chapter_id).await;
 						}

@@ -272,7 +272,7 @@ async fn run_entry(
 			.bind(user_id)
 			.fetch_optional(&mut *tx)
 			.await?;
-	crate::store::library::shelve(&mut *tx, to_manga_id, user_id, origin_at.unwrap_or_else(unix_now)).await?;
+	crate::store::library::shelve(&mut tx, to_manga_id, user_id, origin_at.unwrap_or_else(unix_now)).await?;
 
 	// Categories are a union: the target's existing categories are kept, the source entry's are added in
 	let category_ids: Vec<i64> =
@@ -282,7 +282,7 @@ async fn run_entry(
 			.fetch_all(&mut *tx)
 			.await?;
 	for category_id in &category_ids {
-		crate::store::category::add_manga(&mut *tx, *category_id, to_manga_id, user_id).await?;
+		crate::store::category::add_manga(&mut tx, *category_id, to_manga_id, user_id).await?;
 	}
 
 	let origin_progress: Vec<OriginProgress> = sqlx::query_as(
@@ -311,7 +311,7 @@ async fn run_entry(
 		};
 		// Existing target progress keeps the newer values: page number takes the max, read/bookmarked take OR, read time takes the newer
 		crate::store::progress::merge(
-			&mut *tx,
+			&mut tx,
 			target.id,
 			user_id,
 			&crate::model::ChapterProgress {
@@ -327,10 +327,10 @@ async fn run_entry(
 	match mode {
 		MigrateMode::Copy => {}
 		MigrateMode::Migrate | MigrateMode::MigrateWithHistory => {
-			crate::store::library::unshelve(&mut *tx, origin.id, user_id).await?;
-			crate::store::category::clear_manga(&mut *tx, origin.id, user_id).await?;
+			crate::store::library::unshelve(&mut tx, origin.id, user_id).await?;
+			crate::store::category::clear_manga(&mut tx, origin.id, user_id).await?;
 			if mode == MigrateMode::Migrate {
-				crate::store::progress::reset_manga(&mut *tx, origin.id, user_id).await?;
+				crate::store::progress::reset_manga(&mut tx, origin.id, user_id).await?;
 			}
 		}
 	}

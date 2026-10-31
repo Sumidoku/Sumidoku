@@ -670,7 +670,7 @@ async fn clear_inner(
 			.bind(id)
 			.execute(&mut *tx)
 			.await?;
-		crate::store::chapter::clear_analyzed(&mut *tx, *id).await?;
+		crate::store::chapter::clear_analyzed(&mut tx, *id).await?;
 		sqlx::query("INSERT INTO chapter_cache_state(chapter_id,bytes,page_bytes,original_bytes,blob_bytes,opds_bytes,accessed_at,revision,last_error) VALUES (?,0,0,0,0,0,?,?,NULL) ON CONFLICT(chapter_id) DO UPDATE SET bytes=0, page_bytes=0, original_bytes=0, blob_bytes=0, opds_bytes=0, revision=excluded.revision, accessed_at=excluded.accessed_at, last_error=NULL")
 			.bind(id).bind(unix_now()).bind(revision.unwrap_or(1)).execute(&mut *tx).await?;
 	}
@@ -810,7 +810,7 @@ async fn enforce_limit_with_budget(
 			.bind(id)
 			.execute(&mut *tx)
 			.await?;
-		crate::store::chapter::clear_analyzed(&mut *tx, id).await?;
+		crate::store::chapter::clear_analyzed(&mut tx, id).await?;
 		sqlx::query(
 			"UPDATE chapter_cache_state SET bytes=0, page_bytes=0, original_bytes=0, blob_bytes=0, opds_bytes=0, revision=?, last_error=? WHERE chapter_id=?",
 		)

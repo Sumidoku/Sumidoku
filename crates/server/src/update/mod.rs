@@ -443,7 +443,7 @@ impl UpdateScheduler {
 						reconcile_chapters_detailed(&mut tx, manga.id, &chapters, &update.protected, true).await?;
 					crate::internal::local::store_epub_divina(&mut tx, manga.id, &chapters, &update.epub_divina).await?;
 					crate::internal::local::store_chapter_metadata(&mut tx, manga.id, &update.chapter_meta).await?;
-					crate::store::manga::set_next_update(&mut *tx, manga.id, next_update_time, next_update_is_fallback, now).await?;
+					crate::store::manga::set_next_update(&mut tx, manga.id, next_update_time, next_update_is_fallback, now).await?;
 					tx.commit().await?;
 					Ok(reconciled)
 				} else {
@@ -454,7 +454,9 @@ impl UpdateScheduler {
 				let now = unix_now();
 				let (next_update_time, next_update_is_fallback) =
 					resolved_next_update(None, manga.next_update_time, now, settings.update_interval_hours);
-				crate::store::manga::set_next_update(&state.pool, manga.id, next_update_time, next_update_is_fallback, now).await?;
+				let mut write = crate::db::begin_write(&state.pool).await?;
+				crate::store::manga::set_next_update(&mut write, manga.id, next_update_time, next_update_is_fallback, now).await?;
+				write.commit().await?;
 				Ok(reconciled)
 			}
 			} else {
@@ -633,7 +635,7 @@ async fn persist_success(
 		false,
 	)
 	.await?;
-	crate::store::manga::set_next_update(&mut *conn, manga.id, next_update_time, next_update_is_fallback, fetched_at).await?;
+	crate::store::manga::set_next_update(conn, manga.id, next_update_time, next_update_is_fallback, fetched_at).await?;
 	Ok(reconciled)
 }
 

@@ -1,5 +1,6 @@
 pub mod apply;
 pub mod compact;
+pub mod journal;
 
 use crate::error::{ApiError, ApiResult};
 use serde::{Deserialize, Serialize};
@@ -230,7 +231,7 @@ pub(crate) async fn insert_change(
 	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
 	change: &SyncChange,
 ) -> ApiResult<i64> {
-	Ok(sqlx::query_scalar(
+	let sequence = sqlx::query_scalar(
 		"INSERT INTO sync_change
 		 (user_id, entity_kind, entity_key, origin, origin_user_id, origin_entity_key, origin_sequence,
 		  deleted, modified_at, identity, snapshot)
@@ -248,5 +249,10 @@ pub(crate) async fn insert_change(
 	.bind(serde_json::to_string(&change.identity)?)
 	.bind(serde_json::to_string(&change.snapshot)?)
 	.fetch_one(&mut **tx)
-	.await?)
+	.await?;
+	// A local event has no origin yet; a relayed one keeps the origin it arrived with
+	if change.origin_sequence == 0 {
+		journal::localize(tx, &[sequence]).await?;
+	}
+	Ok(sequence)
 }

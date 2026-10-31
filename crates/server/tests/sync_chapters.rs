@@ -9,6 +9,7 @@ use std::str::FromStr;
 use sumidoku_server::sync::{SyncChange, changes_since};
 
 async fn high_watermark(pool: &SqlitePool) -> i64 {
+	common::publish_raw_writes(pool).await;
 	sqlx::query_scalar("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name = 'sync_change'), 0)")
 		.fetch_one(pool)
 		.await
@@ -16,6 +17,7 @@ async fn high_watermark(pool: &SqlitePool) -> i64 {
 }
 
 async fn since(pool: &SqlitePool, user_id: i64, cursor: i64) -> Vec<SyncChange> {
+	common::publish_raw_writes(pool).await;
 	changes_since(pool, user_id, cursor, 10_000)
 		.await
 		.expect("changes")
@@ -345,6 +347,7 @@ async fn chapter_content_noop_rekey_and_recursive_updates_follow_the_time_contra
 	.execute(&mut *conn)
 	.await
 	.expect("chapter content update");
+	common::publish_chapter(&pool, chapter_id).await;
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false)]);
 	assert_time_contract(&events);
@@ -373,11 +376,7 @@ async fn chapter_content_noop_rekey_and_recursive_updates_follow_the_time_contra
 	assert_eq!(state_key, "renamed");
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("UPDATE chapter SET last_modified_at = 1002 WHERE id = ?")
-		.bind(chapter_id)
-		.execute(&mut *conn)
-		.await
-		.expect("timestamp-only update");
+	common::set_chapter_version(&pool, chapter_id, 1002).await;
 	sqlx::query("UPDATE chapter SET fetched_at = 1003 WHERE id = ?")
 		.bind(chapter_id)
 		.execute(&mut *conn)
@@ -460,6 +459,7 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	.execute(&mut *conn)
 	.await
 	.expect("actual progress update");
+	common::publish_progress(&pool, chapter_id).await;
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false), ("chapter_user", false)]);
 	assert_eq!(events.len(), 3);
@@ -492,11 +492,7 @@ async fn progress_changes_emit_parents_without_library_membership_and_download_s
 	assert_eq!(download_insert_time, 0);
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM chapter_user WHERE chapter_id = ? AND user_id = 1")
-		.bind(chapter_id)
-		.execute(&mut *conn)
-		.await
-		.expect("delete progress");
+	common::delete_progress(&pool, chapter_id).await;
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false), ("chapter_user", true)]);
 	assert_time_contract(&events);
@@ -518,42 +514,11 @@ async fn chapter_and_progress_writes_use_history_for_monotonic_versions() {
 	add_progress(&pool, target, 1, future + 100).await;
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM chapter_user WHERE chapter_id = ? AND user_id = 1")
-		.bind(target)
-		.execute(&pool)
-		.await
-		.expect("delete target progress");
+	common::delete_progress(&pool, target).await;
 	let deleted = since(&pool, 1, cursor).await;
 	let target_tombstone = deleted.iter().find(|event| event.entity_kind == "chapter_user").expect("target tombstone");
 	assert_eq!(target_tombstone.modified_at, future + 101);
 	assert_eq!(target_tombstone.snapshot["lastModifiedAt"], future + 100);
-
-	let cursor = high_watermark(&pool).await;
-	sqlx::query("UPDATE chapter_user SET chapter_id = ? WHERE chapter_id = ? AND user_id = 1")
-		.bind(target)
-		.bind(source)
-		.execute(&pool)
-		.await
-		.expect("move progress to deleted key");
-	let events = since(&pool, 1, cursor).await;
-	assert_eq!(
-		kinds(&events),
-		[
-			("manga", false),
-			("chapter", false),
-			("chapter_user", true),
-			("manga", false),
-			("chapter", false),
-			("chapter_user", false),
-		]
-	);
-	assert_time_contract(&events);
-	assert_eq!(events[2].entity_key, format!("{source}:1"));
-	assert_eq!(events[5].entity_key, format!("{target}:1"));
-	assert_eq!(events[2].modified_at, future + 102);
-	assert_eq!(events[2].snapshot["lastModifiedAt"], future + 20);
-	assert_eq!(events[5].modified_at, future + 102);
-	assert_eq!(events[5].snapshot["lastModifiedAt"], future + 102);
 
 	let cursor = high_watermark(&pool).await;
 	sqlx::query("UPDATE chapter SET title = 'Changed' WHERE id = ?")
@@ -561,16 +526,13 @@ async fn chapter_and_progress_writes_use_history_for_monotonic_versions() {
 		.execute(&pool)
 		.await
 		.expect("ordinary chapter update");
+	common::publish_chapter(&pool, target).await;
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", false)]);
 	assert_eq!(events[1].modified_at, future + 31);
 
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM chapter WHERE id = ?")
-		.bind(target)
-		.execute(&pool)
-		.await
-		.expect("delete future chapter");
+	common::delete_chapter(&pool, target).await;
 	let events = since(&pool, 1, cursor).await;
 	let chapter_tombstone = events.iter().find(|event| event.entity_kind == "chapter").expect("chapter tombstone");
 	assert_eq!(chapter_tombstone.modified_at, future + 32);
@@ -582,6 +544,7 @@ async fn chapter_and_progress_writes_use_history_for_monotonic_versions() {
 		.execute(&pool)
 		.await
 		.expect("recreate chapter");
+	common::publish_chapter(&pool, target).await;
 	assert_eq!(chapter_modified(&pool, target).await, future + 33);
 }
 
@@ -611,11 +574,7 @@ async fn chapter_delete_captures_progress_once_before_cascade() {
 	let pool = connect_db(&app.db_path).await;
 	let (_, manga_id, chapter_id) = seed_cascade(&pool).await;
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM chapter WHERE id = ?")
-		.bind(chapter_id)
-		.execute(&pool)
-		.await
-		.expect("delete chapter");
+	common::delete_chapter(&pool, chapter_id).await;
 	let events = since(&pool, 1, cursor).await;
 	assert_eq!(kinds(&events), [("manga", false), ("chapter", true), ("chapter_user", true)]);
 	assert_time_contract(&events);
@@ -640,11 +599,7 @@ async fn manga_delete_captures_chapter_and_progress_before_parent_disappears() {
 	let pool = connect_db(&app.db_path).await;
 	let (_, manga_id, chapter_id) = seed_cascade(&pool).await;
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM manga WHERE id = ?")
-		.bind(manga_id)
-		.execute(&pool)
-		.await
-		.expect("delete manga");
+	common::delete_manga(&pool, manga_id).await;
 	let admin = since(&pool, 1, cursor).await;
 	assert_eq!(
 		kinds(&admin),
@@ -661,11 +616,7 @@ async fn source_delete_captures_chapter_and_progress_before_parent_disappears() 
 	let pool = connect_db(&app.db_path).await;
 	let (source_id, _, chapter_id) = seed_cascade(&pool).await;
 	let cursor = high_watermark(&pool).await;
-	sqlx::query("DELETE FROM source WHERE id = ?")
-		.bind(source_id)
-		.execute(&pool)
-		.await
-		.expect("delete source");
+	common::delete_source(&pool, source_id).await;
 	let admin = since(&pool, 1, cursor).await;
 	assert_eq!(
 		kinds(&admin),

@@ -94,7 +94,9 @@ pub async fn analyze_instance(run: &crate::task::TaskRun, source_id: i64) -> Api
 			}
 			// a chapter still at zero pages (no images, an unreadable archive) is settled until a scan sees its
 			// manga change; without the stamp every pass would reopen it
-			crate::store::chapter::stamp_empty_analyzed(&state.pool, chapter_id, crate::model::unix_now()).await?;
+			let mut write = crate::db::begin_write(&state.pool).await?;
+			crate::store::chapter::stamp_empty_analyzed(&mut write, chapter_id, crate::model::unix_now()).await?;
+			write.commit().await?;
 		}
 	}
 

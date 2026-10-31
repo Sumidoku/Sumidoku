@@ -803,15 +803,18 @@ no alias is derived from migration text.
   chapter `fetched_at`. Every non-delete event has
   `modified_at == snapshot.lastModifiedAt`; a delete event instead carries the
   deletion time while its snapshot retains the deleted row's previous version.
-  Ordinary updates and deletes use `max(now, old + 1)`; a key- or
-  owner-changing UPDATE also includes the NEW key's historical maximum + 1 in
-  the NEW user's namespace. An ordinary insert with timestamp zero uses
-  `max(now, the entity key's historical maximum + 1)`, so recreating a deleted
-  key cannot move its version backwards. Explicit nonzero
-  insert timestamps and changed nonzero update timestamps are preserved for
-  sync apply. Only a changed nonzero UPDATE value is treated as explicit: a
-  value equal to OLD is indistinguishable from leaving the column untouched
-  and follows the ordinary increment rule. The journal has no foreign keys to
+  Entity writes go through `store/` (`store/mod.rs` pins which file owns which
+  table), and each store journals in the transaction of the write: it reads
+  the published fields, writes, compares, and appends through `sync/journal.rs`.
+  Migration 0034 dropped every journal trigger, so a write outside the stores
+  reaches peers never. Ordinary updates and deletes use `max(now, old + 1)`. A
+  new row uses `max(now, the entity key's historical maximum + 1)`, so
+  recreating a deleted key cannot move its version backwards. Sync apply
+  stores the version it received, then `sync/apply.rs:finish` rewrites what the
+  stores journaled during the batch with the event's origin metadata. The stores
+  never move a row to another key except on rekey (`manga::try_rekey`,
+  `chapter::try_set_key`), whose alias rewrite stays in `sync/apply.rs`.
+  The journal has no foreign keys to
   tracked entities and belongs to users through `user_id ON DELETE CASCADE`;
   deleting a user removes only that user's events. Its `AUTOINCREMENT`
   sequence, not a wall-clock time, is the delta cursor. Migration 0017 seeds an
@@ -824,7 +827,7 @@ no alias is derived from migration text.
   Migration 0018 adds `origin`, `origin_user_id`, `origin_entity_key` and
   `origin_sequence`. Existing rows are backfilled from the local instance,
   user, mapped entity key and sequence. `sync.instance_id` is seeded once with 16
-  random bytes encoded as hex (it moved to `server_state` in migration 0032), and the journal insert trigger
+  random bytes encoded as hex (it moved to `server_state` in migration 0032), and `sync/journal.rs:localize`
   fills local origin metadata only when `origin_sequence = 0`. `entity_key`
   remains the local mapped key; the origin fields retain the original event
   identity. `sync_alias` stores remote-to-local entity mappings separately from

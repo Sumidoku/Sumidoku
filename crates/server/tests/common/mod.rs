@@ -605,3 +605,170 @@ pub async fn read_sse_data(stream: &mut tokio::net::TcpStream, buf: &mut Vec<u8>
 		}
 	}
 }
+
+/// Journals what raw SQL wrote since the last call, parents first, for tests that need exact ids or
+/// times. Production writes go through the stores, which journal themselves.
+#[allow(dead_code)]
+pub async fn publish_raw_writes(pool: &sqlx::SqlitePool) {
+	use sumidoku_server::store::{category, chapter, library, manga, progress};
+	let mut conn = pool.acquire().await.expect("connection");
+	// A migration test can stop at a schema that still has the journal triggers
+	let current: bool = sqlx::query_scalar(
+		"SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'server_state')
+		 AND NOT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'sync_change_origin_insert')",
+	)
+		.fetch_one(&mut *conn)
+		.await
+		.expect("schema");
+	if !current {
+		return;
+	}
+	// Sync stubs have no name yet and stay quiet at version 0
+	let unpublished = |kind: &str, key_sql: &str, table: &str, name: &str| {
+		format!(
+			"SELECT {key_sql} FROM {table} t WHERE NOT EXISTS (
+				SELECT 1 FROM sync_change sc WHERE sc.entity_kind = '{kind}' AND sc.entity_key = CAST(t.id AS TEXT)
+				AND sc.modified_at >= t.last_modified_at
+			) AND t.{name} <> '' ORDER BY t.id"
+		)
+	};
+	let ids: Vec<i64> = sqlx::query_scalar(&unpublished("manga", "t.id", "manga", "title")).fetch_all(&mut *conn).await.expect("manga");
+	for id in ids {
+		manga::publish(&mut conn, id).await.expect("publish manga");
+	}
+	let ids: Vec<i64> = sqlx::query_scalar(
+		"SELECT t.id FROM chapter t WHERE NOT EXISTS (SELECT 1 FROM sync_chapter_state s WHERE s.chapter_id = t.id) ORDER BY t.id",
+	)
+	.fetch_all(&mut *conn)
+	.await
+	.expect("chapters");
+	for id in ids {
+		chapter::publish(&mut conn, id).await.expect("publish chapter");
+	}
+	let ids: Vec<i64> = sqlx::query_scalar(&unpublished("category", "t.id", "category", "name")).fetch_all(&mut *conn).await.expect("categories");
+	for id in ids {
+		category::publish(&mut conn, id).await.expect("publish category");
+	}
+	let rows: Vec<(i64, i64)> = sqlx::query_as(
+		"SELECT t.manga_id, t.user_id FROM manga_user t WHERE NOT EXISTS (
+			SELECT 1 FROM sync_change sc WHERE sc.entity_kind = 'manga_user'
+			AND sc.entity_key = t.manga_id || ':' || t.user_id AND sc.modified_at >= t.last_modified_at
+		) ORDER BY t.manga_id, t.user_id",
+	)
+	.fetch_all(&mut *conn)
+	.await
+	.expect("library rows");
+	for (manga_id, user_id) in rows {
+		library::publish(&mut conn, manga_id, user_id).await.expect("publish library row");
+	}
+	let rows: Vec<(i64, i64)> = sqlx::query_as(
+		"SELECT t.chapter_id, t.user_id FROM chapter_user t WHERE NOT EXISTS (
+			SELECT 1 FROM sync_change sc WHERE sc.entity_kind = 'chapter_user'
+			AND sc.entity_key = t.chapter_id || ':' || t.user_id AND sc.modified_at >= t.last_modified_at
+		) AND NOT (t.is_downloaded = 1 AND t.last_page_read = 0 AND t.is_read = 0 AND t.is_bookmarked = 0 AND t.last_read_at IS NULL)
+		ORDER BY t.chapter_id, t.user_id",
+	)
+	.fetch_all(&mut *conn)
+	.await
+	.expect("progress rows");
+	for (chapter_id, user_id) in rows {
+		progress::publish(&mut conn, chapter_id, user_id).await.expect("publish progress");
+	}
+	let rows: Vec<(i64, i64, i64)> = sqlx::query_as(
+		"SELECT t.category_id, t.manga_id, t.user_id FROM category_manga t WHERE NOT EXISTS (
+			SELECT 1 FROM sync_change sc WHERE sc.entity_kind = 'category_manga'
+			AND sc.entity_key = t.category_id || ':' || t.manga_id || ':' || t.user_id AND sc.modified_at >= t.last_modified_at
+		) ORDER BY t.category_id, t.manga_id, t.user_id",
+	)
+	.fetch_all(&mut *conn)
+	.await
+	.expect("memberships");
+	for (category_id, manga_id, user_id) in rows {
+		category::publish_member(&mut conn, category_id, manga_id, user_id).await.expect("publish membership");
+	}
+}
+
+/// Journals a category written with raw SQL, for tests that need exact times or ids
+#[allow(dead_code)]
+pub async fn publish_category(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::category::publish(&mut conn, id).await.expect("publish category");
+}
+
+#[allow(dead_code)]
+pub async fn delete_category(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::category::delete(&mut conn, id).await.expect("delete category");
+}
+
+#[allow(dead_code)]
+pub async fn delete_manga(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::manga::delete(&mut conn, id).await.expect("delete manga");
+}
+
+#[allow(dead_code)]
+pub async fn delete_chapter(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::chapter::delete(&mut conn, id).await.expect("delete chapter");
+}
+
+#[allow(dead_code)]
+pub async fn delete_source(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::source::delete(&mut conn, id).await.expect("delete source");
+}
+
+#[allow(dead_code)]
+pub async fn delete_library_row(pool: &sqlx::SqlitePool, manga_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::library::delete(&mut conn, manga_id, 1).await.expect("delete library row");
+}
+
+#[allow(dead_code)]
+pub async fn delete_progress(pool: &sqlx::SqlitePool, chapter_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::progress::delete(&mut conn, chapter_id, 1).await.expect("delete progress");
+}
+
+#[allow(dead_code)]
+pub async fn delete_membership(pool: &sqlx::SqlitePool, category_id: i64, manga_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::category::remove_manga(&mut conn, category_id, manga_id, 1).await.expect("delete membership");
+}
+
+#[allow(dead_code)]
+pub async fn publish_manga(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::manga::publish(&mut conn, id).await.expect("publish manga");
+}
+
+#[allow(dead_code)]
+pub async fn publish_chapter(pool: &sqlx::SqlitePool, id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::chapter::publish(&mut conn, id).await.expect("publish chapter");
+}
+
+#[allow(dead_code)]
+pub async fn publish_library(pool: &sqlx::SqlitePool, manga_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::library::publish(&mut conn, manga_id, 1).await.expect("publish library row");
+}
+
+#[allow(dead_code)]
+pub async fn publish_progress(pool: &sqlx::SqlitePool, chapter_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::progress::publish(&mut conn, chapter_id, 1).await.expect("publish progress");
+}
+
+#[allow(dead_code)]
+pub async fn publish_membership(pool: &sqlx::SqlitePool, category_id: i64, manga_id: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::category::publish_member(&mut conn, category_id, manga_id, 1).await.expect("publish membership");
+}
+
+#[allow(dead_code)]
+pub async fn set_chapter_version(pool: &sqlx::SqlitePool, id: i64, modified_at: i64) {
+	let mut conn = pool.acquire().await.expect("connection");
+	sumidoku_server::store::chapter::set_modified_at(&mut conn, id, modified_at).await.expect("set chapter version");
+}

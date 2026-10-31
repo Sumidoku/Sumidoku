@@ -359,6 +359,7 @@ mod tests {
 			(31, "F149F163796123A8F0A99F27943E7A895E76CB07FD73C9B937AFFE523801C83D5A851F14A6CE4506D76A46FFCBB0A120"),
 			(32, "CB18CACFE9A9F3A939FF7A7C3294BD7449B16FF45DEA56355FCFDC688016A33DD6F76552894B0742B0527CAE1F54FFF9"),
 			(33, "34AC8BEC17F4466576ACFBBCC6A3BC9EDC1DC1C043279B6A820C857E56307301E3740641519A05A04B6AEA348125E01F"),
+			(34, "9C8958325710D0B1507F00DEAF5DE35E60EC74C2E310CC817909FBB028CEC05E28B7506967DB8FC978385BCA45F7E7D0"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
@@ -921,6 +922,9 @@ mod tests {
 			.await
 			.expect("insert sync origin state");
 		}
+		let mut publisher = pool.acquire().await.expect("connection");
+		crate::store::library::publish(&mut publisher, manga_id, 1).await.expect("publish library row");
+		drop(publisher);
 		let original_sequence: i64 = sqlx::query_scalar(
 			"SELECT sequence FROM sync_change WHERE entity_kind = 'manga' AND entity_key = ? ORDER BY sequence DESC LIMIT 1",
 		)
@@ -933,6 +937,9 @@ mod tests {
 			.execute(&pool)
 			.await
 			.expect("update shared manga");
+		let mut publisher = pool.acquire().await.expect("connection");
+		crate::store::manga::publish(&mut publisher, manga_id).await.expect("publish manga");
+		drop(publisher);
 		let (shared_identity, shared_snapshot): (String, String) =
 			sqlx::query_as("SELECT identity, snapshot FROM sync_manga_state WHERE manga_id = ?")
 				.bind(manga_id)
@@ -1008,11 +1015,10 @@ mod tests {
 			.execute(&pool)
 			.await
 			.expect("insert old admin library state");
-		sqlx::query("DELETE FROM manga_user WHERE manga_id = ? AND user_id = 1")
-			.bind(owner_deleted_id)
-			.execute(&pool)
-			.await
-			.expect("delete admin library state");
+		let mut writer = pool.acquire().await.expect("connection");
+		crate::store::library::publish(&mut writer, owner_deleted_id, 1).await.expect("publish admin library state");
+		crate::store::library::delete(&mut writer, owner_deleted_id, 1).await.expect("delete admin library state");
+		drop(writer);
 		let owner_deleted_key = format!("{owner_deleted_id}:1");
 		let (owner_modified_at, owner_identity, owner_snapshot): (i64, String, String) = sqlx::query_as(
 			"SELECT modified_at, identity, snapshot FROM sync_change
@@ -1045,17 +1051,16 @@ mod tests {
 			.fetch_one(&pool)
 			.await
 			.expect("instance id");
-		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (19, 32)")
+		let deleted = sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (19, 32, 34)")
 			.execute(&pool)
 			.await
-			.expect("remove migration 19 and 32 bookkeeping");
-		assert_eq!(deleted.rows_affected(), 2);
-		// Back to the shape 0019 runs against, so 0019 and then 0032 replay in shipping order. One transaction
+			.expect("remove migration 19, 32 and 34 bookkeeping");
+		assert_eq!(deleted.rows_affected(), 3);
+		// Back to the shape 0019 runs against, so these replay in shipping order. One transaction
 		// keeps these on one connection: another pooled connection can parse with a stale schema.
 		let mut tx = pool.begin().await.expect("undo transaction");
 		for statement in [
 			"INSERT INTO setting (key, value) SELECT key, value FROM server_state",
-			"DROP TRIGGER sync_change_origin_insert",
 			"DROP TABLE server_state",
 			"CREATE TRIGGER sync_change_origin_insert AFTER INSERT ON sync_change WHEN 0 BEGIN SELECT 1; END",
 		] {
