@@ -13,7 +13,7 @@ use crate::model::{MangaRow, content_rating_from_int, status_from_int};
 use aidoku::{ContentRating, MangaStatus};
 use serde_json::{Value, json};
 use sqlx::SqliteConnection;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Lock provider tag for values the user typed into the edit dialog.
 pub const MANUAL: &str = "manual";
@@ -221,14 +221,12 @@ pub fn parse_value(field: Field, value: &Value) -> Result<FieldValue, String> {
 		Field::Authors | Field::Artists | Field::Tags => {
 			let items = value.as_array().ok_or_else(|| format!("{} must be an array of strings", field.as_str()))?;
 			let mut names: Vec<String> = Vec::new();
+			let mut seen: BTreeSet<String> = BTreeSet::new();
 			for item in items {
 				let name = item.as_str().ok_or_else(|| format!("{} must be an array of strings", field.as_str()))?.trim();
-				if !name.is_empty() {
+				if !name.is_empty() && seen.insert(name.to_lowercase()) {
 					names.push(name.to_string());
 				}
-			}
-			if field == Field::Title {
-				return Err("title is not a list".into());
 			}
 			Ok(FieldValue::List(names))
 		}
