@@ -1862,7 +1862,7 @@ async fn update_manga(
 	if !writes.is_empty() || !unlocks.is_empty() {
 		crate::api::metadata::require_in_library(&state.pool, id, existing.source_id, user.id).await?;
 		let now = crate::model::unix_now();
-		let mut tx = state.pool.begin().await?;
+		let mut tx = crate::db::begin_write(&state.pool).await?;
 		let mut locks = crate::metadata::load(&mut tx, id).await?;
 		for (field, _) in &writes {
 			crate::metadata::lock_field(&mut locks, *field, crate::metadata::MANUAL, None, now);

@@ -1058,6 +1058,16 @@ pub(crate) fn slugify(name: &str) -> Option<String> {
 pub(crate) async fn source_is_local(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_LOCAL)
 }
 
+/// The natural key of a source instance; `None` if the row is gone. Instance ids are
+/// local to one database, so anything a backup or a sync event carries across
+/// databases — journal identities, metadata locks — names the source by this key.
+pub(crate) async fn source_key(pool: &SqlitePool, source_id: i64) -> ApiResult<Option<String>> {
+	Ok(sqlx::query_scalar("SELECT key FROM source WHERE id = ?")
+		.bind(source_id)
+		.fetch_optional(pool)
+		.await?)
+}
+
 /// The built-in OPDS source (kind = opds) likewise has no wasm instance; catalog fetches take the opds_source branch
 pub(crate) async fn source_is_opds(pool: &SqlitePool, source_id: i64) -> ApiResult<bool> {
 	Ok(source_kind(pool, source_id).await? == crate::model::SOURCE_KIND_OPDS)

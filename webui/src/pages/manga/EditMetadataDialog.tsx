@@ -90,8 +90,9 @@ export function EditMetadataDialog({ mangaId, onClose }: { mangaId: number; onCl
 		if (manga) setForm((current) => current ?? formFrom(manga));
 	}, [manga]);
 
-	const sourceName = (id: number) =>
-		(sourcesQuery.data ?? []).find((source) => source.id === id)?.name;
+	// The lock names a source by its natural key, so resolve the label by key, not id
+	const sourceName = (key: string) =>
+		(sourcesQuery.data ?? []).find((source) => source.key === key)?.name;
 	const lockOf = (field: MetadataField) => manga?.metadataLocks?.[field];
 	const titleMissing = form !== null && form.title.trim() === '';
 
@@ -262,7 +263,7 @@ function LockNote({
 	onUnlock
 }: {
 	lock: { provider: string } | undefined;
-	sourceName: (id: number) => string | undefined;
+	sourceName: (key: string) => string | undefined;
 	fieldLabel: string;
 	onUnlock: () => void;
 }) {

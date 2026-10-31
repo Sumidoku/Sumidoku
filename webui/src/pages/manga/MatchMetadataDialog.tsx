@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { ExternalLink, Search, TriangleAlert } from 'lucide-react';
 import { sourceImageUrl } from '../../api/client';
 import { useGlobalSearch, useSources } from '../../api/hooks';
-import { applyMetadata, invalidateMangaMetadata, previewMetadata } from '../../api/metadata';
+import { applyMetadata, invalidateMangaMetadata, lockProviderLabel, previewMetadata } from '../../api/metadata';
 import {
 	TRACKER_PROVIDERS,
 	TRACKER_PROVIDER_NAMES,
@@ -104,6 +104,11 @@ export function MatchMetadataDialog({
 		return (id: number) => byId.get(id) ?? `#${id}`;
 	}, [sources]);
 	const sourceIds = useMemo(() => sources.map((source) => source.id), [sources]);
+	// Locks carry the source key, so the label resolves by key rather than by instance id
+	const lockSourceName = useMemo(() => {
+		const byKey = new Map(sources.map((source) => [source.key, source.name]));
+		return (key: string) => byKey.get(key);
+	}, [sources]);
 
 	const trackerQuery = useQuery({
 		queryKey: trackerKeys.search(provider, submitted),
@@ -418,6 +423,7 @@ export function MatchMetadataDialog({
 										<FieldRow
 											key={field.field}
 											field={field}
+											sourceName={lockSourceName}
 											checked={Boolean(checked[field.field])}
 											titleValue={titleValue}
 											onChecked={(value) =>
@@ -507,12 +513,14 @@ function TrackerCandidate({
 
 function FieldRow({
 	field,
+	sourceName,
 	checked,
 	titleValue,
 	onChecked,
 	onTitleValue
 }: {
 	field: MetadataPreviewField;
+	sourceName: (key: string) => string | undefined;
 	checked: boolean;
 	titleValue: string;
 	onChecked: (value: boolean) => void;
@@ -536,7 +544,12 @@ function FieldRow({
 				<span>{t(`metadata.fieldLabels.${field.field}`)}</span>
 				{field.lock && (
 					<span className="metadata-fields__lock">
-						{t('metadata.lockedBy', { provider: field.lock.provider })}
+						{t('metadata.lockedBy', {
+							provider:
+								field.lock.provider === 'manual'
+									? t('metadata.manualLock')
+									: lockProviderLabel(field.lock.provider, sourceName)
+						})}
 					</span>
 				)}
 			</td>

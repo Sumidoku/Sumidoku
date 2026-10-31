@@ -3,9 +3,11 @@
 //!
 //! The `manga` row keeps the single copy of every metadata field. A per-field
 //! lock in `manga.metadata_locks` records the writer that last applied it —
-//! a tracker (`tracker:anilist`), another source (`source:5`) or the user
-//! (`manual`). A locked column is kept through source refreshes; the lock is
-//! the provenance record shown in the UI and allows a single-column restore.
+//! a tracker (`tracker:anilist`), another source (`source:<source key>`) or the
+//! user (`manual`). A locked column is kept through source refreshes; the lock
+//! is the provenance record shown in the UI and allows a single-column restore.
+//! A source is named by its natural key, never its instance id: the map travels
+//! through backups and sync events, where an id would name a different source.
 //!
 //! Everything here is pure except [`load`], [`store`] and [`write`].
 
@@ -22,8 +24,10 @@ pub fn tracker_reference(provider: &str) -> String {
 	format!("tracker:{provider}")
 }
 
-pub fn source_reference(source_id: i64) -> String {
-	format!("source:{source_id}")
+/// The lock reference for a source: its natural key rather than the instance
+/// id, because the lock map outlives one database (backups, sync events).
+pub fn source_reference(source_key: &str) -> String {
+	format!("source:{source_key}")
 }
 
 /// A lock held by a tracker (covers need the tracker-cover fetch path) versus
@@ -349,6 +353,17 @@ mod tests {
 		assert!(parse_value(Field::Status, &json!("hiatus")).is_err());
 		assert_eq!(parse_value(Field::Cover, &json!(null)), Ok(FieldValue::Text(None)));
 		assert!(parse_value(Field::Cover, &json!("ftp://x")).is_err());
+	}
+
+	#[test]
+	fn references_name_a_writer_that_outlives_one_database() {
+		assert_eq!(tracker_reference("anilist"), "tracker:anilist");
+		// The source key, not an instance id: the same reference has to resolve in a
+		// backup's target and on a synced peer
+		assert_eq!(source_reference("en.example-source"), "source:en.example-source");
+		assert!(is_tracker_reference("tracker:anilist"));
+		assert!(!is_tracker_reference("source:en.example-source"));
+		assert!(!is_tracker_reference(MANUAL));
 	}
 
 	#[test]

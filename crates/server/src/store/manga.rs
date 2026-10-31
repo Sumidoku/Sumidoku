@@ -598,6 +598,9 @@ pub(crate) async fn set_next_update(conn: &mut SqliteConnection, id: i64,
 	Ok(())
 }
 
+/// Test-only: the HTTP cover pick writes the URL and its lock in one `set_metadata` statement, and
+/// only the journal-contract tests still pin this single-column write on its own.
+#[cfg(test)]
 pub(crate) async fn set_cover_url(conn: &mut SqliteConnection, id: i64, url: &str) -> ApiResult<()> {
 	let before = published(conn, id).await?;
 	let version = version_of(conn, id).await?;

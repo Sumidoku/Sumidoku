@@ -27,7 +27,10 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Citation {
 	Tracker(Provider, String),
-	Source(i64, String),
+	/// A source reference: `source_id` addresses the installed instance (the wire
+	/// reference and the fetch handle) while `source_key` is the natural key the
+	/// lock records, because an instance id means nothing outside one database.
+	Source { source_id: i64, source_key: String, remote_id: String },
 }
 
 impl Citation {
@@ -35,13 +38,13 @@ impl Citation {
 	fn lock_provider(&self) -> String {
 		match self {
 			Self::Tracker(provider, _) => metadata::tracker_reference(provider.as_str()),
-			Self::Source(source_id, _) => metadata::source_reference(*source_id),
+			Self::Source { source_key, .. } => metadata::source_reference(source_key),
 		}
 	}
 
 	fn remote_id(&self) -> &str {
 		match self {
-			Self::Tracker(_, remote_id) | Self::Source(_, remote_id) => remote_id,
+			Self::Tracker(_, remote_id) | Self::Source { remote_id, .. } => remote_id,
 		}
 	}
 
@@ -49,12 +52,12 @@ impl Citation {
 	fn wire_provider(&self) -> String {
 		match self {
 			Self::Tracker(provider, _) => format!("tracker:{}", provider.as_str()),
-			Self::Source(source_id, _) => format!("source:{source_id}"),
+			Self::Source { source_id, .. } => format!("source:{source_id}"),
 		}
 	}
 }
 
-fn parse_citation(provider: &str, remote_id: &str) -> ApiResult<Citation> {
+async fn parse_citation(state: &AppState, provider: &str, remote_id: &str) -> ApiResult<Citation> {
 	let remote_id = remote_id.trim();
 	if remote_id.is_empty() {
 		return Err(ApiError::bad_request("remoteId must not be blank"));
@@ -67,7 +70,12 @@ fn parse_citation(provider: &str, remote_id: &str) -> ApiResult<Citation> {
 		let source_id: i64 = source_id
 			.parse()
 			.map_err(|_| ApiError::bad_request("source reference must be 'source:<id>'"))?;
-		return Ok(Citation::Source(source_id, remote_id.to_string()));
+		// Resolve the natural key now: the lock stores it, and a citation naming a
+		// source that is not installed cannot be fetched anyway
+		let source_key = crate::source::source_key(&state.pool, source_id)
+			.await?
+			.ok_or_else(|| ApiError::not_found(format!("source {source_id} is not installed")))?;
+		return Ok(Citation::Source { source_id, source_key, remote_id: remote_id.to_string() });
 	}
 	Err(ApiError::bad_request("provider must be 'tracker:<provider>' or 'source:<id>'"))
 }
@@ -94,7 +102,7 @@ async fn fetch_metadata(state: &Arc<AppState>, citation: &Citation, user_id: i64
 				.await
 				.map_err(crate::api::tracker::tracker_error)
 		}
-		Citation::Source(source_id, key) => source_metadata(state, *source_id, key).await,
+		Citation::Source { source_id, remote_id, .. } => source_metadata(state, *source_id, remote_id).await,
 	}
 }
 
@@ -208,7 +216,7 @@ pub async fn preview_metadata(
 ) -> ApiResult<Json<Value>> {
 	let row = manga_row(&state.pool, manga_id).await?;
 	require_in_library(&state.pool, manga_id, row.source_id, user.id).await?;
-	let citation = parse_citation(&query.provider, &query.remote_id)?;
+	let citation = parse_citation(&state, &query.provider, &query.remote_id).await?;
 	let metadata = fetch_metadata(&state, &citation, user.id).await?;
 	let mut conn = state.pool.acquire().await?;
 	let locks = metadata::load(&mut conn, manga_id).await?;
@@ -277,7 +285,7 @@ pub async fn apply_metadata(
 ) -> ApiResult<Json<Value>> {
 	let row = manga_row(&state.pool, manga_id).await?;
 	require_in_library(&state.pool, manga_id, row.source_id, user.id).await?;
-	let citation = parse_citation(&body.provider, &body.remote_id)?;
+	let citation = parse_citation(&state, &body.provider, &body.remote_id).await?;
 	if body.bind && !matches!(citation, Citation::Tracker(..)) {
 		return Err(ApiError::bad_request("bind is only available for tracker matches"));
 	}
@@ -311,7 +319,10 @@ pub async fn apply_metadata(
 	}
 	let now = unix_now();
 	let lock_provider = citation.lock_provider();
-	let mut tx = state.pool.begin().await?;
+	// The lock map is read before it is written, so the transaction starts as a write:
+	// a deferred BEGIN would hit SQLITE_BUSY_SNAPSHOT when it upgrades against a
+	// concurrent commit
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let mut locks = metadata::load(&mut tx, manga_id).await?;
 	for (field, _) in &planned {
 		metadata::lock_field(&mut locks, *field, &lock_provider, Some(citation.remote_id()), now);
@@ -361,7 +372,7 @@ pub async fn restore_metadata(
 			.collect::<ApiResult<_>>()?,
 		_ => Field::ALL.to_vec(),
 	};
-	let mut tx = state.pool.begin().await?;
+	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let mut locks = metadata::load(&mut tx, manga_id).await?;
 	let mut unlocked: Vec<Field> = Vec::new();
 	for field in &fields {
@@ -390,8 +401,11 @@ pub async fn restore_metadata(
 async fn refresh_from_source(state: &Arc<AppState>, row: &MangaRow) -> ApiResult<MangaRow> {
 	let handle = state.get_handle(row.source_id).await?;
 	let updated = handle.get_manga_update(manga_from_row(row), true, false).await?;
-	let mut conn = state.pool.acquire().await?;
-	upsert_manga(&mut conn, row.source_id, &updated, true, true, false).await?;
+	// The upsert writes the row and journals the version that describes it; both
+	// belong to one write transaction, as in every other refresh path
+	let mut write = crate::db::begin_write(&state.pool).await?;
+	upsert_manga(&mut write, row.source_id, &updated, true, true, false).await?;
+	write.commit().await?;
 	manga_row(&state.pool, row.id).await
 }
 

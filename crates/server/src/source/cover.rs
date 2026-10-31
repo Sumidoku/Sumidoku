@@ -130,10 +130,17 @@ pub async fn get_cover(
 /// source detail fetch and must bypass that source's image rules
 async fn external_cover_lock(state: &AppState, manga_id: i64, source_id: i64) -> ApiResult<bool> {
 	let mut conn = state.pool.acquire().await?;
+	let source_key: Option<String> = sqlx::query_scalar("SELECT key FROM source WHERE id = ?")
+		.bind(source_id)
+		.fetch_optional(&mut *conn)
+		.await?;
 	let locks = crate::metadata::load(&mut conn, manga_id).await?;
+	// The lock names the source by its natural key, so a re-installed instance under a
+	// new id still counts as the entry's own source
+	let own = source_key.as_deref().map(crate::metadata::source_reference);
 	Ok(locks
 		.get(crate::metadata::Field::Cover.as_str())
-		.is_some_and(|lock| lock.provider != crate::metadata::source_reference(source_id)))
+		.is_some_and(|lock| own.as_deref() != Some(lock.provider.as_str())))
 }
 
 /// Strong validator over the served bytes, so an expired browser entry revalidates with a 304 instead of a
@@ -195,21 +202,52 @@ pub struct SelectCoverRequest {
 	pub url: String,
 }
 
-/// Selects a cover: only writes cover_url and invalidates the disk cache. last_fetched_at is untouched (that is
-/// source-refresh semantics) — the cache judges freshness by it, and without clearing the old bytes the old cover would keep being served after the switch, so the selection would never take effect
+/// Selects a cover: writes cover_url, hands the cover column back to the entry's own source
+/// and invalidates the disk cache. last_fetched_at is untouched (that is source-refresh
+/// semantics) — the cache judges freshness by it, and without clearing the old bytes the old
+/// cover would keep being served after the switch, so the selection would never take effect
 pub async fn select_cover(
 	State(state): State<Arc<AppState>>,
 	Extension(user): Extension<crate::auth::AuthUser>,
 	Path(id): Path<i64>,
 	Json(body): Json<SelectCoverRequest>,
 ) -> ApiResult<Json<Value>> {
-	manga_row(&state.pool, id).await?;
+	let manga = manga_row(&state.pool, id).await?;
 	let parsed = reqwest::Url::parse(&body.url).map_err(|_| ApiError::bad_request("invalid cover url"))?;
 	if !matches!(parsed.scheme(), "http" | "https") {
 		return Err(ApiError::bad_request("unsupported cover url scheme"));
 	}
+	let source_key = crate::source::source_key(&state.pool, manga.source_id).await?;
 	let mut write = crate::db::begin_write(&state.pool).await?;
-	crate::store::manga::set_cover_url(&mut write, id, &body.url).await?;
+	let mut locks = crate::metadata::load(&mut write, id).await?;
+	// The pick came from an alternate-cover list of the entry's own source, so the column
+	// belongs to that source again: naming it keeps the bytes on the source image chain
+	// (not the bare GET a tracker or manual cover needs) and keeps a later refresh from
+	// overwriting the pick. Already-owned covers are left untouched, so reselecting the same
+	// URL stamps nothing and journals nothing. A source row that is gone leaves no owner to
+	// name, so the lock is dropped instead.
+	let own = source_key.as_deref().map(crate::metadata::source_reference);
+	if own.as_deref() != locks.get(crate::metadata::Field::Cover.as_str()).map(|lock| lock.provider.as_str()) {
+		match own {
+			Some(reference) => crate::metadata::lock_field(
+				&mut locks,
+				crate::metadata::Field::Cover,
+				&reference,
+				None,
+				crate::model::unix_now(),
+			),
+			None => {
+				crate::metadata::unlock_field(&mut locks, crate::metadata::Field::Cover);
+			}
+		}
+	}
+	crate::store::manga::set_metadata(
+		&mut write,
+		id,
+		&[(crate::metadata::Field::Cover, crate::metadata::FieldValue::Text(Some(body.url.clone())))],
+		&locks,
+	)
+	.await?;
 	write.commit().await?;
 	invalidate_cache(&state.config.covers_dir, id).await;
 	let row = manga_row(&state.pool, id).await?;

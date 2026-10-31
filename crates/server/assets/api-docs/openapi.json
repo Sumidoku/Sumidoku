@@ -1770,7 +1770,8 @@
           "manga"
         ],
         "operationId": "selectMangaCover",
-        "summary": "Select a cover URL and invalidate the cached image",
+        "summary": "Select a cover URL, record the source's ownership of the cover and invalidate the cached image",
+        "description": "The pick is written together with a cover lock naming the entry's own source (by source key), so a later refresh keeps it and the bytes stay on the source image chain. Selecting the cover the entry already owns stamps nothing.",
         "requestBody": {
           "required": true,
           "content": {
@@ -8504,7 +8505,7 @@
         "properties": {
           "provider": {
             "type": "string",
-            "description": "'tracker:<provider>', 'source:<id>' or 'manual'"
+            "description": "'tracker:<provider>', 'source:<source key>' or 'manual'. A source is named by its natural key, not its instance id, because the lock map travels through backups and sync events."
           },
           "remoteId": {
             "type": "string",

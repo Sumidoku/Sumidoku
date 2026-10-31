@@ -162,14 +162,27 @@ async fn preview_and_apply_from_another_source() {
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
 	assert_eq!(body["appliedFields"], json!(["title"]));
-	assert_eq!(lock_provider(&body["manga"], "title"), Some(&json!(format!("source:{source_id}"))));
+	// The lock records the source's natural key, not its instance id: the map is carried
+	// by backups and sync events, where an id would name a different source
+	assert_eq!(lock_provider(&body["manga"], "title"), Some(&json!(format!("source:{SOURCE_KEY}"))));
+
+	// The same reference survives into a backup document
+	let (status, doc) = request(&app, "GET", "/api/v1/backups/document", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let entry = doc["manga"]
+		.as_array()
+		.expect("manga entries")
+		.iter()
+		.find(|entry| entry["key"] == key)
+		.expect("manga entry");
+	assert_eq!(entry["metadataLocks"]["title"]["provider"], format!("source:{SOURCE_KEY}"));
 
 	// The match survives a later source refresh
 	let (status, body) = request(&app, "GET", &format!("/api/v1/manga/{manga_id}?refresh=1"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(
 		lock_provider(&body, "title"),
-		Some(&json!(format!("source:{source_id}")))
+		Some(&json!(format!("source:{SOURCE_KEY}")))
 	);
 }
 

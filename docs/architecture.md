@@ -1379,9 +1379,14 @@ no alias is derived from migration text.
   `get_alternate_covers` with the stored manga row and returns the URL
   list, 501 when the source does not export it.
   `PUT /api/v1/manga/{id}/cover` `{url}` persists a pick to
-  `manga.cover_url` and deletes the cache files: the freshness key is
-  `last_fetched_at`, which a user pick must not move, so without the
-  delete the stale bytes keep serving and the pick never takes effect.
+  `manga.cover_url`, hands the cover column back to the entry's own source
+  and deletes the cache files: the freshness key is `last_fetched_at`, which a
+  user pick must not move, so without the delete the stale bytes keep serving
+  and the pick never takes effect. The write also records ownership, by source
+  key, in the cover lock: the bytes then take the source image chain rather
+  than the direct-URL path a tracker or manual cover needs, and a later refresh
+  cannot overwrite the pick. Reselecting the cover an entry already owns stamps
+  nothing, so the selection stays journal-idempotent.
   The web UI versions cover `<img>` URLs with the manga's `cover` string
   (`webui/src/api/client.ts:coverUrl`), so a changed cover is a new URL: a
   `?v=` request is cacheable for 30 days, an unversioned one or any local
@@ -1404,14 +1409,25 @@ no alias is derived from migration text.
   JSON object keyed by camelCase field name (`title`, `authors`, `artists`,
   `description`, `tags`, `status`, `contentRating`, `cover`) whose values are
   `{provider, remoteId?, appliedAt}`. `provider` is `tracker:<anilist|mal|bangumi|mangabaka>`,
-  `source:<id>` or `manual`, so the lock doubles as provenance. A locked
+  `source:<source key>` or `manual`, so the lock doubles as provenance. A
+  source is named by its natural key (`source.key`), never its instance id: the
+  map travels through backup documents and sync events, where an id would name
+  a different or absent source on the target. The wire reference a client
+  sends is still `source:<id>`, resolved to the key when the lock is written;
+  the UI labels a lock by looking the key up in the source list. A locked
   column wins over the source: `store/manga.rs:upsert_from_source` wraps every
   lockable `ON CONFLICT DO UPDATE` assignment in
   `CASE WHEN json_extract(manga.metadata_locks, '$.<field>') IS NOT NULL THEN manga.<column> ELSE excluded.<column> END`,
   so an entry refresh, a scheduled update and a backup restore keep the
   value, while unlocked columns still follow the source. Backups carry the
   map (`metadataLocks` on the exported entry) and a document without one
-  leaves the target's locks alone. Reads are unchanged: `manga_json` and
+  leaves the target's locks alone. A metadata write reads the lock map
+  before changing it, so `apply`, `restore`, the PATCH metadata block and the
+  cover pick run in `db::begin_write` (`BEGIN IMMEDIATE`): upgrading a
+  deferred transaction that already read would fail with
+  `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` does not retry. A refresh that
+  journals a new version commits the row and its events in one write
+  transaction. Reads are unchanged: `manga_json` and
   `manga_json_batch` add a `metadataLocks` object built from the column, and
   the aggregate search, OPDS and reader responses are untouched. `trashed_at`,
   `url` and `viewer` are deliberately not lockable.
@@ -1423,7 +1439,8 @@ no alias is derived from migration text.
   fetches the remote record — tracker services answer through
   `TrackerService::metadata`, a default trait method that errors with
   "metadata is not supported by this tracker" (all four providers implement
-  it; a `source:<id>` reference instead fetches a fresh `get_manga_update`
+  it; a `source:<id>` wire reference resolves the id to the source key and
+  fetches a fresh `get_manga_update`
   through the source runtime) — and returns
   `{candidate, linked, fields}`. A tracker whose detail endpoint is public
   reports `metadata_is_public()`, so MangaBaka previews work without a login;
