@@ -14,7 +14,7 @@ const PNG: &[u8] = &[
 #[tokio::test]
 async fn http_response_logging_is_info_and_omits_query() {
 	let (logs, _guard) = common::capture_logs();
-	let TestApp { app, .. } = test_app().await;
+	let TestApp { app, tmp: _tmp, .. } = test_app().await;
 	logs.take();
 
 	let (status, _) = request(&app, "GET", "/api/v1/version?token=query-secret", None).await;
