@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -33,6 +33,7 @@ import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterP
 import { useResolvedTheme } from '../lib/theme';
 import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
+import { bumpRetries, failedInSpread } from './reader/pageRetry';
 import { pageText } from './reader/pageText';
 import { ReaderSettings } from './reader/ReaderSettings';
 import { TransitionPage } from './reader/TransitionPage';
@@ -561,9 +562,27 @@ function ReaderCore({
 	// keeps idx page-based, so the current page stays put when a mate re-pairs
 	const [measuredDims, setMeasuredDims] = useState<Record<number, PageDims>>({});
 	function reportDims(arrayIndex: number, width: number, height: number) {
+		clearFailed(arrayIndex);
 		setMeasuredDims((prev) =>
 			recordMeasured(prev, arrayIndex, { width, height }, pageDimensions(pages?.[arrayIndex]))
 		);
+	}
+	// Latched page failures by page index: in paged mode the in-slot retry button is
+	// unreachable (the tap zones sit above the pages and the track's transform traps
+	// any in-slot z-index in its stacking context), so the retry moves to an overlay
+	// above the zones and the reader has to know which pages of the spread failed
+	const [failedPages, setFailedPages] = useState<ReadonlySet<number>>(new Set());
+	const [retryTicks, setRetryTicks] = useState<Readonly<Record<number, number>>>({});
+	const reportFailed = useCallback((arrayIndex: number) => {
+		setFailedPages((prev) => (prev.has(arrayIndex) ? prev : new Set(prev).add(arrayIndex)));
+	}, []);
+	function clearFailed(arrayIndex: number) {
+		setFailedPages((prev) => {
+			if (!prev.has(arrayIndex)) return prev;
+			const next = new Set(prev);
+			next.delete(arrayIndex);
+			return next;
+		});
 	}
 	function dimsOf(arrayIndex: number): PageDims | null {
 		return pageDimensions(pages?.[arrayIndex]) ?? measuredDims[arrayIndex] ?? null;
@@ -583,6 +602,10 @@ function ReaderCore({
 	}, [mode, pages, layout, measuredDims]);
 	const curSpreadIdx = spreads ? spreadIndexOf(spreads, idx) : 0;
 	const curSpread = spreads ? spreads[curSpreadIdx] : null;
+	const failedCur = useMemo(
+		() => (curSpread ? failedInSpread(curSpread, failedPages) : []),
+		[curSpread, failedPages]
+	);
 	// Wide-page splitting is a paged-mode, single-layout navigation overlay: the
 	// current page keeps its real index while a landscape page takes two turns
 	const splitOn = mode === 'paged' && layout === 'single' && split;
@@ -1371,6 +1394,9 @@ function ReaderCore({
 															src={pageUrl(chapterId, idx, curPage?.cacheRevision)}
 															alt={t('reader.pageAlt', { page: idx + 1 })}
 															style={{ objectPosition: `${splitSides(dir)[half]} center` }}
+															retryInOverlay={tapZones !== 'off'}
+															onFailed={() => reportFailed(idx)}
+															retryToken={retryTicks[idx] ?? 0}
 															onLoad={(w, h) => reportDims(idx, w, h)}
 														/>
 													</div>
@@ -1436,6 +1462,11 @@ function ReaderCore({
 																// in its own half instead of collapsing to zero size and
 																// letting the loaded mate sit in the middle of the spread
 																style={{ aspectRatio: slotAspectRatio(dims) }}
+																// The in-slot retry would sit under the tap zones, so it is
+																// dropped and the reader retries from the overlay instead
+																retryInOverlay={tapZones !== 'off'}
+																onFailed={() => reportFailed(slot)}
+																retryToken={retryTicks[slot] ?? 0}
 																onLoad={(w, h) => reportDims(slot, w, h)}
 															/>
 														);
@@ -1478,6 +1509,23 @@ function ReaderCore({
 								}}
 							/>
 						</>
+					)}
+					{tapZones !== 'off' && failedCur.length > 0 && (
+						// The zones cover the whole page area, so a failed page's retry
+						// renders here, above them; the click retries every failed page
+						// of the visible spread at once and stays off the container's
+						// click-to-toggle handler
+						<div className="reader__page-retry">
+							<Button
+								variant="primary"
+								onClick={(e) => {
+									e.stopPropagation();
+									setRetryTicks((prev) => bumpRetries(prev, failedCur));
+								}}
+							>
+								{t('reader.retry')}
+							</Button>
+						</div>
 					)}
 					{pendingTurn && (
 						<TransitionPage

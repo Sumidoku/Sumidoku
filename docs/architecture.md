@@ -1959,11 +1959,20 @@ from its content would otherwise leave a 0x0 box; in continuous mode a page
 whose size was never measured has no box yet and stays silent. A page image
 that fails to load retries once
 automatically with an `r=N` cache-buster the server ignores, and latches into a failed placeholder
-that keeps the slot's aspect-ratio box and offers a manual retry button
+that keeps the slot's aspect-ratio box
 (`reader/PageImage.tsx`, state machine in `reader/pageRetry.ts`, keyed by src
 so a component reused for another page cannot inherit a stale failure; the
 loading indicator keys on the exact effective URL, so the automatic retry
-re-arms it).
+re-arms it). The retry affordance differs by mode because the paged tap zones
+cover the page area and the spread track's transform creates a stacking context
+no in-slot z-index can escape, so an in-slot button is unreachable there
+(hit-testing it returns the zone): continuous mode keeps the retry button
+inside the placeholder (its click stops propagation so it does not also toggle
+the toolbar), while paged mode drops the in-slot button and, whenever a page of
+the visible spread is latched failed, overlays a retry above the zones
+(`.reader__page-retry`) that retries every failed page of the spread at once —
+each `PageImage` reports its latch through `onFailed` and a bumped `retryToken`
+tells it to reload.
 Text pages also offer font-family, font-size and line-height controls persisted
 in `sumidoku.reader.typography`; the same style applies to paged and continuous
 rendering, and typography changes recompute paged text columns. Reading direction

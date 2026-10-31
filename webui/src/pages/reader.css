@@ -496,12 +496,13 @@
 }
 
 /* A page whose load and automatic retry both failed keeps its slot's box (the
-   inline aspect-ratio) and offers a manual retry inside it. The positive
-   z-index lifts the placeholder above the absolutely positioned tap-zone
-   buttons, which would otherwise swallow clicks meant for the retry button */
+   inline aspect-ratio) and shows the failure inside it. In continuous mode the
+   retry button lives in this placeholder; in paged mode it cannot — the zones
+   cover the page area and the spread track's transform creates a stacking
+   context that traps any in-slot z-index below them (hit-testing the button
+   returns the zone), so paged mode drops the in-slot button and the reader
+   overlays a retry above the zones instead (.reader__page-retry below) */
 .reader__img-failed {
-	position: relative;
-	z-index: 1;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
@@ -518,6 +519,24 @@
 .reader__pg .reader__img-failed {
 	width: 100%;
 	min-height: 40vh;
+}
+
+/* Paged mode's retry for the failed pages of the visible spread: rendered after
+   the tap-zone buttons in the same container, so this z-index (plus DOM order)
+   puts it above them but still below the toolbar (z-index 60). It centres
+   itself without intercepting taps outside the button */
+.reader__page-retry {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	pointer-events: none;
+}
+
+.reader__page-retry > * {
+	pointer-events: auto;
 }
 
 /* Loading state: the spinner is a centered background painted on the img itself —
