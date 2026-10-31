@@ -50,3 +50,23 @@ export function retrySrc(src: string, attempt: number): string {
 export function imageLoading(loadedSrc: string | null, src: string, attempt: number): boolean {
 	return loadedSrc !== retrySrc(src, attempt);
 }
+
+/** The failed pages of one spread, as page array indices. In paged mode the
+    in-slot retry button is unreachable — the tap-zone buttons sit above the
+    pages, and the spread track's transform creates a stacking context that no
+    z-index inside a slot can escape (hit-testing the button returns the zone) —
+    so the reader moves the retry to an overlay above the zones for these pages */
+export function failedInSpread(spread: readonly (number | null)[], failedPages: ReadonlySet<number>): number[] {
+	return spread.filter((s): s is number => s !== null && failedPages.has(s));
+}
+
+/** Bump the retry token of each given page: the token change tells the mounted
+    PageImage to clear its latched failure and reload with a fresh cache-buster */
+export function bumpRetries(
+	ticks: Readonly<Record<number, number>>,
+	indices: readonly number[]
+): Record<number, number> {
+	const next = { ...ticks };
+	for (const i of indices) next[i] = (next[i] ?? 0) + 1;
+	return next;
+}

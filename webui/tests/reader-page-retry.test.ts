@@ -7,6 +7,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 import {
 	PAGE_AUTO_RETRIES,
+	bumpRetries,
+	failedInSpread,
 	imageErrored,
 	imageLoading,
 	imageRetried,
@@ -118,6 +120,80 @@ test('PageImage marks the image as loading until its own load event lands', asyn
 	} finally {
 		await vite.close();
 	}
+});
+
+test('failedInSpread returns only the failed, non-null slots of the spread', () => {
+	assert.deepEqual(failedInSpread([3, null], new Set([3])), [3]);
+	assert.deepEqual(failedInSpread([3, 4], new Set([4, 9])), [4]);
+	assert.deepEqual(failedInSpread([1, 2], new Set()), []);
+});
+
+test('bumpRetries increments each failed page and keeps the other entries', () => {
+	assert.deepEqual(bumpRetries({}, [3]), { 3: 1 });
+	assert.deepEqual(bumpRetries({ 3: 1, 5: 2 }, [3, 7]), { 3: 2, 5: 2, 7: 1 });
+});
+
+test('FailedPage offers the retry button in place by default', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+		const previous = i18n.language;
+		await i18n.changeLanguage('en');
+		try {
+			const { FailedPage } = await vite.ssrLoadModule('/src/pages/reader/PageImage.tsx');
+			const markup = renderToStaticMarkup(
+				createElement(FailedPage, { className: 'reader__img', onRetry: () => {} })
+			);
+			assert.match(markup, /role="alert"/);
+			assert.match(markup, /<button/);
+			assert.match(markup, /Retry/);
+		} finally {
+			await i18n.changeLanguage(previous);
+		}
+	} finally {
+		await vite.close();
+	}
+});
+
+test('FailedPage in overlay mode drops the in-slot button the tap zones would swallow', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+		const previous = i18n.language;
+		await i18n.changeLanguage('en');
+		try {
+			const { FailedPage } = await vite.ssrLoadModule('/src/pages/reader/PageImage.tsx');
+			const markup = renderToStaticMarkup(
+				createElement(FailedPage, { className: 'reader__img', retryInOverlay: true })
+			);
+			assert.match(markup, /role="alert"/);
+			assert.doesNotMatch(markup, /<button/);
+		} finally {
+			await i18n.changeLanguage(previous);
+		}
+	} finally {
+		await vite.close();
+	}
+});
+
+test('the paged overlay retry sits above the tap zones', () => {
+	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8');
+	const rule = css.match(/\.reader__page-retry\s*\{([^}]*)\}/)?.[1];
+	assert.ok(rule);
+	assert.match(rule, /\bposition:\s*absolute;/);
+	assert.match(rule, /\bz-index:\s*[1-9]/);
 });
 
 test('the paged loading image keeps a box for the spinner while it has no intrinsic size', () => {
