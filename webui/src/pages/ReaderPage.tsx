@@ -397,6 +397,12 @@ function ReaderChapterItem({
 	);
 }
 
+/** A clicked tap zone would keep focus, and the next arrow-key turn would draw the focus ring around
+    an invisible button that spans the page. Keyboard users can still tab to it. */
+function keepFocusOut(e: RMouseEvent<HTMLButtonElement>) {
+	e.preventDefault();
+}
+
 export default function ReaderPage() {
 	const { t } = useTranslation();
 	const { chapterId: raw } = useParams();
@@ -1484,6 +1490,7 @@ function ReaderCore({
 							<button
 								type="button"
 								className="reader__zone reader__zone--left"
+								onMouseDown={keepFocusOut}
 								aria-label={t(zoneAction(dir, tapZones, 'left') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
 								onClick={(e) => {
 									e.stopPropagation();
@@ -1493,6 +1500,7 @@ function ReaderCore({
 							<button
 								type="button"
 								className="reader__zone reader__zone--right"
+								onMouseDown={keepFocusOut}
 								aria-label={t(zoneAction(dir, tapZones, 'right') === 'next' ? 'reader.nextPage' : 'reader.prevPage')}
 								onClick={(e) => {
 									e.stopPropagation();
@@ -1502,6 +1510,7 @@ function ReaderCore({
 							<button
 								type="button"
 								className="reader__zone reader__zone--mid"
+								onMouseDown={keepFocusOut}
 								aria-label={t('reader.toggleToolbar')}
 								onClick={(e) => {
 									e.stopPropagation();
