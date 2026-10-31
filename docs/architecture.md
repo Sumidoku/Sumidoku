@@ -1425,7 +1425,8 @@ no alias is derived from migration text.
   exists. Matching and editing are library features: preview, apply, restore
   and metadata edits through PATCH answer 409 `not_in_library` for an entry
   that is not shelved, while `updateStrategy`/`incognito` keep working on any
-  entry. `POST …/metadata/apply` takes `{provider, remoteId, fields, values?, bind?}`:
+  entry. Local sources are exempt — their entries are the user's own files and
+  are editable without a `manga_user` row. `POST …/metadata/apply` takes `{provider, remoteId, fields, values?, bind?}`:
   `fields` is required and non-empty, `values` may only replace a value the
   preview exposed for that field (the server refetches the record and
   revalidates membership, so a stale preview cannot inject arbitrary text),
@@ -1978,7 +1979,7 @@ the selected fields; `EditMetadataDialog.tsx` edits the lockable fields directly
 and shows each field's source as follow-the-source, written by a provider, or
 manual, with per-field unlock and a restore-to-source action. Both live in
 `webui/src/pages/manga/`, share `metadata.css`, and are only offered while the
-entry is in the library.
+entry is in the library or its source is local.
 Settings sections are linked from the settings group, while mobile keeps the
 settings page's own tabs. The settings page shows the admin account and
 all management controls; there is no Users page or role-dependent UI. The

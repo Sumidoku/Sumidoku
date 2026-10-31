@@ -1432,3 +1432,43 @@ async fn live_payload_moves_to_the_newest_trigger() {
 		"the executed scan carried the newest (manual) trigger's payload: {last}"
 	);
 }
+
+/// Local entries are the user's own files: metadata matching and editing must
+/// work without a `manga_user` library row (`require_in_library` exempts local
+/// sources).
+#[tokio::test]
+async fn local_entries_edit_metadata_without_library_membership() {
+	let app = scan_app().await;
+	scan_and_settle(&app.app).await;
+	let pool = common::connect_db(&app.db_path).await;
+	let (manga_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("alpha indexed");
+	let shelved: Option<(bool,)> =
+		sqlx::query_as("SELECT in_library FROM manga_user WHERE manga_id = ?")
+			.bind(manga_id)
+			.fetch_optional(&pool)
+			.await
+			.expect("library lookup");
+	assert!(
+		!shelved.map(|(flag,)| flag).unwrap_or(false),
+		"the scan does not shelve local entries"
+	);
+	let (status, body) = request(
+		&app.app,
+		"PATCH",
+		&format!("/api/v1/manga/{manga_id}"),
+		Some(json!({"title": "Local Locked"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["title"], "Local Locked");
+	assert_eq!(body["metadataLocks"]["title"]["provider"], "manual", "{body}");
+	let (status, body) = request(
+		&app.app,
+		"POST",
+		&format!("/api/v1/manga/{manga_id}/metadata/restore"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["unlockedFields"], json!(["title"]), "{body}");
+}

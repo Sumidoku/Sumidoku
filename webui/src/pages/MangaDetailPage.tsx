@@ -816,7 +816,7 @@ export default function MangaDetailPage() {
 											<span>{t('mangaDetail.changeCover')}</span>
 											<Images size={14} />
 										</button>
-										{manga.inLibrary && (
+										{(manga.inLibrary || isLocal) && (
 											<button
 												type="button"
 												className="manga-menu__row"
@@ -829,7 +829,7 @@ export default function MangaDetailPage() {
 												<Tags size={14} />
 											</button>
 										)}
-										{manga.inLibrary && (
+										{(manga.inLibrary || isLocal) && (
 											<button
 												type="button"
 												className="manga-menu__row"
@@ -1152,7 +1152,7 @@ export default function MangaDetailPage() {
 
 			{migrateOpen && <MigrateModal manga={manga} onClose={() => setMigrateOpen(false)} />}
 
-			{manga.inLibrary && matchMetadataOpen && (
+			{(manga.inLibrary || isLocal) && matchMetadataOpen && (
 				<MatchMetadataDialog
 					mangaId={mangaId}
 					mangaTitle={manga.title}
@@ -1160,7 +1160,7 @@ export default function MangaDetailPage() {
 				/>
 			)}
 
-			{manga.inLibrary && editMetadataOpen && (
+			{(manga.inLibrary || isLocal) && editMetadataOpen && (
 				<EditMetadataDialog mangaId={mangaId} onClose={() => setEditMetadataOpen(false)} />
 			)}
 
