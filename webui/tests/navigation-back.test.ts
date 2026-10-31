@@ -27,6 +27,16 @@ test('source browse back pops history instead of always pushing the source list'
 	);
 });
 
+test('source home backs pop history instead of pushing a fixed page', () => {
+	const source = readFileSync(new URL('../src/pages/SourceHomePage.tsx', import.meta.url), 'utf8');
+	// A pushed parent destination on a back button ping-pongs forever with the browse
+	// page's pop-back; the forward search/goSearch buttons keep their fixed paths
+	assert.doesNotMatch(source, /onClick=\{\(\) => navigate\('\/browse'\)\}/);
+	assert.match(source, /label=\{t\('sourceHome\.backToBrowse'\)\} onClick=\{goBack\}/);
+	assert.match(source, /onClick=\{goBackToSource\}/);
+	assert.match(source, /else navigate\(`\/browse\/\$\{sourceId\}`\);/);
+});
+
 test('detail and reader backs share the same history check', () => {
 	for (const page of ['MangaDetailPage.tsx', 'ReaderPage.tsx']) {
 		const source = readFileSync(new URL(`../src/pages/${page}`, import.meta.url), 'utf8');

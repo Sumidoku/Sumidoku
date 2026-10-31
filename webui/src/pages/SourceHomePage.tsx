@@ -18,6 +18,7 @@ import type {
 } from '../api/types';
 import { chapterLabel, relativeTime } from '../lib/format';
 import { homeSectionTitle } from '../lib/localListings';
+import { hasHistoryBack } from '../lib/navigation';
 import { Button, Chip, Cover, CoverCard, EmptyState, IconButton, Skeleton } from '../components';
 
 export default function SourceHomePage() {
@@ -33,6 +34,19 @@ export default function SourceHomePage() {
 
 	const register = useRegisterManga();
 	const [pendingKey, setPendingKey] = useState<string | null>(null);
+
+	// Home can be entered from the source list or the source browse page; back pops to the
+	// caller, and only a direct entry (fresh load/deep link) falls back to a fixed page.
+	// Pushing the parent here would ping-pong with the browse page's own history-pop back.
+	function goBack() {
+		if (hasHistoryBack(window.history.state?.idx)) navigate(-1);
+		else navigate('/browse');
+	}
+
+	function goBackToSource() {
+		if (hasHistoryBack(window.history.state?.idx)) navigate(-1);
+		else navigate(`/browse/${sourceId}`);
+	}
 
 	async function openManga(m: SourceManga) {
 		if (pendingKey) return;
@@ -87,7 +101,7 @@ export default function SourceHomePage() {
 		return (
 			<div className="page container">
 				<div className="source-page__head">
-					<IconButton label={t('sourceHome.backToBrowse')} onClick={() => navigate('/browse')}>
+					<IconButton label={t('sourceHome.backToBrowse')} onClick={goBack}>
 						<ArrowLeft size={18} />
 					</IconButton>
 					<h1 className="source-page__title">{source.data.name}</h1>
@@ -109,7 +123,7 @@ export default function SourceHomePage() {
 			<div className="source-page__head">
 				<IconButton
 					label={t('sourceHome.backToSource', { name: source.data?.name ?? t('sourceHome.sourceFallback') })}
-					onClick={() => navigate(`/browse/${sourceId}`)}
+					onClick={goBackToSource}
 				>
 					<ArrowLeft size={18} />
 				</IconButton>
