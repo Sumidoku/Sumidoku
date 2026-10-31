@@ -24,7 +24,7 @@ import { compareSourceName } from '../lib/source';
 import { downloadEligibleIds } from '../lib/librarySelection';
 import { hasLibraryFilterPrefs, loadLibraryFilters, saveLibraryFilters } from '../lib/libraryFilterPrefs';
 import { BatchActionBar, Button, CoverCard, EmptyState, InfiniteList, PageHeader, Skeleton, pushToast } from '../components';
-import { LibraryToolbar, UNCATEGORIZED } from './library/LibraryToolbar';
+import { LibraryToolbar, UNCATEGORIZED, type RemovableFilterKind } from './library/LibraryToolbar';
 import { ChangeCategoriesModal, RemoveFromLibraryModal } from './library/LibraryBatchModals';
 import './library/library.css';
 
@@ -37,6 +37,12 @@ function cycled(sel: TriStateSelection, key: string): TriStateSelection {
 	const v = nextTri(next[key] ?? 0);
 	if (v === 0) delete next[key];
 	else next[key] = v;
+	return next;
+}
+
+function without(sel: TriStateSelection, key: string): TriStateSelection {
+	const next = { ...sel };
+	delete next[key];
 	return next;
 }
 
@@ -177,6 +183,7 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		.filter((s) => !counted || (counts.get(s.id) ?? 0) > 0 || sourceTri[String(s.id)])
 		.map((s) => ({
 			key: String(s.id),
+			name: s.name,
 			label: counted ? `${s.name}（${counts.get(s.id) ?? 0}）` : s.name
 		}));
 	// The author/tag endpoints return the entry counts directly and arrive pre-sorted case-insensitively,
@@ -360,6 +367,11 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		setGroupId(null);
 	}
 
+	function removeFilter(kind: RemovableFilterKind, key: string) {
+		const setters = { filter: setFilterTri, rating: setRatings, source: setSourceTri, author: setAuthorTri, tag: setTagTri };
+		setters[kind]((cur) => without(cur, key));
+	}
+
 	/** Cycling a category chip by hand counts as a user choice, so the first-visit default must not override it later */
 	function cycleCategory(key: string) {
 		defaultSeed.touched = true;
@@ -416,6 +428,7 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 					onAuthorCycle={(key) => setAuthorTri((cur) => cycled(cur, key))}
 					onTagCycle={(key) => setTagTri((cur) => cycled(cur, key))}
 					onGroupChange={setGroupId}
+					onRemoveFilter={removeFilter}
 					onResetRatings={() => setRatings({})}
 					onResetSources={() => setSourceTri({})}
 					onResetAuthors={() => setAuthorTri({})}

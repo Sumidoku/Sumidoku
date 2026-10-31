@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { createServer } from 'vite';
 
-test('library toolbar groups controls and reveals active advanced filters', async () => {
+test('library toolbar stays collapsed with active filters and summarizes them', async () => {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -60,6 +60,7 @@ test('library toolbar groups controls and reveals active advanced filters', asyn
 				onAuthorCycle: () => {},
 				onTagCycle: () => {},
 				onGroupChange: () => {},
+				onRemoveFilter: () => {},
 				onResetRatings: () => {},
 				onResetSources: () => {},
 				onResetAuthors: () => {},
@@ -67,16 +68,61 @@ test('library toolbar groups controls and reveals active advanced filters', asyn
 				onClearFilters: () => {}
 			})
 		);
-		assert.match(activeMarkup, /aria-expanded="true"/);
+		assert.match(activeMarkup, /aria-expanded="false"/);
+		assert.doesNotMatch(activeMarkup, /class="library__filter-panel"/);
 		assert.match(activeMarkup, /class="library__filter-count">3</);
-		assert.match(activeMarkup, /class="library__filter-panel"/);
-		assert.match(activeMarkup, />Status</);
-		assert.match(activeMarkup, />More filters</);
-		assert.match(activeMarkup, />Filter groups</);
 		assert.match(activeMarkup, /Reading（12）/);
-		assert.match(activeMarkup, /Author（1）/);
-		assert.match(activeMarkup, />Tag</);
+		assert.match(activeMarkup, /aria-label="Active filters"/);
+		assert.match(activeMarkup, /class="library__active-label">Unread</);
+		assert.match(activeMarkup, /class="library__active-label">Author: Jane Doe</);
+		assert.match(activeMarkup, /class="library__active-label">Group: Unread only</);
 		assert.match(activeMarkup, />Clear filters</);
+	} finally {
+		await vite.close();
+	}
+});
+
+test('active filter summary names every advanced filter with its state', async () => {
+	const vite = await createServer({
+		root: fileURLToPath(new URL('../', import.meta.url)),
+		configFile: false,
+		logLevel: 'silent',
+		appType: 'custom',
+		server: { middlewareMode: true }
+	});
+	try {
+		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
+		await i18n.changeLanguage('en');
+		const { activeFilterItems, advancedFilterCount } = await vite.ssrLoadModule('/src/pages/library/LibraryToolbar.tsx');
+		const selections = {
+			filterTri: { unread: 1, downloaded: -1 },
+			ratings: { '3': -1 },
+			sourceTri: { '5': 1, '6': 1 },
+			authorTri: { 'Jane Doe': -1 },
+			tagTri: { romance: 1 },
+			groupId: 7,
+			groups: [{ id: 7, name: 'Weekend', sortOrder: 0, rules: [] }],
+			// Counts in the dropdown label stay out of the pill; source 6 has not loaded yet
+			sourceOptions: [{ key: '5', label: 'Alpha（12）', name: 'Alpha' }]
+		};
+		const items = activeFilterItems(i18n.t, selections);
+		assert.deepEqual(
+			items.map(({ label, state, kind, filterKey }: { label: string; state: number; kind: string | null; filterKey: string }) => [label, state, kind, filterKey]),
+			[
+				['Unread', 1, 'filter', 'unread'],
+				['Downloaded', -1, 'filter', 'downloaded'],
+				['Rating: NSFW', -1, 'rating', '3'],
+				['Source: Alpha', 1, 'source', '5'],
+				['Source', 1, 'source', '6'],
+				['Author: Jane Doe', -1, 'author', 'Jane Doe'],
+				['Tag: romance', 1, 'tag', 'romance'],
+				['Group: Weekend', 1, null, '']
+			]
+		);
+		assert.equal(
+			items.length,
+			advancedFilterCount(selections.filterTri, selections.ratings, selections.sourceTri, selections.authorTri, selections.tagTri, selections.groupId)
+		);
 	} finally {
 		await vite.close();
 	}
