@@ -12,6 +12,7 @@ import type {
 	TrackerLinkPage,
 	TrackerLinkUpsert,
 	TrackerOAuthStatus,
+	TrackerPreferences,
 	TrackerProvider,
 	TrackerSyncResult,
 	TrackerUpdateRequest
@@ -31,6 +32,7 @@ export const trackerKeys = {
 	bindingsPage: (page: number, provider?: TrackerProvider) => ['trackers', 'links', 'page', page, provider] as const,
 	mangaLinks: (mangaId: number) => ['trackers', 'links', mangaId] as const,
 	ledger: ['trackers', 'ledger'] as const,
+	preferences: ['trackers', 'preferences'] as const,
 	oauth: ['trackers', 'oauth'] as const,
 	oauthStatus: (provider: TrackerProvider) => ['trackers', 'oauth', provider] as const,
 	search: (provider: TrackerProvider, name: string, nsfw?: boolean) =>
@@ -103,6 +105,14 @@ export function updateTracker(provider: TrackerProvider, body: TrackerUpdateRequ
 	return api<void>(`/trackers/${provider}/update`, { method: 'POST', body, silent: true });
 }
 
+export function trackerPreferences() {
+	return api<TrackerPreferences>('/trackers/preferences', { silent: true });
+}
+
+export function putTrackerPreferences(body: TrackerPreferences) {
+	return api<TrackerPreferences>('/trackers/preferences', { method: 'PUT', body });
+}
+
 export function oauthStatus(provider: TrackerProvider) {
 	return api<TrackerOAuthStatus>(`/trackers/oauth/${provider}/status`, { silent: true });
 }
@@ -142,6 +152,14 @@ export function isTrackerAuthError(error: unknown): error is ApiError {
 export function availableTrackerProviders(links: readonly TrackerLink[]) {
 	const bound = new Set(links.map((link) => link.provider));
 	return TRACKER_PROVIDERS.filter((provider) => !bound.has(provider));
+}
+
+export function preferredTrackerProvider(
+	defaultTracker: TrackerProvider | null | undefined,
+	available: readonly TrackerProvider[]
+): TrackerProvider {
+	if (defaultTracker && available.includes(defaultTracker)) return defaultTracker;
+	return available[0] ?? 'anilist';
 }
 
 export interface TrackEditValues {

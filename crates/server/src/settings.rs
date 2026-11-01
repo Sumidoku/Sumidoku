@@ -29,6 +29,10 @@ impl<T: DeserializeOwned + Serialize> Key<T> {
 	pub(crate) async fn set<'e, E: Executor<'e, Database = Sqlite>>(&self, db: E, value: &T) -> ApiResult<()> {
 		write(db, self.name, &serde_json::to_string(value)?).await
 	}
+
+	pub(crate) async fn clear<'e, E: Executor<'e, Database = Sqlite>>(&self, db: E) -> ApiResult<()> {
+		remove(db, self.name).await
+	}
 }
 
 pub(crate) const AUTO_DOWNLOAD_NEW_CHAPTERS: Key<bool> = Key::new(crate::download::AUTO_DOWNLOAD_NEW_CHAPTERS);
@@ -48,6 +52,9 @@ pub(crate) const PINNED_SOURCES: Key<Vec<String>> = Key::new("browse.pinned_sour
 pub(crate) const EXCLUDED_DOWNLOAD_CATEGORIES: Key<Vec<i64>> = Key::new(crate::download::LIBRARY_EXCLUDED_DOWNLOAD_CATEGORIES);
 pub(crate) const EXCLUDED_UPDATE_CATEGORIES: Key<Vec<i64>> = Key::new(crate::update::LIBRARY_EXCLUDED_UPDATE_CATEGORIES);
 pub(crate) const INCOGNITO_ENABLED: Key<bool> = Key::new("incognito.enabled");
+const TRACKER_DEFAULT_PROVIDER_KEY: &str = "tracker.default_provider";
+/// Modeled so a full settings write can't replay it: only `/trackers/preferences` and logout change it
+pub(crate) const TRACKER_DEFAULT_PROVIDER: Key<String> = Key::new(TRACKER_DEFAULT_PROVIDER_KEY);
 
 /// One setting the server knows about. New settings are added here, and validation, the structured
 /// view and backups all follow from this entry.
@@ -149,6 +156,14 @@ fn default_category(key: &str, value: &Value) -> Result<(), String> {
 	}
 }
 
+fn tracker_provider(key: &str, value: &Value) -> Result<(), String> {
+	if value.as_str().is_some_and(|name| crate::tracker::Provider::parse(name).is_some()) {
+		Ok(())
+	} else {
+		Err(format!("{key} must be a supported tracker"))
+	}
+}
+
 const DEFINITIONS: &[Definition] = &[
 	Definition::new("cache.chapterMaxBytes", chapter_cache_bytes),
 	Definition::new("incognito.enabled", any),
@@ -178,6 +193,7 @@ const DEFINITIONS: &[Definition] = &[
 	Definition::new("backup.retention_count", any),
 	Definition::new("backup.dir", any).clearable(),
 	Definition::new("browse.pinned_sources", any),
+	Definition::new(TRACKER_DEFAULT_PROVIDER_KEY, tracker_provider).clearable(),
 ];
 
 /// Names older clients and backups can still send: the removed chapter LRU switch, which must not

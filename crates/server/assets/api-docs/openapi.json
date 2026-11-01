@@ -4171,6 +4171,71 @@
         }
       }
     },
+    "/api/v1/trackers/preferences": {
+      "get": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "trackerPreferences",
+        "summary": "Tracker preferences of the current user",
+        "responses": {
+          "200": {
+            "description": "Preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackerPreferences"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "trackers"
+        ],
+        "operationId": "putTrackerPreferences",
+        "summary": "Replace the tracker preferences of the current user",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrackerPreferences"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Saved preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackerPreferences"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/trackers/{provider}/search": {
       "get": {
         "tags": [
@@ -5686,6 +5751,23 @@
         "properties": {
           "error": {
             "$ref": "#/components/schemas/ApiError"
+          }
+        }
+      },
+      "TrackerPreferences": {
+        "type": "object",
+        "required": [
+          "defaultTracker"
+        ],
+        "properties": {
+          "defaultTracker": {
+            "description": "The provider preselected when adding a binding or matching metadata; null for none",
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TrackerProvider"
+              }
+            ]
           }
         }
       },

@@ -14,6 +14,7 @@ import {
 	listTrackerLinks,
 	mergeTrackEditValues,
 	oauthStartUrl,
+	preferredTrackerProvider,
 	putTrackerLink,
 	remoteToTrackEdit,
 	searchTracker,
@@ -21,6 +22,7 @@ import {
 	trackerEntryUrl,
 	trackerKeys,
 	trackerMediaLabelKey,
+	trackerPreferences,
 	trackerState,
 	updateTrackEditValue,
 	updateTracker
@@ -98,7 +100,9 @@ interface AddTrackerDialogProps {
 function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: AddTrackerDialogProps) {
 	const { t } = useTranslation();
 	const qc = useQueryClient();
-	const [provider, setProvider] = useState<TrackerProvider>(providers[0] ?? 'anilist');
+	const preferencesQuery = useQuery({ queryKey: trackerKeys.preferences, queryFn: trackerPreferences });
+	const [picked, setProvider] = useState<TrackerProvider | null>(null);
+	const provider = picked ?? preferredTrackerProvider(preferencesQuery.data?.defaultTracker, providers);
 	const [draft, setDraft] = useState(mangaTitle);
 	const [submitted, setSubmitted] = useState('');
 	const searchQuery = useQuery({

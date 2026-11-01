@@ -227,3 +227,11 @@ test('the hero primary button keeps its fill on hover in both themes', () => {
 		assert.ok(css.includes(rule), `missing: ${rule}`);
 	}
 });
+
+test('preferredTrackerProvider preselects a free default and falls back to the first free provider', () => {
+	assert.equal(trackers.preferredTrackerProvider('bangumi', ['anilist', 'mal', 'bangumi']), 'bangumi');
+	assert.equal(trackers.preferredTrackerProvider('bangumi', ['anilist', 'mal']), 'anilist');
+	assert.equal(trackers.preferredTrackerProvider(null, ['mal', 'bangumi']), 'mal');
+	assert.equal(trackers.preferredTrackerProvider(undefined, ['mal']), 'mal');
+	assert.equal(trackers.preferredTrackerProvider('bangumi', []), 'anilist');
+});

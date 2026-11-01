@@ -14,12 +14,14 @@ import {
 	logoutTracker,
 	oauthStartUrl,
 	oauthStatus,
+	putTrackerPreferences,
 	readOAuthReturn,
 	trackerEntryUrl,
-	trackerKeys
+	trackerKeys,
+	trackerPreferences
 } from '../../api/trackers';
 import type { TrackerBinding, TrackerLink, TrackerProvider } from '../../api/types';
-import { Button, Cover, IconButton, Modal, SegmentedControl, Skeleton, pushToast } from '../../components';
+import { Badge, Button, Cover, IconButton, Modal, SegmentedControl, Skeleton, pushToast } from '../../components';
 import { TrackerLogo } from '../../components/trackers/TrackerLogo';
 import '../../components/trackers/trackers.css';
 
@@ -37,17 +39,27 @@ function TrackerAccountCard({ provider }: { provider: TrackerProvider }) {
 			setConfirming(false);
 			void qc.invalidateQueries({ queryKey: trackerKeys.oauth });
 			void qc.invalidateQueries({ queryKey: trackerKeys.states });
+			void qc.invalidateQueries({ queryKey: trackerKeys.preferences });
 			pushToast(t('trackers.disconnected', { provider: TRACKER_PROVIDER_NAMES[provider] }), 'info');
 		}
 	});
+	const preferencesQuery = useQuery({ queryKey: trackerKeys.preferences, queryFn: trackerPreferences });
+	const setDefault = useMutation({
+		mutationFn: (defaultTracker: TrackerProvider | null) => putTrackerPreferences({ defaultTracker }),
+		onSuccess: (preferences) => qc.setQueryData(trackerKeys.preferences, preferences)
+	});
 	const name = TRACKER_PROVIDER_NAMES[provider];
 	const connected = statusQuery.data?.logged_in === true;
+	const isDefault = connected && preferencesQuery.data?.defaultTracker === provider;
 	return (
 		<article className="tracker-provider">
 			<div className="tracker-provider__identity">
 				<TrackerLogo provider={provider} />
 				<div className="tracker-provider__meta">
-					<h3>{name}</h3>
+					<h3>
+						{name}
+						{isDefault && <Badge>{t('trackers.defaultBadge')}</Badge>}
+					</h3>
 					{statusQuery.isPending ? (
 						<Skeleton height={14} width={120} />
 					) : statusQuery.isError ? (
@@ -66,6 +78,18 @@ function TrackerAccountCard({ provider }: { provider: TrackerProvider }) {
 				</div>
 			</div>
 			<div className="tracker-provider__actions">
+				{connected && (
+					<Button
+						size="sm"
+						variant="ghost"
+						disabled={!preferencesQuery.isSuccess}
+						loading={setDefault.isPending}
+						aria-pressed={isDefault}
+						onClick={() => setDefault.mutate(isDefault ? null : provider)}
+					>
+						{isDefault ? t('trackers.clearDefault') : t('trackers.setDefault')}
+					</Button>
+				)}
 				<Button
 					size="sm"
 					variant={connected ? 'ghost' : 'primary'}

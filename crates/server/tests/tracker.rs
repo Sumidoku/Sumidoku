@@ -192,6 +192,57 @@ async fn oauth_status_and_start_without_build_credentials() {
 
 /// The shared request helper sends no Host header; OAuth routes need one to
 /// derive the instance origin.
+#[tokio::test]
+async fn default_tracker_preference_round_trips_and_survives_a_full_settings_write() {
+	let TestApp { app, .. } = test_app().await;
+	let path = "/api/v1/trackers/preferences";
+	let (status, body) = request(&app, "GET", path, None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, json!({"defaultTracker": null}));
+
+	request(&app, "PUT", path, Some(json!({"defaultTracker": "mal"}))).await;
+	let (_, stale) = request(&app, "GET", "/api/v1/settings", None).await;
+	let (status, body) = request(&app, "PUT", path, Some(json!({"defaultTracker": "bangumi"}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, json!({"defaultTracker": "bangumi"}));
+
+	// The settings page saves a whole cached snapshot taken before the preference changed
+	let (status, _) = request(&app, "PUT", "/api/v1/settings", Some(stale)).await;
+	assert_eq!(status, StatusCode::OK);
+	let (_, body) = request(&app, "GET", path, None).await;
+	assert_eq!(body, json!({"defaultTracker": "bangumi"}));
+
+	let (status, _) = request(&app, "PUT", path, Some(json!({"defaultTracker": "nope"}))).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (status, _) = request(&app, "PUT", path, Some(json!({}))).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
+	let (_, body) = request(&app, "GET", path, None).await;
+	assert_eq!(body, json!({"defaultTracker": "bangumi"}));
+
+	let (status, body) = request(&app, "PUT", path, Some(json!({"defaultTracker": null}))).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(body, json!({"defaultTracker": null}));
+	let (_, body) = request(&app, "GET", path, None).await;
+	assert_eq!(body, json!({"defaultTracker": null}));
+}
+
+#[tokio::test]
+async fn logout_clears_only_its_own_default_tracker() {
+	let TestApp { app, .. } = test_app().await;
+	let path = "/api/v1/trackers/preferences";
+	request(&app, "PUT", path, Some(json!({"defaultTracker": "bangumi"}))).await;
+
+	let (status, _) = request(&app, "POST", "/api/v1/trackers/oauth/anilist/logout", None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&app, "GET", path, None).await;
+	assert_eq!(body, json!({"defaultTracker": "bangumi"}));
+
+	let (status, _) = request(&app, "POST", "/api/v1/trackers/oauth/bangumi/logout", None).await;
+	assert_eq!(status, StatusCode::NO_CONTENT);
+	let (_, body) = request(&app, "GET", path, None).await;
+	assert_eq!(body, json!({"defaultTracker": null}));
+}
+
 async fn request_with_host(app: &axum::Router, path: &str) -> (StatusCode, Value) {
 	let request = axum::http::Request::builder()
 		.method("GET")

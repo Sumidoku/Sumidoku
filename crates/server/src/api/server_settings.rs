@@ -114,7 +114,7 @@ pub struct BrowseSettings {
 	pub pinned_sources: Vec<String>,
 }
 
-fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
 	D: serde::Deserializer<'de>,
 	T: Deserialize<'de>,
