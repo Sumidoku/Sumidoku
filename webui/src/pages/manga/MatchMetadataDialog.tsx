@@ -25,6 +25,7 @@ import type {
 	TrackSearchItem,
 	TrackerProvider
 } from '../../api/types';
+import { editedMetadataValue } from '../../lib/metadataValues';
 import { compareSourceName } from '../../lib/source';
 import {
 	CONTENT_RATING_LEVELS,
@@ -207,15 +208,7 @@ export function MatchMetadataDialog({
 				if (field.field === 'title') continue;
 				if (!field.selectable || !checked[field.field]) continue;
 				const v = values[field.field];
-				if (v === undefined || v === '') continue;
-				if (Array.isArray(field.incoming)) {
-					valuesPayload[field.field] = v
-						.split(',')
-						.map((s) => s.trim())
-						.filter((s) => s.length > 0);
-				} else {
-					valuesPayload[field.field] = v;
-				}
+				if (v !== undefined) valuesPayload[field.field] = editedMetadataValue(field.incoming, v);
 			}
 			return applyMetadata(mangaId, {
 				provider: wireProvider(selection!),

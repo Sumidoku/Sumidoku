@@ -1820,7 +1820,7 @@
         ],
         "operationId": "applyMangaMetadata",
         "summary": "Write metadata matched from a tracker or another source",
-        "description": "fields carry the metadata field names the user confirmed. values may only replace the title with another variant the preview offered; some fields may only carry the matched value. bind remembers the tracker binding in the same transaction and is rejected for source matches. Only an entry in the library or in a local source can be matched.",
+        "description": "fields carry the metadata field names the user confirmed. values replace the matched value of a confirmed field: the title must be a variant the preview offered, and any other field takes the user's edit, with null or an empty list clearing it. bind remembers the tracker binding in the same transaction and is rejected for source matches. Only an entry in the library or in a local source can be matched.",
         "requestBody": {
           "required": true,
           "content": {
