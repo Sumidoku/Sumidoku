@@ -409,9 +409,8 @@ impl BangumiTracker {
 					BANGUMI_STATUS_KEYS
 						.iter()
 						.any(|key| item.key == *key)
-						.then(|| item.value.as_str())
-						.flatten()
-						.and_then(classify_bangumi_status)
+						.then(|| Self::infobox_text(&item.value))
+						.and_then(|text| classify_bangumi_status(&text))
 				})
 			})
 			.or_else(|| {
@@ -1015,7 +1014,7 @@ mod tests {
 			"images": {"large": "https://img.test/7.jpg"},
 			"info": "Info",
 			"infobox": [
-				{"key": "状态", "values": "连载中"}
+				{"key": "状态", "values": [{"v": "连载中"}]}
 			],
 			"tags": [{"name": "奇幻", "count": 200}],
 			"nsfw": false
