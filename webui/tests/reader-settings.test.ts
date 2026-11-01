@@ -47,7 +47,16 @@ async function renderSettings(
 					stretch: false,
 					onStretchChange: () => {},
 					anim: true,
+					anim: true,
 					onAnimChange: () => {},
+					pageTurn: 'auto',
+					onPageTurnChange: () => {},
+					continuousScale: 'width',
+					onContinuousScaleChange: () => {},
+					continuousPadding: 0,
+					onContinuousPaddingChange: () => {},
+					continuousGap: 0,
+					onContinuousGapChange: () => {},
 					transition: true,
 					onTransitionChange: () => {},
 					currentPage,
@@ -91,11 +100,14 @@ test('tap-zone and background controls render in paged mode', async () => {
 	assert.match(markup, /aria-label="Tap zones"/);
 	assert.match(markup, />Kindle</);
 	assert.match(markup, />Off</);
+	assert.match(markup, /reader__tz-preview/);
+	assert.match(markup, /Page turn style/);
+	assert.match(markup, />Fade</);
 	assert.match(markup, /Background/);
-	assert.match(markup, />Black</);
-	assert.match(markup, />Gray</);
-	assert.match(markup, />White</);
-	assert.match(markup, />Follow system</);
+	assert.match(markup, /aria-label="Black"/);
+	assert.match(markup, /aria-label="Gray"/);
+	assert.match(markup, /aria-label="White"/);
+	assert.match(markup, /aria-label="Follow system"/);
 });
 
 test('continuous mode marks the page and turning groups as paged-only and locks them', async () => {
@@ -103,13 +115,17 @@ test('continuous mode marks the page and turning groups as paged-only and locks 
 	assert.equal(markup.match(/Paged mode only/g)?.length, 2);
 	assert.equal(markup.match(/reader__settings-body--off" inert=""/g)?.length, 2);
 	// The background applies to every mode, so its group stays unmarked and live
-	const appearance = markup.slice(markup.indexOf('Appearance'));
+	const appearance = markup.slice(markup.indexOf('Continuous reading'));
 	assert.doesNotMatch(appearance, /Paged mode only|inert/);
 	assert.match(appearance, /aria-label="Background"/);
+	assert.match(appearance, /aria-label="Page scale"/);
+	assert.match(appearance, /Side padding/);
+	assert.match(appearance, /Page gap/);
 });
 
 test('page-scale select and stretch toggle render in paged mode', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /aria-label="Page layout"/);
 	assert.match(markup, /aria-label="Page scale"/);
 	assert.match(markup, />Fit width \(shrink only\)</);
 	assert.match(markup, />Original size</);
@@ -128,7 +144,7 @@ test('groups separate page, turning and appearance settings', async () => {
 	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
 	assert.deepEqual(titles, ['Page', 'Page turning', 'Appearance']);
 	for (const label of ['Page layout', 'Reading direction', 'Background']) {
-		assert.match(markup, new RegExp(`role="tablist" aria-label="${label}"`));
+		assert.match(markup, new RegExp(`role="group" aria-label="${label}"`));
 	}
 });
 

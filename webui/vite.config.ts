@@ -53,7 +53,7 @@ export default defineConfig(({ mode }) => ({
 	},
 	server: {
 		proxy: {
-			'/api': { target: 'http://localhost:3000', ws: true }
+			'/api': { target: process.env.SUMIDOKU_DEV_API ?? 'http://localhost:3000', ws: true }
 		}
 	}
 }));
