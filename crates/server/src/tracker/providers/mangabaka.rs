@@ -1,7 +1,7 @@
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
-use crate::tracker::{Provider, TrackerError, TrackerService};
+use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -210,7 +210,7 @@ impl MangaBakaTracker {
 			.header(reqwest::header::USER_AGENT, USER_AGENT)
 			.send()
 			.await
-			.map_err(|error| provider_error(format!("{action} request failed: {error}")))
+			.map_err(|error| provider_error(format!("{action} request failed: {}", request_failure(error))))
 	}
 
 	async fn send_authed(
@@ -234,7 +234,7 @@ impl MangaBakaTracker {
 			request
 		};
 		let mut response =
-			build(&token).send().await.map_err(|error| provider_error(format!("{action} request failed: {error}")))?;
+			build(&token).send().await.map_err(|error| provider_error(format!("{action} request failed: {}", request_failure(error))))?;
 		if response.status() == StatusCode::UNAUTHORIZED {
 			let token = match self.oauth.refresh_now(Provider::Mangabaka, user_id).await? {
 				Some(token) => token,
@@ -243,7 +243,7 @@ impl MangaBakaTracker {
 					return Err(not_logged_in());
 				}
 			};
-			response = build(&token).send().await.map_err(|error| provider_error(format!("{action} retry failed: {error}")))?;
+			response = build(&token).send().await.map_err(|error| provider_error(format!("{action} retry failed: {}", request_failure(error))))?;
 			if response.status() == StatusCode::UNAUTHORIZED {
 				self.oauth.logout_if_current(Provider::Mangabaka, user_id, &token).await?;
 				return Err(not_logged_in());
@@ -254,9 +254,9 @@ impl MangaBakaTracker {
 
 	async fn decode_json<T: DeserializeOwned>(response: reqwest::Response, action: &str) -> Result<T, TrackerError> {
 		let status = response.status();
-		let body = response.text().await.map_err(|error| provider_error(format!("{action} response could not be read: {error}")))?;
+		let body = response.text().await.map_err(|error| provider_error(format!("{action} response could not be read: {}", request_failure(error))))?;
 		if !status.is_success() {
-			return Err(provider_error(format!("{action} returned {status}: {body}")));
+			return Err(response_failure(Provider::Mangabaka, action, status, &body));
 		}
 		serde_json::from_str(&body).map_err(|error| provider_error(format!("{action} response is invalid: {error}")))
 	}
@@ -267,7 +267,7 @@ impl MangaBakaTracker {
 		}
 		let status = response.status();
 		let body = response.text().await.unwrap_or_default();
-		Err(provider_error(format!("{action} returned {status}: {body}")))
+		Err(response_failure(Provider::Mangabaka, action, status, &body))
 	}
 
 	async fn get_authed_json<T: DeserializeOwned>(&self, user_id: i64, url: Url, action: &str) -> Result<T, TrackerError> {
@@ -799,6 +799,13 @@ mod tests {
 			Err(TrackerError::Provider { provider: Provider::Mangabaka, .. })
 		));
 		assert!(!mock.requests().iter().any(|recorded| recorded.request.path == "/v1/my/library/42"));
+	}
+
+	#[tokio::test]
+	async fn a_rate_limited_read_is_reported_as_one() {
+		let (origin, _mock) = serve(|_| (StatusCode::TOO_MANY_REQUESTS, json!({"message": "slow down"}))).await;
+		let (service, user, _tmp) = test_service(&origin).await;
+		assert!(matches!(service.get_state(user, "42").await, Err(TrackerError::RateLimited { provider: Provider::Mangabaka })));
 	}
 
 	#[tokio::test]

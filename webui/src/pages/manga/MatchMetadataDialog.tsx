@@ -14,6 +14,7 @@ import {
 	listTrackerLinks,
 	preferredTrackerProvider,
 	searchTracker,
+	trackerErrorMessage,
 	trackerKeys,
 	trackerPreferences
 } from '../../api/trackers';
@@ -377,7 +378,7 @@ export function MatchMetadataDialog({
 								</p>
 							) : (
 								<div className="tracker-error" role="alert">
-									<span>{trackerQuery.error.message}</span>
+									<span>{trackerErrorMessage(trackerQuery.error)}</span>
 								</div>
 							)
 						) : trackerQuery.isPending ? (
@@ -485,7 +486,7 @@ export function MatchMetadataDialog({
 
 					{previewQuery.isError ? (
 						<div className="tracker-error" role="alert">
-							<span>{previewQuery.error.message}</span>
+							<span>{trackerErrorMessage(previewQuery.error)}</span>
 						</div>
 					) : previewQuery.isPending ? (
 						<div className="tracker-dialog-state">
@@ -541,7 +542,7 @@ export function MatchMetadataDialog({
 
 							{apply.isError && (
 								<p className="tracker-error" role="alert">
-									{apply.error.message}
+									{trackerErrorMessage(apply.error)}
 								</p>
 							)}
 						</>

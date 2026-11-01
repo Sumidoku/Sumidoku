@@ -5,7 +5,7 @@
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
-use crate::tracker::{Provider, TrackerError, TrackerService};
+use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -174,7 +174,7 @@ impl AniListTracker {
 
 	async fn read_response(response: reqwest::Response) -> Result<(reqwest::StatusCode, String), TrackerError> {
 		let status = response.status();
-		let body = response.text().await.map_err(|error| Self::error(format!("response could not be read: {error}")))?;
+		let body = response.text().await.map_err(|error| Self::error(format!("response could not be read: {}", request_failure(error))))?;
 		Ok((status, body))
 	}
 
@@ -199,14 +199,14 @@ impl AniListTracker {
 			}))
 		};
 
-		let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {error}")))?;
+		let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {}", request_failure(error))))?;
 		let (mut status, mut raw) = Self::read_response(response).await?;
 		let mut body = serde_json::from_str::<Value>(&raw).ok();
 
 		if Self::is_unauthorized(status, body.as_ref()) {
 			if let Some(fresh) = self.oauth.refresh_now(Provider::Anilist, user_id).await? {
 				token = fresh;
-				let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {error}")))?;
+				let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {}", request_failure(error))))?;
 				(status, raw) = Self::read_response(response).await?;
 				body = serde_json::from_str::<Value>(&raw).ok();
 			}
@@ -221,7 +221,7 @@ impl AniListTracker {
 		}
 
 		if !status.is_success() {
-			return Err(Self::error(format!("request returned {status}: {raw}")));
+			return Err(response_failure(Provider::Anilist, "request", status, &raw));
 		}
 		let body = body.ok_or_else(|| Self::error("response was not valid JSON"))?;
 		if let Some(errors) = body.get("errors").and_then(Value::as_array) {
@@ -721,6 +721,17 @@ mod tests {
 		assert_eq!(state.score, Some(8));
 		let requests = mock.requests();
 		assert_eq!(requests.iter().filter(|request| request_has_query(request, "scoreFormat")).count(), 2);
+	}
+
+	#[tokio::test]
+	async fn a_rate_limited_read_is_reported_as_one() {
+		let base_url = crate::tracker::providers::test_support::serve(axum::Router::new().fallback(|| async {
+			(axum::http::StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({"errors": [{"message": "Too Many Requests.", "status": 429}]})))
+		}))
+		.await;
+		let (oauth, alice, _tmp) = seeded_oauth(&base_url).await;
+		let tracker = AniListTracker::with_graphql_url(reqwest::Client::new(), oauth, format!("{base_url}/graphql"));
+		assert!(matches!(tracker.get_state(alice, "42").await, Err(TrackerError::RateLimited { provider: Provider::Anilist })));
 	}
 
 	#[tokio::test]

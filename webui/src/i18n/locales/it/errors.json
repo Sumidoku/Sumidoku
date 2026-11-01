@@ -12,6 +12,7 @@
     "source_error": "La richiesta alla fonte non è riuscita",
     "timeout": "La richiesta alla fonte è scaduta",
     "bad_gateway": "La richiesta a monte non è riuscita",
+    "tracker_rate_limited": "Il tracker sta limitando le richieste. Riprova più tardi.",
     "internal": "Errore interno del server",
     "gone": "La cartella risulta ancora mancante; ripristinala su disco oppure elimina definitivamente la voce",
     "not_trashed": "Questa voce non è nel cestino",

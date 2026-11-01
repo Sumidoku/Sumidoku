@@ -7,7 +7,7 @@
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
-use crate::tracker::{Provider, TrackerError, TrackerService};
+use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use aidoku::MangaStatus;
 use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
@@ -249,7 +249,7 @@ impl BangumiTracker {
 			}
 			request
 		};
-		let mut response = build(&token).send().await.map_err(|error| provider_error(format!("{action} request failed: {error}")))?;
+		let mut response = build(&token).send().await.map_err(|error| provider_error(format!("{action} request failed: {}", request_failure(error))))?;
 		if response.status() == StatusCode::UNAUTHORIZED {
 			let token = match self.oauth.refresh_now(Provider::Bangumi, user_id).await? {
 				Some(token) => token,
@@ -258,7 +258,7 @@ impl BangumiTracker {
 					return Err(not_logged_in());
 				}
 			};
-			response = build(&token).send().await.map_err(|error| provider_error(format!("{action} retry failed: {error}")))?;
+			response = build(&token).send().await.map_err(|error| provider_error(format!("{action} retry failed: {}", request_failure(error))))?;
 			if response.status() == StatusCode::UNAUTHORIZED {
 				self.oauth.logout_if_current(Provider::Bangumi, user_id, &token).await?;
 				return Err(not_logged_in());
@@ -269,9 +269,9 @@ impl BangumiTracker {
 
 	async fn decode_json<T: DeserializeOwned>(response: reqwest::Response, action: &str) -> Result<T, TrackerError> {
 		let status = response.status();
-		let body = response.text().await.map_err(|error| provider_error(format!("{action} response could not be read: {error}")))?;
+		let body = response.text().await.map_err(|error| provider_error(format!("{action} response could not be read: {}", request_failure(error))))?;
 		if !status.is_success() {
-			return Err(provider_error(format!("{action} returned {status}: {body}")));
+			return Err(response_failure(Provider::Bangumi, action, status, &body));
 		}
 		serde_json::from_str(&body).map_err(|error| provider_error(format!("{action} response is invalid: {error}")))
 	}
@@ -282,7 +282,7 @@ impl BangumiTracker {
 		}
 		let status = response.status();
 		let body = response.text().await.unwrap_or_default();
-		Err(provider_error(format!("{action} returned {status}: {body}")))
+		Err(response_failure(Provider::Bangumi, action, status, &body))
 	}
 
 	async fn send_ok(&self, user_id: i64, method: Method, url: Url, body: &Value, action: &str) -> Result<(), TrackerError> {
@@ -730,6 +730,13 @@ mod tests {
 		let search = requests.iter().find(|request| request.path == "/p1/search/subjects").unwrap();
 		assert_eq!(search.json()["filter"]["nsfw"], true);
 		assert!(!requests.iter().any(|request| request.path.starts_with("/p1/subjects/")));
+	}
+
+	#[tokio::test]
+	async fn a_rate_limited_read_is_reported_as_one() {
+		let (origin, _mock) = serve(|_| (StatusCode::TOO_MANY_REQUESTS, json!({"message": "slow down"}))).await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+		assert!(matches!(service.get_state(USER_ID, "42").await, Err(TrackerError::RateLimited { provider: Provider::Bangumi })));
 	}
 
 	#[tokio::test]

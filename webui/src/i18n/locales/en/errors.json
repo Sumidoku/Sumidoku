@@ -12,6 +12,7 @@
     "source_error": "The source request failed",
     "timeout": "The source request timed out",
     "bad_gateway": "The upstream request failed",
+    "tracker_rate_limited": "The tracker is rate limiting requests. Try again in a while.",
     "internal": "Internal server error",
     "gone": "The directory is still missing; restore it on disk first, or purge the entry",
     "not_trashed": "This entry is not in the trash",

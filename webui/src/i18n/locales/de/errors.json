@@ -12,6 +12,7 @@
     "source_error": "Die Anfrage an die Quelle ist fehlgeschlagen",
     "timeout": "Zeitüberschreitung bei der Anfrage an die Quelle",
     "bad_gateway": "Die Anfrage an den vorgelagerten Server ist fehlgeschlagen",
+    "tracker_rate_limited": "Der Tracker begrenzt gerade die Anfragen. Versuchen Sie es später erneut.",
     "internal": "Interner Serverfehler",
     "gone": "Das Verzeichnis fehlt weiterhin; stellen Sie es zuerst auf dem Datenträger wieder her oder löschen Sie den Eintrag endgültig",
     "not_trashed": "Dieser Eintrag befindet sich nicht im Papierkorb",

@@ -147,7 +147,11 @@ no alias is derived from migration text.
   list endpoints derive them with one page-scoped batch query and never call a
   provider. A remote route hit without a connected account answers 409
   `tracker_auth` — deliberately distinct from the auth layer's reason-free
-  401, because the web UI must offer the connect flow, not a re-login. The
+  401, because the web UI must offer the connect flow, not a re-login. A
+  provider's 429 answers 429 `tracker_rate_limited`, which the web UI translates;
+  any other provider failure answers 502 with the action, status and readable
+  part of the body (`tracker/mod.rs:response_failure`), and a failed request
+  names its cause without its URL. The
   `/settings?section=trackers` page manages accounts and current-user bindings;
   `GET /trackers/links` pages by bound manga, so one manga's providers never
   split across pages, and carries the local title and cover plus unfiltered

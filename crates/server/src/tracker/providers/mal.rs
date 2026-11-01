@@ -5,7 +5,7 @@
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
 use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
-use crate::tracker::{Provider, TrackerError, TrackerService};
+use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -42,29 +42,20 @@ impl MalTracker {
 
 	async fn read_response(response: reqwest::Response) -> Result<(reqwest::StatusCode, String), TrackerError> {
 		let status = response.status();
-		let body = response.text().await.map_err(|error| Self::error(format!("response could not be read: {error}")))?;
+		let body = response.text().await.map_err(|error| Self::error(format!("response could not be read: {}", request_failure(error))))?;
 		Ok((status, body))
-	}
-
-	fn response_error(action: &str, status: reqwest::StatusCode, raw: &str) -> TrackerError {
-		let message = serde_json::from_str::<Value>(raw)
-			.ok()
-			.and_then(|body| body.get("message").or_else(|| body.get("error")).and_then(Value::as_str).map(str::to_string))
-			.filter(|message| !message.is_empty())
-			.unwrap_or_else(|| raw.to_string());
-		Self::error(format!("{action} returned {status}: {message}"))
 	}
 
 	async fn get_json(&self, user_id: i64, url: &str) -> Result<Value, TrackerError> {
 		let mut token = self.access_token(user_id).await?;
 		let send = |token: &str| self.http.get(url).bearer_auth(token);
-		let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {error}")))?;
+		let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {}", request_failure(error))))?;
 		let (mut status, mut raw) = Self::read_response(response).await?;
 
 		if status == reqwest::StatusCode::UNAUTHORIZED {
 			if let Some(fresh) = self.oauth.refresh_now(Provider::Mal, user_id).await? {
 				token = fresh;
-				let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {error}")))?;
+				let response = send(&token).send().await.map_err(|error| Self::error(format!("request failed: {}", request_failure(error))))?;
 				(status, raw) = Self::read_response(response).await?;
 			}
 			if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -78,7 +69,7 @@ impl MalTracker {
 		}
 
 		if !status.is_success() {
-			return Err(Self::response_error("request", status, &raw));
+			return Err(response_failure(Provider::Mal, "request", status, &raw));
 		}
 		serde_json::from_str(&raw).map_err(|error| Self::error(format!("response was not valid JSON: {error}")))
 	}
@@ -296,12 +287,12 @@ impl TrackerService for MalTracker {
 		let url = format!("{}/manga/{id}/my_list_status", self.base_url);
 		let mut token = self.access_token(user_id).await?;
 		let send = |token: &str| self.http.patch(&url).bearer_auth(token).form(&form);
-		let response = send(&token).send().await.map_err(|error| Self::error(format!("update failed: {error}")))?;
+		let response = send(&token).send().await.map_err(|error| Self::error(format!("update failed: {}", request_failure(error))))?;
 		let (mut status, mut raw) = Self::read_response(response).await?;
 		if status == reqwest::StatusCode::UNAUTHORIZED {
 			if let Some(fresh) = self.oauth.refresh_now(Provider::Mal, user_id).await? {
 				token = fresh;
-				let response = send(&token).send().await.map_err(|error| Self::error(format!("update failed: {error}")))?;
+				let response = send(&token).send().await.map_err(|error| Self::error(format!("update failed: {}", request_failure(error))))?;
 				(status, raw) = Self::read_response(response).await?;
 			}
 			if status == reqwest::StatusCode::UNAUTHORIZED {
@@ -310,7 +301,7 @@ impl TrackerService for MalTracker {
 			}
 		}
 		if !status.is_success() {
-			return Err(Self::response_error("update", status, &raw));
+			return Err(response_failure(Provider::Mal, "update", status, &raw));
 		}
 		Ok(())
 	}
@@ -546,6 +537,17 @@ mod tests {
 		let chapters = [ChapterTrackInput { number: Some(100.0), volume: None, read: true }];
 		let update = decide(TrackMode::Chapter, 0, &state, &chapters, chrono::NaiveDate::from_ymd_opt(2026, 10, 25).unwrap()).unwrap();
 		assert_eq!(update.status, Some(TrackStatus::Completed));
+	}
+
+	#[tokio::test]
+	async fn a_rate_limited_read_is_reported_as_one() {
+		let base_url = crate::tracker::providers::test_support::serve(axum::Router::new().fallback(|| async {
+			(axum::http::StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({"error": "too_many_requests"})))
+		}))
+		.await;
+		let (oauth, alice, _tmp) = seeded_oauth(&base_url).await;
+		let tracker = MalTracker::with_base_url(reqwest::Client::new(), oauth, format!("{base_url}/v2"));
+		assert!(matches!(tracker.get_state(alice, "42").await, Err(TrackerError::RateLimited { provider: Provider::Mal })));
 	}
 
 	#[tokio::test]
