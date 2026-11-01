@@ -17,6 +17,7 @@ import {
 	putTrackerPreferences,
 	readOAuthReturn,
 	trackerEntryUrl,
+	trackerErrorMessage,
 	trackerKeys,
 	trackerPreferences
 } from '../../api/trackers';
@@ -64,7 +65,7 @@ function TrackerAccountCard({ provider }: { provider: TrackerProvider }) {
 						<Skeleton height={14} width={120} />
 					) : statusQuery.isError ? (
 						<p className="tracker-provider__state tracker-provider__state--error">
-							{statusQuery.error.message}
+							{trackerErrorMessage(statusQuery.error)}
 						</p>
 					) : connected ? (
 						<p className="tracker-provider__state">

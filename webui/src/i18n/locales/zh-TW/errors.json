@@ -12,6 +12,7 @@
     "source_error": "來源請求失敗",
     "timeout": "來源請求逾時",
     "bad_gateway": "上游請求失敗",
+    "tracker_rate_limited": "追蹤器請求過於頻繁，已被限流，請稍後再試",
     "internal": "伺服器內部錯誤",
     "gone": "目錄仍然不存在；請先在磁碟上還原，或永久刪除此條目",
     "not_trashed": "此條目不在垃圾桶中",

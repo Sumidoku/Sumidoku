@@ -12,6 +12,7 @@
     "source_error": "源请求失败",
     "timeout": "源请求超时",
     "bad_gateway": "上游服务请求失败",
+    "tracker_rate_limited": "追踪器请求过于频繁，已被限流，请稍后再试",
     "internal": "服务器内部错误",
     "gone": "目录仍不存在；请先在磁盘上恢复，或清除该条目",
     "not_trashed": "该条目不在回收站中",

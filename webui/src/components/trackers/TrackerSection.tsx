@@ -11,6 +11,7 @@ import {
 	hasTrackUpdate,
 	invalidateTrackerLinks,
 	isTrackerAuthError,
+	trackerErrorMessage,
 	listTrackerLinks,
 	mergeTrackEditValues,
 	oauthStartUrl,
@@ -176,7 +177,7 @@ function AddTrackerDialog({ mangaId, mangaTitle, providers, onClose, onBound }: 
 						<TrackerAuthNotice provider={provider} />
 					) : (
 						<div className="tracker-dialog-state tracker-error" role="alert">
-							<span>{searchQuery.error.message}</span>
+							<span>{trackerErrorMessage(searchQuery.error)}</span>
 							<Button size="sm" onClick={() => void searchQuery.refetch()}>
 								{t('trackers.retry')}
 							</Button>
@@ -303,7 +304,7 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 						<TrackerAuthNotice provider={link.provider} reconnect />
 					) : (
 						<p className="tracker-error" role="alert">
-							{save.error.message}
+							{trackerErrorMessage(save.error)}
 						</p>
 					))}
 				<div className="tracker-edit__mode">
@@ -396,7 +397,7 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 						<TrackerAuthNotice provider={link.provider} reconnect />
 					) : (
 						<p className="tracker-error" role="alert">
-							{previewSync.error.message}
+							{trackerErrorMessage(previewSync.error)}
 						</p>
 					))}
 				<div className="tracker-edit__actions">
@@ -441,7 +442,7 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 					))}
 				{applySync.isError && (
 					<p className="tracker-error" role="alert">
-						{applySync.error.message}
+						{trackerErrorMessage(applySync.error)}
 					</p>
 				)}
 			</Modal>
@@ -492,7 +493,7 @@ function EditTrackerDialog({ link, onClose }: { link: TrackerLink; onClose: () =
 							<TrackerAuthNotice provider={link.provider} reconnect />
 						) : (
 							<div className="tracker-dialog-state tracker-error" role="alert">
-								<span>{remoteQuery.error.message}</span>
+								<span>{trackerErrorMessage(remoteQuery.error)}</span>
 								<Button size="sm" onClick={() => void remoteQuery.refetch()}>
 									{t('trackers.retry')}
 								</Button>

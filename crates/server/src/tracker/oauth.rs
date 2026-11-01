@@ -9,7 +9,7 @@
 //! and serialized; every conditional write guards on the access token it saw,
 //! so a racing logout/login or a second refresh never clobbers the other.
 
-use super::{Provider, TrackerError, dao};
+use super::{Provider, TrackerError, dao, request_failure, response_detail};
 use base64::Engine as _;
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -318,14 +318,17 @@ impl OAuthManager {
 			.form(form)
 			.send()
 			.await
-			.map_err(|error| TrackerError::Provider { provider, message: format!("OAuth token request failed: {error}") })?;
+			.map_err(|error| TrackerError::Provider { provider, message: format!("OAuth token request failed: {}", request_failure(error)) })?;
 		let status = response.status();
 		let body = response
 			.text()
 			.await
-			.map_err(|error| TrackerError::Provider { provider, message: format!("OAuth token response could not be read: {error}") })?;
+			.map_err(|error| TrackerError::Provider { provider, message: format!("OAuth token response could not be read: {}", request_failure(error)) })?;
+		if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+			return Err(TrackerError::RateLimited { provider });
+		}
 		if !status.is_success() {
-			return Err(TrackerError::Upstream { provider, status, message: body });
+			return Err(TrackerError::Upstream { provider, status, message: response_detail(&body).unwrap_or_default() });
 		}
 		let parsed: TokenResponse = serde_json::from_str(&body)
 			.map_err(|error| TrackerError::Provider { provider, message: format!("OAuth token response is invalid: {error}") })?;
@@ -493,6 +496,7 @@ mod tests {
 		RefreshNoNewRefreshToken,
 		Rejected,
 		Transient,
+		RateLimited,
 	}
 
 	async fn token_handler(
@@ -511,6 +515,7 @@ mod tests {
 			),
 			TokenMode::Rejected => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "invalid_grant"}))),
 			TokenMode::Transient => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({}))),
+			TokenMode::RateLimited => (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error": "slow_down"}))),
 		}
 	}
 
@@ -616,6 +621,16 @@ mod tests {
 
 		let result = fixture.oauth.access_token(Provider::Bangumi, 1).await;
 		assert!(matches!(result, Err(TrackerError::Upstream { status: StatusCode::INTERNAL_SERVER_ERROR, .. })));
+		assert!(dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().is_some());
+	}
+
+	#[tokio::test]
+	async fn a_rate_limited_refresh_keeps_the_account() {
+		let fixture = fixture(TokenMode::RateLimited).await;
+		seed(&fixture.pool, Some(now() - 60), true).await;
+
+		let result = fixture.oauth.access_token(Provider::Bangumi, 1).await;
+		assert!(matches!(result, Err(TrackerError::RateLimited { provider: Provider::Bangumi })));
 		assert!(dao::get_token(&fixture.pool, Provider::Bangumi, 1).await.unwrap().is_some());
 	}
 

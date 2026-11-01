@@ -68,6 +68,10 @@ impl ApiError {
 		Self::new(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
 	}
 
+	pub fn tracker_rate_limited(message: impl Into<String>) -> Self {
+		Self::new(StatusCode::TOO_MANY_REQUESTS, "tracker_rate_limited", message)
+	}
+
 	pub fn payload_too_large(message: impl Into<String>) -> Self {
 		Self::new(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
 	}

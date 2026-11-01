@@ -12,6 +12,7 @@
     "source_error": "La requête vers la source a échoué",
     "timeout": "La requête vers la source a expiré",
     "bad_gateway": "La requête en amont a échoué",
+    "tracker_rate_limited": "Le service de suivi limite les requêtes. Réessayez plus tard.",
     "internal": "Erreur interne du serveur",
     "gone": "Le répertoire est toujours manquant ; restaurez-le d'abord sur le disque, ou purgez l'entrée",
     "not_trashed": "Cette entrée n'est pas à la corbeille",

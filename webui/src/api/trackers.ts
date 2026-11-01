@@ -1,3 +1,4 @@
+import { translateApiError } from '../i18n';
 import { ApiError, api } from './client';
 import { qk } from './hooks';
 import type { QueryClient } from '@tanstack/react-query';
@@ -147,6 +148,14 @@ export function trackerMediaLabelKey(item: Pick<TrackSearchItem, 'mediaType' | '
 
 export function isTrackerAuthError(error: unknown): error is ApiError {
 	return error instanceof ApiError && error.status === 409 && error.code === 'tracker_auth';
+}
+
+/** A rate limit reads the same in every language; other failures keep the server's specifics */
+export function trackerErrorMessage(error: Error): string {
+	if (error instanceof ApiError && error.code === 'tracker_rate_limited') {
+		return translateApiError(error.code, error.message);
+	}
+	return error.message;
 }
 
 export function availableTrackerProviders(links: readonly TrackerLink[]) {

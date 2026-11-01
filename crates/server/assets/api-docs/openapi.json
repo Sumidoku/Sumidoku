@@ -1854,6 +1854,9 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -1915,6 +1918,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -4135,6 +4141,9 @@
               }
             }
           },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4296,6 +4305,9 @@
               }
             }
           },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4351,6 +4363,9 @@
               }
             }
           },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
+          },
           "default": {
             "$ref": "#/components/responses/Error"
           }
@@ -4400,6 +4415,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "$ref": "#/components/responses/TrackerRateLimited"
           },
           "default": {
             "$ref": "#/components/responses/Error"
@@ -5700,6 +5718,16 @@
             }
           }
         }
+      },
+      "TrackerRateLimited": {
+        "description": "The tracker provider is rate limiting requests (error code `tracker_rate_limited`); try again later",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -5735,7 +5763,8 @@
               "not_trashed",
               "gone",
               "root_unavailable",
-              "tracker_auth"
+              "tracker_auth",
+              "tracker_rate_limited"
             ]
           },
           "message": {

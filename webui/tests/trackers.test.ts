@@ -235,3 +235,15 @@ test('preferredTrackerProvider preselects a free default and falls back to the f
 	assert.equal(trackers.preferredTrackerProvider(undefined, ['mal']), 'mal');
 	assert.equal(trackers.preferredTrackerProvider('bangumi', []), 'anilist');
 });
+
+test('a rate limit is translated by its code while other failures keep the server text', async () => {
+	const { default: i18n } = await vite.ssrLoadModule('/src/i18n/index.ts');
+	await i18n.changeLanguage('zh-CN');
+	const limited = new ApiError(429, 'tracker_rate_limited', 'bangumi rate limit reached; try again later');
+	assert.equal(trackers.trackerErrorMessage(limited), '追踪器请求过于频繁，已被限流，请稍后再试');
+	await i18n.changeLanguage('en');
+	assert.equal(trackers.trackerErrorMessage(limited), 'The tracker is rate limiting requests. Try again in a while.');
+
+	const failed = new ApiError(502, 'bad_gateway', 'anilist tracker: request returned 503 Service Unavailable');
+	assert.equal(trackers.trackerErrorMessage(failed), failed.message);
+});

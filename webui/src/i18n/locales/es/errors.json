@@ -12,6 +12,7 @@
     "source_error": "La solicitud a la fuente falló",
     "timeout": "La solicitud a la fuente agotó el tiempo de espera",
     "bad_gateway": "La solicitud al servidor de origen falló",
+    "tracker_rate_limited": "El tracker está limitando las solicitudes. Inténtalo de nuevo más tarde.",
     "internal": "Error interno del servidor",
     "gone": "El directorio sigue sin estar disponible; restáuralo primero en el disco o elimina la entrada",
     "not_trashed": "Esta entrada no está en la papelera",

@@ -59,6 +59,8 @@ pub enum TrackerError {
 	Provider { provider: Provider, message: String },
 	#[error("{provider} OAuth endpoint returned {status}: {message}")]
 	Upstream { provider: Provider, status: reqwest::StatusCode, message: String },
+	#[error("{provider} rate limit reached; try again later")]
+	RateLimited { provider: Provider },
 	#[error(transparent)]
 	Database(#[from] sqlx::Error),
 	#[error("{provider} OAuth client id is not configured at build time ({variable})")]
@@ -69,6 +71,50 @@ pub enum TrackerError {
 	InvalidState,
 	#[error("OAuth authorization session is missing or expired")]
 	PendingExpired,
+}
+
+/// reqwest's own text is "error sending request for url (...)": the address and no reason. The reason sits
+/// in the source chain, and the address must not reach the page.
+pub(crate) fn request_failure(error: reqwest::Error) -> String {
+	let error = error.without_url();
+	let mut text = error.to_string();
+	let mut source = std::error::Error::source(&error);
+	while let Some(cause) = source {
+		text.push_str(": ");
+		text.push_str(&cause.to_string());
+		source = cause.source();
+	}
+	text
+}
+
+/// What a failed response says for itself. The body is shown to a reader, so a JSON error keeps only its
+/// message, and an HTML error page says nothing useful.
+pub(crate) fn response_detail(body: &str) -> Option<String> {
+	const MAX_CHARS: usize = 200;
+	let body = body.trim();
+	if body.is_empty() || body.starts_with('<') {
+		return None;
+	}
+	let json = serde_json::from_str::<serde_json::Value>(body).ok();
+	let message = json.as_ref().and_then(|json| {
+		["/message", "/error_description", "/error", "/errors/0/message"]
+			.into_iter()
+			.find_map(|pointer| json.pointer(pointer).and_then(serde_json::Value::as_str))
+			.filter(|message| !message.is_empty())
+	});
+	Some(message.unwrap_or(body).chars().take(MAX_CHARS).collect())
+}
+
+/// The error for a non-success response from any provider endpoint.
+pub(crate) fn response_failure(provider: Provider, action: &str, status: reqwest::StatusCode, body: &str) -> TrackerError {
+	if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+		return TrackerError::RateLimited { provider };
+	}
+	let message = match response_detail(body) {
+		Some(detail) => format!("{action} returned {status}: {detail}"),
+		None => format!("{action} returned {status}"),
+	};
+	TrackerError::Provider { provider, message }
 }
 
 #[async_trait::async_trait]
@@ -189,6 +235,37 @@ mod tests {
 		}
 		let error = TrackerError::NotLoggedIn { provider: Provider::Anilist };
 		assert_eq!(error.to_string(), "anilist tracker: not logged in");
+	}
+
+	#[test]
+	fn a_rate_limit_is_its_own_error_whatever_the_body_says() {
+		let error = response_failure(Provider::Bangumi, "search", reqwest::StatusCode::TOO_MANY_REQUESTS, "https://bgm.tv/limits");
+		assert!(matches!(error, TrackerError::RateLimited { provider: Provider::Bangumi }));
+		assert_eq!(error.to_string(), "bangumi rate limit reached; try again later");
+	}
+
+	#[test]
+	fn a_failed_response_keeps_its_status_and_only_the_readable_part_of_its_body() {
+		let status = reqwest::StatusCode::SERVICE_UNAVAILABLE;
+		let message = |body| response_failure(Provider::Anilist, "request", status, body).to_string();
+		let prefix = "anilist tracker: request returned 503 Service Unavailable";
+		assert_eq!(message(r#"{"message":"down for maintenance","code":7}"#), format!("{prefix}: down for maintenance"));
+		assert_eq!(message(r#"{"error":"invalid_grant","error_description":"expired"}"#), format!("{prefix}: expired"));
+		assert_eq!(message(r#"{"errors":[{"message":"try later","status":503}],"data":null}"#), format!("{prefix}: try later"));
+		assert_eq!(message("<html><body>Bad gateway</body></html>"), prefix);
+		assert_eq!(message(""), prefix);
+		assert_eq!(message(&"界".repeat(300)), format!("{prefix}: {}", "界".repeat(200)));
+	}
+
+	#[tokio::test]
+	async fn a_failed_request_names_its_cause_instead_of_its_url() {
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let address = listener.local_addr().unwrap();
+		drop(listener);
+		let error = reqwest::Client::new().get(format!("http://{address}/secret-path")).send().await.unwrap_err();
+		let text = request_failure(error);
+		assert!(!text.contains("secret-path") && !text.contains("url ("), "{text}");
+		assert!(text.len() > "error sending request".len(), "{text}");
 	}
 
 	#[tokio::test]

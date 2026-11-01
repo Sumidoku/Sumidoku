@@ -44,7 +44,9 @@ pub(crate) fn tracker_error(error: TrackerError) -> ApiError {
 		TrackerError::InvalidState | TrackerError::PendingExpired => ApiError::bad_request(error.to_string()),
 		TrackerError::Database(error) => error.into(),
 		TrackerError::MissingClientId { .. } | TrackerError::MissingClientSecret { .. } => ApiError::internal(error.to_string()),
-		TrackerError::Upstream { message, .. } | TrackerError::Provider { message, .. } => ApiError::bad_gateway(message),
+		// the web UI translates this code; the provider's own wording never reaches the page
+		TrackerError::RateLimited { .. } => ApiError::tracker_rate_limited(error.to_string()),
+		TrackerError::Upstream { .. } | TrackerError::Provider { .. } => ApiError::bad_gateway(error.to_string()),
 	}
 }
 
@@ -678,6 +680,21 @@ mod tests {
 	/// Aidoku's "Sync Local History": the tracker is ahead, so applying marks
 	/// every chapter up to its progress read (locked state does not matter),
 	/// while a preview computes the same plan without writing.
+	#[test]
+	fn upstream_failures_answer_with_what_went_wrong() {
+		let limited = tracker_error(TrackerError::RateLimited { provider: Provider::Bangumi });
+		assert_eq!(limited.code(), "tracker_rate_limited");
+		assert_eq!(limited.message(), "bangumi rate limit reached; try again later");
+
+		let upstream = tracker_error(TrackerError::Upstream {
+			provider: Provider::Mal,
+			status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+			message: "maintenance".into(),
+		});
+		assert_eq!(upstream.code(), "bad_gateway");
+		assert_eq!(upstream.message(), "mal OAuth endpoint returned 503 Service Unavailable: maintenance");
+	}
+
 	#[tokio::test]
 	async fn sync_pull_marks_chapters_read_and_preview_stays_read_only() {
 		let remote = RemoteState {
