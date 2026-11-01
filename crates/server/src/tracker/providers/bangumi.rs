@@ -61,7 +61,7 @@ struct Subject {
 struct InfoboxItem {
 	#[serde(default)]
 	key: String,
-	#[serde(default)]
+	#[serde(default, rename = "values")]
 	value: Value,
 }
 
@@ -279,7 +279,21 @@ impl BangumiTracker {
 		};
 		let mut people = Vec::new();
 		for item in items.iter().filter(|item| item.key == key) {
-			for name in Self::infobox_text(&item.value).split(['/', '、', ',', '，']) {
+			let text = Self::infobox_text(&item.value);
+			// Strip bracketed annotations like （原作） before splitting.
+			let text = {
+				let mut out = String::new();
+				let mut depth = 0i32;
+				for c in text.chars() {
+					match c {
+						'(' | '（' | '[' | '【' | '《' => { depth += 1; }
+						')' | '）' | ']' | '】' | '》' => { if depth > 0 { depth -= 1; } }
+						_ => { if depth == 0 { out.push(c); } }
+					}
+				}
+				out
+			};
+			for name in text.split(['/', '／', '、', '_', '→', '・', ':', '×', '&', ',', '，']) {
 				let name = name.trim();
 				if !name.is_empty() {
 					people.push(name.to_string());
@@ -309,7 +323,13 @@ impl BangumiTracker {
 			id: subject.id.to_string(),
 			title: TitleVariants { default, alternatives },
 			info: subject.info.clone().filter(|info| !info.is_empty()),
-			authors: Self::infobox_people(subject, "作者"),
+			authors: {
+				let mut authors = Self::infobox_people(subject, "作者");
+				for key in ["原作", "脚本", "原案", "作画"] {
+					authors.extend(Self::infobox_people(subject, key));
+				}
+				dedupe(authors)
+			},
 			artists: Self::infobox_people(subject, "作画"),
 			description: subject.summary.clone().filter(|summary| !summary.is_empty()),
 			tags,
@@ -493,9 +513,9 @@ mod tests {
 			"images": {"large": "https://img.test/42.jpg"},
 			"info": "Info",
 			"infobox": [
-				{"key": "作者", "value": [{"v": "三浦建太郎"}, {"v": "Studio Gaga"}]},
-				{"key": "作画", "value": "Studio Gaga"},
-				{"key": "别名", "value": [{"v": "Berserk"}]}
+				{"key": "作者", "values": [{"v": "三浦建太郎"}, {"v": "Studio Gaga"}]},
+				{"key": "作画", "values": "Studio Gaga"},
+				{"key": "别名", "values": [{"v": "Berserk"}]}
 			],
 			"tags": [{"name": "奇幻", "count": 200}, {"name": "冒险", "count": 50}],
 			"nsfw": true
