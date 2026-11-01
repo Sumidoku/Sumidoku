@@ -3,7 +3,7 @@
 //! the viewer's configured score format, cached per user.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
-use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
+use crate::tracker::metadata::{StaffNames, TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use serde_json::{Value, json};
@@ -355,20 +355,33 @@ impl AniListTracker {
 			.filter_map(|(label, value)| value.map(|value| TitleAlternative { label: label.into(), value }))
 			.collect();
 
-		let staff = media
+		// Staff records carry both a native and a latin (`full`) spelling. The
+		// authors default to the native one, the same way the title does; the latin
+		// list travels as an alternative for the user to pick instead.
+		let staff_names = media
 			.pointer("/staff/nodes")
 			.and_then(Value::as_array)
 			.into_iter()
 			.flatten()
 			.filter_map(|staff| {
-				let name = staff
-					.pointer("/name/native")
-					.and_then(Value::as_str)
-					.filter(|name| !name.is_empty())
-					.or_else(|| staff.pointer("/name/full").and_then(Value::as_str).filter(|name| !name.is_empty()))?;
-				Some(name.to_string())
-			});
-		let authors = dedupe(staff);
+				let name = |key: &str| {
+					staff
+						.pointer(&format!("/name/{key}"))
+						.and_then(Value::as_str)
+						.filter(|name| !name.is_empty())
+						.map(str::to_string)
+				};
+				let (native, full) = (name("native"), name("full"));
+				(native.is_some() || full.is_some()).then_some((native, full))
+			})
+			.collect::<Vec<_>>();
+		let authors = dedupe(staff_names.iter().filter_map(|(native, full)| native.clone().or_else(|| full.clone())));
+		let full_names = dedupe(staff_names.iter().filter_map(|(native, full)| full.clone().or_else(|| native.clone())));
+		let staff = if full_names == authors {
+			Vec::new()
+		} else {
+			vec![StaffNames { label: "Full".into(), authors: full_names, artists: Vec::new() }]
+		};
 		let mut ranked = media
 			.get("tags")
 			.and_then(Value::as_array)
@@ -390,6 +403,7 @@ impl AniListTracker {
 			info: super::search_info(media.pointer("/startDate/year").and_then(Value::as_i64), authors.iter().cloned()),
 			authors,
 			artists: Vec::new(),
+			staff,
 			description: media.get("description").and_then(Value::as_str).map(plain_description).filter(|text| !text.is_empty()),
 			tags,
 			status: media.get("status").and_then(Value::as_str).and_then(crate::tracker::metadata::anilist_status),
@@ -613,6 +627,33 @@ mod tests {
 		assert_eq!(metadata.cover_url.as_deref(), Some("https://img.example/large.jpg"));
 		assert_eq!(metadata.url.as_deref(), Some("https://anilist.co/manga/30002"));
 		assert!(metadata.description.as_deref().unwrap_or_default().contains("story"));
+	}
+
+	#[test]
+	fn metadata_offers_the_latin_staff_names_when_they_differ() {
+		let media = json!({
+			"id": 30002,
+			"title": {"native": "ベルセルク"},
+			"staff": {"nodes": [
+				{"name": {"native": "三浦建太郎", "full": "Kentarou Miura"}},
+				// a record without a native name uses its full one for both lists
+				{"name": {"full": "Studio Gaga"}},
+			]}
+		});
+		let metadata = AniListTracker::metadata_from_media(30002, &media);
+		// the native spelling leads, the way the title does
+		assert_eq!(metadata.authors, ["三浦建太郎", "Studio Gaga"]);
+		assert_eq!(
+			metadata.staff,
+			[StaffNames { label: "Full".into(), authors: vec!["Kentarou Miura".into(), "Studio Gaga".into()], artists: Vec::new() }]
+		);
+	}
+
+	#[test]
+	fn metadata_offers_no_staff_alternative_when_one_spelling_exists() {
+		let metadata = AniListTracker::metadata_from_media(42, &media());
+		assert_eq!(metadata.authors, ["Kentarou Miura", "Studio Gaga"]);
+		assert!(metadata.staff.is_empty());
 	}
 
 	// token rows reference user(id) with foreign keys enforced, so the user

@@ -192,6 +192,7 @@ impl MalTracker {
 			),
 			authors,
 			artists: Vec::new(),
+			staff: Vec::new(),
 			description: string(manga.get("synopsis")),
 			tags,
 			status: manga.get("status").and_then(Value::as_str).and_then(crate::tracker::metadata::mal_status),

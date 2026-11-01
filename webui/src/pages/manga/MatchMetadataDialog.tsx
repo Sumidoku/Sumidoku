@@ -21,6 +21,7 @@ import {
 import type {
 	GlobalSearchResult,
 	MetadataField,
+	MetadataFieldAlternative,
 	MetadataPreviewField,
 	SearchManga,
 	TrackSearchItem,
@@ -106,7 +107,7 @@ export function MatchMetadataDialog({
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [checked, setChecked] = useState<Partial<Record<MetadataField, boolean>>>({});
 	const [titleValue, setTitleValue] = useState('');
-	const [values, setValues] = useState<Partial<Record<MetadataField, string>>>({});
+	const [values, setValues] = useState<Partial<Record<MetadataField, string | Array<string>>>>({});
 	const [bind, setBind] = useState(false);
 	const [applied, setApplied] = useState<MetadataField[] | null>(null);
 
@@ -209,7 +210,10 @@ export function MatchMetadataDialog({
 				if (field.field === 'title') continue;
 				if (!field.selectable || !checked[field.field]) continue;
 				const v = values[field.field];
-				if (v !== undefined) valuesPayload[field.field] = editedMetadataValue(field.incoming, v);
+				if (v !== undefined) {
+					// a picked alternative is already a value list; a typed draft is text
+					valuesPayload[field.field] = Array.isArray(v) ? v : editedMetadataValue(field.incoming, v);
+				}
 			}
 			return applyMetadata(mangaId, {
 				provider: wireProvider(selection!),
@@ -517,7 +521,14 @@ export function MatchMetadataDialog({
 												setChecked((cur) => ({ ...cur, [field.field]: value }))
 											}
 											onTitleValue={setTitleValue}
-											onValue={(f, v) => setValues((cur) => ({ ...cur, [f]: v }))}
+											onValue={(f, v) =>
+												setValues((cur) => {
+													const next = { ...cur };
+													if (v === undefined) delete next[f];
+													else next[f] = v;
+													return next;
+												})
+											}
 										/>
 									))}
 								</tbody>
@@ -613,14 +624,28 @@ function FieldRow({
 	sourceName: (key: string) => string | undefined;
 	checked: boolean;
 	titleValue: string;
-	values: Partial<Record<MetadataField, string>>;
+	values: Partial<Record<MetadataField, string | Array<string>>>;
 	onChecked: (value: boolean) => void;
 	onTitleValue: (value: string) => void;
-	onValue: (field: MetadataField, value: string) => void;
+	onValue: (field: MetadataField, value: string | Array<string> | undefined) => void;
 }) {
 	const { t } = useTranslation();
 	const value = field.current;
 	const multi = Array.isArray(value);
+	// The tracker's other spellings of the same people: each list alternative is
+	// one whole-field choice, so one select replaces the incoming list
+	const listAlternatives = field.alternatives.filter(
+		(alternative): alternative is MetadataFieldAlternative & { value: Array<string> } =>
+			Array.isArray(alternative.value)
+	);
+	const stored = values[field.field];
+	const storedList = Array.isArray(stored) ? stored : null;
+	const chosen = listAlternatives.findIndex(
+		(alternative) =>
+			storedList !== null &&
+			alternative.value.length === storedList.length &&
+			alternative.value.every((name, index) => name === storedList[index])
+	);
 	return (
 		<tr className={field.selectable ? undefined : 'metadata-fields__row--disabled'}>
 			<td>
@@ -662,20 +687,45 @@ function FieldRow({
 								{t('metadata.titleAlternativeCurrent')} · {field.incoming}
 							</option>
 						)}
-						{field.alternatives.map((alternative) => (
-							<option value={alternative.value} key={`${alternative.label}:${alternative.value}`}>
-								{alternative.label} · {alternative.value}
-							</option>
-						))}
+						{field.alternatives.map((alternative) =>
+							typeof alternative.value === 'string' ? (
+								<option value={alternative.value} key={`${alternative.label}:${alternative.value}`}>
+									{alternative.label} · {alternative.value}
+								</option>
+							) : null
+						)}
 					</Select>
 				) : field.selectable ? (
 					field.field === 'cover' ? (
 						<CoverCell url={coverUrlOf(field.incoming)} label={t('metadata.fieldLabels.cover')} />
 					) : Array.isArray(field.incoming) ? (
-						<Input
-							value={values[field.field] ?? (field.incoming as string[]).join(', ')}
-							onChange={(e) => onValue(field.field, e.currentTarget.value)}
-						/>
+						<>
+							<Input
+								value={storedList ? storedList.join(', ') : (stored ?? field.incoming.join(', '))}
+								onChange={(e) => onValue(field.field, e.currentTarget.value)}
+							/>
+							{listAlternatives.length > 0 && (
+								<Select
+									className="metadata-fields__spellings"
+									value={chosen === -1 ? '' : String(chosen)}
+									onChange={(choice) =>
+										onValue(
+											field.field,
+											choice === '' ? undefined : [...listAlternatives[Number(choice)].value]
+										)
+									}
+								>
+									<option value="" key="incoming">
+										{t('metadata.creditNamesDefault')} · {field.incoming.join(', ')}
+									</option>
+									{listAlternatives.map((alternative, index) => (
+										<option value={String(index)} key={`${alternative.label}:${index}`}>
+											{alternative.label} · {alternative.value.join(', ')}
+										</option>
+									))}
+								</Select>
+							)}
+						</>
 					) : (
 						<Input
 							value={values[field.field] ?? String(field.incoming ?? '')}

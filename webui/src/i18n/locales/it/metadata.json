@@ -43,6 +43,7 @@
       "cover": "Copertina"
     },
     "titleAlternativeCurrent": "Attuale",
+    "creditNamesDefault": "Nomi predefiniti",
     "editTitle": "Modifica metadati",
     "editHint": "I valori modificati qui vengono bloccati e sopravvivono agli aggiornamenti della fonte. Gli elenchi prendono una voce per riga.",
     "editSaved": "Metadati salvati",

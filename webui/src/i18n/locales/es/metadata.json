@@ -43,6 +43,7 @@
       "cover": "Portada"
     },
     "titleAlternativeCurrent": "Actual",
+    "creditNamesDefault": "Nombres predeterminados",
     "editTitle": "Editar metadatos",
     "editHint": "Los valores que edites aquí quedarán bloqueados para ti y se conservarán al actualizar la fuente. En las listas, escribe una entrada por línea.",
     "editSaved": "Metadatos guardados",

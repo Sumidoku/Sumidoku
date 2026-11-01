@@ -41,6 +41,7 @@
       "cover": "表紙"
     },
     "titleAlternativeCurrent": "現在",
+    "creditNamesDefault": "既定の名前",
     "editTitle": "メタデータを編集",
     "editHint": "ここで編集した値はロックされ、ソースの更新でも上書きされません。リストは 1 行に 1 項目ずつ入力してください。",
     "editSaved": "メタデータを保存しました",

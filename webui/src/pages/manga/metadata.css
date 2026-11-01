@@ -122,6 +122,11 @@
 	width: 46px;
 }
 
+/* The other spellings of a people field, offered under its input */
+.metadata-fields__spellings {
+	margin-top: 5px;
+}
+
 .metadata-bind {
 	display: flex;
 	align-items: center;

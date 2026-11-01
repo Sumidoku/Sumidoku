@@ -43,6 +43,7 @@
       "cover": "Cover"
     },
     "titleAlternativeCurrent": "Aktuell",
+    "creditNamesDefault": "Standardnamen",
     "editTitle": "Metadaten bearbeiten",
     "editHint": "Hier bearbeitete Werte sind für Sie gesperrt und bleiben bei Aktualisierungen der Quelle erhalten. Listen enthalten einen Eintrag pro Zeile.",
     "editSaved": "Metadaten gespeichert",

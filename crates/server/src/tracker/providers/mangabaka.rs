@@ -354,6 +354,7 @@ impl MangaBakaTracker {
 			info: super::search_info(series.year, authors.iter().cloned()),
 			authors,
 			artists: Vec::new(),
+			staff: Vec::new(),
 			description: series.description.clone().filter(|description| !description.is_empty()),
 			tags: Self::tag_names(&series.tags),
 			status: crate::tracker::metadata::mangabaka_status(&series.status),

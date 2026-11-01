@@ -1464,7 +1464,26 @@ no alias is derived from migration text.
   the other three read their record with an OAuth token and answer
   `NotLoggedIn` themselves. Each field carries the current value, the
   incoming value, `selectable` (false when the remote has no value or the
-  type cannot be applied), a `reason` and title `alternatives`; `linked`
+  type cannot be applied), a `reason` and `alternatives`: the title spellings
+  the record offers, and for the fields that name people (`authors`, `artists`)
+  every other spelling the provider records, under the provider's own label.
+  A title alternative's `value` is a string and a names alternative's is a
+  list. The providers differ in where those spellings come from: AniList's
+  staff records carry a native and a latin `full` name, so the native list is
+  the default and a `Full` list is offered whenever it differs. Bangumi's
+  people fields are read from the structured staff list
+  (`/p1/subjects/{id}/staffs/persons`, paginated 100 at a time), where each
+  record carries the positions it credits — 作者/原作/脚本 (2001/2007/2010) as
+  authors, 作者/作画/插图/人物原案 (2001/2002/2003/2009) as artists, mirroring
+  komf — and the person's `nameCN`; the Chinese spelling is the default and the
+  `Original` spelling the alternative. The infobox listing is the fallback for
+  records the staff list credits nobody on: there `localized_names` rewrites the
+  infobox names through the staff endpoint's `(name, nameCN)` pairs, keeping the
+  original spelling for names it cannot spell differently, and the `Original`
+  alternative carries the infobox listing. The staff read is best-effort — a
+  failed one leaves the infobox listing in place instead of failing the match.
+  A field no spelling changes offers no alternative. The user
+  picks another list per field. `linked`
   reports whether a `tracker_link` for that provider and record already
   exists. Matching and editing are library features: preview, apply, restore
   and metadata edits through PATCH answer 409 `not_in_library` for an entry
@@ -2019,7 +2038,8 @@ The manga detail page's more-menu reaches metadata through two dialogs that
 reuse the same infrastructure instead of adding a separate search surface:
 `MatchMetadataDialog.tsx` searches trackers (a linked tracker is offered as a
 one-click shortcut) or the aggregate source search, renders the preview diff
-with per-field checkboxes, title alternatives and lock provenance, and applies
+with per-field checkboxes, title alternatives, a spelling select on the people
+fields and lock provenance, and applies
 the selected fields; `EditMetadataDialog.tsx` edits the lockable fields directly
 and shows each field's source as follow-the-source, written by a provider, or
 manual, with per-field unlock and a restore-to-source action. Both live in
