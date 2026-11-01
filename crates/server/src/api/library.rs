@@ -97,7 +97,7 @@ fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 	if filter == "tracked" {
 		let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
 		return Ok(format!(
-			"{head} (SELECT 1 FROM manga_tracker_link l WHERE l.manga_id = m.id)"
+			"{head} (SELECT 1 FROM tracker_link l WHERE l.manga_id = m.id AND l.user_id = ?)"
 		));
 	}
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c

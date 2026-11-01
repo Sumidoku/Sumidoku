@@ -713,6 +713,37 @@ async fn library_unread_filters_include_missing_chapter_user_rows() {
 }
 
 #[tokio::test]
+async fn library_tracked_filter_reads_the_real_schema() {
+	let TestApp { app, db_path, .. } = test_app().await;
+	let ids = register_three_manga(&app).await;
+	let (a, b) = (ids[0].0, ids[1].0);
+	for id in [a, b] {
+		let (status, _) = request(&app, "POST", "/api/v1/library", Some(json!({"mangaId": id}))).await;
+		assert_eq!(status, StatusCode::OK);
+	}
+	let pool = connect_db(&db_path).await;
+	sqlx::query(
+		"INSERT INTO tracker_link (manga_id, user_id, provider, track_id, created_at, updated_at)
+		 SELECT ?, id, 'anilist', '1', 0, 0 FROM user",
+	)
+	.bind(a)
+	.execute(&pool)
+	.await
+	.expect("link");
+
+	let (status, body) = request(&app, "GET", "/api/v1/library?filter=tracked", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![a]);
+	let (status, body) = request(&app, "GET", "/api/v1/library?filterExclude=tracked", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![b]);
+	// Later binds and the page window sit after the filter's: a miscount shifts them.
+	let (status, body) = request(&app, "GET", "/api/v1/library?filter=tracked,unread&sort=unread", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![a]);
+}
+
+#[tokio::test]
 async fn library_search_sort_filter() {
 	let TestApp { app, db_path, .. } = test_app().await;
 	let ids = register_three_manga(&app).await;
