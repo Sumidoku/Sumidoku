@@ -40,9 +40,9 @@ unicode-normalization = "0.1.26"
 # password hashing (pure Rust, no C-dependency cross-compilation risk); sha2 for token/API key fingerprints
 argon2 = "0.6"
 sha2 = "0.11"
-# the rand_core re-exported by password-hash doesn't enable OsRng by default; depending on it directly enables getrandom to unify features
+# OsRng for session, API key and OAuth secrets; argon2 draws its own salt through getrandom
 rand_core = { version = "0.6", features = ["getrandom"] }
-# base64url encoding for the PKCE code_challenge (the reqwest family already pulls in 0.22, no new version added)
+# base64url encoding for the PKCE code_challenge
 base64 = "0.23"
 # page image downsampling (the wasm crate is also on 0.25, versions align naturally)
 image = "0.25"

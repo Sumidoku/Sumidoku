@@ -317,7 +317,7 @@ fn fragment_container(tree: &ego_tree::Tree<Node>, root_id: NodeId) -> NodeId {
 		return root_id;
 	};
 	match first.value().as_element() {
-		Some(element) if element.name.local.as_ref() == "html" => first.id(),
+		Some(element) if &*element.name.local == "html" => first.id(),
 		_ => root_id,
 	}
 }

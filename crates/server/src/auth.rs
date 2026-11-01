@@ -1,6 +1,6 @@
 use crate::error::{ApiError, ApiResult, Error};
 use crate::state::AppState;
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use argon2::password_hash::{PasswordHasher, PasswordVerifier};
 use argon2::{Algorithm, Argon2, Params, Version};
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -31,9 +31,8 @@ fn argon() -> Argon2<'static> {
 }
 
 pub fn hash_password(password: &str) -> Result<String, Error> {
-	let salt = SaltString::generate(&mut OsRng);
 	argon()
-		.hash_password(password.as_bytes(), &salt)
+		.hash_password(password.as_bytes())
 		.map(|h| h.to_string())
 		.map_err(|e| Error::Auth(format!("hash password: {e}")))
 }
@@ -41,10 +40,7 @@ pub fn hash_password(password: &str) -> Result<String, Error> {
 fn verify_password(hash: &str, password: &str) -> bool {
 	#[cfg(test)]
 	ARGON_VERIFICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-	let Ok(parsed) = PasswordHash::new(hash) else {
-		return false;
-	};
-	argon().verify_password(password.as_bytes(), &parsed).is_ok()
+	argon().verify_password(password.as_bytes(), hash).is_ok()
 }
 
 #[cfg(test)]
@@ -497,6 +493,16 @@ pub async fn change_password(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	/// Stored hashes outlive the argon2 crate: this one was written by argon2 0.5.3 with the login
+	/// parameters, and an upgrade that stops verifying it locks every existing user out
+	#[test]
+	fn a_hash_from_an_older_argon2_release_still_verifies() {
+		let stored = "$argon2id$v=19$m=7168,t=3,p=1$EjrR/7kbk2lV5C7QS8w1TA$UXKMauY9bI8OoQtqorA2tgGySpD2NmyefOsGLN/Qvfc";
+		assert!(verify_password(stored, "legacy-password"));
+		assert!(!verify_password(stored, "wrong-password"));
+		assert!(!verify_password("not a phc string", "legacy-password"));
+	}
 
 	/// An unknown username must pay the same argon2 verification as a wrong password, or response time
 	/// tells an attacker which usernames exist
