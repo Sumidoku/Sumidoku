@@ -26,9 +26,24 @@ import type {
 	TrackerProvider
 } from '../../api/types';
 import { compareSourceName } from '../../lib/source';
-import { Badge, Button, Cover, Input, Modal, SegmentedControl, Select, Spinner } from '../../components';
+import {
+	CONTENT_RATING_LEVELS,
+	MULTI_LANGUAGE,
+	compareLanguageLabel,
+	isMultiLanguage,
+	languageLabel
+} from '../../lib/source';
+import {
+	type GlobalSearchFilterPrefs,
+	type TriState,
+	loadGlobalSearchFilters,
+	saveGlobalSearchFilters
+} from '../../lib/globalSearchPrefs';
+import { Badge, Button, Cover, Input, Modal, SegmentedControl, Select, Spinner, TriStateDropdown } from '../../components';
 import { TrackerLogo } from '../../components/trackers/TrackerLogo';
 import './metadata.css';
+
+type FilterGroup = 'ratings' | 'langs' | 'sources';
 
 type Selection =
 	| {
@@ -99,6 +114,8 @@ export function MatchMetadataDialog({
 	const links = linksQuery.data ?? [];
 
 	const sourcesQuery = useSources();
+	const [filters, setFilters] = useState<GlobalSearchFilterPrefs>(loadGlobalSearchFilters);
+	useEffect(() => saveGlobalSearchFilters(filters), [filters]);
 	const sources = useMemo(
 		() => (sourcesQuery.data ?? []).filter((source) => source.enabled).sort(compareSourceName),
 		[sourcesQuery.data]
@@ -107,7 +124,40 @@ export function MatchMetadataDialog({
 		const byId = new Map(sources.map((source) => [source.id, source.name]));
 		return (id: number) => byId.get(id) ?? `#${id}`;
 	}, [sources]);
-	const sourceIds = useMemo(() => sources.map((source) => source.id), [sources]);
+	const langOptions = useMemo(() => {
+		const set = new Set<string>();
+		for (const s of sources) {
+			for (const l of s.languages) {
+				const code = l.trim().toLowerCase();
+				if (code && !isMultiLanguage(code)) set.add(code);
+			}
+		}
+		return [MULTI_LANGUAGE, ...[...set].sort(compareLanguageLabel)];
+	}, [sources]);
+
+	function sourceMatches(s: { contentRating: number; languages: string[]; id: number }, f: GlobalSearchFilterPrefs): boolean {
+		function triAllows(states: Record<string, TriState>, keys: string[]): boolean {
+			let includes = 0;
+			let includeHit = false;
+			for (const [k, v] of Object.entries(states)) {
+				if (v === 1) {
+					includes += 1;
+					if (keys.includes(k)) includeHit = true;
+				} else if (keys.includes(k)) {
+					return false;
+				}
+			}
+			return includes === 0 || includeHit;
+		}
+		return (
+			triAllows(f.ratings, [String(s.contentRating)]) &&
+			triAllows(f.langs, s.languages.map((l) => l.trim().toLowerCase())) &&
+			triAllows(f.sources, [String(s.id)])
+		);
+	}
+
+	const selectedSources = useMemo(() => sources.filter((s) => sourceMatches(s, filters)), [sources, filters]);
+	const selectedSourceIds = useMemo(() => selectedSources.map((s) => s.id), [selectedSources]);
 	// Locks carry the source key, so the label resolves by key rather than by instance id
 	const lockSourceName = useMemo(() => {
 		const byKey = new Map(sources.map((source) => [source.key, source.name]));
@@ -120,7 +170,7 @@ export function MatchMetadataDialog({
 		enabled: tab === 'tracker' && submitted.length > 0,
 		retry: false
 	});
-	const sourceSearch = useGlobalSearch(sourceIds, submitted, tab === 'source' && submitted.length > 0);
+	const sourceSearch = useGlobalSearch(selectedSourceIds, submitted, tab === 'source' && submitted.length > 0);
 
 	const previewQuery = useQuery({
 		queryKey: ['metadata', 'preview', mangaId, selection ? wireProvider(selection) : '', selection?.remoteId ?? ''],
@@ -176,6 +226,20 @@ export function MatchMetadataDialog({
 		} else {
 			setSubmitted(name);
 		}
+	}
+
+	function cycle(group: FilterGroup, key: string) {
+		setFilters((cur) => {
+			const rec = { ...cur[group] };
+			const curVal = (rec[key] ?? 0) as number;
+			const next = curVal === 0 ? 1 : curVal === 1 ? -1 : 0;
+			if (next === 0) delete rec[key];
+			else rec[key] = next as TriState;
+			return { ...cur, [group]: rec };
+		});
+	}
+	function resetGroup(group: FilterGroup) {
+		setFilters((cur) => ({ ...cur, [group]: {} }));
 	}
 
 	function choose(next: Selection) {
@@ -272,6 +336,14 @@ export function MatchMetadataDialog({
 								setSubmitted('');
 							}}
 						/>
+					)}
+
+					{tab === 'source' && (
+						<div className="filter-header">
+							<TriStateDropdown label={t('search.rating')} options={CONTENT_RATING_LEVELS.map((l) => ({ key: String(l.value), label: l.label }))} states={filters.ratings} onCycle={(k) => cycle('ratings', k)} onReset={() => resetGroup('ratings')} />
+							<TriStateDropdown label={t('search.language')} options={langOptions.map((c) => ({ key: c, label: languageLabel(c) }))} states={filters.langs} onCycle={(k) => cycle('langs', k)} onReset={() => resetGroup('langs')} />
+							<TriStateDropdown label={t('search.source')} options={sources.map((s) => ({ key: String(s.id), label: s.name }))} states={filters.sources} onCycle={(k) => cycle('sources', k)} onReset={() => resetGroup('sources')} />
+						</div>
 					)}
 
 					<form className="tracker-search" onSubmit={submitSearch}>
