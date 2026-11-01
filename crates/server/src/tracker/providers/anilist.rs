@@ -115,7 +115,7 @@ query ($id: Int) {
     title { native romaji english userPreferred }
     description
     startDate { year }
-    staff(perPage: 4, sort: RELEVANCE) { nodes { name { full } } }
+    staff(perPage: 4, sort: RELEVANCE) { nodes { name { full native } } }
     genres
     tags { name rank }
     status
@@ -360,8 +360,14 @@ impl AniListTracker {
 			.and_then(Value::as_array)
 			.into_iter()
 			.flatten()
-			.filter_map(|staff| staff.pointer("/name/full").and_then(Value::as_str).filter(|name| !name.is_empty()))
-			.map(str::to_string);
+			.filter_map(|staff| {
+				let name = staff
+					.pointer("/name/native")
+					.and_then(Value::as_str)
+					.filter(|name| !name.is_empty())
+					.or_else(|| staff.pointer("/name/full").and_then(Value::as_str).filter(|name| !name.is_empty()))?;
+				Some(name.to_string())
+			});
 		let authors = dedupe(staff);
 		let mut ranked = media
 			.get("tags")
