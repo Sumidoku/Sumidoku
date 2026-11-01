@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An editable control is a promise about its whole write path.** A generic input
+loop gives every field a box, but one field can be written elsewhere or refused
+by the server, and then the edit vanishes without an error. Trace the value from
+`onChange` through the payload to the server's validation before shipping an
+input, and read that validation before calling a removed input a regression.
+- Evidence: 2026-11-01, #591 made match fields editable. A title with no
+  alternatives got an input, but `apply` skips `title` in its values loop, and the
+  server answers 400 for any title it did not offer, so edits were dropped. #597
+  replaced it with a select. Its review first read that as a lost feature, until
+  `api/metadata.rs` showed the select was the correct contract.
+
 **An error's `Display` is not a message for a reader.** reqwest prints `error
 sending request for url (...)`, the address with no reason, because the cause sits
 in the source chain. A route that returns such text verbatim shows it to the user,
