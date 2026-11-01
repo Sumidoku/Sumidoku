@@ -44,7 +44,7 @@
     },
     "titleAlternativeCurrent": "Aktuell",
     "editTitle": "Metadaten bearbeiten",
-    "editHint": "Hier bearbeitete Werte sind für Siegesperrt und bleiben bei Aktualisierungen der Quelle erhalten. Listen enthalten einen Eintrag pro Zeile.",
+    "editHint": "Hier bearbeitete Werte sind für Sie gesperrt und bleiben bei Aktualisierungen der Quelle erhalten. Listen enthalten einen Eintrag pro Zeile.",
     "editSaved": "Metadaten gespeichert",
     "editFailed": "Metadaten konnten nicht gespeichert werden",
     "sourceFollows": "Folgt der Quelle",
