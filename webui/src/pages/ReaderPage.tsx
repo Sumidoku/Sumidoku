@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -58,6 +58,10 @@ import { readerKeyAction } from './reader/hotkeys';
 import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
+import { continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
+import type { ContinuousScale } from './reader/continuousPrefs';
+import { crossfadeEnabled, parsePageTurn, shouldRevealTurn, TURN_HOLD_MS } from './reader/pageTurn';
+import type { PageTurnStyle } from './reader/pageTurn';
 import { PageImage } from './reader/PageImage';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -328,6 +332,51 @@ function readTransitionOverride(mangaId: number | null): boolean | null {
 	return null;
 }
 
+// Page-turn style and continuous-reading controls apply across manga
+function readPageTurn(): PageTurnStyle {
+	try {
+		return parsePageTurn(localStorage.getItem('sumidoku.reader.turn')) ?? 'auto';
+	} catch {
+		return 'auto';
+	}
+}
+
+function readContinuousScale(): ContinuousScale {
+	try {
+		return parseContinuousScale(localStorage.getItem('sumidoku.reader.continuousScale')) ?? 'width';
+	} catch {
+		return 'width';
+	}
+}
+
+function readContinuousPadding(): number {
+	try {
+		return readBoundedNumber(localStorage.getItem('sumidoku.reader.continuousPadding'), 40) ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
+function readContinuousGap(): number {
+	try {
+		return readBoundedNumber(localStorage.getItem('sumidoku.reader.continuousGap'), 40) ?? 0;
+	} catch {
+		return 0;
+	}
+}
+
+const landscapeViewport = window.matchMedia('(orientation: landscape)');
+
+function useLandscapeViewport(): boolean {
+	return useSyncExternalStore(
+		(onChange) => {
+			landscapeViewport.addEventListener('change', onChange);
+			return () => landscapeViewport.removeEventListener('change', onChange);
+		},
+		() => landscapeViewport.matches
+	);
+}
+
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
 function isUnsupported(p: Page): boolean {
 	return !!p.content && typeof p.content === 'object' && 'Image' in p.content;
@@ -485,6 +534,10 @@ function ReaderCore({
 	const [globalAnim] = useState<boolean>(readAnim);
 	const [animOverride, setAnimOverride] = useState<boolean | null>(() => readAnimOverride(mangaId));
 	const anim = animOverride ?? globalAnim;
+	const [pageTurn, setPageTurnState] = useState<PageTurnStyle>(readPageTurn);
+	const [continuousScale, setContinuousScaleState] = useState<ContinuousScale>(readContinuousScale);
+	const [continuousPadding, setContinuousPaddingState] = useState(readContinuousPadding);
+	const [continuousGap, setContinuousGapState] = useState(readContinuousGap);
 	const [globalTransition] = useState<boolean>(readTransition);
 	const [transitionOverride, setTransitionOverride] = useState<boolean | null>(() => readTransitionOverride(mangaId));
 	const transition = transitionOverride ?? globalTransition;
@@ -608,13 +661,32 @@ function ReaderCore({
 	}, [mode, pages, layout, measuredDims]);
 	const curSpreadIdx = spreads ? spreadIndexOf(spreads, idx) : 0;
 	const curSpread = spreads ? spreads[curSpreadIdx] : null;
+	const splitOn = mode === 'paged' && layout === 'single' && split;
+	// Keep the outgoing spread visible until the target can paint; split pages
+	// instead change their crop on the outgoing image, so they cannot wait.
+	const [readyPages, setReadyPages] = useState<ReadonlySet<string>>(new Set());
+	const markPageReady = useCallback((src: string) => {
+		setReadyPages((prev) => (prev.has(src) ? prev : new Set(prev).add(src)));
+	}, []);
+	const [shownSpread, setShownSpread] = useState(curSpreadIdx);
+	const targetReady = curSpread !== null && curSpread.every((slot) =>
+		slot === null || (pages?.[slot] !== undefined && (pageText(pages[slot]) !== null || isUnsupported(pages[slot]) ||
+		readyPages.has(pageUrl(chapterId, pages[slot].index, pages[slot].cacheRevision)))
+	));
+	if (shownSpread !== curSpreadIdx && shouldRevealTurn(shownSpread, curSpreadIdx, targetReady, splitOn)) setShownSpread(curSpreadIdx);
+	useEffect(() => {
+		if (shownSpread === curSpreadIdx) return;
+		const timer = window.setTimeout(() => setShownSpread(curSpreadIdx), TURN_HOLD_MS);
+		return () => window.clearTimeout(timer);
+	}, [shownSpread, curSpreadIdx]);
+	const landscape = useLandscapeViewport();
+	const crossfade = crossfadeEnabled(pageTurn, landscape, anim, splitOn);
 	const failedCur = useMemo(
 		() => (curSpread ? failedInSpread(curSpread, failedPages) : []),
 		[curSpread, failedPages]
 	);
 	// Wide-page splitting is a paged-mode, single-layout navigation overlay: the
 	// current page keeps its real index while a landscape page takes two turns
-	const splitOn = mode === 'paged' && layout === 'single' && split;
 	function landscapeOf(arrayIndex: number): boolean {
 		const d = dimsOf(arrayIndex);
 		return d !== null && d.width > d.height;
@@ -1083,6 +1155,42 @@ function ReaderCore({
 		setAnimOverride(mangaId !== null ? v : null);
 	}
 
+	function setPageTurn(value: PageTurnStyle) {
+		setPageTurnState(value);
+		try {
+			localStorage.setItem('sumidoku.reader.turn', value);
+		} catch {
+			// The setting still applies when storage is unavailable
+		}
+	}
+
+	function setContinuousScale(value: ContinuousScale) {
+		setContinuousScaleState(value);
+		try {
+			localStorage.setItem('sumidoku.reader.continuousScale', value);
+		} catch {
+			// Same as above
+		}
+	}
+
+	function setContinuousPadding(value: number) {
+		setContinuousPaddingState(value);
+		try {
+			localStorage.setItem('sumidoku.reader.continuousPadding', String(value));
+		} catch {
+			// Same as above
+		}
+	}
+
+	function setContinuousGap(value: number) {
+		setContinuousGapState(value);
+		try {
+			localStorage.setItem('sumidoku.reader.continuousGap', String(value));
+		} catch {
+			// Same as above
+		}
+	}
+
 	function setTransition(v: boolean) {
 		if (v === transition) return;
 		try {
@@ -1343,20 +1451,20 @@ function ReaderCore({
 							// Spreads form one sliding track: a turn translates the track by a
 							// whole viewport instead of swapping the current page in place
 							<div
-								className="reader__track"
-								style={{ direction: dir, transform: `translateX(${trackOffsetPercent(dir, curSpreadIdx)}%)` }}
+								className={crossfade ? 'reader__track reader__track--fade' : 'reader__track'}
+								style={{ direction: dir, transform: crossfade ? undefined : `translateX(${trackOffsetPercent(dir, shownSpread)}%)` }}
 							>
 								{spreads.map((spread, si) => {
 									const isCur = si === curSpreadIdx;
 									// The ±2 window keeps both ends of a turn animation mounted; distant
 									// spreads render aspect-ratio placeholders instead of the images
-									const near = Math.abs(si - curSpreadIdx) <= 2;
+									const near = Math.abs(si - curSpreadIdx) <= 2 || si === shownSpread;
 									const slotTexts = spread.map((s) => (s !== null && pages?.[s] ? pageText(pages[s]) : null));
 									const isTextSpread =
 										spread.some((s, k) => s !== null && slotTexts[k] !== null) &&
 										spread.every((s, k) => s === null || slotTexts[k] !== null);
 									return (
-										<div key={si} className="reader__spread" data-slots={spread.length}>
+										<div key={si} className={crossfade && si !== shownSpread ? 'reader__spread reader__spread--fading' : 'reader__spread'} data-slots={spread.length}>
 											{isCur && curText !== null ? (
 												<div className="reader__spread-inner reader__spread-inner--text">
 													<TextColumns
@@ -1474,6 +1582,7 @@ function ReaderCore({
 																onFailed={() => reportFailed(slot)}
 																retryToken={retryTicks[slot] ?? 0}
 																onLoad={(w, h) => reportDims(slot, w, h)}
+																onReady={markPageReady}
 															/>
 														);
 													})}
@@ -1580,7 +1689,7 @@ function ReaderCore({
 										className={continuousPageClass(text === null && !unsupported, dimensions)}
 										data-page={p.index}
 										key={p.index}
-										style={dimensions ? { aspectRatio: `${dimensions.width} / ${dimensions.height}` } : undefined}
+										style={continuousPageStyle(mode, continuousScale, continuousPadding, continuousGap, arrayIndex === 0, dimensions)}
 									>
 										{text !== null ? (
 											<div className="reader-text" style={textStyle} dangerouslySetInnerHTML={{ __html: md(text) }} />
@@ -1675,6 +1784,14 @@ function ReaderCore({
 					onStretchChange={setStretch}
 					anim={anim}
 					onAnimChange={setAnim}
+					pageTurn={pageTurn}
+					onPageTurnChange={setPageTurn}
+					continuousScale={continuousScale}
+					onContinuousScaleChange={setContinuousScale}
+					continuousPadding={continuousPadding}
+					onContinuousPaddingChange={setContinuousPadding}
+					continuousGap={continuousGap}
+					onContinuousGapChange={setContinuousGap}
 					transition={transition}
 					onTransitionChange={setTransition}
 					currentPage={curPage}
