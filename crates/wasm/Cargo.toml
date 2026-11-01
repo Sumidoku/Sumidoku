@@ -22,16 +22,16 @@ chrono-tz = "0.10"
 iana-time-zone = "0.1"
 ego-tree = "0.11"
 # Origin of the types in scraper's public signatures (Element::new/Attribute/QualName), needed for attr writes
-html5ever = "0.39"
+html5ever = "0.40"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "cookies", "gzip", "brotli", "deflate", "http2"] }
 encoding_rs = "0.8"
 # full HTML5 named + numeric character reference decoding for the html.unescape host import
-html-escape = "0.2"
-scraper = { version = "0.27", features = ["atomic"] }
+html-escape = "0.3"
+scraper = { version = "0.29", features = ["atomic"] }
 regex = "1"
 url = "2.5"
 zip = { version = "9", default-features = false, features = ["deflate"] }
-boa_engine = "0.21"
+boa_engine = "0.22"
 tiny-skia = "0.12"
 fontdb = "0.24"
 ttf-parser = "0.25"
