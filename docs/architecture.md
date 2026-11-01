@@ -783,8 +783,9 @@ no alias is derived from migration text.
   and missing dates sink to the bottom of the default date order.
   `GET /api/v1/library`
   filters by `search`, `categoryId`, `filter`/`filterExclude` (comma-separated
-  boolean flags `unread`/`downloaded`/`bookmarked`, EXISTS / NOT EXISTS over
-  chapter flags) and the tri-state pairs
+  boolean flags `unread`/`downloaded`/`bookmarked`/`tracked` and publication
+  status `completed`, chapter flags using EXISTS / NOT EXISTS, `completed`
+  using `m.status = 2` / `!= 2`) and the tri-state pairs
   `contentRating`/`contentRatingExclude` (comma-separated manga-level
   ratings 1..=3, `IN` / `NOT IN` on `manga.content_rating`),
   `source`/`sourceExclude` (source ids, `IN` / `NOT IN` on

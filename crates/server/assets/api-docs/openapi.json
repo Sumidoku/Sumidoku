@@ -9520,7 +9520,8 @@
           "unread",
           "bookmarked",
           "downloaded",
-          "tracked"
+          "tracked",
+          "completed"
         ]
       },
       "AddToLibraryRequest": {

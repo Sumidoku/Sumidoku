@@ -4,7 +4,7 @@ import { ChipDropdown } from './ChipDropdown';
 
 export interface TriStateDropdownProps {
 	label: string;
-	options: { key: string; label: string }[];
+	options: { key: string; label: string; count?: number }[];
 	/** Tri-state per option: 1 include / -1 exclude / absent = unselected */
 	states: Record<string, 1 | -1>;
 	onCycle: (key: string) => void;
@@ -20,7 +20,7 @@ export function TriStateDropdown({ label, options, states, onCycle, onReset }: T
 	const count = Object.keys(states).length;
 	const canReset = onReset !== undefined && count > 0;
 	return (
-		<ChipDropdown active={count > 0} label={`${label}${count > 0 ? `（${count}）` : ''}`}>
+		<ChipDropdown active={count > 0} label={<>{label}{count > 0 && <span className="chip__count">{count}</span>}</>}>
 			{(close) => (
 				<>
 					{canReset && (
@@ -45,7 +45,7 @@ export function TriStateDropdown({ label, options, states, onCycle, onReset }: T
 								className="chip-dropdown__item"
 								onClick={() => onCycle(opt.key)}
 							>
-								<span>{opt.label}</span>
+								<span>{opt.label}{opt.count !== undefined && <span className="chip__count">{opt.count}</span>}</span>
 								<span className="chip-dropdown__state" aria-hidden="true">
 									{st === 1 && <Check size={14} />}
 									{st === -1 && <X size={14} />}

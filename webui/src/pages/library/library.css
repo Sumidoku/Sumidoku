@@ -78,6 +78,21 @@
 	background: var(--bg);
 }
 
+.library__category-count {
+	margin-left: 3px;
+	color: var(--text-faint);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+.library__categories .chip--accent .library__category-count {
+	color: var(--accent);
+}
+
+.library__categories .chip--danger .library__category-count {
+	color: var(--danger);
+}
+
 /* One small line under the categories: pills out-specify .chip--clickable's 36px touch height */
 .library__active {
 	display: flex;

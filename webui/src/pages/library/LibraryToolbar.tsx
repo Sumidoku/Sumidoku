@@ -19,6 +19,7 @@ const SORT_OPTIONS: { value: LibrarySort; labelKey: string }[] = [
 
 const FILTER_OPTIONS: { value: LibraryFilter; labelKey: string }[] = [
 	{ value: 'unread', labelKey: 'library.filterUnread' },
+	{ value: 'completed', labelKey: 'format.status.completed' },
 	{ value: 'tracked', labelKey: 'library.filterTracked' },
 	{ value: 'bookmarked', labelKey: 'library.filterBookmarked' },
 	{ value: 'downloaded', labelKey: 'library.filterDownloaded' }
@@ -233,7 +234,8 @@ export function LibraryToolbar({
 							title={triTitle(t, category.name, state)}
 							onClick={() => onCategoryCycle(String(category.id))}
 						>
-							{category.name}（{category.mangaCount}）
+							{category.name}
+							<span className="library__category-count">{category.mangaCount}</span>
 						</Chip>
 					);
 				})}

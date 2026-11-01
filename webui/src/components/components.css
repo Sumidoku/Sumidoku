@@ -136,6 +136,21 @@
 	flex: none;
 }
 
+.chip__count {
+	margin-left: 5px;
+	color: var(--text-faint);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+.chip--accent .chip__count {
+	color: var(--accent);
+}
+
+.chip--danger .chip__count {
+	color: var(--danger);
+}
+
 .chip--clickable {
 	cursor: pointer;
 	min-height: 36px;

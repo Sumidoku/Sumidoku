@@ -592,6 +592,7 @@ export default function MangaDetailPage() {
 	}));
 	const statusColor = STATUS_COLOR[manga.status.toLowerCase()] ?? 'default';
 	const allCats = categoriesQuery.data ?? [];
+	const assignedCats = allCats.filter((category) => manga.categoryIds.includes(category.id));
 
 	// tag/author/artist search mirrors Aidoku: the query is empty and only filter values are sent, reusing the browse page's filters deep link
 	function searchByFilters(values: FilterValue[]) {
@@ -677,6 +678,13 @@ export default function MangaDetailPage() {
 								</a>
 							)}
 						</div>
+						{assignedCats.length > 0 && (
+							<div className="manga-hero__categories">
+								{assignedCats.map((category) => (
+									<Chip key={category.id}>{category.name}</Chip>
+								))}
+							</div>
+						)}
 						{tags.length > 0 && (
 							<>
 							<div
