@@ -104,6 +104,7 @@ export function MatchMetadataDialog({
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [checked, setChecked] = useState<Partial<Record<MetadataField, boolean>>>({});
 	const [titleValue, setTitleValue] = useState('');
+	const [values, setValues] = useState<Partial<Record<MetadataField, string>>>({});
 	const [bind, setBind] = useState(false);
 	const [applied, setApplied] = useState<MetadataField[] | null>(null);
 
@@ -188,6 +189,7 @@ export function MatchMetadataDialog({
 		setChecked(next);
 		const title = preview.fields.find((field) => field.field === 'title');
 		setTitleValue(typeof title?.incoming === 'string' ? title.incoming : '');
+		setValues({});
 		setBind(false);
 	}, [previewQuery.data]);
 
@@ -198,14 +200,28 @@ export function MatchMetadataDialog({
 
 	const apply = useMutation({
 		mutationFn: () => {
-			const values: Partial<Record<MetadataField, string | Array<string> | null>> = {};
+			const valuesPayload: Partial<Record<MetadataField, string | Array<string> | null>> = {};
 			const title = previewQuery.data?.fields.find((field) => field.field === 'title');
-			if (title && titleValue && titleValue !== title.incoming) values.title = titleValue;
+			if (title && titleValue && titleValue !== title.incoming) valuesPayload.title = titleValue;
+			for (const field of previewQuery.data?.fields ?? []) {
+				if (field.field === 'title') continue;
+				if (!field.selectable || !checked[field.field]) continue;
+				const v = values[field.field];
+				if (v === undefined || v === '') continue;
+				if (Array.isArray(field.incoming)) {
+					valuesPayload[field.field] = v
+						.split(',')
+						.map((s) => s.trim())
+						.filter((s) => s.length > 0);
+				} else {
+					valuesPayload[field.field] = v;
+				}
+			}
 			return applyMetadata(mangaId, {
 				provider: wireProvider(selection!),
 				remoteId: selection!.remoteId,
 				fields: selectedFields,
-				values,
+				values: Object.keys(valuesPayload).length > 0 ? valuesPayload : undefined,
 				bind
 			});
 		},
@@ -502,10 +518,12 @@ export function MatchMetadataDialog({
 											sourceName={lockSourceName}
 											checked={Boolean(checked[field.field])}
 											titleValue={titleValue}
+											values={values}
 											onChecked={(value) =>
 												setChecked((cur) => ({ ...cur, [field.field]: value }))
 											}
 											onTitleValue={setTitleValue}
+											onValue={(f, v) => setValues((cur) => ({ ...cur, [f]: v }))}
 										/>
 									))}
 								</tbody>
@@ -592,15 +610,19 @@ function FieldRow({
 	sourceName,
 	checked,
 	titleValue,
+	values,
 	onChecked,
-	onTitleValue
+	onTitleValue,
+	onValue
 }: {
 	field: MetadataPreviewField;
 	sourceName: (key: string) => string | undefined;
 	checked: boolean;
 	titleValue: string;
+	values: Partial<Record<MetadataField, string>>;
 	onChecked: (value: boolean) => void;
 	onTitleValue: (value: string) => void;
+	onValue: (field: MetadataField, value: string) => void;
 }) {
 	const { t } = useTranslation();
 	const value = field.current;
@@ -650,8 +672,16 @@ function FieldRow({
 				) : field.selectable ? (
 					field.field === 'cover' ? (
 						<CoverCell url={coverUrlOf(field.incoming)} label={t('metadata.fieldLabels.cover')} />
+					) : Array.isArray(field.incoming) ? (
+						<Input
+							value={values[field.field] ?? (field.incoming as string[]).join(', ')}
+							onChange={(e) => onValue(field.field, e.currentTarget.value)}
+						/>
 					) : (
-						displayValue(field.incoming)
+						<Input
+							value={values[field.field] ?? String(field.incoming ?? '')}
+							onChange={(e) => onValue(field.field, e.currentTarget.value)}
+						/>
 					)
 				) : (
 					<span className="muted">{field.reason ?? t('metadata.noIncomingValue')}</span>
