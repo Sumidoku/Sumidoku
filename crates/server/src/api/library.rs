@@ -84,20 +84,30 @@ fn library_order_by(sort: Option<&str>) -> ApiResult<(&'static str, bool)> {
 	}
 }
 
-fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
+fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<(String, bool)> {
+	if filter == "completed" {
+		let operator = if exclude { "!=" } else { "=" };
+		return Ok((format!(" AND m.status {operator} 2"), false));
+	}
 	// Missing rows and explicit unread rows both count as unread.
 	if filter == "unread" {
 		let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
-		return Ok(format!(
-			"{head} (SELECT 1 FROM chapter c
-			 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
-			 WHERE c.manga_id = m.id AND cu.chapter_id IS NULL)"
+		return Ok((
+			format!(
+				"{head} (SELECT 1 FROM chapter c
+				 LEFT JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ? AND cu.is_read = 1
+				 WHERE c.manga_id = m.id AND cu.chapter_id IS NULL)"
+			),
+			true,
 		));
 	}
 	if filter == "tracked" {
 		let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
-		return Ok(format!(
-			"{head} (SELECT 1 FROM tracker_link l WHERE l.manga_id = m.id AND l.user_id = ?)"
+		return Ok((
+			format!(
+				"{head} (SELECT 1 FROM tracker_link l WHERE l.manga_id = m.id AND l.user_id = ?)"
+			),
+			true,
 		));
 	}
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
@@ -113,7 +123,7 @@ fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 		other => return Err(ApiError::bad_request(format!("invalid filter: {other}"))),
 	};
 	let head = if exclude { NOT_EXISTS } else { EXISTS };
-	Ok(format!("{head}{column})"))
+	Ok((format!("{head}{column})"), true))
 }
 
 /// Comma-separated integer list: an all-blank value or blank segments count as absent, a non-blank illegal segment is a 400 (same style as sort/filter)
@@ -299,14 +309,16 @@ pub async fn list_library(
 	let mut filter_user_binds = 0usize;
 	if let Some(raw) = &query.filter {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-			sql.push_str(&library_filter_clause(token, false)?);
-			filter_user_binds += 1;
+			let (clause, needs_user) = library_filter_clause(token, false)?;
+			sql.push_str(&clause);
+			filter_user_binds += usize::from(needs_user);
 		}
 	}
 	if let Some(raw) = &query.filter_exclude {
 		for token in raw.split(',').map(str::trim).filter(|t| !t.is_empty()) {
-			sql.push_str(&library_filter_clause(token, true)?);
-			filter_user_binds += 1;
+			let (clause, needs_user) = library_filter_clause(token, true)?;
+			sql.push_str(&clause);
+			filter_user_binds += usize::from(needs_user);
 		}
 	}
 	sql.push_str(&group_sql);

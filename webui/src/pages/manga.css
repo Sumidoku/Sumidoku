@@ -162,6 +162,13 @@
 	background: rgba(255, 255, 255, 0.1);
 }
 
+.manga-hero__categories {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 10px;
+}
+
 .manga-hero__tags {
 	display: flex;
 	flex-wrap: wrap;

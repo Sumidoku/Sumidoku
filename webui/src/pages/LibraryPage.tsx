@@ -184,16 +184,16 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		.map((s) => ({
 			key: String(s.id),
 			name: s.name,
-			label: counted ? `${s.name}（${counts.get(s.id) ?? 0}）` : s.name
+			label: s.name,
+			count: counted ? (counts.get(s.id) ?? 0) : undefined
 		}));
-	// The author/tag endpoints return the entry counts directly and arrive pre-sorted case-insensitively,
-	// so the labels can always carry the same `name（count）` shape the source dropdown uses once counted
+	// The author/tag endpoints return the entry counts directly and arrive pre-sorted case-insensitively
 	const authorOptions = useMemo(
-		() => (authorsQuery.data ?? []).map((a) => ({ key: a.name, label: `${a.name}（${a.count}）` })),
+		() => (authorsQuery.data ?? []).map((a) => ({ key: a.name, label: a.name, count: a.count })),
 		[authorsQuery.data]
 	);
 	const tagOptions = useMemo(
-		() => (tagsQuery.data ?? []).map((tag) => ({ key: tag.name, label: `${tag.name}（${tag.count}）` })),
+		() => (tagsQuery.data ?? []).map((tag) => ({ key: tag.name, label: tag.name, count: tag.count })),
 		[tagsQuery.data]
 	);
 

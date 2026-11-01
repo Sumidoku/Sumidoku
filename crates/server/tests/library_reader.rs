@@ -759,6 +759,12 @@ async fn library_search_sort_filter() {
 		assert_eq!(status, StatusCode::OK);
 	}
 	let pool = connect_db(&db_path).await;
+	sqlx::query("UPDATE manga SET status = CASE WHEN id = ? THEN 2 WHEN id = ? THEN 0 ELSE 1 END")
+		.bind(a)
+		.bind(c)
+		.execute(&pool)
+		.await
+		.expect("set publication status");
 	// anchor for added sorting: shelve times explicitly spread apart to avoid same-second ties
 	for (id, at) in [(a, 1000), (b, 1001), (c, 1002)] {
 		sqlx::query("UPDATE manga_user SET in_library_at = ? WHERE manga_id = ?")
@@ -864,6 +870,16 @@ async fn library_search_sort_filter() {
 	assert_eq!(entry_ids(&body), vec![a]);
 	let (_, body) = request(&app, "GET", "/api/v1/library?filter=unread,downloaded", None).await;
 	assert_eq!(entry_ids(&body), vec![b]);
+	let (status, body) = request(&app, "GET", "/api/v1/library?filter=completed", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![a]);
+	let (status, body) = request(&app, "GET", "/api/v1/library?filterExclude=completed", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![c, b]);
+	// Publication status has no user bind; the following filter and sort do.
+	let (status, body) = request(&app, "GET", "/api/v1/library?filter=completed,unread&sort=unread", None).await;
+	assert_eq!(status, StatusCode::OK);
+	assert_eq!(entry_ids(&body), vec![a]);
 	let (status, _) = request(&app, "GET", "/api/v1/library?filter=unread,bogus", None).await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
 

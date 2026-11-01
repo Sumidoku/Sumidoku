@@ -50,8 +50,8 @@ test('library toolbar stays collapsed with active filters and summarizes them', 
 				groups: [{ id: 7, name: 'Unread only', sortOrder: 0, rules: [] }],
 				categories: [{ id: 3, name: 'Reading', mangaCount: 12, isDefault: false, sortOrder: 0 }],
 				sourceOptions: [],
-				authorOptions: [{ key: 'Jane Doe', label: 'Jane Doe（4）' }],
-				tagOptions: [{ key: 'romance', label: 'romance（9）' }],
+				authorOptions: [{ key: 'Jane Doe', label: 'Jane Doe', count: 4 }],
+				tagOptions: [{ key: 'romance', label: 'romance', count: 9 }],
 				showUncategorized: true,
 				onFilterCycle: () => {},
 				onRatingCycle: () => {},
@@ -71,7 +71,8 @@ test('library toolbar stays collapsed with active filters and summarizes them', 
 		assert.match(activeMarkup, /aria-expanded="false"/);
 		assert.doesNotMatch(activeMarkup, /class="library__filter-panel"/);
 		assert.match(activeMarkup, /class="library__filter-count">3</);
-		assert.match(activeMarkup, /Reading（12）/);
+		assert.match(activeMarkup, /Reading<span class="library__category-count">12<\/span>/);
+		assert.doesNotMatch(activeMarkup, /Reading[（(]12[）)]/);
 		assert.match(activeMarkup, /aria-label="Active filters"/);
 		assert.match(activeMarkup, /class="library__active-label">Unread</);
 		assert.match(activeMarkup, /class="library__active-label">Author: Jane Doe</);
@@ -103,9 +104,13 @@ test('active filter summary names every advanced filter with its state', async (
 			groupId: 7,
 			groups: [{ id: 7, name: 'Weekend', sortOrder: 0, rules: [] }],
 			// Counts in the dropdown label stay out of the pill; source 6 has not loaded yet
-			sourceOptions: [{ key: '5', label: 'Alpha（12）', name: 'Alpha' }]
+			sourceOptions: [{ key: '5', label: 'Alpha', count: 12, name: 'Alpha' }]
 		};
 		const items = activeFilterItems(i18n.t, selections);
+		assert.equal(activeFilterItems(i18n.t, {
+			...selections,
+			filterTri: { completed: 1 }
+		})[0].label, 'Completed');
 		assert.deepEqual(
 			items.map(({ label, state, kind, filterKey }: { label: string; state: number; kind: string | null; filterKey: string }) => [label, state, kind, filterKey]),
 			[

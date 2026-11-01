@@ -540,7 +540,7 @@ export type LibraryEntry = Manga & {
 	unreadCount: number;
 };
 
-export type LibraryFilter = "unread" | "bookmarked" | "downloaded" | "tracked";
+export type LibraryFilter = "unread" | "bookmarked" | "downloaded" | "tracked" | "completed";
 
 export type LibraryPage = {
 	entries: Array<LibraryEntry>;
