@@ -42,6 +42,7 @@
       "contentRating": "Alterseinstufung",
       "cover": "Cover"
     },
+    "titleAlternativeCurrent": "Aktuell",
     "editTitle": "Metadaten bearbeiten",
     "editHint": "Hier bearbeitete Werte sind für Siegesperrt und bleiben bei Aktualisierungen der Quelle erhalten. Listen enthalten einen Eintrag pro Zeile.",
     "editSaved": "Metadaten gespeichert",

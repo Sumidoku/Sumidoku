@@ -654,8 +654,13 @@ function FieldRow({
 				)}
 			</td>
 			<td>
-				{field.field === 'title' && field.alternatives.length > 0 ? (
-					<Select value={titleValue || String(field.incoming)} onChange={onTitleValue}>
+				{field.field === 'title' && typeof field.incoming === 'string' ? (
+					<Select value={titleValue || field.incoming} onChange={onTitleValue}>
+						{!field.alternatives.some((a) => a.value === field.incoming) && (
+							<option value={field.incoming} key="current">
+								{t('metadata.titleAlternativeCurrent')} · {field.incoming}
+							</option>
+						)}
 						{field.alternatives.map((alternative) => (
 							<option value={alternative.value} key={`${alternative.label}:${alternative.value}`}>
 								{alternative.label} · {alternative.value}
