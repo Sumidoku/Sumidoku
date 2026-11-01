@@ -42,6 +42,7 @@
       "contentRating": "Content rating",
       "cover": "Cover"
     },
+    "titleAlternativeCurrent": "Current",
     "editTitle": "Edit metadata",
     "editHint": "Values you edit here are locked to you and survive source refreshes. Lists take one entry per line.",
     "editSaved": "Metadata saved",

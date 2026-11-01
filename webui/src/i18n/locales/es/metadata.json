@@ -42,6 +42,7 @@
       "contentRating": "Clasificación de contenido",
       "cover": "Portada"
     },
+    "titleAlternativeCurrent": "Actual",
     "editTitle": "Editar metadatos",
     "editHint": "Los valores que edites aquí quedarán bloqueados para ti y se conservarán al actualizar la fuente. En las listas, escribe una entrada por línea.",
     "editSaved": "Metadatos guardados",

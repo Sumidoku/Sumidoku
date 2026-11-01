@@ -42,6 +42,7 @@
       "contentRating": "内容分级",
       "cover": "封面"
     },
+    "titleAlternativeCurrent": "当前",
     "editTitle": "编辑元数据",
     "editHint": "这里修改的值会锁定为手动值，图源刷新不会覆盖；列表字段每行一项。",
     "editSaved": "元数据已保存",
