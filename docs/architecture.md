@@ -1466,10 +1466,11 @@ no alias is derived from migration text.
   that is not shelved, while `updateStrategy`/`incognito` keep working on any
   entry. Local sources are exempt — their entries are the user's own files and
   are editable without a `manga_user` row. `POST …/metadata/apply` takes `{provider, remoteId, fields, values?, bind?}`:
-  `fields` is required and non-empty, `values` may only replace a value the
-  preview exposed for that field (the server refetches the record and
-  revalidates membership, so a stale preview cannot inject arbitrary text),
-  a single transaction writes the values, stamps locks for exactly the
+  `fields` is required and non-empty, the server refetches the record, and
+  `values` overrides a confirmed field: `title` must still be a variant that
+  record offers, while any other field takes the user's edit, validated by
+  `metadata::parse_value`, with null or an empty list clearing it. A single
+  transaction writes the values, stamps locks for exactly the
   applied fields and, for tracker references with `bind: true`, upserts the
   `tracker_link` through `tracker/dao.rs:upsert_link_tx`. An applied `cover`
   invalidates the disk cover cache, and a tracker-sourced cover is fetched

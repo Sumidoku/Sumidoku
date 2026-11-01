@@ -264,6 +264,38 @@ async fn metadata_endpoints_validate_citations_and_selections() {
 	)
 	.await;
 	assert_eq!(status, StatusCode::BAD_REQUEST);
+
+	// Any other confirmed field takes the user's edit, and an empty value clears it
+	let (status, body) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/manga/{manga_id}/metadata/apply"),
+		Some(json!({
+			"provider": format!("source:{source_id}"),
+			"remoteId": key,
+			"fields": ["authors", "tags"],
+			"values": {"authors": ["Edited Author"], "tags": []}
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	assert_eq!(body["manga"]["authors"], json!(["Edited Author"]));
+	assert_eq!(body["manga"]["tags"], Value::Null);
+
+	// A cleared status is not a status, so the edit fails rather than falling back
+	let (status, _) = request(
+		&app,
+		"POST",
+		&format!("/api/v1/manga/{manga_id}/metadata/apply"),
+		Some(json!({
+			"provider": format!("source:{source_id}"),
+			"remoteId": key,
+			"fields": ["status"],
+			"values": {"status": null}
+		})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
