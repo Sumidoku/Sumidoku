@@ -330,21 +330,31 @@ impl BangumiTracker {
 	fn infobox_text(value: &Value) -> String {
 		match value {
 			Value::String(text) => text.clone(),
+			Value::Object(object) => object.get("v").and_then(Value::as_str).unwrap_or_default().to_string(),
 			Value::Array(items) => items
 				.iter()
-				.filter_map(|item| match item {
-					Value::String(text) => Some(text.clone()),
-					Value::Object(object) => object.get("v").and_then(Value::as_str).map(str::to_string),
-					_ => None,
-				})
+				.map(Self::infobox_text)
+				.filter(|text| !text.is_empty())
 				.collect::<Vec<_>>()
 				.join(" / "),
 			_ => String::new(),
 		}
 	}
 
-	/// People named by one infobox key (`作者`, `作画`, `别名`), split on the
-	/// separators Bangumi uses inside a single value.
+	/// Titles listed under one infobox key. Each entry is already one title,
+	/// and titles contain the separators people values are split on.
+	fn infobox_titles(subject: &Subject, key: &str) -> Vec<String> {
+		let items = subject.infobox.iter().flatten().filter(|item| item.key == key);
+		let titles = items.flat_map(|item| match &item.value {
+			Value::Array(entries) => entries.iter().map(Self::infobox_text).collect(),
+			value => vec![Self::infobox_text(value)],
+		});
+		dedupe(titles.map(|title| title.trim().to_string()).filter(|title| !title.is_empty()))
+	}
+
+	/// People named by one infobox key (`作者`, `作画`), split on the separators
+	/// Bangumi uses inside a single value. `・` stays out: it joins the parts of
+	/// a foreign name written in katakana.
 	fn infobox_people(subject: &Subject, key: &str) -> Vec<String> {
 		let Some(items) = subject.infobox.as_ref() else {
 			return Vec::new();
@@ -365,7 +375,7 @@ impl BangumiTracker {
 				}
 				out
 			};
-			for name in text.split(['/', '／', '、', '_', '→', '・', ':', '×', '&', ',', '，']) {
+			for name in text.split(['/', '／', '、', '_', '→', ':', '×', '&', ',', '，']) {
 				let name = name.trim();
 				if !name.is_empty() {
 					people.push(name.to_string());
@@ -385,7 +395,7 @@ impl BangumiTracker {
 		if !subject.name.is_empty() && subject.name != default {
 			alternatives.push(TitleAlternative { label: "Original".into(), value: subject.name.clone() });
 		}
-		for alias in Self::infobox_people(subject, "别名") {
+		for alias in Self::infobox_titles(subject, "别名") {
 			alternatives.push(TitleAlternative { label: "Alias".into(), value: alias });
 		}
 		let mut ranked = subject.tags.iter().flatten().filter(|tag| !tag.name.is_empty()).collect::<Vec<_>>();
@@ -643,6 +653,23 @@ mod tests {
 			"platform": {"typeCN": "漫画"},
 			"interest": null
 		})
+	}
+
+	#[test]
+	fn metadata_keeps_aliases_and_katakana_names_whole() {
+		let subject: Subject = serde_json::from_value(json!({
+			"id": 78306,
+			"name": "Harry Potter",
+			"infobox": [
+				{"key": "作者", "values": [{"v": "J・K・ローリング（原作）"}]},
+				{"key": "别名", "values": [{"v": "ハリー・ポッター"}, {"v": "Re:Zero"}, {"v": "Fate/Zero"}, {"v": ""}]}
+			]
+		}))
+		.expect("subject");
+		let metadata = BangumiTracker::metadata_from_subject(&subject);
+		assert_eq!(metadata.authors, ["J・K・ローリング"]);
+		let aliases = metadata.title.alternatives.iter().filter(|alternative| alternative.label == "Alias");
+		assert_eq!(aliases.map(|alternative| alternative.value.as_str()).collect::<Vec<_>>(), ["ハリー・ポッター", "Re:Zero", "Fate/Zero"]);
 	}
 
 	#[tokio::test]
