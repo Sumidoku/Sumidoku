@@ -45,6 +45,78 @@ impl TitleVariants {
 	}
 }
 
+/// One credited person under two spellings: the one an infobox credit list
+/// uses, and the tracker's other spelling of the same person. Bangumi's
+/// infobox lists credits under their original names only, so the structured
+/// staff list is where the Chinese spelling comes from; AniList's staff
+/// records carry both a native and a latin (`full`) name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PersonName {
+	/// The spelling an infobox credit list uses
+	pub name: String,
+	/// The other spelling, absent when the tracker has none or both agree
+	pub name_cn: Option<String>,
+}
+
+/// `names` rewritten in the alternate spellings `people` knows, or `None` when
+/// not one of them has one. A credit the records do not cover keeps its
+/// original spelling, so a partly translated list stays complete.
+pub fn localized_names(people: &[PersonName], names: &[String]) -> Option<Vec<String>> {
+	if people.is_empty() {
+		return None;
+	}
+	let mut changed = false;
+	let localized: Vec<String> = names
+		.iter()
+		.map(|name| match localized_name(people, name) {
+			Some(localized) => {
+				changed = true;
+				localized.to_string()
+			}
+			None => name.clone(),
+		})
+		.collect();
+	changed.then(|| dedupe(localized))
+}
+
+fn localized_name<'a>(people: &'a [PersonName], name: &str) -> Option<&'a str> {
+	people
+		.iter()
+		.find(|person| person.name == name || person.name_cn.as_deref() == Some(name))
+		.and_then(|person| person.name_cn.as_deref())
+		.filter(|localized| !localized.trim().is_empty() && *localized != name)
+}
+
+/// One alternative spelling of a record's staff credits, under a label the
+/// webui shows (`Original`, `Full`, ...). The two people fields share the label
+/// because the records behind them do; a field the provider cannot spell
+/// differently stays empty and offers no alternative.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct StaffNames {
+	pub label: String,
+	pub authors: Vec<String>,
+	pub artists: Vec<String>,
+}
+
+impl StaffNames {
+	/// The list this field would take, if it differs from what it already has
+	pub fn for_field(&self, field: StaffField, incoming: &[String]) -> Option<Vec<String>> {
+		let names = match field {
+			StaffField::Authors => &self.authors,
+			StaffField::Artists => &self.artists,
+		};
+		(!names.is_empty() && names != incoming).then(|| names.clone())
+	}
+}
+
+/// The two metadata fields that name people
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaffField {
+	Authors,
+	Artists,
+}
+
 /// One tracker entry's or source entry's metadata. Every field is optional
 /// because capabilities differ; absent means "this provider cannot supply it".
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -54,6 +126,9 @@ pub struct TrackerMetadata {
 	pub title: TitleVariants,
 	pub authors: Vec<String>,
 	pub artists: Vec<String>,
+	/// Other spellings of the authors and artists above; empty for providers
+	/// whose records carry only one spelling
+	pub staff: Vec<StaffNames>,
 	pub description: Option<String>,
 	pub tags: Vec<String>,
 	pub status: Option<MangaStatus>,
@@ -188,5 +263,34 @@ mod tests {
 		assert_eq!(wire["title"]["default"], "Title");
 		assert_eq!(serde_json::from_str::<TrackerMetadata>("{}").unwrap(), TrackerMetadata::default());
 		assert_eq!(dedupe(vec!["A".into(), "a".into(), " B ".into(), "B".into()]), vec!["A".to_string(), " B ".to_string()]);
+	}
+
+	#[test]
+	fn localized_names_rewrite_only_known_people() {
+		let people = vec![
+			PersonName { name: "尾田栄一郎".into(), name_cn: Some("尾田荣一郎".into()) },
+			PersonName { name: "Studio Gaga".into(), name_cn: Some("Studio Gaga".into()) },
+		];
+		assert_eq!(
+			localized_names(&people, &["尾田栄一郎".into(), "Studio Gaga".into()]),
+			Some(vec!["尾田荣一郎".to_string(), "Studio Gaga".to_string()])
+		);
+		// nothing to translate is reported as such, so the preview offers no choice
+		assert_eq!(localized_names(&people, &["Studio Gaga".into()]), None);
+		assert_eq!(localized_names(&[], &["尾田栄一郎".into()]), None);
+	}
+
+	#[test]
+	fn a_staff_alternative_is_offered_only_when_it_changes_the_field() {
+		let staff = StaffNames {
+			label: "NameCN".into(),
+			authors: vec!["尾田荣一郎".into()],
+			artists: vec!["A".into()],
+		};
+		let incoming = ["尾田栄一郎".to_string()];
+		assert_eq!(staff.for_field(StaffField::Authors, &incoming), Some(vec!["尾田荣一郎".to_string()]));
+		// an empty list for a field is no alternative for that field
+		assert_eq!(staff.for_field(StaffField::Artists, &incoming), Some(vec!["A".to_string()]));
+		assert_eq!(staff.for_field(StaffField::Authors, &["尾田荣一郎".to_string()]), None);
 	}
 }

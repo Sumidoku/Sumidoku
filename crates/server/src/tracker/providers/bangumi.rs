@@ -5,7 +5,9 @@
 //! fields are dropped on update.
 
 use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackStatus, TrackUpdate};
-use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
+use crate::tracker::metadata::{
+	PersonName, StaffField, StaffNames, TitleAlternative, TitleVariants, TrackerMetadata, dedupe, localized_names,
+};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService, request_failure, response_failure};
 use aidoku::MangaStatus;
@@ -106,6 +108,63 @@ struct SearchPage {
 	data: Vec<Subject>,
 }
 
+/// One page of `GET /p1/subjects/{id}/staffs/persons`: the structured staff
+/// list. It is the primary source of the people fields — each record carries
+/// the positions it credits and the person's localized (`nameCN`) spelling —
+/// and the infobox is only the fallback for records it credits nobody on.
+#[derive(Debug, Default, Deserialize)]
+struct StaffPage {
+	#[serde(default)]
+	data: Vec<StaffEntry>,
+	#[serde(default)]
+	total: Option<u64>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StaffEntry {
+	#[serde(default)]
+	staff: StaffPerson,
+	#[serde(default)]
+	positions: Vec<StaffPosition>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StaffPosition {
+	#[serde(default, rename = "type")]
+	kind: StaffPositionType,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StaffPerson {
+	#[serde(default)]
+	name: String,
+	#[serde(default, rename = "nameCN")]
+	name_cn: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct StaffPositionType {
+	#[serde(default)]
+	id: Option<i64>,
+}
+
+/// The people a staff list credits, under both of a person's spellings: the
+/// `nameCN` list is what the fields carry by default, the `original` list is
+/// the alternative the user may pick instead.
+#[derive(Debug, Default)]
+struct StaffCredits {
+	authors: Vec<String>,
+	artists: Vec<String>,
+	original_authors: Vec<String>,
+	original_artists: Vec<String>,
+}
+
+impl StaffCredits {
+	fn is_empty(&self) -> bool {
+		self.authors.is_empty() && self.artists.is_empty()
+	}
+}
+
 fn provider_error(message: impl Into<String>) -> TrackerError {
 	TrackerError::Provider { provider: Provider::Bangumi, message: message.into() }
 }
@@ -153,6 +212,13 @@ const BANGUMI_STATUS_TAGS: [&str; 9] = [
 	"停止连载",
 	"休刊",
 ];
+
+/// bgm.tv staff position ids that credit a person as an author: 作者, 原作, 脚本
+/// (mirrors komf's `AUTHOR_POSITION_IDS`).
+const AUTHOR_POSITIONS: [i64; 3] = [2001, 2007, 2010];
+/// Position ids that credit a person as an artist: 作者, 作画, 插图, 人物原案. A
+/// manga author draws too, so 作者 is on both lists (komf's mapping).
+const ARTIST_POSITIONS: [i64; 4] = [2001, 2002, 2003, 2009];
 
 /// Maps a Bangumi status string to `MangaStatus` (komf `classify_bangumi_status`).
 fn classify_bangumi_status(value: &str) -> Option<MangaStatus> {
@@ -361,33 +427,136 @@ impl BangumiTracker {
 		};
 		let mut people = Vec::new();
 		for item in items.iter().filter(|item| item.key == key) {
-			let text = Self::infobox_text(&item.value);
-			// Strip bracketed annotations like （原作） before splitting.
-			let text = {
-				let mut out = String::new();
-				let mut depth = 0i32;
-				for c in text.chars() {
-					match c {
-						'(' | '（' | '[' | '【' | '《' => { depth += 1; }
-						')' | '）' | ']' | '】' | '》' => { if depth > 0 { depth -= 1; } }
-						_ => { if depth == 0 { out.push(c); } }
-					}
-				}
-				out
-			};
-			for name in text.split(['/', '／', '、', '_', '→', ':', '×', '&', ',', '，']) {
-				let name = name.trim();
-				if !name.is_empty() {
-					people.push(name.to_string());
-				}
-			}
+			people.extend(Self::split_people(&Self::strip_annotations(&Self::infobox_text(&item.value))));
 		}
 		dedupe(people)
 	}
 
+	/// Strip bracketed annotations like `（原作）` or `（漫画家）` without
+	/// splitting: a staff record's localized name only needs this step.
+	fn strip_annotations(text: &str) -> String {
+		let mut out = String::new();
+		let mut depth = 0i32;
+		for c in text.chars() {
+			match c {
+				'(' | '（' | '[' | '【' | '《' => { depth += 1; }
+				')' | '）' | ']' | '】' | '》' => { if depth > 0 { depth -= 1; } }
+				_ => { if depth == 0 { out.push(c); } }
+			}
+		}
+		out.trim().to_string()
+	}
+
+	fn split_people(text: &str) -> Vec<String> {
+		text.split(['/', '／', '、', '_', '→', ':', '×', '&', ',', '，'])
+			.map(str::trim)
+			.filter(|name| !name.is_empty())
+			.map(str::to_string)
+			.collect()
+	}
+
+	/// One staff record names exactly one person; a value that splits into
+	/// several names cannot be attributed to the record's single `nameCN`, so
+	/// it is left alone (the infobox listing stays authoritative).
+	fn staff_name(raw: &str) -> Option<String> {
+		let mut names = Self::split_people(&Self::strip_annotations(raw));
+		if names.len() == 1 {
+			names.pop()
+		} else {
+			None
+		}
+	}
+
+	/// The staff list reduced to the name pairs that can rewrite an infobox
+	/// credit list: a person without a differing `nameCN` is not a mapping.
+	fn staff_people(entries: &[StaffEntry]) -> Vec<PersonName> {
+		let mut people: Vec<PersonName> = Vec::new();
+		for entry in entries {
+			let Some(name) = Self::staff_name(&entry.staff.name) else {
+				continue;
+			};
+			let name_cn = entry
+				.staff
+				.name_cn
+				.as_deref()
+				.map(Self::strip_annotations)
+				.filter(|name_cn| !name_cn.is_empty() && *name_cn != name);
+			let Some(name_cn) = name_cn else {
+				continue;
+			};
+			if people.iter().any(|person| person.name == name) {
+				continue;
+			}
+			people.push(PersonName { name, name_cn: Some(name_cn) });
+		}
+		people
+	}
+
+	/// The people the staff list itself credits, split into the two fields by
+	/// the positions each record holds. A record that names several people (a
+	/// joint pen name) credits all of them; its single `nameCN` cannot be
+	/// attributed to one of them, so the original spelling is kept.
+	fn staff_credits(entries: &[StaffEntry]) -> StaffCredits {
+		let mut credits = StaffCredits::default();
+		for entry in entries {
+			let names = Self::split_people(&Self::strip_annotations(&entry.staff.name));
+			if names.is_empty() {
+				continue;
+			}
+			let name_cn = entry
+				.staff
+				.name_cn
+				.as_deref()
+				.map(Self::strip_annotations)
+				.filter(|name_cn| !name_cn.is_empty() && !names.contains(name_cn));
+			let localized = match (names.len(), name_cn) {
+				(1, Some(name_cn)) => vec![name_cn],
+				_ => names.clone(),
+			};
+			for position in &entry.positions {
+				let Some(id) = position.kind.id else {
+					continue;
+				};
+				if AUTHOR_POSITIONS.contains(&id) {
+					credits.authors.extend(localized.iter().cloned());
+					credits.original_authors.extend(names.iter().cloned());
+				}
+				if ARTIST_POSITIONS.contains(&id) {
+					credits.artists.extend(localized.iter().cloned());
+					credits.original_artists.extend(names.iter().cloned());
+				}
+			}
+		}
+		credits.authors = dedupe(credits.authors);
+		credits.artists = dedupe(credits.artists);
+		credits.original_authors = dedupe(credits.original_authors);
+		credits.original_artists = dedupe(credits.original_artists);
+		credits
+	}
+
+	/// The `Original` alternative of a people field, kept only when at least one
+	/// of the two lists spells something differently from what the field takes.
+	fn staff_alternative(
+		authors: Vec<String>,
+		artists: Vec<String>,
+		incoming_authors: &[String],
+		incoming_artists: &[String],
+	) -> Vec<StaffNames> {
+		let alternative = StaffNames { label: "Original".into(), authors, artists };
+		let offered = alternative.for_field(StaffField::Authors, incoming_authors).is_some()
+			|| alternative.for_field(StaffField::Artists, incoming_artists).is_some();
+		if offered {
+			vec![alternative]
+		} else {
+			Vec::new()
+		}
+	}
+
 	/// Full metadata mapping. Bangumi's Chinese name is the library title when
 	/// present (the native name and aliases travel as alternatives); the p1
-	/// subject carries no publication status, so that field stays absent.
+	/// subject carries no publication status, so that field stays absent. The
+	/// people fields are read from the infobox here and narrowed to the staff
+	/// list's credit when `metadata()` can reach it.
 	fn metadata_from_subject(subject: &Subject) -> TrackerMetadata {
 		let name_cn = subject.name_cn.clone().filter(|name| !name.is_empty());
 		let default = name_cn.clone().unwrap_or_else(|| subject.name.clone());
@@ -434,6 +603,7 @@ impl BangumiTracker {
 				dedupe(authors)
 			},
 			artists: Self::infobox_people(subject, "作画"),
+			staff: Vec::new(),
 			description: subject.summary.clone().filter(|summary| !summary.is_empty()),
 			tags,
 			status,
@@ -463,6 +633,25 @@ impl BangumiTracker {
 		let url = self.api_url(&["p1", "subjects", &id.to_string()])?;
 		let response = self.send_authed(user_id, Method::GET, url, None, "Bangumi subject detail").await?;
 		Self::decode_json(response, "Bangumi subject detail").await
+	}
+
+	/// The subject's structured staff list, paginated 100 at a time.
+	async fn subject_staffs(&self, user_id: i64, id: i64) -> Result<Vec<StaffEntry>, TrackerError> {
+		let mut staffs = Vec::new();
+		let mut offset = 0u64;
+		loop {
+			let mut url = self.api_url(&["p1", "subjects", &id.to_string(), "staffs", "persons"])?;
+			url.query_pairs_mut().append_pair("limit", "100").append_pair("offset", &offset.to_string());
+			let response = self.send_authed(user_id, Method::GET, url, None, "Bangumi subject staffs").await?;
+			let page: StaffPage = Self::decode_json(response, "Bangumi subject staffs").await?;
+			let fetched = page.data.len() as u64;
+			staffs.extend(page.data);
+			match page.total {
+				Some(total) if fetched > 0 && offset + fetched < total => offset += fetched,
+				_ => break,
+			}
+		}
+		Ok(staffs)
 	}
 }
 
@@ -538,7 +727,42 @@ impl TrackerService for BangumiTracker {
 
 	async fn metadata(&self, user_id: i64, track_id: &str) -> Result<TrackerMetadata, TrackerError> {
 		let subject = self.subject(user_id, subject_id(track_id)?).await?;
-		Ok(Self::metadata_from_subject(&subject))
+		let mut metadata = Self::metadata_from_subject(&subject);
+		// The structured staff list is where the people fields come from, with
+		// the Chinese spelling as the default; the infobox is the fallback for
+		// records the staff list credits nobody on. Either way it is an
+		// enhancement: a failure here (a rate limit, a record without person
+		// credits) must not fail the match itself.
+		let staffs = self.subject_staffs(user_id, subject.id).await.unwrap_or_default();
+		let credits = Self::staff_credits(&staffs);
+		if credits.is_empty() {
+			if !(metadata.authors.is_empty() && metadata.artists.is_empty()) {
+				// no structural credits: localize the infobox listing instead
+				let people = Self::staff_people(&staffs);
+				let authors = localized_names(&people, &metadata.authors);
+				let artists = localized_names(&people, &metadata.artists);
+				if authors.is_some() || artists.is_some() {
+					let original = StaffNames {
+						label: "Original".into(),
+						authors: std::mem::take(&mut metadata.authors),
+						artists: std::mem::take(&mut metadata.artists),
+					};
+					metadata.authors = authors.unwrap_or_else(|| original.authors.clone());
+					metadata.artists = artists.unwrap_or_else(|| original.artists.clone());
+					metadata.staff = vec![original];
+				}
+			}
+		} else {
+			metadata.staff = Self::staff_alternative(
+				credits.original_authors,
+				credits.original_artists,
+				&credits.authors,
+				&credits.artists,
+			);
+			metadata.authors = credits.authors;
+			metadata.artists = credits.artists;
+		}
+		Ok(metadata)
 	}
 }
 
@@ -546,6 +770,7 @@ impl TrackerService for BangumiTracker {
 mod tests {
 	use super::*;
 	use crate::tracker::core::{ChapterTrackInput, TrackMode};
+	use crate::tracker::metadata::StaffField;
 	use crate::tracker::providers::test_support::{self, CapturedRequest};
 	use axum::extract::{Request, State};
 	use axum::response::{IntoResponse, Response};
@@ -669,6 +894,182 @@ mod tests {
 		assert_eq!(metadata.authors, ["J・K・ローリング"]);
 		let aliases = metadata.title.alternatives.iter().filter(|alternative| alternative.label == "Alias");
 		assert_eq!(aliases.map(|alternative| alternative.value.as_str()).collect::<Vec<_>>(), ["ハリー・ポッター", "Re:Zero", "Fate/Zero"]);
+	}
+
+	#[tokio::test]
+	async fn metadata_reads_the_people_fields_from_the_staff_list() {
+		let (origin, _mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Berserk");
+				value["infobox"] = json!([
+					{"key": "作者", "values": "情報欄の名前"},
+					{"key": "作画", "values": "情報欄の作画"}
+				]);
+				(StatusCode::OK, value)
+			}
+			"/p1/subjects/42/staffs/persons" => (
+				StatusCode::OK,
+				json!({
+					"data": [
+						{"staff": {"name": "三浦建太郎", "nameCN": "三浦健太郎"}, "positions": [{"type": {"id": 2001}}]},
+						{"staff": {"name": "Studio Gaga"}, "positions": [{"type": {"id": 2002}}]},
+						{"staff": {"name": "脚本の人", "nameCN": "剧本之人"}, "positions": [{"type": {"id": 2010}}]},
+						// a position that credits no person field is ignored
+						{"staff": {"name": "集英社", "nameCN": "集英社"}, "positions": [{"type": {"id": 2004}}]}
+					],
+					"total": 4
+				}),
+			),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+
+		let metadata = service.metadata(USER_ID, "42").await.unwrap();
+		// the staff positions, not the infobox, decide who the people are
+		assert_eq!(metadata.authors, ["三浦健太郎", "剧本之人"]);
+		assert_eq!(metadata.artists, ["三浦健太郎", "Studio Gaga"]);
+		assert_eq!(
+			metadata.staff,
+			[StaffNames {
+				label: "Original".into(),
+				authors: vec!["三浦建太郎".into(), "脚本の人".into()],
+				artists: vec!["三浦建太郎".into(), "Studio Gaga".into()]
+			}]
+		);
+	}
+
+	#[tokio::test]
+	async fn metadata_falls_back_to_the_infobox_when_the_staff_list_credits_nobody() {
+		let (origin, _mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Book");
+				value["infobox"] = json!([{"key": "作者", "values": "甲"}]);
+				(StatusCode::OK, value)
+			}
+			"/p1/subjects/42/staffs/persons" => (
+				StatusCode::OK,
+				json!({
+					"data": [{"staff": {"name": "集英社"}, "positions": [{"type": {"id": 2004}}]}],
+					"total": 1
+				}),
+			),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+
+		let metadata = service.metadata(USER_ID, "42").await.unwrap();
+		assert_eq!(metadata.authors, ["甲"]);
+		assert!(metadata.artists.is_empty());
+		assert!(metadata.staff.is_empty());
+	}
+
+	#[tokio::test]
+	async fn the_infobox_fallback_people_are_localized_by_the_staff_name_pairs() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Berserk");
+				value["nameCN"] = json!("剑风传奇");
+				value["infobox"] = json!([
+					{"key": "作者", "values": [{"v": "三浦建太郎"}, {"v": "Studio Gaga"}]},
+					{"key": "作画", "values": "Studio Gaga"}
+				]);
+				(StatusCode::OK, value)
+			}
+			// no `positions`, so the staff list credits nobody and the infobox
+			// listing is what the fields are built from
+			"/p1/subjects/42/staffs/persons" => (
+				StatusCode::OK,
+				json!({
+					"data": [
+						{"staff": {"id": 1, "name": "三浦建太郎", "nameCN": "三浦健太郎（漫画家）"}},
+						// a record whose localized spelling adds nothing is no mapping
+						{"staff": {"id": 2, "name": "Studio Gaga", "nameCN": "Studio Gaga"}},
+						// one staff record naming several people cannot be attributed
+						{"staff": {"id": 3, "name": "るーすぼーい・古屋庵", "nameCN": "某人"}},
+					],
+					"total": 3
+				}),
+			),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+
+		let metadata = service.metadata(USER_ID, "42").await.unwrap();
+		// the Chinese spelling is what the preview offers by default, so the
+		// infobox spelling moves into the alternative
+		assert_eq!(metadata.authors, ["三浦健太郎", "Studio Gaga"]);
+		// the annotation is stripped, and only a field that really changes is
+		// offered; the artists list has no name the staff list can translate
+		assert_eq!(
+			metadata.staff,
+			[StaffNames {
+				label: "Original".into(),
+				authors: vec!["三浦建太郎".into(), "Studio Gaga".into()],
+				artists: vec!["Studio Gaga".into()]
+			}]
+		);
+		assert_eq!(metadata.staff[0].for_field(StaffField::Artists, &metadata.artists), None);
+
+		let requests = mock.requests();
+		assert_eq!(requests.len(), 2);
+		let staffs = requests.iter().find(|request| request.path == "/p1/subjects/42/staffs/persons").unwrap();
+		assert_eq!(staffs.query("limit"), Some("100"));
+		assert_eq!(staffs.query("offset"), Some("0"));
+	}
+
+	#[tokio::test]
+	async fn staffs_pagination_follows_the_reported_total() {
+		let (origin, mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Book");
+				value["infobox"] = json!([{"key": "作者", "values": "甲"}]);
+				(StatusCode::OK, value)
+			}
+			"/p1/subjects/42/staffs/persons" => match request.query("offset") {
+				Some("0") => (
+					StatusCode::OK,
+					json!({"data": [{"staff": {"name": "甲", "nameCN": "A"}}], "total": 2}),
+				),
+				Some("1") => (
+					StatusCode::OK,
+					json!({"data": [{"staff": {"name": "乙", "nameCN": "B"}}], "total": 2}),
+				),
+				_ => (StatusCode::BAD_REQUEST, json!({"message": "unexpected offset"})),
+			},
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+
+		let metadata = service.metadata(USER_ID, "42").await.unwrap();
+		assert_eq!(metadata.authors, ["A"]);
+		assert_eq!(metadata.staff.len(), 1);
+		assert_eq!(metadata.staff[0].label, "Original");
+		assert_eq!(metadata.staff[0].authors, ["甲"]);
+		assert!(metadata.staff[0].artists.is_empty());
+		assert_eq!(mock.requests().len(), 3);
+	}
+
+	#[tokio::test]
+	async fn a_failed_staffs_read_still_returns_the_metadata() {
+		let (origin, _mock) = serve(|request| match request.path.as_str() {
+			"/p1/subjects/42" => {
+				let mut value = subject(42, "Book");
+				value["infobox"] = json!([{"key": "作者", "values": "甲"}]);
+				(StatusCode::OK, value)
+			}
+			"/p1/subjects/42/staffs/persons" => (StatusCode::INTERNAL_SERVER_ERROR, json!({"message": "staffs unavailable"})),
+			_ => (StatusCode::NOT_FOUND, json!({"message": "unexpected"})),
+		})
+		.await;
+		let (service, _pool, _tmp) = test_service(&origin).await;
+
+		let metadata = service.metadata(USER_ID, "42").await.unwrap();
+		assert_eq!(metadata.authors, ["甲"]);
+		assert!(metadata.staff.is_empty());
 	}
 
 	#[tokio::test]

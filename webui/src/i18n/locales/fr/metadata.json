@@ -43,6 +43,7 @@
       "cover": "Couverture"
     },
     "titleAlternativeCurrent": "Actuel",
+    "creditNamesDefault": "Noms par défaut",
     "editTitle": "Modifier les métadonnées",
     "editHint": "Les valeurs modifiées ici sont verrouillées et résistent aux rafraîchissements de la source. Les listes prennent une entrée par ligne.",
     "editSaved": "Métadonnées enregistrées",

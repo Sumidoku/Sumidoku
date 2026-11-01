@@ -664,6 +664,11 @@ export type MetadataApplyResult = {
 
 export type MetadataField = "title" | "authors" | "artists" | "description" | "tags" | "status" | "contentRating" | "cover";
 
+export type MetadataFieldAlternative = {
+	label: string;
+	value: MetadataFieldValue;
+};
+
 export type MetadataFieldLock = {
 	provider: string;
 	remoteId?: string | null;
@@ -692,7 +697,7 @@ export type MetadataPreviewField = {
 	incoming: MetadataFieldValue;
 	selectable: boolean;
 	reason?: string | null;
-	alternatives: Array<MetadataTitleAlternative>;
+	alternatives: Array<MetadataFieldAlternative>;
 	lock?: MetadataFieldLock | null;
 };
 
@@ -704,11 +709,6 @@ export type MetadataRestoreRequest = {
 export type MetadataRestoreResult = {
 	manga: Manga;
 	unlockedFields: Array<MetadataField>;
-};
-
-export type MetadataTitleAlternative = {
-	label: string;
-	value: string;
 };
 
 export type MigrateEntry = {

@@ -8643,7 +8643,7 @@
         ],
         "nullable": true
       },
-      "MetadataTitleAlternative": {
+      "MetadataFieldAlternative": {
         "type": "object",
         "required": [
           "label",
@@ -8654,7 +8654,7 @@
             "type": "string"
           },
           "value": {
-            "type": "string"
+            "$ref": "#/components/schemas/MetadataFieldValue"
           }
         }
       },
@@ -8691,9 +8691,9 @@
           },
           "alternatives": {
             "type": "array",
-            "description": "Title variants the user may pick instead; empty for other fields",
+            "description": "Variants the user may pick instead: title spellings, and for the fields that name people every other spelling the provider records (Bangumi's Chinese names are the default and its original names an alternative, AniList's native names the default and its latin ones an alternative), labelled as the provider labels them. A title value is a string, a people value a list",
             "items": {
-              "$ref": "#/components/schemas/MetadataTitleAlternative"
+              "$ref": "#/components/schemas/MetadataFieldAlternative"
             }
           },
           "lock": {

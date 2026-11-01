@@ -41,6 +41,7 @@
       "cover": "표지"
     },
     "titleAlternativeCurrent": "현재",
+    "creditNamesDefault": "기본 이름",
     "editTitle": "메타데이터 편집",
     "editHint": "여기서 편집한 값은 잠겨 소스 새로 고침 후에도 유지됩니다. 목록은 한 줄에 항목 하나씩 입력하세요.",
     "editSaved": "메타데이터를 저장함",

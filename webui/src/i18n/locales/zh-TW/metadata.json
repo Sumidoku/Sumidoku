@@ -41,6 +41,7 @@
       "cover": "封面"
     },
     "titleAlternativeCurrent": "目前",
+    "creditNamesDefault": "預設名稱",
     "editTitle": "編輯詮釋資料",
     "editHint": "在此編輯的值會鎖定為你的值，來源重新整理時不會被覆寫。清單欄位每行一項。",
     "editSaved": "詮釋資料已儲存",

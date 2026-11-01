@@ -12,7 +12,7 @@ use crate::model::{MangaRow, manga_from_row, unix_now};
 use crate::source::{manga_row, upsert_manga};
 use crate::state::AppState;
 use crate::tracker::core::TrackMode;
-use crate::tracker::metadata::{TrackerMetadata, TitleVariants};
+use crate::tracker::metadata::{StaffField, TrackerMetadata, TitleVariants};
 use crate::tracker::{Provider, TrackerError, dao};
 use aidoku::{ContentRating, Manga, MangaStatus};
 use axum::extract::{Path, Query, State};
@@ -117,6 +117,7 @@ async fn source_metadata(state: &Arc<AppState>, source_id: i64, key: &str) -> Ap
 		title: TitleVariants { default: manga.title.clone(), alternatives: Vec::new() },
 		authors: manga.authors.unwrap_or_default(),
 		artists: manga.artists.unwrap_or_default(),
+		staff: Vec::new(),
 		description: manga.description.filter(|text| !text.trim().is_empty()),
 		tags: manga.tags.unwrap_or_default(),
 		status: (manga.status != MangaStatus::Unknown).then_some(manga.status),
@@ -149,6 +150,39 @@ fn incoming_for(metadata: &TrackerMetadata, field: Field) -> Option<Value> {
 			.filter(|url| url.starts_with("http://") || url.starts_with("https://"))
 			.map(|url| json!(url)),
 	}
+}
+
+/// The labelled variants a field may take instead of its incoming value: the
+/// title spellings a record carries, and for the fields that name people every
+/// other spelling the provider records — Bangumi's original names, AniList's
+/// latin ones. `value` is a string for a title and a list for a people field.
+fn field_alternatives(metadata: &TrackerMetadata, field: Field) -> Vec<Value> {
+	let staff_field = match field {
+		Field::Authors => Some(StaffField::Authors),
+		Field::Artists => Some(StaffField::Artists),
+		_ => None,
+	};
+	if let Some(staff_field) = staff_field {
+		let names = if field == Field::Authors { &metadata.authors } else { &metadata.artists };
+		return metadata
+			.staff
+			.iter()
+			.filter_map(|staff| {
+				let value = staff.for_field(staff_field, names)?;
+				Some(json!({"label": staff.label, "value": value}))
+			})
+			.collect();
+	}
+	if field != Field::Title {
+		return Vec::new();
+	}
+	metadata
+		.title
+		.alternatives
+		.iter()
+		.filter(|alternative| !alternative.value.trim().is_empty())
+		.map(|alternative| json!({"label": alternative.label, "value": alternative.value}))
+		.collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,17 +260,7 @@ pub async fn preview_metadata(
 		.map(|field| {
 			let incoming = incoming_for(&metadata, field);
 			let reason = incoming.is_none().then(|| "the provider has no value for this field".to_string());
-			let alternatives: Vec<Value> = if field == Field::Title {
-				metadata
-					.title
-					.alternatives
-					.iter()
-					.filter(|alternative| !alternative.value.trim().is_empty())
-					.map(|alternative| json!({"label": alternative.label, "value": alternative.value}))
-					.collect()
-			} else {
-				Vec::new()
-			};
+			let alternatives = field_alternatives(&metadata, field);
 			json!({
 				"field": field.as_str(),
 				"label": field.label(),
@@ -411,4 +435,83 @@ async fn refresh_from_source(state: &Arc<AppState>, row: &MangaRow) -> ApiResult
 pub async fn metadata_locks(state: &Arc<AppState>, manga_id: i64) -> ApiResult<metadata::Locks> {
 	let mut conn = state.pool.acquire().await?;
 	Ok(metadata::load(&mut conn, manga_id).await?)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::tracker::metadata::{StaffNames, TitleAlternative};
+
+	/// A record whose staff list spells the authors differently
+	fn staffed() -> TrackerMetadata {
+		TrackerMetadata {
+			title: TitleVariants {
+				default: "ベルセルク".into(),
+				alternatives: vec![TitleAlternative { label: "Original".into(), value: "Berserk".into() }],
+			},
+			authors: vec!["三浦健太郎".into(), "Studio Gaga".into()],
+			artists: vec!["Studio Gaga".into()],
+			staff: vec![StaffNames {
+				label: "Original".into(),
+				authors: vec!["三浦建太郎".into(), "Studio Gaga".into()],
+				artists: Vec::new(),
+			}],
+			..TrackerMetadata::default()
+		}
+	}
+
+	#[test]
+	fn staff_alternatives_offer_every_recorded_spelling() {
+		assert_eq!(
+			field_alternatives(&staffed(), Field::Authors),
+			vec![json!({"label": "Original", "value": ["三浦建太郎", "Studio Gaga"]})]
+		);
+		// the artist list offers nothing: the record has no other spelling for it
+		assert!(field_alternatives(&staffed(), Field::Artists).is_empty());
+	}
+
+	#[test]
+	fn several_staff_alternatives_keep_their_labels() {
+		let metadata = TrackerMetadata {
+			staff: vec![
+				StaffNames { label: "Original".into(), authors: vec!["三浦建太郎".into()], artists: Vec::new() },
+				StaffNames { label: "Full".into(), authors: vec!["Miura Kentaro".into()], artists: Vec::new() },
+			],
+			..staffed()
+		};
+		assert_eq!(
+			field_alternatives(&metadata, Field::Authors),
+			vec![
+				json!({"label": "Original", "value": ["三浦建太郎"]}),
+				json!({"label": "Full", "value": ["Miura Kentaro"]}),
+			]
+		);
+	}
+
+	#[test]
+	fn an_alternative_matching_the_incoming_value_is_not_offered() {
+		// The other spelling repeats the record's own, so there is nothing to pick
+		let recorded = staffed();
+		let authors = recorded.authors.clone();
+		let metadata = TrackerMetadata {
+			staff: vec![StaffNames { label: "Original".into(), authors, artists: Vec::new() }],
+			..recorded
+		};
+		assert!(field_alternatives(&metadata, Field::Authors).is_empty());
+	}
+
+	#[test]
+	fn title_alternatives_keep_their_labels() {
+		assert_eq!(
+			field_alternatives(&staffed(), Field::Title),
+			vec![json!({"label": "Original", "value": "Berserk"})]
+		);
+	}
+
+	#[test]
+	fn fields_without_variants_offer_none() {
+		for field in [Field::Description, Field::Tags, Field::Status, Field::ContentRating, Field::Cover] {
+			assert!(field_alternatives(&staffed(), field).is_empty(), "{field:?}");
+		}
+	}
 }
