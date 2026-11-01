@@ -8,6 +8,7 @@ use crate::tracker::core::{RemoteState, TrackMediaType, TrackSearchItem, TrackSt
 use crate::tracker::metadata::{TitleAlternative, TitleVariants, TrackerMetadata, dedupe};
 use crate::tracker::oauth::OAuthManager;
 use crate::tracker::{Provider, TrackerError, TrackerService};
+use aidoku::MangaStatus;
 use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -136,6 +137,77 @@ fn collection_type(status: TrackStatus) -> i64 {
 		TrackStatus::Paused => 4,
 		TrackStatus::Dropped => 5,
 	}
+}
+
+/// Bangumi infobox status keys carrying the publication status.
+const BANGUMI_STATUS_KEYS: [&str; 3] = ["状态", "连载状态", "刊行状态"];
+/// Tags that imply a publication status (mirrors komf's BANGUMI_STATUS_TAGS).
+const BANGUMI_STATUS_TAGS: [&str; 9] = [
+	"连载",
+	"连载中",
+	"完结",
+	"已完结",
+	"腰斩",
+	"停刊",
+	"长期休载",
+	"停止连载",
+	"休刊",
+];
+
+/// Maps a Bangumi status string to `MangaStatus` (komf `classify_bangumi_status`).
+fn classify_bangumi_status(value: &str) -> Option<MangaStatus> {
+	let s = value.to_lowercase();
+	if s.contains("休刊") || s.contains("停刊") || s.contains("停止连载") || s.contains("长期休载")
+	{
+		Some(MangaStatus::Hiatus)
+	} else if s.contains("连载中") || s.contains("连载") {
+		Some(MangaStatus::Ongoing)
+	} else if s.contains("腰斩") {
+		Some(MangaStatus::Cancelled)
+	} else if s.contains("完结") || s.contains("已完结") {
+		Some(MangaStatus::Completed)
+	} else {
+		None
+	}
+}
+
+/// Adult-content indicator tags; any match bumps the rating to NSFW.
+const BANGUMI_ADULT_TAGS: [&str; 24] = [
+	"エロ",
+	"官能",
+	"乱交",
+	"SM",
+	"触手",
+	"鬼畜",
+	"催眠",
+	"扶她",
+	"母系",
+	"熟女",
+	"调教",
+	"恶堕",
+	"幼女",
+	"R18",
+	"成年コミック",
+	"成人漫画",
+	"アダルトコミック",
+	"18X",
+	"無修正",
+	"無修",
+	"无修",
+	"H本",
+	"A书",
+	"黄漫",
+];
+
+/// Content rating from the `nsfw` flag and adult tags (komf `map_bangumi_age_rating`
+/// fallback). `nsfw = true` or an adult tag → NSFW; otherwise absent.
+fn map_bangumi_content_rating(nsfw: bool, tags: &[SubjectTag]) -> Option<aidoku::ContentRating> {
+	if nsfw {
+		return Some(aidoku::ContentRating::NSFW);
+	}
+	tags.iter()
+		.any(|tag| BANGUMI_ADULT_TAGS.contains(&tag.name.as_str()))
+		.then_some(aidoku::ContentRating::NSFW)
 }
 
 impl BangumiTracker {
@@ -319,6 +391,28 @@ impl BangumiTracker {
 		let mut ranked = subject.tags.iter().flatten().filter(|tag| !tag.name.is_empty()).collect::<Vec<_>>();
 		ranked.sort_by_key(|tag| std::cmp::Reverse(tag.count));
 		let tags = dedupe(ranked.into_iter().map(|tag| tag.name.clone()).take(12));
+		let status = subject
+			.infobox
+			.as_ref()
+			.and_then(|items| {
+				items.iter().find_map(|item| {
+					BANGUMI_STATUS_KEYS
+						.iter()
+						.any(|key| item.key == *key)
+						.then(|| item.value.as_str())
+						.flatten()
+						.and_then(classify_bangumi_status)
+				})
+			})
+			.or_else(|| {
+				subject
+					.tags
+					.iter()
+					.flatten()
+					.map(|tag| tag.name.as_str())
+					.find(|name| BANGUMI_STATUS_TAGS.contains(name))
+					.and_then(classify_bangumi_status)
+			});
 		TrackerMetadata {
 			id: subject.id.to_string(),
 			title: TitleVariants { default, alternatives },
@@ -333,8 +427,11 @@ impl BangumiTracker {
 			artists: Self::infobox_people(subject, "作画"),
 			description: subject.summary.clone().filter(|summary| !summary.is_empty()),
 			tags,
-			status: None,
-			content_rating: subject.nsfw.then_some(aidoku::ContentRating::NSFW),
+			status,
+			content_rating: map_bangumi_content_rating(
+				subject.nsfw,
+				subject.tags.as_deref().unwrap_or_default(),
+			),
 			cover_url: subject.images.as_ref().and_then(|images| images.large.clone().or_else(|| images.common.clone())),
 			url: Some(format!("{SITE_ORIGIN}/subject/{}", subject.id)),
 		}
@@ -848,5 +945,66 @@ mod tests {
 		assert_eq!(collection_status(Some(4)), Some(TrackStatus::Paused));
 		assert_eq!(collection_status(Some(5)), Some(TrackStatus::Dropped));
 		assert_eq!(collection_type(TrackStatus::Rereading), 3);
+	}
+
+	#[test]
+	fn classify_bangumi_status_maps_status_strings() {
+		assert_eq!(classify_bangumi_status("连载中"), Some(MangaStatus::Ongoing));
+		assert_eq!(classify_bangumi_status("连载"), Some(MangaStatus::Ongoing));
+		assert_eq!(classify_bangumi_status("完结"), Some(MangaStatus::Completed));
+		assert_eq!(classify_bangumi_status("已完结"), Some(MangaStatus::Completed));
+		assert_eq!(classify_bangumi_status("腰斩"), Some(MangaStatus::Cancelled));
+		assert_eq!(classify_bangumi_status("休刊"), Some(MangaStatus::Hiatus));
+		assert_eq!(classify_bangumi_status("停刊"), Some(MangaStatus::Hiatus));
+		assert_eq!(classify_bangumi_status("停止连载"), Some(MangaStatus::Hiatus));
+		assert_eq!(classify_bangumi_status("长期休载"), Some(MangaStatus::Hiatus));
+		assert_eq!(classify_bangumi_status("未知状态"), None);
+	}
+
+	#[test]
+	fn map_bangumi_content_rating_nsfw_and_adult_tags() {
+		assert_eq!(
+			map_bangumi_content_rating(true, &[]),
+			Some(aidoku::ContentRating::NSFW)
+		);
+		assert_eq!(
+			map_bangumi_content_rating(false, &[SubjectTag { name: "R18".into(), count: 5 }]),
+			Some(aidoku::ContentRating::NSFW)
+		);
+		assert_eq!(
+			map_bangumi_content_rating(false, &[SubjectTag { name: "奇幻".into(), count: 5 }]),
+			None
+		);
+		assert_eq!(map_bangumi_content_rating(false, &[]), None);
+	}
+
+	#[test]
+	fn metadata_reads_status_and_rating_from_infobox_tags_and_nsfw() {
+		let subject: Subject = serde_json::from_value(json!({
+			"id": 7,
+			"name": "Book",
+			"nameCN": "",
+			"summary": "Summary",
+			"images": {"large": "https://img.test/7.jpg"},
+			"info": "Info",
+			"infobox": [
+				{"key": "状态", "values": "连载中"}
+			],
+			"tags": [{"name": "奇幻", "count": 200}],
+			"nsfw": false
+		}))
+		.expect("subject");
+		let metadata = BangumiTracker::metadata_from_subject(&subject);
+		assert_eq!(metadata.status, Some(MangaStatus::Ongoing));
+		assert_eq!(metadata.content_rating, None);
+
+		let adult = Subject {
+			nsfw: false,
+			tags: Some(vec![SubjectTag { name: "黄漫".into(), count: 10 }]),
+			..subject
+		};
+		let metadata = BangumiTracker::metadata_from_subject(&adult);
+		assert_eq!(metadata.status, Some(MangaStatus::Ongoing));
+		assert_eq!(metadata.content_rating, Some(aidoku::ContentRating::NSFW));
 	}
 }
