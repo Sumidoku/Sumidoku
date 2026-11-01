@@ -3,10 +3,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Trash2 } from 'lucide-react';
 import type { TrackerProvider } from '../api/types';
-import { TRACKER_PROVIDER_NAMES } from '../api/trackers';
 import { Cover } from './Cover';
 import { Spinner } from './Spinner';
-import { TrackerLogo } from './trackers/TrackerLogo';
 
 export interface CoverCardProps {
 	src?: string | null;
@@ -33,7 +31,6 @@ export function CoverCard({
 	title,
 	subtitle,
 	unreadCount,
-	trackerProviders,
 	trashed,
 	to,
 	onClick,
@@ -43,24 +40,12 @@ export function CoverCard({
 	onToggle
 }: CoverCardProps) {
 	const { t } = useTranslation();
-	const providers = trackerProviders ?? [];
-	const providerNames = providers.map((provider) => TRACKER_PROVIDER_NAMES[provider]);
-	const boundLabel = providers.length > 0 ? t('trackers.coverBound', { providers: providerNames.join(', ') }) : undefined;
 	const inner = (
 		<>
 			<div className="cover-card__cover">
 				<Cover src={src} title={title} />
 				{!selecting && unreadCount != null && unreadCount > 0 && (
 					<span className="cover-card__badge">{unreadCount > 99 ? '99+' : unreadCount}</span>
-				)}
-				{!selecting && boundLabel && (
-					<span className="cover-card__trackers" title={boundLabel} aria-label={boundLabel}>
-						{providers.map((provider) => (
-							<span key={provider} className={`cover-card__tracker cover-card__tracker--${provider}`}>
-								<TrackerLogo provider={provider} />
-							</span>
-						))}
-					</span>
 				)}
 				{trashed && (
 					<span className="cover-card__trashed" title={t('common.trashed')}>

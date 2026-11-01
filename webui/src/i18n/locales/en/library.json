@@ -6,6 +6,7 @@
     "sortLatestChapter": "Latest chapter",
     "sortUnread": "Most unread",
     "filterUnread": "Unread",
+    "filterTracked": "Tracked",
     "filterDownloaded": "Downloaded",
     "filterBookmarked": "Bookmarked",
     "triInclude": "Showing only manga with {{label}}; click to exclude them",

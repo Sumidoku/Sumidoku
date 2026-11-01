@@ -6,6 +6,7 @@
     "sortLatestChapter": "Ultimo capitolo",
     "sortUnread": "Più non letti",
     "filterUnread": "Non letti",
+    "filterTracked": "Tracciati",
     "filterDownloaded": "Scaricati",
     "filterBookmarked": "Con segnalibro",
     "triInclude": "Vengono mostrati solo i manga con «{{label}}»; clicca per escluderli",
