@@ -5,13 +5,13 @@
     "language": "Sprache",
     "source": "Quelle",
     "emptyTitle": "Quellenübergreifende Suche",
-    "emptyHint": "Geben Sieeinen Suchbegriff ein, um alle Quellen zu durchsuchen, die den Filtern entsprechen",
+    "emptyHint": "Geben Sie einen Suchbegriff ein, um alle Quellen zu durchsuchen, die den Filtern entsprechen",
     "noSourcesTitle": "Keine Quellen entsprechen den Filtern",
-    "noSourcesHint": "Passen Siedie Filter für Einstufung / Sprache / Quelle an",
+    "noSourcesHint": "Passen Sie die Filter für Einstufung / Sprache / Quelle an",
     "loadFailedTitle": "Laden fehlgeschlagen",
     "retry": "Erneut versuchen",
     "noResultsTitle": "Keine Ergebnisse",
-    "noResultsHint": "Versuchen Sieeinen anderen Suchbegriff oder passen Siedie Filter an",
+    "noResultsHint": "Versuchen Sie einen anderen Suchbegriff oder passen Sie die Filter an",
     "viewAll": "Alle anzeigen"
   }
 }

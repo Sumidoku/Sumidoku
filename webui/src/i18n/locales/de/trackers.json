@@ -1,7 +1,7 @@
 {
   "trackers": {
     "settingsTitle": "Tracker-Konten",
-    "settingsDesc": "Verbinden SieTracker-Konten, um IhrenLesefortschritt zu synchronisieren.",
+    "settingsDesc": "Verbinden Sie Tracker-Konten, um Ihren Lesefortschritt zu synchronisieren.",
     "connected": "Verbunden",
     "connectedAs": "Verbunden als {{username}}",
     "disconnectedState": "Nicht verbunden",
@@ -15,8 +15,8 @@
     "clearDefault": "Standard entfernen",
     "disconnected": "{{provider}} getrennt.",
     "bindingsTitle": "Manga-Verknüpfungen",
-    "bindingsDesc": "Verknüpfungen gehören zu IhremKonto und bestimmen, wohin der Lesefortschritt gesendet wird.",
-    "noBindings": "Noch keine Tracker-Verknüpfungen. Fügen Sieeine auf der Detailseite eines Manga hinzu.",
+    "bindingsDesc": "Verknüpfungen gehören zu Ihrem Konto und bestimmen, wohin der Lesefortschritt gesendet wird.",
+    "noBindings": "Noch keine Tracker-Verknüpfungen. Fügen Sie eine auf der Detailseite eines Manga hinzu.",
     "unknownManga": "Manga #{{id}}",
     "filterAll": "Alle",
     "pageInfo": "Seite {{page}} von {{pages}}",
@@ -51,7 +51,7 @@
     "tracked": "Bereits getrackt",
     "bind": "Verknüpfen",
     "editBinding": "{{provider}}-Verknüpfung bearbeiten",
-    "authRequired": "Verbinden Sieein {{provider}}-Konto, um diesen Eintrag zu suchen und zu aktualisieren.",
+    "authRequired": "Verbinden Sie ein {{provider}}-Konto, um diesen Eintrag zu suchen und zu aktualisieren.",
     "trackMode": "Fortschrittsmodus",
     "modeAuto": "Automatisch",
     "modeChapter": "Kapitel",

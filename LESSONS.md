@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A catalog test checks keys, not words.** Coverage and interpolation checks pass
+on text a reader would stumble over, so a generated translation needs a scan of
+the words themselves: mid-word capitals and a known pronoun followed by a letter
+find a dropped space in seconds. When one typo turns up, search for its shape
+before fixing it alone.
+- Evidence: 2026-11-01, #595's German catalog passed 260 tests and a sweep for
+  unchanged English. One visible `für Siegesperrt` led to 86 joined words across
+  16 files, such as `Siesie` and `klickenSie`; the other catalogs had none.
+
 **Two APIs of one provider are two contracts: check the URL the code calls
 before judging a field name.** A sample from the provider's better-known API
 proves nothing about another one, and both can answer the same subject with
