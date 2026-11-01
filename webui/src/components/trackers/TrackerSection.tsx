@@ -404,7 +404,6 @@ export function TrackerEditForm({ link, initialState, onClose }: TrackerEditForm
 							<RefreshCw size={14} />
 							{t('trackers.syncFromTracker')}
 						</Button>
-						<Button onClick={onClose}>{t('common.cancel')}</Button>
 						<Button type="submit" variant="primary" loading={save.isPending}>
 							{t('common.save')}
 						</Button>

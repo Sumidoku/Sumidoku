@@ -94,6 +94,12 @@ fn library_filter_clause(filter: &str, exclude: bool) -> ApiResult<String> {
 			 WHERE c.manga_id = m.id AND cu.chapter_id IS NULL)"
 		));
 	}
+	if filter == "tracked" {
+		let head = if exclude { " AND NOT EXISTS" } else { " AND EXISTS" };
+		return Ok(format!(
+			"{head} (SELECT 1 FROM manga_tracker_link l WHERE l.manga_id = m.id)"
+		));
+	}
 	const EXISTS: &str = " AND EXISTS (SELECT 1 FROM chapter c
 		 JOIN chapter_user cu ON cu.chapter_id = c.id AND cu.user_id = ?
 		 WHERE c.manga_id = m.id AND ";

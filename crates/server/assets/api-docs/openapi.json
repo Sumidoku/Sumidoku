@@ -9407,8 +9407,9 @@
         "type": "string",
         "enum": [
           "unread",
+          "bookmarked",
           "downloaded",
-          "bookmarked"
+          "tracked"
         ]
       },
       "AddToLibraryRequest": {

@@ -19,8 +19,9 @@ const SORT_OPTIONS: { value: LibrarySort; labelKey: string }[] = [
 
 const FILTER_OPTIONS: { value: LibraryFilter; labelKey: string }[] = [
 	{ value: 'unread', labelKey: 'library.filterUnread' },
-	{ value: 'downloaded', labelKey: 'library.filterDownloaded' },
-	{ value: 'bookmarked', labelKey: 'library.filterBookmarked' }
+	{ value: 'tracked', labelKey: 'library.filterTracked' },
+	{ value: 'bookmarked', labelKey: 'library.filterBookmarked' },
+	{ value: 'downloaded', labelKey: 'library.filterDownloaded' }
 ];
 
 function triTitle(t: TFunction, label: string, state: 1 | -1 | 0): string {

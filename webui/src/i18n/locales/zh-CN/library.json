@@ -6,6 +6,7 @@
     "sortLatestChapter": "最新章节",
     "sortUnread": "未读最多",
     "filterUnread": "未读",
+    "filterTracked": "已追踪",
     "filterDownloaded": "已下载",
     "filterBookmarked": "书签",
     "triInclude": "当前只显示有{{label}}的漫画，点击改为排除",

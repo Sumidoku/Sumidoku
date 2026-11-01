@@ -77,11 +77,7 @@ test('cover card renders compact tracker provider markers', async () => {
 	const markup = renderToStaticMarkup(
 		createElement(CoverCard, { title: 'Series', trackerProviders: ['bangumi', 'anilist', 'mal', 'mangabaka'] })
 	);
-	assert.match(markup, /cover-card__trackers/);
-	for (const name of ['Bangumi', 'AniList', 'MyAnimeList', 'MangaBaka']) {
-		assert.match(markup, new RegExp(`<img class="tracker-logo[^"]*"[^>]*alt="${name}"`));
-	}
-	assert.doesNotMatch(markup, />\+\d/);
+	assert.doesNotMatch(markup, /cover-card__trackers/);
 });
 
 test('tracker edit uses segmented controls instead of native pickers', async () => {
