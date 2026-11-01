@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**zsh does not split an unquoted variable, so a loop over a file list can run once
+on one bad name.** `for f in $files` passes the whole list as one word, the tool
+reports a missing file, and the script carries on. Read `git diff --stat` against
+the count you expect before writing a commit message, and use a script or an
+array for batch edits.
+- Evidence: 2026-11-01, a replacement across the German catalog changed nothing,
+  yet the commit message said ten strings while its diff held one line. A later
+  scan exposed it before the push, and the amended #598 fixed all 86.
+
 **An editable control is a promise about its whole write path.** A generic input
 loop gives every field a box, but one field can be written elsewhere or refused
 by the server, and then the edit vanishes without an error. Trace the value from
