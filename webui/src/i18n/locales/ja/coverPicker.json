@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "表紙を変更",
+    "changed": "表紙を変更しました",
+    "unsupported": "このソースには別の表紙がありません",
+    "loadFailed": "別の表紙を読み込めませんでした",
+    "retry": "再試行",
+    "empty": "ソースから別の表紙は返されませんでした",
+    "currentTitle": "現在の表紙",
+    "setAsCover": "表紙に設定",
+    "currentBadge": "現在"
+  }
+}

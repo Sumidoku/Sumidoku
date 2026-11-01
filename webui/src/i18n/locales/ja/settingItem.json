@@ -1,0 +1,26 @@
+{
+  "settingItem": {
+    "loggedIn": "ログイン済み",
+    "email": "メールアドレス",
+    "username": "ユーザー名",
+    "password": "パスワード",
+    "login": "ログイン",
+    "relogin": "再ログイン",
+    "logout": "ログアウト",
+    "logoutConfirm": "このソースからログアウトしますか？ログイン状態と保存済みの Cookie エントリーがクリアされます。",
+    "clearCookies": "ログイン Cookie もクリア",
+    "webLoginHint": "先にブラウザでソースにログインし、サイトの Cookie ヘッダーまたは JSON エクスポートを貼り付けてください",
+    "webLoginHintWithUrl": "先にブラウザで <1>{{url}}</1> にログインし、サイトの Cookie ヘッダーまたは JSON エクスポートを貼り付けてください",
+    "cookiePlaceholder": "name=value; name2=value2\nor {\"name\": \"value\"}",
+    "cookieParseError": "Cookie を解析できませんでした。リクエストヘッダーまたは JSON 形式に対応しています",
+    "oauthHint": "「ログイン」をタップすると、新しいタブで認可ページが開きます。認可後、アドレスバーのリダイレクト URL を下に貼り付けてください",
+    "oauthPlaceholder": "リダイレクト URL を貼り付け（例：myscheme://callback?code=…）",
+    "done": "完了",
+    "buttonNoAction": "このボタンにはアクションが定義されていません",
+    "basicClientOnly": "この操作はクライアントアプリで行う必要があります",
+    "oauthUnsupported": "OAuth ログインはまだサポートされていません",
+    "selectedCount_other": "{{count}}件選択中",
+    "unsupportedType": "{{title}}（未対応の種類：{{kind}}）",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

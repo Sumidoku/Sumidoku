@@ -1,0 +1,25 @@
+{
+  "chapterRow": {
+    "locked": "已鎖定",
+    "trashed": "在垃圾桶中",
+    "bookmarked": "已加入書籤",
+    "downloaded": "已下載",
+    "unread": "未讀",
+    "downloadCbz": "下載 CBZ 檔案",
+    "downloadChapter": "下載本章",
+    "enqueueing": "正在加入下載佇列",
+    "enqueued": "已加入下載佇列",
+    "downloading": "正在下載本章",
+    "addBookmark": "加入書籤",
+    "removeBookmark": "移除書籤",
+    "chapterActions": "章節操作",
+    "markRead": "標記為已讀",
+    "markUnread": "標記為未讀",
+    "markPreviousRead": "將下方所有章節標記為已讀",
+    "markPreviousUnread": "將下方所有章節標記為未讀",
+    "removeDownload": "移除下載",
+    "removeDownloadCount_other": "移除 {{count}} 個已完成的下載",
+    "removeDownloadConfirm_other": "要移除這 {{count}} 個已完成的下載及其伺服器檔案嗎？",
+    "removeDownloadConfirmSingle": "要移除「{{name}}」的已完成下載及其伺服器檔案嗎？"
+  }
+}

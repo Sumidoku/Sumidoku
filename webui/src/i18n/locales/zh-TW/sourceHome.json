@@ -1,0 +1,22 @@
+{
+  "sourceHome": {
+    "backToBrowse": "返回瀏覽",
+    "backToSource": "返回 {{name}}",
+    "sourceFallback": "來源",
+    "sourceDisabled": "此來源已停用",
+    "sourceDisabledHint": "請重新安裝或啟用後再瀏覽",
+    "loadFailed": "載入失敗",
+    "retry": "重試",
+    "noHome": "此來源沒有首頁",
+    "noHomeHint": "來源未提供首頁內容；可直接搜尋或依清單瀏覽",
+    "goSearch": "前往搜尋",
+    "emptyHome": "首頁是空的",
+    "emptyHomeHint": "來源回傳了空白的首頁版面",
+    "viewAll": "檢視全部",
+    "all": "全部",
+    "continueReading": "繼續閱讀",
+    "latestUpdates": "最近更新",
+    "latestAdded": "最近加入",
+    "recentlyRead": "最近閱讀"
+  }
+}

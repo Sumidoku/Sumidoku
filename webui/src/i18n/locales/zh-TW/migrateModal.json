@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "切換來源：《{{title}}》",
+    "mode": {
+      "copy": "複製",
+      "migrate": "遷移",
+      "migrateWithHistory": "遷移（保留歷史記錄）"
+    },
+    "modeHint": {
+      "copy": "將目標加入書庫並移轉進度；目前條目保持不變",
+      "migrate": "將目標加入書庫並移轉進度；目前條目會從書庫移除，其閱讀進度也會清除",
+      "migrateWithHistory": "將目標加入書庫並移轉進度；目前條目會從書庫移除，但保留其閱讀歷史記錄"
+    },
+    "searchFailed": "搜尋失敗",
+    "migrateFailed": "遷移失敗",
+    "done": "{{mode}}完成",
+    "viewOnly": "僅查看條目",
+    "backToCandidates": "返回候選項目",
+    "searchCandidates": "搜尋候選項目",
+    "searchHint": "依標題同時搜尋所有目標來源（每次 3 個）。",
+    "noHits": "沒有符合的項目。請調整目標組合後再搜尋。"
+  }
+}

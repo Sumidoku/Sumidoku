@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "primaryNav": "主要導覽",
+    "collapseSidebar": "收合側欄",
+    "expandSidebar": "展開側欄",
+    "toLight": "切換為淺色模式",
+    "toDark": "切換為深色模式"
+  }
+}

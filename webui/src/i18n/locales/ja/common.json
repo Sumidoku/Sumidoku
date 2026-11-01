@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "保存",
+    "cancel": "キャンセル",
+    "delete": "削除",
+    "confirm": "確定",
+    "reset": "リセット",
+    "loading": "読み込み中…",
+    "trashed": "ゴミ箱",
+    "search": "検索",
+    "nav": {
+      "library": "ライブラリ",
+      "browse": "ブラウズ",
+      "search": "検索",
+      "history": "履歴",
+      "downloads": "ダウンロード",
+      "updates": "更新",
+      "activity": "アクティビティ",
+      "settings": "設定"
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "format": {
+    "justNow": "剛剛",
+    "minutesAgo_other": "{{count}} 分鐘前",
+    "hoursAgo_other": "{{count}} 小時前",
+    "daysAgo_other": "{{count}} 天前",
+    "status": {
+      "ongoing": "連載中",
+      "completed": "已完結",
+      "hiatus": "休載中",
+      "cancelled": "已停載",
+      "unknown": "未知"
+    },
+    "chapterNumber": "第 {{number}} 話",
+    "volumeNumber": "第 {{number}} 卷",
+    "unnamedChapter": "未命名章節"
+  }
+}

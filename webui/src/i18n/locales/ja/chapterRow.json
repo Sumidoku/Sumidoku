@@ -1,0 +1,25 @@
+{
+  "chapterRow": {
+    "locked": "ロック中",
+    "trashed": "ゴミ箱",
+    "bookmarked": "ブックマーク済み",
+    "downloaded": "ダウンロード済み",
+    "unread": "未読",
+    "downloadCbz": "CBZ ファイルをダウンロード",
+    "downloadChapter": "この話をダウンロード",
+    "enqueueing": "ダウンロードキューに追加中",
+    "enqueued": "ダウンロードキューに追加済み",
+    "downloading": "この話をダウンロード中",
+    "addBookmark": "ブックマークに追加",
+    "removeBookmark": "ブックマークを解除",
+    "chapterActions": "この話の操作",
+    "markRead": "既読にする",
+    "markUnread": "未読にする",
+    "markPreviousRead": "これより下の話をすべて既読にする",
+    "markPreviousUnread": "これより下の話をすべて未読にする",
+    "removeDownload": "ダウンロードを削除",
+    "removeDownloadCount_other": "ダウンロード済みの {{count}}話を削除",
+    "removeDownloadConfirm_other": "ダウンロード済みの {{count}}話とそのサーバーファイルを削除しますか？",
+    "removeDownloadConfirmSingle": "「{{name}}」のダウンロードとそのサーバーファイルを削除しますか？"
+  }
+}

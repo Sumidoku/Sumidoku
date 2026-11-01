@@ -3,15 +3,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Languages } from 'lucide-react';
 import { IconButton } from '../components';
-import { setLanguage } from '../i18n';
-import type { Language } from '../i18n';
-
-const OPTIONS: readonly { value: Language; label: string }[] = [
-	{ value: 'en', label: 'English' },
-	{ value: 'zh-CN', label: '中文（简体）' },
-	{ value: 'fr', label: 'Français' },
-	{ value: 'it', label: 'Italiano' }
-];
+import { LANGUAGE_OPTIONS, setLanguage } from '../i18n';
 
 // Same portal + fixed-position pattern as ChipDropdown/MenuButton: the sidebar foot clips
 // absolutely positioned menus, and fixed coordinates stop following the anchor on scroll
@@ -31,7 +23,7 @@ export function LanguageMenu() {
 		if (!rect) return;
 		const left = Math.max(8, Math.min(rect.left, window.innerWidth - 188));
 		// The sidebar foot hugs the viewport bottom edge; flip the menu upward when it would overflow
-		if (rect.bottom + 180 > window.innerHeight) {
+		if (rect.bottom + 396 > window.innerHeight) {
 			setPos({ left, bottom: window.innerHeight - rect.top + 6 });
 		} else {
 			setPos({ left, top: rect.bottom + 6 });
@@ -70,8 +62,12 @@ export function LanguageMenu() {
 			{open &&
 				pos &&
 				createPortal(
-					<div className="menu-pop card" ref={menuRef} style={pos}>
-						{OPTIONS.map((option) => (
+					<div
+						className="menu-pop card"
+						ref={menuRef}
+						style={{ ...pos, maxHeight: window.innerHeight - 16, overflowY: 'auto' }}
+					>
+						{LANGUAGE_OPTIONS.map((option) => (
 							<button
 								key={option.value}
 								type="button"

@@ -1,0 +1,11 @@
+{
+  "source": {
+    "multiLanguage": "多語言",
+    "rating": {
+      "safe": "全年齡",
+      "containsNsfw": "含 NSFW 內容",
+      "suggestive": "含暗示內容",
+      "nsfw": "NSFW"
+    }
+  }
+}

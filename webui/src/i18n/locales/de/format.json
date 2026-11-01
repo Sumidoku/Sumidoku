@@ -1,0 +1,21 @@
+{
+  "format": {
+    "justNow": "Gerade eben",
+    "minutesAgo_one": "Vor {{count}} Minute",
+    "minutesAgo_other": "Vor {{count}} Minuten",
+    "hoursAgo_one": "Vor {{count}} Stunde",
+    "hoursAgo_other": "Vor {{count}} Stunden",
+    "daysAgo_one": "Vor {{count}} Tag",
+    "daysAgo_other": "Vor {{count}} Tagen",
+    "status": {
+      "ongoing": "Laufend",
+      "completed": "Abgeschlossen",
+      "hiatus": "Pausiert",
+      "cancelled": "Eingestellt",
+      "unknown": "Unbekannt"
+    },
+    "chapterNumber": "Kapitel {{number}}",
+    "volumeNumber": "Band {{number}}",
+    "unnamedChapter": "Kapitel ohne Titel"
+  }
+}

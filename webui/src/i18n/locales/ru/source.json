@@ -1,0 +1,11 @@
+{
+  "source": {
+    "multiLanguage": "Мультиязычный",
+    "rating": {
+      "safe": "Безопасно",
+      "containsNsfw": "Содержит NSFW",
+      "suggestive": "С намёками",
+      "nsfw": "NSFW"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "migrate": {
+    "title": "移行",
+    "back": "戻る",
+    "pickSourceHint": "移行元のソースを選んでください（ライブラリにエントリーがあるソースのみ表示）：",
+    "inLibrary_other": "ライブラリに {{count}}作品",
+    "libraryEmpty": "ライブラリは空です",
+    "libraryEmptyHint": "先に漫画をライブラリに追加してから移行してください",
+    "selectedCount": "ソース：<b>{{source}}</b> · {{selected}} / {{total}}件選択中",
+    "clearAll": "クリア",
+    "selectAll": "すべて選択",
+    "pickDestinations": "移行先を選択",
+    "loadMore": "さらに読み込む",
+    "startMatch_other": "マッチを開始（{{count}}作品）",
+    "status": "移行先：{{dests}} · {{matched}} / {{total}}件マッチ{{matching}}{{executed}}",
+    "statusMatching": " · マッチ中…",
+    "statusExecuted": " · {{done}}件移行済み",
+    "retryUnmatched": "未マッチを再試行",
+    "notFound": "見つかりません",
+    "gotoTarget": "移行済み — 移行先を表示 →",
+    "confirmTitle_other": "{{count}}作品を{{mode}}しますか？",
+    "confirmAction": "{{mode}}を確定",
+    "unmatchedUntouched_other": "未マッチの {{count}}作品はそのまま残ります。",
+    "toastDone_other": "{{count}}作品を移行しました",
+    "toastPartial": "{{done}}作品が完了、{{failed}}作品が失敗しました",
+    "moreActions": "その他の操作",
+    "rematch": "再検索",
+    "skipEntry": "このエントリーをスキップ",
+    "rematchTitle": "再検索：{{title}}",
+    "rematchHint": "すべての移行先ソースを検索します。候補をクリックするとマッチに使用されます。",
+    "rematchNoHits": "一致する結果がありません。別のキーワードをお試しください。",
+    "mode": {
+      "copy": "コピー",
+      "migrate": "移行",
+      "migrateWithHistory": "移行（履歴を保持）"
+    },
+    "modeHint": {
+      "copy": "移行先をライブラリに追加し、進捗を移します。移行元のエントリーはそのまま残ります",
+      "migrate": "移行先をライブラリに追加し、進捗を移します。移行元はライブラリから削除され、読書進捗もクリアされます",
+      "migrateWithHistory": "移行先をライブラリに追加し、進捗を移します。移行元はライブラリから削除されますが、読書履歴は保持されます"
+    },
+    "reason": {
+      "not_found": "移行元のエントリーが存在しません",
+      "not_in_library": "移行元のエントリーはライブラリにありません",
+      "source_not_found": "移行先のソースが存在しません",
+      "same_source": "移行元と移行先が同じエントリーです",
+      "fetch_failed": "移行先の詳細を取得できませんでした",
+      "fetch_failed_with_message": "移行先の詳細を取得できませんでした：{{message}}"
+    }
+  }
+}

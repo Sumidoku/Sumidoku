@@ -1,0 +1,22 @@
+{
+  "sourceHome": {
+    "backToBrowse": "둘러보기로 돌아가기",
+    "backToSource": "{{name}}(으)로 돌아가기",
+    "sourceFallback": "소스",
+    "sourceDisabled": "이 소스는 사용되지 않습니다",
+    "sourceDisabledHint": "둘러보기 전에 다시 설치하거나 사용하도록 설정하세요",
+    "loadFailed": "불러오지 못했습니다",
+    "retry": "다시 시도",
+    "noHome": "이 소스에는 홈 페이지가 없습니다",
+    "noHomeHint": "소스에서 홈 콘텐츠를 제공하지 않습니다. 바로 검색하거나 목록으로 둘러보세요",
+    "goSearch": "검색으로 이동",
+    "emptyHome": "홈 페이지가 비어 있습니다",
+    "emptyHomeHint": "소스에서 비어 있는 홈 레이아웃을 반환했습니다",
+    "viewAll": "모두 보기",
+    "all": "전체",
+    "continueReading": "이어 읽기",
+    "latestUpdates": "최근 업데이트",
+    "latestAdded": "최근 추가",
+    "recentlyRead": "최근 읽음"
+  }
+}

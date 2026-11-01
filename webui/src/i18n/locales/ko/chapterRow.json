@@ -1,0 +1,25 @@
+{
+  "chapterRow": {
+    "locked": "잠김",
+    "trashed": "휴지통에 있음",
+    "bookmarked": "북마크함",
+    "downloaded": "다운로드함",
+    "unread": "읽지 않음",
+    "downloadCbz": "CBZ 파일 다운로드",
+    "downloadChapter": "챕터 다운로드",
+    "enqueueing": "다운로드 대기열에 추가하는 중",
+    "enqueued": "다운로드 대기열에 있음",
+    "downloading": "챕터 다운로드 중",
+    "addBookmark": "북마크 추가",
+    "removeBookmark": "북마크 삭제",
+    "chapterActions": "챕터 작업",
+    "markRead": "읽음으로 표시",
+    "markUnread": "읽지 않음으로 표시",
+    "markPreviousRead": "아래의 모든 챕터를 읽음으로 표시",
+    "markPreviousUnread": "아래의 모든 챕터를 읽지 않음으로 표시",
+    "removeDownload": "다운로드 삭제",
+    "removeDownloadCount_other": "완료된 다운로드 {{count}}개 삭제",
+    "removeDownloadConfirm_other": "완료된 다운로드 {{count}}개와 서버 파일을 삭제하시겠습니까?",
+    "removeDownloadConfirmSingle": "“{{name}}”의 완료된 다운로드와 서버 파일을 삭제하시겠습니까?"
+  }
+}

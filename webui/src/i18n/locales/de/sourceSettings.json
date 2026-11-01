@@ -1,0 +1,35 @@
+{
+  "sourceSettings": {
+    "title": "Einstellungen von {{name}}",
+    "loadFailed": "Einstellungen konnten nicht geladen werden",
+    "noSettings": "Diese Quelle hat keine konfigurierbaren Optionen",
+    "saved": "Gespeichert",
+    "resetDone": "Auf Standardeinstellungen zurückgesetzt",
+    "cacheCleared": "Anmelde-Cache geleert",
+    "loginSuccess": "Angemeldet",
+    "loggedOut": "Abgemeldet",
+    "resetSettings": "Einstellungen zurücksetzen",
+    "clearLoginCache": "Anmelde-Cache leeren",
+    "reset": "Zurücksetzen",
+    "clear": "Leeren",
+    "resetConfirm": "Alle Einstellungen dieser Quelle auf ihre Standardwerte zurücksetzen? Nicht gespeicherte Änderungen werden verworfen und die Anmeldedaten ebenfalls gelöscht.",
+    "clearConfirm": "Die Anmelde-Cookies dieser Quelle löschen und ihre Instanz neu starten? Sie müssen sich erneut anmelden.",
+    "localDirPlaceholder": "/mnt/manga",
+    "addLocalDir": "Verzeichnis hinzufügen",
+    "localOneshotsDirLabel": "Oneshot-Verzeichnis",
+    "localOneshotsDirPlaceholder": "oneshots",
+
+    "localOneshotsDirDesc": "Ein Verzeichnis, dessen Pfad diesen Namen enthält (ohne Berücksichtigung der Groß-/Kleinschreibung), wird selbst nie aufgeführt; jedes Archiv direkt darin wird zu einem eigenen Manga mit einem Kapitel, dessen Titel dem Dateinamen entspricht. Ein leeres Feld deaktiviert die Oneshot-Regel für diese Quelle; durch Zurücksetzen wird die Serverkonfiguration (SUMIDOKU_LOCAL_ONESHOTS_DIR) wiederhergestellt.",
+    "localExclusionsLabel": "Ausschlüsse",
+    "localExclusionPlaceholder": "Teilzeichenfolge, z. B. @eaDir",
+    "addExclusion": "Ausschluss hinzufügen",
+    "localExclusionsDesc": "Pfade, die eine dieser Teilzeichenfolgen enthalten (ohne Berücksichtigung der Groß-/Kleinschreibung), werden beim Scan übersprungen",
+    "localForceModifiedTime": "Aktualisierung nach Änderungszeit erzwingen",
+    "localAnalyzePages": "Seiten analysieren",
+    "localAnalyzeMetadata": "Metadaten analysieren",
+    "localScanFlagsDesc": "Diese Einstellungen überschreiben die Standardwerte der Serverkonfiguration für diese Instanz; Änderungen, die den Scan betreffen, lösen automatisch einen erneuten Scan aus",
+    "scanNow": "Jetzt scannen",
+    "scanQueued": "Scan eingereiht",
+    "resetLocalConfirm": "Die Überschreibungen dieser lokalen Quelle löschen (Oneshots, Ausschlüsse und Scan-Schalter)? Die Verzeichnisliste bleibt erhalten."
+  }
+}

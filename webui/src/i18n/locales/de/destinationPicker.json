@@ -1,0 +1,14 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "Ausgewählt (Reihenfolge = Priorität)",
+    "addAllPinnedTitle": "Alle angehefteten Quellen in der Reihenfolge ihrer Anheftung hinzufügen",
+    "addAllPinned_one": "Alle angehefteten auswählen ({{count}})",
+    "addAllPinned_other": "Alle angehefteten auswählen ({{count}})",
+    "emptyHint": "Noch keine Zielquellen — klicken Sieunten, um welche hinzuzufügen; die Reihenfolge bestimmt die Priorität beim automatischen Abgleich.",
+    "remove": "{{name}} entfernen",
+    "availableHeading": "Verfügbar",
+    "noMore": "Keine weiteren Quellen zum Hinzufügen.",
+    "add": "{{name}} hinzufügen",
+    "pinned": "Angeheftet"
+  }
+}

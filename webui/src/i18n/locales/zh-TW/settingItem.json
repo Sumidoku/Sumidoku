@@ -1,0 +1,26 @@
+{
+  "settingItem": {
+    "loggedIn": "已登入",
+    "email": "電子郵件",
+    "username": "使用者名稱",
+    "password": "密碼",
+    "login": "登入",
+    "relogin": "重新登入",
+    "logout": "登出",
+    "logoutConfirm": "要登出此來源嗎？登入狀態和已儲存的 Cookie 項目都會清除。",
+    "clearCookies": "同時清除登入 Cookie",
+    "webLoginHint": "請先在瀏覽器中登入來源，再貼上網站的 Cookie 標頭或 JSON 匯出內容",
+    "webLoginHintWithUrl": "請先在瀏覽器中登入 <1>{{url}}</1>，再貼上網站的 Cookie 標頭或 JSON 匯出內容",
+    "cookiePlaceholder": "name=value; name2=value2\n或 {\"name\": \"value\"}",
+    "cookieParseError": "無法解析 Cookie；支援請求標頭或 JSON 格式",
+    "oauthHint": "點擊「登入」在新分頁開啟授權頁面；授權完成後，將網址列中的重新導向 URL 貼到下方",
+    "oauthPlaceholder": "貼上重新導向 URL，例如 myscheme://callback?code=…",
+    "done": "完成",
+    "buttonNoAction": "此按鈕未宣告操作",
+    "basicClientOnly": "必須在用戶端應用程式中完成此操作",
+    "oauthUnsupported": "尚不支援 OAuth 登入",
+    "selectedCount_other": "已選取 {{count}} 個",
+    "unsupportedType": "{{title}}（不支援的類型：{{kind}}）",
+    "localStoragePlaceholder": "localStorage：{{key}}"
+  }
+}

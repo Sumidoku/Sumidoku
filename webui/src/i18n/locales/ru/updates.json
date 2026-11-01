@@ -1,0 +1,32 @@
+{
+  "updates": {
+    "jobPending": "В очереди",
+    "jobRunning": "Обновляется",
+    "complete": "Завершено",
+    "failed": "Ошибка",
+    "skipped": "Пропущено",
+    "started": "Обновление запущено",
+    "alreadyRunning": "Обновление уже выполняется",
+    "updateFailed": "Обновление не удалось",
+    "summaryUnavailable": "Сводка обновления недоступна",
+    "statusRunning": "Обновление",
+    "lastRun": "Последнее обновление {{time}}",
+    "idle": "Ожидание",
+    "total": "Всего",
+    "pending": "В ожидании",
+    "wsOk": "Подключение в реальном времени работает",
+    "wsDown": "Соединение потеряно; повторная попытка через 3 секунды",
+    "runNow": "Обновить сейчас",
+    "selectCategory": "Выбрать категорию",
+    "allCategories": "Все",
+    "runByCategory": "Обновить по категории",
+    "liveFeed": "Действия в реальном времени",
+    "addedChapters_one": "+{{count}} глава",
+    "addedChapters_few": "+{{count}} главы",
+    "addedChapters_many": "+{{count}} глав",
+    "addedChapters_other": "+{{count}} главы",
+    "recentHeading": "Недавние обновления",
+    "recentEmpty": "В последнее время новых глав не было",
+    "newChapter": "Новая"
+  }
+}

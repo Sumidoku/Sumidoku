@@ -1,0 +1,29 @@
+{
+  "settingItem": {
+    "loggedIn": "Вход выполнен",
+    "email": "Электронная почта",
+    "username": "Имя пользователя",
+    "password": "Пароль",
+    "login": "Войти",
+    "relogin": "Войти снова",
+    "logout": "Выйти",
+    "logoutConfirm": "Выйти из этого источника? Состояние входа и сохранённые cookie будут удалены.",
+    "clearCookies": "Также удалить cookie входа",
+    "webLoginHint": "Сначала войдите в источник в браузере, затем вставьте заголовок Cookie сайта или экспортированный JSON",
+    "webLoginHintWithUrl": "Сначала войдите на <1>{{url}}</1> в браузере, затем вставьте заголовок Cookie сайта или экспортированный JSON",
+    "cookiePlaceholder": "name=value; name2=value2\nили {\"name\": \"value\"}",
+    "cookieParseError": "Не удалось разобрать cookie; поддерживаются заголовок запроса и формат JSON",
+    "oauthHint": "Нажмите «Войти», чтобы открыть страницу авторизации в новой вкладке; после авторизации вставьте ниже URL перенаправления из адресной строки",
+    "oauthPlaceholder": "Вставьте URL перенаправления, например myscheme://callback?code=…",
+    "done": "Готово",
+    "buttonNoAction": "Для этой кнопки не задано действие",
+    "basicClientOnly": "Это нужно сделать в клиентском приложении",
+    "oauthUnsupported": "Вход через OAuth пока не поддерживается",
+    "selectedCount_one": "Выбрано: {{count}}",
+    "selectedCount_few": "Выбрано: {{count}}",
+    "selectedCount_many": "Выбрано: {{count}}",
+    "selectedCount_other": "Выбрано: {{count}}",
+    "unsupportedType": "{{title}} (неподдерживаемый тип: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

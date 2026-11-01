@@ -1,0 +1,23 @@
+{
+  "errors": {
+    "bad_request": "Ungültige Anfrage",
+    "unauthorized": "Nicht angemeldet oder Sitzung abgelaufen",
+    "forbidden": "Zugriff verweigert",
+    "not_found": "Die angeforderte Ressource wurde nicht gefunden",
+    "duplicate": "Ein Eintrag mit demselben Namen ist bereits vorhanden",
+    "unsupported": "Diese Funktion wird nicht unterstützt",
+    "no_update": "Bereits auf dem neuesten Stand",
+    "not_in_library": "Der Manga ist nicht in der Bibliothek",
+    "source_disabled": "Diese Quelle ist deaktiviert",
+    "source_error": "Die Anfrage an die Quelle ist fehlgeschlagen",
+    "timeout": "Zeitüberschreitung bei der Anfrage an die Quelle",
+    "bad_gateway": "Die Anfrage an den vorgelagerten Server ist fehlgeschlagen",
+    "internal": "Interner Serverfehler",
+    "gone": "Das Verzeichnis fehlt weiterhin; stellen Siees zuerst auf dem Datenträger wieder her oder löschen Sieden Eintrag endgültig",
+    "not_trashed": "Dieser Eintrag befindet sich nicht im Papierkorb",
+    "network": "Netzwerkanfrage fehlgeschlagen",
+    "http": "Anfrage fehlgeschlagen (HTTP {{status}})",
+    "stream_parse": "Der Datenstrom enthielt ein Ereignis, das nicht verarbeitet werden konnte",
+    "stream_terminal": "Der Datenstrom endete ohne Abschlussereignis"
+  }
+}

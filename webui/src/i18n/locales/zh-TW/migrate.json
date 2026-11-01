@@ -1,0 +1,51 @@
+{
+  "migrate": {
+    "title": "遷移",
+    "back": "返回",
+    "pickSourceHint": "選取要遷出的來源（僅列出書庫中有條目的來源）：",
+    "inLibrary_other": "書庫中有 {{count}} 部",
+    "libraryEmpty": "你的書庫是空的",
+    "libraryEmptyHint": "請先將漫畫加入書庫，再進行遷移",
+    "selectedCount": "來源：<b>{{source}}</b> · 已選取 {{selected}} / {{total}} 部",
+    "clearAll": "清除",
+    "selectAll": "全選",
+    "pickDestinations": "選擇目標",
+    "loadMore": "載入更多",
+    "startMatch_other": "開始比對（{{count}} 部）",
+    "status": "目標：{{dests}} · 已比對 {{matched}} / {{total}}{{matching}}{{executed}}",
+    "statusMatching": " · 比對中…",
+    "statusExecuted": " · 已遷移 {{done}}",
+    "retryUnmatched": "重試未比對的項目",
+    "notFound": "找不到",
+    "gotoTarget": "已遷移，查看目標 →",
+    "confirmTitle_other": "要{{mode}} {{count}} 部漫畫嗎？",
+    "confirmAction": "確認{{mode}}",
+    "unmatchedUntouched_other": "未比對的 {{count}} 部漫畫將保持不變。",
+    "toastDone_other": "已遷移 {{count}} 部漫畫",
+    "toastPartial": "已完成 {{done}} 部，{{failed}} 部失敗",
+    "moreActions": "更多操作",
+    "rematch": "重新搜尋",
+    "skipEntry": "略過此條目",
+    "rematchTitle": "重新搜尋：《{{title}}》",
+    "rematchHint": "搜尋所有目標來源；點擊候選項目即可採用為比對結果。",
+    "rematchNoHits": "沒有符合的項目，請試試其他關鍵字。",
+    "mode": {
+      "copy": "複製",
+      "migrate": "遷移",
+      "migrateWithHistory": "遷移（保留歷史記錄）"
+    },
+    "modeHint": {
+      "copy": "將目標加入書庫並移轉進度；來源條目保持不變",
+      "migrate": "將目標加入書庫並移轉進度；來源條目會從書庫移除，其閱讀進度也會清除",
+      "migrateWithHistory": "將目標加入書庫並移轉進度；來源條目會從書庫移除，但保留其閱讀歷史記錄"
+    },
+    "reason": {
+      "not_found": "來源條目不存在",
+      "not_in_library": "來源條目不在書庫中",
+      "source_not_found": "目標來源不存在",
+      "same_source": "目標與來源是同一個條目",
+      "fetch_failed": "無法取得目標詳細資訊",
+      "fetch_failed_with_message": "無法取得目標詳細資訊：{{message}}"
+    }
+  }
+}

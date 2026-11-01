@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "모든 소스 검색…",
+    "rating": "등급",
+    "language": "언어",
+    "source": "소스",
+    "emptyTitle": "소스 통합 검색",
+    "emptyHint": "검색어를 입력하면 필터에 맞는 모든 소스를 검색합니다",
+    "noSourcesTitle": "필터에 맞는 소스가 없습니다",
+    "noSourcesHint": "등급 / 언어 / 소스 필터를 조정하세요",
+    "loadFailedTitle": "불러오지 못했습니다",
+    "retry": "다시 시도",
+    "noResultsTitle": "검색 결과가 없습니다",
+    "noResultsHint": "다른 검색어를 입력하거나 필터를 조정하세요",
+    "viewAll": "모두 보기"
+  }
+}

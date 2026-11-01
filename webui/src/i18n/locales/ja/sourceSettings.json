@@ -1,0 +1,35 @@
+{
+  "sourceSettings": {
+    "title": "{{name}} の設定",
+    "loadFailed": "設定を読み込めませんでした",
+    "noSettings": "このソースには設定できる項目がありません",
+    "saved": "保存しました",
+    "resetDone": "デフォルト設定に戻しました",
+    "cacheCleared": "ログインキャッシュをクリアしました",
+    "loginSuccess": "ログインしました",
+    "loggedOut": "ログアウトしました",
+    "resetSettings": "設定をリセット",
+    "clearLoginCache": "ログインキャッシュをクリア",
+    "reset": "リセット",
+    "clear": "クリア",
+    "resetConfirm": "このソースのすべての設定をデフォルトに戻しますか？未保存の変更は破棄され、ログイン情報もクリアされます。",
+    "clearConfirm": "このソースのログイン Cookie をクリアして、インスタンスを再起動しますか？再度ログインが必要になります。",
+    "localDirPlaceholder": "/mnt/manga",
+    "addLocalDir": "ディレクトリを追加",
+    "localOneshotsDirLabel": "読み切りディレクトリ",
+    "localOneshotsDirPlaceholder": "oneshots",
+
+    "localOneshotsDirDesc": "パスにこの名前を含むディレクトリ（大文字・小文字を区別しない）は、それ自体がリストに表示されません。直下の各アーカイブが、ファイル名をタイトルとする 1 話の漫画になります。空欄にすると、このソースで読み切りルールが無効になります。リセットするとサーバー設定（SUMIDOKU_LOCAL_ONESHOTS_DIR）に戻ります。",
+    "localExclusionsLabel": "除外",
+    "localExclusionPlaceholder": "部分文字列（例：@eaDir）",
+    "addExclusion": "除外を追加",
+    "localExclusionsDesc": "これらの部分文字列のいずれかをパスに含む項目（大文字・小文字を区別しない）は、スキャンでスキップされます",
+    "localForceModifiedTime": "更新日時による更新を強制",
+    "localAnalyzePages": "ページを分析",
+    "localAnalyzeMetadata": "メタデータを分析",
+    "localScanFlagsDesc": "このインスタンスでは、サーバー設定のデフォルト値をこれらで上書きします。スキャンに影響する変更は、自動で再スキャンを開始します",
+    "scanNow": "今すぐスキャン",
+    "scanQueued": "スキャンをキューに追加しました",
+    "resetLocalConfirm": "このローカルソースの上書き設定（読み切り、除外、スキャンの切り替え）をクリアしますか？ディレクトリリストは保持されます。"
+  }
+}

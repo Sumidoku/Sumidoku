@@ -1,0 +1,22 @@
+{
+  "sourceHome": {
+    "backToBrowse": "ブラウズに戻る",
+    "backToSource": "{{name}} に戻る",
+    "sourceFallback": "ソース",
+    "sourceDisabled": "このソースは無効になっています",
+    "sourceDisabledHint": "参照するには、再インストールするか有効にしてください",
+    "loadFailed": "読み込めませんでした",
+    "retry": "再試行",
+    "noHome": "このソースにはホームページがありません",
+    "noHomeHint": "ソースがホームコンテンツを提供していません。直接検索するか、リストから参照できます",
+    "goSearch": "検索へ",
+    "emptyHome": "ホームページは空です",
+    "emptyHomeHint": "ソースから空のホームレイアウトが返されました",
+    "viewAll": "すべて表示",
+    "all": "すべて",
+    "continueReading": "続きを読む",
+    "latestUpdates": "最近の更新",
+    "latestAdded": "最近の追加",
+    "recentlyRead": "最近読んだ作品"
+  }
+}

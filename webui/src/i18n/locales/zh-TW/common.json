@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "儲存",
+    "cancel": "取消",
+    "delete": "刪除",
+    "confirm": "確認",
+    "reset": "重設",
+    "loading": "載入中…",
+    "trashed": "在垃圾桶中",
+    "search": "搜尋",
+    "nav": {
+      "library": "書庫",
+      "browse": "瀏覽",
+      "search": "搜尋",
+      "history": "歷史記錄",
+      "downloads": "下載",
+      "updates": "更新",
+      "activity": "動態",
+      "settings": "設定"
+    }
+  }
+}

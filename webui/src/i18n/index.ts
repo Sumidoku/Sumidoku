@@ -1,9 +1,22 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
-export type Language = 'en' | 'zh-CN' | 'fr' | 'it';
+export const LANGUAGE_OPTIONS = [
+	{ value: 'en', label: 'English' },
+	{ value: 'de', label: 'Deutsch' },
+	{ value: 'es', label: 'Español' },
+	{ value: 'fr', label: 'Français' },
+	{ value: 'it', label: 'Italiano' },
+	{ value: 'ja', label: '日本語' },
+	{ value: 'ko', label: '한국어' },
+	{ value: 'ru', label: 'Русский' },
+	{ value: 'zh-CN', label: '中文（简体）' },
+	{ value: 'zh-TW', label: '中文（繁體）' }
+] as const;
 
-const LANGUAGES: readonly Language[] = ['en', 'zh-CN', 'fr', 'it'];
+export type Language = (typeof LANGUAGE_OPTIONS)[number]['value'];
+
+const LANGUAGES: readonly Language[] = LANGUAGE_OPTIONS.map((option) => option.value);
 
 const STORAGE_KEY = 'sumidoku.language';
 
@@ -14,11 +27,10 @@ function detectLanguage(): Language {
 	} catch {
 		// Private mode blocks the read; fall through to the browser language
 	}
-	const nav = navigator.language.toLowerCase();
-	if (nav.startsWith('zh')) return 'zh-CN';
-	if (nav.startsWith('fr')) return 'fr';
-	if (nav.startsWith('it')) return 'it';
-	return 'en';
+	const nav = navigator.language.toLowerCase().replace(/_/g, '-');
+	if (nav.startsWith('zh')) return /hant|-tw|-hk|-mo/.test(nav) ? 'zh-TW' : 'zh-CN';
+	const primary = nav.split('-')[0];
+	return LANGUAGES.find((lang) => lang.split('-')[0] === primary) ?? 'en';
 }
 
 // Catalogs live one file per namespace per locale (locales/<lang>/<ns>.json, the file

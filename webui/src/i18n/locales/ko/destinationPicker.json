@@ -1,0 +1,13 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "선택됨(순서 = 우선순위)",
+    "addAllPinnedTitle": "고정된 모든 소스를 고정 순서대로 추가",
+    "addAllPinned_other": "고정된 소스 모두 선택({{count}})",
+    "emptyHint": "아직 대상 소스가 없습니다. 아래를 클릭하여 추가하세요. 순서에 따라 자동 매칭 우선순위가 결정됩니다.",
+    "remove": "{{name}} 제거",
+    "availableHeading": "사용 가능",
+    "noMore": "더 이상 추가할 소스가 없습니다.",
+    "add": "{{name}} 추가",
+    "pinned": "고정됨"
+  }
+}

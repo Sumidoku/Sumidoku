@@ -1,0 +1,18 @@
+{
+  "format": {
+    "justNow": "방금",
+    "minutesAgo_other": "{{count}}분 전",
+    "hoursAgo_other": "{{count}}시간 전",
+    "daysAgo_other": "{{count}}일 전",
+    "status": {
+      "ongoing": "연재 중",
+      "completed": "완결",
+      "hiatus": "휴재",
+      "cancelled": "연재 중단",
+      "unknown": "알 수 없음"
+    },
+    "chapterNumber": "제{{number}}화",
+    "volumeNumber": "{{number}}권",
+    "unnamedChapter": "제목 없는 챕터"
+  }
+}

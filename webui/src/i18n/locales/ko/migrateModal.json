@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "소스 변경: {{title}}",
+    "mode": {
+      "copy": "복사",
+      "migrate": "이전",
+      "migrateWithHistory": "이전(기록 유지)"
+    },
+    "modeHint": {
+      "copy": "대상을 라이브러리에 추가하고 진행 상황을 옮기며, 현재 항목은 그대로 유지합니다",
+      "migrate": "대상을 라이브러리에 추가하고 진행 상황을 옮기며, 현재 항목은 라이브러리에서 제거하고 읽기 진행 상황을 지웁니다",
+      "migrateWithHistory": "대상을 라이브러리에 추가하고 진행 상황을 옮기며, 현재 항목은 라이브러리에서 제거하지만 읽기 기록은 유지합니다"
+    },
+    "searchFailed": "검색 실패",
+    "migrateFailed": "이전 실패",
+    "done": "{{mode}} 완료",
+    "viewOnly": "항목만 보기",
+    "backToCandidates": "후보로 돌아가기",
+    "searchCandidates": "후보 검색",
+    "searchHint": "모든 대상 소스에서 제목을 동시에 검색합니다(한 번에 3개).",
+    "noHits": "일치하는 항목이 없습니다. 대상을 조정한 후 다시 검색하세요."
+  }
+}

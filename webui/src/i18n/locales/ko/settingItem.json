@@ -1,0 +1,26 @@
+{
+  "settingItem": {
+    "loggedIn": "로그인함",
+    "email": "이메일",
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "login": "로그인",
+    "relogin": "다시 로그인",
+    "logout": "로그아웃",
+    "logoutConfirm": "이 소스에서 로그아웃하시겠습니까? 로그인 상태와 저장된 쿠키 항목이 삭제됩니다.",
+    "clearCookies": "로그인 쿠키도 삭제",
+    "webLoginHint": "먼저 브라우저에서 소스에 로그인한 다음, 사이트의 Cookie 헤더나 JSON 낮볼내기를 붙여 넣으세요",
+    "webLoginHintWithUrl": "먼저 브라우저에서 <1>{{url}}</1>에 로그인한 다음, 사이트의 Cookie 헤더나 JSON 낮볼내기를 붙여 넣으세요",
+    "cookiePlaceholder": "name=value; name2=value2\nor {\"name\": \"value\"}",
+    "cookieParseError": "쿠키를 구문 분석하지 못했습니다. 요청 헤더 또는 JSON 형식을 지원합니다",
+    "oauthHint": "\"로그인\"을 눌러 새 탭에서 인증 페이지를 여세요. 인증 후 주소 표시줄의 리디렉션 URL을 아래에 붙여 넣으세요",
+    "oauthPlaceholder": "리디렉션 URL 붙여 넣기, 예: myscheme://callback?code=…",
+    "done": "완료",
+    "buttonNoAction": "이 버튼에는 지정된 작업이 없습니다",
+    "basicClientOnly": "클리언트 앱에서 진행해야 합니다",
+    "oauthUnsupported": "아직 OAuth 로그인을 지원하지 않습니다",
+    "selectedCount_other": "{{count}}개 선택됨",
+    "unsupportedType": "{{title}}(지원되지 않는 유형: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

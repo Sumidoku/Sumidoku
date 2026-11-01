@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "Cambiar portada",
+    "changed": "Portada cambiada",
+    "unsupported": "Esta fuente no ofrece portadas alternativas",
+    "loadFailed": "No se pudieron cargar las portadas alternativas",
+    "retry": "Reintentar",
+    "empty": "La fuente no devolvió portadas alternativas",
+    "currentTitle": "Portada actual",
+    "setAsCover": "Establecer como portada",
+    "currentBadge": "Actual"
+  }
+}

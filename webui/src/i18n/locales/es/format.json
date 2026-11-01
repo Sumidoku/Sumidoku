@@ -1,0 +1,21 @@
+{
+  "format": {
+    "justNow": "Ahora mismo",
+    "minutesAgo_one": "Hace {{count}} minuto",
+    "minutesAgo_other": "Hace {{count}} minutos",
+    "hoursAgo_one": "Hace {{count}} hora",
+    "hoursAgo_other": "Hace {{count}} horas",
+    "daysAgo_one": "Hace {{count}} día",
+    "daysAgo_other": "Hace {{count}} días",
+    "status": {
+      "ongoing": "En publicación",
+      "completed": "Completado",
+      "hiatus": "En pausa",
+      "cancelled": "Cancelado",
+      "unknown": "Desconocido"
+    },
+    "chapterNumber": "Capítulo {{number}}",
+    "volumeNumber": "Vol. {{number}}",
+    "unnamedChapter": "Capítulo sin título"
+  }
+}

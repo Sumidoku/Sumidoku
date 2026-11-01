@@ -1,0 +1,10 @@
+{
+  "history": {
+    "emptyTitle": "読書履歴はまだありません",
+    "emptyHint": "読んだ話はここに表示され、いつでも続きから読めます",
+    "goLibrary": "ライブラリへ",
+    "finished": "読了",
+    "progress": "{{page}}ページ",
+    "more": "ほか {{count}}件"
+  }
+}

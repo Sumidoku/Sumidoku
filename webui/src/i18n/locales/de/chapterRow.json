@@ -1,0 +1,27 @@
+{
+  "chapterRow": {
+    "locked": "Gesperrt",
+    "trashed": "Im Papierkorb",
+    "bookmarked": "Mit Lesezeichen",
+    "downloaded": "Heruntergeladen",
+    "unread": "Ungelesen",
+    "downloadCbz": "CBZ-Datei herunterladen",
+    "downloadChapter": "Kapitel herunterladen",
+    "enqueueing": "Wird zur Download-Warteschlange hinzugefügt",
+    "enqueued": "In der Download-Warteschlange",
+    "downloading": "Kapitel wird heruntergeladen",
+    "addBookmark": "Lesezeichen hinzufügen",
+    "removeBookmark": "Lesezeichen entfernen",
+    "chapterActions": "Kapitelaktionen",
+    "markRead": "Als gelesen markieren",
+    "markUnread": "Als ungelesen markieren",
+    "markPreviousRead": "Alle darunterliegenden Kapitel als gelesen markieren",
+    "markPreviousUnread": "Alle darunterliegenden Kapitel als ungelesen markieren",
+    "removeDownload": "Download entfernen",
+    "removeDownloadCount_one": "{{count}} abgeschlossenen Download entfernen",
+    "removeDownloadCount_other": "{{count}} abgeschlossene Downloads entfernen",
+    "removeDownloadConfirm_one": "Diesen abgeschlossenen Download und seine Dateien auf dem Server entfernen?",
+    "removeDownloadConfirm_other": "Diese {{count}} abgeschlossenen Downloads und ihre Dateien auf dem Server entfernen?",
+    "removeDownloadConfirmSingle": "Den abgeschlossenen Download für „{{name}}“ und seine Dateien auf dem Server entfernen?"
+  }
+}

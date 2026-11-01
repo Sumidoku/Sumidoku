@@ -1,0 +1,29 @@
+{
+  "updates": {
+    "jobPending": "대기 중",
+    "jobRunning": "업데이트 중",
+    "complete": "완료",
+    "failed": "실패",
+    "skipped": "걸러뜀",
+    "started": "업데이트 시작함",
+    "alreadyRunning": "이미 업데이트가 실행 중입니다",
+    "updateFailed": "업데이트 실패",
+    "summaryUnavailable": "업데이트 요약을 사용할 수 없습니다",
+    "statusRunning": "업데이트 중",
+    "lastRun": "마지막 업데이트: {{time}}",
+    "idle": "유휴 상태",
+    "total": "전체",
+    "pending": "대기 중",
+    "wsOk": "실시간 연결 정상",
+    "wsDown": "연결이 끊어졌습니다. 3초 후에 다시 시도합니다",
+    "runNow": "지금 업데이트",
+    "selectCategory": "카테고리 선택",
+    "allCategories": "전체",
+    "runByCategory": "카테고리별 업데이트",
+    "liveFeed": "실시간 활동",
+    "addedChapters_other": "+챕터 {{count}}개",
+    "recentHeading": "최근 업데이트",
+    "recentEmpty": "최근 새 챕터가 없습니다",
+    "newChapter": "신규"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "errors": {
+    "bad_request": "Solicitud no válida",
+    "unauthorized": "No has iniciado sesión o la sesión ha caducado",
+    "forbidden": "Permiso denegado",
+    "not_found": "No se encontró el recurso solicitado",
+    "duplicate": "Ya existe una entrada con el mismo nombre",
+    "unsupported": "Esta función no es compatible",
+    "no_update": "Ya está actualizado",
+    "not_in_library": "El manga no está en la biblioteca",
+    "source_disabled": "Esta fuente está desactivada",
+    "source_error": "La solicitud a la fuente falló",
+    "timeout": "La solicitud a la fuente agotó el tiempo de espera",
+    "bad_gateway": "La solicitud al servidor de origen falló",
+    "internal": "Error interno del servidor",
+    "gone": "El directorio sigue sin estar disponible; restáuralo primero en el disco o elimina la entrada",
+    "not_trashed": "Esta entrada no está en la papelera",
+    "network": "La solicitud de red falló",
+    "http": "La solicitud falló (HTTP {{status}})",
+    "stream_parse": "La transmisión contenía un evento que no se pudo analizar",
+    "stream_terminal": "La transmisión terminó sin un evento final"
+  }
+}
