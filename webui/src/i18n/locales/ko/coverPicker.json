@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "표지 변경",
+    "changed": "표지를 변경함",
+    "unsupported": "이 소스는 대체 표지를 제공하지 않습니다",
+    "loadFailed": "대체 표지를 불러오지 못했습니다",
+    "retry": "다시 시도",
+    "empty": "소스에서 대체 표지를 반환하지 않았습니다",
+    "currentTitle": "현재 표지",
+    "setAsCover": "표지로 설정",
+    "currentBadge": "현재"
+  }
+}

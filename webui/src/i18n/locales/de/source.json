@@ -1,0 +1,11 @@
+{
+  "source": {
+    "multiLanguage": "Mehrsprachig",
+    "rating": {
+      "safe": "Jugendfrei",
+      "containsNsfw": "Enthält NSFW",
+      "suggestive": "Anzüglich",
+      "nsfw": "NSFW"
+    }
+  }
+}

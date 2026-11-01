@@ -1,0 +1,29 @@
+{
+  "updates": {
+    "jobPending": "排隊中",
+    "jobRunning": "更新中",
+    "complete": "完成",
+    "failed": "失敗",
+    "skipped": "已略過",
+    "started": "更新已開始",
+    "alreadyRunning": "已有更新正在執行",
+    "updateFailed": "更新失敗",
+    "summaryUnavailable": "無法取得更新摘要",
+    "statusRunning": "更新中",
+    "lastRun": "上次更新於 {{time}}",
+    "idle": "閒置",
+    "total": "總數",
+    "pending": "待處理",
+    "wsOk": "即時連線正常",
+    "wsDown": "連線已中斷，將在 3 秒後重試",
+    "runNow": "立即更新",
+    "selectCategory": "選擇分類",
+    "allCategories": "全部",
+    "runByCategory": "依分類更新",
+    "liveFeed": "即時動態",
+    "addedChapters_other": "+{{count}} 章",
+    "recentHeading": "最近更新",
+    "recentEmpty": "最近沒有新章節",
+    "newChapter": "新章節"
+  }
+}

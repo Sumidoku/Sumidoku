@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "搜尋所有來源…",
+    "rating": "分級",
+    "language": "語言",
+    "source": "來源",
+    "emptyTitle": "跨來源搜尋",
+    "emptyHint": "輸入關鍵字，搜尋所有符合篩選條件的來源",
+    "noSourcesTitle": "沒有符合篩選條件的來源",
+    "noSourcesHint": "調整分級／語言／來源篩選條件",
+    "loadFailedTitle": "載入失敗",
+    "retry": "重試",
+    "noResultsTitle": "沒有結果",
+    "noResultsHint": "試試其他關鍵字或調整篩選條件",
+    "viewAll": "檢視全部"
+  }
+}

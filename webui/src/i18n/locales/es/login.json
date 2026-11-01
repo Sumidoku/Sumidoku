@@ -1,0 +1,11 @@
+{
+  "login": {
+    "hint": "Este servidor requiere iniciar sesión. Introduce tu nombre de usuario y contraseña",
+    "username": "Nombre de usuario",
+    "password": "Contraseña",
+    "submit": "Iniciar sesión",
+    "error_invalid": "Nombre de usuario o contraseña incorrectos",
+    "error_generic": "No se pudo iniciar sesión. Inténtalo de nuevo más tarde",
+    "error_throttled": "Demasiados intentos fallidos de inicio de sesión. Espera un momento e inténtalo de nuevo"
+  }
+}

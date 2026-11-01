@@ -1,0 +1,30 @@
+{
+  "updates": {
+    "jobPending": "En cola",
+    "jobRunning": "Actualizando",
+    "complete": "Completada",
+    "failed": "Fallida",
+    "skipped": "Omitida",
+    "started": "Actualización iniciada",
+    "alreadyRunning": "Ya hay una actualización en curso",
+    "updateFailed": "La actualización falló",
+    "summaryUnavailable": "Resumen de la actualización no disponible",
+    "statusRunning": "Actualizando",
+    "lastRun": "Última actualización {{time}}",
+    "idle": "Inactivo",
+    "total": "Total",
+    "pending": "Pendiente",
+    "wsOk": "Conexión en tiempo real activa",
+    "wsDown": "Conexión perdida; reintentando en 3 segundos",
+    "runNow": "Actualizar ahora",
+    "selectCategory": "Seleccionar categoría",
+    "allCategories": "Todas",
+    "runByCategory": "Actualizar por categoría",
+    "liveFeed": "Actividad en tiempo real",
+    "addedChapters_one": "+{{count}} capítulo",
+    "addedChapters_other": "+{{count}} capítulos",
+    "recentHeading": "Actualizaciones recientes",
+    "recentEmpty": "No hay capítulos nuevos recientemente",
+    "newChapter": "Nuevo"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "Speichern",
+    "cancel": "Abbrechen",
+    "delete": "Löschen",
+    "confirm": "Bestätigen",
+    "reset": "Zurücksetzen",
+    "loading": "Wird geladen…",
+    "trashed": "Im Papierkorb",
+    "search": "Suchen",
+    "nav": {
+      "library": "Bibliothek",
+      "browse": "Entdecken",
+      "search": "Suche",
+      "history": "Verlauf",
+      "downloads": "Downloads",
+      "updates": "Updates",
+      "activity": "Aktivität",
+      "settings": "Einstellungen"
+    }
+  }
+}

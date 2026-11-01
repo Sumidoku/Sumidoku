@@ -1,0 +1,13 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "選択済み（順序が優先度になります）",
+    "addAllPinnedTitle": "ピン留めしたソースをピン順にすべて追加",
+    "addAllPinned_other": "ピン留めをすべて選択（{{count}}）",
+    "emptyHint": "対象ソースはまだありません。下をクリックして追加してください。順序が自動マッチの優先度になります。",
+    "remove": "{{name}} を削除",
+    "availableHeading": "利用可能",
+    "noMore": "追加できるソースはもうありません。",
+    "add": "{{name}} を追加",
+    "pinned": "ピン留め"
+  }
+}

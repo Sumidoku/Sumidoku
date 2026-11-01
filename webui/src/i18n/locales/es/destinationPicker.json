@@ -1,0 +1,14 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "Seleccionadas (orden = prioridad)",
+    "addAllPinnedTitle": "Añadir todas las fuentes fijadas en su orden de fijación",
+    "addAllPinned_one": "Seleccionar todas las fijadas ({{count}})",
+    "addAllPinned_other": "Seleccionar todas las fijadas ({{count}})",
+    "emptyHint": "Aún no hay fuentes de destino; haz clic abajo para añadirlas. El orden determina la prioridad de la búsqueda automática.",
+    "remove": "Quitar {{name}}",
+    "availableHeading": "Disponibles",
+    "noMore": "No hay más fuentes para añadir.",
+    "add": "Añadir {{name}}",
+    "pinned": "Fijada"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "format": {
+    "justNow": "Только что",
+    "minutesAgo_one": "{{count}} минуту назад",
+    "minutesAgo_few": "{{count}} минуты назад",
+    "minutesAgo_many": "{{count}} минут назад",
+    "minutesAgo_other": "{{count}} минуты назад",
+    "hoursAgo_one": "{{count}} час назад",
+    "hoursAgo_few": "{{count}} часа назад",
+    "hoursAgo_many": "{{count}} часов назад",
+    "hoursAgo_other": "{{count}} часа назад",
+    "daysAgo_one": "{{count}} день назад",
+    "daysAgo_few": "{{count}} дня назад",
+    "daysAgo_many": "{{count}} дней назад",
+    "daysAgo_other": "{{count}} дня назад",
+    "status": {
+      "ongoing": "Выходит",
+      "completed": "Завершено",
+      "hiatus": "Перерыв",
+      "cancelled": "Отменено",
+      "unknown": "Неизвестно"
+    },
+    "chapterNumber": "Глава {{number}}",
+    "volumeNumber": "Том {{number}}",
+    "unnamedChapter": "Глава без названия"
+  }
+}

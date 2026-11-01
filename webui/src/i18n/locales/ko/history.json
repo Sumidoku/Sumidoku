@@ -1,0 +1,10 @@
+{
+  "history": {
+    "emptyTitle": "아직 읽기 기록이 없습니다",
+    "emptyHint": "읽은 챕터가 여기에 표시되어 언제든 이어 읽을 수 있습니다",
+    "goLibrary": "라이브러리로 이동",
+    "finished": "완료",
+    "progress": "{{page}}페이지",
+    "more": "+{{count}}개 더"
+  }
+}

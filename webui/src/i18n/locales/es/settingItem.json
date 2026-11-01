@@ -1,0 +1,27 @@
+{
+  "settingItem": {
+    "loggedIn": "Sesión iniciada",
+    "email": "Correo electrónico",
+    "username": "Nombre de usuario",
+    "password": "Contraseña",
+    "login": "Iniciar sesión",
+    "relogin": "Volver a iniciar sesión",
+    "logout": "Cerrar sesión",
+    "logoutConfirm": "¿Cerrar sesión en esta fuente? Se borrarán el estado de la sesión y las cookies guardadas.",
+    "clearCookies": "Borrar también las cookies de sesión",
+    "webLoginHint": "Inicia sesión en la fuente desde tu navegador y luego pega la cabecera Cookie del sitio o una exportación JSON",
+    "webLoginHintWithUrl": "Inicia sesión en <1>{{url}}</1> desde tu navegador y luego pega la cabecera Cookie del sitio o una exportación JSON",
+    "cookiePlaceholder": "nombre=valor; nombre2=valor2\no {\"nombre\": \"valor\"}",
+    "cookieParseError": "No se pudieron analizar las cookies; se admite una cabecera de solicitud o formato JSON",
+    "oauthHint": "Pulsa \"Iniciar sesión\" para abrir la página de autorización en una pestaña nueva; una vez autorizado, pega abajo la URL de redirección de la barra de direcciones",
+    "oauthPlaceholder": "Pega la URL de redirección, p. ej., myscheme://callback?code=…",
+    "done": "Hecho",
+    "buttonNoAction": "Este botón no declara ninguna acción",
+    "basicClientOnly": "Esto debe hacerse en una aplicación cliente",
+    "oauthUnsupported": "El inicio de sesión con OAuth aún no es compatible",
+    "selectedCount_one": "{{count}} seleccionado",
+    "selectedCount_other": "{{count}} seleccionados",
+    "unsupportedType": "{{title}} (tipo no compatible: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

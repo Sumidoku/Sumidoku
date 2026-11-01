@@ -71,7 +71,7 @@ import { formatBytes } from '../lib/format';
 import { MANGA_CONTENT_RATING_LEVELS } from '../lib/source';
 import { useTheme } from '../lib/theme';
 import type { Theme } from '../lib/theme';
-import { setLanguage, translateApiError } from '../i18n';
+import { LANGUAGE_OPTIONS, setLanguage, translateApiError } from '../i18n';
 import type { Language } from '../i18n';
 import { compareVersions } from '../lib/version';
 import {
@@ -144,10 +144,11 @@ function AppearanceSection() {
 					value={i18n.language}
 					onChange={(value) => setLanguage(value as Language)}
 				>
-					<option value="en">English</option>
-					<option value="zh-CN">中文（简体）</option>
-					<option value="fr">Français</option>
-					<option value="it">Italiano</option>
+					{LANGUAGE_OPTIONS.map((option) => (
+						<option key={option.value} value={option.value}>
+							{option.label}
+						</option>
+					))}
 				</Select>
 			</div>
 			<div className="settings-row">

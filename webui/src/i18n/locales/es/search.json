@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "Buscar en todas las fuentes…",
+    "rating": "Clasificación",
+    "language": "Idioma",
+    "source": "Fuente",
+    "emptyTitle": "Búsqueda entre fuentes",
+    "emptyHint": "Introduce una palabra clave para buscar en todas las fuentes que coincidan con los filtros",
+    "noSourcesTitle": "Ninguna fuente coincide con los filtros",
+    "noSourcesHint": "Ajusta los filtros de clasificación / idioma / fuente",
+    "loadFailedTitle": "No se pudo cargar",
+    "retry": "Reintentar",
+    "noResultsTitle": "Sin resultados",
+    "noResultsHint": "Prueba con otra palabra clave o ajusta los filtros",
+    "viewAll": "Ver todo"
+  }
+}

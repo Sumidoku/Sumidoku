@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "primaryNav": "Hauptnavigation",
+    "collapseSidebar": "Seitenleiste einklappen",
+    "expandSidebar": "Seitenleiste ausklappen",
+    "toLight": "Zum hellen Modus wechseln",
+    "toDark": "Zum dunklen Modus wechseln"
+  }
+}

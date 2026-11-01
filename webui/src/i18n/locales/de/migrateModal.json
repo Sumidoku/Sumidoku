@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "Quelle wechseln: {{title}}",
+    "mode": {
+      "copy": "Kopieren",
+      "migrate": "Migrieren",
+      "migrateWithHistory": "Migrieren (Verlauf behalten)"
+    },
+    "modeHint": {
+      "copy": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der aktuelle Eintrag bleibt unverändert",
+      "migrate": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der aktuelle Eintrag wird aus der Bibliothek entfernt und sein Lesefortschritt gelöscht",
+      "migrateWithHistory": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der aktuelle Eintrag wird aus der Bibliothek entfernt, behält aber seinen Leseverlauf"
+    },
+    "searchFailed": "Suche fehlgeschlagen",
+    "migrateFailed": "Migration fehlgeschlagen",
+    "done": "{{mode}} abgeschlossen",
+    "viewOnly": "Eintrag nur ansehen",
+    "backToCandidates": "Zurück zu den Treffern",
+    "searchCandidates": "Treffer suchen",
+    "searchHint": "Alle Zielquellen werden gleichzeitig nach dem Titel durchsucht (jeweils 3).",
+    "noHits": "Keine Treffer. Passen Siedie Auswahl der Ziele an und suchen Sieerneut."
+  }
+}

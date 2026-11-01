@@ -1,0 +1,13 @@
+{
+  "destinationPicker": {
+    "selectedHeading": "已選取（順序即優先順序）",
+    "addAllPinnedTitle": "依釘選順序加入所有已釘選的來源",
+    "addAllPinned_other": "選取所有已釘選的來源（{{count}}）",
+    "emptyHint": "尚未選取目標來源，請從下方點選加入；順序決定自動比對的優先順序。",
+    "remove": "移除 {{name}}",
+    "availableHeading": "可選取",
+    "noMore": "沒有其他可加入的來源。",
+    "add": "加入 {{name}}",
+    "pinned": "已釘選"
+  }
+}

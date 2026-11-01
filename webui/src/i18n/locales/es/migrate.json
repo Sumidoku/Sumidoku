@@ -1,0 +1,56 @@
+{
+  "migrate": {
+    "title": "Migrar",
+    "back": "Atrás",
+    "pickSourceHint": "Elige la fuente de origen (solo se muestran fuentes con entradas en la biblioteca):",
+    "inLibrary_one": "{{count}} título en la biblioteca",
+    "inLibrary_other": "{{count}} títulos en la biblioteca",
+    "libraryEmpty": "Tu biblioteca está vacía",
+    "libraryEmptyHint": "Añade primero mangas a la biblioteca y luego migra",
+    "selectedCount": "Fuente: <b>{{source}}</b> · {{selected}} / {{total}} seleccionados",
+    "clearAll": "Quitar selección",
+    "selectAll": "Seleccionar todo",
+    "pickDestinations": "Elegir destinos",
+    "loadMore": "Cargar más",
+    "startMatch_one": "Iniciar búsqueda ({{count}} título)",
+    "startMatch_other": "Iniciar búsqueda ({{count}} títulos)",
+    "status": "Destinos: {{dests}} · {{matched}} / {{total}} encontrados{{matching}}{{executed}}",
+    "statusMatching": " · buscando…",
+    "statusExecuted": " · {{done}} migrados",
+    "retryUnmatched": "Reintentar los no encontrados",
+    "notFound": "No encontrado",
+    "gotoTarget": "Migrado: ver destino →",
+    "confirmTitle_one": "¿{{mode}} {{count}} título?",
+    "confirmTitle_other": "¿{{mode}} {{count}} títulos?",
+    "confirmAction": "Confirmar {{mode}}",
+    "unmatchedUntouched_one": "{{count}} título no encontrado se dejará sin cambios.",
+    "unmatchedUntouched_other": "{{count}} títulos no encontrados se dejarán sin cambios.",
+    "toastDone_one": "{{count}} título migrado",
+    "toastDone_other": "{{count}} títulos migrados",
+    "toastPartial": "{{done}} títulos completados, {{failed}} fallidos",
+    "moreActions": "Más acciones",
+    "rematch": "Buscar de nuevo",
+    "skipEntry": "Omitir esta entrada",
+    "rematchTitle": "Buscar de nuevo: {{title}}",
+    "rematchHint": "Se busca en todas las fuentes de destino; haz clic en un candidato para usarlo como coincidencia.",
+    "rematchNoHits": "Sin coincidencias. Prueba con otra palabra clave.",
+    "mode": {
+      "copy": "Copiar",
+      "migrate": "Migrar",
+      "migrateWithHistory": "Migrar (conservar historial)"
+    },
+    "modeHint": {
+      "copy": "Añade el destino a la biblioteca y transfiere el progreso; la entrada de origen se conserva sin cambios",
+      "migrate": "Añade el destino a la biblioteca y transfiere el progreso; la entrada de origen sale de la biblioteca y se borra su progreso de lectura",
+      "migrateWithHistory": "Añade el destino a la biblioteca y transfiere el progreso; la entrada de origen sale de la biblioteca, pero conserva su historial de lectura"
+    },
+    "reason": {
+      "not_found": "La entrada de origen no existe",
+      "not_in_library": "La entrada de origen no está en la biblioteca",
+      "source_not_found": "La fuente de destino no existe",
+      "same_source": "El destino y el origen son la misma entrada",
+      "fetch_failed": "No se pudieron obtener los detalles del destino",
+      "fetch_failed_with_message": "No se pudieron obtener los detalles del destino: {{message}}"
+    }
+  }
+}

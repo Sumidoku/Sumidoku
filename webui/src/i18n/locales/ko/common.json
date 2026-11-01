@@ -1,0 +1,22 @@
+{
+  "common": {
+    "save": "저장",
+    "cancel": "취소",
+    "delete": "삭제",
+    "confirm": "확인",
+    "reset": "초기화",
+    "loading": "불러오는 중…",
+    "trashed": "휴지통에 있음",
+    "search": "검색",
+    "nav": {
+      "library": "라이브러리",
+      "browse": "둘러보기",
+      "search": "검색",
+      "history": "기록",
+      "downloads": "다운로드",
+      "updates": "업데이트",
+      "activity": "활동",
+      "settings": "설정"
+    }
+  }
+}

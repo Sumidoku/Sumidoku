@@ -1,0 +1,13 @@
+{
+  "coverPicker": {
+    "title": "Cover ändern",
+    "changed": "Cover geändert",
+    "unsupported": "Diese Quelle bietet keine alternativen Cover",
+    "loadFailed": "Alternative Cover konnten nicht geladen werden",
+    "retry": "Erneut versuchen",
+    "empty": "Die Quelle hat keine alternativen Cover zurückgegeben",
+    "currentTitle": "Aktuelles Cover",
+    "setAsCover": "Als Cover festlegen",
+    "currentBadge": "Aktuell"
+  }
+}

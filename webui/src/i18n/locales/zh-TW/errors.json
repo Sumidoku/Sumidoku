@@ -1,0 +1,23 @@
+{
+  "errors": {
+    "bad_request": "請求無效",
+    "unauthorized": "尚未登入或登入工作階段已過期",
+    "forbidden": "權限不足",
+    "not_found": "找不到請求的資源",
+    "duplicate": "已存在同名條目",
+    "unsupported": "不支援此功能",
+    "no_update": "已是最新版本",
+    "not_in_library": "此漫畫不在書庫中",
+    "source_disabled": "此來源已停用",
+    "source_error": "來源請求失敗",
+    "timeout": "來源請求逾時",
+    "bad_gateway": "上游請求失敗",
+    "internal": "伺服器內部錯誤",
+    "gone": "目錄仍然不存在；請先在磁碟上還原，或永久刪除此條目",
+    "not_trashed": "此條目不在垃圾桶中",
+    "network": "網路請求失敗",
+    "http": "請求失敗（HTTP {{status}}）",
+    "stream_parse": "串流中含有無法解析的事件",
+    "stream_terminal": "串流結束時未收到終止事件"
+  }
+}

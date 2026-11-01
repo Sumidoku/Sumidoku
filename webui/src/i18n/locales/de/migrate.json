@@ -1,0 +1,56 @@
+{
+  "migrate": {
+    "title": "Migrieren",
+    "back": "Zurück",
+    "pickSourceHint": "Wählen Siedie Quelle aus, aus der migriert werden soll (nur Quellen mit Bibliothekseinträgen werden aufgeführt):",
+    "inLibrary_one": "{{count}} Titel in der Bibliothek",
+    "inLibrary_other": "{{count}} Titel in der Bibliothek",
+    "libraryEmpty": "Ihre Bibliothek ist leer",
+    "libraryEmptyHint": "Fügen Siezuerst Manga zur Bibliothek hinzu und migrieren Siedann",
+    "selectedCount": "Quelle: <b>{{source}}</b> · {{selected}} / {{total}} ausgewählt",
+    "clearAll": "Auswahl aufheben",
+    "selectAll": "Alle auswählen",
+    "pickDestinations": "Ziele auswählen",
+    "loadMore": "Mehr laden",
+    "startMatch_one": "Abgleich starten ({{count}} Titel)",
+    "startMatch_other": "Abgleich starten ({{count}} Titel)",
+    "status": "Ziele: {{dests}} · {{matched}} / {{total}} abgeglichen{{matching}}{{executed}}",
+    "statusMatching": " · Abgleich läuft…",
+    "statusExecuted": " · {{done}} migriert",
+    "retryUnmatched": "Nicht Abgeglichene erneut versuchen",
+    "notFound": "Nicht gefunden",
+    "gotoTarget": "Migriert — Ziel ansehen →",
+    "confirmTitle_one": "{{mode}}: {{count}} Titel?",
+    "confirmTitle_other": "{{mode}}: {{count}} Titel?",
+    "confirmAction": "{{mode}} bestätigen",
+    "unmatchedUntouched_one": "Der {{count}} nicht abgeglichene Titel bleibt unverändert.",
+    "unmatchedUntouched_other": "Die {{count}} nicht abgeglichenen Titel bleiben unverändert.",
+    "toastDone_one": "{{count}} Titel migriert",
+    "toastDone_other": "{{count}} Titel migriert",
+    "toastPartial": "{{done}} Titel abgeschlossen, {{failed}} fehlgeschlagen",
+    "moreActions": "Weitere Aktionen",
+    "rematch": "Erneut suchen",
+    "skipEntry": "Diesen Eintrag überspringen",
+    "rematchTitle": "Erneut suchen: {{title}}",
+    "rematchHint": "Alle Zielquellen werden durchsucht; klicken Sieauf einen Treffer, um ihn für den Abgleich zu verwenden.",
+    "rematchNoHits": "Keine Treffer. Versuchen Sieeinen anderen Suchbegriff.",
+    "mode": {
+      "copy": "Kopieren",
+      "migrate": "Migrieren",
+      "migrateWithHistory": "Migrieren (Verlauf behalten)"
+    },
+    "modeHint": {
+      "copy": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der Quelleintrag bleibt unverändert",
+      "migrate": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der Quelleintrag wird aus der Bibliothek entfernt und sein Lesefortschritt gelöscht",
+      "migrateWithHistory": "Fügt das Ziel zur Bibliothek hinzu und überträgt den Fortschritt; der Quelleintrag wird aus der Bibliothek entfernt, behält aber seinen Leseverlauf"
+    },
+    "reason": {
+      "not_found": "Der Quelleintrag existiert nicht",
+      "not_in_library": "Der Quelleintrag ist nicht in der Bibliothek",
+      "source_not_found": "Die Zielquelle existiert nicht",
+      "same_source": "Ziel und Quelle sind derselbe Eintrag",
+      "fetch_failed": "Die Zieldetails konnten nicht abgerufen werden",
+      "fetch_failed_with_message": "Die Zieldetails konnten nicht abgerufen werden: {{message}}"
+    }
+  }
+}

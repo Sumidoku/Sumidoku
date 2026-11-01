@@ -1,0 +1,17 @@
+{
+  "search": {
+    "placeholder": "すべてのソースを検索…",
+    "rating": "レーティング",
+    "language": "言語",
+    "source": "ソース",
+    "emptyTitle": "ソース横断検索",
+    "emptyHint": "キーワードを入力すると、フィルターに一致するすべてのソースを検索します",
+    "noSourcesTitle": "フィルターに一致するソースがありません",
+    "noSourcesHint": "レーティング / 言語 / ソースのフィルターを調整してください",
+    "loadFailedTitle": "読み込めませんでした",
+    "retry": "再試行",
+    "noResultsTitle": "結果がありません",
+    "noResultsHint": "別のキーワードを試すか、フィルターを調整してください",
+    "viewAll": "すべて表示"
+  }
+}

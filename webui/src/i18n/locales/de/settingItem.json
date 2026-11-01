@@ -1,0 +1,27 @@
+{
+  "settingItem": {
+    "loggedIn": "Angemeldet",
+    "email": "E-Mail",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "login": "Anmelden",
+    "relogin": "Erneut anmelden",
+    "logout": "Abmelden",
+    "logoutConfirm": "Von dieser Quelle abmelden? Der Anmeldestatus und die gespeicherten Cookie-Einträge werden gelöscht.",
+    "clearCookies": "Anmelde-Cookies ebenfalls löschen",
+    "webLoginHint": "Melden Siesich zuerst in IhremBrowser bei der Quelle an und fügen Siedann den Cookie-Header der Website oder einen JSON-Export ein",
+    "webLoginHintWithUrl": "Melden Siesich zuerst in IhremBrowser bei <1>{{url}}</1> an und fügen Siedann den Cookie-Header der Website oder einen JSON-Export ein",
+    "cookiePlaceholder": "name=value; name2=value2\nor {\"name\": \"value\"}",
+    "cookieParseError": "Cookies konnten nicht verarbeitet werden; unterstützt werden ein Anfrage-Header oder das JSON-Format",
+    "oauthHint": "Tippen Sieauf „Anmelden“, um die Autorisierungsseite in einem neuen Tab zu öffnen; fügen Sieanschließend die Weiterleitungs-URL aus der Adressleiste unten ein",
+    "oauthPlaceholder": "Weiterleitungs-URL einfügen, z. B. myscheme://callback?code=…",
+    "done": "Fertig",
+    "buttonNoAction": "Für diese Schaltfläche ist keine Aktion definiert",
+    "basicClientOnly": "Dies muss in einer Client-App erfolgen",
+    "oauthUnsupported": "OAuth-Anmeldung wird noch nicht unterstützt",
+    "selectedCount_one": "{{count}} ausgewählt",
+    "selectedCount_other": "{{count}} ausgewählt",
+    "unsupportedType": "{{title}} (nicht unterstützter Typ: {{kind}})",
+    "localStoragePlaceholder": "localStorage: {{key}}"
+  }
+}

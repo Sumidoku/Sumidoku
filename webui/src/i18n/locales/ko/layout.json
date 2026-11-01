@@ -1,0 +1,9 @@
+{
+  "layout": {
+    "primaryNav": "기본 탐색",
+    "collapseSidebar": "사이드바 접기",
+    "expandSidebar": "사이드바 펼치기",
+    "toLight": "라이트 모드로 전환",
+    "toDark": "다크 모드로 전환"
+  }
+}

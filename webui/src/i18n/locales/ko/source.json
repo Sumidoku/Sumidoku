@@ -1,0 +1,11 @@
+{
+  "source": {
+    "multiLanguage": "다국어",
+    "rating": {
+      "safe": "전체 이용가",
+      "containsNsfw": "NSFW 포함",
+      "suggestive": "선정적",
+      "nsfw": "NSFW"
+    }
+  }
+}

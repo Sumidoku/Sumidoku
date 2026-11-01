@@ -1,0 +1,10 @@
+{
+  "history": {
+    "emptyTitle": "尚無閱讀歷史記錄",
+    "emptyHint": "讀過的章節會顯示在這裡，方便隨時繼續閱讀",
+    "goLibrary": "前往書庫",
+    "finished": "已讀完",
+    "progress": "第 {{page}} 頁",
+    "more": "還有 {{count}} 個"
+  }
+}

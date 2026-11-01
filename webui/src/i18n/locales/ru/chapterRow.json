@@ -1,0 +1,31 @@
+{
+  "chapterRow": {
+    "locked": "Заблокирована",
+    "trashed": "В корзине",
+    "bookmarked": "С закладкой",
+    "downloaded": "Скачана",
+    "unread": "Непрочитана",
+    "downloadCbz": "Скачать файл CBZ",
+    "downloadChapter": "Скачать главу",
+    "enqueueing": "Добавление в очередь скачивания",
+    "enqueued": "В очереди скачивания",
+    "downloading": "Скачивание главы",
+    "addBookmark": "Добавить закладку",
+    "removeBookmark": "Удалить закладку",
+    "chapterActions": "Действия с главой",
+    "markRead": "Отметить прочитанной",
+    "markUnread": "Отметить непрочитанной",
+    "markPreviousRead": "Отметить все главы ниже прочитанными",
+    "markPreviousUnread": "Отметить все главы ниже непрочитанными",
+    "removeDownload": "Удалить скачанное",
+    "removeDownloadCount_one": "Удалить {{count}} завершённое скачивание",
+    "removeDownloadCount_few": "Удалить {{count}} завершённых скачивания",
+    "removeDownloadCount_many": "Удалить {{count}} завершённых скачиваний",
+    "removeDownloadCount_other": "Удалить {{count}} завершённого скачивания",
+    "removeDownloadConfirm_one": "Удалить это завершённое скачивание и его файлы на сервере?",
+    "removeDownloadConfirm_few": "Удалить эти {{count}} завершённых скачивания и их файлы на сервере?",
+    "removeDownloadConfirm_many": "Удалить эти {{count}} завершённых скачиваний и их файлы на сервере?",
+    "removeDownloadConfirm_other": "Удалить эти {{count}} завершённых скачивания и их файлы на сервере?",
+    "removeDownloadConfirmSingle": "Удалить завершённое скачивание «{{name}}» и его файлы на сервере?"
+  }
+}

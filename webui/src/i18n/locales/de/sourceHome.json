@@ -1,0 +1,22 @@
+{
+  "sourceHome": {
+    "backToBrowse": "Zurück zu „Entdecken“",
+    "backToSource": "Zurück zu {{name}}",
+    "sourceFallback": "Quelle",
+    "sourceDisabled": "Diese Quelle ist deaktiviert",
+    "sourceDisabledHint": "Installieren Siesie erneut oder aktivieren Siesie vor dem Durchsuchen",
+    "loadFailed": "Laden fehlgeschlagen",
+    "retry": "Erneut versuchen",
+    "noHome": "Diese Quelle hat keine Startseite",
+    "noHomeHint": "Die Quelle stellt keine Startseiteninhalte bereit; Siekönnen direkt suchen oder nach Auflistung stöbern",
+    "goSearch": "Zur Suche",
+    "emptyHome": "Die Startseite ist leer",
+    "emptyHomeHint": "Die Quelle hat ein leeres Startseitenlayout zurückgegeben",
+    "viewAll": "Alle anzeigen",
+    "all": "Alle",
+    "continueReading": "Weiterlesen",
+    "latestUpdates": "Neueste Updates",
+    "latestAdded": "Zuletzt hinzugefügt",
+    "recentlyRead": "Zuletzt gelesen"
+  }
+}

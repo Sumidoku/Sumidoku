@@ -1,0 +1,23 @@
+{
+  "migrateModal": {
+    "title": "Cambiar de fuente: {{title}}",
+    "mode": {
+      "copy": "Copiar",
+      "migrate": "Migrar",
+      "migrateWithHistory": "Migrar (conservar historial)"
+    },
+    "modeHint": {
+      "copy": "Añade el destino a la biblioteca y transfiere el progreso; la entrada actual se conserva sin cambios",
+      "migrate": "Añade el destino a la biblioteca y transfiere el progreso; la entrada actual sale de la biblioteca y se borra su progreso de lectura",
+      "migrateWithHistory": "Añade el destino a la biblioteca y transfiere el progreso; la entrada actual sale de la biblioteca, pero conserva su historial de lectura"
+    },
+    "searchFailed": "La búsqueda falló",
+    "migrateFailed": "La migración falló",
+    "done": "{{mode}} completado",
+    "viewOnly": "Solo ver entrada",
+    "backToCandidates": "Volver a los candidatos",
+    "searchCandidates": "Buscar candidatos",
+    "searchHint": "Se busca por título en todas las fuentes de destino a la vez (3 simultáneamente).",
+    "noHits": "Sin coincidencias. Ajusta el conjunto de destinos y busca de nuevo."
+  }
+}

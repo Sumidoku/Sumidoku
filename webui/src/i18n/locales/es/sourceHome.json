@@ -1,0 +1,22 @@
+{
+  "sourceHome": {
+    "backToBrowse": "Volver a Explorar",
+    "backToSource": "Volver a {{name}}",
+    "sourceFallback": "Fuente",
+    "sourceDisabled": "Esta fuente está desactivada",
+    "sourceDisabledHint": "Reinstálala o actívala antes de explorar",
+    "loadFailed": "No se pudo cargar",
+    "retry": "Reintentar",
+    "noHome": "Esta fuente no tiene página de inicio",
+    "noHomeHint": "La fuente no ofrece contenido de inicio; puedes buscar directamente o explorar por listado",
+    "goSearch": "Ir a buscar",
+    "emptyHome": "La página de inicio está vacía",
+    "emptyHomeHint": "La fuente devolvió un diseño de inicio vacío",
+    "viewAll": "Ver todo",
+    "all": "Todo",
+    "continueReading": "Continuar leyendo",
+    "latestUpdates": "Últimas actualizaciones",
+    "latestAdded": "Últimos añadidos",
+    "recentlyRead": "Leídos recientemente"
+  }
+}

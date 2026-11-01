@@ -1,0 +1,29 @@
+{
+  "updates": {
+    "jobPending": "待機中",
+    "jobRunning": "更新中",
+    "complete": "完了",
+    "failed": "失敗",
+    "skipped": "スキップ",
+    "started": "更新を開始しました",
+    "alreadyRunning": "別の更新がすでに実行中です",
+    "updateFailed": "更新に失敗しました",
+    "summaryUnavailable": "更新の概要を取得できません",
+    "statusRunning": "更新中",
+    "lastRun": "最終更新 {{time}}",
+    "idle": "待機中",
+    "total": "合計",
+    "pending": "保留中",
+    "wsOk": "リアルタイム接続中",
+    "wsDown": "接続が切れました。3 秒後に再試行します",
+    "runNow": "今すぐ更新",
+    "selectCategory": "カテゴリーを選択",
+    "allCategories": "すべて",
+    "runByCategory": "カテゴリーごとに更新",
+    "liveFeed": "リアルタイムのアクティビティ",
+    "addedChapters_other": "+{{count}}話",
+    "recentHeading": "最近の更新",
+    "recentEmpty": "最近追加された話はありません",
+    "newChapter": "新着"
+  }
+}

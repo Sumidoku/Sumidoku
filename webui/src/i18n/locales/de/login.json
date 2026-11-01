@@ -1,0 +1,11 @@
+{
+  "login": {
+    "hint": "Dieser Server erfordert eine Anmeldung. Geben Sie Ihren Benutzernamen und Ihr Passwort ein",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "submit": "Anmelden",
+    "error_invalid": "Benutzername oder Passwort falsch",
+    "error_generic": "Anmeldung fehlgeschlagen. Bitte versuchen Sie es später erneut",
+    "error_throttled": "Zu viele fehlgeschlagene Anmeldeversuche. Bitte warten Sie einen Moment und versuchen Sie es erneut"
+  }
+}
