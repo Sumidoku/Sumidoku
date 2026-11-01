@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Two APIs of one provider are two contracts: check the URL the code calls
+before judging a field name.** A sample from the provider's better-known API
+proves nothing about another one, and both can answer the same subject with
+different keys. Read the client's origin and fetch through that exact path, or
+a working fix gets reported as a regression.
+- Evidence: 2026-11-01, #586 renamed Bangumi's infobox field to `values`. A patrol
+  fetched `/v0/subjects/9912`, saw `value`, and suspected every infobox had gone
+  empty. The client calls `next.bgm.tv/p1`, whose same subject returns `values`,
+  so #586 was right. The same fetch then found the real defect: aliases split
+  into pieces.
+
 **A migration that needs a second write belongs to the store that owns the
 table, not to a trigger.** Re-creating or widening a trigger to keep a derived
 row in step with a new column is the tempting shape, but triggers make the

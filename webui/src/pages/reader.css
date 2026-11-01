@@ -101,6 +101,27 @@
 	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Fade turns stack the spreads: the target paints under the outgoing page, so
+   the canvas never flashes between them */
+.reader__track--fade {
+	position: static;
+	display: block;
+	transform: none;
+	transition: none;
+}
+
+.reader__track--fade .reader__spread {
+	position: absolute;
+	inset: 0;
+}
+
+.reader__track--fade .reader__spread--fading {
+	z-index: 10;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 200ms;
+}
+
 /* Text pages slide between columns with the same motion */
 .reader__paged[data-anim='true'] .reader-text--cols {
 	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -416,7 +437,7 @@
 	margin: 0 auto;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	align-items: center;
 	padding: 12px 0 40vh;
 	overflow-y: auto;
 	overscroll-behavior: none;
@@ -426,6 +447,15 @@
 	max-width: none;
 	gap: 0;
 	padding: 0;
+}
+
+.reader__pg {
+	box-sizing: border-box;
+	flex: none;
+}
+
+.reader__pg--unsized {
+	box-sizing: content-box;
 }
 
 .reader__pg--unsized,
@@ -441,6 +471,10 @@
 
 .reader__cont:not(.reader__cont--webtoon) .reader__pg {
 	padding: 0 8px;
+}
+
+.reader__cont .reader__pg:has(.reader-text) {
+	width: 100%;
 }
 
 /* ---------- Text pages ---------- */
@@ -655,8 +689,182 @@
 
 .reader__settings-group {
 	display: grid;
+	gap: 8px;
+	min-width: 0;
+}
+
+.reader__settings-card {
+	padding: 0 12px;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+}
+
+.reader__settings-card > * + * {
+	border-top: 1px solid var(--border);
+}
+
+.reader__option-tiles {
+	display: grid;
+	gap: 6px;
+}
+
+.reader__option {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
 	gap: 6px;
 	min-width: 0;
+	min-height: 62px;
+	padding: 8px 5px;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1.25;
+	text-align: center;
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	cursor: pointer;
+}
+
+.reader__option:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.reader__option--selected {
+	color: var(--accent);
+	background: var(--accent-soft);
+	border-color: var(--accent);
+}
+
+.reader__option-icon {
+	display: flex;
+}
+
+.reader__turn-style {
+	display: grid;
+	gap: 8px;
+	padding: 10px 0;
+}
+
+.reader__turn-style > span {
+	font-size: 13px;
+}
+
+.reader__tz-preview {
+	display: block;
+	width: 44px;
+	height: 30px;
+	border-radius: 2px;
+}
+
+.reader__tz-fill--prev {
+	fill: #a4706f;
+}
+
+.reader__tz-fill--next {
+	fill: #6f9a80;
+}
+
+.reader__tz-fill--menu {
+	fill: #6f86a8;
+}
+
+.reader__tz-fill--none {
+	fill: #29262c;
+}
+
+.reader__tz-legend {
+	display: flex;
+	justify-content: center;
+	gap: 12px;
+	padding-top: 7px;
+	font-size: 11px;
+	color: var(--text-dim);
+}
+
+.reader__tz-legend > span {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+}
+
+.reader__tz-legend i {
+	display: block;
+	width: 8px;
+	height: 8px;
+	border-radius: 2px;
+}
+
+.reader__backgrounds {
+	display: flex;
+	gap: 12px;
+	padding: 4px;
+}
+
+.reader__background {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	border: 1px solid var(--border);
+	border-radius: 50%;
+	cursor: pointer;
+}
+
+.reader__background--dark {
+	background: #000;
+}
+
+.reader__background--gray {
+	background: #161618;
+}
+
+.reader__background--light {
+	background: #fff;
+}
+
+.reader__background--auto {
+	color: var(--text-dim);
+	border-color: transparent;
+	background: transparent;
+}
+
+.reader__background--selected {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+
+.reader__sliders {
+	display: grid;
+	gap: 12px;
+	padding-top: 12px;
+	padding-bottom: 12px;
+}
+
+.reader__sliders label {
+	display: grid;
+	grid-template-columns: 88px minmax(0, 1fr) 40px;
+	align-items: center;
+	gap: 8px;
+	font-size: 13px;
+}
+
+.reader__sliders input {
+	width: 100%;
+	min-width: 0;
+	accent-color: var(--accent);
+}
+
+.reader__sliders output {
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
 }
 
 .reader__settings-group + .reader__settings-group {

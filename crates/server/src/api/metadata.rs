@@ -307,8 +307,6 @@ pub async fn apply_metadata(
 			if !metadata.title.values().iter().any(|value| value == title) {
 				return Err(ApiError::bad_request("title must be one of the offered title variants"));
 			}
-		} else if chosen != incoming {
-			return Err(ApiError::bad_request(format!("{} can only carry the matched value", field.as_str())));
 		}
 		let value = metadata::parse_value(field, &chosen).map_err(ApiError::bad_request)?;
 		planned.push((field, value));

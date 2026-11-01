@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ImageOff } from 'lucide-react';
@@ -60,6 +60,8 @@ export interface PageImageProps {
 	/** Bump to clear a latched failure and reload with a fresh cache-buster */
 	retryToken?: number;
 	onLoad?: (width: number, height: number) => void;
+	/** The turn waits for nearby pages to finish decoding before revealing them. */
+	onReady?: (src: string) => void;
 }
 
 /** A reader page image: while the effective URL is in flight the img carries a
@@ -77,14 +79,41 @@ export function PageImage({
 	retryInOverlay,
 	onFailed,
 	retryToken,
-	onLoad
+	onLoad,
+	onReady
 }: PageImageProps) {
 	const [state, setState] = useState<PageImageState | null>(null);
 	const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+	const imageRef = useRef<HTMLImageElement>(null);
+	const failedCallbackRef = useRef(onFailed);
+	failedCallbackRef.current = onFailed;
+	const readyCallbackRef = useRef(onReady);
+	readyCallbackRef.current = onReady;
 	const { attempt, failed } = imageStateFor(state, src);
+	const effectiveSrc = retrySrc(src, attempt);
 	useEffect(() => {
-		if (failed) onFailed?.();
-	}, [failed, onFailed]);
+		if (failed) {
+			readyCallbackRef.current?.(src);
+			return;
+		}
+		if (loadedSrc !== effectiveSrc) return;
+		let active = true;
+		const image = imageRef.current;
+		if (!image || typeof image.decode !== 'function') {
+			readyCallbackRef.current?.(effectiveSrc);
+			return;
+		}
+		void image.decode().catch(() => {}).then(() => {
+			if (!readyCallbackRef.current) return;
+			if (active) readyCallbackRef.current?.(effectiveSrc);
+		});
+		return () => {
+			active = false;
+		};
+	}, [effectiveSrc, failed, loadedSrc]);
+	useEffect(() => {
+		if (failed) failedCallbackRef.current?.();
+	}, [failed]);
 	useEffect(() => {
 		// A token bump retries the latched failure the same way the in-slot button
 		// does; a fresh mount (state still null) has nothing to unlatch
@@ -100,12 +129,12 @@ export function PageImage({
 			/>
 		);
 	}
-	const effectiveSrc = retrySrc(src, attempt);
 	const cls = [className, imageLoading(loadedSrc, src, attempt) ? 'reader__img--loading' : null]
 		.filter(Boolean)
 		.join(' ');
 	return (
 		<img
+			ref={imageRef}
 			className={cls || undefined}
 			src={effectiveSrc}
 			alt={alt}

@@ -1466,10 +1466,11 @@ no alias is derived from migration text.
   that is not shelved, while `updateStrategy`/`incognito` keep working on any
   entry. Local sources are exempt — their entries are the user's own files and
   are editable without a `manga_user` row. `POST …/metadata/apply` takes `{provider, remoteId, fields, values?, bind?}`:
-  `fields` is required and non-empty, `values` may only replace a value the
-  preview exposed for that field (the server refetches the record and
-  revalidates membership, so a stale preview cannot inject arbitrary text),
-  a single transaction writes the values, stamps locks for exactly the
+  `fields` is required and non-empty, the server refetches the record, and
+  `values` overrides a confirmed field: `title` must still be a variant that
+  record offers, while any other field takes the user's edit, validated by
+  `metadata::parse_value`, with null or an empty list clearing it. A single
+  transaction writes the values, stamps locks for exactly the
   applied fields and, for tracker references with `bind: true`, upserts the
   `tracker_link` through `tracker/dao.rs:upsert_link_tx`. An applied `cover`
   invalidates the disk cover cache, and a tracker-sourced cover is fetched
@@ -2130,7 +2131,17 @@ ends of a turn animation are live. Text spreads render their column layout
 statically on neighbouring spreads (column 0) and live on the current one. The
 animation can be switched off (`sumidoku.reader.anim` + `.anim.<id>`, default on,
 `0` disables) and `prefers-reduced-motion` always disables it; text pages slide
-between columns with the same transition. A boundary turn does not switch
+between columns with the same transition. `sumidoku.reader.turn` selects the
+paged turn style: `auto` crossfades horizontal turns in landscape and slides
+elsewhere, while `slide` and `fade` force one style. Wide-page splitting always
+slides. Page turns hold the outgoing spread until every target image has decoded
+or failed, for at most 500ms; the held spread stays mounted while waiting, so a
+slow image cannot blank the canvas or skip ahead through repeated decode waits.
+In continuous/webtoon mode `sumidoku.reader.continuousScale` chooses fit-width
+or original measured width, `sumidoku.reader.continuousPadding` sets side
+padding (0–40%), and `sumidoku.reader.continuousGap` sets page spacing (0–40px).
+`continuousPrefs.ts:continuousPageStyle` applies the spacing inside the page
+slot's reserved height, keeping page progress and jump targets aligned. A boundary turn does not switch
 chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
 direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
 current and target chapter with its scanlator; a second boundary turn in the
@@ -2154,7 +2165,10 @@ tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
 turn zones to 15%, `kindle` makes the menu a full-width top strip above a
 75/25 prev/next split, and `off` removes the zone buttons so every tap falls
 back to toggling the toolbar. The hit-test helper and the CSS geometry are the
-single source of truth and must change together. The reader canvas background
+single source of truth and must change together. The settings panel pins its
+dark theme independently of the app theme and renders those tap layouts as
+previews sampled through the same resolver (`reader/TapZonePreview.tsx`), so a
+preview cannot drift from the actual tap action. The reader canvas background
 (`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
