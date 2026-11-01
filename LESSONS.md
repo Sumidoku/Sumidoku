@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An error's `Display` is not a message for a reader.** reqwest prints `error
+sending request for url (...)`, the address with no reason, because the cause sits
+in the source chain. A route that returns such text verbatim shows it to the user,
+and a `silent` request has no toast to soften it. Walk the chain with `without_url`,
+keep the status, and give any failure a person can act on, like a rate limit, its
+own error code.
+- Evidence: 2026-11-01, a tracker 429 reached the page as a 502 with the raw body,
+  OAuth failures lost their status, and a failed request showed only its URL. #599
+  adds `tracker_rate_limited` and `tracker/mod.rs:request_failure`.
+
 **A catalog test checks keys, not words.** Coverage and interpolation checks pass
 on text a reader would stumble over, so a generated translation needs a scan of
 the words themselves: mid-word capitals and a known pronoun followed by a letter
