@@ -1173,7 +1173,7 @@ mod tests {
 	async fn direct_client_negotiates_http2() {
 		use tokio::io::AsyncReadExt;
 
-		let rcgen::CertifiedKey { cert, key_pair } =
+		let rcgen::CertifiedKey { cert, signing_key } =
 			rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).expect("self-signed");
 		let cert_der = cert.der().clone();
 		let mut server_config = rustls::ServerConfig::builder()
@@ -1181,7 +1181,7 @@ mod tests {
 			.with_single_cert(
 				vec![cert_der.clone()],
 				rustls::pki_types::PrivateKeyDer::Pkcs8(
-					rustls::pki_types::PrivatePkcs8KeyDer::from(key_pair.serialize_der()),
+					rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der()),
 				),
 			)
 			.expect("server config");
