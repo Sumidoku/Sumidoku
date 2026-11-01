@@ -6,6 +6,26 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**zsh does not split an unquoted variable, so a loop over a file list can run once
+on one bad name.** `for f in $files` passes the whole list as one word, the tool
+reports a missing file, and the script carries on. Read `git diff --stat` against
+the count you expect before writing a commit message, and use a script or an
+array for batch edits.
+- Evidence: 2026-11-01, a replacement across the German catalog changed nothing,
+  yet the commit message said ten strings while its diff held one line. A later
+  scan exposed it before the push, and the amended #598 fixed all 86.
+
+**An editable control is a promise about its whole write path.** A generic input
+loop gives every field a box, but one field can be written elsewhere or refused
+by the server, and then the edit vanishes without an error. Trace the value from
+`onChange` through the payload to the server's validation before shipping an
+input, and read that validation before calling a removed input a regression.
+- Evidence: 2026-11-01, #591 made match fields editable. A title with no
+  alternatives got an input, but `apply` skips `title` in its values loop, and the
+  server answers 400 for any title it did not offer, so edits were dropped. #597
+  replaced it with a select. Its review first read that as a lost feature, until
+  `api/metadata.rs` showed the select was the correct contract.
+
 **An error's `Display` is not a message for a reader.** reqwest prints `error
 sending request for url (...)`, the address with no reason, because the cause sits
 in the source chain. A route that returns such text verbatim shows it to the user,
@@ -1217,15 +1237,6 @@ green run picks the release up on its own. `git ls-remote --tags` and
 tag nor release.
 - Evidence: run 39078788016 cancelled with zero tags and zero releases
   created; run 39080251858 then ran the full pipeline for the same version.
-
-**`gh run watch --exit-status` exits 1 on `cancelled`, not only on
-`failure`.** A watcher that treats nonzero as "the build failed" misreads a
-cancelled run. Read the per-job conclusion before deciding what happened.
-- Evidence: the run-1 watcher exited 1 while four of five build legs were
-  green; the queued macos-13 leg's cancellation was the only red.
-- Seen again: 2026-10-30, #532's CI run ended red with `red legs: docker` while
-  the docker job never left `queued`. Tests, builds and the same commit's
-  Release docker job had passed, and rerunning the failed job turned it green.
 
 **Write every GitHub body to a file; never inline it.**
 Backticks inside a double-quoted `--body`/`--comment` string are command
