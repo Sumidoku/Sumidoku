@@ -12,7 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Redirect;
 use axum::{Extension, Json};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -403,7 +403,46 @@ pub async fn tracker_oauth_logout(
 ) -> ApiResult<StatusCode> {
 	let provider = parse_provider(&provider)?;
 	oauth_manager(&state)?.logout(provider, user.id).await.map_err(tracker_error)?;
+	let default = crate::settings::TRACKER_DEFAULT_PROVIDER.get(&state.pool).await?;
+	if default.as_deref() == Some(provider.as_str()) {
+		crate::settings::TRACKER_DEFAULT_PROVIDER.clear(&state.pool).await?;
+	}
 	Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackerPreferences {
+	#[serde(deserialize_with = "crate::api::server_settings::required_option")]
+	default_tracker: Option<String>,
+}
+
+pub async fn tracker_preferences(State(state): State<Arc<AppState>>) -> ApiResult<Json<TrackerPreferences>> {
+	// A restored backup writes settings unchecked
+	let default_tracker = crate::settings::TRACKER_DEFAULT_PROVIDER
+		.get(&state.pool)
+		.await?
+		.filter(|name| Provider::parse(name).is_some());
+	Ok(Json(TrackerPreferences { default_tracker }))
+}
+
+pub async fn put_tracker_preferences(
+	State(state): State<Arc<AppState>>,
+	body: Option<Json<serde_json::Value>>,
+) -> ApiResult<Json<TrackerPreferences>> {
+	let Json(body) = body.ok_or_else(|| ApiError::bad_request("missing body"))?;
+	let body: TrackerPreferences =
+		serde_json::from_value(body).map_err(|error| ApiError::bad_request(format!("invalid preferences: {error}")))?;
+	match &body.default_tracker {
+		Some(name) => {
+			if Provider::parse(name).is_none() {
+				return Err(ApiError::bad_request(format!("tracker provider '{name}' is not supported")));
+			}
+			crate::settings::TRACKER_DEFAULT_PROVIDER.set(&state.pool, name).await?;
+		}
+		None => crate::settings::TRACKER_DEFAULT_PROVIDER.clear(&state.pool).await?,
+	}
+	Ok(Json(body))
 }
 
 #[derive(Debug, Deserialize)]

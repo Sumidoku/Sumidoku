@@ -151,7 +151,11 @@ no alias is derived from migration text.
   `/settings?section=trackers` page manages accounts and current-user bindings;
   `GET /trackers/links` pages by bound manga, so one manga's providers never
   split across pages, and carries the local title and cover plus unfiltered
-  counts for the provider filter;
+  counts for the provider filter. `GET/PUT /trackers/preferences` hold the
+  default tracker in the `tracker.default_provider` setting: the page sets it on
+  a connected account, logout clears it, a full settings write can't replay it,
+  and the add-binding and metadata-match dialogs preselect it unless it is
+  already bound, falling back to the first free provider;
   the manga-detail tracker section handles search, linking and edits to the
   binding and remote entry. Remote searches require explicit submission, and
   binding-only edits do not issue a remote update. Each provider

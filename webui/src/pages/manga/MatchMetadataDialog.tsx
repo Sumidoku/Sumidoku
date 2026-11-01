@@ -12,8 +12,10 @@ import {
 	invalidateTrackerLinks,
 	isTrackerAuthError,
 	listTrackerLinks,
+	preferredTrackerProvider,
 	searchTracker,
-	trackerKeys
+	trackerKeys,
+	trackerPreferences
 } from '../../api/trackers';
 import type {
 	GlobalSearchResult,
@@ -79,7 +81,9 @@ export function MatchMetadataDialog({
 	const { t } = useTranslation();
 	const qc = useQueryClient();
 	const [tab, setTab] = useState<'tracker' | 'source'>('tracker');
-	const [provider, setProvider] = useState<TrackerProvider>('anilist');
+	const preferencesQuery = useQuery({ queryKey: trackerKeys.preferences, queryFn: trackerPreferences });
+	const [picked, setProvider] = useState<TrackerProvider | null>(null);
+	const provider = picked ?? preferredTrackerProvider(preferencesQuery.data?.defaultTracker, TRACKER_PROVIDERS);
 	const [draft, setDraft] = useState(mangaTitle);
 	const [submitted, setSubmitted] = useState('');
 	const [selection, setSelection] = useState<Selection | null>(null);

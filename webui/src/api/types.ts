@@ -1371,6 +1371,10 @@ export type TrackerOAuthStatus = {
 	username?: string | null;
 };
 
+export type TrackerPreferences = {
+	defaultTracker: TrackerProvider | null;
+};
+
 export type TrackerProvider = "anilist" | "mal" | "bangumi" | "mangabaka";
 
 export type TrackerSyncRequest = {
