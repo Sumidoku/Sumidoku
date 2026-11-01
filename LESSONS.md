@@ -1218,15 +1218,6 @@ tag nor release.
 - Evidence: run 39078788016 cancelled with zero tags and zero releases
   created; run 39080251858 then ran the full pipeline for the same version.
 
-**`gh run watch --exit-status` exits 1 on `cancelled`, not only on
-`failure`.** A watcher that treats nonzero as "the build failed" misreads a
-cancelled run. Read the per-job conclusion before deciding what happened.
-- Evidence: the run-1 watcher exited 1 while four of five build legs were
-  green; the queued macos-13 leg's cancellation was the only red.
-- Seen again: 2026-10-30, #532's CI run ended red with `red legs: docker` while
-  the docker job never left `queued`. Tests, builds and the same commit's
-  Release docker job had passed, and rerunning the failed job turned it green.
-
 **Write every GitHub body to a file; never inline it.**
 Backticks inside a double-quoted `--body`/`--comment` string are command
 substitution to the shell: the text between them ran as a command and the

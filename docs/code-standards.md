@@ -49,6 +49,10 @@ run is listed as not run, never left out.
   `gh pr view --comments` for comments and commits that arrived after
   acceptance. Anything new means reviewing that delta first, not merging
   on a stale read.
+- A red run is not yet a code failure. Read each job's conclusion, and its
+  annotations when the failed job has no failed step or no log: a cancelled
+  job, a job stuck in `queued` and a runner out of disk all end red. Same
+  commit's other legs green means rerun the failed job, not debug the code.
 - The maintainer's standing authorization: an agent merges work it has
   verified against these criteria with CI green on the reviewed head. A
   change to a deliberate product decision, or a PR stopped by the
