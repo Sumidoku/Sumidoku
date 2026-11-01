@@ -218,6 +218,11 @@ hands the result in cannot see it; run the query against a migrated database.
   eviction through 1.16.1 while `evict_over_cap` stayed green with an injected
   set. `eviction_reads_library_membership_from_the_real_schema` failed with the
   old query and passed with the fix.
+- Seen again: 2026-11-01, #581's `tracked` library filter selected from
+  `manga_tracker_link`, but the table is `tracker_link`, so the filter returned
+  500 while CI stayed green with no test on it. Correcting the name alone still
+  returned `[]`: the caller binds one user id per filter token and the clause had
+  no `?`, so the page window shifted. Hand-counted binds need the same test.
 
 **A temporary database does not isolate a test's other writable paths.**
 A fixture built from `Config::default()` must also pin every artifact directory
