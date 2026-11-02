@@ -92,6 +92,22 @@
     "transitionNoNext": "次の話はありません",
     "transitionNoPrev": "前の話はありません",
     "transitionBackToManga": "漫画のページに戻る",
-    "descending": "降順"
+    "descending": "降順",
+    "readingMode": "読書モード",
+    "shortcuts": {
+      "title": "キーボードショートカット",
+      "navigation": "ナビゲーション",
+      "reading": "読書",
+      "menus": "メニュー",
+      "turnPage": "ページをめくる",
+      "scrollVertical": "上下にスクロール",
+      "pageForwardBack": "次へ / 前へ",
+      "firstLastPage": "最初 / 最後のページ",
+      "cycleScale": "スケールを切り替え",
+      "toggleFullscreen": "全画面の切り替え",
+      "toggleToolbars": "ツールバーの表示切り替え",
+      "thisHelp": "このヘルプ",
+      "closeExit": "閉じる / 終了"
+    }
   }
 }

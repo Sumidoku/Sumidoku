@@ -92,6 +92,22 @@
     "transitionNoNext": "沒有下一章了",
     "transitionNoPrev": "沒有上一章了",
     "transitionBackToManga": "返回漫畫頁面",
-    "descending": "遞減"
+    "descending": "遞減",
+    "readingMode": "閱讀模式",
+    "shortcuts": {
+      "title": "鍵盤快捷鍵",
+      "navigation": "導覽",
+      "reading": "閱讀",
+      "menus": "選單",
+      "turnPage": "翻頁",
+      "scrollVertical": "上下捲動",
+      "pageForwardBack": "向前 / 向後",
+      "firstLastPage": "第一頁／最後一頁",
+      "cycleScale": "切換縮放",
+      "toggleFullscreen": "切換全螢幕",
+      "toggleToolbars": "切換工具列",
+      "thisHelp": "此說明",
+      "closeExit": "關閉／離開"
+    }
   }
 }

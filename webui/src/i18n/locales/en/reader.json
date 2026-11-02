@@ -92,6 +92,22 @@
     "transitionNoNext": "No more chapters",
     "transitionNoPrev": "No previous chapter",
     "transitionBackToManga": "Back to the manga page",
-    "descending": "Descending"
+    "descending": "Descending",
+    "readingMode": "Reading mode",
+    "shortcuts": {
+      "title": "Keyboard shortcuts",
+      "navigation": "Navigation",
+      "reading": "Reading",
+      "menus": "Menus",
+      "turnPage": "Turn page",
+      "scrollVertical": "Scroll up / down",
+      "pageForwardBack": "Forward / back",
+      "firstLastPage": "First / last page",
+      "cycleScale": "Cycle scale",
+      "toggleFullscreen": "Toggle fullscreen",
+      "toggleToolbars": "Toggle toolbars",
+      "thisHelp": "This help",
+      "closeExit": "Close / exit"
+    }
   }
 }

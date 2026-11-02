@@ -18,7 +18,8 @@ export type ReaderKeyAction =
 	| 'last'
 	| 'toggleOverlay'
 	| 'toggleFullscreen'
-	| 'cycleScale';
+	| 'cycleScale'
+	| 'toggleShortcuts';
 
 export interface KeyLike {
 	key: string;
@@ -77,6 +78,8 @@ export function readerKeyAction(e: KeyLike, mode: Mode): ReaderKeyAction | null 
 		case 'c':
 			// Scale cycling only makes sense in paged mode; the scroll modes always fit width
 			return mode === 'paged' ? 'cycleScale' : null;
+		case 'h':
+			return 'toggleShortcuts';
 		default:
 			return null;
 	}

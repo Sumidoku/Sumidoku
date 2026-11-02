@@ -62,6 +62,8 @@ test('page, home/end and space keys page in paged mode and scroll in continuous 
 		assert.equal(readerKeyAction(key('c'), 'paged'), 'cycleScale');
 		assert.equal(readerKeyAction(key('c'), 'continuous'), null);
 		assert.equal(readerKeyAction(key('x'), 'paged'), null);
+		assert.equal(readerKeyAction(key('h'), 'paged'), 'toggleShortcuts');
+		assert.equal(readerKeyAction(key('h'), 'continuous'), 'toggleShortcuts');
 	});
 });
 

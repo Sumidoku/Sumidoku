@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -32,6 +33,7 @@ async function renderSettings(
 			return renderToStaticMarkup(
 				createElement(ReaderSettings, {
 					mode,
+					onModeChange: () => {},
 					dir: 'ltr',
 					onDirChange: () => {},
 					layout,
@@ -81,6 +83,18 @@ test('image pages keep direction settings but do not offer typography controls',
 	assert.doesNotMatch(markup, /type="range"/);
 });
 
+test('reading mode moves from the toolbar into the theme-aware settings panel', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.match(markup, /role="group" aria-label="Reading mode"/);
+	assert.match(markup, />Paged</);
+	assert.match(markup, />Scroll</);
+	assert.match(markup, />Webtoon</);
+	assert.doesNotMatch(markup, /data-theme=/);
+	const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8');
+	assert.match(source, /onModeChange=\{setMode\}/);
+	assert.doesNotMatch(source, /<SegmentedControl/);
+});
+
 test('text pages keep typography controls', async () => {
 	const markup = await renderSettings(page({ Text: 'A text chapter' }));
 	assert.match(markup, /reader__typography/);
@@ -108,6 +122,15 @@ test('tap-zone and background controls render in paged mode', async () => {
 	assert.match(markup, /aria-label="Gray"/);
 	assert.match(markup, /aria-label="White"/);
 	assert.match(markup, /aria-label="Follow system"/);
+});
+
+test('tap previews use the page aspect ratio and HTML legends share the SVG colors', async () => {
+	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
+	assert.equal(markup.match(/viewBox="0 0 99 140"/g)?.length, 5);
+	assert.match(markup, /<i class="reader__tz-fill--prev"><\/i>Previous/);
+	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8');
+	assert.match(css, /\.reader__tz-legend i\s*\{[^}]*background: var\(--tz-color\)/s);
+	assert.match(css, /\.reader__tz-fill--prev\s*\{[^}]*--tz-color: #[0-9a-f]+;[^}]*fill: var\(--tz-color\)/s);
 });
 
 test('continuous mode marks the page and turning groups as paged-only and locks them', async () => {
@@ -142,7 +165,7 @@ test('toggles use the shared switch', async () => {
 test('groups separate page, turning and appearance settings', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
 	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
-	assert.deepEqual(titles, ['Page', 'Page turning', 'Appearance']);
+	assert.deepEqual(titles, ['Reading mode', 'Page', 'Page turning', 'Appearance']);
 	for (const label of ['Page layout', 'Reading direction', 'Background']) {
 		assert.match(markup, new RegExp(`role="group" aria-label="${label}"`));
 	}

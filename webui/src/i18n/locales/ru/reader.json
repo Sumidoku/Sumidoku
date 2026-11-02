@@ -92,6 +92,22 @@
     "transitionNoNext": "Следующих глав нет",
     "transitionNoPrev": "Предыдущей главы нет",
     "transitionBackToManga": "Вернуться к странице манги",
-    "descending": "По убыванию"
+    "descending": "По убыванию",
+    "readingMode": "Режим чтения",
+    "shortcuts": {
+      "title": "Сочетания клавиш",
+      "navigation": "Навигация",
+      "reading": "Чтение",
+      "menus": "Меню",
+      "turnPage": "Перелистнуть страницу",
+      "scrollVertical": "Прокрутка вверх / вниз",
+      "pageForwardBack": "Вперёд / назад",
+      "firstLastPage": "Первая / последняя страница",
+      "cycleScale": "Переключить масштаб",
+      "toggleFullscreen": "Полноэкранный режим",
+      "toggleToolbars": "Панели инструментов",
+      "thisHelp": "Эта справка",
+      "closeExit": "Закрыть / выйти"
+    }
   }
 }

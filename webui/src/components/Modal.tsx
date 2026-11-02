@@ -11,13 +11,14 @@ export interface ModalProps {
 	onClose: () => void;
 	children: ReactNode;
 	footer?: ReactNode;
+	portalTarget?: Element;
 	/** Class name appended to the panel, e.g. to widen it */
 	panelClassName?: string;
 }
 
 const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-export function Modal({ open, title, onClose, children, footer, panelClassName }: ModalProps) {
+export function Modal({ open, title, onClose, children, footer, portalTarget, panelClassName }: ModalProps) {
 	const { t } = useTranslation();
 	const panelRef = useRef<HTMLDivElement>(null);
 
@@ -75,6 +76,6 @@ export function Modal({ open, title, onClose, children, footer, panelClassName }
 				{footer && <div className="modal__footer">{footer}</div>}
 			</div>
 		</div>,
-		document.body
+		portalTarget ?? document.body
 	);
 }

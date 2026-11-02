@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+	AlignJustify,
 	ArrowLeft,
 	ArrowRight,
 	Minimize2,
@@ -27,6 +28,7 @@ import { TapZonePreview } from './TapZonePreview';
 
 interface ReaderSettingsProps {
 	mode: Mode;
+	onModeChange: (mode: Mode) => void;
 	dir: Dir;
 	onDirChange: (dir: Dir) => void;
 	layout: SpreadLayout;
@@ -93,6 +95,7 @@ function SwitchRow({
 
 export function ReaderSettings({
 	mode,
+	onModeChange,
 	dir,
 	onDirChange,
 	layout,
@@ -128,14 +131,26 @@ export function ReaderSettings({
 	const pagedOnly = mode !== 'paged';
 	const splitAvailable = layout === 'single';
 	return (
-		<div className="reader__settings card" data-theme="dark">
+		<div className="reader__settings card">
+			<SettingsGroup title={t('reader.readingMode')}>
+				<OptionTiles
+					label={t('reader.readingMode')}
+					options={[
+						{ value: 'paged', label: t('reader.mode.paged'), icon: <BookOpen size={18} /> },
+						{ value: 'continuous', label: t('reader.mode.continuous'), icon: <AlignJustify size={18} /> },
+						{ value: 'webtoon', label: t('reader.mode.webtoon'), icon: <StretchVertical size={18} /> }
+					]}
+					value={mode}
+					onChange={onModeChange}
+				/>
+			</SettingsGroup>
 			<SettingsGroup title={t('reader.groupPage')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
 				<OptionTiles
 					label={t('reader.layout')}
 					options={[
-						{ value: 'single', label: t('reader.layoutSingle'), icon: <Square size={22} /> },
-						{ value: 'double', label: t('reader.layoutDouble'), icon: <BookOpen size={22} /> },
-						{ value: 'doubleNoCover', label: t('reader.layoutDoubleNoCover'), icon: <BookOpen size={22} /> }
+						{ value: 'single', label: t('reader.layoutSingle'), icon: <Square size={18} /> },
+						{ value: 'double', label: t('reader.layoutDouble'), icon: <BookOpen size={18} /> },
+						{ value: 'doubleNoCover', label: t('reader.layoutDoubleNoCover'), icon: <BookOpen size={18} /> }
 					]}
 					value={layout}
 					onChange={onLayoutChange}
@@ -143,11 +158,11 @@ export function ReaderSettings({
 				<OptionTiles
 					label={t('reader.pageScale')}
 					options={[
-						{ value: 'screen', label: t('reader.scaleScreen'), icon: <Scan size={22} /> },
-						{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={22} /> },
-						{ value: 'widthShrink', label: t('reader.scaleWidthShrink'), icon: <Minimize2 size={22} /> },
-						{ value: 'height', label: t('reader.scaleHeight'), icon: <StretchVertical size={22} /> },
-						{ value: 'original', label: t('reader.scaleOriginal'), icon: <Frame size={22} /> }
+						{ value: 'screen', label: t('reader.scaleScreen'), icon: <Scan size={18} /> },
+						{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
+						{ value: 'widthShrink', label: t('reader.scaleWidthShrink'), icon: <Minimize2 size={18} /> },
+						{ value: 'height', label: t('reader.scaleHeight'), icon: <StretchVertical size={18} /> },
+						{ value: 'original', label: t('reader.scaleOriginal'), icon: <Frame size={18} /> }
 					]}
 					value={scale}
 					onChange={onScaleChange}
@@ -166,8 +181,8 @@ export function ReaderSettings({
 				<OptionTiles
 					label={t('reader.direction')}
 					options={[
-						{ value: 'ltr', label: t('reader.ltr'), icon: <ArrowRight size={22} /> },
-						{ value: 'rtl', label: t('reader.rtl'), icon: <ArrowLeft size={22} /> }
+						{ value: 'ltr', label: t('reader.ltr'), icon: <ArrowRight size={18} /> },
+						{ value: 'rtl', label: t('reader.rtl'), icon: <ArrowLeft size={18} /> }
 					]}
 					value={dir}
 					onChange={onDirChange}
@@ -215,8 +230,8 @@ export function ReaderSettings({
 					<OptionTiles
 						label={t('reader.pageScale')}
 						options={[
-							{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={22} /> },
-							{ value: 'original', label: t('reader.scaleOriginal'), icon: <FileImage size={22} /> }
+							{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
+							{ value: 'original', label: t('reader.scaleOriginal'), icon: <FileImage size={18} /> }
 						]}
 						value={continuousScale}
 						onChange={onContinuousScaleChange}
