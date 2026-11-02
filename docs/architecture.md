@@ -2198,9 +2198,9 @@ turn zones to 15%, `kindle` makes the menu a full-width top strip above a
 back to toggling the toolbar. The hit-test helper and the CSS geometry are the
 single source of truth and must change together. The settings panel follows the
 app theme, keeps the reading-mode switch that was previously in the toolbar, and
-renders those tap layouts as 1:1.414 previews sampled through the same resolver
-(`reader/TapZonePreview.tsx`), so a preview cannot drift from the actual tap
-action. Its legend paints the same colors as HTML swatches rather than applying
+renders those tap layouts as 1:1.414 previews through a small grid sampled from
+the same resolver (`reader/TapZonePreview.tsx`), so a preview cannot drift from
+the actual tap action. Its legend paints SVG swatches rather than applying
 SVG's `fill` to elements with no SVG fill geometry. The reader canvas background
 (`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`

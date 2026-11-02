@@ -786,12 +786,11 @@
 	gap: 5px;
 }
 
-.reader__tz-legend i {
+.reader__tz-swatch {
 	display: block;
 	width: 8px;
 	height: 8px;
 	border-radius: 2px;
-	background: var(--tz-color);
 }
 
 .reader__backgrounds {

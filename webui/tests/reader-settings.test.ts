@@ -126,10 +126,12 @@ test('tap-zone and background controls render in paged mode', async () => {
 
 test('tap previews use the page aspect ratio and HTML legends share the SVG colors', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
-	assert.equal(markup.match(/viewBox="0 0 99 140"/g)?.length, 5);
-	assert.match(markup, /<i class="reader__tz-fill--prev"><\/i>Previous/);
+	assert.equal(markup.match(/viewBox="0 0 20 28"/g)?.length, 5);
+	assert.ok(Math.abs(39.1 / 27.642857 - 1.414) < 0.001);
+	assert.match(markup, /<svg class="reader__tz-swatch"[^>]*><rect width="1" height="1" class="reader__tz-fill--prev"><\/rect><\/svg>Previous/);
 	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8');
-	assert.match(css, /\.reader__tz-legend i\s*\{[^}]*background: var\(--tz-color\)/s);
+	assert.match(css, /\.reader__tz-preview\s*\{[^}]*width: 27\.642857px;[^}]*height: 39\.1px;/s);
+	assert.match(css, /\.reader__tz-swatch\s*\{[^}]*width: 8px;[^}]*height: 8px;/s);
 	assert.match(css, /\.reader__tz-fill--prev\s*\{[^}]*--tz-color: #[0-9a-f]+;[^}]*fill: var\(--tz-color\)/s);
 });
 

@@ -53,8 +53,8 @@ import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './re
 import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
-import { readerKeyAction } from './reader/hotkeys';
-import { INITIAL_READER_CHROME, isShortcutHelpKey, readerChromeReducer } from './reader/readerChrome';
+import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
+import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
@@ -943,7 +943,7 @@ function ReaderCore({
 		if (chaptersOpen) return;
 		if (shortcutsOpen) {
 			// The focused dialog owns the other keys; H must still close it
-			if (isShortcutHelpKey(e)) {
+			if (shouldCloseShortcuts(e)) {
 				e.preventDefault();
 				dispatchChrome('closeShortcuts');
 			}

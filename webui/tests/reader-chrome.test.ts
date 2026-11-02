@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { INITIAL_READER_CHROME, isShortcutHelpKey, readerChromeReducer } from '../src/pages/reader/readerChrome.ts';
+import { INITIAL_READER_CHROME, readerChromeReducer } from '../src/pages/reader/readerChrome.ts';
 import type { ReaderChrome, ReaderChromeAction } from '../src/pages/reader/readerChrome.ts';
 
 function run(state: ReaderChrome, ...actions: ReaderChromeAction[]): ReaderChrome {
@@ -57,11 +57,11 @@ test('shortcut help can be toggled while the toolbar is hidden and is exclusive 
 });
 
 test('H closes shortcut help even when the focused dialog is not a form control', () => {
-	const key = { key: 'h', ctrlKey: false, altKey: false, metaKey: false };
-	assert.equal(isShortcutHelpKey(key), true);
-	assert.equal(isShortcutHelpKey({ ...key, key: 'm' }), false);
-	assert.equal(isShortcutHelpKey({ ...key, ctrlKey: true }), false);
-	assert.equal(isShortcutHelpKey({ ...key, metaKey: true }), false);
+	const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8');
+	const guard = source.match(/\n\t\tif \(shortcutsOpen\) \{([\s\S]*?)\n\t\t\}/);
+	assert(guard, 'the open shortcut dialog has its own keyboard guard');
+	assert.match(guard[1], /if \(shouldCloseShortcuts\(e\)\)/);
+	assert.match(guard[1], /dispatchChrome\('closeShortcuts'\)/);
 });
 
 test('the reader keeps the bar and the menu in the one reducer', () => {

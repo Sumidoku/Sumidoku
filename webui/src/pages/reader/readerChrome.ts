@@ -1,7 +1,3 @@
-export function isShortcutHelpKey(e: { key: string; ctrlKey: boolean; altKey: boolean; metaKey: boolean }): boolean {
-	return e.key === 'h' && !e.ctrlKey && !e.altKey && !e.metaKey;
-}
-
 export interface ReaderChrome {
 	overlay: boolean;
 	settingsOpen: boolean;

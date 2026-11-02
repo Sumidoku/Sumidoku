@@ -31,6 +31,10 @@ export interface KeyLike {
 }
 
 // Structural check (no HTMLElement instance) so the mapping is testable under SSR
+export function shouldCloseShortcuts(e: KeyLike): boolean {
+	return e.key === 'h' && !e.ctrlKey && !e.altKey && !e.metaKey;
+}
+
 export function isEditableTarget(target: EventTarget | null): boolean {
 	const el = target as Partial<HTMLElement> | null;
 	if (!el) return false;

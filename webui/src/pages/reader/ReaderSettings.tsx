@@ -201,7 +201,7 @@ export function ReaderSettings({
 					/>
 					<div className="reader__tz-legend">
 						{(['prev', 'next', 'menu'] as ZoneAction[]).map((action) => (
-							<span key={action}><i className={`reader__tz-fill--${action}`} />{t(`reader.tzAction.${action}`)}</span>
+							<span key={action}><svg className="reader__tz-swatch" viewBox="0 0 1 1" aria-hidden><rect width={1} height={1} className={`reader__tz-fill--${action}`} /></svg>{t(`reader.tzAction.${action}`)}</span>
 						))}
 					</div>
 				</div>
