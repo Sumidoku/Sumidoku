@@ -58,7 +58,7 @@ import { readerKeyAction } from './reader/hotkeys';
 import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
-import { continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
+import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
 import { crossfadeEnabled, parsePageTurn, shouldRevealTurn, TURN_HOLD_MS } from './reader/pageTurn';
 import type { PageTurnStyle } from './reader/pageTurn';
@@ -1699,6 +1699,7 @@ function ReaderCore({
 											<PageImage
 												src={pageUrl(chapterId, p.index, p.cacheRevision)}
 												alt={t('reader.pageAlt', { page: p.index + 1 })}
+												style={continuousImageStyle(dimensions)}
 												width={dimensions?.width}
 												height={dimensions?.height}
 												lazy

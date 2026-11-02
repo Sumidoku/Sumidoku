@@ -452,10 +452,7 @@
 .reader__pg {
 	box-sizing: border-box;
 	flex: none;
-}
-
-.reader__pg--unsized {
-	box-sizing: content-box;
+	padding-top: 0;
 }
 
 .reader__pg--unsized,
