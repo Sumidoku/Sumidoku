@@ -1280,8 +1280,8 @@ impl DownloadManager {
 		};
 		let base = sanitize(&chapter_name);
 		let (mut rel_path, mut moved) = plan(base.clone());
-		// The name carries only the display number/title, so another chapter (other group, language or volume,
-		// or a same-titled manga) can map to the same path; the chapter id keeps this one from overwriting it
+		// The prefix makes a same-manga clash unlikely, but a same-titled manga (or a source that
+		// reorders its list between index and download) can still map here; the chapter id keeps this one from overwriting it
 		if !self.claim_paths(chapter_id, &rel_path, moved.as_ref().map(|(_, stored)| stored.as_str()), false).await? {
 			(rel_path, moved) = plan(format!("{base} [{chapter_id}]"));
 			self.claim_paths(chapter_id, &rel_path, moved.as_ref().map(|(_, stored)| stored.as_str()), true).await?;
@@ -1981,14 +1981,24 @@ fn xml_escape(text: &str) -> String {
 		.replace('>', "&gt;")
 }
 
+/// Artifact chapter name: a zero-padded `source_order` prefix plus the display label, which
+/// mirrors the webui's chapterLabel (webui/src/lib/format.ts): `第 V 卷` and a nonzero
+/// `第 N 话` join a nonblank title with ` · ` — sources use 0 as a no-number sentinel — and a
+/// chapter with none of the three falls back to `未命名章节` (never the raw key). Files sort in
+/// source reading order and same-numbered chapters from different groups stay distinguishable
 fn chapter_display(chapter: &ChapterRow) -> String {
-	if let Some(number) = chapter.number {
-		format!("第 {number} 话")
-	} else if let Some(title) = &chapter.title {
-		title.clone()
-	} else {
-		chapter.key.clone()
+	let mut parts: Vec<String> = Vec::new();
+	if let Some(volume) = chapter.volume {
+		parts.push(format!("第 {volume} 卷"));
 	}
+	if let Some(number) = chapter.number.filter(|n| n.is_finite() && *n != 0.0) {
+		parts.push(format!("第 {number} 话"));
+	}
+	if let Some(title) = chapter.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+		parts.push(title.to_string());
+	}
+	let name = if parts.is_empty() { "未命名章节".to_string() } else { parts.join(" · ") };
+	format!("{:04} - {name}", chapter.source_order)
 }
 
 /// File-name sanitizing: strips path-illegal characters, collapses whitespace, trims leading/trailing spaces and dots
@@ -2059,6 +2069,39 @@ mod tests {
 			chapter: "第 1 话",
 			filename: "第 1 话",
 		}
+	}
+
+	fn chapter_row(source_order: i64, volume: Option<f64>, number: Option<f64>, title: Option<&str>) -> ChapterRow {
+		ChapterRow {
+			id: 1,
+			manga_id: 1,
+			key: "ch-key".into(),
+			title: title.map(str::to_string),
+			number,
+			volume,
+			scanlators: sqlx::types::Json(Vec::new()),
+			language: None,
+			thumbnail: None,
+			url: None,
+			date_uploaded: None,
+			source_order,
+			page_count: 0,
+			locked: false,
+			fetched_at: 0,
+			created_at: None,
+			trashed_at: None,
+		}
+	}
+
+	#[test]
+	fn chapter_display_prefixes_source_order() {
+		assert_eq!(chapter_display(&chapter_row(5, None, Some(12.0), None)), "0005 - 第 12 话");
+		assert_eq!(chapter_display(&chapter_row(0, None, Some(12.5), Some("标题"))), "0000 - 第 12.5 话 · 标题");
+		assert_eq!(chapter_display(&chapter_row(9, Some(2.0), Some(12.0), None)), "0009 - 第 2 卷 · 第 12 话");
+		// A zero number is the sources' no-number sentinel; a blank title counts as absent
+		assert_eq!(chapter_display(&chapter_row(7, None, Some(0.0), Some("番外篇"))), "0007 - 番外篇");
+		assert_eq!(chapter_display(&chapter_row(10, None, None, Some("   "))), "0010 - 未命名章节");
+		assert_eq!(chapter_display(&chapter_row(3, None, None, None)), "0003 - 未命名章节");
 	}
 
 	#[test]

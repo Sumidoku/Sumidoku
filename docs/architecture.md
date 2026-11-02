@@ -1196,9 +1196,13 @@ no alias is derived from migration text.
   stored `path` resolves through `download::product_path` — absolute is used
   as-is, relative joins `downloads_dir` — and every read/delete site
   (`api/download.rs`) goes through it. The default product path is
-  `<source>/<manga title>/<chapter display name>`, which other chapters can
-  share (same number from another group, language or volume, or a
-  same-titled manga). Before packaging, `claim_paths` checks the default
+  `<source>/<manga title>/<chapter display name>`, where the display
+  name is a zero-padded `source_order` prefix plus the webui
+  chapterLabel composition (`第 V 卷`, a nonzero `第 N 话` — sources
+  use 0 as a no-number sentinel — and a nonblank title, joined by
+  ` · `, falling back to `未命名章节`), e.g. `0005 - 第 12 话`;
+  products sort in source reading order, and a same-titled manga can
+  still map a different chapter to the same path. Before packaging, `claim_paths` checks the default
   path and its move target against other chapters' rows and the in-flight
   claims of concurrent downloads; on a clash the base name gains
   ` [<chapter id>]`. Claims are released when the chapter's worker exits.
@@ -1278,7 +1282,8 @@ no alias is derived from migration text.
   `download.move_path` is set (setting table, env
   `SUMIDOKU_DOWNLOAD_MOVE_PATH` overrides), a finished package is moved
   to the path its template renders to. Variables `{source}`,
-  `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}` and
+  `{title}`/`{manga}`, `{author}`, `{artist}`, `{chapter}` (the display
+  name including its `source_order` prefix) and
   `{filename}` (the default base name, no extension) each pass through
   `sanitize()`, with empty or unknown variables rendering as `Unknown`.
   A template containing `{filename}` renders the full file name (`.cbz`
