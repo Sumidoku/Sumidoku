@@ -92,6 +92,22 @@
     "transitionNoNext": "다음 챕터가 없습니다",
     "transitionNoPrev": "이전 챕터가 없습니다",
     "transitionBackToManga": "만화 페이지로 돌아가기",
-    "descending": "내림차순"
+    "descending": "내림차순",
+    "readingMode": "읽기 모드",
+    "shortcuts": {
+      "title": "키보드 단축키",
+      "navigation": "탐색",
+      "reading": "읽기",
+      "menus": "메뉴",
+      "turnPage": "페이지 넘기기",
+      "scrollVertical": "위아래로 스크롤",
+      "pageForwardBack": "앞으로 / 뒤로",
+      "firstLastPage": "첫 / 마지막 페이지",
+      "cycleScale": "배율 순환",
+      "toggleFullscreen": "전체 화면 전환",
+      "toggleToolbars": "도구 모음 전환",
+      "thisHelp": "이 도움말",
+      "closeExit": "닫기 / 종료"
+    }
   }
 }

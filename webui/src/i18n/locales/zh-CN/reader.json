@@ -92,6 +92,22 @@
     "transitionNoNext": "没有下一章了",
     "transitionNoPrev": "没有上一章了",
     "transitionBackToManga": "返回漫画页面",
-    "descending": "降序"
+    "descending": "降序",
+    "readingMode": "阅读模式",
+    "shortcuts": {
+      "title": "键盘快捷键",
+      "navigation": "导航",
+      "reading": "阅读",
+      "menus": "菜单",
+      "turnPage": "翻页",
+      "scrollVertical": "上下滚动",
+      "pageForwardBack": "向前 / 向后",
+      "firstLastPage": "第一页 / 最后一页",
+      "cycleScale": "循环切换缩放",
+      "toggleFullscreen": "切换全屏",
+      "toggleToolbars": "切换工具栏",
+      "thisHelp": "本帮助",
+      "closeExit": "关闭 / 退出"
+    }
   }
 }

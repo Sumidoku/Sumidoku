@@ -5,22 +5,21 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { marked } from 'marked';
 import {
-	AlignJustify,
 	ArrowDownUp,
 	ArrowLeft,
 	BookOpen,
 	Bookmark,
 	CheckCircle2,
+	CircleHelp,
 	List,
 	Lock,
 	Maximize,
 	Minimize,
 	Settings,
-	StretchVertical,
 	TriangleAlert,
 	X
 } from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
+import { ShortcutsHelp } from './reader/ShortcutsHelp';
 import { api, pageUrl } from '../api/client';
 import { useDocumentTitle } from '../components/DocumentTitle';
 import { qk, subscribeChapterCacheEvents, useChapterPages, useManga, useMangaChapters, useWhoami } from '../api/hooks';
@@ -31,7 +30,7 @@ import { chapterLabel, formatDate, hasChapterNumber } from '../lib/format';
 import { hasHistoryBack } from '../lib/navigation';
 import { applyPrefs, DEFAULT_PREFS, loadPrefs, savePrefs } from '../lib/chapterPrefs';
 import { useResolvedTheme } from '../lib/theme';
-import { Button, EmptyState, IconButton, SegmentedControl, Spinner } from '../components';
+import { Button, EmptyState, IconButton, Spinner } from '../components';
 import { usePinchZoom } from './reader/usePinchZoom';
 import { bumpRetries, failedInSpread } from './reader/pageRetry';
 import { pageText } from './reader/pageText';
@@ -54,7 +53,7 @@ import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './re
 import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
-import { readerKeyAction } from './reader/hotkeys';
+import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
 import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { ReaderPager } from './reader/ReaderPager';
@@ -69,12 +68,6 @@ import type { ReaderTypography } from './reader/typography';
 import './reader.css';
 
 // continuous is the stored value for "scroll" in the old localStorage; renaming it would lose existing users' settings
-
-const MODES: { key: Mode; icon: LucideIcon }[] = [
-	{ key: 'paged', icon: BookOpen },
-	{ key: 'continuous', icon: AlignJustify },
-	{ key: 'webtoon', icon: StretchVertical }
-];
 
 function readMode(): Mode {
 	try {
@@ -549,7 +542,7 @@ function ReaderCore({
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
 	const mode = resolveMode(modeOverride, metaMode, globalMode);
 	const dir = resolveDir(dirOverride, metaDir, globalDir);
-	const [{ overlay, settingsOpen }, dispatchChrome] = useReducer(readerChromeReducer, INITIAL_READER_CHROME);
+	const [{ overlay, settingsOpen, shortcutsOpen }, dispatchChrome] = useReducer(readerChromeReducer, INITIAL_READER_CHROME);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
 	// Fullscreen targets the reader root so the toolbars (fixed) stay visible inside it
@@ -715,12 +708,6 @@ function ReaderCore({
 	const navTotal = textOnly ? textLayout.cols : total;
 	const navPos = textOnly ? col : shown;
 	const mangaTitle = mangaQuery.data?.title ?? '';
-
-	const MODE_LABEL: Record<Mode, string> = {
-		paged: t('reader.mode.paged'),
-		continuous: t('reader.mode.continuous'),
-		webtoon: t('reader.mode.webtoon')
-	};
 
 	function setIdx(i: number) {
 		idxRef.current = i;
@@ -937,6 +924,10 @@ function ReaderCore({
 				setChaptersOpen(false);
 				return;
 			}
+			if (shortcutsOpen) {
+				dispatchChrome('closeShortcuts');
+				return;
+			}
 			if (settingsOpen) {
 				dispatchChrome('closeSettings');
 				return;
@@ -950,6 +941,14 @@ function ReaderCore({
 			return;
 		}
 		if (chaptersOpen) return;
+		if (shortcutsOpen) {
+			// The focused dialog owns the other keys; H must still close it
+			if (shouldCloseShortcuts(e)) {
+				e.preventDefault();
+				dispatchChrome('closeShortcuts');
+			}
+			return;
+		}
 		const action = readerKeyAction(e, mode);
 		if (action === null) return;
 		// The key is ours: keep Space and the arrows from scrolling the page natively
@@ -990,6 +989,9 @@ function ReaderCore({
 			case 'cycleScale':
 				setScale(nextScale(scale));
 				break;
+			case 'toggleShortcuts':
+				dispatchChrome('toggleShortcuts');
+				break;
 		}
 	};
 	useEffect(() => {
@@ -1012,7 +1014,7 @@ function ReaderCore({
 	}
 	const wheelRef = useRef<(e: WheelEvent) => void>(() => {});
 	wheelRef.current = (e) => {
-		if (mode !== 'paged' || chaptersOpen) return;
+		if (mode !== 'paged' || chaptersOpen || shortcutsOpen) return;
 		// Scrollable scale modes (width/widthShrink/original) keep the wheel for native scrolling
 		if (scale === 'width' || scale === 'widthShrink' || scale === 'original') return;
 		// Browser zoom chords and an active pinch zoom keep the wheel to themselves
@@ -1725,19 +1727,14 @@ function ReaderCore({
 					<div className="reader__title">{mangaTitle || t('reader.reading')}</div>
 					{curChapter && <div className="reader__subtitle">{chapterLabel(curChapter)}</div>}
 				</div>
-				<SegmentedControl
-					options={MODES.map((m) => ({
-						value: m.key,
-						label: (
-							<span className="reader__mode" title={MODE_LABEL[m.key]}>
-								<m.icon size={15} />
-								<span className="reader__mode-label">{MODE_LABEL[m.key]}</span>
-							</span>
-						)
-					}))}
-					value={mode}
-					onChange={setMode}
-				/>
+				<IconButton
+					label={t('reader.shortcuts.title')}
+					aria-keyshortcuts="h"
+					className={shortcutsOpen ? 'reader__icon--on' : undefined}
+					onClick={() => dispatchChrome('toggleShortcuts')}
+				>
+					<CircleHelp size={17} />
+				</IconButton>
 				{navEnabled && (
 					<IconButton
 						label={t('reader.chapters')}
@@ -1769,6 +1766,7 @@ function ReaderCore({
 			{overlay && settingsOpen && (
 				<ReaderSettings
 					mode={mode}
+					onModeChange={setMode}
 					dir={dir}
 					onDirChange={setDir}
 					layout={layout}
@@ -1800,6 +1798,8 @@ function ReaderCore({
 					onTypographyChange={updateTypography}
 				/>
 			)}
+
+			<ShortcutsHelp open={shortcutsOpen} onClose={() => dispatchChrome('closeShortcuts')} portalTarget={rootRef.current ?? undefined} />
 
 			{chaptersOpen && (
 				<>

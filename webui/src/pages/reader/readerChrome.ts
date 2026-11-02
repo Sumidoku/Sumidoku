@@ -1,11 +1,12 @@
 export interface ReaderChrome {
 	overlay: boolean;
 	settingsOpen: boolean;
+	shortcutsOpen: boolean;
 }
 
-export type ReaderChromeAction = 'toggleOverlay' | 'toggleSettings' | 'closeSettings';
+export type ReaderChromeAction = 'toggleOverlay' | 'toggleSettings' | 'closeSettings' | 'toggleShortcuts' | 'closeShortcuts';
 
-export const INITIAL_READER_CHROME: ReaderChrome = { overlay: true, settingsOpen: false };
+export const INITIAL_READER_CHROME: ReaderChrome = { overlay: true, settingsOpen: false, shortcutsOpen: false };
 
 /**
  * The control bar and its settings menu change together here, so no route that hides
@@ -16,10 +17,14 @@ export const INITIAL_READER_CHROME: ReaderChrome = { overlay: true, settingsOpen
 export function readerChromeReducer(state: ReaderChrome, action: ReaderChromeAction): ReaderChrome {
 	switch (action) {
 		case 'toggleOverlay':
-			return state.overlay ? { overlay: false, settingsOpen: false } : { ...state, overlay: true };
+			return state.overlay ? { overlay: false, settingsOpen: false, shortcutsOpen: false } : { ...state, overlay: true };
 		case 'toggleSettings':
-			return state.overlay ? { ...state, settingsOpen: !state.settingsOpen } : state;
+			return state.overlay ? { ...state, settingsOpen: !state.settingsOpen, shortcutsOpen: false } : state;
 		case 'closeSettings':
 			return { ...state, settingsOpen: false };
+		case 'toggleShortcuts':
+			return { ...state, settingsOpen: false, shortcutsOpen: !state.shortcutsOpen };
+		case 'closeShortcuts':
+			return { ...state, shortcutsOpen: false };
 	}
 }

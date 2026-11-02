@@ -2,7 +2,7 @@ import { zoneAction, zoneAt } from './readerPrefs';
 import type { Dir, TapZoneLayout } from './readerPrefs';
 
 const COLUMNS = 20;
-const ROWS = 8;
+const ROWS = 28;
 
 export function TapZonePreview({ layout, dir }: { layout: TapZoneLayout; dir: Dir }) {
 	const cells = Array.from({ length: COLUMNS * ROWS }, (_, i) => {
