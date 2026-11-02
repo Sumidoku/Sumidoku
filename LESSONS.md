@@ -6,6 +6,19 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**With `box-sizing: border-box`, `aspect-ratio` sizes the padding too, so a gap
+put in padding comes out of the content.** The ratio applies to the box that
+`box-sizing` names, so a slot reserving an image's ratio with a top padding keeps
+its total height and shrinks the content by the gap; the `height: auto` image then
+overflows into the space the gap was meant to show. Put spacing between such boxes
+in margin, give the ratio to the element whose shape it is, and measure the
+distance between rendered neighbours: a test of the style object passes either way.
+- Evidence: 2026-11-02, #593 applied the continuous page gap as `paddingTop` on a
+  border-box slot that also carried the page's aspect ratio. Its style-object tests
+  passed, and #603 reported that spacing did nothing in continuous and webtoon modes
+  on 1.20.0. #605 moved the gap to `marginTop` and the ratio onto the image, and a
+  browser fixture measured exactly 24px between loaded pages in both modes.
+
 **zsh does not split an unquoted variable, so a loop over a file list can run once
 on one bad name.** `for f in $files` passes the whole list as one word, the tool
 reports a missing file, and the script carries on. Read `git diff --stat` against
