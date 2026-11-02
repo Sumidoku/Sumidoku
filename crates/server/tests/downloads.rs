@@ -219,8 +219,8 @@ async fn download_full_flow() {
 	assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
-/// Two chapters with the same display number (other group, language or volume) used to package to the same
-/// path: the second download overwrote the first while the first row still pointed at it
+/// Two chapters with the same display number (other group, language or volume) stay distinct:
+/// the source-order prefix keeps their artifact names apart even when the label is identical
 #[tokio::test]
 async fn same_numbered_chapters_get_distinct_artifacts() {
 	let t = downloads_app(|_| {}).await;
@@ -265,7 +265,16 @@ async fn same_numbered_chapters_get_distinct_artifacts() {
 		paths.push(entry["path"].as_str().expect("download path").to_string());
 	}
 	assert_ne!(paths[0], paths[1], "each chapter needs its own artifact");
-	assert!(paths[1].contains(&format!("[{second}]")), "the later chapter is disambiguated: {}", paths[1]);
+	let (second_order,): (i64,) = sqlx::query_as("SELECT source_order FROM chapter WHERE id = ?")
+		.bind(second)
+		.fetch_one(&pool)
+		.await
+		.expect("second source_order");
+	assert!(
+		paths[1].contains(&format!("{second_order:04} - 第 7 话")),
+		"the source-order prefix keeps the later chapter distinct: {}",
+		paths[1]
+	);
 	for (path, key) in paths.iter().zip(&keys) {
 		let bytes = std::fs::read(downloads_dir.join(path)).expect("read cbz");
 		assert_cbz(&bytes, "en.example-source", &manga_key, key, 2);
@@ -325,7 +334,8 @@ async fn download_backfills_online_page_dimensions() {
 	assert_eq!(body[0]["height"], 1);
 }
 
-/// Metadata mirror for rendering expected paths (chapter_display and the author empty fallback follow the server's rules)
+/// Metadata mirror for rendering expected paths (chapter_display's source-order prefix, webui-style label
+/// composition and the author empty fallback follow the server's rules)
 struct ChapterMeta {
 	source: String,
 	title: String,
@@ -334,15 +344,16 @@ struct ChapterMeta {
 }
 
 async fn chapter_meta(pool: &sqlx::SqlitePool, chapter_id: i64) -> ChapterMeta {
-	let (title, authors, number, chapter_title, chapter_key, source): (
+	let (title, authors, number, volume, chapter_title, source, source_order): (
 		String,
 		String,
 		Option<f64>,
+		Option<f64>,
 		Option<String>,
 		String,
-		String,
+		i64,
 	) = sqlx::query_as(
-		"SELECT m.title, m.authors, c.number, c.title, c.key, s.name FROM chapter c
+		"SELECT m.title, m.authors, c.number, c.volume, c.title, s.name, c.source_order FROM chapter c
 		 JOIN manga m ON m.id = c.manga_id JOIN source s ON s.id = m.source_id WHERE c.id = ?",
 	)
 	.bind(chapter_id)
@@ -350,16 +361,22 @@ async fn chapter_meta(pool: &sqlx::SqlitePool, chapter_id: i64) -> ChapterMeta {
 	.await
 	.expect("chapter meta");
 	let authors: Vec<String> = serde_json::from_str(&authors).expect("authors json");
-	let chapter = match (number, chapter_title) {
-		(Some(n), _) => format!("第 {n} 话"),
-		(None, Some(t)) => t,
-		(None, None) => chapter_key,
-	};
+	let mut parts: Vec<String> = Vec::new();
+	if let Some(v) = volume {
+		parts.push(format!("第 {v} 卷"));
+	}
+	if let Some(n) = number.filter(|n| n.is_finite() && *n != 0.0) {
+		parts.push(format!("第 {n} 话"));
+	}
+	if let Some(t) = chapter_title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+		parts.push(t.to_string());
+	}
+	let name = if parts.is_empty() { "未命名章节".to_string() } else { parts.join(" · ") };
 	ChapterMeta {
 		source,
 		title,
 		author: if authors.is_empty() { "Unknown".into() } else { authors.join(", ") },
-		chapter,
+		chapter: format!("{source_order:04} - {name}"),
 	}
 }
 
