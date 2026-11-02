@@ -13,6 +13,10 @@ export function readBoundedNumber(value: string | null, max: number): number | n
 	return Number.isInteger(n) && n >= 0 && n <= max ? n : null;
 }
 
+export function continuousImageStyle(dims: PageDims | null): CSSProperties {
+	return { aspectRatio: dims ? `${dims.width} / ${dims.height}` : undefined };
+}
+
 export function continuousPageStyle(
 	mode: 'continuous' | 'webtoon',
 	scale: ContinuousScale,
@@ -24,7 +28,6 @@ export function continuousPageStyle(
 	const naturalWidth = scale === 'original' && dims !== null ? `${dims.width}px` : null;
 	return {
 		width: naturalWidth ?? `calc(${100 - padding * 2}% - ${mode === 'continuous' ? 16 : 0}px)`,
-		paddingTop: first ? 0 : gap,
-		aspectRatio: dims ? `${dims.width} / ${dims.height}` : undefined
+		marginTop: first ? 0 : gap
 	};
 }

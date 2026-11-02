@@ -2165,8 +2165,9 @@ slow image cannot blank the canvas or skip ahead through repeated decode waits.
 In continuous/webtoon mode `sumidoku.reader.continuousScale` chooses fit-width
 or original measured width, `sumidoku.reader.continuousPadding` sets side
 padding (0–40%), and `sumidoku.reader.continuousGap` sets page spacing (0–40px).
-`continuousPrefs.ts:continuousPageStyle` applies the spacing inside the page
-slot's reserved height, keeping page progress and jump targets aligned. A boundary turn does not switch
+`continuousPrefs.ts:continuousPageStyle` applies the spacing outside the page
+slot's reserved height, while `continuousImageStyle` sizes the image by its own
+aspect ratio, keeping the gap unchanged after dimensions arrive. A boundary turn does not switch
 chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
 direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
 current and target chapter with its scanlator; a second boundary turn in the
