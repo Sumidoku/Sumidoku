@@ -19,6 +19,19 @@ distance between rendered neighbours: a test of the style object passes either w
   on 1.20.0. #605 moved the gap to `marginTop` and the ratio onto the image, and a
   browser fixture measured exactly 24px between loaded pages in both modes.
 
+**A preview's sampling cost and its coordinate system are part of its UI
+contract.** Multiply a sampled SVG grid by the requested aspect ratio and a
+small settings panel can pay for tens of thousands of DOM nodes at once;
+changing only the SVG's aspect ratio without scaling every rectangle also leaves
+part of the preview unpainted. Check the reference implementation's sampling
+density before tuning, and test full coverage through the real resolver, with
+browser timing and a rendered bottom edge.
+- Evidence: 2026-11-02, changing the reader tap preview from 20×8 to 99×140 made
+  settings render about 69,300 rectangles and visibly delayed it. Replacing the
+  grid with bands using height 1 in a 1.414-high viewBox then cut off the bottom
+  29%. The 20×28 resolver-sampled grid renders 2,800 cells and opened in about
+  30ms; `reader-preview.test.ts` checks every cell and its bottom-right corner.
+
 **zsh does not split an unquoted variable, so a loop over a file list can run once
 on one bad name.** `for f in $files` passes the whole list as one word, the tool
 reports a missing file, and the script carries on. Read `git diff --stat` against
