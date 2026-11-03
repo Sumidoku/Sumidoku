@@ -15,7 +15,8 @@ function page(content: Page['content']): Page {
 async function renderSettings(
 	currentPage: Page | null,
 	mode: 'paged' | 'continuous' = 'paged',
-	layout: 'single' | 'double' = 'single'
+	layout: 'single' | 'double' = 'single',
+	textOnly = false
 ): Promise<string> {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
@@ -62,6 +63,7 @@ async function renderSettings(
 					transition: true,
 					onTransitionChange: () => {},
 					currentPage,
+					textOnly,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {}
 				})
@@ -183,4 +185,38 @@ test('double layouts lock only the split toggle and say why', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'paged', 'double');
 	assert.match(markup, /reader__settings-row--off"><span>Split wide pages \(single-page layout only\)/);
 	assert.equal(markup.match(/disabled=""/g)?.length, 1);
+});
+
+test('text-only chapters hide image-specific options', async () => {
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'paged', 'single', true);
+	assert.doesNotMatch(markup, /aria-label="Page layout"/);
+	assert.doesNotMatch(markup, /aria-label="Page scale"/);
+	assert.doesNotMatch(markup, /Split wide pages/);
+	assert.doesNotMatch(markup, /Stretch small pages/);
+	assert.doesNotMatch(markup, /aria-label="Tap zones"/);
+	assert.doesNotMatch(markup, /Page turn style/);
+	assert.doesNotMatch(markup, /reader__tz-preview/);
+});
+
+test('text-only chapters keep direction, animation, transition, background and typography controls', async () => {
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'paged', 'single', true);
+	assert.match(markup, /aria-label="Reading direction"/);
+	assert.match(markup, /aria-label="Page turn animation"/);
+	assert.match(markup, /aria-label="Chapter transition page"/);
+	assert.match(markup, /aria-label="Background"/);
+	assert.match(markup, /reader__typography/);
+	assert.match(markup, /aria-label="Font"/);
+});
+
+test('text-only chapter settings group titles drop the image-specific groups', async () => {
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'paged', 'single', true);
+	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
+	assert.deepEqual(titles, ['Reading mode', 'Page turning', 'Appearance', 'Typography']);
+});
+
+test('paged text columns switch colour on a light canvas', () => {
+	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8')
+		.replace(/\r\n/g, '\n');
+	assert.match(css, /\.reader-text--cols \{\n[^}]*color: #e6e6e9;/);
+	assert.match(css, /\.reader--bg-light \.reader-text--cols \{\n\tcolor: #1f2937;\n\}/);
 });

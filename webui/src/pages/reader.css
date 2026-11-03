@@ -493,7 +493,8 @@
 }
 
 /* Text pages in paged mode: split into viewport-wide columns, turned by horizontal translation.
-   The reader is fixed on a black background, so drop the card for light text here — dark text would be invisible in the light theme */
+   The card styling is dropped so the text paints directly on the reader canvas; the colour
+   must therefore follow the canvas background instead of the app theme. */
 .reader-text--cols {
 	height: 100%;
 	max-width: none;
@@ -506,6 +507,10 @@
 	column-gap: 48px;
 	color: #e6e6e9;
 	will-change: transform;
+}
+
+.reader--bg-light .reader-text--cols {
+	color: #1f2937;
 }
 
 .reader-text pre {
