@@ -6,6 +6,16 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A new option breaks every rule written for the value it replaces.** Code built
+while a setting had one fixed value often bakes that value in, and a comment saying
+so is the only trace. Making it configurable leaves those rules quietly wrong for the
+new values. When a fixed value becomes a choice, grep for the old value and for
+comments that state it, then render each place under every new choice.
+- Evidence: 2026-11-03, the paged text column painted light text straight on the
+  canvas, under a comment saying the reader is fixed on a black background. #522 had
+  added a light reader background on 2026-10-30, so text pages there showed white on
+  white until #609 switched the colour on `.reader--bg-light`.
+
 **With `box-sizing: border-box`, `aspect-ratio` sizes the padding too, so a gap
 put in padding comes out of the content.** The ratio applies to the box that
 `box-sizing` names, so a slot reserving an image's ratio with a top padding keeps
