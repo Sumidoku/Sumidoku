@@ -56,6 +56,7 @@ interface ReaderSettingsProps {
 	transition: boolean;
 	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
+	textOnly: boolean;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
 }
@@ -123,6 +124,7 @@ export function ReaderSettings({
 	transition,
 	onTransitionChange,
 	currentPage,
+	textOnly,
 	typography,
 	onTypographyChange
 }: ReaderSettingsProps) {
@@ -130,6 +132,7 @@ export function ReaderSettings({
 	const showTypography = pageText(currentPage) !== null;
 	const pagedOnly = mode !== 'paged';
 	const splitAvailable = layout === 'single';
+	const turningNote = pagedOnly ? t('reader.pagedOnly') : undefined;
 	return (
 		<div className="reader__settings card">
 			<SettingsGroup title={t('reader.readingMode')}>
@@ -144,40 +147,42 @@ export function ReaderSettings({
 					onChange={onModeChange}
 				/>
 			</SettingsGroup>
-			<SettingsGroup title={t('reader.groupPage')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
-				<OptionTiles
-					label={t('reader.layout')}
-					options={[
-						{ value: 'single', label: t('reader.layoutSingle'), icon: <Square size={18} /> },
-						{ value: 'double', label: t('reader.layoutDouble'), icon: <BookOpen size={18} /> },
-						{ value: 'doubleNoCover', label: t('reader.layoutDoubleNoCover'), icon: <BookOpen size={18} /> }
-					]}
-					value={layout}
-					onChange={onLayoutChange}
-				/>
-				<OptionTiles
-					label={t('reader.pageScale')}
-					options={[
-						{ value: 'screen', label: t('reader.scaleScreen'), icon: <Scan size={18} /> },
-						{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
-						{ value: 'widthShrink', label: t('reader.scaleWidthShrink'), icon: <Minimize2 size={18} /> },
-						{ value: 'height', label: t('reader.scaleHeight'), icon: <StretchVertical size={18} /> },
-						{ value: 'original', label: t('reader.scaleOriginal'), icon: <Frame size={18} /> }
-					]}
-					value={scale}
-					onChange={onScaleChange}
-				/>
-				<div className="reader__settings-card">
-					<SwitchRow
-						label={splitAvailable ? t('reader.splitWide') : t('reader.splitWideSingleOnly')}
-						checked={split}
-						onChange={onSplitChange}
-						disabled={!splitAvailable}
+			{!textOnly && (
+				<SettingsGroup title={t('reader.groupPage')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
+					<OptionTiles
+						label={t('reader.layout')}
+						options={[
+							{ value: 'single', label: t('reader.layoutSingle'), icon: <Square size={18} /> },
+							{ value: 'double', label: t('reader.layoutDouble'), icon: <BookOpen size={18} /> },
+							{ value: 'doubleNoCover', label: t('reader.layoutDoubleNoCover'), icon: <BookOpen size={18} /> }
+						]}
+						value={layout}
+						onChange={onLayoutChange}
 					/>
-					<SwitchRow label={t('reader.stretch')} checked={stretch} onChange={onStretchChange} />
-				</div>
-			</SettingsGroup>
-			<SettingsGroup title={t('reader.groupTurning')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
+					<OptionTiles
+						label={t('reader.pageScale')}
+						options={[
+							{ value: 'screen', label: t('reader.scaleScreen'), icon: <Scan size={18} /> },
+							{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
+							{ value: 'widthShrink', label: t('reader.scaleWidthShrink'), icon: <Minimize2 size={18} /> },
+							{ value: 'height', label: t('reader.scaleHeight'), icon: <StretchVertical size={18} /> },
+							{ value: 'original', label: t('reader.scaleOriginal'), icon: <Frame size={18} /> }
+						]}
+						value={scale}
+						onChange={onScaleChange}
+					/>
+					<div className="reader__settings-card">
+						<SwitchRow
+							label={splitAvailable ? t('reader.splitWide') : t('reader.splitWideSingleOnly')}
+							checked={split}
+							onChange={onSplitChange}
+							disabled={!splitAvailable}
+						/>
+						<SwitchRow label={t('reader.stretch')} checked={stretch} onChange={onStretchChange} />
+					</div>
+				</SettingsGroup>
+			)}
+			<SettingsGroup title={t('reader.groupTurning')} note={turningNote}>
 				<OptionTiles
 					label={t('reader.direction')}
 					options={[
@@ -188,26 +193,28 @@ export function ReaderSettings({
 					onChange={onDirChange}
 					columns={2}
 				/>
-				<div>
-					<OptionTiles
-						label={t('reader.tapZones')}
-						options={(['lr', 'rl', 'edge', 'kindle', 'off'] as TapZoneLayout[]).map((value) => ({
-							value,
-							label: t(`reader.tz${value[0].toUpperCase()}${value.slice(1)}`),
-							preview: <TapZonePreview layout={value} dir={dir} />
-						}))}
-						value={tapZones}
-						onChange={onTapZonesChange}
-					/>
-					<div className="reader__tz-legend">
-						{(['prev', 'next', 'menu'] as ZoneAction[]).map((action) => (
-							<span key={action}><svg className="reader__tz-swatch" viewBox="0 0 1 1" aria-hidden><rect width={1} height={1} className={`reader__tz-fill--${action}`} /></svg>{t(`reader.tzAction.${action}`)}</span>
-						))}
+				{!textOnly && (
+					<div>
+						<OptionTiles
+							label={t('reader.tapZones')}
+							options={(['lr', 'rl', 'edge', 'kindle', 'off'] as TapZoneLayout[]).map((value) => ({
+								value,
+								label: t(`reader.tz${value[0].toUpperCase()}${value.slice(1)}`),
+								preview: <TapZonePreview layout={value} dir={dir} />
+							}))}
+							value={tapZones}
+							onChange={onTapZonesChange}
+						/>
+						<div className="reader__tz-legend">
+							{(['prev', 'next', 'menu'] as ZoneAction[]).map((action) => (
+								<span key={action}><svg className="reader__tz-swatch" viewBox="0 0 1 1" aria-hidden><rect width={1} height={1} className={`reader__tz-fill--${action}`} /></svg>{t(`reader.tzAction.${action}`)}</span>
+							))}
+						</div>
 					</div>
-				</div>
+				)}
 				<div className="reader__settings-card">
 					<SwitchRow label={t('reader.animations')} checked={anim} onChange={onAnimChange} />
-					{anim && (
+					{!textOnly && anim && (
 						<div className="reader__turn-style">
 							<span>{t('reader.pageTurn')}</span>
 							<OptionTiles

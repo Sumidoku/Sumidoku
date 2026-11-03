@@ -2201,13 +2201,18 @@ app theme, keeps the reading-mode switch that was previously in the toolbar, and
 renders those tap layouts as 1:1.414 previews through a small grid sampled from
 the same resolver (`reader/TapZonePreview.tsx`), so a preview cannot drift from
 the actual tap action. Its legend paints SVG swatches rather than applying
-SVG's `fill` to elements with no SVG fill geometry. The reader canvas background
+SVG's `fill` to elements with no SVG fill geometry. For text-only chapters the
+panel hides image-specific options (page layout, scale, split, stretch, tap zones
+and page-turn style), leaving reading mode, direction, animation, transition,
+background and typography controls. The reader canvas background
 (`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
 canvas. `auto` is not a class: it resolves through `useResolvedTheme()` so the
 canvas follows the app theme (dark under a dark theme, white under light),
-reacting live to theme and system preference changes. Fullscreen uses the Fullscreen API on the reader root so the fixed
+reacting live to theme and system preference changes. Paged text columns drop
+their card background and paint directly on the canvas, so their colour switches
+with the canvas background to stay legible on white. Fullscreen uses the Fullscreen API on the reader root so the fixed
 toolbar and settings card move into the fullscreen subtree; the toggle hides
 when the API is unavailable (iOS Safari) and Esc exits fullscreen ahead of the
 reader's own Esc chain.
