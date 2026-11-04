@@ -15,7 +15,16 @@ import {
 	StretchVertical
 } from 'lucide-react';
 import type { Page } from '../../api/types';
-import { Select, Switch } from '../../components';
+import { Button, Select, Switch } from '../../components';
+import {
+	BLEND_MODES,
+	DEFAULT_FILTERS,
+	FILTER_LIMITS,
+	hasActiveFilters,
+	RGBA_ALPHA_LIMIT,
+	RGBA_CHANNEL_LIMIT
+} from './filters';
+import type { BlendMode, FilterLevel, FilterLimit, ReaderFilters } from './filters';
 import { FONT_SIZE_LIMITS, LINE_HEIGHT_LIMITS } from './typography';
 import type { ReaderFont, ReaderTypography } from './typography';
 import { pageText } from './pageText';
@@ -59,6 +68,8 @@ interface ReaderSettingsProps {
 	textOnly: boolean;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
+	filters: ReaderFilters;
+	onFiltersChange: (filters: ReaderFilters) => void;
 }
 
 function SettingsGroup({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
@@ -94,6 +105,42 @@ function SwitchRow({
 	);
 }
 
+// One numeric filter (brightness etc.): a switch, with its slider indented
+// underneath while enabled — Suwayomi's checkbox+slider pair
+function FilterSlider({
+	label,
+	limit,
+	level,
+	format,
+	onChange
+}: {
+	label: string;
+	limit: FilterLimit;
+	level: FilterLevel;
+	format: (value: number) => string;
+	onChange: (level: FilterLevel) => void;
+}) {
+	return (
+		<div className="reader__filter">
+			<SwitchRow label={label} checked={level.enabled} onChange={(enabled) => onChange({ ...level, enabled })} />
+			{level.enabled && (
+				<label className="reader__filter-slider">
+					<input
+						type="range"
+						aria-label={label}
+						min={limit.min}
+						max={limit.max}
+						step={limit.step}
+						value={level.value}
+						onChange={(e) => onChange({ ...level, value: Number(e.currentTarget.value) })}
+					/>
+					<output>{format(level.value)}</output>
+				</label>
+			)}
+		</div>
+	);
+}
+
 export function ReaderSettings({
 	mode,
 	onModeChange,
@@ -126,7 +173,9 @@ export function ReaderSettings({
 	currentPage,
 	textOnly,
 	typography,
-	onTypographyChange
+	onTypographyChange,
+	filters,
+	onFiltersChange
 }: ReaderSettingsProps) {
 	const { t } = useTranslation();
 	const showTypography = pageText(currentPage) !== null;
@@ -275,6 +324,126 @@ export function ReaderSettings({
 					))}
 				</div>
 			</SettingsGroup>
+			{!textOnly && (
+				<SettingsGroup title={t('reader.groupFilters')}>
+					<div className="reader__settings-card">
+						<FilterSlider
+							label={t('reader.filterBrightness')}
+							limit={FILTER_LIMITS.brightness}
+							level={filters.brightness}
+							format={(v) => `${v}%`}
+							onChange={(level) => onFiltersChange({ ...filters, brightness: level })}
+						/>
+						<FilterSlider
+							label={t('reader.filterContrast')}
+							limit={FILTER_LIMITS.contrast}
+							level={filters.contrast}
+							format={(v) => `${v}%`}
+							onChange={(level) => onFiltersChange({ ...filters, contrast: level })}
+						/>
+						<FilterSlider
+							label={t('reader.filterSaturate')}
+							limit={FILTER_LIMITS.saturate}
+							level={filters.saturate}
+							format={(v) => `${v}%`}
+							onChange={(level) => onFiltersChange({ ...filters, saturate: level })}
+						/>
+						<FilterSlider
+							label={t('reader.filterHue')}
+							limit={FILTER_LIMITS.hue}
+							level={filters.hue}
+							format={(v) => `${v}°`}
+							onChange={(level) => onFiltersChange({ ...filters, hue: level })}
+						/>
+						<SwitchRow
+							label={t('reader.filterSepia')}
+							checked={filters.sepia}
+							onChange={(sepia) => onFiltersChange({ ...filters, sepia })}
+						/>
+						<SwitchRow
+							label={t('reader.filterGrayscale')}
+							checked={filters.grayscale}
+							onChange={(grayscale) => onFiltersChange({ ...filters, grayscale })}
+						/>
+						<SwitchRow
+							label={t('reader.filterInvert')}
+							checked={filters.invert}
+							onChange={(invert) => onFiltersChange({ ...filters, invert })}
+						/>
+						<div className="reader__filter">
+							<SwitchRow
+								label={t('reader.filterTint')}
+								checked={filters.rgba.enabled}
+								onChange={(enabled) => onFiltersChange({ ...filters, rgba: { ...filters.rgba, enabled } })}
+							/>
+							{filters.rgba.enabled && (
+								<>
+									{(['red', 'green', 'blue'] as const).map((channel) => (
+										<label key={channel} className="reader__filter-slider">
+											<input
+												type="range"
+												aria-label={t(`reader.filterChannel.${channel}`)}
+												min={RGBA_CHANNEL_LIMIT.min}
+												max={RGBA_CHANNEL_LIMIT.max}
+												step={RGBA_CHANNEL_LIMIT.step}
+												value={filters.rgba[channel]}
+												onChange={(e) =>
+													onFiltersChange({
+														...filters,
+														rgba: { ...filters.rgba, [channel]: Number(e.currentTarget.value) }
+													})
+												}
+											/>
+											<output>
+												{t(`reader.filterChannel.${channel}`)} {filters.rgba[channel]}
+											</output>
+										</label>
+									))}
+									<label className="reader__filter-slider">
+										<input
+											type="range"
+											aria-label={t('reader.filterChannel.alpha')}
+											min={RGBA_ALPHA_LIMIT.min}
+											max={RGBA_ALPHA_LIMIT.max}
+											step={RGBA_ALPHA_LIMIT.step}
+											value={filters.rgba.alpha}
+											onChange={(e) =>
+												onFiltersChange({
+													...filters,
+													rgba: { ...filters.rgba, alpha: Number(e.currentTarget.value) }
+												})
+											}
+										/>
+										<output>{filters.rgba.alpha}%</output>
+									</label>
+									<div className="reader__settings-row">
+										<span>{t('reader.filterBlendMode')}</span>
+										<Select
+											aria-label={t('reader.filterBlendMode')}
+											value={filters.rgba.blendMode}
+											onChange={(value) =>
+												onFiltersChange({ ...filters, rgba: { ...filters.rgba, blendMode: value as BlendMode } })
+											}
+										>
+											{BLEND_MODES.map((blendMode) => (
+												<option key={blendMode} value={blendMode}>
+													{t(`reader.filterBlend.${blendMode}`)}
+												</option>
+											))}
+										</Select>
+									</div>
+								</>
+							)}
+						</div>
+						<div className="reader__settings-row">
+							<span>{t('reader.filterReset')}</span>
+							<Button size="sm" onClick={() => onFiltersChange(DEFAULT_FILTERS)} disabled={!hasActiveFilters(filters)}>
+								{t('reader.filterResetAction')}
+							</Button>
+						</div>
+					</div>
+				</SettingsGroup>
+			)}
 			{showTypography && (
 				<SettingsGroup title={t('reader.typography')}>
 					<div className="reader__typography">
