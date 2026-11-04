@@ -2247,6 +2247,23 @@ builder's wide-page rule (strictly wider than tall) and the same measured-dims
 pipeline, so unknown-dimension pages render whole until `recordMeasured` proves
 them landscape and the halves appear without moving the current page.
 
+Custom image filters (`sumidoku.reader.filters` + `.filters.<id>`, after
+Suwayomi's ReaderCustomFilter, `reader/filters.ts`) adjust page rendering
+client-side: brightness/contrast/saturate/hue sliders, sepia/grayscale/invert
+toggles and an RGBA blend-mode tint. `buildFilterString` folds the enabled
+entries into one CSS `filter` list carried on the reader root as
+`--reader-filter`, and both image paths (`.reader__img` and
+`.reader__pg > img`) read the variable, so paged and continuous stay in sync
+without per-call-site props; text pages are deliberately excluded. The tint
+is not a filter entry but a fixed overlay (`.reader__tint`, Suwayomi's
+ReaderRGBAFilter) stacked above the pages and their retry overlay yet below
+the toolbar chrome (z-index 60), so a tint never dims the controls. Unlike
+Suwayomi the AUTO canvas background is not re-filtered (Sumidoku has no
+page-colour extraction) and filters take per-manga overrides like the other
+reader keys. `parseFilters` clamps into the documented ranges and rejects
+malformed values and unknown blend modes, so a hand-edited localStorage
+entry can never inject an arbitrary `filter` string.
+
 ## Known gaps
 
 ### Source login: OAuth callback capture
