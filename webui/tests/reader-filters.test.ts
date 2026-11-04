@@ -217,7 +217,9 @@ test('the reader root carries the filter variable, the tint overlay and the stor
 	const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8');
 	assert.match(source, /'--reader-filter': filterString/);
 	assert.match(source, /buildTintStyle\(filters\)/);
-	assert.match(source, /className="reader__tint"/);
+	// The tint must stay unmounted in text-only chapters: the controls are hidden
+	// there, so a stored tint would otherwise cover the text with no way to turn it off
+	assert.match(source, /\{!textOnly && tintStyle !== null && <div className="reader__tint"/);
 	assert.match(source, /'sumidoku\.reader\.filters'/);
 	assert.match(source, /sumidoku\.reader\.filters\.\$\{mangaId\}/);
 });

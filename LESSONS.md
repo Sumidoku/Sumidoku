@@ -6,6 +6,15 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Source-reading tests must normalise CRLF before matching multi-line
+needles.** A needle containing `\n` never matches a CRLF checkout, so a test
+that passes on CI (LF) fails on a Windows clone with `core.autocrlf`. Read
+with `.replace(/\r\n/g, '\n')` before matching — the convention
+`reader-settings.test.ts` and `trackers.test.ts` already follow.
+- Evidence: 2026-11-05, #611: `reader-zone-focus.test.ts` (an 8-tab needle)
+  and `reader-continuous.test.ts` (a reader.css needle) failed locally while
+  CI stayed green; both now normalise.
+
 **A new option breaks every rule written for the value it replaces.** Code built
 while a setting had one fixed value often bakes that value in, and a comment saying
 so is the only trace. Making it configurable leaves those rules quietly wrong for the
@@ -753,6 +762,10 @@ assertions language-independent.
 - Evidence: 2026-10-24, internal-source work (#257): source-card-mobile and
   sidebar-layout tests failed on a zh-CN workstation with Chinese labels
   while CI was green; both now force English.
+- Seen again: 2026-11-05, #611: `i18n.test.ts`'s ten-locales test asserted
+  `lng === 'en'`, but `detectLanguage()` resolved `zh-CN` from Node's
+  `navigator.language` on a zh-CN host; the test now pins the language with
+  `Object.defineProperty` around the module load.
 
 **Dynamic fallbacks must treat an empty string as absent, not only null or
 undefined.** Content APIs can legitimately return `""`, and `??` preserves it,
@@ -1637,19 +1650,3 @@ reference and what each one pins down.
   day with "refer to kmrs for re-improvement" — the kmrs clone sat in
   `~/src` unread while the implementations guessed at field mappings and
   profile detection that kmrs already pins down.
-
-**Webui tests that read source files must normalise CRLF and pin the
-detected language — the local checkout is CRLF and Node's navigator follows
-the OS locale.** A needle containing `\n` never matches a CRLF file, and
-`detectLanguage()` resolves `zh-CN` on a Chinese Windows box, so tests that
-pass on CI (LF, en-US) fail locally. Read with
-`.replace(/\r\n/g, '\n')` before matching multi-line text, and stub
-`globalThis.navigator`/`localStorage` with `Object.defineProperty` (restore
-in `finally`) before `ssrLoadModule('/src/i18n')` — the pattern already
-exists in `i18n.test.ts`'s regional-language test.
-- Evidence: 2026-11-05, feat/reader-filters: the first full local
-  `npm test` run failed in `reader-zone-focus.test.ts` (8-tab needle vs
-  CRLF), `reader-continuous.test.ts` (same, reader.css) and
-  `i18n.test.ts`'s ten-locales test (`lng` resolved `zh-CN`), all while CI
-  stayed green; `reader-settings.test.ts`, `trackers.test.ts` and
-  `api-types.test.ts` already normalised and never failed.

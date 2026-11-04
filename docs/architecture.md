@@ -2257,7 +2257,9 @@ entries into one CSS `filter` list carried on the reader root as
 without per-call-site props; text pages are deliberately excluded. The tint
 is not a filter entry but a fixed overlay (`.reader__tint`, Suwayomi's
 ReaderRGBAFilter) stacked above the pages and their retry overlay yet below
-the toolbar chrome (z-index 60), so a tint never dims the controls. Unlike
+the toolbar chrome (z-index 60), so a tint never dims the controls, and it
+stays unmounted in text-only chapters, matching the hidden filter controls —
+a stored tint would otherwise cover text it cannot be switched off from. Unlike
 Suwayomi the AUTO canvas background is not re-filtered (Sumidoku has no
 page-colour extraction) and filters take per-manga overrides like the other
 reader keys. `parseFilters` clamps into the documented ranges and rejects

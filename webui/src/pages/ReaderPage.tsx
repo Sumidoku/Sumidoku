@@ -1766,7 +1766,9 @@ function ReaderCore({
 				</div>
 			)}
 
-			{tintStyle !== null && <div className="reader__tint" style={tintStyle} aria-hidden="true" />}
+			{/* Text-only chapters hide the filter controls, so the tint must not
+			    paint there either — a stored tint would otherwise be unturnable-off */}
+			{!textOnly && tintStyle !== null && <div className="reader__tint" style={tintStyle} aria-hidden="true" />}
 
 			<div className={barCls('reader__bar reader__bar--top')}>
 				<IconButton label={t('reader.back')} onClick={goBack}>
