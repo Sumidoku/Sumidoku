@@ -173,7 +173,7 @@ test('toggles use the shared switch', async () => {
 test('groups separate page, turning and appearance settings', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
 	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
-	assert.deepEqual(titles, ['Reading mode', 'Page', 'Page turning', 'Appearance', 'Filters']);
+	assert.deepEqual(titles, ['Reading mode', 'Page', 'Page turning', 'Filters', 'Appearance']);
 	for (const label of ['Page layout', 'Reading direction', 'Background']) {
 		assert.match(markup, new RegExp(`role="group" aria-label="${label}"`));
 	}

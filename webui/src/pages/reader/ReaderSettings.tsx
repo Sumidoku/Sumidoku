@@ -307,23 +307,6 @@ export function ReaderSettings({
 					</div>
 				</SettingsGroup>
 			)}
-			<SettingsGroup title={t('reader.groupAppearance')}>
-				<div className="reader__backgrounds" role="group" aria-label={t('reader.background')}>
-					{(['auto', 'dark', 'gray', 'light'] as ReaderBackground[]).map((value) => (
-						<button
-							type="button"
-							key={value}
-							className={value === bg ? `reader__background reader__background--${value} reader__background--selected` : `reader__background reader__background--${value}`}
-							aria-label={t(`reader.bg${value[0].toUpperCase()}${value.slice(1)}`)}
-							aria-pressed={value === bg}
-							title={t(`reader.bg${value[0].toUpperCase()}${value.slice(1)}`)}
-							onClick={() => onBgChange(value)}
-						>
-							{value === 'auto' && <Contrast size={24} />}
-						</button>
-					))}
-				</div>
-			</SettingsGroup>
 			{!textOnly && (
 				<SettingsGroup title={t('reader.groupFilters')}>
 					<div className="reader__settings-card">
@@ -444,6 +427,23 @@ export function ReaderSettings({
 					</div>
 				</SettingsGroup>
 			)}
+			<SettingsGroup title={t('reader.groupAppearance')}>
+				<div className="reader__backgrounds" role="group" aria-label={t('reader.background')}>
+					{(['auto', 'dark', 'gray', 'light'] as ReaderBackground[]).map((value) => (
+						<button
+							type="button"
+							key={value}
+							className={value === bg ? `reader__background reader__background--${value} reader__background--selected` : `reader__background reader__background--${value}`}
+							aria-label={t(`reader.bg${value[0].toUpperCase()}${value.slice(1)}`)}
+							aria-pressed={value === bg}
+							title={t(`reader.bg${value[0].toUpperCase()}${value.slice(1)}`)}
+							onClick={() => onBgChange(value)}
+						>
+							{value === 'auto' && <Contrast size={24} />}
+						</button>
+					))}
+				</div>
+			</SettingsGroup>
 			{showTypography && (
 				<SettingsGroup title={t('reader.typography')}>
 					<div className="reader__typography">
