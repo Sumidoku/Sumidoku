@@ -52,6 +52,13 @@ test('all ten locales are registered and English is the fallback', async () => {
 		appType: 'custom',
 		server: { middlewareMode: true }
 	});
+	// Pin the detected language: detection reads navigator.language, which follows
+	// the OS locale under Node and would otherwise leak the host language in
+	const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+	Object.defineProperty(globalThis, 'navigator', {
+		configurable: true,
+		value: { language: 'en-US' }
+	});
 	try {
 		const i18n = (await vite.ssrLoadModule('/src/i18n')).default;
 		for (const lang of LOCALES) assert.ok(i18n.hasResourceBundle(lang, 'translation'), lang);
@@ -62,6 +69,8 @@ test('all ten locales are registered and English is the fallback', async () => {
 		assert.equal(i18n.getFixedT('ru')('settings.groupWithCount', { name: 'Группа', count: 5 }), 'Группа (5 произведений)');
 		assert.equal(i18n.getFixedT('ja')('format.minutesAgo', { count: 1 }), '1分前');
 	} finally {
+		if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
+		else Reflect.deleteProperty(globalThis, 'navigator');
 		await vite.close();
 	}
 });

@@ -22,7 +22,8 @@ async function loadSpreads() {
 test('an image page without dimensions reserves a viewport-tall box', async () => {
 	const { continuousPageClass } = await loadSpreads();
 	assert.equal(continuousPageClass(true, null), 'reader__pg reader__pg--unsized');
-	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8');
+	// Normalise line endings: a CRLF checkout would otherwise miss the \n in the needle
+	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 	assert.match(css, /\.reader__pg--unsized,\n\.reader__pg--unsized \.reader__img--loading \{\n\tmin-height: 100dvh;/);
 });
 
