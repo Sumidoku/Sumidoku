@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
-import { ArrowLeft, ArrowRight, Ellipsis, Search, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Search, TriangleAlert } from 'lucide-react';
 import { coverUrl } from '../../api/client';
 import { migrateLookup, useLibrary, useMigrate, useMigrateSources } from '../../api/hooks';
 import type { LibraryEntry, MigrateMode, MigrateResult, SearchManga } from '../../api/types';
@@ -12,6 +12,7 @@ import {
 	Cover,
 	EmptyState,
 	Input,
+	MenuButton,
 	Modal,
 	PageHeader,
 	Skeleton,
@@ -398,18 +399,17 @@ export default function MigratePage() {
 
 function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () => void }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(false);
+	// MenuButton portals the popover with a measured viewport flip, so the last row's menu
+	// never crosses the screen edge; outside presses and Escape close it like every other menu
 	return (
-		<span className="migrate-row__menu">
-			<button type="button" className="migrate-row__menu-btn" title={t('migrate.moreActions')} onClick={() => setOpen((v) => !v)}>
-				<Ellipsis size={16} />
-			</button>
-			{open && (
-				<span className="migrate-row__menu-pop card">
+		<MenuButton label={t('migrate.moreActions')}>
+			{(close) => (
+				<>
 					<button
 						type="button"
+						className="menu-row"
 						onClick={() => {
-							setOpen(false);
+							close();
 							onRematch();
 						}}
 					>
@@ -417,16 +417,17 @@ function RowMenu({ onRematch, onRemove }: { onRematch: () => void; onRemove: () 
 					</button>
 					<button
 						type="button"
+						className="menu-row"
 						onClick={() => {
-							setOpen(false);
+							close();
 							onRemove();
 						}}
 					>
 						{t('migrate.skipEntry')}
 					</button>
-				</span>
+				</>
 			)}
-		</span>
+		</MenuButton>
 	);
 }
 
