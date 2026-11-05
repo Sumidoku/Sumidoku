@@ -24,6 +24,7 @@ export type { InputProps } from './Input';
 export { Modal } from './Modal';
 export type { ModalProps } from './Modal';
 export { MenuButton, menuViewportWidth, useMenuInViewport } from './MenuButton';
+export type { MenuViewportPosition } from './MenuButton';
 export { PageHeader } from './PageHeader';
 export { ProgressBar } from './ProgressBar';
 export type { ProgressBarProps } from './ProgressBar';

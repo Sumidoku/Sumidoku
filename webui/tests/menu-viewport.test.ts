@@ -38,9 +38,37 @@ test('a menu that fits keeps its right edge on the anchor', async () => {
 });
 
 test('every anchored menu goes through the viewport clamp', () => {
-	for (const path of ['../src/components/MenuButton.tsx', '../src/pages/manga/MoreMenu.tsx']) {
+	for (const path of ['../src/components/MenuButton.tsx', '../src/pages/manga/MoreMenu.tsx', '../src/layout/LanguageMenu.tsx']) {
 		const source = readFileSync(new URL(path, import.meta.url), 'utf8');
-		assert.match(source, /useMenuInViewport\(open, popRef, setPos\);/, path);
+		assert.match(source, /useMenuInViewport\(open, btnRef, popRef, setPos/, path);
+	}
+});
+
+test('the language menu measures its height instead of guessing', () => {
+	// A hardcoded height estimate silently overflows the day the language list outgrows it (#619)
+	const source = readFileSync(new URL('../src/layout/LanguageMenu.tsx', import.meta.url), 'utf8');
+	assert.doesNotMatch(source, /\b\d{3,}\b(?=\s*[>*+])/);
+	assert.doesNotMatch(source, /window\.innerHeight/);
+});
+
+test('the migrate row menu goes through MenuButton', () => {
+	// The inline absolute popover had no flip, no portal and no outside-dismiss
+	const page = readFileSync(new URL('../src/pages/migrate/MigratePage.tsx', import.meta.url), 'utf8');
+	assert.match(page, /<MenuButton label=\{t\('migrate\.moreActions'\)\}>/);
+	assert.doesNotMatch(page, /migrate-row__menu/);
+	const styles = readFileSync(new URL('../src/pages/migrate/migrate.css', import.meta.url), 'utf8');
+	assert.doesNotMatch(styles, /migrate-row__menu/);
+});
+
+test('a clamped menu scrolls instead of crossing the screen edge', () => {
+	// The flip alone leaves a menu taller than its side of the viewport cut off; the position
+	// clamp caps max-height and the stylesheet makes the menu scroll (#619)
+	for (const [path, selector] of [
+		['../src/components/components.css', '.menu-pop'],
+		['../src/pages/manga.css', '.manga-menu__pop']
+	] as const) {
+		const source = readFileSync(new URL(path, import.meta.url), 'utf8');
+		assert.match(source, new RegExp(`\\${selector} \\{[^}]*overflow-y: auto;`), path);
 	}
 });
 

@@ -3,25 +3,22 @@ import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { MoreVertical } from 'lucide-react';
-import { IconButton, menuViewportWidth, useMenuInViewport } from '../../components';
+import { IconButton, useMenuInViewport } from '../../components';
+import type { MenuViewportPosition } from '../../components';
 
 // The popover goes through a portal: the hero container is overflow:hidden, so absolute positioning would be clipped
 export function MoreMenu({ children }: { children: (close: () => void) => ReactNode }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+	const [pos, setPos] = useState<MenuViewportPosition | null>(null);
 	const btnRef = useRef<HTMLDivElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 
 	function toggle() {
-		if (!open && btnRef.current) {
-			const r = btnRef.current.getBoundingClientRect();
-			setPos({ top: r.bottom + 6, right: menuViewportWidth() - r.right });
-		}
 		setOpen((v) => !v);
 	}
 
-	useMenuInViewport(open, popRef, setPos);
+	useMenuInViewport(open, btnRef, popRef, setPos);
 
 	useEffect(() => {
 		if (!open) return;
@@ -46,14 +43,10 @@ export function MoreMenu({ children }: { children: (close: () => void) => ReactN
 			<IconButton label={t('moreMenu.label')} onClick={toggle}>
 				<MoreVertical size={17} />
 			</IconButton>
+			{/* Hidden until measured, same as MenuButton: the position effect runs before paint */}
 			{open &&
-				pos &&
 				createPortal(
-					<div
-						className="manga-menu__pop card"
-						ref={popRef}
-						style={{ top: pos.top, right: pos.right }}
-					>
+					<div className="manga-menu__pop card" ref={popRef} style={pos ?? { visibility: 'hidden' }}>
 						{children(() => setOpen(false))}
 					</div>,
 					document.body

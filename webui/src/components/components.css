@@ -1102,6 +1102,9 @@
 	gap: 2px;
 	min-width: 180px;
 	padding: 4px;
+	/* The position clamp caps max-height at the room left in the viewport; the menu scrolls
+		rather than crossing the screen edge */
+	overflow-y: auto;
 }
 
 .menu-row {

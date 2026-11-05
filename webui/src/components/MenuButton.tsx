@@ -3,13 +3,22 @@ import type { Dispatch, ReactNode, RefObject, SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 import { MoreVertical } from 'lucide-react';
 import { IconButton } from './IconButton';
+import { placeMenuVertical } from './selectModel';
 
 interface MenuButtonProps {
 	label: string;
 	disabled?: boolean;
+	/** Preferred side of the anchor; the menu flips when only the other side has room */
 	placement?: 'bottom' | 'top';
 	/** Entries render through a close callback so an action can dismiss the popover */
 	children: (close: () => void) => ReactNode;
+}
+
+/** Fixed-position offsets for a portaled menu, measured against the viewport */
+export interface MenuViewportPosition {
+	top: number;
+	right: number;
+	maxHeight: number;
 }
 
 export function handleMenuToggle(event: { stopPropagation: () => void }, toggle: () => void): void {
@@ -19,18 +28,6 @@ export function handleMenuToggle(event: { stopPropagation: () => void }, toggle:
 
 export function isMenuPopupVisible(open: boolean, disabled: boolean): boolean {
 	return open && !disabled;
-}
-
-export function menuPosition(
-	anchor: Pick<DOMRect, 'top' | 'bottom' | 'right'>,
-	placement: 'bottom' | 'top',
-	viewportHeight: number,
-	viewportWidth: number
-): { top: number; right: number } | { bottom: number; right: number } {
-	const right = viewportWidth - anchor.right;
-	return placement === 'top'
-		? { bottom: viewportHeight - anchor.top + 6, right }
-		: { top: anchor.bottom + 6, right };
 }
 
 const MENU_EDGE = 8;
@@ -45,39 +42,43 @@ export function clampMenuRight(right: number, menuWidth: number, viewportWidth: 
 	return Math.max(MENU_EDGE, Math.min(right, viewportWidth - menuWidth - MENU_EDGE));
 }
 
-// Runs before paint: only the rendered menu knows its width, and an anchor near the middle of a phone
-// screen (the manga hero's actions) leaves less room to its left than the menu needs.
-export function useMenuInViewport<P extends { right: number }>(
+// Runs before paint: only the rendered menu knows its size, and an anchor near an edge of the
+// screen (the last row of a list) can leave less room on the preferred side than the menu needs.
+export function useMenuInViewport(
 	open: boolean,
+	anchorRef: RefObject<HTMLElement | null>,
 	popRef: RefObject<HTMLElement | null>,
-	setPos: Dispatch<SetStateAction<P | null>>
+	setPos: Dispatch<SetStateAction<MenuViewportPosition | null>>,
+	placement: 'bottom' | 'top' = 'bottom'
 ): void {
 	useLayoutEffect(() => {
-		const pop = popRef.current;
-		if (!open || !pop) return;
-		const width = pop.getBoundingClientRect().width;
-		setPos((pos) => pos && { ...pos, right: clampMenuRight(pos.right, width, menuViewportWidth()) });
-	}, [open, popRef, setPos]);
+		const anchor = anchorRef.current?.getBoundingClientRect();
+		const pop = popRef.current?.getBoundingClientRect();
+		if (!open || !anchor || !pop) return;
+		const width = menuViewportWidth();
+		const vertical = placeMenuVertical(anchor, pop.height, window.innerHeight, placement);
+		setPos({
+			top: vertical.top,
+			right: clampMenuRight(width - anchor.right, pop.width, width),
+			maxHeight: vertical.maxHeight
+		});
+	}, [open, anchorRef, popRef, setPos, placement]);
 }
 
 // Anchored dropdown for row-level action menus (chapter rows, list items). The popover goes through a
 // portal because row containers commonly clip absolute positioning; same pattern as the manga page's MoreMenu.
 export function MenuButton({ label, disabled = false, placement = 'bottom', children }: MenuButtonProps) {
 	const [open, setOpen] = useState(false);
-	const [pos, setPos] = useState<{ top: number; right: number } | { bottom: number; right: number } | null>(null);
+	const [pos, setPos] = useState<MenuViewportPosition | null>(null);
 	const btnRef = useRef<HTMLDivElement>(null);
 	const popRef = useRef<HTMLDivElement>(null);
 
 	function toggle() {
 		if (disabled) return;
-		if (!open && btnRef.current) {
-			const r = btnRef.current.getBoundingClientRect();
-			setPos(menuPosition(r, placement, window.innerHeight, menuViewportWidth()));
-		}
 		setOpen((v) => !v);
 	}
 
-	useMenuInViewport(open, popRef, setPos);
+	useMenuInViewport(open, btnRef, popRef, setPos, placement);
 
 	useEffect(() => {
 		if (disabled) setOpen(false);
@@ -106,10 +107,16 @@ export function MenuButton({ label, disabled = false, placement = 'bottom', chil
 			<IconButton label={label} disabled={disabled} onClick={(event) => handleMenuToggle(event, toggle)}>
 				<MoreVertical size={16} />
 			</IconButton>
+			{/* Renders hidden until measured: the position effect runs before paint, so the menu
+				never flashes at the wrong spot */}
 			{isMenuPopupVisible(open, disabled) &&
-				pos &&
 				createPortal(
-					<div className="menu-pop card" ref={popRef} style={pos} onClick={(event) => event.stopPropagation()}>
+					<div
+						className="menu-pop card"
+						ref={popRef}
+						style={pos ?? { visibility: 'hidden' }}
+						onClick={(event) => event.stopPropagation()}
+					>
 						{children(() => setOpen(false))}
 					</div>,
 					document.body

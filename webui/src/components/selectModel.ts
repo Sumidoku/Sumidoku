@@ -52,19 +52,33 @@ const GAP = 4;
 const EDGE = 8;
 const MAX_HEIGHT = 260;
 
+/** Vertical half of menu placement: the preferred side unless the menu fits only on the other
+ * side, with the height clamped inside the viewport so the menu never crosses a screen edge */
+export function placeMenuVertical(
+	anchor: { top: number; bottom: number },
+	menuHeight: number,
+	viewportHeight: number,
+	preferred: 'bottom' | 'top' = 'bottom'
+): { top: number; maxHeight: number } {
+	const below = viewportHeight - anchor.bottom - GAP - EDGE;
+	const above = anchor.top - GAP - EDGE;
+	// A side that cannot hold the menu flips only when the other side has more room
+	const flips = preferred === 'top' ? menuHeight > above && below > above : menuHeight > below && above > below;
+	const up = preferred === 'top' ? !flips : flips;
+	const maxHeight = Math.max(Math.min(up ? above : below, MAX_HEIGHT), 0);
+	const height = Math.min(menuHeight, maxHeight);
+	return { top: up ? anchor.top - GAP - height : anchor.bottom + GAP, maxHeight };
+}
+
 /** Below the anchor unless only the space above fits; always clamped inside the viewport */
 export function placeMenu(
 	anchor: { top: number; bottom: number; left: number },
 	menu: { width: number; height: number },
 	viewport: { width: number; height: number }
 ): MenuPlacement {
-	const below = viewport.height - anchor.bottom - GAP - EDGE;
-	const above = anchor.top - GAP - EDGE;
-	const up = menu.height > below && above > below;
-	const maxHeight = Math.max(Math.min(up ? above : below, MAX_HEIGHT), 0);
-	const height = Math.min(menu.height, maxHeight);
+	const { top, maxHeight } = placeMenuVertical(anchor, menu.height, viewport.height);
 	return {
-		top: up ? anchor.top - GAP - height : anchor.bottom + GAP,
+		top,
 		left: Math.max(EDGE, Math.min(anchor.left, viewport.width - menu.width - EDGE)),
 		maxHeight
 	};
