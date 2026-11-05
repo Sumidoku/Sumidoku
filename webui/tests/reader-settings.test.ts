@@ -17,7 +17,8 @@ async function renderSettings(
 	currentPage: Page | null,
 	mode: 'paged' | 'continuous' = 'paged',
 	layout: 'single' | 'double' = 'single',
-	textOnly = false
+	textOnly = false,
+	textChapter = textOnly
 ): Promise<string> {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
@@ -65,6 +66,7 @@ async function renderSettings(
 					onTransitionChange: () => {},
 					currentPage,
 					textOnly,
+					textChapter,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {},
 					filters: DEFAULT_FILTERS,
@@ -223,6 +225,14 @@ test('text-only chapter settings group titles drop the image-specific groups', a
 
 test('text-only chapters drop the webtoon reading mode', async () => {
 	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'paged', 'single', true);
+	assert.match(markup, />Paged</);
+	assert.match(markup, />Scroll</);
+	assert.doesNotMatch(markup, />Webtoon</);
+});
+
+test('text chapters keep webtoon out of the mode tiles in scroll mode too', async () => {
+	// ReaderPage only sets textOnly in paged mode, so a scrolling text chapter passes textOnly=false
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'continuous', 'single', false, true);
 	assert.match(markup, />Paged</);
 	assert.match(markup, />Scroll</);
 	assert.doesNotMatch(markup, />Webtoon</);

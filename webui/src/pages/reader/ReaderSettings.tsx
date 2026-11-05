@@ -66,6 +66,8 @@ interface ReaderSettingsProps {
 	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
 	textOnly: boolean;
+	// Mode-independent: textOnly is paged-only, but the mode tiles must not regain Webtoon once a text chapter scrolls
+	textChapter: boolean;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
 	filters: ReaderFilters;
@@ -172,6 +174,7 @@ export function ReaderSettings({
 	onTransitionChange,
 	currentPage,
 	textOnly,
+	textChapter,
 	typography,
 	onTypographyChange,
 	filters,
@@ -188,7 +191,7 @@ export function ReaderSettings({
 				<OptionTiles
 					label={t('reader.readingMode')}
 					options={
-						textOnly
+						textChapter
 							? [
 									{ value: 'paged', label: t('reader.mode.paged'), icon: <BookOpen size={18} /> },
 									{ value: 'continuous', label: t('reader.mode.continuous'), icon: <AlignJustify size={18} /> }
