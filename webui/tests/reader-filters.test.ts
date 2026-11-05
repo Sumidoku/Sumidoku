@@ -22,7 +22,7 @@ function page(content: Page['content']): Page {
 	return { content, thumbnail: null, hasDescription: false, description: null, index: 0 };
 }
 
-async function renderSettingsWithFilters(filters: ReaderFilters, textOnly = false): Promise<string> {
+async function renderSettingsWithFilters(filters: ReaderFilters, textOnly = false, textChapter = textOnly): Promise<string> {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -68,6 +68,7 @@ async function renderSettingsWithFilters(filters: ReaderFilters, textOnly = fals
 					onTransitionChange: () => {},
 					currentPage: page({ Url: ['https://example.invalid/page.png', null] }),
 					textOnly,
+					textChapter,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {},
 					filters,
