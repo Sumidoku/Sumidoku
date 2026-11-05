@@ -52,11 +52,18 @@ export function useMenuInViewport(
 	placement: 'bottom' | 'top' = 'bottom'
 ): void {
 	useLayoutEffect(() => {
+		// Closing drops the old position: a reopen must measure the menu unclamped, or the previous
+		// maxHeight caps the measured height and the new placement is computed from the wrong size
+		if (!open) {
+			setPos(null);
+			return;
+		}
 		const anchor = anchorRef.current?.getBoundingClientRect();
 		const pop = popRef.current?.getBoundingClientRect();
-		if (!open || !anchor || !pop) return;
+		if (!anchor || !pop) return;
 		const width = menuViewportWidth();
-		const vertical = placeMenuVertical(anchor, pop.height, window.innerHeight, placement);
+		// No listbox cap: only the room on screen limits an action menu's height
+		const vertical = placeMenuVertical(anchor, pop.height, window.innerHeight, placement, Infinity);
 		setPos({
 			top: vertical.top,
 			right: clampMenuRight(width - anchor.right, pop.width, width),

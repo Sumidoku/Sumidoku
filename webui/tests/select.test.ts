@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import test, { after, before } from 'node:test';
@@ -120,4 +121,22 @@ test('a closed Select renders a labelled combobox and no native picker', async (
 	assert.match(markup, /<span class="select__value">Every 2 hours<\/span>/);
 	// Both labels stay in the sizer so the width holds whichever value is shown
 	assert.equal(markup.match(/select__sizer/g)?.length, 2);
+});
+
+test('action menus are limited by the screen, not the listbox cap', () => {
+	// A ten-row language menu is about 366px: it must fit whole when the screen has room
+	assert.deepEqual(placeMenuVertical({ top: 100, bottom: 136 }, 366, 900, 'bottom', Infinity), { top: 140, maxHeight: 752 });
+	// Near the bottom edge it still flips up and clamps to the room above
+	assert.deepEqual(placeMenuVertical({ top: 600, bottom: 636 }, 366, 700, 'bottom', Infinity), { top: 230, maxHeight: 588 });
+});
+
+test('MenuButton positions without the listbox cap', () => {
+	const source = readFileSync(new URL('../src/components/MenuButton.tsx', import.meta.url), 'utf8');
+	assert.match(source, /placeMenuVertical\(anchor, pop\.height, window\.innerHeight, placement, Infinity\)/);
+});
+
+test('closing an anchored menu drops its measured position', () => {
+	// A stale maxHeight would cap the next measurement and misplace the reopened menu
+	const source = readFileSync(new URL('../src/components/MenuButton.tsx', import.meta.url), 'utf8');
+	assert.match(source, /if \(!open\) \{\s*setPos\(null\);\s*return;\s*\}/);
 });

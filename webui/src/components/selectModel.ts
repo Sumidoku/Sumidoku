@@ -53,19 +53,22 @@ const EDGE = 8;
 const MAX_HEIGHT = 260;
 
 /** Vertical half of menu placement: the preferred side unless the menu fits only on the other
- * side, with the height clamped inside the viewport so the menu never crosses a screen edge */
+ * side, with the height clamped inside the viewport so the menu never crosses a screen edge.
+ * `cap` is the listbox height limit; action menus pass Infinity so a list that fits on screen
+ * (the ten-entry language menu) never scrolls */
 export function placeMenuVertical(
 	anchor: { top: number; bottom: number },
 	menuHeight: number,
 	viewportHeight: number,
-	preferred: 'bottom' | 'top' = 'bottom'
+	preferred: 'bottom' | 'top' = 'bottom',
+	cap: number = MAX_HEIGHT
 ): { top: number; maxHeight: number } {
 	const below = viewportHeight - anchor.bottom - GAP - EDGE;
 	const above = anchor.top - GAP - EDGE;
 	// A side that cannot hold the menu flips only when the other side has more room
 	const flips = preferred === 'top' ? menuHeight > above && below > above : menuHeight > below && above > below;
 	const up = preferred === 'top' ? !flips : flips;
-	const maxHeight = Math.max(Math.min(up ? above : below, MAX_HEIGHT), 0);
+	const maxHeight = Math.max(Math.min(up ? above : below, cap), 0);
 	const height = Math.min(menuHeight, maxHeight);
 	return { top: up ? anchor.top - GAP - height : anchor.bottom + GAP, maxHeight };
 }
