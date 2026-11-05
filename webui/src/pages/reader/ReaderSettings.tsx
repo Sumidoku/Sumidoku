@@ -187,11 +187,18 @@ export function ReaderSettings({
 			<SettingsGroup title={t('reader.readingMode')}>
 				<OptionTiles
 					label={t('reader.readingMode')}
-					options={[
-						{ value: 'paged', label: t('reader.mode.paged'), icon: <BookOpen size={18} /> },
-						{ value: 'continuous', label: t('reader.mode.continuous'), icon: <AlignJustify size={18} /> },
-						{ value: 'webtoon', label: t('reader.mode.webtoon'), icon: <StretchVertical size={18} /> }
-					]}
+					options={
+						textOnly
+							? [
+									{ value: 'paged', label: t('reader.mode.paged'), icon: <BookOpen size={18} /> },
+									{ value: 'continuous', label: t('reader.mode.continuous'), icon: <AlignJustify size={18} /> }
+								]
+							: [
+									{ value: 'paged', label: t('reader.mode.paged'), icon: <BookOpen size={18} /> },
+									{ value: 'continuous', label: t('reader.mode.continuous'), icon: <AlignJustify size={18} /> },
+									{ value: 'webtoon', label: t('reader.mode.webtoon'), icon: <StretchVertical size={18} /> }
+								]
+					}
 					value={mode}
 					onChange={onModeChange}
 				/>
