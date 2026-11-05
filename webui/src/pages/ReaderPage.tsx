@@ -723,7 +723,8 @@ function ReaderCore({
 		resetPinch();
 	}, [mode, idx, col, dir, layout, curSpreadKey, scale, stretch, half, split, resetPinch]);
 	// A text chapter is a single page on the server, so its pagination unit is the column, not the page
-	const textOnly = mode === 'paged' && total === 1 && pageText(pages?.[0]) !== null;
+	const textChapter = total === 1 && pageText(pages?.[0]) !== null;
+	const textOnly = mode === 'paged' && textChapter;
 	// Title/resume use the raw list, so the subtitle and progress survive the current chapter being filtered out
 	const curChapter = rawChapters.find((c) => c.id === chapterId) ?? null;
 	const pos = navChapters.findIndex((c) => c.id === chapterId);
@@ -1846,6 +1847,7 @@ function ReaderCore({
 					onTransitionChange={setTransition}
 					currentPage={curPage}
 					textOnly={textOnly}
+					textChapter={textChapter}
 					typography={typography}
 					onTypographyChange={updateTypography}
 					filters={filters}
