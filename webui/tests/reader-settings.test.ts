@@ -238,6 +238,24 @@ test('text chapters keep webtoon out of the mode tiles in scroll mode too', asyn
 	assert.doesNotMatch(markup, />Webtoon</);
 });
 
+test('scrolling text chapters drop image reader controls but keep text spacing', async () => {
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'continuous', 'single', false, true);
+	assert.doesNotMatch(markup, /aria-label="Page layout"/);
+	assert.doesNotMatch(markup, /aria-label="Page scale"/);
+	assert.doesNotMatch(markup, /Split wide pages/);
+	assert.doesNotMatch(markup, /Stretch small pages/);
+	assert.doesNotMatch(markup, /aria-label="Tap zones"/);
+	assert.doesNotMatch(markup, /aria-label="Reading direction"/);
+	assert.doesNotMatch(markup, /Page turn style/);
+	assert.doesNotMatch(markup, /reader__settings-title">Filters</);
+	assert.match(markup, /Side padding/);
+	assert.match(markup, /Page gap/);
+	assert.match(markup, /aria-label="Background"/);
+	assert.match(markup, /reader__typography/);
+	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
+	assert.deepEqual(titles, ['Reading mode', 'Continuous reading', 'Appearance', 'Typography']);
+});
+
 test('paged text columns switch colour on a light canvas', () => {
 	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8')
 		.replace(/\r\n/g, '\n');

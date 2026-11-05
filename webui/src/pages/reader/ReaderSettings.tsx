@@ -66,7 +66,8 @@ interface ReaderSettingsProps {
 	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
 	textOnly: boolean;
-	// Mode-independent: textOnly is paged-only, but the mode tiles must not regain Webtoon once a text chapter scrolls
+	// Mode-independent: textOnly is paged-only, so content adaptation (mode tiles,
+	// image groups, filters, continuous scale) keys on textChapter to survive scrolling
 	textChapter: boolean;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
@@ -173,7 +174,6 @@ export function ReaderSettings({
 	transition,
 	onTransitionChange,
 	currentPage,
-	textOnly,
 	textChapter,
 	typography,
 	onTypographyChange,
@@ -206,7 +206,7 @@ export function ReaderSettings({
 					onChange={onModeChange}
 				/>
 			</SettingsGroup>
-			{!textOnly && (
+			{!textChapter && (
 				<SettingsGroup title={t('reader.groupPage')} note={pagedOnly ? t('reader.pagedOnly') : undefined}>
 					<OptionTiles
 						label={t('reader.layout')}
@@ -241,7 +241,8 @@ export function ReaderSettings({
 					</div>
 				</SettingsGroup>
 			)}
-			<SettingsGroup title={t('reader.groupTurning')} note={turningNote}>
+			{(!textChapter || !pagedOnly) && (
+				<SettingsGroup title={t('reader.groupTurning')} note={turningNote}>
 				<OptionTiles
 					label={t('reader.direction')}
 					options={[
@@ -252,7 +253,7 @@ export function ReaderSettings({
 					onChange={onDirChange}
 					columns={2}
 				/>
-				{!textOnly && (
+				{!textChapter && (
 					<div>
 						<OptionTiles
 							label={t('reader.tapZones')}
@@ -273,7 +274,7 @@ export function ReaderSettings({
 				)}
 				<div className="reader__settings-card">
 					<SwitchRow label={t('reader.animations')} checked={anim} onChange={onAnimChange} />
-					{!textOnly && anim && (
+					{!textChapter && anim && (
 						<div className="reader__turn-style">
 							<span>{t('reader.pageTurn')}</span>
 							<OptionTiles
@@ -291,18 +292,21 @@ export function ReaderSettings({
 					<SwitchRow label={t('reader.transition')} checked={transition} onChange={onTransitionChange} />
 				</div>
 			</SettingsGroup>
+			)}
 			{pagedOnly && (
 				<SettingsGroup title={t('reader.groupContinuous')}>
-					<OptionTiles
-						label={t('reader.pageScale')}
-						options={[
-							{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
-							{ value: 'original', label: t('reader.scaleOriginal'), icon: <FileImage size={18} /> }
-						]}
-						value={continuousScale}
-						onChange={onContinuousScaleChange}
-						columns={2}
-					/>
+					{!textChapter && (
+						<OptionTiles
+							label={t('reader.pageScale')}
+							options={[
+								{ value: 'width', label: t('reader.scaleWidth'), icon: <StretchHorizontal size={18} /> },
+								{ value: 'original', label: t('reader.scaleOriginal'), icon: <FileImage size={18} /> }
+							]}
+							value={continuousScale}
+							onChange={onContinuousScaleChange}
+							columns={2}
+						/>
+					)}
 					<div className="reader__settings-card reader__sliders">
 						<label>
 							<span>{t('reader.sidePadding')}</span>
@@ -317,7 +321,7 @@ export function ReaderSettings({
 					</div>
 				</SettingsGroup>
 			)}
-			{!textOnly && (
+			{!textChapter && (
 				<SettingsGroup title={t('reader.groupFilters')}>
 					<div className="reader__settings-card">
 						<FilterSlider

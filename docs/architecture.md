@@ -2213,7 +2213,11 @@ the actual tap action. Its legend paints SVG swatches rather than applying
 SVG's `fill` to elements with no SVG fill geometry. For text-only chapters the
 panel hides image-specific options (page layout, scale, split, stretch, tap zones
 and page-turn style), leaving reading mode, direction, animation, transition,
-background and typography controls. The reader canvas background
+background and typography controls. Scrolling a text chapter hides the paged
+groups outright instead of marking them paged-only, drops the original-size page
+scale (text has no intrinsic image dimensions) and the image filters group
+(filters target page scans, not EPUB text), leaving reading mode, side padding,
+page gap, background and typography. The reader canvas background
 (`sumidoku.reader.bg`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
