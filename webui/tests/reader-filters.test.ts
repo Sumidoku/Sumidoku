@@ -232,7 +232,9 @@ test('the reader root carries the filter variable, the tint defs and the storage
 	assert.match(source, /\{filters\.rgba\.enabled && <TintFilterDefs tint=\{filters\.rgba\} \/>\}/);
 	assert.doesNotMatch(source, /reader__tint|buildTintStyle/);
 	assert.match(source, /'sumidoku\.reader\.filters'/);
-	assert.match(source, /sumidoku\.reader\.filters\.\$\{mangaId\}/);
+	// The per-manga override key lives in the override store now
+	const overrides = readFileSync(new URL('../src/pages/reader/overrideStore.ts', import.meta.url), 'utf8');
+	assert.match(overrides, /\['mode', 'dir', 'layout', 'scale', 'stretch', 'split', 'filters'\]/);
 });
 
 test('the tint SVG filter floods the tint colour, clips to the image alpha and blends', () => {

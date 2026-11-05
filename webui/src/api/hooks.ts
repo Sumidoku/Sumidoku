@@ -69,6 +69,7 @@ import type {
 } from './protocol';
 import { sse } from './sse';
 import type { TriStateSelection } from '../lib/triState';
+import { clearReaderOverrides } from '../pages/reader/overrideStore';
 
 export const queryClient = new QueryClient({
 	defaultOptions: {
@@ -431,6 +432,8 @@ export function useRemoveFromLibrary() {
 	return useMutation({
 		mutationFn: (mangaId: number) => api(`/library/${mangaId}`, { method: 'DELETE' }),
 		onSuccess: (_d, mangaId) => {
+			// Its per-manga reader overrides are unreadable from here on
+			clearReaderOverrides(mangaId);
 			void qc.invalidateQueries({ queryKey: qk.library });
 			void qc.invalidateQueries({ queryKey: qk.manga(mangaId) });
 		}

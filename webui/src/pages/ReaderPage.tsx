@@ -50,6 +50,23 @@ import {
 	zoneMovesForward
 } from './reader/readerPrefs';
 import type { Dir, Mode, PageScale, ReaderBackground, TapZoneLayout } from './reader/readerPrefs';
+import {
+	readDirOverride,
+	readFiltersOverride,
+	readLayoutOverride,
+	readModeOverride,
+	readScaleOverride,
+	readSplitOverride,
+	readStretchOverride,
+	sweepGlobalizedOverrides,
+	writeDirOverride,
+	writeFiltersOverride,
+	writeLayoutOverride,
+	writeModeOverride,
+	writeScaleOverride,
+	writeSplitOverride,
+	writeStretchOverride
+} from './reader/overrideStore';
 import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
@@ -93,38 +110,6 @@ function readDir(): Dir {
 	return 'ltr';
 }
 
-// Per-manga override of the metadata/default direction, keyed by manga id
-function dirOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.dir.${mangaId}`;
-}
-
-function readDirOverride(mangaId: number | null): Dir | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(dirOverrideKey(mangaId));
-		if (v === 'ltr' || v === 'rtl') return v;
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
-// Per-manga override of the metadata/default reading mode, keyed by manga id
-function modeOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.mode.${mangaId}`;
-}
-
-function readModeOverride(mangaId: number | null): Mode | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(modeOverrideKey(mangaId));
-		if (v === 'paged' || v === 'continuous' || v === 'webtoon') return v;
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
 // Page layout (single/double spread) has no manga-metadata counterpart, so the
 // resolution is just per-manga override over the global default
 function readLayout(): SpreadLayout {
@@ -137,23 +122,9 @@ function readLayout(): SpreadLayout {
 	return 'single';
 }
 
-function layoutOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.layout.${mangaId}`;
-}
-
-function readLayoutOverride(mangaId: number | null): SpreadLayout | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(layoutOverrideKey(mangaId));
-		if (v === 'single' || v === 'double' || v === 'doubleNoCover') return v;
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
-// Tap-zone layout and canvas background follow the page layout's persistence
-// shape: a global default plus a per-manga override, no metadata layer
+// Tap-zone layout and canvas background are personal preferences, not content
+// properties: they are global-only, and changing them in the reader writes the
+// global default, same as the settings page
 function readTapZones(): TapZoneLayout {
 	try {
 		const v = parseTapZones(localStorage.getItem('sumidoku.reader.tapzones'));
@@ -162,20 +133,6 @@ function readTapZones(): TapZoneLayout {
 		// Same as above
 	}
 	return 'lr';
-}
-
-function tapZonesOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.tapzones.${mangaId}`;
-}
-
-function readTapZonesOverride(mangaId: number | null): TapZoneLayout | null {
-	if (mangaId === null) return null;
-	try {
-		return parseTapZones(localStorage.getItem(tapZonesOverrideKey(mangaId)));
-	} catch {
-		// Same as above
-	}
-	return null;
 }
 
 function readBackground(): ReaderBackground {
@@ -188,22 +145,8 @@ function readBackground(): ReaderBackground {
 	return 'dark';
 }
 
-function backgroundOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.bg.${mangaId}`;
-}
-
-function readBackgroundOverride(mangaId: number | null): ReaderBackground | null {
-	if (mangaId === null) return null;
-	try {
-		return parseBackground(localStorage.getItem(backgroundOverrideKey(mangaId)));
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
-// Custom image filters (ported from Suwayomi) share the background's
-// persistence shape: a JSON blob under a global key plus a per-manga override
+// Custom image filters (ported from Suwayomi) are content-dependent: a JSON
+// blob under a global key plus a per-manga override
 function readFilters(): ReaderFilters {
 	try {
 		const v = parseFilters(localStorage.getItem('sumidoku.reader.filters'));
@@ -212,20 +155,6 @@ function readFilters(): ReaderFilters {
 		// Same as above
 	}
 	return DEFAULT_FILTERS;
-}
-
-function filtersOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.filters.${mangaId}`;
-}
-
-function readFiltersOverride(mangaId: number | null): ReaderFilters | null {
-	if (mangaId === null) return null;
-	try {
-		return parseFilters(localStorage.getItem(filtersOverrideKey(mangaId)));
-	} catch {
-		// Same as above
-	}
-	return null;
 }
 
 // Page scale and small-page stretching share the same persistence shape: a
@@ -240,20 +169,6 @@ function readScale(): PageScale {
 	return 'screen';
 }
 
-function scaleOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.scale.${mangaId}`;
-}
-
-function readScaleOverride(mangaId: number | null): PageScale | null {
-	if (mangaId === null) return null;
-	try {
-		return parseScale(localStorage.getItem(scaleOverrideKey(mangaId)));
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
 // The stretch flag stores only "on"; anything else (including absence) is off
 function readStretch(): boolean {
 	try {
@@ -261,22 +176,6 @@ function readStretch(): boolean {
 	} catch {
 		return false;
 	}
-}
-
-function stretchOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.stretch.${mangaId}`;
-}
-
-function readStretchOverride(mangaId: number | null): boolean | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(stretchOverrideKey(mangaId));
-		if (v === '1') return true;
-		if (v === '0') return false;
-	} catch {
-		// Same as above
-	}
-	return null;
 }
 
 // Same storage convention as stretch: only "1" is on
@@ -288,23 +187,8 @@ function readSplit(): boolean {
 	}
 }
 
-function splitOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.split.${mangaId}`;
-}
-
-function readSplitOverride(mangaId: number | null): boolean | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(splitOverrideKey(mangaId));
-		if (v === '1') return true;
-		if (v === '0') return false;
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
-// The turn animation defaults to on, so only "0" is stored; overrides keep "1"/"0"
+// The turn animation defaults to on, so only "0" is stored. Like the tap zones
+// it is a personal preference: global-only, written from reader and settings alike
 function readAnim(): boolean {
 	try {
 		return localStorage.getItem('sumidoku.reader.anim') !== '0';
@@ -313,45 +197,14 @@ function readAnim(): boolean {
 	}
 }
 
-function animOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.anim.${mangaId}`;
-}
-
-function readAnimOverride(mangaId: number | null): boolean | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(animOverrideKey(mangaId));
-		if (v === '1') return true;
-		if (v === '0') return false;
-	} catch {
-		// Same as above
-	}
-	return null;
-}
-
-// The chapter transition page defaults to on, so only "0" disables it
+// The chapter transition page defaults to on, so only "0" disables it; global-only
+// like the animation
 function readTransition(): boolean {
 	try {
 		return localStorage.getItem('sumidoku.reader.transition') !== '0';
 	} catch {
 		return true;
 	}
-}
-
-function transitionOverrideKey(mangaId: number): string {
-	return `sumidoku.reader.transition.${mangaId}`;
-}
-
-function readTransitionOverride(mangaId: number | null): boolean | null {
-	if (mangaId === null) return null;
-	try {
-		const v = localStorage.getItem(transitionOverrideKey(mangaId));
-		if (v === '1') return true;
-		if (v === '0') return false;
-	} catch {
-		// Same as above
-	}
-	return null;
 }
 
 // Page-turn style and continuous-reading controls apply across manga
@@ -512,6 +365,8 @@ function ReaderCore({
 	const eventsAllowed = authAllowsEvents(auth.data);
 	useEffect(() => acquireSseConnection(eventsAllowed), [eventsAllowed, auth.data?.user?.id]);
 	useEffect(() => eventsAllowed ? subscribeChapterCacheEvents(qc) : undefined, [eventsAllowed, qc]);
+	// One-time housekeeping: drop the unread per-manga keys of the settings that went global-only
+	useEffect(() => sweepGlobalizedOverrides(), []);
 
 	const pagesQuery = useChapterPages(chapterId);
 	const pages = useMemo(() => pagesQuery.data ?? null, [pagesQuery.data]);
@@ -535,12 +390,8 @@ function ReaderCore({
 	const [globalLayout] = useState<SpreadLayout>(readLayout);
 	const [layoutOverride, setLayoutOverride] = useState<SpreadLayout | null>(() => readLayoutOverride(mangaId));
 	const layout = layoutOverride ?? globalLayout;
-	const [globalTapZones] = useState<TapZoneLayout>(readTapZones);
-	const [tapZonesOverride, setTapZonesOverride] = useState<TapZoneLayout | null>(() => readTapZonesOverride(mangaId));
-	const tapZones = tapZonesOverride ?? globalTapZones;
-	const [globalBg] = useState<ReaderBackground>(readBackground);
-	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
-	const bg = bgOverride ?? globalBg;
+	const [tapZones, setTapZonesState] = useState<TapZoneLayout>(readTapZones);
+	const [bg, setBgState] = useState<ReaderBackground>(readBackground);
 	const [globalFilters] = useState<ReaderFilters>(readFilters);
 	const [filtersOverride, setFiltersOverride] = useState<ReaderFilters | null>(() => readFiltersOverride(mangaId));
 	const filters = filtersOverride ?? globalFilters;
@@ -556,16 +407,12 @@ function ReaderCore({
 	const [globalSplit] = useState<boolean>(readSplit);
 	const [splitOverride, setSplitOverride] = useState<boolean | null>(() => readSplitOverride(mangaId));
 	const split = splitOverride ?? globalSplit;
-	const [globalAnim] = useState<boolean>(readAnim);
-	const [animOverride, setAnimOverride] = useState<boolean | null>(() => readAnimOverride(mangaId));
-	const anim = animOverride ?? globalAnim;
+	const [anim, setAnimState] = useState<boolean>(readAnim);
 	const [pageTurn, setPageTurnState] = useState<PageTurnStyle>(readPageTurn);
 	const [continuousScale, setContinuousScaleState] = useState<ContinuousScale>(readContinuousScale);
 	const [continuousPadding, setContinuousPaddingState] = useState(readContinuousPadding);
 	const [continuousGap, setContinuousGapState] = useState(readContinuousGap);
-	const [globalTransition] = useState<boolean>(readTransition);
-	const [transitionOverride, setTransitionOverride] = useState<boolean | null>(() => readTransitionOverride(mangaId));
-	const transition = transitionOverride ?? globalTransition;
+	const [transition, setTransitionState] = useState<boolean>(readTransition);
 	// A boundary turn with a target chapter first parks on the transition page; a
 	// second turn in the same direction (or the page's own continue) jumps
 	const [pendingTurn, setPendingTurn] = useState<'next' | 'prev' | null>(null);
@@ -1079,125 +926,135 @@ function ReaderCore({
 
 	function setMode(m: Mode) {
 		if (m === mode) return;
-		try {
-			if (mangaId !== null) {
-				// Switching back to the metadata mode drops the override so future metadata edits apply
-				if (m === metaMode) localStorage.removeItem(modeOverrideKey(mangaId));
-				else localStorage.setItem(modeOverrideKey(mangaId), m);
-			} else {
-				// Without a manga in scope there is no metadata to respect: write the global default
+		if (mangaId !== null) {
+			// Matching the metadata mode drops the override so future metadata edits apply
+			setModeOverride(writeModeOverride(mangaId, m, metaMode));
+		} else {
+			// Without a manga in scope there is no metadata to respect: write the global default
+			try {
 				localStorage.setItem('sumidoku.reader.mode', m);
+			} catch {
+				// Private mode blocks persistence but the mode still switches
 			}
-		} catch {
-			// Private mode blocks persistence but the mode still switches
+			setModeOverride(null);
 		}
-		setModeOverride(mangaId !== null && m !== metaMode ? m : null);
 	}
 
 	function setDir(d: Dir) {
-		try {
-			if (mangaId !== null) {
-				// Toggling back to the metadata direction drops the override so future metadata edits apply
-				if (d === metaDir) localStorage.removeItem(dirOverrideKey(mangaId));
-				else localStorage.setItem(dirOverrideKey(mangaId), d);
-			} else {
-				// Without a manga in scope there is no metadata to respect: write the global default
+		if (mangaId !== null) {
+			// Matching the metadata direction drops the override so future metadata edits apply
+			setDirOverride(writeDirOverride(mangaId, d, metaDir));
+		} else {
+			// Without a manga in scope there is no metadata to respect: write the global default
+			try {
 				localStorage.setItem('sumidoku.reader.dir', d);
+			} catch {
+				// Private mode blocks persistence but the direction still switches
 			}
-		} catch {
-			// Private mode blocks persistence but the direction still switches
+			setDirOverride(null);
 		}
-		setDirOverride(mangaId !== null && d !== metaDir ? d : null);
 	}
 
 	function setLayout(l: SpreadLayout) {
 		if (l === layout) return;
-		try {
-			if (mangaId !== null) localStorage.setItem(layoutOverrideKey(mangaId), l);
-			else localStorage.setItem('sumidoku.reader.layout', l);
-		} catch {
-			// Private mode blocks persistence but the layout still switches
+		if (mangaId !== null) {
+			setLayoutOverride(writeLayoutOverride(mangaId, l, globalLayout));
+		} else {
+			try {
+				localStorage.setItem('sumidoku.reader.layout', l);
+			} catch {
+				// Private mode blocks persistence but the layout still switches
+			}
+			setLayoutOverride(null);
 		}
-		setLayoutOverride(mangaId !== null ? l : null);
 	}
 
 	function setTapZones(z: TapZoneLayout) {
 		if (z === tapZones) return;
 		try {
-			if (mangaId !== null) localStorage.setItem(tapZonesOverrideKey(mangaId), z);
-			else localStorage.setItem('sumidoku.reader.tapzones', z);
+			localStorage.setItem('sumidoku.reader.tapzones', z);
 		} catch {
 			// Private mode blocks persistence but the layout still switches
 		}
-		setTapZonesOverride(mangaId !== null ? z : null);
+		setTapZonesState(z);
 	}
 
 	function setBackground(b: ReaderBackground) {
 		if (b === bg) return;
 		try {
-			if (mangaId !== null) localStorage.setItem(backgroundOverrideKey(mangaId), b);
-			else localStorage.setItem('sumidoku.reader.bg', b);
+			localStorage.setItem('sumidoku.reader.bg', b);
 		} catch {
 			// Private mode blocks persistence but the background still switches
 		}
-		setBgOverride(mangaId !== null ? b : null);
+		setBgState(b);
 	}
 
 	function setFilters(f: ReaderFilters) {
-		try {
-			if (mangaId !== null) localStorage.setItem(filtersOverrideKey(mangaId), JSON.stringify(f));
-			else localStorage.setItem('sumidoku.reader.filters', JSON.stringify(f));
-		} catch {
-			// Private mode blocks persistence but the filters still apply
+		if (mangaId !== null) {
+			setFiltersOverride(writeFiltersOverride(mangaId, f, globalFilters));
+		} else {
+			try {
+				localStorage.setItem('sumidoku.reader.filters', JSON.stringify(f));
+			} catch {
+				// Private mode blocks persistence but the filters still apply
+			}
+			setFiltersOverride(null);
 		}
-		setFiltersOverride(mangaId !== null ? f : null);
 	}
 
 	function setScale(s: PageScale) {
 		if (s === scale) return;
-		try {
-			if (mangaId !== null) localStorage.setItem(scaleOverrideKey(mangaId), s);
-			else localStorage.setItem('sumidoku.reader.scale', s);
-		} catch {
-			// Private mode blocks persistence but the scale still switches
+		if (mangaId !== null) {
+			setScaleOverride(writeScaleOverride(mangaId, s, globalScale));
+		} else {
+			try {
+				localStorage.setItem('sumidoku.reader.scale', s);
+			} catch {
+				// Private mode blocks persistence but the scale still switches
+			}
+			setScaleOverride(null);
 		}
-		setScaleOverride(mangaId !== null ? s : null);
 	}
 
 	function setStretch(v: boolean) {
 		if (v === stretch) return;
-		try {
-			if (mangaId !== null) localStorage.setItem(stretchOverrideKey(mangaId), v ? '1' : '0');
-			else if (v) localStorage.setItem('sumidoku.reader.stretch', '1');
-			else localStorage.removeItem('sumidoku.reader.stretch');
-		} catch {
-			// Private mode blocks persistence but the stretch still switches
+		if (mangaId !== null) {
+			setStretchOverride(writeStretchOverride(mangaId, v, globalStretch));
+		} else {
+			try {
+				if (v) localStorage.setItem('sumidoku.reader.stretch', '1');
+				else localStorage.removeItem('sumidoku.reader.stretch');
+			} catch {
+				// Private mode blocks persistence but the stretch still switches
+			}
+			setStretchOverride(null);
 		}
-		setStretchOverride(mangaId !== null ? v : null);
 	}
 
 	function setSplit(v: boolean) {
 		if (v === split) return;
-		try {
-			if (mangaId !== null) localStorage.setItem(splitOverrideKey(mangaId), v ? '1' : '0');
-			else if (v) localStorage.setItem('sumidoku.reader.split', '1');
-			else localStorage.removeItem('sumidoku.reader.split');
-		} catch {
-			// Private mode blocks persistence but the split still switches
+		if (mangaId !== null) {
+			setSplitOverride(writeSplitOverride(mangaId, v, globalSplit));
+		} else {
+			try {
+				if (v) localStorage.setItem('sumidoku.reader.split', '1');
+				else localStorage.removeItem('sumidoku.reader.split');
+			} catch {
+				// Private mode blocks persistence but the split still switches
+			}
+			setSplitOverride(null);
 		}
-		setSplitOverride(mangaId !== null ? v : null);
 	}
 
 	function setAnim(v: boolean) {
 		if (v === anim) return;
 		try {
-			if (mangaId !== null) localStorage.setItem(animOverrideKey(mangaId), v ? '1' : '0');
-			else if (v) localStorage.removeItem('sumidoku.reader.anim');
+			if (v) localStorage.removeItem('sumidoku.reader.anim');
 			else localStorage.setItem('sumidoku.reader.anim', '0');
 		} catch {
 			// Private mode blocks persistence but the animation still switches
 		}
-		setAnimOverride(mangaId !== null ? v : null);
+		setAnimState(v);
 	}
 
 	function setPageTurn(value: PageTurnStyle) {
@@ -1239,13 +1096,12 @@ function ReaderCore({
 	function setTransition(v: boolean) {
 		if (v === transition) return;
 		try {
-			if (mangaId !== null) localStorage.setItem(transitionOverrideKey(mangaId), v ? '1' : '0');
-			else if (v) localStorage.removeItem('sumidoku.reader.transition');
+			if (v) localStorage.removeItem('sumidoku.reader.transition');
 			else localStorage.setItem('sumidoku.reader.transition', '0');
 		} catch {
 			// Private mode blocks persistence but the transition still switches
 		}
-		setTransitionOverride(mangaId !== null ? v : null);
+		setTransitionState(v);
 	}
 
 	function toggleAsc() {

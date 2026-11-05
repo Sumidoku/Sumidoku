@@ -2132,7 +2132,16 @@ RightToLeft/LeftToRight set the direction, Webtoon selects webtoon mode and
 Vertical continuous mode. Reader toggles write per-manga overrides in
 `sumidoku.reader.dir.<id>` / `sumidoku.reader.mode.<id>` (cleared when they match
 the metadata), and the global settings are the fallback for manga whose viewer
-carries no corresponding preference. The paged mode also offers a page layout
+carries no corresponding preference. Per-manga overrides exist only for
+content-dependent settings — mode, direction, page layout, page scale, stretch,
+split and filters (`reader/overrideStore.ts`); personal preferences (canvas
+background, tap zones, turn animation, transition page) are global-only, so
+changing them in the reader writes the same global key as the settings page.
+The override store is self-cleaning: writing the value the resolution would
+already produce without an override deletes the key, removing a manga from the
+library drops its keys (`clearReaderOverrides` in the mutation's onSuccess),
+and a one-time sweep on reader mount (`sweepGlobalizedOverrides`) removes the
+per-manga keys the globalized settings left behind. The paged mode also offers a page layout
 (`reader/spreads.ts`, ported from KMReader): `double` and `doubleNoCover` pair
 pages into spreads in reading order, giving the cover and closing page a blank
 mate and always showing landscape pages solo. Blank slots copy their mate's
@@ -2159,7 +2168,7 @@ spreads within two of the current one mount their images — distant spreads ren
 aspect-ratio placeholders, which keeps the track cheap while guaranteeing both
 ends of a turn animation are live. Text spreads render their column layout
 statically on neighbouring spreads (column 0) and live on the current one. The
-animation can be switched off (`sumidoku.reader.anim` + `.anim.<id>`, default on,
+animation can be switched off (`sumidoku.reader.anim`, default on,
 `0` disables) and `prefers-reduced-motion` always disables it; text pages slide
 between columns with the same transition. `sumidoku.reader.turn` selects the
 paged turn style: `auto` crossfades horizontal turns in landscape and slides
@@ -2181,8 +2190,8 @@ turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. With no
 chapter left in that direction the same page answers with an end-of-list card
 (once the chapter list is fetched) whose continue leaves the reader for the
 manga page. The page
-is on by default and disabled by `sumidoku.reader.transition` +
-`.transition.<id>` storing `0`. Keyboard shortcuts
+is on by default and disabled by `sumidoku.reader.transition`
+storing `0`. Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
@@ -2191,7 +2200,7 @@ keys aimed at form controls never reach the reader. In paged mode the wheel also
 deltas accumulate past a threshold into one turn per gesture, locked until
 200ms of wheel quiet so trackpad inertia cannot flip multiple pages. The paged
 tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
-`sumidoku.reader.tapzones(.<id>)`, paged mode only): `lr`/`rl` keep the default
+`sumidoku.reader.tapzones`, paged mode only): `lr`/`rl` keep the default
 28/44/28 geometry and only swap which side moves forward, `edge` shrinks the
 turn zones to 15%, `kindle` makes the menu a full-width top strip above a
 75/25 prev/next split, and `off` removes the zone buttons so every tap falls
@@ -2205,7 +2214,7 @@ SVG's `fill` to elements with no SVG fill geometry. For text-only chapters the
 panel hides image-specific options (page layout, scale, split, stretch, tap zones
 and page-turn style), leaving reading mode, direction, animation, transition,
 background and typography controls. The reader canvas background
-(`sumidoku.reader.bg(.<id>)`, all modes) is a class on the reader root —
+(`sumidoku.reader.bg`, all modes) is a class on the reader root —
 `dark` is the classless default, `gray` matches the app chrome, and `light`
 also lifts the dim page-counter and unsupported-page text that assumes a dark
 canvas. `auto` is not a class: it resolves through `useResolvedTheme()` so the
