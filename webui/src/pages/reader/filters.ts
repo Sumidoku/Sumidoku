@@ -116,26 +116,29 @@ function parseLevel(raw: unknown, limit: FilterLimit): FilterLevel | null {
 
 function parseRgba(raw: unknown): RgbaFilter | null {
 	if (!isPlainObject(raw)) return null;
-	if (typeof raw.enabled !== 'boolean') return null;
+	// Missing sub-fields keep defaults, so blobs stored before a schema grows
+	// still parse; only present-but-wrong values reject the whole blob
+	const enabled = raw.enabled;
+	if (enabled !== undefined && typeof enabled !== 'boolean') return null;
+	const parsed: RgbaFilter = { ...DEFAULT_FILTERS.rgba };
+	if (enabled !== undefined) parsed.enabled = enabled;
 	const channels: Array<'red' | 'green' | 'blue'> = ['red', 'green', 'blue'];
-	const parsed: RgbaFilter = {
-		enabled: raw.enabled,
-		red: 0,
-		green: 0,
-		blue: 0,
-		alpha: RGBA_ALPHA_LIMIT.defaultValue,
-		blendMode: 'normal',
-	};
 	for (const channel of channels) {
 		const value = raw[channel];
+		if (value === undefined) continue;
 		if (typeof value !== 'number' || !Number.isFinite(value)) return null;
 		parsed[channel] = clampInt(value, RGBA_CHANNEL_LIMIT);
 	}
-	if (typeof raw.alpha !== 'number' || !Number.isFinite(raw.alpha)) return null;
-	parsed.alpha = clampInt(raw.alpha, RGBA_ALPHA_LIMIT);
-	if (typeof raw.blendMode !== 'string') return null;
-	if (!BLEND_MODES.includes(raw.blendMode as BlendMode)) return null;
-	parsed.blendMode = raw.blendMode as BlendMode;
+	if (raw.alpha !== undefined) {
+		if (typeof raw.alpha !== 'number' || !Number.isFinite(raw.alpha)) return null;
+		parsed.alpha = clampInt(raw.alpha, RGBA_ALPHA_LIMIT);
+	}
+	if (raw.blendMode !== undefined) {
+		if (typeof raw.blendMode !== 'string' || !BLEND_MODES.includes(raw.blendMode as BlendMode)) {
+			return null;
+		}
+		parsed.blendMode = raw.blendMode as BlendMode;
+	}
 	return parsed;
 }
 
@@ -186,9 +189,15 @@ export function parseFilters(json: string | null): ReaderFilters | null {
 	return filters;
 }
 
-// CSS `filter` value for image pages. The RGBA filter is deliberately not
-// part of this string: it is rendered as a blend-mode overlay div instead
-// (Suwayomi's ReaderRGBAFilter), since CSS filter has no tint+blendMode.
+/** id of the SVG filter that paints the RGBA tint; ReaderPage renders its
+    definition (TintFilterDefs) whenever the tint is enabled */
+export const TINT_FILTER_ID = 'reader-tint';
+
+// CSS `filter` value for image pages. CSS has no tint-with-blend-mode filter
+// function, so the RGBA tint joins the chain as a reference to an SVG filter
+// (feFlood clipped to the image alpha, then feBlend — after kmrs #360). It
+// runs last, on top of the other adjustments, and touches only the image's
+// own pixels: the canvas letterbox and transparent areas stay untouched.
 export function buildFilterString(filters: ReaderFilters): string {
 	const parts: string[] = [];
 	if (filters.brightness.enabled) {
@@ -206,20 +215,8 @@ export function buildFilterString(filters: ReaderFilters): string {
 	if (filters.invert) parts.push('invert(1)');
 	if (filters.sepia) parts.push('sepia(1)');
 	if (filters.grayscale) parts.push('grayscale(1)');
+	if (filters.rgba.enabled) parts.push(`url(#${TINT_FILTER_ID})`);
 	return parts.join(' ');
-}
-
-// Overlay style for the RGBA filter, or null when disabled. Applied to a
-// fixed, pointer-events-none div covering the reader viewport.
-export function buildTintStyle(
-	filters: ReaderFilters,
-): { background: string; mixBlendMode: BlendMode } | null {
-	const { rgba } = filters;
-	if (!rgba.enabled) return null;
-	return {
-		background: `rgba(${rgba.red}, ${rgba.green}, ${rgba.blue}, ${rgba.alpha / 100})`,
-		mixBlendMode: rgba.blendMode,
-	};
 }
 
 // True when any filter deviates from the all-off default. Drives the
