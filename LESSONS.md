@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Run the full suite before calling a webui change green, not just the
+files you touched.** A deleted or re-signed export keeps consumers alive
+behind `vite.ssrLoadModule` and behind test files that import it for a
+different feature; a targeted `node --test <changed files>` cannot see
+those failures. `npm test` is the gate, targeted runs are only the fast
+loop while editing.
+- Evidence: 2026-11-05, #619: removing `menuPosition` from
+  `MenuButton.tsx` passed the three menu test files and broke
+  `chapter-cache-ui.test.ts`, which loaded it by name through
+  `ssrLoadModule`; only the full run caught it.
+
 **Restore a working file with `git show` through cmd redirection, never
 through PowerShell.** When `git restore -- <file>` is blocked by the
 sandbox, `git show HEAD:<path> | Set-Content -NoNewline` collapses the
