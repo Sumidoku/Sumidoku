@@ -221,7 +221,9 @@ test('the reader root carries the filter variable, the tint overlay and the stor
 	// there, so a stored tint would otherwise cover the text with no way to turn it off
 	assert.match(source, /\{!textOnly && tintStyle !== null && <div className="reader__tint"/);
 	assert.match(source, /'sumidoku\.reader\.filters'/);
-	assert.match(source, /sumidoku\.reader\.filters\.\$\{mangaId\}/);
+	// The per-manga override key lives in the override store now
+	const overrides = readFileSync(new URL('../src/pages/reader/overrideStore.ts', import.meta.url), 'utf8');
+	assert.match(overrides, /\['mode', 'dir', 'layout', 'scale', 'stretch', 'split', 'filters'\]/);
 });
 
 test('the stylesheet applies the variable to page images and pins the tint below the chrome', () => {
