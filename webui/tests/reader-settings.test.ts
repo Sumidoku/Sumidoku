@@ -214,6 +214,13 @@ test('text-only chapter settings group titles drop the image-specific groups', a
 	assert.deepEqual(titles, ['Reading mode', 'Page turning', 'Appearance', 'Typography']);
 });
 
+test('text-only chapters drop the webtoon reading mode', async () => {
+	const markup = await renderSettings(page({ Text: 'A text chapter' }), 'paged', 'single', true);
+	assert.match(markup, />Paged</);
+	assert.match(markup, />Scroll</);
+	assert.doesNotMatch(markup, />Webtoon</);
+});
+
 test('paged text columns switch colour on a light canvas', () => {
 	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8')
 		.replace(/\r\n/g, '\n');
