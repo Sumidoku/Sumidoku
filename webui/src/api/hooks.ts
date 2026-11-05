@@ -432,7 +432,9 @@ export function useRemoveFromLibrary() {
 	return useMutation({
 		mutationFn: (mangaId: number) => api(`/library/${mangaId}`, { method: 'DELETE' }),
 		onSuccess: (_d, mangaId) => {
-			// Its per-manga reader overrides are unreadable from here on
+			// The reader still reads overrides for manga outside the library; dropping
+			// them here keeps the store bounded, at the cost of a re-added manga
+			// starting from the defaults
 			clearReaderOverrides(mangaId);
 			void qc.invalidateQueries({ queryKey: qk.library });
 			void qc.invalidateQueries({ queryKey: qk.manga(mangaId) });
