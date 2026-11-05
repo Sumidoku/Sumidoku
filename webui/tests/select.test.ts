@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import test, { after, before } from 'node:test';
 import { createServer } from 'vite';
 import type { ViteDevServer } from 'vite';
-import { moveIndex, placeMenu, selectedIndex, typeaheadIndex } from '../src/components/selectModel.ts';
+import { moveIndex, placeMenu, placeMenuVertical, selectedIndex, typeaheadIndex } from '../src/components/selectModel.ts';
 
 const options = [
 	{ value: 'title', label: 'Title' },
@@ -74,6 +74,32 @@ test('the menu keeps inside the viewport at the right edge and on short screens'
 	const short = placeMenu({ top: 40, bottom: 76, left: 0 }, { width: 200, height: 200 }, { width: 400, height: 200 });
 	assert.equal(short.maxHeight, 112);
 	assert.equal(short.top, 80);
+});
+
+test('a bottom-preferred menu opens below its anchor while it fits', () => {
+	assert.deepEqual(placeMenuVertical({ top: 100, bottom: 136 }, 200, 800), { top: 140, maxHeight: 260 });
+});
+
+test('a bottom-preferred menu flips above an anchor near the bottom edge', () => {
+	// #619: the last source row's ⋮ on a phone — 220px of menu against 52px below the anchor
+	assert.deepEqual(placeMenuVertical({ top: 700, bottom: 736 }, 220, 800), { top: 476, maxHeight: 260 });
+});
+
+test('a bottom-preferred menu stays down when neither side fits and below has more room', () => {
+	assert.deepEqual(placeMenuVertical({ top: 200, bottom: 236 }, 700, 800), { top: 240, maxHeight: 260 });
+});
+
+test('a top-preferred menu opens above its anchor while it fits', () => {
+	assert.deepEqual(placeMenuVertical({ top: 700, bottom: 736 }, 200, 800, 'top'), { top: 496, maxHeight: 260 });
+});
+
+test('a top-preferred menu flips below when only that side has room', () => {
+	// The batch action bar at the top of a short list: 28px above the anchor, the menu needs 200
+	assert.deepEqual(placeMenuVertical({ top: 40, bottom: 76 }, 200, 800, 'top'), { top: 80, maxHeight: 260 });
+});
+
+test('a menu taller than the room on its side is clamped so it can scroll', () => {
+	assert.deepEqual(placeMenuVertical({ top: 40, bottom: 76 }, 200, 200), { top: 80, maxHeight: 112 });
 });
 
 test('a closed Select renders a labelled combobox and no native picker', async () => {

@@ -110,11 +110,12 @@ test('top placed batch menus open above the anchor and stay inside the viewport'
 		server: { middlewareMode: true }
 	});
 	try {
-		const { menuPosition } = await vite.ssrLoadModule('/src/components/MenuButton.tsx');
-		const position = menuPosition({ top: 770, bottom: 810, right: 370 }, 'top', 844, 390);
-		assert.deepEqual(position, { bottom: 80, right: 20 });
-		assert.ok(844 - position.bottom <= 770);
-		assert.ok(844 - position.bottom <= 844);
+		const { placeMenuVertical } = await vite.ssrLoadModule('/src/components/selectModel.ts');
+		const menuHeight = 220;
+		const position = placeMenuVertical({ top: 770, bottom: 810 }, menuHeight, 844, 'top');
+		assert.deepEqual(position, { top: 546, maxHeight: 260 });
+		assert.ok(position.top + menuHeight <= 770);
+		assert.ok(position.top >= 8);
 	} finally {
 		await vite.close();
 	}
