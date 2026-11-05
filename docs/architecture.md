@@ -2254,17 +2254,19 @@ toggles and an RGBA blend-mode tint. `buildFilterString` folds the enabled
 entries into one CSS `filter` list carried on the reader root as
 `--reader-filter`, and both image paths (`.reader__img` and
 `.reader__pg > img`) read the variable, so paged and continuous stay in sync
-without per-call-site props; text pages are deliberately excluded. The tint
-is not a filter entry but a fixed overlay (`.reader__tint`, Suwayomi's
-ReaderRGBAFilter) stacked above the pages and their retry overlay yet below
-the toolbar chrome (z-index 60), so a tint never dims the controls, and it
-stays unmounted in text-only chapters, matching the hidden filter controls —
-a stored tint would otherwise cover text it cannot be switched off from. Unlike
-Suwayomi the AUTO canvas background is not re-filtered (Sumidoku has no
-page-colour extraction) and filters take per-manga overrides like the other
-reader keys. `parseFilters` clamps into the documented ranges and rejects
-malformed values and unknown blend modes, so a hand-edited localStorage
-entry can never inject an arbitrary `filter` string.
+without per-call-site props; text pages are deliberately excluded. CSS has no
+tint-with-blend-mode filter function, so the tint joins the chain last as
+`url(#reader-tint)` (kmrs #360): `reader/TintFilterDefs.tsx` defines an SVG
+filter whose `feFlood` is clipped to the image's own alpha
+(`feComposite operator="in"`) before `feBlend` composites it like
+`mix-blend-mode` — the canvas letterbox and transparent page areas are never
+tinted, and no overlay div, z-index dance or text-only gate is needed.
+Unlike Suwayomi the AUTO canvas background is not re-filtered (Sumidoku has
+no page-colour extraction) and filters take per-manga overrides like the
+other reader keys. `parseFilters` clamps into the documented ranges, keeps
+defaults for fields missing from older stored blobs, and rejects malformed
+values and unknown blend modes, so a hand-edited localStorage entry can
+never inject an arbitrary `filter` string.
 
 ## Known gaps
 

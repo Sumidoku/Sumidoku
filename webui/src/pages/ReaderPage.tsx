@@ -61,8 +61,9 @@ import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBo
 import type { ContinuousScale } from './reader/continuousPrefs';
 import { crossfadeEnabled, parsePageTurn, shouldRevealTurn, TURN_HOLD_MS } from './reader/pageTurn';
 import type { PageTurnStyle } from './reader/pageTurn';
-import { buildFilterString, buildTintStyle, DEFAULT_FILTERS, parseFilters } from './reader/filters';
+import { buildFilterString, DEFAULT_FILTERS, parseFilters } from './reader/filters';
 import type { ReaderFilters } from './reader/filters';
+import { TintFilterDefs } from './reader/TintFilterDefs';
 import { PageImage } from './reader/PageImage';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -1434,11 +1435,11 @@ function ReaderCore({
 	const rootCls = (extra?: string) =>
 		['reader', effectiveBg === 'dark' ? '' : `reader--bg-${effectiveBg}`, extra ?? ''].filter(Boolean).join(' ');
 	// Image filters reach every page via a CSS variable on the root, so paged,
-	// split and continuous render paths pick them up without per-call-site props;
-	// the RGBA filter is a blend-mode overlay, not part of the filter string
+	// split and continuous render paths pick them up without per-call-site props.
+	// The RGBA tint joins the chain as url(#reader-tint), an SVG filter defined
+	// by TintFilterDefs below, clipped to each image's own pixels
 	const filterString = buildFilterString(filters);
 	const rootStyle = (filterString ? { '--reader-filter': filterString } : undefined) as CSSProperties | undefined;
-	const tintStyle = buildTintStyle(filters);
 
 	if (pagesQuery.isPending) {
 		return (
@@ -1767,9 +1768,7 @@ function ReaderCore({
 				</div>
 			)}
 
-			{/* Text-only chapters hide the filter controls, so the tint must not
-			    paint there either — a stored tint would otherwise be unturnable-off */}
-			{!textOnly && tintStyle !== null && <div className="reader__tint" style={tintStyle} aria-hidden="true" />}
+			{filters.rgba.enabled && <TintFilterDefs tint={filters.rgba} />}
 
 			<div className={barCls('reader__bar reader__bar--top')}>
 				<IconButton label={t('reader.back')} onClick={goBack}>

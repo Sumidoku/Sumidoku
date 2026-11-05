@@ -67,21 +67,13 @@
 /* Custom image filters: ReaderPage sets --reader-filter on the root from
    filters.ts (buildFilterString); both image paths read it so paged and
    continuous stay in sync without per-call-site props. Text pages are
-   deliberately excluded — the filters target page scans, not EPUB text */
+   deliberately excluded — the filters target page scans, not EPUB text.
+   The RGBA tint rides the same chain as url(#reader-tint), an SVG filter
+   clipped to each image's alpha (TintFilterDefs), so the canvas letterbox
+   and transparent page areas are never tinted */
 .reader__img,
 .reader__pg > img {
 	filter: var(--reader-filter, none);
-}
-
-/* The RGBA filter is a blend-mode overlay rather than a CSS filter entry
-   (Suwayomi's ReaderRGBAFilter). It sits above the pages and their retry
-   overlay (z-index 1) but below the toolbar chrome (z-index 60), so the
-   toolbars and settings panel stay undimmed while a tint is active */
-.reader__tint {
-	position: fixed;
-	inset: 0;
-	z-index: 2;
-	pointer-events: none;
 }
 
 /* ---------- Paged spreads (single/double page layout) ---------- */

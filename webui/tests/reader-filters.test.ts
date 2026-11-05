@@ -9,11 +9,11 @@ import type { Page } from '../src/api/types.ts';
 import {
 	BLEND_MODES,
 	buildFilterString,
-	buildTintStyle,
 	DEFAULT_FILTERS,
 	FILTER_LIMITS,
 	hasActiveFilters,
-	parseFilters
+	parseFilters,
+	TINT_FILTER_ID
 } from '../src/pages/reader/filters.ts';
 import type { ReaderFilters } from '../src/pages/reader/filters.ts';
 import { DEFAULT_TYPOGRAPHY } from '../src/pages/reader/typography.ts';
@@ -133,6 +133,15 @@ test('parseFilters rejects malformed entries instead of guessing', () => {
 	);
 });
 
+test('parseRgba keeps defaults for missing sub-fields instead of rejecting the blob', () => {
+	// A blob stored before the schema grows must survive: only present-but-wrong
+	// values reject, missing ones fall back (kmrs #360's persist-merge lesson)
+	const enabledOnly = parseFilters(JSON.stringify({ rgba: { enabled: true } }));
+	assert.deepEqual(enabledOnly?.rgba, { ...DEFAULT_FILTERS.rgba, enabled: true });
+	const oneChannel = parseFilters(JSON.stringify({ rgba: { red: 300 } }));
+	assert.deepEqual(oneChannel?.rgba, { ...DEFAULT_FILTERS.rgba, red: 255 });
+});
+
 test('every advertised blend mode round-trips', () => {
 	for (const blendMode of BLEND_MODES) {
 		const parsed = parseFilters(JSON.stringify({ rgba: { ...DEFAULT_FILTERS.rgba, blendMode } }));
@@ -144,7 +153,7 @@ test('buildFilterString is empty when every filter is off', () => {
 	assert.equal(buildFilterString(DEFAULT_FILTERS), '');
 });
 
-test('buildFilterString combines enabled filters in a stable order, excluding rgba', () => {
+test('buildFilterString combines enabled filters in a stable order, the tint last', () => {
 	const filters: ReaderFilters = {
 		...DEFAULT_FILTERS,
 		brightness: { enabled: true, value: 120 },
@@ -158,17 +167,19 @@ test('buildFilterString combines enabled filters in a stable order, excluding rg
 	};
 	assert.equal(
 		buildFilterString(filters),
-		'brightness(1.2) contrast(0.9) saturate(1.5) hue-rotate(45deg) invert(1) sepia(1) grayscale(1)'
+		`brightness(1.2) contrast(0.9) saturate(1.5) hue-rotate(45deg) invert(1) sepia(1) grayscale(1) url(#${TINT_FILTER_ID})`
 	);
 });
 
-test('buildTintStyle is null until the rgba filter is enabled', () => {
-	assert.equal(buildTintStyle(DEFAULT_FILTERS), null);
-	const style = buildTintStyle({
-		...DEFAULT_FILTERS,
-		rgba: { enabled: true, red: 255, green: 0, blue: 128, alpha: 25, blendMode: 'overlay' }
-	});
-	assert.deepEqual(style, { background: 'rgba(255, 0, 128, 0.25)', mixBlendMode: 'overlay' });
+test('the tint joins the filter chain as an SVG reference', () => {
+	assert.equal(
+		buildFilterString({ ...DEFAULT_FILTERS, rgba: { ...DEFAULT_FILTERS.rgba, enabled: true } }),
+		`url(#${TINT_FILTER_ID})`
+	);
+	assert.equal(
+		buildFilterString({ ...DEFAULT_FILTERS, invert: true, rgba: { ...DEFAULT_FILTERS.rgba, enabled: true } }),
+		`invert(1) url(#${TINT_FILTER_ID})`
+	);
 });
 
 test('hasActiveFilters tracks the enabled flags only', () => {
@@ -213,19 +224,27 @@ test('text-only chapters hide the filters group', async () => {
 	assert.doesNotMatch(markup, /reader__settings-title">Filters</);
 });
 
-test('the reader root carries the filter variable, the tint overlay and the storage keys', () => {
+test('the reader root carries the filter variable, the tint defs and the storage keys', () => {
 	const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8');
 	assert.match(source, /'--reader-filter': filterString/);
-	assert.match(source, /buildTintStyle\(filters\)/);
-	// The tint must stay unmounted in text-only chapters: the controls are hidden
-	// there, so a stored tint would otherwise cover the text with no way to turn it off
-	assert.match(source, /\{!textOnly && tintStyle !== null && <div className="reader__tint"/);
+	// The tint is an SVG filter scoped to each image's pixels, so it needs no
+	// textOnly gate and no overlay: enabled mounts the defs, the chain references them
+	assert.match(source, /\{filters\.rgba\.enabled && <TintFilterDefs tint=\{filters\.rgba\} \/>\}/);
+	assert.doesNotMatch(source, /reader__tint|buildTintStyle/);
 	assert.match(source, /'sumidoku\.reader\.filters'/);
 	assert.match(source, /sumidoku\.reader\.filters\.\$\{mangaId\}/);
 });
 
-test('the stylesheet applies the variable to page images and pins the tint below the chrome', () => {
+test('the tint SVG filter floods the tint colour, clips to the image alpha and blends', () => {
+	const defs = readFileSync(new URL('../src/pages/reader/TintFilterDefs.tsx', import.meta.url), 'utf8');
+	assert.match(defs, /<feFlood floodColor=\{`rgb\(\$\{tint\.red\}, \$\{tint\.green\}, \$\{tint\.blue\}\)`\} floodOpacity=\{tint\.alpha \/ 100\} \/>/);
+	assert.match(defs, /<feComposite in2="SourceAlpha" operator="in" \/>/);
+	assert.match(defs, /<feBlend in2="SourceGraphic" mode=\{tint\.blendMode\} \/>/);
+	assert.match(defs, /colorInterpolationFilters="sRGB"/);
+});
+
+test('the stylesheet applies the variable to page images and has no tint overlay', () => {
 	const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 	assert.match(css, /\.reader__img,\n\.reader__pg > img \{\n\tfilter: var\(--reader-filter, none\);\n\}/);
-	assert.match(css, /\.reader__tint \{\n\tposition: fixed;\n\tinset: 0;\n\tz-index: 2;\n\tpointer-events: none;\n\}/);
+	assert.doesNotMatch(css, /\.reader__tint/);
 });

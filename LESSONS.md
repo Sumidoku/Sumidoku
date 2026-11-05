@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A blend overlay paints everything under it, not the content it was meant
+to tint.** A fixed viewport overlay with `mix-blend-mode` also tints the
+canvas letterbox, page margins and transparent image areas, and then needs
+z-index choreography and per-page-type gates to stay off the chrome and
+text. Scope a colour tint to the content's own pixels instead: an inline
+SVG filter (`feFlood` clipped by `feComposite operator="in"` against
+`SourceAlpha`, then `feBlend`) referenced from the element's `filter` chain
+tints exactly the image and retires the overlay, the stacking problem and
+the gate in one move.
+- Evidence: 2026-11-05, kmrs #360 scoped their reader tint this way after
+  their overlay showed the same letterbox tinting our #611 had ported from
+  Suwayomi; adopting it deleted `.reader__tint`, the `!textOnly` gate and
+  `buildTintStyle` with no loss of function.
+
 **Source-reading tests must normalise CRLF before matching multi-line
 needles.** A needle containing `\n` never matches a CRLF checkout, so a test
 that passes on CI (LF) fails on a Windows clone with `core.autocrlf`. Read
