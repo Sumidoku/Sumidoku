@@ -61,6 +61,8 @@ import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBo
 import type { ContinuousScale } from './reader/continuousPrefs';
 import { crossfadeEnabled, parsePageTurn, shouldRevealTurn, TURN_HOLD_MS } from './reader/pageTurn';
 import type { PageTurnStyle } from './reader/pageTurn';
+import { buildFilterString, buildTintStyle, DEFAULT_FILTERS, parseFilters } from './reader/filters';
+import type { ReaderFilters } from './reader/filters';
 import { PageImage } from './reader/PageImage';
 import { TextColumns } from './reader/TextColumns';
 import { loadTypography, saveTypography, typographyStyle } from './reader/typography';
@@ -193,6 +195,32 @@ function readBackgroundOverride(mangaId: number | null): ReaderBackground | null
 	if (mangaId === null) return null;
 	try {
 		return parseBackground(localStorage.getItem(backgroundOverrideKey(mangaId)));
+	} catch {
+		// Same as above
+	}
+	return null;
+}
+
+// Custom image filters (ported from Suwayomi) share the background's
+// persistence shape: a JSON blob under a global key plus a per-manga override
+function readFilters(): ReaderFilters {
+	try {
+		const v = parseFilters(localStorage.getItem('sumidoku.reader.filters'));
+		if (v !== null) return v;
+	} catch {
+		// Same as above
+	}
+	return DEFAULT_FILTERS;
+}
+
+function filtersOverrideKey(mangaId: number): string {
+	return `sumidoku.reader.filters.${mangaId}`;
+}
+
+function readFiltersOverride(mangaId: number | null): ReaderFilters | null {
+	if (mangaId === null) return null;
+	try {
+		return parseFilters(localStorage.getItem(filtersOverrideKey(mangaId)));
 	} catch {
 		// Same as above
 	}
@@ -512,6 +540,9 @@ function ReaderCore({
 	const [globalBg] = useState<ReaderBackground>(readBackground);
 	const [bgOverride, setBgOverride] = useState<ReaderBackground | null>(() => readBackgroundOverride(mangaId));
 	const bg = bgOverride ?? globalBg;
+	const [globalFilters] = useState<ReaderFilters>(readFilters);
+	const [filtersOverride, setFiltersOverride] = useState<ReaderFilters | null>(() => readFiltersOverride(mangaId));
+	const filters = filtersOverride ?? globalFilters;
 	// 'auto' follows the app theme: a light app theme reads on a white canvas
 	const resolvedTheme = useResolvedTheme();
 	const effectiveBg = bg === 'auto' ? (resolvedTheme === 'light' ? 'light' : 'dark') : bg;
@@ -1110,6 +1141,16 @@ function ReaderCore({
 		setBgOverride(mangaId !== null ? b : null);
 	}
 
+	function setFilters(f: ReaderFilters) {
+		try {
+			if (mangaId !== null) localStorage.setItem(filtersOverrideKey(mangaId), JSON.stringify(f));
+			else localStorage.setItem('sumidoku.reader.filters', JSON.stringify(f));
+		} catch {
+			// Private mode blocks persistence but the filters still apply
+		}
+		setFiltersOverride(mangaId !== null ? f : null);
+	}
+
 	function setScale(s: PageScale) {
 		if (s === scale) return;
 		try {
@@ -1391,6 +1432,12 @@ function ReaderCore({
 	// Canvas background variants: dark stays the unclassed default
 	const rootCls = (extra?: string) =>
 		['reader', effectiveBg === 'dark' ? '' : `reader--bg-${effectiveBg}`, extra ?? ''].filter(Boolean).join(' ');
+	// Image filters reach every page via a CSS variable on the root, so paged,
+	// split and continuous render paths pick them up without per-call-site props;
+	// the RGBA filter is a blend-mode overlay, not part of the filter string
+	const filterString = buildFilterString(filters);
+	const rootStyle = (filterString ? { '--reader-filter': filterString } : undefined) as CSSProperties | undefined;
+	const tintStyle = buildTintStyle(filters);
 
 	if (pagesQuery.isPending) {
 		return (
@@ -1428,7 +1475,7 @@ function ReaderCore({
 	}
 
 	return (
-		<div className={rootCls()} ref={rootRef}>
+		<div className={rootCls()} ref={rootRef} style={rootStyle}>
 			{mode === 'paged' ? (
 				<div
 					className="reader__paged"
@@ -1719,6 +1766,10 @@ function ReaderCore({
 				</div>
 			)}
 
+			{/* Text-only chapters hide the filter controls, so the tint must not
+			    paint there either — a stored tint would otherwise be unturnable-off */}
+			{!textOnly && tintStyle !== null && <div className="reader__tint" style={tintStyle} aria-hidden="true" />}
+
 			<div className={barCls('reader__bar reader__bar--top')}>
 				<IconButton label={t('reader.back')} onClick={goBack}>
 					<ArrowLeft size={18} />
@@ -1797,6 +1848,8 @@ function ReaderCore({
 					textOnly={textOnly}
 					typography={typography}
 					onTypographyChange={updateTypography}
+					filters={filters}
+					onFiltersChange={setFilters}
 				/>
 			)}
 

@@ -64,6 +64,26 @@
 	object-fit: contain;
 }
 
+/* Custom image filters: ReaderPage sets --reader-filter on the root from
+   filters.ts (buildFilterString); both image paths read it so paged and
+   continuous stay in sync without per-call-site props. Text pages are
+   deliberately excluded — the filters target page scans, not EPUB text */
+.reader__img,
+.reader__pg > img {
+	filter: var(--reader-filter, none);
+}
+
+/* The RGBA filter is a blend-mode overlay rather than a CSS filter entry
+   (Suwayomi's ReaderRGBAFilter). It sits above the pages and their retry
+   overlay (z-index 1) but below the toolbar chrome (z-index 60), so the
+   toolbars and settings panel stay undimmed while a tint is active */
+.reader__tint {
+	position: fixed;
+	inset: 0;
+	z-index: 2;
+	pointer-events: none;
+}
+
 /* ---------- Paged spreads (single/double page layout) ---------- */
 
 /* The track is one row of viewport-sized spreads; a turn slides it by a whole
@@ -861,6 +881,40 @@
 }
 
 .reader__sliders output {
+	font-size: 12px;
+	color: var(--text-dim);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+}
+
+/* Filter rows: the card's child separator lands between filters, while a
+   filter's own switch and slider share one unbordered block */
+.reader__filter {
+	display: grid;
+	gap: 2px;
+	padding: 6px 0;
+}
+
+.reader__filter .reader__settings-row {
+	min-height: 28px;
+}
+
+.reader__filter-slider {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 52px;
+	align-items: center;
+	gap: 8px;
+	padding: 2px 0 6px 12px;
+	font-size: 13px;
+}
+
+.reader__filter-slider input {
+	width: 100%;
+	min-width: 0;
+	accent-color: var(--accent);
+}
+
+.reader__filter-slider output {
 	font-size: 12px;
 	color: var(--text-dim);
 	font-variant-numeric: tabular-nums;

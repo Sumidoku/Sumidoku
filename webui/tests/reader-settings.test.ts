@@ -6,6 +6,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createServer } from 'vite';
 import type { Page } from '../src/api/types.ts';
+import { DEFAULT_FILTERS } from '../src/pages/reader/filters.ts';
 import { DEFAULT_TYPOGRAPHY } from '../src/pages/reader/typography.ts';
 
 function page(content: Page['content']): Page {
@@ -65,7 +66,9 @@ async function renderSettings(
 					currentPage,
 					textOnly,
 					typography: DEFAULT_TYPOGRAPHY,
-					onTypographyChange: () => {}
+					onTypographyChange: () => {},
+					filters: DEFAULT_FILTERS,
+					onFiltersChange: () => {}
 				})
 			);
 		} finally {
@@ -162,14 +165,15 @@ test('page-scale select and stretch toggle render in paged mode', async () => {
 
 test('toggles use the shared switch', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
-	assert.equal(markup.match(/type="checkbox"/g)?.length, 4);
-	assert.equal(markup.match(/class="switch"/g)?.length, 4);
+	// 4 page/turning toggles plus 8 filter switches (4 levels, sepia, grayscale, invert, tint)
+	assert.equal(markup.match(/type="checkbox"/g)?.length, 12);
+	assert.equal(markup.match(/class="switch"/g)?.length, 12);
 });
 
 test('groups separate page, turning and appearance settings', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }));
 	const titles = [...markup.matchAll(/reader__settings-title">([^<]+)</g)].map((m) => m[1]);
-	assert.deepEqual(titles, ['Reading mode', 'Page', 'Page turning', 'Appearance']);
+	assert.deepEqual(titles, ['Reading mode', 'Page', 'Page turning', 'Filters', 'Appearance']);
 	for (const label of ['Page layout', 'Reading direction', 'Background']) {
 		assert.match(markup, new RegExp(`role="group" aria-label="${label}"`));
 	}
@@ -184,7 +188,9 @@ test('paged mode leaves every group unmarked and live', async () => {
 test('double layouts lock only the split toggle and say why', async () => {
 	const markup = await renderSettings(page({ Url: ['https://example.invalid/page.png', null] }), 'paged', 'double');
 	assert.match(markup, /reader__settings-row--off"><span>Split wide pages \(single-page layout only\)/);
-	assert.equal(markup.match(/disabled=""/g)?.length, 1);
+	// Count disabled switches only: the filters reset button is also disabled while
+	// every filter is off, and it is not a switch
+	assert.equal(markup.match(/class="switch"[^>]*disabled/g)?.length, 1);
 });
 
 test('text-only chapters hide image-specific options', async () => {
@@ -196,6 +202,7 @@ test('text-only chapters hide image-specific options', async () => {
 	assert.doesNotMatch(markup, /aria-label="Tap zones"/);
 	assert.doesNotMatch(markup, /Page turn style/);
 	assert.doesNotMatch(markup, /reader__tz-preview/);
+	assert.doesNotMatch(markup, /reader__settings-title">Filters</);
 });
 
 test('text-only chapters keep direction, animation, transition, background and typography controls', async () => {
