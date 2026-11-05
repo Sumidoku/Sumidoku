@@ -112,8 +112,9 @@ test('top placed batch menus open above the anchor and stay inside the viewport'
 	try {
 		const { placeMenuVertical } = await vite.ssrLoadModule('/src/components/selectModel.ts');
 		const menuHeight = 220;
-		const position = placeMenuVertical({ top: 770, bottom: 810 }, menuHeight, 844, 'top');
-		assert.deepEqual(position, { top: 546, maxHeight: 260 });
+		// MenuButton passes no listbox cap, so only the room above limits the height
+		const position = placeMenuVertical({ top: 770, bottom: 810 }, menuHeight, 844, 'top', Infinity);
+		assert.deepEqual(position, { top: 546, maxHeight: 758 });
 		assert.ok(position.top + menuHeight <= 770);
 		assert.ok(position.top >= 8);
 	} finally {
