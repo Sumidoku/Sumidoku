@@ -657,7 +657,7 @@ export default function SourceBrowsePage() {
 						</Button>
 					}
 				/>
-			) : entries.length === 0 && browseGroups.length === 0 && browseNavigation.length === 0 ? (
+			) : entries.length === 0 && browseGroups.length === 0 && browseNavigation.length === 0 && (!isOpds || !activeQuery.hasNextPage) ? (
 				<EmptyState icon={SearchX} title={t('sourceBrowse.noResults')} hint={t('sourceBrowse.noResultsHint')} />
 			) : (
 				<InfiniteList

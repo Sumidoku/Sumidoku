@@ -667,9 +667,25 @@ no alias is derived from migration text.
   their feed; acquisition-only publications open as a single-work manga with
   one chapter. manga = a drill-down entry (Atom `<id>` is the key, its feed
   link is `manga.url`); standalone acquisition, PSE template/count, or
-  manifest locators persist in `chapter.url` for reading and refresh fallback
-  after catalog disappearance; chapters = the series feed's acquisition entries, paginated
-  feeds followed to completion (cap 20); pages = the entry's OPDS-PSE
+  manifest locators persist in a versioned internal `chapter.url` value for
+  reading after catalog disappearance. Registration resolves publication
+  identity and page locators from the fetched feed, treating client chapters
+  as hints only. PSE and manifest locators retain the acquisition archive as
+  fallback. Discovery search and browse results carry a per-install HMAC over
+  the locator, source, manga, chapter and discovery-feed URL. Registration may
+  use only a single signed chapter whose decoded publication ID and MAC match;
+  unsigned or invalid hints require a feed lookup. A per-install HMAC key in
+  private `server_state` authenticates persisted locators. A logical import into another
+  database cannot validate old signatures and needs a feed refresh before
+  offline standalone reading. Pre-feature raw URLs and typed PSE/manifest fragments remain
+  readable for series, whose chapters came from fetched feeds. Unversioned
+  standalone locators are unverifiable because the earlier registration path
+  accepted client chapter hints; they are not used for requests while their
+  feed is unavailable and can be replaced by a refresh after it returns.
+  Chapters = the series feed's acquisition entries, paginated feeds
+  followed through up to 20 pages, resolving each relative next link against
+  the page that supplied it. A later-page request error or repeated link fails
+  the update; larger feeds retain the existing 20-page cap. Pages = the entry's OPDS-PSE
   stream link expanded into `Url` pages (`pse:count`, 0-based page
   numbers — Komga's `books/{id}/pages/{n}` needs no archive download)
   or, on 2.0, the publication manifest's `readingOrder` enumerated into
@@ -696,8 +712,11 @@ no alias is derived from migration text.
   artist-role fields and contributor role codes into manga tags, authors,
   and artists; unknown contributor roles do not imply an author or artist.
   Navigation remains separate from work entries and is shown as directory
-  links in its feed or group; navigation IDs encode a root-to-feed URL path,
-  and each hop is validated against its parent's top-level or group navigation.
+  links in its feed or group; Atom subsection and specialized sort links are
+  navigation regardless of destination `kind`, while alternate `type=entry`
+  links are never treated as feeds. Navigation IDs encode a root-to-feed URL
+  path, and each hop is validated against that parent's top-level or group
+  navigation across bounded pagination; repeated targets and paths are rejected.
   Publications become entries (`metadata.identifier/title/modified/description`
   onto the 1.2 fields; a feed-typed `self` link is the series drill-down, any
   other JSON `self` link the book's manifest; `images[0]` is the cover, the

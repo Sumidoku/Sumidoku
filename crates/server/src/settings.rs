@@ -206,7 +206,7 @@ pub(crate) fn definition(key: &str) -> Option<&'static Definition> {
 
 /// The `user.*` namespace was retired by migration 0033, and older backups can still name it
 pub(crate) fn ignored_on_write(key: &str) -> bool {
-	key.starts_with("user.") || RETIRED_KEYS.contains(&key) || crate::server_state::KEYS.contains(&key)
+	key.starts_with("user.") || RETIRED_KEYS.contains(&key) || crate::server_state::is_internal_key(key)
 }
 
 /// Anything else is an unknown key, which the settings API stores and returns as it came
@@ -216,7 +216,7 @@ pub(crate) fn is_modeled(key: &str) -> bool {
 
 /// Older backups can still name these, so restore needs the same answer as export
 pub(crate) fn omitted_from_backup(key: &str) -> bool {
-	crate::server_state::KEYS.contains(&key) || definition(key).is_some_and(|definition| !definition.in_backup)
+	crate::server_state::is_internal_key(key) || definition(key).is_some_and(|definition| !definition.in_backup)
 }
 
 async fn get_typed<'e, E, T>(db: E, key: &str) -> ApiResult<Option<T>>

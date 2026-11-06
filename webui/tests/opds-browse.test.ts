@@ -36,7 +36,7 @@ test('OPDS browse renders publications in the cover grid and groups in independe
 	assert.match(browse, /activeQuery\.data\?\.pages\.flatMap\(\(page\) => page\.groups \?\? \[\]\)/);
 	assert.match(browse, /<div className="home-hrow">[\s\S]*?group\.entries\.map/);
 	assert.match(browse, /onClick=\{\(\) => void openEntry\(m\)\}/);
-	assert.match(browse, /entries\.length === 0 && browseGroups\.length === 0 && browseNavigation\.length === 0/);
+	assert.match(browse, /entries\.length === 0 && browseGroups\.length === 0 && browseNavigation\.length === 0 && \(!isOpds \|\| !activeQuery\.hasNextPage\)/);
 });
 
 test('OPDS navigation appears in feed and group sections and follows listing IDs with a parent link', () => {
