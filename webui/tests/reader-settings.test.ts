@@ -65,7 +65,6 @@ async function renderSettings(
 					transition: true,
 					onTransitionChange: () => {},
 					currentPage,
-					textOnly,
 					textChapter,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {},
