@@ -67,7 +67,6 @@ async function renderSettingsWithFilters(filters: ReaderFilters, textOnly = fals
 					transition: true,
 					onTransitionChange: () => {},
 					currentPage: page({ Url: ['https://example.invalid/page.png', null] }),
-					textOnly,
 					textChapter,
 					typography: DEFAULT_TYPOGRAPHY,
 					onTypographyChange: () => {},

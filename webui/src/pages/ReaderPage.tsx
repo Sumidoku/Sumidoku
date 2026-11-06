@@ -1701,7 +1701,6 @@ function ReaderCore({
 					transition={transition}
 					onTransitionChange={setTransition}
 					currentPage={curPage}
-					textOnly={textOnly}
 					textChapter={textChapter}
 					typography={typography}
 					onTypographyChange={updateTypography}

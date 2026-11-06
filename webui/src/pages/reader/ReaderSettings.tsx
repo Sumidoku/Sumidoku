@@ -65,9 +65,8 @@ interface ReaderSettingsProps {
 	transition: boolean;
 	onTransitionChange: (transition: boolean) => void;
 	currentPage: Page | null;
-	textOnly: boolean;
-	// Mode-independent: textOnly is paged-only, so content adaptation (mode tiles,
-	// image groups, filters, continuous scale) keys on textChapter to survive scrolling
+	// Mode-independent, unlike ReaderPage's paged-only textOnly: content adaptation (mode
+	// tiles, image groups, filters, continuous scale) must survive switching to scroll
 	textChapter: boolean;
 	typography: ReaderTypography;
 	onTypographyChange: (patch: Partial<ReaderTypography>) => void;
