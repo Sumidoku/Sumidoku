@@ -118,6 +118,9 @@
     "transitionNoNext": "沒有下一章了",
     "transitionNoPrev": "沒有上一章了",
     "transitionBackToManga": "返回漫畫頁面",
+    "pullNextHint": "上滑進入第 {{chapter}} 章",
+    "pullNextHintPaged": "繼續拉動進入第 {{chapter}} 章",
+    "pullNextRelease": "鬆開進入第 {{chapter}} 章",
     "descending": "遞減",
     "readingMode": "閱讀模式",
     "shortcuts": {

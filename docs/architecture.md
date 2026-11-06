@@ -2191,7 +2191,32 @@ chapter left in that direction the same page answers with an end-of-list card
 (once the chapter list is fetched) whose continue leaves the reader for the
 manga page. The page
 is on by default and disabled by `sumidoku.reader.transition`
-storing `0`. Keyboard shortcuts
+storing `0`. Every mode also offers a pull-to-next-chapter gesture at the
+chapter end (`reader/pullNextChapter.ts:PullGestureController`): further input
+in the reading-forward direction past the end accumulates a raw pull distance,
+and the visible offset is that distance compressed by a rubber-band curve
+(`rubber()`, 1:1 at the origin, bounded near 267px), so the content resists
+increasingly and never flies off. Releasing past the 160px threshold opens the
+next chapter — a wheel pull commits on the crossing event itself and only
+counts after the wheel has gone quiet for 250ms at the edge, so fling inertia
+can never be read as a pull; a touch/pointer pull commits when the finger
+lifts. Reversing the gesture shrinks the pull back, and abandoning it is the
+cancel — there is no post-jump undo. Continuous/webtoon pull vertically at the
+scroll hard bottom (wheel and touch; `touchmove` turns non-passive once the
+pull owns the drag) and render the hint in-flow after the last page with real
+padding so it is never a zero-height box; paged pulls horizontally at the last
+spread via pointer drag (the wheel keeps its WheelTurnController → boundaryNav
+path), the hint is the track's trailing child — the track stays viewport-wide,
+so the spread translation percentages are unaffected, and the rtl row direction
+mirrors it for free — and the pull adds its damped offset through the
+`--paged-pull` variable so a re-render cannot clobber an active drag, while a
+`--dragging` class cuts the turn transition mid-pull and its removal animates
+the spring-back. A click trailing a pull (or any real drag) is swallowed before
+it can reach the tap zones. Progress paints through inline styles and CSS
+variables so a drag never re-renders the reader; only the armed flip is React
+state. A committed pull slides the content off for 180ms before navigating.
+The gesture requires a next chapter and is suspended while pinch-zoomed.
+Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the

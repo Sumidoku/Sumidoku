@@ -118,6 +118,9 @@
     "transitionNoNext": "Keine weiteren Kapitel",
     "transitionNoPrev": "Kein vorheriges Kapitel",
     "transitionBackToManga": "Zurück zur Manga-Seite",
+    "pullNextHint": "Nach oben ziehen für Kapitel {{chapter}}",
+    "pullNextHintPaged": "Weiter ziehen für Kapitel {{chapter}}",
+    "pullNextRelease": "Loslassen für Kapitel {{chapter}}",
     "descending": "Absteigend",
     "readingMode": "Lesemodus",
     "shortcuts": {

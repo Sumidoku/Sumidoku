@@ -461,6 +461,97 @@
 	padding: 0;
 }
 
+/* ---------- Pull to next chapter ---------- */
+
+/* In-flow at the chapter end; its own padding guarantees real height in
+   webtoon mode too (the webtoon container pads nothing), so the hint is
+   always fully visible before the hard bottom where the pull arms */
+.reader__pull {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 32px 16px;
+	margin: 0 auto;
+	color: var(--text-dim);
+	user-select: none;
+}
+
+/* Paged mode: the hint is the track's trailing child, revealed by the pull's
+   extra translation (the track stays viewport-wide, so spread percentages are
+   unaffected); the rtl row direction mirrors it for free */
+.reader__pull-p {
+	flex: none;
+	width: 220px;
+	height: 100%;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	color: var(--text-dim);
+	user-select: none;
+}
+
+.reader__pull-track {
+	width: 120px;
+	height: 3px;
+	border-radius: 2px;
+	background: var(--border);
+	overflow: hidden;
+}
+
+.reader__pull-bar {
+	width: var(--pull-progress, 0%);
+	height: 100%;
+	background: var(--accent);
+	transition: width 60ms linear;
+}
+
+.reader__pull-label {
+	font-size: 13px;
+	text-align: center;
+}
+
+.reader__pull-icon {
+	opacity: 0.6;
+}
+
+.reader__pull-icon--armed {
+	opacity: 1;
+	color: var(--accent);
+	animation: reader-pull-bounce 0.6s ease-in-out infinite;
+}
+
+@keyframes reader-pull-bounce {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(4px);
+	}
+}
+
+/* Spring-back after an abandoned pull, and the slide-off that sells the jump.
+   The paged track already animates turns with its own transition, so only the
+   scroll container needs these */
+.reader__pull-spring {
+	transition: transform 220ms ease-out;
+}
+
+.reader__pull-fire {
+	transition: transform 180ms ease-in;
+}
+
+/* While the finger owns the pull the track must follow it 1:1; the turn
+   transition would lag behind every drag frame. Removing the class on release
+   restores the transition, which then animates the spring-back or slide-off */
+.reader__paged[data-anim='true'] .reader__track--dragging {
+	transition: none;
+}
+
 .reader__pg {
 	box-sizing: border-box;
 	flex: none;

@@ -118,6 +118,9 @@
     "transitionNoNext": "Non ci sono altri capitoli",
     "transitionNoPrev": "Nessun capitolo precedente",
     "transitionBackToManga": "Torna alla pagina del manga",
+    "pullNextHint": "Scorri verso l'alto per il capitolo {{chapter}}",
+    "pullNextHintPaged": "Continua a trascinare per il capitolo {{chapter}}",
+    "pullNextRelease": "Rilascia per aprire il capitolo {{chapter}}",
     "descending": "Decrescente",
     "readingMode": "Modalità di lettura",
     "shortcuts": {
