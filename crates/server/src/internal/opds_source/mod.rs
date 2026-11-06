@@ -1,8 +1,9 @@
 //! The built-in OPDS source (kind = opds, multi-instance): OPDS catalogs as first-class sources, no wasm payload.
 //! Both wire formats are accepted, detected per response: OPDS 1.2 (Atom) and OPDS 2.0 (JSON) — the Content-Type
 //! decides, with a JSON body sniff as fallback for mislabeled servers; both parse into the same Feed model.
-//! manga = a drill-down entry (1.2 subsection entry, 2.0 navigation item or feed-linked publication; its feed link
-//! as url, which refreshes use to fetch upstream); chapters = book entries in the series feed; pages = OPDS-PSE
+//! manga = a feed-linked publication (its feed link as url, which refreshes use to fetch upstream), or an
+//! acquisition-only publication as a one-chapter manga; navigation stays a directory link and is never a work;
+//! chapters = book entries in the series feed; pages = OPDS-PSE
 //! per-page streaming (1.2) or the publication manifest's readingOrder (2.0) when present, otherwise the
 //! acquisition archive is downloaded to disk and split into pages with local's ZipCache. basic credentials live in
 //! source_setting; register/delete go through the admin surface.
@@ -13,14 +14,29 @@ use crate::source::slugify;
 use crate::state::{AppState, load_defaults};
 use aidoku::{Chapter, Manga};
 use aidoku_wasm::DefaultValue;
+use base64::Engine;
 use quick_xml::events::Event;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 const PSE_STREAM_REL: &str = "http://vaemendis.net/opds-pse/stream";
 const IMAGE_REL: &str = "http://opds-spec.org/image";
 const THUMBNAIL_REL: &str = "http://opds-spec.org/image/thumbnail";
+const THUMBNAIL_REL_ALT: &str = "http://opds-spec.org/image-thumbnail";
+const WORK_KEY_PREFIX: &str = "opds:work:";
+
+#[derive(sqlx::FromRow)]
+struct PersistedWorkChapter {
+	key: String,
+	title: Option<String>,
+	number: Option<f64>,
+	volume: Option<f64>,
+	language: Option<String>,
+	thumbnail: Option<String>,
+	url: Option<String>,
+	date_uploaded: Option<i64>,
+}
 /// OPDS 2.0 feed media type: doubles as the drill marker on navigation items and series publications
 const FEED_TYPE_V2: &str = "application/opds+json";
 /// rel is prefix-matched: acquisition/open-access, buy, etc. are all file-retrieval links
@@ -75,6 +91,10 @@ impl Catalog {
 		})
 	}
 
+	pub fn base_url(&self) -> &str {
+		&self.base_url
+	}
+
 	/// Credentials belong to the catalog's origin only: image proxy URLs are caller-chosen and feed hrefs may point
 	/// at any host, so sending them elsewhere would hand the catalog password to a third party
 	fn same_origin(&self, url: &reqwest::Url) -> bool {
@@ -96,14 +116,14 @@ impl Catalog {
 	}
 
 	/// href resolves to absolute against the URL of the feed containing it: Komga sends absolute links, generic catalogs may send relative ones
-	fn resolve(feed_url: &str, href: &str) -> ApiResult<String> {
+	pub fn resolve(feed_url: &str, href: &str) -> ApiResult<String> {
 		let base = reqwest::Url::parse(feed_url).map_err(|_| ApiError::bad_request("invalid feed url"))?;
 		base.join(href)
 			.map(|u| u.to_string())
 			.map_err(|_| ApiError::bad_gateway(format!("invalid link href {href:?}")))
 	}
 
-	async fn get_feed(&self, state: &AppState, url: &str) -> ApiResult<Feed> {
+	pub async fn get_feed(&self, state: &AppState, url: &str) -> ApiResult<Feed> {
 		let max = state.config.net_body_max_mb * 1024 * 1024;
 		let (bytes, mime) = self.get_bytes(state, url, max).await?;
 		if is_json_feed(mime.as_deref(), &bytes) {
@@ -134,7 +154,7 @@ fn string_default(defaults: &std::collections::HashMap<String, DefaultValue>, ke
 }
 
 /// One link of a catalog entry; pse_count appears only on OPDS-PSE stream links (the pse:count attribute)
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntryLink {
 	pub rel: String,
 	pub type_: String,
@@ -142,13 +162,15 @@ pub struct EntryLink {
 	pub pse_count: Option<i64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FeedEntry {
 	pub id: String,
 	pub title: String,
 	pub content: String,
 	pub updated: Option<i64>,
 	pub authors: Vec<String>,
+	pub artists: Vec<String>,
+	pub tags: Vec<String>,
 	pub links: Vec<EntryLink>,
 }
 
@@ -160,7 +182,18 @@ impl FeedEntry {
 	/// A book (acquisition entry): has an acquisition or PSE stream link, or (OPDS 2.0) a publication manifest;
 	/// otherwise it is a drillable series/navigation entry
 	pub fn is_book(&self) -> bool {
-		self.acquisition().is_some() || self.pse().is_some() || self.manifest().is_some()
+		!self.is_atom_navigation() && (self.acquisition().is_some() || self.pse().is_some() || self.manifest().is_some())
+	}
+
+	fn is_atom_navigation(&self) -> bool {
+		self.links.iter().any(|link| {
+			link.rel == "subsection"
+				&& link.type_.starts_with("application/atom+xml")
+		})
+	}
+
+	fn is_actionable_publication(&self) -> bool {
+		self.is_book() || (!self.is_atom_navigation() && self.feed_link().is_some())
 	}
 
 	pub fn acquisition(&self) -> Option<&EntryLink> {
@@ -188,7 +221,9 @@ impl FeedEntry {
 	}
 
 	pub fn thumbnail(&self) -> Option<&EntryLink> {
-		self.links_by_rel(THUMBNAIL_REL).next()
+		self.links_by_rel(THUMBNAIL_REL)
+			.next()
+			.or_else(|| self.links_by_rel(THUMBNAIL_REL_ALT).next())
 	}
 
 	pub fn image(&self) -> Option<&EntryLink> {
@@ -196,11 +231,21 @@ impl FeedEntry {
 	}
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct FeedGroup {
+	pub title: String,
+	pub navigation: Vec<FeedEntry>,
+	pub publications: Vec<FeedEntry>,
+}
+
 #[derive(Debug, Default)]
 pub struct Feed {
 	pub title: String,
 	pub links: Vec<EntryLink>,
 	pub entries: Vec<FeedEntry>,
+	pub navigation: Vec<FeedEntry>,
+	pub publications: Vec<FeedEntry>,
+	pub groups: Vec<FeedGroup>,
 }
 
 impl Feed {
@@ -215,7 +260,7 @@ fn local_name(name: &str) -> &str {
 }
 
 /// Event-stream parsing of an Atom feed: serde bindings cannot handle inline markup like <br/> mixed into content,
-/// so per event only the small tag set entry/id/title/updated/content/summary/author/name/link is recognized
+/// so per event only entry/id/title/updated/content/summary/author/name/link/category is recognized
 pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 	let mut reader = quick_xml::Reader::from_reader(bytes);
 	reader.config_mut().trim_text(true);
@@ -237,10 +282,13 @@ pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 							content: String::new(),
 							updated: None,
 							authors: Vec::new(),
+							artists: Vec::new(),
+							tags: Vec::new(),
 							links: Vec::new(),
 						});
 					}
 					"link" => push_link(&mut feed, &mut entry, &e)?,
+					"category" => push_category(&mut entry, &e)?,
 					"author" => in_author = true,
 					tag @ ("id" | "title" | "updated" | "content" | "summary" | "name")
 						if text_tag.is_none() && (tag != "name" || in_author) =>
@@ -254,6 +302,7 @@ pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 			Ok(Event::Empty(e)) => {
 				match local_name(e.name().as_ref()) {
 					"link" => push_link(&mut feed, &mut entry, &e)?,
+					"category" => push_category(&mut entry, &e)?,
 					"br" if text_tag.as_deref() == Some("content") => text_buf.push('\n'),
 					_ => {}
 				}
@@ -286,6 +335,11 @@ pub fn parse_feed(bytes: &[u8]) -> Result<Feed, String> {
 				match local_name(e.name().as_ref()) {
 					"entry" => {
 						if let Some(done) = entry.take() {
+							if done.is_atom_navigation() {
+								feed.navigation.push(done.clone());
+							} else {
+								feed.publications.push(done.clone());
+							}
 							feed.entries.push(done);
 						}
 					}
@@ -354,6 +408,27 @@ fn push_link(feed: &mut Feed, entry: &mut Option<FeedEntry>, e: &quick_xml::even
 	Ok(())
 }
 
+fn push_category(entry: &mut Option<FeedEntry>, e: &quick_xml::events::BytesStart) -> Result<(), String> {
+	let Some(entry) = entry.as_mut() else { return Ok(()) };
+	let mut term = String::new();
+	let mut label = String::new();
+	for attr in e.attributes() {
+		let attr = attr.map_err(|e| e.to_string())?;
+		let value = attr
+			.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+			.map_err(|e| e.to_string())?
+			.into_owned();
+		match local_name(attr.key.as_ref()) {
+			"term" => term = value,
+			"label" => label = value,
+			_ => {}
+		}
+	}
+	let category = if label.is_empty() { term } else { label };
+	push_unique(&mut entry.tags, category);
+	Ok(())
+}
+
 fn commit_text(feed: &mut Feed, entry: &mut Option<FeedEntry>, in_author: bool, tag: &str, text: &str) {
 	let text = text.trim();
 	if let Some(entry) = entry.as_mut() {
@@ -370,15 +445,20 @@ fn commit_text(feed: &mut Feed, entry: &mut Option<FeedEntry>, in_author: bool, 
 	}
 }
 
+fn push_unique(values: &mut Vec<String>, value: String) {
+	if !value.is_empty() && !values.contains(&value) {
+		values.push(value);
+	}
+}
+
 fn parse_rfc3339(text: &str) -> Option<i64> {
 	chrono::DateTime::parse_from_rfc3339(text)
 		.map(|dt| dt.timestamp())
 		.ok()
 }
 
-/// OPDS 2.0 (JSON) feed → the same Feed model the 1.2 parser fills: navigation items become drill entries and
-/// publications become entries, so every downstream consumer (search, manga_update, load_pages) works unchanged.
-/// Groups are flattened: their navigation and publications join the same entry list, no group drill level
+/// OPDS 2.0 (JSON) feed → the same Feed model the 1.2 parser fills. Top-level navigation and publications and each
+/// group's navigation/publications remain distinct for browse while all records join entries for search and updates.
 pub fn parse_feed_json(bytes: &[u8]) -> Result<Feed, String> {
 	let value: Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
 	let mut feed = Feed::default();
@@ -390,25 +470,42 @@ pub fn parse_feed_json(bytes: &[u8]) -> Result<Feed, String> {
 			push_json_link(&mut feed.links, link);
 		}
 	}
-	push_section_entries(&mut feed, &value);
+	push_section_entries(&mut feed, &value, None);
 	if let Some(groups) = value.get("groups").and_then(Value::as_array) {
 		for group in groups {
-			push_section_entries(&mut feed, group);
+			let mut parsed = FeedGroup {
+				title: group.get("metadata").and_then(|m| m.get("title")).map(json_text).unwrap_or_default(),
+				..FeedGroup::default()
+			};
+			push_section_entries(&mut feed, group, Some(&mut parsed));
+			feed.groups.push(parsed);
 		}
 	}
 	Ok(feed)
 }
 
 /// The navigation + publications pair one feed section (top level or a group) contributes
-fn push_section_entries(feed: &mut Feed, owner: &Value) {
+fn push_section_entries(feed: &mut Feed, owner: &Value, mut group: Option<&mut FeedGroup>) {
 	if let Some(navigation) = owner.get("navigation").and_then(Value::as_array) {
 		for item in navigation {
-			feed.entries.push(navigation_entry(item));
+			let entry = navigation_entry(item);
+			feed.entries.push(entry.clone());
+			if let Some(group) = group.as_deref_mut() {
+				group.navigation.push(entry);
+			} else {
+				feed.navigation.push(entry);
+			}
 		}
 	}
 	if let Some(publications) = owner.get("publications").and_then(Value::as_array) {
 		for publication in publications {
-			feed.entries.push(publication_entry(publication));
+			let entry = publication_entry(publication);
+			feed.entries.push(entry.clone());
+			if let Some(group) = group.as_deref_mut() {
+				group.publications.push(entry);
+			} else {
+				feed.publications.push(entry);
+			}
 		}
 	}
 }
@@ -436,6 +533,70 @@ fn json_contributors(value: Option<&Value>) -> Vec<String> {
 		Some(single) => one(single).into_iter().collect(),
 		None => Vec::new(),
 	}
+}
+
+fn json_terms(value: Option<&Value>) -> Vec<String> {
+	fn append(value: &Value, out: &mut Vec<String>) {
+		match value {
+			Value::Array(items) => items.iter().for_each(|item| append(item, out)),
+			Value::String(text) => push_unique(out, text.clone()),
+			Value::Object(map) => {
+				for key in ["name", "term", "label"] {
+					if let Some(text) = map.get(key).map(json_text).filter(|text| !text.is_empty()) {
+						push_unique(out, text);
+						return;
+					}
+				}
+			}
+			_ => {}
+		}
+	}
+	let mut out = Vec::new();
+	if let Some(value) = value {
+		append(value, &mut out);
+	}
+	out
+}
+
+fn role_names(metadata: Option<&Value>) -> (Vec<String>, Vec<String>) {
+	let Some(metadata) = metadata else { return (Vec::new(), Vec::new()) };
+	let mut authors = json_contributors(metadata.get("author"));
+	let mut artists = Vec::new();
+	for key in ["artist", "illustrator", "letterer", "penciller", "colorist", "inker"] {
+		for name in json_contributors(metadata.get(key)) {
+			push_unique(&mut artists, name);
+		}
+	}
+	if let Some(contributors) = metadata.get("contributor") {
+		let items = contributors.as_array().map(Vec::as_slice).unwrap_or(std::slice::from_ref(contributors));
+		for contributor in items {
+			let names = json_contributors(Some(contributor.get("name").unwrap_or(contributor)));
+			let Some(roles) = contributor.get("role") else { continue };
+			let role_values = roles
+				.as_array()
+				.map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+				.unwrap_or_else(|| roles.as_str().into_iter().collect());
+			for role in role_values {
+				let role = role
+					.rsplit(['/', '#'])
+					.next()
+					.unwrap_or(role)
+					.to_ascii_lowercase();
+				let target = match role.as_str() {
+					"aut" | "author" | "cre" | "creator" => Some(&mut authors),
+					"art" | "artist" | "ill" | "illustrator" | "let" | "letterer" | "pnc" | "penciller"
+					| "clr" | "colorist" | "ink" | "inker" => Some(&mut artists),
+					_ => None,
+				};
+				if let Some(target) = target {
+					for name in &names {
+						push_unique(target, name.clone());
+					}
+				}
+			}
+		}
+	}
+	(authors, artists)
 }
 
 /// rel may be a string or an array (RWPM); one EntryLink per rel keeps rel lookups working
@@ -481,6 +642,8 @@ fn navigation_entry(item: &Value) -> FeedEntry {
 		content: String::new(),
 		updated: None,
 		authors: Vec::new(),
+		artists: Vec::new(),
+		tags: Vec::new(),
 		links: vec![EntryLink {
 			rel: "subsection".to_string(),
 			type_,
@@ -490,11 +653,12 @@ fn navigation_entry(item: &Value) -> FeedEntry {
 	}
 }
 
-/// A publication becomes one entry: metadata.identifier/title/author/modified/description onto the 1.2 fields,
+/// A publication becomes one entry: metadata.identifier/title/author/subject/modified/description onto the 1.2 fields,
 /// acquisition rels and self links stay links (a feed-typed self link is the series drill-down, any other json
 /// self link the book's manifest), images[0] is the cover and the rest thumbnails
 fn publication_entry(publication: &Value) -> FeedEntry {
 	let metadata = publication.get("metadata");
+	let (authors, artists) = role_names(metadata);
 	let mut entry = FeedEntry {
 		id: metadata.and_then(|m| m.get("identifier")).map(json_text).unwrap_or_default(),
 		title: metadata.and_then(|m| m.get("title")).map(json_text).unwrap_or_default(),
@@ -503,7 +667,9 @@ fn publication_entry(publication: &Value) -> FeedEntry {
 			.and_then(|m| m.get("modified"))
 			.and_then(Value::as_str)
 			.and_then(parse_rfc3339),
-		authors: json_contributors(metadata.and_then(|m| m.get("author"))),
+		authors,
+		artists,
+		tags: json_terms(metadata.and_then(|m| m.get("subject"))),
 		links: Vec::new(),
 	};
 	if let Some(links) = publication.get("links").and_then(Value::as_array) {
@@ -556,6 +722,7 @@ fn search_template_url(template: &str, query: &str) -> String {
 		.replace('+', "%20");
 	let mut out = template
 		.replace("{?query}", &format!("?query={encoded}"))
+		.replace("{query}", &encoded)
 		.replace("{searchTerms?}", &encoded)
 		.replace("{searchTerms}", &encoded);
 	while let Some(start) = out.find('{') {
@@ -565,24 +732,37 @@ fn search_template_url(template: &str, query: &str) -> String {
 	out
 }
 
-/// The result URL template in an OpenSearch description document (the first Url element's template attribute)
-pub fn parse_opensearch_template(bytes: &[u8]) -> Option<String> {
+/// The result URL template in an OpenSearch description document, selected by result media type
+pub fn parse_opensearch_template(bytes: &[u8], preferred_type: Option<&str>) -> Option<String> {
 	let mut reader = quick_xml::Reader::from_reader(bytes);
 	let mut buf = Vec::new();
+	let mut fallback = None;
+	let preferred_type = preferred_type.map(|value| value.split(';').next().unwrap_or_default().trim());
 	loop {
 		match reader.read_event_into(&mut buf) {
 			Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
 				if local_name(e.name().as_ref()) == "Url" {
+					let mut template = None;
+					let mut type_ = String::new();
 					for attr in e.attributes().flatten() {
-						if local_name(attr.key.as_ref()) == "template"
-							&& let Ok(value) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
-						{
-							return Some(value.into_owned());
+						if let Ok(value) = attr.normalized_value(quick_xml::XmlVersion::Implicit1_0) {
+							match local_name(attr.key.as_ref()) {
+								"template" => template = Some(value.into_owned()),
+								"type" => type_ = value.into_owned(),
+								_ => {}
+							}
 						}
+					}
+					if let Some(template) = template {
+						let base_type = type_.split(';').next().unwrap_or_default().trim();
+						if preferred_type.is_none_or(|t| base_type.eq_ignore_ascii_case(t)) {
+							return Some(template);
+						}
+						fallback.get_or_insert(template);
 					}
 				}
 			}
-			Ok(Event::Eof) => return None,
+			Ok(Event::Eof) => return if preferred_type.is_none() { fallback } else { None },
 			Err(_) => return None,
 			_ => {}
 		}
@@ -616,11 +796,266 @@ pub struct SearchOutcome {
 	pub entries: Vec<Manga>,
 	/// Marks the feed-traversal fallback when the catalog has no OpenSearch: results are just title substring filtering, not a real search
 	pub degraded: bool,
+	pub has_next_page: bool,
+}
+
+pub struct BrowseGroup {
+	pub title: String,
+	pub entries: Vec<Manga>,
+	pub navigation: Vec<BrowseNavigation>,
+}
+
+pub struct BrowseNavigation {
+	pub title: String,
+	pub listing_id: String,
+}
+
+pub struct ListingPage {
+	pub entries: Vec<Manga>,
+	pub has_next_page: bool,
+	pub groups: Vec<BrowseGroup>,
+	pub navigation: Vec<BrowseNavigation>,
+	pub parent_id: Option<String>,
+}
+
+fn navigation_listing_id(path: &[String]) -> String {
+	if path.len() == 1 {
+		return format!("opds:nav:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&path[0]));
+	}
+	format!(
+		"opds:path:{}",
+		base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(path).expect("serialize OPDS path"))
+	)
+}
+
+fn decode_listing_path(listing_id: &str) -> ApiResult<Vec<String>> {
+	let Some((prefix, encoded)) = listing_id.split_once(':').and_then(|(a, tail)| tail.split_once(':').map(|(b, c)| (format!("{a}:{b}"), c))) else {
+		return Err(ApiError::not_found("unknown OPDS listing"));
+	};
+	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+		.decode(encoded)
+		.map_err(|_| ApiError::not_found("unknown OPDS listing"))?;
+	if prefix == "opds:nav" {
+		return String::from_utf8(bytes)
+			.map(|url| vec![url])
+			.map_err(|_| ApiError::not_found("unknown OPDS listing"));
+	}
+	if prefix == "opds:path" {
+		let path: Vec<String> = serde_json::from_slice(&bytes).map_err(|_| ApiError::not_found("unknown OPDS listing"))?;
+		if path.is_empty() || path.len() > 16 {
+			return Err(ApiError::not_found("unknown OPDS listing"));
+		}
+		return Ok(path);
+	}
+	Err(ApiError::not_found("unknown OPDS listing"))
+}
+
+fn navigation_destinations(feed: &Feed, feed_url: &str) -> Vec<(String, String)> {
+	feed.navigation
+		.iter()
+		.chain(feed.groups.iter().flat_map(|group| &group.navigation))
+		.filter_map(|entry| {
+			let link = entry.feed_link()?;
+			Some((entry.title.clone(), Catalog::resolve(feed_url, &link.href).ok()?))
+		})
+		.collect()
+}
+
+fn top_navigation_destinations(feed: &Feed, feed_url: &str) -> Vec<(String, String)> {
+	feed.navigation
+		.iter()
+		.filter_map(|entry| {
+			let link = entry.feed_link()?;
+			Some((entry.title.clone(), Catalog::resolve(feed_url, &link.href).ok()?))
+		})
+		.collect()
+}
+
+pub async fn get_listings(state: &Arc<AppState>, source_id: i64) -> ApiResult<Vec<Value>> {
+	let catalog = Catalog::load(state, source_id).await?;
+	let root = catalog.get_feed(state, catalog.base_url()).await?;
+	let mut listings = vec![json!({"id": "opds:all", "name": "All", "kind": "default"})];
+	let mut seen_urls = std::collections::HashSet::new();
+	for entry in &root.navigation {
+		let Some(link) = entry.feed_link() else { continue };
+		let Ok(url) = Catalog::resolve(catalog.base_url(), &link.href) else { continue };
+		let id = navigation_listing_id(std::slice::from_ref(&url));
+		if seen_urls.insert(url) {
+			listings.push(json!({"id": id, "name": entry.title, "kind": "default"}));
+		}
+	}
+	Ok(listings)
+}
+
+pub async fn listing_page(
+	state: &Arc<AppState>,
+	source_id: i64,
+	listing_id: &str,
+	page: i32,
+) -> ApiResult<ListingPage> {
+	let catalog = Catalog::load(state, source_id).await?;
+	let root_url = catalog.base_url().to_string();
+	let path = if listing_id == "opds:all" { Vec::new() } else { decode_listing_path(listing_id)? };
+	let mut feed_url = root_url.clone();
+	let mut feed = catalog.get_feed(state, &root_url).await?;
+	let mut seen = std::collections::HashSet::from([root_url.clone()]);
+	for target in &path {
+		if !navigation_destinations(&feed, &feed_url).iter().any(|(_, url)| url == target) || !seen.insert(target.clone()) {
+			return Err(ApiError::not_found("unknown OPDS listing"));
+		}
+		feed_url = target.clone();
+		feed = catalog.get_feed(state, &feed_url).await?;
+	}
+	let (feed, resolved_url, has_next_page) = search_page(&catalog, state, feed_url, page).await?;
+	let entries = browse_entries(&feed.publications, &resolved_url);
+	let navigation = if path.is_empty() { Vec::new() } else { top_navigation_destinations(&feed, &resolved_url) }
+		.into_iter()
+		.map(|(title, url)| {
+			let mut child_path = path.clone();
+			child_path.push(url);
+			BrowseNavigation { title, listing_id: navigation_listing_id(&child_path) }
+		})
+		.collect();
+	let groups = feed
+		.groups
+		.into_iter()
+		.map(|group| BrowseGroup {
+			title: group.title,
+			entries: browse_entries(&group.publications, &resolved_url),
+			navigation: group.navigation.iter().filter_map(|entry| {
+				let link = entry.feed_link()?;
+				let mut child_path = path.clone();
+				child_path.push(Catalog::resolve(&resolved_url, &link.href).ok()?);
+				Some(BrowseNavigation { title: entry.title.clone(), listing_id: navigation_listing_id(&child_path) })
+			}).collect(),
+		})
+		.filter(|group| !group.entries.is_empty() || !group.navigation.is_empty())
+		.collect();
+	Ok(ListingPage {
+		entries,
+		has_next_page,
+		groups,
+		navigation,
+		parent_id: if path.is_empty() { None } else if path.len() == 1 { Some("opds:all".into()) } else { Some(navigation_listing_id(&path[..path.len() - 1])) },
+	})
+}
+
+fn browse_entries(entries: &[FeedEntry], feed_url: &str) -> Vec<Manga> {
+	entries
+		.iter()
+		.filter(|entry| entry.is_actionable_publication())
+		.filter_map(|entry| {
+			let stable_id = stable_entry_id(entry, feed_url)?;
+			let url = if entry.is_book() {
+				feed_url.to_string()
+			} else {
+				Catalog::resolve(feed_url, &entry.feed_link()?.href).ok()?
+			};
+			let key = if entry.is_book() {
+				work_key(&stable_id)
+			} else if entry.id.is_empty() {
+				entry
+					.acquisition()
+					.or_else(|| entry.pse())
+					.or_else(|| entry.manifest())
+					.and_then(|link| Catalog::resolve(feed_url, &link.href).ok())
+					.unwrap_or_else(|| url.clone())
+			} else {
+				entry.id.clone()
+			};
+			Some(Manga {
+				key,
+				title: entry.title.clone(),
+				url: Some(url),
+				cover: entry
+					.image()
+					.or_else(|| entry.thumbnail())
+					.and_then(|link| Catalog::resolve(feed_url, &link.href).ok()),
+				description: (!entry.content.is_empty()).then(|| entry.content.clone()),
+				authors: (!entry.authors.is_empty()).then(|| entry.authors.clone()),
+				artists: (!entry.artists.is_empty()).then(|| entry.artists.clone()),
+				tags: (!entry.tags.is_empty()).then(|| entry.tags.clone()),
+				chapters: if entry.is_book() {
+					entry_to_chapter(entry, feed_url).map(|chapter| vec![chapter])
+				} else {
+					None
+				},
+				..Manga::default()
+			})
+		})
+		.collect()
+}
+
+fn work_key(entry_id: &str) -> String {
+	format!("{WORK_KEY_PREFIX}{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entry_id))
+}
+
+fn stable_entry_id(entry: &FeedEntry, feed_url: &str) -> Option<String> {
+	if !entry.id.is_empty() {
+		return Some(entry.id.clone());
+	}
+	entry
+		.links
+		.iter()
+		.find(|link| link.rel == "self")
+		.or_else(|| entry.acquisition())
+		.or_else(|| entry.pse())
+		.or_else(|| entry.manifest())
+		.and_then(|link| Catalog::resolve(feed_url, &link.href).ok())
+}
+
+fn work_entry_id(key: &str) -> ApiResult<Option<String>> {
+	let Some(encoded) = key.strip_prefix(WORK_KEY_PREFIX) else {
+		return Ok(None);
+	};
+	let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+		.decode(encoded)
+		.map_err(|_| ApiError::bad_request("invalid OPDS work key"))?;
+	String::from_utf8(bytes)
+		.map(Some)
+		.map_err(|_| ApiError::bad_request("invalid OPDS work key"))
+}
+
+async fn search_page(
+	catalog: &Catalog,
+	state: &AppState,
+	mut url: String,
+	page: i32,
+) -> ApiResult<(Feed, String, bool)> {
+	if page < 1 || page as usize > FEED_MAX_PAGES {
+		return Err(ApiError::bad_request(format!("catalog search page exceeds maximum of {FEED_MAX_PAGES}")));
+	}
+	let mut visited = std::collections::HashSet::new();
+	visited.insert(url.clone());
+	for _ in 1..page {
+		let feed = catalog.get_feed(state, &url).await?;
+		let Some(next) = feed.next_link() else {
+			return Ok((Feed::default(), url, false));
+		};
+		url = Catalog::resolve(&url, &next.href)?;
+		if !visited.insert(url.clone()) {
+			return Err(ApiError::bad_gateway("catalog search pagination repeated a link"));
+		}
+	}
+	let feed = catalog.get_feed(state, &url).await?;
+	let has_more = feed.next_link().is_some();
+	if let Some(next) = feed.next_link() {
+		let next_url = Catalog::resolve(&url, &next.href)?;
+		if visited.contains(&next_url) {
+			return Err(ApiError::bad_gateway("catalog search pagination repeated a link"));
+		}
+	}
+	Ok((feed, url, has_more && (page as usize) < FEED_MAX_PAGES))
 }
 
 /// search capability mapping: the OpenSearch description wins; when missing/unusable, fall back to feed traversal marked degraded.
 /// An empty query = browse, traversing the root directly (not counted as degraded)
-pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) -> ApiResult<SearchOutcome> {
+pub async fn search(
+	state: &Arc<AppState>,
+	source_id: i64,
+	query: Option<&str>,
+	page: i32,
+) -> ApiResult<SearchOutcome> {
 	let catalog = Catalog::load(state, source_id).await?;
 	let root_url = catalog.base_url.clone();
 	let root = catalog.get_feed(state, &root_url).await?;
@@ -633,14 +1068,15 @@ pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) 
 		if let Some(link) = search_link {
 			let descriptor_url = Catalog::resolve(&root_url, &link.href)?;
 			if let Ok((descriptor, _)) = catalog.get_bytes(state, &descriptor_url, 1024 * 1024).await
-				&& let Some(template) = parse_opensearch_template(&descriptor)
+				&& let Some(template) = parse_opensearch_template(&descriptor, Some("application/atom+xml"))
 			{
-				let search_url = opensearch_url(&Catalog::resolve(&root_url, &template)?, query);
-				let feed = catalog.get_feed(state, &search_url).await?;
+				let search_url = Catalog::resolve(&descriptor_url, &opensearch_url(&template, query))?;
+				let (feed, search_url, has_next_page) = search_page(&catalog, state, search_url, page).await?;
 				let entries = feed_entries_to_manga(&feed, &search_url);
 				return Ok(SearchOutcome {
 					entries,
 					degraded: false,
+					has_next_page,
 				});
 			}
 		}
@@ -648,26 +1084,33 @@ pub async fn search(state: &Arc<AppState>, source_id: i64, query: Option<&str>) 
 		let v2_search = root
 			.links
 			.iter()
-			.find(|l| l.rel == "search" && l.type_.starts_with(FEED_TYPE_V2) && l.href.contains('{'));
+			.find(|l| {
+				l.rel == "search"
+					&& (l.type_.starts_with(FEED_TYPE_V2) || l.type_.starts_with("application/atom+xml"))
+					&& l.href.contains('{')
+			});
 		if let Some(link) = v2_search {
 			let search_url = Catalog::resolve(&root_url, &search_template_url(&link.href, query))?;
-			let feed = catalog.get_feed(state, &search_url).await?;
+			let (feed, search_url, has_next_page) = search_page(&catalog, state, search_url, page).await?;
 			let entries = feed_entries_to_manga(&feed, &search_url);
 			return Ok(SearchOutcome {
 				entries,
 				degraded: false,
+				has_next_page,
 			});
 		}
 		let entries = traverse(&catalog, state, &root, &root_url, Some(query)).await?;
 		return Ok(SearchOutcome {
 			entries,
 			degraded: true,
+			has_next_page: false,
 		});
 	}
 	let entries = traverse(&catalog, state, &root, &root_url, None).await?;
 	Ok(SearchOutcome {
 		entries,
 		degraded: false,
+		has_next_page: false,
 	})
 }
 
@@ -686,6 +1129,7 @@ async fn traverse(
 	let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
 	let mut queue: std::collections::VecDeque<(String, usize)> = std::collections::VecDeque::new();
 	visited.insert(root_url.to_string());
+	append_matching_entries(&mut out, &mut seen, root, root_url, needle.as_deref());
 	let mut fetched = 1usize;
 	let mut pending: Vec<(String, usize)> = Vec::new();
 	for entry in &root.entries {
@@ -715,14 +1159,7 @@ async fn traverse(
 			}
 		};
 		fetched += 1;
-		for manga in feed_entries_to_manga(&feed, &feed_url) {
-			if needle.as_ref().is_some_and(|n| !manga.title.to_lowercase().contains(n)) {
-				continue;
-			}
-			if seen.insert(manga.key.clone()) {
-				out.push(manga);
-			}
-		}
+		append_matching_entries(&mut out, &mut seen, &feed, &feed_url, needle.as_deref());
 		if depth < TRAVERSE_MAX_DEPTH {
 			for entry in &feed.entries {
 				if let Some(link) = entry.feed_link()
@@ -743,76 +1180,166 @@ async fn traverse(
 	Ok(out)
 }
 
-/// Drillable entry → source-side Manga: key is the entry <id>, url is the drill-down feed link (the only handle for
-/// fetching upstream); book-shaped entries (acquisition links straight in the list) do not enter the manga model — they are chapter material of a series
+fn append_matching_entries(
+	out: &mut Vec<Manga>,
+	seen: &mut std::collections::HashSet<String>,
+	feed: &Feed,
+	feed_url: &str,
+	needle: Option<&str>,
+) {
+	for manga in feed_entries_to_manga(feed, feed_url) {
+		if needle.is_some_and(|n| !manga.title.to_lowercase().contains(n)) { continue; }
+		if seen.insert(manga.key.clone()) { out.push(manga); }
+	}
+}
+
+/// Convert publications to source-side Manga entries. Navigation remains available for feed traversal and listing
+/// payloads, but it never becomes a work result.
 fn feed_entries_to_manga(feed: &Feed, feed_url: &str) -> Vec<Manga> {
-	feed.entries
+	let publications: Vec<FeedEntry> = feed
+		.publications
 		.iter()
-		.filter(|entry| !entry.is_book())
-		.filter_map(|entry| {
-			let link = entry.feed_link()?;
-			let url = Catalog::resolve(feed_url, &link.href).ok()?;
-			let cover = entry
-				.image()
-				.or_else(|| entry.thumbnail())
-				.and_then(|l| Catalog::resolve(feed_url, &l.href).ok());
-			let description = (!entry.content.is_empty()).then(|| entry.content.clone());
-			Some(Manga {
-				key: entry.id.clone(),
-				title: entry.title.clone(),
-				url: Some(url),
-				cover,
-				description,
-				authors: (!entry.authors.is_empty()).then(|| entry.authors.clone()),
-				..Manga::default()
-			})
-		})
-		.collect()
+		.chain(feed.groups.iter().flat_map(|group| &group.publications))
+	.cloned()
+	.collect();
+	browse_entries(&publications, feed_url)
 }
 
 /// The opds counterpart of fetching details + chapters from the source: pulls the entry feed and maps acquisition
 /// entries to chapters; pagination (rel=next) is followed to completion. initial provides key and url (search results/library rows both carry them)
 pub async fn manga_update(state: &Arc<AppState>, source_id: i64, initial: Manga) -> ApiResult<Manga> {
 	let catalog = Catalog::load(state, source_id).await?;
+	let standalone_id = work_entry_id(&initial.key)?;
+	if let Some(entry_id) = standalone_id.as_deref()
+		&& let Some(chapters) = initial.chapters.as_ref()
+		&& chapters.len() == 1
+		&& chapters[0].key == entry_id
+	{
+		// Search and listing results already carry the publication and its acquisition link; use them to build the
+		// first detail page instead of fetching the result feed again. Refreshes have no chapter hint and still fetch.
+		return Ok(initial);
+	}
 	let feed_url = initial
 		.url
 		.clone()
 		.filter(|u| !u.is_empty())
 		.ok_or_else(|| ApiError::bad_request("opds manga requires a catalog url"))?;
-	let feed = fetch_feed_pages(&catalog, state, &feed_url, FEED_MAX_PAGES).await?;
-	let chapters: Vec<Chapter> = feed
-		.entries
+	let feed = match fetch_feed_pages(&catalog, state, &feed_url, FEED_MAX_PAGES).await {
+		Ok(feed) => feed,
+		Err(error) if standalone_id.is_some() => {
+			if let Some(updated) = persisted_work_update(state, source_id, &initial, standalone_id.as_deref().unwrap(), &feed_url).await? {
+				return Ok(updated);
+			}
+			return Err(error);
+		}
+		Err(error) => return Err(error),
+	};
+	let standalone = if let Some(entry_id) = standalone_id {
+		if let Some(entry) = feed.entries.iter().find(|entry| entry.is_book() && stable_entry_id(entry, &feed_url).as_deref() == Some(&entry_id)) {
+			Some(entry)
+		} else {
+			if let Some(updated) = persisted_work_update(state, source_id, &initial, &entry_id, &feed_url).await? {
+				return Ok(updated);
+			}
+			return Err(ApiError::not_found("opds publication not found in catalog feed"));
+		}
+	} else {
+		None
+	};
+	let chapter_entries: Vec<&FeedEntry> = standalone
+		.map(|entry| vec![entry])
+		.unwrap_or_else(|| feed.entries.iter().collect());
+	let chapters: Vec<Chapter> = chapter_entries
 		.iter()
 		.filter_map(|entry| entry_to_chapter(entry, &feed_url))
 		.collect();
-	let cover = feed
-		.entries
-		.iter()
-		.find_map(|entry| {
+	let cover = if let Some(entry) = standalone {
+		entry
+			.image()
+			.or_else(|| entry.thumbnail())
+			.and_then(|l| Catalog::resolve(&feed_url, &l.href).ok())
+			.or(initial.cover.clone())
+	} else {
+		feed.entries
+			.iter()
+			.find_map(|entry| {
 			entry
 				.image()
 				.or_else(|| entry.thumbnail())
 				.and_then(|l| Catalog::resolve(&feed_url, &l.href).ok())
-		})
-		.or(initial.cover.clone());
+			})
+			.or(initial.cover.clone())
+	};
 	let mut authors: Vec<String> = Vec::new();
-	for entry in &feed.entries {
+	let mut artists: Vec<String> = Vec::new();
+	let mut tags: Vec<String> = Vec::new();
+	for entry in &chapter_entries {
 		for author in &entry.authors {
-			if !authors.contains(author) {
-				authors.push(author.clone());
-			}
+			push_unique(&mut authors, author.clone());
+		}
+		for artist in &entry.artists {
+			push_unique(&mut artists, artist.clone());
+		}
+		for tag in &entry.tags {
+			push_unique(&mut tags, tag.clone());
 		}
 	}
 	Ok(Manga {
 		key: initial.key.clone(),
-		title: if feed.title.is_empty() { initial.title.clone() } else { feed.title },
+		title: if standalone.is_some() || feed.title.is_empty() {
+			initial.title.clone()
+		} else {
+			feed.title
+		},
 		url: Some(feed_url),
 		cover,
 		authors: if authors.is_empty() { initial.authors.clone() } else { Some(authors) },
+		artists: if artists.is_empty() { initial.artists.clone() } else { Some(artists) },
+		tags: if tags.is_empty() { initial.tags.clone() } else { Some(tags) },
 		description: initial.description.clone(),
 		chapters: Some(chapters),
 		..Manga::default()
 	})
+}
+
+async fn persisted_work_update(
+	state: &AppState,
+	source_id: i64,
+	initial: &Manga,
+	entry_id: &str,
+	feed_url: &str,
+) -> ApiResult<Option<Manga>> {
+	let persisted: Option<PersistedWorkChapter> = sqlx::query_as(
+		"SELECT c.key, c.title, c.number, c.volume, c.language, c.thumbnail, c.url, c.date_uploaded FROM chapter c JOIN manga m ON m.id = c.manga_id WHERE m.source_id = ? AND m.key = ? AND c.key = ? AND c.trashed_at IS NULL",
+	)
+	.bind(source_id)
+	.bind(&initial.key)
+	.bind(entry_id)
+	.fetch_optional(&state.pool)
+	.await?;
+	Ok(persisted.map(|chapter| Manga {
+		key: initial.key.clone(),
+		title: initial.title.clone(),
+		url: Some(feed_url.to_string()),
+		cover: initial.cover.clone(),
+		authors: initial.authors.clone(),
+		artists: initial.artists.clone(),
+		tags: initial.tags.clone(),
+		description: initial.description.clone(),
+		chapters: Some(vec![Chapter {
+			key: chapter.key,
+			title: chapter.title,
+			chapter_number: chapter.number.map(|n| n as f32),
+			volume_number: chapter.volume.map(|n| n as f32),
+			language: chapter.language,
+			thumbnail: chapter.thumbnail,
+			url: chapter.url,
+			date_uploaded: chapter.date_uploaded,
+			locked: false,
+			..Chapter::default()
+		}]),
+		..Manga::default()
+	}))
 }
 
 /// The feed's first page plus rel=next pagination merged into the complete entry list (the feed-level title comes only from the first page)
@@ -823,6 +1350,7 @@ async fn fetch_feed_pages(catalog: &Catalog, state: &AppState, feed_url: &str, m
 		title: first.title,
 		links: Vec::new(),
 		entries: first.entries,
+		..Feed::default()
 	};
 	let mut pages = 1;
 	while let Some(href) = next {
@@ -839,22 +1367,25 @@ async fn fetch_feed_pages(catalog: &Catalog, state: &AppState, feed_url: &str, m
 	Ok(merged)
 }
 
-/// Book entry → chapter: url prefers the acquisition file link (both the CBZ fallback and downloads point at it),
-/// falling back to the PSE stream base when there is no file link; number parses from the title's digits (volume-level chapters are a source feature, so an unparseable number stays empty)
+/// Book entry → chapter: url prefers a usable PSE template with its count, then the publication manifest, then the
+/// acquisition archive. Number parses from the title's digits (volume-level chapters are a source feature, so an
+/// unparseable number stays empty).
 fn entry_to_chapter(entry: &FeedEntry, feed_url: &str) -> Option<Chapter> {
 	if !entry.is_book() {
 		return None;
 	}
 	let url = entry
-		.acquisition()
-		.or_else(|| entry.pse())
-		.and_then(|l| Catalog::resolve(feed_url, &l.href).ok());
+		.pse()
+		.filter(|link| link.pse_count.is_some_and(|count| count > 0) && link.href.contains("{pageNumber}"))
+		.and_then(|l| resolve_template(feed_url, &l.href).ok().map(|href| pse_locator(&href, l.pse_count)))
+		.or_else(|| entry.manifest().and_then(|l| Catalog::resolve(feed_url, &l.href).ok().map(|href| manifest_locator(&href))))
+		.or_else(|| entry.acquisition().and_then(|l| Catalog::resolve(feed_url, &l.href).ok()));
 	let thumbnail = entry
 		.thumbnail()
 		.or_else(|| entry.image())
 		.and_then(|l| Catalog::resolve(feed_url, &l.href).ok());
 	Some(Chapter {
-		key: entry.id.clone(),
+		key: stable_entry_id(entry, feed_url)?,
 		title: Some(entry.title.clone()),
 		chapter_number: crate::internal::local::chapter_number::parse_chapter_number(&entry.title),
 		volume_number: None,
@@ -867,9 +1398,66 @@ fn entry_to_chapter(entry: &FeedEntry, feed_url: &str) -> Option<Chapter> {
 	})
 }
 
+fn pse_locator(url: &str, count: Option<i64>) -> String {
+	format!("{}#opds-pse-count={}", url.split('#').next().unwrap_or(url), count.unwrap_or(0))
+}
+
+fn resolve_template(feed_url: &str, href: &str) -> ApiResult<String> {
+	let marker = "OPDS_PAGE_PLACEHOLDER";
+	let escaped = href.replace("{pageNumber}", marker);
+	Ok(Catalog::resolve(feed_url, &escaped)?.replace(marker, "{pageNumber}"))
+}
+
+fn manifest_locator(url: &str) -> String {
+	format!("{}#opds-manifest", url.split('#').next().unwrap_or(url))
+}
+
+fn decode_locator(value: &str) -> Option<(String, Option<i64>)> {
+	let (url, fragment) = value.split_once('#')?;
+	if let Some(count) = fragment.strip_prefix("opds-pse-count=") {
+		Some((url.to_string(), Some(count.parse().ok()?)))
+	} else if fragment == "opds-manifest" {
+		Some((url.to_string(), None))
+	} else {
+		None
+	}
+}
+
+fn is_direct_acquisition_locator(value: &str) -> bool {
+	decode_locator(value).is_none()
+		&& !value.contains("{pageNumber}")
+		&& reqwest::Url::parse(value).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
+}
+
 /// load_pages' opds arm: PSE per-page links expand into Url pages (PSE page numbers are 0-based; Komga's endpoint
 /// implements +1), otherwise the acquisition archive is downloaded to disk and ZipCache lists image entries into OpdsZip pages
 pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter: &ChapterRow) -> ApiResult<Vec<Value>> {
+	if let Some(locator) = chapter.url.as_deref() {
+		if let Some((url, count)) = decode_locator(locator) {
+			if locator.contains("#opds-pse-count=") {
+				let count = count.unwrap_or(0);
+				if count <= 0 || !url.contains("{pageNumber}") { return Err(ApiError::bad_gateway("opds persisted PSE locator is invalid")); }
+				return (0..count).map(|i| Ok(page_url_json(url.replace("{pageNumber}", &i.to_string())))).collect();
+			}
+			let catalog = Catalog::load(state, manga.source_id).await?;
+			let max = state.config.net_body_max_mb * 1024 * 1024;
+			match catalog.get_bytes(state, &url, max).await {
+				Ok((bytes, _)) => match parse_reading_order(&bytes) {
+					Ok(reading_order) if !reading_order.is_empty() => {
+						return reading_order.iter().map(|href| Ok(page_url_json(Catalog::resolve(&url, href)?))).collect();
+					}
+					_ => tracing::warn!(manifest_url = %url, "opds persisted manifest has no usable readingOrder; falling back to feed"),
+				},
+				Err(error) => tracing::warn!(manifest_url = %url, "opds persisted manifest fetch failed; falling back to feed: {}", error.message()),
+			}
+		}
+		if is_direct_acquisition_locator(locator) && let Ok(url) = reqwest::Url::parse(locator) {
+			let catalog = Catalog::load(state, manga.source_id).await?;
+			let path = ensure_cbz(state, &catalog, chapter.id, url.as_str()).await?;
+			let names = list_cbz_pages(state, &path).await?;
+			return Ok(names.iter().map(|name| page_opds_zip_json(name)).collect());
+		}
+	}
 	let catalog = Catalog::load(state, manga.source_id).await?;
 	let feed_url = manga
 		.url
@@ -880,7 +1468,7 @@ pub async fn chapter_page_rows(state: &Arc<AppState>, manga: &MangaRow, chapter:
 	let entry = feed
 		.entries
 		.iter()
-		.find(|e| e.id == chapter.key)
+		.find(|e| stable_entry_id(e, &feed_url).as_deref() == Some(&chapter.key))
 		.ok_or_else(|| ApiError::not_found("opds chapter not found in catalog feed"))?;
 	if let Some(pse) = entry.pse()
 		&& let Some(count) = pse.pse_count
@@ -954,6 +1542,12 @@ async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &Chap
 	if tokio::fs::metadata(&path).await.is_ok() {
 		return Ok(path);
 	}
+	if let Some(url) = chapter.url.as_deref().filter(|url| is_direct_acquisition_locator(url)) {
+		let catalog = Catalog::load(state, manga.source_id).await?;
+		ensure_cbz(state, &catalog, chapter.id, url).await?;
+		crate::cache::reconcile_chapter_accounted(state, chapter.id).await?;
+		return Ok(path);
+	}
 	let catalog = Catalog::load(state, manga.source_id).await?;
 	let feed_url = manga
 		.url
@@ -964,7 +1558,7 @@ async fn ensure_cbz_path(state: &Arc<AppState>, manga: &MangaRow, chapter: &Chap
 	let entry = feed
 		.entries
 		.iter()
-		.find(|e| e.id == chapter.key)
+		.find(|e| stable_entry_id(e, &feed_url).as_deref() == Some(&chapter.key))
 		.ok_or_else(|| ApiError::not_found("opds chapter not found in catalog feed"))?;
 	let acquisition = entry
 		.acquisition()
@@ -1149,6 +1743,23 @@ mod tests {
 			entry.thumbnail().map(|l| l.href.as_str()),
 			Some("/opds/books/book-1/thumbnail/small")
 		);
+		let both = parse_feed(
+			br#"
+<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>A</title><id>a</id>
+<link rel="http://opds-spec.org/image-thumbnail" href="legacy.jpg"/>
+<link rel="http://opds-spec.org/image/thumbnail" href="canonical.jpg"/>
+</entry></feed>"#,
+		)
+			.expect("thumbnail relation variants");
+		assert_eq!(both.entries[0].thumbnail().map(|l| l.href.as_str()), Some("canonical.jpg"));
+		let alias = parse_feed(
+			br#"
+<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+<link rel="http://opds-spec.org/image-thumbnail" href="legacy.jpg"/>
+</entry></feed>"#,
+		)
+			.expect("alternate thumbnail relation");
+		assert_eq!(alias.entries[0].thumbnail().map(|l| l.href.as_str()), Some("legacy.jpg"));
 	}
 
 	#[test]
@@ -1164,17 +1775,120 @@ mod tests {
     <content></content>
     <link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="/opds/series/alpha"/>
   </entry>
+  <entry>
+    <title>Volume collection</title>
+    <id>volumes</id>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=acquisition" href="/opds/books"/>
+  </entry>
 </feed>"#;
 		let feed = parse_feed(xml.as_bytes()).expect("parse");
-		assert_eq!(feed.entries.len(), 1);
+		assert_eq!(feed.entries.len(), 2);
+		assert_eq!(feed.navigation.len(), 2);
+		assert_eq!(feed.publications.len(), 0);
 		let entry = &feed.entries[0];
 		assert!(!entry.is_book());
+		assert!(feed_entries_to_manga(&feed, "https://catalog.test/root").is_empty());
 		assert_eq!(
 			entry.feed_link().map(|l| l.href.as_str()),
 			Some("/opds/series/alpha")
 		);
 		let search = feed.links.iter().find(|l| l.rel == "search").expect("search link");
 		assert_eq!(search.href, "/opds/search");
+	}
+
+	#[test]
+	fn atom_categories_and_authors_map_to_manga_metadata() {
+		let xml = br#"<feed xmlns="http://www.w3.org/2005/Atom"><entry>
+<title>Metadata series</title><id>metadata-series</id>
+<category term="action" label="Action"/><category term="Drama"/>
+<author><name>Atom Author</name></author>
+<link rel="subsection" type="application/atom+xml;kind=acquisition" href="/series/metadata"/>
+</entry></feed>"#;
+		let feed = parse_feed(xml).expect("Atom metadata feed");
+		let manga = feed_entries_to_manga(&feed, "https://catalog.test/root");
+		assert!(manga.is_empty(), "Atom subsection remains navigation despite kind=acquisition");
+	}
+
+	#[test]
+	fn persisted_locators_keep_absolute_urls_and_pse_count() {
+		let pse = pse_locator("https://catalog.test/pages/{pageNumber}", Some(17));
+		assert_eq!(decode_locator(&pse), Some(("https://catalog.test/pages/{pageNumber}".into(), Some(17))));
+		let manifest = manifest_locator("https://catalog.test/book.json");
+		assert_eq!(decode_locator(&manifest), Some(("https://catalog.test/book.json".into(), None)));
+		assert!(reqwest::Url::parse(&pse).is_ok());
+		assert!(!is_direct_acquisition_locator(&manifest));
+		assert!(!is_direct_acquisition_locator("https://catalog.test/pages/{pageNumber}"));
+		assert!(is_direct_acquisition_locator("https://catalog.test/archive.cbz"));
+	}
+
+	#[test]
+	fn degraded_search_matches_root_publications_and_deduplicates() {
+		let mut feed = Feed::default();
+		feed.publications.push(FeedEntry {
+			id: "root-book".into(), title: "Root Only Book".into(), content: String::new(), updated: None,
+			authors: Vec::new(), artists: Vec::new(), tags: Vec::new(),
+			links: vec![EntryLink { rel: "http://opds-spec.org/acquisition".into(), type_: "application/zip".into(), href: "/root.cbz".into(), pse_count: None }],
+		});
+		let mut out = Vec::new();
+		let mut seen = std::collections::HashSet::new();
+		append_matching_entries(&mut out, &mut seen, &feed, "https://catalog.test/root", Some("root only"));
+		append_matching_entries(&mut out, &mut seen, &feed, "https://catalog.test/root", Some("root only"));
+		assert_eq!(out.len(), 1);
+		assert_eq!(out[0].key, "opds:work:cm9vdC1ib29r");
+	}
+
+	#[test]
+	fn rwpm_subject_shapes_and_contributor_roles_map_to_manga_metadata() {
+		let json = br#"{
+  "publications": [
+    {"metadata": {"title": "String subject", "subject": "Action"}, "links": [{"rel": "http://opds-spec.org/acquisition", "href": "/one.cbz"}]},
+    {"metadata": {"title": "Object subject", "subject": {"name": "Mystery"}}, "links": [{"rel": "http://opds-spec.org/acquisition", "href": "/two.cbz"}]},
+    {"metadata": {
+      "title": "Array subjects", "identifier": "mapped", "subject": ["Drama", {"name": "Seinen"}],
+      "author": [{"name": "Named Author"}],
+      "artist": "Named Artist", "illustrator": [{"name": "Illustrator"}],
+      "letterer": "Letterer", "penciller": "Penciller", "colorist": "Colorist", "inker": "Inker",
+      "contributor": [
+        {"name": "Role Author", "role": "aut"},
+        {"name": "Role Creator", "role": "cre"},
+        {"name": "Role Artist", "role": "art"},
+        {"name": "Role Illustrator", "role": "ill"},
+        {"name": "Role Letterer", "role": "let"},
+        {"name": "Role Penciller", "role": "pnc"},
+        {"name": "Role Colorist", "role": "clr"},
+        {"name": "Role Inker", "role": "ink"},
+        {"name": "Unknown Role", "role": "zzz"}
+      ]
+    }, "links": [{"rel": "http://opds-spec.org/acquisition", "href": "/three.cbz"}]}
+  ]
+}"#;
+		let feed = parse_feed_json(json).expect("RWPM metadata feed");
+		let manga = feed_entries_to_manga(&feed, "https://catalog.test/root");
+		assert_eq!(manga.len(), 3);
+		assert_eq!(manga[0].tags, Some(vec!["Action".to_string()]));
+		assert_eq!(manga[1].tags, Some(vec!["Mystery".to_string()]));
+		assert_eq!(manga[2].tags, Some(vec!["Drama".to_string(), "Seinen".to_string()]));
+		assert_eq!(
+			manga[2].authors,
+			Some(vec!["Named Author".to_string(), "Role Author".to_string(), "Role Creator".to_string()])
+		);
+		assert_eq!(
+			manga[2].artists,
+			Some(vec![
+				"Named Artist".to_string(),
+				"Illustrator".to_string(),
+				"Letterer".to_string(),
+				"Penciller".to_string(),
+				"Colorist".to_string(),
+				"Inker".to_string(),
+				"Role Artist".to_string(),
+				"Role Illustrator".to_string(),
+				"Role Letterer".to_string(),
+				"Role Penciller".to_string(),
+				"Role Colorist".to_string(),
+				"Role Inker".to_string(),
+			])
+		);
 	}
 
 	#[test]
@@ -1185,12 +1899,24 @@ mod tests {
   <Description>Search for series</Description>
   <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition" template="http://host/opds/series?search={searchTerms}"/>
 </OpenSearchDescription>"#;
-		let template = parse_opensearch_template(descriptor.as_bytes()).expect("template");
+		let template = parse_opensearch_template(descriptor.as_bytes(), Some("application/atom+xml"))
+			.expect("template");
 		assert_eq!(
 			opensearch_url(&template, "attack on titan"),
 			"http://host/opds/series?search=attack%20on%20titan"
 		);
 		assert_eq!(opensearch_url("http://h/s?q={searchTerms?}&count={count?}", "a b"), "http://h/s?q=a%20b&count=");
+		assert_eq!(opensearch_url("http://h/s?q={searchTerms}", "a+b /漢"), "http://h/s?q=a%2Bb%20%2F%E6%BC%A2");
+		let selected = br#"
+<OpenSearchDescription>
+  <Url type="application/json" template="json?q={searchTerms}"/>
+  <Url type="application/atom+xmlx" template="bad-prefix?q={searchTerms}"/>
+  <Url type="APPLICATION/ATOM+XML;profile=opds-catalog" template="atom?q={searchTerms}"/>
+</OpenSearchDescription>"#;
+		assert_eq!(
+			parse_opensearch_template(selected, Some("application/atom+xml")).as_deref(),
+			Some("atom?q={searchTerms}")
+		);
 	}
 
 	#[test]
@@ -1268,8 +1994,15 @@ mod tests {
 		let search = feed.links.iter().find(|l| l.rel == "search").expect("search link");
 		assert_eq!(search.href, "/opds/v2/search{?query}");
 
-		// 2 navigation + 2 publications + group navigation + group publications, groups flattened in order
+		// Navigation and publications stay distinct while entries retains the parser's flattened traversal order.
 		assert_eq!(feed.entries.len(), 6);
+		assert_eq!(feed.navigation.len(), 2);
+		assert_eq!(feed.publications.len(), 2);
+		assert_eq!(feed.groups.len(), 2);
+		assert_eq!(feed.groups[0].title, "Latest series");
+		assert_eq!(feed.groups[0].navigation.len(), 1);
+		assert_eq!(feed.groups[0].publications.len(), 0);
+		assert_eq!(feed.groups[1].publications.len(), 1);
 		let nav = &feed.entries[0];
 		assert_eq!(nav.id, "/opds/v2/series");
 		assert_eq!(nav.title, "All series");
@@ -1313,15 +2046,38 @@ mod tests {
 	}
 
 	#[test]
-	fn parse_feed_json_series_stay_manga_candidates_books_do_not() {
+	fn parse_feed_json_series_and_standalone_books_become_manga_candidates() {
 		let feed = parse_feed_json(V2_FEED.as_bytes()).expect("parse");
 		let manga = feed_entries_to_manga(&feed, "http://host/opds/v2/root");
 		let keys: Vec<&str> = manga.iter().map(|m| m.key.as_str()).collect();
-		assert_eq!(keys, vec!["/opds/v2/series", "urn:sumidoku:manga:1", "/opds/v2/series/2"]);
-		assert_eq!(manga[0].url.as_deref(), Some("http://host/opds/v2/series"));
-		assert_eq!(manga[1].url.as_deref(), Some("http://host/opds/v2/series/1"));
-		assert_eq!(manga[1].cover.as_deref(), Some("http://host/opds/v2/cover/1"));
-		assert_eq!(manga[1].description.as_deref(), Some("alpha description"));
+		assert_eq!(keys, vec!["urn:sumidoku:manga:1", "opds:work:Ym9vay0x", "opds:work:Ym9vay0y"]);
+		assert_eq!(manga[0].url.as_deref(), Some("http://host/opds/v2/series/1"));
+		assert_eq!(manga[0].cover.as_deref(), Some("http://host/opds/v2/cover/1"));
+		assert_eq!(manga[0].description.as_deref(), Some("alpha description"));
+	}
+
+	#[test]
+	fn opds2_groups_only_flatten_and_resolve_relative_navigation() {
+		let json = br#"
+{
+  "metadata": {"title": "Grouped"},
+  "groups": [{
+    "navigation": [{"title": "Series", "href": "series/one"}],
+    "publications": [{
+      "metadata": {"identifier": "book-1", "title": "Book"},
+      "links": [{"rel": "http://opds-spec.org/acquisition",
+                 "href": "books/one.cbz", "type": "application/zip"}]
+    }]
+  }]
+}"#;
+		let feed = parse_feed_json(json).expect("groups-only feed");
+		assert_eq!(feed.entries.len(), 2);
+		let manga = feed_entries_to_manga(&feed, "http://host/catalog/root.json");
+		assert_eq!(manga.len(), 1);
+		assert_eq!(manga[0].title, "Book");
+		assert_eq!(manga[0].key, "opds:work:Ym9vay0x");
+		assert_eq!(manga[0].url.as_deref(), Some("http://host/catalog/root.json"));
+		assert!(feed.entries.iter().any(FeedEntry::is_book));
 	}
 
 	#[test]
@@ -1348,6 +2104,7 @@ mod tests {
 			search_template_url("http://h/s?q={searchTerms}&count={count?}", "a b"),
 			"http://h/s?q=a%20b&count="
 		);
+		assert_eq!(search_template_url("http://h/s?q={query}", "a+b /漢"), "http://h/s?q=a%2Bb%20%2F%E6%BC%A2");
 		assert_eq!(search_template_url("http://h/s{?query}{&page}", "x"), "http://h/s?query=x");
 	}
 

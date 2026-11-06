@@ -9,6 +9,7 @@
     "linkNotRecognized": "ソースがこのリンクを認識できませんでした",
     "searchPlaceholder": "漫画のタイトルを検索…",
     "searchLocalPlaceholder": "ローカルディレクトリを検索…",
+    "degradedSearch": "このカタログには利用できる検索リンクがありません。Sumidoku は限られた数のカタログページをタイトルで検索します。",
     "filters": "フィルター",
     "applyFilters": "フィルターを適用",
     "savedFilters": "保存済みフィルター",

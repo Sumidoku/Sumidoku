@@ -9,6 +9,7 @@
     "linkNotRecognized": "源未识别该链接",
     "searchPlaceholder": "搜索漫画标题…",
     "searchLocalPlaceholder": "搜索本地目录…",
+    "degradedSearch": "此目录没有可用的搜索链接，Sumidoku 只能在有限数量的目录页中按标题查找。",
     "filters": "筛选",
     "applyFilters": "应用筛选",
     "savedFilters": "已保存筛选",

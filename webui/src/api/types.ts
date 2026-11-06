@@ -638,6 +638,19 @@ export type MangaPage = {
 	entries: Array<SearchManga>;
 	hasNextPage: boolean;
 	degraded?: boolean;
+	navigation?: Array<{
+		title: string;
+		listingId: string;
+	}>;
+	parentId?: string;
+	groups?: Array<{
+		title: string;
+		entries: Array<SearchManga>;
+		navigation: Array<{
+			title: string;
+			listingId: string;
+		}>;
+	}>;
 };
 
 export type MangaStatus = "Unknown" | "Ongoing" | "Completed" | "Cancelled" | "Hiatus";

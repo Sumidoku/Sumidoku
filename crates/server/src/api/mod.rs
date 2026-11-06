@@ -673,11 +673,11 @@ async fn search_source(
 	}
 	// opds sources likewise have no source call to stream; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 	if crate::source::source_is_opds(&state.pool, id).await? {
-		let outcome = crate::internal::opds_source::search(&state, id, body.query.as_deref()).await?;
+		let outcome = crate::internal::opds_source::search(&state, id, body.query.as_deref(), page).await?;
 		let entries = attach_internal_ids(&state, id, outcome.entries).await?;
 		return Ok(Json(json!({
 			"entries": entries,
-			"hasNextPage": false,
+			"hasNextPage": outcome.has_next_page,
 			"degraded": outcome.degraded,
 		}))
 		.into_response());
@@ -713,6 +713,9 @@ async fn get_listings(
 	// Local sources have no WASM package; expose the synthesized Aidoku-style listings
 	// (continue-reading / latest-updates / recently-added / oneshots / recently-read)
 	let row = source_row(&state, id).await?;
+	if row.is_opds() {
+		return Ok(Json(Value::Array(crate::internal::opds_source::get_listings(&state, id).await?)));
+	}
 	if row.is_local() {
 		let listings = crate::internal::local::home::local_listings();
 		let out: Vec<Value> = listings.iter().map(crate::api::listings::listing_json).collect();
@@ -787,6 +790,27 @@ async fn get_manga_list(
 		return Err(ApiError::bad_request("page must be >= 1"));
 	}
 	let row = source_row(&state, id).await?;
+	if row.is_opds() {
+		let result = crate::internal::opds_source::listing_page(&state, id, &listing_id, page).await?;
+		let entries = attach_internal_ids(&state, id, result.entries).await?;
+		let navigation: Vec<Value> = result.navigation.iter().map(|item| json!({"title": item.title, "listingId": item.listing_id})).collect();
+		let mut value = json!({"entries": entries, "hasNextPage": result.has_next_page, "navigation": navigation});
+		if let Some(parent_id) = result.parent_id {
+			value["parentId"] = json!(parent_id);
+		}
+		if !result.groups.is_empty() {
+			let mut groups = Vec::with_capacity(result.groups.len());
+			for group in result.groups {
+				groups.push(json!({
+					"title": group.title,
+					"entries": attach_internal_ids(&state, id, group.entries).await?,
+					"navigation": group.navigation.iter().map(|item| json!({"title": item.title, "listingId": item.listing_id})).collect::<Vec<Value>>()
+				}));
+			}
+			value["groups"] = json!(groups);
+		}
+		return Ok(Json(value));
+	}
 	if row.is_local() {
 		let value = crate::internal::local::home::local_listing_page(&state, id, &listing_id, page).await?;
 		return Ok(Json(value));

@@ -181,11 +181,10 @@ export default function SourceBrowsePage() {
 	const sourceEnabled = source.data?.enabled ?? true;
 	const kind = source.data?.kind;
 	const isLocal = kind === 'local';
-	// Built-in OPDS sources have no filters/listings/home/deep-link concept (endpoints 501);
-	// local sources now synthesize listings + home server-side, so only OPDS skips those queries
+	// OPDS sources expose catalog navigation listings but have no filter panel or home layout.
 	const isOpds = kind === 'opds';
 	const filtersQuery = useSourceFilters(sourceId, sourceEnabled && !isLocal && !isOpds);
-	const listingsQuery = useSourceListings(sourceId, sourceEnabled && !isOpds);
+	const listingsQuery = useSourceListings(sourceId, sourceEnabled);
 
 	// hidesFiltersWhileSearching: filters hide in search mode, and search requests don't carry filter values
 	// (AidokuRunner simply clears filters when the query is non-empty before calling the source)
@@ -339,15 +338,19 @@ export default function SourceBrowsePage() {
 	}, [input, isLocal]);
 
 	const isSearch = mode === 'search';
+	const isEmptyOpdsSearch = isOpds && isSearch && submitted.query === '';
 	const filtersHidden = !!sourceConfig?.hidesFiltersWhileSearching && input.trim() !== '';
 	const searchOptions = sourceSearchOptions(sourceConfig, submitted, isSearch, sourceEnabled);
-	const searchQuery = useSourceSearch(sourceId, searchOptions.request, searchOptions.enabled);
+	const searchQuery = useSourceSearch(sourceId, searchOptions.request, searchOptions.enabled && !isEmptyOpdsSearch);
 	const listingQuery = useListing(sourceId, mode, !isSearch && sourceEnabled);
 	const activeQuery = isSearch ? searchQuery : listingQuery;
 	const entries = useMemo(
 		() => activeQuery.data?.pages.flatMap((p) => p.entries) ?? [],
 		[activeQuery.data, mode, isSearch]
 	);
+	const browseGroups = isOpds && !isSearch ? (activeQuery.data?.pages.flatMap((page) => page.groups ?? []) ?? []) : [];
+	const browseNavigation = isOpds && !isSearch ? (activeQuery.data?.pages.flatMap((page) => page.navigation ?? []) ?? []) : [];
+	const parentListingId = isOpds && !isSearch ? activeQuery.data?.pages[0]?.parentId : undefined;
 	// The server normalizes kind to default/list; search mode and unknown kinds (an undeclared listing from a deep link) stay on the grid
 	const listMode = !isSearch && listings?.find((l) => l.id === mode)?.kind === 'list';
 
@@ -475,7 +478,7 @@ export default function SourceBrowsePage() {
 							{ value: 'search', label: t('common.search') },
 							...listings.map((l) => ({
 								value: l.id,
-								label: isLocal ? localListingLabel(l.id, l.name, t) : l.name
+								label: isLocal || isOpds ? localListingLabel(l.id, l.name, t) : l.name
 							}))
 						]}
 						value={mode}
@@ -500,6 +503,11 @@ export default function SourceBrowsePage() {
 							value={input}
 							onChange={(e) => setInput(e.currentTarget.value)}
 						/>
+						{!isLocal && (
+							<Button type="submit" variant="primary" loading={searchQuery.isFetching}>
+								{t('common.search')}
+							</Button>
+						)}
 						{filters && !filtersHidden && (
 							<Button onClick={() => setShowFilters((v) => !v)}>
 								<ListFilter size={15} />
@@ -507,6 +515,11 @@ export default function SourceBrowsePage() {
 							</Button>
 						)}
 					</form>
+					{isOpds &&
+						submitted.query !== '' &&
+						searchQuery.data?.pages.some((page) => page.degraded) && (
+							<p className="muted" role="status">{t('sourceBrowse.degradedSearch')}</p>
+						)}
 
 					{/* Same as Aidoku's FilterHeaderView: a horizontal filter chip bar under the input; chip changes submit immediately */}
 					{filters && !filtersHidden && states && (
@@ -608,7 +621,9 @@ export default function SourceBrowsePage() {
 			)}
 
 			{/* During a streaming search partials already land in the list: skeletons are only for when there is nothing at all, then entries append edge-to-edge */}
-			{activeQuery.isPending && entries.length === 0 ? (
+			{isEmptyOpdsSearch ? (
+				<EmptyState icon={SearchX} title={t('common.search')} hint={t('sourceBrowse.searchPlaceholder')} />
+			) : activeQuery.isPending && entries.length === 0 ? (
 				listMode ? (
 					<div className="home-rows">
 						{Array.from({ length: 8 }, (_, i) => (
@@ -642,7 +657,7 @@ export default function SourceBrowsePage() {
 						</Button>
 					}
 				/>
-			) : entries.length === 0 ? (
+			) : entries.length === 0 && browseGroups.length === 0 && browseNavigation.length === 0 ? (
 				<EmptyState icon={SearchX} title={t('sourceBrowse.noResults')} hint={t('sourceBrowse.noResultsHint')} />
 			) : (
 				<InfiniteList
@@ -650,6 +665,28 @@ export default function SourceBrowsePage() {
 					isFetching={activeQuery.isFetching}
 					onLoadMore={() => void activeQuery.fetchNextPage()}
 				>
+					{parentListingId && (
+						<div className="source-page__parent-listing">
+							<Button variant="ghost" onClick={() => switchMode(parentListingId)}>
+								<ArrowLeft size={15} />
+								{t('sourceBrowse.backToBrowse')}
+							</Button>
+						</div>
+					)}
+					{browseNavigation.length > 0 && (
+						<section className="home-section">
+							<div className="home-section__head"><h2 className="home-section__title">{t('common.nav.browse')}</h2></div>
+							<div className="home-hrow source-page__directory-row">
+								{browseNavigation.map((item) => (
+									<div className="source-page__directory-item" key={item.listingId}>
+										<Button className="source-page__directory-button" variant="ghost" onClick={() => switchMode(item.listingId)}>
+											<span className="source-page__directory-label">{item.title}</span>
+										</Button>
+									</div>
+								))}
+							</div>
+						</section>
+					)}
 					{listMode ? (
 						<div className="home-rows">
 						{entries.map((m, i) => {
@@ -688,6 +725,34 @@ export default function SourceBrowsePage() {
 							))}
 						</div>
 					)}
+					{browseGroups.map((group, groupIndex) => (
+						<section className="home-section" key={`${group.title}-${groupIndex}`}>
+							<div className="home-section__head">
+								<div className="home-section__titles"><h2 className="home-section__title">{group.title}</h2></div>
+							</div>
+							{(group.navigation ?? []).length > 0 && (
+								<div className="home-hrow source-page__directory-row source-page__group-directory-row">
+									{(group.navigation ?? []).map((item) => (
+										<div className="source-page__directory-item" key={item.listingId}>
+											<Button className="source-page__directory-button" variant="ghost" onClick={() => switchMode(item.listingId)}>
+												<span className="source-page__directory-label">{item.title}</span>
+											</Button>
+										</div>
+									))}
+								</div>
+							)}
+							{group.entries.length > 0 && (
+								<div className="home-hrow">
+									{group.entries.map((m) => (
+										<div className="home-scroller__item" key={m.key}>
+											<CoverCard src={entryCover(m)} title={m.title} subtitle={entrySubtitle(m)}
+												busy={pendingKey === m.key} onClick={() => void openEntry(m)} />
+										</div>
+									))}
+								</div>
+							)}
+						</section>
+					))}
 				</InfiniteList>
 			)}
 

@@ -118,9 +118,9 @@ async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>
 		}
 		// opds sources same as the local arm; degraded marks a catalog without OpenSearch, where results are just traversal filtering
 		if crate::source::source_is_opds(&state.pool, source_id).await? {
-			let outcome = crate::internal::opds_source::search(state, source_id, query.as_deref()).await?;
+			let outcome = crate::internal::opds_source::search(state, source_id, query.as_deref(), page).await?;
 			let entries = super::attach_internal_ids(state, source_id, outcome.entries).await?;
-			return Ok((entries, false, outcome.degraded));
+			return Ok((entries, outcome.has_next_page, outcome.degraded));
 		}
 		let handle = state.get_handle(source_id).await?;
 		let result = handle.get_search_manga_list(query, page, Vec::new()).await?;

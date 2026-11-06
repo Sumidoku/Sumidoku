@@ -419,6 +419,42 @@
 	margin-bottom: 14px;
 }
 
+.source-page__parent-listing {
+	margin-bottom: 28px;
+}
+
+.source-page__directory-row {
+	flex-wrap: nowrap;
+	justify-content: flex-start;
+	overflow-x: auto;
+}
+
+.source-page__group-directory-row {
+	margin-bottom: 16px;
+}
+
+.source-page__directory-item {
+	flex: 0 0 auto;
+	min-width: 0;
+	max-width: min(240px, 72vw);
+}
+
+.source-page__directory-button {
+	width: max-content;
+	max-width: 100%;
+	min-width: 0;
+	justify-content: flex-start;
+	overflow: hidden;
+}
+
+.source-page__directory-label {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .source-page__search {
 	display: flex;
 	gap: 8px;

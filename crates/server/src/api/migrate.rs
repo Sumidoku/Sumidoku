@@ -77,7 +77,7 @@ pub async fn migrate_lookup(
 	}
 	// An opds target has no wasm instance: take the catalog search arm (OpenSearch/traversal fallback), the degraded flag passed through
 	if crate::source::source_is_opds(&state.pool, query.target_source_id).await? {
-		let outcome = crate::internal::opds_source::search(&state, query.target_source_id, Some(&title)).await?;
+		let outcome = crate::internal::opds_source::search(&state, query.target_source_id, Some(&title), 1).await?;
 		let candidates = attach_internal_ids(&state, query.target_source_id, outcome.entries).await?;
 		return Ok(Json(json!({
 			"query": title,
