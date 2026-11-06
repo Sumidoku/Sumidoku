@@ -70,7 +70,13 @@ export class PullGestureController {
 	feedWheel(deltaY: number, deltaMode: number, viewportHeight: number, atEdge: boolean): void {
 		if (this.state === 'firing') return;
 		if (deltaY > 0) {
-			if (!atEdge && this.raw === 0) return;
+			if (!atEdge && this.raw === 0) {
+				// Scrolling toward the end from mid-chapter is a new approach: its
+				// fling must go quiet at the edge again before it can pull
+				this.wheelArmed = false;
+				this.clearWheelTimer();
+				return;
+			}
 			this.armWheelQuiet();
 			// Inertia from the fling that reached the edge is not a pull
 			if (!this.wheelArmed) return;

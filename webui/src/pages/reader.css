@@ -494,6 +494,17 @@
 	user-select: none;
 }
 
+/* Fade turns lay the track out as a block with the spreads stacked over it,
+   so the in-flow hint would sit at the start edge on every page. Park it just
+   past the track's trailing edge instead, where the pull's translation reveals
+   it; inline-start follows the track's direction, so rtl mirrors it */
+.reader__track--fade .reader__pull-p {
+	position: absolute;
+	inset-block: 0;
+	inset-inline-start: 100%;
+	height: auto;
+}
+
 .reader__pull-track {
 	width: 120px;
 	height: 3px;

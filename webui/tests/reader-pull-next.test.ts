@@ -103,6 +103,28 @@ test('wheel inertia landing at the chapter end is not a pull until the wheel goe
 	});
 });
 
+test('a later fling toward the end must go quiet at the edge again before it pulls', async () => {
+	await withVite(async (vite) => {
+		const timers = fakeTimers();
+		const { ctl, probe } = await makeCtl(vite, timers);
+		// The first visit to the end arms the wheel
+		ctl.feedWheel(40, 0, 800, true);
+		timers.fireQuiet();
+		// The reader scrolls back up, then flings toward the end again
+		ctl.feedWheel(-300, 0, 800, false);
+		ctl.feedWheel(60, 0, 800, false);
+		// That fling's inertia lands at the edge with no quiet gap
+		for (let i = 0; i < 6; i++) ctl.feedWheel(40, 0, 800, true);
+		assert.deepEqual(probe.triggers, [], 'the earlier arming must not carry over to a new approach');
+		assert.deepEqual(probe.pulls, []);
+		timers.fireQuiet();
+		ctl.feedWheel(100, 0, 800, true);
+		ctl.feedWheel(80, 0, 800, true);
+		assert.deepEqual(probe.triggers, [1], 'it pulls once the new fling has gone quiet');
+		ctl.dispose();
+	});
+});
+
 test('wheel deltas away from the edge never start a pull', async () => {
 	await withVite(async (vite) => {
 		const timers = fakeTimers();
