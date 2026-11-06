@@ -1,0 +1,29 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+
+// A text page owns horizontal swipes for its column flow (turn() advances
+// columns before any chapter boundary). A text chapter is a single page, so
+// "last spread" is true for the whole chapter — without these gates every
+// column swipe would also feed the pull-to-next-chapter drag, and a release
+// would commit the pull on top of the column turn
+const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+
+test('the paged pull tracks whether the current page is text', () => {
+	assert.match(source, /textPageRef\.current = curText !== null;/);
+});
+
+test('the paged drag never feeds the pull on a text page', () => {
+	assert.match(source, /ctl\.feedTouch\(dx \* forwardSignRef\.current, atLastSpreadRef\.current && !textPageRef\.current\);/);
+});
+
+test('turning onto a text page abandons an active pull', () => {
+	assert.match(
+		source,
+		/\(!atLastSpreadRef\.current \|\| textPageRef\.current\) && pullCtlRef\.current && pullCtlRef\.current\.rawPull > 0\) pullCtlRef\.current\.cancel\(\);/
+	);
+});
+
+test('the paged hint strip is not rendered for a text page', () => {
+	assert.match(source, /\{navEnabled && nextCh !== null && curText === null && \(/);
+});

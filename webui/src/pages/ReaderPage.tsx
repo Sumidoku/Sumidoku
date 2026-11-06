@@ -944,6 +944,11 @@ function ReaderCore({
 	forwardSignRef.current = dir === 'rtl' ? 1 : -1;
 	const atLastSpreadRef = useRef(false);
 	atLastSpreadRef.current = spreads !== null && curSpreadIdx === spreads.length - 1;
+	// A text page owns horizontal swipes for its column flow; the paged pull must
+	// not compete with it — a text page's chapter boundary stays on the
+	// transition page, so the drag (and its hint strip) opt out there
+	const textPageRef = useRef(false);
+	textPageRef.current = curText !== null;
 	const pullTriggerRef = useRef<() => void>(() => {});
 	pullTriggerRef.current = () => {
 		if (!nextCh) return;
@@ -1028,7 +1033,7 @@ function ReaderCore({
 	useEffect(() => () => pullCtlRef.current?.dispose(), []);
 	// Turning away from the last spread abandons a paged pull
 	useEffect(() => {
-		if (!atLastSpreadRef.current && pullCtlRef.current && pullCtlRef.current.rawPull > 0) pullCtlRef.current.cancel();
+		if ((!atLastSpreadRef.current || textPageRef.current) && pullCtlRef.current && pullCtlRef.current.rawPull > 0) pullCtlRef.current.cancel();
 	}, [curSpreadIdx]);
 	// Continuous/webtoon: wheel and touch at the scroll hard bottom
 	useEffect(() => {
@@ -1110,7 +1115,7 @@ function ReaderCore({
 			const dx = e.clientX - lastX;
 			lastX = e.clientX;
 			moved += Math.abs(dx);
-			ctl.feedTouch(dx * forwardSignRef.current, atLastSpreadRef.current);
+			ctl.feedTouch(dx * forwardSignRef.current, atLastSpreadRef.current && !textPageRef.current);
 		};
 		const endDrag = (e: PointerEvent) => {
 			if (dragId === null || e.pointerId !== dragId) return;
@@ -1731,7 +1736,7 @@ function ReaderCore({
 										</div>
 									);
 								})}
-								{navEnabled && nextCh !== null && (
+								{navEnabled && nextCh !== null && curText === null && (
 									// The next-chapter hint is the track's trailing child: LTR
 									// lays it after the last spread, and the rtl row direction
 									// mirrors it to the leading side for free. The pull's extra

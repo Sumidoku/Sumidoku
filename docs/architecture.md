@@ -2215,7 +2215,12 @@ the spring-back. A click trailing a pull (or any real drag) is swallowed before
 it can reach the tap zones. Progress paints through inline styles and CSS
 variables so a drag never re-renders the reader; only the armed flip is React
 state. A committed pull slides the content off for 180ms before navigating.
-The gesture requires a next chapter and is suspended while pinch-zoomed.
+The gesture requires a next chapter and is suspended while pinch-zoomed. A
+text page opts out of the paged drag (its hint strip is not rendered): its
+column flow owns horizontal swipes all the way to the last column, so its
+chapter boundary keeps arriving through the transition page — the pull only
+applies to text chapters in the continuous modes, where the text is one tall
+block in the scroll list and the hard-bottom pull works unchanged.
 Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
