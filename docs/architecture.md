@@ -2284,15 +2284,19 @@ pull's pointer listeners): a horizontal drag follows the finger 1:1 — the
 track on image pages, the column strip on text pages (the `--text-swipe`
 variable composes with the column base the way `--paged-pull` composes with
 the spread base, and a `reader__swiping` class cuts the column transition
-mid-drag) — and releasing past the turn distance (half the viewport capped at
-180px, so a double-page spread or a wide desktop window never demands more
-than one honest drag length), or flicking at 0.5px/ms
-with at least 24px of travel, turns through the same `turn()` the tap zones
-use, so text columns, spreads, double-page and boundary behaviour stay in one
+mid-drag) — and releasing turns through the same `turn()` the tap zones
+use when the drag's projected landing crosses the turn distance (a quarter of
+the viewport capped at 96px, so a double-page spread or a wide desktop window
+never demands more than one honest drag length) — the projection extends the
+drag by 150ms of its release velocity, so a decisive swipe never needs the
+full drag and a release already moving back springs back instead — or when
+flicking at 0.2px/ms with at least 16px of travel,
+so text columns, spreads, double-page and boundary behaviour stay in one
 place; anything less springs back. Past the content's own end in the drag
 direction the follow offset is rubber-banded instead. The drag locks to the
 horizontal axis past 8px of travel so vertical wobble never moves the page,
-velocity is an exponential moving average of the pointer deltas, and a second
+velocity is measured over the last 100ms of movement (a finger slows before
+it lifts, so a whole-drag average under-reads the release), and a second
 finger abandons the drag for the pinch. At the last spread of an image page a
 forward drag belongs to the pull — once it owns the drag the swipe stays out
 of the shared variable — so the chapter end keeps one gesture. Swipes need no

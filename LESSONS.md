@@ -6,6 +6,33 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**An effect that attaches listeners to a ref container must depend on the
+state that mounts that container, not only on the flags that gate it.** The
+effect's single run happens while the ref is still null whenever the gated
+flags settle before the data arrives, and with nothing left in the dependency
+array to change, the listeners never attach. Include the data that renders
+the container (or re-key the container) and pin the dependency array with a
+source test.
+- Evidence: 2026-11-07, the paged reader's pointer-gesture effect keyed on
+  `[mode, navReady]` ran before the pages query rendered `.reader__paged`,
+  returned on the null ref, and swipes stayed dead on first chapter entry
+  until the user toggled the reading mode — which changed `mode` and forced
+  a re-run with the container mounted. The effect now depends on
+  `[mode, pages, navReady]`; `reader-swipe-turn.test.ts` pins the array.
+
+**Gesture release velocity is a trailing-window measurement, not an average
+of the drag.** A finger slows before it lifts, so an exponential moving
+average of every pointer delta under-reads the release: flicks that should
+turn the page spring back. Keep the last ~100ms of (position, time) samples
+and derive velocity from the window's endpoints.
+- Evidence: 2026-11-07, the paged swipe used `0.7 * velocity + 0.3 * (dx/dt)`
+  per move event, so a natural flick's deceleration phase dragged the release
+  velocity below the flick threshold; combined with an AND-ed minimum travel
+  and a half-viewport turn distance, only deliberate full-width drags turned
+  pages. Velocity is now the trailing 100ms window and the release is decided
+  on the drag's projected landing (offset + velocity x 150ms) against a
+  quarter-viewport distance capped at 96px.
+
 **Navigation turns are not the only path that puts content on screen; the
 opening state is one too.** A progress model wired only into turn handlers
 never reports anything for a resume or deep link that lands directly on the
