@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createServer } from 'vite';
@@ -70,6 +71,42 @@ test('spread lookup finds the containing spread and skips blank slots', async ()
 		assert.equal(spreadLeadPage(spreads[0]), 0);
 		assert.equal(spreadLeadPage(spreads[3]), 4);
 	});
+});
+
+test('spreadLastPage follows the last real page, so a paired final spread reaches the chapter end (#629)', async () => {
+	await withVite(async (vite) => {
+		const { buildSpreads, spreadLastPage, spreadLeadPage } = await vite.ssrLoadModule(
+			'/src/pages/reader/spreads.ts'
+		);
+		// #629: doubleNoCover with an even page count pairs the final spread; its
+		// lead page is the second-to-last page, so a landing-page progress report
+		// never reaches the chapter end — the spread's last page is the last page
+		const even = buildSpreads(4, portrait(), 'doubleNoCover');
+		assert.deepEqual(even, [[0, 1], [2, 3]]);
+		assert.equal(spreadLeadPage(even[1]), 2);
+		assert.equal(spreadLastPage(even[1]), 3);
+		// Blank mates (cover, closing page, broken pair) resolve to their only page
+		const dbl = buildSpreads(5, portrait(), 'double');
+		assert.equal(spreadLastPage(dbl[0]), 0);
+		assert.equal(spreadLastPage(dbl[2]), 3);
+		assert.equal(spreadLastPage(dbl[3]), 4);
+		// A full pair resolves to its second page; a landscape solo to itself
+		assert.equal(spreadLastPage([1, 2]), 2);
+		assert.equal(spreadLastPage([7]), 7);
+	});
+});
+
+test('a forward spread turn reports progress from the spread\'s last page, not the landing page (#629)', () => {
+	// Source-reading wiring pin; CRLF checkouts normalise before matching
+	const source = readFileSync(fileURLToPath(new URL('../src/pages/ReaderPage.tsx', import.meta.url)), 'utf8').replace(
+		/\r\n/g,
+		'\n'
+	);
+	// The turn still lands on the spread's lead page…
+	assert.match(source, /const lead = spreadLeadPage\(target\);\n\t\t\t\t\tgotoPage\(lead\);/);
+	// …but progress and the chapter-end mark follow the spread's last page, or a
+	// paired final spread (doubleNoCover, even page count) never marks the chapter read
+	assert.match(source, /const last = spreadLastPage\(target\);\n\t\t\t\t\tif \(last !== lead\) scheduleProgress\(last, last >= total - 1\);/);
 });
 
 test('measured dimensions only fill gaps the server left', async () => {

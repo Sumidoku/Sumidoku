@@ -70,7 +70,7 @@ import {
 	writeSplitOverride,
 	writeStretchOverride
 } from './reader/overrideStore';
-import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
+import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLastPage, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
@@ -788,7 +788,16 @@ function ReaderCore({
 			if (spreads) {
 				const si = spreadIndexOf(spreads, idxRef.current);
 				if (si >= spreads.length - 1) boundaryNav(nextCh, 'next');
-				else gotoPage(spreadLeadPage(spreads[si + 1]));
+				else {
+					const target = spreads[si + 1];
+					const lead = spreadLeadPage(target);
+					gotoPage(lead);
+					// A pair shows both pages at once, so progress and the chapter-end mark
+					// follow the spread's last page, not the landing page — otherwise a paired
+					// final spread (doubleNoCover, even page count) never marks the chapter read
+					const last = spreadLastPage(target);
+					if (last !== lead) scheduleProgress(last, last >= total - 1);
+				}
 				return;
 			}
 			if (idxRef.current >= total - 1) boundaryNav(nextCh, 'next');

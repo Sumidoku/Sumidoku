@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Progress that follows a navigation's landing item misses whatever else the
+navigation unit already shows.** When one turn displays several pages (a
+double-page spread), reporting only the page the turn landed on leaves the
+rest of the visible unit unreported; a paired final unit then never reaches
+the end-of-content mark, and the boundary affordance fires a page early.
+Derive progress and end marks from the last item the unit makes visible,
+and pin the wiring with a test on the exact layout that pairs the final
+unit.
+- Evidence: 2026-11-07, #629: with doubleNoCover and an even page count the
+  final spread is a pair, so the turn landed on the second-to-last page,
+  `atEnd` stayed false and the chapter was never marked read while the
+  next-chapter transition already showed. The forward spread turn now
+  reports `spreadLastPage(target)`; `reader-spreads.test.ts` pins the
+  paired-final-spread shape and the wiring.
+
 **A gesture offset folded into an existing transform through a CSS
 variable must be sign-checked against both the drag delta and the
 layout's own offset convention — the type system and the
