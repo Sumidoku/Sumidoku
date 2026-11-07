@@ -74,7 +74,7 @@ import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, sl
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
-import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
+import { AUTO_HIDE_MS, INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { PULL_THRESHOLD, PullGestureController, rubber } from './reader/pullNextChapter';
 import { decideSwipe } from './reader/swipeTurn';
@@ -426,8 +426,22 @@ function ReaderCore({
 	const metaDir = dirFromViewer(mangaQuery.data?.viewer);
 	const mode = resolveMode(modeOverride, metaMode, globalMode);
 	const dir = resolveDir(dirOverride, metaDir, globalDir);
-	const [{ overlay, settingsOpen, shortcutsOpen }, dispatchChrome] = useReducer(readerChromeReducer, INITIAL_READER_CHROME);
+	const [{ overlay, settingsOpen, shortcutsOpen, autoHidePending }, dispatchChrome] = useReducer(readerChromeReducer, INITIAL_READER_CHROME);
 	const [chaptersOpen, setChaptersOpen] = useState(false);
+	// The bar opens visible, then gets out of the way once. A pointer resting on a bar or
+	// focus inside one at that moment means the reader is using it, so it stays
+	useEffect(() => {
+		if (!autoHidePending) return;
+		const timer = window.setTimeout(() => {
+			const bars = rootRef.current ? Array.from(rootRef.current.querySelectorAll('.reader__bar')) : [];
+			const engaged = bars.some((bar) => bar.matches(':hover') || bar.contains(document.activeElement));
+			dispatchChrome(engaged ? 'keepOverlay' : 'autoHide');
+		}, AUTO_HIDE_MS);
+		return () => window.clearTimeout(timer);
+	}, [autoHidePending]);
+	useEffect(() => {
+		if (chaptersOpen) dispatchChrome('keepOverlay');
+	}, [chaptersOpen]);
 	const drawerBodyRef = useRef<HTMLDivElement>(null);
 	// Fullscreen targets the reader root so the toolbars (fixed) stay visible inside it
 	const rootRef = useRef<HTMLDivElement>(null);

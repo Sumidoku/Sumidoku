@@ -8,21 +8,44 @@ function run(state: ReaderChrome, ...actions: ReaderChromeAction[]): ReaderChrom
 	return actions.reduce(readerChromeReducer, state);
 }
 
-test('the bar starts visible with the menu closed', () => {
-	assert.deepEqual(INITIAL_READER_CHROME, { overlay: true, settingsOpen: false, shortcutsOpen: false });
+test('the bar starts visible with the menu closed and an auto-hide pending', () => {
+	assert.deepEqual(INITIAL_READER_CHROME, { overlay: true, settingsOpen: false, shortcutsOpen: false, autoHidePending: true });
+});
+
+test('the pending auto-hide hides the bar once', () => {
+	const hidden = run(INITIAL_READER_CHROME, 'autoHide');
+	assert.deepEqual(hidden, { overlay: false, settingsOpen: false, shortcutsOpen: false, autoHidePending: false });
+	// Brought back by hand, the bar stays: a later stray autoHide does nothing
+	assert.equal(run(hidden, 'toggleOverlay', 'autoHide').overlay, true);
+});
+
+test('touching the chrome before the timer cancels the auto-hide', () => {
+	for (const first of ['toggleSettings', 'toggleShortcuts', 'closeSettings', 'closeShortcuts', 'keepOverlay'] as const) {
+		const state = run(INITIAL_READER_CHROME, first);
+		assert.equal(state.autoHidePending, false, first);
+		assert.equal(run(state, 'autoHide').overlay, state.overlay, first);
+	}
+	// Hiding and showing the bar by hand also takes over
+	assert.equal(run(INITIAL_READER_CHROME, 'toggleOverlay', 'toggleOverlay', 'autoHide').overlay, true);
+});
+
+test('the auto-hide never closes an open menu', () => {
+	const state = { ...INITIAL_READER_CHROME, settingsOpen: true };
+	assert.deepEqual(run(state, 'autoHide'), { ...state, autoHidePending: false });
 });
 
 test('hiding the control bar closes the settings menu', () => {
 	const open = run(INITIAL_READER_CHROME, 'toggleSettings');
-	assert.deepEqual(open, { overlay: true, settingsOpen: true, shortcutsOpen: false });
-	assert.deepEqual(run(open, 'toggleOverlay'), { overlay: false, settingsOpen: false, shortcutsOpen: false });
+	assert.deepEqual(open, { overlay: true, settingsOpen: true, shortcutsOpen: false, autoHidePending: false });
+	assert.deepEqual(run(open, 'toggleOverlay'), { overlay: false, settingsOpen: false, shortcutsOpen: false, autoHidePending: false });
 });
 
 test('the menu stays closed when the bar comes back', () => {
 	assert.deepEqual(run(INITIAL_READER_CHROME, 'toggleSettings', 'toggleOverlay', 'toggleOverlay'), {
 		overlay: true,
 		settingsOpen: false,
-		shortcutsOpen: false
+		shortcutsOpen: false,
+		autoHidePending: false
 	});
 });
 
@@ -30,7 +53,8 @@ test('the hidden settings button cannot open the menu behind the bar', () => {
 	assert.deepEqual(run(INITIAL_READER_CHROME, 'toggleOverlay', 'toggleSettings', 'toggleOverlay'), {
 		overlay: true,
 		settingsOpen: false,
-		shortcutsOpen: false
+		shortcutsOpen: false,
+		autoHidePending: false
 	});
 });
 
@@ -41,17 +65,19 @@ test('the settings button and Escape still work while the bar is up', () => {
 
 test('shortcut help can be toggled while the toolbar is hidden and is exclusive with settings', () => {
 	const open = run(INITIAL_READER_CHROME, 'toggleOverlay', 'toggleShortcuts');
-	assert.deepEqual(open, { overlay: false, settingsOpen: false, shortcutsOpen: true });
+	assert.deepEqual(open, { overlay: false, settingsOpen: false, shortcutsOpen: true, autoHidePending: false });
 	assert.deepEqual(run(open, 'toggleShortcuts').shortcutsOpen, false);
 	assert.deepEqual(run(INITIAL_READER_CHROME, 'toggleSettings', 'toggleShortcuts'), {
 		overlay: true,
 		settingsOpen: false,
-		shortcutsOpen: true
+		shortcutsOpen: true,
+		autoHidePending: false
 	});
 	assert.deepEqual(run(INITIAL_READER_CHROME, 'toggleShortcuts', 'toggleSettings'), {
 		overlay: true,
 		settingsOpen: true,
-		shortcutsOpen: false
+		shortcutsOpen: false,
+		autoHidePending: false
 	});
 	assert.deepEqual(run(INITIAL_READER_CHROME, 'toggleShortcuts', 'toggleOverlay').shortcutsOpen, false);
 });

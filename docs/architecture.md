@@ -2246,7 +2246,11 @@ are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
 toolbar, f toggles fullscreen, h toggles the grouped keyboard-shortcut dialog, and
-keys aimed at form controls never reach the reader. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
+keys aimed at form controls never reach the reader. The toolbar opens visible
+and hides itself once after 2 seconds (`reader/readerChrome.ts:AUTO_HIDE_MS`);
+any toolbar, settings, shortcut-help or chapter-list action first, or a pointer
+or focus inside a bar when the timer fires, cancels that hide. Each chapter
+remounts the reader, so a chapter change shows the bar briefly again. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
 deltas accumulate past a threshold into one turn per gesture, locked until
 200ms of wheel quiet so trackpad inertia cannot flip multiple pages. The paged
 tap zones are a configurable layout (`reader/readerPrefs.ts:zoneWidths/zoneAt`,
