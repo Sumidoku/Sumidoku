@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -91,4 +92,12 @@ test('the first-chapter transition reports no previous chapter and points at lea
 	assert.match(markup, /No previous chapter/);
 	assert.doesNotMatch(markup, /Turn again to continue/);
 	assert.match(markup, /Turn again to leave the reader/);
+});
+
+test('an unparked transition page stays out of the accessibility tree', () => {
+	// Both sides mount at the chapter ends before the track parks on them, so
+	// their status regions must not be read out while off-screen
+	const reader = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+	assert.match(reader, /'--transition-slot': -1 \} as CSSProperties\}[\s\S]{0,200}aria-hidden=\{pendingTurn !== 'prev'\}/);
+	assert.match(reader, /'--transition-slot': spreads\.length \} as CSSProperties\}[\s\S]{0,200}aria-hidden=\{pendingTurn !== 'next'\}/);
 });

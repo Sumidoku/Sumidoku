@@ -1929,6 +1929,9 @@ function ReaderCore({
 									<div
 										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'prev' ? ' reader__spread--fading' : ''}`}
 										style={{ '--transition-slot': -1 } as CSSProperties}
+										// Mounted off-screen until the track parks on it: keep its
+										// status region out of the accessibility tree until then
+										aria-hidden={pendingTurn !== 'prev'}
 									>
 										<TransitionPage
 											direction="prev"
@@ -1942,6 +1945,9 @@ function ReaderCore({
 									<div
 										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'next' ? ' reader__spread--fading' : ''}`}
 										style={{ '--transition-slot': spreads.length } as CSSProperties}
+										// Mounted off-screen until the track parks on it: keep its
+										// status region out of the accessibility tree until then
+										aria-hidden={pendingTurn !== 'next'}
 									>
 										<TransitionPage
 											direction="next"
