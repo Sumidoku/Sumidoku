@@ -2228,7 +2228,9 @@ pull's pointer listeners): a horizontal drag follows the finger 1:1 — the
 track on image pages, the column strip on text pages (the `--text-swipe`
 variable composes with the column base the way `--paged-pull` composes with
 the spread base, and a `reader__swiping` class cuts the column transition
-mid-drag) — and releasing past half the viewport, or flicking at 0.5px/ms
+mid-drag) — and releasing past the turn distance (half the viewport capped at
+180px, so a double-page spread or a wide desktop window never demands more
+than one honest drag length), or flicking at 0.5px/ms
 with at least 24px of travel, turns through the same `turn()` the tap zones
 use, so text columns, spreads, double-page and boundary behaviour stay in one
 place; anything less springs back. Past the content's own end in the drag

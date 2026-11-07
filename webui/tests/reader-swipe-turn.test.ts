@@ -1,7 +1,9 @@
 // The swipe-to-turn decision is what makes mid-chapter drags feel honest:
-// cross half the viewport (or flick hard enough with a little travel) and the
-// release turns the page, anything less springs back. These pins cover both
-// reading directions, since screen signs flip with RTL.
+// cross the turn distance (half the viewport, capped so double-page spreads
+// and desktop windows do not demand an impossible drag) or flick hard enough
+// with a little travel, and the release turns the page; anything less springs
+// back. These pins cover both reading directions, since screen signs flip
+// with RTL.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -19,9 +21,22 @@ test('crossing half the viewport turns the page in that direction (RTL)', () => 
 	assert.equal(decideSwipe(-500, 0, 1000, 1), 'backward');
 });
 
-test('just short of the midpoint springs back', () => {
-	assert.equal(decideSwipe(-499, 0, 1000, -1), null);
-	assert.equal(decideSwipe(499, 0, 1000, 1), null);
+test('just short of the turn distance springs back', () => {
+	// Wide viewport: the cap is the threshold, so 179px stays short
+	assert.equal(decideSwipe(-179, 0, 1000, -1), null);
+	assert.equal(decideSwipe(179, 0, 1000, 1), null);
+});
+
+test('the turn distance is capped on wide viewports (double-page, desktop)', () => {
+	// A 1400px spread viewport would demand a 700px drag without the cap
+	assert.equal(decideSwipe(-180, 0, 1400, -1), 'forward');
+	assert.equal(decideSwipe(180, 0, 1400, 1), 'forward');
+});
+
+test('a narrow viewport keeps the honest half as its threshold', () => {
+	// 300px viewport: half (150px) is below the cap and stays the threshold
+	assert.equal(decideSwipe(-150, 0, 300, -1), 'forward');
+	assert.equal(decideSwipe(-149, 0, 300, -1), null);
 });
 
 test('a fast flick turns with little travel, a slow drag with the same travel does not', () => {
