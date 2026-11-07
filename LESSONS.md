@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Navigation turns are not the only path that puts content on screen; the
+opening state is one too.** A progress model wired only into turn handlers
+never reports anything for a resume or deep link that lands directly on the
+final unit, so damage from a reporting bug cannot heal on reopen. When a
+fix changes what a navigation unit reports, audit the init path in the same
+PR's follow-up: derive the opening unit's last visible item with the same
+helper the turn uses.
+- Evidence: 2026-11-07, #629 follow-up: chapters stranded one page short by
+  the paired-final-spread bug reopened straight onto the last spread, no
+  turn ever fired, and the chapter stayed unread. The init effect now
+  reports the end through `initialEndProgress` (spread's last real page in
+  spread mode, last page minus the split-first-half case in single mode;
+  text and continuous modes excluded). `reader-spreads.test.ts` pins the
+  shapes and the wiring.
+
 **Progress that follows a navigation's landing item misses whatever else the
 navigation unit already shows.** When one turn displays several pages (a
 double-page spread), reporting only the page the turn landed on leaves the
