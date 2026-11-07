@@ -25,6 +25,27 @@ export const SWIPE_FLICK_MIN_PX = 16;
  */
 export const SWIPE_VELOCITY_WINDOW_MS = 100;
 
+/**
+ * Velocity over the window that ends at the release, in px/ms. A finger that
+ * holds still sends no pointer moves, so the window slides past the last
+ * sample: the still time counts as zero travel, and a flick followed by a
+ * pause before the lift reads as slow. The trail is ordered by time and keeps
+ * at least one sample from before the window when the drag is longer.
+ */
+export function releaseVelocity(trail: readonly { x: number; t: number }[], now: number): number {
+	if (trail.length < 2) return 0;
+	const from = now - SWIPE_VELOCITY_WINDOW_MS;
+	// The finger's position when the window opened: the last sample at or
+	// before it, or the drag's start when the whole drag is shorter
+	let base = trail[0];
+	for (const sample of trail) {
+		if (sample.t > from) break;
+		base = sample;
+	}
+	const span = now - Math.max(base.t, from);
+	return span > 0 ? (trail[trail.length - 1].x - base.x) / span : 0;
+}
+
 export type SwipeDecision = 'forward' | 'backward' | null;
 
 /**

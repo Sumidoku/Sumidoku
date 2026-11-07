@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decideSwipe } from '../src/pages/reader/swipeTurn.ts';
+import { decideSwipe, releaseVelocity } from '../src/pages/reader/swipeTurn.ts';
 
 test('crossing the turn distance turns the page in that direction (LTR)', () => {
 	// LTR: forward is a leftward (negative) drag; 1000px viewport is past
@@ -76,6 +76,34 @@ test('degenerate inputs never turn', () => {
 	assert.equal(decideSwipe(-500, 0, -100, -1), null);
 });
 
+function steadyDrag(px: number, ms: number) {
+	// One sample every 10ms along a steady drag from 0 to px
+	return Array.from({ length: ms / 10 + 1 }, (_, i) => ({ x: (px * i * 10) / ms, t: i * 10 }));
+}
+
+test('a flick lifted at once reads at its own speed', () => {
+	assert.equal(releaseVelocity(steadyDrag(-100, 100), 100), -1);
+	// A drag shorter than the window is measured from its start
+	assert.equal(releaseVelocity(steadyDrag(-30, 30), 30), -1);
+});
+
+test('stopping before the lift drains the release velocity', () => {
+	// No pointer moves arrive while the finger holds still, so the window
+	// slides past the last sample and the still time counts as no travel
+	const trail = steadyDrag(-60, 100);
+	assert.equal(releaseVelocity(trail, 150), -0.3);
+	assert.equal(releaseVelocity(trail, 300), 0);
+	// The drag kept its 60px, but held still it is no longer a flick or a
+	// projected landing past the turn distance
+	assert.equal(decideSwipe(-60, releaseVelocity(trail, 300), 1000, -1), null);
+	assert.equal(decideSwipe(-60, releaseVelocity(trail, 100), 1000, -1), 'forward');
+});
+
+test('a trail too short to measure has no velocity', () => {
+	assert.equal(releaseVelocity([], 0), 0);
+	assert.equal(releaseVelocity([{ x: 5, t: 0 }], 50), 0);
+});
+
 // Wiring pins: the swipe decision only matters while the release routes
 // through the same turn() the tap zones use, and the text column strip is the
 // follow target on text pages
@@ -97,6 +125,8 @@ test('the release velocity comes from a trailing window, not a drag-long average
 	assert.match(source, /SWIPE_VELOCITY_WINDOW_MS/);
 	assert.match(source, /while \(trail\.length > 2 && now - trail\[0\]\.t > SWIPE_VELOCITY_WINDOW_MS\) trail\.shift\(\);/);
 	assert.doesNotMatch(source, /0\.7 \* velocity/);
+	// Read at the lift: the last move's speed is stale after a pause
+	assert.match(source, /const velocity = releaseVelocity\(trail, performance\.now\(\)\);/);
 });
 
 test('the gesture effect re-attaches once pages mount the paged container', () => {

@@ -77,7 +77,7 @@ import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
 import { AUTO_HIDE_MS, INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { PULL_THRESHOLD, PullGestureController, rubber } from './reader/pullNextChapter';
-import { decideSwipe, SWIPE_VELOCITY_WINDOW_MS } from './reader/swipeTurn';
+import { decideSwipe, releaseVelocity, SWIPE_VELOCITY_WINDOW_MS } from './reader/swipeTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
@@ -1180,7 +1180,6 @@ function ReaderCore({
 		let axis: 'x' | 'y' | null = null;
 		let totalDx = 0;
 		let totalDy = 0;
-		let velocity = 0;
 		let pullOwned = false;
 		const clearSwipe = () => {
 			// Restoring the transitions the drag cut animates the spring-back —
@@ -1247,6 +1246,10 @@ function ReaderCore({
 			const had = ctl.rawPull > 0;
 			ctl.releaseTouch();
 			if (!had) {
+				// Read at the lift, not at the last move: a finger that stops
+				// before lifting sends no moves, and its earlier flick speed
+				// must not still count
+				const velocity = releaseVelocity(trail, performance.now());
 				const decision =
 					!abandon && axis === 'x' ? decideSwipe(totalDx, velocity, root.clientWidth, forwardSignRef.current) : null;
 				clearSwipe();
@@ -1271,7 +1274,6 @@ function ReaderCore({
 			axis = null;
 			totalDx = 0;
 			totalDy = 0;
-			velocity = 0;
 			pullOwned = false;
 		};
 		const onPointerMove = (e: PointerEvent) => {
@@ -1288,13 +1290,9 @@ function ReaderCore({
 			totalDx += dx;
 			totalDy += dy;
 			const now = performance.now();
-			// Release velocity is the last ~100ms of movement, not an average of
-			// the whole drag — a finger slows before it lifts, and an EMA
-			// under-reads the flick and springs honest swipes back
+			// Only the last ~100ms of movement is kept for the release velocity
 			trail.push({ x: e.clientX, t: now });
 			while (trail.length > 2 && now - trail[0].t > SWIPE_VELOCITY_WINDOW_MS) trail.shift();
-			const oldest = trail[0];
-			velocity = now > oldest.t ? (e.clientX - oldest.x) / (now - oldest.t) : 0;
 			if (axis === null && Math.abs(totalDx) + Math.abs(totalDy) > 8) {
 				axis = Math.abs(totalDx) >= Math.abs(totalDy) ? 'x' : 'y';
 			}
