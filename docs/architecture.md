@@ -2191,7 +2191,57 @@ chapter left in that direction the same page answers with an end-of-list card
 (once the chapter list is fetched) whose continue leaves the reader for the
 manga page. The page
 is on by default and disabled by `sumidoku.reader.transition`
-storing `0`. Keyboard shortcuts
+storing `0`. Every mode also offers a pull-to-next-chapter gesture at the
+chapter end (`reader/pullNextChapter.ts:PullGestureController`): further input
+in the reading-forward direction past the end accumulates a raw pull distance,
+and the visible offset is that distance compressed by a rubber-band curve
+(`rubber()`, 1:1 at the origin, bounded near 267px), so the content resists
+increasingly and never flies off. Releasing past the 160px threshold opens the
+next chapter — a wheel pull commits on the crossing event itself and only
+counts after the wheel has gone quiet for 250ms at the edge, so fling inertia
+can never be read as a pull; a touch/pointer pull commits when the finger
+lifts. Reversing the gesture shrinks the pull back, and abandoning it is the
+cancel — there is no post-jump undo. Continuous/webtoon pull vertically at the
+scroll hard bottom (wheel and touch; `touchmove` turns non-passive once the
+pull owns the drag) and render the hint in-flow after the last page with real
+padding so it is never a zero-height box; paged pulls horizontally at the last
+spread via pointer drag (the wheel keeps its WheelTurnController → boundaryNav
+path), the hint is the track's trailing child — the track stays viewport-wide,
+so the spread translation percentages are unaffected, and the rtl row direction
+mirrors it for free — and the pull adds its damped offset through the
+`--paged-pull` variable so a re-render cannot clobber an active drag, while a
+`--dragging` class cuts the turn transition mid-pull and its removal animates
+the spring-back. A click trailing a pull (or any real drag) is swallowed before
+it can reach the tap zones. Progress paints through inline styles and CSS
+variables so a drag never re-renders the reader; only the armed flip is React
+state. A committed pull slides the content off for 180ms before navigating.
+The gesture requires a next chapter and is suspended while pinch-zoomed. A
+text page opts out of the paged pull (its hint strip is not rendered): a text
+chapter is a single page, so without the opt-out every drag would arm a
+chapter jump mid-reading. Its chapter boundary keeps arriving through the
+transition page, and the pull only applies to text chapters in the continuous
+modes, where the text is one tall block in the scroll list and the hard-bottom
+pull works unchanged.
+
+Paged mode also turns by swipe (`reader/swipeTurn.ts:decideSwipe`, sharing the
+pull's pointer listeners): a horizontal drag follows the finger 1:1 — the
+track on image pages, the column strip on text pages (the `--text-swipe`
+variable composes with the column base the way `--paged-pull` composes with
+the spread base, and a `reader__swiping` class cuts the column transition
+mid-drag) — and releasing past the turn distance (half the viewport capped at
+180px, so a double-page spread or a wide desktop window never demands more
+than one honest drag length), or flicking at 0.5px/ms
+with at least 24px of travel, turns through the same `turn()` the tap zones
+use, so text columns, spreads, double-page and boundary behaviour stay in one
+place; anything less springs back. Past the content's own end in the drag
+direction the follow offset is rubber-banded instead. The drag locks to the
+horizontal axis past 8px of travel so vertical wobble never moves the page,
+velocity is an exponential moving average of the pointer deltas, and a second
+finger abandons the drag for the pinch. At the last spread of an image page a
+forward drag belongs to the pull — once it owns the drag the swipe stays out
+of the shared variable — so the chapter end keeps one gesture. Swipes need no
+next chapter; only pinch zoom suspends them.
+Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the

@@ -99,11 +99,12 @@ test('paged text columns flow right-to-left under rtl', async () => {
 				})
 			);
 		const ltr = render('ltr');
-		assert.match(ltr, /transform:translateX\(-520px\)/);
+		// The drag offset composes into the column base through --text-swipe
+		assert.match(ltr, /transform:translateX\(calc\(-520px \+ var\(--text-swipe, 0px\)\)\)/);
 		assert.doesNotMatch(ltr, /direction:rtl/);
 		const rtl = render('rtl');
 		assert.match(rtl, /direction:rtl/);
-		assert.match(rtl, /transform:translateX\(520px\)/);
+		assert.match(rtl, /transform:translateX\(calc\(520px \+ var\(--text-swipe, 0px\)\)\)/);
 	});
 });
 

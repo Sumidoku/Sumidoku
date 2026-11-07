@@ -118,6 +118,9 @@
     "transitionNoNext": "次の話はありません",
     "transitionNoPrev": "前の話はありません",
     "transitionBackToManga": "漫画のページに戻る",
+    "pullNextHint": "上にスワイプして第 {{chapter}} 章へ",
+    "pullNextHintPaged": "そのまま引っ張って第 {{chapter}} 章へ",
+    "pullNextRelease": "指を離して第 {{chapter}} 章へ",
     "descending": "降順",
     "readingMode": "読書モード",
     "shortcuts": {

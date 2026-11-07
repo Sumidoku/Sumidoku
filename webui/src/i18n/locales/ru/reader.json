@@ -118,6 +118,9 @@
     "transitionNoNext": "Следующих глав нет",
     "transitionNoPrev": "Предыдущей главы нет",
     "transitionBackToManga": "Вернуться к странице манги",
+    "pullNextHint": "Потяните вверх, чтобы перейти к главе {{chapter}}",
+    "pullNextHintPaged": "Тяните дальше, чтобы открыть главу {{chapter}}",
+    "pullNextRelease": "Отпустите, чтобы открыть главу {{chapter}}",
     "descending": "По убыванию",
     "readingMode": "Режим чтения",
     "shortcuts": {

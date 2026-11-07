@@ -6,6 +6,22 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A gesture offset folded into an existing transform through a CSS
+variable must be sign-checked against both the drag delta and the
+layout's own offset convention — the type system and the
+direction-agnostic controller tests cannot see a flipped sign.** Work
+one concrete case (LTR, drag 10px forward) through the whole chain by
+hand — pointer delta → controller distance → CSS variable → computed
+transform — before calling the wiring done; a wrong sign compiles,
+passes every controller test, and only shows up as content moving
+against the finger.
+- Evidence: 2026-11-07, the pull-to-next-chapter paged wiring wrote
+  `--paged-pull` as `-forwardSign * offset`, moving the track opposite
+  the finger (`forwardSign` already encodes "LTR forward = negative X"
+  to match `trackOffsetPercent`); caught by re-deriving the geometry,
+  invisible to `tsc` and the controller's unit tests, which are
+  direction-agnostic by design.
+
 **Run the full suite before calling a webui change green, not just the
 files you touched.** A deleted or re-signed export keeps consumers alive
 behind `vite.ssrLoadModule` and behind test files that import it for a
