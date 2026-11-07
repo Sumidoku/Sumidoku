@@ -1174,13 +1174,14 @@ function ReaderCore({
 			if (moved > 10 || had) suppressClickRef.current = true;
 		};
 		const onPointerDown = (e: PointerEvent) => {
-			if (!e.isPrimary || zoomedRef.current) return;
-			if (e.pointerType === 'mouse' && e.button !== 0) return;
 			if (dragId !== null) {
-				// A second finger turns this into a pinch: abandon the drag
+				// A second finger turns this into a pinch: abandon the drag. It
+				// arrives with isPrimary false, so this runs before that filter
 				endDrag(true);
 				return;
 			}
+			if (!e.isPrimary || zoomedRef.current) return;
+			if (e.pointerType === 'mouse' && e.button !== 0) return;
 			dragId = e.pointerId;
 			lastX = e.clientX;
 			lastY = e.clientY;

@@ -80,3 +80,14 @@ test('the column strip follows the finger through its own variable and transitio
 test('a pull that owns the drag keeps the swipe out of the shared variable', () => {
 	assert.match(source, /if \(ctl\.feedTouch\(dx \* forwardSignRef\.current, true\)\) \{\n\t\t\t\t\tpullOwned = true;/);
 });
+
+test('a second finger abandons the drag before the primary-pointer filter drops it', () => {
+	// A second touch arrives with isPrimary false, so a dragId check placed
+	// after the isPrimary filter never runs and a pinch at scale 1 keeps
+	// swiping the first finger's travel into a page turn
+	const handler = source.slice(source.indexOf('const onPointerDown = (e: PointerEvent) => {'));
+	const abandon = handler.indexOf('if (dragId !== null) {');
+	const primaryFilter = handler.indexOf('if (!e.isPrimary || zoomedRef.current) return;');
+	assert.ok(abandon >= 0 && primaryFilter >= 0);
+	assert.ok(abandon < primaryFilter, 'the pinch abandon must run before non-primary pointers are filtered out');
+});
