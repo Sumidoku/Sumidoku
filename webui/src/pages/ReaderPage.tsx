@@ -77,7 +77,7 @@ import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
 import { AUTO_HIDE_MS, INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { PULL_THRESHOLD, PullGestureController, rubber } from './reader/pullNextChapter';
-import { decideSwipe } from './reader/swipeTurn';
+import { decideSwipe, releaseVelocity, SWIPE_VELOCITY_WINDOW_MS } from './reader/swipeTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
@@ -1161,8 +1161,9 @@ function ReaderCore({
 	}, [mode, pages, navReady]);
 	// Paged pointer gestures. A horizontal drag follows the finger 1:1 — the
 	// track on image pages, the column strip on text pages — and releasing
-	// past half the viewport (or flicking) turns through the same turn() the
-	// tap zones use, anything less springs back. Past the content's own end
+	// with enough projected travel (or flicking) turns through the same
+	// turn() the tap zones use, anything less springs back. Past the
+	// content's own end
 	// the drag rubber-bands, and at the last spread of an image page a forward
 	// drag is the pull-to-next-chapter instead. A click after any real drag
 	// must not reach the tap zones
@@ -1174,12 +1175,11 @@ function ReaderCore({
 		let dragId: number | null = null;
 		let lastX = 0;
 		let lastY = 0;
-		let lastT = 0;
+		let trail: { x: number; t: number }[] = [];
 		let moved = 0;
 		let axis: 'x' | 'y' | null = null;
 		let totalDx = 0;
 		let totalDy = 0;
-		let velocity = 0;
 		let pullOwned = false;
 		const clearSwipe = () => {
 			// Restoring the transitions the drag cut animates the spring-back —
@@ -1246,6 +1246,10 @@ function ReaderCore({
 			const had = ctl.rawPull > 0;
 			ctl.releaseTouch();
 			if (!had) {
+				// Read at the lift, not at the last move: a finger that stops
+				// before lifting sends no moves, and its earlier flick speed
+				// must not still count
+				const velocity = releaseVelocity(trail, performance.now());
 				const decision =
 					!abandon && axis === 'x' ? decideSwipe(totalDx, velocity, root.clientWidth, forwardSignRef.current) : null;
 				clearSwipe();
@@ -1265,12 +1269,11 @@ function ReaderCore({
 			dragId = e.pointerId;
 			lastX = e.clientX;
 			lastY = e.clientY;
-			lastT = performance.now();
+			trail = [{ x: e.clientX, t: performance.now() }];
 			moved = 0;
 			axis = null;
 			totalDx = 0;
 			totalDy = 0;
-			velocity = 0;
 			pullOwned = false;
 		};
 		const onPointerMove = (e: PointerEvent) => {
@@ -1287,9 +1290,9 @@ function ReaderCore({
 			totalDx += dx;
 			totalDy += dy;
 			const now = performance.now();
-			const dt = now - lastT;
-			lastT = now;
-			if (dt > 0) velocity = 0.7 * velocity + 0.3 * (dx / dt);
+			// Only the last ~100ms of movement is kept for the release velocity
+			trail.push({ x: e.clientX, t: now });
+			while (trail.length > 2 && now - trail[0].t > SWIPE_VELOCITY_WINDOW_MS) trail.shift();
 			if (axis === null && Math.abs(totalDx) + Math.abs(totalDy) > 8) {
 				axis = Math.abs(totalDx) >= Math.abs(totalDy) ? 'x' : 'y';
 			}
@@ -1341,7 +1344,7 @@ function ReaderCore({
 			ctl.cancel();
 			clearSwipe();
 		};
-	}, [mode, navReady]);
+	}, [mode, pages, navReady]);
 
 	useEffect(() => {
 		if (!chaptersOpen) return;
