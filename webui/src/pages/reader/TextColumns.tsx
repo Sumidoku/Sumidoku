@@ -30,7 +30,9 @@ export function TextColumns({ dir, html, textStyle, layout, col, innerRef }: Tex
 					...textStyle,
 					direction: dir === 'rtl' ? 'rtl' : undefined,
 					columnWidth: layout.w > 0 ? `${layout.w}px` : undefined,
-					transform: `translateX(${textColumnOffset(dir, col, layout.w, layout.gap)}px)`
+					// --text-swipe carries the follow-the-finger drag offset; the
+				    // swipe writer resets it to 0 as the column base moves
+				    transform: `translateX(calc(${textColumnOffset(dir, col, layout.w, layout.gap)}px + var(--text-swipe, 0px)))`
 				}}
 				dangerouslySetInnerHTML={{ __html: html }}
 			/>

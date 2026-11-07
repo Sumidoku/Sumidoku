@@ -76,7 +76,8 @@ import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/s
 import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
 import { INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
-import { PULL_THRESHOLD, PullGestureController } from './reader/pullNextChapter';
+import { PULL_THRESHOLD, PullGestureController, rubber } from './reader/pullNextChapter';
+import { decideSwipe } from './reader/swipeTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
@@ -940,7 +941,7 @@ function ReaderCore({
 	// Render-scope values the long-lived listeners read through refs
 	const modeRef = useRef(mode);
 	modeRef.current = mode;
-	const forwardSignRef = useRef(1);
+	const forwardSignRef = useRef<1 | -1>(1);
 	forwardSignRef.current = dir === 'rtl' ? 1 : -1;
 	const atLastSpreadRef = useRef(false);
 	atLastSpreadRef.current = spreads !== null && curSpreadIdx === spreads.length - 1;
@@ -1029,6 +1030,10 @@ function ReaderCore({
 	const pullEnabled = navEnabled && nextCh !== null && !zoomed;
 	const pullEnabledRef = useRef(false);
 	pullEnabledRef.current = pullEnabled;
+	// Unlike the pull, mid-chapter swipes stay available without a next chapter;
+	// only pinch zoom suspends every pointer drag
+	const zoomedRef = useRef(false);
+	zoomedRef.current = zoomed;
 	useEffect(() => {
 		if (!pullEnabled) pullCtlRef.current?.cancel();
 	}, [pullEnabled]);
@@ -1095,8 +1100,13 @@ function ReaderCore({
 			ctl.cancel();
 		};
 	}, [mode, pages, navReady]);
-	// Paged: a pointer drag past the last spread pulls the track; a click after
-	// a pull (or any real drag) must not reach the tap zones
+	// Paged pointer gestures. A horizontal drag follows the finger 1:1 — the
+	// track on image pages, the column strip on text pages — and releasing
+	// past half the viewport (or flicking) turns through the same turn() the
+	// tap zones use, anything less springs back. Past the content's own end
+	// the drag rubber-bands, and at the last spread of an image page a forward
+	// drag is the pull-to-next-chapter instead. A click after any real drag
+	// must not reach the tap zones
 	useEffect(() => {
 		if (mode !== 'paged' || !navReady) return;
 		const root = pagedRef.current;
@@ -1104,27 +1114,124 @@ function ReaderCore({
 		if (!root || !ctl) return;
 		let dragId: number | null = null;
 		let lastX = 0;
+		let lastY = 0;
+		let lastT = 0;
 		let moved = 0;
-		const onPointerDown = (e: PointerEvent) => {
-			if (!pullEnabledRef.current || !e.isPrimary) return;
-			if (e.pointerType === 'mouse' && e.button !== 0) return;
-			dragId = e.pointerId;
-			lastX = e.clientX;
-			moved = 0;
+		let axis: 'x' | 'y' | null = null;
+		let totalDx = 0;
+		let totalDy = 0;
+		let velocity = 0;
+		let pullOwned = false;
+		const clearSwipe = () => {
+			// Restoring the transitions the drag cut animates the spring-back —
+			// or the remainder of the slide when a turn moved the base
+			const tr = trackRef.current;
+			if (tr) {
+				tr.classList.remove('reader__track--dragging');
+				tr.style.setProperty('--paged-pull', '0px');
+			}
+			const cols = textColsRef.current;
+			if (cols) {
+				cols.classList.remove('reader__swiping');
+				cols.style.setProperty('--text-swipe', '0px');
+			}
 		};
-		const onPointerMove = (e: PointerEvent) => {
-			if (dragId === null || e.pointerId !== dragId || !pullEnabledRef.current) return;
-			const dx = e.clientX - lastX;
-			lastX = e.clientX;
-			moved += Math.abs(dx);
-			ctl.feedTouch(dx * forwardSignRef.current, atLastSpreadRef.current && !textPageRef.current);
+		const applySwipeOffset = () => {
+			// 1:1 with the finger, except past the content's own end in the
+			// drag direction, where the rubber curve takes over
+			let offset = totalDx;
+			const fwd = totalDx * forwardSignRef.current;
+			const overStart = fwd < 0 && (textPageRef.current ? colRef.current <= 0 : idxRef.current <= 0);
+			const overEnd =
+				fwd > 0 &&
+				(textPageRef.current ? colRef.current >= textLayoutRef.current.cols - 1 : atLastSpreadRef.current);
+			if (overStart || overEnd) offset = Math.sign(totalDx) * rubber(Math.abs(totalDx));
+			if (textPageRef.current) {
+				const cols = textColsRef.current;
+				if (cols) {
+					cols.classList.add('reader__swiping');
+					cols.style.setProperty('--text-swipe', `${offset}px`);
+				}
+			} else {
+				const tr = trackRef.current;
+				if (tr) {
+					tr.classList.add('reader__track--dragging');
+					tr.style.setProperty('--paged-pull', `${offset}px`);
+				}
+			}
 		};
-		const endDrag = (e: PointerEvent) => {
-			if (dragId === null || e.pointerId !== dragId) return;
+		const endDrag = (abandon = false) => {
+			if (dragId === null) return;
 			dragId = null;
 			const had = ctl.rawPull > 0;
 			ctl.releaseTouch();
+			if (!had) {
+				const decision =
+					!abandon && axis === 'x' ? decideSwipe(totalDx, velocity, root.clientWidth, forwardSignRef.current) : null;
+				clearSwipe();
+				if (decision !== null) turnRef.current(decision === 'forward');
+			}
 			if (moved > 10 || had) suppressClickRef.current = true;
+		};
+		const onPointerDown = (e: PointerEvent) => {
+			if (!e.isPrimary || zoomedRef.current) return;
+			if (e.pointerType === 'mouse' && e.button !== 0) return;
+			if (dragId !== null) {
+				// A second finger turns this into a pinch: abandon the drag
+				endDrag(true);
+				return;
+			}
+			dragId = e.pointerId;
+			lastX = e.clientX;
+			lastY = e.clientY;
+			lastT = performance.now();
+			moved = 0;
+			axis = null;
+			totalDx = 0;
+			totalDy = 0;
+			velocity = 0;
+			pullOwned = false;
+		};
+		const onPointerMove = (e: PointerEvent) => {
+			if (dragId === null || e.pointerId !== dragId) return;
+			if (zoomedRef.current) {
+				endDrag(true);
+				return;
+			}
+			const dx = e.clientX - lastX;
+			const dy = e.clientY - lastY;
+			lastX = e.clientX;
+			lastY = e.clientY;
+			moved += Math.abs(dx) + Math.abs(dy);
+			totalDx += dx;
+			totalDy += dy;
+			const now = performance.now();
+			const dt = now - lastT;
+			lastT = now;
+			if (dt > 0) velocity = 0.7 * velocity + 0.3 * (dx / dt);
+			if (axis === null && Math.abs(totalDx) + Math.abs(totalDy) > 8) {
+				axis = Math.abs(totalDx) >= Math.abs(totalDy) ? 'x' : 'y';
+			}
+			if (axis !== 'x') return;
+			// A forward drag at the last spread of an image page belongs to the
+			// pull; once it owns the drag the swipe stays out of the shared var
+			if (pullOwned) {
+				ctl.feedTouch(dx * forwardSignRef.current, true);
+				return;
+			}
+			if (pullEnabledRef.current && atLastSpreadRef.current && !textPageRef.current) {
+				if (ctl.feedTouch(dx * forwardSignRef.current, true)) {
+					pullOwned = true;
+					return;
+				}
+			}
+			applySwipeOffset();
+		};
+		const onPointerUp = (e: PointerEvent) => {
+			if (e.pointerId === dragId) endDrag();
+		};
+		const onPointerCancel = (e: PointerEvent) => {
+			if (e.pointerId === dragId) endDrag(true);
 		};
 		const onClickCapture = (e: MouseEvent) => {
 			if (!suppressClickRef.current) return;
@@ -1134,16 +1241,17 @@ function ReaderCore({
 		};
 		root.addEventListener('pointerdown', onPointerDown, { passive: true });
 		root.addEventListener('pointermove', onPointerMove, { passive: true });
-		root.addEventListener('pointerup', endDrag, { passive: true });
-		root.addEventListener('pointercancel', endDrag, { passive: true });
+		root.addEventListener('pointerup', onPointerUp, { passive: true });
+		root.addEventListener('pointercancel', onPointerCancel, { passive: true });
 		root.addEventListener('click', onClickCapture, { capture: true });
 		return () => {
 			root.removeEventListener('pointerdown', onPointerDown);
 			root.removeEventListener('pointermove', onPointerMove);
-			root.removeEventListener('pointerup', endDrag);
-			root.removeEventListener('pointercancel', endDrag);
+			root.removeEventListener('pointerup', onPointerUp);
+			root.removeEventListener('pointercancel', onPointerCancel);
 			root.removeEventListener('click', onClickCapture, { capture: true });
 			ctl.cancel();
+			clearSwipe();
 		};
 	}, [mode, navReady]);
 

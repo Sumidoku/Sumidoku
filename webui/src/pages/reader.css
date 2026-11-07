@@ -139,6 +139,13 @@
 	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* A mid-drag column strip follows the finger 1:1; cutting its column
+   transition keeps it from lagging, and removing the class animates the
+   release (spring-back or the remainder of the slide after a turn) */
+.reader__paged[data-anim='true'] .reader-text--cols.reader__swiping {
+	transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.reader__paged .reader__track,
 	.reader__paged .reader-text--cols {

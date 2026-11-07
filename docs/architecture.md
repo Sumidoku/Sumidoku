@@ -2216,14 +2216,29 @@ it can reach the tap zones. Progress paints through inline styles and CSS
 variables so a drag never re-renders the reader; only the armed flip is React
 state. A committed pull slides the content off for 180ms before navigating.
 The gesture requires a next chapter and is suspended while pinch-zoomed. A
-text page opts out of the paged drag (its hint strip is not rendered): paged
-mode has no swipe navigation — taps, keys and wheel turn pages and text
-columns alike — but a horizontal drag is still what a reader tries on a text
-page, and a text chapter is a single page, so without the opt-out that drag
-would arm a chapter jump mid-reading. A text page's chapter boundary keeps
-arriving through the transition page, and the pull only applies to text
-chapters in the continuous modes, where the text is one tall block in the
-scroll list and the hard-bottom pull works unchanged.
+text page opts out of the paged pull (its hint strip is not rendered): a text
+chapter is a single page, so without the opt-out every drag would arm a
+chapter jump mid-reading. Its chapter boundary keeps arriving through the
+transition page, and the pull only applies to text chapters in the continuous
+modes, where the text is one tall block in the scroll list and the hard-bottom
+pull works unchanged.
+
+Paged mode also turns by swipe (`reader/swipeTurn.ts:decideSwipe`, sharing the
+pull's pointer listeners): a horizontal drag follows the finger 1:1 — the
+track on image pages, the column strip on text pages (the `--text-swipe`
+variable composes with the column base the way `--paged-pull` composes with
+the spread base, and a `reader__swiping` class cuts the column transition
+mid-drag) — and releasing past half the viewport, or flicking at 0.5px/ms
+with at least 24px of travel, turns through the same `turn()` the tap zones
+use, so text columns, spreads, double-page and boundary behaviour stay in one
+place; anything less springs back. Past the content's own end in the drag
+direction the follow offset is rubber-banded instead. The drag locks to the
+horizontal axis past 8px of travel so vertical wobble never moves the page,
+velocity is an exponential moving average of the pointer deltas, and a second
+finger abandons the drag for the pinch. At the last spread of an image page a
+forward drag belongs to the pull — once it owns the drag the swipe stays out
+of the shared variable — so the chapter end keeps one gesture. Swipes need no
+next chapter; only pinch zoom suspends them.
 Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
 pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
