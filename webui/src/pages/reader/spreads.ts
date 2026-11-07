@@ -135,6 +135,20 @@ export function spreadLeadPage(spread: Spread): number {
 }
 
 /**
+ * The spread's last real page in reading order. Both slots of a pair are
+ * visible at once, so progress and the chapter-end mark follow this page, not
+ * the landing page: a paired final spread (doubleNoCover with an even page
+ * count) would otherwise never report its last page as read.
+ */
+export function spreadLastPage(spread: Spread): number {
+	for (let i = spread.length - 1; i >= 0; i--) {
+		const slot = spread[i];
+		if (slot !== null) return slot;
+	}
+	return 0;
+}
+
+/**
  * The aspect-ratio box a spread slot reserves before its page's dimensions are
  * known. Manga pages are close to 2:3 (KMReader's blankOf uses the same
  * fallback), so an unloaded page already occupies the correct half of the
