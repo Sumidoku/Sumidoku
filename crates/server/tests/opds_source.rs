@@ -25,14 +25,21 @@ const AUTH_HEADER: &str = "Basic dXNlcjpwYXNz"; // user:pass
 struct MockState {
 	base: String,
 	opensearch: bool,
+	direct_search: bool,
+	manifest_unavailable: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn root_feed(state: &MockState) -> String {
-	let search_link = if state.opensearch {
+	let search_link = if state.direct_search {
 		format!(
-			r#"  <link rel="search" type="application/opensearchdescription+xml" href="{}/opds/search"/>"#,
+			r#"
+  <link rel="search" type="application/atom+xml;profile=opds-catalog"
+        href="{}/opds/series?search={{searchTerms}}"/>"#,
 			state.base
 		)
+	} else if state.opensearch {
+		"  <link rel=\"search\" type=\"application/opensearchdescription+xml\" href=\"descriptions/search.xml\"/>"
+			.to_string()
 	} else {
 		String::new()
 	};
@@ -47,22 +54,22 @@ fn root_feed(state: &MockState) -> String {
     <id>allSeries</id>
     <updated>2024-01-01T00:00:00Z</updated>
     <content>Browse by series</content>
-    <link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="{}/opds/series"/>
+    <link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=acquisition" href="{}/opds/series"/>
   </entry>
 </feed>"#,
 		state.base
 	)
 }
 
-fn search_descriptor(base: &str) -> String {
-	format!(
-		r#"<?xml version="1.0" encoding="UTF-8"?>
+fn search_descriptor() -> String {
+	r#"<?xml version="1.0" encoding="UTF-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
   <ShortName>Search</ShortName>
   <Description>Search for series</Description>
-  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition" template="{base}/opds/series?search={{searchTerms}}"/>
-</OpenSearchDescription>"#
-	)
+  <Url type="application/json" template="wrong-type?q={searchTerms}"/>
+  <Url type="application/atom+xml;profile=opds-catalog;kind=acquisition"
+       template="../series?search={searchTerms}"/>
+</OpenSearchDescription>"#.to_string()
 }
 
 fn series_entry(id: &str, title: &str, base: &str) -> String {
@@ -72,7 +79,7 @@ fn series_entry(id: &str, title: &str, base: &str) -> String {
     <id>{id}</id>
     <updated>2024-02-01T00:00:00Z</updated>
     <content></content>
-    <link rel="subsection" type="application/atom+xml;profile=opds-catalog;kind=navigation" href="{base}/opds/series/{id}"/>
+    <link rel="alternate" type="application/atom+xml;profile=opds-catalog;kind=acquisition" href="{base}/opds/series/{id}"/>
   </entry>"#
 	)
 }
@@ -128,6 +135,30 @@ fn alpha_books_feed(base: &str) -> String {
 	)
 }
 
+fn standalone_book_feed(base: &str) -> String {
+	format!(r#"<feed xmlns="http://www.w3.org/2005/Atom" xmlns:pse="http://vaemendis.net/opds-pse/ns">
+<entry><id>book-1</id><title>Standalone Book</title>
+<link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/opds/books/book-2/file/vol2.cbz"/>
+<link rel="http://vaemendis.net/opds-pse/stream" type="image/jpeg" href="{base}/opds/books/book-1/pages/{{pageNumber}}" pse:count="2"/>
+</entry></feed>"#)
+}
+
+fn manifest_book_feed(base: &str) -> String {
+	format!(r#"<feed xmlns="http://www.w3.org/2005/Atom">
+<entry><id>manifest-book</id><title>Manifest Book</title>
+<link rel="self" type="application/opds-publication+json" href="{base}/opds/unavailable-manifest"/>
+<link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/opds/books/book-2/file/vol2.cbz"/>
+</entry></feed>"#)
+}
+
+fn malformed_manifest_book_feed(base: &str) -> String {
+	format!(r#"<feed xmlns="http://www.w3.org/2005/Atom">
+<entry><id>malformed-book</id><title>Malformed Manifest Book</title>
+<link rel="self" type="application/opds-publication+json" href="{base}/opds/malformed-manifest"/>
+<link rel="http://opds-spec.org/acquisition" type="application/zip" href="{base}/opds/books/book-2/file/vol2.cbz"/>
+</entry></feed>"#)
+}
+
 fn cbz_bytes() -> Vec<u8> {
 	let mut cursor = std::io::Cursor::new(Vec::new());
 	let mut writer = zip::ZipWriter::new(&mut cursor);
@@ -169,11 +200,31 @@ async fn basic_gate(req: axum::extract::Request, next: axum::middleware::Next) -
 
 /// Starts a mock OPDS catalog: auth = require basic credentials, opensearch = root feed carries a search link
 async fn mock_catalog(auth: bool, opensearch: bool) -> (u16, tokio::task::JoinHandle<()>) {
+	mock_catalog_mode(auth, opensearch, false).await
+}
+
+async fn mock_catalog_mode(
+	auth: bool,
+	opensearch: bool,
+	direct_search: bool,
+) -> (u16, tokio::task::JoinHandle<()>) {
+	let (port, server, _) = mock_catalog_mode_toggle(auth, opensearch, direct_search).await;
+	(port, server)
+}
+
+async fn mock_catalog_mode_toggle(
+	auth: bool,
+	opensearch: bool,
+	direct_search: bool,
+) -> (u16, tokio::task::JoinHandle<()>, std::sync::Arc<std::sync::atomic::AtomicBool>) {
 	let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
 	let port = listener.local_addr().expect("local addr").port();
+	let manifest_unavailable = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 	let state = MockState {
 		base: format!("http://127.0.0.1:{port}"),
 		opensearch,
+		direct_search,
+		manifest_unavailable: manifest_unavailable.clone(),
 	};
 	let cbz = std::sync::Arc::new(cbz_bytes());
 	let app = Router::new()
@@ -182,14 +233,34 @@ async fn mock_catalog(auth: bool, opensearch: bool) -> (u16, tokio::task::JoinHa
 			get(|State(state): State<MockState>| async move { xml(root_feed(&state)) }),
 		)
 		.route(
-			"/opds/search",
-			get(|State(state): State<MockState>| async move { xml(search_descriptor(&state.base)) }),
+			"/opds/descriptions/search.xml",
+			get(|| async move { xml(search_descriptor()) }),
 		)
 		.route(
 			"/opds/series",
 			get(
 				|State(state): State<MockState>, Query(query): Query<HashMap<String, String>>| async move {
-					xml(series_feed(query.get("search").map(String::as_str), &state.base))
+					let search = query.get("search").map(String::as_str);
+					if search == Some("paged") || search == Some("repeat") || search == Some("cap") {
+						let page = query.get("page").and_then(|p| p.parse::<u32>().ok()).unwrap_or(1);
+						let next = if search == Some("repeat") {
+							Some("?search=repeat".to_string())
+						} else if search == Some("paged") && page >= 2 {
+							None
+						} else {
+							Some(format!("?search={}&page={}", search.unwrap(), page + 1))
+						};
+						let next_link = next
+							.map(|n| format!("<link rel=\"next\" href=\"{}\"/>", n.replace('&', "&amp;")))
+							.unwrap_or_default();
+						let entry = series_entry(&format!("page-{page}"), &format!("Page {page}"), &state.base);
+						let body = format!(
+							r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Results</title>{next_link}{entry}</feed>"#
+						);
+						return xml(body);
+					}
+					let search = search.map(|q| if q == "alpha +" { "alpha" } else { q });
+					xml(series_feed(search, &state.base))
 				},
 			),
 		)
@@ -197,6 +268,41 @@ async fn mock_catalog(auth: bool, opensearch: bool) -> (u16, tokio::task::JoinHa
 			"/opds/series/series-alpha",
 			get(|State(state): State<MockState>| async move { xml(alpha_books_feed(&state.base)) }),
 		)
+		.route(
+			"/opds/standalone",
+			get(|State(state): State<MockState>| async move {
+				if state.manifest_unavailable.load(std::sync::atomic::Ordering::Relaxed) { StatusCode::NOT_FOUND.into_response() } else { xml(standalone_book_feed(&state.base)) }
+			}),
+		)
+		.route("/opds/manifest-book", get(|State(state): State<MockState>| async move {
+			if state.manifest_unavailable.load(std::sync::atomic::Ordering::Relaxed) { StatusCode::NOT_FOUND.into_response() } else { xml(manifest_book_feed(&state.base)) }
+		}))
+		.route("/opds/malformed-book", get(|State(state): State<MockState>| async move {
+			if state.manifest_unavailable.load(std::sync::atomic::Ordering::Relaxed) { StatusCode::NOT_FOUND.into_response() } else { xml(malformed_manifest_book_feed(&state.base)) }
+		}))
+		.route("/opds/malformed-manifest", get(|| async {
+			([(header::CONTENT_TYPE, "application/opds-publication+json")], r#"{"readingOrder":[{"href":"http://[::1"}]}"#)
+		}))
+		.route("/opds/paged-root", get(|State(state): State<MockState>, Query(query): Query<HashMap<String, String>>| async move {
+			if query.get("page").map(String::as_str) == Some("2") {
+				xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Late Root</title><id>late-root</id><link rel="subsection" type="application/atom+xml;kind=navigation" href="/opds/root-late"/></entry></feed>"#.into())
+			} else {
+				xml(format!(r#"<feed xmlns="http://www.w3.org/2005/Atom"><link rel="next" href="?page=2"/><entry><title>Parent</title><id>parent</id><link rel="subsection" type="application/atom+xml;kind=navigation" href="{}/opds/parent"/></entry></feed>"#, state.base))
+			}
+		}))
+		.route("/opds/root-late", get(|| async { xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Late root child</title></feed>"#.into()) }))
+		.route("/opds/parent", get(|Query(query): Query<HashMap<String, String>>| async move {
+			if query.get("page").map(String::as_str) == Some("2") {
+				xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Late Child</title><id>late</id><link rel="subsection" type="application/atom+xml;kind=acquisition" href="child"/></entry></feed>"#.into())
+			} else {
+				xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><link rel="next" href="?page=2"/></feed>"#.into())
+			}
+		}))
+		.route("/opds/child", get(|| async { xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>Child Feed</title></feed>"#.into()) }))
+		.route("/opds/failing", get(|Query(query): Query<HashMap<String, String>>| async move {
+			if query.contains_key("page") { (StatusCode::SERVICE_UNAVAILABLE, "later page unavailable").into_response() }
+			else { xml(r#"<feed xmlns="http://www.w3.org/2005/Atom"><title>First Page</title><link rel="next" href="?page=2"/><entry><id>first</id><title>First</title><link rel="http://opds-spec.org/acquisition" href="/first.cbz"/></entry></feed>"#.into()) }
+		}))
 		.route(
 			"/opds/books/book-1/pages/{n}",
 			get(|Path(n): Path<u32>| async move {
@@ -226,7 +332,7 @@ async fn mock_catalog(auth: bool, opensearch: bool) -> (u16, tokio::task::JoinHa
 	let handle = tokio::spawn(async move {
 		axum::serve(listener, app).await.expect("serve");
 	});
-	(port, handle)
+	(port, handle, manifest_unavailable)
 }
 
 async fn opds_app() -> TestApp {
@@ -298,6 +404,25 @@ async fn register_two_instances_and_search_and_browse() {
 	assert_eq!(source_by_key(&body, "opds.demo-komga-2")["kind"], "opds");
 
 	let source_id = first["id"].as_i64().expect("source id");
+	let (status, listings) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{listings}");
+	assert_eq!(listings.as_array().unwrap().len(), 2);
+	assert_eq!(listings[0]["id"], "opds:all");
+	assert_eq!(listings[0]["name"], "All");
+	assert_eq!(listings[1]["name"], "All series");
+	let (status, all) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/opds:all"), None).await;
+	assert_eq!(status, StatusCode::OK, "{all}");
+	assert!(all["navigation"].as_array().unwrap().is_empty(), "root navigation is exposed by listing tabs");
+	let listing_id = listings[1]["id"].as_str().expect("navigation listing id");
+	let (status, listing_page) = request(
+		&t.app,
+		"GET",
+		&format!("/api/v1/sources/{source_id}/listings/{listing_id}?page=1"),
+		None,
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{listing_page}");
+	assert!(listing_page["entries"].as_array().unwrap().iter().any(|entry| entry["key"] == "series-alpha"));
 	// OpenSearch: the mock filters only by the search term, beta is filtered out
 	let (status, body) = request(
 		&t.app,
@@ -308,10 +433,20 @@ async fn register_two_instances_and_search_and_browse() {
 	.await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(body["degraded"], false);
+	assert_eq!(body["hasNextPage"], false);
 	let entries = body["entries"].as_array().expect("entries");
 	assert_eq!(entries.len(), 1);
 	assert_eq!(entries[0]["key"], "series-alpha");
 	assert_eq!(entries[0]["title"], "Alpha Series");
+	let (status, encoded) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{source_id}/search"),
+		Some(json!({"query":"alpha +"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{encoded}");
+	assert_eq!(encoded["entries"][0]["key"], "series-alpha");
 	assert_eq!(
 		entries[0]["url"].as_str().expect("entry url"),
 		format!("http://127.0.0.1:{port}/opds/series/series-alpha")
@@ -344,6 +479,110 @@ async fn register_two_instances_and_search_and_browse() {
 		let (status, _) = request(&t.app, "POST", "/api/v1/sources/internal", Some(body)).await;
 		assert_eq!(status, StatusCode::BAD_REQUEST);
 	}
+}
+
+#[tokio::test]
+async fn direct_atom_template_expands_encoded_query() {
+	let t = common::test_app().await;
+	let (port, _server) = mock_catalog_mode(false, false, true).await;
+	let url = format!("http://127.0.0.1:{port}/opds/catalog");
+	let (status, registered) = request(
+		&t.app,
+		"POST",
+		"/api/v1/sources/internal",
+		Some(json!({"type":"opds", "name":"Direct Atom", "url":url})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK);
+	let id = registered["id"].as_i64().unwrap();
+	let (status, result) = request(
+		&t.app,
+		"POST",
+		&format!("/api/v1/sources/{id}/search"),
+		Some(json!({"query":"alpha +"})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{result}");
+	assert_eq!(result["degraded"], false);
+	assert_eq!(result["entries"][0]["key"], "series-alpha");
+}
+
+#[tokio::test]
+async fn navigation_from_later_parent_page_produces_a_validated_listing_id() {
+	let t = opds_app().await;
+	let (port, _server) = mock_catalog(false, true).await;
+	let source = register_instance(&t.app, "Paged nav", &format!("http://127.0.0.1:{port}/opds/paged-root"), None).await;
+	let source_id = source["id"].as_i64().unwrap();
+	let (status, listings) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings"), None).await;
+	assert_eq!(status, StatusCode::OK, "{listings}");
+	let parent_id = listings[1]["id"].as_str().unwrap();
+	let (status, root_page_two) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/opds:all?page=2"), None).await;
+	assert_eq!(status, StatusCode::OK, "{root_page_two}");
+	assert_eq!(root_page_two["navigation"][0]["title"], "Late Root");
+	let root_late_id = root_page_two["navigation"][0]["listingId"].as_str().unwrap();
+	let (status, root_late) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/{root_late_id}"), None).await;
+	assert_eq!(status, StatusCode::OK, "later root navigation must validate against its parent page");
+	assert_eq!(root_late["entries"].as_array().unwrap().len(), 0);
+	let (status, page) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/{parent_id}?page=2"), None).await;
+	assert_eq!(status, StatusCode::OK, "{page}");
+	assert_eq!(page["navigation"][0]["title"], "Late Child");
+	let child_id = page["navigation"][0]["listingId"].as_str().unwrap();
+	let (status, child) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/{child_id}"), None).await;
+	assert_eq!(status, StatusCode::OK, "{child}");
+	assert_eq!(child["parentId"], parent_id);
+}
+
+#[tokio::test]
+async fn page_one_listing_does_not_require_an_unavailable_later_page() {
+	let t = opds_app().await;
+	let (port, _server) = mock_catalog(false, true).await;
+	let source = register_instance(&t.app, "Failing pages", &format!("http://127.0.0.1:{port}/opds/failing"), None).await;
+	let source_id = source["id"].as_i64().unwrap();
+	let (status, page) = request(&t.app, "GET", &format!("/api/v1/sources/{source_id}/listings/opds:all?page=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "{page}");
+	assert_eq!(page["entries"][0]["title"], "First");
+	assert_eq!(page["hasNextPage"], true);
+}
+
+#[tokio::test]
+async fn opds_search_pages_are_bounded_and_follow_next() {
+	let t = common::test_app().await;
+	let (port, _server) = mock_catalog(false, true).await;
+	let url = format!("http://127.0.0.1:{port}/opds/catalog");
+	let (_, registered) = request(
+		&t.app,
+		"POST",
+		"/api/v1/sources/internal",
+		Some(json!({"type":"opds", "name":"Paging", "url":url})),
+	)
+	.await;
+	let id = registered["id"].as_i64().unwrap();
+	let path = format!("/api/v1/sources/{id}/search");
+	let (status, first) = request(&t.app, "POST", &path, Some(json!({"query":"paged", "page":1}))).await;
+	assert_eq!(status, StatusCode::OK, "{first}");
+	assert_eq!(first["entries"][0]["key"], "page-1");
+	assert_eq!(first["hasNextPage"], true);
+	let (status, second) = request(&t.app, "POST", &path, Some(json!({"query":"paged", "page":2}))).await;
+	assert_eq!(status, StatusCode::OK, "{second}");
+	assert_eq!(second["entries"][0]["key"], "page-2");
+	assert_eq!(second["hasNextPage"], false);
+	let (status, aggregate) = request(
+		&t.app,
+		"POST",
+		"/api/v1/search",
+		Some(json!({"sourceIds":[id], "query":"paged", "page":2})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{aggregate}");
+	assert_eq!(aggregate["sources"][0]["entries"][0]["key"], "page-2");
+	assert_eq!(aggregate["sources"][0]["hasNextPage"], false);
+	let (status, repeated) = request(&t.app, "POST", &path, Some(json!({"query":"repeat"}))).await;
+	assert_eq!(status, StatusCode::BAD_GATEWAY, "{repeated}");
+	let (status, too_far) = request(&t.app, "POST", &path, Some(json!({"query":"paged", "page":21}))).await;
+	assert_eq!(status, StatusCode::BAD_REQUEST, "{too_far}");
+	let (status, at_cap) = request(&t.app, "POST", &path, Some(json!({"query":"cap", "page":20}))).await;
+	assert_eq!(status, StatusCode::OK, "{at_cap}");
+	assert_eq!(at_cap["hasNextPage"], false);
 }
 
 #[tokio::test]
@@ -422,6 +661,123 @@ async fn read_pages_via_pse_links_and_cbz_fallback() {
 		request_full(&t.app, "GET", &format!("/api/v1/manga/{manga_id}/cover"), None).await;
 	assert_eq!(status, StatusCode::OK);
 	assert_eq!(headers[header::CACHE_CONTROL], "private, max-age=86400", "an unversioned URL keeps the short lifetime");
+}
+
+#[tokio::test]
+async fn standalone_register_ignores_forged_chapter_and_pauses_on_unverified_offline_locator() {
+	use aidoku::{Chapter, Manga};
+	let t = opds_app().await;
+	let (port, _server, unavailable) = mock_catalog_mode_toggle(false, true, false).await;
+	let catalog = format!("http://127.0.0.1:{port}/opds/standalone");
+	let source = register_instance(&t.app, "Standalone", &format!("http://127.0.0.1:{port}/opds/catalog"), None).await;
+	let source_id = source["id"].as_i64().unwrap();
+	let manga = Manga {
+		key: "opds:work:Ym9vay0x".into(),
+		title: "Standalone Book".into(),
+		url: Some(catalog.clone()),
+		chapters: Some(vec![Chapter { key: "book-1".into(), url: Some("https://attacker.invalid/forged.cbz".into()), ..Chapter::default() }]),
+		..Manga::default()
+	};
+	let (status, body) = request(
+		&t.app,
+		"POST",
+		"/api/v1/manga",
+		Some(json!({"sourceId": source_id, "manga": serde_json::to_value(manga).unwrap()})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let manga_id = body["id"].as_i64().unwrap();
+	let chapters = chapter_ids(&t.app, manga_id).await;
+	assert_eq!(chapters.len(), 1);
+	let (status, pages) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages", chapters[0].0), None).await;
+	assert_eq!(status, StatusCode::OK, "{pages}");
+	assert_eq!(pages[0]["content"]["Url"][0], format!("http://127.0.0.1:{port}/opds/books/book-1/pages/0"));
+
+	// The signed locator remains usable after restart and after the feed disappears.
+	let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=rwc", t.db_path.display())).await.unwrap();
+	let chapter_id = chapters[0].0;
+	let signed_locator: String = sqlx::query_scalar("SELECT url FROM chapter WHERE id=?").bind(chapter_id).fetch_one(&pool).await.unwrap();
+	assert_eq!(signed_locator.matches(':').count(), 3, "versioned locator includes an authenticated signature");
+	let forged_versioned_locator = signed_locator.rsplit_once(':').unwrap().0.to_string();
+	let reopened = build_app(base_config(&t.tmp)).await.expect("reopen same database");
+	let (status, pages) = request(&reopened, "GET", &format!("/api/v1/chapter/{chapter_id}/pages?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "signed locator survives server restart: {pages}");
+	assert!(pages[0]["content"]["Url"][0].as_str().unwrap().contains("/pages/0"));
+
+	// Simulate pre-feature standalone rows. Their old locators, including a hand-crafted unsigned versioned
+	// shape copied from a valid locator, are untrusted when the feed is unavailable.
+	let archive = format!("http://127.0.0.1:{port}/opds/books/book-2/file/vol2.cbz");
+	for old_locator in [archive, format!("http://127.0.0.1:{port}/opds/books/book-1/pages/{{pageNumber}}#opds-pse-count=2"), forged_versioned_locator] {
+		sqlx::query("UPDATE manga SET url=? WHERE id=?").bind(format!("http://127.0.0.1:{port}/opds/missing")).bind(manga_id).execute(&pool).await.unwrap();
+		sqlx::query("UPDATE chapter SET url=? WHERE id=?").bind(old_locator).bind(chapter_id).execute(&pool).await.unwrap();
+		let (status, _) = request(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/pages?refresh=1"), None).await;
+		assert_eq!(status, StatusCode::BAD_GATEWAY);
+		sqlx::query("UPDATE page SET content=? WHERE chapter_id=? AND idx=0")
+			.bind(r#"{"content":{"OpdsZip":"p1.png"},"thumbnail":null,"hasDescription":false,"description":null}"#)
+			.bind(chapter_id)
+			.execute(&pool)
+			.await
+			.unwrap();
+		let (status, _, _) = request_full(&t.app, "GET", &format!("/api/v1/chapter/{chapter_id}/page/0"), None).await;
+		assert_eq!(status, StatusCode::BAD_GATEWAY, "missing cache must not re-fetch the unverified standalone locator");
+	}
+
+	// A legacy series archive URL is feed-derived. If the feed remains available, its PSE stream still wins.
+	let (series_id, _) = register_alpha_manga(&t.app, source_id).await;
+	let series_chapters = chapter_ids(&t.app, series_id).await;
+	sqlx::query("UPDATE chapter SET url=? WHERE id=?")
+		.bind(format!("http://127.0.0.1:{port}/opds/books/book-2/file/vol2.cbz"))
+		.bind(series_chapters[0].0)
+		.execute(&pool)
+		.await
+		.unwrap();
+	let (status, pages) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages?refresh=1", series_chapters[0].0), None).await;
+	assert_eq!(status, StatusCode::OK, "{pages}");
+	assert_eq!(pages[0]["content"]["Url"][0], format!("http://127.0.0.1:{port}/opds/books/book-1/pages/0"));
+	sqlx::query("UPDATE manga SET url=? WHERE id=?").bind(catalog).bind(manga_id).execute(&pool).await.unwrap();
+	sqlx::query("UPDATE chapter SET url=? WHERE id=?").bind(signed_locator).bind(chapter_id).execute(&pool).await.unwrap();
+	unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+	let (status, pages) = request(&reopened, "GET", &format!("/api/v1/chapter/{chapter_id}/pages?refresh=1"), None).await;
+	assert_eq!(status, StatusCode::OK, "valid signed locator survives the feed becoming unavailable: {pages}");
+}
+
+#[tokio::test]
+async fn persisted_manifest_falls_back_to_its_archive_after_feed_disappears() {
+	use aidoku::Manga;
+	let t = opds_app().await;
+	let (port, _server, unavailable) = mock_catalog_mode_toggle(false, true, false).await;
+	let base = format!("http://127.0.0.1:{port}");
+	let source = register_instance(&t.app, "Manifest fallback", &format!("{base}/opds/catalog"), None).await;
+	let manga = Manga { key: "opds:work:bWFuaWZlc3QtYm9vaw".into(), title: "Manifest Book".into(), url: Some(format!("{base}/opds/manifest-book")), ..Manga::default() };
+	let (status, body) = request(&t.app, "POST", "/api/v1/manga", Some(json!({"sourceId": source["id"], "manga": serde_json::to_value(manga).unwrap()}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let manga_id = body["id"].as_i64().unwrap();
+	let chapters = chapter_ids(&t.app, manga_id).await;
+	assert_eq!(chapters.len(), 1);
+	unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+	let (status, pages) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages?refresh=1", chapters[0].0), None).await;
+	assert_eq!(status, StatusCode::OK, "{pages}");
+	assert_eq!(pages[0]["content"]["OpdsZip"], "p1.png");
+}
+
+#[tokio::test]
+async fn malformed_manifest_page_href_falls_back_to_archive() {
+	use aidoku::Manga;
+	use base64::Engine as _;
+	let t = opds_app().await;
+	let (port, _server, unavailable) = mock_catalog_mode_toggle(false, true, false).await;
+	let base = format!("http://127.0.0.1:{port}");
+	let source = register_instance(&t.app, "Malformed manifest", &format!("{base}/opds/catalog"), None).await;
+	let key = format!("opds:work:{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode("malformed-book"));
+	let manga = Manga { key, title: "Malformed Manifest Book".into(), url: Some(format!("{base}/opds/malformed-book")), ..Manga::default() };
+	let (status, body) = request(&t.app, "POST", "/api/v1/manga", Some(json!({"sourceId": source["id"], "manga": serde_json::to_value(manga).unwrap()}))).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	let manga_id = body["id"].as_i64().unwrap();
+	let chapters = chapter_ids(&t.app, manga_id).await;
+	unavailable.store(true, std::sync::atomic::Ordering::Relaxed);
+	let (status, pages) = request(&t.app, "GET", &format!("/api/v1/chapter/{}/pages?refresh=1", chapters[0].0), None).await;
+	assert_eq!(status, StatusCode::OK, "{pages}");
+	assert_eq!(pages[0]["content"]["OpdsZip"], "p1.png");
 }
 
 #[tokio::test]

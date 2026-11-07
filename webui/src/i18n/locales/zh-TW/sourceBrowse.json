@@ -9,6 +9,7 @@
     "linkNotRecognized": "來源無法識別此連結",
     "searchPlaceholder": "搜尋漫畫標題…",
     "searchLocalPlaceholder": "搜尋本機目錄…",
+    "degradedSearch": "此目錄沒有可用的搜尋連結，Sumidoku 只能在有限數量的目錄頁中按標題查找。",
     "filters": "篩選",
     "applyFilters": "套用篩選",
     "savedFilters": "已儲存的篩選",

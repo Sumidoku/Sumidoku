@@ -9,6 +9,7 @@
     "linkNotRecognized": "La source n'a pas reconnu ce lien",
     "searchPlaceholder": "Rechercher des titres de mangas…",
     "searchLocalPlaceholder": "Rechercher dans le répertoire local…",
+    "degradedSearch": "Ce catalogue ne propose aucun lien de recherche utilisable. Sumidoku vérifie les titres sur un nombre limité de pages du catalogue.",
     "filters": "Filtres",
     "applyFilters": "Appliquer les filtres",
     "savedFilters": "Filtres enregistrés",

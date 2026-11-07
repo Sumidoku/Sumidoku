@@ -9,6 +9,7 @@
     "linkNotRecognized": "소스에서 이 링크를 인식하지 못했습니다",
     "searchPlaceholder": "만화 제목 검색…",
     "searchLocalPlaceholder": "로컬 디렉터리 검색…",
+    "degradedSearch": "이 카탈로그에는 사용할 수 있는 검색 링크가 없습니다. Sumidoku가 제한된 수의 카탈로그 페이지에서 제목을 검색합니다.",
     "filters": "필터",
     "applyFilters": "필터 적용",
     "savedFilters": "저장된 필터",

@@ -12,9 +12,13 @@ const LOCAL_LISTING_KEYS: Record<string, string> = {
 	'recently-read': 'sourceHome.recentlyRead'
 };
 
+const SHARED_LISTING_KEYS: Record<string, string> = {
+	'opds:all': 'sourceHome.all'
+};
+
 /** Translated label for a local listing id, or the fallback when the id is unknown */
 export function localListingLabel(id: string, fallback: string, t: TFunction): string {
-	const key = LOCAL_LISTING_KEYS[id];
+	const key = LOCAL_LISTING_KEYS[id] ?? SHARED_LISTING_KEYS[id];
 	return key ? t(key) : fallback;
 }
 

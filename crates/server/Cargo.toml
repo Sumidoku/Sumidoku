@@ -42,6 +42,8 @@ argon2 = "0.6"
 sha2 = "0.11"
 # OsRng for session, API key and OAuth secrets; argon2 draws its own salt through getrandom
 rand_core = { version = "0.6", features = ["getrandom"] }
+# HMAC authentication for server-generated OPDS locators; ring is already in the locked TLS dependency graph.
+ring = "0.17.14"
 # base64url encoding for the PKCE code_challenge
 base64 = "0.23"
 # page image downsampling (the wasm crate is also on 0.25, versions align naturally)

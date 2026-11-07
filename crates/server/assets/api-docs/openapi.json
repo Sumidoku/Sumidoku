@@ -1269,7 +1269,7 @@
         "summary": "List source listings",
         "responses": {
           "200": {
-            "description": "Listings with normalized lowercase kind",
+            "description": "Listings with normalized lowercase kind. OPDS catalogs return All followed by root feed navigation entries; group navigation stays in listing page payloads.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1314,7 +1314,7 @@
         "summary": "Get a page of manga from a source listing",
         "responses": {
           "200": {
-            "description": "Manga page",
+            "description": "Manga page. OPDS listing pages may include grouped publications in groups.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8303,6 +8303,71 @@
           "degraded": {
             "type": "boolean",
             "description": "Present for the OPDS traversal fallback."
+          },
+          "navigation": {
+            "type": "array",
+            "description": "OPDS top-level navigation links for this feed, separate from work entries.",
+            "items": {
+              "type": "object",
+              "required": [
+                "title",
+                "listingId"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "listingId": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "parentId": {
+            "type": "string",
+            "description": "Listing ID of the parent feed, when this page is nested."
+          },
+          "groups": {
+            "type": "array",
+            "description": "Present for OPDS 2 feeds with grouped navigation or publications.",
+            "items": {
+              "type": "object",
+              "required": [
+                "title",
+                "entries",
+                "navigation"
+              ],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchManga"
+                  }
+                },
+                "navigation": {
+                  "type": "array",
+                  "description": "Directory links for this group, separate from work entries.",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "title",
+                      "listingId"
+                    ],
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "listingId": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },

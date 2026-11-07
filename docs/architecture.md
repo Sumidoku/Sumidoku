@@ -630,7 +630,9 @@ no alias is derived from migration text.
   multi-instance from day one. Both wire formats are accepted, detected per
   response by Content-Type with a JSON body sniff for mislabeled servers: 1.2
   (Atom) through `parse_feed`, 2.0 (JSON) through `parse_feed_json`, both
-  filling the same `Feed` model. Registration shares the internal-source
+  filling the same `Feed` model, which preserves top-level navigation,
+  publications, and OPDS 2 groups while retaining flattened entries for
+  chapter updates and search. Registration shares the internal-source
   endpoint: `POST /api/v1/sources/internal` with `{type: "opds", name, url,
   username?, password?}` takes
   name + catalog URL + optional basic credentials; keys are `opds.<slug>`
@@ -640,14 +642,50 @@ no alias is derived from migration text.
   backfill (`kind = 'aidoku'` scope), and every wasm-capability endpoint
   answers 501 `unsupported` exactly like the local source. Capability
   mapping: search = the catalog's OpenSearch descriptor (`rel="search"`
-  link on the root feed → `{searchTerms}` template) or, on 2.0 catalogs,
-  the templated `rel="search"` link itself (`{?query}` expanded directly,
-  no descriptor), falling back to a
-  bounded BFS traversal (depth 2, 12 feeds) when the descriptor is absent
-  and flagging the response `degraded`; manga = a drill-down entry (Atom
-  `<id>` is the key, its feed link is `manga.url` — the only re-fetch
-  handle); chapters = the series feed's acquisition entries, paginated
-  feeds followed to completion (cap 20); pages = the entry's OPDS-PSE
+  link on the root feed → descriptor-relative URL template selected by its
+  result media type) or a directly templated `rel="search"` link in Atom or
+  JSON (`{searchTerms}`, `{?query}`, and `{query}` expanded with encoded
+  query values),
+  falling back to a
+  bounded BFS traversal (depth 2, 12 feeds) when search links are absent
+  and flagging the response `degraded`; templated search follows the
+  `rel="next"` link for the requested page (maximum 20 pages; repeated links
+  are errors) and
+  reports `hasNextPage`; source listings expose `All` followed by the root
+  feed's top-level navigation entries; root group navigation remains inline
+  in its group. Non-root listing payloads expose their top-level and group
+  navigation inline with feed contents; nested listing IDs encode the feed URL path from
+  the catalog root, and each hop is validated against its parent feed's
+  navigation links. The payload includes the parent listing ID for an explicit
+  return path. The browse page opens in Search
+  without implicitly requesting an unfiltered root feed. Browsing All or a
+  selected navigation feed shows that feed's publications, makes its
+  top-level navigation visible, and gives each OPDS 2 group a separate
+  horizontal row containing its navigation links and publications. Atom subsection links with
+  Atom feed media type are navigation regardless of `kind`; they remain
+  drillable and are excluded from manga results. Feed-linked series open
+  their feed; acquisition-only publications open as a single-work manga with
+  one chapter. manga = a drill-down entry (Atom `<id>` is the key, its feed
+  link is `manga.url`); standalone acquisition, PSE template/count, or
+  manifest locators persist in a versioned internal `chapter.url` value for
+  reading after catalog disappearance. Registration resolves publication
+  identity and page locators from the fetched feed, treating client chapters
+  as hints only. PSE and manifest locators retain the acquisition archive as
+  fallback. Discovery search and browse results carry a per-install HMAC over
+  the locator, source, manga, chapter and discovery-feed URL. Registration may
+  use only a single signed chapter whose decoded publication ID and MAC match;
+  unsigned or invalid hints require a feed lookup. A per-install HMAC key in
+  private `server_state` authenticates persisted locators. A logical import into another
+  database cannot validate old signatures and needs a feed refresh before
+  offline standalone reading. Pre-feature raw URLs and typed PSE/manifest fragments remain
+  readable for series, whose chapters came from fetched feeds. Unversioned
+  standalone locators are unverifiable because the earlier registration path
+  accepted client chapter hints; they are not used for requests while their
+  feed is unavailable and can be replaced by a refresh after it returns.
+  Chapters = the series feed's acquisition entries, paginated feeds
+  followed through up to 20 pages, resolving each relative next link against
+  the page that supplied it. A later-page request error or repeated link fails
+  the update; larger feeds retain the existing 20-page cap. Pages = the entry's OPDS-PSE
   stream link expanded into `Url` pages (`pse:count`, 0-based page
   numbers — Komga's `books/{id}/pages/{n}` needs no archive download)
   or, on 2.0, the publication manifest's `readingOrder` enumerated into
@@ -668,14 +706,22 @@ no alias is derived from migration text.
   gets an admin-only internal-source dialog (`BrowsePage.tsx`
   `InternalSourceModal`, a kind picker over the registration dispatch) and
   hides the home/settings buttons on opds cards.
-  The 2.0 mapping (`parse_feed_json`): navigation items become drill
-  entries (href doubles as the key), publications become entries
-  (`metadata.identifier/title/author/modified/description` onto the 1.2
-  fields; a feed-typed `self` link is the series drill-down, any other
-  JSON `self` link the book's manifest; `images[0]` is the cover, the
-  rest thumbnails), and groups are flattened — their navigation and
-  publications join the same entry list — so series feeds and search
-  results look identical to 1.2 downstream.
+  The OPDS metadata mapping (`parse_feed` and `parse_feed_json`) carries Atom
+  category labels (falling back to terms) and authors into manga tags/authors.
+  OPDS 2 maps `metadata.subject` and `metadata.author` plus recognized
+  artist-role fields and contributor role codes into manga tags, authors,
+  and artists; unknown contributor roles do not imply an author or artist.
+  Navigation remains separate from work entries and is shown as directory
+  links in its feed or group; Atom subsection and specialized sort links are
+  navigation regardless of destination `kind`, while alternate `type=entry`
+  links are never treated as feeds. Navigation IDs encode a root-to-feed URL
+  path, and each hop is validated against that parent's top-level or group
+  navigation across bounded pagination; repeated targets and paths are rejected.
+  Publications become entries (`metadata.identifier/title/modified/description`
+  onto the 1.2 fields; a feed-typed `self` link is the series drill-down, any
+  other JSON `self` link the book's manifest; `images[0]` is the cover, the
+  rest thumbnails). Group publications remain in their group listing; group
+  navigation is displayed separately and never becomes a work result.
 - Pinned sources (`api/pins.rs`): an ordered list of source keys in the
   global `setting` table under `browse.pinned_sources` — Aidoku's
   `Browse.pinnedList` analogue, no schema migration. The array order is the
