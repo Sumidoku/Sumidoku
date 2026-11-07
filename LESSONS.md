@@ -1704,3 +1704,16 @@ reference and what each one pins down.
   day with "refer to kmrs for re-improvement" — the kmrs clone sat in
   `~/src` unread while the implementations guessed at field mappings and
   profile detection that kmrs already pins down.
+
+**The web UI test suite can fail with a transient `Error: UNKNOWN: unknown
+error, read` (errno -4094) inside vite's SSR module runner on Windows —
+green on re-run, so re-run before debugging code.** The full `npm test`
+spawns one vite dev server per SSR test file in parallel; under that load a
+locale read in `src/i18n/index.ts` intermittently returns errno -4094 with no
+relation to the files' contents. The same tree passes when the affected
+files run alone and on a second full run. Treat a -4094 read failure with an
+otherwise-green suite as infrastructure flake, not a regression.
+- Evidence: 2026-11-07, on the in-flow transition page change the full suite
+  failed twice in `source-card-mobile.test.ts` and another SSR test with
+  errno -4094 reading i18n locale modules; the three files passed alone
+  (15/15) and the unchanged full suite then passed 340/340.

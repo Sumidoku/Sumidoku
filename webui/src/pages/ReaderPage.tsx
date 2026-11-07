@@ -418,8 +418,9 @@ function ReaderCore({
 	const [continuousPadding, setContinuousPaddingState] = useState(readContinuousPadding);
 	const [continuousGap, setContinuousGapState] = useState(readContinuousGap);
 	const [transition, setTransitionState] = useState<boolean>(readTransition);
-	// A boundary turn with a target chapter first parks on the transition page; a
-	// second turn in the same direction (or the page's own continue) confirms
+	// A boundary turn with the preference on parks the track on the transition
+	// page — a virtual slot one past either chapter end; a second turn in the
+	// same direction confirms the jump, a turn back cancels it
 	const [pendingTurn, setPendingTurn] = useState<'next' | 'prev' | null>(null);
 	// Per-manga override > manga metadata (viewer) > global default, for mode and direction alike
 	const metaMode = modeFromViewer(mangaQuery.data?.viewer);
@@ -699,14 +700,24 @@ function ReaderCore({
 		navigate(`/reader/${c.id}${mangaId !== null ? `?manga=${mangaId}` : ''}`, { replace: true });
 	}
 
-	// A boundary turn parks on the transition page when the preference is on;
-	// the same boundary turn again (or the page's continue action) confirms the
-	// jump, and an opposite turn cancels the pending jump. With no chapter left
-	// in that direction the page answers with an end-of-list card whose continue
-	// leaves the reader — before the chapter list is fetched (or with the
-	// preference off) a boundary tap stays silent
+	// A boundary turn parks the track on the transition page when the
+	// preference is on; the same boundary turn again confirms the jump and an
+	// opposite turn cancels it. With no chapter left in that direction the page
+	// answers with an end-of-list state whose confirming turn leaves the
+	// reader — before the chapter list is fetched (or with the preference off)
+	// a boundary tap stays silent
 	function boundaryNav(c: ChapterWithDownload | null, direction: 'next' | 'prev') {
 		if (!c) {
+			if (pendingTurn === direction) {
+				// Confirming the end-of-list page leaves the reader
+				setPendingTurn(null);
+				goBack();
+				return;
+			}
+			if (pendingTurn !== null) {
+				setPendingTurn(null);
+				return;
+			}
 			if (transition && chaptersQuery.isFetched) setPendingTurn(direction);
 			return;
 		}
@@ -730,6 +741,12 @@ function ReaderCore({
 	// Double-page layouts turn spread by spread, landing on each spread's leading page in reading order
 	// Split navigation steps through half-pages; text pages keep their column flow
 	function turn(forward: boolean) {
+		// While the track rests on the transition page every turn input is a
+		// confirm/cancel of the pending boundary jump, not an in-chapter move
+		if (pendingTurn !== null) {
+			boundaryNav(forward ? nextCh : prevCh, forward ? 'next' : 'prev');
+			return;
+		}
 		const textPage = curText !== null;
 		const cols = textLayoutRef.current.cols;
 		if (splitOn && !textPage) {
@@ -928,8 +945,13 @@ function ReaderCore({
 	// curve; releasing past the threshold opens the next chapter, sliding back
 	// shrinks the pull and abandoning it is the cancel — there is no post-jump
 	// undo. Continuous/webtoon pull vertically at the scroll hard bottom (wheel
-	// and touch); paged pulls horizontally at the last spread (pointer drag;
-	// the wheel keeps its WheelTurnController path through boundaryNav).
+	// and touch); paged pulls horizontally (pointer drag; the wheel keeps its
+	// WheelTurnController path through boundaryNav). Where the paged pull
+	// starts depends on the transition page: with the page off it starts right
+	// at the last spread and jumps in one release; with the page on the
+	// last-spread drag is the plain swipe that reveals the page, and the pull
+	// starts on the page itself — its first leg anywhere else only parks the
+	// track on the page.
 	// Progress paints through inline styles/CSS variables so a drag does not
 	// re-render the reader; only the armed flip is React state
 	const [pullArmed, setPullArmed] = useState(false);
@@ -952,9 +974,23 @@ function ReaderCore({
 	// stays on the transition page
 	const textPageRef = useRef(false);
 	textPageRef.current = curText !== null;
+	// The parked transition page and the preference behind it, for the
+	// long-lived pointer listeners
+	const pendingTurnRef = useRef<'next' | 'prev' | null>(null);
+	pendingTurnRef.current = pendingTurn;
+	const transitionRef = useRef(transition);
+	transitionRef.current = transition;
 	const pullTriggerRef = useRef<() => void>(() => {});
 	pullTriggerRef.current = () => {
 		if (!nextCh) return;
+		// With the transition page on, a pull that starts anywhere but on that
+		// page only parks the track on it — the pull's second leg, started on
+		// the page itself, is the one that jumps
+		if (mode === 'paged' && transition && pendingTurn !== 'next') {
+			pullCtlRef.current?.reset();
+			setPendingTurn('next');
+			return;
+		}
 		// A short slide-off sells the jump before the remount swaps chapters
 		if (mode !== 'paged') {
 			const el = contRef.current;
@@ -1138,15 +1174,36 @@ function ReaderCore({
 		};
 		const applySwipeOffset = () => {
 			// 1:1 with the finger, except past the content's own end in the
-			// drag direction, where the rubber curve takes over
+			// drag direction, where the rubber curve takes over. With the
+			// transition page mounted the drag has real content past the end —
+			// the page itself — so it follows 1:1 there instead of banding;
+			// parked on the page, only the direction with nothing left to
+			// reveal bands (the pull owns the other one)
 			let offset = totalDx;
 			const fwd = totalDx * forwardSignRef.current;
-			const overStart = fwd < 0 && (textPageRef.current ? colRef.current <= 0 : idxRef.current <= 0);
+			const onTransition = pendingTurnRef.current !== null;
+			const overStart =
+				fwd < 0 &&
+				(onTransition
+					? pendingTurnRef.current === 'prev'
+					: transitionRef.current && !textPageRef.current
+						? false
+						: textPageRef.current
+							? colRef.current <= 0
+							: idxRef.current <= 0);
 			const overEnd =
 				fwd > 0 &&
-				(textPageRef.current ? colRef.current >= textLayoutRef.current.cols - 1 : atLastSpreadRef.current);
+				(onTransition
+					? pendingTurnRef.current === 'next' && !pullEnabledRef.current
+					: transitionRef.current && !textPageRef.current
+						? false
+						: textPageRef.current
+							? colRef.current >= textLayoutRef.current.cols - 1
+							: atLastSpreadRef.current);
 			if (overStart || overEnd) offset = Math.sign(totalDx) * rubber(Math.abs(totalDx));
-			if (textPageRef.current) {
+			// On the transition page the drag moves the track even when the
+			// chapter underneath is a text page
+			if (textPageRef.current && !onTransition) {
 				const cols = textColsRef.current;
 				if (cols) {
 					cols.classList.add('reader__swiping');
@@ -1214,13 +1271,20 @@ function ReaderCore({
 				axis = Math.abs(totalDx) >= Math.abs(totalDy) ? 'x' : 'y';
 			}
 			if (axis !== 'x') return;
-			// A forward drag at the last spread of an image page belongs to the
-			// pull; once it owns the drag the swipe stays out of the shared var
+			// A forward drag at the pull spot belongs to the pull; once it owns
+			// the drag the swipe stays out of the shared var. The pull spot is
+			// the last spread of an image page — with the transition page on,
+			// only once the track rests on that page (the last-page drag itself
+			// is the swipe that reveals it); with the page off, right at the
+			// last spread
 			if (pullOwned) {
 				ctl.feedTouch(dx * forwardSignRef.current, true);
 				return;
 			}
-			if (pullEnabledRef.current && atLastSpreadRef.current && !textPageRef.current) {
+			const atPullSpot =
+				atLastSpreadRef.current &&
+				(transitionRef.current ? pendingTurnRef.current === 'next' : !textPageRef.current);
+			if (pullEnabledRef.current && atPullSpot) {
 				if (ctl.feedTouch(dx * forwardSignRef.current, true)) {
 					pullOwned = true;
 					return;
@@ -1444,6 +1508,9 @@ function ReaderCore({
 		} catch {
 			// Private mode blocks persistence but the transition still switches
 		}
+		// Switching the page off while the track rests on it would point the
+		// track's translation at an unmounted slot — unpark first
+		if (!v) setPendingTurn(null);
 		setTransitionState(v);
 	}
 
@@ -1490,6 +1557,8 @@ function ReaderCore({
 			// Entering continuous/webtoon returns the page number to the paged mode's current page, not the historical furthest page
 			setCur(idxRef.current);
 			if (initedRef.current) scrollToPage(idxRef.current);
+			// The transition page only exists in the paged track
+			setPendingTurn(null);
 		}
 	}, [mode]);
 
@@ -1707,7 +1776,7 @@ function ReaderCore({
 									// The pull adds its damped offset on top of the spread
 									// translation through a variable, so a re-render cannot
 									// clobber an active drag
-									transform: `translateX(calc(${crossfade ? 0 : trackOffsetPercent(dir, shownSpread)}% + var(--paged-pull, 0px)))`
+									transform: `translateX(calc(${crossfade ? 0 : trackOffsetPercent(dir, pendingTurn === 'next' ? spreads.length : pendingTurn === 'prev' ? -1 : shownSpread)}% + var(--paged-pull, 0px)))`
 								}}
 							>
 								{spreads.map((spread, si) => {
@@ -1715,12 +1784,15 @@ function ReaderCore({
 									// The ±2 window keeps both ends of a turn animation mounted; distant
 									// spreads render aspect-ratio placeholders instead of the images
 									const near = Math.abs(si - curSpreadIdx) <= 2 || si === shownSpread;
+									// While the track rests on the transition page every spread
+									// fades out; otherwise all but the shown one
+									const fadeBase = pendingTurn === null ? shownSpread : -1;
 									const slotTexts = spread.map((s) => (s !== null && pages?.[s] ? pageText(pages[s]) : null));
 									const isTextSpread =
 										spread.some((s, k) => s !== null && slotTexts[k] !== null) &&
 										spread.every((s, k) => s === null || slotTexts[k] !== null);
 									return (
-										<div key={si} className={crossfade && si !== shownSpread ? 'reader__spread reader__spread--fading' : 'reader__spread'} data-slots={spread.length}>
+										<div key={si} className={crossfade && si !== fadeBase ? 'reader__spread reader__spread--fading' : 'reader__spread'} data-slots={spread.length}>
 											{isCur && curText !== null ? (
 												<div className="reader__spread-inner reader__spread-inner--text">
 													<TextColumns
@@ -1847,7 +1919,49 @@ function ReaderCore({
 										</div>
 									);
 								})}
-								{navEnabled && nextCh !== null && curText === null && (
+								{/* The transition page rides the same track as the spreads,
+								absolutely parked on a virtual slot past either chapter end, so
+								mounting it never shifts the spreads and the turn translation
+								slides it in like any page. It only mounts while the track can
+								reach the slot (first/last spread), so forward reading never
+								meets the previous-chapter page and vice versa */}
+								{transition && curSpreadIdx === 0 && (
+									<div
+										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'prev' ? ' reader__spread--fading' : ''}`}
+										style={{ '--transition-slot': -1 } as CSSProperties}
+										// Mounted off-screen until the track parks on it: keep its
+										// status region out of the accessibility tree until then
+										aria-hidden={pendingTurn !== 'prev'}
+									>
+										<TransitionPage
+											direction="prev"
+											currentLabel={curChapter ? chapterLabel(curChapter) : mangaTitle}
+											target={prevCh}
+											armed={false}
+										/>
+									</div>
+								)}
+								{transition && curSpreadIdx === spreads.length - 1 && (
+									<div
+										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'next' ? ' reader__spread--fading' : ''}`}
+										style={{ '--transition-slot': spreads.length } as CSSProperties}
+										// Mounted off-screen until the track parks on it: keep its
+										// status region out of the accessibility tree until then
+										aria-hidden={pendingTurn !== 'next'}
+									>
+										<TransitionPage
+											direction="next"
+											currentLabel={curChapter ? chapterLabel(curChapter) : mangaTitle}
+											target={nextCh}
+											armed={pullArmed}
+											hintRef={pagedHintRef}
+										/>
+									</div>
+								)}
+								{/* The pull's trailing hint strip only exists without the
+								transition page: with the page on, the pull starts on the page
+								itself and its progress lives in the page's own track */}
+								{navEnabled && nextCh !== null && curText === null && !transition && (
 									// The next-chapter hint is the track's trailing child: LTR
 									// lays it after the last spread, and the rtl row direction
 									// mirrors it to the leading side for free. The pull's extra
@@ -1927,21 +2041,6 @@ function ReaderCore({
 								{t('reader.retry')}
 							</Button>
 						</div>
-					)}
-					{pendingTurn && (
-						<TransitionPage
-							direction={pendingTurn}
-							currentLabel={curChapter ? chapterLabel(curChapter) : mangaTitle}
-							target={pendingTurn === 'next' ? nextCh : prevCh}
-							onContinue={() => {
-								const target = pendingTurn === 'next' ? nextCh : prevCh;
-								setPendingTurn(null);
-								// No chapter left in that direction: continue leaves the reader
-								if (target) navCh(target);
-								else goBack();
-							}}
-							onCancel={() => setPendingTurn(null)}
-						/>
 					)}
 				</div>
 			) : (
