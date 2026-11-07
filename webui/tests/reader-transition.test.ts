@@ -7,7 +7,10 @@ import { createServer } from 'vite';
 import type { ViteDevServer } from 'vite';
 import type { ChapterWithDownload } from '../src/api/types.ts';
 
-async function renderTransition(direction: 'next' | 'prev', withTarget = true): Promise<string> {
+// The transition page has no buttons: confirming is another same-direction
+// turn, so the markup must carry the gesture hints instead of actions, and
+// only the next-side page with a target owns the pull progress track
+async function renderTransition(direction: 'next' | 'prev', withTarget = true, armed = false): Promise<string> {
 	const vite = await createServer({
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		configFile: false,
@@ -36,8 +39,7 @@ async function renderTransition(direction: 'next' | 'prev', withTarget = true): 
 					direction,
 					currentLabel: 'Chapter 1',
 					target,
-					onContinue: () => {},
-					onCancel: () => {}
+					armed
 				})
 			);
 		} finally {
@@ -48,35 +50,45 @@ async function renderTransition(direction: 'next' | 'prev', withTarget = true): 
 	}
 }
 
-test('the next-chapter transition says the chapter finished and names the target', async () => {
+test('the next-chapter transition says the chapter finished, names the target and asks for the confirming turn', async () => {
 	const markup = await renderTransition('next');
 	assert.match(markup, /Chapter finished/);
 	assert.match(markup, /Chapter 1/);
 	assert.match(markup, /Next chapter/);
 	assert.match(markup, /Scan Group/);
-	assert.match(markup, /Continue to next chapter/);
-	assert.match(markup, /Stay on this page/);
+	assert.match(markup, /Turn again to continue/);
+	assert.match(markup, /reader__pull-track/);
+	assert.doesNotMatch(markup, /<button/);
 });
 
-test('the prev-chapter transition says the chapter start and names the target', async () => {
+test('the armed next-chapter transition announces the pull release', async () => {
+	const markup = await renderTransition('next', true, true);
+	assert.match(markup, /Release to open chapter 2/);
+	assert.doesNotMatch(markup, /Turn again to continue/);
+});
+
+test('the prev-chapter transition says the chapter start and names the target, without a pull track', async () => {
 	const markup = await renderTransition('prev');
 	assert.match(markup, /At the chapter start/);
 	assert.match(markup, /Previous chapter/);
-	assert.match(markup, /Continue to previous chapter/);
+	assert.match(markup, /Turn again to continue/);
+	assert.doesNotMatch(markup, /reader__pull-track/);
+	assert.doesNotMatch(markup, /<button/);
 });
 
-test('the last-chapter transition reports no next chapter and offers to leave the reader', async () => {
+test('the last-chapter transition reports no next chapter and points at leaving the reader', async () => {
 	const markup = await renderTransition('next', false);
 	assert.match(markup, /Chapter finished/);
 	assert.match(markup, /No more chapters/);
-	assert.doesNotMatch(markup, /Continue to next chapter/);
-	assert.match(markup, /Back to the manga page/);
+	assert.doesNotMatch(markup, /Turn again to continue/);
+	assert.match(markup, /Turn again to leave the reader/);
+	assert.doesNotMatch(markup, /reader__pull-track/);
 });
 
-test('the first-chapter transition reports no previous chapter and offers to leave the reader', async () => {
+test('the first-chapter transition reports no previous chapter and points at leaving the reader', async () => {
 	const markup = await renderTransition('prev', false);
 	assert.match(markup, /At the chapter start/);
 	assert.match(markup, /No previous chapter/);
-	assert.doesNotMatch(markup, /Continue to previous chapter/);
-	assert.match(markup, /Back to the manga page/);
+	assert.doesNotMatch(markup, /Turn again to continue/);
+	assert.match(markup, /Turn again to leave the reader/);
 });

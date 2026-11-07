@@ -2182,16 +2182,21 @@ padding (0–40%), and `sumidoku.reader.continuousGap` sets page spacing (0–40
 `continuousPrefs.ts:continuousPageStyle` applies the spacing outside the page
 slot's reserved height, while `continuousImageStyle` sizes the image by its own
 aspect ratio, keeping the gap unchanged after dimensions arrive. A boundary turn does not switch
-chapters outright (`ReaderPage.tsx:boundaryNav`): with a target chapter in that
-direction it parks on a transition page (`reader/TransitionPage.tsx`) naming the
-current and target chapter with its scanlator; a second boundary turn in the
-same direction or the page's own continue button commits the jump, an opposite
-turn or Esc cancels it, and any in-chapter move (`gotoPage`) clears it. With no
-chapter left in that direction the same page answers with an end-of-list card
-(once the chapter list is fetched) whose continue leaves the reader for the
-manga page. The page
-is on by default and disabled by `sumidoku.reader.transition`
-storing `0`. Every mode also offers a pull-to-next-chapter gesture at the
+chapters outright (`ReaderPage.tsx:boundaryNav`): with the preference on it
+parks the track on a transition page (`reader/TransitionPage.tsx`) naming the
+current and target chapter with its scanlator. The page is not an overlay but
+a track page absolutely parked on a virtual slot past either chapter end
+(`--transition-slot`, -1 or the spread count), mounted only while the first or
+last spread is current so forward reading never meets the previous-chapter
+page; the ordinary turn translation slides it in, and under fade turns it
+joins the stacked spreads with the same opacity answer. A second boundary turn
+in the same direction confirms the jump, an opposite turn or Esc cancels it,
+and any in-chapter move (`gotoPage`) clears it. With no chapter left in that
+direction the same page answers with an end-of-list state (once the chapter
+list is fetched) whose confirming turn leaves the reader for the manga page.
+The page is on by default and disabled by `sumidoku.reader.transition`
+storing `0`; switching it off while parked unparks the track first. Every mode
+also offers a pull-to-next-chapter gesture at the
 chapter end (`reader/pullNextChapter.ts:PullGestureController`): further input
 in the reading-forward direction past the end accumulates a raw pull distance,
 and the visible offset is that distance compressed by a rubber-band curve
@@ -2204,11 +2209,16 @@ lifts. Reversing the gesture shrinks the pull back, and abandoning it is the
 cancel — there is no post-jump undo. Continuous/webtoon pull vertically at the
 scroll hard bottom (wheel and touch; `touchmove` turns non-passive once the
 pull owns the drag) and render the hint in-flow after the last page with real
-padding so it is never a zero-height box; paged pulls horizontally at the last
-spread via pointer drag (the wheel keeps its WheelTurnController → boundaryNav
-path), the hint is the track's trailing child — the track stays viewport-wide,
-so the spread translation percentages are unaffected, and the rtl row direction
-mirrors it for free — and the pull adds its damped offset through the
+padding so it is never a zero-height box; paged pulls horizontally via pointer
+drag (the wheel keeps its WheelTurnController → boundaryNav path), and where
+the pull starts depends on the transition page: with the page off it starts
+right at the last spread — the hint is the track's trailing child, kept
+viewport-wide so the spread translation percentages are unaffected and the rtl
+row direction mirrors it for free — and jumps in one release; with the page on
+the last-spread drag is the plain swipe that reveals it, the pull starts on
+the page itself with the progress track inside it, and a pull released
+anywhere else only parks the track on the page. The pull adds its damped
+offset through the
 `--paged-pull` variable so a re-render cannot clobber an active drag, while a
 `--dragging` class cuts the turn transition mid-pull and its removal animates
 the spring-back. A click trailing a pull (or any real drag) is swallowed before

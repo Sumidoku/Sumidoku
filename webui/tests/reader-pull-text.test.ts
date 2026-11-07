@@ -14,7 +14,10 @@ test('the paged pull tracks whether the current page is text', () => {
 });
 
 test('the paged drag never feeds the pull on a text page', () => {
-	assert.match(source, /if \(pullEnabledRef\.current && atLastSpreadRef\.current && !textPageRef\.current\) \{/);
+	// The pull spot is the last spread of an image page — or, with the
+	// transition page on, the parked transition page itself
+	assert.match(source, /\(transitionRef\.current \? pendingTurnRef\.current === 'next' : !textPageRef\.current\)/);
+	assert.match(source, /if \(pullEnabledRef\.current && atPullSpot\) \{/);
 });
 
 test('turning onto a text page abandons an active pull', () => {
@@ -25,7 +28,17 @@ test('turning onto a text page abandons an active pull', () => {
 });
 
 test('the paged hint strip is not rendered for a text page', () => {
-	assert.match(source, /\{navEnabled && nextCh !== null && curText === null && \(/);
+	// Nor with the transition page on: the pull's progress lives in the page
+	assert.match(source, /\{navEnabled && nextCh !== null && curText === null && !transition && \(/);
+});
+
+test('with the transition page on, a pull away from the page only parks on it', () => {
+	assert.match(source, /if \(mode === 'paged' && transition && pendingTurn !== 'next'\) \{/);
+});
+
+test('the transition page rides the track on a virtual slot past either chapter end', () => {
+	assert.match(source, /'\-\-transition\-slot': -1/);
+	assert.match(source, /'\-\-transition\-slot': spreads\.length/);
 });
 
 // Fade turns make the track a block with absolutely stacked spreads; the hint
