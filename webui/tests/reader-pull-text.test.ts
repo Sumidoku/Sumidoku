@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-// A text page owns horizontal swipes for its column flow (turn() advances
-// columns before any chapter boundary). A text chapter is a single page, so
-// "last spread" is true for the whole chapter — without these gates every
-// column swipe would also feed the pull-to-next-chapter drag, and a release
-// would commit the pull on top of the column turn
+// Paged mode has no swipe navigation — taps, keys and wheel turn pages, and a
+// text page's columns the same way (turn() advances columns before any chapter
+// boundary). A horizontal drag is still the gesture a reader tries on a text
+// page, and a text chapter is a single page, so "last spread" holds for the
+// whole chapter: without these gates that natural drag would arm the
+// pull-to-next-chapter and a release would commit it mid-reading
 const source = readFileSync(new URL('../src/pages/ReaderPage.tsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('the paged pull tracks whether the current page is text', () => {

@@ -944,9 +944,11 @@ function ReaderCore({
 	forwardSignRef.current = dir === 'rtl' ? 1 : -1;
 	const atLastSpreadRef = useRef(false);
 	atLastSpreadRef.current = spreads !== null && curSpreadIdx === spreads.length - 1;
-	// A text page owns horizontal swipes for its column flow; the paged pull must
-	// not compete with it — a text page's chapter boundary stays on the
-	// transition page, so the drag (and its hint strip) opt out there
+	// Paged mode has no swipe navigation (taps, keys and wheel turn pages and
+	// text columns), but a horizontal drag is still the gesture a reader tries
+	// on a text page — it must not be hijacked into a chapter pull. The drag
+	// (and its hint strip) opts out on text pages; their chapter boundary
+	// stays on the transition page
 	const textPageRef = useRef(false);
 	textPageRef.current = curText !== null;
 	const pullTriggerRef = useRef<() => void>(() => {});
