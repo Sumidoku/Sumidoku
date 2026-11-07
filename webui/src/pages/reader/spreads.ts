@@ -149,6 +149,26 @@ export function spreadLastPage(spread: Spread): number {
 }
 
 /**
+ * The page to report as the chapter end when the reader OPENS directly on a
+ * unit, or null when the opening view is not the chapter end. Resuming or
+ * deep-linking onto the last visible unit counts as reaching the end — a
+ * chapter left unread short of the final page (#629) heals on reopen — while
+ * a mid-chapter resume reports nothing. `spread` is the unit the initial page
+ * opens in (null in single-page mode); `splitFirstHalf` withholds the end
+ * when a split wide final page opens on its first half.
+ */
+export function initialEndProgress(
+	pageCount: number,
+	initial: number,
+	spread: Spread | null,
+	splitFirstHalf: boolean
+): number | null {
+	if (pageCount <= 0 || splitFirstHalf) return null;
+	const lastVisible = spread ? spreadLastPage(spread) : initial;
+	return lastVisible >= pageCount - 1 ? lastVisible : null;
+}
+
+/**
  * The aspect-ratio box a spread slot reserves before its page's dimensions are
  * known. Manga pages are close to 2:3 (KMReader's blankOf uses the same
  * fallback), so an unloaded page already occupies the correct half of the

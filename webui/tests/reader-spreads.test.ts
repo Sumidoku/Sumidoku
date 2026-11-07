@@ -109,6 +109,46 @@ test('a forward spread turn reports progress from the spread\'s last page, not t
 	assert.match(source, /const last = spreadLastPage\(target\);\n\t\t\t\t\tif \(last !== lead\) scheduleProgress\(last, last >= total - 1\);/);
 });
 
+test('initialEndProgress reports the end only when the opening unit already shows the last page (#629 heal)', async () => {
+	await withVite(async (vite) => {
+		const { buildSpreads, initialEndProgress, spreadIndexOf } = await vite.ssrLoadModule(
+			'/src/pages/reader/spreads.ts'
+		);
+		// Resuming onto a paired final spread (doubleNoCover, even page count) sees
+		// both pages, so the end is reported from the spread's last page
+		const even = buildSpreads(4, portrait(), 'doubleNoCover'); // [[0,1],[2,3]]
+		assert.equal(initialEndProgress(4, 2, even[spreadIndexOf(even, 2)], false), 3);
+		assert.equal(initialEndProgress(4, 3, even[spreadIndexOf(even, 3)], false), 3);
+		// A mid-chapter resume reports nothing
+		assert.equal(initialEndProgress(4, 0, even[spreadIndexOf(even, 0)], false), null);
+		// Single-page mode: only the last page itself qualifies, and a split wide
+		// final page opening on its first half is not the end yet
+		assert.equal(initialEndProgress(4, 3, null, false), 3);
+		assert.equal(initialEndProgress(4, 2, null, false), null);
+		assert.equal(initialEndProgress(4, 3, null, true), null);
+		// A trailing blank mate does not hide the real last page
+		assert.equal(initialEndProgress(5, 4, [4, null], false), 4);
+		// A one-page chapter opens already complete; an empty chapter never does
+		assert.equal(initialEndProgress(1, 0, [null, 0], false), 0);
+		assert.equal(initialEndProgress(0, 0, null, false), null);
+	});
+});
+
+test('opening the reader on the final visible unit reports the chapter end (resume heals #629)', () => {
+	// Source-reading wiring pin; CRLF checkouts normalise before matching
+	const source = readFileSync(fileURLToPath(new URL('../src/pages/ReaderPage.tsx', import.meta.url)), 'utf8').replace(
+		/\r\n/g,
+		'\n'
+	);
+	// Text chapters (column pagination from 0) are excluded at the call site…
+	assert.match(source, /if \(mode === 'paged' && !textChapter\) \{/);
+	// …the opening unit is the spread the initial page lands in (null in single-page mode)…
+	assert.match(source, /const unit = spreads \? spreads\[spreadIndexOf\(spreads, initial\)\] : null;/);
+	// …and a split wide final page's first half withholds the end mark
+	assert.match(source, /const endPage = initialEndProgress\(pages\.length, initial, unit, splitOn && landscapeOf\(initial\)\);/);
+	assert.match(source, /if \(endPage !== null\) scheduleProgress\(endPage, true\);/);
+});
+
 test('measured dimensions only fill gaps the server left', async () => {
 	await withVite(async (vite) => {
 		const { recordMeasured } = await vite.ssrLoadModule('/src/pages/reader/spreads.ts');

@@ -70,7 +70,7 @@ import {
 	writeSplitOverride,
 	writeStretchOverride
 } from './reader/overrideStore';
-import { buildSpreads, continuousPageClass, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLastPage, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
+import { buildSpreads, continuousPageClass, initialEndProgress, measureWhenKnown, recordMeasured, slotAspectRatio, spreadIndexOf, spreadLastPage, spreadLeadPage, trackOffsetPercent } from './reader/spreads';
 import type { PageDims, SpreadLayout } from './reader/spreads';
 import { isSplittable, splitEndReached, splitSides, turnSplit } from './reader/splitWide';
 import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
@@ -1565,6 +1565,16 @@ function ReaderCore({
 		setCur(initial);
 		prefetch(initial);
 		if (mode !== 'paged') scrollToPage(initial);
+		// Opening directly on the chapter's last visible unit counts as reaching
+		// the end: a resume or deep link there shows the final page without any
+		// turn, so a chapter left unread short of it (#629) heals on reopen.
+		// Text chapters paginate by column from 0 and never qualify here;
+		// continuous mode's observer reports the visible end on its own.
+		if (mode === 'paged' && !textChapter) {
+			const unit = spreads ? spreads[spreadIndexOf(spreads, initial)] : null;
+			const endPage = initialEndProgress(pages.length, initial, unit, splitOn && landscapeOf(initial));
+			if (endPage !== null) scheduleProgress(endPage, true);
+		}
 	});
 
 	// After switching to continuous/webtoon, position back to the current page
