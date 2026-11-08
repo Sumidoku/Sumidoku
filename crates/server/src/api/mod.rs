@@ -503,12 +503,6 @@ pub(crate) async fn attach_internal_ids(
 		.collect()
 }
 
-/// Browse/search for the local source reads the scan index, never the filesystem (phase 2): rows come from
-/// the manga table (trashed excluded — they are gone from disk and live in the trash view), the multi-root
-/// dedup rule is unchanged (a numbered key is shadowed when the bare form exists), and a non-empty query
-/// filters by title substring (case-insensitive, same as Suwayomi LocalSource). An instance with no rows at
-/// all gets its first scan kicked at manual priority — the dedup id makes repeated browsing cheap — and the
-/// web UI refreshes on the task SSE event; everything returns in one page, hasNextPage is always false
 /// Criteria extracted from Aidoku-style filter values for local-source search.
 /// Author/artist/tag use case-insensitive exact matching against the JSON arrays
 /// stored on the manga row; the free-text query matches title/author/artist/tag as
@@ -546,16 +540,24 @@ fn parse_local_search_filters(filters: Option<Vec<FilterValue>>) -> LocalSearchC
 	criteria
 }
 
-fn json_array_contains(list: &sqlx::types::Json<Vec<String>>, needle: &str) -> bool {
-	let lowered = needle.to_lowercase();
-	list.0.iter().any(|v| v.to_lowercase() == lowered)
+/// Escapes LIKE's special characters so the free-text query matches literally; every LIKE arm in the
+/// search SQL declares ESCAPE '\' to make the backslash the escape character
+fn escape_like(needle: &str) -> String {
+	let mut out = String::with_capacity(needle.len());
+	for ch in needle.chars() {
+		if matches!(ch, '\\' | '%' | '_') {
+			out.push('\\');
+		}
+		out.push(ch);
+	}
+	out
 }
 
-fn json_array_contains_substring(list: &sqlx::types::Json<Vec<String>>, needle: &str) -> bool {
-	let lowered = needle.to_lowercase();
-	list.0.iter().any(|v| v.to_lowercase().contains(&lowered))
-}
-
+/// Browse/search for the local source reads the scan index, never the filesystem (phase 2). Visibility
+/// (exclusions and multi-root shadowing) and the author/artist/tag/query predicates all run in SQL, so
+/// one request reads only the matching (id, key, title) rows instead of the whole instance with its
+/// three JSON metadata columns (#502); the natural-sort order has no SQL expression, so ordering and
+/// pagination stay in Rust over that already-filtered set.
 pub(crate) async fn local_search(
 	state: &AppState,
 	source_id: i64,
@@ -571,21 +573,59 @@ pub(crate) async fn local_search(
 		id: i64,
 		key: String,
 		title: String,
-		authors: sqlx::types::Json<Vec<String>>,
-		artists: sqlx::types::Json<Vec<String>>,
-		tags: sqlx::types::Json<Vec<String>>,
+	}
+	// The shared visibility rule (exclusions and lowest-root-wins shadowing), the same one every home
+	// listing applies, computed in Rust and bound as a JSON array so the id list never meets the
+	// bound-variable cap
+	let hidden = crate::internal::local::hidden_manga_ids_json(state, source_id).await?;
+	// Author/artist/tag filters are exact matches on LOWER()ed JSON array elements; the free-text query
+	// is a substring match across title, authors, artists and tags. SQLite's LOWER/LIKE fold ASCII only,
+	// so non-ASCII case pairs (e.g. É/é) no longer fold — an accepted narrowing of the old Unicode-aware
+	// Rust matching.
+	let mut sql = format!(
+		"SELECT m.id, m.key, m.title FROM manga m WHERE m.source_id = ? AND m.trashed_at IS NULL{}",
+		crate::internal::local::HIDDEN_CLAUSE
+	);
+	if criteria.author.is_some() {
+		sql.push_str(" AND EXISTS (SELECT 1 FROM json_each(m.authors) WHERE LOWER(value) = LOWER(?))");
+	}
+	if criteria.artist.is_some() {
+		sql.push_str(" AND EXISTS (SELECT 1 FROM json_each(m.artists) WHERE LOWER(value) = LOWER(?))");
+	}
+	for _ in &criteria.tags {
+		sql.push_str(" AND EXISTS (SELECT 1 FROM json_each(m.tags) WHERE LOWER(value) = LOWER(?))");
+	}
+	let needle = query.or(criteria.query.as_deref());
+	if needle.is_some() {
+		sql.push_str(
+			" AND (LOWER(m.title) LIKE ? ESCAPE '\\'
+			 OR EXISTS (SELECT 1 FROM json_each(m.authors) WHERE LOWER(value) LIKE ? ESCAPE '\\')
+			 OR EXISTS (SELECT 1 FROM json_each(m.artists) WHERE LOWER(value) LIKE ? ESCAPE '\\')
+			 OR EXISTS (SELECT 1 FROM json_each(m.tags) WHERE LOWER(value) LIKE ? ESCAPE '\\'))",
+		);
+	}
+	let mut q = sqlx::query_as::<_, LocalSearchRow>(&sql).bind(source_id).bind(hidden);
+	if let Some(author) = &criteria.author {
+		q = q.bind(author);
+	}
+	if let Some(artist) = &criteria.artist {
+		q = q.bind(artist);
+	}
+	for tag in &criteria.tags {
+		q = q.bind(tag);
+	}
+	if let Some(needle) = needle {
+		// Lowercased here because SQLite's LOWER on the column side folds ASCII only; escaping keeps
+		// % and _ literal
+		let pattern = format!("%{}%", escape_like(&needle.to_lowercase()));
+		q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
 	}
 	// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one:
 	// once every row sits in the trash, every browse would otherwise re-trigger a full filesystem scan.
 	// The zero-row check and the response snapshot are both captured BEFORE the kick, so an immediately
 	// scheduled worker cannot index rows between enqueue and this SELECT — keeping the accepted
 	// first-browse-empty-response contract (the kicked scan's rows land on the next browse)
-	let mut rows: Vec<LocalSearchRow> = sqlx::query_as(
-		"SELECT id, key, title, authors, artists, tags FROM manga WHERE source_id = ? AND trashed_at IS NULL",
-	)
-	.bind(source_id)
-	.fetch_all(&state.pool)
-	.await?;
+	let mut rows: Vec<LocalSearchRow> = q.fetch_all(&state.pool).await?;
 	let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE source_id = ?")
 		.bind(source_id)
 		.fetch_one(&state.pool)
@@ -595,34 +635,6 @@ pub(crate) async fn local_search(
 			crate::internal::local::scan::enqueue_scan(state, Some(source_id), crate::task::PRIORITY_MANUAL, false).await
 	{
 		tracing::warn!(source_id, "enqueue first scan on browse failed: {}", e.message());
-	}
-	// the shared visibility rule (exclusions and lowest-root-wins shadowing), the same one every home listing applies
-	let exclusions = state.local_exclusions(source_id).await?;
-	let keyed: Vec<(i64, String)> = rows.iter().map(|row| (row.id, row.key.clone())).collect();
-	let hidden: HashSet<i64> = crate::internal::local::hidden_ids(&keyed, &exclusions).into_iter().collect();
-	rows.retain(|row| !hidden.contains(&row.id));
-	// Apply explicit author/artist/tag filters with case-insensitive exact matching, then the free-text
-	// query as a substring match across title, authors, artists and tags.
-	if let Some(author) = &criteria.author {
-		rows.retain(|row| json_array_contains(&row.authors, author));
-	}
-	if let Some(artist) = &criteria.artist {
-		rows.retain(|row| json_array_contains(&row.artists, artist));
-	}
-	if !criteria.tags.is_empty() {
-		let tags = &criteria.tags;
-		rows.retain(|row| tags.iter().all(|tag| json_array_contains(&row.tags, tag)));
-	}
-	let needle = query
-		.or(criteria.query.as_deref())
-		.map(str::to_lowercase);
-	if let Some(needle) = needle {
-		rows.retain(|row| {
-			row.title.to_lowercase().contains(&needle)
-				|| json_array_contains_substring(&row.authors, &needle)
-				|| json_array_contains_substring(&row.artists, &needle)
-				|| json_array_contains_substring(&row.tags, &needle)
-		});
 	}
 	rows.sort_by(|a, b| crate::internal::local::natural_sort::compare(&a.key, &b.key));
 	let total_matched = rows.len() as i64;

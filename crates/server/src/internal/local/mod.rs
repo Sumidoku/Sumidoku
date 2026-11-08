@@ -201,6 +201,11 @@ pub async fn hidden_manga_ids_json(state: &AppState, source_id: i64) -> ApiResul
 	Ok(serde_json::to_string(&hidden_ids(&rows, &exclusions))?)
 }
 
+/// SQL visibility filter shared by search and every home listing — one rule (exclusions and multi-root
+/// shadowing), computed by `hidden_manga_ids_json` and bound as a JSON array, so the id list never
+/// meets the bound-variable cap
+pub(crate) const HIDDEN_CLAUSE: &str = " AND m.id NOT IN (SELECT value FROM json_each(?))";
+
 fn require_key(key: &str) -> ApiResult<()> {
 	if valid_key(key) {
 		Ok(())
