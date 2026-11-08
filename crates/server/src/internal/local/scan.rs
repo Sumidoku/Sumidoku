@@ -1036,12 +1036,16 @@ mod tests {
 		let (state, source_id, tmp) = local_state().await;
 		let second = tmp.path().join("mounted");
 		std::fs::create_dir_all(&second).expect("empty second root");
+		let paths = aidoku_wasm::DefaultValue::StringArray(vec![
+			tmp.path().join("local").to_string_lossy().into_owned(),
+			second.to_string_lossy().into_owned(),
+		]);
 		sqlx::query(
 			"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)
 			 ON CONFLICT(source_id, key) DO UPDATE SET value = excluded.value",
 		)
 		.bind(source_id)
-		.bind(serde_json::to_string(&serde_json::json!([tmp.path().join("local"), second])).expect("paths json"))
+		.bind(serde_json::to_string(&paths).expect("paths json"))
 		.execute(&state.pool)
 		.await
 		.expect("point the instance at both roots");
