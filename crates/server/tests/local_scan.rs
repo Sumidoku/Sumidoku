@@ -611,6 +611,13 @@ async fn analysis_switches_gate_the_two_passes() {
 	pool.close().await;
 }
 
+/// Leaves a visible non-manga file in the root so a scan after every manga directory is removed still
+/// trusts the listing: a root with nothing visible reads as an unmounted disk, and the scan refuses to
+/// trash its rows
+fn keep_root_visible(t: &TestApp) {
+	std::fs::write(t.tmp.path().join("local/notes.txt"), b"kept").expect("placeholder file");
+}
+
 #[tokio::test]
 async fn empty_trash_purges_everything_trashed() {
 	let t = scan_app().await;
@@ -618,6 +625,7 @@ async fn empty_trash_purges_everything_trashed() {
 	scan_and_settle(&t.app).await;
 	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
 	std::fs::remove_dir_all(t.tmp.path().join("local/Beta")).expect("remove Beta");
+	keep_root_visible(&t);
 	scan_and_settle(&t.app).await;
 	let trashed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE trashed_at IS NOT NULL")
 		.fetch_one(&pool)
@@ -888,6 +896,7 @@ async fn empty_trash_never_deletes_a_restored_manga() {
 	scan_and_settle(&t.app).await;
 	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
 	std::fs::remove_dir_all(t.tmp.path().join("local/Beta")).expect("remove Beta");
+	keep_root_visible(&t);
 	scan_and_settle(&t.app).await;
 	let (alpha_id, _, _, _, _) = manga_row(&pool, "Alpha").await.expect("Alpha");
 
@@ -1337,6 +1346,7 @@ async fn an_all_trashed_instance_does_not_rekick_a_scan_on_browse() {
 	// trash everything: remove both manga directories and rescan
 	std::fs::remove_dir_all(t.tmp.path().join("local/Alpha")).expect("remove Alpha");
 	std::fs::remove_dir_all(t.tmp.path().join("local/Beta")).expect("remove Beta");
+	keep_root_visible(&t);
 	scan_and_settle(&t.app).await;
 	let trashed: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM manga WHERE trashed_at IS NOT NULL")
 		.fetch_one(&pool)

@@ -581,7 +581,12 @@ no alias is derived from migration text.
   the flag in place (a same-dir rename needs no user action). Protection
   layers: unreadable entries prefix-protect their subtrees
   (kmrs's `failed_directories`), a missing/unreadable root fails the whole
-  scan (kmrs's unavailable library), a zero-hit scan with any failure
+  scan (kmrs's unavailable library), a readable root with no visible
+  entries and live rows underneath also fails it (an unmounted mount
+  point reads as an empty directory: zero hits, zero failures, so the
+  diff cannot tell it from "everything deleted"; a root with nothing at
+  risk is a plain empty library and scans to empty), a zero-hit scan
+  with any failure
   trashes nothing, excluded subtrees (`exclusions`, case-insensitive
   substrings — browse skips them too) and entries that exist but are not
   directories are out of the diff's sight. `scan_mtime` is the change

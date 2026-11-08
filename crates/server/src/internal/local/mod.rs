@@ -135,6 +135,12 @@ fn dir_prefix(key: &str) -> Option<(usize, &str)> {
 	Some((index, rel))
 }
 
+/// The root index a manga key addresses: a bare key addresses root 0, `N:<path>` root N — the same
+/// parse resolve_key applies, for callers that need the slot without resolving the path
+pub(crate) fn root_index_of(key: &str) -> usize {
+	dir_prefix(key).map_or(0, |(index, _)| index)
+}
+
 /// Manga/chapter keys are relative paths: API input can be anything, and without this guard it would escape
 /// the local roots. Every '/'-separated segment must be a real component (non-empty, not . or ..); backslash,
 /// a leading / (empty first segment) and any drive-letter head (C:, C:foo) are rejected so the key can never
