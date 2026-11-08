@@ -1118,11 +1118,15 @@ async fn put_source_settings(
 			}
 		}
 		tx.commit().await?;
-		// kmrs's check_library_should_rescan: editing a scan-affecting setting re-scans the instance
-		if rescan
-			&& let Err(e) = crate::internal::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await
-		{
-			tracing::warn!(source_id = id, "enqueue rescan on settings change failed: {}", e.message());
+		// kmrs's check_library_should_rescan: editing a scan-affecting setting re-scans the instance. A
+		// live scan would converge on the old inputs mid-flight, so it is cancelled first and the fresh
+		// scan runs against the new values from the top
+		if rescan {
+			crate::internal::local::scan::cancel_instance_scan(&state, id).await;
+			if let Err(e) = crate::internal::local::scan::enqueue_scan(&state, Some(id), crate::task::PRIORITY_MANUAL, true).await
+			{
+				tracing::warn!(source_id = id, "enqueue rescan on settings change failed: {}", e.message());
+			}
 		}
 		// No instance to restart: the next scan reads the new values
 		let values = local_settings_doc(&state, id).await?["values"].clone();

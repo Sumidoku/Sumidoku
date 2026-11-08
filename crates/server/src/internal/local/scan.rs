@@ -28,11 +28,6 @@ pub const KIND_SCAN: &str = "local_scan";
 pub const KIND_ANALYZE: &str = "local_analyze";
 pub const KIND_EMPTY_TRASH: &str = "empty_trash";
 
-
-/// How many persisted rows between inputs checkpoints: the scan reloads roots/oneshots/exclusions/force
-/// this often so a settings write mid-run is observed and the handler reruns on the fresh configuration
-const INPUTS_CHECKPOINT_EVERY: usize = 32;
-
 static SCAN_REQUEST_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Each trigger needs a distinct identity even when its visible settings are unchanged, so a newer request
@@ -57,10 +52,6 @@ pub struct ScanOutcome {
 	pub protected: i64,
 	pub chapters_trashed: i64,
 	pub chapters_restored: i64,
-	/// The inputs checkpoint observed a settings change mid-run (internal: the task handler reruns to
-	/// converge on the current configuration; never part of the public outcome JSON)
-	#[serde(skip)]
-	pub inputs_changed: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -124,23 +115,6 @@ fn is_archive_name(key: &str) -> bool {
 		.is_some_and(|ext| ["cbz", "zip", "epub"].iter().any(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-/// Whether the live instance configuration diverged from the snapshot a scan started with. Called at the
-/// inputs checkpoint: a settings write during a long scan must be observed, or the acknowledged rescan
-/// would never take effect (one-outstanding-execution keeps a single live task)
-async fn inputs_stale(
-	state: &AppState,
-	source_id: i64,
-	roots: &[std::path::PathBuf],
-	oneshots: &Option<String>,
-	exclusions: &[String],
-	force: bool,
-) -> ApiResult<bool> {
-	Ok(state.local_dirs(source_id).await? != roots
-		|| state.local_oneshots_dir(source_id).await? != *oneshots
-		|| state.local_exclusions(source_id).await? != exclusions
-		|| state.local_force_modified_time(source_id).await? != force)
-}
-
 /// `Some(true)` when a root holds at least one entry the scan would count (not dot-prefixed, not
 /// `@eaDir` — the skip rule `read_items` applies), `Some(false)` when it holds none, `None` when it
 /// cannot be listed. A mount point with nothing mounted on it is a readable but empty directory:
@@ -169,9 +143,8 @@ async fn root_has_visible_entry(root: &std::path::Path) -> Option<bool> {
 /// `refresh_metadata` gates the metadata invalidation (changed rows are marked initialized = 0 so the
 /// analysis pass re-reads embedded metadata): enumeration/reconcile always happens, metadata re-reads only
 /// with the user's opt-in. `cancelled` (the task's flag) stops the per-manga loops between entries; work
-/// already committed stands and the next scan continues from it. The inputs checkpoint runs on every
-/// `INPUTS_CHECKPOINT_EVERY` rows of both passes plus once after each pass, so empty scans and the final
-/// upsert observe settings writes and the handler reruns on the fresh configuration
+/// already committed stands and the next scan continues from it. A settings write does not converge a
+/// running scan on mixed inputs: it cancels the task and requeues a fresh one (see the settings endpoint)
 pub async fn scan_instance(
 	state: &Arc<AppState>,
 	source_id: i64,
@@ -241,17 +214,8 @@ pub async fn scan_instance(
 
 	let scanned: HashSet<&str> = keys.iter().map(String::as_str).collect();
 	if !(keys.is_empty() && !failed.is_empty()) {
-		for (row_index, row) in persisted.iter().enumerate() {
+		for row in &persisted {
 			if is_cancelled() {
-				break;
-			}
-			// inputs checkpoint: a settings write during a long scan must be observed, or the acknowledged
-			// rescan would never take effect (one-outstanding-execution keeps a single live task). The
-			// handler reruns on the fresh configuration when this flags a change
-			if row_index % INPUTS_CHECKPOINT_EVERY == 0
-				&& inputs_stale(state, source_id, &roots, &oneshots, &exclusions, force).await?
-			{
-				outcome.inputs_changed = true;
 				break;
 			}
 			if scanned.contains(row.key.as_str()) {
@@ -302,28 +266,12 @@ pub async fn scan_instance(
 			outcome.trashed += 1;
 		}
 	}
-	// the checkpoint covers the whole lifecycle, not just row-heavy scans: an empty scan (no persisted rows
-	// at all) must still observe a settings write, or a rescan of an empty instance would never converge
-	if !outcome.inputs_changed && inputs_stale(state, source_id, &roots, &oneshots, &exclusions, force).await? {
-		outcome.inputs_changed = true;
-	}
 
 	let known: HashMap<&str, &PersistedManga> = persisted.iter().map(|row| (row.key.as_str(), row)).collect();
-	// the upsert pass runs only when the inputs checkpoint stayed stable: a changed configuration must
-	// rerun from the top, not index the rest with stale roots/oneshots/exclusions/force
-	if !outcome.inputs_changed {
-		for (key_index, key) in keys.iter().enumerate() {
-			if is_cancelled() {
-				break;
-			}
-			// the upsert stage stays on the same checkpoint cadence: settings written while earlier rows were
-			// being indexed must not let the remaining upserts commit under stale rules
-			if key_index % INPUTS_CHECKPOINT_EVERY == 0
-				&& inputs_stale(state, source_id, &roots, &oneshots, &exclusions, force).await?
-			{
-				outcome.inputs_changed = true;
-				break;
-			}
+	for key in &keys {
+		if is_cancelled() {
+			break;
+		}
 		let Some(scan) = scan_listed_entry(source_id, &roots, key, &exclusions).await else {
 			outcome.protected += 1;
 			continue;
@@ -384,24 +332,19 @@ pub async fn scan_instance(
 				clear_zero_page_stamps(&mut tx, manga_id).await?;
 				outcome.chapters_trashed += reconciled.trashed;
 				outcome.chapters_restored += reconciled.restored;
-			// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of
-			// its initial indexing and should keep updated_at NULL so it appears in latest-added only.
-			let is_existing = existing.is_some();
-			let content_changed = is_existing
-				&& (!reconciled.new_ids.is_empty()
-					|| reconciled.trashed > 0
-					|| reconciled.restored > 0);
-			if content_changed {
-				crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
+				// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of
+				// its initial indexing and should keep updated_at NULL so it appears in latest-added only.
+				let is_existing = existing.is_some();
+				let content_changed = is_existing
+					&& (!reconciled.new_ids.is_empty()
+						|| reconciled.trashed > 0
+						|| reconciled.restored > 0);
+				if content_changed {
+					crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
+				}
+				tx.commit().await?;
 			}
-			tx.commit().await?;
 		}
-	}
-	}
-	}
-	// No later per-key checkpoint can catch a settings write made during the final upsert batch.
-	if !outcome.inputs_changed && inputs_stale(state, source_id, &roots, &oneshots, &exclusions, force).await? {
-		outcome.inputs_changed = true;
 	}
 	Ok(outcome)
 }
@@ -523,50 +466,17 @@ pub async fn register_handlers(manager: &crate::task::TaskManager) {
 					.task
 					.source_id
 					.ok_or_else(|| crate::error::ApiError::bad_request("local_scan needs a source id"))?;
-				let mut refresh_metadata = serde_json::from_str::<Value>(&run.task.payload)?
+				let refresh_metadata = serde_json::from_str::<Value>(&run.task.payload)?
 					.get("refreshMetadata")
 					.and_then(Value::as_bool)
 					.unwrap_or(false);
 				if run.is_cancelled() {
 					return Ok(serde_json::to_value(ScanOutcome::default())?);
 				}
-				let mut outcome = scan_instance(&run.state, source_id, refresh_metadata, Some(&run.cancel_flag())).await?;
-				// A settings write (or a manual refreshMetadata=true) requested while this task was live must
-				// still take effect: the one-outstanding-execution contract keeps one live task, so when change
-				// detection observed newer inputs we rerun with the fresh configuration. refreshMetadata is part
-				// of change detection too — a manual refreshMetadata=true during a false run would otherwise be
-				// acknowledged and then lost. The cap stops an edit-storm from spinning the scan forever
-				let mut reruns = 0;
-				loop {
-					// reload the live payload after each pass and fold its refreshMetadata flag into the dirty
-					// signal (enqueue keeps the payload pointed at the newest trigger)
-					if !outcome.inputs_changed {
-						let payload: String = sqlx::query_scalar("SELECT payload FROM task WHERE id = ?")
-							.bind(&run.task.id)
-							.fetch_one(&run.state.pool)
-							.await?;
-						if let Ok(Value::Object(parsed)) = serde_json::from_str::<Value>(&payload)
-							&& let Some(flag) = parsed.get("refreshMetadata").and_then(Value::as_bool)
-							&& flag != refresh_metadata
-						{
-							refresh_metadata = flag;
-							outcome.inputs_changed = true;
-						}
-					}
-					if !outcome.inputs_changed {
-						break;
-					}
-					if reruns >= 3 {
-						// never report success on a retry cap: newer work is still unapplied, so the task fails
-						// loudly and the next trigger (or the next settings write) retries fresh
-						return Err(crate::error::ApiError::conflict(
-							"inputs_changing",
-							"scan inputs kept changing; the scan did not converge. Retry after the configuration settles",
-						));
-					}
-					outcome = scan_instance(&run.state, source_id, refresh_metadata, Some(&run.cancel_flag())).await?;
-					reruns += 1;
-				}
+				// One pass per execution, no mid-scan convergence: a settings write cancels the live task
+				// and requeues a fresh one (the settings endpoint cancels before enqueueing), and a newer
+				// manual trigger moves the payload, which the terminal-write supersession requeues on
+				let outcome = scan_instance(&run.state, source_id, refresh_metadata, Some(&run.cancel_flag())).await?;
 				// A cancelled scan leaves no side effects behind it: no derived analysis either
 				if !run.is_cancelled() {
 					run.state
@@ -606,6 +516,17 @@ pub async fn register_handlers(manager: &crate::task::TaskManager) {
 			})
 		}))
 		.await;
+}
+
+/// Cancels the instance's live scan task, if any: a settings write supersedes a running scan wholesale —
+/// converging it mid-flight would commit rows reconciled under the old inputs. The caller re-enqueues
+/// afterwards, so a missing or already-terminal task is the normal no-op, not an error
+pub async fn cancel_instance_scan(state: &AppState, source_id: i64) {
+	match state.tasks().cancel(&format!("{KIND_SCAN}:{source_id}")).await {
+		Ok(_) => tracing::info!(source_id, "cancelled the live local scan; a fresh one is requeued"),
+		Err(e) if e.code() == "not_found" || e.code() == "task_finished" => {}
+		Err(e) => tracing::warn!(source_id, "cancel local scan failed: {}", e.message()),
+	}
 }
 
 /// Enqueues a scan per local instance (or just the given one); the per-instance dedup id makes a repeat
