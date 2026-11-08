@@ -1,5 +1,7 @@
 //! Local-source search supports title substring matching plus author/artist/tag jumps,
 //! using the same Aidoku-style filter values that MangaDetailPage sends for online sources.
+//! Visibility and filter predicates run in SQL; natural-sort ordering and pagination over the
+//! filtered set stay server-side.
 
 mod common;
 
@@ -42,14 +44,18 @@ fn seed_tree(root: &std::path::Path) {
 	write_page(&gamma.join("ch1"), "1.png", b"gamma-1");
 }
 
-async fn local_app() -> TestApp {
+async fn local_app_seeded(seed: impl FnOnce(&std::path::Path)) -> TestApp {
 	let tmp = tempfile::tempdir().expect("tempdir");
-	seed_tree(&tmp.path().join("local"));
+	seed(&tmp.path().join("local"));
 	let config = base_config(&tmp);
 	let db_path = tmp.path().join("test.db");
 	let app = build_app(config).await.expect("build app");
 	local_scan_and_settle(&app, None).await;
 	TestApp::new(app, tmp, db_path)
+}
+
+async fn local_app() -> TestApp {
+	local_app_seeded(seed_tree).await
 }
 
 async fn local_source_id(app: &axum::Router) -> i64 {
@@ -63,11 +69,17 @@ async fn local_source_id(app: &axum::Router) -> i64 {
 		.expect("local.local source")
 }
 
-async fn search(app: &axum::Router, source_id: i64, query: Option<&str>, filters: serde_json::Value) -> Vec<serde_json::Value> {
+async fn search_page(
+	app: &axum::Router,
+	source_id: i64,
+	query: Option<&str>,
+	filters: serde_json::Value,
+	page: i32,
+) -> (Vec<serde_json::Value>, bool) {
 	let body = json!({
 		"query": query,
 		"filters": filters,
-		"page": 1,
+		"page": page,
 	});
 	let (status, body) = request(
 		app,
@@ -77,7 +89,12 @@ async fn search(app: &axum::Router, source_id: i64, query: Option<&str>, filters
 	)
 	.await;
 	assert_eq!(status, StatusCode::OK, "{body}");
-	body["entries"].as_array().expect("entries array").clone()
+	let entries = body["entries"].as_array().expect("entries array").clone();
+	(entries, body["hasNextPage"].as_bool().expect("hasNextPage"))
+}
+
+async fn search(app: &axum::Router, source_id: i64, query: Option<&str>, filters: serde_json::Value) -> Vec<serde_json::Value> {
+	search_page(app, source_id, query, filters, 1).await.0
 }
 
 fn titles(entries: &[serde_json::Value]) -> Vec<&str> {
@@ -150,4 +167,54 @@ async fn search_combines_query_and_filters() {
 	// "Title" matches all; author filter narrows to Beta.
 	let entries = search(&app, id, Some("Title"), json!([{"Text": {"id": "author", "value": "Author B"}}])).await;
 	assert_eq!(titles(&entries), vec!["Beta Title"]);
+}
+
+#[tokio::test]
+async fn search_paginates_with_has_next() {
+	// 25 titles against the fixed page size of 20: natural sort puts "Series 2" ahead of "Series 10",
+	// and page 2 carries the 5 leftovers
+	let TestApp { app, .. } = local_app_seeded(|root| {
+		for n in 1..=25 {
+			write_page(&root.join(format!("Series {n}/ch1")), "1.png", b"page");
+		}
+	})
+	.await;
+	let id = local_source_id(&app).await;
+	let (first, has_next) = search_page(&app, id, None, json!([]), 1).await;
+	assert_eq!(first.len(), 20, "page 1 fills the page size");
+	assert!(has_next);
+	let first_titles = titles(&first);
+	assert_eq!(first_titles[..2], ["Series 1", "Series 2"], "natural order, not lexicographic");
+	let (second, has_next) = search_page(&app, id, None, json!([]), 2).await;
+	assert_eq!(titles(&second), vec!["Series 21", "Series 22", "Series 23", "Series 24", "Series 25"]);
+	assert!(!has_next);
+}
+
+#[tokio::test]
+async fn search_filter_applies_before_pagination() {
+	// 22 genre matches among 32 indexed titles: the SQL filter runs before the page slice, so page 1 is
+	// full (20 matches) and page 2 holds the 2 remaining matches — not the instance paginated before filtering
+	let TestApp { app, .. } = local_app_seeded(|root| {
+		for n in 1..=10 {
+			write_page(&root.join(format!("Other {n}/ch1")), "1.png", b"page");
+		}
+		for n in 1..=22 {
+			let dir = root.join(format!("ZMatch {n}"));
+			std::fs::create_dir_all(&dir).expect("mkdir match");
+			std::fs::write(dir.join("series.json"), format!(r#"{{"title":"ZMatch {n}","genres":["Action"]}}"#))
+				.expect("write series.json");
+			write_page(&dir.join("ch1"), "1.png", b"page");
+		}
+	})
+	.await;
+	let id = local_source_id(&app).await;
+	let filters = json!([{"Select": {"id": "genre", "value": "Action"}}]);
+	let (first, has_next) = search_page(&app, id, None, filters.clone(), 1).await;
+	assert_eq!(first.len(), 20, "the genre match alone fills page 1");
+	assert!(has_next);
+	let first_titles = titles(&first);
+	assert_eq!(first_titles[..2], ["ZMatch 1", "ZMatch 2"]);
+	let (second, has_next) = search_page(&app, id, None, filters, 2).await;
+	assert_eq!(titles(&second), vec!["ZMatch 21", "ZMatch 22"]);
+	assert!(!has_next);
 }

@@ -185,10 +185,6 @@ fn row_to_joined(row: &sqlx::sqlite::SqliteRow) -> sqlx::Result<JoinedRow> {
 	Ok(JoinedRow { manga, chapter, last_read_at })
 }
 
-/// Every listing hides what search hides: one visibility rule (exclusions and multi-root shadowing) computed
-/// by `hidden_manga_ids_json` and bound as a JSON array, so the id list never meets the bound-variable cap
-const HIDDEN_CLAUSE: &str = " AND m.id NOT IN (SELECT value FROM json_each(?))";
-
 /// The two reading-history sections (`continue-reading`, `recently-read`) are about manga, not
 /// chapters: each row is one manga and carries that manga's most recently read chapter matching
 /// `progress_filter`. A manga with several half-read or finished chapters therefore appears once,
@@ -206,7 +202,7 @@ async fn run_reading_history(
 	// chapter id breaks ties, so a same-second read cannot make the chosen chapter depend on row
 	// order. The source and hidden filters live inside the CTE so the ranking only walks one
 	// source's history, and the outer join restores the full manga and chapter rows.
-	let clauses = HIDDEN_CLAUSE;
+	let clauses = super::HIDDEN_CLAUSE;
 	let sql = format!(
 		"WITH newest AS (
 		     SELECT cu.chapter_id AS chapter_id, cu.last_read_at AS last_read_at,
@@ -283,7 +279,7 @@ async fn run_latest_updates(
 ) -> ApiResult<Vec<Value>> {
 	// For each manga, pick its newest chapter by (created_at DESC, source_order DESC, id DESC).
 	// SQLite lacks DISTINCT ON, so we use a correlated subquery against the latest chapter id.
-	let clauses = HIDDEN_CLAUSE;
+	let clauses = super::HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -331,7 +327,7 @@ async fn run_recently_added(
 ) -> ApiResult<Vec<Value>> {
 	// visibility is applied in SQL so LIMIT/OFFSET paginates correctly (Rust-side filtering would skip
 	// rows inside the page window)
-	let clauses = HIDDEN_CLAUSE;
+	let clauses = super::HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,
@@ -402,7 +398,7 @@ async fn run_all_by_title(
 	limit: i64,
 	offset: i64,
 ) -> ApiResult<Vec<Value>> {
-	let clauses = HIDDEN_CLAUSE;
+	let clauses = super::HIDDEN_CLAUSE;
 	let sql = format!(
 		"SELECT m.id, m.source_id, m.key, m.title, m.authors, m.artists, m.description,
 		        m.tags, m.status, m.content_rating, m.viewer, m.cover_url, m.url, m.initialized,

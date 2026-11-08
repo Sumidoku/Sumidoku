@@ -465,13 +465,20 @@ no alias is derived from migration text.
   (`internal/local/mod.rs:hidden_ids`): a key whose Unicode-lowercased
   text contains an exclusion is hidden (a literal substring, as in
   discovery), and a relative path present under several roots shows
-  only its lowest-root row. Home listings bind the hidden ids as one
-  JSON array (`json_each`) so paging stays in SQL. Titles are
+  only its lowest-root row. Search and the home listings compute the
+  hidden ids once per request and bind them as one JSON array
+  (`json_each`), so visibility filtering runs in SQL on both. Titles are
   the leaf segment of the relative path (analysis later replaces them
-  with metadata titles); the case-insensitive substring filter matches
-  the title (Suwayomi's `contains(query, ignoreCase = true)`), every
-  index row carries its internal id, and `hasNextPage` is always false;
-  the response is always buffered (there is no source call to stream),
+  with metadata titles); search's author/artist/tag filter values are
+  case-insensitive exact matches on the JSON metadata columns and its
+  free-text query is a substring match across title, authors, artists
+  and tags (Suwayomi's `contains(query, ignoreCase = true)`, folded by
+  SQLite's ASCII-only `LOWER`), all pushed into the same SQL statement,
+  while the natural key sort has no SQL expression, so ordering and the
+  page slice run over the filtered rows in Rust and `hasNextPage`
+  reports the matches remaining after the page; every index row carries
+  its internal id, the response is always buffered (there is no source
+  call to stream),
   an instance with no rows gets its first scan kicked at manual
   priority, and the aggregate search reuses the same arm so a selected
   Local yields a section instead of an error entry. The local source
