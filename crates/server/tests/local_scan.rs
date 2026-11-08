@@ -1375,8 +1375,8 @@ async fn an_all_trashed_instance_does_not_rekick_a_scan_on_browse() {
 	pool.close().await;
 }
 
-/// An empty instance (no manga at all) scans and settles cleanly: the inputs checkpoint still runs after
-/// the persisted pass (there are no rows to checkpoint against), so the handler converges without looping
+/// An empty instance (no manga at all) scans and settles cleanly: both passes have no rows to work,
+/// and the handler finishes on the first pass without a rerun
 #[tokio::test]
 async fn empty_instance_scan_settles_cleanly() {
 	let tmp = tempfile::tempdir().expect("tempdir");
