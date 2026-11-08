@@ -606,9 +606,13 @@ no alias is derived from migration text.
   (`refresh_metadata`, kmrs's OUTDATED; enumeration alone never invalidates
   metadata) — so the analysis pass re-reads its embedded metadata. Migration
   0026 adds `manga.local_entry_kind`: `directory` or `archive`, learned from
-  actual filesystem metadata by full and entry scans, with no suffix-based
-  backfill. Existing or not-yet-observed local rows stay NULL; unchanged fast
-  paths backfill only that missing value without reconciling chapters.
+  actual filesystem metadata by full and entry scans; migration 0037
+  backfills the column for pre-existing local rows from the key suffix (the
+  only signal a migration has — a directory named like an archive is
+  corrected by the next scan), so the recorded kind is the single shape
+  authority. Unchanged fast paths backfill only a missing value without
+  reconciling chapters — a safety net for rows a restored backup brings in
+  without a kind.
   Manual restore and entry-level refresh compare the current entry with the
   recorded kind, never the filename. Manual restore answers 409 for a missing,
   mismatched or unknown shape; entry refresh can answer 404 for a missing path.

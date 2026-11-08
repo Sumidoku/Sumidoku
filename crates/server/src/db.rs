@@ -229,6 +229,79 @@ mod tests {
 		assert_eq!(namespaced, 0);
 	}
 
+	/// Migration 0037 backfills local_entry_kind for local rows that predate the column: archive
+	/// suffixes become 'archive', everything else 'directory', trashed rows included; online rows and
+	/// rows with a recorded kind stay untouched
+	#[tokio::test]
+	async fn migration_37_backfills_local_entry_kind_from_the_key_suffix() {
+		use sqlx::migrate::Migrate;
+		use std::str::FromStr;
+		let tmp = tempfile::tempdir().expect("tmp");
+		let url = format!("sqlite://{}/kind.db?mode=rwc", tmp.path().display());
+		let options = sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+			.expect("database url")
+			.create_if_missing(true)
+			.foreign_keys(true);
+		let pool = sqlx::sqlite::SqlitePoolOptions::new()
+			.max_connections(1)
+			.connect_with(options)
+			.await
+			.expect("connect");
+		let migrator = sqlx::migrate!("./migrations");
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.ensure_migrations_table().await.expect("migration table");
+		for migration in migrator.iter().filter(|migration| migration.version < 37) {
+			conn.apply(migration).await.expect("apply pre-0037 migration");
+		}
+		drop(conn);
+		let local_id: i64 = sqlx::query_scalar("SELECT id FROM source WHERE key = 'local.local'")
+			.fetch_one(&pool)
+			.await
+			.expect("local source");
+		let online_id: i64 = sqlx::query_scalar("INSERT INTO source (key, name, wasm_path) VALUES ('en.online', 'Online', '') RETURNING id")
+			.fetch_one(&pool)
+			.await
+			.expect("online source");
+		for (source_id, key, kind, trashed) in [
+			(local_id, "Series.cbz", None, false),
+			(local_id, "PlainDir", None, false),
+			(local_id, "1:Nested.ZIP", None, false),
+			(local_id, "Gone.epub", None, true),
+			(local_id, "Known", Some("archive"), false),
+			(online_id, "Online.cbz", None, false),
+		] {
+			sqlx::query("INSERT INTO manga (source_id, key, title, trashed_at, local_entry_kind) VALUES (?, ?, ?, ?, ?)")
+				.bind(source_id)
+				.bind(key)
+				.bind(key)
+				.bind(if trashed { Some(1) } else { None })
+				.bind(kind)
+				.execute(&pool)
+				.await
+				.expect("seed manga");
+		}
+
+		let mut conn = pool.acquire().await.expect("migration connection");
+		conn.apply(migrator.iter().find(|migration| migration.version == 37).expect("migration 37"))
+			.await
+			.expect("apply 0037 migration");
+		drop(conn);
+
+		async fn kind_of(pool: &SqlitePool, key: &str) -> Option<String> {
+			sqlx::query_scalar("SELECT local_entry_kind FROM manga WHERE key = ?")
+				.bind(key)
+				.fetch_one(pool)
+				.await
+				.expect("manga row")
+		}
+		assert_eq!(kind_of(&pool, "Series.cbz").await.as_deref(), Some("archive"));
+		assert_eq!(kind_of(&pool, "PlainDir").await.as_deref(), Some("directory"));
+		assert_eq!(kind_of(&pool, "1:Nested.ZIP").await.as_deref(), Some("archive"), "case-insensitive suffix");
+		assert_eq!(kind_of(&pool, "Gone.epub").await.as_deref(), Some("archive"), "trashed rows backfill too");
+		assert_eq!(kind_of(&pool, "Known").await.as_deref(), Some("archive"), "a recorded kind stays");
+		assert_eq!(kind_of(&pool, "Online.cbz").await, None, "online rows stay NULL");
+	}
+
 	#[tokio::test]
 	async fn migration_32_moves_server_state_and_the_origin_trigger() {
 		use sqlx::migrate::Migrate;
@@ -362,6 +435,7 @@ mod tests {
 			(34, "9C8958325710D0B1507F00DEAF5DE35E60EC74C2E310CC817909FBB028CEC05E28B7506967DB8FC978385BCA45F7E7D0"),
 			(35, "83C7B7BB45284084A4305B10D5887CDCFE5892EFAD4E0A36731E90600E7D928837BDBEE52F6D67DB3061DC3B83219AD1"),
 			(36, "434D2F610FDEEA4E8AA51D921390701ED5258A3AA2BF34433508170BE2058DD585E91D11DE47D99614A62606291F8979"),
+			(37, "FC15CAF9D09E656B98C3C0442A6AD252D7E6A706F992F198024D870CC05436C11BBEB1F3A52A1A3ACD0206680EE58FEF"),
 		];
 		let migrator = sqlx::migrate!("./migrations");
 		assert_eq!(
