@@ -218,3 +218,19 @@ async fn search_filter_applies_before_pagination() {
 	assert_eq!(titles(&second), vec!["ZMatch 21", "ZMatch 22"]);
 	assert!(!has_next);
 }
+
+#[tokio::test]
+async fn search_matches_a_title_typed_exactly_with_non_ascii_capitals() {
+	// SQLite's LOWER and LIKE fold ASCII only, so the query must reach LIKE as typed: lowercasing it in
+	// Rust turns the capital in "Берсерк" or "École" into a letter the stored title does not carry
+	let TestApp { app, .. } = local_app_seeded(|root| {
+		write_page(&root.join("Берсерк/ch1"), "1.png", b"page");
+		write_page(&root.join("École Days/ch1"), "1.png", b"page");
+	})
+	.await;
+	let id = local_source_id(&app).await;
+	assert_eq!(titles(&search(&app, id, Some("Берсерк"), json!([])).await), vec!["Берсерк"]);
+	assert_eq!(titles(&search(&app, id, Some("École"), json!([])).await), vec!["École Days"]);
+	// ASCII still folds both ways
+	assert_eq!(titles(&search(&app, id, Some("cole DAYS"), json!([])).await), vec!["École Days"]);
+}

@@ -615,9 +615,10 @@ pub(crate) async fn local_search(
 		q = q.bind(tag);
 	}
 	if let Some(needle) = needle {
-		// Lowercased here because SQLite's LOWER on the column side folds ASCII only; escaping keeps
-		// % and _ literal
-		let pattern = format!("%{}%", escape_like(&needle.to_lowercase()));
+		// Bound as typed: LIKE already folds ASCII, and lowercasing in Rust would fold non-ASCII
+		// capitals the column side keeps, so a title typed exactly ("Берсерк") would stop matching.
+		// Escaping keeps % and _ literal
+		let pattern = format!("%{}%", escape_like(needle));
 		q = q.bind(pattern.clone()).bind(pattern.clone()).bind(pattern.clone()).bind(pattern);
 	}
 	// The first-scan kick answers a genuinely empty instance (no rows at all), not an all-trashed one:
