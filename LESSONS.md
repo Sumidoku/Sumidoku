@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A `source_setting` test row must be serialized from the `DefaultValue`
+enum, not hand-shaped JSON.** The server reads the value column as
+`aidoku_wasm::DefaultValue`, an externally-tagged enum — `StringArray`
+only parses from `{"StringArray": [...]}`. A bare `["a", "b"]` fails
+silently: the reader falls back to the config layer, and the test
+exercises a different setup than it claims while its `.expect()` on the
+INSERT still passes. Serialize `DefaultValue::StringArray(...)` (or the
+matching variant) with `serde_json::to_string`.
+- Evidence: 2026-11-08, PR #636's multi-root scan test inserted a bare
+  JSON array as the instance's `paths`; `local_dirs` discarded it and
+  used the single-root config fallback, so the "empty second root" the
+  test created was never consulted and the scan succeeded instead of
+  failing (CI caught it; the setup looked plausible because the fallback
+  is silent by design).
+
 **An effect that attaches listeners to a ref container must depend on the
 state that mounts that container, not only on the flags that gate it.** The
 effect's single run happens while the ref is still null whenever the gated
