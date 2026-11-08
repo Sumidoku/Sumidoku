@@ -277,76 +277,142 @@ pub async fn scan_instance(
 			continue;
 		};
 		let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
-		// a trashed row returns only under its recorded shape (manual restore answers 409 gone otherwise): an
-		// entry of another kind now at the key is a different thing. An unknown kind is learned here instead
-		if known.get(key.as_str()).is_some_and(|row| {
-			row.trashed_at.is_some() && row.local_entry_kind.as_deref().is_some_and(|kind| kind != scan.entry_kind)
-		}) {
-			outcome.protected += 1;
-			continue;
-		}
-		match known.get(key.as_str()) {
-			// the fast path: an untouched, non-trashed subtree skips reconciliation entirely. Trashed rows
-			// are exempt — reappearance must always restore — and a NULL stored mtime (pre-index row) always
-			// reconciles once so the row picks up its stamp
-			Some(row)
-				if row.trashed_at.is_none()
-					&& row.scan_mtime == Some(mtime)
-					&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind) =>
-			{
-				if row.local_entry_kind.is_none() {
-					let mut write = crate::db::begin_write(&state.pool).await?;
-					crate::store::manga::backfill_entry_kind(&mut write, row.id, scan.entry_kind).await?;
-					write.commit().await?;
-				}
+		let mut tx = crate::db::begin_write(&state.pool).await?;
+		match upsert_entry(&mut tx, source_id, key, known.get(key.as_str()).copied(), &scan, mtime, refresh_metadata, false, None, true).await? {
+			EntryUpsert::Unchanged { .. } => {
+				tx.commit().await?;
 				outcome.unchanged += 1;
 			}
-			existing => {
-				let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
-				let mut tx = crate::db::begin_write(&state.pool).await?;
-				let now = crate::model::unix_now();
-				let manga_id = match existing {
-					Some(row) => {
-						// A changed subtree (or a restored row) reconciles; marking initialized = 0 (kmrs's
-						// OUTDATED, the analysis pass re-reads embedded metadata) happens only with the
-						// caller's metadata opt-in — enumeration is not metadata refresh
-						crate::store::manga::mark_scanned(&mut tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
-						if row.trashed_at.is_some() {
-							outcome.restored += 1;
-						} else {
-							outcome.reconciled += 1;
-						}
-						row.id
-					}
-					None => {
-						// index-level insert: leaf-name title, no metadata (initialized stays 0 for the
-						// analysis pass / on-open path). updated_at stays NULL so the manga appears in
-						// latest-added but not latest-updates until a content change sets it.
-						let id = crate::store::manga::insert_local(&mut tx, source_id, key, super::title_of(key), mtime, scan.entry_kind, now).await?;
-						outcome.indexed += 1;
-						id
-					}
-				};
-				let reconciled =
-					reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
-				clear_zero_page_stamps(&mut tx, manga_id).await?;
+			// a trashed row returns only under its recorded shape (manual restore answers 409 gone
+			// otherwise): an entry of another kind now at the key is a different thing. An unknown kind
+			// is learned here instead
+			EntryUpsert::ShapeMismatch | EntryUpsert::KindUnknown => {
+				outcome.protected += 1;
+			}
+			EntryUpsert::Done { is_new, was_trashed, reconciled, .. } => {
+				tx.commit().await?;
+				if is_new {
+					outcome.indexed += 1;
+				} else if was_trashed {
+					outcome.restored += 1;
+				} else {
+					outcome.reconciled += 1;
+				}
 				outcome.chapters_trashed += reconciled.trashed;
 				outcome.chapters_restored += reconciled.restored;
-				// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of
-				// its initial indexing and should keep updated_at NULL so it appears in latest-added only.
-				let is_existing = existing.is_some();
-				let content_changed = is_existing
-					&& (!reconciled.new_ids.is_empty()
-						|| reconciled.trashed > 0
-						|| reconciled.restored > 0);
-				if content_changed {
-					crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
-				}
-				tx.commit().await?;
 			}
 		}
 	}
 	Ok(outcome)
+}
+
+/// What the entry upsert decided; the two scan paths map it differently — the full scan counts and
+/// protects, the entry scan answers 409 for the blocked shapes and reports the reconcile outcome
+enum EntryUpsert {
+	/// The unchanged fast path: same mtime, not trashed, kind matches (a missing kind was backfilled)
+	Unchanged { manga_id: i64 },
+	/// The entry was inserted or reconciled and its chapters are in sync
+	Done {
+		manga_id: i64,
+		is_new: bool,
+		was_trashed: bool,
+		reconciled: crate::source::ReconcileOutcome,
+	},
+	/// A trashed row whose recorded kind disagrees with the entry now at the key: the full scan
+	/// protects the row; the entry scan refuses to restore over a different entry (409 gone)
+	ShapeMismatch,
+	/// A trashed row without a recorded kind: full scans learn the kind by reconciling; entry scans
+	/// refuse (restore needs the shape a full scan records first)
+	KindUnknown,
+}
+
+/// The one upsert branch shared by the full scan (`scan_instance`) and the entry scan
+/// (`scan_manga_entry`): identity guard, trashed-shape guard, unchanged fast path, then mark/insert +
+/// chapter reconcile + the latest-updates stamp. `existing` is the caller's view of the persisted row —
+/// the full scan's snapshot from scan start, the entry scan's fresh read inside this transaction.
+/// `force_reconcile` bypasses the fast path and forbids a fresh insert (restore keeps the original
+/// row), `expected_manga_id` pins the row restore is allowed to claim, and `learn_unknown_kind` lets
+/// the full scan adopt a kind for rows recorded before the column existed where the entry scan
+/// rejects them
+#[allow(clippy::too_many_arguments)]
+async fn upsert_entry(
+	tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+	source_id: i64,
+	key: &str,
+	existing: Option<&PersistedManga>,
+	scan: &super::ChapterScan,
+	mtime: i64,
+	refresh_metadata: bool,
+	force_reconcile: bool,
+	expected_manga_id: Option<i64>,
+	learn_unknown_kind: bool,
+) -> ApiResult<EntryUpsert> {
+	// Restore must keep the original row, not a replacement with the same source and key.
+	if let Some(row) = existing
+		&& let Some(expected) = expected_manga_id
+		&& (row.id != expected || row.trashed_at.is_none())
+	{
+		return Err(crate::error::ApiError::conflict("not_trashed", "the original manga row was purged or already restored"));
+	}
+	// A trashed row returns only under its recorded shape: an entry of another kind now at the key is
+	// a different thing. An unknown kind is learned by full scans; entry scans reject it.
+	if let Some(row) = existing
+		&& row.trashed_at.is_some()
+	{
+		match row.local_entry_kind.as_deref() {
+			Some(kind) if kind == scan.entry_kind => {}
+			Some(_) => return Ok(EntryUpsert::ShapeMismatch),
+			None if learn_unknown_kind => {}
+			None => return Ok(EntryUpsert::KindUnknown),
+		}
+	}
+	// the fast path: an untouched, non-trashed subtree skips reconciliation entirely. Trashed rows are
+	// exempt — reappearance must always restore — and a NULL stored mtime (pre-index row) always
+	// reconciles once so the row picks up its stamp
+	if let Some(row) = existing
+		&& row.trashed_at.is_none()
+		&& row.scan_mtime == Some(mtime)
+		&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind)
+		&& !force_reconcile
+	{
+		if row.local_entry_kind.is_none() {
+			crate::store::manga::backfill_entry_kind(&mut *tx, row.id, scan.entry_kind).await?;
+		}
+		return Ok(EntryUpsert::Unchanged { manga_id: row.id });
+	}
+	let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
+	let now = crate::model::unix_now();
+	let is_existing = existing.is_some();
+	let was_trashed = existing.is_some_and(|row| row.trashed_at.is_some());
+	let manga_id = match existing {
+		Some(row) => {
+			// A changed subtree (or a restored row) reconciles; marking initialized = 0 (kmrs's
+			// OUTDATED, the analysis pass re-reads embedded metadata) happens only with the caller's
+			// metadata opt-in — enumeration is not metadata refresh
+			crate::store::manga::mark_scanned(&mut *tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
+			row.id
+		}
+		None => {
+			// Restore cannot recreate a purged row with a fresh id and lose the original user state.
+			if force_reconcile {
+				return Err(crate::error::ApiError::conflict("not_trashed", "manga was purged before restore"));
+			}
+			// index-level insert: leaf-name title, no metadata (initialized stays 0 for the analysis
+			// pass / on-open path). updated_at stays NULL so the manga appears in latest-added but not
+			// latest-updates until a content change sets it.
+			crate::store::manga::insert_local(&mut *tx, source_id, key, super::title_of(key), mtime, scan.entry_kind, now).await?
+		}
+	};
+	let reconciled = reconcile_chapters_detailed(&mut *tx, manga_id, &chapters, &scan.failed, true).await?;
+	clear_zero_page_stamps(&mut *tx, manga_id).await?;
+	// Only existing manga count as "updated"; a freshly inserted manga's chapters are part of its
+	// initial indexing and should keep updated_at NULL so it appears in latest-added only.
+	let content_changed = is_existing
+		&& (!reconciled.new_ids.is_empty() || reconciled.trashed > 0 || reconciled.restored > 0);
+	if content_changed {
+		crate::store::manga::set_updated_at(&mut *tx, manga_id, now).await?;
+	}
+	Ok(EntryUpsert::Done { manga_id, is_new: !is_existing, was_trashed, reconciled })
 }
 
 /// Entry-level scan of one manga (manual refresh / open / library update): directory enumeration only,
@@ -371,7 +437,6 @@ pub async fn scan_manga_entry(
 	let (dir, rel) = super::resolve_key(&roots, manga_key)?;
 	let scan = super::scan_chapters(dir, rel, &exclusions).await?;
 	let mtime = if force { scan.all_mtime_ms } else { scan.dir_mtime_ms };
-	let chapters: Vec<aidoku::Chapter> = scan.chapters.iter().map(super::to_aidoku_chapter).collect();
 	let mut tx = crate::db::begin_write(&state.pool).await?;
 	let existing: Option<PersistedManga> = sqlx::query_as(
 		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ? AND key = ?",
@@ -380,81 +445,42 @@ pub async fn scan_manga_entry(
 	.bind(manga_key)
 	.fetch_optional(&mut *tx)
 	.await?;
-	// Restore must keep the original row, not a replacement with the same source and key.
-	if let Some(row) = &existing
-		&& let Some(expected) = expected_manga_id
-		&& (row.id != expected || row.trashed_at.is_none())
-	{
-		return Err(crate::error::ApiError::conflict("not_trashed", "the original manga row was purged or already restored"));
-	}
-	// Refresh may reclassify a live row, but a trashed row can return only under its recorded shape.
-	if let Some(row) = &existing
-		&& row.trashed_at.is_some()
-		&& row.local_entry_kind.as_deref() != Some(scan.entry_kind)
-	{
-		return Err(crate::error::ApiError::conflict(
+	match upsert_entry(&mut tx, source_id, manga_key, existing.as_ref(), &scan, mtime, refresh_metadata, force_reconcile, expected_manga_id, false).await? {
+		EntryUpsert::Unchanged { manga_id } => {
+			tx.commit().await?;
+			Ok((manga_id, crate::source::ReconcileOutcome {
+				new_ids: Vec::new(),
+				previous_latest_chapter_number: None,
+				trashed: 0,
+				restored: 0,
+			}, false))
+		}
+		// Refresh may reclassify a live row, but a trashed row can return only under its recorded shape.
+		EntryUpsert::ShapeMismatch | EntryUpsert::KindUnknown => Err(crate::error::ApiError::conflict(
 			"gone",
 			"the on-disk entry no longer matches the recorded manga shape",
-		));
-	}
-	if let Some(row) = &existing
-		&& row.trashed_at.is_none()
-		&& row.scan_mtime == Some(mtime)
-		&& row.local_entry_kind.as_deref().is_none_or(|kind| kind == scan.entry_kind)
-		&& !force_reconcile
-	{
-		if row.local_entry_kind.is_none() {
-			crate::store::manga::backfill_entry_kind(&mut tx, row.id, scan.entry_kind).await?;
-		}
-		tx.commit().await?;
-		return Ok((row.id, crate::source::ReconcileOutcome {
-			new_ids: Vec::new(),
-			previous_latest_chapter_number: None,
-			trashed: 0,
-			restored: 0,
-		}, false));
-	}
-	let now = crate::model::unix_now();
-	let is_existing = existing.is_some();
-	let manga_id = match existing {
-		Some(row) => {
-			crate::store::manga::mark_scanned(&mut tx, row.id, mtime, scan.entry_kind, refresh_metadata).await?;
-			row.id
-		}
-		None => {
-			// Restore cannot recreate a purged row with a fresh id and lose the original user state.
-			if force_reconcile {
-				return Err(crate::error::ApiError::conflict("not_trashed", "manga was purged before restore"));
+		)),
+		EntryUpsert::Done { manga_id, reconciled, .. } => {
+			tx.commit().await?;
+			// The analysis pass owns archive-opening work; opening or refreshing an unanalyzed manga
+			// kicks it at manual priority (the per-instance dedup id makes repeats free); harnesses
+			// without the manager skip
+			if let Some(tasks) = state.maybe_tasks()
+				&& let Err(e) = tasks
+					.enqueue(
+						&format!("{KIND_ANALYZE}:{source_id}"),
+						KIND_ANALYZE,
+						Some(source_id),
+						json!({}),
+						PRIORITY_MANUAL,
+					)
+					.await
+			{
+				tracing::warn!(source_id, "enqueue analysis failed: {}", e.message());
 			}
-			crate::store::manga::insert_local(&mut tx, source_id, manga_key, super::title_of(manga_key), mtime, scan.entry_kind, now).await?
+			Ok((manga_id, reconciled, true))
 		}
-	};
-	let reconciled = reconcile_chapters_detailed(&mut tx, manga_id, &chapters, &scan.failed, true).await?;
-	clear_zero_page_stamps(&mut tx, manga_id).await?;
-	let content_changed = is_existing
-		&& (!reconciled.new_ids.is_empty()
-			|| reconciled.trashed > 0
-			|| reconciled.restored > 0);
-	if content_changed {
-		crate::store::manga::set_updated_at(&mut tx, manga_id, now).await?;
 	}
-	tx.commit().await?;
-	// The analysis pass owns archive-opening work; opening or refreshing an unanalyzed manga kicks it at
-	// manual priority (the per-instance dedup id makes repeats free); harnesses without the manager skip
-	if let Some(tasks) = state.maybe_tasks()
-		&& let Err(e) = tasks
-			.enqueue(
-				&format!("{KIND_ANALYZE}:{source_id}"),
-				KIND_ANALYZE,
-				Some(source_id),
-				json!({}),
-				PRIORITY_MANUAL,
-			)
-			.await
-	{
-		tracing::warn!(source_id, "enqueue analysis failed: {}", e.message());
-	}
-	Ok((manga_id, reconciled, true))
 }
 
 /// Registers the three local task kinds on the manager (called from build_app)
