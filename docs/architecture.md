@@ -2325,7 +2325,7 @@ pages in paged mode, PageUp/PageDown and Space/Shift+Space turn pages or scroll
 a screen in the continuous modes, Home/End jump to the ends, m toggles the
 toolbar, f toggles fullscreen, h toggles the grouped keyboard-shortcut dialog, and
 keys aimed at form controls never reach the reader. The toolbar opens visible
-and hides itself once after 2 seconds (`reader/readerChrome.ts:AUTO_HIDE_MS`);
+and hides itself once after 1 second (`reader/readerChrome.ts:AUTO_HIDE_MS`);
 any toolbar, settings, shortcut-help or chapter-list action first, or a pointer
 or focus inside a bar when the timer fires, cancels that hide. Each chapter
 remounts the reader, so a chapter change shows the bar briefly again. In paged mode the wheel also turns pages (`reader/wheelTurn.ts`):
