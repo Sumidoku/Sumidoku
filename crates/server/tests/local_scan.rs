@@ -1375,8 +1375,8 @@ async fn an_all_trashed_instance_does_not_rekick_a_scan_on_browse() {
 	pool.close().await;
 }
 
-/// An empty instance (no manga at all) scans and settles cleanly: the inputs checkpoint still runs after
-/// the persisted pass (there are no rows to checkpoint against), so the handler converges without looping
+/// An empty instance (no manga at all) scans and settles cleanly: both passes have no rows to work,
+/// and the handler finishes on the first pass without a rerun
 #[tokio::test]
 async fn empty_instance_scan_settles_cleanly() {
 	let tmp = tempfile::tempdir().expect("tempdir");
@@ -1441,6 +1441,67 @@ async fn live_payload_moves_to_the_newest_trigger() {
 		last["payload"]["refreshMetadata"], true,
 		"the executed scan carried the newest (manual) trigger's payload: {last}"
 	);
+}
+
+/// Reads SSE frames until the given task row reaches the wanted status
+async fn read_task_status(
+	stream: &mut tokio::net::TcpStream,
+	rest: &mut Vec<u8>,
+	task_id: &str,
+	want: &str,
+	timeout: std::time::Duration,
+) -> Value {
+	let deadline = std::time::Instant::now() + timeout;
+	loop {
+		let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+		assert!(remaining > std::time::Duration::ZERO, "the scan task never reached {want}");
+		let frame = tokio::time::timeout(remaining, common::read_sse_event(stream, rest))
+			.await
+			.expect("sse read timeout");
+		if frame["type"] == "task" && frame["data"]["id"] == task_id && frame["data"]["status"] == want {
+			return frame;
+		}
+	}
+}
+
+/// A settings write supersedes a running scan wholesale (#493): the live task is cancelled and a
+/// fresh scan requeued against the new values — no mid-scan convergence on mixed inputs
+#[tokio::test]
+async fn a_settings_write_cancels_and_requeues_the_running_scan() {
+	// a large library keeps the first scan running long enough for the settings write to land
+	let tmp = tempfile::tempdir().expect("tempdir");
+	for index in 0..400 {
+		write_page(&tmp.path().join(format!("local/Series {index:03}/ch 1")), "1.png", b"page");
+	}
+	let mut config = base_config(&tmp);
+	config.local_dirs = Some(vec![tmp.path().join("local")]);
+	config.local_analyze_pages = false;
+	config.local_analyze_metadata = false;
+	let db_path = tmp.path().join("test.db");
+	let app = build_app(config).await.expect("build app");
+	let t = TestApp::new(app, tmp, db_path);
+	let source_id = local_source_id(&t.app).await;
+	let task_id = format!("local_scan:{source_id}");
+	let addr = common::serve_app(t.app.clone()).await;
+	let (mut stream, mut rest) = common::connect_sse(addr, "/api/v1/events", None, &[]).await;
+	let snapshot = common::read_sse_kind(&mut stream, &mut rest, "snapshot").await;
+	assert_eq!(snapshot["data"]["type"], "snapshot");
+
+	let (status, body) = request(&t.app, "POST", "/api/v1/local/scan", None).await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	// wait for the scan to be running, then flip a scan-affecting setting under it
+	read_task_status(&mut stream, &mut rest, &task_id, "running", std::time::Duration::from_secs(15)).await;
+	let (status, body) = request(
+		&t.app,
+		"PUT",
+		&format!("/api/v1/sources/{source_id}/settings"),
+		Some(json!({"forceModifiedTime": true})),
+	)
+	.await;
+	assert_eq!(status, StatusCode::OK, "{body}");
+	read_task_status(&mut stream, &mut rest, &task_id, "cancelled", std::time::Duration::from_secs(15)).await;
+	let done = read_task_status(&mut stream, &mut rest, &task_id, "done", std::time::Duration::from_secs(60)).await;
+	assert_eq!(done["data"]["result"]["scanned"], 400, "the requeued scan ran on the new inputs: {done}");
 }
 
 /// Local entries are the user's own files: metadata matching and editing must

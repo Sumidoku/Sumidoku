@@ -151,8 +151,8 @@ impl TaskManager {
 	/// with the new trigger's identity and priority (a manual run must not permanently promote later
 	/// scheduled runs). The payload, however, always reflects the newest trigger: a manual
 	/// `refreshMetadata = true` (or a settings rescan) requested while the same task is live must not
-	/// be acknowledged and then lost — the running handler reloads it when it reruns after its inputs
-	/// checkpoint observed the change (one-outstanding-execution does not discard newer work)
+	/// be acknowledged and then lost — the terminal write requeues the task when the live payload
+	/// moved past the executing one (one-outstanding-execution does not discard newer work)
 	pub async fn enqueue(
 		&self,
 		id: &str,

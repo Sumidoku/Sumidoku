@@ -247,12 +247,13 @@ no alias is derived from migration text.
   manual full scans (`local_scan:{id}`, `refreshMetadata` in the payload),
   derived analysis (`local_analyze:{id}`) and trash emptying (`empty_trash`)
   — plus the one-shot local scan scheduler (`local_scan_secs` /
-  `local_scan_on_startup`). Scan inputs are re-read every 32 rows and after
-  each pass; the newest `refreshMetadata` payload is reloaded between passes.
-  Every trigger carries a unique `requestId`, and the terminal write requeues
-  when a newer payload arrived instead of finishing the older request. Completion
-  requires a stable pass, otherwise repeated changes fail with `inputs_changing`
-  instead of being acknowledged unapplied.
+  `local_scan_on_startup`). A settings write cancels the instance's live
+  scan and enqueues a fresh one instead of converging a running scan on
+  mixed inputs; a newer manual trigger only moves the payload, and the
+  terminal write requeues when the live payload moved past the executing
+  one instead of finishing the older request. Every trigger carries a
+  unique `requestId`, so a genuinely newer trigger is never mistaken for a
+  duplicate.
 - Partial-result streaming (`api/partial.rs`): the home, search and
   manga-update endpoints honor `Accept: application/x-ndjson` as an explicit
   opt-in. The source's mid-request `send_partial_result` payloads arrive as

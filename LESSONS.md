@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Removing a mechanism breaks the tests that pin its behavior, not the
+tests that name it.** A grep for the mechanism's identifiers comes back
+clean while a test that never mentions them still asserts the behavior the
+mechanism produced. Before deleting machinery, search the suite for the
+*outcome* it guarantees (a mid-flight write being observed, a rerun, a
+retry) and rewrite those pins to the new contract in the same change.
+- Evidence: 2026-11-08, PR #638 removed the local scan's inputs
+  checkpoints; every `inputs_changed`/`inputs_stale` reference was gone and
+  check + clippy were green, but CI failed
+  `scan_checks_inputs_after_the_last_upsert`, which pinned the convergence
+  through a database trigger without naming the mechanism. The rewritten
+  `a_mid_scan_settings_write_applies_from_the_next_scan` pins the new
+  contract instead.
+
+
 **A `source_setting` test row must be serialized from the `DefaultValue`
 enum, not hand-shaped JSON.** The server reads the value column as
 `aidoku_wasm::DefaultValue`, an externally-tagged enum — `StringArray`

@@ -499,8 +499,11 @@ async fn first_browse_uses_pre_kick_snapshot() {
 	pool.close().await;
 }
 
+/// A settings write made mid-scan (here directly in the database, bypassing the endpoint's
+/// cancel-and-requeue) does not converge the running scan: it finishes on the inputs it started
+/// with, and the next scan picks the new exclusions up
 #[tokio::test]
-async fn scan_checks_inputs_after_the_last_upsert() {
+async fn a_mid_scan_settings_write_applies_from_the_next_scan() {
 	let TestApp { app, tmp, db_path } = local_app().await;
 	for name in ["Gamma", "Delta", "Epsilon"] {
 		std::fs::remove_dir_all(tmp.path().join("local").join(name)).expect("remove extra fixture");
@@ -522,7 +525,16 @@ async fn scan_checks_inputs_after_the_last_upsert() {
 	assert_eq!(status, StatusCode::OK);
 	let tasks = body.as_array().expect("tasks array");
 	let scan = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
-	assert_eq!(scan["result"]["scanned"], 1, "the final pass excludes the second upsert: {scan}");
+	assert_eq!(scan["result"]["scanned"], 2, "the running scan finishes on its original inputs: {scan}");
+
+	common::local_scan_and_settle(&app, None).await;
+	let (status, body) = request(&app, "GET", "/api/v1/tasks", None).await;
+	assert_eq!(status, StatusCode::OK);
+	let tasks = body.as_array().expect("tasks array");
+	let scan = tasks.iter().find(|task| task["kind"] == "local_scan").expect("scan task");
+	assert_eq!(scan["result"]["scanned"], 1, "the next scan discovers under the new exclusions: {scan}");
+	assert_eq!(scan["result"]["trashed"], 0, "an excluded row is protected, never trashed: {scan}");
+	assert!(scan["result"]["protected"].as_i64().expect("protected") >= 1, "{scan}");
 	pool.close().await;
 }
 
