@@ -7,6 +7,9 @@
 //! Safety invariants, pinned by tests:
 //! - failed-directory protection: anything under an unreadable path is excluded from the trash diff;
 //! - empty-scan guard: zero hits with any failed directory trashes nothing (we do not know the state);
+//! - empty-root guard: a readable root with no visible entries (an unmounted mount point reads as an
+//!   empty directory) and live rows underneath fails the scan as root_unavailable — a zero-key,
+//!   zero-failure listing from such a root must never reach the trash diff;
 //! - a mid-scan IO error fails the whole scan (the module contract: reconciling against half a listing
 //!   would mistake unscanned chapters for deleted ones).
 
@@ -138,6 +141,29 @@ async fn inputs_stale(
 		|| state.local_force_modified_time(source_id).await? != force)
 }
 
+/// `Some(true)` when a root holds at least one entry the scan would count (not dot-prefixed, not
+/// `@eaDir` — the skip rule `read_items` applies), `Some(false)` when it holds none, `None` when it
+/// cannot be listed. A mount point with nothing mounted on it is a readable but empty directory:
+/// scanning it finds zero keys and zero failures, which the trash diff would read as "every row
+/// deleted". Hidden entries do not count — the scan skips them, and file browsers leave them behind
+/// (`.DS_Store`).
+async fn root_has_visible_entry(root: &std::path::Path) -> Option<bool> {
+	let mut entries = tokio::fs::read_dir(root).await.ok()?;
+	loop {
+		match entries.next_entry().await {
+			Ok(Some(entry)) => {
+				let name = entry.file_name();
+				let name = name.to_string_lossy();
+				if !name.starts_with('.') && name != "@eaDir" {
+					return Some(true);
+				}
+			}
+			Ok(None) => return Some(false),
+			Err(_) => return None,
+		}
+	}
+}
+
 /// Full scan of one local instance. Runs against the live filesystem; every manga's writes commit in their
 /// own transaction (the migrate pattern), so a later failure never rolls back earlier, already-correct work.
 /// `refresh_metadata` gates the metadata invalidation (changed rows are marked initialized = 0 so the
@@ -157,10 +183,20 @@ pub async fn scan_instance(
 	let oneshots = state.local_oneshots_dir(source_id).await?;
 	let exclusions = state.local_exclusions(source_id).await?;
 	let force = state.local_force_modified_time(source_id).await?;
+	let persisted: Vec<PersistedManga> = sqlx::query_as(
+		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ?",
+	)
+	.bind(source_id)
+	.fetch_all(&state.pool)
+	.await?;
 	// kmrs's unavailable library: a missing or unreadable root means we cannot know the state of anything
 	// under it, so the scan fails outright instead of trashing on a partial view (browse treats a missing
-	// root as an empty listing; the lifecycle scan must not)
-	for root in &roots {
+	// root as an empty listing; the lifecycle scan must not). The same holds for a readable root with no
+	// visible entries — the shape of a mount point whose disk is not mounted (kmrs's "no visible
+	// entries"): its listing is zero keys and zero failures, which no downstream guard distinguishes from
+	// "the user deleted everything". Only a root with live rows at risk refuses; an empty root with
+	// nothing to trash is just an empty library and scans normally.
+	for (index, root) in roots.iter().enumerate() {
 		match tokio::fs::metadata(root).await {
 			Ok(metadata) if metadata.is_dir() => {}
 			_ => {
@@ -169,6 +205,16 @@ pub async fn scan_instance(
 					format!("local root is not a readable directory: {}", root.display()),
 				));
 			}
+		}
+		if root_has_visible_entry(root).await == Some(false)
+			&& persisted
+				.iter()
+				.any(|row| row.trashed_at.is_none() && super::root_index_of(&row.key) == index)
+		{
+			return Err(crate::error::ApiError::conflict(
+				"root_unavailable",
+				format!("local root has no visible entries (unmounted?): {}", root.display()),
+			));
 		}
 	}
 	// Index every discovered directory, shadowed copies included (N:rel keys too): the multi-root dedup is
@@ -187,12 +233,6 @@ pub async fn scan_instance(
 			_ => format!("{index}:{rel}"),
 		}));
 	}
-	let persisted: Vec<PersistedManga> = sqlx::query_as(
-		"SELECT id, key, trashed_at, scan_mtime, local_entry_kind FROM manga WHERE source_id = ?",
-	)
-	.bind(source_id)
-	.fetch_all(&state.pool)
-	.await?;
 	let mut outcome = ScanOutcome {
 		scanned: keys.len() as i64,
 		..ScanOutcome::default()
@@ -878,6 +918,90 @@ mod tests {
 		assert_eq!(trashed_at, Some(1));
 	}
 
+	async fn insert_live_manga(state: &AppState, source_id: i64, key: &str) -> i64 {
+		sqlx::query_scalar(
+			"INSERT INTO manga (source_id, key, title, local_entry_kind) VALUES (?, ?, ?, 'directory') RETURNING id",
+		)
+		.bind(source_id)
+		.bind(key)
+		.bind(crate::internal::local::title_of(key))
+		.fetch_one(&state.pool)
+		.await
+		.expect("live manga row")
+	}
+
+	async fn trashed_at(state: &AppState, manga_id: i64) -> Option<i64> {
+		sqlx::query_scalar("SELECT trashed_at FROM manga WHERE id = ?")
+			.bind(manga_id)
+			.fetch_one(&state.pool)
+			.await
+			.expect("manga row")
+	}
+
+	/// kmrs #365's case: the root reads fine but shows no entries — a mount point with nothing mounted.
+	/// The scan must fail as root_unavailable, not trash every live row (#498)
+	#[tokio::test]
+	async fn an_empty_root_with_live_rows_fails_the_scan() {
+		let (state, source_id, tmp) = local_state().await;
+		let root = tmp.path().join("local");
+		let manga_id = insert_live_manga(&state, source_id, "Alpha.cbz").await;
+		std::fs::remove_dir_all(root.join("Alpha.cbz")).expect("unmount the disk");
+
+		let error = scan_instance(&state, source_id, false, None)
+			.await
+			.expect_err("an empty root with live rows must fail the scan");
+		assert_eq!(error.code(), "root_unavailable");
+		assert_eq!(trashed_at(&state, manga_id).await, None, "nothing may be trashed");
+	}
+
+	/// A root with nothing to trash is just an empty library: the scan runs and indexes nothing
+	/// (kmrs's "a new library on an empty folder stays available")
+	#[tokio::test]
+	async fn an_empty_root_without_live_rows_scans_to_empty() {
+		let (state, source_id, tmp) = local_state().await;
+		let root = tmp.path().join("local");
+		std::fs::remove_dir_all(root.join("Alpha.cbz")).expect("empty the root");
+
+		let outcome = scan_instance(&state, source_id, false, None)
+			.await
+			.expect("an empty root with no live rows is a plain empty library");
+		assert_eq!(outcome.scanned, 0);
+		assert_eq!(outcome.trashed, 0);
+	}
+
+	/// Hidden entries do not count as content: the scan skips them, so a root holding only a
+	/// .DS_Store is exactly the unmounted-mount-point shape
+	#[tokio::test]
+	async fn hidden_entries_do_not_keep_a_root_available() {
+		let (state, source_id, tmp) = local_state().await;
+		let root = tmp.path().join("local");
+		let manga_id = insert_live_manga(&state, source_id, "Alpha.cbz").await;
+		std::fs::remove_dir_all(root.join("Alpha.cbz")).expect("unmount the disk");
+		std::fs::write(root.join(".DS_Store"), b"").expect("hidden file");
+
+		let error = scan_instance(&state, source_id, false, None)
+			.await
+			.expect_err("hidden entries must not count as content");
+		assert_eq!(error.code(), "root_unavailable");
+		assert_eq!(trashed_at(&state, manga_id).await, None);
+	}
+
+	/// A root with visible content is trusted: the manga really is gone, so it trashes normally
+	#[tokio::test]
+	async fn a_root_with_visible_entries_scans_and_trashes() {
+		let (state, source_id, tmp) = local_state().await;
+		let root = tmp.path().join("local");
+		let manga_id = insert_live_manga(&state, source_id, "Alpha.cbz").await;
+		std::fs::remove_dir_all(root.join("Alpha.cbz")).expect("delete the manga");
+		std::fs::write(root.join("notes.txt"), b"").expect("visible non-manga file");
+
+		let outcome = scan_instance(&state, source_id, false, None)
+			.await
+			.expect("a root with visible entries scans normally");
+		assert_eq!(outcome.trashed, 1);
+		assert!(trashed_at(&state, manga_id).await.is_some());
+	}
+
 	#[tokio::test]
 	async fn restore_rejects_a_row_that_was_already_restored() {
 		let (state, source_id, _tmp) = local_state().await;
@@ -903,5 +1027,35 @@ mod tests {
 			.await
 			.expect("restored row");
 		assert_eq!(trashed_at, None);
+	}
+
+	/// Root attribution follows the key's N: prefix: an empty root 1 fails the scan even while root 0
+	/// is fine, and the error names the offending root
+	#[tokio::test]
+	async fn an_empty_second_root_fails_while_the_first_is_fine() {
+		let (state, source_id, tmp) = local_state().await;
+		let second = tmp.path().join("mounted");
+		std::fs::create_dir_all(&second).expect("empty second root");
+		sqlx::query(
+			"INSERT INTO source_setting (source_id, key, value) VALUES (?, 'paths', ?)
+			 ON CONFLICT(source_id, key) DO UPDATE SET value = excluded.value",
+		)
+		.bind(source_id)
+		.bind(serde_json::to_string(&serde_json::json!([tmp.path().join("local"), second])).expect("paths json"))
+		.execute(&state.pool)
+		.await
+		.expect("point the instance at both roots");
+		let manga_id = insert_live_manga(&state, source_id, "1:Beta").await;
+
+		let error = scan_instance(&state, source_id, false, None)
+			.await
+			.expect_err("the empty second root must fail the scan");
+		assert_eq!(error.code(), "root_unavailable");
+		assert!(
+			error.message().contains("mounted"),
+			"the error must name the empty root, got: {}",
+			error.message()
+		);
+		assert_eq!(trashed_at(&state, manga_id).await, None);
 	}
 }
