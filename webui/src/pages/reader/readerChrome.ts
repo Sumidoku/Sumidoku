@@ -16,7 +16,7 @@ export type ReaderChromeAction =
 	| 'keepOverlay';
 
 /** How long the bar stays up after the reader opens before it gets out of the way */
-export const AUTO_HIDE_MS = 2000;
+export const AUTO_HIDE_MS = 1000;
 
 export const INITIAL_READER_CHROME: ReaderChrome = { overlay: true, settingsOpen: false, shortcutsOpen: false, autoHidePending: true };
 
