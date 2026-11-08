@@ -474,7 +474,8 @@ no alias is derived from migration text.
   case-insensitive exact matches on the JSON metadata columns and its
   free-text query is a substring match across title, authors, artists
   and tags (Suwayomi's `contains(query, ignoreCase = true)`, folded by
-  SQLite's ASCII-only `LOWER`), all pushed into the same SQL statement,
+  SQLite's ASCII-only `LIKE`, so the query is bound as typed and a
+  non-ASCII capital matches only itself), all pushed into the same SQL statement,
   while the natural key sort has no SQL expression, so ordering and the
   page slice run over the filtered rows in Rust and `hasNextPage`
   reports the matches remaining after the page; every index row carries
