@@ -62,6 +62,12 @@ and derive velocity from the window's endpoints.
   pages. Velocity is now the trailing 100ms window and the release is decided
   on the drag's projected landing (offset + velocity x 150ms) against a
   quarter-viewport distance capped at 96px.
+- Seen again: 2026-11-08, #634 measured that trailing window only on
+  `pointermove`. A finger that pauses before lifting sends no moves, so a
+  60px flick held still for 400ms still read about 0.6px/ms at release and
+  turned the page. `swipeTurn.ts:releaseVelocity` now slides the window to
+  the lift time and counts the still time as no travel; the window ends at
+  release, not at the last sample.
 
 **Navigation turns are not the only path that puts content on screen; the
 opening state is one too.** A progress model wired only into turn handlers
