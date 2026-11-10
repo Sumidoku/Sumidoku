@@ -6,6 +6,20 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Normalise a bound value only as far as the SQL that compares it.**
+SQLite's `LOWER` and `LIKE` fold ASCII letters only, so lowercasing a search
+term with Rust's Unicode `to_lowercase` before binding it makes the two sides
+disagree: the needle loses its non-ASCII capitals while the column keeps them,
+and a title typed exactly stops matching. Bind the value as typed (or fold
+both sides in one place), and test with a stored value that carries a
+non-ASCII capital.
+- Evidence: 2026-11-08, #637 moved local-source search into SQL with
+  `LOWER(title) LIKE ?` and bound `needle.to_lowercase()`; `Берсерк` and
+  `École` typed exactly returned nothing, which the in-memory filter it
+  replaced had matched. #641 binds the term as typed, and
+  `search_matches_a_title_typed_exactly_with_non_ascii_capitals` failed with
+  an empty list before the fix.
+
 **Removing a mechanism breaks the tests that pin its behavior, not the
 tests that name it.** A grep for the mechanism's identifiers comes back
 clean while a test that never mentions them still asserts the behavior the
