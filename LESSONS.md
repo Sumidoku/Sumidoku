@@ -6,6 +6,22 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**Check a page transition on the uncached first open, where a skeleton
+mounts before the content.** A cached navigation renders the final tree in
+the first frame, so an entrance animation or a view transition that only
+misbehaves when the real content replaces a loading state never shows
+there. Record the uncached open frame by frame before calling motion done,
+and keep `view-transition-name` off elements inside a page: a named element
+inside a backdrop-filtered hero changes how the browser paints its
+neighbours for the whole transition.
+- Evidence: 2026-11-11, #645's first cut had two glitches that only an
+  uncached manga-detail open showed. The hero backdrop scaled in from 112%
+  whenever the hero mounted after the skeleton, and a shared-element cover
+  morph made Chrome paint the hero backdrop unclipped over the card.
+  Clipping, isolating or unfiltering the backdrop did not stop the second;
+  dropping the transition name did. A frame capture of a first open
+  reproduced both and confirmed the plain cross-fade that shipped.
+
 **Normalise a bound value only as far as the SQL that compares it.**
 SQLite's `LOWER` and `LIKE` fold ASCII letters only, so lowercasing a search
 term with Rust's Unicode `to_lowercase` before binding it makes the two sides
