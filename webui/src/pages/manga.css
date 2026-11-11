@@ -15,15 +15,6 @@
 	background-size: cover;
 	background-position: center;
 	filter: blur(44px) saturate(1.4) brightness(0.74);
-	animation: hero-bg-in 0.9s var(--ease-out) backwards;
-}
-
-/* The backdrop blooms in a beat after the cover lands, so the page seems to take its color from the art */
-@keyframes hero-bg-in {
-	from {
-		opacity: 0;
-		transform: scale(1.12);
-	}
 }
 
 .manga-hero__scrim {
