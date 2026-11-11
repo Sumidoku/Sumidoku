@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
@@ -203,6 +203,7 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 	);
 
 	const [selecting, setSelecting] = useState(initialSelecting);
+	const gridSettled = useRef(initialSelecting);
 	// Entering selection mode selects the whole loaded prefix, so the seeded state must start the same way
 	const [selected, setSelected] = useState<Set<number>>(() =>
 		initialSelecting ? new Set(entries.map((m) => m.id)) : new Set()
@@ -378,6 +379,10 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 		setCategoryTri((cur) => cycled(cur, key));
 	}
 
+	// Select mode swaps every card between a link and a button, which remounts it; without this
+	// the grid's entrance cascade would replay on each toggle
+	if (selecting) gridSettled.current = true;
+
 	return (
 		<div className="page container">
 			<PageHeader
@@ -472,7 +477,7 @@ export default function LibraryPage({ initialSelecting = false }: LibraryPagePro
 					isFetching={query.isFetching}
 					onLoadMore={() => void query.fetchNextPage()}
 				>
-					<div className={selecting ? 'cover-grid cover-grid--selecting' : 'cover-grid'}>
+					<div className={['cover-grid', selecting ? 'cover-grid--selecting' : '', gridSettled.current ? 'cover-grid--settled' : ''].filter(Boolean).join(' ')}>
 						{entries.map((m) => (
 							<CoverCard
 								key={m.id}

@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Check, Trash2 } from 'lucide-react';
@@ -24,6 +24,22 @@ export interface CoverCardProps {
 	selecting?: boolean;
 	selected?: boolean;
 	onToggle?: () => void;
+}
+
+/** Shared-element name the manga detail hero's cover also carries (see app.css) */
+const COVER_TRANSITION_NAME = 'manga-cover';
+
+// The route transition snapshots the old page right after this click, so naming the clicked
+// card's cover here pairs it with the detail page's cover and the art morphs between the two.
+// Done imperatively rather than through useViewTransitionState: that hook needs a data router,
+// and the name must be on exactly one card. It is dropped again shortly after, because a
+// leftover name (modified click into a new tab, cancelled navigation) would collide with the
+// next card clicked and make the browser skip that transition.
+function tagCoverForTransition(event: MouseEvent<HTMLElement>) {
+	const cover = event.currentTarget.querySelector<HTMLElement>('.cover');
+	if (!cover) return;
+	cover.style.setProperty('view-transition-name', COVER_TRANSITION_NAME);
+	window.setTimeout(() => cover.style.removeProperty('view-transition-name'), 1000);
 }
 
 export function CoverCard({
@@ -82,7 +98,7 @@ export function CoverCard({
 	}
 	if (to) {
 		return (
-			<Link to={to} className={cls}>
+			<Link to={to} className={cls} viewTransition state={{ cover: src ?? null, title }} onClick={tagCoverForTransition}>
 				{inner}
 			</Link>
 		);

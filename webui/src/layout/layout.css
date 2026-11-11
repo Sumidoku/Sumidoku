@@ -14,9 +14,10 @@
 	gap: 10px;
 	height: 56px;
 	padding: 0 12px;
-	background: color-mix(in srgb, var(--bg) 88%, transparent);
-	backdrop-filter: blur(10px);
-	border-bottom: 1px solid var(--border);
+	background: color-mix(in srgb, var(--bg) 74%, transparent);
+	backdrop-filter: var(--blur);
+	-webkit-backdrop-filter: var(--blur);
+	border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .app__shell-actions {
@@ -34,12 +35,14 @@
 	display: flex;
 	height: calc(56px + env(safe-area-inset-bottom));
 	padding-bottom: env(safe-area-inset-bottom);
-	background: color-mix(in srgb, var(--bg) 92%, transparent);
-	backdrop-filter: blur(10px);
-	border-top: 1px solid var(--border);
+	background: color-mix(in srgb, var(--bg) 78%, transparent);
+	backdrop-filter: var(--blur);
+	-webkit-backdrop-filter: var(--blur);
+	border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .tabbar__item {
+	position: relative;
 	flex: 1;
 	display: flex;
 	flex-direction: column;
@@ -47,7 +50,39 @@
 	justify-content: center;
 	gap: 2px;
 	color: var(--text-faint);
-	transition: color 0.15s;
+	transition: color var(--t);
+}
+
+/* The active pill sits behind the 20px icon (icon center is 21px from the top of the 56px bar)
+   and grows from nothing, so switching tabs reads as the pill jumping to the new icon */
+.tabbar__item::before {
+	content: '';
+	position: absolute;
+	top: 7px;
+	left: 50%;
+	width: 50px;
+	height: 28px;
+	margin-left: -25px;
+	border-radius: 999px;
+	background: var(--accent-soft);
+	opacity: 0;
+	transform: scaleX(0.4);
+	transition:
+		opacity var(--t),
+		transform var(--t-slow) var(--ease-spring);
+}
+
+.tabbar__item svg,
+.tabbar__label {
+	position: relative;
+}
+
+.tabbar__item svg {
+	transition: transform var(--t-slow) var(--ease-spring);
+}
+
+.tabbar__item:active svg {
+	transform: scale(0.86);
 }
 
 .tabbar__label {
@@ -57,6 +92,12 @@
 
 .tabbar__item--active {
 	color: var(--accent);
+	font-weight: 600;
+}
+
+.tabbar__item--active::before {
+	opacity: 1;
+	transform: none;
 }
 
 .app__content {
@@ -74,8 +115,14 @@
 	display: block;
 	width: 34px;
 	height: 34px;
-	border-radius: 8px;
+	border-radius: 9px;
 	flex: none;
+	box-shadow: 0 4px 14px -4px rgba(255, 47, 82, 0.55);
+	transition: transform var(--t-slow) var(--ease-spring);
+}
+
+.app__logo:hover .app__logo-mark {
+	transform: rotate(-6deg) scale(1.06);
 }
 
 .app__logo--sm .app__logo-mark {
@@ -101,9 +148,11 @@
 		flex-direction: column;
 		width: 232px;
 		padding: 18px 12px;
+		/* Opaque on purpose: nothing scrolls under the rail, and a backdrop-filter here makes the
+		   whole panel re-composite on every hover transition inside it, which shows as flicker */
 		background: var(--bg-elev);
 		border-right: 1px solid var(--border);
-		transition: width 0.18s ease;
+		transition: width var(--t-slow) var(--ease-out);
 	}
 
 	.app__sidebar--collapsed {
@@ -142,9 +191,32 @@
 		border-radius: var(--r-sm);
 		color: var(--text-dim);
 		font-size: 14.5px;
+		white-space: nowrap;
 		transition:
-			background 0.15s,
-			color 0.15s;
+			background var(--t),
+			color var(--t);
+	}
+
+	/* Active marker: a short accent bar on the leading edge that grows in from its center */
+	.side-nav__item::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 50%;
+		width: 3px;
+		height: 18px;
+		margin-top: -9px;
+		border-radius: 999px;
+		background: var(--accent);
+		opacity: 0;
+		transform: scaleY(0.2);
+		transition:
+			opacity var(--t),
+			transform var(--t-slow) var(--ease-spring);
+	}
+
+	.side-nav__item svg {
+		flex: none;
 	}
 
 	.side-nav__item:hover {
@@ -152,10 +224,20 @@
 		color: var(--text);
 	}
 
-	.side-nav__item--active {
+	/* Compounded with :hover so the active item keeps its look under the pointer: the plain
+	   :hover rule out-specifies a single class, and a solid fill (not a gradient) lets the
+	   background transition interpolate instead of snapping. No transform on hover either:
+	   promoting the icon to its own layer re-rasterizes the label next to it. */
+	.side-nav__item--active,
+	.side-nav__item--active:hover {
 		background: var(--accent-soft);
 		color: var(--accent);
 		font-weight: 600;
+	}
+
+	.side-nav__item--active::before {
+		opacity: 1;
+		transform: none;
 	}
 
 	.side-nav__group-trigger {
@@ -170,7 +252,7 @@
 	.side-nav__chevron {
 		margin-left: auto;
 		color: var(--text-faint);
-		transition: transform 0.15s ease;
+		transition: transform var(--t) var(--ease-out);
 	}
 
 	.side-nav__chevron--open {
@@ -184,6 +266,14 @@
 		margin-left: 21px;
 		padding-left: 7px;
 		border-left: 1px solid var(--border);
+		animation: side-nav-open var(--t-slow) var(--ease-out) backwards;
+	}
+
+	@keyframes side-nav-open {
+		from {
+			opacity: 0;
+			transform: translateY(-4px);
+		}
 	}
 
 	.side-nav__children .side-nav__item {
@@ -241,9 +331,9 @@
 
 	.app__content {
 		margin-left: 232px;
-		padding: 26px 32px 48px;
+		padding: 30px 36px 56px;
 		min-height: 100dvh;
-		transition: margin-left 0.18s ease;
+		transition: margin-left var(--t-slow) var(--ease-out);
 	}
 
 	.app--sidebar-collapsed .app__content {

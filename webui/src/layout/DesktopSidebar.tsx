@@ -43,6 +43,7 @@ function NavItem({ item, collapsed }: { item: NavItemData; collapsed: boolean })
 	return (
 		<Link
 			to={item.to}
+			viewTransition
 			className={isActive ? 'side-nav__item side-nav__item--active' : 'side-nav__item'}
 			aria-current={isActive ? 'page' : undefined}
 			aria-label={collapsed ? t(item.labelKey) : undefined}

@@ -75,6 +75,7 @@ export function AppLayout() {
 					<NavLink
 						key={item.to}
 						to={item.to}
+						viewTransition
 						className={({ isActive }) =>
 							isActive ? 'tabbar__item tabbar__item--active' : 'tabbar__item'
 						}

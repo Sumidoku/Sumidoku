@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { BookOpen, ArrowDownUp, ArrowLeft, ArrowLeftRight, Download as DownloadIcon, ExternalLink, EyeOff, Images, PencilLine, RefreshCw, Search, Tags, Trash2, TriangleAlert } from 'lucide-react';
@@ -129,6 +129,9 @@ export default function MangaDetailPage() {
 	const { id: rawId } = useParams();
 	const mangaId = Number(rawId);
 	const navigate = useNavigate();
+	// A cover card hands over the art it was showing, so the skeleton can already hold the cover
+	// the route transition morphs into (the manga query has usually not resolved by then)
+	const handoff = useLocation().state as { cover?: string | null; title?: string } | null;
 	const qc = useQueryClient();
 
 	const mangaQuery = useManga(mangaId);
@@ -540,7 +543,13 @@ export default function MangaDetailPage() {
 		return (
 			<div className="page container">
 				<div className="manga-skeleton">
-					<Skeleton width={180} aspect="2 / 3" style={{ flex: 'none' }} />
+					<div className="manga-skeleton__cover">
+						{handoff?.cover ? (
+							<Cover src={handoff.cover} title={handoff.title ?? ''} />
+						) : (
+							<Skeleton aspect="2 / 3" style={{ borderRadius: 'var(--r-md)' }} />
+						)}
+					</div>
 					<div className="manga-skeleton__info">
 						<Skeleton height={24} width="60%" />
 						<Skeleton height={14} width="40%" />

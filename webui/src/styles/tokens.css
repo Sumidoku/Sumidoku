@@ -1,45 +1,74 @@
-/* "Dark-night study" design tone: dark-first, low-saturation base + brand-pink accent (from the logo #ff2f52, brightened in dark mode to keep contrast); the covers are the only protagonists */
+/* "Dark-night study" design tone: dark-first, low-saturation ink base + brand-pink accent (from the logo #ff2f52, brightened in dark mode to keep contrast); the covers are the only protagonists.
+   Three surface levels: --bg (page), --bg-elev (cards, controls), --bg-raise (floating layers: menus, dialogs, toasts). */
 
 :root {
 	--font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'Source Han Sans SC', 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', sans-serif;
 	--font-display: ui-serif, Georgia, 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Noto Serif SC', 'Source Han Serif SC', 'SimSun', 'Times New Roman', serif;
 	--font-brand: ui-rounded, 'Arial Rounded MT Bold', 'Hiragino Maru Gothic ProN', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 	--font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
+
+	/* Radii */
+	--r-sm: 9px;
+	--r-md: 13px;
+	--r-lg: 18px;
+	--r-xl: 24px;
+
+	/* Motion: one vocabulary for every transition. ease-out for things arriving,
+	   spring for things the pointer just touched (thumbs, toggles, pops). */
+	--ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+	--ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+	--ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+	--t-fast: 0.12s;
+	--t: 0.2s;
+	--t-slow: 0.36s;
+
+	/* Brand fill for primary actions and selected thumbs */
+	--accent-grad: linear-gradient(135deg, #ff5f7c 0%, #ff2f52 55%, #e9174b 100%);
+	--blur: saturate(170%) blur(18px);
 }
 
 :root,
 [data-theme='dark'] {
 	color-scheme: dark;
-	--bg: #100f12;
-	--bg-elev: #18161a;
-	--bg-hover: #211e24;
-	--text: #e8eaf0;
-	--text-dim: #9aa1b2;
-	--text-faint: #6b7280;
-	--accent: #ff4d6d;
-	--accent-hover: #ff6b85;
-	--accent-soft: rgba(255, 77, 109, 0.1);
+	--bg: #0d0c10;
+	--bg-elev: #16151b;
+	--bg-raise: #1c1a22;
+	--bg-hover: #211f29;
+	--text: #ecedf3;
+	--text-dim: #a0a5b8;
+	--text-faint: #6c7183;
+	--accent: #ff5373;
+	--accent-hover: #ff7a92;
+	--accent-soft: rgba(255, 83, 115, 0.12);
 	--accent-solid: #ff2f52;
-	--accent-solid-hover: #d91a3e;
+	--accent-solid-hover: #e31c43;
 	--danger: #f4673b;
 	--success: #3fb68b;
 	--warning: #d9a03f;
-	--border: #29262c;
-	--shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
-	--r-sm: 8px;
-	--r-md: 12px;
-	--r-lg: 16px;
+	--border: #27252f;
+	--border-strong: #3a3745;
+	--glass: rgba(22, 21, 27, 0.72);
+	--ring: 0 0 0 3px rgba(255, 83, 115, 0.22);
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.18);
+	--shadow: 0 10px 34px rgba(0, 0, 0, 0.42), 0 2px 8px rgba(0, 0, 0, 0.24);
+	--shadow-lg: 0 24px 70px rgba(0, 0, 0, 0.58), 0 4px 14px rgba(0, 0, 0, 0.3);
+	--glow: 0 8px 24px -8px rgba(255, 47, 82, 0.6);
+	/* Hairline that catches light on the top edge of raised surfaces */
+	--edge: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+	--ambient-1: rgba(255, 47, 82, 0.1);
+	--ambient-2: rgba(110, 90, 255, 0.08);
 }
 
 [data-theme='light'] {
 	color-scheme: light;
-	--bg: #f6f7f9;
+	--bg: #f5f5f8;
 	--bg-elev: #ffffff;
-	--bg-hover: #eef0f4;
+	--bg-raise: #ffffff;
+	--bg-hover: #eceef3;
 	--text: #1a1d26;
 	--text-dim: #5b6172;
-	--text-faint: #9aa1b2;
-	--accent: #ff2f52;
+	--text-faint: #969db0;
+	--accent: #f2284c;
 	--accent-hover: #d91a3e;
 	--accent-soft: rgba(255, 47, 82, 0.1);
 	--accent-solid: #ff2f52;
@@ -47,9 +76,15 @@
 	--danger: #d9482e;
 	--success: #2f9e77;
 	--warning: #c08a2e;
-	--border: #e3e6ec;
-	--shadow: 0 8px 24px rgba(20, 24, 40, 0.08);
-	--r-sm: 8px;
-	--r-md: 12px;
-	--r-lg: 16px;
+	--border: #e3e5ed;
+	--border-strong: #cdd1dc;
+	--glass: rgba(255, 255, 255, 0.76);
+	--ring: 0 0 0 3px rgba(255, 47, 82, 0.16);
+	--shadow-sm: 0 1px 2px rgba(20, 24, 40, 0.05), 0 2px 8px rgba(20, 24, 40, 0.04);
+	--shadow: 0 10px 30px rgba(20, 24, 40, 0.1), 0 2px 6px rgba(20, 24, 40, 0.05);
+	--shadow-lg: 0 24px 60px rgba(20, 24, 40, 0.16), 0 4px 12px rgba(20, 24, 40, 0.06);
+	--glow: 0 8px 22px -8px rgba(255, 47, 82, 0.5);
+	--edge: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+	--ambient-1: rgba(255, 47, 82, 0.07);
+	--ambient-2: rgba(110, 90, 255, 0.06);
 }

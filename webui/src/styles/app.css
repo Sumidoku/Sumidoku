@@ -26,7 +26,20 @@ body {
 	-webkit-font-smoothing: antialiased;
 	-moz-osx-font-smoothing: grayscale;
 	-webkit-tap-highlight-color: transparent;
-	transition: background 0.2s;
+	transition: background var(--t);
+}
+
+/* Ambient ink wash: two faint glows pinned to the viewport so every page sits on the same
+   lit canvas. A fixed pseudo-element instead of background-attachment, which repaints on scroll. */
+body::before {
+	content: '';
+	position: fixed;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background:
+		radial-gradient(900px 520px at 12% -8%, var(--ambient-1), transparent 62%),
+		radial-gradient(760px 480px at 96% -12%, var(--ambient-2), transparent 60%);
 }
 
 img {
@@ -75,19 +88,25 @@ p {
 	border-radius: var(--r-sm);
 }
 
+html {
+	scrollbar-color: var(--border-strong) transparent;
+}
+
 ::-webkit-scrollbar {
 	width: 10px;
 	height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-	background: var(--border);
+	background: var(--border-strong);
 	border-radius: 999px;
-	border: 2px solid var(--bg);
+	border: 3px solid transparent;
+	background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
 	background: var(--text-faint);
+	background-clip: content-box;
 }
 
 ::-webkit-scrollbar-track {
@@ -95,20 +114,103 @@ p {
 }
 
 .container {
-	max-width: 1200px;
+	max-width: 1320px;
 	margin: 0 auto;
 }
 
-/* One shared page entrance: fade + slight rise */
+/* One shared page entrance: fade + slight rise. `backwards` (not `both`) so the finished
+   animation leaves no transform behind: a transformed ancestor would become the containing
+   block of the page's fixed children (batch bar, menus). */
 .page {
-	animation: page-in 0.2s ease-out;
+	animation: page-in var(--t-slow) var(--ease-out) backwards;
 }
 
 @keyframes page-in {
 	from {
 		opacity: 0;
-		transform: translateY(4px);
+		transform: translateY(8px);
 	}
+}
+
+/* Shared entrance for items of a freshly mounted list; lists stagger it with --i */
+@keyframes rise-in {
+	from {
+		opacity: 0;
+		transform: translateY(10px) scale(0.985);
+	}
+}
+
+/* ============ Route transitions (View Transitions API) ============ */
+/* Navigations opt in through React Router's `viewTransition`; browsers without the API just
+   swap the page and keep the .page entrance above. The old page fades out quickly under the
+   new one, and a cover tagged `manga-cover` on both sides morphs between its two boxes. */
+
+::view-transition-old(root) {
+	animation: vt-out 0.16s var(--ease-in-out) both;
+}
+
+::view-transition-new(root) {
+	animation: vt-in 0.3s var(--ease-out) both;
+}
+
+@keyframes vt-out {
+	to {
+		opacity: 0;
+	}
+}
+
+@keyframes vt-in {
+	from {
+		opacity: 0;
+	}
+}
+
+::view-transition-group(manga-cover) {
+	animation-duration: 0.38s;
+	animation-timing-function: var(--ease-out);
+	z-index: 2;
+}
+
+::view-transition-old(manga-cover),
+::view-transition-new(manga-cover) {
+	/* Both snapshots are the same 2:3 art at different sizes: fill the morphing box instead of
+	   cross-fading two letterboxed copies */
+	height: 100%;
+	object-fit: cover;
+	border-radius: var(--r-md);
+	overflow: clip;
+}
+
+/* The shell does not change between routes: keep it out of the root cross-fade */
+.app__sidebar {
+	view-transition-name: app-sidebar;
+}
+
+.app__tabbar {
+	view-transition-name: app-tabbar;
+}
+
+.app__topbar {
+	view-transition-name: app-topbar;
+}
+
+::view-transition-group(app-sidebar),
+::view-transition-group(app-tabbar),
+::view-transition-group(app-topbar) {
+	animation: none;
+	z-index: 3;
+}
+
+::view-transition-old(app-sidebar),
+::view-transition-old(app-tabbar),
+::view-transition-old(app-topbar) {
+	display: none;
+}
+
+::view-transition-new(app-sidebar),
+::view-transition-new(app-tabbar),
+::view-transition-new(app-topbar) {
+	animation: none;
 }
 
 .muted {
@@ -126,5 +228,11 @@ p {
 		animation-duration: 0.01ms !important;
 		animation-iteration-count: 1 !important;
 		transition-duration: 0.01ms !important;
+	}
+
+	::view-transition-group(*),
+	::view-transition-old(*),
+	::view-transition-new(*) {
+		animation: none !important;
 	}
 }
