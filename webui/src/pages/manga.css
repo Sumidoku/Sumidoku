@@ -3,23 +3,26 @@
 .manga-hero {
 	position: relative;
 	overflow: hidden;
-	border-radius: var(--r-lg);
+	border-radius: var(--r-xl);
 	border: 1px solid var(--border);
+	box-shadow: var(--shadow);
 }
 
 .manga-hero__bg {
 	position: absolute;
-	inset: -48px;
+	inset: -60px;
 	background-color: var(--bg-elev);
 	background-size: cover;
 	background-position: center;
-	filter: blur(40px) brightness(0.6);
+	filter: blur(44px) saturate(1.4) brightness(0.74);
 }
 
 .manga-hero__scrim {
 	position: absolute;
 	inset: 0;
-	background: linear-gradient(180deg, rgba(12, 14, 18, 0.42), rgba(12, 14, 18, 0.78));
+	background:
+		linear-gradient(100deg, rgba(10, 10, 14, 0.5), rgba(10, 10, 14, 0.2) 55%, rgba(10, 10, 14, 0.42)),
+		linear-gradient(180deg, rgba(10, 10, 14, 0.28), rgba(10, 10, 14, 0.8));
 }
 
 /* Floating back affordance: the detail page is the deepest the deep-links go and has no other in-page way back.
@@ -70,19 +73,35 @@
 .manga-hero__body {
 	position: relative;
 	display: flex;
-	gap: 20px;
-	padding: 22px;
+	gap: 26px;
+	padding: 28px;
 	color: #eef0f5;
 }
 
-.manga-hero__cover {
+/* The loading skeleton's cover occupies the same box, so the art does not move when the hero replaces it */
+.manga-hero__cover,
+.manga-skeleton__cover {
 	position: relative;
-	width: 180px;
+	width: 200px;
 	flex: none;
 	align-self: flex-start;
-	box-shadow: var(--shadow);
 	border-radius: var(--r-md);
 }
+
+.manga-hero__cover {
+	box-shadow:
+		0 18px 44px rgba(0, 0, 0, 0.5),
+		0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.manga-hero__info > * {
+	animation: rise-in var(--t-slow) var(--ease-out) backwards;
+}
+
+.manga-hero__info > :nth-child(2) { animation-delay: 40ms; }
+.manga-hero__info > :nth-child(3) { animation-delay: 80ms; }
+.manga-hero__info > :nth-child(4) { animation-delay: 120ms; }
+.manga-hero__info > :nth-child(n + 5) { animation-delay: 160ms; }
 
 .manga-hero__nsfw {
 	position: absolute;
@@ -106,9 +125,12 @@
 }
 
 .manga-hero__title {
-	font-size: 22px;
+	font-family: var(--font-display);
+	font-size: 30px;
 	font-weight: 700;
-	line-height: 1.35;
+	line-height: 1.25;
+	letter-spacing: -0.02em;
+	text-shadow: 0 2px 18px rgba(0, 0, 0, 0.35);
 	display: -webkit-box;
 	line-clamp: 2;
 	-webkit-line-clamp: 2;
@@ -213,15 +235,17 @@
 	align-items: center;
 	gap: 8px;
 	flex-wrap: wrap;
-	margin-top: 16px;
+	margin-top: 20px;
 }
 
 /* Ghost buttons inside the hero need a backing fill over the darkened cover art to keep from looking washed out */
 .manga-hero__actions .btn {
-	background: rgba(23, 26, 33, 0.66);
-	border-color: rgba(255, 255, 255, 0.18);
+	background: rgba(23, 24, 32, 0.55);
+	border-color: rgba(255, 255, 255, 0.16);
 	color: #eef0f5;
-	backdrop-filter: blur(6px);
+	backdrop-filter: blur(10px);
+	-webkit-backdrop-filter: blur(10px);
+	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .manga-hero__actions .btn:hover:not(:disabled) {
@@ -232,6 +256,10 @@
 	background: var(--accent-solid);
 	border-color: var(--accent-solid);
 	color: #fff;
+	padding-inline: 20px;
+	box-shadow:
+		inset 0 1px 0 rgba(255, 255, 255, 0.22),
+		var(--glow);
 }
 
 /* The ghost hover above out-specifies .btn--primary:hover and leaves white text on its fill */
@@ -256,7 +284,17 @@
 
 /* Light-theme hero goes lighter: blurred cover base + white translucent scrim, foreground falls back to page tokens */
 [data-theme='light'] .manga-hero__bg {
-	filter: blur(40px) brightness(1.08);
+	filter: blur(44px) saturate(1.2) brightness(1.08);
+}
+
+[data-theme='light'] .manga-hero__title {
+	text-shadow: none;
+}
+
+[data-theme='light'] .manga-hero__cover {
+	box-shadow:
+		0 18px 40px rgba(20, 24, 40, 0.22),
+		0 2px 8px rgba(20, 24, 40, 0.1);
 }
 
 [data-theme='light'] .manga-hero__scrim {
@@ -323,8 +361,11 @@
 	position: fixed;
 	z-index: 70;
 	width: 240px;
-	padding: 8px;
-	box-shadow: var(--shadow);
+	padding: 6px;
+	background: var(--bg-raise);
+	border-color: var(--border-strong);
+	box-shadow: var(--shadow-lg), var(--edge);
+	animation: pop-in var(--t) var(--ease-out) backwards;
 	/* Same contract as .menu-pop: the position clamp caps max-height, the menu scrolls */
 	overflow-y: auto;
 }
@@ -339,6 +380,7 @@
 	border-radius: var(--r-sm);
 	font-size: 14px;
 	text-align: left;
+	transition: background var(--t-fast);
 }
 
 button.manga-menu__row:hover:not(:disabled) {
@@ -354,7 +396,7 @@ button.manga-menu__row:hover:not(:disabled) {
 /* ============ Chapter section ============ */
 
 .manga-chaps {
-	margin-top: 22px;
+	margin-top: 28px;
 }
 
 .manga-chaps__head {
@@ -365,8 +407,10 @@ button.manga-menu__row:hover:not(:disabled) {
 }
 
 .manga-chaps__head h2 {
-	font-size: 17px;
+	font-family: var(--font-display);
+	font-size: 21px;
 	font-weight: 600;
+	letter-spacing: -0.01em;
 }
 
 .manga-chaps__tools {
@@ -475,15 +519,42 @@ button.manga-menu__row:hover:not(:disabled) {
 	align-items: center;
 	gap: 12px;
 	width: 100%;
-	padding: 10px 8px;
-	border-bottom: 1px solid var(--border);
+	padding: 11px 10px;
 	border-radius: var(--r-sm);
 	cursor: pointer;
 	text-align: left;
+	transition: background var(--t-fast);
+}
+
+/* The divider is its own inset line: a border on the rounded row would curl up at both ends */
+.chapter-row::after {
+	content: '';
+	position: absolute;
+	left: 10px;
+	right: 10px;
+	bottom: 0;
+	height: 1px;
+	background: var(--border);
+	opacity: 0.7;
+	transition: opacity var(--t-fast);
 }
 
 .chapter-row:hover {
 	background: var(--bg-hover);
+}
+
+.chapter-row:hover::after,
+.chapter-row--selected::after {
+	opacity: 0;
+}
+
+.chapter-row__title,
+.chapter-row__num {
+	transition: color var(--t);
+}
+
+.chapter-row:hover .chapter-row__num {
+	color: var(--text);
 }
 
 .chapter-row--selected {
@@ -522,9 +593,10 @@ button.manga-menu__row:hover:not(:disabled) {
 	width: 44px;
 	flex: none;
 	text-align: center;
-	font-size: 18px;
-	font-weight: 700;
-	color: var(--text-dim);
+	font-family: var(--font-display);
+	font-size: 19px;
+	font-weight: 600;
+	color: var(--text-faint);
 	font-variant-numeric: tabular-nums;
 }
 
@@ -591,6 +663,7 @@ button.manga-menu__row:hover:not(:disabled) {
 	flex: none;
 	border-radius: 50%;
 	background: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .chapter-row__unread-label {
@@ -770,10 +843,11 @@ button.manga-menu__row:hover:not(:disabled) {
 
 .manga-skeleton {
 	display: flex;
-	gap: 20px;
-	padding: 22px;
-	border-radius: var(--r-lg);
+	gap: 26px;
+	padding: 28px;
+	border-radius: var(--r-xl);
 	border: 1px solid var(--border);
+	background: var(--bg-elev);
 }
 
 .manga-skeleton__info {
@@ -791,17 +865,73 @@ button.manga-menu__row:hover:not(:disabled) {
 }
 
 @media (max-width: 767px) {
-	.manga-hero__body {
+	.manga-hero__body,
+	.manga-skeleton {
 		gap: 14px;
 		padding: 16px;
 	}
 
-	.manga-hero__cover {
+	.manga-hero,
+	.manga-skeleton {
+		border-radius: var(--r-lg);
+	}
+
+	.manga-hero__cover,
+	.manga-skeleton__cover {
 		width: 112px;
 	}
 
 	.manga-hero__title {
-		font-size: 18px;
+		font-size: 20px;
+	}
+
+	/* On a phone only the identity (title, creators, status) sits beside the cover; everything
+	   wider than that column (tags, description, actions) spans the card under it. The info
+	   wrapper dissolves so its children can be placed on the body's grid. */
+	.manga-hero__body {
+		display: grid;
+		grid-template-columns: 112px minmax(0, 1fr);
+		grid-template-rows: auto auto 1fr;
+		column-gap: 14px;
+		row-gap: 0;
+	}
+
+	.manga-hero__cover {
+		grid-column: 1;
+		grid-row: 1 / span 3;
+	}
+
+	.manga-hero__info {
+		display: contents;
+	}
+
+	.manga-hero__info > * {
+		grid-column: 1 / -1;
+	}
+
+	.manga-hero__info > .manga-hero__title,
+	.manga-hero__info > .manga-hero__creators,
+	.manga-hero__info > .manga-hero__chips {
+		grid-column: 2;
+		align-self: start;
+	}
+
+	.manga-hero__actions {
+		margin-top: 16px;
+	}
+
+	.manga-hero__tags-toggle,
+	.manga-hero__desc-toggle {
+		justify-self: start;
+	}
+
+	.manga-hero__actions .btn--primary {
+		flex: 1 0 100%;
+		min-height: 44px;
+	}
+
+	.manga-hero__actions .btn:not(.btn--primary) {
+		flex: 1 1 auto;
 	}
 
 	/* On mobile the batch bar hugs the tab bar and may wrap */

@@ -2085,6 +2085,20 @@ offline chapters or offline reading progress.
 Typography uses system stacks through `--font-sans`, `--font-display`,
 `--font-brand` and `--font-mono`; brand marks use the rounded brand stack,
 page-header titles use display serif, and content names and controls stay sans.
+Colors, radii, shadows and motion come from `src/styles/tokens.css`: three
+surface levels (`--bg`, `--bg-elev`, `--bg-raise` for floating layers), one
+set of easing/duration variables, and `--accent-grad` for primary fills.
+Sidebar, tab-bar and cover-card navigations opt into React Router's
+`viewTransition`; `src/styles/app.css` cross-fades the page while the shell
+keeps its own transition names and stays put. Nothing inside a page is named:
+a shared-element cover morph was tried and removed, because a named cover
+inside the manga hero made Chrome paint the hero backdrop unclipped over the
+card during the transition. A cover card hands its cover URL over in router
+state so the detail page's loading skeleton shows the art in the hero's
+position. Browsers without the View Transitions API fall back to the
+`.page` entrance animation. Floating menus animate with opacity and
+`clip-path` only: they position themselves from `getBoundingClientRect` before
+first paint, which a transform would skew.
 Route handles provide translated fallback document titles, and
 `DocumentTitleProvider` appends ` · Sumidoku`. Source, manga and reader pages
 replace the fallback with content names through `useDocumentTitle`; overrides

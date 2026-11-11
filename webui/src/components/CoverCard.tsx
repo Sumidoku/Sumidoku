@@ -82,7 +82,7 @@ export function CoverCard({
 	}
 	if (to) {
 		return (
-			<Link to={to} className={cls}>
+			<Link to={to} className={cls} viewTransition state={{ cover: src ?? null, title }}>
 				{inner}
 			</Link>
 		);
