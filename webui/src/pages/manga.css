@@ -78,8 +78,7 @@
 	color: #eef0f5;
 }
 
-/* Shares its transition name with the cover card that was clicked (CoverCard.tsx), and with the
-   loading skeleton's cover below: all three occupy the same box, so the art lands once */
+/* The loading skeleton's cover occupies the same box, so the art does not move when the hero replaces it */
 .manga-hero__cover,
 .manga-skeleton__cover {
 	position: relative;
@@ -87,7 +86,6 @@
 	flex: none;
 	align-self: flex-start;
 	border-radius: var(--r-md);
-	view-transition-name: manga-cover;
 }
 
 .manga-hero__cover {

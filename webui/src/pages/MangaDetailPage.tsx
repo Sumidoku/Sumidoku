@@ -129,8 +129,8 @@ export default function MangaDetailPage() {
 	const { id: rawId } = useParams();
 	const mangaId = Number(rawId);
 	const navigate = useNavigate();
-	// A cover card hands over the art it was showing, so the skeleton can already hold the cover
-	// the route transition morphs into (the manga query has usually not resolved by then)
+	// A cover card hands over the art it was showing, so the skeleton already holds the cover in
+	// the hero's position while the manga query resolves
 	const handoff = useLocation().state as { cover?: string | null; title?: string } | null;
 	const qc = useQueryClient();
 

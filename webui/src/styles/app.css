@@ -143,7 +143,9 @@ html {
 /* ============ Route transitions (View Transitions API) ============ */
 /* Navigations opt in through React Router's `viewTransition`; browsers without the API just
    swap the page and keep the .page entrance above. The old page fades out quickly under the
-   new one, and a cover tagged `manga-cover` on both sides morphs between its two boxes. */
+   new one. No element inside a page carries a transition name: a named cover inside the manga
+   hero made Chrome paint the hero's backdrop unclipped over the whole card for the length of
+   the transition. */
 
 ::view-transition-old(root) {
 	animation: vt-out 0.16s var(--ease-in-out) both;
@@ -163,22 +165,6 @@ html {
 	from {
 		opacity: 0;
 	}
-}
-
-::view-transition-group(manga-cover) {
-	animation-duration: 0.38s;
-	animation-timing-function: var(--ease-out);
-	z-index: 2;
-}
-
-::view-transition-old(manga-cover),
-::view-transition-new(manga-cover) {
-	/* Both snapshots are the same 2:3 art at different sizes: fill the morphing box instead of
-	   cross-fading two letterboxed copies */
-	height: 100%;
-	object-fit: cover;
-	border-radius: var(--r-md);
-	overflow: clip;
 }
 
 /* The shell does not change between routes: keep it out of the root cross-fade */
