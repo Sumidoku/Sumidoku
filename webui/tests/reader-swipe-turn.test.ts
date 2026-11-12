@@ -161,7 +161,10 @@ test('the axis lock no longer decides alone: the release rescues a vertical lock
 	// from the spread the gesture started on
 	assert.match(source, /rescuesHorizontal\(axis, totalDx, totalDy, scrolled, threshold\)/);
 	assert.match(source, /const horizontal = !abandon && rescuesHorizontal\(/);
-	assert.match(source, /\.closest\('\.reader__spread, \.reader-text--cols'\)/);
+	// The nearest scroller wins: a text half inside a mixed spread scrolls on
+	// its own, so measuring the spread around it would miss that scroll
+	assert.match(source, /\.closest\('\.reader__spread-text, \.reader__spread, \.reader-text--cols'\)/);
+	assert.match(css, /\.reader__spread-text \{[^}]*overflow-y: auto;/);
 	assert.match(source, /Math\.abs\(start\.el\.scrollTop - start\.top\) > 2/);
 });
 

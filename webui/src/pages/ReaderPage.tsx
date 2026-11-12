@@ -1376,7 +1376,9 @@ function ReaderCore({
 			totalDx = 0;
 			totalDy = 0;
 			pullOwned = false;
-			const target = e.target instanceof Element ? e.target.closest('.reader__spread, .reader-text--cols') : null;
+			// closest() returns the nearest scroller: a text half inside a mixed
+			// spread scrolls on its own, and the spread around it never moves
+			const target = e.target instanceof Element ? e.target.closest('.reader__spread-text, .reader__spread, .reader-text--cols') : null;
 			scrollStart = target ? { el: target, top: target.scrollTop, left: target.scrollLeft } : null;
 		};
 		const onPointerMove = (e: PointerEvent) => {
