@@ -2240,7 +2240,8 @@ override-over-global resolution but no metadata counterpart. Paged spreads are
 laid out as one sliding track (after KMReader's PagedReader): the track is a flex
 row of viewport-sized spreads inside the zoom wrapper, and a page turn translates
 it by a whole spread width (`spreads.ts:trackOffsetPercent`, sign-flipped under
-rtl) with a 300ms ease-out transition instead of swapping the content in place.
+rtl) with a 200ms `cubic-bezier(0.25, 0.9, 0.35, 1)` transition instead of
+swapping the content in place.
 Each spread is its own scroll container holding a margin-auto inner box, and only
 spreads within two of the current one mount their images — distant spreads render
 aspect-ratio placeholders, which keeps the track cheap while guaranteeing both
@@ -2249,10 +2250,16 @@ statically on neighbouring spreads (column 0) and live on the current one. The
 animation can be switched off (`sumidoku.reader.anim`, default on,
 `0` disables) and `prefers-reduced-motion` always disables it; text pages slide
 between columns with the same transition. `sumidoku.reader.turn` selects the
-paged turn style: `auto` crossfades horizontal turns in landscape and slides
-elsewhere, while `slide` and `fade` force one style. Wide-page splitting always
+paged turn style: `slide` translates the track and is the default, while `fade`
+cross-fades the current spread against the target painted underneath; a stored
+`auto` (which used to pick fade on landscape windows) reads back as `slide`.
+Under fade a drag drives the outgoing spread's opacity through `--paged-fade`
+instead of sliding the track, capped at a quarter while the target image has
+not decoded, and the commit completes the fade before the page changes.
+Wide-page splitting always
 slides. Page turns hold the outgoing spread until every target image has decoded
-or failed, for at most 500ms; the held spread stays mounted while waiting, so a
+or failed, for at most 500ms — 250ms under fade, where the target already sits
+underneath; the held spread stays mounted while waiting, so a
 slow image cannot blank the canvas or skip ahead through repeated decode waits.
 In continuous/webtoon mode `sumidoku.reader.continuousScale` chooses fit-width
 or original measured width, `sumidoku.reader.continuousPadding` sets side
@@ -2266,8 +2273,9 @@ current and target chapter with its scanlator. The page is not an overlay but
 a track page absolutely parked on a virtual slot past either chapter end
 (`--transition-slot`, -1 or the spread count), mounted only while the first or
 last spread is current so forward reading never meets the previous-chapter
-page; the ordinary turn translation slides it in, and under fade turns it
-joins the stacked spreads with the same opacity answer. A second boundary turn
+page; the ordinary turn translation slides it in, and under fade it takes part
+in the fade as the turn's target (`--current` once the commit points at it) or
+as the parked layer a drag fades onto (`--under`). A second boundary turn
 in the same direction confirms the jump, an opposite turn or Esc cancels it,
 and any in-chapter move (`gotoPage`) clears it. With no chapter left in that
 direction the same page answers with an end-of-list state (once the chapter
@@ -2317,21 +2325,35 @@ track on image pages, the column strip on text pages (the `--text-swipe`
 variable composes with the column base the way `--paged-pull` composes with
 the spread base, and a `reader__swiping` class cuts the column transition
 mid-drag) — and releasing turns through the same `turn()` the tap zones
-use when the drag's projected landing crosses the turn distance (a quarter of
-the viewport capped at 96px, so a double-page spread or a wide desktop window
-never demands more than one honest drag length) — the projection extends the
-drag by 150ms of its release velocity, so a decisive swipe never needs the
-full drag and a release already moving back springs back instead — or when
-flicking at 0.2px/ms with at least 16px of travel,
-so text columns, spreads, double-page and boundary behaviour stay in one
-place; anything less springs back. Past the content's own end in the drag
+use when the drag crossed the turn distance, or when flicking at 0.2px/ms with
+at least 16px of travel, so text columns, spreads, double-page and boundary
+behaviour stay in one place; anything less springs back. The turn distance is
+a fraction of the viewport width (`swipeTurnThreshold`: 8%, clamped to 32–56px)
+measured at the lift: the drag is 1:1, so 8% of the width is 8% of the page's
+own travel, and a fixed distance was either too short for a tablet, where a
+horizontal wobble during a scroll carried the page away, or too long for a
+phone thumb. There is no velocity projection — the flick gate already answers
+the quick swipe, and a projection turned a slow release with leftover speed
+into a turn.
+
+Past the content's own end in the drag
 direction the follow offset is rubber-banded instead. The drag locks to the
-horizontal axis past 8px of travel so vertical wobble never moves the page,
-velocity is measured over the last 100ms of movement (a finger slows before
+horizontal axis past 8px of travel so vertical wobble never moves the page, but
+the lock only decides what follows the finger; the commit may disagree. A
+release that locked to y still turns when the spread never scrolled (at most
+2px of `scrollTop`/`scrollLeft` on the element under the pointer at
+pointerdown) and the travel is clearly horizontal (`rescuesHorizontal`: |dx|
+over the threshold and 1.25 times |dy|), so a diagonal the early lock misread
+is not lost — a `pointercancel` never rescues, because the browser already used
+the gesture. Velocity is measured over the last 100ms of movement (a finger slows before
 it lifts, so a whole-drag average under-reads the release), and a second
 finger abandons the drag for the pinch. At the last spread of an image page a
 forward drag belongs to the pull — once it owns the drag the swipe stays out
-of the shared variable — so the chapter end keeps one gesture. Swipes need no
+of the shared variable — so the chapter end keeps one gesture. A drag suppresses
+the click that follows it when the pointer ever left the 10px tap slop,
+measured as displacement from the pointerdown point rather than distance
+travelled, so a thumb that rolls while tapping still reaches the tap zone while
+a swipe that came back still cancels. Swipes need no
 next chapter; only pinch zoom suspends them.
 Keyboard shortcuts
 are mapped in `reader/hotkeys.ts` (pure and unit-tested): ArrowLeft/Right turn
