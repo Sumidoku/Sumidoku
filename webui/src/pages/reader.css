@@ -108,9 +108,12 @@
 }
 
 /* Turn animation: slide the track one spread per turn. The anim flag and
-   prefers-reduced-motion both gate it; without the flag turns are instant */
+   prefers-reduced-motion both gate it; without the flag turns are instant.
+   The curve starts near the finger's release speed (slope ~2.5, not the ~6 of
+   an expo-out) and the distance is short, so the page lands with the gesture
+   instead of shooting off and then creeping */
 .reader__paged[data-anim='true'] .reader__track {
-	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+	transition: transform 200ms cubic-bezier(0.25, 0.9, 0.35, 1);
 }
 
 /* Fade turns stack the spreads: the target paints under the outgoing page, so
@@ -125,6 +128,34 @@
 .reader__track--fade .reader__spread {
 	position: absolute;
 	inset: 0;
+	opacity: 0;
+	transition: opacity 160ms ease-out;
+}
+
+/* While a drag drives the crossfade the opacity follows the finger: no
+   transition, or every pointer move would fight the previous one */
+.reader__track--fade.reader__track--dragging .reader__spread {
+	transition: none;
+}
+
+.reader__track--fade .reader__spread--current {
+	z-index: 1;
+	opacity: 1;
+}
+
+/* The target paints under the outgoing page from the first frame, so a fade
+   never reveals the canvas; it is a backdrop, not a second animated layer */
+.reader__track--fade .reader__spread--under {
+	z-index: 0;
+	opacity: 1;
+	pointer-events: none;
+}
+
+/* Above --current on purpose: the drag dims the spread the finger is pulling */
+.reader__track--fade .reader__spread--outgoing {
+	z-index: 10;
+	opacity: calc(1 - var(--paged-fade, 0));
+	pointer-events: none;
 }
 
 .reader__track--fade .reader__spread--fading {
@@ -136,7 +167,7 @@
 
 /* Text pages slide between columns with the same motion */
 .reader__paged[data-anim='true'] .reader-text--cols {
-	transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1);
+	transition: transform 200ms cubic-bezier(0.25, 0.9, 0.35, 1);
 }
 
 /* A mid-drag column strip follows the finger 1:1; cutting its column

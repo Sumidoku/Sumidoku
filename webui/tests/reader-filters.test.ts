@@ -56,7 +56,7 @@ async function renderSettingsWithFilters(filters: ReaderFilters, textOnly = fals
 					onStretchChange: () => {},
 					anim: true,
 					onAnimChange: () => {},
-					pageTurn: 'auto',
+					pageTurn: 'slide',
 					onPageTurnChange: () => {},
 					continuousScale: 'width',
 					onContinuousScaleChange: () => {},

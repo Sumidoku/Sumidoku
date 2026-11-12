@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { ChangeEvent, CSSProperties, MouseEvent as RMouseEvent, PointerEvent as RPointerEvent } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -77,11 +77,11 @@ import { readerKeyAction, shouldCloseShortcuts } from './reader/hotkeys';
 import { AUTO_HIDE_MS, INITIAL_READER_CHROME, readerChromeReducer } from './reader/readerChrome';
 import { WheelTurnController } from './reader/wheelTurn';
 import { PULL_THRESHOLD, PullGestureController, rubber } from './reader/pullNextChapter';
-import { decideSwipe, releaseVelocity, SWIPE_VELOCITY_WINDOW_MS } from './reader/swipeTurn';
+import { decideSwipe, releaseVelocity, rescuesHorizontal, swipeTurnThreshold, SWIPE_VELOCITY_WINDOW_MS } from './reader/swipeTurn';
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
-import { crossfadeEnabled, parsePageTurn, shouldRevealTurn, TURN_HOLD_MS } from './reader/pageTurn';
+import { crossfadeEnabled, fadeProgress, parsePageTurn, shouldRevealTurn, TURN_HOLD_FADE_MS, TURN_HOLD_MS } from './reader/pageTurn';
 import type { PageTurnStyle } from './reader/pageTurn';
 import { buildFilterString, DEFAULT_FILTERS, parseFilters } from './reader/filters';
 import type { ReaderFilters } from './reader/filters';
@@ -215,9 +215,9 @@ function readTransition(): boolean {
 // Page-turn style and continuous-reading controls apply across manga
 function readPageTurn(): PageTurnStyle {
 	try {
-		return parsePageTurn(localStorage.getItem('sumidoku.reader.turn')) ?? 'auto';
+		return parsePageTurn(localStorage.getItem('sumidoku.reader.turn')) ?? 'slide';
 	} catch {
-		return 'auto';
+		return 'slide';
 	}
 }
 
@@ -243,18 +243,6 @@ function readContinuousGap(): number {
 	} catch {
 		return 0;
 	}
-}
-
-const landscapeViewport = window.matchMedia('(orientation: landscape)');
-
-function useLandscapeViewport(): boolean {
-	return useSyncExternalStore(
-		(onChange) => {
-			landscapeViewport.addEventListener('change', onChange);
-			return () => landscapeViewport.removeEventListener('change', onChange);
-		},
-		() => landscapeViewport.matches
-	);
 }
 
 /** The server 501s the Image variant outright, and the frontend has no way to render it either */
@@ -561,18 +549,63 @@ function ReaderCore({
 		setReadyPages((prev) => (prev.has(src) ? prev : new Set(prev).add(src)));
 	}, []);
 	const [shownSpread, setShownSpread] = useState(curSpreadIdx);
-	const targetReady = curSpread !== null && curSpread.every((slot) =>
-		slot === null || (pages?.[slot] !== undefined && (pageText(pages[slot]) !== null || isUnsupported(pages[slot]) ||
-		readyPages.has(pageUrl(chapterId, pages[slot].index, pages[slot].cacheRevision)))
-	));
+	const crossfade = crossfadeEnabled(pageTurn, anim, splitOn);
+	const turnHoldMs = crossfade ? TURN_HOLD_FADE_MS : TURN_HOLD_MS;
+	// A crossfade drag owns one spare layer: the spread the finger is pulling
+	// toward, painted under the outgoing page while the travel drives the fade
+	const [drag, setDragState] = useState<{ dir: 'next' | 'prev'; base: number } | null>(null);
+	const dragRef = useRef<{ dir: 'next' | 'prev'; base: number } | null>(null);
+	const setDrag = useCallback((next: { dir: 'next' | 'prev'; base: number } | null) => {
+		dragRef.current = next;
+		setDragState(next);
+	}, []);
+	// Set when a released drag committed a turn: the fade stays at 1 until the
+	// page lands, then the layer and the variable are cleared together
+	const fadeCommitRef = useRef(false);
+	const shownSpreadRef = useRef(curSpreadIdx);
+	const spreadCountRef = useRef(0);
+	const underReadyRef = useRef(false);
+	const crossfadeRef = useRef(crossfade);
+	shownSpreadRef.current = shownSpread;
+	spreadCountRef.current = spreads ? spreads.length : 0;
+	crossfadeRef.current = crossfade;
+	// The spread a crossfade drag pulls toward: the neighbour of the spread the
+	// drag started on, or the transition page at a chapter end
+	const underIdx = drag === null || spreads === null ? null : drag.dir === 'next' ? drag.base + 1 : drag.base - 1;
+	const prevTransitionUnder = crossfade && drag !== null && drag.dir === 'prev' && drag.base === 0 && pendingTurn === null;
+	const nextTransitionUnder =
+		crossfade && drag !== null && drag.dir === 'next' && spreads !== null && drag.base === spreads.length - 1 && pendingTurn === null;
+	underReadyRef.current =
+		prevTransitionUnder ||
+		nextTransitionUnder ||
+		(underIdx !== null && underIdx >= 0 && spreads !== null && spreads[underIdx] !== undefined && spreadReady(spreads[underIdx]));
+	function spreadReady(slots: readonly (number | null)[]): boolean {
+		return slots.every((slot) =>
+			slot === null || (pages?.[slot] !== undefined && (pageText(pages[slot]) !== null || isUnsupported(pages[slot]) ||
+			readyPages.has(pageUrl(chapterId, pages[slot].index, pages[slot].cacheRevision))))
+		);
+	}
+	const targetReady = curSpread !== null && spreadReady(curSpread);
 	if (shownSpread !== curSpreadIdx && shouldRevealTurn(shownSpread, curSpreadIdx, targetReady, splitOn)) setShownSpread(curSpreadIdx);
 	useEffect(() => {
 		if (shownSpread === curSpreadIdx) return;
-		const timer = window.setTimeout(() => setShownSpread(curSpreadIdx), TURN_HOLD_MS);
+		const timer = window.setTimeout(() => setShownSpread(curSpreadIdx), turnHoldMs);
 		return () => window.clearTimeout(timer);
-	}, [shownSpread, curSpreadIdx]);
-	const landscape = useLandscapeViewport();
-	const crossfade = crossfadeEnabled(pageTurn, landscape, anim, splitOn);
+	}, [shownSpread, curSpreadIdx, turnHoldMs]);
+	// After a committed fade lands, drop the drag layer: the new spread is
+	// current, the old one fades out from where the finger left it, and the
+	// progress variable is only read while a spread is --outgoing
+	useEffect(() => {
+		if (!fadeCommitRef.current) return;
+		fadeCommitRef.current = false;
+		setDrag(null);
+	}, [shownSpread, pendingTurn, setDrag]);
+	// A chapter, mode or layout swap replaces the spreads under the gesture: a
+	// drag layer left behind would dim a spread of the next chapter
+	useEffect(() => {
+		fadeCommitRef.current = false;
+		setDrag(null);
+	}, [chapterId, mode, layout, setDrag]);
 	const failedCur = useMemo(
 		() => (curSpread ? failedInSpread(curSpread, failedPages) : []),
 		[curSpread, failedPages]
@@ -1160,13 +1193,14 @@ function ReaderCore({
 		};
 	}, [mode, pages, navReady]);
 	// Paged pointer gestures. A horizontal drag follows the finger 1:1 — the
-	// track on image pages, the column strip on text pages — and releasing
-	// with enough projected travel (or flicking) turns through the same
-	// turn() the tap zones use, anything less springs back. Past the
-	// content's own end
-	// the drag rubber-bands, and at the last spread of an image page a forward
-	// drag is the pull-to-next-chapter instead. A click after any real drag
-	// must not reach the tap zones
+	// track on image pages, the column strip on text pages, the fade's opacity
+	// on a crossfade — and releasing with enough travel (or flicking) turns
+	// through the same turn() the tap zones use, anything less springs back.
+	// The axis lock only renders the drag: a release that locked to y may
+	// still turn when the spread never scrolled and the travel is clearly
+	// horizontal. Past the content's own end the drag rubber-bands, and at the
+	// last spread of an image page a forward drag is the pull-to-next-chapter
+	// instead. A click after any real drag must not reach the tap zones
 	useEffect(() => {
 		if (mode !== 'paged' || !navReady) return;
 		const root = pagedRef.current;
@@ -1176,11 +1210,20 @@ function ReaderCore({
 		let lastX = 0;
 		let lastY = 0;
 		let trail: { x: number; t: number }[] = [];
-		let moved = 0;
+		// Tap slop: the furthest the pointer got from where it went down. A
+		// click is suppressed once the gesture left the slop — never once its
+		// *path* got long, or a thumb that rolls a few pixels while tapping
+		// (back and forth, ending where it started) would lose the tap
+		const TAP_SLOP_PX = 10;
+		let maxTravel = 0;
 		let axis: 'x' | 'y' | null = null;
 		let totalDx = 0;
 		let totalDy = 0;
 		let pullOwned = false;
+		// The scroll offset of the spread under the finger when the gesture
+		// started: a release that turns must not be one the browser already
+		// used to scroll that spread
+		let scrollStart: { el: Element; top: number; left: number } | null = null;
 		const clearSwipe = () => {
 			// Restoring the transitions the drag cut animates the spring-back —
 			// or the remainder of the slide when a turn moved the base
@@ -1188,12 +1231,22 @@ function ReaderCore({
 			if (tr) {
 				tr.classList.remove('reader__track--dragging');
 				tr.style.setProperty('--paged-pull', '0px');
+				tr.style.setProperty('--paged-fade', '0');
 			}
 			const cols = textColsRef.current;
 			if (cols) {
 				cols.classList.remove('reader__swiping');
 				cols.style.setProperty('--text-swipe', '0px');
 			}
+		};
+		// A crossfade has no position to drag to: the horizontal travel becomes
+		// the fade's progress instead, so the drag stays reversible and the
+		// target page is already painted under the outgoing one
+		const canFade = (dir: 'next' | 'prev'): boolean => {
+			if (!crossfadeRef.current || textPageRef.current || pendingTurnRef.current !== null) return false;
+			const base = shownSpreadRef.current;
+			if (dir === 'next') return base < spreadCountRef.current - 1 || transitionRef.current;
+			return base > 0 || transitionRef.current;
 		};
 		const applySwipeOffset = () => {
 			// 1:1 with the finger, except past the content's own end in the
@@ -1232,6 +1285,23 @@ function ReaderCore({
 					cols.classList.add('reader__swiping');
 					cols.style.setProperty('--text-swipe', `${offset}px`);
 				}
+			} else if (dragRef.current !== null) {
+				const tr = trackRef.current;
+				if (tr) {
+					tr.classList.add('reader__track--dragging');
+					// A target that has not painted yet caps the fade: a blank
+					// spread behind the finger would read as a broken page
+					tr.style.setProperty(
+						'--paged-fade',
+						String(
+							fadeProgress(
+								totalDx * forwardSignRef.current,
+								dragRef.current.dir,
+								underReadyRef.current ? 1 : 0.25
+							)
+						)
+					);
+				}
 			} else {
 				const tr = trackRef.current;
 				if (tr) {
@@ -1245,17 +1315,48 @@ function ReaderCore({
 			dragId = null;
 			const had = ctl.rawPull > 0;
 			ctl.releaseTouch();
+			const fade = dragRef.current;
 			if (!had) {
 				// Read at the lift, not at the last move: a finger that stops
 				// before lifting sends no moves, and its earlier flick speed
 				// must not still count
 				const velocity = releaseVelocity(trail, performance.now());
-				const decision =
-					!abandon && axis === 'x' ? decideSwipe(totalDx, velocity, root.clientWidth, forwardSignRef.current) : null;
-				clearSwipe();
+				const start = scrollStart;
+				scrollStart = null;
+				const scrolled =
+					start !== null &&
+					(Math.abs(start.el.scrollTop - start.top) > 2 || Math.abs(start.el.scrollLeft - start.left) > 2);
+				// The axis lock renders the drag; the commit may still take a
+				// release that locked to y, as long as the spread never
+				// scrolled and the travel is clearly horizontal. The turn
+				// distance is read at the lift: a rotation or window resize
+				// mid-drag must count against the box the page is in now
+				const threshold = swipeTurnThreshold(root.clientWidth);
+				const horizontal = !abandon && rescuesHorizontal(axis, totalDx, totalDy, scrolled, threshold);
+				const decision = horizontal ? decideSwipe(totalDx, velocity, forwardSignRef.current, threshold) : null;
+				if (fade !== null && decision !== null) {
+					const tr = trackRef.current;
+					if (tr) {
+						// Restoring the transition lets the release finish the fade
+						// from where the finger left it
+						tr.classList.remove('reader__track--dragging');
+						// A target that already paints completes the fade now; one
+						// still loading keeps the drag's capped frame until the hold
+						// gate below reveals it
+						if (underReadyRef.current) tr.style.setProperty('--paged-fade', '1');
+					}
+					fadeCommitRef.current = true;
+				} else {
+					clearSwipe();
+					if (fade !== null) setDrag(null);
+				}
 				if (decision !== null) turnRef.current(decision === 'forward');
 			}
-			if (moved > 10 || had) suppressClickRef.current = true;
+			// A gesture that ever left the tap slop keeps the click suppressed
+			// even if it came back: that is what makes a swipe cancellable by
+			// dragging back, and a released-above-slop zone click would turn
+			// the page the gesture was cancelling
+			if (maxTravel > TAP_SLOP_PX || had) suppressClickRef.current = true;
 		};
 		const onPointerDown = (e: PointerEvent) => {
 			if (dragId !== null) {
@@ -1270,11 +1371,13 @@ function ReaderCore({
 			lastX = e.clientX;
 			lastY = e.clientY;
 			trail = [{ x: e.clientX, t: performance.now() }];
-			moved = 0;
+			maxTravel = 0;
 			axis = null;
 			totalDx = 0;
 			totalDy = 0;
 			pullOwned = false;
+			const target = e.target instanceof Element ? e.target.closest('.reader__spread, .reader-text--cols') : null;
+			scrollStart = target ? { el: target, top: target.scrollTop, left: target.scrollLeft } : null;
 		};
 		const onPointerMove = (e: PointerEvent) => {
 			if (dragId === null || e.pointerId !== dragId) return;
@@ -1286,9 +1389,10 @@ function ReaderCore({
 			const dy = e.clientY - lastY;
 			lastX = e.clientX;
 			lastY = e.clientY;
-			moved += Math.abs(dx) + Math.abs(dy);
 			totalDx += dx;
 			totalDy += dy;
+			const travel = Math.hypot(totalDx, totalDy);
+			if (travel > maxTravel) maxTravel = travel;
 			const now = performance.now();
 			// Only the last ~100ms of movement is kept for the release velocity
 			trail.push({ x: e.clientX, t: now });
@@ -1315,6 +1419,13 @@ function ReaderCore({
 					pullOwned = true;
 					return;
 				}
+			}
+			// The crossfade layer is chosen once, when the axis is already known
+			// to be horizontal: the spare spread only mounts for a drag that can
+			// complete, and mounting it earlier would flash it under a scroll
+			if (dragRef.current === null && totalDx !== 0) {
+				const dir = totalDx * forwardSignRef.current > 0 ? 'next' : 'prev';
+				if (canFade(dir)) setDrag({ dir, base: shownSpreadRef.current });
 			}
 			applySwipeOffset();
 		};
@@ -1811,8 +1922,11 @@ function ReaderCore({
 									direction: dir,
 									// The pull adds its damped offset on top of the spread
 									// translation through a variable, so a re-render cannot
-									// clobber an active drag
-									transform: `translateX(calc(${crossfade ? 0 : trackOffsetPercent(dir, pendingTurn === 'next' ? spreads.length : pendingTurn === 'prev' ? -1 : shownSpread)}% + var(--paged-pull, 0px)))`
+									// clobber an active drag. A crossfade has no track offset —
+									// the spreads are stacked — so only the pull moves it
+									transform: crossfade
+										? 'translateX(var(--paged-pull, 0px))'
+										: `translateX(calc(${trackOffsetPercent(dir, pendingTurn === 'next' ? spreads.length : pendingTurn === 'prev' ? -1 : shownSpread)}% + var(--paged-pull, 0px)))`
 								}}
 							>
 								{spreads.map((spread, si) => {
@@ -1822,13 +1936,21 @@ function ReaderCore({
 									const near = Math.abs(si - curSpreadIdx) <= 2 || si === shownSpread;
 									// While the track rests on the transition page every spread
 									// fades out; otherwise all but the shown one
-									const fadeBase = pendingTurn === null ? shownSpread : -1;
+									const fadeCurrent = crossfade && pendingTurn === null && si === shownSpread;
+									const fadeUnder = crossfade && underIdx === si;
+									// The spread the finger is pulling on stays on top and
+									// dims; it is the drag's own base, so the frame after a
+									// committed turn never dims the page that just landed
+									const fadeOutgoing = crossfade && drag !== null && pendingTurn === null && si === drag.base;
+									const spreadClass = !crossfade
+										? 'reader__spread'
+										: `reader__spread${fadeUnder ? ' reader__spread--under' : ''}${fadeCurrent ? ' reader__spread--current' : ''}${fadeOutgoing ? ' reader__spread--outgoing' : ''}${!fadeCurrent && !fadeUnder ? ' reader__spread--fading' : ''}`;
 									const slotTexts = spread.map((s) => (s !== null && pages?.[s] ? pageText(pages[s]) : null));
 									const isTextSpread =
 										spread.some((s, k) => s !== null && slotTexts[k] !== null) &&
 										spread.every((s, k) => s === null || slotTexts[k] !== null);
 									return (
-										<div key={si} className={crossfade && si !== fadeBase ? 'reader__spread reader__spread--fading' : 'reader__spread'} data-slots={spread.length}>
+										<div key={si} className={spreadClass} data-slots={spread.length}>
 											{isCur && curText !== null ? (
 												<div className="reader__spread-inner reader__spread-inner--text">
 													<TextColumns
@@ -1963,7 +2085,7 @@ function ReaderCore({
 								meets the previous-chapter page and vice versa */}
 								{transition && curSpreadIdx === 0 && (
 									<div
-										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'prev' ? ' reader__spread--fading' : ''}`}
+										className={`reader__spread reader__spread--transition${crossfade ? (pendingTurn === 'prev' ? ' reader__spread--current' : prevTransitionUnder ? ' reader__spread--under' : ' reader__spread--fading') : ''}`}
 										style={{ '--transition-slot': -1 } as CSSProperties}
 										// Mounted off-screen until the track parks on it: keep its
 										// status region out of the accessibility tree until then
@@ -1979,7 +2101,7 @@ function ReaderCore({
 								)}
 								{transition && curSpreadIdx === spreads.length - 1 && (
 									<div
-										className={`reader__spread reader__spread--transition${crossfade && pendingTurn !== 'next' ? ' reader__spread--fading' : ''}`}
+										className={`reader__spread reader__spread--transition${crossfade ? (pendingTurn === 'next' ? ' reader__spread--current' : nextTransitionUnder ? ' reader__spread--under' : ' reader__spread--fading') : ''}`}
 										style={{ '--transition-slot': spreads.length } as CSSProperties}
 										// Mounted off-screen until the track parks on it: keep its
 										// status region out of the accessibility tree until then
