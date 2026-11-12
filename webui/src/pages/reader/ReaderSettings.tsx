@@ -279,12 +279,12 @@ export function ReaderSettings({
 							<OptionTiles
 								label={t('reader.pageTurn')}
 								options={[
-									{ value: 'auto', label: t('reader.turnAuto') },
 									{ value: 'slide', label: t('reader.turnSlide') },
 									{ value: 'fade', label: t('reader.turnFade') }
 								]}
 								value={pageTurn}
 								onChange={onPageTurnChange}
+								columns={2}
 							/>
 						</div>
 					)}

@@ -54,7 +54,7 @@ async function renderSettings(
 					anim: true,
 					anim: true,
 					onAnimChange: () => {},
-					pageTurn: 'auto',
+					pageTurn: 'slide',
 					onPageTurnChange: () => {},
 					continuousScale: 'width',
 					onContinuousScaleChange: () => {},

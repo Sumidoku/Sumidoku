@@ -6,6 +6,21 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A velocity projection on top of a flick gate counts the same signal twice.**
+The flick gate already answers the quick release from the last ~100ms of
+movement with a minimum travel. Extending the drag by a projection of that
+velocity then makes a slow release with a little leftover speed cross the
+distance on paper while the page never followed the finger, and the two gates
+stop being separable when one of them is wrong. Decide the distance on its own
+and keep speed as a separate, independent gate.
+- Evidence: 2026-11-12, the paged swipe projected `offset + velocity x 150ms`
+  onto a quarter-viewport distance (96px max) while also turning on a
+  0.2px/ms flick. The effective distance fell to zero at 0.64px/ms, so a drag
+  that barely moved could turn a page when the release happened to be moving,
+  and the fixed 96px asked a phone thumb for about 25% of the screen. #648
+  drops the projection, measures the distance as 8% of the viewport width
+  (32-56px) at the lift, and leaves the flick gate unchanged.
+
 **Check a page transition on the uncached first open, where a skeleton
 mounts before the content.** A cached navigation renders the final tree in
 the first frame, so an entrance animation or a view transition that only

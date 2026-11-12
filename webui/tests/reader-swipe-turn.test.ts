@@ -1,79 +1,115 @@
 // The swipe-to-turn decision is what makes mid-chapter drags feel honest:
-// the release turns when the drag's projected landing — where the release
-// velocity would carry it over the next 150ms — crosses the turn distance (a
-// quarter of the viewport, capped so double-page spreads and desktop windows
-// do not demand an impossible drag), or when a fast flick travels a short
-// minimum; anything less springs back. These pins cover both reading
-// directions, since screen signs flip with RTL.
+// the release turns when the finger travelled the turn distance in a
+// direction, or when a fast flick carries it even with a short travel;
+// anything less springs back. The turn distance follows the viewport width —
+// 8% of it, clamped — because the drag is 1:1 and the same pixel travel reads
+// as a very different share of the page on a phone and on a tablet. These
+// pins cover both reading directions, since screen signs flip with RTL.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { decideSwipe, releaseVelocity } from '../src/pages/reader/swipeTurn.ts';
+import {
+	decideSwipe,
+	releaseVelocity,
+	rescuesHorizontal,
+	swipeTurnThreshold,
+	SWIPE_TURN_MAX_PX,
+	SWIPE_TURN_MIN_PX,
+} from '../src/pages/reader/swipeTurn.ts';
 
-test('crossing the turn distance turns the page in that direction (LTR)', () => {
-	// LTR: forward is a leftward (negative) drag; 1000px viewport is past
-	// the cap, so the threshold is the 96px cap
-	assert.equal(decideSwipe(-96, 0, 1000, -1), 'forward');
-	assert.equal(decideSwipe(96, 0, 1000, -1), 'backward');
+// A phone viewport and a desktop one, as the release would measure them
+const PHONE = swipeTurnThreshold(390);
+const DESKTOP = swipeTurnThreshold(1440);
+
+function near(actual: number, expected: number): boolean {
+	return Math.abs(actual - expected) < 1e-9;
+}
+
+test('the turn distance follows the viewport width inside the clamp', () => {
+	// 8% of a phone is under the floor, so small screens share one distance
+	assert.equal(swipeTurnThreshold(320), SWIPE_TURN_MIN_PX);
+	assert.ok(near(swipeTurnThreshold(390), SWIPE_TURN_MIN_PX));
+	assert.ok(near(swipeTurnThreshold(400), SWIPE_TURN_MIN_PX) || swipeTurnThreshold(400) === SWIPE_TURN_MIN_PX);
+	// In between it scales with the width
+	assert.ok(near(swipeTurnThreshold(600), 48));
+	// Wide surfaces stop at the ceiling instead of asking for a screen drag
+	assert.equal(swipeTurnThreshold(768), SWIPE_TURN_MAX_PX);
+	assert.equal(swipeTurnThreshold(1024), SWIPE_TURN_MAX_PX);
+	assert.equal(swipeTurnThreshold(2400), SWIPE_TURN_MAX_PX);
+	// Monotonic: a wider view never needs a shorter drag
+	let previous = 0;
+	for (const width of [280, 320, 390, 480, 600, 700, 768, 1024, 1440, 2560]) {
+		const next = swipeTurnThreshold(width);
+		assert.ok(next >= previous);
+		assert.ok(next >= SWIPE_TURN_MIN_PX && next <= SWIPE_TURN_MAX_PX);
+		previous = next;
+	}
+	assert.equal(PHONE, 32);
+	assert.equal(DESKTOP, 56);
 });
 
-test('crossing the turn distance turns the page in that direction (RTL)', () => {
+test('the turn distance is the same in both directions (LTR)', () => {
+	// LTR: forward is a leftward (negative) drag
+	assert.equal(decideSwipe(-PHONE, 0, -1, PHONE), 'forward');
+	assert.equal(decideSwipe(PHONE, 0, -1, PHONE), 'backward');
+	assert.equal(decideSwipe(-(PHONE - 1), 0, -1, PHONE), null);
+});
+
+test('the turn distance mirrors for RTL', () => {
 	// RTL: forward is a rightward (positive) drag
-	assert.equal(decideSwipe(96, 0, 1000, 1), 'forward');
-	assert.equal(decideSwipe(-96, 0, 1000, 1), 'backward');
+	assert.equal(decideSwipe(PHONE, 0, 1, PHONE), 'forward');
+	assert.equal(decideSwipe(-PHONE, 0, 1, PHONE), 'backward');
+	assert.equal(decideSwipe(PHONE - 1, 0, 1, PHONE), null);
 });
 
-test('just short of the turn distance springs back', () => {
-	// Wide viewport: the cap is the threshold, so 95px stays short
-	assert.equal(decideSwipe(-95, 0, 1000, -1), null);
-	assert.equal(decideSwipe(95, 0, 1000, 1), null);
-});
-
-test('the turn distance is capped on wide viewports (double-page, desktop)', () => {
-	// A 1400px spread viewport would demand a 350px drag without the cap
-	assert.equal(decideSwipe(-96, 0, 1400, -1), 'forward');
-	assert.equal(decideSwipe(96, 0, 1400, 1), 'forward');
-});
-
-test('a narrow viewport keeps the quarter as its threshold', () => {
-	// 300px viewport: a quarter (75px) is below the cap and stays the threshold
-	assert.equal(decideSwipe(-75, 0, 300, -1), 'forward');
-	assert.equal(decideSwipe(-74, 0, 300, -1), null);
-});
-
-test('a drag released with forward momentum turns on its projected landing', () => {
-	// 60px is short of the 96px distance, but at 0.4px/ms the projection over
-	// 150ms lands at 120px — a confident swipe never needs the full drag
-	assert.equal(decideSwipe(-60, -0.4, 1000, -1), 'forward');
-	// The same travel released dead springs back
-	assert.equal(decideSwipe(-60, 0, 1000, -1), null);
-});
-
-test('a release already moving back cancels the turn its travel earned', () => {
-	// 120px of forward travel, but the finger reversed before lifting: the
-	// projection falls short and the page springs back
-	assert.equal(decideSwipe(-120, 0.5, 1000, -1), null);
+test('a tablet needs more travel than a phone for the same slow drag', () => {
+	// The drag is 1:1, so the threshold is a share of the page's own travel
+	assert.equal(decideSwipe(-40, 0, -1, PHONE), 'forward');
+	assert.equal(decideSwipe(-40, 0, -1, DESKTOP), null);
+	assert.equal(decideSwipe(-DESKTOP, 0, -1, DESKTOP), 'forward');
 });
 
 test('a fast flick turns with little travel, a slow drag with the same travel does not', () => {
-	// 16px at 0.25px/ms: projection (53.5px) falls short of the distance, the
-	// flick gate carries it
-	assert.equal(decideSwipe(-16, -0.25, 1000, -1), 'forward');
+	// 16px at 0.25px/ms: the flick gate carries it on every screen size
+	assert.equal(decideSwipe(-16, -0.25, -1, DESKTOP), 'forward');
 	// Same travel one notch slower turns nothing
-	assert.equal(decideSwipe(-16, -0.15, 1000, -1), null);
+	assert.equal(decideSwipe(-16, -0.15, -1, DESKTOP), null);
 });
 
 test('a flick still needs minimum travel, and only counts in its own direction', () => {
-	assert.equal(decideSwipe(-15, -0.25, 1000, -1), null);
+	assert.equal(decideSwipe(-15, -0.25, -1, PHONE), null);
 	// Fast but backward: not a forward turn
-	assert.equal(decideSwipe(30, 0.6, 1000, -1), 'backward');
-	assert.equal(decideSwipe(-30, 0.6, 1000, -1), null);
+	assert.equal(decideSwipe(30, 0.6, -1, PHONE), 'backward');
+	assert.equal(decideSwipe(-30, 0.6, -1, PHONE), null);
+});
+
+test('a release that travelled past the distance turns regardless of its speed', () => {
+	// A slow long drag is a deliberate swipe: no projection is needed
+	assert.equal(decideSwipe(-PHONE, 0, -1, PHONE), 'forward');
+	assert.equal(decideSwipe(-120, 0, -1, PHONE), 'forward');
 });
 
 test('degenerate inputs never turn', () => {
-	assert.equal(decideSwipe(0, 0, 1000, -1), null);
-	assert.equal(decideSwipe(-500, 0, 0, -1), null);
-	assert.equal(decideSwipe(-500, 0, -100, -1), null);
+	assert.equal(decideSwipe(0, 0, -1, PHONE), null);
+	assert.equal(decideSwipe(PHONE - 1, 0, -1, PHONE), null);
+	assert.equal(decideSwipe(-(PHONE - 1), 0, 1, PHONE), null);
+});
+
+test('a release can rescue a gesture the axis lock had filed as vertical', () => {
+	// Locked horizontal already: nothing to rescue
+	assert.equal(rescuesHorizontal('x', 60, 40, false, PHONE), true);
+	assert.equal(rescuesHorizontal('x', 5, 40, false, PHONE), true);
+	// Locked vertical with no scroll: only a clearly horizontal travel counts
+	assert.equal(rescuesHorizontal('y', 41, 30, false, PHONE), true);
+	assert.equal(rescuesHorizontal('y', 40, 40, false, PHONE), false);
+	assert.equal(rescuesHorizontal('y', 31, 10, false, PHONE), false);
+	// The rescue follows the same viewport threshold as a normal turn
+	assert.equal(rescuesHorizontal('y', 41, 10, false, DESKTOP), false);
+	assert.equal(rescuesHorizontal('y', 57, 10, false, DESKTOP), true);
+	// The spread scrolled: the browser already used the gesture
+	assert.equal(rescuesHorizontal('y', 100, 10, true, PHONE), false);
+	// No axis yet (the release came before the lock distance)
+	assert.equal(rescuesHorizontal(null, 100, 10, false, PHONE), false);
 });
 
 function steadyDrag(px: number, ms: number) {
@@ -93,10 +129,10 @@ test('stopping before the lift drains the release velocity', () => {
 	const trail = steadyDrag(-60, 100);
 	assert.equal(releaseVelocity(trail, 150), -0.3);
 	assert.equal(releaseVelocity(trail, 300), 0);
-	// The drag kept its 60px, but held still it is no longer a flick or a
-	// projected landing past the turn distance
-	assert.equal(decideSwipe(-60, releaseVelocity(trail, 300), 1000, -1), null);
-	assert.equal(decideSwipe(-60, releaseVelocity(trail, 100), 1000, -1), 'forward');
+	// The drag kept its 60px — past the phone turn distance — but held still it
+	// is no longer a flick
+	assert.equal(decideSwipe(-60, releaseVelocity(trail, 300), -1, PHONE), 'forward');
+	assert.equal(decideSwipe(-16, releaseVelocity(trail, 300), -1, PHONE), null);
 });
 
 test('a trail too short to measure has no velocity', () => {
@@ -114,8 +150,31 @@ const textColumns = readFileSync(new URL('../src/pages/reader/TextColumns.tsx', 
 const css = readFileSync(new URL('../src/pages/reader.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 
 test('a swipe release turns through the shared turn path', () => {
-	assert.match(source, /decideSwipe\(totalDx, velocity, root\.clientWidth, forwardSignRef\.current\)/);
+	// The threshold is measured at the lift against the container in use
+	assert.match(source, /const threshold = swipeTurnThreshold\(root\.clientWidth\);/);
+	assert.match(source, /decideSwipe\(totalDx, velocity, forwardSignRef\.current, threshold\)/);
 	assert.match(source, /turnRef\.current\(decision === 'forward'\);/);
+});
+
+test('the axis lock no longer decides alone: the release rescues a vertical lock', () => {
+	// The commit reads the rescue, and the rescue needs the scroll measured
+	// from the spread the gesture started on
+	assert.match(source, /rescuesHorizontal\(axis, totalDx, totalDy, scrolled, threshold\)/);
+	assert.match(source, /const horizontal = !abandon && rescuesHorizontal\(/);
+	assert.match(source, /\.closest\('\.reader__spread, \.reader-text--cols'\)/);
+	assert.match(source, /Math\.abs\(start\.el\.scrollTop - start\.top\) > 2/);
+});
+
+test('a jittery tap still reaches a tap zone, a real drag never does', () => {
+	// The click is judged by how far the pointer got from where it went down,
+	// not by the length of the path travelled: a thumb that rolls while
+	// tapping ends near where it started and must still click, while a swipe
+	// that left the slop and came back must not (that is how a swipe cancels)
+	assert.match(source, /const TAP_SLOP_PX = 10;/);
+	assert.match(source, /const travel = Math\.hypot\(totalDx, totalDy\);/);
+	assert.match(source, /if \(travel > maxTravel\) maxTravel = travel;/);
+	assert.match(source, /if \(maxTravel > TAP_SLOP_PX \|\| had\) suppressClickRef\.current = true;/);
+	assert.doesNotMatch(source, /moved \+= Math\.abs\(dx\) \+ Math\.abs\(dy\)/);
 });
 
 test('the release velocity comes from a trailing window, not a drag-long average', () => {
