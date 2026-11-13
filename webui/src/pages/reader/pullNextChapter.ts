@@ -9,7 +9,7 @@
  * the crossing event itself, and only counts after the wheel has gone quiet
  * once at the edge, so fling inertia can never be read as an intentional pull.
  */
-export const PULL_THRESHOLD = 160;
+export const PULL_THRESHOLD = 96;
 export const RUBBER_MAX = 240;
 export const WHEEL_ARM_QUIET_MS = 250;
 

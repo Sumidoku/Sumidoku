@@ -74,14 +74,15 @@ test('rubber compresses: 1:1 at the origin, monotonic, bounded by the asymptote'
 		const slopeAtOrigin = (rubber(1) - rubber(0)) / 1;
 		assert.ok(slopeAtOrigin > 0.98, `origin slope ≈ 1, got ${slopeAtOrigin}`);
 		const slopeAtThreshold = rubber(threshold + 1) - rubber(threshold);
-		assert.ok(slopeAtThreshold < 0.45 && slopeAtThreshold > 0.35, `threshold slope ≈ 0.39, got ${slopeAtThreshold}`);
+		assert.ok(slopeAtThreshold < 0.56 && slopeAtThreshold > 0.52, `threshold slope ≈ 0.54, got ${slopeAtThreshold}`);
 		// Monotonic and forever below the 240/0.9 ≈ 267px asymptote
 		for (const raw of [400, 2000, 100000]) {
 			assert.ok(rubber(raw) > rubber(raw - 1));
 			assert.ok(rubber(raw) < 240 / 0.9);
 		}
-		// The hint (≈100px tall) is exactly revealed at the threshold
-		assert.ok(rubber(threshold) > 99 && rubber(threshold) < 101);
+		// At the threshold the content has travelled ≈70.6px — the commit
+		// lands on a drag compressed well below the raw 96px
+		assert.ok(rubber(threshold) > 70.4 && rubber(threshold) < 70.8);
 	});
 });
 
@@ -95,10 +96,10 @@ test('wheel inertia landing at the chapter end is not a pull until the wheel goe
 		assert.deepEqual(probe.triggers, [], 'unarmed wheel deltas never count');
 		// The wheel settles; the user's next scroll is the intentional pull
 		timers.fireQuiet();
-		ctl.feedWheel(100, 0, 800, true);
+		ctl.feedWheel(60, 0, 800, true);
 		assert.deepEqual(probe.triggers, []);
-		ctl.feedWheel(80, 0, 800, true);
-		assert.deepEqual(probe.triggers, [1], '100+80 crosses the 160px threshold once armed');
+		ctl.feedWheel(40, 0, 800, true);
+		assert.deepEqual(probe.triggers, [1], '60+40 crosses the 96px threshold once armed');
 		ctl.dispose();
 	});
 });
@@ -118,8 +119,8 @@ test('a later fling toward the end must go quiet at the edge again before it pul
 		assert.deepEqual(probe.triggers, [], 'the earlier arming must not carry over to a new approach');
 		assert.deepEqual(probe.pulls, []);
 		timers.fireQuiet();
-		ctl.feedWheel(100, 0, 800, true);
-		ctl.feedWheel(80, 0, 800, true);
+		ctl.feedWheel(60, 0, 800, true);
+		ctl.feedWheel(40, 0, 800, true);
 		assert.deepEqual(probe.triggers, [1], 'it pulls once the new fling has gone quiet');
 		ctl.dispose();
 	});
@@ -145,7 +146,7 @@ test('line and page delta modes normalize to pixels', async () => {
 		// A positive edge delta opens the quiet window (it does not count itself)
 		ctl.feedWheel(1, 0, 800, true);
 		timers.fireQuiet();
-		ctl.feedWheel(5, 1, 800, true); // 5 lines × 16px = 80 < 160
+		ctl.feedWheel(5, 1, 800, true); // 5 lines × 16px = 80 < 96
 		assert.deepEqual(probe.triggers, []);
 		ctl.feedWheel(0.1, 2, 800, true); // 0.1 page × 800px = 80 → 160
 		assert.deepEqual(probe.triggers, [1]);
@@ -157,13 +158,13 @@ test('a touch pull commits on release past the threshold, and a partial pull can
 	await withVite(async (vite) => {
 		const { ctl, probe } = await makeCtl(vite, fakeTimers());
 		// Touch needs no arming: momentum scrolling emits no touch events
-		ctl.feedTouch(100, true);
-		ctl.feedTouch(50, true);
-		ctl.releaseTouch();
-		assert.deepEqual(probe.triggers, [], '150px is below the threshold');
-		assert.deepEqual(probe.cancels, [true], 'the partial pull springs back');
-		ctl.feedTouch(100, true);
 		ctl.feedTouch(60, true);
+		ctl.feedTouch(30, true);
+		ctl.releaseTouch();
+		assert.deepEqual(probe.triggers, [], '90px is below the threshold');
+		assert.deepEqual(probe.cancels, [true], 'the partial pull springs back');
+		ctl.feedTouch(60, true);
+		ctl.feedTouch(40, true);
 		ctl.releaseTouch();
 		assert.deepEqual(probe.triggers, [1], 'an armed touch pull commits when the finger lifts');
 		ctl.dispose();
@@ -173,10 +174,10 @@ test('a touch pull commits on release past the threshold, and a partial pull can
 test('sliding back shrinks the pull, and reversing to zero abandons it', async () => {
 	await withVite(async (vite) => {
 		const { ctl, probe } = await makeCtl(vite, fakeTimers());
-		ctl.feedTouch(180, true);
-		assert.equal(ctl.rawPull, 180);
+		ctl.feedTouch(80, true);
+		assert.equal(ctl.rawPull, 80);
 		assert.equal(ctl.feedTouch(-60, true), true, 'the pull still owns the drag while raw > 0');
-		assert.equal(ctl.rawPull, 120);
+		assert.equal(ctl.rawPull, 20);
 		// Back at the start: that move is still consumed (it cancels the pull),
 		// but the raw distance clamps at zero and the next downward drag
 		// returns to native scrolling

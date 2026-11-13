@@ -2287,7 +2287,7 @@ chapter end (`reader/pullNextChapter.ts:PullGestureController`): further input
 in the reading-forward direction past the end accumulates a raw pull distance,
 and the visible offset is that distance compressed by a rubber-band curve
 (`rubber()`, 1:1 at the origin, bounded near 267px), so the content resists
-increasingly and never flies off. Releasing past the 160px threshold opens the
+increasingly and never flies off. Releasing past the 96px threshold opens the
 next chapter — a wheel pull commits on the crossing event itself and only
 counts after the wheel has gone quiet for 250ms at the edge, so fling inertia
 can never be read as a pull; a touch/pointer pull commits when the finger
