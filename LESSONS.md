@@ -6,6 +6,18 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A pull threshold is a raw distance fed into the rubber-band curve, so
+lowering it shortens the commit trigger and the visible travel at the same
+time.** Recompute the mapped offset when tuning `PULL_THRESHOLD`; a test or
+comment that pins the visible reveal at commit ("the hint is exactly
+revealed") encodes that coupling and has to be re-derived, not adjusted
+until green.
+- Evidence: 2026-11-13, #653: dropping `PULL_THRESHOLD` from 160 to 96 left
+  `rubber()` untouched, so the commit travel fell from about 100px to about
+  70.6px and the slope at the threshold rose from about 0.39 to about 0.54;
+  the old "hint ≈100px exactly revealed" assert became false, and
+  `reader-pull-next.test.ts` now pins `rubber(96)` in 70.4-70.8.
+
 **A green Windows build on a compile cache says nothing about the compiler
 spawn.** A compiler-cache wrapper (sccache/kache) starts the compiler itself,
 so the build tool's own guard against an oversized command line never runs: on
