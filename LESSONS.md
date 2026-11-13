@@ -6,6 +6,24 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A green Windows build on a compile cache says nothing about the compiler
+spawn.** A compiler-cache wrapper (sccache/kache) starts the compiler itself,
+so the build tool's own guard against an oversized command line never runs: on
+Windows the argument list dies at `CreateProcess`' 32 767-character limit with
+`os error 206` the first time a crate's cache entry is cold. A job that has
+never compiled a crate from scratch is unproven, whether or not it is green;
+where the line can get that long, run the build without the wrapper and let the
+build tool put the arguments in a response file.
+- Evidence: 2026-11-13, #650's 1.23.2 version bump invalidated
+  `sumidoku-server`'s cache entry. Its rustc line carried 412 `-L dependency=`
+  entries (~41 KB, 41 559 characters) and the Windows job failed three times,
+  always on that crate (0 hits/495 misses, then 441/53 once the cache was
+  readable again). Main's 1.23.1 bump had passed the same job with 419 hits/78
+  misses — on cache, not by compiling. #651 drops `RUSTC_WRAPPER` from the
+  Windows ci and release builds and compiled the whole workspace cold in
+  10m 53s; the Rust toolchain reads `@argfile` since 1.61, but only the process
+  that spawns rustc writes one.
+
 **A velocity projection on top of a flick gate counts the same signal twice.**
 The flick gate already answers the quick release from the last ~100ms of
 movement with a minimum travel. Extending the drag by a projection of that
