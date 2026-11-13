@@ -121,12 +121,22 @@ jobs:
         with:
           tool: cross
       - uses: mozilla-actions/sccache-action@v0.0.11
-        if: matrix.builder == 'cargo'
+        if: matrix.builder == 'cargo' && runner.os != 'Windows'
       - name: Build (cross)
         if: matrix.builder == 'cross'
         run: cross build --release --target ${{ matrix.target }} -p sumidoku-server
+      # sccache spawns rustc itself, so cargo's response-file fallback for
+      # an oversized command line never applies. The Windows rustc line for
+      # sumidoku-server carries one -L per dependency and passes the
+      # CreateProcess limit, so a cache miss fails with `os error 206`;
+      # cargo alone writes those arguments to a response file instead
+      - name: Build (cargo, no wrapper)
+        if: matrix.builder == 'cargo' && runner.os == 'Windows'
+        run: cargo build --release --target ${{ matrix.target }} -p sumidoku-server
+        env:
+          CARGO_INCREMENTAL: "0"
       - name: Build (cargo)
-        if: matrix.builder == 'cargo'
+        if: matrix.builder == 'cargo' && runner.os != 'Windows'
         run: cargo build --release --target ${{ matrix.target }} -p sumidoku-server
         env:
           RUSTC_WRAPPER: sccache
