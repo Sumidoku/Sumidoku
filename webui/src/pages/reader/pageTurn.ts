@@ -1,15 +1,14 @@
 export type PageTurnStyle = 'slide' | 'fade';
 
 /**
- * How long the outgoing page stays on top while the target page is still
- * loading. Long enough to cover a normal page load, short enough that a
- * failed image does not look like a stuck gesture.
+ * How long an ordinary turn waits before showing a loading indicator over the
+ * outgoing page. The page itself stays until the target is decoded or failed.
  */
 export const TURN_HOLD_MS = 500;
 
 /**
- * A crossfade holds for less: the target page paints underneath from the
- * first frame, so the hold only has to hide the seam.
+ * A crossfade waits for less: the target page already paints underneath, so a
+ * slow load should become visible to the reader sooner.
  */
 export const TURN_HOLD_FADE_MS = 250;
 
@@ -34,6 +33,14 @@ export function crossfadeEnabled(style: PageTurnStyle, animated: boolean, split:
 
 export function shouldRevealTurn(shownPage: number, targetPage: number, ready: boolean, split: boolean): boolean {
 	return shownPage === targetPage || ready || split;
+}
+
+/** Only adjacent turns slide. Opening alignment and multi-spread jumps move
+ * directly to the target instead of sweeping through unloaded middle pages.
+ * Same-position renders keep transitions enabled for boundary pages and
+ * gesture spring-back. */
+export function shouldAnimateSpread(painted: boolean, shownPage: number, targetPage: number): boolean {
+	return painted && Math.abs(shownPage - targetPage) <= 1;
 }
 
 /**

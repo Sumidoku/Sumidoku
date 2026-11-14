@@ -116,6 +116,22 @@
 	transition: transform 200ms cubic-bezier(0.25, 0.9, 0.35, 1);
 }
 
+/* Opening alignment and multi-page jumps must not sweep through the middle
+   spreads. This modifier applies only to the position-changing commit, so
+   boundary turns and gesture spring-back keep their ordinary transition. */
+.reader__paged[data-anim='true'] .reader__track.reader__track--instant {
+	transition: none;
+}
+
+.reader__turn-loading {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	display: grid;
+	place-items: center;
+	pointer-events: none;
+}
+
 /* Fade turns stack the spreads: the target paints under the outgoing page, so
    the canvas never flashes between them */
 .reader__track--fade {
@@ -141,6 +157,9 @@
 .reader__track--fade .reader__spread--current {
 	z-index: 1;
 	opacity: 1;
+	/* The target is the opaque backdrop from the first frame. Fading it in
+	   under the outgoing page would expose the canvas halfway through. */
+	transition: none;
 }
 
 /* The target paints under the outgoing page from the first frame, so a fade
