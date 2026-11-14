@@ -6,6 +6,17 @@ went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
 [docs/code-standards.md](docs/code-standards.md).
 
+**A crossfade keeps its target fully opaque; only the outgoing layer fades.**
+Fading the target in underneath the outgoing layer does not sum the two
+opacities: the outgoing layer masks the target, so the canvas shows through
+in the middle of the turn. Paint the decoded target at opacity 1 from the
+first frame and animate only the outgoing layer's opacity.
+- Evidence: 2026-11-14, a reader fade turn sampled at 80ms had the outgoing
+  page at 0.59 and the target underneath at 0.46, leaving the target's
+  effective opacity near 0.27 and visibly flashing the black canvas. Keeping
+  the target at 1 throughout removed the dip in desktop and 390x844 browser
+  checks; `reader-page-turn.test.ts` pins the CSS rule.
+
 **A pull threshold is a raw distance fed into the rubber-band curve, so
 lowering it shortens the commit trigger and the visible travel at the same
 time.** Recompute the mapped offset when tuning `PULL_THRESHOLD`; a test or

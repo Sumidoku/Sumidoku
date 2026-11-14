@@ -81,7 +81,7 @@ import { decideSwipe, releaseVelocity, rescuesHorizontal, swipeTurnThreshold, SW
 import { ReaderPager } from './reader/ReaderPager';
 import { continuousImageStyle, continuousPageStyle, parseContinuousScale, readBoundedNumber } from './reader/continuousPrefs';
 import type { ContinuousScale } from './reader/continuousPrefs';
-import { crossfadeEnabled, fadeProgress, parsePageTurn, shouldRevealTurn, TURN_HOLD_FADE_MS, TURN_HOLD_MS } from './reader/pageTurn';
+import { crossfadeEnabled, fadeProgress, parsePageTurn, shouldAnimateSpread, shouldRevealTurn, TURN_HOLD_FADE_MS, TURN_HOLD_MS } from './reader/pageTurn';
 import type { PageTurnStyle } from './reader/pageTurn';
 import { buildFilterString, DEFAULT_FILTERS, parseFilters } from './reader/filters';
 import type { ReaderFilters } from './reader/filters';
@@ -367,6 +367,10 @@ function ReaderCore({
 	const navEnabled = mangaId !== null;
 	const mangaQuery = useManga(mangaId ?? 0, { enabled: navEnabled, silent: true });
 	const chaptersQuery = useMangaChapters(mangaId ?? 0, { enabled: navEnabled, silent: true });
+	// Chapter navigation data readiness gates both the start-page restore and
+	// the gestures: neither may act before the chapter list and manga metadata
+	// are in place. Keeping the loading canvas up also avoids flashing page one.
+	const navReady = !navEnabled || (chaptersQuery.isFetched && mangaQuery.isFetched);
 	// The raw list is kept for chapter titles/resume progress; the sorted/filtered list only drives prev/next-chapter navigation
 	const rawChapters = useMemo(() => chaptersQuery.data ?? [], [chaptersQuery.data]);
 	const prefs = useMemo(() => (mangaId !== null ? loadPrefs(mangaId) : DEFAULT_PREFS), [mangaId]);
@@ -467,6 +471,7 @@ function ReaderCore({
 	const initedRef = useRef(false);
 	const contRef = useRef<HTMLDivElement>(null);
 	const pagedRef = useRef<HTMLDivElement>(null);
+	const trackRef = useRef<HTMLDivElement>(null);
 	const contentResizeRef = useRef<() => void>(() => {});
 
 	// In paged mode a text page is split into viewport-wide columns, col being the current one; textLayout is the measured column width/gap/count
@@ -549,6 +554,27 @@ function ReaderCore({
 		setReadyPages((prev) => (prev.has(src) ? prev : new Set(prev).add(src)));
 	}, []);
 	const [shownSpread, setShownSpread] = useState(curSpreadIdx);
+	// The virtual transition slots share the track's motion. Keep the previous
+	// painted position so a multi-page jump can be instant without disabling
+	// later boundary turns or gesture spring-back.
+	const trackSpread = pendingTurn === 'next' && spreads !== null ? spreads.length : pendingTurn === 'prev' ? -1 : shownSpread;
+	const previousTrackSpreadRef = useRef(trackSpread);
+	const trackPaintedRef = useRef(false);
+	const animateSpread = shouldAnimateSpread(trackPaintedRef.current, previousTrackSpreadRef.current, trackSpread);
+	useLayoutEffect(() => {
+		previousTrackSpreadRef.current = trackSpread;
+	}, [trackSpread]);
+	useEffect(() => {
+		if (pages && navReady && initedRef.current) trackPaintedRef.current = true;
+	}, [pages, navReady]);
+	useEffect(() => {
+		if (animateSpread) return;
+		// React would otherwise leave the instant modifier in place until some
+		// unrelated render. Restore it once this position has painted so a
+		// cancelled swipe immediately after a jump still springs back smoothly.
+		const frame = requestAnimationFrame(() => trackRef.current?.classList.remove('reader__track--instant'));
+		return () => cancelAnimationFrame(frame);
+	}, [animateSpread, trackSpread]);
 	const crossfade = crossfadeEnabled(pageTurn, anim, splitOn);
 	const turnHoldMs = crossfade ? TURN_HOLD_FADE_MS : TURN_HOLD_MS;
 	// A crossfade drag owns one spare layer: the spread the finger is pulling
@@ -587,11 +613,15 @@ function ReaderCore({
 	}
 	const targetReady = curSpread !== null && spreadReady(curSpread);
 	if (shownSpread !== curSpreadIdx && shouldRevealTurn(shownSpread, curSpreadIdx, targetReady, splitOn)) setShownSpread(curSpreadIdx);
+	const [turnWaiting, setTurnWaiting] = useState(false);
 	useEffect(() => {
-		if (shownSpread === curSpreadIdx) return;
-		const timer = window.setTimeout(() => setShownSpread(curSpreadIdx), turnHoldMs);
+		setTurnWaiting(false);
+		if (shownSpread === curSpreadIdx || splitOn) return;
+		// A slow target gets feedback over the stable outgoing page. Revealing on
+		// timeout would paint a blank/loading spread and then flash the image in.
+		const timer = window.setTimeout(() => setTurnWaiting(true), turnHoldMs);
 		return () => window.clearTimeout(timer);
-	}, [shownSpread, curSpreadIdx, turnHoldMs]);
+	}, [shownSpread, curSpreadIdx, splitOn, turnHoldMs]);
 	// After a committed fade lands, drop the drag layer: the new spread is
 	// current, the old one fades out from where the finger left it, and the
 	// progress variable is only read while a spread is --outgoing
@@ -991,11 +1021,6 @@ function ReaderCore({
 	}, [mode, pages]);
 	useEffect(() => () => wheelCtlRef.current?.dispose(), []);
 
-	// Chapter navigation data readiness gates both the start-page restore and
-	// the pull gesture: neither may act before the chapter list and the manga's
-	// viewer metadata are in place
-	const navReady = !navEnabled || (chaptersQuery.isFetched && mangaQuery.isFetched);
-
 	// Pull-to-next-chapter (all modes): at the chapter end, further input in the
 	// reading-forward direction pulls the content with a rubber-band damping
 	// curve; releasing past the threshold opens the next chapter, sliding back
@@ -1013,7 +1038,6 @@ function ReaderCore({
 	const [pullArmed, setPullArmed] = useState(false);
 	const pullFooterRef = useRef<HTMLDivElement>(null);
 	const pagedHintRef = useRef<HTMLDivElement>(null);
-	const trackRef = useRef<HTMLDivElement>(null);
 	const touchPullRef = useRef<{ y: number } | null>(null);
 	const suppressClickRef = useRef(false);
 	// Render-scope values the long-lived listeners read through refs
@@ -1676,6 +1700,9 @@ function ReaderCore({
 			Math.max(pages.length - 1, 0)
 		);
 		setIdx(initial);
+		// The opening page is an alignment, not a turn from spread zero. Aligning
+		// here also keeps a slow resume/deep-link image from flashing page one.
+		setShownSpread(spreadIndexOf(spreads ?? [], initial));
 		setFurthest(initial);
 		setCol(0);
 		setCur(initial);
@@ -1857,7 +1884,7 @@ function ReaderCore({
 	const filterString = buildFilterString(filters);
 	const rootStyle = (filterString ? { '--reader-filter': filterString } : undefined) as CSSProperties | undefined;
 
-	if (pagesQuery.isPending) {
+	if (pagesQuery.isPending || !navReady) {
 		return (
 			<div className={rootCls('reader--msg')}>
 				<Spinner />
@@ -1918,7 +1945,7 @@ function ReaderCore({
 							// Spreads form one sliding track: a turn translates the track by a
 							// whole viewport instead of swapping the current page in place
 							<div
-								className={crossfade ? 'reader__track reader__track--fade' : 'reader__track'}
+								className={`${crossfade ? 'reader__track reader__track--fade' : 'reader__track'}${!crossfade && !animateSpread ? ' reader__track--instant' : ''}`}
 								ref={trackRef}
 								style={{
 									direction: dir,
@@ -2151,6 +2178,11 @@ function ReaderCore({
 							</div>
 						)}
 					</div>
+					{turnWaiting && shownSpread !== curSpreadIdx && (
+						<div className="reader__turn-loading">
+							<Spinner />
+						</div>
+					)}
 					{tapZones !== 'off' && (
 						<>
 							<button

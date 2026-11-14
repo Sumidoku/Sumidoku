@@ -2258,9 +2258,13 @@ instead of sliding the track, capped at a quarter while the target image has
 not decoded, and the commit completes the fade before the page changes.
 Wide-page splitting always
 slides. Page turns hold the outgoing spread until every target image has decoded
-or failed, for at most 500ms — 250ms under fade, where the target already sits
-underneath; the held spread stays mounted while waiting, so a
-slow image cannot blank the canvas or skip ahead through repeated decode waits.
+or failed; after 500ms — 250ms under fade, where the target already sits
+underneath — a loading indicator appears over the held spread instead of
+revealing an unfinished target. The held spread stays mounted while waiting, so
+a slow image cannot blank the canvas or skip ahead through repeated decode waits.
+Opening alignment and non-adjacent slider jumps position the track instantly;
+only adjacent spread changes slide, so a distant jump never sweeps through
+unloaded middle pages.
 In continuous/webtoon mode `sumidoku.reader.continuousScale` chooses fit-width
 or original measured width, `sumidoku.reader.continuousPadding` sets side
 padding (0–40%), and `sumidoku.reader.continuousGap` sets page spacing (0–40px).

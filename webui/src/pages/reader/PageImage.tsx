@@ -100,17 +100,19 @@ export function PageImage({
 		let active = true;
 		const image = imageRef.current;
 		if (!image || typeof image.decode !== 'function') {
-			readyCallbackRef.current?.(effectiveSrc);
+			readyCallbackRef.current?.(src);
 			return;
 		}
 		void image.decode().catch(() => {}).then(() => {
 			if (!readyCallbackRef.current) return;
-			if (active) readyCallbackRef.current?.(effectiveSrc);
+			// The reader keys readiness by the stable page URL. A successful
+			// cache-busted retry is the same page becoming ready.
+			if (active) readyCallbackRef.current?.(src);
 		});
 		return () => {
 			active = false;
 		};
-	}, [effectiveSrc, failed, loadedSrc]);
+	}, [effectiveSrc, failed, loadedSrc, src]);
 	useEffect(() => {
 		if (failed) failedCallbackRef.current?.();
 	}, [failed]);
