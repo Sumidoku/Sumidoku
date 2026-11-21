@@ -648,8 +648,9 @@ const TERMINAL_TASK_STATUSES: Task['status'][] = ['done', 'failed', 'cancelled']
 /**
  * Single owner of task-event-driven invalidation (subscribed once from AppLayout): every task event refreshes
  * the task list; a terminal local_scan/local_analyze refreshes everything the scan may have changed (library,
- * manga/chapter details, source browse/search caches and the trash), a terminal empty_trash refreshes the
- * trash and the manga views
+ * manga/chapter details, that local instance's browse/search caches and the trash), a terminal empty_trash
+ * refreshes the trash and the manga views. Remote and aggregate searches never refetch from a background event:
+ * their next request belongs to an explicit submission.
  */
 export function subscribeTaskEvents(qc: QueryClient): () => void {
 	return sse.on('task', (data) => {
@@ -659,8 +660,11 @@ export function subscribeTaskEvents(qc: QueryClient): () => void {
 		if (task.kind === 'local_scan' || task.kind === 'local_analyze') {
 			void qc.invalidateQueries({ queryKey: qk.library });
 			void qc.invalidateQueries({ queryKey: ['manga'] });
-			void qc.invalidateQueries({ queryKey: ['sources'] });
-			void qc.invalidateQueries({ queryKey: ['global-search'] });
+			if (task.sourceId !== null) {
+				void qc.invalidateQueries({ queryKey: ['sources', task.sourceId, 'search'] });
+				void qc.invalidateQueries({ queryKey: ['sources', task.sourceId, 'listing'] });
+				void qc.invalidateQueries({ queryKey: ['sources', task.sourceId, 'home'] });
+			}
 			void qc.invalidateQueries({ queryKey: qk.localTrash });
 		} else if (task.kind === 'empty_trash') {
 			void qc.invalidateQueries({ queryKey: qk.localTrash });
