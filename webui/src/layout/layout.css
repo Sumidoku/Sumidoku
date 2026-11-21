@@ -42,39 +42,18 @@
 }
 
 .tabbar__item {
-	position: relative;
 	flex: 1;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
 	gap: 2px;
-	color: var(--text-faint);
-	transition: color var(--t);
-}
-
-/* The active pill sits behind the 20px icon (icon center is 21px from the top of the 56px bar)
-   and grows from nothing, so switching tabs reads as the pill jumping to the new icon */
-.tabbar__item::before {
-	content: '';
-	position: absolute;
-	top: 7px;
-	left: 50%;
-	width: 50px;
-	height: 28px;
-	margin-left: -25px;
+	margin: 6px 4px;
 	border-radius: 999px;
-	background: var(--accent-soft);
-	opacity: 0;
-	transform: scaleX(0.4);
+	color: var(--text-faint);
 	transition:
-		opacity var(--t),
-		transform var(--t-slow) var(--ease-spring);
-}
-
-.tabbar__item svg,
-.tabbar__label {
-	position: relative;
+		background var(--t),
+		color var(--t);
 }
 
 .tabbar__item svg {
@@ -91,13 +70,9 @@
 }
 
 .tabbar__item--active {
+	background: var(--accent-soft);
 	color: var(--accent);
 	font-weight: 600;
-}
-
-.tabbar__item--active::before {
-	opacity: 1;
-	transform: none;
 }
 
 .app__content {
@@ -183,7 +158,6 @@
 	}
 
 	.side-nav__item {
-		position: relative;
 		display: flex;
 		align-items: center;
 		gap: 11px;
@@ -195,24 +169,6 @@
 		transition:
 			background var(--t),
 			color var(--t);
-	}
-
-	/* Active marker: a short accent bar on the leading edge that grows in from its center */
-	.side-nav__item::before {
-		content: '';
-		position: absolute;
-		left: 0;
-		top: 50%;
-		width: 3px;
-		height: 18px;
-		margin-top: -9px;
-		border-radius: 999px;
-		background: var(--accent);
-		opacity: 0;
-		transform: scaleY(0.2);
-		transition:
-			opacity var(--t),
-			transform var(--t-slow) var(--ease-spring);
 	}
 
 	.side-nav__item svg {
@@ -233,11 +189,6 @@
 		background: var(--accent-soft);
 		color: var(--accent);
 		font-weight: 600;
-	}
-
-	.side-nav__item--active::before {
-		opacity: 1;
-		transform: none;
 	}
 
 	.side-nav__group-trigger {

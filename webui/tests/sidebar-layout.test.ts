@@ -109,6 +109,17 @@ test('sidebar preference round-trips and rejects unknown values', () => {
 	}
 });
 
+test('navigation selection uses a full tab pill and no decorative sidebar marker', () => {
+	const css = readFileSync(new URL('../src/layout/layout.css', import.meta.url), 'utf8');
+	assert.doesNotMatch(css, /\.side-nav__item::before/);
+	assert.doesNotMatch(css, /\.side-nav__item--active::before/);
+	assert.doesNotMatch(css, /\.tabbar__item::before/);
+	assert.doesNotMatch(css, /\.tabbar__item--active::before/);
+	assert.match(css, /\.side-nav__item--active,[\s\S]*?background:\s*var\(--accent-soft\);/);
+	assert.match(css, /\.tabbar__item\s*\{[^}]*margin:\s*6px 4px;[^}]*border-radius:\s*999px;/);
+	assert.match(css, /\.tabbar__item--active\s*\{[^}]*background:\s*var\(--accent-soft\);[^}]*color:\s*var\(--accent\);/);
+});
+
 test('collapsing keeps the sidebar toggle at the same spot', async () => {
 	const css = readFileSync(new URL('../src/layout/layout.css', import.meta.url), 'utf8');
 	const rule = (selector: string) =>
