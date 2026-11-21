@@ -224,6 +224,11 @@ impl SourceHandle {
 		let start = std::time::Instant::now();
 		if tx
 			.send(Cmd::Job(Box::new(move |instance| {
+				// Cancelling the caller also cancels work still waiting in the actor queue. A job already
+				// executing cannot be preempted, but a disconnected search must not run every queued call.
+				if reply_tx.is_closed() {
+					return;
+				}
 				let _ = reply_tx.send(job(instance));
 			})))
 			.await
@@ -491,5 +496,89 @@ impl SourceHandle {
 
 	pub async fn process_cover_image(&self, input: crate::source::ProcessImageInput) -> Result<Vec<u8>> {
 		self.call("process_cover_image", move |i| i.process_cover_image(input)).await
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{DirectPolicy, NoopCookieSink, NoopDefaultsSink, StdoutLogger};
+	use std::path::PathBuf;
+
+	fn test_config() -> SourceConfig {
+		SourceConfig {
+			key: "en.example".into(),
+			wasm_path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+				.join("tests/fixtures/example/main.wasm"),
+			limits: Default::default(),
+			defaults: HashMap::new(),
+			sink: Arc::new(NoopDefaultsSink),
+			cookies: HashMap::new(),
+			cookie_sink: Arc::new(NoopCookieSink),
+			policy: Arc::new(DirectPolicy { user_agent: None }),
+			logger: Arc::new(StdoutLogger),
+			accept_language: crate::DEFAULT_ACCEPT_LANGUAGE.to_string(),
+			browser_trawl: None,
+		}
+	}
+
+	#[tokio::test]
+	async fn a_cancelled_call_is_skipped_when_the_actor_reaches_it() {
+		let (handle, _) = SourceHandle::spawn(test_config(), Arc::new(Semaphore::new(8)))
+			.await
+			.expect("spawn source");
+		let handle = Arc::new(handle);
+		let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+		let (release_tx, release_rx) = std::sync::mpsc::channel();
+		let blocker = tokio::spawn({
+			let handle = handle.clone();
+			async move {
+				handle
+					.call("test_blocker", move |_| {
+						let _ = started_tx.send(());
+						release_rx.recv().expect("release blocker");
+						Ok(())
+					})
+					.await
+			}
+		});
+		started_rx.recv().await.expect("blocker started");
+
+		let cancelled_ran = Arc::new(AtomicBool::new(false));
+		let cancelled = tokio::spawn({
+			let handle = handle.clone();
+			let cancelled_ran = cancelled_ran.clone();
+			async move {
+				handle
+					.call("test_cancelled", move |_| {
+						cancelled_ran.store(true, Ordering::SeqCst);
+						Ok(())
+					})
+					.await
+			}
+		});
+		for _ in 0..100 {
+			let queued = {
+				let inner = handle.inner.read().expect("inner lock");
+				inner.tx.max_capacity() - inner.tx.capacity()
+			};
+			if queued == 1 {
+				break;
+			}
+			tokio::task::yield_now().await;
+		}
+		let queued = {
+			let inner = handle.inner.read().expect("inner lock");
+			inner.tx.max_capacity() - inner.tx.capacity()
+		};
+		assert_eq!(queued, 1, "cancelled job is queued");
+		cancelled.abort();
+		let _ = cancelled.await;
+		release_tx.send(()).expect("release blocker");
+		blocker.await.expect("blocker join").expect("blocker call");
+
+		// The sentinel runs after every previously queued job, proving whether the cancelled closure ran.
+		handle.call("test_sentinel", |_| Ok(())).await.expect("sentinel");
+		assert!(!cancelled_ran.load(Ordering::SeqCst), "cancelled actor job executed");
 	}
 }

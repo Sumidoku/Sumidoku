@@ -1,6 +1,7 @@
 //! Cross-source aggregate search: runs the single-source search concurrently for every source in the request; a
 //! single source's failure only lands in that source's error entry and never sinks the whole request. With NDJSON,
-//! each source emits one source/sourceError event in completion order, and the terminal payload equals the buffered response
+//! each source emits one source/sourceError event in completion order, and the terminal payload equals the buffered response.
+//! Closing the stream aborts all unresolved source tasks instead of leaving a detached queue after the client is gone
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
@@ -79,8 +80,21 @@ pub(crate) async fn run_global_search(
 		task_index.insert(handle.id(), index);
 	}
 	let mut results: Vec<Option<Value>> = ids.iter().map(|_| None).collect();
-	let mut events = events;
-	while let Some(joined) = tasks.join_next_with_id().await {
+	loop {
+		let joined = match events {
+			Some(tx) => tokio::select! {
+				joined = tasks.join_next_with_id() => joined,
+				_ = tx.closed() => {
+					tasks.abort_all();
+					while tasks.join_next().await.is_some() {}
+					return Vec::new();
+				}
+			},
+			None => tasks.join_next_with_id().await,
+		};
+		let Some(joined) = joined else {
+			break;
+		};
 		let (index, entry) = match joined {
 			Ok((_, pair)) => pair,
 			Err(e) => {
@@ -94,9 +108,12 @@ pub(crate) async fn run_global_search(
 				Some(error) => json!({"type": "sourceError", "sourceId": ids[index], "error": error}),
 				None => json!({"type": "source", "source": entry}),
 			};
-			// Stop sending once the client disconnects; tasks still run to completion and results are discarded, same convention as the existing streaming endpoints
+			// A disconnected client cannot use any more results. Abort the per-request semaphore queue and
+			// every unresolved source call instead of leaving an invisible backlog behind a closed stream.
 			if !partial::send_line(tx, &event) {
-				events = None;
+				tasks.abort_all();
+				while tasks.join_next().await.is_some() {}
+				return Vec::new();
 			}
 		}
 		results[index] = Some(entry);
@@ -124,6 +141,8 @@ async fn search_one(state: &Arc<AppState>, source_id: i64, query: Option<String>
 		}
 		let handle = state.get_handle(source_id).await?;
 		let result = handle.get_search_manga_list(query, page, Vec::new()).await?;
+		#[cfg(test)]
+		TEST_FINISHED_SOURCE_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 		let entries = super::attach_internal_ids(state, source_id, result.entries).await?;
 		Ok((entries, result.has_next_page, false))
 	}
@@ -152,4 +171,92 @@ fn error_entry(source_id: i64, code: &str, message: &str) -> Value {
 		"hasNextPage": false,
 		"error": {"code": code, "message": message},
 	})
+}
+
+#[cfg(test)]
+static TEST_FINISHED_SOURCE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+	use std::{path::PathBuf, time::Duration};
+
+	async fn test_state(tmp: &tempfile::TempDir) -> (Arc<AppState>, Vec<i64>) {
+		let sources_dir = tmp.path().join("sources");
+		for (index, key) in ["en.example-a", "en.example-b", "en.example-c"].into_iter().enumerate() {
+			let dir = sources_dir.join(key);
+			std::fs::create_dir_all(&dir).expect("source directory");
+			std::fs::copy(
+				PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wasm/tests/fixtures/example/main.wasm"),
+				dir.join("main.wasm"),
+			)
+			.expect("fixture wasm");
+			let doc = json!({"info": {"id": key, "name": format!("Example {index}"), "version": 1, "languages": ["en"]}});
+			std::fs::write(dir.join("source.json"), doc.to_string()).expect("source manifest");
+		}
+		let config = crate::config::Config {
+			database_url: format!("sqlite://{}/test.db?mode=rwc", tmp.path().display()),
+			config_dir: tmp.path().to_path_buf(),
+			call_concurrency: 1,
+			..crate::config::Config::default()
+		};
+		let pool = crate::db::create_pool(&config.database_url).await.expect("pool");
+		let (defaults_tx, _defaults_rx) = mpsc::unbounded_channel();
+		let (cookie_tx, _cookie_rx) = mpsc::unbounded_channel();
+		let state = AppState::new(pool, config, defaults_tx, cookie_tx);
+		assert!(state.tasks.set(crate::task::TaskManager::new(&state)).is_ok());
+		crate::source::scan_sources_dir(&state, &sources_dir).await.expect("scan sources");
+		let local = crate::internal::local::register_instance(
+			&state,
+			"Local",
+			&[tmp.path().to_string_lossy().into_owned()],
+			None,
+			None,
+			None,
+			None,
+			None,
+		)
+		.await
+		.expect("local source");
+		let mut ids = vec![local.id];
+		let mut remote = sqlx::query_scalar("SELECT id FROM source WHERE kind = 'aidoku' ORDER BY key")
+			.fetch_all(&state.pool)
+			.await
+			.expect("remote ids");
+		ids.append(&mut remote);
+		(state, ids)
+	}
+
+	#[tokio::test]
+	async fn disconnect_aborts_sources_still_queued_behind_the_call_limit() {
+		let tmp = tempfile::tempdir().expect("tempdir");
+		let (state, ids) = test_state(&tmp).await;
+		TEST_FINISHED_SOURCE_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+		let permit = state.call_semaphore.clone().acquire_owned().await.expect("call permit");
+		let (tx, mut rx) = mpsc::unbounded_channel();
+		let run = tokio::spawn({
+			let state = state.clone();
+			let ids = ids.clone();
+			async move { run_global_search(&state, &ids, None, 1, Some(&tx)).await }
+		});
+		let first = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+			.await
+			.expect("first local event timeout")
+			.expect("first local event");
+		let first: Value = serde_json::from_slice(&first).expect("local event json");
+		assert_eq!(first["type"], "source");
+		assert_eq!(first["source"]["sourceId"], ids[0]);
+
+		// The local event is already delivered. Dropping the body wakes the disconnect branch immediately;
+		// no remote source may start once the single global permit becomes available.
+		drop(rx);
+		drop(permit);
+		let result = tokio::time::timeout(Duration::from_secs(5), run)
+			.await
+			.expect("aggregate join timeout")
+			.expect("aggregate join");
+		assert!(result.is_empty(), "a disconnected request has no terminal payload");
+		assert_eq!(TEST_FINISHED_SOURCE_CALLS.load(std::sync::atomic::Ordering::SeqCst), 0);
+	}
 }

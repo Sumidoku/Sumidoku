@@ -297,7 +297,12 @@ no alias is derived from migration text.
   in completion order, then a final event whose payload is the same JSON
   value as the buffered response. The per-source failure type is
   `sourceError`, not `error`, because the streaming client treats
-  `{"type":"error"}` as the terminal failure of the whole request. The
+  `{"type":"error"}` as the terminal failure of the whole request. Closing
+  the stream aborts the remaining per-source tasks immediately; a WASM call
+  whose caller was cancelled is skipped when the actor dequeues it, so only
+  an already executing source call may finish after disconnect. Local task
+  events refresh only the affected local instance's views, never active
+  remote or aggregate searches: those require explicit submission. The
   browse page's search view (`webui/src/pages/browse/SearchPanel.tsx`) renders
   each arriving section as a horizontal cover scroller and offers tri-state
   (include/exclude) content-rating / language / source filters persisted
