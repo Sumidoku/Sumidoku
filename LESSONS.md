@@ -1,6 +1,22 @@
 <!-- reviewed-through: f4f4a3d (2026-10-30) -->
 # Lessons from merged work
 
+**Background cache invalidation must not restart explicit remote work, and
+cancellation must reach both the async queue and the actor queue.** A broad
+`invalidateQueries` on a task event refetches every active observer, including
+remote searches that the user did not resubmit. Scope task refreshes to the
+local data the task can change. On the server, stop unresolved request tasks
+when the stream closes and check the reply channel before running each queued
+actor job; aborting only the HTTP future leaves already queued source calls
+executing.
+- Evidence: 2026-11-20, repeated task events and SSE reconnects produced 3,428
+  aggregate searches in about six minutes, leaving hours of queued source
+  calls after the short client streams had closed. A controlled 12-event
+  fixture reproduced the same 3:1:1 tasks/sources/search request ratio.
+  `task-events.test.ts`, `disconnect_aborts_sources_still_queued_behind_the_call_limit`,
+  and `a_cancelled_call_is_skipped_when_the_actor_reaches_it` failed before
+  the scoped-invalidation and two-layer cancellation fixes and pass after them.
+
 Sumidoku's code is written, reviewed and released by agent sessions. What
 went wrong is kept here as a rule, then why, then the evidence. Read this
 before changing code. A lesson seen again on a later day moves into
