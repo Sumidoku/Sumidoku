@@ -91,16 +91,23 @@
 	color: var(--danger);
 }
 
-/* One small line under the categories: pills out-specify .chip--clickable's 36px touch height */
-.library__active {
+/* Categories and active filters stay separate rows on desktop; the clear action aligns with the latter. */
+.library__filter-summary {
 	display: flex;
-	align-items: flex-start;
+	align-items: flex-end;
 	gap: 8px;
+}
+
+.library__filter-summary-scroll {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	gap: 12px;
+	min-width: 0;
 }
 
 .library__active-filters {
 	display: flex;
-	flex: 1;
 	flex-wrap: wrap;
 	gap: 6px;
 	min-width: 0;
@@ -200,69 +207,97 @@
 
 @media (max-width: 767px) {
 	.library__toolbar {
-		gap: 10px;
-		margin-bottom: 16px;
+		gap: 8px;
+		margin-bottom: 14px;
 	}
 
 	.library__primary {
-		flex-direction: column;
-		align-items: stretch;
-		gap: 10px;
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
 	}
 
 	.library__search {
-		width: 100%;
+		width: auto;
 	}
 
 	.library__actions {
-		width: 100%;
+		width: auto;
 	}
 
 	.library__filter-toggle {
-		flex: 1;
+		position: relative;
+		flex: none;
 		justify-content: center;
-		min-width: 0;
+		width: 42px;
+		min-width: 42px;
+		padding-inline: 0;
+	}
+
+	.library__filter-label {
+		display: none;
+	}
+
+	.library__filter-count {
+		position: absolute;
+		top: -5px;
+		right: -5px;
+		min-width: 18px;
+		height: 18px;
+		padding: 0 4px;
+		border: 2px solid var(--bg);
+		background: var(--accent-solid);
+		color: #fff;
+		font-size: 10px;
 	}
 
 	.library__sort {
-		flex: 1;
-		min-width: 0;
+		flex: 0 1 132px;
+		width: 132px;
+		min-width: 104px;
 	}
 
 	.library__sort .select__field {
 		width: 100%;
 	}
 
-	.library__categories {
-		flex-wrap: nowrap;
+	/* One horizontal strip owns every category and active filter, so selections never add a row. */
+	.library__filter-summary {
+		align-items: center;
+	}
+
+	.library__filter-summary-scroll {
+		flex-direction: row;
+		align-items: center;
+		gap: 8px;
 		overflow-x: auto;
 		padding-bottom: 2px;
 		scrollbar-width: none;
 	}
 
-	.library__categories::-webkit-scrollbar {
+	.library__filter-summary-scroll::-webkit-scrollbar {
 		display: none;
 	}
 
-	.library__categories > * {
-		flex: none;
-	}
-
-	.library__active-filters {
-		flex-wrap: nowrap;
-		overflow-x: auto;
-		scrollbar-width: none;
-	}
-
-	.library__active-filters::-webkit-scrollbar {
-		display: none;
-	}
-
+	.library__filter-summary-scroll > *,
+	.library__categories > *,
 	.library__active-filters > * {
 		flex: none;
 	}
 
-	/* Phones keep a little more touch height, and the pinned clear shrinks to its icon so the pills keep the row */
+	.library__categories {
+		flex-wrap: nowrap;
+		overflow: visible;
+		padding-bottom: 0;
+	}
+
+	.library__active-filters {
+		flex: none;
+		flex-wrap: nowrap;
+		overflow: visible;
+	}
+
+	/* The clear action stays pinned outside the strip and shrinks to its icon on phones. */
 	.library__active-filters .chip--clickable,
 	.library__active-clear {
 		min-height: 32px;

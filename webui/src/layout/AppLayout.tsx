@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, ScrollRestoration } from 'react-router-dom';
+import { Outlet, ScrollRestoration } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { Moon, Sun } from 'lucide-react';
@@ -11,7 +11,7 @@ import { acquireSseConnection } from '../api/sse';
 import { authAllowsEvents } from '../lib/auth';
 import { DesktopSidebar } from './DesktopSidebar';
 import { LanguageMenu } from './LanguageMenu';
-import { NAV } from './navigation';
+import { MobileTabbar } from './MobileTabbar';
 
 function ThemeToggle() {
 	const { t } = useTranslation();
@@ -30,7 +30,6 @@ function ThemeToggle() {
 
 /** The full-screen reader does not come through here (its route hangs outside AppLayout) */
 export function AppLayout() {
-	const { t } = useTranslation();
 	const [sidebarCollapsed, setSidebarCollapsed] = useState(readSidebarCollapsed);
 	const auth = useWhoami();
 	const qc = useQueryClient();
@@ -70,21 +69,7 @@ export function AppLayout() {
 			{/* New navigation scrolls to top, forward/back restores each page's own position; the reader lives outside the layout with its own scroll management, unaffected */}
 			<ScrollRestoration />
 
-			<nav className="app__tabbar">
-				{NAV.map((item) => (
-					<NavLink
-						key={item.to}
-						to={item.to}
-						viewTransition
-						className={({ isActive }) =>
-							isActive ? 'tabbar__item tabbar__item--active' : 'tabbar__item'
-						}
-					>
-						<item.icon size={20} />
-						<span className="tabbar__label">{t(item.labelKey)}</span>
-					</NavLink>
-				))}
-			</nav>
+			<MobileTabbar />
 		</div>
 	);
 }

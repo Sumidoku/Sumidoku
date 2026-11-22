@@ -192,12 +192,13 @@ export function LibraryToolbar({
 				<div className="library__actions">
 					<Button
 						className={filtersOpen || activeCount > 0 ? 'library__filter-toggle library__filter-toggle--active' : 'library__filter-toggle'}
+						aria-label={t('library.filters')}
 						aria-expanded={filtersOpen}
 						aria-controls="library-filter-panel"
 						onClick={() => setFiltersOpen((open) => !open)}
 					>
 						<SlidersHorizontal size={16} />
-						<span>{t('library.filters')}</span>
+						<span className="library__filter-label">{t('library.filters')}</span>
 						{activeCount > 0 && <span className="library__filter-count">{activeCount}</span>}
 					</Button>
 					<Select
@@ -215,47 +216,51 @@ export function LibraryToolbar({
 				</div>
 			</div>
 
-			<div className="library__categories" role="group" aria-label={t('library.categories')}>
-				{showUncategorized && (
-					<Chip
-						triState={categoryTri[UNCATEGORIZED] ?? 0}
-						title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
-						onClick={() => onCategoryCycle(UNCATEGORIZED)}
-					>
-						{t('library.uncategorized')}
-					</Chip>
-				)}
-				{categories.map((category) => {
-					const state = categoryTri[String(category.id)] ?? 0;
-					return (
-						<Chip
-							key={category.id}
-							triState={state}
-							title={triTitle(t, category.name, state)}
-							onClick={() => onCategoryCycle(String(category.id))}
-						>
-							{category.name}
-							<span className="library__category-count">{category.mangaCount}</span>
-						</Chip>
-					);
-				})}
-			</div>
-
-			{activeItems.length > 0 && (
-				<div className="library__active">
-					<div className="library__active-filters" role="group" aria-label={t('library.activeFilters')}>
-						{activeItems.map((item) => (
+			<div className="library__filter-summary">
+				<div className="library__filter-summary-scroll">
+					<div className="library__categories" role="group" aria-label={t('library.categories')}>
+						{showUncategorized && (
 							<Chip
-								key={item.id}
-								triState={item.state}
-								title={t(item.state === 1 ? 'library.activeIncluded' : 'library.activeExcluded', { label: item.label })}
-								onClick={() => (item.kind === null ? onGroupChange(null) : onRemoveFilter(item.kind, item.filterKey))}
+								triState={categoryTri[UNCATEGORIZED] ?? 0}
+								title={triTitle(t, t('library.uncategorized'), categoryTri[UNCATEGORIZED] ?? 0)}
+								onClick={() => onCategoryCycle(UNCATEGORIZED)}
 							>
-								<span className="library__active-label">{item.label}</span>
-								<X size={12} />
+								{t('library.uncategorized')}
 							</Chip>
-						))}
+						)}
+						{categories.map((category) => {
+							const state = categoryTri[String(category.id)] ?? 0;
+							return (
+								<Chip
+									key={category.id}
+									triState={state}
+									title={triTitle(t, category.name, state)}
+									onClick={() => onCategoryCycle(String(category.id))}
+								>
+									{category.name}
+									<span className="library__category-count">{category.mangaCount}</span>
+								</Chip>
+							);
+						})}
 					</div>
+
+					{activeItems.length > 0 && (
+						<div className="library__active-filters" role="group" aria-label={t('library.activeFilters')}>
+							{activeItems.map((item) => (
+								<Chip
+									key={item.id}
+									triState={item.state}
+									title={t(item.state === 1 ? 'library.activeIncluded' : 'library.activeExcluded', { label: item.label })}
+									onClick={() => (item.kind === null ? onGroupChange(null) : onRemoveFilter(item.kind, item.filterKey))}
+								>
+									<span className="library__active-label">{item.label}</span>
+									<X size={12} />
+								</Chip>
+							))}
+						</div>
+					)}
+				</div>
+				{activeItems.length > 0 && (
 					<Button
 						size="sm"
 						className="library__active-clear"
@@ -266,8 +271,8 @@ export function LibraryToolbar({
 						<RotateCcw size={14} />
 						<span>{t('library.clearFilters')}</span>
 					</Button>
-				</div>
-			)}
+				)}
+			</div>
 
 			{filtersOpen && (
 				<div className="library__filter-panel" id="library-filter-panel">
