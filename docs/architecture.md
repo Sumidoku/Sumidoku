@@ -2095,9 +2095,12 @@ surface levels (`--bg`, `--bg-elev`, `--bg-raise` for floating layers), one
 set of easing/duration variables, and `--accent-grad` for primary fills.
 Sidebar, tab-bar and cover-card navigations opt into React Router's
 `viewTransition`; `src/styles/app.css` cross-fades the page while the shell
-keeps its own transition names and stays put. Nothing inside a page is named:
-a shared-element cover morph was tried and removed, because a named cover
-inside the manga hero made Chrome paint the hero backdrop unclipped over the
+keeps its own transition names and stays put. At every viewport width that
+page entrance is the only one: grids, cards, home sections, manga-hero items
+and empty states do not replay their entrance when async content replaces a
+skeleton. Nothing inside a page is named: a shared-element cover morph was
+tried and removed, because a named cover inside the manga hero made Chrome
+paint the hero backdrop unclipped over the
 card during the transition. A cover card hands its cover URL over in router
 state so the detail page's loading skeleton shows the art in the hero's
 position. Browsers without the View Transitions API fall back to the

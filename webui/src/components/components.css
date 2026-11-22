@@ -828,10 +828,6 @@
 	color: var(--text-faint);
 }
 
-.empty-state {
-	animation: rise-in var(--t-slow) var(--ease-out) backwards;
-}
-
 /* The icon sits on a soft disc so an empty page still has a focal point */
 .empty-state__icon {
 	display: inline-flex;

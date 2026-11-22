@@ -132,14 +132,6 @@ html {
 	}
 }
 
-/* Shared entrance for items of a freshly mounted list; lists stagger it with --i */
-@keyframes rise-in {
-	from {
-		opacity: 0;
-		transform: translateY(10px) scale(0.985);
-	}
-}
-
 /* ============ Route transitions (View Transitions API) ============ */
 /* Navigations opt in through React Router's `viewTransition`; browsers without the API just
    swap the page and keep the .page entrance above. The old page fades out quickly under the
