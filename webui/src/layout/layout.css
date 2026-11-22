@@ -1,4 +1,4 @@
-/* Desktop ≥768px: fixed collapsible left sidebar; mobile <768px: 56px top bar + 56px bottom tab bar */
+/* Desktop ≥768px: fixed collapsible left sidebar; mobile <768px: 56px top bar + floating bottom dock */
 
 .app__sidebar {
 	display: none;
@@ -28,45 +28,63 @@
 
 .app__tabbar {
 	position: fixed;
-	left: 0;
-	right: 0;
-	bottom: 0;
+	left: 12px;
+	right: 12px;
+	bottom: calc(10px + env(safe-area-inset-bottom));
 	z-index: 50;
 	display: flex;
-	height: calc(56px + env(safe-area-inset-bottom));
-	padding-bottom: env(safe-area-inset-bottom);
-	background: color-mix(in srgb, var(--bg) 78%, transparent);
+	height: 64px;
+	max-width: 560px;
+	margin: 0 auto;
+	padding: 5px;
+	background: color-mix(in srgb, var(--bg-raise) 88%, transparent);
 	backdrop-filter: var(--blur);
 	-webkit-backdrop-filter: var(--blur);
-	border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+	border: 1px solid color-mix(in srgb, var(--border-strong) 72%, transparent);
+	border-radius: var(--r-xl);
+	box-shadow: var(--shadow), var(--edge);
 }
 
 .tabbar__item {
 	flex: 1;
+	min-width: 0;
 	display: flex;
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 2px;
-	margin: 6px 4px;
-	border-radius: 999px;
-	color: var(--text-faint);
+	gap: 1px;
+	padding: 4px 2px 7px;
+	/* Concentric with the dock: 24px outer radius - 5px padding - 1px border. */
+	border-radius: var(--r-lg);
+	color: var(--text-dim);
 	transition:
 		background var(--t),
 		color var(--t);
 }
 
-.tabbar__item svg {
-	transition: transform var(--t-slow) var(--ease-spring);
+.tabbar__icon {
+	display: grid;
+	place-items: center;
+	width: 36px;
+	height: 28px;
+	flex: none;
+	border-radius: 999px;
+	transition:
+		background var(--t),
+		transform var(--t-slow) var(--ease-spring);
 }
 
-.tabbar__item:active svg {
-	transform: scale(0.86);
+.tabbar__item:active .tabbar__icon {
+	transform: scale(0.88);
 }
 
 .tabbar__label {
+	max-width: 100%;
+	overflow: hidden;
 	font-size: 10px;
 	line-height: 1.2;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .tabbar__item--active {
@@ -75,8 +93,75 @@
 	font-weight: 600;
 }
 
+.tabbar__activity {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	display: flex;
+}
+
+.tabbar__activity .tabbar__item {
+	width: 100%;
+}
+
+.tabbar__activity .tabbar__item[aria-expanded='true']:not(.tabbar__item--active) {
+	color: var(--text);
+}
+
+.tabbar__activity .tabbar__item[aria-expanded='true']:not(.tabbar__item--active) .tabbar__icon {
+	background: var(--bg-hover);
+}
+
+.tabbar__activity-menu {
+	position: absolute;
+	right: 0;
+	bottom: calc(100% + 10px);
+	/* Right alignment keeps the 220px sheet inside 320px-wide phones too. */
+	width: min(220px, calc(100vw - 24px));
+	padding: 6px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--r-lg);
+	background: var(--bg-raise);
+	box-shadow: var(--shadow-lg), var(--edge);
+	animation: tabbar-menu-in var(--t) var(--ease-out) backwards;
+}
+
+@keyframes tabbar-menu-in {
+	from {
+		opacity: 0;
+		translate: 0 8px;
+	}
+}
+
+.tabbar__activity-item {
+	display: flex;
+	align-items: center;
+	gap: 11px;
+	min-height: 44px;
+	padding: 9px 12px;
+	border-radius: var(--r-sm);
+	color: var(--text-dim);
+	font-size: 14px;
+	transition:
+		background var(--t),
+		color var(--t);
+}
+
+.tabbar__activity-item:hover {
+	background: var(--bg-hover);
+	color: var(--text);
+}
+
+.tabbar__activity-item--active,
+.tabbar__activity-item--active:hover {
+	background: var(--accent-soft);
+	color: var(--accent);
+	font-weight: 600;
+}
+
 .app__content {
-	padding: 16px 16px calc(24px + 56px + env(safe-area-inset-bottom));
+	/* Keep content above the 64px dock, its 10px offset and 24px of breathing room. */
+	padding: 16px 16px calc(98px + env(safe-area-inset-bottom));
 	min-height: 100dvh;
 }
 

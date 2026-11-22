@@ -13,6 +13,13 @@
 	}
 }
 
+/* Small tablets have room for larger covers: iPad mini portrait gets four columns, not six. */
+@media (min-width: 600px) and (max-width: 767px) {
+	.cover-grid {
+		grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	}
+}
+
 /* ============ Row list (shared by source home and list-kind listings) ============ */
 
 .home-rows {

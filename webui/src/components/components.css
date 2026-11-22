@@ -1393,9 +1393,9 @@ button.menu-row:hover:not(:disabled) {
 }
 
 @media (max-width: 767px) {
-	/* The bar hugs the bottom tab bar on mobile and may wrap */
+	/* Sit 10px above the floating dock: 10px viewport offset + 64px dock + 10px gap. */
 	.batch-bar {
-		bottom: calc(66px + env(safe-area-inset-bottom));
+		bottom: calc(84px + env(safe-area-inset-bottom));
 		border-radius: var(--r-lg);
 	}
 }

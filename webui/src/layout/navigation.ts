@@ -8,3 +8,7 @@ export const NAV = [
 	{ to: '/updates', labelKey: 'common.nav.updates', icon: RefreshCw },
 	{ to: '/settings', labelKey: 'common.nav.settings', icon: Settings }
 ] as const;
+
+export const MOBILE_PRIMARY_NAV = NAV.filter((item) => ['/library', '/browse', '/updates'].includes(item.to));
+export const MOBILE_ACTIVITY_NAV = NAV.filter((item) => ['/history', '/downloads'].includes(item.to));
+export const MOBILE_SETTINGS_NAV = NAV.filter((item) => item.to === '/settings');

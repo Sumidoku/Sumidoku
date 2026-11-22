@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createElement } from 'react';
@@ -81,6 +82,18 @@ test('library toolbar stays collapsed with active filters and summarizes them', 
 	} finally {
 		await vite.close();
 	}
+});
+
+test('mobile library toolbar combines search and actions into one compact row', () => {
+	const css = readFileSync(new URL('../src/pages/library/library.css', import.meta.url), 'utf8');
+	const mobile = css.slice(css.indexOf('@media (max-width: 767px)'));
+	assert.match(mobile, /\.library__toolbar\s*\{[^}]*gap:\s*8px;[^}]*margin-bottom:\s*14px;/);
+	assert.match(mobile, /\.library__primary\s*\{[^}]*flex-direction:\s*row;[^}]*gap:\s*8px;/);
+	assert.match(mobile, /\.library__filter-label\s*\{[^}]*display:\s*none;/);
+	assert.match(mobile, /\.library__filter-count\s*\{[^}]*position:\s*absolute;[^}]*top:\s*-5px;[^}]*right:\s*-5px;/);
+	assert.match(mobile, /\.library__sort\s*\{[^}]*flex:\s*0 1 132px;[^}]*min-width:\s*104px;/);
+	assert.match(mobile, /\.library__filter-summary-scroll\s*\{[^}]*flex-direction:\s*row;[^}]*overflow-x:\s*auto;/);
+	assert.match(mobile, /\.library__active-filters\s*\{[^}]*flex:\s*none;[^}]*overflow:\s*visible;/);
 });
 
 test('active filter summary names every advanced filter with its state', async () => {

@@ -109,15 +109,26 @@ test('sidebar preference round-trips and rejects unknown values', () => {
 	}
 });
 
-test('navigation selection uses a full tab pill and no decorative sidebar marker', () => {
+test('navigation selection uses a full sidebar pill and no decorative marker', () => {
 	const css = readFileSync(new URL('../src/layout/layout.css', import.meta.url), 'utf8');
 	assert.doesNotMatch(css, /\.side-nav__item::before/);
 	assert.doesNotMatch(css, /\.side-nav__item--active::before/);
-	assert.doesNotMatch(css, /\.tabbar__item::before/);
-	assert.doesNotMatch(css, /\.tabbar__item--active::before/);
 	assert.match(css, /\.side-nav__item--active,[\s\S]*?background:\s*var\(--accent-soft\);/);
-	assert.match(css, /\.tabbar__item\s*\{[^}]*margin:\s*6px 4px;[^}]*border-radius:\s*999px;/);
+});
+
+test('mobile navigation is a floating dock with a fully highlighted active tab', () => {
+	const css = readFileSync(new URL('../src/layout/layout.css', import.meta.url), 'utf8');
+	const layout = readFileSync(new URL('../src/layout/MobileTabbar.tsx', import.meta.url), 'utf8');
+	const navigation = readFileSync(new URL('../src/layout/navigation.ts', import.meta.url), 'utf8');
+	assert.match(navigation, /export const MOBILE_PRIMARY_NAV = NAV\.filter\(\(item\) => \['\/library', '\/browse', '\/updates'\]\.includes\(item\.to\)\);/);
+	assert.match(navigation, /export const MOBILE_ACTIVITY_NAV = NAV\.filter\(\(item\) => \['\/history', '\/downloads'\]\.includes\(item\.to\)\);/);
+	assert.match(navigation, /export const MOBILE_SETTINGS_NAV = NAV\.filter\(\(item\) => item\.to === '\/settings'\);/);
+	assert.match(css, /\.app__tabbar\s*\{[^}]*left:\s*12px;[^}]*right:\s*12px;[^}]*bottom:\s*calc\(10px \+ env\(safe-area-inset-bottom\)\);[^}]*height:\s*64px;[^}]*border-radius:\s*var\(--r-xl\);[^}]*box-shadow:\s*var\(--shadow\), var\(--edge\);/);
+	assert.match(css, /\.tabbar__item\s*\{[^}]*gap:\s*1px;[^}]*padding:\s*4px 2px 7px;[^}]*border-radius:\s*var\(--r-lg\);/);
 	assert.match(css, /\.tabbar__item--active\s*\{[^}]*background:\s*var\(--accent-soft\);[^}]*color:\s*var\(--accent\);/);
+	assert.doesNotMatch(css, /\.tabbar__item--active \.tabbar__icon\s*\{[^}]*background:/);
+	assert.match(layout, /<span className="tabbar__icon">/);
+	assert.match(css, /\.app__content\s*\{[^}]*padding:\s*16px 16px calc\(98px \+ env\(safe-area-inset-bottom\)\);/);
 });
 
 test('collapsing keeps the sidebar toggle at the same spot', async () => {
