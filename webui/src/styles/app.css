@@ -118,77 +118,21 @@ html {
 	margin: 0 auto;
 }
 
-/* One shared page entrance: fade + slight rise. `backwards` (not `both`) so the finished
-   animation leaves no transform behind: a transformed ancestor would become the containing
-   block of the page's fixed children (batch bar, menus). */
-.page {
-	animation: page-in var(--t-slow) var(--ease-out) backwards;
+/* Routes swap in place without a `.page` entrance animation or view transition: skeletons
+   already show loading, and re-animating the page or its covers made navigation (especially
+   between mobile tabs and back from detail) look like a second refresh.
+   Neutralize the pseudo tree too: React Router persists earlier viewTransition navigations
+   in sessionStorage and replays a UA cross-fade when history pops back between those paths. */
+::view-transition-group(*),
+::view-transition-image-pair(*),
+::view-transition-old(*),
+::view-transition-new(*) {
+	animation: none !important;
+	mix-blend-mode: normal !important;
 }
 
-@keyframes page-in {
-	from {
-		opacity: 0;
-		transform: translateY(8px);
-	}
-}
-
-/* ============ Route transitions (View Transitions API) ============ */
-/* Navigations opt in through React Router's `viewTransition`; browsers without the API just
-   swap the page and keep the .page entrance above. The old page fades out quickly under the
-   new one. No element inside a page carries a transition name: a named cover inside the manga
-   hero made Chrome paint the hero's backdrop unclipped over the whole card for the length of
-   the transition. */
-
-::view-transition-old(root) {
-	animation: vt-out 0.16s var(--ease-in-out) both;
-}
-
-::view-transition-new(root) {
-	animation: vt-in 0.3s var(--ease-out) both;
-}
-
-@keyframes vt-out {
-	to {
-		opacity: 0;
-	}
-}
-
-@keyframes vt-in {
-	from {
-		opacity: 0;
-	}
-}
-
-/* The shell does not change between routes: keep it out of the root cross-fade */
-.app__sidebar {
-	view-transition-name: app-sidebar;
-}
-
-.app__tabbar {
-	view-transition-name: app-tabbar;
-}
-
-.app__topbar {
-	view-transition-name: app-topbar;
-}
-
-::view-transition-group(app-sidebar),
-::view-transition-group(app-tabbar),
-::view-transition-group(app-topbar) {
-	animation: none;
-	z-index: 3;
-}
-
-::view-transition-old(app-sidebar),
-::view-transition-old(app-tabbar),
-::view-transition-old(app-topbar) {
-	display: none;
-}
-
-::view-transition-new(app-sidebar),
-::view-transition-new(app-tabbar),
-::view-transition-new(app-topbar) {
-	animation: none;
+::view-transition-old(*) {
+	display: none !important;
 }
 
 .muted {
@@ -206,11 +150,5 @@ html {
 		animation-duration: 0.01ms !important;
 		animation-iteration-count: 1 !important;
 		transition-duration: 0.01ms !important;
-	}
-
-	::view-transition-group(*),
-	::view-transition-old(*),
-	::view-transition-new(*) {
-		animation: none !important;
 	}
 }
