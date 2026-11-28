@@ -2093,20 +2093,20 @@ page-header titles use display serif, and content names and controls stay sans.
 Colors, radii, shadows and motion come from `src/styles/tokens.css`: three
 surface levels (`--bg`, `--bg-elev`, `--bg-raise` for floating layers), one
 set of easing/duration variables, and `--accent-grad` for primary fills.
-Sidebar, tab-bar and cover-card navigations opt into React Router's
-`viewTransition`; `src/styles/app.css` cross-fades the page while the shell
-keeps its own transition names and stays put. At every viewport width that
-page entrance is the only one: grids, cards, home sections, manga-hero items
-and empty states do not replay their entrance when async content replaces a
-skeleton. Nothing inside a page is named: a shared-element cover morph was
-tried and removed, because a named cover inside the manga hero made Chrome
-paint the hero backdrop unclipped over the
-card during the transition. A cover card hands its cover URL over in router
-state so the detail page's loading skeleton shows the art in the hero's
-position. Browsers without the View Transitions API fall back to the
-`.page` entrance animation. Floating menus animate with opacity and
-`clip-path` only: they position themselves from `getBoundingClientRect` before
-first paint, which a transform would skew.
+Route changes render in place with no `.page` entrance animation, view
+transition, grid stagger or cover fade/zoom on load: skeletons show while a
+query is pending, and content or cached covers paint directly when ready.
+Links do not pass `viewTransition`, and `src/styles/app.css` neutralizes the
+`::view-transition-*` pseudo tree because React Router persists earlier
+view-transition navigations in `sessionStorage` and otherwise replays a UA
+cross-fade when history pops back between those paths. A cover card still
+hands its cover URL over in router state so the detail page's loading
+skeleton shows the art in the hero's position. Motion stays on direct
+feedback and overlays: active nav states, card hover zoom (only under
+`@media (hover: hover)`), reader page turns (configurable), floating menus
+(opacity and `clip-path` only, because they position themselves from
+`getBoundingClientRect` before first paint, which a transform would skew),
+dialogs, sheets, toasts and the batch bar.
 Route handles provide translated fallback document titles, and
 `DocumentTitleProvider` appends ` · Sumidoku`. Source, manga and reader pages
 replace the fallback with content names through `useDocumentTitle`; overrides

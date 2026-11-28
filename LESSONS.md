@@ -1,6 +1,25 @@
 <!-- reviewed-through: f4f4a3d (2026-10-30) -->
 # Lessons from merged work
 
+**Dropping a `viewTransition` prop does not stop history-back cross-fades,
+and a CSS "fallback" entrance still runs inside a view transition.** React
+Router records every `viewTransition` navigation in `sessionStorage` and
+starts a UA view transition when a later `POP` returns between those paths,
+even after the props are gone. Meanwhile a `.page` mount animation meant
+only for browsers without the API animates inside the live
+`::view-transition-new(root)` snapshot, stacking a second fade and rise on
+every navigation. Render routes and loaded covers in place, and when
+retiring view transitions, neutralize the `::view-transition-*` pseudo tree
+(`animation: none`, `mix-blend-mode: normal`, `old` `display: none`) so
+restored `POP` transitions are inert too.
+- Evidence: 2026-11-28, a 390x844 CDP `Animation` probe on a cached tab
+  switch to `/library` counted 44 concurrent animations (view transition +
+  `.page` rise + 12 cover opacity and 600ms `scale(1.04)` transitions), and
+  30 on returning from manga detail. Removing the props alone still left 5
+  UA view-transition animations on back navigation from the stored
+  `sessionStorage` paths; neutralizing the pseudo tree cut the return to the
+  2 active-tab color transitions. `page-motion.test.ts` pins the contract.
+
 **Background cache invalidation must not restart explicit remote work, and
 cancellation must reach both the async queue and the actor queue.** A broad
 `invalidateQueries` on a task event refetches every active observer, including

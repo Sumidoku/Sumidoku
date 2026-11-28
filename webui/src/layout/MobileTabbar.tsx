@@ -12,7 +12,6 @@ function MobileNavLink({ item }: { item: NavItem }) {
 	return (
 		<NavLink
 			to={item.to}
-			viewTransition
 			className={({ isActive }) => isActive ? 'tabbar__item tabbar__item--active' : 'tabbar__item'}
 		>
 			<span className="tabbar__icon">
@@ -106,7 +105,6 @@ export function MobileTabbar() {
 							<NavLink
 								key={item.to}
 								to={item.to}
-								viewTransition
 								role="menuitem"
 								className={({ isActive }) => isActive ? 'tabbar__activity-item tabbar__activity-item--active' : 'tabbar__activity-item'}
 								onClick={() => setActivityOpen(false)}
